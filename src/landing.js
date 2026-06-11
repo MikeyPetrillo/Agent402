@@ -4,8 +4,29 @@ export function landingPage(baseUrl, network, freeMode) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent402 — Paid web tools for AI agents</title>
-<meta name="description" content="Pay-per-call web tools for AI agents. URL-to-markdown extraction, page metadata, and DNS lookups, paid in USDC via the x402 protocol. No API keys, no signup.">
+<title>Agent402 — Paid web tools for AI agents (x402, USDC on Base)</title>
+<meta name="description" content="Pay-per-call web tools for AI agents: headless-browser rendering, screenshots, PDF extraction, URL-to-markdown, wallet-keyed memory, metadata and DNS. Paid per request in USDC via the x402 protocol — no API keys, no signup.">
+<link rel="canonical" href="${baseUrl}/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="${baseUrl}/">
+<meta property="og:site_name" content="Agent402">
+<meta property="og:title" content="Agent402 — Paid web tools for AI agents">
+<meta property="og:description" content="8 machine-payable endpoints: browser rendering, screenshots, PDF extraction, markdown extraction, wallet-keyed memory, metadata, DNS. USDC per call via x402. No signup.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Agent402 — Paid web tools for AI agents">
+<meta name="twitter:description" content="Machine-payable web tools. Agents pay per call in USDC via x402 — no API keys, no signup.">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebAPI",
+  "name": "Agent402",
+  "url": "${baseUrl}",
+  "description": "Pay-per-call web tools for AI agents via the x402 payment protocol (USDC on Base): headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed key-value memory, page metadata, and DNS lookups.",
+  "documentation": "${baseUrl}/llms.txt",
+  "termsOfService": "${baseUrl}/",
+  "offers": { "@type": "Offer", "price": "0.001-0.02", "priceCurrency": "USD", "description": "Per-call micropayments in USDC via x402" }
+}
+</script>
 <style>
   :root { --bg:#0b0e14; --card:#131826; --text:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --mono:ui-monospace,SFMono-Regular,Menlo,monospace; }
   * { box-sizing:border-box; margin:0; }
