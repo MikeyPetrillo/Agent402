@@ -358,16 +358,26 @@ jobs:
           }
           ENV_ID='${{ steps.project.outputs.env_id }}'
           SERVICE_ID='${{ steps.service.outputs.service_id }}'
-          DOMAIN=$(jq -n --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
-            '{query:"query($e:String!, $s:String!) { domains(environmentId: $e, serviceId: $s) { serviceDomains { domain } } }", variables:{e:$e,s:$s}}' | gql \
-            | jq -r '.data.domains.serviceDomains[0].domain // empty')
+          queryDomain() {
+            jq -n --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
+              '{query:"query($e:String!, $s:String!) { domains(environmentId: $e, serviceId: $s) { serviceDomains { domain } } }", variables:{e:$e,s:$s}}' | gql \
+              | jq -r '.data.domains.serviceDomains[0].domain // empty'
+          }
+          DOMAIN=$(queryDomain)
           if [ -z "$DOMAIN" ]; then
             RESP=$(jq -n --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
               '{query:"mutation($e:String!, $s:String!) { serviceDomainCreate(input: { environmentId: $e, serviceId: $s }) { domain } }", variables:{e:$e,s:$s}}' | gql)
             echo "$RESP"
             DOMAIN=$(echo "$RESP" | jq -r '.data.serviceDomainCreate.domain // empty')
+            # If creation failed (e.g. plan domain-limit reached because one
+            # already exists), re-query and reuse it rather than failing.
+            [ -z "$DOMAIN" ] && DOMAIN=$(queryDomain)
           fi
-          [ -n "$DOMAIN" ] || { echo "Could not create domain"; exit 1; }
+          # The public Railway domain is only used to poll /health below; the
+          # real address is the custom domain. Fall back to it so a domain quirk
+          # never blocks the actual deploy (env vars + trigger come after).
+          [ -z "$DOMAIN" ] && DOMAIN="${CUSTOM_DOMAIN}"
+          [ -n "$DOMAIN" ] || { echo "No domain available to verify against"; exit 1; }
           echo "domain=$DOMAIN" >> "$GITHUB_OUTPUT"
           echo "PUBLIC URL: https://$DOMAIN"
 
