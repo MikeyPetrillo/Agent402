@@ -38,8 +38,11 @@ jobs:
       # CDP keys take priority in the server's facilitator selection, so this
       # default is harmless once CDP_API_KEY_ID/SECRET secrets are added.
       FACILITATOR_URL: ${{ vars.FACILITATOR_URL || 'https://facilitator.payai.network' }}
+      PROJECT_NAME: agent402
+      REPO: ${{ github.repository }}
+      BRANCH: ${{ github.ref_name }}
     steps:
-      - name: Mask sensitive inputs
+      - name: Check inputs
         run: |
           [ -n "$RAILWAY_API_TOKEN" ] && echo "::add-mask::$RAILWAY_API_TOKEN"
           [ -n "$CDP_KEY_SECRET" ] && echo "::add-mask::$CDP_KEY_SECRET"
@@ -48,127 +51,114 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Detect token type
-        id: token
+      - name: Find or create project
+        id: project
         run: |
           gql() {
             curl -s -X POST https://backboard.railway.app/graphql/v2 \
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
-              -d "{\"query\":\"$1\"}"
+              --data @-
           }
-          echo "= me =";        gql 'query { me { name } }'
-          echo; echo "= projects =";  gql 'query { projects { edges { node { id name } } } }'
-          echo; echo "= teams =";     gql 'query { teams { edges { node { id name } } } }'
-          echo
-          if gql 'query { me { name } }' | grep -q '"name"'; then
-            echo "type=account" >> "$GITHUB_OUTPUT"
-            echo "Token works at account level."
-          elif gql 'query { projects { edges { node { id name } } } }' | grep -q '"edges"'; then
-            echo "type=workspace" >> "$GITHUB_OUTPUT"
-            echo "Token is workspace-scoped; can list/create projects in its workspace."
-          elif RAILWAY_API_TOKEN= RAILWAY_TOKEN="$RAILWAY_API_TOKEN" railway status; then
-            echo "type=project" >> "$GITHUB_OUTPUT"
-            echo "Token is a PROJECT token; will deploy into its project directly."
-          else
-            echo "Token is not valid as an account token or a project token." >&2
-            echo "Create an ACCOUNT token at https://railway.com/account/tokens (no workspace scope)," >&2
-            echo "or a PROJECT token inside the target project's settings, and update the RAILWAY_TOKEN secret." >&2
-            exit 1
-          fi
-
-      - name: Create or link project (account token)
-        if: steps.token.outputs.type == 'account'
-        run: |
-          set -x
-          if railway list 2>/dev/null | grep -qi 'agent402'; then
-            railway link --project agent402 --environment production \
-              || railway link --project agent402
-          else
-            railway init --name agent402
-          fi
-          railway status || true
-
-      - name: Create or link project via API (workspace token)
-        if: steps.token.outputs.type == 'workspace'
-        run: |
-          gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
-              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
-              -d "$1"
-          }
-          PROJECT_ID=$(gql '{"query":"query { projects { edges { node { id name } } } }"}' \
-            | grep -o '{"node":{"id":"[^"]*","name":"agent402"}' | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+          PROJECT_ID=$(jq -n '{query:"query { projects { edges { node { id name } } } }"}' | gql \
+            | jq -r --arg n "$PROJECT_NAME" '.data.projects.edges[] | select(.node.name==$n) | .node.id' | head -1)
           if [ -z "$PROJECT_ID" ]; then
-            echo "Creating project agent402…"
-            RESP=$(gql '{"query":"mutation { projectCreate(input: { name: \"agent402\" }) { id } }"}')
+            RESP=$(jq -n --arg n "$PROJECT_NAME" '{query:"mutation($n:String) { projectCreate(input: { name: $n }) { id } }", variables:{n:$n}}' | gql)
             echo "$RESP"
-            PROJECT_ID=$(echo "$RESP" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-            if [ -z "$PROJECT_ID" ]; then
-              echo "projectCreate failed without teamId; retrying with the workspace's team id…"
-              TEAM_ID=$(gql '{"query":"query { projects { edges { node { team { id } } } } }"}' \
-                | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-              RESP=$(gql "{\"query\":\"mutation { projectCreate(input: { name: \\\"agent402\\\", teamId: \\\"$TEAM_ID\\\" }) { id } }\"}")
-              echo "$RESP"
-              PROJECT_ID=$(echo "$RESP" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-            fi
+            PROJECT_ID=$(echo "$RESP" | jq -r '.data.projectCreate.id // empty')
           fi
-          [ -n "$PROJECT_ID" ] || { echo "Could not create or find project"; exit 1; }
-          echo "PROJECT_ID=$PROJECT_ID" >> "$GITHUB_ENV"
-          echo "Project: $PROJECT_ID"
-          railway link --project "$PROJECT_ID" --environment production && railway status
+          [ -n "$PROJECT_ID" ] || { echo "Could not find or create project"; exit 1; }
+          ENV_ID=$(jq -n --arg id "$PROJECT_ID" '{query:"query($id:String!) { project(id: $id) { environments { edges { node { id name } } } } }", variables:{id:$id}}' | gql \
+            | jq -r '.data.project.environments.edges[] | select(.node.name=="production") | .node.id' | head -1)
+          [ -n "$ENV_ID" ] || { echo "No production environment found"; exit 1; }
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "env_id=$ENV_ID" >> "$GITHUB_OUTPUT"
+          echo "Project: $PROJECT_ID  Environment: $ENV_ID"
 
-      - name: Use project token for remaining steps
-        if: steps.token.outputs.type == 'project'
+      - name: Find or create service (connected to GitHub repo)
+        id: service
         run: |
-          echo "RAILWAY_TOKEN=$RAILWAY_API_TOKEN" >> "$GITHUB_ENV"
-          echo "RAILWAY_API_TOKEN=" >> "$GITHUB_ENV"
+          gql() {
+            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+              --data @-
+          }
+          PROJECT_ID='${{ steps.project.outputs.project_id }}'
+          SERVICE_ID=$(jq -n --arg id "$PROJECT_ID" '{query:"query($id:String!) { project(id: $id) { services { edges { node { id name } } } } }", variables:{id:$id}}' | gql \
+            | jq -r --arg n "$PROJECT_NAME" '.data.project.services.edges[] | select(.node.name==$n) | .node.id' | head -1)
+          if [ -z "$SERVICE_ID" ]; then
+            RESP=$(jq -n --arg p "$PROJECT_ID" --arg n "$PROJECT_NAME" --arg r "$REPO" --arg b "$BRANCH" \
+              '{query:"mutation($p:String!, $n:String, $r:String!, $b:String) { serviceCreate(input: { projectId: $p, name: $n, branch: $b, source: { repo: $r } }) { id } }", variables:{p:$p,n:$n,r:$r,b:$b}}' | gql)
+            echo "$RESP"
+            SERVICE_ID=$(echo "$RESP" | jq -r '.data.serviceCreate.id // empty')
+          fi
+          [ -n "$SERVICE_ID" ] || { echo "Could not find or create service. If the error above mentions GitHub, install the Railway GitHub app: https://railway.com/account/integrations"; exit 1; }
+          echo "service_id=$SERVICE_ID" >> "$GITHUB_OUTPUT"
+          echo "Service: $SERVICE_ID"
 
-      - name: Create service and set variables
-        run: |
-          set -x
-          railway add --service agent402 || echo "service may already exist"
-          VARS=(--set "WALLET_ADDRESS=$WALLET_ADDRESS" --set "NETWORK=$NETWORK")
-          [ -n "$FACILITATOR_URL" ] && VARS+=(--set "FACILITATOR_URL=$FACILITATOR_URL")
-          [ -n "$CDP_KEY_ID" ] && [ -n "$CDP_KEY_SECRET" ] && VARS+=(--set "CDP_API_KEY_ID=$CDP_KEY_ID" --set "CDP_API_KEY_SECRET=$CDP_KEY_SECRET")
-          railway variables "${VARS[@]}" --service agent402 --skip-deploys \
-            || railway variables "${VARS[@]}" --skip-deploys \
-            || railway variables "${VARS[@]}"
-
-      - name: Generate public domain
+      - name: Create public domain
         id: domain
         run: |
-          set -x
-          railway domain --service agent402 --json > domain.json || railway domain --json > domain.json || railway domain --service agent402 || railway domain
-          cat domain.json 2>/dev/null || true
-          URL=$(grep -o '"domain"[^,}]*' domain.json 2>/dev/null | head -1 | sed 's/.*: *"\(.*\)"/\1/') || true
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-          echo "PUBLIC URL: https://$URL"
-
-      - name: Set BASE_URL and deploy
-        run: |
-          set -x
-          URL="${{ steps.domain.outputs.url }}"
-          if [ -n "$URL" ]; then
-            railway variables --set "BASE_URL=https://$URL" --service agent402 --skip-deploys \
-              || railway variables --set "BASE_URL=https://$URL" --skip-deploys || true
+          gql() {
+            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+              --data @-
+          }
+          ENV_ID='${{ steps.project.outputs.env_id }}'
+          SERVICE_ID='${{ steps.service.outputs.service_id }}'
+          DOMAIN=$(jq -n --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
+            '{query:"query($e:String!, $s:String!) { domains(environmentId: $e, serviceId: $s) { serviceDomains { domain } } }", variables:{e:$e,s:$s}}' | gql \
+            | jq -r '.data.domains.serviceDomains[0].domain // empty')
+          if [ -z "$DOMAIN" ]; then
+            RESP=$(jq -n --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
+              '{query:"mutation($e:String!, $s:String!) { serviceDomainCreate(input: { environmentId: $e, serviceId: $s }) { domain } }", variables:{e:$e,s:$s}}' | gql)
+            echo "$RESP"
+            DOMAIN=$(echo "$RESP" | jq -r '.data.serviceDomainCreate.domain // empty')
           fi
-          railway up --ci --service agent402 || railway up --ci
+          [ -n "$DOMAIN" ] || { echo "Could not create domain"; exit 1; }
+          echo "domain=$DOMAIN" >> "$GITHUB_OUTPUT"
+          echo "PUBLIC URL: https://$DOMAIN"
+
+      - name: Set environment variables (triggers deploy)
+        run: |
+          gql() {
+            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+              --data @-
+          }
+          VARS=$(jq -n --arg w "$WALLET_ADDRESS" --arg n "$NETWORK" --arg f "$FACILITATOR_URL" --arg b "https://${{ steps.domain.outputs.domain }}" \
+            '{WALLET_ADDRESS:$w, NETWORK:$n, FACILITATOR_URL:$f, BASE_URL:$b}')
+          if [ -n "$CDP_KEY_ID" ] && [ -n "$CDP_KEY_SECRET" ]; then
+            VARS=$(echo "$VARS" | jq --arg i "$CDP_KEY_ID" --arg s "$CDP_KEY_SECRET" '. + {CDP_API_KEY_ID:$i, CDP_API_KEY_SECRET:$s}')
+          fi
+          RESP=$(jq -n --arg p '${{ steps.project.outputs.project_id }}' --arg e '${{ steps.project.outputs.env_id }}' --arg s '${{ steps.service.outputs.service_id }}' --argjson v "$VARS" \
+            '{query:"mutation($p:String!, $e:String!, $s:String!, $v:EnvironmentVariables!) { variableCollectionUpsert(input: { projectId: $p, environmentId: $e, serviceId: $s, variables: $v }) }", variables:{p:$p,e:$e,s:$s,v:$v}}' | gql)
+          echo "$RESP"
+          echo "$RESP" | jq -e '.data.variableCollectionUpsert' >/dev/null || { echo "Variable upsert failed"; exit 1; }
+
+      - name: Trigger deploy of latest commit
+        run: |
+          gql() {
+            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+              --data @-
+          }
+          RESP=$(jq -n --arg e '${{ steps.project.outputs.env_id }}' --arg s '${{ steps.service.outputs.service_id }}' --arg c "$GITHUB_SHA" \
+            '{query:"mutation($e:String!, $s:String!, $c:String) { serviceInstanceDeployV2(environmentId: $e, serviceId: $s, commitSha: $c) }", variables:{e:$e,s:$s,c:$c}}' | gql)
+          echo "$RESP"
+          echo "$RESP" | jq -e '.errors' >/dev/null && echo "(deploy trigger reported an error — the repo-connect deploy may already be running, continuing)" || true
 
       - name: Verify deployment
         run: |
-          URL="${{ steps.domain.outputs.url }}"
-          [ -n "$URL" ] || { echo "No domain captured; check logs above"; exit 1; }
+          URL='${{ steps.domain.outputs.domain }}'
           echo "Waiting for https://$URL/health …"
-          for i in $(seq 1 30); do
+          code=000
+          for i in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$URL/health" || echo 000)
             [ "$code" = "200" ] && break
             sleep 10
           done
           echo "health: $code"
-          [ "$code" = "200" ] || exit 1
+          [ "$code" = "200" ] || { echo "Service did not become healthy in 10 minutes"; exit 1; }
           echo "=== pricing ==="
           curl -s "https://$URL/api/pricing"
           echo; echo "=== 402 check ==="
