@@ -36,6 +36,11 @@ export function llmsTxt(baseUrl, catalog) {
     .map(([key, { label }]) => {
       const inCat = tools.filter((t) => t.category === key);
       if (!inCat.length) return "";
+      // Summarize very large generated families instead of listing every endpoint.
+      if (inCat.length > 40) {
+        const sample = inCat.slice(0, 6).map((t) => `\`${t.route.split(" ")[1]}\``).join(", ");
+        return `### ${label}\n\n- ${inCat.length} endpoints, all \`GET /api/convert/{from}-to-{to}?value=N\` at ${inCat[0].price}/call. Examples: ${sample}. Full list: ${baseUrl}/api/pricing (or ${baseUrl}/openapi.json).`;
+      }
       const lines = inCat.map(
         (t) => `- \`${t.route}\` — ${t.price}/call. ${t.description} Docs: ${baseUrl}/tools/${t.slug}`
       );

@@ -1,7 +1,7 @@
 # Agent402 — where agents pay agents
 
-**A live node in the machine-to-machine economy: 100 tools autonomous agents pay
-for per call in USDC via the [x402 protocol](https://x402.org) — or with
+**A live node in the machine-to-machine economy: 1000+ tools autonomous agents
+pay for per call in USDC via the [x402 protocol](https://x402.org) — or with
 proof-of-work, no wallet.**
 
 **🟢 Live at [agent402.tools](https://agent402.tools)** — USDC on Base mainnet.
@@ -22,7 +22,13 @@ node scripts/demo-payment.js                              # pays with compute �
 AGENT_KEY=0xYOUR_FUNDED_KEY node scripts/demo-payment.js  # settles in real USDC on Base
 ```
 
-## The catalogue (100 tools, 10 categories — 77 free via proof-of-work)
+## The catalogue (1000+ tools, 11 categories — ~1047 free via proof-of-work)
+
+The headline count is real: ~970 of these are individually-discoverable unit
+conversions (`GET /api/convert/{from}-to-{to}`), each a genuine endpoint backed
+by one verified engine and covered by exact-value + round-trip tests
+(`scripts/test-convert.js`). The curated tools below are the rest:
+
 
 | Category | Tools | Highlights |
 |---|---|---|
