@@ -38,14 +38,16 @@ db.exec(`
   );
   CREATE TABLE IF NOT EXISTS docs (
     ns TEXT NOT NULL, id TEXT NOT NULL, text TEXT NOT NULL,
-    meta TEXT, vec TEXT NOT NULL, updated INTEGER NOT NULL,
+    meta TEXT, vec TEXT NOT NULL, model TEXT, updated INTEGER NOT NULL,
     PRIMARY KEY (ns, id)
   );
 `);
 
-// Migrate the v1 kv table (no exp column) in place if needed.
+// Migrate older tables in place if needed.
 const kvCols = db.prepare("PRAGMA table_info(kv)").all().map((c) => c.name);
 if (!kvCols.includes("exp")) db.exec("ALTER TABLE kv ADD COLUMN exp INTEGER");
+const docCols = db.prepare("PRAGMA table_info(docs)").all().map((c) => c.name);
+if (!docCols.includes("model")) db.exec("ALTER TABLE docs ADD COLUMN model TEXT");
 
 const MAX_KEY = 256;
 const MAX_VALUE = 64 * 1024;
@@ -90,11 +92,11 @@ const logIns = db.prepare(
 const logRead = db.prepare("SELECT seq, ts, actor, action, key, data, prev_hash, hash FROM memlog WHERE ns = ? ORDER BY seq ASC LIMIT ?");
 
 const docPut = db.prepare(
-  "INSERT INTO docs (ns, id, text, meta, vec, updated) VALUES (@ns, @id, @text, @meta, @vec, @updated) " +
-    "ON CONFLICT(ns, id) DO UPDATE SET text = excluded.text, meta = excluded.meta, vec = excluded.vec, updated = excluded.updated"
+  "INSERT INTO docs (ns, id, text, meta, vec, model, updated) VALUES (@ns, @id, @text, @meta, @vec, @model, @updated) " +
+    "ON CONFLICT(ns, id) DO UPDATE SET text = excluded.text, meta = excluded.meta, vec = excluded.vec, model = excluded.model, updated = excluded.updated"
 );
 const docCount = db.prepare("SELECT COUNT(*) AS n FROM docs WHERE ns = ?");
-const docAll = db.prepare("SELECT id, text, meta, vec, updated FROM docs WHERE ns = ?");
+const docAll = db.prepare("SELECT id, text, meta, vec, model, updated FROM docs WHERE ns = ?");
 const docDel = db.prepare("DELETE FROM docs WHERE ns = ? AND id = ?");
 
 // --- access control -------------------------------------------------------
@@ -282,16 +284,20 @@ function fnv1a(str) {
   return h >>> 0;
 }
 
+function l2normalize(arr) {
+  let norm = 0;
+  for (const x of arr) norm += x * x;
+  norm = Math.sqrt(norm) || 1;
+  return arr.map((x) => +(x / norm).toFixed(6));
+}
+
 /**
  * Deterministic local embedding: L2-normalized hashed bag of unigrams+bigrams
- * (the hashing trick with signed buckets). No external service or key. Set
- * EMBEDDINGS_URL to swap in a real provider later without touching callers.
+ * (the hashing trick with signed buckets). No external service or key.
  */
-function embed(text) {
+function embedLocal(text) {
   const vec = new Float64Array(EMBED_DIM);
-  const tokens = String(text)
-    .toLowerCase()
-    .match(/[a-z0-9]+/g) || [];
+  const tokens = String(text).toLowerCase().match(/[a-z0-9]+/g) || [];
   const grams = [...tokens];
   for (let i = 0; i < tokens.length - 1; i++) grams.push(tokens[i] + "_" + tokens[i + 1]);
   for (const tok of grams) {
@@ -299,12 +305,46 @@ function embed(text) {
     const sign = fnv1a(tok + "#") & 1 ? 1 : -1;
     vec[h] += sign;
   }
-  let norm = 0;
-  for (let i = 0; i < EMBED_DIM; i++) norm += vec[i] * vec[i];
-  norm = Math.sqrt(norm) || 1;
-  const out = new Array(EMBED_DIM);
-  for (let i = 0; i < EMBED_DIM; i++) out[i] = +(vec[i] / norm).toFixed(5);
-  return out;
+  return l2normalize(Array.from(vec));
+}
+
+// Optional real embeddings provider (OpenAI-compatible /embeddings shape:
+// Voyage, OpenAI, Together, DeepInfra, etc.). Configure to upgrade recall from
+// lexical to true semantic similarity without touching callers.
+const EMBEDDINGS_URL = process.env.EMBEDDINGS_URL || "";
+const EMBEDDINGS_MODEL = process.env.EMBEDDINGS_MODEL || "text-embedding-3-small";
+const EMBEDDINGS_KEY = process.env.EMBEDDINGS_API_KEY || "";
+export const EMBEDDER = EMBEDDINGS_URL ? `provider:${EMBEDDINGS_MODEL}` : "local-v1";
+
+async function embedRemote(text) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(EMBEDDINGS_URL, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...(EMBEDDINGS_KEY ? { Authorization: `Bearer ${EMBEDDINGS_KEY}` } : {}),
+      },
+      body: JSON.stringify({ model: EMBEDDINGS_MODEL, input: text }),
+    });
+    if (!res.ok) throw new Error(`embeddings provider HTTP ${res.status}`);
+    const json = await res.json();
+    const vec = json?.data?.[0]?.embedding;
+    if (!Array.isArray(vec) || !vec.length) throw new Error("embeddings provider returned no vector");
+    return l2normalize(vec);
+  } catch (e) {
+    throw Object.assign(new Error(`Embedding failed: ${e.message}`), { statusCode: 502 });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Embed text into an L2-normalized vector. Returns { vec, model }. */
+async function embedText(text) {
+  if (EMBEDDINGS_URL) return { vec: await embedRemote(text), model: EMBEDDER };
+  return { vec: embedLocal(text), model: EMBEDDER };
 }
 
 function cosine(a, b) {
@@ -318,25 +358,29 @@ function newDocId() {
   return `${nowSec().toString(36)}${(docSeq++ & 0xffff).toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
 }
 
-export function remember(owner, text, meta, { actor = owner } = {}) {
+export async function remember(owner, text, meta, { actor = owner } = {}) {
   requireAccess(owner, actor, "write");
   if (typeof text !== "string" || !text.trim()) throw bad('"text" is required');
   if (text.length > MAX_DOC_TEXT) throw bad(`"text" exceeds ${MAX_DOC_TEXT} chars`);
   if (docCount.get(owner).n >= MAX_DOCS_PER_NS) throw bad(`Recall store is full (${MAX_DOCS_PER_NS} docs)`);
+  const { vec, model } = await embedText(text);
   const id = newDocId();
-  const vec = JSON.stringify(embed(text));
   const metaStr = meta === undefined ? null : JSON.stringify(meta);
-  docPut.run({ ns: owner, id, text, meta: metaStr, vec, updated: now() });
+  docPut.run({ ns: owner, id, text, meta: metaStr, vec: JSON.stringify(vec), model, updated: now() });
   appendLog(owner, actor, "remember", id, { chars: text.length });
-  return { id, owner, stored: true };
+  return { id, owner, stored: true, embedder: model };
 }
 
-export function recall(owner, query, k, { actor = owner } = {}) {
+export async function recall(owner, query, k, { actor = owner } = {}) {
   requireAccess(owner, actor, "read");
   if (typeof query !== "string" || !query.trim()) throw bad('"query" is required');
   const topK = Math.min(Math.max(parseInt(k, 10) || 5, 1), 50);
-  const qv = embed(query);
-  const scored = docAll.all(owner).map((d) => ({
+  const { vec: qv, model } = await embedText(query);
+  // Only compare against docs embedded by the SAME embedder (a provider switch
+  // would otherwise compare incompatible vector spaces).
+  const docs = docAll.all(owner);
+  const comparable = docs.filter((d) => (d.model ?? "local-v1") === model);
+  const scored = comparable.map((d) => ({
     id: d.id,
     score: +cosine(qv, JSON.parse(d.vec)).toFixed(4),
     text: d.text,
@@ -344,7 +388,10 @@ export function recall(owner, query, k, { actor = owner } = {}) {
     updated: d.updated,
   }));
   scored.sort((a, b) => b.score - a.score);
-  return { owner, query, results: scored.slice(0, topK).filter((r) => r.score > 0) };
+  const out = { owner, query, embedder: model, results: scored.slice(0, topK).filter((r) => r.score > 0) };
+  const skipped = docs.length - comparable.length;
+  if (skipped > 0) out.note = `${skipped} doc(s) embedded with a different model were skipped; re-remember them to use ${model}.`;
+  return out;
 }
 
 export function forget(owner, id, { actor = owner } = {}) {
