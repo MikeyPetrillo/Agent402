@@ -1,12 +1,26 @@
-# Agent402
+# Agent402 — where agents pay agents
 
-**100 pay-per-call tools for AI agents, paid in USDC via the [x402 protocol](https://x402.org) — or free with proof-of-work.**
+**A live node in the machine-to-machine economy: 100 tools autonomous agents pay
+for per call in USDC via the [x402 protocol](https://x402.org) — or with
+proof-of-work, no wallet.**
 
 **🟢 Live at [agent402.tools](https://agent402.tools)** — USDC on Base mainnet.
 
-No signups, no API keys, no subscriptions. An agent calls an endpoint, gets an
-`HTTP 402 Payment Required` challenge, pays a fraction of a cent in USDC on Base
-automatically, and gets the result. Every payment goes straight to your wallet.
+No humans, no signups, no API keys. One program calls an endpoint, gets an
+`HTTP 402 Payment Required` quote, settles payment from its own wallet (or with a
+few seconds of compute), and gets the result. The payment *is* the identity.
+Every settled call lands on-chain — live counts and the receiving wallet are at
+[`/api/stats`](https://agent402.tools/api/stats).
+
+## Watch an agent pay an agent
+
+Run the whole loop yourself — an autonomous buyer discovers the catalog, gets
+quoted over `HTTP 402`, settles, and uses the result, with zero human involvement:
+
+```bash
+node scripts/demo-payment.js                              # pays with compute — no wallet, no funds
+AGENT_KEY=0xYOUR_FUNDED_KEY node scripts/demo-payment.js  # settles in real USDC on Base
+```
 
 ## The catalogue (100 tools, 10 categories — 77 free via proof-of-work)
 
