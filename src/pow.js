@@ -52,7 +52,11 @@ function clampInt(value, dflt, min, max) {
 // Stable across restarts when POW_SECRET (or the CDP secret) is set; otherwise a
 // random per-process secret (outstanding challenges simply expire on restart).
 const SECRET = process.env.POW_SECRET || process.env.CDP_API_KEY_SECRET || randomBytes(32).toString("hex");
-export const POW_DIFFICULTY = clampInt(process.env.POW_DIFFICULTY, 20, 8, 28);
+// 16 bits ≈ 65k hashes ≈ ~0.1-0.3s of client CPU: enough to make bulk abuse of
+// the (near-free-to-serve) CPU tools uneconomic, while keeping a one-off call
+// snappy. Higher difficulties have brutal tail latency (difficulty 20 p90 ≈ 12s)
+// because solving is a memoryless random search. Tune via POW_DIFFICULTY.
+export const POW_DIFFICULTY = clampInt(process.env.POW_DIFFICULTY, 16, 8, 28);
 const TTL_SECONDS = clampInt(process.env.POW_TTL_SECONDS, 300, 30, 3600);
 
 function sign(payload) {
