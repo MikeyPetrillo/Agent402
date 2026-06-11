@@ -51,6 +51,24 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
+      - name: Diagnose token
+        run: |
+          echo "token length: ${#RAILWAY_API_TOKEN}"
+          echo "=== whoami ==="
+          railway whoami || true
+          echo "=== GraphQL me ==="
+          curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+            -d '{"query":"query { me { name email } }"}'
+          echo
+          echo "=== GraphQL workspaces ==="
+          curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+            -d '{"query":"query { me { workspaces { id name } } }"}'
+          echo
+          echo "=== railway list ==="
+          railway list || true
+
       - name: Create or link project
         run: |
           set -x
