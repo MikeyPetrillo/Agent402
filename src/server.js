@@ -3,7 +3,10 @@ import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
 import { renderArticle, screenshotPage } from "./tools/render.js";
-import { memoryPut, memoryGet, memoryDelete } from "./tools/memory.js";
+import {
+  memoryPut, memoryGet, memoryDelete, memoryIncr,
+  grant, revoke, listGrants, getLog, remember, recall, forget,
+} from "./tools/memory.js";
 import { payerFromRequest } from "./payer.js";
 import { landingPage } from "./landing.js";
 import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
@@ -157,20 +160,22 @@ const CATALOG = {
     category: "memory",
     price: "$0.002",
     description:
-      "Persistent key-value memory for agents, scoped to the paying wallet. Your x402 payment IS your authentication: the wallet that pays owns the namespace. No signup, no API keys. Body: {\"key\": \"…\", \"value\": any JSON} to write, or {\"key\": \"…\", \"delete\": true} to remove. Values up to 64KB.",
-    tags: ["memory", "storage", "state", "key-value", "persistence"],
+      "Persistent key-value memory for agents, scoped to the paying wallet. Your x402 payment IS your authentication: the wallet that pays owns the namespace. No signup, no API keys. Body: {\"key\":\"…\",\"value\":any JSON,\"ttlSeconds\":3600?} to write (optional TTL), or {\"key\":\"…\",\"delete\":true} to remove. Add \"owner\":\"0x…\" to write into another wallet's namespace you've been granted. Values up to 64KB.",
+    tags: ["memory", "storage", "state", "key-value", "persistence", "ttl"],
     discovery: {
       bodyType: "json",
-      input: { key: "research/task-42", value: { status: "done", findings: ["…"] } },
+      input: { key: "research/task-42", value: { status: "done", findings: ["…"] }, ttlSeconds: 86400 },
       inputSchema: {
         properties: {
           key: { type: "string", description: "Key to write (max 256 chars)" },
           value: { description: "Any JSON value (max 64KB serialized)" },
+          ttlSeconds: { type: "number", description: "Optional: auto-expire the key after N seconds" },
+          owner: { type: "string", description: "Optional 0x namespace to write into (requires a readwrite grant)" },
           delete: { type: "boolean", description: "Set true to delete the key instead" },
         },
         required: ["key"],
       },
-      output: { example: { key: "research/task-42", bytes: 42, updated: 1760000000000, persistent: true } },
+      output: { example: { key: "research/task-42", bytes: 42, updated: 1760000000000, expiresAt: 1760086400, owner: "0x…", persistent: true } },
     },
   },
   "GET /api/memory": {
@@ -179,14 +184,168 @@ const CATALOG = {
     category: "memory",
     price: "$0.001",
     description:
-      "Read from your wallet-scoped memory. ?key=… returns the stored value; omit key to list your keys. Only the wallet that paid for the writes can read them.",
+      "Read from a wallet-scoped namespace. ?key=… returns the stored value; omit key to list keys. Reads your own namespace by default; add ?owner=0x… to read a namespace you've been granted access to.",
     tags: ["memory", "storage", "state", "key-value"],
     discovery: {
       input: { key: "research/task-42" },
       inputSchema: {
-        properties: { key: { type: "string", description: "Key to read; omit to list all your keys" } },
+        properties: {
+          key: { type: "string", description: "Key to read; omit to list all keys" },
+          owner: { type: "string", description: "Optional 0x namespace to read (requires a grant)" },
+        },
       },
-      output: { example: { key: "research/task-42", value: { status: "done" }, updated: 1760000000000 } },
+      output: { example: { key: "research/task-42", value: { status: "done" }, updated: 1760000000000, owner: "0x…" } },
+    },
+  },
+  "POST /api/memory/incr": {
+    name: "Memory counter",
+    slug: "memory-incr",
+    category: "memory",
+    price: "$0.001",
+    description:
+      "Atomically increment (or decrement) a numeric key and return the new value — a coordination primitive for counters, locks, and rate budgets shared across agents. Creates the key at 0 if absent.",
+    tags: ["memory", "counter", "atomic", "coordination", "lock"],
+    discovery: {
+      bodyType: "json",
+      input: { key: "jobs/processed", by: 1 },
+      inputSchema: {
+        properties: {
+          key: { type: "string", description: "Counter key" },
+          by: { type: "number", description: "Amount to add (default 1; negative to decrement)" },
+          owner: { type: "string", description: "Optional 0x namespace (requires a readwrite grant)" },
+        },
+        required: ["key"],
+      },
+      output: { example: { key: "jobs/processed", value: 43, owner: "0x…" } },
+    },
+  },
+  "POST /api/memory/grant": {
+    name: "Memory grant",
+    slug: "memory-grant",
+    category: "memory",
+    price: "$0.002",
+    description:
+      "Share your namespace with another wallet so different agents can coordinate through it. Grant read or readwrite access to a grantee wallet, optionally with a TTL. This is the cross-agent sharing a single agent cannot provide for itself.",
+    tags: ["memory", "grant", "sharing", "coordination", "multi-agent", "acl"],
+    discovery: {
+      bodyType: "json",
+      input: { grantee: "0x1111111111111111111111111111111111111111", mode: "readwrite", ttlSeconds: 86400 },
+      inputSchema: {
+        properties: {
+          grantee: { type: "string", description: "0x wallet to grant access to" },
+          mode: { type: "string", description: '"read" or "readwrite"' },
+          ttlSeconds: { type: "number", description: "Optional: auto-expire the grant" },
+        },
+        required: ["grantee", "mode"],
+      },
+      output: { example: { owner: "0x…", grantee: "0x1111…", mode: "readwrite", expiresAt: 1760086400 } },
+    },
+  },
+  "POST /api/memory/revoke": {
+    name: "Memory revoke",
+    slug: "memory-revoke",
+    category: "memory",
+    price: "$0.001",
+    description: "Revoke a previously granted wallet's access to your namespace.",
+    tags: ["memory", "revoke", "sharing", "acl"],
+    discovery: {
+      bodyType: "json",
+      input: { grantee: "0x1111111111111111111111111111111111111111" },
+      inputSchema: {
+        properties: { grantee: { type: "string", description: "0x wallet to revoke" } },
+        required: ["grantee"],
+      },
+      output: { example: { owner: "0x…", grantee: "0x1111…", revoked: true } },
+    },
+  },
+  "GET /api/memory/grants": {
+    name: "Memory grants list",
+    slug: "memory-grants",
+    category: "memory",
+    price: "$0.001",
+    description: "List the wallets you've granted access to your namespace, with their mode and expiry.",
+    tags: ["memory", "grants", "sharing", "acl"],
+    discovery: {
+      input: {},
+      inputSchema: { properties: {} },
+      output: { example: { owner: "0x…", grants: [{ grantee: "0x1111…", mode: "read", active: true }] } },
+    },
+  },
+  "GET /api/memory/log": {
+    name: "Memory audit log",
+    slug: "memory-log",
+    category: "memory",
+    price: "$0.001",
+    description:
+      "Tamper-evident history of every change to a namespace — an append-only, hash-chained audit log the server attests to (provenance an agent can't forge for itself). ?owner=0x… reads a granted namespace.",
+    tags: ["memory", "audit", "provenance", "history", "verifiable"],
+    discovery: {
+      input: { limit: "50" },
+      inputSchema: {
+        properties: {
+          limit: { type: "string", description: "Max entries (1-1000, default 100)" },
+          owner: { type: "string", description: "Optional 0x namespace (requires a grant)" },
+        },
+      },
+      output: { example: { ns: "0x…", entries: [{ seq: 1, action: "put", key: "task-42", hash: "…", prevHash: "" }] } },
+    },
+  },
+  "POST /api/memory/remember": {
+    name: "Memory remember",
+    slug: "memory-remember",
+    category: "memory",
+    price: "$0.003",
+    description:
+      "Store a piece of text for later similarity recall — a per-wallet semantic index an agent cannot host in-session. Returns an id. Pair with /api/memory/recall to retrieve by meaning, not exact key.",
+    tags: ["memory", "semantic", "embeddings", "recall", "vector"],
+    discovery: {
+      bodyType: "json",
+      input: { text: "The deploy failed because the Railway build ran out of memory.", meta: { topic: "ops" } },
+      inputSchema: {
+        properties: {
+          text: { type: "string", description: "Text to remember (max 8KB)" },
+          meta: { description: "Optional JSON metadata stored alongside" },
+          owner: { type: "string", description: "Optional 0x namespace (requires a readwrite grant)" },
+        },
+        required: ["text"],
+      },
+      output: { example: { id: "abc123", owner: "0x…", stored: true } },
+    },
+  },
+  "POST /api/memory/recall": {
+    name: "Memory recall",
+    slug: "memory-recall",
+    category: "memory",
+    price: "$0.002",
+    description:
+      "Recall remembered text by similarity to a query (ranked by cosine similarity), not by exact key. Returns the top-k matches with scores. The retrieval half of the wallet-scoped semantic memory.",
+    tags: ["memory", "semantic", "search", "recall", "vector", "similarity"],
+    discovery: {
+      bodyType: "json",
+      input: { query: "why did the deployment break", k: 3 },
+      inputSchema: {
+        properties: {
+          query: { type: "string", description: "Natural-language query" },
+          k: { type: "number", description: "How many matches (1-50, default 5)" },
+          owner: { type: "string", description: "Optional 0x namespace (requires a grant)" },
+        },
+        required: ["query"],
+      },
+      output: { example: { query: "why did the deployment break", results: [{ id: "abc123", score: 0.62, text: "The deploy failed because…" }] } },
+    },
+  },
+  "POST /api/memory/forget": {
+    name: "Memory forget",
+    slug: "memory-forget",
+    category: "memory",
+    price: "$0.001",
+    description: "Delete a remembered document by id from the recall store.",
+    tags: ["memory", "semantic", "delete"],
+    discovery: {
+      bodyType: "json",
+      input: { id: "abc123" },
+      inputSchema: { properties: { id: { type: "string", description: "Document id from /remember" } }, required: ["id"] },
+      output: { example: { id: "abc123", deleted: true, owner: "0x…" } },
     },
   },
 };
@@ -357,37 +516,47 @@ app.post("/api/pdf", async (req, res) => {
   }
 });
 
-// Wallet-keyed memory: the verified payer address is the namespace.
-function memoryNamespace(req, res) {
+// Wallet-keyed memory: the verified payer address is the caller identity.
+// `actor` is who is calling; `owner` is the namespace being acted on (defaults
+// to the caller's own namespace; a different owner requires a grant).
+function memoryActor(req, res) {
   const payer = payerFromRequest(req);
   if (payer) return payer;
   if (FREE_MODE && req.query.ns) return `demo:${req.query.ns}`;
   res.status(400).json({
-    error: "No payer identity found on this request. Pay via x402 — the paying wallet owns the namespace.",
+    error: "No payer identity found on this request. Pay via x402 — the paying wallet is your identity.",
   });
   return null;
 }
-
-app.post("/api/memory", (req, res) => {
-  const ns = memoryNamespace(req, res);
-  if (!ns) return;
-  const { key, value, delete: del } = req.body ?? {};
+const targetOwner = (req, actor) => {
+  const o = (req.body?.owner ?? req.query.owner ?? "").toString().toLowerCase();
+  return o && /^0x[0-9a-f]{40}$/.test(o) ? o : actor;
+};
+const memHandler = (fn) => (req, res) => {
+  const actor = memoryActor(req, res);
+  if (!actor) return;
   try {
-    res.json(del ? memoryDelete(ns, key) : memoryPut(ns, key, value));
+    res.json(fn(req, actor, targetOwner(req, actor)));
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
-});
+};
 
-app.get("/api/memory", (req, res) => {
-  const ns = memoryNamespace(req, res);
-  if (!ns) return;
-  try {
-    res.json(memoryGet(ns, req.query.key));
-  } catch (err) {
-    res.status(err.statusCode || 500).json({ error: err.message });
-  }
-});
+app.post("/api/memory", memHandler((req, actor, owner) => {
+  const { key, value, delete: del, ttlSeconds } = req.body ?? {};
+  return del ? memoryDelete(owner, key, { actor }) : memoryPut(owner, key, value, { actor, ttlSeconds });
+}));
+app.get("/api/memory", memHandler((req, actor, owner) => memoryGet(owner, req.query.key, { actor })));
+
+// Coordination + provenance + recall (all wallet-only; identity = payment).
+app.post("/api/memory/incr", memHandler((req, actor, owner) => memoryIncr(owner, req.body?.key, req.body?.by, actor)));
+app.post("/api/memory/grant", memHandler((req, actor) => grant(actor, req.body?.grantee, req.body?.mode, req.body?.ttlSeconds)));
+app.post("/api/memory/revoke", memHandler((req, actor) => revoke(actor, req.body?.grantee)));
+app.get("/api/memory/grants", memHandler((req, actor) => listGrants(actor)));
+app.get("/api/memory/log", memHandler((req, actor, owner) => getLog(owner, actor, parseInt(req.query.limit, 10) || 100)));
+app.post("/api/memory/remember", memHandler((req, actor, owner) => remember(owner, req.body?.text, req.body?.meta, { actor })));
+app.post("/api/memory/recall", memHandler((req, actor, owner) => recall(owner, req.body?.query, req.body?.k, { actor })));
+app.post("/api/memory/forget", memHandler((req, actor, owner) => forget(owner, req.body?.id, { actor })));
 
 // Kit routes: input is merged query + JSON body; handlers return JSON or
 // { __binary, contentType } for image responses.

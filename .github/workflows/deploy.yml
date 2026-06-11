@@ -97,6 +97,12 @@ jobs:
           curl -s -X POST 'localhost:3000/api/memory?ns=ci' -H 'Content-Type: application/json' -d '{"key":"a","value":{"n":1}}' | jq .
           curl -s 'localhost:3000/api/memory?ns=ci&key=a' | jq .
           curl -s 'localhost:3000/api/memory?ns=other&key=a' | jq .
+          echo "=== memory v2: counter / recall / audit log ==="
+          curl -s -X POST 'localhost:3000/api/memory/incr?ns=ci' -H 'Content-Type: application/json' -d '{"key":"jobs","by":3}' | jq -c .
+          curl -s -X POST 'localhost:3000/api/memory/remember?ns=ci' -H 'Content-Type: application/json' -d '{"text":"The Railway deploy failed: build out of memory"}' | jq -c '{stored}'
+          curl -s -X POST 'localhost:3000/api/memory/remember?ns=ci' -H 'Content-Type: application/json' -d '{"text":"pineapple pizza recipe"}' | jq -c '{stored}'
+          curl -s -X POST 'localhost:3000/api/memory/recall?ns=ci' -H 'Content-Type: application/json' -d '{"query":"deployment ran out of memory","k":1}' | jq -c '.results[0].text'
+          curl -s 'localhost:3000/api/memory/log?ns=ci&limit=3' | jq -c '.entries|map(.action)'
           echo "=== kit: encoding/data/text/time/validation ==="
           curl -s -X POST localhost:3000/api/hash -H 'Content-Type: application/json' -d '{"text":"hello"}' | jq -c .
           curl -s -X POST localhost:3000/api/json-to-csv -H 'Content-Type: application/json' -d '{"json":[{"a":1,"b":{"c":2}}]}' | jq -c .
@@ -111,11 +117,14 @@ jobs:
           curl -s -X POST localhost:3000/api/robots-check -H 'Content-Type: application/json' -d '{"url":"https://www.google.com/search","userAgent":"TestBot"}' | jq -c '{allowed, matchedRule}'
           curl -s -X POST localhost:3000/api/sitemap -H 'Content-Type: application/json' -d '{"url":"https://www.sitemaps.org/sitemap.xml"}' | jq -c '{type, count}'
           echo "=== discovery surfaces ==="
-          N=$(curl -s localhost:3000/api/pricing | jq '.endpoints | length'); echo "catalog endpoints: $N (expect 56)"; [ "$N" = "56" ]
+          N=$(curl -s localhost:3000/api/pricing | jq '.endpoints | length'); echo "catalog endpoints: $N (expect 64)"; [ "$N" = "64" ]
           curl -s localhost:3000/openapi.json | jq '{paths: (.paths | length)}'
           curl -s localhost:3000/tools | grep -o '<h1>[^<]*</h1>'
           curl -s localhost:3000/tools/memory-write | grep -o '<title>[^<]*</title>'
           curl -s localhost:3000/sitemap.xml | grep -c '<loc>'
+
+      - name: Memory v2 unit tests (grants, counters, audit chain, recall)
+        run: node scripts/test-memory.js
 
       - name: Proof-of-work tier (gate bypass with payments enabled)
         run: |
@@ -165,11 +174,11 @@ jobs:
         run: |
           PROD=https://agent402.tools
           N=$(curl -s "$PROD/api/pricing" | jq '.endpoints | length')
-          echo "production endpoint count: $N (expect 56)"
+          echo "production endpoint count: $N (expect 64)"
           curl -s "$PROD/api/pricing" | jq -r '.endpoints[] | "\(.method) \(.path) \(.price)"'
           paid=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PROD/api/hash" -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{"text":"x"}')
           echo "hash unpaid → HTTP $paid (expect 402)"
-          [ "$N" = "56" ] && [ "$paid" = "402" ] || { echo "Production may still be building the new image — re-run this check shortly."; exit 1; }
+          [ "$N" = "64" ] && [ "$paid" = "402" ] || { echo "Production may still be building the new image — re-run this check shortly."; exit 1; }
           echo "=== proof-of-work tier live on production (no wallet) ==="
           node --input-type=module -e '
           const B = "'"$PROD"'";
