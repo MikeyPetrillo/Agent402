@@ -132,6 +132,12 @@ jobs:
       - name: Multi-agent coordination demo (two wallets, one namespace)
         run: node scripts/demo-coordination.js
 
+      - name: /api/stats surfaces the M2M economy
+        run: |
+          curl -s localhost:3000/api/hash -X POST -H 'Content-Type: application/json' -d '{"text":"x"}' >/dev/null
+          curl -s localhost:3000/api/stats | jq -e '.tools == 100 and .toolCallsServed.total >= 1 and (.summary | test("machine-to-machine"))' >/dev/null \
+            && echo "/api/stats OK" || { echo "/api/stats wrong"; curl -s localhost:3000/api/stats; exit 1; }
+
       - name: Proof-of-work tier (gate bypass with payments enabled)
         run: |
           # Start a second instance with the x402 paywall ACTIVE so the PoW gate
@@ -199,6 +205,10 @@ jobs:
           if (r.status !== 200) { console.error("PoW on production returned " + r.status); process.exit(1); }
           console.log("solved difficulty " + c.difficulty + " -> /api/hash HTTP 200, X-Pow-Accepted:", r.headers.get("x-pow-accepted"));
           '
+          echo "=== watch an agent pay an agent (live, no wallet) ==="
+          TARGET_URL=https://agent402.tools node scripts/demo-payment.js
+          echo "=== live M2M stats ==="
+          curl -s https://agent402.tools/api/stats | jq '{tools, wallet, onchainRevenueProof, served: .toolCallsServed}'
 
   probe:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || contains(join(github.event.commits.*.message), '[probe]')

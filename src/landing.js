@@ -23,17 +23,17 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent402 — ${count} pay-per-call tools for AI agents (x402, USDC on Base)</title>
-<meta name="description" content="${count} machine-payable tools for AI agents: headless-browser rendering, screenshots, PDF extraction, wallet-keyed memory, data conversion, validation, networking. Fractions of a cent per call in USDC via the x402 protocol — no API keys, no signup.">
+<title>Agent402 — where agents pay agents (machine-to-machine payments via x402, USDC on Base)</title>
+<meta name="description" content="A live node in the machine-to-machine economy: ${count} tools autonomous agents pay for per call in USDC via the x402 protocol — or with proof-of-work, no wallet. No human, no signup, no API key. The payment is the identity.">
 <link rel="canonical" href="${baseUrl}/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/">
 <meta property="og:site_name" content="Agent402">
-<meta property="og:title" content="Agent402 — ${count} pay-per-call tools for AI agents">
-<meta property="og:description" content="${count} machine-payable endpoints, one base URL, zero API keys. Browser rendering, PDF extraction, wallet-keyed memory, conversions, validation. USDC per call via x402.">
+<meta property="og:title" content="Agent402 — where agents pay agents (machine-to-machine payments)">
+<meta property="og:description" content="A working node in agent-to-agent commerce: ${count} tools settled per call in USDC via x402 (or proof-of-work). No human, no signup. The payment is the identity.">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="Agent402 — ${count} pay-per-call tools for AI agents">
-<meta name="twitter:description" content="Machine-payable web tools. Agents pay fractions of a cent per call in USDC via x402 — no API keys, no signup.">
+<meta name="twitter:title" content="Agent402 — where agents pay agents">
+<meta name="twitter:description" content="Machine-to-machine payments, live. Autonomous agents pay per call in USDC via x402 — or with compute. No human, no signup, no API key.">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -86,14 +86,26 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
 </head>
 <body>
 <div class="wrap">
-  <div class="badge">x402 &middot; USDC on ${network} &middot; ${count} tools &middot; no signup, no API keys</div>
-  <h1>The utility belt your agent<br>can't build for itself<span class="x">.</span></h1>
-  <p class="sub">${count} pay-per-call tools behind one base URL. Your agent hits an endpoint, pays a fraction of a cent in USDC automatically, and gets the result. No accounts. No keys. No subscriptions. The wallet is the identity.</p>
+  <div class="badge">x402 &middot; machine-to-machine payments &middot; USDC on ${network} &middot; ${count} tools</div>
+  <h1>Where agents pay agents<span class="x">.</span></h1>
+  <p class="sub">A live node in the machine-to-machine economy. An autonomous agent hits an endpoint, gets an <code>HTTP 402</code> price quote, settles payment from its own wallet in USDC — or with a few seconds of compute — and gets the result. No human, no signup, no API key. The payment <em>is</em> the identity. ${count} tools to prove it's real.</p>
   <a class="cta primary" href="/tools">Browse all ${count} tools →</a>
+  <a class="cta ghost" href="/api/stats">live stats</a>
   <a class="cta ghost" href="/llms.txt">llms.txt</a>
   <a class="cta ghost" href="/openapi.json">OpenAPI</a>
-  <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet at all.</b> Pay with a few seconds of <a href="/api/pow">proof-of-work</a> (CPU) instead of USDC — no signup, no key. The other ${count - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run.</div>
+  <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet at all.</b> An agent with no funds pays with a few seconds of <a href="/api/pow">proof-of-work</a> (CPU) instead of USDC — still no human, no signup. The other ${count - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run.</div>
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
+
+  <h2>Watch an agent pay an agent</h2>
+  <p class="sub">No slideware — run the whole loop yourself. An autonomous buyer discovers the catalog, gets quoted over <code>HTTP 402</code>, settles, and uses the result, with zero human involvement:</p>
+  <pre>git clone https://github.com/MikeyPetrillo/Agent402 &amp;&amp; cd Agent402 &amp;&amp; npm i
+
+# pays with COMPUTE — no wallet, no funds, runs anywhere
+node scripts/demo-payment.js
+
+# or settle in real USDC on Base with a funded key
+AGENT_KEY=0xYOUR_FUNDED_KEY node scripts/demo-payment.js</pre>
+  <p class="sub">Revenue is trustless and public — every settled call lands on-chain. See live counts and the receiving wallet at <a href="/api/stats">/api/stats</a>.</p>
 
   <h2>Why not just build it yourself?</h2>
   <p class="sub">Your agent can write code. Here's what it can't do mid-task:</p>
