@@ -1,0 +1,27 @@
+{
+  "name": "agent402",
+  "version": "1.0.0",
+  "description": "Paid web tools for AI agents via the x402 payment protocol",
+  "main": "src/server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node src/server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:32787/git/MikeyPetrillo/Agent402"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@coinbase/x402": "^2.1.0",
+    "@mozilla/readability": "^0.6.0",
+    "@x402/evm": "^2.14.0",
+    "@x402/express": "^2.14.0",
+    "express": "^5.2.1",
+    "jsdom": "^29.1.1",
+    "turndown": "^7.2.4"
+  }
+}
