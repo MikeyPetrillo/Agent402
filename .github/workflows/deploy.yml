@@ -6,6 +6,7 @@ on:
       - ".github/trigger-probe"
       - ".github/trigger-deploy"
       - ".github/trigger-test"
+      - ".github/trigger-paytest"
   workflow_dispatch:
     inputs:
       mode:
@@ -13,6 +14,29 @@ on:
         default: "deploy"
 
 jobs:
+  paytest:
+    if: contains(join(github.event.commits.*.message), '[paytest]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      TARGET_URL: https://agent402-production.up.railway.app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci && npm install --no-save @x402/fetch viem
+      - name: Generate burner agent wallet
+        run: MODE=address KEY_FILE=$RUNNER_TEMP/agent-key node scripts/agent-e2e.js
+      - name: Publish funding address
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-address
+          path: agent-address.txt
+      - name: Wait for funding, then buy from the live API
+        run: MODE=run KEY_FILE=$RUNNER_TEMP/agent-key node scripts/agent-e2e.js
+
   test:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'test' || contains(join(github.event.commits.*.message), '[test]')
     runs-on: ubuntu-latest
