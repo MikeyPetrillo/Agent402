@@ -1,3 +1,8 @@
 node_modules/
 .env
 *.log
+
+# Never commit wallet keys
+.github/burner-key
+agent-key
+agent-address.txt
