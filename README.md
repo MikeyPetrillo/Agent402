@@ -27,6 +27,29 @@ pages), [`/api/pricing`](https://agent402.tools/api/pricing) (JSON catalog),
 [`/openapi.json`](https://agent402.tools/openapi.json) (OpenAPI 3.1),
 [`/llms.txt`](https://agent402.tools/llms.txt) (LLM-readable docs), `/health`.
 
+## No wallet? Pay with compute (proof-of-work)
+
+Agents that can't pay USDC can still use the **41 pure-CPU tools** by spending CPU
+instead — a built-in anti-abuse onramp that converts non-payers into integrated
+users. The browser/network/storage tools (`render`, `screenshot`, `pdf`,
+`memory`, `extract`, `http-check`, …) stay wallet-only.
+
+```js
+import { createHash } from "node:crypto";
+const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
+const c = await (await fetch("https://agent402.tools/api/pow/challenge?slug=hash")).json();
+let n = 0;                                   // find a nonce with `difficulty` leading zero bits
+while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
+const res = await fetch("https://agent402.tools/api/hash", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "X-Pow-Solution": c.token + ":" + n },
+  body: JSON.stringify({ text: "hello world" }),
+});
+```
+
+Each challenge is signed, single-use, and short-lived; difficulty is tunable via
+`POW_DIFFICULTY`. See `GET /api/pow` for the machine-readable description.
+
 **Why agents pay for this instead of building it themselves:**
 
 1. **Capabilities the sandbox doesn't have.** Most agent runtimes have no

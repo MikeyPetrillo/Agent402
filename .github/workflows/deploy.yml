@@ -117,6 +117,50 @@ jobs:
           curl -s localhost:3000/tools/memory-write | grep -o '<title>[^<]*</title>'
           curl -s localhost:3000/sitemap.xml | grep -c '<loc>'
 
+      - name: Proof-of-work tier (gate bypass with payments enabled)
+        run: |
+          # Start a second instance with the x402 paywall ACTIVE so the PoW gate
+          # is meaningful (in FREE_MODE everything is free). The facilitator is
+          # never contacted (X402_SYNC_ON_START=false); unpaid+unproven requests
+          # are rejected, a valid proof-of-work is served.
+          WALLET_ADDRESS=0x000000000000000000000000000000000000dEaD NETWORK=base \
+          FACILITATOR_URL=https://facilitator.payai.network X402_SYNC_ON_START=false \
+          POW_DIFFICULTY=16 PORT=3001 node src/server.js &
+          for i in $(seq 1 20); do curl -s localhost:3001/api/pow >/dev/null && break; sleep 1; done
+          node --input-type=module -e '
+          const B = "http://localhost:3001";
+          const { createHash } = await import("node:crypto");
+          const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
+          const solve = (c) => { let n = 0; while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++; return n; };
+          const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
+
+          const info = await (await fetch(B + "/api/pow")).json();
+          if (info.eligibleTools.length !== 41) fail("expected 41 PoW-eligible tools, got " + info.eligibleTools.length);
+          if (info.eligibleTools.includes("render")) fail("render must NOT be PoW-eligible");
+
+          const c = await (await fetch(B + "/api/pow/challenge?slug=hash")).json();
+          const n = solve(c);
+          const ok = await fetch(B + "/api/hash", { method: "POST", headers: { "Content-Type": "application/json", "X-Pow-Solution": c.token + ":" + n }, body: JSON.stringify({ text: "hello world" }) });
+          if (ok.status !== 200) fail("valid PoW should return 200, got " + ok.status);
+          if ((await ok.json()).hex.slice(0, 8) !== "b94d27b9") fail("wrong hash result");
+          console.log("valid PoW -> 200 ✓");
+
+          const replay = await fetch(B + "/api/hash", { method: "POST", headers: { "Content-Type": "application/json", "X-Pow-Solution": c.token + ":" + n }, body: JSON.stringify({ text: "x" }) });
+          if (replay.status === 200) fail("replayed challenge must be rejected");
+          console.log("replay -> " + replay.status + " ✓");
+
+          const noPow = await fetch(B + "/api/hash", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "x" }) });
+          if (noPow.status === 200) fail("no payment + no PoW must be rejected");
+          console.log("no PoW -> " + noPow.status + " ✓");
+
+          const c2 = await (await fetch(B + "/api/pow/challenge?slug=hash")).json();
+          const n2 = solve(c2);
+          const walletOnly = await fetch(B + "/api/render", { method: "POST", headers: { "Content-Type": "application/json", "X-Pow-Solution": c2.token + ":" + n2 }, body: JSON.stringify({ url: "https://example.com" }) });
+          if (walletOnly.status === 200) fail("PoW must NOT bypass the wallet-only /api/render");
+          console.log("PoW on wallet-only render -> " + walletOnly.status + " ✓");
+          console.log("proof-of-work gate: all assertions passed");
+          '
+
       - name: Check production is serving the new catalog
         run: |
           PROD=https://agent402.tools
@@ -126,6 +170,17 @@ jobs:
           paid=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PROD/api/hash" -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{"text":"x"}')
           echo "hash unpaid → HTTP $paid (expect 402)"
           [ "$N" = "56" ] && [ "$paid" = "402" ] || { echo "Production may still be building the new image — re-run this check shortly."; exit 1; }
+          echo "=== proof-of-work tier live on production (no wallet) ==="
+          node --input-type=module -e '
+          const B = "'"$PROD"'";
+          const { createHash } = await import("node:crypto");
+          const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
+          const c = await (await fetch(B + "/api/pow/challenge?slug=hash")).json();
+          let n = 0; while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
+          const r = await fetch(B + "/api/hash", { method: "POST", headers: { "Content-Type": "application/json", "X-Pow-Solution": c.token + ":" + n }, body: JSON.stringify({ text: "hello world" }) });
+          if (r.status !== 200) { console.error("PoW on production returned " + r.status); process.exit(1); }
+          console.log("solved difficulty " + c.difficulty + " -> /api/hash HTTP 200, X-Pow-Accepted:", r.headers.get("x-pow-accepted"));
+          '
 
   probe:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || contains(join(github.event.commits.*.message), '[probe]')
