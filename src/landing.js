@@ -1,8 +1,10 @@
 import { toolList, CATEGORIES } from "./pages.js";
+import { isComputePayable } from "./pow.js";
 
 export function landingPage(baseUrl, network, freeMode, catalog) {
   const tools = toolList(catalog);
   const count = tools.length;
+  const freeCount = tools.filter(isComputePayable).length;
   const categoryCards = Object.entries(CATEGORIES)
     .map(([key, { label, blurb }]) => {
       const inCat = tools.filter((t) => t.category === key);
@@ -77,6 +79,9 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
   a { color:var(--accent); }
   footer { margin-top:56px; color:var(--muted); font-size:.85rem; border-top:1px solid #1e2638; padding-top:20px; }
   .warn { background:#3a2a12; border:1px solid #6b4a1a; color:#fbbf24; border-radius:10px; padding:12px 16px; margin:20px 0; font-size:.9rem; }
+  .callout { background:#10210f; border:1px solid #1f4a1d; border-radius:12px; padding:14px 18px; margin:24px 0 8px; font-size:1rem; color:var(--text); }
+  .callout b { color:#fff; }
+  .freebadge { display:inline-block; background:var(--accent); color:#08130b; font-weight:800; font-size:.72rem; letter-spacing:.03em; padding:2px 9px; border-radius:999px; margin-right:8px; vertical-align:middle; }
 </style>
 </head>
 <body>
@@ -87,7 +92,7 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
   <a class="cta primary" href="/tools">Browse all ${count} tools →</a>
   <a class="cta ghost" href="/llms.txt">llms.txt</a>
   <a class="cta ghost" href="/openapi.json">OpenAPI</a>
-  <p class="sub" style="margin-top:18px;font-size:1rem"><b style="color:var(--accent)">No wallet?</b> Agents can pay for the pure-CPU tools with <a href="/api/pow">proof-of-work</a> instead of USDC — spend a little compute, skip the wallet. The browser, network, and storage tools stay wallet-only.</p>
+  <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet at all.</b> Pay with a few seconds of <a href="/api/pow">proof-of-work</a> (CPU) instead of USDC — no signup, no key. The other ${count - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run.</div>
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
 
   <h2>Why not just build it yourself?</h2>

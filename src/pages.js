@@ -1,5 +1,6 @@
 // Server-rendered catalogue pages and the OpenAPI spec — all generated from
 // the tool catalog so they never drift from what the API actually serves.
+import { isComputePayable } from "./pow.js";
 
 export const CATEGORIES = {
   web: { label: "Web & documents", blurb: "Read the live web: browser rendering, screenshots, article extraction, PDFs, metadata." },
@@ -46,11 +47,27 @@ const SHARED_CSS = `
   .card .price { color:var(--accent); font-family:var(--mono); font-size:.8rem; }
   .card p { color:var(--muted); font-size:.82rem; margin-top:6px; }
   .cat-blurb { color:var(--muted); font-size:.9rem; margin:-6px 0 10px; }
+  .free { display:inline-block; background:var(--accent); color:#08130b; font-weight:700; font-size:.68rem; letter-spacing:.02em; padding:1px 7px; border-radius:999px; font-family:system-ui,sans-serif; vertical-align:middle; }
+  .paidtag { display:inline-block; background:#1b2336; color:var(--muted); font-size:.68rem; padding:1px 7px; border-radius:999px; font-family:system-ui,sans-serif; vertical-align:middle; }
+  .callout { background:#10210f; border:1px solid #1f4a1d; border-radius:12px; padding:14px 16px; margin:16px 0; font-size:.95rem; }
+  .callout b { color:var(--accent); }
   table { border-collapse:collapse; width:100%; font-size:.88rem; }
   td, th { border:1px solid #1e2638; padding:8px 10px; text-align:left; vertical-align:top; }
   th { background:#10162a; }
   footer { margin-top:56px; color:var(--muted); font-size:.85rem; border-top:1px solid #1e2638; padding-top:20px; }
 `;
+
+// Price line for a tool card: compute-payable tools are FREE via proof-of-work
+// (the USDC price is the alternative); the rest are USDC-only.
+function priceLine(tool) {
+  return isComputePayable(tool)
+    ? `<span class="free">FREE</span> with compute · or ${tool.price} USDC`
+    : `<span class="paidtag">USDC</span> ${tool.price}`;
+}
+
+function card(t) {
+  return `<div class="card"><h3><a href="/tools/${t.slug}">${esc(t.name)}</a></h3><div class="price">${priceLine(t)} · <code>${t.method} ${esc(t.path)}</code></div><p>${esc(t.description.length > 120 ? t.description.slice(0, 120) + "…" : t.description)}</p></div>`;
+}
 
 function head({ title, description, canonical, jsonLd }) {
   return `<meta charset="utf-8">
@@ -120,11 +137,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
       return `<tr><td><code>${esc(k)}</code>${required ? " <b>*</b>" : ""}</td><td>${esc(v.type ?? "any")}</td><td>${esc(v.description ?? "")}</td></tr>`;
     })
     .join("\n");
-  const relatedCards = related
-    .map(
-      (t) => `<div class="card"><h3><a href="/tools/${t.slug}">${esc(t.name)}</a></h3><div class="price">${t.price} · <code>${t.method} ${esc(t.path)}</code></div><p>${esc(t.description.slice(0, 110))}…</p></div>`
-    )
-    .join("\n");
+  const relatedCards = related.map(card).join("\n");
 
   return `<!doctype html>
 <html lang="en">
@@ -135,7 +148,11 @@ ${head({ title, description: `${tool.description} ${tool.price} per call via x40
 <div class="wrap">
   <div class="crumb"><a href="/">Agent402</a> / <a href="/tools">tools</a> / ${esc(tool.slug)}</div>
   <h1>${esc(tool.name)}</h1>
-  <div class="price-badge">${tool.price} per call · <code>${tool.method} ${esc(tool.path)}</code> · USDC via x402</div>
+  <div class="price-badge">${
+    computePayable
+      ? `<span class="free">FREE</span> with proof-of-work · or ${tool.price} in USDC`
+      : `${tool.price} per call · USDC via x402`
+  } · <code>${tool.method} ${esc(tool.path)}</code></div>
   <p class="sub">${esc(tool.description)}</p>
 
   <h2>Input</h2>
@@ -202,16 +219,20 @@ export function toolsIndexPage(baseUrl, catalog) {
       url: `${baseUrl}/tools/${t.slug}`,
     })),
   };
+  const freeCount = tools.filter(isComputePayable).length;
   const sections = Object.entries(CATEGORIES)
     .map(([key, { label, blurb }]) => {
       const inCat = tools.filter((t) => t.category === key);
       if (!inCat.length) return "";
-      const cards = inCat
-        .map(
-          (t) => `<div class="card"><h3><a href="/tools/${t.slug}">${esc(t.name)}</a></h3><div class="price">${t.price} · <code>${t.method} ${esc(t.path)}</code></div><p>${esc(t.description.length > 120 ? t.description.slice(0, 120) + "…" : t.description)}</p></div>`
-        )
-        .join("\n");
-      return `<h2>${esc(label)} <span style="color:var(--muted);font-size:.85rem">(${inCat.length})</span></h2>
+      const free = inCat.filter(isComputePayable).length;
+      const tag =
+        free === inCat.length
+          ? ` <span class="free">ALL FREE w/ compute</span>`
+          : free > 0
+            ? ` <span class="free">${free} FREE w/ compute</span>`
+            : ` <span class="paidtag">USDC only</span>`;
+      const cards = inCat.map(card).join("\n");
+      return `<h2>${esc(label)} <span style="color:var(--muted);font-size:.85rem">(${inCat.length})</span>${tag}</h2>
 <p class="cat-blurb">${esc(blurb)}</p>
 <div class="grid">${cards}</div>`;
     })
@@ -226,7 +247,8 @@ ${head({ title, description, canonical, jsonLd })}
 <div class="wrap">
   <div class="crumb"><a href="/">Agent402</a> / tools</div>
   <h1>${tools.length} tools, one base URL, zero API keys</h1>
-  <p class="sub">Every endpoint below is live and machine-payable: call it, get an <code>HTTP 402</code> price quote, pay a fraction of a cent in USDC on Base via <a href="https://x402.org" rel="noopener">x402</a>, get the result. Machine-readable versions: <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>.</p>
+  <p class="sub">Call any endpoint, get an <code>HTTP 402</code> quote, and either pay a fraction of a cent in USDC on Base via <a href="https://x402.org" rel="noopener">x402</a> — or, on the <span class="free">FREE</span> tools, skip the wallet entirely. Machine-readable: <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>.</p>
+  <div class="callout"><b>${freeCount} of ${tools.length} tools are free</b> — no wallet needed. Pay with a few seconds of <a href="/api/pow">proof-of-work</a> (CPU) instead of USDC. The other ${tools.length - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run. Look for the <span class="free">FREE</span> badge below.</div>
   ${sections}
   <footer>Agent402 — pay-per-call tools for AI agents. <a href="/">Home</a> · <a href="/llms.txt">llms.txt</a></footer>
 </div>
