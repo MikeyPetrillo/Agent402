@@ -1,6 +1,6 @@
 # Agent402
 
-**64 pay-per-call tools for AI agents, paid in USDC via the [x402 protocol](https://x402.org).**
+**100 pay-per-call tools for AI agents, paid in USDC via the [x402 protocol](https://x402.org) — or free with proof-of-work.**
 
 **🟢 Live at [agent402.tools](https://agent402.tools)** — USDC on Base mainnet.
 
@@ -8,19 +8,25 @@ No signups, no API keys, no subscriptions. An agent calls an endpoint, gets an
 `HTTP 402 Payment Required` challenge, pays a fraction of a cent in USDC on Base
 automatically, and gets the result. Every payment goes straight to your wallet.
 
-## The catalogue (56 tools, 9 categories)
+## The catalogue (100 tools, 10 categories — 77 free via proof-of-work)
 
 | Category | Tools | Highlights |
 |---|---|---|
 | Web & documents | 5 | `render` (headless Chromium, $0.02), `screenshot`, `pdf`, `extract`, `meta` |
 | Agent memory & coordination | 10 | Wallet-keyed KV + TTL, atomic counters, **shared namespaces (grants)**, tamper-evident audit log, **similarity recall** — the payment IS the identity |
 | Network & domains | 6 | `dns`, `http-check`, `tls-cert`, `whois` (RDAP), `robots-check`, `sitemap` |
-| Data conversion | 10 | JSON ⇄ CSV/YAML/XML, markdown ⇄ HTML, `json-diff`, `json-query` |
-| Text processing | 7 | `slugify`, `case`, `text-stats` (token estimates), `keywords`, `text-diff`, `regex`, `lorem` |
-| Encoding & crypto | 7 | `hash`, `hmac`, `base64`, `hex`, `url-code`, `jwt-decode`, `totp` |
+| Data conversion | 16 | JSON ⇄ CSV/YAML/XML, markdown ⇄ HTML, `json-diff`/`query`/`flatten`/`merge`, `csv-to-md`, `querystring`, `base-convert`, `roman` |
+| Text processing | 16 | `slugify`, `case`, `text-stats`, `keywords`, `regex`, `levenshtein`, `redact` (PII), `extract-entities`, `readability`, `truncate`, `count`, `sort-lines` |
+| Encoding & crypto | 14 | `hash`, `hmac`, `base64`/`32`/`58`, `hex`, `jwt-decode`/`verify`, `totp`, `crc32`, `rot13`, `morse`, `html-entities` |
+| Math & finance | 7 | `calc` (safe evaluator), `stats`, `unit-convert`, `percentage`, `number-format`, `cidr` (subnets), `finance` (loans/interest) |
 | Generators & IDs | 5 | `uuid` (v4/v7), `ulid`, `password`, `random`, `qr` (PNG) |
-| Time & scheduling | 5 | `time`, `time-convert`, `cron-next`, `duration`, `date-diff` |
-| Validation & parsing | 9 | `email-validate` (MX), `url-parse`, `ip-info`, `user-agent`, `color`, `semver`, `mime`, `iban-validate`, `card-validate` |
+| Time & scheduling | 9 | `time`, `time-convert`, `cron-next`, `duration`, `date-diff`, `business-days`, `age`, `relative-time`, `add-time` |
+| Validation & parsing | 13 | `email-validate` (MX), `url-parse`, `ip-info`, `user-agent`, `color`, `semver`, `mime`, `iban`/`card`/`isbn`-validate, `password-strength`, `json-pointer`, `uuid-validate` |
+
+Every tool is covered by tests: `scripts/test-kit2.js` asserts exact outputs for
+the pure-CPU tools, `scripts/test-memory.js` covers the coordination layer, and
+the paid end-to-end test (`scripts/agent-e2e.js`) buys each endpoint with real
+USDC and verifies the result.
 
 Free discovery surfaces: [`/tools`](https://agent402.tools/tools) (per-tool docs
 pages), [`/api/pricing`](https://agent402.tools/api/pricing) (JSON catalog),
