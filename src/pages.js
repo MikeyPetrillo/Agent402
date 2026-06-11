@@ -120,6 +120,39 @@ function payExample(baseUrl, tool) {
 });`;
 }
 
+// Unique, useful per-page content for the generated conversion tools — a
+// reference table + the factor + the inverse link — so the ~970 pages are
+// substantive rather than near-duplicate doorway pages.
+function convertContent(baseUrl, tool) {
+  let from, to, perUnit;
+  try {
+    const r = tool.handler({ value: 1 });
+    from = r.from;
+    to = r.to;
+    perUnit = r.result;
+  } catch {
+    return "";
+  }
+  const rows = [1, 2, 5, 10, 25, 100, 1000]
+    .map((v) => {
+      let out;
+      try {
+        out = tool.handler({ value: v }).result;
+      } catch {
+        out = "";
+      }
+      return `<tr><td>${v} ${esc(from.replace(/-/g, " "))}</td><td>${esc(String(out))} ${esc(to.replace(/-/g, " "))}</td></tr>`;
+    })
+    .join("");
+  const inverse = `convert-${to}-to-${from}`;
+  const fromL = from.replace(/-/g, " ");
+  const toL = to.replace(/-/g, " ");
+  return `
+  <p class="sub"><b>1 ${esc(fromL)} = ${esc(String(perUnit))} ${esc(toL)}.</b> To convert, multiply the number of ${esc(fromL)} by ${esc(String(perUnit))}. The reverse direction is <a href="/tools/${inverse}">${esc(toL)} → ${esc(fromL)}</a>.</p>
+  <h2>Common ${esc(fromL)} to ${esc(toL)} values</h2>
+  <table><tr><th>${esc(fromL)}</th><th>${esc(toL)}</th></tr>${rows}</table>`;
+}
+
 export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0 } = {}) {
   const title = `${tool.name} API for AI agents — ${tool.price} per call | Agent402`;
   const canonical = `${baseUrl}/tools/${tool.slug}`;
@@ -174,6 +207,7 @@ ${head({ title, description: `${tool.description} ${tool.price} per call via x40
       : `${tool.price} per call · USDC via x402`
   } · <code>${tool.method} ${esc(tool.path)}</code></div>
   <p class="sub">${esc(tool.description)}</p>
+  ${tool.category === "convert" ? convertContent(baseUrl, tool) : ""}
 
   <h2>Input</h2>
   ${schemaRows ? `<table><tr><th>Field</th><th>Type</th><th>Description</th></tr>${schemaRows}</table>` : `<p class="sub">No parameters.</p>`}
