@@ -1,6 +1,6 @@
 # Agent402
 
-**56 pay-per-call tools for AI agents, paid in USDC via the [x402 protocol](https://x402.org).**
+**64 pay-per-call tools for AI agents, paid in USDC via the [x402 protocol](https://x402.org).**
 
 **🟢 Live at [agent402.tools](https://agent402.tools)** — USDC on Base mainnet.
 
@@ -13,7 +13,7 @@ automatically, and gets the result. Every payment goes straight to your wallet.
 | Category | Tools | Highlights |
 |---|---|---|
 | Web & documents | 5 | `render` (headless Chromium, $0.02), `screenshot`, `pdf`, `extract`, `meta` |
-| Agent memory | 2 | Wallet-keyed persistent KV store — the payment IS the login |
+| Agent memory & coordination | 10 | Wallet-keyed KV + TTL, atomic counters, **shared namespaces (grants)**, tamper-evident audit log, **similarity recall** — the payment IS the identity |
 | Network & domains | 6 | `dns`, `http-check`, `tls-cert`, `whois` (RDAP), `robots-check`, `sitemap` |
 | Data conversion | 10 | JSON ⇄ CSV/YAML/XML, markdown ⇄ HTML, `json-diff`, `json-query` |
 | Text processing | 7 | `slugify`, `case`, `text-stats` (token estimates), `keywords`, `text-diff`, `regex`, `lorem` |
@@ -26,6 +26,51 @@ Free discovery surfaces: [`/tools`](https://agent402.tools/tools) (per-tool docs
 pages), [`/api/pricing`](https://agent402.tools/api/pricing) (JSON catalog),
 [`/openapi.json`](https://agent402.tools/openapi.json) (OpenAPI 3.1),
 [`/llms.txt`](https://agent402.tools/llms.txt) (LLM-readable docs), `/health`.
+
+## Memory & coordination — the part agents can't build for themselves
+
+A single, ephemeral, sandboxed agent cannot give itself durable state, a portable
+identity, a place *other* agents can reach, atomic coordination primitives, or
+tamper-evident history. Agent402's memory layer is exactly that — keyed to the
+paying wallet, no signup:
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/memory` | Write KV, optional `ttlSeconds`; `owner` to target a granted namespace |
+| `GET /api/memory` | Read a key or list keys (your namespace, or a granted `owner`) |
+| `POST /api/memory/incr` | **Atomic** counter/lock — coordinate across agents |
+| `POST /api/memory/grant` | **Share your namespace** with another wallet (`read`/`readwrite`) |
+| `POST /api/memory/revoke` · `GET /api/memory/grants` | Manage access |
+| `GET /api/memory/log` | **Tamper-evident**, hash-chained audit history of a namespace |
+| `POST /api/memory/remember` · `recall` · `forget` | **Similarity recall** — store text, retrieve by meaning |
+
+Two different agents (two wallets) coordinate through one shared namespace: A
+grants B `readwrite`, B atomically increments a shared job counter, and the
+hash-chained log proves who did what. That rendezvous point is not vibe-codable —
+it requires a persistent, neutral third party with portable identity.
+
+## No wallet? Pay with compute (proof-of-work)
+
+Agents that can't pay USDC can still use the **41 pure-CPU tools** by spending CPU
+instead — a built-in anti-abuse onramp that converts non-payers into integrated
+users. The browser/network/storage tools (`render`, `screenshot`, `pdf`,
+`memory`, `extract`, `http-check`, …) stay wallet-only.
+
+```js
+import { createHash } from "node:crypto";
+const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
+const c = await (await fetch("https://agent402.tools/api/pow/challenge?slug=hash")).json();
+let n = 0;                                   // find a nonce with `difficulty` leading zero bits
+while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
+const res = await fetch("https://agent402.tools/api/hash", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "X-Pow-Solution": c.token + ":" + n },
+  body: JSON.stringify({ text: "hello world" }),
+});
+```
+
+Each challenge is signed, single-use, and short-lived; difficulty is tunable via
+`POW_DIFFICULTY`. See `GET /api/pow` for the machine-readable description.
 
 **Why agents pay for this instead of building it themselves:**
 

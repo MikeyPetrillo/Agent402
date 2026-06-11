@@ -3,7 +3,7 @@
 
 export const CATEGORIES = {
   web: { label: "Web & documents", blurb: "Read the live web: browser rendering, screenshots, article extraction, PDFs, metadata." },
-  memory: { label: "Agent memory", blurb: "Durable key-value state owned by the paying wallet. The payment is the login." },
+  memory: { label: "Agent memory & coordination", blurb: "The stateful layer a stateless agent can't build for itself: durable wallet-keyed KV with TTL, atomic counters/locks, shared namespaces other agents can reach (grants), a tamper-evident audit log, and similarity recall. The payment is the identity — no signup." },
   network: { label: "Network & domains", blurb: "DNS, TLS certificates, WHOIS/RDAP, uptime checks, robots.txt and sitemaps." },
   conversion: { label: "Data conversion", blurb: "JSON ⇄ CSV/YAML/XML, markdown ⇄ HTML, diffs and queries — formats agents juggle constantly." },
   text: { label: "Text processing", blurb: "Slugs, case conversion, diffs, regex, keywords, token estimates." },
@@ -96,7 +96,7 @@ function payExample(baseUrl, tool) {
 });`;
 }
 
-export function toolPage(baseUrl, tool, related) {
+export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0 } = {}) {
   const title = `${tool.name} API for AI agents — ${tool.price} per call | Agent402`;
   const canonical = `${baseUrl}/tools/${tool.slug}`;
   const jsonLd = {
@@ -159,6 +159,19 @@ registerExactEvmScheme(client, { signer: privateKeyToAccount(KEY) });
 const payFetch = wrapFetchWithPayment(fetch, client);
 
 ${esc(payExample(baseUrl, tool))}</pre>
+
+  ${
+    computePayable
+      ? `<h2>No wallet? Pay with compute</h2>
+  <p class="sub">This is a pure-CPU tool, so an agent without a wallet can pay with <a href="/api/pow">proof-of-work</a> instead of USDC: fetch a challenge, solve it (${powDifficulty} leading zero bits), and resend with the <code>X-Pow-Solution</code> header.</p>
+  <pre>import { createHash } from "node:crypto";
+const lz = (b) =&gt; { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
+const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${esc(tool.slug)}")).json();
+let n = 0;
+while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) &lt; c.difficulty) n++;
+await fetch("${baseUrl}${tool.path}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(tool.discovery?.input ?? {})})` : ""} });</pre>`
+      : `<p class="sub" style="margin-top:24px"><b>Wallet-only.</b> This tool reaches the network/browser/storage, so it is paid in USDC via x402 (no proof-of-work tier).</p>`
+  }
 
   <h2>Related tools</h2>
   <div class="grid">${relatedCards}</div>

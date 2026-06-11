@@ -87,6 +87,7 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
   <a class="cta primary" href="/tools">Browse all ${count} tools →</a>
   <a class="cta ghost" href="/llms.txt">llms.txt</a>
   <a class="cta ghost" href="/openapi.json">OpenAPI</a>
+  <p class="sub" style="margin-top:18px;font-size:1rem"><b style="color:var(--accent)">No wallet?</b> Agents can pay for the pure-CPU tools with <a href="/api/pow">proof-of-work</a> instead of USDC — spend a little compute, skip the wallet. The browser, network, and storage tools stay wallet-only.</p>
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
 
   <h2>Why not just build it yourself?</h2>
