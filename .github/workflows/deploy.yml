@@ -48,6 +48,7 @@ jobs:
       - name: Install and start in free mode
         run: |
           npm ci
+          npx playwright install --with-deps chromium
           FREE_MODE=true PORT=3000 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       - name: Exercise tools against live sites
@@ -67,6 +68,19 @@ jobs:
           echo "=== SSRF guard: cloud metadata endpoint must be blocked ==="
           curl -s -X POST localhost:3000/api/extract -H 'Content-Type: application/json' \
             -d '{"url":"http://169.254.169.254/latest/meta-data"}' | jq .
+          echo "=== render: JS-only page (plain extract cannot read this) ==="
+          curl -s -X POST localhost:3000/api/render -H 'Content-Type: application/json' \
+            -d '{"url":"https://react.dev"}' | jq '{title, wordCount, rendered, sample: (.markdown | .[0:300])}'
+          echo "=== screenshot: example.com ==="
+          curl -s 'localhost:3000/api/screenshot?url=https://example.com' -o shot.png
+          file shot.png && ls -la shot.png
+          echo "=== pdf: W3C dummy PDF ==="
+          curl -s -X POST localhost:3000/api/pdf -H 'Content-Type: application/json' \
+            -d '{"url":"https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"}' | jq '{pages, wordCount, text: (.text | .[0:100])}'
+          echo "=== memory: write/read/isolation ==="
+          curl -s -X POST 'localhost:3000/api/memory?ns=ci' -H 'Content-Type: application/json' -d '{"key":"a","value":{"n":1}}' | jq .
+          curl -s 'localhost:3000/api/memory?ns=ci&key=a' | jq .
+          curl -s 'localhost:3000/api/memory?ns=other&key=a' | jq .
 
   probe:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || contains(join(github.event.commits.*.message), '[probe]')

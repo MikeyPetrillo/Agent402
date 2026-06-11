@@ -10,16 +10,15 @@ const turndown = new TurndownService({
 });
 
 /**
- * Extract the main readable content of a page as markdown.
+ * Turn raw HTML into a readable article object (markdown + metadata).
  */
-export async function extractArticle(rawUrl) {
-  const { finalUrl, html } = await safeFetch(rawUrl);
+export function htmlToArticle(html, finalUrl) {
   const dom = new JSDOM(html, { url: finalUrl });
   const article = new Readability(dom.window.document).parse();
   if (!article || !article.content) {
     const err = new Error("Could not extract readable content from this page");
     err.statusCode = 422;
-    return Promise.reject(err);
+    throw err;
   }
   const markdown = turndown.turndown(article.content);
   return {
@@ -32,6 +31,14 @@ export async function extractArticle(rawUrl) {
     wordCount: markdown.split(/\s+/).filter(Boolean).length,
     markdown,
   };
+}
+
+/**
+ * Extract the main readable content of a page as markdown.
+ */
+export async function extractArticle(rawUrl) {
+  const { finalUrl, html } = await safeFetch(rawUrl);
+  return htmlToArticle(html, finalUrl);
 }
 
 function meta(doc, selector, attr = "content") {
