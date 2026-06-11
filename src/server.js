@@ -6,6 +6,7 @@ import { renderArticle, screenshotPage } from "./tools/render.js";
 import { memoryPut, memoryGet, memoryDelete } from "./tools/memory.js";
 import { payerFromRequest } from "./payer.js";
 import { landingPage } from "./landing.js";
+import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
 import { buildPaymentMiddleware } from "./payments.js";
 
 const PORT = process.env.PORT || 3000;
@@ -169,6 +170,9 @@ app.use(express.json({ limit: "100kb" }));
 // Free, unauthenticated routes
 app.get("/", (_req, res) => res.type("html").send(landingPage(BASE_URL, NETWORK, FREE_MODE)));
 app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
+app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL)));
+app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));
 app.get("/api/pricing", (_req, res) =>
   res.json({
     name: "Agent402",

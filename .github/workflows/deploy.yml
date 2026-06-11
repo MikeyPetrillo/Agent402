@@ -95,7 +95,15 @@ jobs:
   probe:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || contains(join(github.event.commits.*.message), '[probe]')
     runs-on: ubuntu-latest
+    env:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
+      - name: Check Railway API for domain purchase support
+        run: |
+          curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+            -d '{"query":"query { __schema { mutationType { fields { name } } } }"}' \
+            | jq -r '.data.__schema.mutationType.fields[].name' | grep -iE 'domain|dns|purchase|register' || echo "(no domain-purchase mutations found)"
       - name: Probe public x402 facilitators
         run: |
           for u in https://facilitator.payai.network https://facilitator.x402.rs https://x402.org/facilitator; do
