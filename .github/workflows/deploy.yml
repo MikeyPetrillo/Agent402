@@ -218,7 +218,7 @@ jobs:
           [ "$N" -ge 1000 ] && [ "$paid" = "402" ] || { echo "Production may still be building the new image — re-run this check shortly."; exit 1; }
           echo "=== SEO structured data on production (informational) ==="
           HTML=$(curl -s "$PROD/")
-          echo "$HTML" | grep -q '"@type":"FAQPage"' && echo "  FAQPage JSON-LD ✓" || echo "  (FAQPage not live yet — Railway still rolling out the SEO image)"
+          echo "$HTML" | grep -q '"FAQPage"' && echo "  FAQPage JSON-LD ✓" || echo "  (FAQPage not live yet — Railway still rolling out the SEO image)"
           echo "$HTML" | grep -q '<h2>FAQ</h2>' && echo "  visible FAQ ✓" || echo "  (visible FAQ not live yet)"
           echo "$HTML" | grep -q 'AggregateOffer' && echo "  AggregateOffer ✓" || true
           curl -s "$PROD/robots.txt" | grep -q 'GPTBot' && echo "  robots welcomes AI crawlers ✓" || echo "  (robots not updated yet)"
