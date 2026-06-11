@@ -230,7 +230,7 @@ const encoding = [
     route: "POST /api/jwt-verify", name: "JWT verify (HMAC)", slug: "jwt-verify", category: "encoding", price: "$0.002",
     description: "Verify an HS256/384/512 JWT signature against a secret and check expiry. Returns valid + decoded payload. (HMAC algorithms only.)",
     tags: ["jwt", "verify", "hmac", "auth"],
-    discovery: { bodyType: "json", input: { token: "eyJhbG…", secret: "your-secret" }, inputSchema: { properties: { token: { type: "string" }, secret: { type: "string" } }, required: ["token", "secret"] }, output: { example: { valid: true, expired: false, payload: { sub: "123" } } } },
+    discovery: { bodyType: "json", input: { token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZ2VudDQwMiIsIm5hbWUiOiJkZW1vIGFnZW50IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9.NqggPBGuLX1OA7YuSlQ4S0INJfCOWnwXWT0XUIUrt3s", secret: "my-secret" }, inputSchema: { properties: { token: { type: "string" }, secret: { type: "string" } }, required: ["token", "secret"] }, output: { example: { valid: true, algorithm: "HS256", expired: false, payload: { sub: "agent402" } } } },
     handler: (i) => {
       const token = cap(need(i, "token"), 16384, "token");
       const secret = need(i, "secret");

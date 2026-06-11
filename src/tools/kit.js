@@ -295,12 +295,12 @@ const encodingTools = [
     tags: ["jwt", "token", "auth", "decode"],
     discovery: {
       bodyType: "json",
-      input: { token: "eyJhbGciOi…" },
+      input: { token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZ2VudDQwMiIsIm5hbWUiOiJkZW1vIGFnZW50IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c" },
       inputSchema: {
         properties: { token: { type: "string", description: "The JWT string" } },
         required: ["token"],
       },
-      output: { example: { header: { alg: "HS256" }, payload: { sub: "123", exp: 1760000000 }, expired: false, expiresInSeconds: 3600 } },
+      output: { example: { header: { alg: "HS256" }, payload: { sub: "agent402", exp: 9999999999 }, expired: false } },
     },
     handler: (input) => {
       const token = capText(need(input, "token"), 16_384, "token");

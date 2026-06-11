@@ -303,6 +303,7 @@ export function openapiSpec(baseUrl, catalog) {
         required: required.includes(name),
         description: schema.description,
         schema: { type: schema.type === "number" ? "number" : "string" },
+        ...(discovery?.input?.[name] !== undefined ? { example: discovery.input[name] } : {}),
       }));
     } else {
       op.requestBody = {

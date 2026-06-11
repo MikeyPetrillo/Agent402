@@ -132,6 +132,9 @@ jobs:
       - name: Conversion tools (~970 endpoints, exact + round-trip)
         run: node scripts/test-convert.js
 
+      - name: Every tool responds to its own example (all ~1070 endpoints)
+        run: TARGET_URL=http://localhost:3000 node scripts/test-all.js
+
       - name: Multi-agent coordination demo (two wallets, one namespace)
         run: node scripts/demo-coordination.js
 
