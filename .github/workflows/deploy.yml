@@ -1,0 +1,125 @@
+name: Deploy to Railway
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "probe (test facilitators only) or deploy"
+        default: "deploy"
+      railway_token:
+        description: "Railway account token (falls back to RAILWAY_TOKEN secret)"
+        required: false
+      wallet_address:
+        description: "Base USDC receiving address (0x…)"
+        required: false
+      network:
+        description: "base or base-sepolia"
+        default: "base"
+      facilitator_url:
+        description: "x402 facilitator URL (leave empty when CDP keys are set)"
+        required: false
+      cdp_key_id:
+        description: "Coinbase CDP API key ID (optional)"
+        required: false
+      cdp_key_secret:
+        description: "Coinbase CDP API key secret (optional)"
+        required: false
+
+jobs:
+  probe:
+    if: inputs.mode == 'probe'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe public x402 facilitators
+        run: |
+          for u in https://facilitator.payai.network https://facilitator.x402.rs https://x402.org/facilitator; do
+            echo "=== GET $u/supported ==="
+            curl -s --max-time 15 "$u/supported" | head -c 3000 || echo "(unreachable)"
+            echo; echo
+          done
+
+  deploy:
+    if: inputs.mode == 'deploy'
+    runs-on: ubuntu-latest
+    env:
+      RAILWAY_API_TOKEN: ${{ inputs.railway_token || secrets.RAILWAY_TOKEN }}
+      CDP_KEY_ID: ${{ inputs.cdp_key_id }}
+      CDP_KEY_SECRET: ${{ inputs.cdp_key_secret }}
+      WALLET_ADDRESS: ${{ inputs.wallet_address }}
+      NETWORK: ${{ inputs.network }}
+      FACILITATOR_URL: ${{ inputs.facilitator_url }}
+    steps:
+      - name: Mask sensitive inputs
+        run: |
+          [ -n "$RAILWAY_API_TOKEN" ] && echo "::add-mask::$RAILWAY_API_TOKEN"
+          [ -n "$CDP_KEY_SECRET" ] && echo "::add-mask::$CDP_KEY_SECRET"
+          [ -n "$RAILWAY_API_TOKEN" ] || { echo "No Railway token provided"; exit 1; }
+          [ -n "$WALLET_ADDRESS" ] || { echo "No wallet address provided"; exit 1; }
+
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Create or link project
+        run: |
+          set -x
+          if railway list 2>/dev/null | grep -qi 'agent402'; then
+            railway link --project agent402 --environment production \
+              || railway link --project agent402
+          else
+            railway init --name agent402
+          fi
+          railway status || true
+
+      - name: Create service and set variables
+        run: |
+          set -x
+          railway add --service agent402 || echo "service may already exist"
+          VARS=(--set "WALLET_ADDRESS=$WALLET_ADDRESS" --set "NETWORK=$NETWORK")
+          [ -n "$FACILITATOR_URL" ] && VARS+=(--set "FACILITATOR_URL=$FACILITATOR_URL")
+          [ -n "$CDP_KEY_ID" ] && VARS+=(--set "CDP_API_KEY_ID=$CDP_KEY_ID" --set "CDP_API_KEY_SECRET=$CDP_KEY_SECRET")
+          railway variables "${VARS[@]}" --service agent402 --skip-deploys \
+            || railway variables "${VARS[@]}" --skip-deploys \
+            || railway variables "${VARS[@]}"
+
+      - name: Generate public domain
+        id: domain
+        run: |
+          set -x
+          railway domain --service agent402 --json > domain.json || railway domain --json > domain.json || railway domain --service agent402 || railway domain
+          cat domain.json 2>/dev/null || true
+          URL=$(grep -o '"domain"[^,}]*' domain.json 2>/dev/null | head -1 | sed 's/.*: *"\(.*\)"/\1/') || true
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "PUBLIC URL: https://$URL"
+
+      - name: Set BASE_URL and deploy
+        run: |
+          set -x
+          URL="${{ steps.domain.outputs.url }}"
+          if [ -n "$URL" ]; then
+            railway variables --set "BASE_URL=https://$URL" --service agent402 --skip-deploys \
+              || railway variables --set "BASE_URL=https://$URL" --skip-deploys || true
+          fi
+          railway up --ci --service agent402 || railway up --ci
+
+      - name: Verify deployment
+        run: |
+          URL="${{ steps.domain.outputs.url }}"
+          [ -n "$URL" ] || { echo "No domain captured; check logs above"; exit 1; }
+          echo "Waiting for https://$URL/health …"
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$URL/health" || echo 000)
+            [ "$code" = "200" ] && break
+            sleep 10
+          done
+          echo "health: $code"
+          [ "$code" = "200" ] || exit 1
+          echo "=== pricing ==="
+          curl -s "https://$URL/api/pricing"
+          echo; echo "=== 402 check ==="
+          paid=$(curl -s -o /dev/null -w '%{http_code}' -X POST "https://$URL/api/extract" -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{"url":"https://example.com"}')
+          echo "unpaid request returned HTTP $paid (expect 402)"
+          [ "$paid" = "402" ] || exit 1
+          echo
+          echo "🚀 LIVE: https://$URL"
