@@ -15,7 +15,7 @@ import TurndownService from "turndown";
 import yaml from "js-yaml";
 import { marked } from "marked";
 import QRCode from "qrcode";
-import { assertPublicUrl, safeFetch } from "./fetch-guard.js";
+import { assertPublicUrl, safeFetch, ssrfDispatcher, isSsrfBlock } from "./fetch-guard.js";
 
 const REGEX_WORKER = fileURLToPath(new URL("./regex-worker.js", import.meta.url));
 const REGEX_TIMEOUT_MS = 750;
@@ -1806,23 +1806,6 @@ const validationTools = [
 // Network & web
 // ---------------------------------------------------------------------------
 
-async function assertPublicHost(host) {
-  if (isIP(host)) {
-    // reuse the URL guard by faking a URL
-    await assertPublicUrl(`https://${host}/`);
-    return;
-  }
-  let resolved;
-  try {
-    resolved = await lookup(host);
-  } catch {
-    throw bad(`Could not resolve host: ${host}`);
-  }
-  await assertPublicUrl(`https://${resolved.address.includes(":") ? `[${resolved.address}]` : resolved.address}/`).catch(() => {
-    throw bad("Host resolves to a private address");
-  });
-}
-
 function parseRobots(text) {
   const groups = [];
   let current = null;
@@ -1893,6 +1876,7 @@ const networkTools = [
           method,
           redirect: "follow",
           signal: controller.signal,
+          dispatcher: ssrfDispatcher,
           headers: { "User-Agent": "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)" },
         });
         const latencyMs = Date.now() - started;
@@ -1904,6 +1888,7 @@ const networkTools = [
         }
         return { up: res.status < 500, status: res.status, latencyMs, finalUrl: res.url, headers };
       } catch (err) {
+        if (isSsrfBlock(err)) throw bad("URL resolves to a private address (including after redirects)");
         return { up: false, error: err.name === "AbortError" ? "Timed out after 15s" : err.message, latencyMs: Date.now() - started };
       } finally {
         clearTimeout(timer);
@@ -1930,10 +1915,20 @@ const networkTools = [
     handler: async (input) => {
       const host = need(input, "host").trim().toLowerCase();
       if (!/^[a-z0-9.-]+$/.test(host)) throw bad("Invalid hostname");
-      await assertPublicHost(host);
+      // Resolve once, validate the IP is public, then connect to THAT pinned IP
+      // with SNI = host. Connecting by IP (not hostname) means DNS rebinding
+      // cannot point the socket at an internal address after the check passes.
+      let ip = host;
+      if (!isIP(host)) {
+        const resolved = await lookup(host).catch(() => {
+          throw bad(`Could not resolve host: ${host}`);
+        });
+        ip = resolved.address;
+      }
+      await assertPublicUrl(`https://${ip.includes(":") ? `[${ip}]` : ip}/`); // throws 400 if private
       const cert = await new Promise((resolve, reject) => {
         const socket = tls.connect(
-          { host, port: 443, servername: host, timeout: 10_000, rejectUnauthorized: false },
+          { host: ip, port: 443, servername: host, timeout: 10_000, rejectUnauthorized: false },
           () => {
             const c = socket.getPeerCertificate();
             const authorized = socket.authorized;
@@ -1990,6 +1985,7 @@ const networkTools = [
         const res = await fetch(`https://rdap.org/domain/${domain}`, {
           signal: controller.signal,
           redirect: "follow",
+          dispatcher: ssrfDispatcher,
           headers: { Accept: "application/rdap+json" },
         });
         if (res.status === 404) throw Object.assign(new Error("Domain not found in RDAP"), { statusCode: 404 });
