@@ -12,11 +12,22 @@ automatically, and gets the result. Every payment goes straight to your wallet.
 
 | Endpoint | Price | What it does |
 |---|---|---|
+| `POST /api/render` | $0.02 | **Headless Chromium**: JS executed, SPAs included → clean markdown |
+| `GET /api/screenshot?url=…` | $0.015 | Any URL → PNG (optional `&fullPage=true`) |
+| `POST /api/pdf` | $0.01 | PDF URL → full text + document info (up to 20MB) |
 | `POST /api/extract` | $0.005 | Any URL → clean markdown (title, byline, main content, boilerplate stripped) |
+| `POST /api/memory` | $0.002 | **Wallet-keyed persistent KV store** — the paying wallet owns the namespace; no signup |
+| `GET /api/memory?key=…` | $0.001 | Read your wallet-scoped memory (omit key to list keys) |
 | `GET /api/meta?url=…` | $0.002 | Page metadata: title, description, OpenGraph, Twitter cards, canonical, favicon |
 | `GET /api/dns?name=…&type=A` | $0.001 | DNS lookup (A, AAAA, MX, TXT, NS, CNAME) |
 | `GET /api/pricing` | free | Machine-readable catalog of endpoints and prices |
 | `GET /health` | free | Health check |
+
+**Why agents pick this over rolling their own:** `/api/render` needs real browser
+infrastructure agents don't have; `/api/memory` gives stateless agents durable
+state with zero signup (the x402 payment is the authentication — the wallet IS
+the account, creating natural stickiness); and one base URL covers the whole
+utility belt, so agent developers integrate once.
 
 ## Deploy on Railway
 

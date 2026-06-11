@@ -41,22 +41,40 @@ export function landingPage(baseUrl, network, freeMode) {
 
   <div class="grid">
     <div class="card">
+      <h3>Render 🆕</h3>
+      <div class="price">$0.02 / call</div>
+      <p>Real headless Chromium. JavaScript executed, SPAs included &rarr; clean markdown. The pages plain fetch can't read.</p>
+      <code>POST /api/render</code>
+    </div>
+    <div class="card">
+      <h3>Memory 🆕</h3>
+      <div class="price">$0.002 write / $0.001 read</div>
+      <p>Persistent key-value state scoped to your wallet. Your payment is your login — no signup, no API keys, ever.</p>
+      <code>POST·GET /api/memory</code>
+    </div>
+    <div class="card">
+      <h3>Screenshot 🆕</h3>
+      <div class="price">$0.015 / call</div>
+      <p>Any URL &rarr; PNG, full-page optional. Visual verification for agent workflows.</p>
+      <code>GET /api/screenshot?url=…</code>
+    </div>
+    <div class="card">
+      <h3>PDF 🆕</h3>
+      <div class="price">$0.01 / call</div>
+      <p>PDF URL &rarr; full text + document info. Up to 20MB. The format agents hit constantly and parse badly.</p>
+      <code>POST /api/pdf</code>
+    </div>
+    <div class="card">
       <h3>Extract</h3>
       <div class="price">$0.005 / call</div>
       <p>Any URL &rarr; clean markdown. Title, byline, main content with boilerplate stripped. The page-reading primitive every agent needs.</p>
       <code>POST /api/extract</code>
     </div>
     <div class="card">
-      <h3>Meta</h3>
-      <div class="price">$0.002 / call</div>
-      <p>Page title, description, OpenGraph and Twitter cards, canonical URL, favicon — without downloading and parsing the page yourself.</p>
-      <code>GET /api/meta?url=…</code>
-    </div>
-    <div class="card">
-      <h3>DNS</h3>
-      <div class="price">$0.001 / call</div>
-      <p>A, AAAA, MX, TXT, NS, and CNAME lookups with clean JSON output.</p>
-      <code>GET /api/dns?name=…&amp;type=A</code>
+      <h3>Meta &amp; DNS</h3>
+      <div class="price">$0.002 / $0.001</div>
+      <p>Page metadata (OpenGraph, Twitter cards, favicon) and DNS lookups (A, AAAA, MX, TXT, NS, CNAME).</p>
+      <code>GET /api/meta · /api/dns</code>
     </div>
   </div>
 

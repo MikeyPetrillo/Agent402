@@ -20,8 +20,11 @@
     "@mozilla/readability": "^0.6.0",
     "@x402/evm": "^2.14.0",
     "@x402/express": "^2.14.0",
+    "better-sqlite3": "^12.10.0",
     "express": "^5.2.1",
     "jsdom": "^29.1.1",
+    "pdf-parse": "^2.4.5",
+    "playwright": "^1.60.0",
     "turndown": "^7.2.4"
   }
 }

@@ -36,10 +36,10 @@ function badRequest(message) {
 }
 
 /**
- * Fetch a public http(s) URL with SSRF protection, size cap, and timeout.
- * Returns { finalUrl, html }.
+ * Validate that a URL is http(s) and does not resolve to a private address.
+ * Returns the parsed URL. Shared by the plain fetcher and the browser renderer.
  */
-export async function safeFetch(rawUrl) {
+export async function assertPublicUrl(rawUrl) {
   let url;
   try {
     url = new URL(rawUrl);
@@ -65,6 +65,15 @@ export async function safeFetch(rawUrl) {
       throw badRequest("URL resolves to a private address");
     }
   }
+  return url;
+}
+
+/**
+ * Fetch a public http(s) URL with SSRF protection, size cap, and timeout.
+ * Returns { finalUrl, html } — or { finalUrl, buffer } with `binary: true`.
+ */
+export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES } = {}) {
+  const url = await assertPublicUrl(rawUrl);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -95,12 +104,15 @@ export async function safeFetch(rawUrl) {
     const { done, value } = await reader.read();
     if (done) break;
     received += value.length;
-    if (received > MAX_BYTES) {
+    if (received > maxBytes) {
       reader.cancel();
-      throw Object.assign(new Error("Page exceeds 5MB limit"), { statusCode: 413 });
+      throw Object.assign(new Error(`Resource exceeds ${Math.round(maxBytes / 1048576)}MB limit`), {
+        statusCode: 413,
+      });
     }
     chunks.push(value);
   }
-  const html = Buffer.concat(chunks).toString("utf-8");
-  return { finalUrl: response.url, html };
+  const buffer = Buffer.concat(chunks);
+  if (binary) return { finalUrl: response.url, buffer };
+  return { finalUrl: response.url, html: buffer.toString("utf-8") };
 }
