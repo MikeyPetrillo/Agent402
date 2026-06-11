@@ -80,7 +80,7 @@ jobs:
           fi
 
       - name: Create or link project (account token)
-        if: steps.token.outputs.type == 'account' || steps.token.outputs.type == 'workspace'
+        if: steps.token.outputs.type == 'account'
         run: |
           set -x
           if railway list 2>/dev/null | grep -qi 'agent402'; then
@@ -90,6 +90,35 @@ jobs:
             railway init --name agent402
           fi
           railway status || true
+
+      - name: Create or link project via API (workspace token)
+        if: steps.token.outputs.type == 'workspace'
+        run: |
+          gql() {
+            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+              -d "$1"
+          }
+          PROJECT_ID=$(gql '{"query":"query { projects { edges { node { id name } } } }"}' \
+            | grep -o '{"node":{"id":"[^"]*","name":"agent402"}' | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+          if [ -z "$PROJECT_ID" ]; then
+            echo "Creating project agent402…"
+            RESP=$(gql '{"query":"mutation { projectCreate(input: { name: \"agent402\" }) { id } }"}')
+            echo "$RESP"
+            PROJECT_ID=$(echo "$RESP" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+            if [ -z "$PROJECT_ID" ]; then
+              echo "projectCreate failed without teamId; retrying with the workspace's team id…"
+              TEAM_ID=$(gql '{"query":"query { projects { edges { node { team { id } } } } }"}' \
+                | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+              RESP=$(gql "{\"query\":\"mutation { projectCreate(input: { name: \\\"agent402\\\", teamId: \\\"$TEAM_ID\\\" }) { id } }\"}")
+              echo "$RESP"
+              PROJECT_ID=$(echo "$RESP" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+            fi
+          fi
+          [ -n "$PROJECT_ID" ] || { echo "Could not create or find project"; exit 1; }
+          echo "PROJECT_ID=$PROJECT_ID" >> "$GITHUB_ENV"
+          echo "Project: $PROJECT_ID"
+          railway link --project "$PROJECT_ID" --environment production && railway status
 
       - name: Use project token for remaining steps
         if: steps.token.outputs.type == 'project'
