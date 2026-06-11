@@ -72,18 +72,23 @@ function card(t) {
 }
 
 function head({ title, description, canonical, jsonLd }) {
+  const blocks = (Array.isArray(jsonLd) ? jsonLd : [jsonLd])
+    .filter(Boolean)
+    .map((b) => `<script type="application/ld+json">${JSON.stringify(b)}</script>`)
+    .join("\n");
   return `<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
 <link rel="canonical" href="${canonical}">
+<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${canonical}">
 <meta property="og:site_name" content="Agent402">
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(description)}">
 <meta name="twitter:card" content="summary">
-<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
+${blocks}
 <style>${SHARED_CSS}</style>`;
 }
 
@@ -115,24 +120,70 @@ function payExample(baseUrl, tool) {
 });`;
 }
 
+// Unique, useful per-page content for the generated conversion tools — a
+// reference table + the factor + the inverse link — so the ~970 pages are
+// substantive rather than near-duplicate doorway pages.
+function convertContent(baseUrl, tool) {
+  let from, to, perUnit;
+  try {
+    const r = tool.handler({ value: 1 });
+    from = r.from;
+    to = r.to;
+    perUnit = r.result;
+  } catch {
+    return "";
+  }
+  const rows = [1, 2, 5, 10, 25, 100, 1000]
+    .map((v) => {
+      let out;
+      try {
+        out = tool.handler({ value: v }).result;
+      } catch {
+        out = "";
+      }
+      return `<tr><td>${v} ${esc(from.replace(/-/g, " "))}</td><td>${esc(String(out))} ${esc(to.replace(/-/g, " "))}</td></tr>`;
+    })
+    .join("");
+  const inverse = `convert-${to}-to-${from}`;
+  const fromL = from.replace(/-/g, " ");
+  const toL = to.replace(/-/g, " ");
+  return `
+  <p class="sub"><b>1 ${esc(fromL)} = ${esc(String(perUnit))} ${esc(toL)}.</b> To convert, multiply the number of ${esc(fromL)} by ${esc(String(perUnit))}. The reverse direction is <a href="/tools/${inverse}">${esc(toL)} → ${esc(fromL)}</a>.</p>
+  <h2>Common ${esc(fromL)} to ${esc(toL)} values</h2>
+  <table><tr><th>${esc(fromL)}</th><th>${esc(toL)}</th></tr>${rows}</table>`;
+}
+
 export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0 } = {}) {
   const title = `${tool.name} API for AI agents — ${tool.price} per call | Agent402`;
   const canonical = `${baseUrl}/tools/${tool.slug}`;
-  const jsonLd = {
-    "@context": "https://schema.org",
-    "@type": "WebAPI",
-    name: `Agent402 ${tool.name}`,
-    url: canonical,
-    description: tool.description,
-    documentation: `${baseUrl}/llms.txt`,
-    provider: { "@type": "Organization", name: "Agent402", url: baseUrl },
-    offers: {
-      "@type": "Offer",
-      price: tool.price.replace("$", ""),
-      priceCurrency: "USD",
-      description: `${tool.price} per call, paid in USDC on Base via the x402 protocol. No signup, no API key.`,
+  const catLabel = CATEGORIES[tool.category]?.label ?? tool.category;
+  const jsonLd = [
+    {
+      "@context": "https://schema.org",
+      "@type": "WebAPI",
+      name: `Agent402 ${tool.name}`,
+      url: canonical,
+      description: tool.description,
+      documentation: `${baseUrl}/llms.txt`,
+      provider: { "@type": "Organization", name: "Agent402", url: baseUrl },
+      offers: {
+        "@type": "Offer",
+        price: tool.price.replace("$", ""),
+        priceCurrency: "USD",
+        description: `${tool.price} per call, paid in USDC on Base via the x402 protocol. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
+      },
     },
-  };
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      itemListElement: [
+        { "@type": "ListItem", position: 1, name: "Agent402", item: baseUrl },
+        { "@type": "ListItem", position: 2, name: "Tools", item: `${baseUrl}/tools` },
+        { "@type": "ListItem", position: 3, name: catLabel, item: `${baseUrl}/tools#${tool.category}` },
+        { "@type": "ListItem", position: 4, name: tool.name, item: canonical },
+      ],
+    },
+  ];
   const schemaRows = Object.entries(tool.discovery?.inputSchema?.properties ?? {})
     .map(([k, v]) => {
       const required = (tool.discovery?.inputSchema?.required ?? []).includes(k);
@@ -156,6 +207,7 @@ ${head({ title, description: `${tool.description} ${tool.price} per call via x40
       : `${tool.price} per call · USDC via x402`
   } · <code>${tool.method} ${esc(tool.path)}</code></div>
   <p class="sub">${esc(tool.description)}</p>
+  ${tool.category === "convert" ? convertContent(baseUrl, tool) : ""}
 
   <h2>Input</h2>
   ${schemaRows ? `<table><tr><th>Field</th><th>Type</th><th>Description</th></tr>${schemaRows}</table>` : `<p class="sub">No parameters.</p>`}
