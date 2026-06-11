@@ -8,9 +8,15 @@ export async function pdfToText(rawUrl) {
   const { finalUrl, buffer } = await safeFetch(rawUrl, { binary: true, maxBytes: 20 * 1024 * 1024 });
   const parser = new PDFParse({ data: buffer });
   try {
-    const [textResult, infoResult] = await Promise.all([parser.getText(), parser.getInfo()]);
+    // The parser's worker cannot handle concurrent calls — keep these sequential.
+    const textResult = await parser.getText();
+    let info = {};
+    try {
+      info = (await parser.getInfo())?.info ?? {};
+    } catch {
+      // Document info is best-effort; some PDFs have metadata the worker can't clone.
+    }
     const text = (textResult.text || "").trim();
-    const info = infoResult?.info ?? {};
     return {
       url: finalUrl,
       pages: textResult.total ?? textResult.pages?.length ?? null,
