@@ -98,35 +98,56 @@ jobs:
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
-      - name: Check Railway API for domain purchase support
+      - name: Check which facilitator production is configured to use
         run: |
-          curl -s -X POST https://backboard.railway.app/graphql/v2 \
-            -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
-            -d '{"query":"query { __schema { mutationType { fields { name } } } }"}' \
-            | jq -r '.data.__schema.mutationType.fields[].name' | grep -iE 'domain|dns|purchase|register' || echo "(no domain-purchase mutations found)"
-      - name: Probe public x402 facilitators
-        run: |
-          for u in https://facilitator.payai.network https://facilitator.x402.rs https://x402.org/facilitator; do
-            echo "=== GET $u/supported ==="
-            curl -s --max-time 15 "$u/supported" | head -c 3000 || echo "(unreachable)"
-            echo; echo
-          done
+          gql() {
+            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+              --data @-
+          }
+          PROJECT_ID=$(jq -n '{query:"query { projects { edges { node { id name } } } }"}' | gql \
+            | jq -r '.data.projects.edges[] | select(.node.name=="agent402") | .node.id' | head -1)
+          ENV_ID=$(jq -n --arg id "$PROJECT_ID" '{query:"query($id:String!) { project(id: $id) { environments { edges { node { id name } } } } }", variables:{id:$id}}' | gql \
+            | jq -r '.data.project.environments.edges[] | select(.node.name=="production") | .node.id' | head -1)
+          SERVICE_ID=$(jq -n --arg id "$PROJECT_ID" '{query:"query($id:String!) { project(id: $id) { services { edges { node { id name } } } } }", variables:{id:$id}}' | gql \
+            | jq -r '.data.project.services.edges[] | select(.node.name=="agent402") | .node.id' | head -1)
+          echo "Variable NAMES set on the production service (values withheld):"
+          jq -n --arg p "$PROJECT_ID" --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
+            '{query:"query($p:String!, $e:String!, $s:String!) { variables(projectId: $p, environmentId: $e, serviceId: $s) }", variables:{p:$p,e:$e,s:$s}}' | gql \
+            | jq -r '.data.variables | keys[]'
+          echo
+          echo "If CDP_API_KEY_ID + CDP_API_KEY_SECRET are absent, the server uses"
+          echo "FACILITATOR_URL (PayAI) and will NEVER appear in the CDP Bazaar."
 
-      - name: Check Bazaar listing for agent402
+      - name: Search full discovery indexes for agent402
         run: |
-          for u in \
-            "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=100" \
-            "https://x402.org/facilitator/discovery/resources?limit=100" \
-            "https://facilitator.payai.network/discovery/resources?limit=100"; do
-            echo "=== GET $u ==="
-            BODY=$(curl -s --max-time 20 "$u" || echo unreachable)
-            echo "$BODY" | head -c 600
-            echo
-            if echo "$BODY" | grep -q "agent402"; then
-              echo ">>> FOUND agent402 in this index! Matching entries:"
-              echo "$BODY" | grep -o '[^"]*agent402[^"]*' | sort -u
+          WALLET="0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0"
+          for base in \
+            "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources" \
+            "https://facilitator.payai.network/discovery/resources"; do
+            echo "=== $base (paginated) ==="
+            offset=0; total=0; found=0
+            while true; do
+              BODY=$(curl -s --max-time 30 "$base?limit=100&offset=$offset") || break
+              N=$(echo "$BODY" | jq '.items | length' 2>/dev/null || echo "")
+              if [ -z "$N" ] || [ "$N" = "0" ] || [ "$N" = "null" ]; then break; fi
+              total=$((total+N))
+              HITS=$(echo "$BODY" | jq -c --arg w "$WALLET" \
+                '.items[] | select(((.resource // "") | ascii_downcase | contains("agent402")) or (any(.accepts[]?; (.payTo // "" | ascii_downcase) == $w)))' \
+                2>/dev/null || true)
+              if [ -n "$HITS" ]; then
+                found=1
+                echo ">>> FOUND at offset $offset:"
+                echo "$HITS" | jq '{resource, type, lastUpdated, payTo: [.accepts[]?.payTo]}'
+              fi
+              if [ "$N" -lt 100 ]; then break; fi
+              offset=$((offset+100))
+              if [ "$offset" -ge 20000 ]; then echo "(stopping after 20000 items)"; break; fi
+            done
+            if [ "$found" = "1" ]; then
+              echo ">>> RESULT: agent402 IS LISTED in this index (scanned $total items)"
             else
-              echo ">>> agent402 not found in this index"
+              echo ">>> RESULT: agent402 NOT FOUND (scanned $total items)"
             fi
             echo
           done
