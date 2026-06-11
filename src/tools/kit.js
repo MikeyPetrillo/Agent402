@@ -8,12 +8,44 @@ import { resolveMx, reverse } from "node:dns/promises";
 import { isIP } from "node:net";
 import tls from "node:tls";
 import { lookup } from "node:dns/promises";
+import { Worker } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 import TurndownService from "turndown";
 import yaml from "js-yaml";
 import { marked } from "marked";
 import QRCode from "qrcode";
 import { assertPublicUrl, safeFetch } from "./fetch-guard.js";
+
+const REGEX_WORKER = fileURLToPath(new URL("./regex-worker.js", import.meta.url));
+const REGEX_TIMEOUT_MS = 750;
+
+// Run a user regex in a worker thread with a hard timeout. ReDoS patterns are
+// contained to a single terminated worker instead of freezing the event loop.
+function runRegexSafely({ pattern, flags, text, maxMatches }) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(REGEX_WORKER, { workerData: { pattern, flags, text, maxMatches } });
+    let done = false;
+    const finish = (fn, arg) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      worker.terminate();
+      fn(arg);
+    };
+    const timer = setTimeout(
+      () => finish(reject, bad("Regex timed out (>750ms) — pattern likely has catastrophic backtracking")),
+      REGEX_TIMEOUT_MS
+    );
+    worker.on("message", (msg) =>
+      msg.error ? finish(reject, bad(msg.error)) : finish(resolve, msg)
+    );
+    worker.on("error", (e) => finish(reject, bad(`Regex execution error: ${e.message}`)));
+    worker.on("exit", (code) => {
+      if (!done && code !== 0) finish(reject, bad("Regex worker stopped unexpectedly"));
+    });
+  });
+}
 
 function bad(message) {
   const err = new Error(message);
@@ -1063,19 +1095,8 @@ const textTools = [
       const pattern = capText(need(input, "pattern"), 200, "pattern");
       const text = capText(need(input, "text"), 10_000);
       const flags = typeof input.flags === "string" && /^[gimsuy]*$/.test(input.flags) ? input.flags : "g";
-      let re;
-      try {
-        re = new RegExp(pattern, flags.includes("g") ? flags : flags + "g");
-      } catch (e) {
-        throw bad(`Invalid regex: ${e.message}`);
-      }
-      const matches = [];
-      let m;
-      while ((m = re.exec(text)) && matches.length < 100) {
-        matches.push({ match: m[0], index: m.index, groups: m.slice(1) });
-        if (m.index === re.lastIndex) re.lastIndex++;
-      }
-      return { matchCount: matches.length, matches };
+      // Executed in a worker with a hard timeout — see runRegexSafely (ReDoS guard).
+      return runRegexSafely({ pattern, flags, text, maxMatches: 100 });
     },
   },
   {
