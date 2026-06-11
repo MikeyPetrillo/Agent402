@@ -2,7 +2,7 @@
 
 **Pay-per-call web tools for AI agents, paid in USDC via the [x402 protocol](https://x402.org).**
 
-**🟢 Live at [agent402-production.up.railway.app](https://agent402-production.up.railway.app)** — USDC on Base mainnet.
+**🟢 Live at [agent402.tools](https://agent402.tools)** — USDC on Base mainnet.
 
 No signups, no API keys, no subscriptions. An agent calls an endpoint, gets an
 `HTTP 402 Payment Required` challenge, pays a fraction of a cent in USDC on Base
