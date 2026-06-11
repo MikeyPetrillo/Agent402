@@ -29,9 +29,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      CDP_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
+      # The key ID and wallet address are not sensitive (the wallet address is
+      # public on-chain); only the Railway token and CDP secret live in secrets.
+      CDP_KEY_ID: ${{ secrets.CDP_API_KEY_ID || 'ff16e708-0590-4a24-8a17-b0e978143f68' }}
       CDP_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
-      WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS }}
+      WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
       NETWORK: ${{ vars.NETWORK || 'base' }}
       # CDP keys take priority in the server's facilitator selection, so this
       # default is harmless once CDP_API_KEY_ID/SECRET secrets are added.
@@ -66,7 +68,7 @@ jobs:
           railway add --service agent402 || echo "service may already exist"
           VARS=(--set "WALLET_ADDRESS=$WALLET_ADDRESS" --set "NETWORK=$NETWORK")
           [ -n "$FACILITATOR_URL" ] && VARS+=(--set "FACILITATOR_URL=$FACILITATOR_URL")
-          [ -n "$CDP_KEY_ID" ] && VARS+=(--set "CDP_API_KEY_ID=$CDP_KEY_ID" --set "CDP_API_KEY_SECRET=$CDP_KEY_SECRET")
+          [ -n "$CDP_KEY_ID" ] && [ -n "$CDP_KEY_SECRET" ] && VARS+=(--set "CDP_API_KEY_ID=$CDP_KEY_ID" --set "CDP_API_KEY_SECRET=$CDP_KEY_SECRET")
           railway variables "${VARS[@]}" --service agent402 --skip-deploys \
             || railway variables "${VARS[@]}" --skip-deploys \
             || railway variables "${VARS[@]}"
