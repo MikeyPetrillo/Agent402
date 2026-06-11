@@ -13,10 +13,12 @@ import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
 import { buildPaymentMiddleware } from "./payments.js";
 import { KIT } from "./tools/kit.js";
 import { KIT2 } from "./tools/kit2.js";
+import { CONVERSIONS } from "./tools/convert-gen.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES } from "./pages.js";
 
-const ALL_KIT = [...KIT, ...KIT2];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
+import { recordServedCall, getStats } from "./stats.js";
 
 const PORT = process.env.PORT || 3000;
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
@@ -396,6 +398,12 @@ app.get("/api/pow/challenge", (req, res) => {
   res.json(issueChallenge(slug));
 });
 
+// Live machine-to-machine economy stats (free). Money is provable on-chain at
+// the wallet; this also tallies calls served and how they were paid for.
+app.get("/api/stats", (_req, res) =>
+  res.json(getStats({ wallet: WALLET_ADDRESS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL }))
+);
+
 app.get("/api/pricing", (_req, res) =>
   res.json({
     name: "Agent402",
@@ -456,6 +464,18 @@ if (FREE_MODE) {
   });
   console.log(`x402 payments enabled: ${NETWORK} -> ${WALLET_ADDRESS}; proof-of-work tier on ${POW_SLUGS.size} tools (difficulty ${POW_DIFFICULTY} bits)`);
 }
+
+// Tally successfully served paid-tool calls for /api/stats (best-effort; runs
+// after the paywall so only paid/proven requests that return 200 are counted).
+app.use((req, res, next) => {
+  const def = CATALOG[`${req.method} ${req.path}`];
+  if (def) {
+    res.on("finish", () => {
+      if (res.statusCode === 200) recordServedCall(def.slug, req.headers["x-pow-solution"] ? "pow" : "usdc");
+    });
+  }
+  next();
+});
 
 // Paid routes
 app.post("/api/extract", async (req, res) => {

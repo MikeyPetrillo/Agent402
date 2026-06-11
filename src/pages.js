@@ -9,6 +9,7 @@ export const CATEGORIES = {
   conversion: { label: "Data conversion", blurb: "JSON ⇄ CSV/YAML/XML, markdown ⇄ HTML, diffs and queries — formats agents juggle constantly." },
   text: { label: "Text processing", blurb: "Slugs, case conversion, diffs, regex, keywords, token estimates, edit distance, readability, PII redaction." },
   math: { label: "Math & finance", blurb: "Safe expression calculator, statistics, unit/percentage/number formatting, CIDR subnets, compound interest and loan math." },
+  convert: { label: "Unit conversions", blurb: "One real endpoint per unit pair across length, mass, volume, area, speed, time, data, pressure, energy, power, angle, frequency, and temperature — e.g. GET /api/convert/miles-to-kilometers?value=5." },
   encoding: { label: "Encoding & crypto", blurb: "Hashes, HMAC signatures, base64/hex, JWT decoding, TOTP codes." },
   identifiers: { label: "Generators & IDs", blurb: "UUIDs, ULIDs, passwords, secure randomness, QR codes." },
   time: { label: "Time & scheduling", blurb: "Timezone-aware clocks, epoch conversion, cron parsing, durations." },
@@ -232,6 +233,17 @@ export function toolsIndexPage(baseUrl, catalog) {
           : free > 0
             ? ` <span class="free">${free} FREE w/ compute</span>`
             : ` <span class="paidtag">USDC only</span>`;
+      // Large generated families (e.g. ~970 conversions) render as a compact
+      // sample + count, not hundreds of cards; each still has its own /tools page.
+      if (inCat.length > 40) {
+        const sample = inCat
+          .slice(0, 24)
+          .map((t) => `<a href="/tools/${t.slug}">${esc(t.name)}</a>`)
+          .join(" · ");
+        return `<h2>${esc(label)} <span style="color:var(--muted);font-size:.85rem">(${inCat.length})</span>${tag}</h2>
+<p class="cat-blurb">${esc(blurb)}</p>
+<p class="sub" style="font-size:.85rem">${sample} · <a href="/api/pricing">…and ${inCat.length - 24} more →</a></p>`;
+      }
       const cards = inCat.map(card).join("\n");
       return `<h2>${esc(label)} <span style="color:var(--muted);font-size:.85rem">(${inCat.length})</span>${tag}</h2>
 <p class="cat-blurb">${esc(blurb)}</p>

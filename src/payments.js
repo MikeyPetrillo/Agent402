@@ -37,7 +37,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         tags: ["web", "tools", "agents", ...(item.tags ?? [])],
         mimeType: "application/json",
         resource: `${baseUrl}${route.split(" ")[1]}`,
-        extensions: declareDiscoveryExtension(item.discovery),
+        // Tools flagged bazaar:false are paid + listed on our own surfaces
+        // (/api/pricing, /openapi.json, /tools) but not individually declared to
+        // the x402 Bazaar — this keeps the boot-time facilitator sync light when
+        // the catalog is large (e.g. the ~1000 generated conversion endpoints).
+        extensions: item.bazaar === false ? undefined : declareDiscoveryExtension(item.discovery),
       },
     ])
   );

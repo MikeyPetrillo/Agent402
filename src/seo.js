@@ -17,6 +17,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/llms.txt`, priority: "0.8" },
     { loc: `${baseUrl}/openapi.json`, priority: "0.7" },
     { loc: `${baseUrl}/api/pricing`, priority: "0.7" },
+    { loc: `${baseUrl}/api/stats`, priority: "0.6" },
   ];
   const toolUrls = toolList(catalog).map((t) => ({ loc: `${baseUrl}/tools/${t.slug}`, priority: "0.8" }));
   const entries = [...staticUrls, ...toolUrls]
@@ -35,6 +36,11 @@ export function llmsTxt(baseUrl, catalog) {
     .map(([key, { label }]) => {
       const inCat = tools.filter((t) => t.category === key);
       if (!inCat.length) return "";
+      // Summarize very large generated families instead of listing every endpoint.
+      if (inCat.length > 40) {
+        const sample = inCat.slice(0, 6).map((t) => `\`${t.route.split(" ")[1]}\``).join(", ");
+        return `### ${label}\n\n- ${inCat.length} endpoints, all \`GET /api/convert/{from}-to-{to}?value=N\` at ${inCat[0].price}/call. Examples: ${sample}. Full list: ${baseUrl}/api/pricing (or ${baseUrl}/openapi.json).`;
+      }
       const lines = inCat.map(
         (t) => `- \`${t.route}\` — ${t.price}/call. ${t.description} Docs: ${baseUrl}/tools/${t.slug}`
       );
@@ -43,11 +49,17 @@ export function llmsTxt(baseUrl, catalog) {
     .filter(Boolean)
     .join("\n\n");
 
-  return `# Agent402 — ${tools.length} pay-per-call tools for AI agents
+  return `# Agent402 — where agents pay agents (machine-to-machine payments)
 
-> Machine-payable web tools, paid in USDC on Base via the x402 payment protocol (v2). No signup, no API keys, no subscriptions: call an endpoint, receive an HTTP 402 challenge with exact payment requirements, pay with any x402 v2 client (e.g. @x402/fetch + @x402/evm), and retry to get the result. Prices range $0.001–$0.02 per call.
+> A live node in the machine-to-machine economy. Autonomous agents pay per call over HTTP — no human, no signup, no API key. Call an endpoint, receive an HTTP 402 with exact payment requirements, settle from your own wallet in USDC via the x402 protocol (v2, e.g. @x402/fetch + @x402/evm) — or, on ${tools.filter(isComputePayable).length} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. Retry with the proof and get the result. The payment IS the identity. Prices range $0.001–$0.02 per call.
 
 Base URL: ${baseUrl}
+
+## This is machine-to-machine commerce, and you can verify it
+
+- Run the full loop yourself with no human and no funds: \`node scripts/demo-payment.js\` — an autonomous agent discovers the catalog, gets quoted over HTTP 402, pays with compute, and uses the result. (Set AGENT_KEY=0x… to settle in real USDC instead.)
+- Live economy stats and the receiving wallet: \`${baseUrl}/api/stats\`. Settled revenue is trustless and public — every paid call lands on-chain, verifiable on Basescan at the wallet shown there.
+- The payment is the authentication: /api/memory namespaces are owned by the paying wallet, and wallets can grant each other access to coordinate — agents transacting AND coordinating with payment identity as the primitive.
 
 ## Why agents use this instead of building it themselves
 
