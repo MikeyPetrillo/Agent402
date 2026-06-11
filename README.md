@@ -47,7 +47,21 @@ paying wallet, no signup:
 Two different agents (two wallets) coordinate through one shared namespace: A
 grants B `readwrite`, B atomically increments a shared job counter, and the
 hash-chained log proves who did what. That rendezvous point is not vibe-codable —
-it requires a persistent, neutral third party with portable identity.
+it requires a persistent, neutral third party with portable identity. See it run:
+
+```bash
+node scripts/demo-coordination.js   # two wallets: grant → recall → atomic handoff → verifiable audit
+```
+
+**Similarity recall** (`/api/memory/remember` + `/recall`) ships with a local
+lexical embedder (no key, works out of the box). Point it at any
+OpenAI-compatible embeddings endpoint for true semantic recall — no code change:
+
+```bash
+EMBEDDINGS_URL=https://api.openai.com/v1/embeddings
+EMBEDDINGS_MODEL=text-embedding-3-small
+EMBEDDINGS_API_KEY=sk-...
+```
 
 ## No wallet? Pay with compute (proof-of-work)
 
