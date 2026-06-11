@@ -74,13 +74,23 @@ jobs:
           echo "=== screenshot: example.com ==="
           curl -s 'localhost:3000/api/screenshot?url=https://example.com' -o shot.png
           file shot.png && ls -la shot.png
-          echo "=== pdf: W3C dummy PDF ==="
+          echo "=== pdf: arXiv 'Attention Is All You Need' ==="
           curl -s -X POST localhost:3000/api/pdf -H 'Content-Type: application/json' \
-            -d '{"url":"https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"}' | jq '{pages, wordCount, text: (.text | .[0:100])}'
+            -d '{"url":"https://arxiv.org/pdf/1706.03762"}' | jq 'if .error then . else {pages, wordCount, sample: (.text | .[0:150])} end'
           echo "=== memory: write/read/isolation ==="
           curl -s -X POST 'localhost:3000/api/memory?ns=ci' -H 'Content-Type: application/json' -d '{"key":"a","value":{"n":1}}' | jq .
           curl -s 'localhost:3000/api/memory?ns=ci&key=a' | jq .
           curl -s 'localhost:3000/api/memory?ns=other&key=a' | jq .
+
+      - name: Check production is serving the new catalog
+        run: |
+          PROD=https://agent402-production.up.railway.app
+          N=$(curl -s "$PROD/api/pricing" | jq '.endpoints | length')
+          echo "production endpoint count: $N (expect 8)"
+          curl -s "$PROD/api/pricing" | jq -r '.endpoints[] | "\(.method) \(.path) \(.price)"'
+          paid=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PROD/api/render" -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{"url":"https://example.com"}')
+          echo "render unpaid → HTTP $paid (expect 402)"
+          [ "$N" = "8" ] && [ "$paid" = "402" ] || { echo "Production may still be building the new image — re-run this check shortly."; exit 1; }
 
   probe:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || contains(join(github.event.commits.*.message), '[probe]')
