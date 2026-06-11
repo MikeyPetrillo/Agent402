@@ -207,8 +207,8 @@ jobs:
           '
           echo "=== watch an agent pay an agent (live, no wallet) ==="
           TARGET_URL=https://agent402.tools node scripts/demo-payment.js
-          echo "=== live M2M stats ==="
-          curl -s https://agent402.tools/api/stats | jq '{tools, wallet, onchainRevenueProof, served: .toolCallsServed}'
+          echo "=== live M2M stats (informational; present once deployed) ==="
+          curl -s https://agent402.tools/api/stats | jq '{tools, wallet, onchainRevenueProof, served: .toolCallsServed}' || echo "(/api/stats not live yet — will appear after this image rolls out)"
 
   probe:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || contains(join(github.event.commits.*.message), '[probe]')
