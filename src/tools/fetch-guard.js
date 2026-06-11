@@ -1,10 +1,14 @@
 import { lookup } from "node:dns/promises";
+import { lookup as lookupCb } from "node:dns";
 import { isIP } from "node:net";
+import { Agent } from "undici";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
 const USER_AGENT =
   "Mozilla/5.0 (compatible; Agent402/1.0; +https://github.com/MikeyPetrillo/Agent402)";
+
+const SSRF_BLOCK_CODE = "ESSRFBLOCKED";
 
 function isPrivateIp(ip) {
   if (ip.includes(":")) {
@@ -33,6 +37,42 @@ function badRequest(message) {
   const err = new Error(message);
   err.statusCode = 400;
   return err;
+}
+
+/**
+ * A DNS lookup that rejects any resolved private/loopback/metadata address.
+ * Used as the connect-time `lookup` for the SSRF dispatcher below: because the
+ * connection is made to the exact IP this returns, an attacker cannot win the
+ * race between an upfront DNS check and the socket connect (DNS rebinding), and
+ * every redirect hop re-resolves through the same guard.
+ */
+function guardedLookup(hostname, options, callback) {
+  lookupCb(hostname, options, (err, address, family) => {
+    if (err) return callback(err);
+    const entries = Array.isArray(address) ? address : [{ address, family }];
+    for (const e of entries) {
+      if (isPrivateIp(e.address)) {
+        return callback(Object.assign(new Error(`Blocked: ${hostname} resolves to a private address`), { code: SSRF_BLOCK_CODE }));
+      }
+    }
+    callback(null, address, family);
+  });
+}
+
+// Shared dispatcher that pins every connection (and redirect hop) to a
+// validated public IP. Scoped to the tool fetchers — it is passed explicitly
+// and never set as the process-global dispatcher, so the x402 payment client's
+// own outbound calls are unaffected.
+export const ssrfDispatcher = new Agent({ connect: { lookup: guardedLookup, timeout: FETCH_TIMEOUT_MS } });
+
+// Distinguish an SSRF-block from a generic network failure on a thrown fetch error.
+export function isSsrfBlock(err) {
+  let e = err;
+  for (let i = 0; i < 5 && e; i++) {
+    if (e.code === SSRF_BLOCK_CODE) return true;
+    e = e.cause;
+  }
+  return false;
 }
 
 /**
@@ -82,9 +122,11 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES }
     response = await fetch(url, {
       signal: controller.signal,
       redirect: "follow",
+      dispatcher: ssrfDispatcher,
       headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml,*/*" },
     });
   } catch (err) {
+    if (isSsrfBlock(err)) throw badRequest("URL resolves to a private address");
     throw Object.assign(
       new Error(err.name === "AbortError" ? "Upstream fetch timed out" : `Fetch failed: ${err.message}`),
       { statusCode: 504 }
