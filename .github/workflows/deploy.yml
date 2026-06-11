@@ -1,33 +1,19 @@
 name: Deploy to Railway
 
 on:
+  push:
+    paths:
+      - ".github/trigger-probe"
+      - ".github/trigger-deploy"
   workflow_dispatch:
     inputs:
       mode:
         description: "probe (test facilitators only) or deploy"
         default: "deploy"
-      railway_token:
-        description: "Railway account token (falls back to RAILWAY_TOKEN secret)"
-        required: false
-      wallet_address:
-        description: "Base USDC receiving address (0x…)"
-        required: false
-      network:
-        description: "base or base-sepolia"
-        default: "base"
-      facilitator_url:
-        description: "x402 facilitator URL (leave empty when CDP keys are set)"
-        required: false
-      cdp_key_id:
-        description: "Coinbase CDP API key ID (optional)"
-        required: false
-      cdp_key_secret:
-        description: "Coinbase CDP API key secret (optional)"
-        required: false
 
 jobs:
   probe:
-    if: inputs.mode == 'probe'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || contains(join(github.event.commits.*.message), '[probe]')
     runs-on: ubuntu-latest
     steps:
       - name: Probe public x402 facilitators
@@ -39,15 +25,15 @@ jobs:
           done
 
   deploy:
-    if: inputs.mode == 'deploy'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' || contains(join(github.event.commits.*.message), '[deploy]')
     runs-on: ubuntu-latest
     env:
-      RAILWAY_API_TOKEN: ${{ inputs.railway_token || secrets.RAILWAY_TOKEN }}
-      CDP_KEY_ID: ${{ inputs.cdp_key_id }}
-      CDP_KEY_SECRET: ${{ inputs.cdp_key_secret }}
-      WALLET_ADDRESS: ${{ inputs.wallet_address }}
-      NETWORK: ${{ inputs.network }}
-      FACILITATOR_URL: ${{ inputs.facilitator_url }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      CDP_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
+      CDP_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
+      WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS }}
+      NETWORK: ${{ vars.NETWORK || 'base' }}
+      FACILITATOR_URL: ${{ vars.FACILITATOR_URL }}
     steps:
       - name: Mask sensitive inputs
         run: |
