@@ -37,13 +37,41 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
-  "@type": "WebAPI",
-  "name": "Agent402",
-  "url": "${baseUrl}",
-  "description": "${count} pay-per-call tools for AI agents via the x402 payment protocol (USDC on Base): headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed key-value memory, data conversion, text processing, validation, time, and network tools.",
-  "documentation": "${baseUrl}/llms.txt",
-  "termsOfService": "${baseUrl}/",
-  "offers": { "@type": "Offer", "price": "0.001-0.02", "priceCurrency": "USD", "description": "Per-call micropayments in USDC via x402" }
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "${baseUrl}/#org",
+      "name": "Agent402",
+      "url": "${baseUrl}",
+      "description": "Machine-to-machine payments for AI agents: ${count} pay-per-call web tools settled in USDC via the x402 protocol, or free with proof-of-work."
+    },
+    {
+      "@type": "WebSite",
+      "@id": "${baseUrl}/#site",
+      "url": "${baseUrl}",
+      "name": "Agent402 — tools for AI agents",
+      "publisher": { "@id": "${baseUrl}/#org" },
+      "potentialAction": { "@type": "SearchAction", "target": "${baseUrl}/tools?q={search_term_string}", "query-input": "required name=search_term_string" }
+    },
+    {
+      "@type": "WebAPI",
+      "name": "Agent402",
+      "url": "${baseUrl}",
+      "provider": { "@id": "${baseUrl}/#org" },
+      "description": "${count} pay-per-call tools for AI agents via the x402 payment protocol (USDC on Base): headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed memory & coordination, ${count - freeCount > 0 ? "data conversion, " : ""}unit conversions, validation, and more.",
+      "documentation": "${baseUrl}/llms.txt",
+      "offers": { "@type": "AggregateOffer", "offerCount": "${count}", "lowPrice": "0.001", "highPrice": "0.02", "priceCurrency": "USD", "description": "Per-call micropayments in USDC via x402, or free with proof-of-work" }
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        { "@type": "Question", "name": "What is Agent402?", "acceptedAnswer": { "@type": "Answer", "text": "Agent402 is a live node in the machine-to-machine economy: ${count} web tools an autonomous AI agent can call and pay for per request in USDC via the x402 protocol — or with proof-of-work, no wallet. No human, no signup, no API key." } },
+        { "@type": "Question", "name": "How does an AI agent pay for a tool?", "acceptedAnswer": { "@type": "Answer", "text": "The agent calls an endpoint and receives an HTTP 402 Payment Required quote. An x402 client signs a USDC payment from the agent's own wallet on Base and retries; the call settles on-chain in seconds. The wallet is the identity — no account needed." } },
+        { "@type": "Question", "name": "Are any tools free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes — ${freeCount} of the ${count} pure-CPU tools can be used with no wallet at all by solving a short proof-of-work puzzle (a few seconds of the caller's CPU) instead of paying USDC." } },
+        { "@type": "Question", "name": "Why would an agent use this instead of building the tools itself?", "acceptedAnswer": { "@type": "Answer", "text": "Many agents can write code but can't run a headless browser, reach the network from a locked sandbox, or keep durable state across sessions. Agent402 provides a real browser, network access, and wallet-keyed memory and coordination that a single ephemeral agent cannot give itself." } }
+      ]
+    }
+  ]
 }
 </script>
 <style>
@@ -79,6 +107,8 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
   a { color:var(--accent); }
   footer { margin-top:56px; color:var(--muted); font-size:.85rem; border-top:1px solid #1e2638; padding-top:20px; }
   .warn { background:#3a2a12; border:1px solid #6b4a1a; color:#fbbf24; border-radius:10px; padding:12px 16px; margin:20px 0; font-size:.9rem; }
+  .faq p { color:var(--muted); margin:14px 0; font-size:.95rem; }
+  .faq b { color:var(--text); }
   .callout { background:#10210f; border:1px solid #1f4a1d; border-radius:12px; padding:14px 18px; margin:24px 0 8px; font-size:1rem; color:var(--text); }
   .callout b { color:#fff; }
   .freebadge { display:inline-block; background:var(--accent); color:#08130b; font-weight:800; font-size:.72rem; letter-spacing:.03em; padding:2px 9px; border-radius:999px; margin-right:8px; vertical-align:middle; }
@@ -168,6 +198,14 @@ curl ${baseUrl}/openapi.json
 curl -i -X POST ${baseUrl}/api/extract \\
   -H "Content-Type: application/json" \\
   -d '{"url":"https://example.com"}'</pre>
+
+  <h2>FAQ</h2>
+  <div class="faq">
+    <p><b>What is Agent402?</b><br><span>A live node in the machine-to-machine economy: ${count} web tools an autonomous AI agent can call and pay for per request in USDC via the <a href="https://x402.org" rel="noopener">x402 protocol</a> — or with proof-of-work, no wallet. No human, no signup, no API key.</span></p>
+    <p><b>How does an AI agent pay for a tool?</b><br><span>It calls an endpoint and gets an <code>HTTP 402 Payment Required</code> quote. An x402 client signs a USDC payment from the agent's own wallet on Base and retries; the call settles on-chain in seconds. The wallet is the identity.</span></p>
+    <p><b>Are any tools free?</b><br><span>Yes — ${freeCount} of the ${count} pure-CPU tools work with no wallet at all: solve a short <a href="/api/pow">proof-of-work</a> puzzle (a few seconds of CPU) instead of paying USDC.</span></p>
+    <p><b>Why not just build the tools myself?</b><br><span>Many agents can write code but can't run a headless browser, reach the network from a locked sandbox, or keep durable state across sessions. Agent402 provides a real browser, network access, and wallet-keyed memory &amp; coordination a single ephemeral agent can't give itself.</span></p>
+  </div>
 
   <footer>
     Agent402 — ${count} machine-payable tools for AI agents. Built on the <a href="https://x402.org" rel="noopener">x402 protocol</a>.

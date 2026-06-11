@@ -2,10 +2,21 @@ import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
 
 export function robotsTxt(baseUrl) {
-  return `User-agent: *
+  // Explicitly welcome AI/agent crawlers and search engines; point them at the
+  // machine-readable surfaces. Disallow only the wallet-scoped memory endpoints.
+  const agents = [
+    "GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot", "Claude-Web", "anthropic-ai",
+    "PerplexityBot", "Google-Extended", "Googlebot", "Bingbot", "Applebot", "Applebot-Extended",
+    "CCBot", "Bytespider", "Amazonbot", "cohere-ai", "Meta-ExternalAgent", "DuckDuckBot",
+  ];
+  const blocks = agents.map((a) => `User-agent: ${a}\nAllow: /`).join("\n\n");
+  return `${blocks}
+
+User-agent: *
 Allow: /
 Disallow: /api/memory
 
+# Machine-readable catalogs for agents: ${baseUrl}/llms.txt , ${baseUrl}/openapi.json , ${baseUrl}/api/pricing
 Sitemap: ${baseUrl}/sitemap.xml
 `;
 }
