@@ -10,16 +10,19 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "probe (test facilitators only), test (exercise tools), or deploy"
+        description: "probe (test facilitators only), test (exercise tools), paytest (paid e2e), or deploy"
         default: "deploy"
+      burner_key:
+        description: "Existing funded burner key for paytest (hex). Leave empty to generate a fresh wallet."
+        default: ""
 
 jobs:
   paytest:
-    if: contains(join(github.event.commits.*.message), '[paytest]')
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'paytest' || contains(join(github.event.commits.*.message), '[paytest]')
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
-      TARGET_URL: https://agent402-production.up.railway.app
+      TARGET_URL: https://agent402.tools
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,6 +30,14 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm ci && npm install --no-save @x402/fetch viem
+      - name: Load provided burner key
+        if: github.event_name == 'workflow_dispatch' && inputs.burner_key != ''
+        env:
+          BURNER_KEY: ${{ inputs.burner_key }}
+        run: |
+          echo "::add-mask::$BURNER_KEY"
+          printf '%s' "$BURNER_KEY" > "$RUNNER_TEMP/agent-key"
+          chmod 600 "$RUNNER_TEMP/agent-key"
       - name: Generate burner agent wallet
         run: MODE=address KEY_FILE=$RUNNER_TEMP/agent-key node scripts/agent-e2e.js
       - name: Publish funding address
