@@ -126,6 +126,9 @@ jobs:
       - name: Memory v2 unit tests (grants, counters, audit chain, recall)
         run: node scripts/test-memory.js
 
+      - name: Multi-agent coordination demo (two wallets, one namespace)
+        run: node scripts/demo-coordination.js
+
       - name: Proof-of-work tier (gate bypass with payments enabled)
         run: |
           # Start a second instance with the x402 paywall ACTIVE so the PoW gate

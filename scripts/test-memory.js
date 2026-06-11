@@ -76,15 +76,16 @@ ok("audit hash-chain verifies end-to-end", okChain);
 ok("log records the grant action", log.entries.some((e) => e.action === "grant" && e.key === B.toLowerCase()));
 
 // --- similarity recall ---
-remember(A, "The Railway deploy failed because the build ran out of memory.", { topic: "ops" }, { actor: A });
-remember(A, "Our favorite pizza topping is pineapple and jalapeno.", { topic: "food" }, { actor: A });
-remember(A, "Kubernetes pods were OOMKilled during the rollout.", { topic: "ops" }, { actor: A });
-const r = recall(A, "why did the deployment crash from low memory", 2, { actor: A });
+await remember(A, "The Railway deploy failed because the build ran out of memory.", { topic: "ops" }, { actor: A });
+await remember(A, "Our favorite pizza topping is pineapple and jalapeno.", { topic: "food" }, { actor: A });
+await remember(A, "Kubernetes pods were OOMKilled during the rollout.", { topic: "ops" }, { actor: A });
+const r = await recall(A, "why did the deployment crash from low memory", 2, { actor: A });
 ok("recall returns results", r.results.length > 0);
 ok("recall ranks the ops docs above pizza", r.results[0].text.toLowerCase().includes("memory") || r.results[0].text.toLowerCase().includes("oomkilled"));
 ok("recall not topped by unrelated food doc", !r.results[0].text.toLowerCase().includes("pizza"));
 const firstId = r.results[0].id;
 ok("forget deletes a doc", forget(A, firstId, { actor: A }).deleted === true);
+ok("recall reports its embedder", typeof r.embedder === "string" && r.embedder.length > 0);
 
 const failed = checks.filter(([, c]) => !c);
 console.log(`\n${pass}/${checks.length} checks passed`);

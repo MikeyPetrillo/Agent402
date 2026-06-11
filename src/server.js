@@ -532,11 +532,11 @@ const targetOwner = (req, actor) => {
   const o = (req.body?.owner ?? req.query.owner ?? "").toString().toLowerCase();
   return o && /^0x[0-9a-f]{40}$/.test(o) ? o : actor;
 };
-const memHandler = (fn) => (req, res) => {
+const memHandler = (fn) => async (req, res) => {
   const actor = memoryActor(req, res);
   if (!actor) return;
   try {
-    res.json(fn(req, actor, targetOwner(req, actor)));
+    res.json(await fn(req, actor, targetOwner(req, actor)));
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
