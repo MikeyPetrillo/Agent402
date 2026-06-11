@@ -8,6 +8,8 @@ import { payerFromRequest } from "./payer.js";
 import { landingPage } from "./landing.js";
 import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
 import { buildPaymentMiddleware } from "./payments.js";
+import { KIT } from "./tools/kit.js";
+import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES } from "./pages.js";
 
 const PORT = process.env.PORT || 3000;
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
@@ -17,6 +19,9 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
 const CATALOG = {
   "POST /api/extract": {
+    name: "Extract article",
+    slug: "extract",
+    category: "web",
     price: "$0.005",
     description:
       "Extract the main article content from any public URL as clean markdown. Returns title, byline, excerpt, word count, and markdown.",
@@ -41,6 +46,9 @@ const CATALOG = {
     },
   },
   "GET /api/meta": {
+    name: "Page metadata",
+    slug: "meta",
+    category: "web",
     price: "$0.002",
     description:
       "Fetch page metadata for a URL: title, description, OpenGraph, Twitter cards, canonical URL, favicon.",
@@ -63,6 +71,9 @@ const CATALOG = {
     },
   },
   "GET /api/dns": {
+    name: "DNS lookup",
+    slug: "dns",
+    category: "network",
     price: "$0.001",
     description: "DNS lookup for a domain. Supported record types: A, AAAA, MX, TXT, NS, CNAME.",
     tags: ["dns", "domains", "networking"],
@@ -79,6 +90,9 @@ const CATALOG = {
     },
   },
   "POST /api/render": {
+    name: "Browser render",
+    slug: "render",
+    category: "web",
     price: "$0.02",
     description:
       "Render a page in a real headless Chromium browser (JavaScript executed), then extract the main content as clean markdown. Use this for SPAs and JS-heavy sites where plain fetching returns an empty shell.",
@@ -96,6 +110,9 @@ const CATALOG = {
     },
   },
   "GET /api/screenshot": {
+    name: "Screenshot",
+    slug: "screenshot",
+    category: "web",
     price: "$0.015",
     description:
       "Screenshot any public URL in headless Chromium. Returns a PNG image. Query params: ?url=https://…&fullPage=true (optional).",
@@ -114,6 +131,9 @@ const CATALOG = {
     },
   },
   "POST /api/pdf": {
+    name: "PDF to text",
+    slug: "pdf",
+    category: "web",
     price: "$0.01",
     description:
       "Fetch a PDF from a URL and extract its text content. Returns page count, document info, and the full text (up to 20MB PDFs).",
@@ -131,6 +151,9 @@ const CATALOG = {
     },
   },
   "POST /api/memory": {
+    name: "Memory write",
+    slug: "memory-write",
+    category: "memory",
     price: "$0.002",
     description:
       "Persistent key-value memory for agents, scoped to the paying wallet. Your x402 payment IS your authentication: the wallet that pays owns the namespace. No signup, no API keys. Body: {\"key\": \"…\", \"value\": any JSON} to write, or {\"key\": \"…\", \"delete\": true} to remove. Values up to 64KB.",
@@ -150,6 +173,9 @@ const CATALOG = {
     },
   },
   "GET /api/memory": {
+    name: "Memory read",
+    slug: "memory-read",
+    category: "memory",
     price: "$0.001",
     description:
       "Read from your wallet-scoped memory. ?key=… returns the stored value; omit key to list your keys. Only the wallet that paid for the writes can read them.",
@@ -164,24 +190,41 @@ const CATALOG = {
   },
 };
 
+// The utility kit (49 small tools) joins the catalog; same paywall, same discovery.
+for (const tool of KIT) {
+  if (CATALOG[tool.route]) throw new Error(`Duplicate route in kit: ${tool.route}`);
+  CATALOG[tool.route] = tool;
+}
+
 const app = express();
 app.use(express.json({ limit: "100kb" }));
 
 // Free, unauthenticated routes
-app.get("/", (_req, res) => res.type("html").send(landingPage(BASE_URL, NETWORK, FREE_MODE)));
+app.get("/", (_req, res) => res.type("html").send(landingPage(BASE_URL, NETWORK, FREE_MODE, CATALOG)));
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
-app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL)));
+app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));
+app.get("/openapi.json", (_req, res) => res.json(openapiSpec(BASE_URL, CATALOG)));
+app.get("/tools", (_req, res) => res.type("html").send(toolsIndexPage(BASE_URL, CATALOG)));
+app.get("/tools/:slug", (req, res) => {
+  const tools = toolList(CATALOG);
+  const tool = tools.find((t) => t.slug === req.params.slug);
+  if (!tool) return res.status(404).type("html").send('<p>Tool not found. <a href="/tools">All tools</a></p>');
+  const related = tools.filter((t) => t.category === tool.category && t.slug !== tool.slug).slice(0, 3);
+  res.type("html").send(toolPage(BASE_URL, tool, related));
+});
 app.get("/api/pricing", (_req, res) =>
   res.json({
     name: "Agent402",
-    description: "Paid web tools for AI agents via the x402 payment protocol.",
+    description: "Pay-per-call tools for AI agents via the x402 payment protocol.",
     payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC" },
     baseUrl: BASE_URL,
-    endpoints: Object.entries(CATALOG).map(([route, { price, description }]) => {
+    openapi: `${BASE_URL}/openapi.json`,
+    categories: Object.fromEntries(Object.entries(CATEGORIES).map(([k, v]) => [k, v.label])),
+    endpoints: Object.entries(CATALOG).map(([route, { price, description, category, slug }]) => {
       const [method, path] = route.split(" ");
-      return { method, path, price, description };
+      return { method, path, price, category, description, docs: `${BASE_URL}/tools/${slug}` };
     }),
   })
 );
@@ -301,4 +344,19 @@ app.get("/api/memory", (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`Agent402 listening on :${PORT}`));
+// Kit routes: input is merged query + JSON body; handlers return JSON or
+// { __binary, contentType } for image responses.
+for (const tool of KIT) {
+  const [method, path] = tool.route.split(" ");
+  app[method.toLowerCase()](path, async (req, res) => {
+    try {
+      const result = await tool.handler({ ...req.query, ...(req.body ?? {}) }, req);
+      if (result && result.__binary) return res.type(result.contentType).send(result.__binary);
+      res.json(result);
+    } catch (err) {
+      res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+}
+
+app.listen(PORT, () => console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`));

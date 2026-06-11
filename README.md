@@ -1,6 +1,6 @@
 # Agent402
 
-**Pay-per-call web tools for AI agents, paid in USDC via the [x402 protocol](https://x402.org).**
+**56 pay-per-call tools for AI agents, paid in USDC via the [x402 protocol](https://x402.org).**
 
 **🟢 Live at [agent402.tools](https://agent402.tools)** — USDC on Base mainnet.
 
@@ -8,26 +8,37 @@ No signups, no API keys, no subscriptions. An agent calls an endpoint, gets an
 `HTTP 402 Payment Required` challenge, pays a fraction of a cent in USDC on Base
 automatically, and gets the result. Every payment goes straight to your wallet.
 
-## Endpoints
+## The catalogue (56 tools, 9 categories)
 
-| Endpoint | Price | What it does |
+| Category | Tools | Highlights |
 |---|---|---|
-| `POST /api/render` | $0.02 | **Headless Chromium**: JS executed, SPAs included → clean markdown |
-| `GET /api/screenshot?url=…` | $0.015 | Any URL → PNG (optional `&fullPage=true`) |
-| `POST /api/pdf` | $0.01 | PDF URL → full text + document info (up to 20MB) |
-| `POST /api/extract` | $0.005 | Any URL → clean markdown (title, byline, main content, boilerplate stripped) |
-| `POST /api/memory` | $0.002 | **Wallet-keyed persistent KV store** — the paying wallet owns the namespace; no signup |
-| `GET /api/memory?key=…` | $0.001 | Read your wallet-scoped memory (omit key to list keys) |
-| `GET /api/meta?url=…` | $0.002 | Page metadata: title, description, OpenGraph, Twitter cards, canonical, favicon |
-| `GET /api/dns?name=…&type=A` | $0.001 | DNS lookup (A, AAAA, MX, TXT, NS, CNAME) |
-| `GET /api/pricing` | free | Machine-readable catalog of endpoints and prices |
-| `GET /health` | free | Health check |
+| Web & documents | 5 | `render` (headless Chromium, $0.02), `screenshot`, `pdf`, `extract`, `meta` |
+| Agent memory | 2 | Wallet-keyed persistent KV store — the payment IS the login |
+| Network & domains | 6 | `dns`, `http-check`, `tls-cert`, `whois` (RDAP), `robots-check`, `sitemap` |
+| Data conversion | 10 | JSON ⇄ CSV/YAML/XML, markdown ⇄ HTML, `json-diff`, `json-query` |
+| Text processing | 7 | `slugify`, `case`, `text-stats` (token estimates), `keywords`, `text-diff`, `regex`, `lorem` |
+| Encoding & crypto | 7 | `hash`, `hmac`, `base64`, `hex`, `url-code`, `jwt-decode`, `totp` |
+| Generators & IDs | 5 | `uuid` (v4/v7), `ulid`, `password`, `random`, `qr` (PNG) |
+| Time & scheduling | 5 | `time`, `time-convert`, `cron-next`, `duration`, `date-diff` |
+| Validation & parsing | 9 | `email-validate` (MX), `url-parse`, `ip-info`, `user-agent`, `color`, `semver`, `mime`, `iban-validate`, `card-validate` |
 
-**Why agents pick this over rolling their own:** `/api/render` needs real browser
-infrastructure agents don't have; `/api/memory` gives stateless agents durable
-state with zero signup (the x402 payment is the authentication — the wallet IS
-the account, creating natural stickiness); and one base URL covers the whole
-utility belt, so agent developers integrate once.
+Free discovery surfaces: [`/tools`](https://agent402.tools/tools) (per-tool docs
+pages), [`/api/pricing`](https://agent402.tools/api/pricing) (JSON catalog),
+[`/openapi.json`](https://agent402.tools/openapi.json) (OpenAPI 3.1),
+[`/llms.txt`](https://agent402.tools/llms.txt) (LLM-readable docs), `/health`.
+
+**Why agents pay for this instead of building it themselves:**
+
+1. **Capabilities the sandbox doesn't have.** Most agent runtimes have no
+   headless browser, restricted network egress, and no durable disk. `render`,
+   `screenshot`, and `memory` are infrastructure rented by the call.
+2. **State that survives the session.** `memory` is keyed to the paying wallet —
+   persist findings today, read them next week from a different machine, zero
+   credentials to store or leak.
+3. **The token math.** Writing and debugging a CSV parser or cron calculator
+   mid-task burns 10–100× more in tokens than a tested $0.001 call.
+4. **One integration, 56 tools.** A single x402-wrapped fetch covers the whole
+   catalogue. No per-service SDKs or API-key management.
 
 ## Deploy on Railway
 
