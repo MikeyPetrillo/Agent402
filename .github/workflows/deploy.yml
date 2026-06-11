@@ -146,6 +146,7 @@ jobs:
       # default is harmless once CDP_API_KEY_ID/SECRET secrets are added.
       FACILITATOR_URL: ${{ vars.FACILITATOR_URL || 'https://facilitator.payai.network' }}
       PROJECT_NAME: agent402
+      CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN || 'agent402.tools' }}
       REPO: ${{ github.repository }}
       BRANCH: ${{ github.ref_name }}
     steps:
@@ -225,6 +226,26 @@ jobs:
           echo "domain=$DOMAIN" >> "$GITHUB_OUTPUT"
           echo "PUBLIC URL: https://$DOMAIN"
 
+      - name: Attach custom domain
+        if: env.CUSTOM_DOMAIN != ''
+        run: |
+          gql() {
+            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+              --data @-
+          }
+          ENV_ID='${{ steps.project.outputs.env_id }}'
+          SERVICE_ID='${{ steps.service.outputs.service_id }}'
+          EXISTING=$(jq -n --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
+            '{query:"query($e:String!, $s:String!) { domains(environmentId: $e, serviceId: $s) { customDomains { domain } } }", variables:{e:$e,s:$s}}' | gql \
+            | jq -r '.data.domains.customDomains[]?.domain')
+          echo "existing custom domains: ${EXISTING:-none}"
+          if ! echo "$EXISTING" | grep -qx "$CUSTOM_DOMAIN"; then
+            RESP=$(jq -n --arg p '${{ steps.project.outputs.project_id }}' --arg e "$ENV_ID" --arg s "$SERVICE_ID" --arg d "$CUSTOM_DOMAIN" \
+              '{query:"mutation($p:String!, $e:String!, $s:String!, $d:String!) { customDomainCreate(input: { projectId: $p, environmentId: $e, serviceId: $s, domain: $d }) { id domain status { dnsRecords { hostlabel requiredValue recordType currentValue status } } } }", variables:{p:$p,e:$e,s:$s,d:$d}}' | gql)
+            echo "$RESP" | jq .
+          fi
+
       - name: Set environment variables (triggers deploy)
         run: |
           gql() {
@@ -232,7 +253,8 @@ jobs:
               -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
               --data @-
           }
-          VARS=$(jq -n --arg w "$WALLET_ADDRESS" --arg n "$NETWORK" --arg f "$FACILITATOR_URL" --arg b "https://${{ steps.domain.outputs.domain }}" \
+          BASE="https://${CUSTOM_DOMAIN:-${{ steps.domain.outputs.domain }}}"
+          VARS=$(jq -n --arg w "$WALLET_ADDRESS" --arg n "$NETWORK" --arg f "$FACILITATOR_URL" --arg b "$BASE" \
             '{WALLET_ADDRESS:$w, NETWORK:$n, FACILITATOR_URL:$f, BASE_URL:$b}')
           if [ -n "$CDP_KEY_ID" ] && [ -n "$CDP_KEY_SECRET" ]; then
             VARS=$(echo "$VARS" | jq --arg i "$CDP_KEY_ID" --arg s "$CDP_KEY_SECRET" '. + {CDP_API_KEY_ID:$i, CDP_API_KEY_SECRET:$s}')
@@ -274,3 +296,13 @@ jobs:
           [ "$paid" = "402" ] || exit 1
           echo
           echo "🚀 LIVE: https://$URL"
+          if [ -n "$CUSTOM_DOMAIN" ]; then
+            echo "=== custom domain check (informational — DNS may still be propagating) ==="
+            for i in $(seq 1 12); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$CUSTOM_DOMAIN/health" || echo 000)
+              [ "$code" = "200" ] && break
+              sleep 10
+            done
+            echo "https://$CUSTOM_DOMAIN/health → HTTP $code"
+            [ "$code" = "200" ] && echo "🌐 CUSTOM DOMAIN LIVE: https://$CUSTOM_DOMAIN" || echo "(not resolving yet — Railway-managed DNS usually completes within minutes)"
+          fi
