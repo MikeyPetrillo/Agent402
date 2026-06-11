@@ -175,7 +175,10 @@ jobs:
           const B = "'"$PROD"'";
           const { createHash } = await import("node:crypto");
           const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
-          const c = await (await fetch(B + "/api/pow/challenge?slug=hash")).json();
+          const cr = await fetch(B + "/api/pow/challenge?slug=hash");
+          const ct = cr.headers.get("content-type") || "";
+          if (!ct.includes("application/json")) { console.error("Production not yet serving /api/pow (still building the new image?) — re-run shortly."); process.exit(1); }
+          const c = await cr.json();
           let n = 0; while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
           const r = await fetch(B + "/api/hash", { method: "POST", headers: { "Content-Type": "application/json", "X-Pow-Solution": c.token + ":" + n }, body: JSON.stringify({ text: "hello world" }) });
           if (r.status !== 200) { console.error("PoW on production returned " + r.status); process.exit(1); }
