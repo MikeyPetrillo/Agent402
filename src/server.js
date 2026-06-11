@@ -10,6 +10,7 @@ import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
 import { buildPaymentMiddleware } from "./payments.js";
 import { KIT } from "./tools/kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES } from "./pages.js";
+import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
 
 const PORT = process.env.PORT || 3000;
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
@@ -196,6 +197,17 @@ for (const tool of KIT) {
   CATALOG[tool.route] = tool;
 }
 
+// Routes that accept proof-of-work in lieu of payment: the pure-CPU tools.
+// Map "METHOD /path" -> tool slug, for the gate and the challenge endpoint.
+const POW_ROUTES = new Map();
+const POW_SLUGS = new Set();
+for (const [route, def] of Object.entries(CATALOG)) {
+  if (isComputePayable(def)) {
+    POW_ROUTES.set(route, def.slug);
+    POW_SLUGS.add(def.slug);
+  }
+}
+
 const app = express();
 app.use(express.json({ limit: "100kb" }));
 
@@ -212,19 +224,35 @@ app.get("/tools/:slug", (req, res) => {
   const tool = tools.find((t) => t.slug === req.params.slug);
   if (!tool) return res.status(404).type("html").send('<p>Tool not found. <a href="/tools">All tools</a></p>');
   const related = tools.filter((t) => t.category === tool.category && t.slug !== tool.slug).slice(0, 3);
-  res.type("html").send(toolPage(BASE_URL, tool, related));
+  res.type("html").send(toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY }));
 });
+// Free proof-of-work endpoints: agents without a wallet pay with CPU instead.
+app.get("/api/pow", (_req, res) => res.json(powInfo(BASE_URL, [...POW_SLUGS].sort())));
+app.get("/api/pow/challenge", (req, res) => {
+  const requested = (req.query.slug || req.query.path || "").toString().replace(/^.*\//, "");
+  const slug = POW_SLUGS.has(requested) ? requested : "*";
+  res.json(issueChallenge(slug));
+});
+
 app.get("/api/pricing", (_req, res) =>
   res.json({
     name: "Agent402",
     description: "Pay-per-call tools for AI agents via the x402 payment protocol.",
     payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC" },
+    altPayment: {
+      protocol: "proof-of-work",
+      summary: "No wallet? Spend CPU instead on the pure-CPU tools.",
+      challengeUrl: `${BASE_URL}/api/pow/challenge`,
+      info: `${BASE_URL}/api/pow`,
+      difficultyBits: POW_DIFFICULTY,
+      eligibleTools: [...POW_SLUGS].sort(),
+    },
     baseUrl: BASE_URL,
     openapi: `${BASE_URL}/openapi.json`,
     categories: Object.fromEntries(Object.entries(CATEGORIES).map(([k, v]) => [k, v.label])),
     endpoints: Object.entries(CATALOG).map(([route, { price, description, category, slug }]) => {
       const [method, path] = route.split(" ");
-      return { method, path, price, category, description, docs: `${BASE_URL}/tools/${slug}` };
+      return { method, path, price, category, description, docs: `${BASE_URL}/tools/${slug}`, computePayable: POW_SLUGS.has(slug) };
     }),
   })
 );
@@ -239,15 +267,32 @@ if (FREE_MODE) {
     );
     process.exit(1);
   }
-  app.use(
-    await buildPaymentMiddleware({
-      walletAddress: WALLET_ADDRESS,
-      network: NETWORK,
-      baseUrl: BASE_URL,
-      catalog: CATALOG,
-    })
-  );
-  console.log(`x402 payments enabled: ${NETWORK} -> ${WALLET_ADDRESS}`);
+  const x402mw = await buildPaymentMiddleware({
+    walletAddress: WALLET_ADDRESS,
+    network: NETWORK,
+    baseUrl: BASE_URL,
+    catalog: CATALOG,
+  });
+  // Gate: for a compute-payable route, a valid proof-of-work bypasses the x402
+  // paywall; otherwise the normal USDC paywall applies (and we advertise the
+  // PoW alternative via a response header on its 402).
+  app.use((req, res, next) => {
+    const slug = POW_ROUTES.get(`${req.method} ${req.path}`);
+    if (slug) {
+      const solution = req.header("x-pow-solution");
+      if (solution) {
+        const result = verifySolution(solution, slug);
+        if (result.ok) {
+          res.setHeader("X-Pow-Accepted", "true");
+          return next(); // work accepted — skip the USDC paywall
+        }
+        res.setHeader("X-Pow-Error", result.reason);
+      }
+      res.setHeader("X-Pow-Challenge", `${BASE_URL}/api/pow/challenge?slug=${slug}`);
+    }
+    return x402mw(req, res, next);
+  });
+  console.log(`x402 payments enabled: ${NETWORK} -> ${WALLET_ADDRESS}; proof-of-work tier on ${POW_SLUGS.size} tools (difficulty ${POW_DIFFICULTY} bits)`);
 }
 
 // Paid routes

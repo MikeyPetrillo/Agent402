@@ -1,4 +1,5 @@
 import { toolList, CATEGORIES } from "./pages.js";
+import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
 
 export function robotsTxt(baseUrl) {
   return `User-agent: *
@@ -65,9 +66,38 @@ ${sections}
 - \`GET /api/pricing\` — machine-readable catalog (JSON): every endpoint, price, category, and docs URL.
 - \`GET /openapi.json\` — full OpenAPI 3.1 spec with input/output schemas for all tools.
 - \`GET /tools\` and \`GET /tools/{slug}\` — human-readable docs per tool.
+- \`GET /api/pow\` — describes the proof-of-work option below.
+- \`GET /api/pow/challenge?slug={tool}\` — get a challenge to pay with CPU instead of USDC.
 - \`GET /health\` — health check.
 
-## How to pay (JavaScript example)
+## No wallet? Pay with compute (proof-of-work)
+
+Agents that cannot pay USDC can access the **pure-CPU tools** by spending CPU
+instead. The network/browser/storage tools (extract, meta, dns, render,
+screenshot, pdf, memory, http-check, tls-cert, whois, robots-check, sitemap,
+email-validate, ip-info) stay wallet-only; everything else accepts proof-of-work.
+
+1. \`GET ${baseUrl}/api/pow/challenge?slug=hash\` → returns \`{ challenge, difficulty, token, ... }\`.
+2. Find an integer \`nonce\` such that \`sha256(challenge + ":" + nonce)\` has at least
+   \`difficulty\` (${POW_DIFFICULTY}) leading zero bits.
+3. Resend the tool request with header \`X-Pow-Solution: <token>:<nonce>\`.
+
+Each challenge is single-use and expires quickly. Example:
+
+\`\`\`js
+import { createHash } from "node:crypto";
+const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
+const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=hash")).json();
+let n = 0;
+while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
+const res = await fetch("${baseUrl}/api/hash", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "X-Pow-Solution": c.token + ":" + n },
+  body: JSON.stringify({ text: "hello world" }),
+});
+\`\`\`
+
+## How to pay with USDC (JavaScript example)
 
 \`\`\`js
 import { wrapFetchWithPayment } from "@x402/fetch";
