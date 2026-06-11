@@ -5,13 +5,45 @@ on:
     paths:
       - ".github/trigger-probe"
       - ".github/trigger-deploy"
+      - ".github/trigger-test"
   workflow_dispatch:
     inputs:
       mode:
-        description: "probe (test facilitators only) or deploy"
+        description: "probe (test facilitators only), test (exercise tools), or deploy"
         default: "deploy"
 
 jobs:
+  test:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'test' || contains(join(github.event.commits.*.message), '[test]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install and start in free mode
+        run: |
+          npm ci
+          FREE_MODE=true PORT=3000 node src/server.js &
+          for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
+      - name: Exercise tools against live sites
+        run: |
+          echo "=== extract: BBC News article ==="
+          curl -s -X POST localhost:3000/api/extract -H 'Content-Type: application/json' \
+            -d '{"url":"https://www.bbc.com/news"}' | jq '{title, siteName, wordCount, sample: (.markdown | .[0:400])}'
+          echo "=== extract: Wikipedia x402-adjacent page ==="
+          curl -s -X POST localhost:3000/api/extract -H 'Content-Type: application/json' \
+            -d '{"url":"https://en.wikipedia.org/wiki/List_of_HTTP_status_codes"}' | jq '{title, wordCount, sample: (.markdown | .[0:400])}'
+          echo "=== meta: github.com ==="
+          curl -s 'localhost:3000/api/meta?url=https://github.com' | jq .
+          echo "=== dns: MX for gmail.com ==="
+          curl -s 'localhost:3000/api/dns?name=gmail.com&type=MX' | jq .
+          echo "=== dns: TXT for openai.com ==="
+          curl -s 'localhost:3000/api/dns?name=openai.com&type=TXT' | jq '.records | length as $n | {records_found: $n}'
+          echo "=== SSRF guard: cloud metadata endpoint must be blocked ==="
+          curl -s -X POST localhost:3000/api/extract -H 'Content-Type: application/json' \
+            -d '{"url":"http://169.254.169.254/latest/meta-data"}' | jq .
+
   probe:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || contains(join(github.event.commits.*.message), '[probe]')
     runs-on: ubuntu-latest
