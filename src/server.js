@@ -12,7 +12,10 @@ import { landingPage } from "./landing.js";
 import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
 import { buildPaymentMiddleware } from "./payments.js";
 import { KIT } from "./tools/kit.js";
+import { KIT2 } from "./tools/kit2.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES } from "./pages.js";
+
+const ALL_KIT = [...KIT, ...KIT2];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
 
 const PORT = process.env.PORT || 3000;
@@ -351,7 +354,7 @@ const CATALOG = {
 };
 
 // The utility kit (49 small tools) joins the catalog; same paywall, same discovery.
-for (const tool of KIT) {
+for (const tool of ALL_KIT) {
   if (CATALOG[tool.route]) throw new Error(`Duplicate route in kit: ${tool.route}`);
   CATALOG[tool.route] = tool;
 }
@@ -560,7 +563,7 @@ app.post("/api/memory/forget", memHandler((req, actor, owner) => forget(owner, r
 
 // Kit routes: input is merged query + JSON body; handlers return JSON or
 // { __binary, contentType } for image responses.
-for (const tool of KIT) {
+for (const tool of ALL_KIT) {
   const [method, path] = tool.route.split(" ");
   app[method.toLowerCase()](path, async (req, res) => {
     try {
