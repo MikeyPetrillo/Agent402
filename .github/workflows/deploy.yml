@@ -248,6 +248,35 @@ jobs:
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
+      - name: Railway deployment history (which image is live, what failed)
+        run: |
+          gql() {
+            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+              --data @-
+          }
+          PROJECT_ID=$(jq -n '{query:"query { projects { edges { node { id name } } } }"}' | gql \
+            | jq -r '.data.projects.edges[] | select(.node.name=="agent402") | .node.id' | head -1)
+          ENV_ID=$(jq -n --arg id "$PROJECT_ID" '{query:"query($id:String!) { project(id: $id) { environments { edges { node { id name } } } } }", variables:{id:$id}}' | gql \
+            | jq -r '.data.project.environments.edges[] | select(.node.name=="production") | .node.id' | head -1)
+          SERVICE_ID=$(jq -n --arg id "$PROJECT_ID" '{query:"query($id:String!) { project(id: $id) { services { edges { node { id name } } } } }", variables:{id:$id}}' | gql \
+            | jq -r '.data.project.services.edges[] | select(.node.name=="agent402") | .node.id' | head -1)
+          echo "=== last 10 deployments (newest first) ==="
+          DEPLOYS=$(jq -n --arg p "$PROJECT_ID" --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
+            '{query:"query($p:String!, $e:String!, $s:String!) { deployments(first: 10, input: { projectId: $p, environmentId: $e, serviceId: $s }) { edges { node { id status createdAt meta } } } }", variables:{p:$p,e:$e,s:$s}}' | gql)
+          echo "$DEPLOYS" | jq -r '.data.deployments.edges[]?.node | "\(.createdAt)  \(.status)  \(.id)  commit=\(.meta.commitHash // .meta.commit // "?" | tostring | .[0:8])  msg=\((.meta.commitMessage // "" | tostring | .[0:60]) | gsub("\n";" "))"' || echo "$DEPLOYS" | head -c 1500
+          LATEST_ID=$(echo "$DEPLOYS" | jq -r '.data.deployments.edges[0].node.id // empty')
+          LATEST_STATUS=$(echo "$DEPLOYS" | jq -r '.data.deployments.edges[0].node.status // empty')
+          echo; echo "latest deployment: $LATEST_ID status=$LATEST_STATUS"
+          if [ -n "$LATEST_ID" ] && [ "$LATEST_STATUS" != "SUCCESS" ]; then
+            echo "=== build logs (tail) for latest deployment ==="
+            jq -n --arg d "$LATEST_ID" '{query:"query($d:String!) { buildLogs(deploymentId: $d, limit: 60) { timestamp message } }", variables:{d:$d}}' | gql \
+              | jq -r '.data.buildLogs[]? | "\(.timestamp)  \(.message)"' | tail -60 || true
+            echo "=== deploy logs (tail) ==="
+            jq -n --arg d "$LATEST_ID" '{query:"query($d:String!) { deploymentLogs(deploymentId: $d, limit: 40) { timestamp message } }", variables:{d:$d}}' | gql \
+              | jq -r '.data.deploymentLogs[]? | "\(.timestamp)  \(.message)"' | tail -40 || true
+          fi
+
       - name: Check which facilitator production is configured to use
         run: |
           gql() {
