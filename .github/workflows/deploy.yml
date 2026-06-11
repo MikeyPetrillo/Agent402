@@ -33,7 +33,9 @@ jobs:
       CDP_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
       WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS }}
       NETWORK: ${{ vars.NETWORK || 'base' }}
-      FACILITATOR_URL: ${{ vars.FACILITATOR_URL }}
+      # CDP keys take priority in the server's facilitator selection, so this
+      # default is harmless once CDP_API_KEY_ID/SECRET secrets are added.
+      FACILITATOR_URL: ${{ vars.FACILITATOR_URL || 'https://facilitator.payai.network' }}
     steps:
       - name: Mask sensitive inputs
         run: |
