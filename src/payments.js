@@ -6,32 +6,61 @@ import {
   declareDiscoveryExtension,
 } from "@x402/extensions/bazaar";
 
+// USDC is auto-resolved per network by @x402/evm's built-in asset registry, so
+// adding a chain just means registering the scheme + offering it in `accepts`.
+// Only chains the registry knows USDC for (and a facilitator can settle) are safe.
 const NETWORKS = {
   base: "eip155:8453",
+  polygon: "eip155:137",
+  arbitrum: "eip155:42161",
   "base-sepolia": "eip155:84532",
 };
 
+/** Which networks to accept. PAYMENT_NETWORKS="base,polygon,arbitrum" opts in;
+ *  default is the single primary network (current behavior, zero change). The
+ *  primary `network` is always included and listed first (it carries the Bazaar
+ *  resource + is what the facilitator must support). */
+export function enabledNetworks(network) {
+  const requested = (process.env.PAYMENT_NETWORKS || network)
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const names = [network, ...requested.filter((n) => n !== network)];
+  const seen = new Set();
+  const out = [];
+  for (const n of names) {
+    if (!NETWORKS[n]) throw new Error(`Unsupported network "${n}". Known: ${Object.keys(NETWORKS).join(", ")}`);
+    if (!seen.has(n)) {
+      seen.add(n);
+      out.push(n);
+    }
+  }
+  return out;
+}
+
 /**
- * Build the x402 v2 payment middleware: an "exact" USDC payment scheme on
- * Base, paywalling the routes in `catalog`, with Bazaar discovery metadata
- * so agents can find the service.
+ * Build the x402 v2 payment middleware: an "exact" USDC payment scheme,
+ * paywalling the routes in `catalog`, with Bazaar discovery metadata so agents
+ * can find the service. Accepts USDC on one or more EVM chains (the agent picks
+ * the chain it holds funds on).
  */
 export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, catalog }) {
-  const caip2 = NETWORKS[network];
-  if (!caip2) {
-    throw new Error(`Unsupported NETWORK "${network}". Use one of: ${Object.keys(NETWORKS).join(", ")}`);
-  }
+  const networks = enabledNetworks(network);
+  const caip2List = networks.map((n) => NETWORKS[n]);
 
   const facilitatorClient = new HTTPFacilitatorClient(await resolveFacilitatorConfig(network));
-  const server = new x402ResourceServer(facilitatorClient)
-    .register(caip2, new ExactEvmScheme())
-    .registerExtension(bazaarResourceServerExtension);
+  let server = new x402ResourceServer(facilitatorClient).registerExtension(bazaarResourceServerExtension);
+  for (const caip2 of caip2List) server = server.register(caip2, new ExactEvmScheme());
+  console.log(`Accepting USDC on: ${networks.join(", ")} (${caip2List.join(", ")})`);
+
+  // One payment option per enabled chain — an array of accepts the agent can choose from.
+  const acceptsFor = (item) => caip2List.map((caip2) => ({ scheme: "exact", payTo: walletAddress, price: item.price, network: caip2 }));
 
   const routes = Object.fromEntries(
     Object.entries(catalog).map(([route, item]) => [
       route,
       {
-        accepts: { scheme: "exact", payTo: walletAddress, price: item.price, network: caip2 },
+        accepts: acceptsFor(item),
         description: item.description,
         serviceName: "Agent402",
         tags: ["web", "tools", "agents", ...(item.tags ?? [])],
