@@ -10,7 +10,7 @@ import {
 import { payerFromRequest } from "./payer.js";
 import { landingPage } from "./landing.js";
 import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
-import { buildPaymentMiddleware } from "./payments.js";
+import { buildPaymentMiddleware, enabledNetworks } from "./payments.js";
 import { KIT } from "./tools/kit.js";
 import { KIT2 } from "./tools/kit2.js";
 import { CONVERSIONS } from "./tools/convert-gen.js";
@@ -408,7 +408,7 @@ app.get("/api/pricing", (_req, res) =>
   res.json({
     name: "Agent402",
     description: "Pay-per-call tools for AI agents via the x402 payment protocol.",
-    payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC" },
+    payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC", networks: enabledNetworks(NETWORK) },
     altPayment: {
       protocol: "proof-of-work",
       summary: "No wallet? Spend CPU instead on the pure-CPU tools.",
