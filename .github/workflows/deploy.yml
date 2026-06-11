@@ -98,16 +98,35 @@ jobs:
           curl -s -X POST 'localhost:3000/api/memory?ns=ci' -H 'Content-Type: application/json' -d '{"key":"a","value":{"n":1}}' | jq .
           curl -s 'localhost:3000/api/memory?ns=ci&key=a' | jq .
           curl -s 'localhost:3000/api/memory?ns=other&key=a' | jq .
+          echo "=== kit: encoding/data/text/time/validation ==="
+          curl -s -X POST localhost:3000/api/hash -H 'Content-Type: application/json' -d '{"text":"hello"}' | jq -c .
+          curl -s -X POST localhost:3000/api/json-to-csv -H 'Content-Type: application/json' -d '{"json":[{"a":1,"b":{"c":2}}]}' | jq -c .
+          curl -s -X POST localhost:3000/api/cron-next -H 'Content-Type: application/json' -d '{"expr":"0 9 * * 1-5","count":2}' | jq -c .
+          curl -s -X POST localhost:3000/api/email-validate -H 'Content-Type: application/json' -d '{"email":"test@gmail.com"}' | jq -c '{syntaxValid, deliverableDomain}'
+          curl -s 'localhost:3000/api/uuid?version=7&count=2' | jq -c .
+          curl -s 'localhost:3000/api/qr?text=https://agent402.tools' -o qr.png && file qr.png
+          echo "=== kit: live network tools ==="
+          curl -s -X POST localhost:3000/api/http-check -H 'Content-Type: application/json' -d '{"url":"https://example.com"}' | jq -c '{up, status, latencyMs}'
+          curl -s -X POST localhost:3000/api/tls-cert -H 'Content-Type: application/json' -d '{"host":"github.com"}' | jq -c '{subject, issuer, daysRemaining, chainTrusted}'
+          curl -s -X POST localhost:3000/api/whois -H 'Content-Type: application/json' -d '{"domain":"github.com"}' | jq -c '{registrar, created, expires}'
+          curl -s -X POST localhost:3000/api/robots-check -H 'Content-Type: application/json' -d '{"url":"https://www.google.com/search","userAgent":"TestBot"}' | jq -c '{allowed, matchedRule}'
+          curl -s -X POST localhost:3000/api/sitemap -H 'Content-Type: application/json' -d '{"url":"https://www.sitemaps.org/sitemap.xml"}' | jq -c '{type, count}'
+          echo "=== discovery surfaces ==="
+          N=$(curl -s localhost:3000/api/pricing | jq '.endpoints | length'); echo "catalog endpoints: $N (expect 56)"; [ "$N" = "56" ]
+          curl -s localhost:3000/openapi.json | jq '{paths: (.paths | length)}'
+          curl -s localhost:3000/tools | grep -o '<h1>[^<]*</h1>'
+          curl -s localhost:3000/tools/memory-write | grep -o '<title>[^<]*</title>'
+          curl -s localhost:3000/sitemap.xml | grep -c '<loc>'
 
       - name: Check production is serving the new catalog
         run: |
-          PROD=https://agent402-production.up.railway.app
+          PROD=https://agent402.tools
           N=$(curl -s "$PROD/api/pricing" | jq '.endpoints | length')
-          echo "production endpoint count: $N (expect 8)"
+          echo "production endpoint count: $N (expect 56)"
           curl -s "$PROD/api/pricing" | jq -r '.endpoints[] | "\(.method) \(.path) \(.price)"'
-          paid=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PROD/api/render" -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{"url":"https://example.com"}')
-          echo "render unpaid → HTTP $paid (expect 402)"
-          [ "$N" = "8" ] && [ "$paid" = "402" ] || { echo "Production may still be building the new image — re-run this check shortly."; exit 1; }
+          paid=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PROD/api/hash" -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{"text":"x"}')
+          echo "hash unpaid → HTTP $paid (expect 402)"
+          [ "$N" = "56" ] && [ "$paid" = "402" ] || { echo "Production may still be building the new image — re-run this check shortly."; exit 1; }
 
   probe:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || contains(join(github.event.commits.*.message), '[probe]')
