@@ -376,6 +376,45 @@ jobs:
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
+      - name: Competitive look — fetch OSF site + the Reddit post
+        run: |
+          UA="Mozilla/5.0 (compatible; Agent402-research/1.0)"
+          echo "=== osf-master-server.com (text) ==="
+          curl -s -A "$UA" --max-time 25 -L https://osf-master-server.com/ -o /tmp/osf.html || echo "(fetch failed)"
+          wc -c /tmp/osf.html 2>/dev/null || true
+          python3 - << 'PY' 2>/dev/null || true
+          import re
+          try: html=open("/tmp/osf.html",encoding="utf-8",errors="replace").read()
+          except: html=""
+          # capture script/link asset names (to see the stack) + visible text
+          assets=re.findall(r'(?:src|href)="([^"]+\.(?:js|css|woff2?|svg))"', html)
+          html2=re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>"," ",html)
+          html2=re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>|</h[1-6]>"," \n ",html2)
+          text=re.sub(r"(?s)<[^>]+>"," ",html2); text=re.sub(r"[ \t]+"," ",text)
+          text="\n".join(l.strip() for l in text.splitlines() if l.strip())
+          metas=re.findall(r'<meta[^>]+(?:name|property)="([^"]+)"[^>]+content="([^"]+)"', html)
+          print("ASSETS:", sorted(set(assets))[:40])
+          print("META:")
+          for k,v in metas[:30]: print(f"  {k}: {v[:160]}")
+          print("VISIBLE TEXT (first 6000 chars):")
+          print(text[:6000])
+          PY
+          echo
+          echo "=== Reddit post (old.reddit JSON) ==="
+          curl -s -A "$UA" --max-time 25 -L "https://www.reddit.com/r/ethdev/comments/1tzljxz/.json" -o /tmp/rd.json || echo "(fetch failed)"
+          python3 - << 'PY' 2>/dev/null || true
+          import json
+          try: d=json.load(open("/tmp/rd.json"))
+          except Exception as e: print("reddit parse failed:", e); raise SystemExit
+          post=d[0]["data"]["children"][0]["data"]
+          print("TITLE:", post.get("title"))
+          print("BODY:\n", (post.get("selftext") or "")[:6000])
+          print("\nTOP COMMENTS:")
+          for c in d[1]["data"]["children"][:6]:
+              b=c["data"].get("body","")
+              if b: print(" -", b[:500])
+          PY
+
       - name: Railway deployment history (which image is live, what failed)
         run: |
           gql() {
