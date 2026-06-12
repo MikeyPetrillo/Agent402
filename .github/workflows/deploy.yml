@@ -419,21 +419,6 @@ jobs:
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
-      - name: Inspect gov-data upstreams (raw shape)
-        run: |
-          UA="Mozilla/5.0 (compatible; Agent402-research/1.0)"
-          echo "=== catalog.data.gov CKAN ==="
-          curl -s -A "$UA" --max-time 25 "https://catalog.data.gov/api/3/action/package_search?q=electric+vehicle&rows=2" -o /tmp/dg.json -w "http %{http_code} ct=%{content_type}\n"
-          head -c 600 /tmp/dg.json; echo
-          python3 -c "import json;d=json.load(open('/tmp/dg.json'));print('success=',d.get('success'),'count=',d.get('result',{}).get('count'),'n=',len(d.get('result',{}).get('results',[])))" 2>&1 | head -3
-          echo "=== api.weather.gov ==="
-          curl -s -A "$UA" --max-time 25 "https://api.weather.gov/alerts/active?area=CA" -w "http %{http_code}\n" -o /tmp/w.json; python3 -c "import json;print('features=',len(json.load(open('/tmp/w.json')).get('features',[])))" 2>&1 | head -1
-          echo "=== earthquake.usgs.gov ==="
-          curl -s -A "$UA" --max-time 25 "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson" -w "http %{http_code}\n" -o /tmp/q.json; python3 -c "import json;print('quakes=',len(json.load(open('/tmp/q.json')).get('features',[])))" 2>&1 | head -1
-          echo "=== Yahoo from a datacenter IP (stock-quote upstream) ==="
-          curl -s -A "$UA" --max-time 25 "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=1d" -w "q1 http %{http_code}\n" -o /tmp/y1.json; head -c 200 /tmp/y1.json; echo
-          curl -s -A "$UA" --max-time 25 "https://query2.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=1d" -w "q2 http %{http_code}\n" -o /tmp/y2.json
-
       - name: Railway deployment history (which image is live, what failed)
         run: |
           gql() {
