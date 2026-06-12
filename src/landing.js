@@ -41,7 +41,9 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <meta property="og:site_name" content="Agent402">
 <meta property="og:title" content="Agent402 — where agents pay agents (machine-to-machine payments)">
 <meta property="og:description" content="A working node in agent-to-agent commerce: ${count} tools settled per call in USDC via x402 (or proof-of-work). No human, no signup. The payment is the identity.">
+<meta property="og:image" content="${baseUrl}/logo.png">
 <meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="${baseUrl}/logo.png">
 <meta name="twitter:title" content="Agent402 — where agents pay agents">
 <meta name="twitter:description" content="Machine-to-machine payments, live. Autonomous agents pay per call in USDC via x402 — or with compute. No human, no signup, no API key.">
 <script type="application/ld+json">

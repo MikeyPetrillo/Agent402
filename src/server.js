@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
-import { renderArticle, screenshotPage } from "./tools/render.js";
+import { renderArticle, screenshotPage, rasterizeSvg } from "./tools/render.js";
 import {
   memoryPut, memoryGet, memoryDelete, memoryIncr,
   grant, revoke, listGrants, getLog, remember, recall, forget,
@@ -21,12 +21,26 @@ import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES } from "./p
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
 import { recordServedCall, getStats } from "./stats.js";
+import { timingSafeEqual } from "node:crypto";
 
 const PORT = process.env.PORT || 3000;
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
 const NETWORK = process.env.NETWORK || "base";
 const FREE_MODE = process.env.FREE_MODE === "true";
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+
+// Marketplace bridge (agent402.app): that platform IS the paywall — it collects
+// the caller's USDC (settled directly to our wallet) and then forwards the call
+// to the endpoint we registered. So those forwarded calls must skip our own
+// x402 paywall. They authenticate with a secret token embedded in the
+// registered service_endpoint URL. Off unless MARKETPLACE_TOKEN is set.
+const MARKETPLACE_TOKEN = process.env.MARKETPLACE_TOKEN || "";
+const marketplaceTokenOk = (t) => {
+  if (!MARKETPLACE_TOKEN || typeof t !== "string") return false;
+  const a = Buffer.from(t);
+  const b = Buffer.from(MARKETPLACE_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+};
 
 const CATALOG = {
   "POST /api/extract": {
@@ -393,6 +407,68 @@ app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL
 app.get("/demo.js", (_req, res) =>
   res.type("text/javascript").send(readFileSync(new URL("../scripts/demo-payment.js", import.meta.url), "utf-8"))
 );
+
+// Brand mark — the same 402 glyph as the favicon, at logo size. The PNG is
+// rasterized once via the existing headless Chromium and cached for the
+// process lifetime (marketplaces and link previews often refuse SVG).
+const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#0b0e14"/><text x="256" y="295" font-size="170" font-weight="700" font-family="ui-monospace,Menlo,monospace" text-anchor="middle" fill="#4ade80">402</text><text x="256" y="408" font-size="42" font-family="ui-monospace,Menlo,monospace" text-anchor="middle" fill="#8b93a7">agent402.tools</text></svg>`;
+app.get("/logo.svg", (_req, res) => res.type("image/svg+xml").send(LOGO_SVG));
+
+// Marketplace bridge endpoint. agent402.app POSTs the caller's JSON body here
+// after collecting payment; we authenticate via the token in the path, adapt
+// the body to the tool's own method, and serve the result with the paywall
+// bypassed. A coarse global rate limit bounds abuse if a service_endpoint URL
+// ever leaks (their on-chain metadata is public). Off unless MARKETPLACE_TOKEN set.
+if (MARKETPLACE_TOKEN) {
+  const slugToRoute = new Map();
+  for (const [route, def] of Object.entries(CATALOG)) slugToRoute.set(def.slug, route);
+  let mktCount = 0;
+  let mktWindow = Date.now();
+  const MKT_PER_MIN = Math.min(Math.max(parseInt(process.env.MARKETPLACE_RATE_PER_MIN, 10) || 600, 10), 100000);
+
+  app.all("/mkt/:token/:slug", async (req, res) => {
+    if (!marketplaceTokenOk(req.params.token)) return res.status(404).json({ error: "Not found" });
+    const route = slugToRoute.get(req.params.slug);
+    if (!route) return res.status(404).json({ error: `Unknown service "${req.params.slug}"` });
+    const now = Date.now();
+    if (now - mktWindow > 60000) { mktCount = 0; mktWindow = now; }
+    if (++mktCount > MKT_PER_MIN) return res.status(429).json({ error: "Marketplace rate limit" });
+
+    const [method, path] = route.split(" ");
+    const input = { ...(req.query || {}), ...(req.body || {}) };
+    const headers = { "X-Mkt-Bypass": MARKETPLACE_TOKEN };
+    let target = `http://127.0.0.1:${PORT}${path}`;
+    let body;
+    if (method === "GET") {
+      const qs = new URLSearchParams(
+        Object.entries(input).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : String(v)])
+      ).toString();
+      if (qs) target += `?${qs}`;
+    } else {
+      headers["Content-Type"] = "application/json";
+      body = JSON.stringify(input);
+    }
+    try {
+      const r = await fetch(target, { method, headers, body });
+      const ct = r.headers.get("content-type") || "application/json";
+      const buf = Buffer.from(await r.arrayBuffer());
+      res.status(r.status).type(ct).send(buf);
+    } catch (err) {
+      res.status(502).json({ error: `Bridge dispatch failed: ${err.message}` });
+    }
+  });
+  console.log(`Marketplace bridge enabled at /mkt/<token>/<slug> (${MKT_PER_MIN}/min cap)`);
+}
+let logoPngCache = null;
+app.get("/logo.png", async (_req, res) => {
+  try {
+    logoPngCache ??= await rasterizeSvg(LOGO_SVG, 512);
+    res.type("image/png").send(logoPngCache);
+  } catch {
+    // No Chromium on this instance — the SVG is always available.
+    res.redirect(302, "/logo.svg");
+  }
+});
 app.get("/openapi.json", (_req, res) => res.json(openapiSpec(BASE_URL, CATALOG)));
 app.get("/tools", (_req, res) => res.type("html").send(toolsIndexPage(BASE_URL, CATALOG)));
 app.get("/tools/:slug", (req, res) => {
@@ -463,6 +539,12 @@ if (FREE_MODE) {
   // paywall; otherwise the normal USDC paywall applies (and we advertise the
   // PoW alternative via a response header on its 402).
   app.use((req, res, next) => {
+    // Marketplace-forwarded calls already settled USDC to our wallet via
+    // agent402.app's facilitator — honor the bridge token and skip our paywall.
+    if (marketplaceTokenOk(req.header("x-mkt-bypass"))) {
+      res.setHeader("X-Settled-Via", "marketplace");
+      return next();
+    }
     const slug = POW_ROUTES.get(`${req.method} ${req.path}`);
     if (slug) {
       const solution = req.header("x-pow-solution");

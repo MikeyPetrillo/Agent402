@@ -101,3 +101,19 @@ export async function screenshotPage(rawUrl, { fullPage = false } = {}) {
     return page.screenshot({ type: "png", fullPage });
   });
 }
+
+/**
+ * Rasterize server-owned SVG markup to a PNG (used for the site logo). No
+ * navigation and no external content — the SSRF route guard is not needed.
+ */
+export async function rasterizeSvg(svg, size = 512) {
+  const browser = await getBrowser();
+  const context = await browser.newContext({ viewport: { width: size, height: size } });
+  try {
+    const page = await context.newPage();
+    await page.setContent(`<!doctype html><style>*{margin:0;padding:0}svg{display:block}</style>${svg}`);
+    return await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: size, height: size } });
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
