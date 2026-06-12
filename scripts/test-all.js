@@ -17,6 +17,7 @@ const NETWORK = new Set([
   "/api/pdf-info", "/api/pdf-merge", "/api/pdf-extract-pages", "/api/pdf-rotate", "/api/images-to-pdf",
   "/api/pdf-to-markdown", "/api/xlsx-to-json", "/api/xlsx-to-csv", "/api/stock-quote",
   "/api/media-info", "/api/audio-convert", "/api/audio-normalize",
+  "/api/gov-data", "/api/weather-alerts", "/api/earthquakes",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 

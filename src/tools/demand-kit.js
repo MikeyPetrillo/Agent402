@@ -134,7 +134,7 @@ export const DEMAND_TOOLS = [
     },
   },
   {
-    route: "GET /api/stock-quote", name: "Stock quote", slug: "stock-quote", category: "network", price: "$0.005",
+    route: "GET /api/stock-quote", name: "Stock quote", slug: "stock-quote", category: "data", price: "$0.005",
     description:
       "Delayed stock quote (open/high/low/close/volume) for a ticker via Stooq's public data — no API key, deterministic JSON. US tickers by default; use suffixed symbols for other markets (e.g. AAPL.US, BMW.DE). ?symbol=AAPL.",
     tags: ["stocks", "finance", "quote", "market-data", "stock-alerts"],

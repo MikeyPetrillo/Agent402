@@ -39,6 +39,7 @@ const WALLET_ONLY_SLUGS = new Set([
   "pdf-info", "pdf-merge", "pdf-extract-pages", "pdf-rotate", "images-to-pdf",
   "pdf-to-markdown", "xlsx-to-json", "xlsx-to-csv", "stock-quote",
   "media-info", "audio-convert", "audio-normalize",
+  "gov-data", "weather-alerts", "earthquakes",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */

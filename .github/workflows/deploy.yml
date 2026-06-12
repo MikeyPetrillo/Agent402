@@ -160,6 +160,13 @@ jobs:
             -d '{"url":"https://arxiv.org/pdf/1706.03762"}' | jq '{pages, wordCount, md: (.markdown | .[0:160])}'
           curl -s 'localhost:3000/api/stock-quote?symbol=AAPL' | jq -c .
           curl -s 'localhost:3000/api/stock-quote?symbol=AAPL' | jq -e '.price != null' >/dev/null || { echo "stock-quote returned no price"; exit 1; }
+          echo "=== live public data (data.gov / NWS / USGS) ==="
+          curl -s 'localhost:3000/api/gov-data?q=electric+vehicle+charging&rows=3' | jq '{totalFound, top: .results[0].title}'
+          curl -s 'localhost:3000/api/gov-data?q=electric+vehicle+charging&rows=3' | jq -e '.totalFound >= 1' >/dev/null || { echo "gov-data returned nothing"; exit 1; }
+          curl -s 'localhost:3000/api/weather-alerts?area=CA' | jq '{count, top: .alerts[0].event}'
+          curl -s 'localhost:3000/api/weather-alerts?area=CA' | jq -e 'has("alerts")' >/dev/null || { echo "weather-alerts malformed"; exit 1; }
+          curl -s 'localhost:3000/api/earthquakes?minMag=2.5&period=day' | jq '{count, top: .quakes[0].place}'
+          curl -s 'localhost:3000/api/earthquakes?minMag=2.5&period=day' | jq -e '.count >= 1' >/dev/null || { echo "earthquakes returned nothing"; exit 1; }
           echo "=== kit: live network tools ==="
           curl -s -X POST localhost:3000/api/http-check -H 'Content-Type: application/json' -d '{"url":"https://example.com"}' | jq -c '{up, status, latencyMs}'
           curl -s -X POST localhost:3000/api/tls-cert -H 'Content-Type: application/json' -d '{"host":"github.com"}' | jq -c '{subject, issuer, daysRemaining, chainTrusted}'

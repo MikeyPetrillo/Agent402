@@ -47,6 +47,18 @@ const bjson = await b.json().catch(() => ({}));
 if (b.status !== 200 || !(bjson.title || bjson.markdown)) fail(`bridge did not serve a result: HTTP ${b.status} ${JSON.stringify(bjson).slice(0, 200)}`);
 console.log(`1. production bridge served "${svc.slug}" → 200, title="${(bjson.title || "").slice(0, 50)}" ✓`);
 
+// 1b) ffmpeg works in the production image (media-info through the bridge).
+const m = await fetch(`${SITE}/mkt/${TOKEN}/media-info`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" }),
+});
+const mjson = await m.json().catch(() => ({}));
+if (m.status === 200 && mjson.durationSec > 1) {
+  console.log(`1b. production ffmpeg works (media-info: ${mjson.formatName}, ${mjson.durationSec}s) ✓`);
+} else {
+  console.log(`1b. production media-info not ready yet: HTTP ${m.status} ${JSON.stringify(mjson).slice(0, 120)} (image may still be rolling out)`);
+}
+
 // 2) Marketplace invoke URL quotes a 402.
 const q = await fetch(invokeUrl, {
   method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(body),
