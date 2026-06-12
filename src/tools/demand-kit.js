@@ -147,34 +147,37 @@ export const DEMAND_TOOLS = [
       const raw = String(need(i, "symbol")).trim();
       if (!/^[A-Za-z0-9.^=-]{1,15}$/.test(raw)) throw bad('"symbol" looks invalid');
       const symbol = raw.toUpperCase();
-      // Primary: Yahoo Finance public chart endpoint (keyless JSON). Fallback:
-      // Stooq CSV (blocks some datacenter IPs, hence second).
-      try {
-        const { html } = await safeFetch(
-          `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`,
-          { maxBytes: 200_000 }
-        );
-        const data = JSON.parse(html);
-        const r = data?.chart?.result?.[0];
-        if (!r?.meta) throw new Error("empty");
-        const m = r.meta;
-        const q = r.indicators?.quote?.[0] ?? {};
-        const last = (a) => (Array.isArray(a) ? [...a].reverse().find((v) => v !== null) ?? null : null);
-        return {
-          symbol: m.symbol ?? symbol,
-          currency: m.currency ?? null,
-          exchange: m.fullExchangeName ?? m.exchangeName ?? null,
-          price: m.regularMarketPrice ?? last(q.close),
-          previousClose: m.chartPreviousClose ?? m.previousClose ?? null,
-          open: last(q.open),
-          high: m.regularMarketDayHigh ?? last(q.high),
-          low: m.regularMarketDayLow ?? last(q.low),
-          volume: m.regularMarketVolume ?? last(q.volume),
-          asOf: m.regularMarketTime ? new Date(m.regularMarketTime * 1000).toISOString() : null,
-          source: "Yahoo Finance public chart data (delayed)",
-        };
-      } catch {
-        // fall through to Stooq
+      // Primary: Yahoo's keyless chart endpoint. Try both hosts — they are
+      // load-balanced separately and one can block a datacenter IP while the
+      // other answers. Fallback: Stooq CSV.
+      const last = (a) => (Array.isArray(a) ? [...a].reverse().find((v) => v !== null) ?? null : null);
+      for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+        try {
+          const { html } = await safeFetch(
+            `https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`,
+            { maxBytes: 200_000 }
+          );
+          const data = JSON.parse(html);
+          const r = data?.chart?.result?.[0];
+          if (!r?.meta) throw new Error("empty");
+          const m = r.meta;
+          const q = r.indicators?.quote?.[0] ?? {};
+          return {
+            symbol: m.symbol ?? symbol,
+            currency: m.currency ?? null,
+            exchange: m.fullExchangeName ?? m.exchangeName ?? null,
+            price: m.regularMarketPrice ?? last(q.close),
+            previousClose: m.chartPreviousClose ?? m.previousClose ?? null,
+            open: last(q.open),
+            high: m.regularMarketDayHigh ?? last(q.high),
+            low: m.regularMarketDayLow ?? last(q.low),
+            volume: m.regularMarketVolume ?? last(q.volume),
+            asOf: m.regularMarketTime ? new Date(m.regularMarketTime * 1000).toISOString() : null,
+            source: "Yahoo Finance public chart data (delayed)",
+          };
+        } catch {
+          // try the next host, then Stooq
+        }
       }
       const stooqSym = (symbol.includes(".") || symbol.startsWith("^") ? symbol : `${symbol}.US`).toLowerCase();
       let csv;

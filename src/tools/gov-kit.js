@@ -46,11 +46,19 @@ export const GOV_TOOLS = [
       if (!q) throw bad('"q" is required');
       const rows = Math.min(Math.max(parseInt(i.rows, 10) || 5, 1), 20);
       const data = await getJson(`https://catalog.data.gov/api/3/action/package_search?q=${encodeURIComponent(q)}&rows=${rows}`);
-      if (!data.success) throw bad("data.gov search failed upstream", 502);
+      // CKAN's shape is { success, result: { count, results } } — but data.gov
+      // intermittently returns a 200 with a different/empty body during its
+      // (frequent) outages. Treat a missing result block as an honest 502
+      // rather than silently returning nulls.
+      const result = data?.result;
+      if (data?.success !== true || !result || (result.count === undefined && !Array.isArray(result.results))) {
+        throw bad("data.gov is not returning results right now (upstream outage) — retry later", 502);
+      }
+      const results = Array.isArray(result.results) ? result.results : [];
       return {
         query: q,
-        totalFound: data.result.count,
-        results: (data.result.results ?? []).map((d) => ({
+        totalFound: result.count ?? results.length,
+        results: results.map((d) => ({
           title: d.title,
           organization: d.organization?.title ?? null,
           notes: (d.notes ?? "").replace(/\s+/g, " ").slice(0, 240),
