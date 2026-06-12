@@ -10,17 +10,7 @@ const USER_AGENT =
 
 const SSRF_BLOCK_CODE = "ESSRFBLOCKED";
 
-function isPrivateIp(ip) {
-  if (ip.includes(":")) {
-    const lower = ip.toLowerCase();
-    return (
-      lower === "::1" ||
-      lower.startsWith("fe80:") ||
-      lower.startsWith("fc") ||
-      lower.startsWith("fd") ||
-      lower.startsWith("::ffff:") // IPv4-mapped — re-check the embedded v4
-    );
-  }
+function isPrivateV4(ip) {
   const [a, b] = ip.split(".").map(Number);
   return (
     a === 0 ||
@@ -29,8 +19,57 @@ function isPrivateIp(ip) {
     (a === 100 && b >= 64 && b <= 127) ||
     (a === 169 && b === 254) ||
     (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168)
+    (a === 192 && b === 168) ||
+    (a === 192 && b === 0) || // 192.0.0.0/24 special-purpose + 192.0.2.0/24 doc
+    (a === 198 && (b === 18 || b === 19)) || // benchmarking
+    (a === 198 && b === 51) || (a === 203 && b === 113) || // doc ranges
+    a >= 224 // multicast, reserved, broadcast
   );
+}
+
+/** Expand an IPv6 literal to 8 hextet numbers, supporting "::" and a trailing
+ *  dotted-quad. Returns null when unparseable (callers treat that as blocked). */
+function expandV6(ip) {
+  let s = ip;
+  // trailing dotted-quad (e.g. ::ffff:169.254.169.254) → two hextets
+  const v4 = s.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (v4) {
+    const o = v4[1].split(".").map(Number);
+    if (o.some((n) => n > 255)) return null;
+    s = s.slice(0, -v4[1].length) + ((o[0] << 8) | o[1]).toString(16) + ":" + ((o[2] << 8) | o[3]).toString(16);
+  }
+  const halves = s.split("::");
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const fill = 8 - left.length - right.length;
+  if (halves.length === 2 ? fill < 0 : left.length !== 8) return null;
+  const parts = [...left, ...Array(halves.length === 2 ? fill : 0).fill("0"), ...right];
+  const out = parts.map((p) => (/^[0-9a-f]{1,4}$/i.test(p) ? parseInt(p, 16) : NaN));
+  return out.some(Number.isNaN) ? null : out;
+}
+
+function isPrivateIp(ip) {
+  if (!ip.includes(":")) return isPrivateV4(ip);
+  if (ip.includes("%")) return true; // zone-scoped — never a global address
+  const g = expandV6(ip.toLowerCase());
+  if (!g) return true; // unparseable — fail closed
+  const embedded = (hi, lo) => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+  if (g.every((x) => x === 0)) return true; // :: unspecified (routes to loopback)
+  if (g.slice(0, 7).every((x) => x === 0) && g[7] === 1) return true; // ::1
+  // IPv4-mapped (::ffff:0:0/96) and IPv4-compatible (::/96) — re-check the v4
+  if (g.slice(0, 5).every((x) => x === 0) && (g[5] === 0xffff || g[5] === 0)) return isPrivateV4(embedded(g[6], g[7]));
+  // NAT64 64:ff9b::/96 — translated v4 in the low 32 bits
+  if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0) return isPrivateV4(embedded(g[6], g[7]));
+  // 6to4 2002::/16 — v4 embedded in hextets 1-2
+  if (g[0] === 0x2002) return isPrivateV4(embedded(g[1], g[2]));
+  if (g[0] === 0x2001 && g[1] === 0) return true; // Teredo tunnel
+  if (g[0] === 0x2001 && g[1] === 0xdb8) return true; // documentation
+  if ((g[0] & 0xffc0) === 0xfe80) return true; // link-local fe80::/10
+  if ((g[0] & 0xfe00) === 0xfc00) return true; // unique-local fc00::/7
+  if (g[0] === 0x100 && g[1] === 0 && g[2] === 0 && g[3] === 0) return true; // discard 100::/64
+  if ((g[0] & 0xff00) === 0xff00) return true; // multicast ff00::/8
+  return false;
 }
 
 function badRequest(message) {
@@ -75,6 +114,28 @@ export function isSsrfBlock(err) {
   return false;
 }
 
+// Request-time host check for the browser renderer: every request a page makes
+// (navigation, redirect hop, subresource) is validated against the same policy
+// as the fetch path. Short-TTL cache keeps per-subresource overhead negligible
+// while still re-resolving often enough to catch DNS-rebinding flips.
+const hostCache = new Map();
+export async function hostIsPublic(hostname) {
+  if (isIP(hostname)) return !isPrivateIp(hostname);
+  const now = Date.now();
+  const hit = hostCache.get(hostname);
+  if (hit && hit.exp > now) return hit.ok;
+  let ok = false;
+  try {
+    const addrs = await lookup(hostname, { all: true });
+    ok = addrs.length > 0 && addrs.every((a) => !isPrivateIp(a.address));
+  } catch {
+    ok = false;
+  }
+  if (hostCache.size > 5000) hostCache.clear();
+  hostCache.set(hostname, { ok, exp: now + 30_000 });
+  return ok;
+}
+
 /**
  * Validate that a URL is http(s) and does not resolve to a private address.
  * Returns the parsed URL. Shared by the plain fetcher and the browser renderer.
@@ -90,7 +151,10 @@ export async function assertPublicUrl(rawUrl) {
     throw badRequest("Only http(s) URLs are supported");
   }
 
-  const host = url.hostname;
+  // IPv6 literals keep their brackets in URL.hostname — strip them so the IP
+  // check actually evaluates the address (literals never hit DNS, so this
+  // upfront check is the only guard they get).
+  const host = url.hostname.replace(/^\[|\]$/g, "");
   if (isIP(host) ? isPrivateIp(host) : false) {
     throw badRequest("URL resolves to a private address");
   }

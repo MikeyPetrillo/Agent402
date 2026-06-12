@@ -554,6 +554,9 @@ const conversion = [
     discovery: { bodyType: "json", input: { value: "ff", from: 16, to: 2 }, inputSchema: { properties: { value: { type: "string" }, from: { type: "number", description: "2-36" }, to: { type: "number", description: "2-36" } }, required: ["value", "from", "to"] }, output: { example: { result: "11111111" } } },
     handler: (i) => {
       const value = String(need(i, "value", "any")).trim().toLowerCase();
+      // BigInt parse/format is quadratic in digit count — cap it so a paid call
+      // (or a 16-bit proof-of-work) can't buy seconds of CPU.
+      if (value.length > 4096) throw bad("value too long (max 4096 digits)");
       const from = parseInt(i.from, 10), to = parseInt(i.to, 10);
       if (!(from >= 2 && from <= 36 && to >= 2 && to <= 36)) throw bad("from/to must be 2-36");
       const digits = "0123456789abcdefghijklmnopqrstuvwxyz";
