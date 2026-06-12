@@ -216,6 +216,9 @@ jobs:
       - name: Every tool responds to its own example (all ~1070 endpoints)
         run: TARGET_URL=http://localhost:3000 node scripts/test-all.js
 
+      - name: Remote MCP connector (/mcp — initialize, search, free call, paid refusal)
+        run: TARGET_URL=http://localhost:3000 node scripts/test-mcp-http.js
+
       - name: Exercise tools against live sites
         run: |
           echo "=== extract: BBC News article ==="
@@ -456,6 +459,14 @@ jobs:
           if (r.status !== 200) { console.error("PoW on production returned " + r.status); process.exit(1); }
           console.log("solved difficulty " + c.difficulty + " -> /api/hash HTTP 200, X-Pow-Accepted:", r.headers.get("x-pow-accepted"));
           '
+          echo "=== remote MCP connector live on production (paid mode, real paywall mount order) ==="
+          # /mcp is new — the old image 404s it, so poll through the rollout window.
+          MCP_OK=0
+          for i in $(seq 1 8); do
+            if TARGET_URL=$PROD node scripts/test-mcp-http.js; then MCP_OK=1; break; fi
+            echo "  attempt $i: /mcp not serving yet — retrying in 15s…"; sleep 15
+          done
+          [ "$MCP_OK" = "1" ] || { echo "Remote MCP connector not live on production"; exit 1; }
           echo "=== watch an agent pay an agent (live, no wallet) ==="
           TARGET_URL=https://agent402.tools node scripts/demo-payment.js
           echo "=== live M2M stats (informational; present once deployed) ==="
