@@ -11,9 +11,11 @@
 // search_tools + call_tool.
 //
 // Config (env):
-//   AGENT402_URL   target service (default https://agent402.tools)
-//   AGENT_KEY      hex private key of a funded wallet (USDC on Base) — optional
-//   AGENT402_TOOLS comma-separated slugs to expose first-class (overrides default)
+//   AGENT402_URL          target service (default https://agent402.tools)
+//   AGENT_KEY             hex private key of a funded wallet (USDC on Base) — optional
+//   AGENT402_TOOLS        comma-separated slugs to expose first-class (overrides default)
+//   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (e.g. 0.01)
+//   AGENT402_BUDGET       hard cap on total USDC spent this session (e.g. 1.00)
 import { createHash } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -21,7 +23,14 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 
 const BASE = (process.env.AGENT402_URL || "https://agent402.tools").replace(/\/$/, "");
 const AGENT_KEY = process.env.AGENT_KEY || "";
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
+
+// Spend controls — enforced BEFORE a payment is ever signed, so a confused or
+// runaway model cannot drain the wallet. Unset = unlimited (back-compat).
+const num = (v) => (v !== undefined && v !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
+const MAX_PER_CALL = num(process.env.AGENT402_MAX_PER_CALL) ?? Infinity;
+const BUDGET = num(process.env.AGENT402_BUDGET) ?? Infinity;
+let spentUsd = 0;
 
 const DEFAULT_CURATED = [
   // the tools agents can't replicate locally: browser, live web, PDF, shared memory
@@ -133,8 +142,24 @@ async function callEndpoint(tool, args = {}) {
 
   let res;
   if (AGENT_KEY) {
+    const price = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;
+    if (price > MAX_PER_CALL) {
+      return {
+        content: [{ type: "text", text: `Refused without paying: "${tool.slug}" costs ${tool.price}/call, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}. Raise the cap on this MCP server to allow it.` }],
+        isError: true,
+      };
+    }
+    if (spentUsd + price > BUDGET) {
+      return {
+        content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent; "${tool.slug}" costs ${tool.price}). Restart the MCP server or raise AGENT402_BUDGET.` }],
+        isError: true,
+      };
+    }
     const payFetch = await getPayFetch();
     res = await payFetch(url, init);
+    // Count spend when the server confirms settlement (payment receipt header),
+    // falling back to any 2xx — conservative in the buyer's favor.
+    if (res.headers.get("x-payment-response") || res.ok) spentUsd += price;
   } else if (tool.computePayable) {
     // No wallet: pay with compute up front — solving before the call skips the
     // 402 round-trip entirely (challenges are single-use and tool-scoped).
@@ -263,8 +288,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             tools: catalog.size,
             payableWithCompute: computePayable,
             walletOnly: catalog.size - computePayable,
+            spendControls: AGENT_KEY
+              ? {
+                  maxPerCallUsd: MAX_PER_CALL === Infinity ? "unlimited" : MAX_PER_CALL,
+                  sessionBudgetUsd: BUDGET === Infinity ? "unlimited" : BUDGET,
+                  spentThisSessionUsd: Number(spentUsd.toFixed(6)),
+                  remainingUsd: BUDGET === Infinity ? "unlimited" : Number(Math.max(0, BUDGET - spentUsd).toFixed(6)),
+                }
+              : "n/a (proof-of-work mode spends CPU, not money)",
             note: AGENT_KEY
-              ? "Every tool is available; each call is paid in USDC via x402 from the configured wallet."
+              ? "Every tool is available; each call is paid in USDC via x402 from the configured wallet, within the spend controls above."
               : `No AGENT_KEY configured: ${computePayable} pure-CPU tools are free via proof-of-work; the ${catalog.size - computePayable} network/browser/memory tools need a funded wallet (set AGENT_KEY).`,
           }, null, 2),
         }],
@@ -291,6 +324,10 @@ const requested = (process.env.AGENT402_TOOLS || DEFAULT_CURATED.join(","))
   .split(",").map((s) => s.trim()).filter(Boolean);
 curated = requested.map((slug) => catalog.get(slug)).filter(Boolean);
 log(`catalog: ${catalog.size} tools from ${BASE}; ${curated.length} first-class, rest via search_tools/call_tool`);
-log(AGENT_KEY ? "payment: USDC via x402 (wallet configured)" : "payment: proof-of-work on eligible tools (no AGENT_KEY)");
+log(
+  AGENT_KEY
+    ? `payment: USDC via x402 (wallet configured; max/call ${MAX_PER_CALL === Infinity ? "unlimited" : `$${MAX_PER_CALL}`}, budget ${BUDGET === Infinity ? "unlimited" : `$${BUDGET}`})`
+    : "payment: proof-of-work on eligible tools (no AGENT_KEY)"
+);
 
 await server.connect(new StdioServerTransport());

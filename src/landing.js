@@ -1,10 +1,19 @@
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 
-export function landingPage(baseUrl, network, freeMode, catalog) {
+export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   const tools = toolList(catalog);
   const count = tools.length;
   const freeCount = tools.filter(isComputePayable).length;
+  const served = stats?.toolCallsServed;
+  // The old-web visitor counter, except every digit is a real served tool call.
+  const odometer = served
+    ? `<div class="odometer" title="Counted live by the server; settled revenue is independently verifiable on-chain">
+    <span class="odo-label">— TOOL CALLS SERVED —</span>
+    <span class="odo-digits">${String(served.total).padStart(7, "0").split("").map((d) => `<b>${d}</b>`).join("")}</span>
+    <span class="odo-sub">${served.viaUSDC} settled in USDC · ${served.viaProofOfWork} paid with compute${stats.onchainRevenueProof ? ` · <a href="${stats.onchainRevenueProof}" rel="noopener">on-chain proof</a>` : ""} · counting since ${String(stats.servingSince).slice(0, 10)}</span>
+  </div>`
+    : "";
   const categoryCards = Object.entries(CATEGORIES)
     .map(([key, { label, blurb }]) => {
       const inCat = tools.filter((t) => t.category === key);
@@ -114,6 +123,10 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
   .callout { background:#10210f; border:1px solid #1f4a1d; border-radius:12px; padding:14px 18px; margin:24px 0 8px; font-size:1rem; color:var(--text); }
   .callout b { color:#fff; }
   .freebadge { display:inline-block; background:var(--accent); color:#08130b; font-weight:800; font-size:.72rem; letter-spacing:.03em; padding:2px 9px; border-radius:999px; margin-right:8px; vertical-align:middle; }
+  .odometer { margin:30px 0 4px; text-align:center; }
+  .odo-label { display:block; color:var(--muted); font-family:var(--mono); font-size:.7rem; letter-spacing:.3em; margin-bottom:9px; }
+  .odo-digits b { display:inline-block; background:#000; color:var(--accent); border:1px solid #1f4a1d; border-radius:6px; font:700 1.9rem/1 var(--mono); padding:9px 8px; margin:0 2px; text-shadow:0 0 9px rgba(74,222,128,.55); }
+  .odo-sub { display:block; margin-top:9px; color:var(--muted); font-size:.8rem; font-family:var(--mono); }
 </style>
 </head>
 <body>
@@ -127,6 +140,7 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
   <a class="cta ghost" href="/openapi.json">OpenAPI</a>
   <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet at all.</b> An agent with no funds pays with a few seconds of <a href="/api/pow">proof-of-work</a> (CPU) instead of USDC — still no human, no signup. The other ${count - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run.</div>
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
+  ${odometer}
 
   <h2>Watch an agent pay an agent</h2>
   <p class="sub">No slideware — run the whole loop yourself. An autonomous buyer discovers the catalog, gets quoted over <code>HTTP 402</code>, settles, and uses the result, with zero human involvement:</p>
@@ -189,10 +203,11 @@ const res = await payFetch("${baseUrl}/api/extract", {
 console.log(await res.json()); // { title, markdown, ... }</pre>
 
   <h2>Or just add it to Claude / any MCP client</h2>
-  <p>The <code>agent402-mcp</code> server exposes the whole catalog as MCP tools and pays underneath — USDC via x402 if you give it a funded key, proof-of-work (free) on the pure-CPU tools if you don't. High-value tools are first-class; the rest are reachable via <code>search_tools</code> + <code>call_tool</code>, so your context window stays small.</p>
+  <p>The <code>agent402-mcp</code> server exposes the whole catalog as MCP tools and pays underneath — USDC via x402 if you give it a funded key, proof-of-work (free) on the pure-CPU tools if you don't. High-value tools are first-class; the rest are reachable via <code>search_tools</code> + <code>call_tool</code>, so your context window stays small. Built-in spend controls (<code>AGENT402_BUDGET</code>, <code>AGENT402_MAX_PER_CALL</code>) refuse a runaway model <em>before</em> a payment is signed.</p>
   <pre>{ "mcpServers": { "agent402": {
     "command": "npx", "args": ["-y", "agent402-mcp"],
-    "env": { "AGENT_KEY": "0x&lt;funded wallet key — optional&gt;" }
+    "env": { "AGENT_KEY": "0x&lt;funded wallet key — optional&gt;",
+             "AGENT402_BUDGET": "1.00" }
 } } }</pre>
 
   <h2>Try it (no payment needed)</h2>
