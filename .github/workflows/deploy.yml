@@ -341,12 +341,20 @@ jobs:
       - name: Check production is serving the new catalog
         run: |
           PROD=https://agent402.tools
-          N=$(curl -s "$PROD/api/pricing" | jq '.endpoints | length')
-          echo "production endpoint count: $N (expect >=1000)"
+          # The deploy job and this test job run concurrently, so production may
+          # still be swapping to the new image when we get here. Poll for up to
+          # ~2 min before deciding it's a real failure (avoids rollout-race flakes).
+          N=0; paid=000
+          for i in $(seq 1 12); do
+            N=$(curl -s --max-time 10 "$PROD/api/pricing" | jq '.endpoints | length' 2>/dev/null || echo 0)
+            paid=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$PROD/api/hash" -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{"text":"x"}' || echo 000)
+            [ "${N:-0}" -ge 1000 ] && [ "$paid" = "402" ] && break
+            echo "  attempt $i: endpoints=$N hash=$paid — production still rolling out, retrying in 10s…"
+            sleep 10
+          done
+          echo "production endpoint count: $N (expect >=1000); hash unpaid → HTTP $paid (expect 402)"
+          [ "${N:-0}" -ge 1000 ] && [ "$paid" = "402" ] || { echo "Production not serving the catalog after ~2 min — real problem, investigate."; exit 1; }
           curl -s "$PROD/api/pricing" | jq -r '.endpoints[] | "\(.method) \(.path) \(.price)"'
-          paid=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PROD/api/hash" -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{"text":"x"}')
-          echo "hash unpaid → HTTP $paid (expect 402)"
-          [ "$N" -ge 1000 ] && [ "$paid" = "402" ] || { echo "Production may still be building the new image — re-run this check shortly."; exit 1; }
           echo "=== SEO + discovery surfaces on production (hard gate) ==="
           # These have all been live in production for a while — a miss now is a
           # real regression, not rollout lag.
