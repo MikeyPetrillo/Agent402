@@ -424,6 +424,40 @@ jobs:
           print(text[max(i, 0):])
           PY
 
+      - name: On-chain check — did marketplace USDC land in our wallet?
+        run: |
+          node --input-type=module -e '
+          const WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0".toLowerCase();
+          const BURNER = "0xFedA7403aabe9A492eD70e810B396D8548A4A022".toLowerCase();
+          const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+          const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+          const pad = (a) => "0x" + "0".repeat(24) + a.replace(/^0x/, "");
+          const RPCS = ["https://mainnet.base.org", "https://base-rpc.publicnode.com", "https://base.llamarpc.com"];
+          const rpc = async (method, params) => {
+            for (const url of RPCS) {
+              try {
+                const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+                const j = await r.json(); if (j.result !== undefined) return j.result;
+              } catch {}
+            }
+            throw new Error("all Base RPCs failed for " + method);
+          };
+          const latest = parseInt(await rpc("eth_blockNumber", []), 16);
+          const from = "0x" + (latest - 4000).toString(16); // ~2h of Base blocks
+          const logs = await rpc("eth_getLogs", [{ fromBlock: from, toBlock: "latest", address: USDC, topics: [TRANSFER, null, pad(WALLET)] }]);
+          console.log(`USDC transfers INTO ${WALLET} in the last ~4000 blocks: ${logs.length}`);
+          let found = 0;
+          for (const l of logs) {
+            const sender = "0x" + l.topics[1].slice(26);
+            const amount = BigInt(l.data) ; const usd = Number(amount) / 1e6;
+            const mark = sender.toLowerCase() === BURNER ? "  <-- from our test burner" : "";
+            console.log(`  $${usd.toFixed(6)} USDC from ${sender} (tx ${l.transactionHash})${mark}`);
+            if (sender.toLowerCase() === BURNER) found++;
+          }
+          if (found > 0) console.log(`\nCONFIRMED: ${found} settlement(s) from the marketplace test burner landed on-chain in the destination wallet.`);
+          else console.log("\nNo transfer from the test burner in this window (it may have settled earlier, or the facilitator settles in batches — check https://basescan.org/address/" + WALLET + "#tokentxns).");
+          '
+
       - name: Check which facilitator production is configured to use
         run: |
           gql() {
