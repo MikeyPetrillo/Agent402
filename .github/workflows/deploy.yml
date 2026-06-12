@@ -113,6 +113,9 @@ jobs:
           curl -s -X POST localhost:3000/api/email-validate -H 'Content-Type: application/json' -d '{"email":"test@gmail.com"}' | jq -c '{syntaxValid, deliverableDomain}'
           curl -s 'localhost:3000/api/uuid?version=7&count=2' | jq -c .
           curl -s 'localhost:3000/api/qr?text=https://agent402.tools' -o qr.png && file qr.png
+          echo "=== brand assets ==="
+          curl -s localhost:3000/logo.svg | grep -q '<svg' && echo "logo.svg ✓"
+          curl -sL localhost:3000/logo.png -o logo.png && file logo.png | grep -q 'PNG image' && echo "logo.png ✓"
           echo "=== search: live web search (premium, requires BRAVE_API_KEY) ==="
           if [ -n "$BRAVE_API_KEY" ]; then
             curl -s 'localhost:3000/api/search?q=x402+payment+protocol&count=3' | jq '{query, count, top: .results[0].url}'
