@@ -357,22 +357,10 @@ jobs:
           text = re.sub(r"(?s)<[^>]+>", " ", html)
           text = re.sub(r"[ \t]+", " ", text)
           text = "\n".join(l.strip() for l in text.splitlines() if l.strip())
-          print(text[:20000])
+          # Full dump this time — the API reference lives past the 20k mark.
+          i = text.find("Interactive API Reference")
+          print(text[max(i, 0):])
           PY
-          echo
-          echo "=== machine-readable spec candidates ==="
-          for u in "https://marketplace.agent402.app/openapi.json" "https://marketplace.agent402.app/api/openapi.json" "https://api.agent402.app/openapi.json"; do
-            code=$(curl -s -o /tmp/spec.json -w '%{http_code}' --max-time 15 -L "$u" || echo 000)
-            echo "--- $u → $code"
-            jq -r '.paths | keys[]' /tmp/spec.json 2>/dev/null | head -30 || true
-          done
-          if [ -n "$A402APP_KEY" ]; then
-            echo "=== authenticated probe (key present) ==="
-            for u in "https://marketplace.agent402.app/api/v1/agents" "https://marketplace.agent402.app/api/agents" "https://api.agent402.app/v1/agents"; do
-              code=$(curl -s -o /tmp/a402app.auth -w '%{http_code}' --max-time 15 -H "Authorization: Bearer $A402APP_KEY" -H "X-API-Key: $A402APP_KEY" "$u" || echo 000)
-              echo "$u → $code"; head -c 300 /tmp/a402app.auth; echo
-            done
-          fi
 
       - name: Check which facilitator production is configured to use
         run: |
