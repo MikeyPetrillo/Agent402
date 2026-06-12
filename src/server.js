@@ -478,10 +478,16 @@ app.get("/logo.png", async (_req, res) => {
 });
 
 // 1200×630 social card for link previews (og:image / twitter:image).
-const cardSvg = () => {
+// `width`/`height` letterbox the same art onto other canvases — GitHub's
+// repo social preview wants exactly 1280×640.
+const cardSvg = (width = 1200, height = 630) => {
   const n = Object.keys(CATALOG).length;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  <rect width="1200" height="630" fill="#0b0e14"/>
+  const s = Math.min(width / 1200, height / 630);
+  const tx = (width - 1200 * s) / 2;
+  const ty = (height - 630 * s) / 2;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <rect width="${width}" height="${height}" fill="#0b0e14"/>
+  <g transform="translate(${tx},${ty}) scale(${s})">
   <rect x="40" y="40" width="1120" height="550" rx="28" fill="none" stroke="#1e2638" stroke-width="2"/>
   <rect x="86" y="96" width="150" height="150" rx="30" fill="#000" stroke="#1f4a1d" stroke-width="2"/>
   <text x="161" y="186" font-size="56" font-weight="700" font-family="ui-monospace,Menlo,monospace" text-anchor="middle" fill="#4ade80">402</text>
@@ -489,6 +495,7 @@ const cardSvg = () => {
   <text x="88" y="416" font-size="33" font-family="system-ui,-apple-system,sans-serif" fill="#8b93a7">${n} pay-per-call web tools for AI agents — no signup, no API key.</text>
   <text x="88" y="492" font-size="26" font-family="ui-monospace,Menlo,monospace" fill="#4ade80">x402 · USDC on Base · or pay with proof-of-work · open source</text>
   <text x="88" y="552" font-size="28" font-weight="600" font-family="ui-monospace,Menlo,monospace" fill="#e6e9f0">agent402.tools</text>
+  </g>
 </svg>`;
 };
 app.get("/card.svg", (_req, res) => res.type("image/svg+xml").send(cardSvg()));
@@ -497,6 +504,16 @@ app.get("/card.png", async (_req, res) => {
   try {
     cardPngCache ??= await rasterizeSvg(cardSvg(), { width: 1200, height: 630 });
     res.type("image/png").send(cardPngCache);
+  } catch {
+    res.redirect(302, "/card.svg");
+  }
+});
+// GitHub repo social preview (Settings → Social preview) wants 1280×640.
+let cardGithubCache = null;
+app.get("/card-1280.png", async (_req, res) => {
+  try {
+    cardGithubCache ??= await rasterizeSvg(cardSvg(1280, 640), { width: 1280, height: 640 });
+    res.type("image/png").send(cardGithubCache);
   } catch {
     res.redirect(302, "/card.svg");
   }
