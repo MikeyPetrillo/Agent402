@@ -8,6 +8,7 @@ on:
       - ".github/trigger-test"
       - ".github/trigger-paytest"
       - ".github/trigger-publish"
+      - ".github/trigger-marketplace"
   workflow_dispatch:
     inputs:
       mode:
