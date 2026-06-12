@@ -139,6 +139,8 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   .verify .row { margin:12px 0; }
   .verify .row b { color:var(--text); font-size:.9rem; }
   .verify code { display:block; margin-top:5px; background:#080c16; border:1px solid #1e2638; border-radius:7px; padding:8px 10px; font-size:.76rem; color:#9fb4dc; overflow-x:auto; white-space:nowrap; }
+  .lbl { color:var(--accent); font-family:var(--mono); font-size:.8rem; font-weight:600; margin:22px 0 7px; }
+  .lbl span { color:var(--muted); font-weight:400; }
 </style>
 </head>
 <body>
@@ -158,12 +160,12 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
     <span class="sep">·</span><span>On the MCP Registry &amp; agent402.app</span>
     <span class="sep">·</span><span>${count} tools</span>
   </div>
-  <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet at all.</b> An agent with no funds pays by solving a tiny <a href="/api/pow">sha256 puzzle</a> (a fraction of a second of its own CPU) instead of USDC — <b>no money, no AI tokens, no model calls</b>, still no signup. The other ${count - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run.</div>
-  ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
   ${odometer}
+  <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet</b> — pay with a tiny <a href="/api/pow">sha256 proof-of-work</a> (a fraction of a second of CPU; no money, no AI tokens). The other ${count - freeCount} (browser, network, memory) settle in USDC.</div>
+  ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
 
   <h2>Watch an agent pay an agent</h2>
-  <p class="sub">No slideware — run the whole loop yourself. An autonomous buyer discovers the catalog, gets quoted over <code>HTTP 402</code>, settles, and uses the result, with zero human involvement:</p>
+  <p class="sub">No slideware — run the whole loop yourself. An autonomous buyer discovers the catalog, gets quoted over <code>HTTP 402</code>, settles, and uses the result, zero humans involved:</p>
   <pre># one file, zero dependencies — pays with COMPUTE (no wallet, no funds)
 curl -s ${baseUrl}/demo.js -o demo.js && node demo.js
 
@@ -188,16 +190,8 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
       <p>Agent sessions are ephemeral; the container is gone an hour later. <code>/api/memory</code> is durable state keyed to the paying wallet — persist findings today, read them next week from a different machine, zero credentials to store or leak. Wallets can grant each other access: shared state for agents that don't share an owner.</p>
     </div>
     <div class="card">
-      <h3>Escape its own sandbox</h3>
-      <p>Many runtimes block or allowlist network egress, so "just fetch it" fails. Agent402 endpoints are a single, predictable host that does the fetching, parsing, and rendering server-side — with SSRF guards built in.</p>
-    </div>
-    <div class="card">
       <h3>Beat the token math</h3>
       <p>Writing, testing, and debugging a CSV parser or cron calculator mid-task burns thousands of tokens — easily 10-100&times; the price of a tested <code>$0.001</code> call. Reimplementation is the expensive path.</p>
-    </div>
-    <div class="card">
-      <h3>Stay maintained</h3>
-      <p>The weekend-built version rots quietly: site layouts change, Chromium updates, SSRF holes ship. Every endpoint here is re-tested against its own documented example before every deploy — all of them green, or it doesn't ship.</p>
     </div>
   </div>
 
@@ -207,32 +201,7 @@ ${categoryCards}
   </div>
 
   <h2>The index lists thousands of sellers. Verify this one.</h2>
-  <p class="sub">Machine-to-machine commerce has no sales calls and no contracts — so every trust claim here is checkable by a program:</p>
-  <div class="why">
-    <div class="card">
-      <h3>Revenue is on-chain</h3>
-      <p>Every USDC call settles to a <a href="/api/stats">public wallet</a> you can audit on Basescan. The odometer above counts real served calls — not marketing numbers.</p>
-    </div>
-    <div class="card">
-      <h3>Tested before every deploy</h3>
-      <p>CI calls all ${count} endpoints with their own documented examples and blocks the release on any failure. The example on each tool page <em>is</em> the test.</p>
-    </div>
-    <div class="card">
-      <h3>A named maintainer</h3>
-      <p>Most x402 sellers are anonymous wallets. This one is <a href="https://github.com/MikeyPetrillo" rel="noopener">signed</a> — a reputation that costs more to burn than a tool call earns.</p>
-    </div>
-    <div class="card">
-      <h3>Deterministic, schema'd, flat-priced</h3>
-      <p>No LLM in the serving path: same input, same output, full <a href="/openapi.json">OpenAPI schemas</a>, flat per-call prices. Nothing to drift, nothing to hallucinate.</p>
-    </div>
-    <div class="card">
-      <h3>Open source — read the code</h3>
-      <p>The entire server, the SSRF/ReDoS guards, the proof-of-work scheme, and the payment path are <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">public on GitHub</a>. You don't have to trust the claims on this page — audit them.</p>
-    </div>
-  </div>
-
-  <h2>Verify it yourself</h2>
-  <p class="sub">Don't take our word for it — every claim above is checkable by a machine. These are the real discovery and settlement records:</p>
+  <p class="sub">No sales calls, no contracts — every trust claim here is checkable by a machine, not asserted: deterministic outputs (no LLM in the path), flat prices, a named maintainer, and fully <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">open source</a>. The records:</p>
   <div class="verify">
     <div class="row"><b>Discoverable on the Coinbase CDP Bazaar</b> — the index AI agents browse for x402 services, keyed to our pay-to address:
       <code>GET api.cdp.coinbase.com/platform/v2/x402/discovery/resources</code></div>
@@ -253,51 +222,40 @@ ${categoryCards}
   <div class="step"><b>2</b><span>An x402-capable client (e.g. <code>@x402/fetch</code>, <code>@x402/axios</code>, or any agent framework with x402 support) signs a USDC payment from its wallet and retries the request.</span></div>
   <div class="step"><b>3</b><span>Payment settles on ${network} in seconds and the response comes back. Total overhead: one round trip.</span></div>
 
-  <h2>Quickstart (JavaScript agent)</h2>
+  <h2>Use it</h2>
+  <p class="lbl">Pay in code <span>— any x402 client</span></p>
   <pre>import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
 
 const client = new x402Client();
-registerExactEvmScheme(client, {
-  signer: privateKeyToAccount(process.env.AGENT_PRIVATE_KEY),
-});
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_PRIVATE_KEY) });
 const payFetch = wrapFetchWithPayment(fetch, client);
 
 const res = await payFetch("${baseUrl}/api/extract", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
+  method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ url: "https://example.com/article" }),
 });
 console.log(await res.json()); // { title, markdown, ... }</pre>
 
-  <h2>Or just add it to Claude / any MCP client</h2>
-  <p>Published in the <a href="https://registry.modelcontextprotocol.io" rel="noopener">official MCP Registry</a> and on npm. The <code>agent402-mcp</code> server exposes the whole catalog as MCP tools and pays underneath — USDC via x402 if you give it a funded key, proof-of-work (free) on the pure-CPU tools if you don't. High-value tools are first-class; the rest are reachable via <code>search_tools</code> + <code>call_tool</code>, so your context window stays small. Built-in spend controls (<code>AGENT402_BUDGET</code>, <code>AGENT402_MAX_PER_CALL</code>) refuse a runaway model <em>before</em> a payment is signed.</p>
+  <p class="lbl">Add to Claude / any MCP client <span>— in the <a href="https://registry.modelcontextprotocol.io" rel="noopener">MCP Registry</a> + npm. High-value tools first-class, the long tail via <code>search_tools</code>/<code>call_tool</code>; spend caps refuse a runaway model before paying.</span></p>
   <pre>{ "mcpServers": { "agent402": {
     "command": "npx", "args": ["-y", "agent402-mcp"],
-    "env": { "AGENT_KEY": "0x&lt;funded wallet key — optional&gt;",
-             "AGENT402_BUDGET": "1.00" }
+    "env": { "AGENT_KEY": "0x&lt;funded wallet key — optional&gt;", "AGENT402_BUDGET": "1.00" }
 } } }</pre>
 
-  <h2>Try it (no payment needed)</h2>
-  <pre># Machine-readable catalog — free
-curl ${baseUrl}/api/pricing
-
-# Full OpenAPI 3.1 spec — free
-curl ${baseUrl}/openapi.json
-
-# See the 402 challenge a paying agent receives
+  <p class="lbl">Or try it free <span>— no wallet needed</span></p>
+  <pre>curl ${baseUrl}/api/pricing          # machine-readable catalog
+curl ${baseUrl}/openapi.json         # full OpenAPI 3.1 spec
 curl -i -X POST ${baseUrl}/api/extract \\
-  -H "Content-Type: application/json" \\
-  -d '{"url":"https://example.com"}'</pre>
+  -H "Content-Type: application/json" -d '{"url":"https://example.com"}'   # see the 402 quote</pre>
 
   <h2>FAQ</h2>
   <div class="faq">
     <p><b>What is Agent402?</b><br><span>A live node in the machine-to-machine economy: ${count} web tools an autonomous AI agent can call and pay for per request in USDC via the <a href="https://x402.org" rel="noopener">x402 protocol</a> — or with proof-of-work, no wallet. No human, no signup, no API key.</span></p>
     <p><b>How does an AI agent pay for a tool?</b><br><span>It calls an endpoint and gets an <code>HTTP 402 Payment Required</code> quote. An x402 client signs a USDC payment from the agent's own wallet on Base and retries; the call settles on-chain in seconds. The wallet is the identity.</span></p>
     <p><b>Are any tools free?</b><br><span>Yes — ${freeCount} of the ${count} pure-CPU tools work with no wallet at all: solve a short <a href="/api/pow">proof-of-work</a> puzzle (a few seconds of CPU) instead of paying USDC.</span></p>
-    <p><b>Why not just build the tools myself?</b><br><span>Many agents can write code but can't run a headless browser, reach the network from a locked sandbox, or keep durable state across sessions. Agent402 provides a real browser, network access, and wallet-keyed memory &amp; coordination a single ephemeral agent can't give itself.</span></p>
     <p><b>Does Agent402 use AI or spend my model tokens?</b><br><span>No. Every tool is deterministic code — parsers, hashes, math, a real browser — with no LLM anywhere in the serving path, and the free tier's proof-of-work is a sha256 puzzle your machine solves in a fraction of a second. Nothing here consumes AI tokens. Tools like <code>/api/extract</code> exist to <em>save</em> your tokens: clean markdown out instead of 100k tokens of raw HTML in.</span></p>
   </div>
 
