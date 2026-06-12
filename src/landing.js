@@ -52,8 +52,7 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
       "@id": "${baseUrl}/#site",
       "url": "${baseUrl}",
       "name": "Agent402 — tools for AI agents",
-      "publisher": { "@id": "${baseUrl}/#org" },
-      "potentialAction": { "@type": "SearchAction", "target": "${baseUrl}/tools?q={search_term_string}", "query-input": "required name=search_term_string" }
+      "publisher": { "@id": "${baseUrl}/#org" }
     },
     {
       "@type": "WebAPI",

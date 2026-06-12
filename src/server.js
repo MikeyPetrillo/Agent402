@@ -355,7 +355,8 @@ const CATALOG = {
   },
 };
 
-// The utility kit (49 small tools) joins the catalog; same paywall, same discovery.
+// The full tool kit (~1060 tools: kit + kit2 + generated conversions) joins the
+// catalog; same paywall, same discovery.
 for (const tool of ALL_KIT) {
   if (CATALOG[tool.route]) throw new Error(`Duplicate route in kit: ${tool.route}`);
   CATALOG[tool.route] = tool;
@@ -394,8 +395,12 @@ app.get("/tools/:slug", (req, res) => {
 app.get("/api/pow", (_req, res) => res.json(powInfo(BASE_URL, [...POW_SLUGS].sort())));
 app.get("/api/pow/challenge", (req, res) => {
   const requested = (req.query.slug || req.query.path || "").toString().replace(/^.*\//, "");
-  const slug = POW_SLUGS.has(requested) ? requested : "*";
-  res.json(issueChallenge(slug));
+  // Challenges are strictly scoped to one known compute-payable tool — no
+  // wildcard tokens, so a solved challenge can never be retargeted.
+  if (!POW_SLUGS.has(requested)) {
+    return res.status(404).json({ error: `Unknown or wallet-only tool "${requested}". Compute-payable slugs: GET /api/pow` });
+  }
+  res.json(issueChallenge(requested));
 });
 
 // Live machine-to-machine economy stats (free). Money is provable on-chain at
@@ -471,7 +476,9 @@ app.use((req, res, next) => {
   const def = CATALOG[`${req.method} ${req.path}`];
   if (def) {
     res.on("finish", () => {
-      if (res.statusCode === 200) recordServedCall(def.slug, req.headers["x-pow-solution"] ? "pow" : "usdc");
+      // Attribute by what the gate actually ACCEPTED, not by header presence —
+      // an invalid PoW header on a USDC-settled call must count as usdc.
+      if (res.statusCode === 200) recordServedCall(def.slug, res.getHeader("X-Pow-Accepted") === "true" ? "pow" : "usdc");
     });
   }
   next();
@@ -596,4 +603,21 @@ for (const tool of ALL_KIT) {
   });
 }
 
-app.listen(PORT, () => console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`));
+const httpServer = app.listen(PORT, () =>
+  console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`)
+);
+
+// Graceful shutdown: a Railway redeploy sends SIGTERM. Stop accepting new
+// connections but let in-flight (already paid-for) requests finish before
+// exiting — a hard kill would take an agent's money and return nothing.
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received — draining in-flight requests`);
+  httpServer.close(() => process.exit(0));
+  // Hard deadline so a stuck request can't block the redeploy.
+  setTimeout(() => process.exit(0), 25_000).unref();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
