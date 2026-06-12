@@ -267,7 +267,10 @@ const res = await payFetch("${baseUrl}/api/extract", {
 });
 console.log(await res.json()); // { title, markdown, ... }</pre>
 
-  <p class="lbl">Add to Claude / any MCP client <span>— in the <a href="https://registry.modelcontextprotocol.io" rel="noopener">MCP Registry</a> + npm. High-value tools first-class, the long tail via <code>search_tools</code>/<code>call_tool</code>; spend caps refuse a runaway model before paying.</span></p>
+  <p class="lbl">Add to Claude / any MCP client <span>— paste the hosted connector URL (claude.ai → Settings → Connectors), zero install: the pure-CPU tools run free there, rate-limited.</span></p>
+  <pre>${baseUrl}/mcp</pre>
+
+  <p class="lbl">Full catalog with payment underneath <span>— in the <a href="https://registry.modelcontextprotocol.io" rel="noopener">MCP Registry</a> + npm. High-value tools first-class, the long tail via <code>search_tools</code>/<code>call_tool</code>; spend caps refuse a runaway model before paying.</span></p>
   <pre>{ "mcpServers": { "agent402": {
     "command": "npx", "args": ["-y", "agent402-mcp"],
     "env": { "AGENT_KEY": "0x&lt;funded wallet key — optional&gt;", "AGENT402_BUDGET": "1.00" }

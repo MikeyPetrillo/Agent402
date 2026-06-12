@@ -134,8 +134,14 @@ const res = await fetch("${baseUrl}/api/hash", {
 
 ## Connect via MCP (Claude, ChatGPT, any MCP client)
 
-The \`agent402-mcp\` package exposes this whole catalog as MCP tools and settles
-payment underneath (USDC via x402 with a wallet key, or proof-of-work without):
+**Hosted connector, zero install:** add \`${baseUrl}/mcp\` as a remote MCP server
+(streamable HTTP, no auth) — e.g. claude.ai → Settings → Connectors → Add custom
+connector. The pure-CPU tools run free there (rate-limited) via \`search_tools\` +
+\`call_tool\`; wallet-only tools return instructions for paid access.
+
+For the full catalog with payment underneath, the \`agent402-mcp\` package exposes
+everything as MCP tools and settles per call (USDC via x402 with a wallet key,
+or proof-of-work without):
 
 \`\`\`json
 { "mcpServers": { "agent402": {

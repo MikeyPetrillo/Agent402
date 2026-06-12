@@ -21,6 +21,7 @@ import { DEMAND_TOOLS } from "./tools/demand-kit.js";
 import { MEDIA_TOOLS } from "./tools/media-kit.js";
 import { GOV_TOOLS } from "./tools/gov-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES } from "./pages.js";
+import { mountMcp } from "./mcp-http.js";
 
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
@@ -524,6 +525,16 @@ app.get("/api/pow/challenge", (req, res) => {
 app.get("/api/stats", (_req, res) =>
   res.json(getStats({ wallet: WALLET_ADDRESS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL }))
 );
+
+// Remote MCP connector (streamable HTTP, authless free tier): paste
+// https://agent402.tools/mcp into Claude/ChatGPT custom connectors. Mounted
+// before the paywall — it meters itself (PoW-eligible tools only, per-IP
+// rate limit) and counts served calls under the proof-of-work tier.
+mountMcp(app, CATALOG, {
+  baseUrl: BASE_URL,
+  isComputePayable,
+  onServed: (slug) => recordServedCall(slug, "pow"),
+});
 
 app.get("/api/pricing", (_req, res) =>
   res.json({

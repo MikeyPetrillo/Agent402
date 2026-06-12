@@ -6,6 +6,11 @@ Your agent gets browser rendering, screenshots, PDF text extraction, URL→markd
 
 ## Quick start
 
+**Zero install (hosted connector):** add `https://agent402.tools/mcp` as a remote
+MCP server — e.g. claude.ai → Settings → Connectors → Add custom connector. The
+pure-CPU tools run free there (rate-limited); for the full catalog and no rate
+limit, run this package locally with a wallet:
+
 With a funded wallet (USDC on Base) — every tool available:
 
 ```json
