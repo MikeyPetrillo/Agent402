@@ -5,6 +5,7 @@ pay for per call in USDC via the [x402 protocol](https://x402.org) — or with
 proof-of-work, no wallet.**
 
 **🟢 Live at [agent402.tools](https://agent402.tools)** — USDC on Base mainnet.
+Built by [Mikey Petrillo](https://github.com/MikeyPetrillo).
 
 No humans, no signups, no API keys. One program calls an endpoint, gets an
 `HTTP 402 Payment Required` quote, settles payment from its own wallet (or with a

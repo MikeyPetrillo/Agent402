@@ -43,6 +43,8 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
       "@id": "${baseUrl}/#org",
       "name": "Agent402",
       "url": "${baseUrl}",
+      "founder": { "@type": "Person", "name": "Mikey Petrillo", "url": "https://github.com/MikeyPetrillo" },
+      "sameAs": ["https://github.com/MikeyPetrillo", "https://www.npmjs.com/package/agent402-mcp"],
       "description": "Machine-to-machine payments for AI agents: ${count} pay-per-call web tools settled in USDC via the x402 protocol, or free with proof-of-work."
     },
     {
@@ -215,7 +217,8 @@ curl -i -X POST ${baseUrl}/api/extract \\
   </div>
 
   <footer>
-    Agent402 — ${count} machine-payable tools for AI agents. Built on the <a href="https://x402.org" rel="noopener">x402 protocol</a>.
+    Agent402 — ${count} machine-payable tools for AI agents. Built on the <a href="https://x402.org" rel="noopener">x402 protocol</a>
+    by <a href="https://github.com/MikeyPetrillo" rel="noopener">Mikey Petrillo</a>.
     Free: <a href="/tools">/tools</a> · <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a> · <code>GET /health</code>.
   </footer>
 </div>
