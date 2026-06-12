@@ -50,8 +50,6 @@ const SERVICES = [
     description: "Convert a PDF to clean markdown — headings, paragraphs, and bullets reconstructed from the text layer, ready for a model's context. No AI, deterministic." },
   { slug: "xlsx-to-json", name: "Excel to JSON", price: 0.005, tags: ["excel", "xlsx", "spreadsheet", "json"],
     description: "Parse an Excel/ODS/CSV workbook URL into header-keyed JSON rows per sheet. Get the data out of Excel with no Google account and no Office license." },
-  { slug: "stock-quote", name: "Stock Quote", price: 0.005, tags: ["stocks", "finance", "market-data"],
-    description: "Delayed stock quote (OHLC + volume) for any ticker as deterministic JSON — no API key, US and international symbols." },
   { slug: "audio-convert", name: "Audio Convert (to MP3)", price: 0.02, tags: ["ffmpeg", "mp4-to-mp3", "audio"],
     description: "Extract/convert the audio of any media URL (mp4, mov, wav, m4a…) to MP3 with real ffmpeg — the classic mp4-to-mp3, deterministic, no AI." },
   { slug: "audio-normalize", name: "Audio Normalize (EBU R128)", price: 0.02, tags: ["ffmpeg", "loudnorm", "audio"],

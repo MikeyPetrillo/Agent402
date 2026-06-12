@@ -3,8 +3,6 @@
 //   pdf-to-markdown   (461 signals "pdf to markdown", + 611 "convert pdf")
 //   xlsx-to-json/csv  (381 signals "convert excel to google sheets" — the
 //                      agentable core of that need is getting data OUT of xlsx)
-//   stock-quote       (128 signals "stock alerts" — the data half; keyless via
-//                      Stooq's public CSV endpoint)
 // All deterministic, no AI, inputs SSRF-guarded via safeFetch.
 import * as XLSX from "xlsx";
 import { pdfToText } from "./pdf.js";
@@ -131,70 +129,6 @@ export const DEMAND_TOOLS = [
       if (!wb.SheetNames.includes(name)) throw bad(`Sheet "${name}" not found. Sheets: ${wb.SheetNames.join(", ")}`);
       const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name]);
       return { sheet: name, rows: csv.trim() ? csv.trim().split("\n").length : 0, csv };
-    },
-  },
-  {
-    route: "GET /api/stock-quote", name: "Stock quote", slug: "stock-quote", category: "data", price: "$0.005",
-    description:
-      "Delayed stock quote (open/high/low/close/volume) for a ticker via Stooq's public data — no API key, deterministic JSON. US tickers by default; use suffixed symbols for other markets (e.g. AAPL.US, BMW.DE). ?symbol=AAPL.",
-    tags: ["stocks", "finance", "quote", "market-data", "stock-alerts"],
-    discovery: {
-      input: { symbol: "AAPL" },
-      inputSchema: { properties: { symbol: { type: "string", description: "Ticker, e.g. AAPL or BMW.DE (default market: .US)" } }, required: ["symbol"] },
-      output: { example: { symbol: "AAPL", currency: "USD", exchange: "NasdaqGS", price: 247.9, previousClose: 245.0, open: 245.1, high: 248.3, low: 244.2, volume: 51234567, asOf: "2026-06-11T20:00:00.000Z" } },
-    },
-    handler: async (i) => {
-      const raw = String(need(i, "symbol")).trim();
-      if (!/^[A-Za-z0-9.^=-]{1,15}$/.test(raw)) throw bad('"symbol" looks invalid');
-      const symbol = raw.toUpperCase();
-      // Primary: Yahoo's keyless chart endpoint. Try both hosts — they are
-      // load-balanced separately and one can block a datacenter IP while the
-      // other answers. Fallback: Stooq CSV.
-      const last = (a) => (Array.isArray(a) ? [...a].reverse().find((v) => v !== null) ?? null : null);
-      for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
-        try {
-          const { html } = await safeFetch(
-            `https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`,
-            { maxBytes: 200_000 }
-          );
-          const data = JSON.parse(html);
-          const r = data?.chart?.result?.[0];
-          if (!r?.meta) throw new Error("empty");
-          const m = r.meta;
-          const q = r.indicators?.quote?.[0] ?? {};
-          return {
-            symbol: m.symbol ?? symbol,
-            currency: m.currency ?? null,
-            exchange: m.fullExchangeName ?? m.exchangeName ?? null,
-            price: m.regularMarketPrice ?? last(q.close),
-            previousClose: m.chartPreviousClose ?? m.previousClose ?? null,
-            open: last(q.open),
-            high: m.regularMarketDayHigh ?? last(q.high),
-            low: m.regularMarketDayLow ?? last(q.low),
-            volume: m.regularMarketVolume ?? last(q.volume),
-            asOf: m.regularMarketTime ? new Date(m.regularMarketTime * 1000).toISOString() : null,
-            source: "Yahoo Finance public chart data (delayed)",
-          };
-        } catch {
-          // try the next host, then Stooq
-        }
-      }
-      const stooqSym = (symbol.includes(".") || symbol.startsWith("^") ? symbol : `${symbol}.US`).toLowerCase();
-      let csv;
-      try {
-        ({ html: csv } = await safeFetch(`https://stooq.com/q/l/?s=${encodeURIComponent(stooqSym)}&f=sd2t2ohlcv&h&e=csv`, { maxBytes: 10_000 }));
-      } catch {
-        throw bad("Quote upstreams unavailable — retry shortly", 502);
-      }
-      const lines = csv.trim().split("\n");
-      const cols = lines[1]?.split(",") ?? [];
-      if (cols.length < 8 || cols[3] === "N/D") throw bad(`No quote found for "${symbol}"`, 404);
-      const num = (s) => (s === "N/D" ? null : Number(s));
-      return {
-        symbol: cols[0], date: cols[1], time: cols[2],
-        open: num(cols[3]), high: num(cols[4]), low: num(cols[5]), price: num(cols[6]), volume: num(cols[7]),
-        source: "stooq.com (delayed public data)",
-      };
     },
   },
 ];

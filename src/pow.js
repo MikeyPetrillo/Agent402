@@ -37,7 +37,7 @@ const WALLET_ONLY_SLUGS = new Set([
   "http-check", "tls-cert", "whois", "robots-check", "sitemap",
   "email-validate", "ip-info", "search",
   "pdf-info", "pdf-merge", "pdf-extract-pages", "pdf-rotate", "images-to-pdf",
-  "pdf-to-markdown", "xlsx-to-json", "xlsx-to-csv", "stock-quote",
+  "pdf-to-markdown", "xlsx-to-json", "xlsx-to-csv",
   "media-info", "audio-convert", "audio-normalize",
   "gov-data", "weather-alerts", "earthquakes",
 ]);

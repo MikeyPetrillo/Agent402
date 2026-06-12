@@ -178,11 +178,9 @@ jobs:
             code=$(curl -s -o /dev/null -w '%{http_code}' 'localhost:3000/api/search?q=test')
             [ "$code" = "503" ] || { echo "expected 503 without key, got $code"; exit 1; }
           fi
-          echo "=== demand kit: live (pdf-to-markdown + stock-quote) ==="
+          echo "=== demand kit: live (pdf-to-markdown) ==="
           curl -s -X POST localhost:3000/api/pdf-to-markdown -H 'Content-Type: application/json' \
             -d '{"url":"https://arxiv.org/pdf/1706.03762"}' | jq '{pages, wordCount, md: (.markdown | .[0:160])}'
-          curl -s 'localhost:3000/api/stock-quote?symbol=AAPL' | jq -c .
-          curl -s 'localhost:3000/api/stock-quote?symbol=AAPL' | jq -e '.price != null' >/dev/null || { echo "stock-quote returned no price"; exit 1; }
           echo "=== live public data (data.gov / NWS / USGS) ==="
           # data.gov has frequent upstream outages — exercise gov-data but don't
           # hard-fail the suite on its availability (the tool returns an honest
