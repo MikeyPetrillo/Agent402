@@ -97,10 +97,17 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   function buildServer(ip) {
     const server = new Server({ name: "agent402", version: VERSION }, { capabilities: { tools: {} } });
 
+    // Titles + safety annotations on every tool are required for listing in
+    // Anthropic's connector directory. The free tier only ever executes
+    // pure-CPU deterministic functions — nothing destructive, no external
+    // reads/writes — so all three tools are honestly read-only.
+    const SAFE = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
         {
           name: "search_tools",
+          title: "Search the Agent402 tool catalog",
+          annotations: { title: "Search the Agent402 tool catalog", ...SAFE },
           description:
             `Search Agent402's ${tools.size} pay-per-call web tools (encoding, crypto, text, time, math, validation, unit conversions, network, browser, PDF, search, memory). ${freeCount} pure-CPU tools run free right here; the rest need a USDC wallet. Returns slugs + input schemas for call_tool.`,
           inputSchema: {
@@ -114,6 +121,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         },
         {
           name: "call_tool",
+          title: "Run an Agent402 tool",
+          annotations: { title: "Run an Agent402 tool", ...SAFE },
           description:
             `Run an Agent402 tool by slug (find slugs with search_tools). The ${freeCount} pure-CPU tools execute free on this hosted connector (rate-limited). Wallet-only tools (live search, browser rendering, PDFs, durable memory) return instructions for paid access instead.`,
           inputSchema: {
@@ -127,6 +136,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         },
         {
           name: "about_agent402",
+          title: "About this connector",
+          annotations: { title: "About this connector", ...SAFE },
           description: "What this connector is: the free tier of agent402.tools, what's free vs wallet-only, and how paid access works (x402, USDC on Base, proof-of-work).",
           inputSchema: { type: "object", properties: {} },
         },

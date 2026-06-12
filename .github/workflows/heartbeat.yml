@@ -11,6 +11,11 @@ on:
   schedule:
     - cron: "*/15 * * * *"
     - cron: "13 */6 * * *"
+  push:
+    branches:
+      - "claude/sweet-brown-i99jl3"
+    paths:
+      - ".github/trigger-heartbeat"
   workflow_dispatch:
     inputs:
       job:
@@ -26,7 +31,7 @@ env:
 
 jobs:
   health:
-    if: github.event_name == 'workflow_dispatch' && (inputs.job == 'health' || inputs.job == 'both') || github.event.schedule == '*/15 * * * *'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' && (inputs.job == 'health' || inputs.job == 'both') || github.event.schedule == '*/15 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -81,7 +86,7 @@ jobs:
           fi
 
   revenue:
-    if: github.event_name == 'workflow_dispatch' && (inputs.job == 'revenue' || inputs.job == 'both') || github.event.schedule == '13 */6 * * *'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' && (inputs.job == 'revenue' || inputs.job == 'both') || github.event.schedule == '13 */6 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
