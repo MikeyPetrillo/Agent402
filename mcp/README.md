@@ -47,8 +47,13 @@ Claude Code: `claude mcp add agent402 -- npx -y agent402-mcp`
 | `AGENT_KEY` | _(unset)_ | Hex private key of a wallet funded with USDC on Base. Unset = proof-of-work mode. |
 | `AGENT402_URL` | `https://agent402.tools` | Target service (point at your own deployment). |
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
+| `AGENT402_MAX_PER_CALL` | unlimited | Refuse any single call priced above this many USD (e.g. `0.01`). |
+| `AGENT402_BUDGET` | unlimited | Hard cap on total USDC spent per session (e.g. `1.00`). |
 
-Use a dedicated low-value wallet for `AGENT_KEY`, funded only with what you intend to spend — calls cost $0.001–$0.02 each.
+Spend controls are enforced **before a payment is signed** — a runaway model is
+refused, not billed. `payment_info` reports the caps, what's been spent, and
+what remains. Use a dedicated low-value wallet for `AGENT_KEY`, funded only
+with what you intend to spend — calls cost $0.001–$0.02 each.
 
 ## Test
 

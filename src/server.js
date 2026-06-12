@@ -378,7 +378,11 @@ const app = express();
 app.use(express.json({ limit: "100kb" }));
 
 // Free, unauthenticated routes
-app.get("/", (_req, res) => res.type("html").send(landingPage(BASE_URL, NETWORK, FREE_MODE, CATALOG)));
+app.get("/", (_req, res) =>
+  res.type("html").send(
+    landingPage(BASE_URL, NETWORK, FREE_MODE, CATALOG, getStats({ wallet: WALLET_ADDRESS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL }))
+  )
+);
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));

@@ -82,6 +82,30 @@ try {
   if (!text(info).includes("proof-of-work")) fail(`payment_info should report proof-of-work mode: ${text(info).slice(0, 300)}`);
   console.log("payment_info reports proof-of-work mode ✓");
 
+  // spend controls: refusals must happen BEFORE any payment is attempted, so a
+  // throwaway (unfunded) key is safe here — no facilitator is ever contacted.
+  const dummyKey = "0x" + "11".repeat(32);
+  const capped = new Client({ name: "agent402-mcp-captest", version: "0.0.0" });
+  await capped.connect(new StdioClientTransport({
+    command: process.execPath,
+    args: [join(ROOT, "mcp", "index.js")],
+    env: { ...process.env, AGENT402_URL: API, AGENT_KEY: dummyKey, AGENT402_MAX_PER_CALL: "0.0005", AGENT402_BUDGET: "0" },
+  }));
+  try {
+    const refused = await capped.callTool({ name: "hash", arguments: { text: "x" } });
+    if (!refused.isError || !text(refused).includes("Refused without paying")) {
+      fail(`spend cap should refuse before paying: ${text(refused).slice(0, 300)}`);
+    }
+    console.log("spend controls refuse before any payment is signed ✓");
+    const info2 = await capped.callTool({ name: "payment_info", arguments: {} });
+    if (!text(info2).includes("spendControls") || !text(info2).includes("0.0005")) {
+      fail(`payment_info should report spend controls: ${text(info2).slice(0, 300)}`);
+    }
+    console.log("payment_info reports spend controls ✓");
+  } finally {
+    await capped.close().catch(() => {});
+  }
+
   console.log("\nMCP e2e: all assertions passed");
 } finally {
   await client.close().catch(() => {});
