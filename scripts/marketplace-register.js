@@ -46,6 +46,12 @@ const SERVICES = [
     description: "Pull a page range (e.g. \"1-3,5\") from a PDF into a new document. The split half of convert-pdf, deterministic." },
   { slug: "images-to-pdf", name: "Images to PDF", price: 0.004, tags: ["pdf", "images", "convert-pdf"],
     description: "Combine PNG/JPEG image URLs into a single PDF, one image per page. The classic image→PDF conversion." },
+  { slug: "pdf-to-markdown", name: "PDF to Markdown", price: 0.01, tags: ["pdf", "markdown", "convert-pdf", "pdf-to-markdown"],
+    description: "Convert a PDF to clean markdown — headings, paragraphs, and bullets reconstructed from the text layer, ready for a model's context. No AI, deterministic." },
+  { slug: "xlsx-to-json", name: "Excel to JSON", price: 0.005, tags: ["excel", "xlsx", "spreadsheet", "json"],
+    description: "Parse an Excel/ODS/CSV workbook URL into header-keyed JSON rows per sheet. Get the data out of Excel with no Google account and no Office license." },
+  { slug: "stock-quote", name: "Stock Quote", price: 0.005, tags: ["stocks", "finance", "market-data"],
+    description: "Delayed stock quote (OHLC + volume) for any ticker as deterministic JSON — no API key, US and international symbols." },
   // NOTE: memory tools are intentionally NOT listed here. They key state to the
   // paying wallet's signature, which the marketplace's pay-then-forward model
   // strips — so they are only sold directly via our own x402 paywall, not the
