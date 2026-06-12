@@ -1,0 +1,39 @@
+name: Sync wiki
+
+# The GitHub wiki is its own git repo that can't take PRs, so the source of
+# truth lives in wiki/ here (version-controlled, reviewed) and this job
+# mirrors it to the wiki on every change.
+on:
+  push:
+    branches:
+      - "claude/sweet-brown-i99jl3"
+      - "claude/festive-archimedes-j76lpp"
+    paths:
+      - "wiki/**"
+      - ".github/workflows/wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Mirror wiki/ to the GitHub wiki repo
+        run: |
+          git clone "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.wiki.git" /tmp/wiki || {
+            echo "::error::Could not clone ${GITHUB_REPOSITORY}.wiki. If the wiki has never been initialized, open the repo's Wiki tab once, click 'Create the first page', save anything, and re-run this workflow."
+            exit 1
+          }
+          rsync -a --delete --exclude .git wiki/ /tmp/wiki/
+          cd /tmp/wiki
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && { echo "wiki already up to date"; exit 0; }
+          git commit -m "Sync wiki from ${GITHUB_SHA::7}"
+          git push
+          echo "synced -> https://github.com/${GITHUB_REPOSITORY}/wiki"
