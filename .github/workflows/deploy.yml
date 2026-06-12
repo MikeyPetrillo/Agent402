@@ -439,6 +439,34 @@ jobs:
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
+      - name: Diagnose stats persistence (Railway volume?) + directory presence
+        run: |
+          gql() { curl -s -X POST https://backboard.railway.app/graphql/v2 -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" --data @-; }
+          PROJECT_ID=$(jq -n '{query:"query { projects { edges { node { id name } } } }"}' | gql | jq -r '.data.projects.edges[] | select(.node.name=="agent402") | .node.id' | head -1)
+          ENV_ID=$(jq -n --arg id "$PROJECT_ID" '{query:"query($id:String!){project(id:$id){environments{edges{node{id name}}}}}",variables:{id:$id}}' | gql | jq -r '.data.project.environments.edges[]|select(.node.name=="production")|.node.id' | head -1)
+          SERVICE_ID=$(jq -n --arg id "$PROJECT_ID" '{query:"query($id:String!){project(id:$id){services{edges{node{id name}}}}}",variables:{id:$id}}' | gql | jq -r '.data.project.services.edges[]|select(.node.name=="agent402")|.node.id' | head -1)
+          echo "=== Railway volumes on the service (THE key question for the counter) ==="
+          jq -n --arg p "$PROJECT_ID" '{query:"query($p:String!){project(id:$p){volumes{edges{node{id name mountPath:volumeInstances{edges{node{mountPath}}}}}}}}",variables:{p:$p}}' | gql | jq '.' 2>/dev/null \
+            || jq -n --arg p "$PROJECT_ID" '{query:"query($p:String!){project(id:$p){volumes{edges{node{id name}}}}}",variables:{p:$p}}' | gql
+          echo "  ^ if 'volumes' is empty, /data is NOT persisted → SQLite (stats/memory/pow) resets every redeploy."
+          echo
+          echo "=== live stats: uptime + servingSince reveal whether it reset on the last deploy ==="
+          curl -s https://agent402.tools/api/stats | jq '{served: .toolCallsServed, servingSince, uptimeSeconds}'
+          echo
+          echo "=== where do we already appear? (passive directory listings) ==="
+          UA="Mozilla/5.0 (compatible; agent402-research/1.0)"
+          WALLET="0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0"
+          check() { # name url needle
+            local body; body=$(curl -s -A "$UA" --max-time 20 -L "$2" 2>/dev/null | tr 'A-Z' 'a-z')
+            if echo "$body" | grep -q "$3"; then echo "  ✓ FOUND on $1"; else echo "  – not found on $1 (or needs submission / not queryable this way)"; fi
+          }
+          check "Glama (search)"        "https://glama.ai/mcp/servers?query=agent402" "agent402"
+          check "mcp.so (search)"       "https://mcp.so/search?q=agent402" "agent402"
+          check "x402-list.com"         "https://x402-list.com/" "agent402"
+          check "x402scan.com"          "https://www.x402scan.com/" "$WALLET"
+          check "PayAI discovery"       "https://facilitator.payai.network/discovery/resources?limit=100" "agent402"
+          echo "(directory checks are best-effort string matches; a '–' often just means the site renders client-side or wants a submission)"
+
       - name: Railway deployment history (which image is live, what failed)
         run: |
           gql() {
