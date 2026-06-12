@@ -1,4 +1,5 @@
 import express from "express";
+import { readFileSync } from "node:fs";
 import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
@@ -382,6 +383,11 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));
+// The runnable buyer demo, served from the site itself (the repo is private,
+// so "git clone" is not a path a visitor can take).
+app.get("/demo.js", (_req, res) =>
+  res.type("text/javascript").send(readFileSync(new URL("../scripts/demo-payment.js", import.meta.url), "utf-8"))
+);
 app.get("/openapi.json", (_req, res) => res.json(openapiSpec(BASE_URL, CATALOG)));
 app.get("/tools", (_req, res) => res.type("html").send(toolsIndexPage(BASE_URL, CATALOG)));
 app.get("/tools/:slug", (req, res) => {

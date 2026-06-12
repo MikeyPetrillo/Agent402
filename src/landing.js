@@ -23,6 +23,7 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230b0e14'/%3E%3Ctext x='50' y='66' font-size='40' font-weight='700' font-family='monospace' text-anchor='middle' fill='%234ade80'%3E402%3C/text%3E%3C/svg%3E">
 <title>Agent402 — where agents pay agents (machine-to-machine payments via x402, USDC on Base)</title>
 <meta name="description" content="A live node in the machine-to-machine economy: ${count} tools autonomous agents pay for per call in USDC via the x402 protocol — or with proof-of-work, no wallet. No human, no signup, no API key. The payment is the identity.">
 <link rel="canonical" href="${baseUrl}/">
@@ -129,13 +130,12 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
 
   <h2>Watch an agent pay an agent</h2>
   <p class="sub">No slideware — run the whole loop yourself. An autonomous buyer discovers the catalog, gets quoted over <code>HTTP 402</code>, settles, and uses the result, with zero human involvement:</p>
-  <pre>git clone https://github.com/MikeyPetrillo/Agent402 &amp;&amp; cd Agent402 &amp;&amp; npm i
-
-# pays with COMPUTE — no wallet, no funds, runs anywhere
-node scripts/demo-payment.js
+  <pre># one file, zero dependencies — pays with COMPUTE (no wallet, no funds)
+curl -s ${baseUrl}/demo.js -o demo.js && node demo.js
 
 # or settle in real USDC on Base with a funded key
-AGENT_KEY=0xYOUR_FUNDED_KEY node scripts/demo-payment.js</pre>
+npm i @x402/core @x402/evm @x402/fetch viem
+AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
   <p class="sub">Revenue is trustless and public — every settled call lands on-chain. See live counts and the receiving wallet at <a href="/api/stats">/api/stats</a>.</p>
 
   <h2>Why not just build it yourself?</h2>
@@ -159,7 +159,7 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node scripts/demo-payment.js</pre>
     </div>
   </div>
 
-  <h2>${count} tools, nine categories</h2>
+  <h2>${count} tools, ${Object.keys(CATEGORIES).filter((k) => tools.some((t) => t.category === k)).length} categories</h2>
   <div class="grid">
 ${categoryCards}
   </div>
