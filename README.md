@@ -1,181 +1,72 @@
-# Agent402 — where agents pay agents
+# Agent402 — pay-per-call web tools for AI agents (x402 + MCP)
 
-**A live node in the machine-to-machine economy: 1000+ tools autonomous agents
-pay for per call in USDC via the [x402 protocol](https://x402.org) — or with
-proof-of-work, no wallet.**
+[![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
+[![npm](https://img.shields.io/npm/v/agent402-mcp?label=agent402-mcp)](https://www.npmjs.com/package/agent402-mcp)
+[![CI](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml)
+[![Heartbeat](https://github.com/MikeyPetrillo/Agent402/actions/workflows/heartbeat.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/heartbeat.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-**🟢 Live at [agent402.tools](https://agent402.tools)** — USDC on Base mainnet.
-Built by [Mikey Petrillo](https://github.com/MikeyPetrillo).
+**A live node in the machine-to-machine economy: 1,000+ web tools that autonomous
+agents pay for per call — USDC on Base via the [x402 protocol](https://x402.org),
+or free with proof-of-work.** No humans, no signups, no API keys: an agent calls
+an endpoint, gets an `HTTP 402 Payment Required` quote, settles from its own
+wallet (or with a fraction of a second of CPU), and gets the result.
+**The payment _is_ the identity.**
 
-No humans, no signups, no API keys. One program calls an endpoint, gets an
-`HTTP 402 Payment Required` quote, settles payment from its own wallet (or with a
-few seconds of compute), and gets the result. The payment *is* the identity.
-Every settled call lands on-chain — live counts and the receiving wallet are at
-[`/api/stats`](https://agent402.tools/api/stats).
+🟢 **Live at [agent402.tools](https://agent402.tools)** · 📖 **[Full documentation in the wiki](https://github.com/MikeyPetrillo/Agent402/wiki)** · 📊 **[Live stats + revenue wallet](https://agent402.tools/api/stats)**
 
-## Watch an agent pay an agent
+## Try it in 30 seconds
 
-Run the whole loop yourself — an autonomous buyer discovers the catalog, gets
-quoted over `HTTP 402`, settles, and uses the result, with zero human involvement:
+**In Claude (claude.ai → Settings → Connectors → Add custom connector):**
 
-```bash
-node scripts/demo-payment.js                              # pays with compute — no wallet, no funds
-AGENT_KEY=0xYOUR_FUNDED_KEY node scripts/demo-payment.js  # settles in real USDC on Base
+```
+https://agent402.tools/mcp
 ```
 
-## Connect via MCP (Claude, ChatGPT, any MCP client)
-
-[`mcp/`](mcp/) ships an MCP server that exposes the whole catalog to any MCP
-client and settles payment underneath — USDC via x402 with `AGENT_KEY` set,
-proof-of-work (free) on the pure-CPU tools without it:
+**In Claude Code / any MCP client** (full catalog, payment handled underneath):
 
 ```bash
-claude mcp add agent402 -- npx -y agent402-mcp          # after npm publish, or:
-claude mcp add agent402 -- node /path/to/Agent402/mcp/index.js
+claude mcp add agent402 -e AGENT_KEY=0x... -e AGENT402_BUDGET=1.00 -- npx -y agent402-mcp
 ```
 
-High-value tools (`extract`, `render`, `screenshot`, `pdf`, `memory-*`, …) are
-first-class MCP tools; the other ~1000 are reachable through `search_tools` +
-`call_tool` so the model's context window stays small. Test: `node mcp/test.js`.
+**Over plain HTTP, no wallet, no install** — watch an autonomous buyer discover
+the catalog, get quoted over 402, pay with compute, and use the result:
 
-## The catalogue (1000+ tools, 11 categories — ~1047 free via proof-of-work)
+```bash
+curl -s https://agent402.tools/demo.js -o demo.js && node demo.js
+```
 
-The headline count is real: ~970 of these are individually-discoverable unit
-conversions (`GET /api/convert/{from}-to-{to}`), each a genuine endpoint backed
-by one verified engine and covered by exact-value + round-trip tests
-(`scripts/test-convert.js`). The curated tools below are the rest:
+**With Stripe's [`purl`](https://github.com/stripe/purl)** (we're interop-tested
+against it in CI, real settlement included):
 
+```bash
+purl "https://agent402.tools/api/convert/kilometers-to-miles?value=42"
+```
 
-| Category | Tools | Highlights |
+## What's in the catalog (~1,083 tools)
+
+| | Examples | Price |
 |---|---|---|
-| Web & documents | 5 | `render` (headless Chromium, $0.02), `screenshot`, `pdf`, `extract`, `meta` |
-| Agent memory & coordination | 10 | Wallet-keyed KV + TTL, atomic counters, **shared namespaces (grants)**, tamper-evident audit log, **similarity recall** — the payment IS the identity |
-| Network & domains | 6 | `dns`, `http-check`, `tls-cert`, `whois` (RDAP), `robots-check`, `sitemap` |
-| Data conversion | 16 | JSON ⇄ CSV/YAML/XML, markdown ⇄ HTML, `json-diff`/`query`/`flatten`/`merge`, `csv-to-md`, `querystring`, `base-convert`, `roman` |
-| Text processing | 16 | `slugify`, `case`, `text-stats`, `keywords`, `regex`, `levenshtein`, `redact` (PII), `extract-entities`, `readability`, `truncate`, `count`, `sort-lines` |
-| Encoding & crypto | 14 | `hash`, `hmac`, `base64`/`32`/`58`, `hex`, `jwt-decode`/`verify`, `totp`, `crc32`, `rot13`, `morse`, `html-entities` |
-| Math & finance | 7 | `calc` (safe evaluator), `stats`, `unit-convert`, `percentage`, `number-format`, `cidr` (subnets), `finance` (loans/interest) |
-| Generators & IDs | 5 | `uuid` (v4/v7), `ulid`, `password`, `random`, `qr` (PNG) |
-| Time & scheduling | 9 | `time`, `time-convert`, `cron-next`, `duration`, `date-diff`, `business-days`, `age`, `relative-time`, `add-time` |
-| Validation & parsing | 13 | `email-validate` (MX), `url-parse`, `ip-info`, `user-agent`, `color`, `semver`, `mime`, `iban`/`card`/`isbn`-validate, `password-strength`, `json-pointer`, `uuid-validate` |
+| **Browser & web** | `render` (headless Chromium, executes JS), `screenshot`, `extract` (article→markdown), `meta` | $0.002–0.02 |
+| **Live search** | `search` — paid web index, the wallet is the credential | $0.01 |
+| **PDFs & media** | `pdf-to-markdown`, `pdf-merge`/`extract-pages`/`rotate`, `images-to-pdf`, `audio-convert`, `audio-normalize` (EBU R128, real ffmpeg) | $0.005–0.02 |
+| **Agent memory** | wallet-keyed KV + TTL, atomic counters, **cross-wallet grants**, hash-chained audit log, similarity recall | $0.002–0.003 |
+| **Network truth** | `dns`, `tls-cert`, `whois`, `http-check`, `robots-check`, `email-validate`, `ip-info` | $0.002–0.005 |
+| **Open data** | `gov-data` (data.gov), `weather-alerts`, `earthquakes` (USGS) | $0.003 |
+| **~1,040 pure-CPU utilities** | hashing, JWT, base58, JSON⇄CSV/YAML, text stats, cron math, validators, ~970 unit conversions | $0.001 · **free via proof-of-work** |
 
-Every tool is covered by tests: `scripts/test-kit2.js` asserts exact outputs for
-the pure-CPU tools, `scripts/test-memory.js` covers the coordination layer, and
-the paid end-to-end test (`scripts/agent-e2e.js`) buys each endpoint with real
-USDC and verifies the result.
-
-Free discovery surfaces: [`/tools`](https://agent402.tools/tools) (per-tool docs
-pages), [`/api/pricing`](https://agent402.tools/api/pricing) (JSON catalog),
-[`/openapi.json`](https://agent402.tools/openapi.json) (OpenAPI 3.1),
-[`/llms.txt`](https://agent402.tools/llms.txt) (LLM-readable docs), `/health`.
-
-## Memory & coordination — the part agents can't build for themselves
-
-A single, ephemeral, sandboxed agent cannot give itself durable state, a portable
-identity, a place *other* agents can reach, atomic coordination primitives, or
-tamper-evident history. Agent402's memory layer is exactly that — keyed to the
-paying wallet, no signup:
-
-| Endpoint | What it does |
-|---|---|
-| `POST /api/memory` | Write KV, optional `ttlSeconds`; `owner` to target a granted namespace |
-| `GET /api/memory` | Read a key or list keys (your namespace, or a granted `owner`) |
-| `POST /api/memory/incr` | **Atomic** counter/lock — coordinate across agents |
-| `POST /api/memory/grant` | **Share your namespace** with another wallet (`read`/`readwrite`) |
-| `POST /api/memory/revoke` · `GET /api/memory/grants` | Manage access |
-| `GET /api/memory/log` | **Tamper-evident**, hash-chained audit history of a namespace |
-| `POST /api/memory/remember` · `recall` · `forget` | **Similarity recall** — store text, retrieve by meaning |
-
-Two different agents (two wallets) coordinate through one shared namespace: A
-grants B `readwrite`, B atomically increments a shared job counter, and the
-hash-chained log proves who did what. That rendezvous point is not vibe-codable —
-it requires a persistent, neutral third party with portable identity. See it run:
-
-```bash
-node scripts/demo-coordination.js   # two wallets: grant → recall → atomic handoff → verifiable audit
-```
-
-**Similarity recall** (`/api/memory/remember` + `/recall`) ships with a local
-lexical embedder (no key, works out of the box). Point it at any
-OpenAI-compatible embeddings endpoint for true semantic recall — no code change:
-
-```bash
-EMBEDDINGS_URL=https://api.openai.com/v1/embeddings
-EMBEDDINGS_MODEL=text-embedding-3-small
-EMBEDDINGS_API_KEY=sk-...
-```
-
-## No wallet? Pay with compute (proof-of-work)
-
-Agents that can't pay USDC can still use the **41 pure-CPU tools** by spending CPU
-instead — a built-in anti-abuse onramp that converts non-payers into integrated
-users. The browser/network/storage tools (`render`, `screenshot`, `pdf`,
-`memory`, `extract`, `http-check`, …) stay wallet-only.
-
-```js
-import { createHash } from "node:crypto";
-const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
-const c = await (await fetch("https://agent402.tools/api/pow/challenge?slug=hash")).json();
-let n = 0;                                   // find a nonce with `difficulty` leading zero bits
-while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
-const res = await fetch("https://agent402.tools/api/hash", {
-  method: "POST",
-  headers: { "Content-Type": "application/json", "X-Pow-Solution": c.token + ":" + n },
-  body: JSON.stringify({ text: "hello world" }),
-});
-```
-
-Each challenge is signed, single-use, and short-lived; difficulty is tunable via
-`POW_DIFFICULTY`. See `GET /api/pow` for the machine-readable description.
-
-**Why agents pay for this instead of building it themselves:**
-
-1. **Capabilities the sandbox doesn't have.** Most agent runtimes have no
-   headless browser, restricted network egress, and no durable disk. `render`,
-   `screenshot`, and `memory` are infrastructure rented by the call.
-2. **State that survives the session.** `memory` is keyed to the paying wallet —
-   persist findings today, read them next week from a different machine, zero
-   credentials to store or leak.
-3. **The token math.** Writing and debugging a CSV parser or cron calculator
-   mid-task burns 10–100× more in tokens than a tested $0.001 call.
-4. **One integration, 56 tools.** A single x402-wrapped fetch covers the whole
-   catalogue. No per-service SDKs or API-key management.
-
-## Deploy on Railway
-
-1. **Create the service**: in [Railway](https://railway.app), *New Project →
-   Deploy from GitHub repo* and pick this repo. The included `Dockerfile` and
-   `railway.toml` are picked up automatically.
-2. **Set environment variables** on the service:
-   - `WALLET_ADDRESS` — your Base USDC receiving address (`0x…`). This is where
-     the money goes.
-   - `CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` — free keys from
-     [portal.cdp.coinbase.com](https://portal.cdp.coinbase.com). This enables
-     real-money settlement on Base mainnet **and** lists your endpoints in the
-     [x402 Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar) so agents can
-     discover and pay you without you lifting a finger.
-   - `BASE_URL` — your public Railway URL (e.g. `https://agent402.up.railway.app`),
-     used in the docs examples on the landing page.
-3. **Generate a public domain** (Service → Settings → Networking → Generate Domain).
-
-To test without real money first, set `NETWORK=base-sepolia` and omit the CDP
-keys (the default x402.org facilitator handles testnet).
-
-## Run locally
-
-```bash
-npm install
-FREE_MODE=true npm start          # demo mode, no payments
-# or, with payments:
-cp .env.example .env              # fill in WALLET_ADDRESS etc.
-node --env-file=.env src/server.js
-```
+Everything is deterministic — **no LLM in the serving path** — with full schemas
+in [`/openapi.json`](https://agent402.tools/openapi.json) and a machine-readable
+catalog at [`/api/pricing`](https://agent402.tools/api/pricing) /
+[`/llms.txt`](https://agent402.tools/llms.txt). Every endpoint is re-tested
+against its own documented example before every deploy.
 
 ## How agents pay
 
-Any x402 v2 client works. Example with `@x402/fetch`:
+Three ways, all standard ([wiki: Paying with x402](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-with-x402) · [Paying with Compute](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-with-Compute)):
 
 ```js
+// x402 v2 — any client works; this is @x402/fetch
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
@@ -184,22 +75,55 @@ import { privateKeyToAccount } from "viem/accounts";
 const client = new x402Client();
 registerExactEvmScheme(client, { signer: privateKeyToAccount(KEY) });
 const payFetch = wrapFetchWithPayment(fetch, client);
-const res = await payFetch("https://YOUR-URL/api/extract", {
+const res = await payFetch("https://agent402.tools/api/extract", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ url: "https://example.com/article" }),
 });
 ```
 
-## Architecture
+No wallet? The ~1,040 pure-CPU tools take a sha256 proof-of-work instead
+(single-use, tool-scoped challenges — sub-second on any CPU). The MCP servers
+solve it for you automatically.
 
-- `src/server.js` — Express app and the endpoint catalog (prices, descriptions,
-  discovery schemas).
-- `src/payments.js` — x402 v2 wiring: `ExactEvmScheme` (USDC on Base),
-  facilitator selection (CDP / custom / testnet default), and Bazaar discovery
-  extensions so agents can find the service.
-- `src/tools/extract.js` — Readability + Turndown for article → markdown; jsdom
-  for metadata parsing.
-- `src/tools/fetch-guard.js` — outbound fetch with SSRF protection (private IP
-  blocking), 5 MB size cap, 15 s timeout.
-- `src/tools/dns.js` — DNS resolution with input validation.
+## Verify, don't trust
+
+Every claim here is machine-checkable:
+
+- **Revenue is on-chain** — every paid call settles to the public wallet shown at [`/api/stats`](https://agent402.tools/api/stats); audit it on [Basescan](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns).
+- **Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)** (`io.github.MikeyPetrillo/agent402`, with the hosted remote) and on [npm](https://www.npmjs.com/package/agent402-mcp).
+- **Discoverable in the [Coinbase CDP x402 Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar)** — the index agents browse for x402 services.
+- **CI is public**: the full test gauntlet, a production heartbeat every 15 minutes, and interop runs against Stripe's x402 client.
+- **A named maintainer** — most x402 sellers are anonymous wallets. This one is [Mikey Petrillo](https://github.com/MikeyPetrillo).
+
+## Run your own
+
+```bash
+npm install
+FREE_MODE=true npm start              # demo mode, no payments
+# or with payments: set WALLET_ADDRESS + CDP_API_KEY_ID/SECRET (free at portal.cdp.coinbase.com)
+```
+
+Deploying to Railway, the CI pipeline, the heartbeat watchdog, and the
+persistence model are documented in
+[wiki: Operations](https://github.com/MikeyPetrillo/Agent402/wiki/Operations);
+the SSRF defenses and proof-of-work hardening in
+[wiki: Security Model](https://github.com/MikeyPetrillo/Agent402/wiki/Security-Model);
+the request path and design positions in
+[wiki: Architecture](https://github.com/MikeyPetrillo/Agent402/wiki/Architecture).
+
+## Repository map
+
+| Path | What |
+|---|---|
+| `src/server.js` | Express app + the tool catalog (prices, schemas, discovery) |
+| `src/payments.js` | x402 v2 wiring: USDC on Base, CDP facilitator, Bazaar discovery |
+| `src/pow.js` | Proof-of-work tier (signed, single-use, slug-scoped challenges) |
+| `src/mcp-http.js` | Hosted MCP connector (streamable HTTP, authless free tier) |
+| `src/tools/` | The tool kits (web, PDF, media, gov data, ~1,040 pure-CPU utilities) |
+| `mcp/` | The `agent402-mcp` npm package (stdio MCP server with spend controls) |
+| `wiki/` | Source of truth for the [GitHub wiki](https://github.com/MikeyPetrillo/Agent402/wiki) (CI-synced) |
+| `scripts/` | Tests, demos (`demo-payment.js`, `demo-coordination.js`), ops tooling |
+
+MIT licensed. Issues and integration ideas welcome →
+[github.com/MikeyPetrillo/Agent402/issues](https://github.com/MikeyPetrillo/Agent402/issues).
