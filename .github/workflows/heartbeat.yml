@@ -1,0 +1,121 @@
+name: Heartbeat
+
+# Production telemetry, fully automated:
+#   • every 15 min — is agent402.tools actually serving? (health, catalog,
+#     a real proof-of-work paid call, the MCP connector). Persistent failure
+#     opens a GitHub issue; recovery closes it.
+#   • every 6 h — decode recent on-chain USDC receipts and, if any payment
+#     came from a wallet that is NOT our test burner, open/append a
+#     "External customer" issue. Your first customer is a notification.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+    - cron: "13 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "health, revenue, or both"
+        default: "both"
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  PROD: https://agent402.tools
+
+jobs:
+  health:
+    if: github.event_name == 'workflow_dispatch' && (inputs.job == 'health' || inputs.job == 'both') || github.event.schedule == '*/15 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Probe production (3 attempts before declaring an outage)
+        id: probe
+        run: |
+          probe() {
+            FAILS=""
+            curl -sf --max-time 15 "$PROD/health" >/dev/null || FAILS="$FAILS /health"
+            N=$(curl -s --max-time 15 "$PROD/api/pricing" | jq '.endpoints | length' 2>/dev/null || echo 0)
+            [ "${N:-0}" -ge 1000 ] || FAILS="$FAILS catalog($N)"
+            MCP=$(curl -s --max-time 15 -X POST "$PROD/mcp" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"heartbeat","version":"0"}}}' \
+              | grep -c '"agent402"' || true)
+            [ "${MCP:-0}" -ge 1 ] || FAILS="$FAILS /mcp"
+            node --input-type=module -e '
+              const B = process.env.PROD;
+              const { createHash } = await import("node:crypto");
+              const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
+              const c = await (await fetch(B + "/api/pow/challenge?slug=hash")).json();
+              let n = 0; while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
+              const r = await fetch(B + "/api/hash", { method: "POST", headers: { "Content-Type": "application/json", "X-Pow-Solution": c.token + ":" + n }, body: JSON.stringify({ text: "heartbeat" }) });
+              if (r.status !== 200) { console.error("pow call -> " + r.status); process.exit(1); }
+            ' || FAILS="$FAILS pow-paid-call"
+            [ -z "$FAILS" ]
+          }
+          for attempt in 1 2 3; do
+            if probe; then echo "status=up" >> "$GITHUB_OUTPUT"; echo "production healthy (attempt $attempt)"; exit 0; fi
+            echo "attempt $attempt failed:$FAILS — retrying in 60s"
+            sleep 60
+          done
+          echo "status=down" >> "$GITHUB_OUTPUT"
+          echo "fails=$FAILS" >> "$GITHUB_OUTPUT"
+      - name: Alert (open issue) or clear (close issue)
+        run: |
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'in:title "Heartbeat: production DOWN"' --json number --jq '.[0].number // empty')
+          if [ "${{ steps.probe.outputs.status }}" = "down" ]; then
+            BODY="Heartbeat failed 3 consecutive probes (checks:${{ steps.probe.outputs.fails }}).
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          Railway dashboard: https://railway.app — check the agent402 service. Re-deploy with a [deploy] commit or the deploy workflow_dispatch."
+            if [ -n "$OPEN" ]; then
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still down at $(date -u +%FT%TZ).${{ steps.probe.outputs.fails }}"
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "Heartbeat: production DOWN" --body "$BODY"
+            fi
+            exit 1
+          elif [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: all probes passing at $(date -u +%FT%TZ)."
+          fi
+
+  revenue:
+    if: github.event_name == 'workflow_dispatch' && (inputs.job == 'revenue' || inputs.job == 'both') || github.event.schedule == '13 */6 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Scan on-chain receipts for external payers
+        run: |
+          node scripts/revenue-scan.js > /tmp/scan.json
+          jq . /tmp/scan.json
+          COUNT=$(jq '.external | length' /tmp/scan.json)
+          [ "$COUNT" -gt 0 ] || { echo "No external payments this window."; exit 0; }
+
+          TITLE="External customer payments detected"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title $TITLE" --json number --jq '.[0].number // empty')
+          if [ -z "$OPEN" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+              --body "A wallet that is not our test burner paid agent402.tools. Details follow as comments. On-chain history: https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns"
+            OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title $TITLE" --json number --jq '.[0].number // empty')
+          fi
+          # Dedup across overlapping scan windows by tx hash.
+          gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body,comments \
+            --jq '.body + " " + ([.comments[].body] | join(" "))' > /tmp/seen.txt
+          NEW=0
+          while read -r row; do
+            TX=$(echo "$row" | jq -r .tx)
+            grep -q "$TX" /tmp/seen.txt && continue
+            gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$(echo "$row" | jq -r '"💸 $\(.usd) at \(.when) from `\(.payer)` — [tx](https://basescan.org/tx/\(.tx))"')"
+            NEW=$((NEW+1))
+          done < <(jq -c '.external[]' /tmp/scan.json)
+          echo "$NEW new external payment(s) recorded on issue #$OPEN"
+          if [ "$NEW" -gt 0 ]; then
+            gh issue reopen "$OPEN" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          fi
