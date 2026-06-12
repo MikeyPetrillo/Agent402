@@ -191,6 +191,8 @@ jobs:
           echo "=== brand assets ==="
           curl -s localhost:3000/logo.svg | grep -q '<svg' && echo "logo.svg ✓"
           curl -sL localhost:3000/logo.png -o logo.png && file logo.png | grep -q 'PNG image' && echo "logo.png ✓"
+          curl -s localhost:3000/card.svg | grep -q '<svg' && echo "card.svg ✓"
+          curl -sL localhost:3000/card.png -o card.png && file card.png | grep -q 'PNG image' && echo "card.png (1200x630 social card) ✓"
           echo "=== search: live web search (premium, requires BRAVE_API_KEY) ==="
           if [ -n "$BRAVE_API_KEY" ]; then
             curl -s 'localhost:3000/api/search?q=x402+payment+protocol&count=3' | jq '{query, count, top: .results[0].url}'

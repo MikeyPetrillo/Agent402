@@ -41,9 +41,11 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <meta property="og:site_name" content="Agent402">
 <meta property="og:title" content="Agent402 — where agents pay agents (machine-to-machine payments)">
 <meta property="og:description" content="A working node in agent-to-agent commerce: ${count} tools settled per call in USDC via x402 (or proof-of-work). No human, no signup. The payment is the identity.">
-<meta property="og:image" content="${baseUrl}/logo.png">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:image" content="${baseUrl}/logo.png">
+<meta property="og:image" content="${baseUrl}/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="${baseUrl}/card.png">
 <meta name="twitter:title" content="Agent402 — where agents pay agents">
 <meta name="twitter:description" content="Machine-to-machine payments, live. Autonomous agents pay per call in USDC via x402 — or with compute. No human, no signup, no API key.">
 <script type="application/ld+json">
@@ -141,6 +143,21 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   .verify code { display:block; margin-top:5px; background:#080c16; border:1px solid #1e2638; border-radius:7px; padding:8px 10px; font-size:.76rem; color:#9fb4dc; overflow-x:auto; white-space:nowrap; }
   .lbl { color:var(--accent); font-family:var(--mono); font-size:.8rem; font-weight:600; margin:22px 0 7px; }
   .lbl span { color:var(--muted); font-weight:400; }
+  .term { background:#080c16; border:1px solid #1e2638; border-radius:12px; margin:20px 0 8px; overflow:hidden; }
+  .term-bar { display:flex; gap:6px; padding:10px 14px; border-bottom:1px solid #151c2c; }
+  .term-bar i { width:11px; height:11px; border-radius:50%; display:block; }
+  .term-bar i:nth-child(1){background:#ff5f57}.term-bar i:nth-child(2){background:#febc2e}.term-bar i:nth-child(3){background:#28c840}
+  .term-body { padding:14px 18px 16px; font-family:var(--mono); font-size:.8rem; line-height:1.9; color:#c9d4ec; overflow-x:auto; }
+  .tline { opacity:0; white-space:nowrap; animation:tcycle 11s infinite; }
+  .tline .p { color:#5b6b8c; } .tline .ok { color:var(--accent); } .tline .warn { color:#fbbf24; }
+  .t1{animation-name:t1}.t2{animation-name:t2}.t3{animation-name:t3}.t4{animation-name:t4}.t5{animation-name:t5}.t6{animation-name:t6}
+  @keyframes t1 { 0%,2%{opacity:0} 4%,90%{opacity:1} 95%,100%{opacity:0} }
+  @keyframes t2 { 0%,13%{opacity:0} 15%,90%{opacity:1} 95%,100%{opacity:0} }
+  @keyframes t3 { 0%,28%{opacity:0} 30%,90%{opacity:1} 95%,100%{opacity:0} }
+  @keyframes t4 { 0%,42%{opacity:0} 44%,90%{opacity:1} 95%,100%{opacity:0} }
+  @keyframes t5 { 0%,57%{opacity:0} 59%,90%{opacity:1} 95%,100%{opacity:0} }
+  @keyframes t6 { 0%,73%{opacity:0} 75%,90%{opacity:1} 95%,100%{opacity:0} }
+  @media (prefers-reduced-motion: reduce){ .tline{ animation:none; opacity:1; } }
 </style>
 </head>
 <body>
@@ -165,6 +182,17 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
 
   <h2>Watch an agent pay an agent</h2>
+  <div class="term" aria-hidden="true">
+    <div class="term-bar"><i></i><i></i><i></i></div>
+    <div class="term-body">
+      <div class="tline t1 tline-anim"><span class="p">agent$</span> POST agent402.tools/api/extract {"url":"https://example.com/article"}</div>
+      <div class="tline t2 tline-anim"><span class="warn">← HTTP 402 Payment Required</span> &nbsp;{"price":"$0.005","payTo":"0xaBF4…a9D0","network":"base"}</div>
+      <div class="tline t3 tline-anim"><span class="p">agent$</span> signing USDC payment from its own wallet… <span class="p">(no human, no API key)</span></div>
+      <div class="tline t4 tline-anim"><span class="p">agent$</span> retry with X-PAYMENT header →</div>
+      <div class="tline t5 tline-anim"><span class="ok">← HTTP 200 OK</span> &nbsp;{"title":"…","markdown":"# …"} <span class="p">· settled on-chain in ~2s</span></div>
+      <div class="tline t6 tline-anim"><span class="ok">✓</span> machine-to-machine commerce, end to end</div>
+    </div>
+  </div>
   <p class="sub">No slideware — run the whole loop yourself. An autonomous buyer discovers the catalog, gets quoted over <code>HTTP 402</code>, settles, and uses the result, zero humans involved:</p>
   <pre># one file, zero dependencies — pays with COMPUTE (no wallet, no funds)
 curl -s ${baseUrl}/demo.js -o demo.js && node demo.js
