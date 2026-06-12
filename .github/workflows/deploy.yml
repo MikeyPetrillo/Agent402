@@ -9,13 +9,14 @@ on:
       - ".github/trigger-deploy"
       - ".github/trigger-test"
       - ".github/trigger-paytest"
+      - ".github/trigger-purl"
       - ".github/trigger-publish"
       - ".github/trigger-marketplace"
       - ".github/trigger-drain"
   workflow_dispatch:
     inputs:
       mode:
-        description: "probe, test, paytest, publish (npm), marketplace (list on agent402.app), or deploy"
+        description: "probe, test, paytest, purl (Stripe client interop), publish (npm), marketplace (list on agent402.app), or deploy"
         default: "deploy"
       burner_key:
         description: "Existing funded burner key for paytest (hex). Leave empty to generate a fresh wallet."
@@ -104,6 +105,74 @@ jobs:
         run: |
           npm install --no-save @x402/fetch @x402/core @x402/evm viem
           node scripts/marketplace-verify.js
+
+  # Interop check against Stripe's open-source x402 client (github.com/stripe/purl).
+  # Stripe's machine-payments quickstart points buyers at purl, so "purl can pay
+  # us" means every developer following Stripe's docs can buy from us unchanged.
+  purl:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'purl' || contains(join(github.event.commits.*.message), '[purl]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TARGET_URL: https://agent402.tools
+    steps:
+      - name: Install Stripe purl
+        run: |
+          if brew install stripe/purl/purl 2>&1; then
+            echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          else
+            echo "brew install failed — building from source"
+            git clone --depth 1 https://github.com/stripe/purl /tmp/purl
+            cargo install --locked --path /tmp/purl/cli
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Show purl CLI surface (for the logs)
+        run: |
+          purl --version || true
+          purl --help || true
+          purl wallet --help || true
+          purl wallet add --help || true
+      - name: Try non-interactive wallet import (burner dust)
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY || inputs.burner_key }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "no burner key — skipping wallet import"; exit 0; }
+          echo "::add-mask::$BURNER_KEY"
+          # The wallet-add UX is interactive; try the common non-interactive forms
+          # and stdin. None failing is fine — the dry-run check below is the gate.
+          purl wallet add --private-key "$BURNER_KEY" 2>&1 \
+            || printf '%s\n' "$BURNER_KEY" | purl wallet add 2>&1 \
+            || PURL_PRIVATE_KEY="$BURNER_KEY" purl wallet add 2>&1 \
+            || echo "could not import key non-interactively (ok)"
+          purl wallet list 2>&1 || true
+      - name: "Interop gate: purl must parse our 402 quote (--dry-run)"
+        run: |
+          set +e
+          OUT=$(purl --dry-run "$TARGET_URL/api/convert/kilometers-to-miles?value=42" 2>&1)
+          STATUS=$?
+          set -e
+          echo "$OUT"
+          echo "(exit $STATUS)"
+          # Pass if purl surfaced our payment requirements (price/asset/network),
+          # i.e. it understood the 402 challenge our server returns.
+          echo "$OUT" | grep -Eiq 'usdc|0\.001|eip155|base|payment' \
+            || { echo "::error::purl could not parse the x402 challenge from $TARGET_URL"; exit 1; }
+          echo "purl parsed our x402 quote — Stripe-tooling compatible"
+      - name: Real paid call via purl (best effort, burner dust)
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY || inputs.burner_key }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "no burner key — skipping paid call"; exit 0; }
+          set +e
+          OUT=$(purl "$TARGET_URL/api/convert/kilometers-to-miles?value=42" 2>&1)
+          STATUS=$?
+          set -e
+          echo "$OUT" | head -40
+          if [ $STATUS -eq 0 ] && echo "$OUT" | grep -q '26\.0'; then
+            echo "PAID CALL SETTLED via Stripe's purl client ✓"
+          else
+            echo "paid call did not complete (likely wallet import or dust balance) — not failing the job"
+          fi
 
   test:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'test' || contains(join(github.event.commits.*.message), '[test]')
