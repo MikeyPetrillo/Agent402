@@ -188,6 +188,11 @@ jobs:
           console.log("proof-of-work gate: all assertions passed");
           '
 
+      - name: MCP server e2e (catalog, search, proof-of-work settlement, wallet guidance)
+        run: |
+          npm --prefix mcp ci
+          node mcp/test.js
+
       - name: Multi-chain USDC — code registers all chains (hard gate) + live 402 (informational)
         run: |
           # HARD GATE: our code must boot multi-chain and advertise the chains in

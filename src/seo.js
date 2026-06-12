@@ -120,6 +120,21 @@ const res = await fetch("${baseUrl}/api/hash", {
 });
 \`\`\`
 
+## Connect via MCP (Claude, ChatGPT, any MCP client)
+
+The \`agent402-mcp\` package exposes this whole catalog as MCP tools and settles
+payment underneath (USDC via x402 with a wallet key, or proof-of-work without):
+
+\`\`\`json
+{ "mcpServers": { "agent402": {
+  "command": "npx", "args": ["-y", "agent402-mcp"],
+  "env": { "AGENT_KEY": "0x<funded wallet key, optional>" }
+} } }
+\`\`\`
+
+High-value tools (extract/render/screenshot/pdf/memory/…) are first-class MCP
+tools; the other ~1000 are reachable via its \`search_tools\` + \`call_tool\`.
+
 ## How to pay with USDC (JavaScript example)
 
 \`\`\`js
