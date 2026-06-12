@@ -37,6 +37,7 @@ const WALLET_ONLY_SLUGS = new Set([
   "http-check", "tls-cert", "whois", "robots-check", "sitemap",
   "email-validate", "ip-info", "search",
   "pdf-info", "pdf-merge", "pdf-extract-pages", "pdf-rotate", "images-to-pdf",
+  "pdf-to-markdown", "xlsx-to-json", "xlsx-to-csv", "stock-quote",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */

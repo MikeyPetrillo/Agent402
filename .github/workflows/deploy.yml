@@ -153,6 +153,11 @@ jobs:
             code=$(curl -s -o /dev/null -w '%{http_code}' 'localhost:3000/api/search?q=test')
             [ "$code" = "503" ] || { echo "expected 503 without key, got $code"; exit 1; }
           fi
+          echo "=== demand kit: live (pdf-to-markdown + stock-quote) ==="
+          curl -s -X POST localhost:3000/api/pdf-to-markdown -H 'Content-Type: application/json' \
+            -d '{"url":"https://arxiv.org/pdf/1706.03762"}' | jq '{pages, wordCount, md: (.markdown | .[0:160])}'
+          curl -s 'localhost:3000/api/stock-quote?symbol=AAPL' | jq -c .
+          curl -s 'localhost:3000/api/stock-quote?symbol=AAPL' | jq -e '.close != null' >/dev/null || { echo "stock-quote returned no close price"; exit 1; }
           echo "=== kit: live network tools ==="
           curl -s -X POST localhost:3000/api/http-check -H 'Content-Type: application/json' -d '{"url":"https://example.com"}' | jq -c '{up, status, latencyMs}'
           curl -s -X POST localhost:3000/api/tls-cert -H 'Content-Type: application/json' -d '{"host":"github.com"}' | jq -c '{subject, issuer, daysRemaining, chainTrusted}'
@@ -174,6 +179,9 @@ jobs:
 
       - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
         run: node scripts/test-pdf.js
+
+      - name: Demand-kit tests (pdf-to-markdown, xlsx parsing)
+        run: node scripts/test-demand.js
 
       - name: Conversion tools (~970 endpoints, exact + round-trip)
         run: node scripts/test-convert.js

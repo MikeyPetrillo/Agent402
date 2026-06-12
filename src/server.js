@@ -17,9 +17,10 @@ import { KIT2 } from "./tools/kit2.js";
 import { CONVERSIONS } from "./tools/convert-gen.js";
 import { SEARCH_TOOLS } from "./tools/search.js";
 import { PDF_TOOLS } from "./tools/pdf-kit.js";
+import { DEMAND_TOOLS } from "./tools/demand-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES } from "./pages.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
 import { recordServedCall, getStats } from "./stats.js";
 import { timingSafeEqual } from "node:crypto";

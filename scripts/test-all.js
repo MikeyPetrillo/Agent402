@@ -15,6 +15,7 @@ const NETWORK = new Set([
   "/api/http-check", "/api/tls-cert", "/api/whois", "/api/robots-check", "/api/sitemap",
   "/api/email-validate", "/api/ip-info", "/api/search",
   "/api/pdf-info", "/api/pdf-merge", "/api/pdf-extract-pages", "/api/pdf-rotate", "/api/images-to-pdf",
+  "/api/pdf-to-markdown", "/api/xlsx-to-json", "/api/xlsx-to-csv", "/api/stock-quote",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 
