@@ -449,6 +449,26 @@ jobs:
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
+      - name: Research — fetch Stripe machine-payments docs
+        run: |
+          UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+          for u in "https://docs.stripe.com/payments/machine" "https://docs.stripe.com/agents" "https://docs.stripe.com/payments/machine/quickstart"; do
+            echo "=== $u ==="
+            curl -s -A "$UA" --max-time 25 -L "$u" -o /tmp/stripe.html || { echo "(fetch failed)"; continue; }
+            wc -c /tmp/stripe.html
+            python3 - << 'PY'
+          import re
+          html=open("/tmp/stripe.html",encoding="utf-8",errors="replace").read()
+          html=re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>"," ",html)
+          html=re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>|</h[1-6]>|</pre>|</code>|</td>|</tr>","\n",html)
+          text=re.sub(r"(?s)<[^>]+>"," ",html)
+          text=re.sub(r"[ \t]+"," ",text)
+          text="\n".join(l.strip() for l in text.splitlines() if l.strip())
+          print(text[:14000])
+          PY
+            echo
+          done
+
       - name: Railway deployment history (which image is live, what failed)
         run: |
           gql() {
