@@ -154,15 +154,19 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
   <p class="sub">Revenue is trustless and public — every settled call lands on-chain. See live counts and the receiving wallet at <a href="/api/stats">/api/stats</a>.</p>
 
   <h2>Why not just build it yourself?</h2>
-  <p class="sub">Your agent can write code. Here's what it can't do mid-task:</p>
+  <p class="sub">A developer with a free weekend could build some of this. But the buyer here isn't that developer — it's an <em>agent, mid-task, with no human to ask</em>. Here's what it can't give itself:</p>
   <div class="why">
+    <div class="card">
+      <h3>Sign up for anything</h3>
+      <p>The useful web hides behind signups, captchas, API keys, and credit cards — none of which an autonomous agent can obtain. Here, the only credential is the one thing an agent can hold: a wallet. That's how <code>/api/search</code> puts a paid search index one HTTP call away, no account.</p>
+    </div>
     <div class="card">
       <h3>Run a browser farm</h3>
       <p>Most agent sandboxes have no Chromium, no GPU, no display. <code>/api/render</code> and <code>/api/screenshot</code> are real headless browser infrastructure — JavaScript executed, SPAs included — rented by the call for 2 cents.</p>
     </div>
     <div class="card">
       <h3>Remember anything tomorrow</h3>
-      <p>Agent sessions are ephemeral; the container is gone an hour later. <code>/api/memory</code> is durable state keyed to the paying wallet — persist findings today, read them next week from a different machine, zero credentials to store or leak.</p>
+      <p>Agent sessions are ephemeral; the container is gone an hour later. <code>/api/memory</code> is durable state keyed to the paying wallet — persist findings today, read them next week from a different machine, zero credentials to store or leak. Wallets can grant each other access: shared state for agents that don't share an owner.</p>
     </div>
     <div class="card">
       <h3>Escape its own sandbox</h3>
@@ -172,11 +176,36 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
       <h3>Beat the token math</h3>
       <p>Writing, testing, and debugging a CSV parser or cron calculator mid-task burns thousands of tokens — easily 10-100&times; the price of a tested <code>$0.001</code> call. Reimplementation is the expensive path.</p>
     </div>
+    <div class="card">
+      <h3>Stay maintained</h3>
+      <p>The weekend-built version rots quietly: site layouts change, Chromium updates, SSRF holes ship. Every endpoint here is re-tested against its own documented example before every deploy — all of them green, or it doesn't ship.</p>
+    </div>
   </div>
 
   <h2>${count} tools, ${Object.keys(CATEGORIES).filter((k) => tools.some((t) => t.category === k)).length} categories</h2>
   <div class="grid">
 ${categoryCards}
+  </div>
+
+  <h2>The index lists thousands of sellers. Verify this one.</h2>
+  <p class="sub">Machine-to-machine commerce has no sales calls and no contracts — so every trust claim here is checkable by a program:</p>
+  <div class="why">
+    <div class="card">
+      <h3>Revenue is on-chain</h3>
+      <p>Every USDC call settles to a <a href="/api/stats">public wallet</a> you can audit on Basescan. The odometer above counts real served calls — not marketing numbers.</p>
+    </div>
+    <div class="card">
+      <h3>Tested before every deploy</h3>
+      <p>CI calls all ${count} endpoints with their own documented examples and blocks the release on any failure. The example on each tool page <em>is</em> the test.</p>
+    </div>
+    <div class="card">
+      <h3>A named maintainer</h3>
+      <p>Most x402 sellers are anonymous wallets. This one is <a href="https://github.com/MikeyPetrillo" rel="noopener">signed</a> — a reputation that costs more to burn than a tool call earns.</p>
+    </div>
+    <div class="card">
+      <h3>Deterministic, schema'd, flat-priced</h3>
+      <p>No LLM in the serving path: same input, same output, full <a href="/openapi.json">OpenAPI schemas</a>, flat per-call prices. Nothing to drift, nothing to hallucinate.</p>
+    </div>
   </div>
 
   <h2>How it works</h2>
