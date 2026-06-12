@@ -61,7 +61,7 @@ jobs:
     env:
       A402APP_KEY: ${{ secrets.AGENT402_APP_API_KEY }}
       MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
-      BURNER_KEY: ${{ secrets.BURNER_KEY }}
+      BURNER_KEY: ${{ secrets.BURNER_KEY || inputs.burner_key }}
       WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
       SITE: https://agent402.tools
     steps:
