@@ -1,0 +1,43 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.mikeypetrillo/agent402",
+  "title": "Agent402 — pay-per-call web tools",
+  "description": "1000+ pay-per-call web tools for AI agents: live web search, headless-browser rendering & screenshots, PDF extraction & manipulation, URL-to-markdown, wallet-keyed memory & coordination. Pays per call in USDC over x402 (Base), or with proof-of-work (free) when no wallet is set. No signup, no API key.",
+  "version": "0.2.2",
+  "repository": {
+    "url": "https://github.com/MikeyPetrillo/Agent402",
+    "source": "github"
+  },
+  "websiteUrl": "https://agent402.tools",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "agent402-mcp",
+      "version": "0.2.2",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "AGENT_KEY",
+          "description": "Hex private key of a wallet funded with USDC on Base. Unset = proof-of-work mode (free pure-CPU tools).",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "AGENT402_BUDGET",
+          "description": "Optional hard cap on total USDC spent per session (e.g. 1.00). Refused before any payment is signed.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "AGENT402_MAX_PER_CALL",
+          "description": "Optional max USD price for any single call (e.g. 0.01).",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
