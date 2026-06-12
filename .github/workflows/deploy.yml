@@ -439,34 +439,6 @@ jobs:
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
-      - name: Diagnose stats persistence (Railway volume?) + directory presence
-        run: |
-          gql() { curl -s -X POST https://backboard.railway.app/graphql/v2 -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" --data @-; }
-          PROJECT_ID=$(jq -n '{query:"query { projects { edges { node { id name } } } }"}' | gql | jq -r '.data.projects.edges[] | select(.node.name=="agent402") | .node.id' | head -1)
-          ENV_ID=$(jq -n --arg id "$PROJECT_ID" '{query:"query($id:String!){project(id:$id){environments{edges{node{id name}}}}}",variables:{id:$id}}' | gql | jq -r '.data.project.environments.edges[]|select(.node.name=="production")|.node.id' | head -1)
-          SERVICE_ID=$(jq -n --arg id "$PROJECT_ID" '{query:"query($id:String!){project(id:$id){services{edges{node{id name}}}}}",variables:{id:$id}}' | gql | jq -r '.data.project.services.edges[]|select(.node.name=="agent402")|.node.id' | head -1)
-          echo "=== Railway volumes on the service (THE key question for the counter) ==="
-          jq -n --arg p "$PROJECT_ID" '{query:"query($p:String!){project(id:$p){volumes{edges{node{id name mountPath:volumeInstances{edges{node{mountPath}}}}}}}}",variables:{p:$p}}' | gql | jq '.' 2>/dev/null \
-            || jq -n --arg p "$PROJECT_ID" '{query:"query($p:String!){project(id:$p){volumes{edges{node{id name}}}}}",variables:{p:$p}}' | gql
-          echo "  ^ if 'volumes' is empty, /data is NOT persisted → SQLite (stats/memory/pow) resets every redeploy."
-          echo
-          echo "=== live stats: uptime + servingSince reveal whether it reset on the last deploy ==="
-          curl -s https://agent402.tools/api/stats | jq '{served: .toolCallsServed, servingSince, uptimeSeconds}'
-          echo
-          echo "=== where do we already appear? (passive directory listings) ==="
-          UA="Mozilla/5.0 (compatible; agent402-research/1.0)"
-          WALLET="0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0"
-          check() { # name url needle
-            local body; body=$(curl -s -A "$UA" --max-time 20 -L "$2" 2>/dev/null | tr 'A-Z' 'a-z')
-            if echo "$body" | grep -q "$3"; then echo "  ✓ FOUND on $1"; else echo "  – not found on $1 (or needs submission / not queryable this way)"; fi
-          }
-          check "Glama (search)"        "https://glama.ai/mcp/servers?query=agent402" "agent402"
-          check "mcp.so (search)"       "https://mcp.so/search?q=agent402" "agent402"
-          check "x402-list.com"         "https://x402-list.com/" "agent402"
-          check "x402scan.com"          "https://www.x402scan.com/" "$WALLET"
-          check "PayAI discovery"       "https://facilitator.payai.network/discovery/resources?limit=100" "agent402"
-          echo "(directory checks are best-effort string matches; a '–' often just means the site renders client-side or wants a submission)"
-
       - name: Railway deployment history (which image is live, what failed)
         run: |
           gql() {
@@ -702,6 +674,34 @@ jobs:
           [ -n "$SERVICE_ID" ] || { echo "Could not find or create service. If the error above mentions GitHub, install the Railway GitHub app: https://railway.com/account/integrations"; exit 1; }
           echo "service_id=$SERVICE_ID" >> "$GITHUB_OUTPUT"
           echo "Service: $SERVICE_ID"
+
+      - name: Ensure a persistent volume at /data (stats + memory + pow survive redeploys)
+        run: |
+          gql() {
+            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+              --data @-
+          }
+          PROJECT_ID='${{ steps.project.outputs.project_id }}'
+          ENV_ID='${{ steps.project.outputs.env_id }}'
+          SERVICE_ID='${{ steps.service.outputs.service_id }}'
+          # Without a volume, the SQLite files (stats/memory/pow) live on the
+          # ephemeral container fs and reset on every redeploy — wiping the
+          # odometer AND agents' paid memory. Create one mounted at /data once.
+          EXISTING=$(jq -n --arg p "$PROJECT_ID" \
+            '{query:"query($p:String!){project(id:$p){volumes{edges{node{id volumeInstances{edges{node{mountPath serviceId}}}}}}}}",variables:{p:$p}}' | gql)
+          HAS_DATA=$(echo "$EXISTING" | jq -r --arg s "$SERVICE_ID" \
+            '[.data.project.volumes.edges[]?.node.volumeInstances.edges[]?.node | select(.serviceId==$s and .mountPath=="/data")] | length' 2>/dev/null || echo 0)
+          if [ "$HAS_DATA" = "0" ]; then
+            echo "No /data volume on the service — creating one…"
+            RESP=$(jq -n --arg p "$PROJECT_ID" --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
+              '{query:"mutation($p:String!,$e:String!,$s:String!){volumeCreate(input:{projectId:$p,environmentId:$e,serviceId:$s,mountPath:\"/data\"}){id}}",variables:{p:$p,e:$e,s:$s}}' | gql)
+            echo "$RESP" | jq -e '.data.volumeCreate.id' >/dev/null \
+              && echo "Created persistent volume at /data ✓ (redeploys now keep stats + memory)" \
+              || { echo "volumeCreate response:"; echo "$RESP"; echo "(if it errors that a volume already exists at this path, that's fine)"; }
+          else
+            echo "Persistent /data volume already attached ✓"
+          fi
 
       - name: Create public domain
         id: domain
