@@ -133,7 +133,7 @@ jobs:
       - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
         run: node scripts/test-pdf.js
 
-      - name: Demand-kit tests (pdf-to-markdown, xlsx parsing)
+      - name: Demand-kit tests (pdf-to-markdown)
         run: node scripts/test-demand.js
 
       - name: Media-kit tests (ffprobe, mp4-to-mp3, loudnorm — real ffmpeg)
