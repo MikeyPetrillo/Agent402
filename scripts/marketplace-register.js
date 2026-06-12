@@ -39,8 +39,10 @@ const SERVICES = [
     description: "Full-page or viewport PNG screenshot of any URL, rendered in headless Chromium." },
   { slug: "pdf", name: "PDF Text Extraction", price: 0.01, tags: ["pdf", "text-extraction", "documents"],
     description: "Extract text and page count from any PDF URL — feed papers and reports straight into your model." },
-  { slug: "memory-write", name: "Agent Memory (write)", price: 0.002, tags: ["memory", "state", "coordination"],
-    description: "Durable key-value memory keyed to the paying wallet — persist findings across sessions and machines; grant other wallets access to coordinate." },
+  // NOTE: memory tools are intentionally NOT listed here. They key state to the
+  // paying wallet's signature, which the marketplace's pay-then-forward model
+  // strips — so they are only sold directly via our own x402 paywall, not the
+  // bridge. The bridge serves stateless tools only.
 ];
 
 async function api(method, path, body) {
@@ -106,6 +108,17 @@ async function main() {
     if (DRY) { console.log(`  [dry-run] would POST service`, payload); continue; }
     const created = await api("POST", `/api/v1/agents/${agent.id}/services`, payload);
     console.log(`  created service "${svc.name}" → ${created.invoke_url || created.id}`);
+  }
+
+  // 2b) Remove any previously-listed service that's no longer in our set
+  //     (e.g. memory-write, which can't work through the pay-then-forward bridge).
+  const wanted = new Set(SERVICES.map((s) => s.slug));
+  for (const c of current) {
+    if (!wanted.has(c.slug)) {
+      if (DRY) { console.log(`  [dry-run] would DELETE stale service "${c.slug}"`); continue; }
+      try { await api("DELETE", `/api/v1/agents/${agent.id}/services/${c.id}`); console.log(`  removed stale service "${c.slug}"`); }
+      catch (e) { console.log(`  (could not remove "${c.slug}": ${e.message})`); }
+    }
   }
 
   // 3) Publish to the marketplace.
