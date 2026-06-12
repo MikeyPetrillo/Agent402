@@ -1,0 +1,122 @@
+// Register Agent402 on the agent402.app marketplace via their REST API —
+// idempotent, re-runnable. Creates the provider "agent", one "service" per
+// money-maker tool (pointing at our marketplace bridge so paid invokes settle
+// once), and publishes the listing. The on-chain ERC-8004 mint and wallet
+// verification are wallet-signature steps the operator does once in their UI;
+// this script does everything else.
+//
+// Env:
+//   A402APP_KEY        agent402.app API key (Settings → API Keys). Required.
+//   A402APP_BASE       default https://marketplace.agent402.app
+//   SITE               our public base, default https://agent402.tools
+//   MARKETPLACE_TOKEN  the bridge secret embedded in each service_endpoint. Required.
+//   WALLET_ADDRESS     our USDC receiving wallet (informational; settlement is on-chain)
+//   DRY_RUN=1          print what would happen without writing
+
+const API = (process.env.A402APP_BASE || "https://marketplace.agent402.app").replace(/\/$/, "");
+const KEY = process.env.A402APP_KEY;
+const SITE = (process.env.SITE || "https://agent402.tools").replace(/\/$/, "");
+const TOKEN = process.env.MARKETPLACE_TOKEN;
+const DRY = process.env.DRY_RUN === "1";
+
+if (!KEY) { console.error("A402APP_KEY is required (agent402.app → Settings → API Keys)"); process.exit(1); }
+if (!TOKEN && !DRY) { console.error("MARKETPLACE_TOKEN is required (same value the server uses for the bridge)"); process.exit(1); }
+
+const AGENT_NAME = "Agent402 Tools";
+const SETTLEMENT = "eip155:8453"; // Base mainnet — matches our x402 settlement
+
+// The services to list. Slugs match our catalog; the bridge dispatches by slug.
+// Prices mirror our own catalog. These are the capabilities worth surfacing —
+// not all 1,071 tools (the conversion long-tail stays discovery-only on our site).
+const SERVICES = [
+  { slug: "search", name: "Web Search", price: 0.01, tags: ["search", "web-search", "fresh-data", "research"],
+    description: "Live web search: ranked results (title, URL, snippet, age) from an independent index as clean JSON — fresh pages a model's training cutoff has never seen." },
+  { slug: "extract", name: "Extract Article", price: 0.005, tags: ["scraping", "markdown", "content-extraction"],
+    description: "Extract the main article from any URL as clean markdown (title, byline, word count) — strips nav/ads/scripts so you spend tokens on content, not cruft." },
+  { slug: "render", name: "Render Page (headless browser)", price: 0.02, tags: ["browser", "javascript", "spa", "render"],
+    description: "Render a page in real headless Chromium (JavaScript executed) and return readable markdown — works on SPAs where a plain fetch returns an empty shell." },
+  { slug: "screenshot", name: "Screenshot", price: 0.02, tags: ["browser", "screenshot", "png"],
+    description: "Full-page or viewport PNG screenshot of any URL, rendered in headless Chromium." },
+  { slug: "pdf", name: "PDF Text Extraction", price: 0.01, tags: ["pdf", "text-extraction", "documents"],
+    description: "Extract text and page count from any PDF URL — feed papers and reports straight into your model." },
+  { slug: "memory-write", name: "Agent Memory (write)", price: 0.002, tags: ["memory", "state", "coordination"],
+    description: "Durable key-value memory keyed to the paying wallet — persist findings across sessions and machines; grant other wallets access to coordinate." },
+];
+
+async function api(method, path, body) {
+  const res = await fetch(`${API}${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${KEY}`, "X-API-Key": KEY, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let json; try { json = JSON.parse(text); } catch { json = text; }
+  if (!res.ok) throw new Error(`${method} ${path} → ${res.status}: ${typeof json === "string" ? json.slice(0, 300) : JSON.stringify(json).slice(0, 400)}`);
+  return json;
+}
+
+const serviceEndpoint = (slug) => `${SITE}/mkt/${TOKEN}/${slug}`;
+
+async function main() {
+  console.log(`Marketplace: ${API}`);
+  console.log(`Listing as "${AGENT_NAME}" → services bridge at ${SITE}/mkt/<token>/<slug>\n`);
+
+  // 1) Find or create our agent (provider card). Idempotent by name.
+  let agent;
+  if (DRY) {
+    console.log("[dry-run] would GET /api/v1/agents to find an existing listing");
+  } else {
+    const existing = await api("GET", "/api/v1/agents");
+    const agents = Array.isArray(existing) ? existing : existing.agents || existing.data || [];
+    agent = agents.find((a) => a.name === AGENT_NAME);
+  }
+
+  if (!agent) {
+    const payload = {
+      name: AGENT_NAME,
+      description: `1,071 pay-per-call web tools for AI agents via x402 (USDC on Base): live web search, headless-browser rendering & screenshots, PDF extraction, URL-to-markdown, and wallet-keyed memory & coordination. No signup, no API key. ${SITE}`,
+      identity_provider_id: "erc8004",
+      identity_network_caip2: "eip155:8453",
+      settlement_network_caip2: SETTLEMENT,
+    };
+    if (DRY) { console.log("[dry-run] would POST /api/v1/agents", payload); agent = { id: "DRY_AGENT", name: AGENT_NAME }; }
+    else { agent = await api("POST", "/api/v1/agents", payload); console.log(`created agent ${agent.id} (status: ${agent.status || "?"})`); }
+  } else {
+    console.log(`reusing agent ${agent.id} (status: ${agent.status || "?"})`);
+  }
+
+  // 2) Find or create each service. Idempotent by slug.
+  let current = [];
+  if (!DRY) {
+    try { const s = await api("GET", `/api/v1/agents/${agent.id}/services`); current = Array.isArray(s) ? s : s.services || []; } catch { current = []; }
+  }
+  for (const [i, svc] of SERVICES.entries()) {
+    const have = current.find((c) => c.slug === svc.slug || c.name === svc.name);
+    const payload = {
+      name: svc.name,
+      description: svc.description,
+      service_endpoint: serviceEndpoint(svc.slug),
+      price_usd: svc.price,
+      pricing_model: "per_call",
+      is_primary: i === 0, // search is the flagship → primary
+      tags: svc.tags,
+      slug: svc.slug,
+    };
+    if (have) { console.log(`  service "${svc.name}" exists (${have.id}) — skipping`); continue; }
+    if (DRY) { console.log(`  [dry-run] would POST service`, payload); continue; }
+    const created = await api("POST", `/api/v1/agents/${agent.id}/services`, payload);
+    console.log(`  created service "${svc.name}" → ${created.invoke_url || created.id}`);
+  }
+
+  // 3) Publish to the marketplace.
+  const publish = { is_published: true, tagline: "1,071 web tools agents pay for per call — search, browser, memory. No signup.", tags: ["tools", "web-search", "browser", "memory", "x402", "agents"] };
+  if (DRY) { console.log("[dry-run] would PATCH publish", publish); }
+  else { await api("PATCH", `/api/v1/agents/${agent.id}`, publish); console.log(`\npublished agent ${agent.id} to the marketplace`); }
+
+  console.log(`\nNext (one-time wallet steps in the agent402.app UI, which the API cannot sign for you):`);
+  console.log(`  1. Settings → Operator Wallets → add + verify ${process.env.WALLET_ADDRESS || "your wallet"} on Base (sign a message).`);
+  console.log(`  2. Sign the ERC-8004 identity mint when prompted (this makes the listing "active").`);
+  console.log(`  Agent + services + bridge are already created; the listing goes live the moment the wallet is verified.`);
+}
+
+main().catch((e) => { console.error("FAILED:", e.message); process.exit(1); });
