@@ -86,6 +86,7 @@ Base URL: ${baseUrl}
 - **Auditable revenue**: every USDC call settles to the public wallet shown at ${baseUrl}/api/stats — check it on Basescan; the served-call counters are real operational tallies.
 - **Tested before every deploy**: CI calls all ${tools.length} endpoints with their own documented examples and blocks the release on any failure.
 - **A named maintainer** (most x402 sellers are anonymous wallets): https://github.com/MikeyPetrillo.
+- **Open source** — the whole server is public and auditable: https://github.com/MikeyPetrillo/Agent402
 - **Deterministic outputs**: no LLM in the serving path — same input, same output, full OpenAPI schemas, flat per-call prices.
 
 ## Paid endpoints (${tools.length})

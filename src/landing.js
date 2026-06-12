@@ -56,7 +56,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "name": "Agent402",
       "url": "${baseUrl}",
       "founder": { "@type": "Person", "name": "Mikey Petrillo", "url": "https://github.com/MikeyPetrillo" },
-      "sameAs": ["https://github.com/MikeyPetrillo", "https://www.npmjs.com/package/agent402-mcp"],
+      "sameAs": ["https://github.com/MikeyPetrillo", "https://github.com/MikeyPetrillo/Agent402", "https://www.npmjs.com/package/agent402-mcp"],
       "description": "Machine-to-machine payments for AI agents: ${count} pay-per-call web tools settled in USDC via the x402 protocol, or free with proof-of-work."
     },
     {
@@ -225,6 +225,10 @@ ${categoryCards}
       <h3>Deterministic, schema'd, flat-priced</h3>
       <p>No LLM in the serving path: same input, same output, full <a href="/openapi.json">OpenAPI schemas</a>, flat per-call prices. Nothing to drift, nothing to hallucinate.</p>
     </div>
+    <div class="card">
+      <h3>Open source — read the code</h3>
+      <p>The entire server, the SSRF/ReDoS guards, the proof-of-work scheme, and the payment path are <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">public on GitHub</a>. You don't have to trust the claims on this page — audit them.</p>
+    </div>
   </div>
 
   <h2>Verify it yourself</h2>
@@ -235,7 +239,9 @@ ${categoryCards}
     <div class="row"><b>Listed in the official MCP Registry</b> — installable by name in any MCP client:
       <code>GET registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402</code></div>
     <div class="row"><b>On npm</b> — one-line install, <code>npx -y agent402-mcp</code>:
-      <code>https://www.npmjs.com/package/agent402-mcp</code></div>${stats?.wallet ? `
+      <code>https://www.npmjs.com/package/agent402-mcp</code></div>
+    <div class="row"><b>Open source on GitHub</b> — read every line that serves and prices your call:
+      <code>https://github.com/MikeyPetrillo/Agent402</code></div>${stats?.wallet ? `
     <div class="row"><b>Real USDC settlements, on-chain</b> — every paid call lands here, verifiable on Basescan:
       <code>${stats.onchainRevenueProof || `https://basescan.org/address/${stats.wallet}#tokentxns`}</code></div>` : ""}
     <div class="row"><b>Self-describing & tested</b> — full schemas, and every endpoint is re-tested against its own documented example before each deploy:
@@ -297,7 +303,7 @@ curl -i -X POST ${baseUrl}/api/extract \\
 
   <footer>
     Agent402 — ${count} machine-payable tools for AI agents. Built on the <a href="https://x402.org" rel="noopener">x402 protocol</a>
-    by <a href="https://github.com/MikeyPetrillo" rel="noopener">Mikey Petrillo</a>.
+    by <a href="https://github.com/MikeyPetrillo" rel="noopener">Mikey Petrillo</a>. Open source on <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub</a>.
     Free: <a href="/tools">/tools</a> · <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a> · <code>GET /health</code>.
   </footer>
 </div>

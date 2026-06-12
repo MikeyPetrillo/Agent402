@@ -22,7 +22,7 @@
     "mcp"
   ],
   "author": "Mikey Petrillo (https://github.com/MikeyPetrillo)",
-  "license": "ISC",
+  "license": "MIT",
   "type": "module",
   "dependencies": {
     "@coinbase/x402": "^2.1.0",
