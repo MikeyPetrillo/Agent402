@@ -77,10 +77,10 @@ function leadingZeroBits(buf) {
 }
 
 /**
- * Issue a signed, single-use challenge. `slug` scopes the token to one tool
- * (or "*" for any compute-payable tool) so a challenge can't be retargeted.
+ * Issue a signed, single-use challenge. `slug` strictly scopes the token to
+ * one tool so a challenge can't be retargeted at a different route.
  */
-export function issueChallenge(slug = "*") {
+export function issueChallenge(slug) {
   const challenge = randomBytes(16).toString("hex");
   const exp = Math.floor(Date.now() / 1000) + TTL_SECONDS;
   const payload = `${challenge}.${exp}.${POW_DIFFICULTY}.${slug}`;
@@ -128,8 +128,9 @@ export function verifySolution(headerValue, slug) {
   const exp = parseInt(expStr, 10);
   if (!Number.isFinite(exp) || exp < Math.floor(Date.now() / 1000)) return { ok: false, reason: "challenge expired" };
 
-  // 3. Scope: token must be for this tool (or the wildcard).
-  if (tokSlug !== "*" && tokSlug !== slug) return { ok: false, reason: `challenge scoped to "${tokSlug}", not "${slug}"` };
+  // 3. Scope: token must be for exactly this tool (wildcards are not issued
+  //    and not accepted — legacy "*" tokens fail here by design).
+  if (tokSlug !== slug) return { ok: false, reason: `challenge scoped to "${tokSlug}", not "${slug}"` };
 
   // 4. Proof of work (difficulty is fixed in the signed token — cannot be downgraded).
   const difficulty = parseInt(diffStr, 10);
@@ -142,6 +143,8 @@ export function verifySolution(headerValue, slug) {
   } catch {
     return { ok: false, reason: "challenge already used" };
   }
+  // Prune here too, so a solve-heavy/issue-light workload can't grow the table.
+  pruneStmt.run(Math.floor(Date.now() / 1000));
   return { ok: true };
 }
 

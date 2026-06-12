@@ -159,5 +159,6 @@ const res = await payFetch("${baseUrl}/api/extract", {
 - \`/api/memory\` namespaces are owned by the paying wallet: only the wallet that wrote a key can read it. Use it for durable state between runs.
 - \`/api/render\` runs a real headless Chromium with JavaScript execution — use it when \`/api/extract\` returns an empty shell for SPA pages.
 - All endpoints publish full input/output schemas via the x402 Bazaar discovery extension and ${baseUrl}/openapi.json.
+- Built and operated by Mikey Petrillo (https://github.com/MikeyPetrillo).
 `;
 }

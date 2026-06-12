@@ -48,6 +48,8 @@ const kvCols = db.prepare("PRAGMA table_info(kv)").all().map((c) => c.name);
 if (!kvCols.includes("exp")) db.exec("ALTER TABLE kv ADD COLUMN exp INTEGER");
 const docCols = db.prepare("PRAGMA table_info(docs)").all().map((c) => c.name);
 if (!docCols.includes("model")) db.exec("ALTER TABLE docs ADD COLUMN model TEXT");
+// After migrations so the column is guaranteed to exist on older databases.
+db.exec("CREATE INDEX IF NOT EXISTS kv_exp ON kv (exp) WHERE exp IS NOT NULL");
 
 const MAX_KEY = 256;
 const MAX_VALUE = 64 * 1024;
@@ -75,6 +77,17 @@ const kvDel = db.prepare("DELETE FROM kv WHERE ns = ? AND k = ?");
 const kvList = db.prepare("SELECT k, updated, exp FROM kv WHERE ns = ? ORDER BY updated DESC LIMIT 1000");
 const kvCount = db.prepare("SELECT COUNT(*) AS n FROM kv WHERE ns = ?");
 const kvPruneExpired = db.prepare("DELETE FROM kv WHERE ns = ? AND exp IS NOT NULL AND exp < ?");
+const kvPruneAll = db.prepare("DELETE FROM kv WHERE exp IS NOT NULL AND exp < ?");
+
+// Expired rows in namespaces nobody reads anymore would otherwise live forever
+// on the persistent volume — sweep globally on a timer (cheap: exp is indexed).
+setInterval(() => {
+  try {
+    kvPruneAll.run(nowSec());
+  } catch {
+    /* best-effort */
+  }
+}, 10 * 60 * 1000).unref();
 
 const grantPut = db.prepare(
   "INSERT INTO grants (owner, grantee, mode, created, exp) VALUES (@owner, @grantee, @mode, @created, @exp) " +
@@ -172,8 +185,11 @@ export function memoryPut(owner, key, value, { actor = owner, ttlSeconds } = {})
   const serialized = typeof value === "string" ? value : JSON.stringify(value);
   if (serialized === undefined || serialized.length > MAX_VALUE)
     throw bad(`"value" is required and must serialize to at most ${MAX_VALUE} bytes`);
-  if (kvCount.get(owner).n >= MAX_KEYS_PER_NS && !kvGet.get(owner, key))
-    throw bad(`Namespace is full (${MAX_KEYS_PER_NS} keys)`);
+  if (kvCount.get(owner).n >= MAX_KEYS_PER_NS && !kvGet.get(owner, key)) {
+    // Expired rows must not consume quota — reclaim before rejecting.
+    kvPruneExpired.run(owner, nowSec());
+    if (kvCount.get(owner).n >= MAX_KEYS_PER_NS) throw bad(`Namespace is full (${MAX_KEYS_PER_NS} keys)`);
+  }
   let exp = null;
   if (ttlSeconds !== undefined && ttlSeconds !== null) {
     const t = parseInt(ttlSeconds, 10);
@@ -224,7 +240,8 @@ export const memoryIncr = db.transaction((owner, key, by, actor) => {
     if (!Number.isFinite(n)) throw bad(`Key "${key}" holds a non-numeric value; cannot increment`);
     current = n;
   } else if (kvCount.get(owner).n >= MAX_KEYS_PER_NS) {
-    throw bad(`Namespace is full (${MAX_KEYS_PER_NS} keys)`);
+    kvPruneExpired.run(owner, nowSec());
+    if (kvCount.get(owner).n >= MAX_KEYS_PER_NS) throw bad(`Namespace is full (${MAX_KEYS_PER_NS} keys)`);
   }
   const next = current + amount;
   kvPut.run({ ns: owner, k: key, v: String(next), updated: now(), exp: row?.exp ?? null });

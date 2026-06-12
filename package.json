@@ -4,15 +4,16 @@
   "description": "Paid web tools for AI agents via the x402 payment protocol",
   "main": "src/server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node scripts/test-kit2.js && node scripts/test-convert.js && node scripts/test-memory.js",
     "start": "node src/server.js"
   },
   "repository": {
     "type": "git",
-    "url": "http://local_proxy@127.0.0.1:32787/git/MikeyPetrillo/Agent402"
+    "url": "https://github.com/MikeyPetrillo/Agent402.git"
   },
-  "keywords": [],
-  "author": "",
+  "homepage": "https://agent402.tools",
+  "keywords": ["x402", "agents", "ai", "payments", "usdc", "tools", "mcp"],
+  "author": "Mikey Petrillo (https://github.com/MikeyPetrillo)",
   "license": "ISC",
   "type": "module",
   "dependencies": {

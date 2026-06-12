@@ -1,10 +1,19 @@
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 
-export function landingPage(baseUrl, network, freeMode, catalog) {
+export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   const tools = toolList(catalog);
   const count = tools.length;
   const freeCount = tools.filter(isComputePayable).length;
+  const served = stats?.toolCallsServed;
+  // The old-web visitor counter, except every digit is a real served tool call.
+  const odometer = served
+    ? `<div class="odometer" title="Counted live by the server; settled revenue is independently verifiable on-chain">
+    <span class="odo-label">— TOOL CALLS SERVED —</span>
+    <span class="odo-digits">${String(served.total).padStart(7, "0").split("").map((d) => `<b>${d}</b>`).join("")}</span>
+    <span class="odo-sub">${served.viaUSDC} settled in USDC · ${served.viaProofOfWork} paid with compute${stats.onchainRevenueProof ? ` · <a href="${stats.onchainRevenueProof}" rel="noopener">on-chain proof</a>` : ""} · counting since ${String(stats.servingSince).slice(0, 10)}</span>
+  </div>`
+    : "";
   const categoryCards = Object.entries(CATEGORIES)
     .map(([key, { label, blurb }]) => {
       const inCat = tools.filter((t) => t.category === key);
@@ -23,6 +32,7 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230b0e14'/%3E%3Ctext x='50' y='66' font-size='40' font-weight='700' font-family='monospace' text-anchor='middle' fill='%234ade80'%3E402%3C/text%3E%3C/svg%3E">
 <title>Agent402 — where agents pay agents (machine-to-machine payments via x402, USDC on Base)</title>
 <meta name="description" content="A live node in the machine-to-machine economy: ${count} tools autonomous agents pay for per call in USDC via the x402 protocol — or with proof-of-work, no wallet. No human, no signup, no API key. The payment is the identity.">
 <link rel="canonical" href="${baseUrl}/">
@@ -43,6 +53,8 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
       "@id": "${baseUrl}/#org",
       "name": "Agent402",
       "url": "${baseUrl}",
+      "founder": { "@type": "Person", "name": "Mikey Petrillo", "url": "https://github.com/MikeyPetrillo" },
+      "sameAs": ["https://github.com/MikeyPetrillo", "https://www.npmjs.com/package/agent402-mcp"],
       "description": "Machine-to-machine payments for AI agents: ${count} pay-per-call web tools settled in USDC via the x402 protocol, or free with proof-of-work."
     },
     {
@@ -50,8 +62,7 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
       "@id": "${baseUrl}/#site",
       "url": "${baseUrl}",
       "name": "Agent402 — tools for AI agents",
-      "publisher": { "@id": "${baseUrl}/#org" },
-      "potentialAction": { "@type": "SearchAction", "target": "${baseUrl}/tools?q={search_term_string}", "query-input": "required name=search_term_string" }
+      "publisher": { "@id": "${baseUrl}/#org" }
     },
     {
       "@type": "WebAPI",
@@ -112,6 +123,10 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
   .callout { background:#10210f; border:1px solid #1f4a1d; border-radius:12px; padding:14px 18px; margin:24px 0 8px; font-size:1rem; color:var(--text); }
   .callout b { color:#fff; }
   .freebadge { display:inline-block; background:var(--accent); color:#08130b; font-weight:800; font-size:.72rem; letter-spacing:.03em; padding:2px 9px; border-radius:999px; margin-right:8px; vertical-align:middle; }
+  .odometer { margin:30px 0 4px; text-align:center; }
+  .odo-label { display:block; color:var(--muted); font-family:var(--mono); font-size:.7rem; letter-spacing:.3em; margin-bottom:9px; }
+  .odo-digits b { display:inline-block; background:#000; color:var(--accent); border:1px solid #1f4a1d; border-radius:6px; font:700 1.9rem/1 var(--mono); padding:9px 8px; margin:0 2px; text-shadow:0 0 9px rgba(74,222,128,.55); }
+  .odo-sub { display:block; margin-top:9px; color:var(--muted); font-size:.8rem; font-family:var(--mono); }
 </style>
 </head>
 <body>
@@ -125,16 +140,16 @@ export function landingPage(baseUrl, network, freeMode, catalog) {
   <a class="cta ghost" href="/openapi.json">OpenAPI</a>
   <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet at all.</b> An agent with no funds pays with a few seconds of <a href="/api/pow">proof-of-work</a> (CPU) instead of USDC — still no human, no signup. The other ${count - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run.</div>
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
+  ${odometer}
 
   <h2>Watch an agent pay an agent</h2>
   <p class="sub">No slideware — run the whole loop yourself. An autonomous buyer discovers the catalog, gets quoted over <code>HTTP 402</code>, settles, and uses the result, with zero human involvement:</p>
-  <pre>git clone https://github.com/MikeyPetrillo/Agent402 &amp;&amp; cd Agent402 &amp;&amp; npm i
-
-# pays with COMPUTE — no wallet, no funds, runs anywhere
-node scripts/demo-payment.js
+  <pre># one file, zero dependencies — pays with COMPUTE (no wallet, no funds)
+curl -s ${baseUrl}/demo.js -o demo.js && node demo.js
 
 # or settle in real USDC on Base with a funded key
-AGENT_KEY=0xYOUR_FUNDED_KEY node scripts/demo-payment.js</pre>
+npm i @x402/core @x402/evm @x402/fetch viem
+AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
   <p class="sub">Revenue is trustless and public — every settled call lands on-chain. See live counts and the receiving wallet at <a href="/api/stats">/api/stats</a>.</p>
 
   <h2>Why not just build it yourself?</h2>
@@ -158,7 +173,7 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node scripts/demo-payment.js</pre>
     </div>
   </div>
 
-  <h2>${count} tools, nine categories</h2>
+  <h2>${count} tools, ${Object.keys(CATEGORIES).filter((k) => tools.some((t) => t.category === k)).length} categories</h2>
   <div class="grid">
 ${categoryCards}
   </div>
@@ -188,10 +203,11 @@ const res = await payFetch("${baseUrl}/api/extract", {
 console.log(await res.json()); // { title, markdown, ... }</pre>
 
   <h2>Or just add it to Claude / any MCP client</h2>
-  <p>The <code>agent402-mcp</code> server exposes the whole catalog as MCP tools and pays underneath — USDC via x402 if you give it a funded key, proof-of-work (free) on the pure-CPU tools if you don't. High-value tools are first-class; the rest are reachable via <code>search_tools</code> + <code>call_tool</code>, so your context window stays small.</p>
+  <p>The <code>agent402-mcp</code> server exposes the whole catalog as MCP tools and pays underneath — USDC via x402 if you give it a funded key, proof-of-work (free) on the pure-CPU tools if you don't. High-value tools are first-class; the rest are reachable via <code>search_tools</code> + <code>call_tool</code>, so your context window stays small. Built-in spend controls (<code>AGENT402_BUDGET</code>, <code>AGENT402_MAX_PER_CALL</code>) refuse a runaway model <em>before</em> a payment is signed.</p>
   <pre>{ "mcpServers": { "agent402": {
     "command": "npx", "args": ["-y", "agent402-mcp"],
-    "env": { "AGENT_KEY": "0x&lt;funded wallet key — optional&gt;" }
+    "env": { "AGENT_KEY": "0x&lt;funded wallet key — optional&gt;",
+             "AGENT402_BUDGET": "1.00" }
 } } }</pre>
 
   <h2>Try it (no payment needed)</h2>
@@ -215,7 +231,8 @@ curl -i -X POST ${baseUrl}/api/extract \\
   </div>
 
   <footer>
-    Agent402 — ${count} machine-payable tools for AI agents. Built on the <a href="https://x402.org" rel="noopener">x402 protocol</a>.
+    Agent402 — ${count} machine-payable tools for AI agents. Built on the <a href="https://x402.org" rel="noopener">x402 protocol</a>
+    by <a href="https://github.com/MikeyPetrillo" rel="noopener">Mikey Petrillo</a>.
     Free: <a href="/tools">/tools</a> · <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a> · <code>GET /health</code>.
   </footer>
 </div>
