@@ -130,6 +130,15 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   .odo-label { display:block; color:var(--muted); font-family:var(--mono); font-size:.7rem; letter-spacing:.3em; margin-bottom:9px; }
   .odo-digits b { display:inline-block; background:#000; color:var(--accent); border:1px solid #1f4a1d; border-radius:6px; font:700 1.9rem/1 var(--mono); padding:9px 8px; margin:0 2px; text-shadow:0 0 9px rgba(74,222,128,.55); }
   .odo-sub { display:block; margin-top:9px; color:var(--muted); font-size:.8rem; font-family:var(--mono); }
+  .ticker { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; margin:18px 0 6px; padding:11px 14px; background:#0d1626; border:1px solid #1f3550; border-radius:10px; font-family:var(--mono); font-size:.78rem; color:var(--muted); }
+  .ticker .live { color:var(--accent); font-weight:700; letter-spacing:.08em; }
+  .ticker .dot { width:7px; height:7px; border-radius:50%; background:var(--accent); display:inline-block; box-shadow:0 0 8px var(--accent); margin-right:6px; vertical-align:middle; }
+  .ticker .sep { color:#33405c; }
+  .verify { background:#0d1220; border:1px solid #1e2638; border-radius:12px; padding:18px 20px; margin:18px 0; }
+  .verify h3 { font-size:1rem; margin-bottom:6px; }
+  .verify .row { margin:12px 0; }
+  .verify .row b { color:var(--text); font-size:.9rem; }
+  .verify code { display:block; margin-top:5px; background:#080c16; border:1px solid #1e2638; border-radius:7px; padding:8px 10px; font-size:.76rem; color:#9fb4dc; overflow-x:auto; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -141,6 +150,14 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   <a class="cta ghost" href="/api/stats">live stats</a>
   <a class="cta ghost" href="/llms.txt">llms.txt</a>
   <a class="cta ghost" href="/openapi.json">OpenAPI</a>
+  <div class="ticker">
+    <span><span class="dot"></span><span class="live">LIVE</span></span>
+    <span class="sep">·</span><span>Settling on ${network} mainnet</span>
+    <span class="sep">·</span><span>Paid MCP server + HTTP x402</span>
+    <span class="sep">·</span><span>On the Coinbase CDP Bazaar</span>
+    <span class="sep">·</span><span>On the MCP Registry &amp; agent402.app</span>
+    <span class="sep">·</span><span>${count} tools</span>
+  </div>
   <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet at all.</b> An agent with no funds pays by solving a tiny <a href="/api/pow">sha256 puzzle</a> (a fraction of a second of its own CPU) instead of USDC — <b>no money, no AI tokens, no model calls</b>, still no signup. The other ${count - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run.</div>
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
   ${odometer}
@@ -210,6 +227,21 @@ ${categoryCards}
     </div>
   </div>
 
+  <h2>Verify it yourself</h2>
+  <p class="sub">Don't take our word for it — every claim above is checkable by a machine. These are the real discovery and settlement records:</p>
+  <div class="verify">
+    <div class="row"><b>Discoverable on the Coinbase CDP Bazaar</b> — the index AI agents browse for x402 services, keyed to our pay-to address:
+      <code>GET api.cdp.coinbase.com/platform/v2/x402/discovery/resources</code></div>
+    <div class="row"><b>Listed in the official MCP Registry</b> — installable by name in any MCP client:
+      <code>GET registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402</code></div>
+    <div class="row"><b>On npm</b> — one-line install, <code>npx -y agent402-mcp</code>:
+      <code>https://www.npmjs.com/package/agent402-mcp</code></div>${stats?.wallet ? `
+    <div class="row"><b>Real USDC settlements, on-chain</b> — every paid call lands here, verifiable on Basescan:
+      <code>${stats.onchainRevenueProof || `https://basescan.org/address/${stats.wallet}#tokentxns`}</code></div>` : ""}
+    <div class="row"><b>Self-describing & tested</b> — full schemas, and every endpoint is re-tested against its own documented example before each deploy:
+      <code>GET ${baseUrl}/openapi.json &nbsp;·&nbsp; GET ${baseUrl}/api/pricing</code></div>
+  </div>
+
   <h2>How it works</h2>
   <div class="step"><b>1</b><span>Your agent calls a paid endpoint and receives <code>HTTP 402 Payment Required</code> with the price and payment details.</span></div>
   <div class="step"><b>2</b><span>An x402-capable client (e.g. <code>@x402/fetch</code>, <code>@x402/axios</code>, or any agent framework with x402 support) signs a USDC payment from its wallet and retries the request.</span></div>
@@ -235,7 +267,7 @@ const res = await payFetch("${baseUrl}/api/extract", {
 console.log(await res.json()); // { title, markdown, ... }</pre>
 
   <h2>Or just add it to Claude / any MCP client</h2>
-  <p>The <code>agent402-mcp</code> server exposes the whole catalog as MCP tools and pays underneath — USDC via x402 if you give it a funded key, proof-of-work (free) on the pure-CPU tools if you don't. High-value tools are first-class; the rest are reachable via <code>search_tools</code> + <code>call_tool</code>, so your context window stays small. Built-in spend controls (<code>AGENT402_BUDGET</code>, <code>AGENT402_MAX_PER_CALL</code>) refuse a runaway model <em>before</em> a payment is signed.</p>
+  <p>Published in the <a href="https://registry.modelcontextprotocol.io" rel="noopener">official MCP Registry</a> and on npm. The <code>agent402-mcp</code> server exposes the whole catalog as MCP tools and pays underneath — USDC via x402 if you give it a funded key, proof-of-work (free) on the pure-CPU tools if you don't. High-value tools are first-class; the rest are reachable via <code>search_tools</code> + <code>call_tool</code>, so your context window stays small. Built-in spend controls (<code>AGENT402_BUDGET</code>, <code>AGENT402_MAX_PER_CALL</code>) refuse a runaway model <em>before</em> a payment is signed.</p>
   <pre>{ "mcpServers": { "agent402": {
     "command": "npx", "args": ["-y", "agent402-mcp"],
     "env": { "AGENT_KEY": "0x&lt;funded wallet key — optional&gt;",

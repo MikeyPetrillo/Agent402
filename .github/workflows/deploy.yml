@@ -172,6 +172,9 @@ jobs:
       - name: Kit2 tool tests (36 tools, exact-output assertions)
         run: node scripts/test-kit2.js
 
+      - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
+        run: node scripts/test-pdf.js
+
       - name: Conversion tools (~970 endpoints, exact + round-trip)
         run: node scripts/test-convert.js
 
@@ -334,6 +337,9 @@ jobs:
   publish:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'publish' || contains(join(github.event.commits.*.message), '[publish]')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # GitHub OIDC → authorize the io.github.mikeypetrillo/* MCP Registry namespace
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -362,10 +368,24 @@ jobs:
       - name: Verify the public npx path resolves
         run: |
           for i in $(seq 1 10); do
-            npm view agent402-mcp version && exit 0
+            npm view agent402-mcp version >/dev/null 2>&1 && { echo "agent402-mcp visible on npm ✓"; break; }
             sleep 15
           done
-          echo "package not visible on the registry yet"; exit 1
+
+      - name: Publish to the official MCP Registry (GitHub OIDC, no secret)
+        run: |
+          # The registry verifies ownership by matching mcp/package.json's
+          # "mcpName" to the server.json name and confirming the npm package is
+          # published — so this runs after the npm publish above.
+          VER=$(node -p "require('./mcp/package.json').version")
+          if curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402" | grep -q "\"version\":\"$VER\""; then
+            echo "io.github.mikeypetrillo/agent402@$VER already in the MCP Registry — nothing to do"; exit 0
+          fi
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          cd mcp
+          ../mcp-publisher login github-oidc
+          ../mcp-publisher publish
+          echo "published io.github.mikeypetrillo/agent402@$VER → https://registry.modelcontextprotocol.io"
 
   probe:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || contains(join(github.event.commits.*.message), '[probe]')
@@ -423,6 +443,61 @@ jobs:
           i = text.find("Interactive API Reference")
           print(text[max(i, 0):])
           PY
+
+      - name: Revenue + real-usage check (stats vs on-chain receipts)
+        run: |
+          echo "=== production /api/stats (calls served, split by settlement) ==="
+          curl -s https://agent402.tools/api/stats | jq '{tools, served: .toolCallsServed, topTools}' || true
+          echo
+          node --input-type=module -e '
+          const WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0".toLowerCase();
+          const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+          const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+          const pad = (a) => "0x" + "0".repeat(24) + a.replace(/^0x/, "");
+          const RPCS = ["https://mainnet.base.org", "https://base-rpc.publicnode.com", "https://base.llamarpc.com"];
+          const rpc = async (m, p) => { for (const u of RPCS) { try { const r = await fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: m, params: p }) }); const j = await r.json(); if (j.result !== undefined) return j.result; } catch {} } throw new Error("RPC failed " + m); };
+          const latest = parseInt(await rpc("eth_blockNumber", []), 16);
+          const SPAN = 40000; // ~24h of Base blocks
+          const logs = await rpc("eth_getLogs", [{ fromBlock: "0x" + (latest - SPAN).toString(16), toBlock: "latest", address: USDC, topics: [TRANSFER, null, pad(WALLET)] }]);
+          // distinct payers (real source = facilitator relayer; payer is in the auth, so group by tx origin instead)
+          const tsCache = {};
+          const ts = async (blk) => { if (!tsCache[blk]) { const b = await rpc("eth_getBlockByNumber", [blk, false]); tsCache[blk] = parseInt(b.timestamp, 16); } return tsCache[blk]; };
+          let total = 0n; const rows = [];
+          for (const l of logs) {
+            const amt = BigInt(l.data); total += amt;
+            const t = await ts(l.blockNumber);
+            const tx = await rpc("eth_getTransactionByHash", [l.transactionHash]);
+            rows.push({ usd: Number(amt) / 1e6, when: new Date(t * 1000).toISOString(), submitter: tx.from.toLowerCase(), tx: l.transactionHash });
+          }
+          // Decode the REAL payer from each tx input. USDC x402 settles via
+          // transferWithAuthorization(from, to, value, …) — "from" is the first
+          // 32-byte word after the 4-byte selector. That is the actual buyer.
+          const OURS = new Set(["0xfeda7403aabe9a492ed70e810b396d8548a4a022"]); // our test burner
+          for (const r of rows) {
+            try {
+              const tx = await rpc("eth_getTransactionByHash", [r.tx]);
+              const input = tx.input || "0x";
+              r.payer = input.length >= 10 + 64 ? "0x" + input.slice(10 + 24, 10 + 64) : null;
+            } catch { r.payer = null; }
+          }
+          rows.sort((a, b) => a.when.localeCompare(b.when));
+          console.log(`\nUSDC received in ~24h: ${rows.length} payments, total $${(Number(total) / 1e6).toFixed(4)}`);
+          const payers = {};
+          for (const r of rows) { const p = (r.payer || "unknown").toLowerCase(); payers[p] = (payers[p] || 0) + 1; }
+          console.log("payments grouped by REAL payer (decoded from tx input):");
+          for (const [p, n] of Object.entries(payers).sort((a, b) => b[1] - a[1])) {
+            const tag = OURS.has(p) ? "  (our test burner)" : p === "unknown" ? "" : "  <-- NOT our burner — possible external customer";
+            console.log(`  ${n} payment(s) from ${p}${tag}`);
+          }
+          const external = rows.filter((r) => r.payer && !OURS.has(r.payer.toLowerCase()));
+          if (external.length) {
+            console.log(`\n*** ${external.length} payment(s) from wallets that are NOT our test burner: ***`);
+            for (const r of external) console.log(`  ${r.when}  $${r.usd.toFixed(6)}  payer ${r.payer}  ${r.tx}`);
+          } else {
+            console.log("\nAll decoded payments came from our own test burner — no external customer in this 24h window yet.");
+          }
+          console.log("Full history: https://basescan.org/address/" + WALLET + "#tokentxns");
+          '
 
       - name: Check which facilitator production is configured to use
         run: |

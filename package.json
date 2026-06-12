@@ -12,7 +12,15 @@
     "url": "https://github.com/MikeyPetrillo/Agent402.git"
   },
   "homepage": "https://agent402.tools",
-  "keywords": ["x402", "agents", "ai", "payments", "usdc", "tools", "mcp"],
+  "keywords": [
+    "x402",
+    "agents",
+    "ai",
+    "payments",
+    "usdc",
+    "tools",
+    "mcp"
+  ],
   "author": "Mikey Petrillo (https://github.com/MikeyPetrillo)",
   "license": "ISC",
   "type": "module",
@@ -26,6 +34,7 @@
     "js-yaml": "^4.2.0",
     "jsdom": "^29.1.1",
     "marked": "^18.0.5",
+    "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
     "playwright": "^1.60.0",
     "qrcode": "^1.5.4",
