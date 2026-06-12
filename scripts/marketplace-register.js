@@ -52,6 +52,10 @@ const SERVICES = [
     description: "Parse an Excel/ODS/CSV workbook URL into header-keyed JSON rows per sheet. Get the data out of Excel with no Google account and no Office license." },
   { slug: "stock-quote", name: "Stock Quote", price: 0.005, tags: ["stocks", "finance", "market-data"],
     description: "Delayed stock quote (OHLC + volume) for any ticker as deterministic JSON — no API key, US and international symbols." },
+  { slug: "audio-convert", name: "Audio Convert (to MP3)", price: 0.02, tags: ["ffmpeg", "mp4-to-mp3", "audio"],
+    description: "Extract/convert the audio of any media URL (mp4, mov, wav, m4a…) to MP3 with real ffmpeg — the classic mp4-to-mp3, deterministic, no AI." },
+  { slug: "audio-normalize", name: "Audio Normalize (EBU R128)", price: 0.02, tags: ["ffmpeg", "loudnorm", "audio"],
+    description: "Loudness-normalize any audio/video URL to a target LUFS (ffmpeg loudnorm) and get MP3 back — consistent levels for podcasts, clips, and TTS output." },
   // NOTE: memory tools are intentionally NOT listed here. They key state to the
   // paying wallet's signature, which the marketplace's pay-then-forward model
   // strips — so they are only sold directly via our own x402 paywall, not the

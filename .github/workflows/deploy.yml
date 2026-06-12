@@ -185,6 +185,9 @@ jobs:
       - name: Demand-kit tests (pdf-to-markdown, xlsx parsing)
         run: node scripts/test-demand.js
 
+      - name: Media-kit tests (ffprobe, mp4-to-mp3, loudnorm — real ffmpeg)
+        run: node scripts/test-media.js
+
       - name: Conversion tools (~970 endpoints, exact + round-trip)
         run: node scripts/test-convert.js
 
