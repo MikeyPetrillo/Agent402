@@ -35,7 +35,7 @@ const WALLET_ONLY_SLUGS = new Set([
   "memory-write", "memory-read", "memory-incr", "memory-grant", "memory-revoke",
   "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",
   "http-check", "tls-cert", "whois", "robots-check", "sitemap",
-  "email-validate", "ip-info",
+  "email-validate", "ip-info", "search",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */
