@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation (wiki)
+    url: https://github.com/MikeyPetrillo/Agent402/wiki
+    about: Getting started, payment flows, MCP setup, architecture, security model
+  - name: Live service & catalog
+    url: https://agent402.tools
+    about: The running service — every tool, price, and schema
+  - name: Security vulnerability
+    url: https://github.com/MikeyPetrillo/Agent402/security/advisories/new
+    about: Report privately — see SECURITY.md

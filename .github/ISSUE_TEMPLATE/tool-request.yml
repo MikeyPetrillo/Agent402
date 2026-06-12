@@ -1,0 +1,16 @@
+name: Tool request
+description: A tool you (or your agent) needed mid-task and we didn't have
+labels: [tool-request]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What should the tool do?
+      description: Input → output. Bonus points for the exact moment an agent would call it.
+    validations:
+      required: true
+  - type: input
+    id: price
+    attributes:
+      label: What would it be worth per call?
+      placeholder: e.g. $0.001 — keep in mind tools must be deterministic and honestly serveable
