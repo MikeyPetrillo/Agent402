@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
-import { renderArticle, screenshotPage } from "./tools/render.js";
+import { renderArticle, screenshotPage, rasterizeSvg } from "./tools/render.js";
 import {
   memoryPut, memoryGet, memoryDelete, memoryIncr,
   grant, revoke, listGrants, getLog, remember, recall, forget,
@@ -393,6 +393,22 @@ app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL
 app.get("/demo.js", (_req, res) =>
   res.type("text/javascript").send(readFileSync(new URL("../scripts/demo-payment.js", import.meta.url), "utf-8"))
 );
+
+// Brand mark — the same 402 glyph as the favicon, at logo size. The PNG is
+// rasterized once via the existing headless Chromium and cached for the
+// process lifetime (marketplaces and link previews often refuse SVG).
+const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#0b0e14"/><text x="256" y="295" font-size="170" font-weight="700" font-family="ui-monospace,Menlo,monospace" text-anchor="middle" fill="#4ade80">402</text><text x="256" y="408" font-size="42" font-family="ui-monospace,Menlo,monospace" text-anchor="middle" fill="#8b93a7">agent402.tools</text></svg>`;
+app.get("/logo.svg", (_req, res) => res.type("image/svg+xml").send(LOGO_SVG));
+let logoPngCache = null;
+app.get("/logo.png", async (_req, res) => {
+  try {
+    logoPngCache ??= await rasterizeSvg(LOGO_SVG, 512);
+    res.type("image/png").send(logoPngCache);
+  } catch {
+    // No Chromium on this instance — the SVG is always available.
+    res.redirect(302, "/logo.svg");
+  }
+});
 app.get("/openapi.json", (_req, res) => res.json(openapiSpec(BASE_URL, CATALOG)));
 app.get("/tools", (_req, res) => res.type("html").send(toolsIndexPage(BASE_URL, CATALOG)));
 app.get("/tools/:slug", (req, res) => {
