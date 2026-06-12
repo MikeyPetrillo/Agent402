@@ -340,43 +340,38 @@ jobs:
               | jq -r '.data.deploymentLogs[]? | "\(.timestamp)  \(.message)"' | tail -40 || true
           fi
 
-      - name: Discover agent402.app marketplace API surface (read-only)
+      - name: Read the agent402.app marketplace API docs (read-only)
         env:
           A402APP_KEY: ${{ secrets.AGENT402_APP_API_KEY }}
         run: |
           [ -n "$A402APP_KEY" ] && echo "::add-mask::$A402APP_KEY"
-          for u in \
-            "https://agent402.app/openapi.json" \
-            "https://agent402.app/api/openapi.json" \
-            "https://agent402.app/api/docs" \
-            "https://agent402.app/api" \
-            "https://agent402.app/docs" \
-            "https://agent402.app/llms.txt" \
-            "https://agent402.app/.well-known/ai-plugin.json" \
-            "https://api.agent402.app/" \
-            "https://api.agent402.app/openapi.json" \
-            "https://api.agent402.app/docs" \
-            "https://docs.agent402.app/" ; do
-            code=$(curl -s -o /tmp/a402app.body -w '%{http_code}' --max-time 15 -L "$u" || echo 000)
-            ct=$(file -b /tmp/a402app.body 2>/dev/null | cut -c1-40)
-            size=$(wc -c < /tmp/a402app.body 2>/dev/null || echo 0)
-            echo "=== $u → $code ($ct, ${size}b) ==="
-            # JSON specs get shown structurally; HTML just enough to find doc links
-            if head -c1 /tmp/a402app.body | grep -q '{'; then
-              jq -r 'if .paths then (.paths | keys[]) else (. | tostring | .[0:600]) end' /tmp/a402app.body 2>/dev/null | head -40
-            else
-              grep -oiE 'href="[^"]*(doc|api|swagger|openapi|developer)[^"]*"' /tmp/a402app.body 2>/dev/null | sort -u | head -20
-            fi
-            echo
+          echo "=== docs page text (tags stripped) ==="
+          curl -s --max-time 20 -L "https://marketplace.agent402.app/docs" -o /tmp/docs.html
+          wc -c /tmp/docs.html
+          # strip scripts/styles/tags to readable text and print the API sections
+          python3 - << 'PY'
+          import re
+          html = open("/tmp/docs.html", encoding="utf-8", errors="replace").read()
+          html = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html)
+          html = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>|</h[1-6]>|</pre>|</code>", "\n", html)
+          text = re.sub(r"(?s)<[^>]+>", " ", html)
+          text = re.sub(r"[ \t]+", " ", text)
+          text = "\n".join(l.strip() for l in text.splitlines() if l.strip())
+          print(text[:20000])
+          PY
+          echo
+          echo "=== machine-readable spec candidates ==="
+          for u in "https://marketplace.agent402.app/openapi.json" "https://marketplace.agent402.app/api/openapi.json" "https://api.agent402.app/openapi.json"; do
+            code=$(curl -s -o /tmp/spec.json -w '%{http_code}' --max-time 15 -L "$u" || echo 000)
+            echo "--- $u → $code"
+            jq -r '.paths | keys[]' /tmp/spec.json 2>/dev/null | head -30 || true
           done
           if [ -n "$A402APP_KEY" ]; then
             echo "=== authenticated probe (key present) ==="
-            for u in "https://agent402.app/api/v1/me" "https://agent402.app/api/me" "https://api.agent402.app/v1/me"; do
+            for u in "https://marketplace.agent402.app/api/v1/agents" "https://marketplace.agent402.app/api/agents" "https://api.agent402.app/v1/agents"; do
               code=$(curl -s -o /tmp/a402app.auth -w '%{http_code}' --max-time 15 -H "Authorization: Bearer $A402APP_KEY" -H "X-API-Key: $A402APP_KEY" "$u" || echo 000)
               echo "$u → $code"; head -c 300 /tmp/a402app.auth; echo
             done
-          else
-            echo "(AGENT402_APP_API_KEY secret not set yet — skipping authenticated probe)"
           fi
 
       - name: Check which facilitator production is configured to use
