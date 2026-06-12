@@ -15,9 +15,10 @@ import { buildPaymentMiddleware, enabledNetworks } from "./payments.js";
 import { KIT } from "./tools/kit.js";
 import { KIT2 } from "./tools/kit2.js";
 import { CONVERSIONS } from "./tools/convert-gen.js";
+import { SEARCH_TOOLS } from "./tools/search.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES } from "./pages.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
 import { recordServedCall, getStats } from "./stats.js";
 
@@ -426,7 +427,7 @@ app.get("/api/pricing", (_req, res) =>
     payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC", networks: enabledNetworks(NETWORK) },
     altPayment: {
       protocol: "proof-of-work",
-      summary: "No wallet? Spend CPU instead on the pure-CPU tools.",
+      summary: "No wallet? Solve a sha256 puzzle (a fraction of a second of CPU) instead — no money, no AI tokens, no model involved.",
       challengeUrl: `${BASE_URL}/api/pow/challenge`,
       info: `${BASE_URL}/api/pow`,
       difficultyBits: POW_DIFFICULTY,

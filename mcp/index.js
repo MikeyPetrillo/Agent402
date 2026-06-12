@@ -33,8 +33,8 @@ const BUDGET = num(process.env.AGENT402_BUDGET) ?? Infinity;
 let spentUsd = 0;
 
 const DEFAULT_CURATED = [
-  // the tools agents can't replicate locally: browser, live web, PDF, shared memory
-  "extract", "render", "screenshot", "pdf", "meta", "dns", "http-check", "tls-cert", "whois",
+  // the tools agents can't replicate locally: live search, browser, PDF, shared memory
+  "search", "extract", "render", "screenshot", "pdf", "meta", "dns", "http-check", "tls-cert", "whois",
   "memory-write", "memory-read", "memory-remember", "memory-recall",
   // one cheap pure-CPU tool so wallet-less clients see the proof-of-work path work
   "hash",

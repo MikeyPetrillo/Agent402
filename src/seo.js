@@ -95,8 +95,11 @@ ${sections}
 
 ## No wallet? Pay with compute (proof-of-work)
 
-Agents that cannot pay USDC can access the **pure-CPU tools** by spending CPU
-instead. The network/browser/storage tools (extract, meta, dns, render,
+Agents that cannot pay USDC can access the **pure-CPU tools** by solving a
+sha256 puzzle — a fraction of a second of the caller's own CPU. This costs no
+money and **no AI tokens**: there is no model anywhere in the loop, and every
+tool on this service is deterministic code (no LLM in the serving path).
+The network/browser/storage tools (extract, meta, dns, render,
 screenshot, pdf, memory, http-check, tls-cert, whois, robots-check, sitemap,
 email-validate, ip-info) stay wallet-only; everything else accepts proof-of-work.
 
