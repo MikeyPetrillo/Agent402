@@ -103,16 +103,18 @@ export async function screenshotPage(rawUrl, { fullPage = false } = {}) {
 }
 
 /**
- * Rasterize server-owned SVG markup to a PNG (used for the site logo). No
+ * Rasterize server-owned SVG markup to a PNG (logo, social card). No
  * navigation and no external content — the SSRF route guard is not needed.
+ * `size` may be a number (square) or { width, height }.
  */
 export async function rasterizeSvg(svg, size = 512) {
+  const { width, height } = typeof size === "number" ? { width: size, height: size } : size;
   const browser = await getBrowser();
-  const context = await browser.newContext({ viewport: { width: size, height: size } });
+  const context = await browser.newContext({ viewport: { width, height } });
   try {
     const page = await context.newPage();
     await page.setContent(`<!doctype html><style>*{margin:0;padding:0}svg{display:block}</style>${svg}`);
-    return await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: size, height: size } });
+    return await page.screenshot({ type: "png", clip: { x: 0, y: 0, width, height } });
   } finally {
     await context.close().catch(() => {});
   }
