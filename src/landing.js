@@ -223,6 +223,21 @@ AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
     </div>
   </div>
 
+  <h2>The tool agents come back for: memory that outlives the session</h2>
+  <p class="sub">One-shot calls solve today's task. <code>/api/memory</code> is why an agent returns next week: durable state where the <em>paying wallet is the identity</em> — no API key to store, leak, or rotate. Write from one machine, read from another, grant a different wallet access, and every access lands in a tamper-evident audit log. From $0.002/call.</p>
+  <pre># today, machine A — persist what you learned
+POST /api/memory   {"key":"deploy-fix","value":{"cause":"build OOM","fix":"NODE_VERSION=22"}}
+
+# next week, machine B — same wallet, nothing else needed
+GET  /api/memory?key=deploy-fix
+
+# let a teammate's agent read your namespace (different wallet, different owner)
+POST /api/memory/grant     {"grantee":"0xTEAMMATE","mode":"read"}
+
+# or store prose and search it by meaning later
+POST /api/memory/remember  {"text":"Railway deploy failed: build out of memory"}
+POST /api/memory/recall    {"query":"why did the deploy break?"}</pre>
+
   <h2>${count} tools, ${Object.keys(CATEGORIES).filter((k) => tools.some((t) => t.category === k)).length} categories</h2>
   <div class="grid">
 ${categoryCards}
