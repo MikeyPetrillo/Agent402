@@ -39,6 +39,13 @@ const SERVICES = [
     description: "Full-page or viewport PNG screenshot of any URL, rendered in headless Chromium." },
   { slug: "pdf", name: "PDF Text Extraction", price: 0.01, tags: ["pdf", "text-extraction", "documents"],
     description: "Extract text and page count from any PDF URL — feed papers and reports straight into your model." },
+  // "convert pdf" is the marketplace's #1 unmet demand (0% supply) — these serve it.
+  { slug: "pdf-merge", name: "Merge PDFs", price: 0.004, tags: ["pdf", "merge", "convert-pdf"],
+    description: "Combine several PDFs into one, in order — give a list of PDF URLs, get one merged PDF back (base64). Deterministic, no AI." },
+  { slug: "pdf-extract-pages", name: "Split / Extract PDF Pages", price: 0.003, tags: ["pdf", "split", "convert-pdf"],
+    description: "Pull a page range (e.g. \"1-3,5\") from a PDF into a new document. The split half of convert-pdf, deterministic." },
+  { slug: "images-to-pdf", name: "Images to PDF", price: 0.004, tags: ["pdf", "images", "convert-pdf"],
+    description: "Combine PNG/JPEG image URLs into a single PDF, one image per page. The classic image→PDF conversion." },
   // NOTE: memory tools are intentionally NOT listed here. They key state to the
   // paying wallet's signature, which the marketplace's pay-then-forward model
   // strips — so they are only sold directly via our own x402 paywall, not the

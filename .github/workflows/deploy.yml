@@ -172,6 +172,9 @@ jobs:
       - name: Kit2 tool tests (36 tools, exact-output assertions)
         run: node scripts/test-kit2.js
 
+      - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
+        run: node scripts/test-pdf.js
+
       - name: Conversion tools (~970 endpoints, exact + round-trip)
         run: node scripts/test-convert.js
 
