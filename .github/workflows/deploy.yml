@@ -2,6 +2,8 @@ name: Deploy to Railway
 
 on:
   push:
+    branches:
+      - "claude/sweet-brown-i99jl3"
     paths:
       - ".github/trigger-probe"
       - ".github/trigger-deploy"
