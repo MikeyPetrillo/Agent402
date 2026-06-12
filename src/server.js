@@ -10,6 +10,7 @@ import {
 } from "./tools/memory.js";
 import { payerFromRequest } from "./payer.js";
 import { landingPage } from "./landing.js";
+import { privacyPage } from "./privacy.js";
 import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
 import { buildPaymentMiddleware, enabledNetworks } from "./payments.js";
 import { KIT } from "./tools/kit.js";
@@ -404,6 +405,7 @@ app.get("/", (_req, res) =>
   )
 );
 app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/privacy", (_req, res) => res.type("html").send(privacyPage(BASE_URL)));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));

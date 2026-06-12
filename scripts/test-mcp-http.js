@@ -40,6 +40,13 @@ assert(
   ["about_agent402", "call_tool", "search_tools"].every((n) => names.includes(n)),
   `tools/list exposes search_tools, call_tool, about_agent402 (got ${names.join(",")})`
 );
+assert(
+  (list.result?.tools ?? []).every((t) => t.title && t.annotations?.readOnlyHint === true),
+  "every tool carries a title + read-only safety annotations (directory requirement)"
+);
+
+const privacy = await fetch(`${BASE}/privacy`);
+assert(privacy.ok && (await privacy.text()).includes("Privacy policy"), "/privacy serves the policy (directory requirement)");
 
 const search = await rpc("tools/call", { name: "search_tools", arguments: { query: "kilometers to miles" } });
 const searchText = search.result?.content?.[0]?.text ?? "";
