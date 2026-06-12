@@ -187,6 +187,13 @@ const res = await payFetch("${baseUrl}/api/extract", {
 });
 console.log(await res.json()); // { title, markdown, ... }</pre>
 
+  <h2>Or just add it to Claude / any MCP client</h2>
+  <p>The <code>agent402-mcp</code> server exposes the whole catalog as MCP tools and pays underneath — USDC via x402 if you give it a funded key, proof-of-work (free) on the pure-CPU tools if you don't. High-value tools are first-class; the rest are reachable via <code>search_tools</code> + <code>call_tool</code>, so your context window stays small.</p>
+  <pre>{ "mcpServers": { "agent402": {
+    "command": "npx", "args": ["-y", "agent402-mcp"],
+    "env": { "AGENT_KEY": "0x&lt;funded wallet key — optional&gt;" }
+} } }</pre>
+
   <h2>Try it (no payment needed)</h2>
   <pre># Machine-readable catalog — free
 curl ${baseUrl}/api/pricing

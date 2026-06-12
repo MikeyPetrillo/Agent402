@@ -1,0 +1,34 @@
+{
+  "name": "agent402-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Agent402 (agent402.tools) — 1000+ pay-per-call web tools for AI agents. Pays per call in USDC via the x402 protocol, or with compute (proof-of-work) when no wallet is configured.",
+  "type": "module",
+  "bin": {
+    "agent402-mcp": "index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "x402",
+    "agents",
+    "ai",
+    "payments",
+    "usdc",
+    "tools"
+  ],
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@x402/core": "^2.14.0",
+    "@x402/evm": "^2.14.0",
+    "@x402/fetch": "^2.14.0",
+    "viem": "^2.21.0"
+  }
+}

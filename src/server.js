@@ -422,7 +422,7 @@ app.get("/api/pricing", (_req, res) =>
     categories: Object.fromEntries(Object.entries(CATEGORIES).map(([k, v]) => [k, v.label])),
     endpoints: Object.entries(CATALOG).map(([route, { price, description, category, slug }]) => {
       const [method, path] = route.split(" ");
-      return { method, path, price, category, description, docs: `${BASE_URL}/tools/${slug}`, computePayable: POW_SLUGS.has(slug) };
+      return { method, path, price, category, slug, description, docs: `${BASE_URL}/tools/${slug}`, computePayable: POW_SLUGS.has(slug) };
     }),
   })
 );
