@@ -23,34 +23,6 @@ on:
         default: ""
 
 jobs:
-  # Temporary: fetch the production 1280x640 social card, verify it is a real
-  # PNG at the exact size, and commit it to docs/ so it can be handed to the
-  # user as a file. Remove after the GitHub social preview is set.
-  card:
-    if: contains(join(github.event.commits.*.message), '[card]')
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v5
-      - name: Fetch, verify, and commit the card
-        run: |
-          curl -sL https://agent402.tools/card-1280.png -o docs/card-1280.png
-          python3 - << 'PY'
-          d = open("docs/card-1280.png", "rb").read()
-          assert d[:8] == b"\x89PNG\r\n\x1a\n", f"not a PNG: starts with {d[:40]!r}"
-          import struct
-          w, h = struct.unpack(">II", d[16:24])
-          print(f"PNG {w}x{h}, {len(d)} bytes")
-          assert (w, h) == (1280, 640), f"wrong size {w}x{h}"
-          PY
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/card-1280.png
-          git commit -m "Add verified 1280x640 social card from production"
-          git push
-
   paytest:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'paytest' || contains(join(github.event.commits.*.message), '[paytest]')
     runs-on: ubuntu-latest
