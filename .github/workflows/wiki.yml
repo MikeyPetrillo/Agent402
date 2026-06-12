@@ -6,6 +6,7 @@ name: Sync wiki
 on:
   push:
     branches:
+      - "main"
       - "claude/sweet-brown-i99jl3"
       - "claude/festive-archimedes-j76lpp"
     paths:

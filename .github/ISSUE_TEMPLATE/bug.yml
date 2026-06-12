@@ -1,0 +1,30 @@
+name: Bug report
+description: Something returned the wrong result, charged incorrectly, or failed
+labels: [bug]
+body:
+  - type: input
+    id: endpoint
+    attributes:
+      label: Endpoint / tool slug
+      placeholder: e.g. POST /api/extract, convert-kilometers-to-miles, /mcp
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: What happened
+      description: The exact request you made (curl or code), what you got, and what you expected. If a paid call charged and then failed, include the approximate time (UTC) so it can be matched on-chain.
+    validations:
+      required: true
+  - type: dropdown
+    id: payment
+    attributes:
+      label: How was the call paid?
+      options:
+        - USDC via x402
+        - Proof-of-work
+        - Hosted MCP connector (free tier)
+        - agent402-mcp npm server
+        - Not paid (free surface)
+    validations:
+      required: true
