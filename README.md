@@ -22,6 +22,21 @@ node scripts/demo-payment.js                              # pays with compute �
 AGENT_KEY=0xYOUR_FUNDED_KEY node scripts/demo-payment.js  # settles in real USDC on Base
 ```
 
+## Connect via MCP (Claude, ChatGPT, any MCP client)
+
+[`mcp/`](mcp/) ships an MCP server that exposes the whole catalog to any MCP
+client and settles payment underneath — USDC via x402 with `AGENT_KEY` set,
+proof-of-work (free) on the pure-CPU tools without it:
+
+```bash
+claude mcp add agent402 -- npx -y agent402-mcp          # after npm publish, or:
+claude mcp add agent402 -- node /path/to/Agent402/mcp/index.js
+```
+
+High-value tools (`extract`, `render`, `screenshot`, `pdf`, `memory-*`, …) are
+first-class MCP tools; the other ~1000 are reachable through `search_tools` +
+`call_tool` so the model's context window stays small. Test: `node mcp/test.js`.
+
 ## The catalogue (1000+ tools, 11 categories — ~1047 free via proof-of-work)
 
 The headline count is real: ~970 of these are individually-discoverable unit
