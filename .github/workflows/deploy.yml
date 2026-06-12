@@ -61,6 +61,7 @@ jobs:
     env:
       A402APP_KEY: ${{ secrets.AGENT402_APP_API_KEY }}
       MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
+      BURNER_KEY: ${{ secrets.BURNER_KEY || inputs.burner_key }}
       WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
       SITE: https://agent402.tools
     steps:
@@ -73,7 +74,12 @@ jobs:
           [ -n "$A402APP_KEY" ] || { echo "AGENT402_APP_API_KEY secret missing"; exit 1; }
           [ -n "$MARKETPLACE_TOKEN" ] || { echo "MARKETPLACE_TOKEN secret missing (must match the value set on the Railway service)"; exit 1; }
           echo "::add-mask::$MARKETPLACE_TOKEN"
+          [ -n "$BURNER_KEY" ] && echo "::add-mask::$BURNER_KEY"
           node scripts/marketplace-register.js
+      - name: Verify the listing works end to end
+        run: |
+          npm install --no-save @x402/fetch @x402/core @x402/evm viem
+          node scripts/marketplace-verify.js
 
   test:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'test' || contains(join(github.event.commits.*.message), '[test]')
