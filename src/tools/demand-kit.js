@@ -1,12 +1,7 @@
 // Demand kit — tools built directly from the agent402.app Demand Intelligence
 // board (top unmet queries with real signal counts):
 //   pdf-to-markdown   (461 signals "pdf to markdown", + 611 "convert pdf")
-//   xlsx-to-json/csv  (381 signals "convert excel to google sheets" — the
-//                      agentable core of that need is getting data OUT of xlsx)
-//   stock-quote       (128 signals "stock alerts" — the data half; keyless via
-//                      Stooq's public CSV endpoint)
 // All deterministic, no AI, inputs SSRF-guarded via safeFetch.
-import * as XLSX from "xlsx";
 import { pdfToText } from "./pdf.js";
 import { safeFetch } from "./fetch-guard.js";
 
@@ -50,22 +45,6 @@ export function textToMarkdown(text) {
   return out.join("\n\n");
 }
 
-/** Workbook buffer -> { sheets: [{name, rows, headers, data}] }. Exported for tests. */
-export function workbookToJson(buffer, { sheet, limit = 5000 } = {}) {
-  let wb;
-  try {
-    wb = XLSX.read(buffer, { type: "buffer" });
-  } catch {
-    throw bad("Not a readable spreadsheet (xlsx/xls/ods/csv)");
-  }
-  const names = sheet ? [sheet] : wb.SheetNames;
-  if (sheet && !wb.SheetNames.includes(sheet)) throw bad(`Sheet "${sheet}" not found. Sheets: ${wb.SheetNames.join(", ")}`);
-  const sheets = names.map((name) => {
-    const data = XLSX.utils.sheet_to_json(wb.Sheets[name], { defval: null }).slice(0, limit);
-    return { name, rows: data.length, headers: data.length ? Object.keys(data[0]) : [], data };
-  });
-  return { sheetNames: wb.SheetNames, sheets };
-}
 
 export const DEMAND_TOOLS = [
   {
@@ -82,116 +61,6 @@ export const DEMAND_TOOLS = [
     handler: async (i) => {
       const r = await pdfToText(need(i, "url"));
       return { url: r.url, pages: r.pages, title: r.info?.title ?? null, wordCount: r.wordCount, markdown: textToMarkdown(r.text) };
-    },
-  },
-  {
-    route: "POST /api/xlsx-to-json", name: "Excel to JSON", slug: "xlsx-to-json", category: "conversion", price: "$0.005",
-    description:
-      "Parse an Excel/ODS/CSV workbook from a URL into JSON rows (header-keyed), per sheet. The agentable half of \"convert excel to google sheets\": get the data out, no Google account required. Body: {\"url\":\"https://…/file.xlsx\",\"sheet\":\"Sheet1\"?}.",
-    tags: ["excel", "xlsx", "spreadsheet", "json", "convert"],
-    discovery: {
-      bodyType: "json",
-      input: { url: "https://example.com/report.xlsx" },
-      inputSchema: {
-        properties: {
-          url: { type: "string", description: "Public URL of the workbook (xlsx, xls, ods, csv)" },
-          sheet: { type: "string", description: "Optional: one sheet name (default: all sheets)" },
-        },
-        required: ["url"],
-      },
-      output: { example: { sheetNames: ["Sheet1"], sheets: [{ name: "Sheet1", rows: 2, headers: ["name", "qty"], data: [{ name: "widget", qty: 4 }] }] } },
-    },
-    handler: async (i) => {
-      const { buffer } = await safeFetch(need(i, "url"), { binary: true, maxBytes: 10 * 1024 * 1024 });
-      return workbookToJson(buffer, { sheet: i.sheet });
-    },
-  },
-  {
-    route: "POST /api/xlsx-to-csv", name: "Excel to CSV", slug: "xlsx-to-csv", category: "conversion", price: "$0.005",
-    description:
-      "Convert one sheet of an Excel/ODS workbook from a URL to CSV text. Body: {\"url\":\"https://…/file.xlsx\",\"sheet\":\"Sheet1\"?} (default: first sheet).",
-    tags: ["excel", "xlsx", "spreadsheet", "csv", "convert"],
-    discovery: {
-      bodyType: "json",
-      input: { url: "https://example.com/report.xlsx" },
-      inputSchema: {
-        properties: {
-          url: { type: "string", description: "Public URL of the workbook" },
-          sheet: { type: "string", description: "Optional sheet name (default: first)" },
-        },
-        required: ["url"],
-      },
-      output: { example: { sheet: "Sheet1", rows: 3, csv: "name,qty\nwidget,4\n" } },
-    },
-    handler: async (i) => {
-      const { buffer } = await safeFetch(need(i, "url"), { binary: true, maxBytes: 10 * 1024 * 1024 });
-      let wb;
-      try { wb = XLSX.read(buffer, { type: "buffer" }); } catch { throw bad("Not a readable spreadsheet"); }
-      const name = i.sheet || wb.SheetNames[0];
-      if (!wb.SheetNames.includes(name)) throw bad(`Sheet "${name}" not found. Sheets: ${wb.SheetNames.join(", ")}`);
-      const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name]);
-      return { sheet: name, rows: csv.trim() ? csv.trim().split("\n").length : 0, csv };
-    },
-  },
-  {
-    route: "GET /api/stock-quote", name: "Stock quote", slug: "stock-quote", category: "network", price: "$0.005",
-    description:
-      "Delayed stock quote (open/high/low/close/volume) for a ticker via Stooq's public data — no API key, deterministic JSON. US tickers by default; use suffixed symbols for other markets (e.g. AAPL.US, BMW.DE). ?symbol=AAPL.",
-    tags: ["stocks", "finance", "quote", "market-data", "stock-alerts"],
-    discovery: {
-      input: { symbol: "AAPL" },
-      inputSchema: { properties: { symbol: { type: "string", description: "Ticker, e.g. AAPL or BMW.DE (default market: .US)" } }, required: ["symbol"] },
-      output: { example: { symbol: "AAPL", currency: "USD", exchange: "NasdaqGS", price: 247.9, previousClose: 245.0, open: 245.1, high: 248.3, low: 244.2, volume: 51234567, asOf: "2026-06-11T20:00:00.000Z" } },
-    },
-    handler: async (i) => {
-      const raw = String(need(i, "symbol")).trim();
-      if (!/^[A-Za-z0-9.^=-]{1,15}$/.test(raw)) throw bad('"symbol" looks invalid');
-      const symbol = raw.toUpperCase();
-      // Primary: Yahoo Finance public chart endpoint (keyless JSON). Fallback:
-      // Stooq CSV (blocks some datacenter IPs, hence second).
-      try {
-        const { html } = await safeFetch(
-          `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`,
-          { maxBytes: 200_000 }
-        );
-        const data = JSON.parse(html);
-        const r = data?.chart?.result?.[0];
-        if (!r?.meta) throw new Error("empty");
-        const m = r.meta;
-        const q = r.indicators?.quote?.[0] ?? {};
-        const last = (a) => (Array.isArray(a) ? [...a].reverse().find((v) => v !== null) ?? null : null);
-        return {
-          symbol: m.symbol ?? symbol,
-          currency: m.currency ?? null,
-          exchange: m.fullExchangeName ?? m.exchangeName ?? null,
-          price: m.regularMarketPrice ?? last(q.close),
-          previousClose: m.chartPreviousClose ?? m.previousClose ?? null,
-          open: last(q.open),
-          high: m.regularMarketDayHigh ?? last(q.high),
-          low: m.regularMarketDayLow ?? last(q.low),
-          volume: m.regularMarketVolume ?? last(q.volume),
-          asOf: m.regularMarketTime ? new Date(m.regularMarketTime * 1000).toISOString() : null,
-          source: "Yahoo Finance public chart data (delayed)",
-        };
-      } catch {
-        // fall through to Stooq
-      }
-      const stooqSym = (symbol.includes(".") || symbol.startsWith("^") ? symbol : `${symbol}.US`).toLowerCase();
-      let csv;
-      try {
-        ({ html: csv } = await safeFetch(`https://stooq.com/q/l/?s=${encodeURIComponent(stooqSym)}&f=sd2t2ohlcv&h&e=csv`, { maxBytes: 10_000 }));
-      } catch {
-        throw bad("Quote upstreams unavailable — retry shortly", 502);
-      }
-      const lines = csv.trim().split("\n");
-      const cols = lines[1]?.split(",") ?? [];
-      if (cols.length < 8 || cols[3] === "N/D") throw bad(`No quote found for "${symbol}"`, 404);
-      const num = (s) => (s === "N/D" ? null : Number(s));
-      return {
-        symbol: cols[0], date: cols[1], time: cols[2],
-        open: num(cols[3]), high: num(cols[4]), low: num(cols[5]), price: num(cols[6]), volume: num(cols[7]),
-        source: "stooq.com (delayed public data)",
-      };
     },
   },
 ];
