@@ -11,6 +11,7 @@ on:
       - ".github/trigger-paytest"
       - ".github/trigger-publish"
       - ".github/trigger-marketplace"
+      - ".github/trigger-drain"
   workflow_dispatch:
     inputs:
       mode:
@@ -56,6 +57,27 @@ jobs:
           path: agent-address.txt
       - name: Wait for funding, then buy from the live API
         run: MODE=run KEY_FILE=$RUNNER_TEMP/agent-key node scripts/agent-e2e.js
+
+  drain:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'drain' || contains(join(github.event.commits.*.message), '[drain]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci && npm install --no-save @x402/fetch @x402/core @x402/evm viem
+      - name: Drain the burner into the revenue wallet via paid tool calls
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY || inputs.burner_key }}
+          TARGET_URL: https://agent402.tools
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "No BURNER_KEY — nothing to drain"; exit 0; }
+          echo "::add-mask::$BURNER_KEY"
+          printf '%s' "$BURNER_KEY" > "$RUNNER_TEMP/agent-key" && chmod 600 "$RUNNER_TEMP/agent-key"
+          KEY_FILE="$RUNNER_TEMP/agent-key" node scripts/drain-burner.js
 
   marketplace:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'marketplace' || contains(join(github.event.commits.*.message), '[marketplace]')
