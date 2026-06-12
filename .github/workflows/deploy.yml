@@ -378,7 +378,7 @@ jobs:
           # "mcpName" to the server.json name and confirming the npm package is
           # published — so this runs after the npm publish above.
           VER=$(node -p "require('./mcp/package.json').version")
-          if curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.mikeypetrillo/agent402" | grep -q "\"version\":\"$VER\""; then
+          if curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402" | grep -q "\"version\":\"$VER\""; then
             echo "io.github.mikeypetrillo/agent402@$VER already in the MCP Registry — nothing to do"; exit 0
           fi
           curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher

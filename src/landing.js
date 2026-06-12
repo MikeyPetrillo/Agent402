@@ -233,7 +233,7 @@ ${categoryCards}
     <div class="row"><b>Discoverable on the Coinbase CDP Bazaar</b> — the index AI agents browse for x402 services, keyed to our pay-to address:
       <code>GET api.cdp.coinbase.com/platform/v2/x402/discovery/resources</code></div>
     <div class="row"><b>Listed in the official MCP Registry</b> — installable by name in any MCP client:
-      <code>GET registry.modelcontextprotocol.io/v0/servers?search=io.github.mikeypetrillo/agent402</code></div>
+      <code>GET registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402</code></div>
     <div class="row"><b>On npm</b> — one-line install, <code>npx -y agent402-mcp</code>:
       <code>https://www.npmjs.com/package/agent402-mcp</code></div>${stats?.wallet ? `
     <div class="row"><b>Real USDC settlements, on-chain</b> — every paid call lands here, verifiable on Basescan:
