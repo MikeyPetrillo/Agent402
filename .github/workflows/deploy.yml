@@ -157,7 +157,7 @@ jobs:
           curl -s -X POST localhost:3000/api/pdf-to-markdown -H 'Content-Type: application/json' \
             -d '{"url":"https://arxiv.org/pdf/1706.03762"}' | jq '{pages, wordCount, md: (.markdown | .[0:160])}'
           curl -s 'localhost:3000/api/stock-quote?symbol=AAPL' | jq -c .
-          curl -s 'localhost:3000/api/stock-quote?symbol=AAPL' | jq -e '.close != null' >/dev/null || { echo "stock-quote returned no close price"; exit 1; }
+          curl -s 'localhost:3000/api/stock-quote?symbol=AAPL' | jq -e '.price != null' >/dev/null || { echo "stock-quote returned no price"; exit 1; }
           echo "=== kit: live network tools ==="
           curl -s -X POST localhost:3000/api/http-check -H 'Content-Type: application/json' -d '{"url":"https://example.com"}' | jq -c '{up, status, latencyMs}'
           curl -s -X POST localhost:3000/api/tls-cert -H 'Content-Type: application/json' -d '{"host":"github.com"}' | jq -c '{subject, issuer, daysRemaining, chainTrusted}'

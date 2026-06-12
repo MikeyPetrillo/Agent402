@@ -141,27 +141,55 @@ export const DEMAND_TOOLS = [
     discovery: {
       input: { symbol: "AAPL" },
       inputSchema: { properties: { symbol: { type: "string", description: "Ticker, e.g. AAPL or BMW.DE (default market: .US)" } }, required: ["symbol"] },
-      output: { example: { symbol: "AAPL.US", date: "2026-06-11", time: "22:00:00", open: 245.1, high: 248.3, low: 244.2, close: 247.9, volume: 51234567 } },
+      output: { example: { symbol: "AAPL", currency: "USD", exchange: "NasdaqGS", price: 247.9, previousClose: 245.0, open: 245.1, high: 248.3, low: 244.2, volume: 51234567, asOf: "2026-06-11T20:00:00.000Z" } },
     },
     handler: async (i) => {
-      const raw = String(need(i, "symbol")).trim().toLowerCase();
-      if (!/^[a-z0-9.^-]{1,15}$/.test(raw)) throw bad('"symbol" looks invalid');
-      const symbol = raw.includes(".") || raw.startsWith("^") ? raw : `${raw}.us`;
-      const { html } = await safeFetch(`https://stooq.com/q/l/?s=${encodeURIComponent(symbol)}&f=sd2t2ohlcv&h&e=csv`, { maxBytes: 10_000 });
-      const lines = html.trim().split("\n");
-      if (lines.length < 2) throw bad("Quote upstream returned no data", 502);
-      const cols = lines[1].split(",");
-      if (cols.length < 8 || cols[3] === "N/D") throw bad(`No quote found for "${symbol.toUpperCase()}"`, 404);
+      const raw = String(need(i, "symbol")).trim();
+      if (!/^[A-Za-z0-9.^=-]{1,15}$/.test(raw)) throw bad('"symbol" looks invalid');
+      const symbol = raw.toUpperCase();
+      // Primary: Yahoo Finance public chart endpoint (keyless JSON). Fallback:
+      // Stooq CSV (blocks some datacenter IPs, hence second).
+      try {
+        const { html } = await safeFetch(
+          `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`,
+          { maxBytes: 200_000 }
+        );
+        const data = JSON.parse(html);
+        const r = data?.chart?.result?.[0];
+        if (!r?.meta) throw new Error("empty");
+        const m = r.meta;
+        const q = r.indicators?.quote?.[0] ?? {};
+        const last = (a) => (Array.isArray(a) ? [...a].reverse().find((v) => v !== null) ?? null : null);
+        return {
+          symbol: m.symbol ?? symbol,
+          currency: m.currency ?? null,
+          exchange: m.fullExchangeName ?? m.exchangeName ?? null,
+          price: m.regularMarketPrice ?? last(q.close),
+          previousClose: m.chartPreviousClose ?? m.previousClose ?? null,
+          open: last(q.open),
+          high: m.regularMarketDayHigh ?? last(q.high),
+          low: m.regularMarketDayLow ?? last(q.low),
+          volume: m.regularMarketVolume ?? last(q.volume),
+          asOf: m.regularMarketTime ? new Date(m.regularMarketTime * 1000).toISOString() : null,
+          source: "Yahoo Finance public chart data (delayed)",
+        };
+      } catch {
+        // fall through to Stooq
+      }
+      const stooqSym = (symbol.includes(".") || symbol.startsWith("^") ? symbol : `${symbol}.US`).toLowerCase();
+      let csv;
+      try {
+        ({ html: csv } = await safeFetch(`https://stooq.com/q/l/?s=${encodeURIComponent(stooqSym)}&f=sd2t2ohlcv&h&e=csv`, { maxBytes: 10_000 }));
+      } catch {
+        throw bad("Quote upstreams unavailable — retry shortly", 502);
+      }
+      const lines = csv.trim().split("\n");
+      const cols = lines[1]?.split(",") ?? [];
+      if (cols.length < 8 || cols[3] === "N/D") throw bad(`No quote found for "${symbol}"`, 404);
       const num = (s) => (s === "N/D" ? null : Number(s));
       return {
-        symbol: cols[0],
-        date: cols[1],
-        time: cols[2],
-        open: num(cols[3]),
-        high: num(cols[4]),
-        low: num(cols[5]),
-        close: num(cols[6]),
-        volume: num(cols[7]),
+        symbol: cols[0], date: cols[1], time: cols[2],
+        open: num(cols[3]), high: num(cols[4]), low: num(cols[5]), price: num(cols[6]), volume: num(cols[7]),
         source: "stooq.com (delayed public data)",
       };
     },
