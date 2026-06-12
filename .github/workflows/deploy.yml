@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "probe (test facilitators only), test (exercise tools), paytest (paid e2e), publish (agent402-mcp to npm), or deploy"
+        description: "probe, test, paytest, publish (npm), marketplace (list on agent402.app), or deploy"
         default: "deploy"
       burner_key:
         description: "Existing funded burner key for paytest (hex). Leave empty to generate a fresh wallet."
@@ -54,11 +54,32 @@ jobs:
       - name: Wait for funding, then buy from the live API
         run: MODE=run KEY_FILE=$RUNNER_TEMP/agent-key node scripts/agent-e2e.js
 
+  marketplace:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'marketplace' || contains(join(github.event.commits.*.message), '[marketplace]')
+    runs-on: ubuntu-latest
+    env:
+      A402APP_KEY: ${{ secrets.AGENT402_APP_API_KEY }}
+      MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
+      WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
+      SITE: https://agent402.tools
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Register / update the agent402.app marketplace listing
+        run: |
+          [ -n "$A402APP_KEY" ] || { echo "AGENT402_APP_API_KEY secret missing"; exit 1; }
+          [ -n "$MARKETPLACE_TOKEN" ] || { echo "MARKETPLACE_TOKEN secret missing (must match the value set on the Railway service)"; exit 1; }
+          echo "::add-mask::$MARKETPLACE_TOKEN"
+          node scripts/marketplace-register.js
+
   test:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'test' || contains(join(github.event.commits.*.message), '[test]')
     runs-on: ubuntu-latest
     env:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+      MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -202,6 +223,40 @@ jobs:
           console.log("PoW on wallet-only render -> " + walletOnly.status + " ✓");
           console.log("proof-of-work gate: all assertions passed");
           '
+
+      - name: Marketplace bridge (token bypasses paywall; wrong/absent token does not)
+        run: |
+          # Paywall ACTIVE + a bridge token set. The bridge must serve paid tools
+          # to agent402.app's forwarded calls (token in path), reject a wrong
+          # token, and a direct unpaid call must still 402.
+          WALLET_ADDRESS=0x000000000000000000000000000000000000dEaD NETWORK=base \
+          FACILITATOR_URL=https://facilitator.payai.network X402_SYNC_ON_START=false \
+          MARKETPLACE_TOKEN=test-bridge-token PORT=3004 node src/server.js &
+          for i in $(seq 1 20); do curl -s localhost:3004/health >/dev/null && break; sleep 1; done
+          node --input-type=module -e '
+          const B = "http://localhost:3004"; const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
+          // good token → POST body adapted to the GET search-less hash tool, paywall bypassed
+          const good = await fetch(B + "/mkt/test-bridge-token/hash", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "hello world" }) });
+          if (good.status !== 200) fail("valid bridge token should serve 200, got " + good.status);
+          if ((await good.json()).hex.slice(0, 8) !== "b94d27b9") fail("bridge returned wrong result");
+          console.log("bridge valid token -> 200 ✓");
+          // wrong token → 404 (route hidden)
+          const bad = await fetch(B + "/mkt/nope/hash", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "x" }) });
+          if (bad.status === 200) fail("wrong bridge token must not be served");
+          console.log("bridge wrong token -> " + bad.status + " ✓");
+          // direct unpaid call to the tool still requires payment
+          const direct = await fetch(B + "/api/hash", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "x" }) });
+          if (direct.status === 200) fail("direct unpaid call must still be paywalled");
+          console.log("direct unpaid -> " + direct.status + " ✓");
+          // a wallet-only tool also works through the bridge (search needs BRAVE; use meta via a public URL is networked, so test dns-free: use uuid GET-style through bridge)
+          const g2 = await fetch(B + "/mkt/test-bridge-token/uuid", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: 2 }) });
+          if (g2.status !== 200) fail("bridge GET-tool adaptation failed, got " + g2.status);
+          console.log("bridge GET-tool (uuid) -> 200 ✓");
+          console.log("marketplace bridge: all assertions passed");
+          '
+
+      - name: Marketplace registration script (dry-run, no writes)
+        run: A402APP_KEY=dummy MARKETPLACE_TOKEN=test DRY_RUN=1 node scripts/marketplace-register.js | head -40 || true
 
       - name: MCP server e2e (catalog, search, proof-of-work settlement, wallet guidance)
         run: |
@@ -426,6 +481,7 @@ jobs:
       CDP_KEY_ID: ${{ secrets.CDP_API_KEY_ID || 'ff16e708-0590-4a24-8a17-b0e978143f68' }}
       CDP_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+      MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
       WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
       NETWORK: ${{ vars.NETWORK || 'base' }}
       # CDP keys take priority in the server's facilitator selection, so this
@@ -441,6 +497,7 @@ jobs:
           [ -n "$RAILWAY_API_TOKEN" ] && echo "::add-mask::$RAILWAY_API_TOKEN"
           [ -n "$CDP_KEY_SECRET" ] && echo "::add-mask::$CDP_KEY_SECRET"
           [ -n "$BRAVE_API_KEY" ] && echo "::add-mask::$BRAVE_API_KEY"
+          [ -n "$MARKETPLACE_TOKEN" ] && echo "::add-mask::$MARKETPLACE_TOKEN"
           [ -n "$RAILWAY_API_TOKEN" ] || { echo "No Railway token provided"; exit 1; }
           [ -n "$WALLET_ADDRESS" ] || { echo "No wallet address provided"; exit 1; }
 
@@ -558,6 +615,9 @@ jobs:
           fi
           if [ -n "$BRAVE_API_KEY" ]; then
             VARS=$(echo "$VARS" | jq --arg b "$BRAVE_API_KEY" '. + {BRAVE_API_KEY:$b}')
+          fi
+          if [ -n "$MARKETPLACE_TOKEN" ]; then
+            VARS=$(echo "$VARS" | jq --arg m "$MARKETPLACE_TOKEN" '. + {MARKETPLACE_TOKEN:$m}')
           fi
           RESP=$(jq -n --arg p '${{ steps.project.outputs.project_id }}' --arg e '${{ steps.project.outputs.env_id }}' --arg s '${{ steps.service.outputs.service_id }}' --argjson v "$VARS" \
             '{query:"mutation($p:String!, $e:String!, $s:String!, $v:EnvironmentVariables!) { variableCollectionUpsert(input: { projectId: $p, environmentId: $e, serviceId: $s, variables: $v }) }", variables:{p:$p,e:$e,s:$s,v:$v}}' | gql)
