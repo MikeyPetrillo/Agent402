@@ -7,10 +7,11 @@ on:
       - ".github/trigger-deploy"
       - ".github/trigger-test"
       - ".github/trigger-paytest"
+      - ".github/trigger-publish"
   workflow_dispatch:
     inputs:
       mode:
-        description: "probe (test facilitators only), test (exercise tools), paytest (paid e2e), or deploy"
+        description: "probe (test facilitators only), test (exercise tools), paytest (paid e2e), publish (agent402-mcp to npm), or deploy"
         default: "deploy"
       burner_key:
         description: "Existing funded burner key for paytest (hex). Leave empty to generate a fresh wallet."
@@ -246,6 +247,42 @@ jobs:
           TARGET_URL=https://agent402.tools node scripts/demo-payment.js
           echo "=== live M2M stats (informational; present once deployed) ==="
           curl -s https://agent402.tools/api/stats | jq '{tools, wallet, onchainRevenueProof, served: .toolCallsServed}' || echo "(/api/stats not live yet — will appear after this image rolls out)"
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'publish' || contains(join(github.event.commits.*.message), '[publish]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: MCP e2e gate before publishing
+        run: |
+          npm ci
+          npm --prefix mcp ci
+          node mcp/test.js
+      - name: Publish agent402-mcp to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN secret missing — add an npm granular token (read/write, all packages, 2FA bypass) as the NPM_TOKEN repo secret"; exit 1; }
+          cd mcp
+          VERSION=$(node -p "require('./package.json').version")
+          # Idempotent: a re-run after a successful publish is a no-op.
+          if npm view "agent402-mcp@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-mcp@$VERSION is already on npm — nothing to do"
+            exit 0
+          fi
+          npm publish
+          echo "published agent402-mcp@$VERSION → https://www.npmjs.com/package/agent402-mcp"
+      - name: Verify the public npx path resolves
+        run: |
+          for i in $(seq 1 10); do
+            npm view agent402-mcp version && exit 0
+            sleep 15
+          done
+          echo "package not visible on the registry yet"; exit 1
 
   probe:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || contains(join(github.event.commits.*.message), '[probe]')
