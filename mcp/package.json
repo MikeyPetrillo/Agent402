@@ -1,6 +1,6 @@
 {
   "name": "agent402-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "Mikey Petrillo (https://github.com/MikeyPetrillo)",
   "homepage": "https://agent402.tools",
   "description": "MCP server for Agent402 (agent402.tools) — 1000+ pay-per-call web tools for AI agents. Pays per call in USDC via the x402 protocol, or with compute (proof-of-work) when no wallet is configured.",

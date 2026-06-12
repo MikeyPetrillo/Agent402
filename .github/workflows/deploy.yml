@@ -57,6 +57,8 @@ jobs:
   test:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'test' || contains(join(github.event.commits.*.message), '[test]')
     runs-on: ubuntu-latest
+    env:
+      BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -111,6 +113,15 @@ jobs:
           curl -s -X POST localhost:3000/api/email-validate -H 'Content-Type: application/json' -d '{"email":"test@gmail.com"}' | jq -c '{syntaxValid, deliverableDomain}'
           curl -s 'localhost:3000/api/uuid?version=7&count=2' | jq -c .
           curl -s 'localhost:3000/api/qr?text=https://agent402.tools' -o qr.png && file qr.png
+          echo "=== search: live web search (premium, requires BRAVE_API_KEY) ==="
+          if [ -n "$BRAVE_API_KEY" ]; then
+            curl -s 'localhost:3000/api/search?q=x402+payment+protocol&count=3' | jq '{query, count, top: .results[0].url}'
+            curl -s 'localhost:3000/api/search?q=x402+payment+protocol&count=3' | jq -e '.count >= 1' >/dev/null || { echo "search returned no results"; exit 1; }
+          else
+            echo "(BRAVE_API_KEY secret not set — verifying the unconfigured 503 path instead)"
+            code=$(curl -s -o /dev/null -w '%{http_code}' 'localhost:3000/api/search?q=test')
+            [ "$code" = "503" ] || { echo "expected 503 without key, got $code"; exit 1; }
+          fi
           echo "=== kit: live network tools ==="
           curl -s -X POST localhost:3000/api/http-check -H 'Content-Type: application/json' -d '{"url":"https://example.com"}' | jq -c '{up, status, latencyMs}'
           curl -s -X POST localhost:3000/api/tls-cert -H 'Content-Type: application/json' -d '{"host":"github.com"}' | jq -c '{subject, issuer, daysRemaining, chainTrusted}'
@@ -389,6 +400,7 @@ jobs:
       # public on-chain); only the Railway token and CDP secret live in secrets.
       CDP_KEY_ID: ${{ secrets.CDP_API_KEY_ID || 'ff16e708-0590-4a24-8a17-b0e978143f68' }}
       CDP_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
+      BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
       NETWORK: ${{ vars.NETWORK || 'base' }}
       # CDP keys take priority in the server's facilitator selection, so this
@@ -403,6 +415,7 @@ jobs:
         run: |
           [ -n "$RAILWAY_API_TOKEN" ] && echo "::add-mask::$RAILWAY_API_TOKEN"
           [ -n "$CDP_KEY_SECRET" ] && echo "::add-mask::$CDP_KEY_SECRET"
+          [ -n "$BRAVE_API_KEY" ] && echo "::add-mask::$BRAVE_API_KEY"
           [ -n "$RAILWAY_API_TOKEN" ] || { echo "No Railway token provided"; exit 1; }
           [ -n "$WALLET_ADDRESS" ] || { echo "No wallet address provided"; exit 1; }
 
@@ -517,6 +530,9 @@ jobs:
             '{WALLET_ADDRESS:$w, NETWORK:$n, FACILITATOR_URL:$f, BASE_URL:$b}')
           if [ -n "$CDP_KEY_ID" ] && [ -n "$CDP_KEY_SECRET" ]; then
             VARS=$(echo "$VARS" | jq --arg i "$CDP_KEY_ID" --arg s "$CDP_KEY_SECRET" '. + {CDP_API_KEY_ID:$i, CDP_API_KEY_SECRET:$s}')
+          fi
+          if [ -n "$BRAVE_API_KEY" ]; then
+            VARS=$(echo "$VARS" | jq --arg b "$BRAVE_API_KEY" '. + {BRAVE_API_KEY:$b}')
           fi
           RESP=$(jq -n --arg p '${{ steps.project.outputs.project_id }}' --arg e '${{ steps.project.outputs.env_id }}' --arg s '${{ steps.service.outputs.service_id }}' --argjson v "$VARS" \
             '{query:"mutation($p:String!, $e:String!, $s:String!, $v:EnvironmentVariables!) { variableCollectionUpsert(input: { projectId: $p, environmentId: $e, serviceId: $s, variables: $v }) }", variables:{p:$p,e:$e,s:$s,v:$v}}' | gql)

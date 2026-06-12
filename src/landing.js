@@ -69,7 +69,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "name": "Agent402",
       "url": "${baseUrl}",
       "provider": { "@id": "${baseUrl}/#org" },
-      "description": "${count} pay-per-call tools for AI agents via the x402 payment protocol (USDC on Base): headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed memory & coordination, ${count - freeCount > 0 ? "data conversion, " : ""}unit conversions, validation, and more.",
+      "description": "${count} pay-per-call tools for AI agents via the x402 payment protocol (USDC on Base): live web search, headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed memory & coordination, ${count - freeCount > 0 ? "data conversion, " : ""}unit conversions, validation, and more.",
       "documentation": "${baseUrl}/llms.txt",
       "offers": { "@type": "AggregateOffer", "offerCount": "${count}", "lowPrice": "0.001", "highPrice": "0.02", "priceCurrency": "USD", "description": "Per-call micropayments in USDC via x402, or free with proof-of-work" }
     },
