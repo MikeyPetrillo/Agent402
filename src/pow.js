@@ -153,7 +153,7 @@ export function powInfo(baseUrl, computeSlugs) {
   return {
     type: "proof-of-work",
     summary:
-      "Agents without a wallet can access the CPU-only tools by spending CPU instead of USDC. Request a challenge, solve it, and resend with the X-Pow-Solution header.",
+      "Agents without a wallet can access the pure-CPU tools by solving a sha256 puzzle (a fraction of a second of the caller's CPU) instead of paying USDC. No money, no AI tokens, no model involved. Request a challenge, solve it, and resend with the X-Pow-Solution header.",
     challengeUrl: `${baseUrl}/api/pow/challenge`,
     difficultyBits: POW_DIFFICULTY,
     ttlSeconds: TTL_SECONDS,

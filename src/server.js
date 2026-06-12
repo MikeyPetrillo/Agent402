@@ -426,7 +426,7 @@ app.get("/api/pricing", (_req, res) =>
     payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC", networks: enabledNetworks(NETWORK) },
     altPayment: {
       protocol: "proof-of-work",
-      summary: "No wallet? Spend CPU instead on the pure-CPU tools.",
+      summary: "No wallet? Solve a sha256 puzzle (a fraction of a second of CPU) instead — no money, no AI tokens, no model involved.",
       challengeUrl: `${BASE_URL}/api/pow/challenge`,
       info: `${BASE_URL}/api/pow`,
       difficultyBits: POW_DIFFICULTY,

@@ -235,7 +235,7 @@ ${esc(payExample(baseUrl, tool))}</pre>
   ${
     computePayable
       ? `<h2>No wallet? Pay with compute</h2>
-  <p class="sub">This is a pure-CPU tool, so an agent without a wallet can pay with <a href="/api/pow">proof-of-work</a> instead of USDC: fetch a challenge, solve it (${powDifficulty} leading zero bits), and resend with the <code>X-Pow-Solution</code> header.</p>
+  <p class="sub">This is a pure-CPU tool, so an agent without a wallet can pay with <a href="/api/pow">proof-of-work</a> instead of USDC: fetch a challenge, solve the sha256 puzzle (${powDifficulty} leading zero bits — a fraction of a second of CPU, no money, no AI tokens), and resend with the <code>X-Pow-Solution</code> header.</p>
   <pre>import { createHash } from "node:crypto";
 const lz = (b) =&gt; { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
 const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${esc(tool.slug)}")).json();
