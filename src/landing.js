@@ -32,8 +32,10 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230b0e14'/%3E%3Ctext x='50' y='66' font-size='40' font-weight='700' font-family='monospace' text-anchor='middle' fill='%234ade80'%3E402%3C/text%3E%3C/svg%3E">
-<title>Agent402 — where agents pay agents (machine-to-machine payments via x402, USDC on Base)</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/png" sizes="512x512" href="/logo.png">
+<link rel="shortcut icon" href="/favicon.ico">
+<link rel="apple-touch-icon" href="/logo.png"><title>Agent402 — where agents pay agents (machine-to-machine payments via x402, USDC on Base)</title>
 <meta name="description" content="A live node in the machine-to-machine economy: ${count} tools autonomous agents pay for per call in USDC via the x402 protocol — or with proof-of-work, no wallet. No human, no signup, no API key. The payment is the identity.">
 <link rel="canonical" href="${baseUrl}/">
 <meta property="og:type" content="website">
