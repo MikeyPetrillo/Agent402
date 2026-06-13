@@ -211,7 +211,10 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium
-          FREE_MODE=true PORT=3000 node src/server.js &
+          # Raise the MCP rate limit so the full-catalog connector test can sweep
+          # every tool (production keeps the default 20/min, 120/hr).
+          AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
+            FREE_MODE=true PORT=3000 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       # Deterministic correctness proofs run FIRST — a flaky live upstream
       # (e.g. data.gov downtime) must never mask whether the tools actually work.
@@ -244,6 +247,9 @@ jobs:
 
       - name: Remote MCP connector (/mcp — initialize, search, free call, paid refusal)
         run: TARGET_URL=http://localhost:3000 node scripts/test-mcp-http.js
+
+      - name: Every tool through the MCP connector (call_tool: free executes, wallet refuses)
+        run: TARGET_URL=http://localhost:3000 node scripts/test-mcp-all.js
 
       - name: Exercise tools against live sites
         run: |
