@@ -47,3 +47,16 @@ Other env knobs: `AGENT402_URL` (target service), `AGENT402_TOOLS` (override the
 | Pure-CPU tools | free, rate-limited | free (PoW), unlimited |
 | Search/browser/PDF/memory | ❌ (refused with guidance) | ✅ with a funded wallet |
 | Identity | anonymous | your wallet = your identity (unlocks [[Memory and Coordination]]) |
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| **Connector won't connect** in claude.ai/Claude Code | Confirm the URL is exactly `https://agent402.tools/mcp` (HTTPS, no trailing path). In Claude Code, `claude mcp list` should show `agent402 ✓ Connected`. If it's mid-deploy it can briefly drop — retry in ~60s. |
+| **"Error occurred during tool execution"** (transient) | Usually a redeploy window on the host; the same call succeeds on retry. The endpoint is health-gated in CI on every deploy. |
+| **`call_tool` says a field is missing / "must be a number"** | Pass `params` as a JSON object, e.g. `{"slug":"convert-kilometers-to-miles","params":{"value":42}}`. A stringified object (`"{\"value\":42}"`) is also accepted. |
+| **A tool returns "wallet required" / paid-path guidance** | That tool (live search, browser render, screenshots, PDFs, durable memory) isn't in the hosted free tier. Run the npm server `npx -y agent402-mcp` with `AGENT_KEY` set to a funded Base wallet, or call it over HTTP with any x402 client. |
+| **"Free-tier rate limit reached"** | The hosted connector is capped at 20 calls/min, 120/hour per client. Wait, or use the npm server with a wallet for unmetered access. |
+| **Finding the right tool** | Call `search_tools` with a plain-language query first; it returns the slug + input schema to pass to `call_tool`. |
+
+More: [[Paying with x402]] · [[Paying with Compute]] · [Open an issue](https://github.com/MikeyPetrillo/Agent402/issues).
