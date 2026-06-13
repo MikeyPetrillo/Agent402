@@ -228,6 +228,9 @@ jobs:
       - name: Media-kit tests (ffprobe, mp4-to-mp3, loudnorm — real ffmpeg)
         run: node scripts/test-media.js
 
+      - name: Agent-kit tests (token-count, text-chunk, json-validate, jsonl)
+        run: node scripts/test-agent-kit.js
+
       - name: Conversion tools (~970 endpoints, exact + round-trip)
         run: node scripts/test-convert.js
 
