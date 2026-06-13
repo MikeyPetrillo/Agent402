@@ -23,6 +23,24 @@ on:
         default: ""
 
 jobs:
+  # Isolated demand-board read so its output isn't buried under the probe job's
+  # verbose steps. Gated on [demand]. Pure read; never fails the run.
+  demand:
+    if: contains(join(github.event.commits.*.message), '[demand]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      A402APP_KEY: ${{ secrets.AGENT402_APP_API_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Scan agent402.app Demand Intelligence
+        run: |
+          [ -n "$A402APP_KEY" ] && echo "::add-mask::$A402APP_KEY"
+          node scripts/demand-scan.js || true
+
   paytest:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'paytest' || contains(join(github.event.commits.*.message), '[paytest]')
     runs-on: ubuntu-latest
