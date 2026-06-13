@@ -40,6 +40,8 @@ jobs:
         run: |
           [ -n "$A402APP_KEY" ] && echo "::add-mask::$A402APP_KEY"
           node scripts/demand-scan.js || true
+      - name: Supply-side gap scan (public Bazaar discovery)
+        run: node scripts/supply-scan.js || true
 
   paytest:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'paytest' || contains(join(github.event.commits.*.message), '[paytest]')
