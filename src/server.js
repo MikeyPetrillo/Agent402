@@ -22,11 +22,12 @@ import { DEMAND_TOOLS } from "./tools/demand-kit.js";
 import { MEDIA_TOOLS } from "./tools/media-kit.js";
 import { GOV_TOOLS } from "./tools/gov-kit.js";
 import { AGENT_TOOLS } from "./tools/agent-kit.js";
+import { BARCODE_TOOLS } from "./tools/barcode-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...AGENT_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
 import { recordServedCall, getStats } from "./stats.js";
 import { timingSafeEqual } from "node:crypto";

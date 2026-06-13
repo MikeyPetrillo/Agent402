@@ -233,6 +233,9 @@ jobs:
       - name: Agent-kit tests (token-count, text-chunk, json-validate, jsonl)
         run: node scripts/test-agent-kit.js
 
+      - name: Barcode-kit tests (QR/barcode decode round-trip, PNG + JPEG)
+        run: node scripts/test-barcode.js
+
       - name: Conversion tools (~970 endpoints, exact + round-trip)
         run: node scripts/test-convert.js
 
