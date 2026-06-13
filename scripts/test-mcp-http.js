@@ -59,6 +59,14 @@ const call = await rpc("tools/call", {
 const callText = call.result?.content?.[0]?.text ?? "";
 assert(!call.result?.isError && callText.includes("26.097590074"), `free CPU tool executes with exact output (got ${callText.slice(0, 120)})`);
 
+// LLM clients often stringify object args — params as a JSON string must still work.
+const callStr = await rpc("tools/call", {
+  name: "call_tool",
+  arguments: { slug: "convert-kilometers-to-miles", params: '{"value": 42}' },
+});
+const callStrText = callStr.result?.content?.[0]?.text ?? "";
+assert(!callStr.result?.isError && callStrText.includes("26.097590074"), `call_tool accepts params as a JSON string (got ${callStrText.slice(0, 120)})`);
+
 const paid = await rpc("tools/call", { name: "call_tool", arguments: { slug: "render", params: { url: "https://example.com" } } });
 const paidText = paid.result?.content?.[0]?.text ?? "";
 assert(paid.result?.isError === true, "wallet-only tool (render) is refused on the free tier");
