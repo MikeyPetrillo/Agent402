@@ -579,13 +579,6 @@ jobs:
               | jq -r '.data.deploymentLogs[]? | "\(.timestamp)  \(.message)"' | tail -40 || true
           fi
 
-      - name: Scan the agent402.app demand board (find unmet demand to build)
-        env:
-          A402APP_KEY: ${{ secrets.AGENT402_APP_API_KEY }}
-        run: |
-          [ -n "$A402APP_KEY" ] && echo "::add-mask::$A402APP_KEY"
-          node scripts/demand-scan.js || true
-
       - name: Read the agent402.app marketplace API docs (read-only)
         env:
           A402APP_KEY: ${{ secrets.AGENT402_APP_API_KEY }}
