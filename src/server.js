@@ -11,6 +11,7 @@ import {
 import { payerFromRequest } from "./payer.js";
 import { landingPage } from "./landing.js";
 import { privacyPage } from "./privacy.js";
+import { termsPage } from "./terms.js";
 import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
 import { buildPaymentMiddleware, enabledNetworks } from "./payments.js";
 import { KIT } from "./tools/kit.js";
@@ -409,6 +410,7 @@ app.get("/", (_req, res) =>
 );
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/privacy", (_req, res) => res.type("html").send(privacyPage(BASE_URL)));
+app.get("/terms", (_req, res) => res.type("html").send(termsPage(BASE_URL)));
 app.get("/guides", (_req, res) => res.type("html").send(guidesIndex(BASE_URL)));
 app.get("/guides/:slug", (req, res) => {
   const html = guidePage(BASE_URL, req.params.slug);
