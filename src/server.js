@@ -485,6 +485,21 @@ app.get("/logo.png", async (_req, res) => {
     res.redirect(302, "/logo.svg");
   }
 });
+// Real favicon files so third-party fetchers (Google's s2/favicons, used by the
+// Anthropic directory) resolve our 402 mark instead of a generic globe. The SVG
+// is always available; the .ico serves the rasterized PNG (favicon clients
+// accept PNG bytes) and falls back to the SVG if Chromium is unavailable.
+app.get("/favicon.svg", (_req, res) =>
+  res.type("image/svg+xml").set("Cache-Control", "public, max-age=86400").send(LOGO_SVG)
+);
+app.get("/favicon.ico", async (_req, res) => {
+  try {
+    logoPngCache ??= await rasterizeSvg(LOGO_SVG, 512);
+    res.type("image/png").set("Cache-Control", "public, max-age=86400").send(logoPngCache);
+  } catch {
+    res.redirect(302, "/favicon.svg");
+  }
+});
 
 // 1200×630 social card for link previews (og:image / twitter:image).
 // `width`/`height` letterbox the same art onto other canvases — GitHub's
