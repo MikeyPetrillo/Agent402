@@ -91,67 +91,61 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 }
 </script>
 <style>
-  :root { --bg:#0b0e14; --card:#131826; --text:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --mono:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  :root { --bg:#0a0d13; --bg2:#0d1220; --card:#121826; --line:#1e2638; --line2:#2a3550; --text:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --accent2:#34d399; --mono:ui-monospace,SFMono-Regular,Menlo,monospace; }
   * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--text); font:16px/1.65 system-ui,-apple-system,sans-serif; }
-  /* hero glow — a quiet pool of accent light behind the headline */
-  body::before { content:""; position:absolute; top:-220px; left:50%; transform:translateX(-50%);
-    width:880px; height:560px; pointer-events:none; z-index:0;
-    background:radial-gradient(closest-side, rgba(74,222,128,.14), rgba(74,222,128,.05) 55%, transparent 75%); }
-  .wrap { position:relative; z-index:1; max-width:920px; margin:0 auto; padding:64px 20px 80px; }
-  h1 { font-size:clamp(2.6rem, 6vw, 3.5rem); font-weight:800; letter-spacing:-.02em; line-height:1.1; margin-bottom:16px; }
-  h1 .x { color:var(--accent); text-shadow:0 0 24px rgba(74,222,128,.6); }
-  .sub { color:var(--muted); font-size:1.2rem; max-width:660px; }
-  .badge { display:inline-block; background:#1b2336; color:var(--accent); border:1px solid #2a3550; border-radius:999px; padding:3px 12px; font-size:.8rem; margin-bottom:20px; font-family:var(--mono); }
-  .cta { display:inline-block; margin:18px 12px 0 0; padding:10px 18px; border-radius:10px; font-weight:600; text-decoration:none; }
-  .cta.primary { background:var(--accent); color:#08130b; box-shadow:0 0 22px rgba(74,222,128,.35); }
-  .cta.ghost { border:1px solid #2a3550; color:var(--text); }
-  .grid { display:grid; gap:14px; margin:32px 0; }
-  @media (min-width:640px){ .grid{ grid-template-columns:repeat(3,1fr);} }
-  .card { background:var(--card); border:1px solid #1e2638; border-radius:12px; padding:18px; }
-  a.card { text-decoration:none; display:block; }
-  a.card:hover { border-color:#2a3550; }
-  .card h3 { font-size:1rem; margin-bottom:4px; color:var(--text); }
-  .card .count { color:var(--muted); font-family:var(--mono); font-size:.8rem; font-weight:400; }
-  .card .price { color:var(--accent); font-family:var(--mono); font-size:.85rem; }
-  .card p { color:var(--muted); font-size:.85rem; margin-top:8px; }
-  h2 { margin:64px 0 14px; font-size:1.5rem; letter-spacing:-.01em; }
-  pre { background:#0d1220; border:1px solid #1e2638; border-radius:10px; padding:16px; overflow-x:auto; font-family:var(--mono); font-size:.82rem; line-height:1.5; color:#c9d4ec; }
-  code { font-family:var(--mono); font-size:.85em; color:#a5b4d4; }
-  .step { display:flex; gap:14px; margin:14px 0; }
-  .step b { color:var(--accent); font-family:var(--mono); flex-shrink:0; }
-  .step span { color:var(--muted); }
-  .why { display:grid; gap:14px; margin:20px 0; }
-  @media (min-width:640px){ .why{ grid-template-columns:repeat(2,1fr);} }
-  .why .card h3 { color:var(--accent); font-size:.95rem; }
+  html { scroll-behavior:smooth; }
+  body { background:var(--bg); color:var(--text); font:16px/1.65 system-ui,-apple-system,sans-serif; -webkit-font-smoothing:antialiased; }
   a { color:var(--accent); }
-  footer { margin-top:56px; color:var(--muted); font-size:.85rem; border-top:1px solid #1e2638; padding-top:20px; }
-  .warn { background:#3a2a12; border:1px solid #6b4a1a; color:#fbbf24; border-radius:10px; padding:12px 16px; margin:20px 0; font-size:.9rem; }
-  .faq p { color:var(--muted); margin:14px 0; font-size:.95rem; }
-  .faq b { color:var(--text); }
-  .callout { background:#10210f; border:1px solid #1f4a1d; border-radius:12px; padding:14px 18px; margin:24px 0 8px; font-size:1rem; color:var(--text); }
-  .callout b { color:#fff; }
-  .freebadge { display:inline-block; background:var(--accent); color:#08130b; font-weight:800; font-size:.72rem; letter-spacing:.03em; padding:2px 9px; border-radius:999px; margin-right:8px; vertical-align:middle; }
-  .odometer { margin:30px 0 4px; text-align:center; }
-  .odo-label { display:block; color:var(--muted); font-family:var(--mono); font-size:.7rem; letter-spacing:.3em; margin-bottom:9px; }
-  .odo-digits b { display:inline-block; background:#000; color:var(--accent); border:1px solid #1f4a1d; border-radius:6px; font:700 1.9rem/1 var(--mono); padding:9px 8px; margin:0 2px; text-shadow:0 0 9px rgba(74,222,128,.55); }
-  .odo-sub { display:block; margin-top:9px; color:var(--muted); font-size:.8rem; font-family:var(--mono); }
-  .ticker { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; margin:18px 0 6px; padding:11px 14px; background:#0d1626; border:1px solid #1f3550; border-radius:10px; font-family:var(--mono); font-size:.78rem; color:var(--muted); }
-  .ticker .live { color:var(--accent); font-weight:700; letter-spacing:.08em; }
-  .ticker .dot { width:7px; height:7px; border-radius:50%; background:var(--accent); display:inline-block; box-shadow:0 0 8px var(--accent); margin-right:6px; vertical-align:middle; }
-  .ticker .sep { color:#33405c; }
-  .verify { background:#0d1220; border:1px solid #1e2638; border-radius:12px; padding:18px 20px; margin:18px 0; }
-  .verify h3 { font-size:1rem; margin-bottom:6px; }
-  .verify .row { margin:12px 0; }
-  .verify .row b { color:var(--text); font-size:.9rem; }
-  .verify code { display:block; margin-top:5px; background:#080c16; border:1px solid #1e2638; border-radius:7px; padding:8px 10px; font-size:.76rem; color:#9fb4dc; overflow-x:auto; white-space:nowrap; }
-  .lbl { color:var(--accent); font-family:var(--mono); font-size:.8rem; font-weight:600; margin:22px 0 7px; }
-  .lbl span { color:var(--muted); font-weight:400; }
-  .term { background:#080c16; border:1px solid #1e2638; border-radius:12px; margin:20px 0 8px; overflow:hidden; }
-  .term-bar { display:flex; gap:6px; padding:10px 14px; border-bottom:1px solid #151c2c; }
+
+  /* sticky top nav — makes it read as a product, not a doc */
+  .nav { position:sticky; top:0; z-index:50; backdrop-filter:blur(12px); background:rgba(10,13,19,.82); border-bottom:1px solid var(--line); }
+  .nav-in { max-width:1080px; margin:0 auto; display:flex; align-items:center; gap:20px; padding:12px 20px; }
+  .brand { display:flex; align-items:center; gap:9px; font-weight:700; text-decoration:none; color:var(--text); letter-spacing:-.01em; }
+  .brand .glyph { font-family:var(--mono); font-weight:700; color:var(--accent); border:1px solid #1f4a1d; background:#000; border-radius:7px; padding:2px 7px; font-size:.82rem; }
+  .nav .spacer { flex:1; }
+  .nav a.link { color:var(--muted); text-decoration:none; font-size:.9rem; }
+  .nav a.link:hover { color:var(--text); }
+  .nav a.gh { border:1px solid var(--line2); border-radius:8px; padding:6px 13px; color:var(--text); font-size:.85rem; text-decoration:none; }
+  .nav a.gh:hover { border-color:var(--accent); }
+  @media (max-width:720px){ .nav a.hide-sm{ display:none; } }
+
+  .wrap { max-width:1080px; margin:0 auto; padding:0 20px; position:relative; }
+  section { padding:60px 0; border-top:1px solid var(--line); }
+  .eyebrow { font-family:var(--mono); font-size:.72rem; letter-spacing:.2em; text-transform:uppercase; color:var(--accent); margin-bottom:12px; }
+  h2 { font-size:clamp(1.5rem,3vw,1.9rem); letter-spacing:-.02em; margin-bottom:12px; }
+  .sub { color:var(--muted); font-size:1.08rem; max-width:680px; }
+
+  /* hero */
+  .hero { position:relative; padding:60px 0 56px; display:grid; gap:36px; border-top:none; }
+  @media (min-width:900px){ .hero{ grid-template-columns:1.04fr .96fr; align-items:center; } }
+  .hero::before { content:""; position:absolute; top:-160px; left:-10%; width:780px; height:520px; pointer-events:none; z-index:-1;
+    background:radial-gradient(closest-side, rgba(74,222,128,.16), rgba(52,211,153,.05) 55%, transparent 75%); }
+  h1 { font-size:clamp(2.6rem,5.6vw,3.7rem); font-weight:800; letter-spacing:-.03em; line-height:1.04; margin-bottom:18px; }
+  h1 .x { color:var(--accent); text-shadow:0 0 26px rgba(74,222,128,.65); }
+  .hero .sub { font-size:1.15rem; }
+  .badge { display:inline-flex; align-items:center; gap:8px; background:#11203a; color:var(--accent); border:1px solid #1f3550; border-radius:999px; padding:5px 13px; font-size:.78rem; margin-bottom:22px; font-family:var(--mono); }
+  .badge .dot { width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 8px var(--accent); }
+  .ctas { margin-top:26px; display:flex; flex-wrap:wrap; gap:12px; }
+  .cta { display:inline-block; padding:12px 20px; border-radius:11px; font-weight:650; text-decoration:none; font-size:.95rem; }
+  .cta.primary { background:linear-gradient(180deg,#5bf09a,#3ec873); color:#06210f; box-shadow:0 6px 24px rgba(74,222,128,.28); }
+  .cta.primary:hover { box-shadow:0 8px 30px rgba(74,222,128,.42); }
+  .cta.ghost { border:1px solid var(--line2); color:var(--text); }
+  .cta.ghost:hover { border-color:var(--accent); }
+
+  /* stat band */
+  .stats { display:grid; grid-template-columns:repeat(2,1fr); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:14px; overflow:hidden; margin-top:14px; }
+  @media (min-width:560px){ .stats{ grid-template-columns:repeat(4,1fr);} }
+  .stat { background:var(--bg2); padding:18px 16px; }
+  .stat .n { font:800 1.7rem/1 var(--mono); color:var(--accent); letter-spacing:-.02em; }
+  .stat .l { color:var(--muted); font-size:.78rem; margin-top:6px; }
+
+  /* terminal (hero right) */
+  .term { background:#080c16; border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:0 24px 60px rgba(0,0,0,.45); }
+  .term-bar { display:flex; gap:7px; padding:11px 14px; border-bottom:1px solid #151c2c; }
   .term-bar i { width:11px; height:11px; border-radius:50%; display:block; }
   .term-bar i:nth-child(1){background:#ff5f57}.term-bar i:nth-child(2){background:#febc2e}.term-bar i:nth-child(3){background:#28c840}
-  .term-body { padding:14px 18px 16px; font-family:var(--mono); font-size:.8rem; line-height:1.9; color:#c9d4ec; overflow-x:auto; }
+  .term-bar .ttl { margin-left:8px; color:#5b6b8c; font-family:var(--mono); font-size:.72rem; align-self:center; }
+  .term-body { padding:16px 18px; font-family:var(--mono); font-size:.78rem; line-height:1.95; color:#c9d4ec; overflow-x:auto; min-height:230px; }
   .tline { opacity:0; white-space:nowrap; animation:tcycle 11s infinite; }
   .tline .p { color:#5b6b8c; } .tline .ok { color:var(--accent); } .tline .warn { color:#fbbf24; }
   .t1{animation-name:t1}.t2{animation-name:t2}.t3{animation-name:t3}.t4{animation-name:t4}.t5{animation-name:t5}.t6{animation-name:t6}
@@ -162,74 +156,134 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   @keyframes t5 { 0%,57%{opacity:0} 59%,90%{opacity:1} 95%,100%{opacity:0} }
   @keyframes t6 { 0%,73%{opacity:0} 75%,90%{opacity:1} 95%,100%{opacity:0} }
   @media (prefers-reduced-motion: reduce){ .tline{ animation:none; opacity:1; } }
+
+  /* cards / grids */
+  .grid { display:grid; gap:14px; margin-top:26px; }
+  @media (min-width:640px){ .grid{ grid-template-columns:repeat(3,1fr);} }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:13px; padding:18px; transition:border-color .15s, transform .15s; }
+  a.card { text-decoration:none; display:block; }
+  a.card:hover { border-color:var(--accent); transform:translateY(-2px); }
+  .card h3 { font-size:1rem; margin-bottom:4px; color:var(--text); }
+  .card .count { color:var(--muted); font-family:var(--mono); font-size:.8rem; font-weight:400; }
+  .card .price { color:var(--accent); font-family:var(--mono); font-size:.85rem; }
+  .card p { color:var(--muted); font-size:.85rem; margin-top:8px; }
+  .why { display:grid; gap:14px; margin-top:22px; }
+  @media (min-width:640px){ .why{ grid-template-columns:repeat(2,1fr);} }
+  .why .card h3 { color:var(--accent); font-size:.95rem; }
+  .steps { display:grid; gap:14px; margin-top:22px; }
+  @media (min-width:760px){ .steps{ grid-template-columns:repeat(3,1fr);} }
+  .stepc { background:var(--card); border:1px solid var(--line); border-radius:13px; padding:18px; }
+  .stepc .num { font:800 1.1rem/1 var(--mono); color:#06210f; background:var(--accent); width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; margin-bottom:12px; }
+  .stepc span { color:var(--muted); font-size:.92rem; }
+
+  pre { background:var(--bg2); border:1px solid var(--line); border-radius:11px; padding:16px; overflow-x:auto; font-family:var(--mono); font-size:.82rem; line-height:1.55; color:#c9d4ec; margin-top:10px; }
+  code { font-family:var(--mono); font-size:.85em; color:#a5b4d4; }
+  .warn { background:#3a2a12; border:1px solid #6b4a1a; color:#fbbf24; border-radius:10px; padding:12px 16px; margin-top:20px; font-size:.9rem; }
+  .faq p { color:var(--muted); margin:16px 0; font-size:.95rem; }
+  .faq b { color:var(--text); }
+  .callout { background:#10210f; border:1px solid #1f4a1d; border-radius:13px; padding:16px 18px; margin-top:24px; font-size:1rem; color:var(--text); }
+  .callout b { color:#fff; }
+  .freebadge { display:inline-block; background:var(--accent); color:#08130b; font-weight:800; font-size:.72rem; letter-spacing:.03em; padding:2px 9px; border-radius:999px; margin-right:8px; vertical-align:middle; }
+  .odometer { margin-top:28px; text-align:center; }
+  .odo-label { display:block; color:var(--muted); font-family:var(--mono); font-size:.7rem; letter-spacing:.3em; margin-bottom:9px; }
+  .odo-digits b { display:inline-block; background:#000; color:var(--accent); border:1px solid #1f4a1d; border-radius:6px; font:700 1.9rem/1 var(--mono); padding:9px 8px; margin:0 2px; text-shadow:0 0 9px rgba(74,222,128,.55); }
+  .odo-sub { display:block; margin-top:9px; color:var(--muted); font-size:.8rem; font-family:var(--mono); }
+  .verify { background:var(--bg2); border:1px solid var(--line); border-radius:13px; padding:6px 20px; margin-top:22px; }
+  .verify .row { margin:16px 0; }
+  .verify .row b { color:var(--text); font-size:.9rem; }
+  .verify code { display:block; margin-top:6px; background:#080c16; border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-size:.76rem; color:#9fb4dc; overflow-x:auto; white-space:nowrap; }
+  .lbl { color:var(--accent); font-family:var(--mono); font-size:.8rem; font-weight:600; margin:22px 0 7px; }
+  .lbl span { color:var(--muted); font-weight:400; }
+  footer { color:var(--muted); font-size:.85rem; border-top:1px solid var(--line); padding:28px 0 56px; }
+  footer a { color:var(--muted); } footer a:hover { color:var(--accent); }
 </style>
 </head>
 <body>
+<nav class="nav"><div class="nav-in">
+  <a class="brand" href="/"><span class="glyph">402</span> Agent402</a>
+  <span class="spacer"></span>
+  <a class="link hide-sm" href="/tools">Tools</a>
+  <a class="link hide-sm" href="/guides">Guides</a>
+  <a class="link hide-sm" href="#connect">Connect</a>
+  <a class="link" href="/api/stats">Stats</a>
+  <a class="gh" href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub ★</a>
+</div></nav>
 <div class="wrap">
-  <div class="badge">x402 &middot; machine-to-machine payments &middot; USDC on ${network} &middot; ${count} tools</div>
-  <h1>Where agents pay agents<span class="x">.</span></h1>
-  <p class="sub">A live node in the machine-to-machine economy. An autonomous agent hits an endpoint, gets an <code>HTTP 402</code> price quote, settles payment from its own wallet in USDC — or with a few seconds of compute — and gets the result. No human, no signup, no API key. The payment <em>is</em> the identity. ${count} tools to prove it's real.</p>
-  <a class="cta primary" href="/tools">Browse all ${count} tools →</a>
-  <a class="cta ghost" href="/api/stats">live stats</a>
-  <a class="cta ghost" href="/llms.txt">llms.txt</a>
-  <a class="cta ghost" href="/openapi.json">OpenAPI</a>
-  <div class="ticker">
-    <span><span class="dot"></span><span class="live">LIVE</span></span>
-    <span class="sep">·</span><span>Settling on ${network} mainnet</span>
-    <span class="sep">·</span><span>Paid MCP server + HTTP x402</span>
-    <span class="sep">·</span><span>On the Coinbase CDP Bazaar</span>
-    <span class="sep">·</span><span>On the MCP Registry &amp; agent402.app</span>
-    <span class="sep">·</span><span>${count} tools</span>
-  </div>
-  ${odometer}
+  <header class="hero">
+    <div>
+      <span class="badge"><span class="dot"></span> x402 · USDC on ${network} · ${count} tools</span>
+      <h1>Where agents pay agents<span class="x">.</span></h1>
+      <p class="sub">An autonomous agent hits an endpoint, gets an <code>HTTP 402</code> price quote, settles from its own wallet in USDC — or with a few seconds of compute — and gets the result. No human, no signup, no API key. The payment <em>is</em> the identity.</p>
+      <div class="ctas">
+        <a class="cta primary" href="/tools">Browse all ${count} tools →</a>
+        <a class="cta ghost" href="#connect">Add to Claude</a>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="n">${count.toLocaleString()}</div><div class="l">pay-per-call tools</div></div>
+        <div class="stat"><div class="n">${freeCount.toLocaleString()}</div><div class="l">free via proof-of-work</div></div>
+        <div class="stat"><div class="n">$0.001</div><div class="l">starting price / call</div></div>
+        <div class="stat"><div class="n">${served ? served.total.toLocaleString() : "live"}</div><div class="l">${served ? "calls served" : "settling on-chain"}</div></div>
+      </div>
+    </div>
+    <div class="term" aria-hidden="true">
+      <div class="term-bar"><i></i><i></i><i></i><span class="ttl">agent — machine-to-machine</span></div>
+      <div class="term-body">
+        <div class="tline t1"><span class="p">agent$</span> POST agent402.tools/api/extract {"url":"…/article"}</div>
+        <div class="tline t2"><span class="warn">← HTTP 402 Payment Required</span> &nbsp;{"price":"$0.005","payTo":"0xaBF4…a9D0"}</div>
+        <div class="tline t3"><span class="p">agent$</span> signing USDC from its own wallet… <span class="p">(no human)</span></div>
+        <div class="tline t4"><span class="p">agent$</span> retry with X-PAYMENT header →</div>
+        <div class="tline t5"><span class="ok">← HTTP 200 OK</span> &nbsp;{"title":"…","markdown":"# …"} <span class="p">· ~2s</span></div>
+        <div class="tline t6"><span class="ok">✓</span> machine-to-machine commerce, end to end</div>
+      </div>
+    </div>
+  </header>
+
   <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet</b> — pay with a tiny <a href="/api/pow">sha256 proof-of-work</a> (a fraction of a second of CPU; no money, no AI tokens). The other ${count - freeCount} (browser, network, memory) settle in USDC.</div>
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
 
-  <h2>Watch an agent pay an agent</h2>
-  <div class="term" aria-hidden="true">
-    <div class="term-bar"><i></i><i></i><i></i></div>
-    <div class="term-body">
-      <div class="tline t1 tline-anim"><span class="p">agent$</span> POST agent402.tools/api/extract {"url":"https://example.com/article"}</div>
-      <div class="tline t2 tline-anim"><span class="warn">← HTTP 402 Payment Required</span> &nbsp;{"price":"$0.005","payTo":"0xaBF4…a9D0","network":"base"}</div>
-      <div class="tline t3 tline-anim"><span class="p">agent$</span> signing USDC payment from its own wallet… <span class="p">(no human, no API key)</span></div>
-      <div class="tline t4 tline-anim"><span class="p">agent$</span> retry with X-PAYMENT header →</div>
-      <div class="tline t5 tline-anim"><span class="ok">← HTTP 200 OK</span> &nbsp;{"title":"…","markdown":"# …"} <span class="p">· settled on-chain in ~2s</span></div>
-      <div class="tline t6 tline-anim"><span class="ok">✓</span> machine-to-machine commerce, end to end</div>
-    </div>
-  </div>
-  <p class="sub">No slideware — run the whole loop yourself. An autonomous buyer discovers the catalog, gets quoted over <code>HTTP 402</code>, settles, and uses the result, zero humans involved:</p>
-  <pre># one file, zero dependencies — pays with COMPUTE (no wallet, no funds)
+  <section>
+    <div class="eyebrow">Proof, not slideware</div>
+    <h2>Run the whole loop yourself</h2>
+    <p class="sub">An autonomous buyer discovers the catalog, gets quoted over <code>HTTP 402</code>, settles, and uses the result — zero humans involved:</p>
+    <pre># one file, zero dependencies — pays with COMPUTE (no wallet, no funds)
 curl -s ${baseUrl}/demo.js -o demo.js && node demo.js
 
 # or settle in real USDC on Base with a funded key
 npm i @x402/core @x402/evm @x402/fetch viem
 AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
-  <p class="sub">Revenue is trustless and public — every settled call lands on-chain. See live counts and the receiving wallet at <a href="/api/stats">/api/stats</a>.</p>
+    <p class="sub">Revenue is trustless and public — every settled call lands on-chain. See live counts and the receiving wallet at <a href="/api/stats">/api/stats</a>.</p>
+    ${odometer}
+  </section>
 
-  <h2>Why not just build it yourself?</h2>
-  <p class="sub">A developer with a free weekend could build some of this. But the buyer here isn't that developer — it's an <em>agent, mid-task, with no human to ask</em>. Here's what it can't give itself:</p>
-  <div class="why">
-    <div class="card">
-      <h3>Sign up for anything</h3>
-      <p>The useful web hides behind signups, captchas, API keys, and credit cards — none of which an autonomous agent can obtain. Here, the only credential is the one thing an agent can hold: a wallet. That's how <code>/api/search</code> puts a paid search index one HTTP call away, no account.</p>
+  <section>
+    <div class="eyebrow">Why pay instead of build</div>
+    <h2>What an agent can't give itself</h2>
+    <p class="sub">A developer with a free weekend could build some of this. But the buyer here is an <em>agent, mid-task, with no human to ask</em>:</p>
+    <div class="why">
+      <div class="card">
+        <h3>Sign up for anything</h3>
+        <p>The useful web hides behind signups, captchas, API keys, and credit cards — none of which an autonomous agent can obtain. Here, the only credential is the one thing an agent holds: a wallet. That's how <code>/api/search</code> puts a paid search index one HTTP call away, no account.</p>
+      </div>
+      <div class="card">
+        <h3>Run a browser farm</h3>
+        <p>Most agent sandboxes have no Chromium, no GPU, no display. <code>/api/render</code> and <code>/api/screenshot</code> are real headless browser infrastructure — JavaScript executed, SPAs included — rented by the call for 2 cents.</p>
+      </div>
+      <div class="card">
+        <h3>Remember anything tomorrow</h3>
+        <p>Agent sessions are ephemeral; the container is gone an hour later. <code>/api/memory</code> is durable state keyed to the paying wallet — persist findings today, read them next week from a different machine, zero credentials to store or leak.</p>
+      </div>
+      <div class="card">
+        <h3>Beat the token math</h3>
+        <p>Writing, testing, and debugging a CSV parser or cron calculator mid-task burns thousands of tokens — easily 10-100&times; the price of a tested <code>$0.001</code> call. Reimplementation is the expensive path.</p>
+      </div>
     </div>
-    <div class="card">
-      <h3>Run a browser farm</h3>
-      <p>Most agent sandboxes have no Chromium, no GPU, no display. <code>/api/render</code> and <code>/api/screenshot</code> are real headless browser infrastructure — JavaScript executed, SPAs included — rented by the call for 2 cents.</p>
-    </div>
-    <div class="card">
-      <h3>Remember anything tomorrow</h3>
-      <p>Agent sessions are ephemeral; the container is gone an hour later. <code>/api/memory</code> is durable state keyed to the paying wallet — persist findings today, read them next week from a different machine, zero credentials to store or leak. Wallets can grant each other access: shared state for agents that don't share an owner.</p>
-    </div>
-    <div class="card">
-      <h3>Beat the token math</h3>
-      <p>Writing, testing, and debugging a CSV parser or cron calculator mid-task burns thousands of tokens — easily 10-100&times; the price of a tested <code>$0.001</code> call. Reimplementation is the expensive path.</p>
-    </div>
-  </div>
+  </section>
 
-  <h2>The tool agents come back for: memory that outlives the session</h2>
-  <p class="sub">One-shot calls solve today's task. <code>/api/memory</code> is why an agent returns next week: durable state where the <em>paying wallet is the identity</em> — no API key to store, leak, or rotate. Write from one machine, read from another, grant a different wallet access, and every access lands in a tamper-evident audit log. From $0.002/call.</p>
-  <pre># today, machine A — persist what you learned
+  <section>
+    <div class="eyebrow">The retention hook</div>
+    <h2>Memory that outlives the session</h2>
+    <p class="sub">One-shot calls solve today's task. <code>/api/memory</code> is why an agent returns next week: durable state where the <em>paying wallet is the identity</em> — no API key to store, leak, or rotate. Write from one machine, read from another, grant a different wallet access, and every access lands in a tamper-evident audit log. From $0.002/call.</p>
+    <pre># today, machine A — persist what you learned
 POST /api/memory   {"key":"deploy-fix","value":{"cause":"build OOM","fix":"NODE_VERSION=22"}}
 
 # next week, machine B — same wallet, nothing else needed
@@ -241,37 +295,51 @@ POST /api/memory/grant     {"grantee":"0xTEAMMATE","mode":"read"}
 # or store prose and search it by meaning later
 POST /api/memory/remember  {"text":"Railway deploy failed: build out of memory"}
 POST /api/memory/recall    {"query":"why did the deploy break?"}</pre>
+  </section>
 
-  <h2>${count} tools, ${Object.keys(CATEGORIES).filter((k) => tools.some((t) => t.category === k)).length} categories</h2>
-  <div class="grid">
+  <section>
+    <div class="eyebrow">The catalog</div>
+    <h2>${count} tools, ${Object.keys(CATEGORIES).filter((k) => tools.some((t) => t.category === k)).length} categories</h2>
+    <div class="grid">
 ${categoryCards}
-  </div>
+    </div>
+  </section>
 
-  <h2>The index lists thousands of sellers. Verify this one.</h2>
-  <p class="sub">No sales calls, no contracts — every trust claim here is checkable by a machine, not asserted: deterministic outputs (no LLM in the path), flat prices, a named maintainer, and fully <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">open source</a>. The records:</p>
-  <div class="verify">
-    <div class="row"><b>Discoverable on the Coinbase CDP Bazaar</b> — the index AI agents browse for x402 services, keyed to our pay-to address:
-      <code>GET api.cdp.coinbase.com/platform/v2/x402/discovery/resources</code></div>
-    <div class="row"><b>Listed in the official MCP Registry</b> — installable by name in any MCP client:
-      <code>GET registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402</code></div>
-    <div class="row"><b>On npm</b> — one-line install, <code>npx -y agent402-mcp</code>:
-      <code>https://www.npmjs.com/package/agent402-mcp</code></div>
-    <div class="row"><b>Open source on GitHub</b> — read every line that serves and prices your call:
-      <code>https://github.com/MikeyPetrillo/Agent402</code></div>${stats?.wallet ? `
-    <div class="row"><b>Real USDC settlements, on-chain</b> — every paid call lands here, verifiable on Basescan:
-      <code>${stats.onchainRevenueProof || `https://basescan.org/address/${stats.wallet}#tokentxns`}</code></div>` : ""}
-    <div class="row"><b>Self-describing & tested</b> — full schemas, and every endpoint is re-tested against its own documented example before each deploy:
-      <code>GET ${baseUrl}/openapi.json &nbsp;·&nbsp; GET ${baseUrl}/api/pricing</code></div>
-  </div>
+  <section>
+    <div class="eyebrow">Trust is checkable</div>
+    <h2>The index lists thousands of sellers. Verify this one.</h2>
+    <p class="sub">No sales calls, no contracts — every trust claim here is checkable by a machine, not asserted: deterministic outputs (no LLM in the path), flat prices, a named maintainer, and fully <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">open source</a>. The records:</p>
+    <div class="verify">
+      <div class="row"><b>Discoverable on the Coinbase CDP Bazaar</b> — the index AI agents browse for x402 services, keyed to our pay-to address:
+        <code>GET api.cdp.coinbase.com/platform/v2/x402/discovery/resources</code></div>
+      <div class="row"><b>Listed in the official MCP Registry</b> — installable by name in any MCP client:
+        <code>GET registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402</code></div>
+      <div class="row"><b>On npm</b> — one-line install, <code>npx -y agent402-mcp</code>:
+        <code>https://www.npmjs.com/package/agent402-mcp</code></div>
+      <div class="row"><b>Open source on GitHub</b> — read every line that serves and prices your call:
+        <code>https://github.com/MikeyPetrillo/Agent402</code></div>${stats?.wallet ? `
+      <div class="row"><b>Real USDC settlements, on-chain</b> — every paid call lands here, verifiable on Basescan:
+        <code>${stats.onchainRevenueProof || `https://basescan.org/address/${stats.wallet}#tokentxns`}</code></div>` : ""}
+      <div class="row"><b>Self-describing & tested</b> — full schemas, and every endpoint is re-tested against its own documented example before each deploy:
+        <code>GET ${baseUrl}/openapi.json &nbsp;·&nbsp; GET ${baseUrl}/api/pricing</code></div>
+    </div>
+  </section>
 
-  <h2>How it works</h2>
-  <div class="step"><b>1</b><span>Your agent calls a paid endpoint and receives <code>HTTP 402 Payment Required</code> with the price and payment details.</span></div>
-  <div class="step"><b>2</b><span>An x402-capable client (e.g. <code>@x402/fetch</code>, <code>@x402/axios</code>, or any agent framework with x402 support) signs a USDC payment from its wallet and retries the request.</span></div>
-  <div class="step"><b>3</b><span>Payment settles on ${network} in seconds and the response comes back. Total overhead: one round trip.</span></div>
+  <section>
+    <div class="eyebrow">How it works</div>
+    <h2>One round trip</h2>
+    <div class="steps">
+      <div class="stepc"><div class="num">1</div><span>Your agent calls a paid endpoint and receives <code>HTTP 402 Payment Required</code> with the price and payment details.</span></div>
+      <div class="stepc"><div class="num">2</div><span>An x402 client (<code>@x402/fetch</code>, <code>@x402/axios</code>, or any agent framework with x402 support) signs a USDC payment from its wallet and retries.</span></div>
+      <div class="stepc"><div class="num">3</div><span>Payment settles on ${network} in seconds and the response comes back. Total overhead: one round trip.</span></div>
+    </div>
+  </section>
 
-  <h2>Use it</h2>
-  <p class="lbl">Pay in code <span>— any x402 client</span></p>
-  <pre>import { wrapFetchWithPayment } from "@x402/fetch";
+  <section id="connect">
+    <div class="eyebrow">Use it</div>
+    <h2>Three ways in</h2>
+    <p class="lbl">Pay in code <span>— any x402 client</span></p>
+    <pre>import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
@@ -286,28 +354,32 @@ const res = await payFetch("${baseUrl}/api/extract", {
 });
 console.log(await res.json()); // { title, markdown, ... }</pre>
 
-  <p class="lbl">Add to Claude / any MCP client <span>— paste the hosted connector URL (claude.ai → Settings → Connectors), zero install: the pure-CPU tools run free there, rate-limited.</span></p>
-  <pre>${baseUrl}/mcp</pre>
+    <p class="lbl">Add to Claude / any MCP client <span>— paste the hosted connector URL (claude.ai → Settings → Connectors), zero install: the pure-CPU tools run free there, rate-limited.</span></p>
+    <pre>${baseUrl}/mcp</pre>
 
-  <p class="lbl">Full catalog with payment underneath <span>— in the <a href="https://registry.modelcontextprotocol.io" rel="noopener">MCP Registry</a> + npm. High-value tools first-class, the long tail via <code>search_tools</code>/<code>call_tool</code>; spend caps refuse a runaway model before paying.</span></p>
-  <pre>{ "mcpServers": { "agent402": {
+    <p class="lbl">Full catalog with payment underneath <span>— in the <a href="https://registry.modelcontextprotocol.io" rel="noopener">MCP Registry</a> + npm. High-value tools first-class, the long tail via <code>search_tools</code>/<code>call_tool</code>; spend caps refuse a runaway model before paying.</span></p>
+    <pre>{ "mcpServers": { "agent402": {
     "command": "npx", "args": ["-y", "agent402-mcp"],
     "env": { "AGENT_KEY": "0x&lt;funded wallet key — optional&gt;", "AGENT402_BUDGET": "1.00" }
 } } }</pre>
 
-  <p class="lbl">Or try it free <span>— no wallet needed</span></p>
-  <pre>curl ${baseUrl}/api/pricing          # machine-readable catalog
+    <p class="lbl">Or try it free <span>— no wallet needed</span></p>
+    <pre>curl ${baseUrl}/api/pricing          # machine-readable catalog
 curl ${baseUrl}/openapi.json         # full OpenAPI 3.1 spec
 curl -i -X POST ${baseUrl}/api/extract \\
   -H "Content-Type: application/json" -d '{"url":"https://example.com"}'   # see the 402 quote</pre>
+  </section>
 
-  <h2>FAQ</h2>
-  <div class="faq">
-    <p><b>What is Agent402?</b><br><span>A live node in the machine-to-machine economy: ${count} web tools an autonomous AI agent can call and pay for per request in USDC via the <a href="https://x402.org" rel="noopener">x402 protocol</a> — or with proof-of-work, no wallet. No human, no signup, no API key.</span></p>
-    <p><b>How does an AI agent pay for a tool?</b><br><span>It calls an endpoint and gets an <code>HTTP 402 Payment Required</code> quote. An x402 client signs a USDC payment from the agent's own wallet on Base and retries; the call settles on-chain in seconds. The wallet is the identity. <a href="https://x402.org" rel="noopener">x402</a> is an open standard with settlement infrastructure from Coinbase and Stripe.</span></p>
-    <p><b>Are any tools free?</b><br><span>Yes — ${freeCount} of the ${count} pure-CPU tools work with no wallet at all: solve a short <a href="/api/pow">proof-of-work</a> puzzle (a few seconds of CPU) instead of paying USDC.</span></p>
-    <p><b>Does Agent402 use AI or spend my model tokens?</b><br><span>No. Every tool is deterministic code — parsers, hashes, math, a real browser — with no LLM anywhere in the serving path, and the free tier's proof-of-work is a sha256 puzzle your machine solves in a fraction of a second. Nothing here consumes AI tokens. Tools like <code>/api/extract</code> exist to <em>save</em> your tokens: clean markdown out instead of 100k tokens of raw HTML in.</span></p>
-  </div>
+  <section>
+    <div class="eyebrow">Questions</div>
+    <h2>FAQ</h2>
+    <div class="faq">
+      <p><b>What is Agent402?</b><br><span>A live node in the machine-to-machine economy: ${count} web tools an autonomous AI agent can call and pay for per request in USDC via the <a href="https://x402.org" rel="noopener">x402 protocol</a> — or with proof-of-work, no wallet. No human, no signup, no API key.</span></p>
+      <p><b>How does an AI agent pay for a tool?</b><br><span>It calls an endpoint and gets an <code>HTTP 402 Payment Required</code> quote. An x402 client signs a USDC payment from the agent's own wallet on Base and retries; the call settles on-chain in seconds. The wallet is the identity. <a href="https://x402.org" rel="noopener">x402</a> is an open standard with settlement infrastructure from Coinbase and Stripe.</span></p>
+      <p><b>Are any tools free?</b><br><span>Yes — ${freeCount} of the ${count} pure-CPU tools work with no wallet at all: solve a short <a href="/api/pow">proof-of-work</a> puzzle (a few seconds of CPU) instead of paying USDC.</span></p>
+      <p><b>Does Agent402 use AI or spend my model tokens?</b><br><span>No. Every tool is deterministic code — parsers, hashes, math, a real browser — with no LLM anywhere in the serving path, and the free tier's proof-of-work is a sha256 puzzle your machine solves in a fraction of a second. Nothing here consumes AI tokens. Tools like <code>/api/extract</code> exist to <em>save</em> your tokens: clean markdown out instead of 100k tokens of raw HTML in.</span></p>
+    </div>
+  </section>
 
   <footer>
     Agent402 — ${count} machine-payable tools for AI agents. Built on the <a href="https://x402.org" rel="noopener">x402 protocol</a>
