@@ -20,9 +20,11 @@ const VERSION = "0.3.0";
 // Generous enough for real use of $0.001-grade CPU tools, tight enough that
 // the free tier can't be farmed as infrastructure.
 const WINDOW_MS = 60 * 60 * 1000;
-const MAX_CALLS_PER_WINDOW = 120;
 const BURST_WINDOW_MS = 60 * 1000;
-const MAX_CALLS_PER_BURST = 20;
+// Defaults match production policy; overridable via env so the full-catalog
+// connector test can sweep every tool without tripping the limiter.
+const MAX_CALLS_PER_WINDOW = Number(process.env.AGENT402_MCP_MAX_PER_HOUR) || 120;
+const MAX_CALLS_PER_BURST = Number(process.env.AGENT402_MCP_MAX_PER_MIN) || 20;
 const buckets = new Map(); // ip -> number[] (call timestamps)
 
 function rateLimited(ip) {
