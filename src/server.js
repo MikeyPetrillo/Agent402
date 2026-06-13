@@ -23,6 +23,7 @@ import { MEDIA_TOOLS } from "./tools/media-kit.js";
 import { GOV_TOOLS } from "./tools/gov-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
+import { guidesIndex, guidePage } from "./guides.js";
 
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
@@ -406,6 +407,12 @@ app.get("/", (_req, res) =>
 );
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/privacy", (_req, res) => res.type("html").send(privacyPage(BASE_URL)));
+app.get("/guides", (_req, res) => res.type("html").send(guidesIndex(BASE_URL)));
+app.get("/guides/:slug", (req, res) => {
+  const html = guidePage(BASE_URL, req.params.slug);
+  if (!html) return res.status(404).type("html").send('<p>Guide not found. <a href="/guides">All guides</a></p>');
+  res.type("html").send(html);
+});
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));

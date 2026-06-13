@@ -1,5 +1,6 @@
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
+import { guideSlugs } from "./guides.js";
 
 export function robotsTxt(baseUrl) {
   // Explicitly welcome AI/agent crawlers and search engines; point them at the
@@ -30,8 +31,12 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/api/pricing`, priority: "0.7" },
     { loc: `${baseUrl}/api/stats`, priority: "0.6" },
   ];
+  const guideUrls = [
+    { loc: `${baseUrl}/guides`, priority: "0.8" },
+    ...guideSlugs().map((s) => ({ loc: `${baseUrl}/guides/${s}`, priority: "0.8" })),
+  ];
   const toolUrls = toolList(catalog).map((t) => ({ loc: `${baseUrl}/tools/${t.slug}`, priority: "0.8" }));
-  const entries = [...staticUrls, ...toolUrls]
+  const entries = [...staticUrls, ...guideUrls, ...toolUrls]
     .map((u) => `  <url><loc>${u.loc}</loc><changefreq>weekly</changefreq><priority>${u.priority}</priority></url>`)
     .join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
