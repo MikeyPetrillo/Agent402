@@ -193,7 +193,20 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             isError: true,
           };
         }
-        const params = args.params && typeof args.params === "object" ? args.params : {};
+        // Accept params as an object OR a JSON string — LLM clients (e.g. some
+        // Claude Code calls) often stringify object arguments. Parse those so
+        // the handler receives real fields instead of an empty object.
+        let params = args.params;
+        if (typeof params === "string") {
+          const s = params.trim();
+          try { params = JSON.parse(s); }
+          catch {
+            // tolerate a single "key=value" pair as a last resort
+            const eq = s.indexOf("=");
+            params = eq > 0 ? { [s.slice(0, eq).trim()]: s.slice(eq + 1).trim() } : {};
+          }
+        }
+        if (!params || typeof params !== "object" || Array.isArray(params)) params = {};
         // Same contract as the express kit routes; handlers only see input.
         const result = await entry.def.handler(params, { headers: {}, query: params, body: params, ip });
         onServed(entry.def.slug);
