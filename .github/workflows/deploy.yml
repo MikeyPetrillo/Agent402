@@ -248,7 +248,7 @@ jobs:
       - name: Remote MCP connector (/mcp — initialize, search, free call, paid refusal)
         run: TARGET_URL=http://localhost:3000 node scripts/test-mcp-http.js
 
-      - name: Every tool through the MCP connector (call_tool: free executes, wallet refuses)
+      - name: "Every tool through the MCP connector (call_tool — free executes, wallet refuses)"
         run: TARGET_URL=http://localhost:3000 node scripts/test-mcp-all.js
 
       - name: Exercise tools against live sites
