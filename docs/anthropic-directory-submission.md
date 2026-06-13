@@ -27,7 +27,7 @@ privacy policy, public docs, and a no-auth streamable-HTTP endpoint.
 
 ## Tagline (short)
 
-> 1,000+ instant utility tools for agents — encoding, conversion, validation, text, time, math. Free, no signup.
+> The headless browser, live web search, and durable memory your agent's sandbox doesn't have — plus 1,000+ instant utilities. No signup, no API key.
 
 ## Description
 
