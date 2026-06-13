@@ -55,6 +55,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     tools.set(def.slug, { def, free: isComputePayable(def) });
   }
   const freeCount = [...tools.values()].filter((t) => t.free).length;
+  const mcpClients = new Map(); // "name@version" -> initialize count since boot
 
   const schemaOf = (def) => {
     const s = def.discovery?.inputSchema;
@@ -169,6 +170,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
                 freeHere: freeCount,
                 walletOnly: tools.size - freeCount,
                 rateLimit: `${MAX_CALLS_PER_BURST}/min, ${MAX_CALLS_PER_WINDOW}/hour per client`,
+                clientsSeenSinceBoot: Object.fromEntries([...mcpClients].sort((a, b) => b[1] - a[1]).slice(0, 20)),
                 paidAccess: "Every tool, no rate limit: pay per call in USDC on Base via the x402 protocol — npx agent402-mcp with AGENT_KEY, or any x402 HTTP client. No signup, no API key; prices $0.001–$0.02/call.",
                 docs: `${baseUrl}/llms.txt`,
               }, null, 2),
@@ -223,6 +225,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // redeploys and needs no sticky routing.
   app.post("/mcp", async (req, res) => {
     const ip = (req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress || "?").trim();
+    // Adoption telemetry: every MCP session announces its client at
+    // initialize (e.g. "claude-ai", "claude-code"). In-memory since boot.
+    const ci = req.body?.method === "initialize" ? req.body?.params?.clientInfo : null;
+    if (ci?.name && mcpClients.size < 500) {
+      const key = `${ci.name}@${ci.version || "?"}`.slice(0, 80);
+      mcpClients.set(key, (mcpClients.get(key) || 0) + 1);
+      console.log(`[mcp] initialize from ${key}`);
+    }
     try {
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on("close", () => transport.close());

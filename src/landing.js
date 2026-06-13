@@ -308,7 +308,7 @@ curl -i -X POST ${baseUrl}/api/extract \\
   <footer>
     Agent402 — ${count} machine-payable tools for AI agents. Built on the <a href="https://x402.org" rel="noopener">x402 protocol</a>
     by <a href="https://github.com/MikeyPetrillo" rel="noopener">Mikey Petrillo</a>. Open source on <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub</a>.
-    Free: <a href="/tools">/tools</a> · <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a> · <code>GET /health</code>.
+    Free: <a href="/guides">/guides</a> · <a href="/tools">/tools</a> · <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a> · <code>GET /health</code>.
     <a href="/privacy">Privacy</a>.
   </footer>
 </div>
