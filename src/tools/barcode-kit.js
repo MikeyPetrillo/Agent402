@@ -34,15 +34,18 @@ function toRgba(imageField) {
 
   const isPng = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
   const isJpg = buf[0] === 0xff && buf[1] === 0xd8;
+  if (!isPng && !isJpg) throw bad("unsupported image format — provide a PNG or JPEG");
   let img;
-  if (isPng) {
-    const png = PNG.sync.read(buf);
-    img = { data: png.data, width: png.width, height: png.height };
-  } else if (isJpg) {
-    const j = jpeg.decode(buf, { useTArray: true, maxMemoryUsageInMB: 64 });
-    img = { data: j.data, width: j.width, height: j.height };
-  } else {
-    throw bad("unsupported image format — provide a PNG or JPEG");
+  try {
+    if (isPng) {
+      const png = PNG.sync.read(buf);
+      img = { data: png.data, width: png.width, height: png.height };
+    } else {
+      const j = jpeg.decode(buf, { useTArray: true, maxMemoryUsageInMB: 64 });
+      img = { data: j.data, width: j.width, height: j.height };
+    }
+  } catch (e) {
+    throw bad(`could not decode ${isPng ? "PNG" : "JPEG"} image: ${e.message}`);
   }
   if (img.width * img.height > MAX_PIXELS) throw bad(`image too large (${img.width}x${img.height}; max ${MAX_PIXELS} px)`);
   return img;
@@ -86,14 +89,15 @@ export const BARCODE_TOOLS = [
     tags: ["barcode", "qr", "qr-code", "decode", "scanner", "ean", "upc", "datamatrix"],
     discovery: {
       bodyType: "json",
-      input: { image: "data:image/png;base64,iVBORw0KGgo..." },
+      // A real, decodable QR ("AGENT402") so the tool's own example works end to end.
+      input: { image: "iVBORw0KGgoAAAANSUhEUgAAAGwAAABsCAYAAACPZlfNAAAAAklEQVR4AewaftIAAALNSURBVO3BW2rgUAwFwT7C+99yTz4vImDjvNCgqviBNUaxRinWKMUapVijXHwiCX9N5bskoVO5k4S/pnIq1ijFGqVYoxRrlIuHVH5KEp5IwknlrSScVJ5Q+SlJuFOsUYo1SrFGKdYoF1+QhDdU3lC5k4TflIQ3VN4o1ijFGqVYo1wMloRO5YkkTFSsUYo1SrFGKdYoF4Mk4aTyRBL+F8UapVijFGuUYo1y8QUqv0nlThKeUPkOKr+pWKMUa5RijXLxUBL+WhJOKk+odEk4qTyRhL9UrFGKNUqxRinWKPED/5EkdCr/i2KNUqxRijVKsUa5+EQSOpUuCSeVLgmdyikJncqdJLyVhJPKG0noVO4koVO5U6xRijVKsUaJH3gpCXdU/loSOpVTEjqVLgknlTeS8ITKqVijFGuUYo1SrFEuPpGEJ1S+QxI6lS4JJ5UuCd8lCW8k4Y5Kl4Q7xRqlWKMUa5RijRI/0CThCZVTEjqVLgknlTeS8JNUuiS8ofIdijVKsUYp1ijFGiV+oElCp9Il4aTSJeENlS4JJ5UnktCpnJLwhkqXhDdU7hRrlGKNUqxR4geGSMIbKm8k4Y5Kl4Q7Km8Ua5RijVKsUYo1ysUnkvDXVDqVUxLeSsJJpVO5k4QnVO4koVM5FWuUYo1SrFGKNcrFQyo/JQlvqHRJeELlThLuqLyRhE7lTrFGKdYoxRrl4guS8IbKG0k4qXQqTyThpPKEyikJnUqXhDtJ6FROxRqlWKMUa5RijXIxiMopCZ1Kl4RO5ZSETuWOyhMqpyR0KneKNUqxRinWKMUa5WKQJJxUflISOpVTEp5QOal0SehUTsUapVijFGuUiy9Q+U0qpyR0Kk8k4Y5Kl4STyhtJeKNYoxRrlGKNUqxRLh5Kwl9LwndROSWhS0KnckpCp9Il4aTSJeFOsUYp1ijFGqVYo8QPrDGKNUqxRinWKP8AIFwq4iXMWtcAAAAASUVORK5CYII=" },
       inputSchema: {
         properties: {
           image: { type: "string", description: "base64-encoded PNG or JPEG, optionally a data: URL" },
         },
         required: ["image"],
       },
-      output: { example: { found: true, format: "QR_CODE", text: "https://agent402.tools", decoder: "zxing" } },
+      output: { example: { found: true, format: "QR_CODE", text: "AGENT402", decoder: "zxing" } },
     },
     handler: (i) => decodeBarcode(toRgba(i.image)),
   },
