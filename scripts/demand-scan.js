@@ -1,15 +1,13 @@
-// Pull the agent402.app "Demand Intelligence" board: what agents are asking for
-// that the marketplace can't yet supply. We don't know the exact endpoint, so
-// try the documented candidates and dump whatever returns structured data.
-// Runs in CI (the sandbox has no egress). Needs A402APP_KEY.
+// Pull the agent402.app "Demand Intelligence" board: what agents search for that
+// the marketplace can't supply. Endpoints per the marketplace API docs. Runs in
+// CI (sandbox has no egress). Needs A402APP_KEY.
 const API = (process.env.A402APP_BASE || "https://marketplace.agent402.app").replace(/\/$/, "");
 const KEY = process.env.A402APP_KEY;
 if (!KEY) { console.error("A402APP_KEY required"); process.exit(1); }
 
-async function api(method, path) {
+async function api(path) {
   try {
     const res = await fetch(`${API}${path}`, {
-      method,
       headers: { Authorization: `Bearer ${KEY}`, "X-API-Key": KEY, "Content-Type": "application/json" },
       signal: AbortSignal.timeout(20000),
     });
@@ -21,24 +19,19 @@ async function api(method, path) {
   }
 }
 
-const candidates = [
-  "/api/v1/demand", "/api/v1/demands", "/api/v1/demand-intelligence",
-  "/api/v1/unmet", "/api/v1/unmet-demand", "/api/v1/insights/demand",
-  "/api/v1/market/demand", "/api/v1/marketplace/demand", "/api/v1/analytics/demand",
-  "/api/v1/searches", "/api/v1/queries", "/api/v1/gaps", "/api/v1/needs",
-  "/api/v1/categories", "/api/v1/services", "/api/v1/discovery",
+const reports = [
+  ["UNMET DEMAND (0-result searches — the build list)", "/api/v1/demand/unmet?period=30d&limit=100"],
+  ["TOP SEARCHES (30d)", "/api/v1/demand/top-searches?period=30d&limit=50"],
+  ["TRENDING (7d growth)", "/api/v1/demand/trending?period=7d&limit=30"],
+  ["OVERVIEW", "/api/v1/demand/overview"],
 ];
 
-let hit = false;
-for (const path of candidates) {
-  const { status, json } = await api("GET", path);
-  const summary = typeof json === "string" ? json.slice(0, 120) : JSON.stringify(json).slice(0, 160);
-  console.log(`GET ${path} -> ${status}  ${summary}`);
-  if (status === 200 && typeof json === "object") {
-    hit = true;
-    console.log("=== FULL PAYLOAD ===");
-    console.log(JSON.stringify(json, null, 2).slice(0, 8000));
-    console.log("=== END ===\n");
+for (const [label, path] of reports) {
+  const { status, json } = await api(path);
+  console.log(`\n===== ${label} =====  GET ${path} -> ${status}`);
+  if (status === 200) {
+    console.log(JSON.stringify(json, null, 2).slice(0, 6000));
+  } else {
+    console.log(typeof json === "string" ? json.slice(0, 300) : JSON.stringify(json).slice(0, 400));
   }
 }
-if (!hit) console.log("\nNo demand endpoint returned 200 with JSON — inspect the 200/40x statuses above for the right path.");
