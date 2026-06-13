@@ -17,7 +17,7 @@ alphabetical by repo name; legend: 📇 = TypeScript/JavaScript, ☁️ = cloud/
 2. In the Aggregators section, insert alphabetically:
 
 ```markdown
-- [MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402) 📇 ☁️ 🏠 - 1,000+ pay-per-call web tools for agents (encoding, conversions, validation, search, browser, PDF, wallet-keyed memory) settled via x402 (USDC on Base) or free with proof-of-work. Hosted remote connector at agent402.tools/mcp.
+- [MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402) 📇 ☁️ 🏠 - The headless browser, live web search, and durable wallet-keyed memory an agent's sandbox doesn't have — plus 1,000+ deterministic utilities — rented per call via x402 (USDC on Base) or free with proof-of-work. Hosted remote connector at agent402.tools/mcp.
 ```
 
 3. PR title: `Add Agent402 (aggregator: 1,000+ pay-per-call web tools over x402)`
@@ -39,7 +39,7 @@ Coinbase reviews within ~5 business days. Category: **Services/Endpoints**.
 ```json
 {
   "name": "Agent402",
-  "description": "1,000+ pay-per-call web tools for AI agents — live search, browser rendering, screenshots, PDFs, durable wallet-keyed memory, and ~1,000 deterministic utilities — priced $0.001–$0.02/call and settled in USDC on Base via x402. Open source, MCP server included, with a proof-of-work free tier for wallet-less agents.",
+  "description": "The headless browser, live web search, and durable wallet-keyed memory an AI agent's sandbox doesn't have — rented per call via x402 (USDC on Base) — plus 1,000+ deterministic utilities. $0.001–$0.02/call, or free with proof-of-work. Open source, MCP server included.",
   "logoUrl": "/logos/agent402.png",
   "websiteUrl": "https://agent402.tools",
   "category": "Services/Endpoints"

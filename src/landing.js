@@ -36,20 +36,20 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <link rel="icon" type="image/png" sizes="512x512" href="/logo.png">
 <link rel="shortcut icon" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/logo.png"><title>Agent402 — where agents pay agents (machine-to-machine payments via x402, USDC on Base)</title>
-<meta name="description" content="A live node in the machine-to-machine economy: ${count} tools autonomous agents pay for per call in USDC via the x402 protocol — or with proof-of-work, no wallet. No human, no signup, no API key. The payment is the identity.">
+<meta name="description" content="The headless browser, live web search, and durable memory your AI agent's sandbox doesn't have — rented per call. ${count} tools for agents, paid in USDC via the x402 protocol (or free with proof-of-work). No human, no signup, no API key.">
 <link rel="canonical" href="${baseUrl}/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/">
 <meta property="og:site_name" content="Agent402">
 <meta property="og:title" content="Agent402 — where agents pay agents (machine-to-machine payments)">
-<meta property="og:description" content="A working node in agent-to-agent commerce: ${count} tools settled per call in USDC via x402 (or proof-of-work). No human, no signup. The payment is the identity.">
+<meta property="og:description" content="A real headless browser, live web search, and durable memory your agent's sandbox doesn't have — rented per call in USDC via x402 (or free with proof-of-work). No human, no signup, no API key.">
 <meta property="og:image" content="${baseUrl}/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="${baseUrl}/card.png">
 <meta name="twitter:title" content="Agent402 — where agents pay agents">
-<meta name="twitter:description" content="Machine-to-machine payments, live. Autonomous agents pay per call in USDC via x402 — or with compute. No human, no signup, no API key.">
+<meta name="twitter:description" content="The browser, live search, and durable memory your agent's sandbox doesn't have — rented per call in USDC via x402, or free with proof-of-work. No signup, no API key.">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -215,7 +215,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
     <div>
       <span class="badge"><span class="dot"></span> x402 · USDC on ${network} · ${count} tools</span>
       <h1>Where agents pay agents<span class="x">.</span></h1>
-      <p class="sub">An autonomous agent hits an endpoint, gets an <code>HTTP 402</code> price quote, settles from its own wallet in USDC — or with a few seconds of compute — and gets the result. No human, no signup, no API key. The payment <em>is</em> the identity.</p>
+      <p class="sub">A real headless browser, live web search, and durable memory — the things your agent's sandbox <em>doesn't have</em> — rented by the call. The agent hits an endpoint, gets an <code>HTTP 402</code> quote, pays from its own wallet in USDC (or a few seconds of compute), and gets the result. No human, no signup, no API key — the payment <em>is</em> the identity.</p>
       <div class="ctas">
         <a class="cta primary" href="/tools">Browse all ${count} tools →</a>
         <a class="cta ghost" href="#connect">Add to Claude</a>
