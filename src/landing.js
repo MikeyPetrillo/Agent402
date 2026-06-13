@@ -93,14 +93,18 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <style>
   :root { --bg:#0b0e14; --card:#131826; --text:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --mono:ui-monospace,SFMono-Regular,Menlo,monospace; }
   * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--text); font:16px/1.6 system-ui,-apple-system,sans-serif; }
-  .wrap { max-width:920px; margin:0 auto; padding:48px 20px 80px; }
-  h1 { font-size:2.4rem; line-height:1.15; margin-bottom:12px; }
-  h1 .x { color:var(--accent); }
-  .sub { color:var(--muted); font-size:1.15rem; max-width:640px; }
+  body { background:var(--bg); color:var(--text); font:16px/1.65 system-ui,-apple-system,sans-serif; }
+  /* hero glow — a quiet pool of accent light behind the headline */
+  body::before { content:""; position:absolute; top:-220px; left:50%; transform:translateX(-50%);
+    width:880px; height:560px; pointer-events:none; z-index:0;
+    background:radial-gradient(closest-side, rgba(74,222,128,.14), rgba(74,222,128,.05) 55%, transparent 75%); }
+  .wrap { position:relative; z-index:1; max-width:920px; margin:0 auto; padding:64px 20px 80px; }
+  h1 { font-size:clamp(2.6rem, 6vw, 3.5rem); font-weight:800; letter-spacing:-.02em; line-height:1.1; margin-bottom:16px; }
+  h1 .x { color:var(--accent); text-shadow:0 0 24px rgba(74,222,128,.6); }
+  .sub { color:var(--muted); font-size:1.2rem; max-width:660px; }
   .badge { display:inline-block; background:#1b2336; color:var(--accent); border:1px solid #2a3550; border-radius:999px; padding:3px 12px; font-size:.8rem; margin-bottom:20px; font-family:var(--mono); }
   .cta { display:inline-block; margin:18px 12px 0 0; padding:10px 18px; border-radius:10px; font-weight:600; text-decoration:none; }
-  .cta.primary { background:var(--accent); color:#08130b; }
+  .cta.primary { background:var(--accent); color:#08130b; box-shadow:0 0 22px rgba(74,222,128,.35); }
   .cta.ghost { border:1px solid #2a3550; color:var(--text); }
   .grid { display:grid; gap:14px; margin:32px 0; }
   @media (min-width:640px){ .grid{ grid-template-columns:repeat(3,1fr);} }
@@ -111,7 +115,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   .card .count { color:var(--muted); font-family:var(--mono); font-size:.8rem; font-weight:400; }
   .card .price { color:var(--accent); font-family:var(--mono); font-size:.85rem; }
   .card p { color:var(--muted); font-size:.85rem; margin-top:8px; }
-  h2 { margin:44px 0 12px; font-size:1.35rem; }
+  h2 { margin:64px 0 14px; font-size:1.5rem; letter-spacing:-.01em; }
   pre { background:#0d1220; border:1px solid #1e2638; border-radius:10px; padding:16px; overflow-x:auto; font-family:var(--mono); font-size:.82rem; line-height:1.5; color:#c9d4ec; }
   code { font-family:var(--mono); font-size:.85em; color:#a5b4d4; }
   .step { display:flex; gap:14px; margin:14px 0; }

@@ -173,6 +173,72 @@ any single sandbox. The whole implementation is
 for the full API.
 `,
   },
+  {
+    slug: "sell-your-api-over-x402",
+    title: "Sell your API to AI agents over x402 — no billing system required",
+    description:
+      "Put a per-call USDC paywall in front of any HTTP endpoint with the x402 protocol: quote over HTTP 402, settle on Base through a facilitator, and get discovered by agents — no accounts, invoices, or payment forms.",
+    md: `
+If you run an API, the next wave of customers can't sign up for it. Autonomous
+agents don't have credit cards, can't pass captchas, and won't wait for a sales
+call — but they hold funded wallets and speak HTTP. [x402](https://x402.org)
+lets you charge them per call with about as much code as adding a middleware.
+
+## The seller's side of the protocol
+
+You return \`402 Payment Required\` with a quote (price, USDC, network, your
+wallet address). The buyer signs a transfer authorization and retries; a
+**facilitator** (Coinbase's is free; Stripe also operates x402 infrastructure)
+verifies the signature and settles on-chain to your wallet. You never touch
+keys, cards, or PCI anything — your "billing system" is one HTTP header check.
+
+## Express example
+
+\`\`\`js
+import express from "express";
+import { paymentMiddleware } from "@x402/express";
+
+const app = express();
+app.use(paymentMiddleware({
+  payTo: "0xYOUR_WALLET",                     // USDC lands here, on Base
+  routes: { "POST /api/summarize": { price: "$0.005" } },
+}));
+app.post("/api/summarize", (req, res) => res.json({ ok: true }));
+\`\`\`
+
+Set Coinbase CDP facilitator keys (free at portal.cdp.coinbase.com) and you're
+settling real money on mainnet. Test the buyer side yourself with Stripe's
+[purl](https://github.com/stripe/purl): \`purl http://localhost:3000/api/summarize\`.
+
+## What we learned operating one (the honest part)
+
+[agent402.tools](https://agent402.tools) runs ~1,083 paid endpoints this way —
+[fully open source](https://github.com/MikeyPetrillo/Agent402). The lessons:
+
+1. **x402 settles before your handler runs.** If your tool then fails, you took
+   money for nothing. Anything that can't be served reliably (upstreams that
+   block datacenter IPs, flaky APIs) should be removed, not monetized.
+2. **Discovery is half the product.** Publish a machine-readable catalog
+   (/api/pricing, OpenAPI, llms.txt) and register with the
+   [x402 Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar) — agents
+   browse it by pay-to address.
+3. **Trust is provable, so prove it.** Your revenue wallet is public; link it.
+   Run your test suite against your own documented examples in CI. Anonymous
+   sellers are the default in this economy — a named maintainer and an
+   auditable repo are differentiation.
+4. **Offer a free taste.** Pure-CPU endpoints can accept a
+   [proof-of-work](/guides/x402-in-5-minutes) instead of money — it converts
+   wallet-less agents into integrated users who fund a wallet later.
+5. **Expose it over MCP too.** A hosted connector
+   (\`https://agent402.tools/mcp\` is ours) puts your tools one paste away from
+   every Claude user, and an npm MCP server with client-side spend caps makes
+   paid adoption safe for buyers.
+
+The entire stack described here — paywall, PoW tier, MCP servers, CI, even the
+on-chain customer detector — is in
+[one repo](https://github.com/MikeyPetrillo/Agent402) you can fork.
+`,
+  },
 ];
 
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
