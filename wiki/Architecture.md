@@ -28,7 +28,7 @@ One Node 22 / Express process serving everything; deliberately boring where poss
 - **Browser tools** (`src/tools/render.js`): a shared headless Chromium with max 3 concurrent contexts, self-healing relaunch on crash, and per-request SSRF re-validation of *every* subresource the page loads (see [[Security Model]]).
 - **Media tools**: ffmpeg via `execFile` (no shell), 30 MB cap, 90 s timeout, max 2 concurrent with `429 + Retry-After`.
 - **Remote MCP** (`src/mcp-http.js`): stateless streamable-HTTP endpoint mounted *before* the paywall; it meters itself (free set + per-IP rate limit) and feeds the same stats counters.
-- **Marketplace bridge** (`/mkt/:token/:slug`): agent402.app collects the buyer's USDC (settled directly to our wallet) and forwards the call with a secret token that bypasses our own paywall — timing-safe comparison, global rate cap.
+- **Marketplace bridge** (`/mkt/:token/:slug`): agent402.app collects the buyer's USDC (settled directly to our wallet) and forwards the call with a token that bypasses our own paywall. The token in the URL is **per-slug** (`HMAC(master, slug)`), so the master secret never appears in a URL and a leaked endpoint exposes only its one tool — timing-safe comparison, global rate cap.
 - **State**: SQLite (better-sqlite3, WAL) on a Railway persistent volume at `/data` — stats, memory namespaces, PoW replay protection all survive redeploys.
 - **Shutdown**: SIGTERM drains in-flight requests before exit, because a hard kill would take an agent's money and return nothing.
 

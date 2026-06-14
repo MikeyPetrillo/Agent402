@@ -56,9 +56,13 @@ function clampInt(value, dflt, min, max) {
   return Math.min(Math.max(n, min), max);
 }
 
-// Stable across restarts when POW_SECRET (or the CDP secret) is set; otherwise a
-// random per-process secret (outstanding challenges simply expire on restart).
-const SECRET = process.env.POW_SECRET || process.env.CDP_API_KEY_SECRET || randomBytes(32).toString("hex");
+// Stable across restarts when POW_SECRET is set; otherwise a random per-process
+// secret (outstanding challenges simply expire on restart). Intentionally does
+// NOT fall back to CDP_API_KEY_SECRET: that secret authenticates on-chain
+// settlement, and reusing it as the PoW HMAC key would cross one credential
+// across two trust domains. Set a dedicated POW_SECRET in production for a
+// durable PoW token signer.
+const SECRET = process.env.POW_SECRET || randomBytes(32).toString("hex");
 // 16 bits ≈ 65k hashes ≈ ~0.1-0.3s of client CPU: enough to make bulk abuse of
 // the (near-free-to-serve) CPU tools uneconomic, while keeping a one-off call
 // snappy. Higher difficulties have brutal tail latency (difficulty 20 p90 ≈ 12s)

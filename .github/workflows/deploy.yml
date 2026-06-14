@@ -22,6 +22,11 @@ on:
         description: "Existing funded burner key for paytest (hex). Leave empty to generate a fresh wallet."
         default: ""
 
+# Least privilege by default: jobs get a read-only GITHUB_TOKEN. The only job
+# that needs more (publish → OIDC) overrides this with its own permissions block.
+permissions:
+  contents: read
+
 jobs:
   # Isolated demand-board read so its output isn't buried under the probe job's
   # verbose steps. Gated on [demand]. Pure read; never fails the run.
@@ -553,7 +558,14 @@ jobs:
           done
 
       - name: Publish to the official MCP Registry (GitHub OIDC, no secret)
+        env:
+          # Pin the publisher release with a repo variable (e.g. v1.2.3); leave
+          # unset to track the latest. Optionally hard-pin the exact tarball
+          # digest with MCP_PUBLISHER_SHA256 for full supply-chain integrity.
+          MCP_PUBLISHER_VERSION: ${{ vars.MCP_PUBLISHER_VERSION }}
+          MCP_PUBLISHER_SHA256: ${{ vars.MCP_PUBLISHER_SHA256 }}
         run: |
+          set -euo pipefail
           # The registry verifies ownership by matching mcp/package.json's
           # "mcpName" to the server.json name and confirming the npm package is
           # published — so this runs after the npm publish above.
@@ -561,7 +573,16 @@ jobs:
           if curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402" | grep -q "\"version\":\"$VER\""; then
             echo "io.github.mikeypetrillo/agent402@$VER already in the MCP Registry — nothing to do"; exit 0
           fi
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          asset="mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz"
+          if [ -n "${MCP_PUBLISHER_VERSION:-}" ]; then base="https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION"; else base="https://github.com/modelcontextprotocol/registry/releases/latest/download"; fi
+          # Download to disk and fail fast (no curl|tar of unverified bytes).
+          curl -fsSL -o "$asset" "$base/$asset"
+          # Verify against the release's published checksums when available, and
+          # against a hard-pinned digest if one is configured.
+          curl -fsSL -o checksums.txt "$base/checksums.txt" 2>/dev/null || true
+          if [ -s checksums.txt ] && grep -q " $asset\$" checksums.txt; then grep " $asset\$" checksums.txt | sha256sum -c -; fi
+          if [ -n "${MCP_PUBLISHER_SHA256:-}" ]; then echo "$MCP_PUBLISHER_SHA256  $asset" | sha256sum -c -; fi
+          tar -xzf "$asset" mcp-publisher
           cd mcp
           ../mcp-publisher login github-oidc
           ../mcp-publisher publish

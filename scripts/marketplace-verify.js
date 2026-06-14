@@ -9,10 +9,14 @@
 //        proving caller → agent402.app facilitator → our wallet → bridge → tool.
 //        Uses the cheapest stateless service; the burner pays our own wallet.
 
+import { createHmac } from "node:crypto";
+
 const API = (process.env.A402APP_BASE || "https://marketplace.agent402.app").replace(/\/$/, "");
 const KEY = process.env.A402APP_KEY;
 const SITE = (process.env.SITE || "https://agent402.tools").replace(/\/$/, "");
 const TOKEN = process.env.MARKETPLACE_TOKEN;
+// Per-slug bridge token (matches the server) — the master never goes in a URL.
+const slugToken = (slug) => createHmac("sha256", TOKEN).update(String(slug)).digest("hex").slice(0, 32);
 const BURNER = process.env.BURNER_KEY || process.env.AGENT_KEY || "";
 const AGENT_NAME = "Agent402 Tools";
 
@@ -40,7 +44,7 @@ console.log(`testing service "${svc.name}" (${svc.slug}) → ${invokeUrl}\n`);
 const body = { url: "https://example.com" };
 
 // 1) Production bridge serves a real tool result.
-const b = await fetch(`${SITE}/mkt/${TOKEN}/${svc.slug}`, {
+const b = await fetch(`${SITE}/mkt/${slugToken(svc.slug)}/${svc.slug}`, {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
 });
 const bjson = await b.json().catch(() => ({}));
@@ -48,7 +52,7 @@ if (b.status !== 200 || !(bjson.title || bjson.markdown)) fail(`bridge did not s
 console.log(`1. production bridge served "${svc.slug}" → 200, title="${(bjson.title || "").slice(0, 50)}" ✓`);
 
 // 1b) ffmpeg works in the production image (media-info through the bridge).
-const m = await fetch(`${SITE}/mkt/${TOKEN}/media-info`, {
+const m = await fetch(`${SITE}/mkt/${slugToken("media-info")}/media-info`, {
   method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" }),
 });

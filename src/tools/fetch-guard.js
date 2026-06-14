@@ -150,6 +150,13 @@ export async function assertPublicUrl(rawUrl) {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw badRequest("Only http(s) URLs are supported");
   }
+  // Strip any userinfo (user:pass@host): we won't forward caller-smuggled
+  // credentials to an upstream host from our egress IP, and userinfo can
+  // confuse host parsing.
+  if (url.username || url.password) {
+    url.username = "";
+    url.password = "";
+  }
 
   // IPv6 literals keep their brackets in URL.hostname — strip them so the IP
   // check actually evaluates the address (literals never hit DNS, so this

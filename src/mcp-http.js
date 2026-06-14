@@ -239,7 +239,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // JSON-RPC message (including initialize) is self-contained, which survives
   // redeploys and needs no sticky routing.
   app.post("/mcp", async (req, res) => {
-    const ip = (req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress || "?").trim();
+    // req.ip is derived via the app's "trust proxy" setting, so it's the real
+    // client IP (the edge-appended XFF hop) — NOT a spoofable client-supplied
+    // X-Forwarded-For value. This is the only abuse control on the free tier,
+    // so it must not be bypassable by injecting a header.
+    const ip = (req.ip || req.socket.remoteAddress || "?").trim();
     // Adoption telemetry: every MCP session announces its client at
     // initialize (e.g. "claude-ai", "claude-code"). In-memory since boot.
     const ci = req.body?.method === "initialize" ? req.body?.params?.clientInfo : null;
