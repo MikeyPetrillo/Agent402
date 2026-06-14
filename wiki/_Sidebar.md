@@ -7,6 +7,7 @@
 - [[MCP Connector]]
 - [[Tool Catalog]]
 - [[Payments and x402]]
+- [[Pay-per-crawl]]
 - [[Memory and Coordination]]
 
 **Under the hood**

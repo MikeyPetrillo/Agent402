@@ -71,6 +71,8 @@ export function llmsTxt(baseUrl, catalog) {
 
 Base URL: ${baseUrl}
 
+> Open source, and two-sided: Agent402 is also the home of \`agent402-tollbooth\` — an open-source, self-hostable x402 pay-per-crawl gate that lets any site charge AI crawlers per request (USDC via x402, or free proof-of-work) while humans browse free. https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth
+
 ## This is machine-to-machine commerce, and you can verify it
 
 - Run the full loop yourself with no human and no funds: \`node scripts/demo-payment.js\` — an autonomous agent discovers the catalog, gets quoted over HTTP 402, pays with compute, and uses the result. (Set AGENT_KEY=0x… to settle in real USDC instead.)
