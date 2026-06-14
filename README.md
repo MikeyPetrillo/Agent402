@@ -137,6 +137,10 @@ sha256 proof-of-work (sub-second; the MCP servers do it automatically). Details:
   security headers. See [wiki: Security Model](https://github.com/MikeyPetrillo/Agent402/wiki/Security-Model).
 - **Deterministic** — no model in the serving path, so the same input always
   gives the same output, with full OpenAPI schemas.
+- **Auditable, on-chain revenue** — every paid call settles in USDC to
+  [`agent402.base.eth`](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns)
+  (a Base name resolving to the public receiving wallet) — verifiable by anyone
+  on Basescan; live counts at [`/api/stats`](https://agent402.tools/api/stats).
 - **MIT licensed, fork-friendly** — clone it, strip what you don't need, add
   what you do.
 

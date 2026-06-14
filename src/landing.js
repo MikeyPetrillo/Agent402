@@ -11,7 +11,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
     ? `<div class="odometer" title="Counted live by the server; settled revenue is independently verifiable on-chain">
     <span class="odo-label">— TOOL CALLS SERVED —</span>
     <span class="odo-digits">${String(served.total).padStart(7, "0").split("").map((d) => `<b>${d}</b>`).join("")}</span>
-    <span class="odo-sub">${served.viaUSDC} settled in USDC · ${served.viaProofOfWork} paid with compute${stats.onchainRevenueProof ? ` · <a href="${stats.onchainRevenueProof}" rel="noopener">on-chain proof</a>` : ""} · counting since ${String(stats.servingSince).slice(0, 10)}</span>
+    <span class="odo-sub">${served.viaUSDC} settled in USDC${stats.walletName ? ` to ${stats.walletName}` : ""} · ${served.viaProofOfWork} paid with compute${stats.onchainRevenueProof ? ` · <a href="${stats.onchainRevenueProof}" rel="noopener">on-chain proof</a>` : ""} · counting since ${String(stats.servingSince).slice(0, 10)}</span>
   </div>`
     : "";
   // Live activity strip — the recent paid-call feed from /api/stats as social
@@ -342,7 +342,7 @@ ${categoryCards}
         <code>https://www.npmjs.com/package/agent402-mcp</code></div>
       <div class="row"><b>Open source on GitHub</b> — read every line that serves and prices your call:
         <code>https://github.com/MikeyPetrillo/Agent402</code></div>${stats?.wallet ? `
-      <div class="row"><b>Real USDC settlements, on-chain</b> — every paid call lands here, verifiable on Basescan:
+      <div class="row"><b>Real USDC settlements, on-chain</b> — every paid call lands at ${stats.walletName ? `<b>${stats.walletName}</b> (${stats.wallet.slice(0, 6)}…${stats.wallet.slice(-4)})` : "the revenue wallet"}, verifiable on Basescan:
         <code>${stats.onchainRevenueProof || `https://basescan.org/address/${stats.wallet}#tokentxns`}</code></div>` : ""}
       <div class="row"><b>Self-describing & tested</b> — full schemas, and every endpoint is re-tested against its own documented example before each deploy:
         <code>GET ${baseUrl}/openapi.json &nbsp;·&nbsp; GET ${baseUrl}/api/pricing</code></div>

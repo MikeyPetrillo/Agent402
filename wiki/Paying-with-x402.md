@@ -50,4 +50,4 @@ Client-side caps belong on the buyer:
 
 ## Verifying you weren't cheated
 
-Every settled call is an on-chain USDC transfer to the public revenue wallet — auditable by anyone at [Basescan](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns). The service also publishes served-call counters at [`/api/stats`](https://agent402.tools/api/stats); the chain, not the counter, is the source of truth.
+Every settled call is an on-chain USDC transfer to **`agent402.base.eth`** (a Base name resolving to the public revenue wallet) — auditable by anyone at [Basescan](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns). The service also publishes served-call counters at [`/api/stats`](https://agent402.tools/api/stats); the chain, not the counter, is the source of truth.
