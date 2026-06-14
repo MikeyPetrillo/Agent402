@@ -157,6 +157,15 @@ working tools, so you don't have to build the catalog yourself.
 Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)
 and discoverable in the Coinbase [x402 Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar).
 
+### Sibling: `agent402-tollbooth` (open-source pay-per-crawl)
+
+Want the *other* side of x402 — charging AI bots that crawl **your** site?
+[`tollbooth/`](tollbooth) is a self-hostable **pay-per-crawl** gate: drop it in
+front of any site/API and humans browse free while AI crawlers pay per request
+(USDC via x402, or free via proof-of-work). The open, crypto-native answer to
+Cloudflare's closed pay-per-crawl — no CDN, no Stripe, no signup. Express
+middleware or reverse proxy. See [tollbooth/README.md](tollbooth/README.md).
+
 ## Repository map
 
 | Path | What |

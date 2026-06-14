@@ -1,0 +1,54 @@
+{
+  "name": "agent402-tollbooth",
+  "version": "0.1.0",
+  "description": "Open-source, self-hostable x402 pay-per-crawl tollbooth: charge AI bots per request (USDC via x402, or free proof-of-work) while humans browse free. Drop-in Express middleware or reverse proxy — no Cloudflare, no Stripe, no signup.",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "agent402-tollbooth": "index.js"
+  },
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "bots.js",
+    "pow.js",
+    "example.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test.js",
+    "example": "node example.js"
+  },
+  "dependencies": {
+    "express": "^5.0.0"
+  },
+  "keywords": [
+    "x402",
+    "pay-per-crawl",
+    "ai-bots",
+    "ai-crawler",
+    "bot-monetization",
+    "http-402",
+    "402-payment-required",
+    "proof-of-work",
+    "usdc",
+    "reverse-proxy",
+    "express-middleware",
+    "self-hosted",
+    "mcp",
+    "ai-agents"
+  ],
+  "author": "Mikey Petrillo (https://github.com/MikeyPetrillo)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MikeyPetrillo/Agent402.git",
+    "directory": "tollbooth"
+  },
+  "homepage": "https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth"
+}
