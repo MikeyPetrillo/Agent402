@@ -123,7 +123,20 @@ async function main() {
       tags: svc.tags,
       slug: svc.slug,
     };
-    if (have) { console.log(`  service "${svc.name}" exists (${have.id}) — skipping`); continue; }
+    if (have) {
+      // Update in place so endpoint changes (e.g. the per-slug bridge token) take
+      // effect — don't skip, or a stale service_endpoint lingers on the marketplace.
+      try {
+        await api("PATCH", `/api/v1/agents/${agent.id}/services/${have.id}`, payload);
+        console.log(`  updated service "${svc.name}" (${have.id}) → ${serviceEndpoint(svc.slug)}`);
+      } catch (e) {
+        // PATCH unsupported → recreate to refresh the endpoint.
+        try { await api("DELETE", `/api/v1/agents/${agent.id}/services/${have.id}`); } catch {}
+        const recreated = await api("POST", `/api/v1/agents/${agent.id}/services`, payload);
+        console.log(`  recreated service "${svc.name}" → ${recreated.invoke_url || recreated.id}`);
+      }
+      continue;
+    }
     if (DRY) { console.log(`  [dry-run] would POST service`, payload); continue; }
     const created = await api("POST", `/api/v1/agents/${agent.id}/services`, payload);
     console.log(`  created service "${svc.name}" → ${created.invoke_url || created.id}`);
