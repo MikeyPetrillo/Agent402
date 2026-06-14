@@ -317,8 +317,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 try {
   pricingInfo = await loadCatalog();
 } catch (err) {
-  log(`Could not load the catalog from ${BASE}: ${err.message}`);
-  process.exit(1);
+  // Don't hard-exit: starting with an empty catalog still lets the server
+  // connect and answer introspection (tools/list) — required to pass directory
+  // health checks (e.g. Glama) and more resilient if the catalog endpoint is
+  // briefly unreachable. search_tools/call_tool just return nothing until the
+  // catalog is reachable again.
+  log(`Could not load the catalog from ${BASE}: ${err.message} — starting with an empty catalog`);
 }
 const requested = (process.env.AGENT402_TOOLS || DEFAULT_CURATED.join(","))
   .split(",").map((s) => s.trim()).filter(Boolean);

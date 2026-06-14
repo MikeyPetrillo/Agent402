@@ -1,0 +1,14 @@
+# Image for the agent402-mcp stdio MCP server. Build context = repo ROOT
+# (hence the mcp/ prefixes), which is how directory health checks like Glama
+# build it: they clone the repo, build this Dockerfile, start the server, and
+# send an MCP introspection request (tools/list). The server starts and
+# responds even if the live catalog endpoint is briefly unreachable.
+#
+#   docker build -f Dockerfile.mcp -t agent402-mcp .
+FROM node:22-slim
+WORKDIR /app
+COPY mcp/package.json mcp/package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+COPY mcp/index.js ./
+# stdio transport: the MCP client speaks JSON-RPC over stdin/stdout.
+ENTRYPOINT ["node", "index.js"]
