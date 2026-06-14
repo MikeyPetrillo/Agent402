@@ -38,6 +38,9 @@ import { timingSafeEqual, createHmac } from "node:crypto";
 
 const PORT = process.env.PORT || 3000;
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
+// Human-readable Base name for the receiving wallet (resolves to WALLET_ADDRESS).
+// Display/branding only — the x402 payTo is always the resolved 0x address.
+const WALLET_ENS = process.env.WALLET_ENS || "agent402.base.eth";
 const NETWORK = process.env.NETWORK || "base";
 const FREE_MODE = process.env.FREE_MODE === "true";
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
@@ -439,7 +442,7 @@ app.use((_req, res, next) => {
 // Free, unauthenticated routes
 app.get("/", (_req, res) =>
   res.type("html").send(
-    landingPage(BASE_URL, NETWORK, FREE_MODE, CATALOG, getStats({ wallet: WALLET_ADDRESS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL }))
+    landingPage(BASE_URL, NETWORK, FREE_MODE, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL }))
   )
 );
 app.get("/health", (_req, res) => res.json({ ok: true }));
@@ -643,7 +646,7 @@ app.get("/api/pow/challenge", (req, res) => {
 // Live machine-to-machine economy stats (free). Money is provable on-chain at
 // the wallet; this also tallies calls served and how they were paid for.
 app.get("/api/stats", (_req, res) =>
-  res.json(getStats({ wallet: WALLET_ADDRESS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL }))
+  res.json(getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL }))
 );
 
 // Remote MCP connector (streamable HTTP, authless free tier): paste

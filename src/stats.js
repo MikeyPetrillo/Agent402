@@ -52,7 +52,7 @@ export function recordServedCall(slug, method) {
   }
 }
 
-export function getStats({ wallet, network, toolCount, baseUrl }) {
+export function getStats({ wallet, walletName, network, toolCount, baseUrl }) {
   const num = (k) => getCounter.get(k)?.n ?? 0;
   const firstServed = parseInt(getMeta.get("firstServed")?.v ?? Date.now(), 10);
   const explorer = network === "base-sepolia" ? "https://sepolia.basescan.org" : "https://basescan.org";
@@ -62,6 +62,7 @@ export function getStats({ wallet, network, toolCount, baseUrl }) {
     tools: toolCount,
     payment: { protocol: "x402", network, currency: "USDC" },
     wallet,
+    walletName: walletName || null,
     onchainRevenueProof: wallet ? `${explorer}/address/${wallet}#tokentxns` : null,
     onchainNote: "Settled revenue is verifiable on-chain at the wallet above — that is the trustless source of truth, not this counter.",
     toolCallsServed: {

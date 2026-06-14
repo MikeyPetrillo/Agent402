@@ -22,7 +22,7 @@ No. There's no LLM anywhere in the serving path — every tool is deterministic 
 Tool inputs are processed in memory and not persisted — except the memory tools, whose purpose is storage (wallet-keyed, owner-deletable, TTL-able). Full policy: [agent402.tools/privacy](https://agent402.tools/privacy).
 
 **How do I know the service is honest?**
-The server is fully open source; CI re-tests every endpoint against its own documented example before each deploy; and revenue settles on-chain to a public wallet anyone can audit on [Basescan](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns).
+The server is fully open source; CI re-tests every endpoint against its own documented example before each deploy; and revenue settles on-chain to **`agent402.base.eth`** (the named public receiving wallet) — anyone can audit it on [Basescan](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns).
 
 **What if a tool fails after I paid?**
 x402 settles before the handler runs, so the operating principle is: anything that can't be served reliably is removed from the catalog rather than left to charge-and-502. Failure rates are watched by CI and a 15-minute production heartbeat.
