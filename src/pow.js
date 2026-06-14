@@ -41,6 +41,8 @@ const WALLET_ONLY_SLUGS = new Set([
   "media-info", "audio-convert", "audio-normalize",
   "gov-data", "weather-alerts", "earthquakes",
   "barcode-lookup", "fx-rate", "weather-forecast",
+  // x402 payments toolkit — kept off the free connector (paid surface only).
+  "x402-quote", "usdc-balance", "tx-status", "gas-estimate", "x402-verify", "transfer-authorization",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */

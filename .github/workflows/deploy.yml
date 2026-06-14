@@ -245,6 +245,9 @@ jobs:
       - name: Data-kit tests (barcode-lookup, fx-rate, weather-forecast — live keyless APIs)
         run: node scripts/test-data-kit.js
 
+      - name: x402-kit tests (transfer-auth typed data + live Base RPC reads)
+        run: node scripts/test-x402-kit.js
+
       - name: Conversion tools (~970 endpoints, exact + round-trip)
         run: node scripts/test-convert.js
 
