@@ -377,10 +377,10 @@ export function openapiSpec(baseUrl, catalog) {
   return {
     openapi: "3.1.0",
     info: {
-      title: "Agent402 — pay-per-call tools for AI agents",
+      title: "Agent402 — the open-source, self-hostable x402 server for AI agents",
       version: "2.0.0",
       description:
-        "Machine-payable web tools for AI agents. Every endpoint is paid per call in USDC on Base via the x402 protocol: no signup, no API keys — the first request returns HTTP 402 with payment requirements, an x402 client pays and retries. Free discovery: GET /api/pricing, GET /llms.txt.",
+        "The open-source, self-hostable x402 server: hundreds of machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) — unlike closed gateways, the whole catalog is open and runnable yourself. Every endpoint is paid per call in USDC on Base via x402 (no signup, no API keys — the first request returns HTTP 402, an x402 client pays and retries) or free with proof-of-work. Free discovery: GET /api/pricing, GET /llms.txt.",
       contact: { url: baseUrl },
     },
     servers: [{ url: baseUrl }],

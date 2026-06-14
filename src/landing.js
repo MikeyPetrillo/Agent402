@@ -47,20 +47,20 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="icon" type="image/png" sizes="512x512" href="/logo.png">
 <link rel="shortcut icon" href="/favicon.ico">
-<link rel="apple-touch-icon" href="/logo.png"><title>Agent402 — self-hostable x402 + MCP server with ${count}+ tools for AI agents</title>
+<link rel="apple-touch-icon" href="/logo.png"><title>Agent402 — the open-source, self-hostable x402 + MCP server (${count}+ tools for AI agents)</title>
 <meta name="description" content="Open-source, self-hostable x402 + MCP server: ${count} tools for AI agents (browser, web search, PDFs, images, live data, payment helpers). Run free with proof-of-work or pay per call in USDC on Base — plus agent402-tollbooth, an open-source pay-per-crawl gate for charging AI bots that crawl your site. No signup, no API key.">
 <link rel="canonical" href="${baseUrl}/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/">
 <meta property="og:site_name" content="Agent402">
-<meta property="og:title" content="Agent402 — self-hostable x402 + MCP server with ${count}+ agent tools">
+<meta property="og:title" content="Agent402 — the open-source, self-hostable x402 + MCP server (${count}+ agent tools)">
 <meta property="og:description" content="Where agents pay agents: an open-source x402 + MCP server with ${count} tools for AI agents — browser, search, PDFs, live data, payments. Self-host free (proof-of-work) or pay per call in USDC on Base. No signup, no API key.">
 <meta property="og:image" content="${baseUrl}/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="${baseUrl}/card.png">
-<meta name="twitter:title" content="Agent402 — self-hostable x402 + MCP server (${count}+ agent tools)">
+<meta name="twitter:title" content="Agent402 — open-source, self-hostable x402 + MCP server (${count}+ agent tools)">
 <meta name="twitter:description" content="Open-source x402 + MCP server: ${count} tools for AI agents — browser, search, PDFs, live data, payments. Self-host free or pay per call in USDC on Base. No signup, no API key.">
 <script type="application/ld+json">
 {
@@ -231,9 +231,9 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <div class="wrap">
   <header class="hero">
     <div>
-      <span class="badge"><span class="dot"></span> x402 · USDC on ${network} · ${count} tools</span>
+      <span class="badge"><span class="dot"></span> open source · self-hostable · ${count} x402 tools</span>
       <h1>Where agents pay agents<span class="x">.</span></h1>
-      <p class="sub">A real headless browser, live web search, durable memory, and a <a href="/guides/x402-payments-toolkit">non-custodial x402 payment toolkit</a> — the things your agent's sandbox <em>doesn't have</em> — rented by the call. The agent hits an endpoint, gets an <code>HTTP 402</code> quote, pays from its own wallet in USDC (or a few seconds of compute), and gets the result. No human, no signup, no API key — the payment <em>is</em> the identity.</p>
+      <p class="sub"><b>The open-source, self-hostable x402 server</b> — ${count} tools for AI agents in one place (and a <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth" rel="noopener">pay-per-crawl gate</a> for the other side). A real headless browser, live web search, durable memory, and a <a href="/guides/x402-payments-toolkit">non-custodial x402 payment toolkit</a> — the things your agent's sandbox <em>doesn't have</em> — rented by the call. The agent hits an endpoint, gets an <code>HTTP 402</code> quote, pays from its own wallet in USDC (or a few seconds of compute), and gets the result. No human, no signup, no API key — the payment <em>is</em> the identity.</p>
       <div class="ctas">
         <a class="cta primary" href="/tools">Browse all ${count} tools →</a>
         <a class="cta ghost" href="#connect">Add to Claude</a>

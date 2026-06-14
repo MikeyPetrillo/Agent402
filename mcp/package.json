@@ -4,7 +4,7 @@
   "mcpName": "io.github.MikeyPetrillo/agent402",
   "author": "Mikey Petrillo (https://github.com/MikeyPetrillo)",
   "homepage": "https://agent402.tools",
-  "description": "MCP server exposing Agent402's 1,100+ tools for AI agents — browser, search, PDFs, images, live data, payments. Free via proof-of-work, or pay per call in USDC via the x402 protocol.",
+  "description": "Open-source MCP server exposing Agent402's 1,100+ self-hostable tools for AI agents — browser, search, PDFs, images, live data, payments. Free via proof-of-work, or pay per call in USDC via the x402 protocol.",
   "type": "module",
   "bin": {
     "agent402-mcp": "index.js"
