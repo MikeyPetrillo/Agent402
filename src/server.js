@@ -409,6 +409,15 @@ app.get("/", (_req, res) =>
   )
 );
 app.get("/health", (_req, res) => res.json({ ok: true }));
+// Glama connector ownership verification: claims our listing at
+// glama.ai/mcp/connectors/io.github.MikeyPetrillo/agent402. The email must match
+// the Glama account; override via GLAMA_MAINTAINER_EMAIL without a code change.
+app.get("/.well-known/glama.json", (_req, res) =>
+  res.json({
+    $schema: "https://glama.ai/mcp/schemas/connector.json",
+    maintainers: [{ email: process.env.GLAMA_MAINTAINER_EMAIL || "mikepetrillo1775@gmail.com" }],
+  })
+);
 app.get("/privacy", (_req, res) => res.type("html").send(privacyPage(BASE_URL)));
 app.get("/terms", (_req, res) => res.type("html").send(termsPage(BASE_URL)));
 app.get("/guides", (_req, res) => res.type("html").send(guidesIndex(BASE_URL)));
