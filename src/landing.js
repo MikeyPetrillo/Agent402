@@ -14,6 +14,18 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
     <span class="odo-sub">${served.viaUSDC} settled in USDC · ${served.viaProofOfWork} paid with compute${stats.onchainRevenueProof ? ` · <a href="${stats.onchainRevenueProof}" rel="noopener">on-chain proof</a>` : ""} · counting since ${String(stats.servingSince).slice(0, 10)}</span>
   </div>`
     : "";
+  // Live activity strip — the recent paid-call feed from /api/stats as social
+  // proof. Server-rendered, then refreshed client-side every 12s.
+  const recent = Array.isArray(stats?.recentCalls) ? stats.recentCalls : [];
+  const agoStr = (iso) => { const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000); return s < 60 ? `${s | 0}s` : s < 3600 ? `${(s / 60) | 0}m` : s < 86400 ? `${(s / 3600) | 0}h` : `${(s / 86400) | 0}d`; };
+  const activityRows = (rows) => rows.slice(0, 8).map((r) => `<li><span class="a-slug">${r.slug}</span><span class="a-meta">${r.paidWith === "proof-of-work" ? "⚙ PoW" : "$ USDC"} · ${agoStr(r.at)} ago</span></li>`).join("");
+  const activity = recent.length
+    ? `<div class="activity">
+    <div class="eyebrow" style="margin:0 0 8px">● Live — recent paid calls</div>
+    <ul id="activity-list">${activityRows(recent)}</ul>
+    <script>(function(){var el=document.getElementById('activity-list');if(!el)return;function ago(iso){var s=Math.max(0,(Date.now()-new Date(iso).getTime())/1000);return s<60?(s|0)+'s':s<3600?((s/60)|0)+'m':s<86400?((s/3600)|0)+'h':((s/86400)|0)+'d';}function esc(t){return String(t).replace(/[&<>"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c];});}async function tick(){try{var r=await fetch('/api/stats',{cache:'no-store'});var d=await r.json();el.innerHTML=(d.recentCalls||[]).slice(0,8).map(function(x){return '<li><span class="a-slug">'+esc(x.slug)+'</span><span class="a-meta">'+(x.paidWith==='proof-of-work'?'⚙ PoW':'$ USDC')+' · '+ago(x.at)+' ago</span></li>';}).join('');}catch(e){}}setInterval(tick,12000);})();</script>
+  </div>`
+    : "";
   const categoryCards = Object.entries(CATEGORIES)
     .map(([key, { label, blurb }]) => {
       const inCat = tools.filter((t) => t.category === key);
@@ -190,6 +202,12 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   .odo-label { display:block; color:var(--muted); font-family:var(--mono); font-size:.7rem; letter-spacing:.3em; margin-bottom:9px; }
   .odo-digits b { display:inline-block; background:#000; color:var(--accent); border:1px solid #1f4a1d; border-radius:6px; font:700 1.9rem/1 var(--mono); padding:9px 8px; margin:0 2px; text-shadow:0 0 9px rgba(74,222,128,.55); }
   .odo-sub { display:block; margin-top:9px; color:var(--muted); font-size:.8rem; font-family:var(--mono); }
+  .activity { margin:26px auto 0; max-width:540px; }
+  .activity ul { list-style:none; margin:0; padding:0; border:1px solid #1f4a1d; border-radius:11px; overflow:hidden; }
+  .activity li { display:flex; justify-content:space-between; gap:12px; padding:8px 13px; border-top:1px solid #14260f; font-family:var(--mono); font-size:.8rem; }
+  .activity li:first-child { border-top:0; }
+  .a-slug { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .a-meta { color:var(--muted); white-space:nowrap; }
   .verify { background:var(--bg2); border:1px solid var(--line); border-radius:13px; padding:6px 20px; margin-top:22px; }
   .verify .row { margin:16px 0; }
   .verify .row b { color:var(--text); font-size:.9rem; }
@@ -258,6 +276,7 @@ npm i @x402/core @x402/evm @x402/fetch viem
 AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
     <p class="sub">Revenue is trustless and public — every settled call lands on-chain. See live counts and the receiving wallet at <a href="/api/stats">/api/stats</a>.</p>
     ${odometer}
+    ${activity}
   </section>
 
   <section>
