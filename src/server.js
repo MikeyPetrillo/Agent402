@@ -34,7 +34,7 @@ import { guidesIndex, guidePage } from "./guides.js";
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
 import { recordServedCall, getStats } from "./stats.js";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, createHmac } from "node:crypto";
 
 const PORT = process.env.PORT || 3000;
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
@@ -45,13 +45,28 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 // Marketplace bridge (agent402.app): that platform IS the paywall — it collects
 // the caller's USDC (settled directly to our wallet) and then forwards the call
 // to the endpoint we registered. So those forwarded calls must skip our own
-// x402 paywall. They authenticate with a secret token embedded in the
-// registered service_endpoint URL. Off unless MARKETPLACE_TOKEN is set.
+// x402 paywall. Off unless MARKETPLACE_TOKEN is set.
+//
+// The master MARKETPLACE_TOKEN is NEVER placed in a URL. Each registered
+// service_endpoint instead carries a PER-SLUG token = HMAC(master, slug): it
+// authorizes exactly one tool, so a leaked endpoint (their on-chain metadata is
+// public) grants free access to that single tool, not the whole catalog, and
+// reveals nothing about the master secret. The bypass header the gate honors is
+// also per-slug-derived and only set on internally-forwarded requests.
 const MARKETPLACE_TOKEN = process.env.MARKETPLACE_TOKEN || "";
 const marketplaceTokenOk = (t) => {
   if (!MARKETPLACE_TOKEN || typeof t !== "string") return false;
   const a = Buffer.from(t);
   const b = Buffer.from(MARKETPLACE_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+};
+// HMAC(master, slug), hex-truncated — the token that actually appears in a URL.
+const marketplaceSlugToken = (slug) =>
+  MARKETPLACE_TOKEN ? createHmac("sha256", MARKETPLACE_TOKEN).update(String(slug)).digest("hex").slice(0, 32) : "";
+const marketplaceSlugTokenOk = (token, slug) => {
+  if (!MARKETPLACE_TOKEN || typeof token !== "string") return false;
+  const a = Buffer.from(token);
+  const b = Buffer.from(marketplaceSlugToken(slug));
   return a.length === b.length && timingSafeEqual(a, b);
 };
 
@@ -403,7 +418,23 @@ for (const [route, def] of Object.entries(CATALOG)) {
 }
 
 const app = express();
+// Behind Railway's single edge proxy: trust exactly that hop so req.ip is the
+// real client IP (the X-Forwarded-For entry the edge appends), not an
+// attacker-supplied XFF value. This is what the per-IP rate limiters key on,
+// so spoofing it must not mint a fresh bucket. Tune for other topologies.
+app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
 app.use(express.json({ limit: "100kb" }));
+
+// Baseline security headers on every response. No CSP (the HTML landing/tool/
+// guide pages use inline styles), but these are cheap, no-break hardening for
+// an API that also serves a few HTML pages.
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains");
+  next();
+});
 
 // Free, unauthenticated routes
 app.get("/", (_req, res) =>
@@ -445,10 +476,11 @@ const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="51
 app.get("/logo.svg", (_req, res) => res.type("image/svg+xml").send(LOGO_SVG));
 
 // Marketplace bridge endpoint. agent402.app POSTs the caller's JSON body here
-// after collecting payment; we authenticate via the token in the path, adapt
-// the body to the tool's own method, and serve the result with the paywall
-// bypassed. A coarse global rate limit bounds abuse if a service_endpoint URL
-// ever leaks (their on-chain metadata is public). Off unless MARKETPLACE_TOKEN set.
+// after collecting payment; we authenticate via the PER-SLUG token in the path
+// (HMAC(master, slug) — the master secret is never in any URL), adapt the body
+// to the tool's own method, and serve the result with the paywall bypassed. A
+// leaked endpoint thus only exposes its one tool. A coarse global rate limit
+// bounds abuse. Off unless MARKETPLACE_TOKEN set.
 if (MARKETPLACE_TOKEN) {
   const slugToRoute = new Map();
   for (const [route, def] of Object.entries(CATALOG)) slugToRoute.set(def.slug, route);
@@ -457,7 +489,10 @@ if (MARKETPLACE_TOKEN) {
   const MKT_PER_MIN = Math.min(Math.max(parseInt(process.env.MARKETPLACE_RATE_PER_MIN, 10) || 600, 10), 100000);
 
   app.all("/mkt/:token/:slug", async (req, res) => {
-    if (!marketplaceTokenOk(req.params.token)) return res.status(404).json({ error: "Not found" });
+    // Token in the path is scoped to this exact slug — not the master secret.
+    if (!marketplaceSlugTokenOk(req.params.token, req.params.slug)) {
+      return res.status(404).json({ error: "Not found" });
+    }
     const route = slugToRoute.get(req.params.slug);
     if (!route) return res.status(404).json({ error: `Unknown service "${req.params.slug}"` });
     const now = Date.now();
@@ -487,7 +522,7 @@ if (MARKETPLACE_TOKEN) {
       res.status(502).json({ error: `Bridge dispatch failed: ${err.message}` });
     }
   });
-  console.log(`Marketplace bridge enabled at /mkt/<token>/<slug> (${MKT_PER_MIN}/min cap)`);
+  console.log(`Marketplace bridge enabled at /mkt/<per-slug-token>/<slug> (${MKT_PER_MIN}/min cap)`);
 }
 let logoPngCache = null;
 app.get("/logo.png", async (_req, res) => {
@@ -567,7 +602,28 @@ app.get("/tools/:slug", (req, res) => {
 });
 // Free proof-of-work endpoints: agents without a wallet pay with CPU instead.
 app.get("/api/pow", (_req, res) => res.json(powInfo(BASE_URL, [...POW_SLUGS].sort())));
+// Light per-IP rate limit on challenge issuance. Issuing is cheap (one HMAC,
+// stateless) but unmetered issuance is needless surface; this keeps a single
+// client from hammering it while staying generous for legitimate solvers.
+const powChallengeHits = new Map(); // ip -> number[] (timestamps, last 60s)
+const POW_CHALLENGE_PER_MIN = Math.min(Math.max(parseInt(process.env.POW_CHALLENGE_PER_MIN, 10) || 120, 10), 100000);
+setInterval(() => {
+  const cutoff = Date.now() - 60000;
+  for (const [ip, ts] of powChallengeHits) {
+    while (ts.length && ts[0] < cutoff) ts.shift();
+    if (!ts.length) powChallengeHits.delete(ip);
+  }
+}, 5 * 60 * 1000).unref();
 app.get("/api/pow/challenge", (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress || "?";
+  const now = Date.now();
+  let ts = powChallengeHits.get(ip);
+  if (!ts) powChallengeHits.set(ip, (ts = []));
+  while (ts.length && ts[0] < now - 60000) ts.shift();
+  if (ts.length >= POW_CHALLENGE_PER_MIN) {
+    return res.status(429).json({ error: `Too many challenge requests (${POW_CHALLENGE_PER_MIN}/min). Solve the ones you have, or pay via x402.` });
+  }
+  ts.push(now);
   const requested = (req.query.slug || req.query.path || "").toString().replace(/^.*\//, "");
   // Challenges are strictly scoped to one known compute-payable tool — no
   // wildcard tokens, so a solved challenge can never be retargeted.

@@ -22,6 +22,11 @@ on:
         description: "Existing funded burner key for paytest (hex). Leave empty to generate a fresh wallet."
         default: ""
 
+# Least privilege by default: jobs get a read-only GITHUB_TOKEN. The only job
+# that needs more (publish → OIDC) overrides this with its own permissions block.
+permissions:
+  contents: read
+
 jobs:
   # Isolated demand-board read so its output isn't buried under the probe job's
   # verbose steps. Gated on [demand]. Pure read; never fails the run.
@@ -397,22 +402,33 @@ jobs:
           console.log("proof-of-work gate: all assertions passed");
           '
 
-      - name: Marketplace bridge (token bypasses paywall; wrong/absent token does not)
+      - name: Marketplace bridge (per-slug token bypasses paywall; master/wrong token does not)
         run: |
-          # Paywall ACTIVE + a bridge token set. The bridge must serve paid tools
-          # to agent402.app's forwarded calls (token in path), reject a wrong
-          # token, and a direct unpaid call must still 402.
+          # Paywall ACTIVE + a bridge token set. Each registered endpoint carries
+          # a PER-SLUG token = HMAC(master, slug); the master must NEVER work in a
+          # URL, a wrong token is rejected, and a direct unpaid call still 402s.
           WALLET_ADDRESS=0x000000000000000000000000000000000000dEaD NETWORK=base \
           FACILITATOR_URL=https://facilitator.payai.network X402_SYNC_ON_START=false \
           MARKETPLACE_TOKEN=test-bridge-token PORT=3004 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3004/health >/dev/null && break; sleep 1; done
           node --input-type=module -e '
+          import { createHmac } from "node:crypto";
           const B = "http://localhost:3004"; const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
-          // good token → POST body adapted to the GET search-less hash tool, paywall bypassed
-          const good = await fetch(B + "/mkt/test-bridge-token/hash", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "hello world" }) });
-          if (good.status !== 200) fail("valid bridge token should serve 200, got " + good.status);
+          const MASTER = "test-bridge-token";
+          const tok = (slug) => createHmac("sha256", MASTER).update(slug).digest("hex").slice(0, 32);
+          // good per-slug token → POST body adapted to the hash tool, paywall bypassed
+          const good = await fetch(B + "/mkt/" + tok("hash") + "/hash", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "hello world" }) });
+          if (good.status !== 200) fail("valid per-slug token should serve 200, got " + good.status);
           if ((await good.json()).hex.slice(0, 8) !== "b94d27b9") fail("bridge returned wrong result");
-          console.log("bridge valid token -> 200 ✓");
+          console.log("bridge per-slug token -> 200 ✓");
+          // the MASTER secret in a URL must NOT work (the whole point of per-slug)
+          const master = await fetch(B + "/mkt/" + MASTER + "/hash", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "x" }) });
+          if (master.status === 200) fail("master token in URL must NOT be served");
+          console.log("bridge master-in-url -> " + master.status + " ✓");
+          // a per-slug token must not be reusable on a different slug
+          const cross = await fetch(B + "/mkt/" + tok("hash") + "/uuid", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: 2 }) });
+          if (cross.status === 200) fail("per-slug token must not work on another slug");
+          console.log("bridge cross-slug reuse -> " + cross.status + " ✓");
           // wrong token → 404 (route hidden)
           const bad = await fetch(B + "/mkt/nope/hash", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "x" }) });
           if (bad.status === 200) fail("wrong bridge token must not be served");
@@ -421,8 +437,8 @@ jobs:
           const direct = await fetch(B + "/api/hash", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "x" }) });
           if (direct.status === 200) fail("direct unpaid call must still be paywalled");
           console.log("direct unpaid -> " + direct.status + " ✓");
-          // a wallet-only tool also works through the bridge (search needs BRAVE; use meta via a public URL is networked, so test dns-free: use uuid GET-style through bridge)
-          const g2 = await fetch(B + "/mkt/test-bridge-token/uuid", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: 2 }) });
+          // a wallet-only / GET-style tool also works through the bridge with its own per-slug token
+          const g2 = await fetch(B + "/mkt/" + tok("uuid") + "/uuid", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: 2 }) });
           if (g2.status !== 200) fail("bridge GET-tool adaptation failed, got " + g2.status);
           console.log("bridge GET-tool (uuid) -> 200 ✓");
           console.log("marketplace bridge: all assertions passed");
@@ -553,7 +569,14 @@ jobs:
           done
 
       - name: Publish to the official MCP Registry (GitHub OIDC, no secret)
+        env:
+          # Pin the publisher release with a repo variable (e.g. v1.2.3); leave
+          # unset to track the latest. Optionally hard-pin the exact tarball
+          # digest with MCP_PUBLISHER_SHA256 for full supply-chain integrity.
+          MCP_PUBLISHER_VERSION: ${{ vars.MCP_PUBLISHER_VERSION }}
+          MCP_PUBLISHER_SHA256: ${{ vars.MCP_PUBLISHER_SHA256 }}
         run: |
+          set -euo pipefail
           # The registry verifies ownership by matching mcp/package.json's
           # "mcpName" to the server.json name and confirming the npm package is
           # published — so this runs after the npm publish above.
@@ -561,7 +584,16 @@ jobs:
           if curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402" | grep -q "\"version\":\"$VER\""; then
             echo "io.github.mikeypetrillo/agent402@$VER already in the MCP Registry — nothing to do"; exit 0
           fi
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          asset="mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz"
+          if [ -n "${MCP_PUBLISHER_VERSION:-}" ]; then base="https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION"; else base="https://github.com/modelcontextprotocol/registry/releases/latest/download"; fi
+          # Download to disk and fail fast (no curl|tar of unverified bytes).
+          curl -fsSL -o "$asset" "$base/$asset"
+          # Verify against the release's published checksums when available, and
+          # against a hard-pinned digest if one is configured.
+          curl -fsSL -o checksums.txt "$base/checksums.txt" 2>/dev/null || true
+          if [ -s checksums.txt ] && grep -q " $asset\$" checksums.txt; then grep " $asset\$" checksums.txt | sha256sum -c -; fi
+          if [ -n "${MCP_PUBLISHER_SHA256:-}" ]; then echo "$MCP_PUBLISHER_SHA256  $asset" | sha256sum -c -; fi
+          tar -xzf "$asset" mcp-publisher
           cd mcp
           ../mcp-publisher login github-oidc
           ../mcp-publisher publish

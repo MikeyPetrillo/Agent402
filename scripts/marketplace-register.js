@@ -9,9 +9,12 @@
 //   A402APP_KEY        agent402.app API key (Settings → API Keys). Required.
 //   A402APP_BASE       default https://marketplace.agent402.app
 //   SITE               our public base, default https://agent402.tools
-//   MARKETPLACE_TOKEN  the bridge secret embedded in each service_endpoint. Required.
+//   MARKETPLACE_TOKEN  master bridge secret. Required. NEVER appears in a URL —
+//                      each service_endpoint carries only HMAC(master, slug).
 //   WALLET_ADDRESS     our USDC receiving wallet (informational; settlement is on-chain)
 //   DRY_RUN=1          print what would happen without writing
+
+import { createHmac } from "node:crypto";
 
 const API = (process.env.A402APP_BASE || "https://marketplace.agent402.app").replace(/\/$/, "");
 const KEY = process.env.A402APP_KEY;
@@ -70,11 +73,14 @@ async function api(method, path, body) {
   return json;
 }
 
-const serviceEndpoint = (slug) => `${SITE}/mkt/${TOKEN}/${slug}`;
+// Per-slug bridge token: HMAC(master, slug) — must match the server's
+// marketplaceSlugToken(). The master TOKEN never appears in a registered URL.
+const slugToken = (slug) => (TOKEN ? createHmac("sha256", TOKEN).update(String(slug)).digest("hex").slice(0, 32) : "<token>");
+const serviceEndpoint = (slug) => `${SITE}/mkt/${slugToken(slug)}/${slug}`;
 
 async function main() {
   console.log(`Marketplace: ${API}`);
-  console.log(`Listing as "${AGENT_NAME}" → services bridge at ${SITE}/mkt/<token>/<slug>\n`);
+  console.log(`Listing as "${AGENT_NAME}" → services bridge at ${SITE}/mkt/<per-slug-token>/<slug>\n`);
 
   // 1) Find or create our agent (provider card). Idempotent by name.
   let agent;
