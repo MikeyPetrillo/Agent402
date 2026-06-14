@@ -14,6 +14,13 @@ ok(ta.typedData.message.value === "10000", "transfer-auth 0.01 USDC -> 10000 ato
 ok(/^0x[0-9a-f]{64}$/.test(ta.typedData.message.nonce), "transfer-auth 32-byte nonce");
 ok(ta.typedData.primaryType === "TransferWithAuthorization", "transfer-auth primaryType");
 
+// --- multi-chain: transfer-auth picks the right chainId + USDC per network ---
+const taPoly = h("transfer-authorization")({ from: "0x1111111111111111111111111111111111111111", to: "0x2222222222222222222222222222222222222222", amount: 1, network: "polygon" });
+ok(taPoly.typedData.domain.chainId === 137, "transfer-auth polygon chainId 137");
+ok(taPoly.typedData.domain.verifyingContract === "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", "transfer-auth polygon USDC");
+const taArb = h("transfer-authorization")({ from: "0x1111111111111111111111111111111111111111", to: "0x2222222222222222222222222222222222222222", amount: 1, network: "arbitrum" });
+ok(taArb.typedData.domain.chainId === 42161, "transfer-auth arbitrum chainId 42161");
+
 // --- validation (deterministic) ---
 for (const [slug, args, label] of [
   ["usdc-balance", { address: "nope" }, "usdc-balance rejects bad address"],
@@ -21,6 +28,7 @@ for (const [slug, args, label] of [
   ["x402-verify", { hash: "deadbeef" }, "x402-verify rejects bad hash"],
   ["transfer-authorization", { from: "bad", to: "0x2222222222222222222222222222222222222222", amount: 1 }, "transfer-auth rejects bad from"],
   ["x402-quote", { url: "https://example.com", method: "DELETE" }, "x402-quote rejects bad method"],
+  ["usdc-balance", { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "solana" }, "usdc-balance rejects unknown network"],
 ]) {
   try { await h(slug)(args); ok(false, label); }
   catch (e) { ok(e.statusCode === 400, label + ` (got ${e.statusCode})`); }
@@ -39,6 +47,9 @@ await live("gas-estimate", {}, (r) => typeof r.gasPriceWei === "string" && r.net
 await live("tx-status", { hash: "0x" + "0".repeat(64) }, (r) => r.status === "not_found", "tx-status zero hash -> not_found");
 await live("x402-verify", { hash: "0x" + "0".repeat(64) }, (r) => r.settled === false, "x402-verify zero hash -> not settled");
 await live("x402-quote", { url: "https://agent402.tools/api/hash", method: "POST" }, (r) => r.status === 402 && r.paymentRequired === true, "x402-quote our own 402");
+// multi-chain live reads (tolerant)
+await live("usdc-balance", { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "polygon" }, (r) => r.network === "polygon" && typeof r.usdc === "string", "usdc-balance on polygon");
+await live("gas-estimate", { network: "arbitrum" }, (r) => r.network === "arbitrum" && typeof r.gasPriceWei === "string", "gas-estimate on arbitrum");
 
 console.log(`\nasserts failed: ${assertFail} | live ok: ${liveOk} | live upstream-errors (tolerated): ${liveErr}`);
 if (assertFail > 0 || liveOk === 0) { console.error("x402-kit: FAILED"); process.exit(1); }
