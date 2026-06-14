@@ -14,6 +14,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS tool_counts (slug TEXT PRIMARY KEY, n INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS recent_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, method TEXT NOT NULL, ts INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS paid_tool_counts (slug TEXT PRIMARY KEY, n INTEGER NOT NULL);
 `);
 
 const RECENT_KEEP = 200; // rows retained
@@ -28,6 +29,9 @@ const getMeta = db.prepare("SELECT v FROM meta WHERE k = ?");
 const insertRecent = db.prepare("INSERT INTO recent_calls (slug, method, ts) VALUES (?, ?, ?)");
 const pruneRecent = db.prepare("DELETE FROM recent_calls WHERE id <= (SELECT MAX(id) FROM recent_calls) - ?");
 const getRecent = db.prepare("SELECT slug, method, ts FROM recent_calls ORDER BY id DESC LIMIT ?");
+const bumpPaidTool = db.prepare("INSERT INTO paid_tool_counts (slug, n) VALUES (?, 1) ON CONFLICT(slug) DO UPDATE SET n = n + 1");
+const topPaid = db.prepare("SELECT slug, n FROM paid_tool_counts ORDER BY n DESC LIMIT 10");
+const allPaid = db.prepare("SELECT slug, n FROM paid_tool_counts");
 
 setMetaIfAbsent.run("firstServed", String(Date.now()));
 const bootedAt = Date.now();
@@ -36,6 +40,7 @@ const recordCall = db.transaction((slug, method) => {
   bumpCounter.run("total");
   bumpCounter.run(method === "pow" ? "viaProofOfWork" : "viaUSDC");
   bumpTool.run(slug);
+  if (method !== "pow") bumpPaidTool.run(slug); // USDC purchases only — what people actually BUY
   // Privacy-safe activity feed: tool + settlement method + time only — never a
   // payload, wallet, or IP. Only successful (200) served calls reach here.
   insertRecent.run(slug, method, Date.now());
@@ -52,8 +57,11 @@ export function recordServedCall(slug, method) {
   }
 }
 
-export function getStats({ wallet, walletName, network, toolCount, baseUrl }) {
+export function getStats({ wallet, walletName, network, toolCount, baseUrl, prices }) {
   const num = (k) => getCounter.get(k)?.n ?? 0;
+  const priceOf = (slug) => (prices && Number(prices[slug])) || 0;
+  const estimatedRevenueUsd = +allPaid.all().reduce((s, r) => s + r.n * priceOf(r.slug), 0).toFixed(4);
+  const topPaidTools = topPaid.all().map((r) => ({ slug: r.slug, purchases: r.n, revenueUsd: +(r.n * priceOf(r.slug)).toFixed(4) }));
   const firstServed = parseInt(getMeta.get("firstServed")?.v ?? Date.now(), 10);
   const explorer = network === "base-sepolia" ? "https://sepolia.basescan.org" : "https://basescan.org";
   return {
@@ -71,6 +79,8 @@ export function getStats({ wallet, walletName, network, toolCount, baseUrl }) {
       viaProofOfWork: num("viaProofOfWork"),
     },
     topTools: allTools.all(),
+    topPaidTools, // most-PURCHASED tools (USDC only), with estimated revenue
+    estimatedRevenueUsd, // sum of price × USDC-purchase count (counters; chain is source of truth)
     recentCalls: getRecent.all(RECENT_SHOW).map((r) => ({
       slug: r.slug,
       paidWith: r.method === "pow" ? "proof-of-work" : "usdc",
