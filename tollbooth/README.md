@@ -86,6 +86,41 @@ TOLLBOOTH_PAYTO=0xYourWallet \
 npx agent402-tollbooth          # listens on :4021, proxies humans free, charges bots
 ```
 
+## Run on the edge (Cloudflare Workers, Next.js, Deno, Bun)
+
+The same gate is also built on the Web Crypto + Fetch APIs (`edge.js`), so it runs
+anywhere — no Node required. The gate returns a `402 Response` when the client
+must pay, or `null` to let it through.
+
+**Cloudflare Workers** (poetic: the open pay-per-crawl, on the incumbent's own platform). `wrangler.toml`:
+
+```toml
+name = "tollbooth"
+main = "node_modules/agent402-tollbooth/worker.js"
+[vars]
+TOLLBOOTH_UPSTREAM = "https://your-origin.example.com"
+TOLLBOOTH_PAYTO    = "0xYourWallet"   # optional: advertise a USDC x402 quote
+# wrangler secret put TOLLBOOTH_SECRET
+# optional single-use replay store:  [[kv_namespaces]] binding = "TOLLBOOTH_KV"
+```
+
+**Next.js middleware** (`middleware.ts`):
+
+```ts
+import { createEdgeTollbooth } from "agent402-tollbooth/edge";
+const gate = createEdgeTollbooth({ secret: process.env.TOLLBOOTH_SECRET! });
+
+export async function middleware(req: Request) {
+  return (await gate(req)) ?? NextResponse.next();
+}
+```
+
+**Any Fetch-API runtime** (Deno, Bun, custom): `const gate = createEdgeTollbooth({ secret }); const blocked = await gate(request); return blocked ?? fetch(request);`
+
+> On the edge, pass a stable `secret` (PoW tokens are HMAC-signed). For
+> single-use replay protection across stateless invocations, supply a `store`
+> (e.g. a Cloudflare KV wrapper — the Worker entry wires this for you).
+
 ## Accepting USDC (x402)
 
 The proof-of-work rail works with **zero config**. To also settle real USDC,

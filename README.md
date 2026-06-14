@@ -163,8 +163,9 @@ Want the *other* side of x402 — charging AI bots that crawl **your** site?
 [`tollbooth/`](tollbooth) is a self-hostable **pay-per-crawl** gate: drop it in
 front of any site/API and humans browse free while AI crawlers pay per request
 (USDC via x402, or free via proof-of-work). The open, crypto-native answer to
-Cloudflare's closed pay-per-crawl — no CDN, no Stripe, no signup. Express
-middleware or reverse proxy. See [tollbooth/README.md](tollbooth/README.md).
+Cloudflare's closed pay-per-crawl — no CDN, no Stripe, no signup. Runs as
+Express middleware, a reverse proxy, **or on the edge** (Cloudflare Workers /
+Next.js middleware, via one Web-Crypto core). See [tollbooth/README.md](tollbooth/README.md).
 
 ## Repository map
 
