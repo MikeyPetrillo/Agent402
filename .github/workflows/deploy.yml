@@ -37,8 +37,8 @@ jobs:
     env:
       A402APP_KEY: ${{ secrets.AGENT402_APP_API_KEY }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
       - name: Scan agent402.app Demand Intelligence
@@ -55,8 +55,8 @@ jobs:
     env:
       TARGET_URL: https://agent402.tools
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
       - name: Install dependencies
@@ -77,7 +77,7 @@ jobs:
       - name: Generate burner agent wallet
         run: MODE=address KEY_FILE=$RUNNER_TEMP/agent-key node scripts/agent-e2e.js
       - name: Publish funding address
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: agent-address
           path: agent-address.txt
@@ -89,8 +89,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
       - name: Install dependencies
@@ -115,8 +115,8 @@ jobs:
       WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
       SITE: https://agent402.tools
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
       - name: Register / update the agent402.app marketplace listing
@@ -208,8 +208,8 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
       - name: Install and start in free mode
@@ -537,8 +537,8 @@ jobs:
       contents: read
       id-token: write   # GitHub OIDC → authorize the io.github.mikeypetrillo/* MCP Registry namespace
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -795,7 +795,7 @@ jobs:
           [ -n "$RAILWAY_API_TOKEN" ] || { echo "No Railway token provided"; exit 1; }
           [ -n "$WALLET_ADDRESS" ] || { echo "No wallet address provided"; exit 1; }
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       - name: Find or create project
         id: project
