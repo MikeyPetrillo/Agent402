@@ -729,6 +729,15 @@ const dataTools = [
     },
     handler: (input) => {
       const text = capText(need(input, "xml"), 100_000, "xml");
+      // Guard against deeply-nested XML: JSDOM's parse is superlinear in depth and
+      // can block the event loop for tens of seconds. Reject pathological nesting
+      // cheaply (single O(n) scan) before handing it to the parser.
+      let depth = 0, maxDepth = 0;
+      for (const m of text.matchAll(/<(\/)?[A-Za-z!?][^>]*?(\/)?>/g)) {
+        if (m[1]) depth = Math.max(0, depth - 1);
+        else if (!m[2] && !m[0].startsWith("<!") && !m[0].startsWith("<?")) { depth++; if (depth > maxDepth) maxDepth = depth; }
+      }
+      if (maxDepth > 256) throw bad("XML nesting too deep (max 256 levels)");
       const dom = new JSDOM("");
       const doc = new dom.window.DOMParser().parseFromString(text, "text/xml");
       if (doc.querySelector("parsererror")) throw bad("XML parse error");

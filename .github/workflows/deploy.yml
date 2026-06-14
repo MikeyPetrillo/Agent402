@@ -229,6 +229,9 @@ jobs:
       - name: Kit2 tool tests (36 tools, exact-output assertions)
         run: node scripts/test-kit2.js
 
+      - name: Security regressions (proto-pollution, input-DoS, 500-hardening)
+        run: node scripts/test-security.js
+
       - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
         run: node scripts/test-pdf.js
 

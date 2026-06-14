@@ -874,3 +874,13 @@ function shutdown(signal) {
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+// Safety net: a stray unhandled rejection/exception in some request path must not
+// take down a process that's handling real payments. Log and keep serving; every
+// request path is already try/caught, so this only catches the unexpected.
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason instanceof Error ? reason.stack : reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err?.stack || err);
+});

@@ -13,8 +13,14 @@
 import { createEdgeTollbooth } from "./edge.js";
 
 const kvStore = (kv) => ({
-  has: async (k) => (await kv.get(k)) != null,
-  add: async (k, expMs) => kv.put(k, "1", { expiration: Math.ceil(expMs / 1000) }),
+  // Best-effort atomic claim. KV has no native compare-and-set, so this is
+  // get-then-put (eventually consistent); for strict single-use, back it with a
+  // Durable Object. Returns true only the first time a token is seen.
+  claim: async (k, expMs) => {
+    if ((await kv.get(k)) != null) return false;
+    await kv.put(k, "1", { expiration: Math.ceil(expMs / 1000) });
+    return true;
+  },
 });
 
 export default {
