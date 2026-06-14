@@ -170,9 +170,25 @@ Amazonbot, …). Classic search indexers (Googlebot, Bingbot) are intentionally
 or take full control with a `charge(req)` predicate (e.g. charge anything
 without a browser-like `Accept` header, or charge everyone on `/api/*`).
 
+## Production checklist (read this)
+
+- **Set a stable `TOLLBOOTH_SECRET`.** Required for any multi-process/clustered
+  Node deploy and for all edge deploys — without it, proof-of-work tokens use a
+  random per-process secret and are rejected across restarts/workers/isolates.
+- **For serverless/edge, supply a durable replay `store`** (e.g. bind a Cloudflare
+  KV namespace as `TOLLBOOTH_KV`). The in-memory default is per-isolate, so a
+  solved token could be reused across isolates within its TTL. The Worker entry
+  warns when no KV is bound.
+- **The reverse proxy pins the host** to your configured upstream (a client can't
+  redirect it elsewhere) and **strips client-forged trust/forwarding headers**
+  (`X-Tollbooth-Paid`, `X-Forwarded-Host`, etc.) before forwarding.
+- **UA matching is the default, not a security boundary** — a bot can forge a
+  human UA to get the *same free access a human gets* (it gains nothing more). If
+  you need to charge everyone, pass `charge: () => true`.
+
 ## Notes
 
 - Proof-of-work tokens are HMAC-signed, expiry-checked, single-use, and bound to
-  the exact resource — a solution for `/a` can't be replayed on `/b` or reused.
-- Set a stable `TOLLBOOTH_SECRET` in production so tokens survive restarts.
+  the exact resource (path + query, dots and all) — a solution for one URL can't
+  be replayed or reused on another.
 - MIT licensed. Part of [Agent402](https://github.com/MikeyPetrillo/Agent402).

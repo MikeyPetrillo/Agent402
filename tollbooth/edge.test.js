@@ -42,4 +42,15 @@ res = await gate2(new Request("https://site.test/other", { headers: { "user-agen
 if (res === null) fail("PoW token bound to /article must not work on /other");
 console.log(`5. cross-resource reuse -> ${res.status} (resource-bound) ✓`);
 
+// 6. REGRESSION (bug 1.1): dotted paths + query strings must work on the edge.
+for (const path of ["/blog/post.html", "/a?v=1.2.3", "/feed.xml?since=2024.01"]) {
+  let rr = await gate(new Request(`https://site.test${path}`, { headers: { "user-agent": BOT } }));
+  if (!rr || rr.status !== 402) fail(`edge dotted path ${path} should 402`);
+  const qq = await rr.json();
+  const nn = await solve(qq.proofOfWork.challenge, qq.proofOfWork.difficulty);
+  rr = await gate(new Request(`https://site.test${path}`, { headers: { "user-agent": BOT, "x-pow-solution": `${qq.proofOfWork.token}:${nn}` } }));
+  if (rr !== null) fail(`edge dotted path ${path} should unlock with valid PoW, got ${rr && rr.status}`);
+}
+console.log("6. edge: dotted paths + query strings unlock correctly ✓");
+
 console.log("\nedge tollbooth: all assertions passed ✓");

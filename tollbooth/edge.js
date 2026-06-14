@@ -43,9 +43,17 @@ function constEq(a, b) {
 export function createEdgePow({ secret, difficulty = 18, ttlMs = 5 * 60 * 1000, store } = {}) {
   if (!secret) throw new Error("createEdgePow requires a stable `secret` string");
   const mem = new Map();
+  const MAX = 50_000; // bound memory: edge runtimes have no timer to sweep, so prune on write
   const used = store || {
     has: async (k) => { const e = mem.get(k); if (e && e < Date.now()) { mem.delete(k); return false; } return mem.has(k); },
-    add: async (k, exp) => { mem.set(k, exp); },
+    add: async (k, exp) => {
+      if (mem.size >= MAX) {
+        const now = Date.now();
+        for (const [kk, ee] of mem) if (ee < now) mem.delete(kk);          // drop expired first
+        if (mem.size >= MAX) mem.delete(mem.keys().next().value);          // hard cap: evict oldest
+      }
+      mem.set(k, exp);
+    },
   };
 
   async function challenge(resource) {
@@ -72,9 +80,11 @@ export function createEdgePow({ secret, difficulty = 18, ttlMs = 5 * 60 * 1000, 
     const token = headerValue.slice(0, cut);
     const nonce = headerValue.slice(cut + 1);
     const parts = token.split(".");
-    if (parts.length !== 5) return { ok: false, reason: "malformed token" };
-    const [chal, expStr, diffStr, res, sig] = parts;
-    const expected = await hmac(secret, `${chal}.${expStr}.${diffStr}.${res}`);
+    if (parts.length < 5) return { ok: false, reason: "malformed token" };
+    const sig = parts.pop();
+    const [chal, expStr, diffStr] = parts;
+    const res = parts.slice(3).join("."); // resource may itself contain dots (e.g. /post.html?v=1.2)
+    const expected = await hmac(secret, parts.join("."));
     if (!constEq(sig, expected)) return { ok: false, reason: "bad signature" };
     if (res !== resource) return { ok: false, reason: "wrong resource" };
     if (Date.now() > Number(expStr)) return { ok: false, reason: "expired" };
@@ -114,8 +124,10 @@ export function createEdgeTollbooth(config = {}) {
   const powEngine = pow ? createEdgePow({ secret, difficulty: powDifficulty, store }) : null;
 
   const shouldCharge = (request) => {
-    if (typeof free === "function" && free(request)) return false;
-    if (typeof charge === "function") return Boolean(charge(request));
+    try {
+      if (typeof free === "function" && free(request)) return false;
+      if (typeof charge === "function") return Boolean(charge(request));
+    } catch { return true; /* fail closed: charge on predicate error */ }
     return isBot(request.headers.get("user-agent") || "");
   };
 

@@ -13,11 +13,21 @@
 // accept USDC, set `payTo` and supply `verifyX402` (wire it to the standard
 // x402 server middleware / your facilitator — see README).
 import { fileURLToPath } from "node:url";
+import { Readable } from "node:stream";
 import { createPow } from "./pow.js";
 import { makeBotMatcher, AI_BOTS } from "./bots.js";
 
 export { AI_BOTS, makeBotMatcher } from "./bots.js";
 export { createPow, leadingZeroBits } from "./pow.js";
+
+const VERIFY_TIMEOUT_MS = Number(process.env.TOLLBOOTH_VERIFY_TIMEOUT_MS) || 10_000;
+// Headers a client must never be able to forge through the proxy: the gate's own
+// trust signals and forwarding/hop-by-hop headers.
+const STRIP_INBOUND = new Set([
+  "host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+  "te", "trailer", "transfer-encoding", "upgrade", "content-length",
+  "x-tollbooth-paid", "x-tollbooth-error", "x-pow-error", "x-forwarded-host", "forwarded",
+]);
 
 /**
  * Create the tollbooth Express middleware.
@@ -56,12 +66,20 @@ export function createTollbooth(config = {}) {
   const powEngine = pow ? createPow({ difficulty: powDifficulty, secret: powSecret }) : null;
 
   const shouldCharge = (req) => {
-    if (typeof free === "function" && free(req)) return false;
-    if (typeof charge === "function") return Boolean(charge(req));
+    try {
+      if (typeof free === "function" && free(req)) return false;
+      if (typeof charge === "function") return Boolean(charge(req));
+    } catch { return true; /* fail closed: charge on predicate error */ }
     return isBot(req.headers["user-agent"] || "");
   };
-  const resourceOf = (req) =>
-    (resourceBaseUrl ? resourceBaseUrl.replace(/\/$/, "") : "") + (req.originalUrl || req.url || "/");
+  const resourceOf = (req) => {
+    // Canonicalize to path+search (matches the edge impl) so the PoW binding is
+    // stable and not confusable via a raw/abnormal request target.
+    const raw = req.originalUrl || req.url || "/";
+    let pathAndSearch = raw;
+    try { const u = new URL(raw, "http://internal.invalid"); pathAndSearch = u.pathname + u.search; } catch { /* keep raw */ }
+    return (resourceBaseUrl ? resourceBaseUrl.replace(/\/$/, "") : "") + pathAndSearch;
+  };
 
   function tollbooth(req, res, next) {
     if (!shouldCharge(req)) return next();
@@ -92,7 +110,9 @@ export function createTollbooth(config = {}) {
     // we reuse the standard, audited x402 stack rather than reinvent it.
     const payHeader = req.headers["x-payment"] || req.headers["payment-signature"];
     if (payTo && typeof verifyX402 === "function" && payHeader) {
-      return Promise.resolve(verifyX402(req, { price, network, asset, payTo, resource }))
+      // Bound verification time so a slow/hung verifier can't exhaust resources.
+      const timeout = new Promise((resolve) => setTimeout(() => resolve(false), VERIFY_TIMEOUT_MS));
+      return Promise.race([Promise.resolve(verifyX402(req, { price, network, asset, payTo, resource })), timeout])
         .then((ok) => {
           if (ok) { res.setHeader("X-Tollbooth-Paid", "x402"); return next(); }
           send402();
@@ -108,19 +128,25 @@ export function createTollbooth(config = {}) {
   return tollbooth;
 }
 
-/** Minimal reverse proxy: forward a request to `upstream`, streaming-safe-ish. */
-export function createProxy(upstream) {
+/** Minimal reverse proxy: forward to `upstream` with the host PINNED (no SSRF via
+ *  the request target), client trust/forwarding headers stripped, and the
+ *  response STREAMED (no unbounded buffering). */
+export function createProxy(upstream, { maxBody = 10 * 1024 * 1024 } = {}) {
+  const base = new URL(upstream);
   return async (req, res) => {
     try {
-      const target = new URL(req.originalUrl || req.url, upstream);
+      // Take ONLY the path+query from the (possibly hostile) target; the
+      // authority is always the operator's upstream — protocol-relative or
+      // absolute-form targets cannot redirect us to another host.
+      const reqUrl = new URL(req.originalUrl || req.url || "/", base);
+      const target = new URL(reqUrl.pathname + reqUrl.search, base);
       const headers = {};
       for (const [k, v] of Object.entries(req.headers)) {
-        const lk = k.toLowerCase();
-        if (lk === "host" || lk === "connection" || lk === "content-length") continue;
-        headers[k] = v;
+        if (!STRIP_INBOUND.has(k.toLowerCase())) headers[k] = v;
       }
+      headers["x-forwarded-for"] = req.socket?.remoteAddress || ""; // set by us, not the client
       const method = req.method;
-      const body = method === "GET" || method === "HEAD" ? undefined : await readBody(req);
+      const body = method === "GET" || method === "HEAD" ? undefined : await readBody(req, maxBody);
       const up = await fetch(target, { method, headers, body, redirect: "manual" });
       res.status(up.status);
       up.headers.forEach((val, key) => {
@@ -129,9 +155,11 @@ export function createProxy(upstream) {
         if (["content-encoding", "content-length", "transfer-encoding", "connection"].includes(lk)) return;
         res.setHeader(key, val);
       });
-      res.send(Buffer.from(await up.arrayBuffer()));
+      if (up.body) Readable.fromWeb(up.body).pipe(res);
+      else res.end();
     } catch (e) {
-      res.status(502).json({ error: `tollbooth proxy failed: ${e.message}` });
+      if (!res.headersSent) res.status(502).json({ error: `tollbooth proxy failed: ${e.message}` });
+      else res.end();
     }
   };
 }
@@ -153,6 +181,9 @@ function readBody(req, cap = 10 * 1024 * 1024) {
 async function startCli() {
   const upstream = process.env.TOLLBOOTH_UPSTREAM;
   const port = Number(process.env.PORT) || 4021;
+  if (!process.env.TOLLBOOTH_SECRET) {
+    console.warn("⚠ TOLLBOOTH_SECRET not set — proof-of-work tokens use a random per-process secret: they won't survive a restart and will be rejected across multiple workers/instances. Set a stable TOLLBOOTH_SECRET in production.");
+  }
   const { default: express } = await import("express");
   const app = express();
   const gate = createTollbooth({ resourceBaseUrl: process.env.TOLLBOOTH_RESOURCE_BASE || upstream || "" });
