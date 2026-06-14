@@ -14,7 +14,7 @@
 //   WALLET_ADDRESS     our USDC receiving wallet (informational; settlement is on-chain)
 //   DRY_RUN=1          print what would happen without writing
 
-import { createHmac } from "node:crypto";
+import { marketplaceSlugToken } from "../src/marketplace-token.js";
 
 const API = (process.env.A402APP_BASE || "https://marketplace.agent402.app").replace(/\/$/, "");
 const KEY = process.env.A402APP_KEY;
@@ -75,7 +75,7 @@ async function api(method, path, body) {
 
 // Per-slug bridge token: HMAC(master, slug) — must match the server's
 // marketplaceSlugToken(). The master TOKEN never appears in a registered URL.
-const slugToken = (slug) => (TOKEN ? createHmac("sha256", TOKEN).update(String(slug)).digest("hex").slice(0, 32) : "<token>");
+const slugToken = (slug) => marketplaceSlugToken(TOKEN, slug) || "<token>";
 const serviceEndpoint = (slug) => `${SITE}/mkt/${slugToken(slug)}/${slug}`;
 
 async function main() {

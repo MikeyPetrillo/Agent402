@@ -34,7 +34,8 @@ import { guidesIndex, guidePage } from "./guides.js";
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
 import { recordServedCall, getStats } from "./stats.js";
-import { timingSafeEqual, createHmac } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
+import { marketplaceSlugToken } from "./marketplace-token.js";
 
 const PORT = process.env.PORT || 3000;
 const WALLET_ADDRESS = process.env.WALLET_ADDRESS;
@@ -64,12 +65,11 @@ const marketplaceTokenOk = (t) => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 // HMAC(master, slug), hex-truncated — the token that actually appears in a URL.
-const marketplaceSlugToken = (slug) =>
-  MARKETPLACE_TOKEN ? createHmac("sha256", MARKETPLACE_TOKEN).update(String(slug)).digest("hex").slice(0, 32) : "";
+// Shared with the registration/verify scripts via src/marketplace-token.js.
 const marketplaceSlugTokenOk = (token, slug) => {
   if (!MARKETPLACE_TOKEN || typeof token !== "string") return false;
   const a = Buffer.from(token);
-  const b = Buffer.from(marketplaceSlugToken(slug));
+  const b = Buffer.from(marketplaceSlugToken(MARKETPLACE_TOKEN, slug));
   return a.length === b.length && timingSafeEqual(a, b);
 };
 

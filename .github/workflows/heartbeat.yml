@@ -51,6 +51,11 @@ jobs:
               -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"heartbeat","version":"0"}}}' \
               | grep -c '"agent402"' || true)
             [ "${MCP:-0}" -ge 1 ] || FAILS="$FAILS /mcp"
+            # Paywall must be ENGAGED: a wallet-only tool returns 402 when unpaid.
+            # Catches an accidental FREE_MODE / gate regression that would give
+            # paid tools away for free (a silent revenue-loss incident).
+            PW=$(curl -s --max-time 15 -o /dev/null -w "%{http_code}" -X POST "$PROD/api/extract" -H 'Content-Type: application/json' -d '{"url":"https://example.com"}')
+            [ "$PW" = "402" ] || FAILS="$FAILS paywall($PW)"
             node --input-type=module -e '
               const B = process.env.PROD;
               const { createHash } = await import("node:crypto");

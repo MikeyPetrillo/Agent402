@@ -9,14 +9,14 @@
 //        proving caller → agent402.app facilitator → our wallet → bridge → tool.
 //        Uses the cheapest stateless service; the burner pays our own wallet.
 
-import { createHmac } from "node:crypto";
+import { marketplaceSlugToken } from "../src/marketplace-token.js";
 
 const API = (process.env.A402APP_BASE || "https://marketplace.agent402.app").replace(/\/$/, "");
 const KEY = process.env.A402APP_KEY;
 const SITE = (process.env.SITE || "https://agent402.tools").replace(/\/$/, "");
 const TOKEN = process.env.MARKETPLACE_TOKEN;
 // Per-slug bridge token (matches the server) — the master never goes in a URL.
-const slugToken = (slug) => createHmac("sha256", TOKEN).update(String(slug)).digest("hex").slice(0, 32);
+const slugToken = (slug) => marketplaceSlugToken(TOKEN, slug);
 const BURNER = process.env.BURNER_KEY || process.env.AGENT_KEY || "";
 const AGENT_NAME = "Agent402 Tools";
 

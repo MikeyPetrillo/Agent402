@@ -232,6 +232,9 @@ jobs:
       - name: Security regressions (proto-pollution, input-DoS, 500-hardening)
         run: node scripts/test-security.js
 
+      - name: Marketplace contract (registration updates existing endpoints)
+        run: node scripts/test-marketplace-contract.js
+
       - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
         run: node scripts/test-pdf.js
 
