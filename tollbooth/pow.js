@@ -59,9 +59,11 @@ export function createPow({
     const token = headerValue.slice(0, cut);
     const nonce = headerValue.slice(cut + 1);
     const parts = token.split(".");
-    if (parts.length !== 5) return { ok: false, reason: "malformed token" };
-    const [chal, expStr, diffStr, res, sig] = parts;
-    const expected = sign(`${chal}.${expStr}.${diffStr}.${res}`);
+    if (parts.length < 5) return { ok: false, reason: "malformed token" };
+    const sig = parts.pop();
+    const [chal, expStr, diffStr] = parts;
+    const res = parts.slice(3).join("."); // resource may itself contain dots (e.g. /post.html?v=1.2)
+    const expected = sign(parts.join("."));
     const a = Buffer.from(sig);
     const b = Buffer.from(expected);
     if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false, reason: "bad signature" };

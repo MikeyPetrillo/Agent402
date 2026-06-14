@@ -22,6 +22,11 @@ export default {
     if (!env.TOLLBOOTH_SECRET) {
       return new Response("Tollbooth misconfigured: set TOLLBOOTH_SECRET (wrangler secret put TOLLBOOTH_SECRET)", { status: 500 });
     }
+    if (!env.TOLLBOOTH_KV) {
+      // No durable store → replay protection is per-isolate only; a solved token
+      // can be reused across isolates within its TTL. Bind a KV namespace for prod.
+      console.warn("agent402-tollbooth: no TOLLBOOTH_KV bound — proof-of-work replay protection is per-isolate only. Bind a KV namespace for production.");
+    }
     const gate = createEdgeTollbooth({
       secret: env.TOLLBOOTH_SECRET,
       price: env.TOLLBOOTH_PRICE || "$0.001",
@@ -42,6 +47,12 @@ export default {
     target.protocol = origin.protocol;
     target.hostname = origin.hostname;
     target.port = origin.port;
-    return fetch(new Request(target.toString(), request));
+    // Strip client-forgeable trust/forwarding headers before forwarding to origin.
+    const headers = new Headers(request.headers);
+    for (const h of ["x-tollbooth-paid", "x-tollbooth-error", "x-pow-error", "x-forwarded-host", "forwarded"]) headers.delete(h);
+    headers.set("x-forwarded-for", request.headers.get("cf-connecting-ip") || "");
+    const init = { method: request.method, headers, redirect: "manual" };
+    if (request.method !== "GET" && request.method !== "HEAD") init.body = request.body;
+    return fetch(target.toString(), init);
   },
 };
