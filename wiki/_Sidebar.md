@@ -6,6 +6,7 @@
 - [[Paying with Compute]]
 - [[MCP Connector]]
 - [[Tool Catalog]]
+- [[Payments and x402]]
 - [[Memory and Coordination]]
 
 **Under the hood**

@@ -36,7 +36,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <link rel="icon" type="image/png" sizes="512x512" href="/logo.png">
 <link rel="shortcut icon" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/logo.png"><title>Agent402 — where agents pay agents (machine-to-machine payments via x402, USDC on Base)</title>
-<meta name="description" content="The headless browser, live web search, and durable memory your AI agent's sandbox doesn't have — rented per call. ${count} tools for agents, paid in USDC via the x402 protocol (or free with proof-of-work). No human, no signup, no API key.">
+<meta name="description" content="The headless browser, live web search, durable memory, and non-custodial x402 payment tooling your AI agent's sandbox doesn't have — rented per call. ${count} tools for agents, paid in USDC via the x402 protocol (or free with proof-of-work). No signup, no API key.">
 <link rel="canonical" href="${baseUrl}/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/">
@@ -75,7 +75,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "name": "Agent402",
       "url": "${baseUrl}",
       "provider": { "@id": "${baseUrl}/#org" },
-      "description": "${count} pay-per-call tools for AI agents via the x402 payment protocol (USDC on Base): live web search, headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed memory & coordination, ${count - freeCount > 0 ? "data conversion, " : ""}unit conversions, validation, and more.",
+      "description": "${count} pay-per-call tools for AI agents via the x402 payment protocol (USDC on Base): live web search, headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed memory & coordination, a non-custodial multi-chain x402 payment toolkit (quote/verify/balance/gas/transfer-authorization/ENS), image transforms, live currency & product data, ${count - freeCount > 0 ? "data conversion, " : ""}unit conversions, validation, and more.",
       "documentation": "${baseUrl}/llms.txt",
       "offers": { "@type": "AggregateOffer", "offerCount": "${count}", "lowPrice": "0.001", "highPrice": "0.02", "priceCurrency": "USD", "description": "Per-call micropayments in USDC via x402, or free with proof-of-work" }
     },
@@ -215,7 +215,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
     <div>
       <span class="badge"><span class="dot"></span> x402 · USDC on ${network} · ${count} tools</span>
       <h1>Where agents pay agents<span class="x">.</span></h1>
-      <p class="sub">A real headless browser, live web search, and durable memory — the things your agent's sandbox <em>doesn't have</em> — rented by the call. The agent hits an endpoint, gets an <code>HTTP 402</code> quote, pays from its own wallet in USDC (or a few seconds of compute), and gets the result. No human, no signup, no API key — the payment <em>is</em> the identity.</p>
+      <p class="sub">A real headless browser, live web search, durable memory, and a <a href="/guides/x402-payments-toolkit">non-custodial x402 payment toolkit</a> — the things your agent's sandbox <em>doesn't have</em> — rented by the call. The agent hits an endpoint, gets an <code>HTTP 402</code> quote, pays from its own wallet in USDC (or a few seconds of compute), and gets the result. No human, no signup, no API key — the payment <em>is</em> the identity.</p>
       <div class="ctas">
         <a class="cta primary" href="/tools">Browse all ${count} tools →</a>
         <a class="cta ghost" href="#connect">Add to Claude</a>

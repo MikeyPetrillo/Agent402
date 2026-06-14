@@ -43,17 +43,19 @@ against it in CI, real settlement included):
 purl "https://agent402.tools/api/convert/kilometers-to-miles?value=42"
 ```
 
-## What's in the catalog (~1,083 tools)
+## What's in the catalog (~1,100 tools)
 
 | | Examples | Price |
 |---|---|---|
+| **Payments & x402** | `x402-quote`, `x402-verify`, `usdc-balance`, `tx-status`, `gas-estimate`, `transfer-authorization`, `ens-resolve` — non-custodial, multi-chain (Base/Polygon/Arbitrum/Optimism/Ethereum) | $0.002–0.004 |
 | **Browser & web** | `render` (headless Chromium, executes JS), `screenshot`, `extract` (article→markdown), `meta` | $0.002–0.02 |
 | **Live search** | `search` — paid web index, the wallet is the credential | $0.01 |
 | **PDFs & media** | `pdf-to-markdown`, `pdf-merge`/`extract-pages`/`rotate`, `images-to-pdf`, `audio-convert`, `audio-normalize` (EBU R128, real ffmpeg) | $0.005–0.02 |
+| **Images** | `image-resize`, `image-convert`, `image-thumbnail`, `barcode-decode` (jimp/zxing, pure-CPU) | $0.003–0.005 |
 | **Agent memory** | wallet-keyed KV + TTL, atomic counters, **cross-wallet grants**, hash-chained audit log, similarity recall | $0.002–0.003 |
 | **Network truth** | `dns`, `tls-cert`, `whois`, `http-check`, `robots-check`, `email-validate`, `ip-info` | $0.002–0.005 |
-| **Open data** | `gov-data` (data.gov), `weather-alerts`, `earthquakes` (USGS) | $0.003 |
-| **~1,040 pure-CPU utilities** | hashing, JWT, base58, JSON⇄CSV/YAML, text stats, cron math, validators, ~970 unit conversions | $0.001 · **free via proof-of-work** |
+| **Live data** | `fx-rate` (ECB), `barcode-lookup` (Open Food Facts), `gov-data` (data.gov), `weather-forecast`/`weather-alerts`, `earthquakes` (USGS) | $0.003 |
+| **~1,040 pure-CPU utilities** | hashing, JWT, base58, JSON⇄CSV/YAML, `token-count`, `text-chunk`, `json-validate`, text stats, cron math, validators, ~970 unit conversions | $0.001 · **free via proof-of-work** |
 
 Everything is deterministic — **no LLM in the serving path** — with full schemas
 in [`/openapi.json`](https://agent402.tools/openapi.json) and a machine-readable
@@ -120,7 +122,7 @@ the request path and design positions in
 | `src/payments.js` | x402 v2 wiring: USDC on Base, CDP facilitator, Bazaar discovery |
 | `src/pow.js` | Proof-of-work tier (signed, single-use, slug-scoped challenges) |
 | `src/mcp-http.js` | Hosted MCP connector (streamable HTTP, authless free tier) |
-| `src/tools/` | The tool kits (web, PDF, media, gov data, ~1,040 pure-CPU utilities) |
+| `src/tools/` | The tool kits (payments/x402, web, PDF, media, images, live data, ~1,040 pure-CPU utilities) |
 | `mcp/` | The `agent402-mcp` npm package (stdio MCP server with spend controls) |
 | `wiki/` | Source of truth for the [GitHub wiki](https://github.com/MikeyPetrillo/Agent402/wiki) (CI-synced) |
 | `scripts/` | Tests, demos (`demo-payment.js`, `demo-coordination.js`), ops tooling |

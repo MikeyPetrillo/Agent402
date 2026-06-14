@@ -1,6 +1,6 @@
 # Tool Catalog
 
-~1,083 endpoints. All deterministic — **no LLM in the serving path**: same input, same output, full input/output schemas. Discover them machine-readably (don't hardcode this page):
+~1,100 endpoints. All deterministic — **no LLM in the serving path**: same input, same output, full input/output schemas. Discover them machine-readably (don't hardcode this page):
 
 - [`/api/pricing`](https://agent402.tools/api/pricing) — slug, route, price, category, description for everything
 - [`/openapi.json`](https://agent402.tools/openapi.json) — OpenAPI 3.1 with schemas
@@ -20,12 +20,14 @@ These exist because an agent mid-task cannot give itself a browser, a paid searc
 | `pdf`, `pdf-to-markdown`, `pdf-merge`, `pdf-extract-pages`, `pdf-rotate`, `images-to-pdf`, `pdf-info` | $0.005–$0.01 | Read and manipulate PDFs |
 | `audio-convert`, `audio-normalize`, `media-info` | $0.005–$0.02 | Real ffmpeg: transcode to mp3, EBU R128 loudness normalize, probe |
 | `memory-*` (10 tools) | $0.002–$0.003 | Durable wallet-keyed state + cross-wallet coordination — see [[Memory and Coordination]] |
+| `x402-quote`, `x402-verify`, `usdc-balance`, `tx-status`, `gas-estimate`, `transfer-authorization`, `ens-resolve` | $0.002–$0.004 | **Non-custodial x402 payment toolkit** — decode 402 quotes, verify settlements, read balances/gas/tx, build EIP-3009 authorizations, resolve ENS. Multi-chain: Base, Polygon, Arbitrum, Optimism, Ethereum. See [[Payments and x402]] |
 | `meta`, `dns`, `http-check`, `tls-cert`, `whois`, `robots-check`, `sitemap`, `email-validate`, `ip-info` | $0.002–$0.005 | Network truth: metadata, DNS, TLS, liveness |
-| `gov-data`, `weather-alerts`, `earthquakes` | $0.003 | US government open data (data.gov CKAN, weather.gov alerts, USGS quakes), keyless |
+| `fx-rate`, `barcode-lookup`, `gov-data`, `weather-forecast`, `weather-alerts`, `earthquakes` | $0.003 | Live keyless data: ECB currency rates, Open Food Facts product lookup, data.gov datasets, NWS weather, USGS quakes |
+| `image-resize`, `image-convert`, `image-thumbnail`, `barcode-decode` | $0.003–$0.005 | Pure-CPU image transforms + barcode/QR decode (jimp / zxing) |
 
 ## The long tail (pure-CPU, also payable with compute)
 
-~1,040 utilities at mostly **$0.001**: hashing/HMAC, base58/base32/base64, JWT decode+verify, UUIDs, CRC32, morse, HTML entities, text stats/dedupe/sort/truncate/diff (Levenshtein), JSON/CSV/YAML conversion and querying, date math and cron calculators, validators (email syntax, IP, IBAN-style checksums…), math/stats, QR codes, and ~970 generated **unit conversions** (`GET /api/convert/{from}-to-{to}?value=N` across length, mass, volume, area, speed, time, data, pressure, energy, power, angle, frequency, temperature).
+~1,040 utilities at mostly **$0.001**: hashing/HMAC, base58/base32/base64, JWT decode+verify, UUIDs, CRC32, morse, HTML entities, `token-count` (exact OpenAI BPE), `text-chunk` (RAG), `json-validate` (JSON Schema), `jsonl`, text stats/dedupe/sort/truncate/diff (Levenshtein), JSON/CSV/YAML conversion and querying, date math and cron calculators, validators (email syntax, IP, IBAN-style checksums…), math/stats, QR codes, and ~970 generated **unit conversions** (`GET /api/convert/{from}-to-{to}?value=N` across length, mass, volume, area, speed, time, data, pressure, energy, power, angle, frequency, temperature).
 
 Why would an agent pay $0.001 instead of writing the code? Because writing, testing, and debugging a CSV parser mid-task burns 10–100× that in tokens — and some sandboxes can't execute code at all.
 
