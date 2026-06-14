@@ -482,8 +482,15 @@ app.get("/logo.svg", (_req, res) => res.type("image/svg+xml").send(LOGO_SVG));
 // leaked endpoint thus only exposes its one tool. A coarse global rate limit
 // bounds abuse. Off unless MARKETPLACE_TOKEN set.
 if (MARKETPLACE_TOKEN) {
+  // The bridge dispatches paid tool calls forwarded by the marketplace. It must
+  // NOT be able to reach wallet-keyed memory tools: those are identity-scoped to
+  // the paying wallet, and a bridged call carries no payer. Exclude them so the
+  // bridge's safety doesn't rest on a downstream "no payer -> 400" check.
   const slugToRoute = new Map();
-  for (const [route, def] of Object.entries(CATALOG)) slugToRoute.set(def.slug, route);
+  for (const [route, def] of Object.entries(CATALOG)) {
+    if (def.slug.startsWith("memory-")) continue;
+    slugToRoute.set(def.slug, route);
+  }
   let mktCount = 0;
   let mktWindow = Date.now();
   const MKT_PER_MIN = Math.min(Math.max(parseInt(process.env.MARKETPLACE_RATE_PER_MIN, 10) || 600, 10), 100000);
