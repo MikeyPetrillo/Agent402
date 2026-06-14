@@ -20,7 +20,10 @@ function cap(text, max = 100_000, label = "text") {
   return text;
 }
 const numArray = (v, label = "numbers") => {
-  const arr = typeof v === "string" ? JSON.parse(v) : v;
+  let arr = v;
+  if (typeof v === "string") {
+    try { arr = JSON.parse(v); } catch { throw bad(`"${label}" must be a JSON array of numbers`); }
+  }
   if (!Array.isArray(arr) || !arr.length) throw bad(`"${label}" must be a non-empty array`);
   const nums = arr.map(Number);
   if (nums.some((n) => !Number.isFinite(n))) throw bad(`"${label}" must contain only numbers`);
@@ -387,7 +390,7 @@ const text = [
           return `[${label.toUpperCase()}]`;
         });
       };
-      sub(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "email");
+      sub(/[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}/g, "email");
       sub(/\b(?:\d[ -]*?){13,16}\b/g, "card");
       sub(/\b\d{3}-\d{2}-\d{4}\b/g, "ssn");
       sub(/\b(?:\+?\d{1,2}[ .-]?)?\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}\b/g, "phone");
@@ -404,7 +407,7 @@ const text = [
       const t = cap(need(i, "text"), 500_000);
       const uniq = (re) => [...new Set(t.match(re) || [])];
       return {
-        emails: uniq(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g),
+        emails: uniq(/[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}/g),
         urls: uniq(/https?:\/\/[^\s<>"')]+/g),
         ipv4: uniq(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g),
         mentions: uniq(/(?:^|\s)(@[A-Za-z0-9_]{1,30})/g).map((s) => s.trim()),
@@ -463,13 +466,16 @@ function flattenObj(obj, prefix = "", out = {}) {
   return out;
 }
 function unflattenObj(flat) {
-  const out = {};
+  const out = Object.create(null);
   for (const [path, v] of Object.entries(flat)) {
     const parts = path.split(".");
+    // Block prototype-pollution via dot-paths like "__proto__.x" / "constructor.prototype.x".
+    if (parts.some((p) => p === "__proto__" || p === "constructor" || p === "prototype"))
+      throw bad(`unsafe key in path "${path}"`);
     let cur = out;
     parts.forEach((p, idx) => {
       if (idx === parts.length - 1) cur[p] = v;
-      else cur = cur[p] ??= {};
+      else cur = cur[p] ??= Object.create(null);
     });
   }
   return out;
@@ -478,7 +484,10 @@ function deepMerge(a, b) {
   if (Array.isArray(a) && Array.isArray(b)) return [...a, ...b];
   if (a && b && typeof a === "object" && typeof b === "object" && !Array.isArray(a) && !Array.isArray(b)) {
     const out = { ...a };
-    for (const [k, v] of Object.entries(b)) out[k] = k in a ? deepMerge(a[k], v) : v;
+    for (const [k, v] of Object.entries(b)) {
+      if (k === "__proto__" || k === "constructor" || k === "prototype") continue; // hygiene: never merge proto keys
+      out[k] = k in a ? deepMerge(a[k], v) : v;
+    }
     return out;
   }
   return b;

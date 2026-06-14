@@ -10,7 +10,7 @@
 // not own requires an explicit grant from the owner — so cross-agent sharing is
 // opt-in and authenticated by x402 payment identity.
 import Database from "better-sqlite3";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -372,7 +372,9 @@ function cosine(a, b) {
 
 let docSeq = 0;
 function newDocId() {
-  return `${nowSec().toString(36)}${(docSeq++ & 0xffff).toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
+  // Crypto-random entropy segment so doc IDs don't collide (collisions would
+  // ON CONFLICT-overwrite a prior doc in the same namespace).
+  return `${nowSec().toString(36)}${(docSeq++ & 0xffff).toString(36)}${randomBytes(6).toString("hex")}`;
 }
 
 export async function remember(owner, text, meta, { actor = owner } = {}) {

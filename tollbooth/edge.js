@@ -37,22 +37,28 @@ function constEq(a, b) {
 /**
  * Web Crypto proof-of-work. `secret` is required (edge runtimes can't keep a
  * random per-process secret across invocations). `store` is an optional
- * single-use replay backend ({ has(token), add(token, expMs) }, both async) —
- * e.g. a Cloudflare KV wrapper; defaults to in-isolate memory.
+ * single-use replay backend: { claim(token, expMs) => bool|Promise<bool> } that
+ * atomically returns true only the first time a token is seen — e.g. a Cloudflare
+ * KV wrapper; defaults to in-isolate memory.
  */
 export function createEdgePow({ secret, difficulty = 18, ttlMs = 5 * 60 * 1000, store } = {}) {
   if (!secret) throw new Error("createEdgePow requires a stable `secret` string");
   const mem = new Map();
   const MAX = 50_000; // bound memory: edge runtimes have no timer to sweep, so prune on write
   const used = store || {
-    has: async (k) => { const e = mem.get(k); if (e && e < Date.now()) { mem.delete(k); return false; } return mem.has(k); },
-    add: async (k, exp) => {
+    // Atomic single-use claim. The body is synchronous (no await), so two
+    // concurrent claims of the same token cannot both win within an isolate —
+    // closing the TOCTOU that a separate has()+add() would open.
+    claim: (k, exp) => {
+      const e = mem.get(k);
+      if (e && e >= Date.now()) return false; // a still-valid entry => already used
       if (mem.size >= MAX) {
         const now = Date.now();
         for (const [kk, ee] of mem) if (ee < now) mem.delete(kk);          // drop expired first
         if (mem.size >= MAX) mem.delete(mem.keys().next().value);          // hard cap: evict oldest
       }
       mem.set(k, exp);
+      return true;
     },
   };
 
@@ -88,10 +94,11 @@ export function createEdgePow({ secret, difficulty = 18, ttlMs = 5 * 60 * 1000, 
     if (!constEq(sig, expected)) return { ok: false, reason: "bad signature" };
     if (res !== resource) return { ok: false, reason: "wrong resource" };
     if (Date.now() > Number(expStr)) return { ok: false, reason: "expired" };
-    if (await used.has(token)) return { ok: false, reason: "already used" };
     const h = await sha256(`${chal}:${nonce}`);
     if (leadingZeroBits(h) < Number(diffStr)) return { ok: false, reason: "insufficient work" };
-    await used.add(token, Number(expStr));
+    // Atomically claim single-use only AFTER the work is validated, so an invalid
+    // attempt never consumes the token and concurrent dupes can't both pass.
+    if (!(await used.claim(token, Number(expStr)))) return { ok: false, reason: "already used" };
     return { ok: true };
   }
 
