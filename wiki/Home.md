@@ -15,7 +15,8 @@
 | [[Paying with x402]] | USDC payments: the 402 flow, code, spend controls, Stripe's `purl` |
 | [[Paying with Compute]] | The proof-of-work tier: spec + reference solver |
 | [[MCP Connector]] | Hosted connector + the `agent402-mcp` npm server |
-| [[Tool Catalog]] | What the ~1,083 tools are and how agents discover them |
+| [[Tool Catalog]] | What the ~1,100 tools are and how agents discover them |
+| [[Payments and x402]] | Non-custodial multi-chain payment toolkit: quote, verify, balance, gas, transfer-auth, ENS |
 | [[Memory and Coordination]] | Durable wallet-keyed state, cross-wallet grants, audit log |
 | [[Architecture]] | How the server, paywall, and facilitators fit together |
 | [[Security Model]] | SSRF defense, PoW scoping, what's wallet-only and why |
