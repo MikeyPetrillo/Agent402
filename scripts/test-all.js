@@ -18,6 +18,7 @@ const NETWORK = new Set([
   "/api/pdf-to-markdown",
   "/api/media-info", "/api/audio-convert", "/api/audio-normalize",
   "/api/gov-data", "/api/weather-alerts", "/api/earthquakes",
+  "/api/barcode-lookup", "/api/fx-rate", "/api/weather-forecast",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 
