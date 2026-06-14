@@ -253,6 +253,9 @@ jobs:
       - name: x402-kit tests (transfer-auth typed data + live Base RPC reads)
         run: node scripts/test-x402-kit.js
 
+      - name: Tollbooth tests (pay-per-crawl gate — human free, bot 402, PoW unlock)
+        run: node tollbooth/test.js
+
       - name: Conversion tools (~970 endpoints, exact + round-trip)
         run: node scripts/test-convert.js
 
