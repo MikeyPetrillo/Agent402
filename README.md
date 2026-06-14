@@ -1,4 +1,9 @@
-# Agent402 — a self-hostable MCP server with 1,100+ tools for AI agents
+# Agent402 — the open-source, self-hostable x402 + MCP server (1,100+ tools for AI agents)
+
+> **What makes it different:** most x402 services are *closed gateways* exposing a
+> handful of tools. Agent402 is the **open-source, self-hostable** one — the whole
+> ~1,100-tool catalog, runnable yourself — **and** it's two-sided: it also ships
+> [`agent402-tollbooth`](tollbooth), an open pay-per-crawl gate for the other side of x402.
 
 [![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
 [![npm](https://img.shields.io/npm/v/agent402-mcp?label=agent402-mcp)](https://www.npmjs.com/package/agent402-mcp)
