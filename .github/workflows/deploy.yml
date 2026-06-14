@@ -60,7 +60,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci && npm install --no-save @x402/fetch viem
+        run: npm ci && npm install --no-save --ignore-scripts @x402/fetch viem
       - name: Load burner key
         env:
           # Provide a throwaway, low-value test wallet key as the BURNER_KEY
@@ -94,7 +94,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci && npm install --no-save @x402/fetch @x402/core @x402/evm viem
+        run: npm ci && npm install --no-save --ignore-scripts @x402/fetch @x402/core @x402/evm viem
       - name: Drain the burner into the revenue wallet via paid tool calls
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY || inputs.burner_key }}
@@ -128,7 +128,7 @@ jobs:
           node scripts/marketplace-register.js
       - name: Verify the listing works end to end
         run: |
-          npm install --no-save @x402/fetch @x402/core @x402/evm viem
+          npm install --no-save --ignore-scripts @x402/fetch @x402/core @x402/evm viem
           node scripts/marketplace-verify.js
 
   # Interop check against Stripe's open-source x402 client (github.com/stripe/purl).
@@ -607,11 +607,20 @@ jobs:
           if [ -n "${MCP_PUBLISHER_VERSION:-}" ]; then base="https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION"; else base="https://github.com/modelcontextprotocol/registry/releases/latest/download"; fi
           # Download to disk and fail fast (no curl|tar of unverified bytes).
           curl -fsSL -o "$asset" "$base/$asset"
-          # Verify against the release's published checksums when available, and
-          # against a hard-pinned digest if one is configured.
-          curl -fsSL -o checksums.txt "$base/checksums.txt" 2>/dev/null || true
-          if [ -s checksums.txt ] && grep -q " $asset\$" checksums.txt; then grep " $asset\$" checksums.txt | sha256sum -c -; fi
-          if [ -n "${MCP_PUBLISHER_SHA256:-}" ]; then echo "$MCP_PUBLISHER_SHA256  $asset" | sha256sum -c -; fi
+          # Verify the binary before executing it. Fail CLOSED: require either a
+          # hard-pinned digest (MCP_PUBLISHER_SHA256 repo var) or the release's
+          # published checksums.txt — never run an unverified download.
+          verified=""
+          if [ -n "${MCP_PUBLISHER_SHA256:-}" ]; then
+            echo "$MCP_PUBLISHER_SHA256  $asset" | sha256sum -c - && verified=1
+          fi
+          if [ -z "$verified" ]; then
+            curl -fsSL -o checksums.txt "$base/checksums.txt" 2>/dev/null || true
+            if [ -s checksums.txt ] && grep -q " $asset\$" checksums.txt; then
+              grep " $asset\$" checksums.txt | sha256sum -c - && verified=1
+            fi
+          fi
+          [ -n "$verified" ] || { echo "mcp-publisher could not be verified (no MCP_PUBLISHER_SHA256 and no checksums.txt) — refusing to execute"; exit 1; }
           tar -xzf "$asset" mcp-publisher
           cd mcp
           ../mcp-publisher login github-oidc
