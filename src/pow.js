@@ -40,6 +40,7 @@ const WALLET_ONLY_SLUGS = new Set([
   "pdf-to-markdown",
   "media-info", "audio-convert", "audio-normalize",
   "gov-data", "weather-alerts", "earthquakes",
+  "barcode-lookup", "fx-rate", "weather-forecast",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */
