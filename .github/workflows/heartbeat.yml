@@ -104,12 +104,14 @@ jobs:
           COUNT=$(jq '.external | length' /tmp/scan.json)
           [ "$COUNT" -gt 0 ] || { echo "No external payments this window."; exit 0; }
 
-          TITLE="External customer payments detected"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title $TITLE" --json number --jq '.[0].number // empty')
+          TITLE="💰 Revenue: external customer payments"
+          SEARCH="external customer payments"   # stable ASCII so dedup matches regardless of emoji
+          gh label create revenue --repo "$GITHUB_REPOSITORY" --color 2ea44f --description "Real external revenue — a win" 2>/dev/null || true
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title $SEARCH" --json number --jq '.[0].number // empty')
           if [ -z "$OPEN" ]; then
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-              --body "A wallet that is not our test burner paid agent402.tools. Details follow as comments. On-chain history: https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns"
-            OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title $TITLE" --json number --jq '.[0].number // empty')
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --label revenue \
+              --body "🎉 Real external customers are paying agent402.tools — wallets that are NOT our test burner. This is the milestone: the machine-to-machine economy is buying. Each detected payment is logged below as a comment. On-chain history (agent402.base.eth): https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns"
+            OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title $SEARCH" --json number --jq '.[0].number // empty')
           fi
           # Dedup across overlapping scan windows by tx hash.
           gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body,comments \
