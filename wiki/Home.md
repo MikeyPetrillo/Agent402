@@ -1,11 +1,12 @@
 # Agent402 Wiki
 
-**Agent402** is a live node in the machine-to-machine economy: **1,000+ pay-per-call web tools for AI agents** over HTTP. No signup, no API key, no account — an agent calls an endpoint, gets quoted over **HTTP 402**, settles in **USDC on Base** via the [x402 protocol](https://x402.org) (or pays with **CPU proof-of-work** on the eligible tools), retries, and gets the result. The payment *is* the identity.
+**Agent402** is an **open-source, self-hostable MCP server + HTTP API with ~1,100 ready-to-use tools for AI agents** — browser rendering, web search, PDFs, images, live data, crypto/payments helpers, and ~1,040 pure-CPU utilities. Clone it and run everything free in 30 seconds (no wallet, no signup), or use the hosted instance. Optionally, the same server can charge per call over the [x402 protocol](https://x402.org) (USDC on Base) — that part is opt-in; by default everything runs free.
 
-- **Live service:** https://agent402.tools
+- **Run it yourself (free):** `git clone … && npm install && FREE_MODE=true npm start` — see [[Getting Started]]
+- **Live hosted demo:** https://agent402.tools · **MCP connector (paste into Claude):** `https://agent402.tools/mcp`
+- **Add your own tool:** a few lines in `src/tools/` — see [CONTRIBUTING](https://github.com/MikeyPetrillo/Agent402/blob/main/CONTRIBUTING.md)
 - **Machine-readable catalog:** [`/api/pricing`](https://agent402.tools/api/pricing) · [`/openapi.json`](https://agent402.tools/openapi.json) · [`/llms.txt`](https://agent402.tools/llms.txt)
-- **Live economy stats (and the revenue wallet):** [`/api/stats`](https://agent402.tools/api/stats)
-- **Hosted MCP connector (paste into Claude):** `https://agent402.tools/mcp`
+- **Live stats (hosted instance):** [`/api/stats`](https://agent402.tools/api/stats)
 
 ## Start here
 

@@ -219,6 +219,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       <div class="ctas">
         <a class="cta primary" href="/tools">Browse all ${count} tools →</a>
         <a class="cta ghost" href="#connect">Add to Claude</a>
+        <a class="cta ghost" href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">Self-host free →</a>
       </div>
       <div class="stats">
         <div class="stat"><div class="n">${count.toLocaleString()}</div><div class="l">pay-per-call tools</div></div>
@@ -241,6 +242,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   </header>
 
   <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet</b> — pay with a tiny <a href="/api/pow">sha256 proof-of-work</a> (a fraction of a second of CPU; no money, no AI tokens). The other ${count - freeCount} (browser, network, memory) settle in USDC.</div>
+  <div class="callout">⭐ <b>Open source &amp; self-hostable</b> — don't want the hosted version? Clone the repo and run all ${count} tools yourself for free (MCP + HTTP, no wallet, no signup): <code>FREE_MODE=true npm start</code>. <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">Star / fork it on GitHub →</a></div>
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
 
   <section>
