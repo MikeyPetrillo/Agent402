@@ -140,6 +140,23 @@ sha256 proof-of-work (sub-second; the MCP servers do it automatically). Details:
 - **MIT licensed, fork-friendly** — clone it, strip what you don't need, add
   what you do.
 
+## Agent402 in the x402 ecosystem
+
+[x402](https://x402.org) is an open payment protocol built on HTTP `402 Payment
+Required` for machine-to-machine, pay-per-call payments in stablecoins (USDC).
+Most projects in the space are the [protocol + SDKs](https://github.com/coinbase/x402),
+a starter template, or a payment facilitator. **Agent402 is the applied layer** —
+a ready-to-run **x402 server** that already speaks the protocol and ships ~1,100
+working tools, so you don't have to build the catalog yourself.
+
+- **Want the protocol or an SDK?** → [coinbase/x402](https://github.com/coinbase/x402).
+- **Want a server you can run *today* that actually does things over x402 + MCP?** → you're here.
+- Self-hostable, deterministic, free via proof-of-work without a wallet, and
+  non-custodial on the payment tools (your agent signs with its own key — Agent402 never holds funds).
+
+Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)
+and discoverable in the Coinbase [x402 Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar).
+
 ## Repository map
 
 | Path | What |

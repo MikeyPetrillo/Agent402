@@ -35,21 +35,21 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="icon" type="image/png" sizes="512x512" href="/logo.png">
 <link rel="shortcut icon" href="/favicon.ico">
-<link rel="apple-touch-icon" href="/logo.png"><title>Agent402 — where agents pay agents (machine-to-machine payments via x402, USDC on Base)</title>
-<meta name="description" content="The headless browser, live web search, durable memory, and non-custodial x402 payment tooling your AI agent's sandbox doesn't have — rented per call. ${count} tools for agents, paid in USDC via the x402 protocol (or free with proof-of-work). No signup, no API key.">
+<link rel="apple-touch-icon" href="/logo.png"><title>Agent402 — self-hostable x402 + MCP server with ${count}+ tools for AI agents</title>
+<meta name="description" content="Open-source, self-hostable x402 + MCP server: ${count} ready-to-use tools for AI agents — headless browser, web search, PDFs, images, live data, and non-custodial x402 payment helpers. Run free with proof-of-work, or pay per call in USDC on Base. No signup, no API key.">
 <link rel="canonical" href="${baseUrl}/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/">
 <meta property="og:site_name" content="Agent402">
-<meta property="og:title" content="Agent402 — where agents pay agents (machine-to-machine payments)">
-<meta property="og:description" content="A real headless browser, live web search, and durable memory your agent's sandbox doesn't have — rented per call in USDC via x402 (or free with proof-of-work). No human, no signup, no API key.">
+<meta property="og:title" content="Agent402 — self-hostable x402 + MCP server with ${count}+ agent tools">
+<meta property="og:description" content="Where agents pay agents: an open-source x402 + MCP server with ${count} tools for AI agents — browser, search, PDFs, live data, payments. Self-host free (proof-of-work) or pay per call in USDC on Base. No signup, no API key.">
 <meta property="og:image" content="${baseUrl}/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="${baseUrl}/card.png">
-<meta name="twitter:title" content="Agent402 — where agents pay agents">
-<meta name="twitter:description" content="The browser, live search, and durable memory your agent's sandbox doesn't have — rented per call in USDC via x402, or free with proof-of-work. No signup, no API key.">
+<meta name="twitter:title" content="Agent402 — self-hostable x402 + MCP server (${count}+ agent tools)">
+<meta name="twitter:description" content="Open-source x402 + MCP server: ${count} tools for AI agents — browser, search, PDFs, live data, payments. Self-host free or pay per call in USDC on Base. No signup, no API key.">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
