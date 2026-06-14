@@ -19,14 +19,15 @@ const SPAN = parseInt(process.env.SPAN_BLOCKS || "12000", 10); // ~6.5h of Base 
 const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const pad = (a) => "0x" + "0".repeat(24) + a.replace(/^0x/, "");
-const RPCS = [
+// Public Base RPCs that support eth_getLogs (some free endpoints don't, or
+// restrict it — those are excluded). An optional BASESCAN_API_KEY path could be
+// added later for higher reliability.
+const RPCS = (process.env.BASE_RPCS || [
   "https://mainnet.base.org",
   "https://base-rpc.publicnode.com",
   "https://base.llamarpc.com",
   "https://base.drpc.org",
-  "https://1rpc.io/base",
-  "https://base.meowrpc.com",
-];
+].join(",")).split(",").map((s) => s.trim()).filter(Boolean);
 const log = (...a) => console.error(...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
