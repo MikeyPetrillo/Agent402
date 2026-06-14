@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // agent402-tollbooth — an open-source, self-hostable x402 "pay-per-crawl" gate.
 //
 // Put it in front of any site or API: human visitors pass through free, while

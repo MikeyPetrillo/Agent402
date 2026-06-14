@@ -571,6 +571,22 @@ jobs:
             sleep 15
           done
 
+      - name: Publish agent402-tollbooth to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN secret missing"; exit 1; }
+          node tollbooth/test.js            # gate: pay-per-crawl logic must pass before shipping
+          cd tollbooth
+          VERSION=$(node -p "require('./package.json').version")
+          # Idempotent: a re-run after a successful publish is a no-op.
+          if npm view "agent402-tollbooth@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-tollbooth@$VERSION is already on npm — nothing to do"
+          else
+            npm publish --access public
+            echo "published agent402-tollbooth@$VERSION → https://www.npmjs.com/package/agent402-tollbooth"
+          fi
+
       - name: Publish to the official MCP Registry (GitHub OIDC, no secret)
         env:
           # Pin the publisher release with a repo variable (e.g. v1.2.3); leave
