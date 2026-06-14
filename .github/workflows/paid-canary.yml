@@ -1,0 +1,57 @@
+name: Paid-path canary
+
+# Once a day, make ONE real x402 USDC purchase from production to prove that
+# *buying* still settles end-to-end — the heartbeat only exercises the free
+# proof-of-work path, so a paywall/facilitator/settlement regression would go
+# unnoticed. Repeated failure opens a GitHub issue; recovery closes it.
+# Cost: ~$0.001/day of dust from the test burner.
+on:
+  schedule:
+    - cron: "17 13 * * *" # daily ~13:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BURNER_KEY: ${{ secrets.BURNER_KEY }}
+      TARGET_URL: https://agent402.tools
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - name: Install x402 client
+        run: npm ci && npm install --no-save --ignore-scripts @x402/fetch @x402/core @x402/evm viem
+      - name: Buy one tool from production (real USDC)
+        id: canary
+        run: |
+          if [ -z "$BURNER_KEY" ]; then
+            echo "No BURNER_KEY secret — canary cannot run (configure a funded test wallet)."
+            echo "result=noconfig" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "::add-mask::$BURNER_KEY"
+          if node scripts/paid-canary.js; then echo "result=ok" >> "$GITHUB_OUTPUT"; else echo "result=fail" >> "$GITHUB_OUTPUT"; fi
+      - name: Alert on failure / clear on recovery
+        run: |
+          TITLE="Paid-path canary FAILED"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "${{ steps.canary.outputs.result }}" = "fail" ]; then
+            BODY="The daily paid-path canary could not complete a real USDC purchase from production — *buying may be broken* (paywall, facilitator, or settlement). The free/proof-of-work path is checked separately by the Heartbeat.
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          If this is a funding issue, top up the test burner; otherwise check the x402 facilitator + the paywall on the Railway service."
+            if [ -n "$OPEN" ]; then
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ)."
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+            fi
+            exit 1
+          elif [ "${{ steps.canary.outputs.result }}" = "ok" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: a real USDC purchase settled at $(date -u +%FT%TZ)."
+          fi
