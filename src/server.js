@@ -411,6 +411,10 @@ for (const tool of ALL_KIT) {
 
 // Routes that accept proof-of-work in lieu of payment: the pure-CPU tools.
 // Map "METHOD /path" -> tool slug, for the gate and the challenge endpoint.
+// slug -> numeric USD price, for revenue estimation in /api/stats.
+const TOOL_PRICES = Object.fromEntries(
+  Object.values(CATALOG).map((d) => [d.slug, parseFloat(String(d.price).replace(/[^0-9.]/g, "")) || 0])
+);
 const POW_ROUTES = new Map();
 const POW_SLUGS = new Set();
 for (const [route, def] of Object.entries(CATALOG)) {
@@ -442,7 +446,7 @@ app.use((_req, res, next) => {
 // Free, unauthenticated routes
 app.get("/", (_req, res) =>
   res.type("html").send(
-    landingPage(BASE_URL, NETWORK, FREE_MODE, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL }))
+    landingPage(BASE_URL, NETWORK, FREE_MODE, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }))
   )
 );
 app.get("/health", (_req, res) => res.json({ ok: true }));
@@ -646,7 +650,7 @@ app.get("/api/pow/challenge", (req, res) => {
 // Live machine-to-machine economy stats (free). Money is provable on-chain at
 // the wallet; this also tallies calls served and how they were paid for.
 app.get("/api/stats", (_req, res) =>
-  res.json(getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL }))
+  res.json(getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }))
 );
 
 // Remote MCP connector (streamable HTTP, authless free tier): paste
