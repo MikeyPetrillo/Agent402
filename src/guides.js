@@ -239,6 +239,92 @@ on-chain customer detector — is in
 [one repo](https://github.com/MikeyPetrillo/Agent402) you can fork.
 `,
   },
+  {
+    slug: "x402-payments-toolkit",
+    title: "Let your agent pay anyone: the non-custodial x402 payments toolkit",
+    description:
+      "Discover a 402 quote, resolve an ENS recipient, check USDC balance and gas, build the EIP-3009 authorization your agent signs with its own key, and verify the settlement on-chain — across Base, Polygon, Arbitrum, Optimism, and Ethereum. Agent402 never touches funds.",
+    md: `
+An autonomous agent that can *pay* is far more useful than one that can't — but
+you don't want a middleman holding your money. Agent402's payments tools are
+**non-custodial**: they help an agent move its *own* USDC with its *own* key.
+Agent402 never holds, signs, or sends funds — it decodes quotes, reads public
+chain state, and builds the authorization *you* sign. Everything below works on
+**Base, Polygon, Arbitrum, Optimism, and Ethereum** (\`network\` param, default
+base), and needs no API key.
+
+## 1. What does this endpoint cost? — \`/api/x402-quote\`
+
+Point it at any paid URL and get the decoded HTTP 402 terms:
+
+\`\`\`bash
+curl "https://agent402.tools/api/x402-quote?url=https://api.example.com/paid&method=GET"
+# { "status": 402, "paymentRequired": true,
+#   "accepts": [{ "scheme":"exact","network":"base","asset":"USDC","maxAmountRequired":"1000","payTo":"0x…" }] }
+\`\`\`
+
+## 2. Who am I paying? — \`/api/ens-resolve\`
+
+Turn a human-readable name into a payable address:
+
+\`\`\`bash
+curl "https://agent402.tools/api/ens-resolve?name=vitalik.eth"
+# { "name":"vitalik.eth", "address":"0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "found":true }
+\`\`\`
+
+## 3. Can I afford it? — \`/api/usdc-balance\` + \`/api/gas-estimate\`
+
+\`\`\`bash
+curl "https://agent402.tools/api/usdc-balance?address=0xYOURWALLET&network=base"
+# { "usdc":"12.5", "raw":"12500000", "network":"base" }
+curl "https://agent402.tools/api/gas-estimate?network=base"
+# { "gasPriceGwei":"0.0051", "network":"base" }
+\`\`\`
+
+## 4. Build the authorization to sign — \`/api/transfer-authorization\`
+
+This returns the exact EIP-3009 \`transferWithAuthorization\` typed data for a
+**gasless** USDC transfer. Agent402 builds it; your agent signs it locally:
+
+\`\`\`bash
+curl -X POST https://agent402.tools/api/transfer-authorization \\
+  -H "Content-Type: application/json" \\
+  -d '{"from":"0xYOURWALLET","to":"0xRECIPIENT","amount":0.01,"network":"base"}'
+# { "typedData": { "domain":{...}, "primaryType":"TransferWithAuthorization", "message":{...} }, ... }
+\`\`\`
+
+Sign it with your own key — Agent402 never sees it:
+
+\`\`\`js
+import { privateKeyToAccount } from "viem/accounts";
+const account = privateKeyToAccount(process.env.AGENT_KEY);
+const { typedData } = await (await fetch("https://agent402.tools/api/transfer-authorization", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ from: account.address, to: recipient, amount: 0.01 }),
+})).json();
+const signature = await account.signTypedData(typedData); // submit to the facilitator / payTo's x402 flow
+\`\`\`
+
+## 5. Did it settle? — \`/api/x402-verify\`
+
+After a payment lands, confirm it on-chain — and optionally that it paid the
+right address at least a minimum amount:
+
+\`\`\`bash
+curl "https://agent402.tools/api/x402-verify?hash=0xTXHASH&network=base&to=0xRECIPIENT&min=0.001"
+# { "settled":true, "status":"success", "transfers":[{"from":"0x…","to":"0x…","usdc":"0.001"}], "matched":true }
+\`\`\`
+
+## Why non-custodial matters
+
+Custodial "pay for me" services have to hold your funds — which means money
+transmission, KYC/AML, and trust in a middleman. These tools never touch your
+money: you keep your key, you sign, you send. That's the right architecture for
+agent payments, and it's the one Agent402 ships. The whole kit is
+[open source](https://github.com/MikeyPetrillo/Agent402) and priced per call in
+USDC (or proof-of-work on the free tools).
+`,
+  },
 ];
 
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
