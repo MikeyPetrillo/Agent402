@@ -10,6 +10,31 @@ Stack Overflow) shipped pay-per-crawl as a closed, fiat, you-must-be-on-our-CDN
 feature. This is the open, crypto-native, run-it-yourself version — built on the
 same hardened 402 + proof-of-work machinery as [Agent402](https://github.com/MikeyPetrillo/Agent402).
 
+## See it work (one command)
+
+```bash
+npx agent402-tollbooth   # then, in the repo:  npm run --prefix tollbooth demo
+```
+
+```text
+agent402-tollbooth — live pay-per-crawl demo
+
+① A human opens the page (normal browser)
+   → HTTP 200 FREE  "📄 The Future of Machine Payments — full article text…"
+   Humans are never charged.
+
+② An AI crawler hits the same page (ClaudeBot)
+   → HTTP 402 Payment Required
+   pay with USDC: $0.002 USDC on base → 0x…
+   …or free with proof-of-work: a 18-bit sha256 puzzle
+
+③ The crawler has no wallet, so it spends CPU instead
+   solved in 0.32s (nonce=100208)
+   → HTTP 200 OK (paid via pow)  "📄 The Future of Machine Payments — full article text…"
+
+✓ Pay-per-crawl, end to end — humans free, bots pay (USDC or compute).
+```
+
 ## Install
 
 ```bash
