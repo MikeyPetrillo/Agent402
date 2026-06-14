@@ -5,6 +5,7 @@
 - **Run it yourself (free):** `git clone … && npm install && FREE_MODE=true npm start` — see [[Getting Started]]
 - **Live hosted demo:** https://agent402.tools · **MCP connector (paste into Claude):** `https://agent402.tools/mcp`
 - **Add your own tool:** a few lines in `src/tools/` — see [CONTRIBUTING](https://github.com/MikeyPetrillo/Agent402/blob/main/CONTRIBUTING.md)
+- **The other side of x402** — charge AI bots crawling *your* site with the open-source pay-per-crawl gate: see [[Pay-per-crawl]]
 - **Machine-readable catalog:** [`/api/pricing`](https://agent402.tools/api/pricing) · [`/openapi.json`](https://agent402.tools/openapi.json) · [`/llms.txt`](https://agent402.tools/llms.txt)
 - **Live stats (hosted instance):** [`/api/stats`](https://agent402.tools/api/stats)
 
@@ -18,6 +19,7 @@
 | [[MCP Connector]] | Hosted connector + the `agent402-mcp` npm server |
 | [[Tool Catalog]] | What the ~1,100 tools are and how agents discover them |
 | [[Payments and x402]] | Non-custodial multi-chain payment toolkit: quote, verify, balance, gas, transfer-auth, ENS |
+| [[Pay-per-crawl]] | `agent402-tollbooth`: charge AI crawlers to access your site (USDC via x402 or proof-of-work) |
 | [[Memory and Coordination]] | Durable wallet-keyed state, cross-wallet grants, audit log |
 | [[Architecture]] | How the server, paywall, and facilitators fit together |
 | [[Security Model]] | SSRF defense, PoW scoping, what's wallet-only and why |
