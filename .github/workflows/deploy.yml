@@ -253,8 +253,8 @@ jobs:
       - name: x402-kit tests (transfer-auth typed data + live Base RPC reads)
         run: node scripts/test-x402-kit.js
 
-      - name: Tollbooth tests (pay-per-crawl gate — human free, bot 402, PoW unlock)
-        run: node tollbooth/test.js
+      - name: Tollbooth tests (pay-per-crawl gate — node + edge/Web-Crypto)
+        run: node tollbooth/test.js && node tollbooth/edge.test.js
 
       - name: Conversion tools (~970 endpoints, exact + round-trip)
         run: node scripts/test-convert.js
@@ -576,7 +576,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN secret missing"; exit 1; }
-          node tollbooth/test.js            # gate: pay-per-crawl logic must pass before shipping
+          node tollbooth/test.js && node tollbooth/edge.test.js   # gate: node + edge logic must pass before shipping
           cd tollbooth
           VERSION=$(node -p "require('./package.json').version")
           # Idempotent: a re-run after a successful publish is a no-op.
