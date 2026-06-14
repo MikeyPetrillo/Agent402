@@ -14,7 +14,26 @@
 // arbitrum, optimism, ethereum). Marked wallet-only so they stay OFF the free
 // hosted connector — the payments surface is the paid HTTP/npm path.
 import { randomBytes } from "node:crypto";
+import sha3 from "js-sha3"; // CommonJS — default import, then destructure
+const { keccak256 } = sha3;
 import { assertPublicUrl, ssrfDispatcher } from "./fetch-guard.js";
+
+// ENS (Ethereum mainnet) — namehash + registry/resolver selectors for forward
+// resolution (name -> address). keccak256 over UTF-8 labels per EIP-137.
+const ENS_REGISTRY = "0x00000000000c2e074ec69a0dfb2997ba6c7d2e1e";
+const SEL_RESOLVER = "0x0178b8bf"; // resolver(bytes32)
+const SEL_ADDR = "0x3b3b57de"; // addr(bytes32)
+function namehash(name) {
+  let node = Buffer.alloc(32);
+  if (name) {
+    for (const label of name.toLowerCase().split(".").reverse()) {
+      const labelHash = Buffer.from(keccak256(label), "hex");
+      node = Buffer.from(keccak256(Buffer.concat([node, labelHash])), "hex");
+    }
+  }
+  return "0x" + node.toString("hex");
+}
+const isZeroAddr = (a) => /^0x0*$/.test(a);
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -283,6 +302,30 @@ export const X402_TOOLS = [
         amountUsdc: amount, valueAtomic: value, asset: "USDC", network: net.key, chainId: net.chainId,
         note: "Sign typedData with the 'from' wallet (EIP-712 / signTypedData). Agent402 never signs or sends — this is the unsigned authorization only.",
       };
+    },
+  },
+  {
+    route: "GET /api/ens-resolve", name: "ENS resolve", slug: "ens-resolve", category: "payments", price: "$0.003",
+    description:
+      "Resolve an ENS name (e.g. vitalik.eth) to its Ethereum address — so an agent can turn a human-readable recipient into a payable address. Read-only on Ethereum mainnet. ?name=vitalik.eth",
+    tags: ["ens", "resolve", "ethereum", "name", "address"],
+    discovery: {
+      input: { name: "vitalik.eth" },
+      inputSchema: { properties: { name: { type: "string", description: "an ENS name, e.g. name.eth" } }, required: ["name"] },
+      output: { example: { name: "vitalik.eth", address: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", found: true } },
+    },
+    handler: async (i) => {
+      const name = String(i.name ?? "").trim().toLowerCase();
+      if (!name || !name.includes(".") || /\s/.test(name)) throw bad("name must be an ENS name like vitalik.eth");
+      const eth = resolveNetwork("ethereum");
+      const node = namehash(name).slice(2);
+      const resolverHex = await rpc(eth, "eth_call", [{ to: ENS_REGISTRY, data: SEL_RESOLVER + node }, "latest"]);
+      const resolver = "0x" + (resolverHex || "0x").slice(-40);
+      if (isZeroAddr(resolver)) return { name, address: null, found: false };
+      const addrHex = await rpc(eth, "eth_call", [{ to: resolver, data: SEL_ADDR + node }, "latest"]);
+      const address = "0x" + (addrHex || "0x").slice(-40);
+      if (isZeroAddr(address)) return { name, address: null, found: false };
+      return { name, address, found: true };
     },
   },
 ];

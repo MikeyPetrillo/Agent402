@@ -29,6 +29,7 @@ for (const [slug, args, label] of [
   ["transfer-authorization", { from: "bad", to: "0x2222222222222222222222222222222222222222", amount: 1 }, "transfer-auth rejects bad from"],
   ["x402-quote", { url: "https://example.com", method: "DELETE" }, "x402-quote rejects bad method"],
   ["usdc-balance", { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "solana" }, "usdc-balance rejects unknown network"],
+  ["ens-resolve", { name: "notanensname" }, "ens-resolve rejects non-ENS input"],
 ]) {
   try { await h(slug)(args); ok(false, label); }
   catch (e) { ok(e.statusCode === 400, label + ` (got ${e.statusCode})`); }
@@ -50,6 +51,7 @@ await live("x402-quote", { url: "https://agent402.tools/api/hash", method: "POST
 // multi-chain live reads (tolerant)
 await live("usdc-balance", { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "polygon" }, (r) => r.network === "polygon" && typeof r.usdc === "string", "usdc-balance on polygon");
 await live("gas-estimate", { network: "arbitrum" }, (r) => r.network === "arbitrum" && typeof r.gasPriceWei === "string", "gas-estimate on arbitrum");
+await live("ens-resolve", { name: "vitalik.eth" }, (r) => r.found === true && r.address?.toLowerCase() === "0xd8da6bf26964af9d7eed9e03e53415d37aa96045", "ens-resolve vitalik.eth");
 
 console.log(`\nasserts failed: ${assertFail} | live ok: ${liveOk} | live upstream-errors (tolerated): ${liveErr}`);
 if (assertFail > 0 || liveOk === 0) { console.error("x402-kit: FAILED"); process.exit(1); }
