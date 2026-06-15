@@ -37,7 +37,7 @@ import { guidesIndex, guidePage } from "./guides.js";
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
 import { recordServedCall, getStats } from "./stats.js";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, createHash } from "node:crypto";
 import { marketplaceSlugToken } from "./marketplace-token.js";
 
 const PORT = process.env.PORT || 3000;
@@ -742,6 +742,46 @@ app.get("/api/pricing", (_req, res) =>
     }),
   })
 );
+
+// Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
+// `Idempotency-Key`, a successful gated call is cached keyed by that key + the
+// gate credential it presented (the x402 payment authorization or the
+// proof-of-work token — both single-use). A retry with the SAME Idempotency-Key
+// AND the SAME credential replays the stored result WITHOUT re-charging — so an
+// agent that paid but lost the response doesn't pay twice. Because the cache key
+// includes the credential (which only the original payer/solver holds), it can
+// never serve a paid result to a non-payer; requests without the header are
+// completely unaffected (default behavior, normal billing). Runs before the
+// paywall so a replay hit skips settlement.
+const idemStore = new Map(); // hashKey -> { at, body }
+const IDEM_TTL_MS = 10 * 60 * 1000;
+const IDEM_MAX = 5000;
+const idemHashKey = (req) => {
+  const idem = req.header("idempotency-key");
+  if (!idem || idem.length > 256) return null;
+  const cred = req.header("x-payment") || req.header("payment-signature") || req.header("x-pow-solution");
+  if (!cred) return null; // nothing to securely bind the key to → don't cache
+  return createHash("sha256").update(`${idem}\n${cred}`).digest("hex");
+};
+app.use((req, res, next) => {
+  if (!CATALOG[`${req.method} ${req.path}`]) return next();
+  const key = idemHashKey(req);
+  if (!key) return next();
+  const hit = idemStore.get(key);
+  if (hit && Date.now() - hit.at < IDEM_TTL_MS) {
+    res.setHeader("X-Idempotent-Replay", "true");
+    return res.status(200).json(hit.body);
+  }
+  const origJson = res.json.bind(res);
+  res.json = (body) => {
+    if (res.statusCode === 200) {
+      if (idemStore.size >= IDEM_MAX) idemStore.delete(idemStore.keys().next().value);
+      idemStore.set(key, { at: Date.now(), body });
+    }
+    return origJson(body);
+  };
+  next();
+});
 
 // x402 paywall for the catalog routes
 if (FREE_MODE) {

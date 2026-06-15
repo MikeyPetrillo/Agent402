@@ -244,6 +244,9 @@ jobs:
       - name: Tool resolver (/api/find ranking, guards)
         run: node scripts/test-find.js
 
+      - name: Idempotency (opt-in safe retry of paid/proven calls; boots paid-mode)
+        run: node scripts/test-idempotency.js
+
       - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
         run: node scripts/test-pdf.js
 

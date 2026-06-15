@@ -197,6 +197,7 @@ const res = await payFetch("${baseUrl}/api/extract", {
 ## Notes for agents
 
 - Payments settle in seconds on Base (eip155:8453); the payer needs USDC only (gas is sponsored).
+- **Safe retries:** send an \`Idempotency-Key\` header with a paid (or proof-of-work) call. If you don't receive the response and retry with the SAME key and the SAME payment/PoW credential, you get the original result back (header \`X-Idempotent-Replay: true\`) without paying again. Without the header, nothing changes.
 - \`/api/memory\` namespaces are owned by the paying wallet: only the wallet that wrote a key can read it. Use it for durable state between runs.
 - \`/api/render\` runs a real headless Chromium with JavaScript execution — use it when \`/api/extract\` returns an empty shell for SPA pages.
 - All endpoints publish full input/output schemas via the x402 Bazaar discovery extension and ${baseUrl}/openapi.json.
