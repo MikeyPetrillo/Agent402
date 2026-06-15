@@ -15,9 +15,26 @@ GET  /api/memory?key=deploy-fix
 POST /api/memory            {"key":"deploy-fix","delete":true}
 # atomic counter
 POST /api/memory/incr       {"key":"jobs-done","by":3}
+# atomic compare-and-set — the primitive for locks + optimistic concurrency
+POST /api/memory/cas        {"key":"locks/import","expected":null,"value":"agent-7","ttlSeconds":30}
 ```
 
 Namespaces are isolated per wallet: only the wallet that wrote a key can read it — unless it grants access.
+
+### Distributed locks & safe updates (`/api/memory/cas`)
+
+Compare-and-set writes (or, with no `value`, deletes) a key **only if its current value equals `expected`** — the building block multi-agent coordination needs:
+
+```bash
+# acquire a lock: succeeds only if the key is unset/expired, with a TTL lease
+POST /api/memory/cas   {"key":"locks/import","expected":null,"value":"agent-7","ttlSeconds":30}
+# release it: only the holder can (expected = your token, no value → deletes)
+POST /api/memory/cas   {"key":"locks/import","expected":"agent-7"}
+# optimistic update: write new only if old hasn't changed
+POST /api/memory/cas   {"key":"doc","expected":{"v":1},"value":{"v":2}}
+```
+
+Returns `{ swapped, value }`. It's a single atomic transaction, honors grants (so agents sharing a namespace can coordinate), and is recorded in the audit log.
 
 ## Cross-wallet coordination (the unusual part)
 

@@ -2,6 +2,7 @@
 
 ~1,100 endpoints. All deterministic — **no LLM in the serving path**: same input, same output, full input/output schemas. Discover them machine-readably (don't hardcode this page):
 
+- [`/api/find?q={task}`](https://agent402.tools/api/find?q=extract%20article) — **resolve a plain-language task to the right tool** (route, price, schema, ready example) in one call, so an agent skips the token-heavy "search to find a tool" step. Also a `find_tool` MCP tool on the connector.
 - [`/api/pricing`](https://agent402.tools/api/pricing) — slug, route, price, category, description for everything
 - [`/openapi.json`](https://agent402.tools/openapi.json) — OpenAPI 3.1 with schemas
 - [`/tools`](https://agent402.tools/tools) — human-readable docs, one page per tool with a working example

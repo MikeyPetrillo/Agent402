@@ -10,10 +10,11 @@ Add **`https://agent402.tools/mcp`** as a remote MCP server:
 - **Claude Code:** `claude mcp add --transport http agent402 https://agent402.tools/mcp`
 - Any client speaking **streamable HTTP** (the endpoint is stateless — every JSON-RPC message is self-contained).
 
-It exposes three read-only tools (each carries safety annotations):
+It exposes four read-only tools (each carries safety annotations):
 
 | Tool | Does |
 |---|---|
+| `find_tool` | Describe a task in plain language; returns the best-matching tool(s) **ready to call** — slug, price, input schema, an example, and the exact `call_tool` invocation. Skips the token-heavy "explore to find a tool" step |
 | `search_tools` | Find tools by description across the catalog; returns slugs + input schemas |
 | `call_tool` | Execute a tool by slug. The ~1,040 pure-CPU tools run **free** (rate-limited: 20/min, 120/hr per client); wallet-only tools return paid-path instructions instead of executing |
 | `about_agent402` | Service description, free-vs-paid breakdown |
@@ -57,6 +58,6 @@ Other env knobs: `AGENT402_URL` (target service), `AGENT402_TOOLS` (override the
 | **`call_tool` says a field is missing / "must be a number"** | Pass `params` as a JSON object, e.g. `{"slug":"convert-kilometers-to-miles","params":{"value":42}}`. A stringified object (`"{\"value\":42}"`) is also accepted. |
 | **A tool returns "wallet required" / paid-path guidance** | That tool (live search, browser render, screenshots, PDFs, durable memory) isn't in the hosted free tier. Run the npm server `npx -y agent402-mcp` with `AGENT_KEY` set to a funded Base wallet, or call it over HTTP with any x402 client. |
 | **"Free-tier rate limit reached"** | The hosted connector is capped at 20 calls/min, 120/hour per client. Wait, or use the npm server with a wallet for unmetered access. |
-| **Finding the right tool** | Call `search_tools` with a plain-language query first; it returns the slug + input schema to pass to `call_tool`. |
+| **Finding the right tool** | Call `find_tool` with a plain-language task — it returns the best match ready to call (slug + example + the exact `call_tool` invocation). `search_tools` is the broader, lower-level search. |
 
 More: [[Paying with x402]] · [[Paying with Compute]] · [Open an issue](https://github.com/MikeyPetrillo/Agent402/issues).
