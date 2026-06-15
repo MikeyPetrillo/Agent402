@@ -247,6 +247,9 @@ jobs:
       - name: Idempotency (opt-in safe retry of paid/proven calls; boots paid-mode)
         run: node scripts/test-idempotency.js
 
+      - name: Buyer SDK (agent402-client — resolve + auto-pay via PoW; boots paid-mode)
+        run: node client/test.js
+
       - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
         run: node scripts/test-pdf.js
 
@@ -606,6 +609,22 @@ jobs:
           else
             npm publish --access public
             echo "published agent402-tollbooth@$VERSION → https://www.npmjs.com/package/agent402-tollbooth"
+          fi
+
+      - name: Publish agent402-client to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN secret missing"; exit 1; }
+          node client/test.js   # gate: the buyer SDK must pass before shipping
+          cd client
+          VERSION=$(node -p "require('./package.json').version")
+          # Idempotent: a re-run after a successful publish is a no-op.
+          if npm view "agent402-client@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-client@$VERSION is already on npm — nothing to do"
+          else
+            npm publish --access public
+            echo "published agent402-client@$VERSION → https://www.npmjs.com/package/agent402-client"
           fi
 
       - name: Publish to the official MCP Registry (GitHub OIDC, no secret)

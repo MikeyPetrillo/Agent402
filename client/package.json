@@ -1,0 +1,19 @@
+{
+  "name": "agent402-client",
+  "version": "0.1.0",
+  "description": "Tiny buyer-side client for Agent402 (x402): resolve a task to a tool and call it with payment handled for you — free tools settle via built-in proof-of-work (no wallet), wallet-only tools via your x402 fetch. Caching + idempotent retries.",
+  "type": "module",
+  "main": "index.js",
+  "exports": { ".": "./index.js" },
+  "files": ["index.js", "README.md"],
+  "engines": { "node": ">=18" },
+  "scripts": { "test": "node test.js" },
+  "keywords": [
+    "x402", "ai-agents", "agent-tools", "llm-tools", "usdc", "base",
+    "proof-of-work", "http-402", "micropayments", "mcp", "client", "sdk"
+  ],
+  "author": "Mikey Petrillo (https://github.com/MikeyPetrillo)",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/MikeyPetrillo/Agent402.git", "directory": "client" },
+  "homepage": "https://github.com/MikeyPetrillo/Agent402/tree/main/client"
+}
