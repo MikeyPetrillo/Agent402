@@ -1,0 +1,17 @@
+services:
+  tollbooth:
+    build: .
+    ports:
+      - "4021:4021"
+    environment:
+      # Where allowed (human / paid) requests are proxied:
+      TOLLBOOTH_UPSTREAM: "https://your-origin.example.com"
+      # REQUIRED — any long random string; signs proof-of-work tokens:
+      TOLLBOOTH_SECRET: "change-me-to-a-long-random-string"
+      # Optional — advertise a USDC x402 quote:
+      TOLLBOOTH_PAYTO: "0xYourWallet"
+      TOLLBOOTH_PRICE: "$0.001"
+      # Optional — stop relying on UA detection (see the tollbooth README):
+      # TOLLBOOTH_MODE: "strict"
+      # TOLLBOOTH_ADAPTIVE: "true"
+    restart: unless-stopped

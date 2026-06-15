@@ -16,6 +16,7 @@
     "worker.js",
     "bots.js",
     "pow.js",
+    "dashboard.js",
     "example.js",
     "demo.js",
     "README.md"

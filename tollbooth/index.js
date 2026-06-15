@@ -230,7 +230,9 @@ async function startCli() {
   const app = express();
   const gate = createTollbooth({ resourceBaseUrl: process.env.TOLLBOOTH_RESOURCE_BASE || upstream || "" });
   // Operator analytics — aggregate counts only (no per-request data), mounted
-  // before the gate so it's always reachable and never itself charged.
+  // before the gate so they're always reachable and never themselves charged.
+  const { dashboardHtml } = await import("./dashboard.js");
+  app.get("/__tollbooth", (_req, res) => res.type("html").send(dashboardHtml()));
   app.get("/__tollbooth/stats", (_req, res) => res.json(gate.stats()));
   app.use(gate);
   if (upstream) {

@@ -99,6 +99,9 @@ must pay, or `null` to let it through.
   incumbent's own platform).
 - **Next.js / Vercel** → [`deploy/nextjs/`](deploy/nextjs/) — a drop-in
   `middleware.js` + a 3-step deploy guide.
+- **Docker** → [`deploy/docker/`](deploy/docker/) — a `Dockerfile` +
+  `docker-compose.yml` to run the reverse proxy in front of any site with
+  `docker compose up -d` (includes the live `/__tollbooth` dashboard).
 
 The short version of each:
 
@@ -200,8 +203,9 @@ something*:
 
 The middleware keeps aggregate counters (no per-request data): `gate.stats()`
 returns `{ requests, freeAllowed, charged, powSolved, x402Paid, difficultyNow }`.
-The reverse-proxy CLI exposes them at **`/__tollbooth/stats`** so you can see how
-much of your traffic is bots and what the tollbooth is collecting.
+The reverse-proxy CLI exposes them as JSON at **`/__tollbooth/stats`** and as a
+live **dashboard at `/__tollbooth`** — requests, how many were charged,
+proof-of-work solves, USDC collected, and what share of your traffic is bots.
 
 ## Production checklist (read this)
 
