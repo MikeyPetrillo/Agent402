@@ -1,6 +1,8 @@
 // Privacy policy — a stable URL is required for listing the remote MCP
 // connector in Anthropic's directory, and it should be true: this service
 // has no accounts, so there is genuinely little to say.
+import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+
 export function privacyPage(baseUrl) {
   return `<!doctype html>
 <html lang="en">
@@ -8,16 +10,24 @@ export function privacyPage(baseUrl) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Privacy — Agent402</title>
+<meta name="description" content="Agent402's privacy policy: no accounts, no cookies, no analytics. What we process, why, and how long we keep it.">
+<link rel="canonical" href="${baseUrl}/privacy">
+<meta property="og:title" content="Privacy — Agent402">
+<meta property="og:description" content="No accounts, no cookies, no analytics. What we process, why, and how long we keep it.">
+<meta property="og:image" content="${baseUrl}/card.png">
+<meta name="twitter:card" content="summary_large_image">
+${CHROME_HEAD_LINKS}
 <style>
   :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; }
   body { background:var(--bg); color:var(--fg); font:16px/1.65 system-ui,-apple-system,sans-serif; margin:0; }
-  .wrap { max-width:760px; margin:0 auto; padding:48px 20px 64px; }
+  .wrap { max-width:760px; margin:0 auto; padding:48px 20px 24px; }
   h1 { font-size:1.6rem; } h2 { font-size:1.1rem; margin-top:32px; color:var(--accent); }
   a { color:var(--accent); } p, li { color:var(--fg); } .muted { color:var(--muted); }
   code { font-family:ui-monospace,Menlo,monospace; font-size:.9em; }
+  ${CHROME_CSS}
 </style>
 </head>
-<body><div class="wrap">
+<body>${renderHeader("/privacy")}<div class="wrap">
 <h1>Privacy policy</h1>
 <p class="muted">Agent402 (agent402.tools) — last updated 2026-06-12.</p>
 
@@ -64,8 +74,6 @@ non-personal counters (total calls served per tool) are kept for the public <a h
 <p>Mikey Petrillo —
 <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">GitHub issues</a>,
 or <a href="https://github.com/MikeyPetrillo" rel="noopener">github.com/MikeyPetrillo</a>.</p>
-
-<p class="muted"><a href="/">← agent402.tools</a></p>
-</div></body>
+</div>${renderFooter()}</body>
 </html>`;
 }

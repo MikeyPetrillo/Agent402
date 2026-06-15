@@ -1,6 +1,8 @@
 // Terms of Service — a stable, public ToS URL is a submission requirement for
 // the Anthropic connector directory. Kept short and honest: a no-account,
 // open-source, pay-per-call tool service.
+import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+
 export function termsPage(baseUrl) {
   return `<!doctype html>
 <html lang="en">
@@ -8,15 +10,23 @@ export function termsPage(baseUrl) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Terms of Service — Agent402</title>
+<meta name="description" content="Agent402 terms of service: open-source, pay-per-call web tools. As-is, no warranty, on-chain settlement.">
+<link rel="canonical" href="${baseUrl}/terms">
+<meta property="og:title" content="Terms of Service — Agent402">
+<meta property="og:description" content="Open-source, pay-per-call web tools. As-is, no warranty, on-chain settlement.">
+<meta property="og:image" content="${baseUrl}/card.png">
+<meta name="twitter:card" content="summary_large_image">
+${CHROME_HEAD_LINKS}
 <style>
   :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; }
   body { background:var(--bg); color:var(--fg); font:16px/1.65 system-ui,-apple-system,sans-serif; margin:0; }
-  .wrap { max-width:760px; margin:0 auto; padding:48px 20px 64px; }
+  .wrap { max-width:760px; margin:0 auto; padding:48px 20px 24px; }
   h1 { font-size:1.6rem; } h2 { font-size:1.1rem; margin-top:30px; color:var(--accent); }
   a { color:var(--accent); } .muted { color:var(--muted); } code { font-family:ui-monospace,Menlo,monospace; font-size:.9em; }
+  ${CHROME_CSS}
 </style>
 </head>
-<body><div class="wrap">
+<body>${renderHeader("/terms")}<div class="wrap">
 <h1>Terms of Service</h1>
 <p class="muted">Agent402 (agent402.tools) — last updated 2026-06-13.</p>
 
@@ -55,8 +65,6 @@ on-chain payments. Total liability for any claim will not exceed the amount you 
 <h2>Contact</h2>
 <p>Mikey Petrillo — <a href="https://github.com/MikeyPetrillo" rel="noopener">github.com/MikeyPetrillo</a>,
 or <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">GitHub issues</a>.</p>
-
-<p class="muted"><a href="/">← agent402.tools</a> · <a href="/privacy">Privacy</a></p>
-</div></body>
+</div>${renderFooter()}</body>
 </html>`;
 }

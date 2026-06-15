@@ -1,5 +1,6 @@
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable } from "./pow.js";
+import { CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 
 export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   const tools = toolList(catalog);
@@ -214,20 +215,11 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   .verify code { display:block; margin-top:6px; background:#080c16; border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-size:.76rem; color:#9fb4dc; overflow-x:auto; white-space:nowrap; }
   .lbl { color:var(--accent); font-family:var(--mono); font-size:.8rem; font-weight:600; margin:22px 0 7px; }
   .lbl span { color:var(--muted); font-weight:400; }
-  footer { color:var(--muted); font-size:.85rem; border-top:1px solid var(--line); padding:28px 0 56px; }
-  footer a { color:var(--muted); } footer a:hover { color:var(--accent); }
+  ${CHROME_CSS}
 </style>
 </head>
 <body>
-<nav class="nav"><div class="nav-in">
-  <a class="brand" href="/"><span class="glyph">402</span> Agent402</a>
-  <span class="spacer"></span>
-  <a class="link hide-sm" href="/tools">Tools</a>
-  <a class="link hide-sm" href="/guides">Guides</a>
-  <a class="link hide-sm" href="#connect">Connect</a>
-  <a class="link" href="/api/stats">Stats</a>
-  <a class="gh" href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub ★</a>
-</div></nav>
+${renderHeader("/", [{ href: "#connect", label: "Connect" }])}
 <div class="wrap">
   <header class="hero">
     <div>
@@ -412,13 +404,8 @@ curl -i -X POST ${baseUrl}/api/extract \\
     </div>
   </section>
 
-  <footer>
-    Agent402 — ${count} machine-payable tools for AI agents. Built on the <a href="https://x402.org" rel="noopener">x402 protocol</a>
-    by <a href="https://github.com/MikeyPetrillo" rel="noopener">Mikey Petrillo</a>. Open source on <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub</a>.
-    Free: <a href="/guides">/guides</a> · <a href="/faq">/faq</a> · <a href="/tools">/tools</a> · <a href="/api/find?q=extract+article">/api/find</a> · <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a> · <code>GET /health</code>.
-    <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a>.
-  </footer>
 </div>
+${renderFooter()}
 </body>
 </html>`;
 }
