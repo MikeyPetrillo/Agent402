@@ -17,7 +17,7 @@ User-agent: *
 Allow: /
 Disallow: /api/memory
 
-# Machine-readable catalogs for agents: ${baseUrl}/llms.txt , ${baseUrl}/openapi.json , ${baseUrl}/api/pricing , ${baseUrl}/.well-known/x402 , ${baseUrl}/api/reliability
+# Machine-readable catalogs for agents: ${baseUrl}/llms.txt , ${baseUrl}/openapi.json , ${baseUrl}/api/pricing , ${baseUrl}/.well-known/x402 , ${baseUrl}/api/reliability , ${baseUrl}/api/find?q={task}
 Sitemap: ${baseUrl}/sitemap.xml
 `;
 }
@@ -33,6 +33,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/llms.txt`, priority: "0.8" },
     { loc: `${baseUrl}/openapi.json`, priority: "0.7" },
     { loc: `${baseUrl}/api/pricing`, priority: "0.7" },
+    { loc: `${baseUrl}/api/find`, priority: "0.7" },
     { loc: `${baseUrl}/.well-known/x402`, priority: "0.7" },
     { loc: `${baseUrl}/api/reliability`, priority: "0.6" },
     { loc: `${baseUrl}/api/stats`, priority: "0.6" },
@@ -79,6 +80,8 @@ Base URL: ${baseUrl}
 
 > One-fetch service manifest (identity, payment options, capability map, MCP, trust signals) for agents deciding whether to use this seller: ${baseUrl}/.well-known/x402 . Machine-readable reliability/SLA report with each claim's verification URL: ${baseUrl}/api/reliability .
 
+> Don't burn tokens exploring to find a tool: \`GET ${baseUrl}/api/find?q=<your task>\` returns the best-matching tools with route, price, input schema, and a ready example — call the result directly. (Also accepts POST {"task": "..."}.)
+
 > Open source, and two-sided: Agent402 is also the home of \`agent402-tollbooth\` — an open-source, self-hostable x402 pay-per-crawl gate that lets any site charge AI crawlers per request (USDC via x402, or free proof-of-work) while humans browse free. https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth
 
 ## This is machine-to-machine commerce, and you can verify it
@@ -112,6 +115,7 @@ ${sections}
 
 ## Free endpoints
 
+- \`GET /api/find?q={task}\` — resolve a task description to the best-matching tools (route, price, input schema, ready example) in one call; skips the token-heavy "search to find a tool" step. Also accepts \`POST {"task":"..."}\`.
 - \`GET /.well-known/x402\` — one-fetch service manifest: identity, payment options (x402 networks + proof-of-work), capability map, MCP connector, and trust signals.
 - \`GET /api/reliability\` — structured reliability/SLA report: uptime, calls served, on-chain revenue proof, and each operational guarantee with a URL to verify it.
 - \`GET /api/pricing\` — machine-readable catalog (JSON): every endpoint, price, category, and docs URL.
