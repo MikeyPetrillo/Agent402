@@ -61,7 +61,7 @@ process memory only. Memory-tool data persists until deleted by its owner or TTL
 non-personal counters (total calls served per tool) are kept for the public <a href="/api/stats">/api/stats</a> page.</p>
 
 <h2>Contact</h2>
-<p>Mikey Petrillo — <a href="https://mikepetrillo.dev/" rel="noopener">mikepetrillo.dev</a>,
+<p>Mikey Petrillo —
 <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">GitHub issues</a>,
 or <a href="https://github.com/MikeyPetrillo" rel="noopener">github.com/MikeyPetrillo</a>.</p>
 
