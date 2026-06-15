@@ -235,6 +235,9 @@ jobs:
       - name: Marketplace contract (registration updates existing endpoints)
         run: node scripts/test-marketplace-contract.js
 
+      - name: Discovery & trust surfaces (/.well-known/x402, /api/reliability)
+        run: node scripts/test-discovery.js
+
       - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
         run: node scripts/test-pdf.js
 

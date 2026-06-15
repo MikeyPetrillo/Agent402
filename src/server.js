@@ -13,6 +13,7 @@ import { landingPage } from "./landing.js";
 import { privacyPage } from "./privacy.js";
 import { termsPage } from "./terms.js";
 import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
+import { serviceManifest, reliabilityReport } from "./discovery.js";
 import { buildPaymentMiddleware, enabledNetworks } from "./payments.js";
 import { KIT } from "./tools/kit.js";
 import { KIT2 } from "./tools/kit2.js";
@@ -469,6 +470,26 @@ app.get("/guides/:slug", (req, res) => {
   if (!html) return res.status(404).type("html").send('<p>Guide not found. <a href="/guides">All guides</a></p>');
   res.type("html").send(html);
 });
+// Top-level machine-readable service manifest — one fetch tells a discovery
+// agent the whole story (identity, payment options, capability map, MCP, trust),
+// so this seller is the one selected. Per-resource terms still live in each
+// 402 + the x402 Bazaar; this is the index that ties them together.
+app.get("/.well-known/x402", (_req, res) =>
+  res.json(serviceManifest({
+    baseUrl: BASE_URL, network: NETWORK, networks: enabledNetworks(NETWORK),
+    wallet: WALLET_ADDRESS, walletName: WALLET_ENS, catalog: CATALOG,
+    toolCount: Object.keys(CATALOG).length, powSlugs: POW_SLUGS,
+    powDifficulty: POW_DIFFICULTY, prices: TOOL_PRICES,
+  }))
+);
+// Structured reliability / trust report — the "safe to depend on" surface, each
+// claim paired with a URL to verify it independently.
+app.get("/api/reliability", (_req, res) =>
+  res.json(reliabilityReport({
+    baseUrl: BASE_URL, network: NETWORK, wallet: WALLET_ADDRESS,
+    stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }),
+  }))
+);
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));
