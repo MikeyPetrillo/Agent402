@@ -4,6 +4,7 @@
 // kicks in when explicitly enabled. Drives the middleware directly with mocks.
 import { createHash } from "node:crypto";
 import { createTollbooth, createPow } from "./index.js";
+import { dashboardHtml } from "./dashboard.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
 let pass = 0;
@@ -68,5 +69,10 @@ ok(ch.difficulty === 14, "pow honors per-call difficulty override");
 const lz = (buf) => { let n = 0; for (const b of buf) { if (b === 0) { n += 8; continue; } n += Math.clz32(b) - 24; break; } return n; };
 let nonce = 0; while (lz(createHash("sha256").update(`${ch.challenge}:${nonce}`).digest()) < 14) nonce++;
 ok(pow.verify(`${ch.token}:${nonce}`, "/r").ok === true, "solution at the per-call difficulty verifies");
+
+// --- dashboard renders and points at the stats endpoint ---
+const html = dashboardHtml();
+ok(html.startsWith("<!doctype html>") && html.includes("/__tollbooth/stats"), "dashboard is HTML that reads /__tollbooth/stats");
+ok(["requests", "freeAllowed", "charged", "powSolved", "x402Paid", "difficultyNow"].every((k) => html.includes(k)), "dashboard references every stat field");
 
 console.log(`\n${pass} passed`);

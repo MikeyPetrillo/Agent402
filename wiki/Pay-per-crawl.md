@@ -68,8 +68,10 @@ unchanged):
 ## One-click deploy
 
 Ready-to-copy templates: [`deploy/cloudflare/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare)
-(Cloudflare Workers) and [`deploy/nextjs/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs)
-(Next.js / Vercel middleware).
+(Cloudflare Workers), [`deploy/nextjs/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs)
+(Next.js / Vercel middleware), and [`deploy/docker/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/docker)
+(`docker compose up -d` reverse proxy). The reverse proxy also serves a live
+operator **dashboard at `/__tollbooth`** (and JSON at `/__tollbooth/stats`).
 
 ## Why it exists
 
