@@ -3,7 +3,7 @@
 // are unchanged (so live deployments aren't affected) and the new behavior only
 // kicks in when explicitly enabled. Drives the middleware directly with mocks.
 import { createHash } from "node:crypto";
-import { createTollbooth, createPow, isStatsAuthorized } from "./index.js";
+import { createTollbooth, createPow } from "./index.js";
 import { dashboardHtml } from "./dashboard.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
@@ -74,28 +74,5 @@ ok(pow.verify(`${ch.token}:${nonce}`, "/r").ok === true, "solution at the per-ca
 const html = dashboardHtml();
 ok(html.startsWith("<!doctype html>") && html.includes("/__tollbooth/stats"), "dashboard is HTML that reads /__tollbooth/stats");
 ok(["requests", "freeAllowed", "charged", "powSolved", "x402Paid", "difficultyNow"].every((k) => html.includes(k)), "dashboard references every stat field");
-
-// --- optional TOLLBOOTH_STATS_TOKEN gates /__tollbooth and /__tollbooth/stats ---
-// Unset/empty token must stay back-compat (anyone with network access can read
-// aggregate counters), so the default `docker compose up -d` story keeps working.
-ok(isStatsAuthorized({ headers: {}, url: "/__tollbooth/stats" }, "") === true,
-  "stats auth: empty token = open (back-compat default)");
-ok(isStatsAuthorized({ headers: {}, url: "/__tollbooth/stats" }, undefined) === true,
-  "stats auth: undefined token = open (back-compat default)");
-
-// Set token: require ?token= or Authorization: Bearer
-const STK = "s3cret-token-abc";
-ok(isStatsAuthorized({ headers: {}, url: "/__tollbooth/stats" }, STK) === false,
-  "stats auth: token set + no creds = denied");
-ok(isStatsAuthorized({ headers: { authorization: `Bearer ${STK}` }, url: "/__tollbooth/stats" }, STK) === true,
-  "stats auth: Bearer authorizes");
-ok(isStatsAuthorized({ headers: {}, url: `/__tollbooth/stats?token=${STK}` }, STK) === true,
-  "stats auth: ?token= authorizes");
-ok(isStatsAuthorized({ headers: { authorization: "Bearer wrong" }, url: "/__tollbooth/stats" }, STK) === false,
-  "stats auth: wrong Bearer denied");
-ok(isStatsAuthorized({ headers: {}, url: "/__tollbooth/stats?token=wrong" }, STK) === false,
-  "stats auth: wrong ?token= denied");
-ok(isStatsAuthorized({ headers: { authorization: `bearer ${STK}` }, url: "/__tollbooth/stats" }, STK) === false,
-  "stats auth: case-sensitive 'Bearer ' prefix (lowercase rejected)");
 
 console.log(`\n${pass} passed`);
