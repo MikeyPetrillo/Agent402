@@ -7,6 +7,8 @@
 
 [![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
 [![npm](https://img.shields.io/npm/v/agent402-mcp?label=agent402-mcp)](https://www.npmjs.com/package/agent402-mcp)
+[![npm](https://img.shields.io/npm/v/agent402-client?label=agent402-client)](https://www.npmjs.com/package/agent402-client)
+[![npm](https://img.shields.io/npm/v/agent402-tollbooth?label=agent402-tollbooth)](https://www.npmjs.com/package/agent402-tollbooth)
 [![CI](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
