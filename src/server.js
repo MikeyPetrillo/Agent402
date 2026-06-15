@@ -761,7 +761,9 @@ const idemHashKey = (req) => {
   if (!idem || idem.length > 256) return null;
   const cred = req.header("x-payment") || req.header("payment-signature") || req.header("x-pow-solution");
   if (!cred) return null; // nothing to securely bind the key to → don't cache
-  return createHash("sha256").update(`${idem}\n${cred}`).digest("hex");
+  // Bind to the exact route too, so the same key+credential on a different
+  // endpoint can never replay another tool's cached result.
+  return createHash("sha256").update(`${req.method} ${req.path}\n${idem}\n${cred}`).digest("hex");
 };
 app.use((req, res, next) => {
   if (!CATALOG[`${req.method} ${req.path}`]) return next();

@@ -41,6 +41,17 @@ try {
   r = await hash(sol1, "key-1");
   ok(r.status === 200 && r.headers.get("x-idempotent-replay") === "true", "retry (same key + credential) replays without re-charging");
 
+  // 2b. Same key + credential on a DIFFERENT route must NOT replay this result
+  // (the cache key is bound to the route). Reusing the hash PoW token elsewhere
+  // also fails the gate, so this can never leak the hash result to another path.
+  const other = await fetch(`${B}/api/base64`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Pow-Solution": sol1, "Idempotency-Key": "key-1" },
+    body: JSON.stringify({ text: "x", mode: "encode" }),
+  });
+  const otherBody = await other.text();
+  ok(other.headers.get("x-idempotent-replay") !== "true" && !otherBody.includes("b94d27b9"), `same key+credential on a different route does not replay (got ${other.status})`);
+
   // 3. Replaying the used token WITHOUT a key keeps normal behavior: rejected.
   r = await hash(sol1, null);
   ok(r.status !== 200, `used token without Idempotency-Key is rejected (got ${r.status})`);
