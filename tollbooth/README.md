@@ -207,6 +207,12 @@ The reverse-proxy CLI exposes them as JSON at **`/__tollbooth/stats`** and as a
 live **dashboard at `/__tollbooth`** — requests, how many were charged,
 proof-of-work solves, USDC collected, and what share of your traffic is bots.
 
+By default both endpoints are open (so `docker compose up -d` stays a one-command
+deploy). To keep your bot %, revenue, and difficulty private, set
+**`TOLLBOOTH_STATS_TOKEN`** — when set, requests must present it as
+`Authorization: Bearer <token>` or `?token=<token>`, otherwise the endpoint
+returns 401.
+
 ## Production checklist (read this)
 
 - **Set a stable `TOLLBOOTH_SECRET`.** Required for any multi-process/clustered
