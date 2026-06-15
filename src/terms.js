@@ -53,7 +53,7 @@ incidental, or consequential damages, or for any losses arising from use of the 
 on-chain payments. Total liability for any claim will not exceed the amount you paid for the call at issue.</p>
 
 <h2>Contact</h2>
-<p>Mikey Petrillo — <a href="https://mikepetrillo.dev/" rel="noopener">mikepetrillo.dev</a>,
+<p>Mikey Petrillo — <a href="https://github.com/MikeyPetrillo" rel="noopener">github.com/MikeyPetrillo</a>,
 or <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">GitHub issues</a>.</p>
 
 <p class="muted"><a href="/">← agent402.tools</a> · <a href="/privacy">Privacy</a></p>
