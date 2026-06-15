@@ -77,6 +77,20 @@ and [`/llms.txt`](https://agent402.tools/llms.txt). Don't know which tool you ne
 a task description to the right tool — route, price, schema, and a ready example —
 so an agent skips the token-heavy "search around to find a tool" step.
 
+**From code**, the [`agent402-client`](client) npm package wraps all of this —
+`find()` a tool, then `call()` it, paying automatically (a built-in proof-of-work
+for free tools, your x402 wallet for paid ones), with caching and idempotent
+retries:
+
+```bash
+npm install agent402-client
+```
+```js
+import { Agent402 } from "agent402-client";
+const a = new Agent402();                       // free tier (proof-of-work)
+const out = await a.call("hash", { text: "hello world", algo: "sha256" });
+```
+
 ## Add your own tool (~15 lines)
 
 A tool is just an object in a kit array. Drop this into any file in
