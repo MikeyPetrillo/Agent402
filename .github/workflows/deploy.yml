@@ -262,6 +262,9 @@ jobs:
       - name: x402-kit tests (transfer-auth typed data + live Base RPC reads)
         run: node scripts/test-x402-kit.js
 
+      - name: Util-kit tests (jwt-sign, uuid-v5, group-by, json-to-xml, geo-distance, color-contrast)
+        run: node scripts/test-util-kit.js
+
       - name: Tollbooth tests (pay-per-crawl gate — node + edge/Web-Crypto)
         run: node tollbooth/test.js && node tollbooth/edge.test.js
 
