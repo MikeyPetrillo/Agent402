@@ -1,9 +1,9 @@
-// One-call tool resolver — kills the agent "exploration tax". Instead of an
-// agent burning tokens searching the web / reading pages to discover how to do
-// something, it sends a task description here and gets back the best-matching
-// tool(s) with everything needed to call them directly: route, price, input
-// schema, and a ready example. Deterministic lexical ranking (no LLM, no tokens),
-// consistent with the MCP connector's search_tools weighting.
+// One-call tool resolver. Instead of an agent spending tokens searching the web
+// and reading pages just to discover how to do something, it sends a task
+// description here and gets back the best-matching tool(s) with everything needed
+// to call them directly: route, price, input schema, and a ready example.
+// Deterministic lexical ranking (no LLM, no tokens), consistent with the MCP
+// connector's search_tools weighting.
 import { toolList } from "./pages.js";
 
 /**
