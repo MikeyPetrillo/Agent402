@@ -72,7 +72,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "name": "Agent402",
       "url": "${baseUrl}",
       "founder": { "@type": "Person", "name": "Mikey Petrillo", "url": "https://github.com/MikeyPetrillo" },
-      "sameAs": ["https://github.com/MikeyPetrillo", "https://github.com/MikeyPetrillo/Agent402", "https://www.npmjs.com/package/agent402-mcp"],
+      "sameAs": ["https://github.com/MikeyPetrillo", "https://github.com/MikeyPetrillo/Agent402", "https://www.npmjs.com/package/agent402-mcp", "https://www.npmjs.com/package/agent402-client", "https://www.npmjs.com/package/agent402-tollbooth"],
       "description": "Machine-to-machine payments for AI agents: ${count} pay-per-call web tools settled in USDC via the x402 protocol, or free with proof-of-work."
     },
     {
@@ -386,6 +386,13 @@ console.log(await res.json()); // { title, markdown, ... }</pre>
     "command": "npx", "args": ["-y", "agent402-mcp"],
     "env": { "AGENT_KEY": "0x&lt;funded wallet key — optional&gt;", "AGENT402_BUDGET": "1.00" }
 } } }</pre>
+
+    <p class="lbl">Call it from your code <span>— the <a href="https://www.npmjs.com/package/agent402-client" rel="noopener">agent402-client</a> SDK resolves a task to a tool and pays automatically (proof-of-work for free tools, your x402 wallet for paid). Zero deps, non-custodial, with caching + idempotent retries.</span></p>
+    <pre>npm install agent402-client
+
+import { Agent402 } from "agent402-client";
+const a = new Agent402();                 // free tier (proof-of-work)
+const out = await a.call("hash", { text: "hello world", algo: "sha256" });</pre>
 
     <p class="lbl">Or try it free <span>— no wallet needed</span></p>
     <pre>curl ${baseUrl}/api/pricing          # machine-readable catalog
