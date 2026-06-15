@@ -163,23 +163,45 @@ app.use(createTollbooth({
 | `network` | `"base"` | x402 network |
 | `pow` | `true` | Enable the free proof-of-work rail |
 | `powDifficulty` | `18` | PoW difficulty in leading zero bits (~0.1–0.5s of CPU) |
-| `botUserAgents` | `AI_BOTS` | User-agents to charge (AI/LLM crawlers; search indexers excluded) |
-| `charge(req)` | UA match | Custom predicate for "should this client pay?" |
-| `free(req)` | – | Custom force-allow predicate (wins over `charge`) |
+| `mode` | `"bots"` | Who pays: `"bots"` (AI-crawler UAs) · `"all"` (everyone but `free()`) · `"strict"` (anything that isn't a real-browser request) |
+| `adaptive` | `false` | Raise PoW difficulty as charged-request load climbs (anti-abuse under traffic spikes) |
+| `maxDifficulty` | `base+6` | Ceiling for adaptive difficulty |
+| `adaptivePerBit` | `300` | +1 difficulty bit per N charged requests/min |
+| `botUserAgents` | `AI_BOTS` | User-agents to charge in `"bots"` mode |
+| `charge(req)` | mode | Custom "should this client pay?" predicate (wins over `mode`) |
+| `free(req)` | – | Custom force-allow predicate (wins over everything) |
 | `verifyX402(req, reqs)` | – | Async USDC settlement check (return `true` to allow) |
 | `resourceBaseUrl` | `""` | Absolute base used for the `resource` field / PoW binding |
 
 Environment variables: `TOLLBOOTH_UPSTREAM`, `TOLLBOOTH_PAYTO`, `TOLLBOOTH_PRICE`,
-`TOLLBOOTH_NETWORK`, `TOLLBOOTH_POW_BITS`, `TOLLBOOTH_SECRET`, `PORT`.
+`TOLLBOOTH_NETWORK`, `TOLLBOOTH_POW_BITS`, `TOLLBOOTH_MODE`, `TOLLBOOTH_ADAPTIVE`,
+`TOLLBOOTH_MAX_POW_BITS`, `TOLLBOOTH_ADAPTIVE_PER_BIT`, `TOLLBOOTH_SECRET`, `PORT`.
 
 ## How it decides who pays
 
-By default it charges requests whose `User-Agent` matches a known **AI/LLM
-crawler** (GPTBot, ClaudeBot, CCBot, PerplexityBot, Bytespider, Google-Extended,
-Amazonbot, …). Classic search indexers (Googlebot, Bingbot) are intentionally
-**not** charged so your SEO indexing stays free. Override with `botUserAgents`,
-or take full control with a `charge(req)` predicate (e.g. charge anything
-without a browser-like `Accept` header, or charge everyone on `/api/*`).
+By default (`mode: "bots"`) it charges requests whose `User-Agent` matches a known
+**AI/LLM crawler** (GPTBot, ClaudeBot, CCBot, PerplexityBot, Bytespider,
+Google-Extended, Amazonbot, …). Classic search indexers (Googlebot, Bingbot) are
+intentionally **not** charged so your SEO indexing stays free.
+
+**Don't want to play whack-a-mole with bot detection?** That's the point of the
+other modes — you stop trying to *identify* bots and instead make access *cost
+something*:
+- `mode: "all"` charges every client (except a `free()` match). A "more
+  sophisticated" bot gains nothing by disguising itself — everyone pays or solves
+  a proof-of-work.
+- `mode: "strict"` charges anything that isn't a real-browser request (browser-like
+  UA **and** an HTML `Accept`), letting genuine human page-loads through free.
+- `adaptive: true` makes proof-of-work **harder as load climbs**, so a high-volume
+  scraper pays escalating CPU per request regardless of how it looks — detection is
+  cat-and-mouse, economics isn't.
+
+## Analytics
+
+The middleware keeps aggregate counters (no per-request data): `gate.stats()`
+returns `{ requests, freeAllowed, charged, powSolved, x402Paid, difficultyNow }`.
+The reverse-proxy CLI exposes them at **`/__tollbooth/stats`** so you can see how
+much of your traffic is bots and what the tollbooth is collecting.
 
 ## Production checklist (read this)
 
@@ -194,8 +216,9 @@ without a browser-like `Accept` header, or charge everyone on `/api/*`).
   redirect it elsewhere) and **strips client-forged trust/forwarding headers**
   (`X-Tollbooth-Paid`, `X-Forwarded-Host`, etc.) before forwarding.
 - **UA matching is the default, not a security boundary** — a bot can forge a
-  human UA to get the *same free access a human gets* (it gains nothing more). If
-  you need to charge everyone, pass `charge: () => true`.
+  human UA to get the *same free access a human gets* (it gains nothing more). To
+  stop relying on detection entirely, use `mode: "all"` / `mode: "strict"`, and
+  turn on `adaptive` so high-volume abuse pays escalating proof-of-work.
 
 ## Notes
 

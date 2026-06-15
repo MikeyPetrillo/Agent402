@@ -241,6 +241,9 @@ jobs:
       - name: Revenue detector classification (real x402 buys vs funding/tests)
         run: node scripts/test-revenue-scan.js
 
+      - name: Tool resolver (/api/find ranking, guards)
+        run: node scripts/test-find.js
+
       - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
         run: node scripts/test-pdf.js
 
@@ -269,7 +272,7 @@ jobs:
         run: node scripts/test-util-kit.js
 
       - name: Tollbooth tests (pay-per-crawl gate — node + edge/Web-Crypto)
-        run: node tollbooth/test.js && node tollbooth/edge.test.js
+        run: node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js
 
       - name: Conversion tools (~970 endpoints, exact + round-trip)
         run: node scripts/test-convert.js

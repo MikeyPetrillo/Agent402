@@ -35,19 +35,22 @@ export function createPow({
 
   const sign = (payload) => createHmac("sha256", secret).update(payload).digest("base64url");
 
-  /** Mint a signed, resource-scoped challenge. */
-  function challenge(resource) {
+  /** Mint a signed, resource-scoped challenge. `diff` lets the caller raise the
+   *  difficulty for this one challenge (e.g. adaptive-under-load); verify reads
+   *  the difficulty from the token, so any value is self-describing and safe. */
+  function challenge(resource, diff = difficulty) {
+    const d = Math.max(1, Math.min(Math.floor(Number(diff) || difficulty), 32));
     const chal = randomBytes(16).toString("hex");
     const exp = Date.now() + ttlMs;
-    const payload = `${chal}.${exp}.${difficulty}.${resource}`;
+    const payload = `${chal}.${exp}.${d}.${resource}`;
     const token = `${payload}.${sign(payload)}`;
     return {
       algorithm: "sha256",
       challenge: chal,
-      difficulty,
+      difficulty: d,
       expires: exp,
       token,
-      rule: `Find an integer nonce so sha256("${chal}:" + nonce) has >= ${difficulty} leading zero bits, then resend the request with header  X-Pow-Solution: ${token}:<nonce>`,
+      rule: `Find an integer nonce so sha256("${chal}:" + nonce) has >= ${d} leading zero bits, then resend the request with header  X-Pow-Solution: ${token}:<nonce>`,
     };
   }
 
