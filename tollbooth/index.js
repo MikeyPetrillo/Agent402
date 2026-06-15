@@ -55,22 +55,58 @@ export function createTollbooth(config = {}) {
     powDifficulty,
     powSecret,
     botUserAgents = AI_BOTS,
+    // Who pays. Default "bots" = the original behavior (charge AI crawler UAs).
+    //  "all"    — charge every client except a `free()` match (UA detection is
+    //             not a security boundary; this stops relying on it).
+    //  "strict" — charge anything that isn't a real-browser request (browser-like
+    //             UA + an HTML Accept). Raises the bar on naive scrapers.
+    // An explicit charge()/free() still wins over the mode.
+    mode = process.env.TOLLBOOTH_MODE || "bots",
     charge,
     free,
     verifyX402,
     resourceBaseUrl = process.env.TOLLBOOTH_RESOURCE_BASE || "",
+    // Adaptive proof-of-work: raise difficulty as charged-request load climbs, so
+    // high-volume abuse pays escalating CPU regardless of how it disguises itself.
+    // Off by default — behavior is unchanged unless explicitly enabled.
+    adaptive = config.adaptive ?? (process.env.TOLLBOOTH_ADAPTIVE === "true"),
+    adaptivePerBit = Number(process.env.TOLLBOOTH_ADAPTIVE_PER_BIT) || 300, // +1 bit per N charged req/min
+    maxDifficulty,
     message = "This resource charges automated / AI clients per request. Humans browse free; bots pay in USDC via x402 or by solving a proof-of-work.",
   } = config;
 
   const isBot = makeBotMatcher(botUserAgents);
   const powEngine = pow ? createPow({ difficulty: powDifficulty, secret: powSecret }) : null;
 
+  // Passive analytics — never affects request handling, just counts what happens.
+  const stats = { since: new Date().toISOString(), requests: 0, freeAllowed: 0, charged: 0, powSolved: 0, x402Paid: 0 };
+
+  const looksHuman = (req) => {
+    const ua = req.headers["user-agent"] || "";
+    const accept = req.headers["accept"] || "";
+    return /mozilla\/5\.0/i.test(ua) && /text\/html/i.test(accept);
+  };
   const shouldCharge = (req) => {
     try {
       if (typeof free === "function" && free(req)) return false;
       if (typeof charge === "function") return Boolean(charge(req));
     } catch { return true; /* fail closed: charge on predicate error */ }
-    return isBot(req.headers["user-agent"] || "");
+    if (mode === "all") return true;
+    if (mode === "strict") return !looksHuman(req);
+    return isBot(req.headers["user-agent"] || ""); // "bots" (default)
+  };
+
+  // Sliding-window of recent charged requests → adaptive PoW difficulty.
+  const baseDifficulty = powEngine?.difficulty ?? (Number(process.env.TOLLBOOTH_POW_BITS) || 18);
+  const ceilDifficulty = Math.min(Number(maxDifficulty) || baseDifficulty + 6, 32);
+  const ADAPT_WINDOW_MS = 60_000;
+  let chargedWindow = [];
+  const difficultyNow = () => {
+    if (!adaptive) return baseDifficulty;
+    const cut = Date.now() - ADAPT_WINDOW_MS;
+    if (chargedWindow.length > 100_000) chargedWindow = chargedWindow.filter((t) => t > cut); // hard bound
+    else while (chargedWindow.length && chargedWindow[0] < cut) chargedWindow.shift();
+    return Math.min(baseDifficulty + Math.floor(chargedWindow.length / Math.max(1, adaptivePerBit)), ceilDifficulty);
   };
   const resourceOf = (req) => {
     // Canonicalize to path+search (matches the edge impl) so the PoW binding is
@@ -82,10 +118,13 @@ export function createTollbooth(config = {}) {
   };
 
   function tollbooth(req, res, next) {
-    if (!shouldCharge(req)) return next();
+    stats.requests++;
+    if (!shouldCharge(req)) { stats.freeAllowed++; return next(); }
     const resource = resourceOf(req);
 
     const send402 = (extra = {}) => {
+      stats.charged++;
+      if (adaptive) chargedWindow.push(Date.now());
       const body = {
         error: "Payment Required",
         message,
@@ -94,7 +133,7 @@ export function createTollbooth(config = {}) {
           : [],
         ...extra,
       };
-      if (powEngine) body.proofOfWork = powEngine.challenge(resource);
+      if (powEngine) body.proofOfWork = powEngine.challenge(resource, difficultyNow());
       res.status(402).json(body);
     };
 
@@ -102,7 +141,7 @@ export function createTollbooth(config = {}) {
     const powHeader = req.headers["x-pow-solution"];
     if (powEngine && powHeader) {
       const r = powEngine.verify(powHeader, resource);
-      if (r.ok) { res.setHeader("X-Tollbooth-Paid", "pow"); return next(); }
+      if (r.ok) { stats.powSolved++; res.setHeader("X-Tollbooth-Paid", "pow"); return next(); }
       res.setHeader("X-Pow-Error", r.reason);
     }
 
@@ -114,7 +153,7 @@ export function createTollbooth(config = {}) {
       const timeout = new Promise((resolve) => setTimeout(() => resolve(false), VERIFY_TIMEOUT_MS));
       return Promise.race([Promise.resolve(verifyX402(req, { price, network, asset, payTo, resource })), timeout])
         .then((ok) => {
-          if (ok) { res.setHeader("X-Tollbooth-Paid", "x402"); return next(); }
+          if (ok) { stats.x402Paid++; res.setHeader("X-Tollbooth-Paid", "x402"); return next(); }
           send402();
         })
         .catch(() => { res.setHeader("X-Tollbooth-Error", "x402-verify-failed"); send402(); });
@@ -125,6 +164,9 @@ export function createTollbooth(config = {}) {
 
   tollbooth.shouldCharge = shouldCharge;
   tollbooth.pow = powEngine;
+  // Live counters for operators: how much traffic, how much was charged, and how
+  // it was settled. A point-in-time snapshot (never mutated by the caller).
+  tollbooth.stats = () => ({ ...stats, difficultyNow: difficultyNow() });
   return tollbooth;
 }
 
@@ -187,6 +229,9 @@ async function startCli() {
   const { default: express } = await import("express");
   const app = express();
   const gate = createTollbooth({ resourceBaseUrl: process.env.TOLLBOOTH_RESOURCE_BASE || upstream || "" });
+  // Operator analytics — aggregate counts only (no per-request data), mounted
+  // before the gate so it's always reachable and never itself charged.
+  app.get("/__tollbooth/stats", (_req, res) => res.json(gate.stats()));
   app.use(gate);
   if (upstream) {
     app.use(createProxy(upstream));

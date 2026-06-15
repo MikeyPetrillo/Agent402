@@ -121,6 +121,10 @@ export function createEdgeTollbooth(config = {}) {
     secret,
     store,
     botUserAgents = AI_BOTS,
+    // "bots" (default, charge AI crawler UAs) | "all" (charge all but free()) |
+    // "strict" (charge anything that isn't a real-browser request). An explicit
+    // charge()/free() still wins. Default preserves the original behavior.
+    mode = "bots",
     charge,
     free,
     resourceBaseUrl = "",
@@ -130,12 +134,19 @@ export function createEdgeTollbooth(config = {}) {
   const isBot = makeBotMatcher(botUserAgents);
   const powEngine = pow ? createEdgePow({ secret, difficulty: powDifficulty, store }) : null;
 
+  const looksHuman = (request) => {
+    const ua = request.headers.get("user-agent") || "";
+    const accept = request.headers.get("accept") || "";
+    return /mozilla\/5\.0/i.test(ua) && /text\/html/i.test(accept);
+  };
   const shouldCharge = (request) => {
     try {
       if (typeof free === "function" && free(request)) return false;
       if (typeof charge === "function") return Boolean(charge(request));
     } catch { return true; /* fail closed: charge on predicate error */ }
-    return isBot(request.headers.get("user-agent") || "");
+    if (mode === "all") return true;
+    if (mode === "strict") return !looksHuman(request);
+    return isBot(request.headers.get("user-agent") || ""); // "bots" (default)
   };
 
   return async function gate(request) {
