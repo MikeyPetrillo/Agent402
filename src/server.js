@@ -473,15 +473,15 @@ app.get("/guides/:slug", (req, res) => {
 // Top-level machine-readable service manifest — one fetch tells a discovery
 // agent the whole story (identity, payment options, capability map, MCP, trust),
 // so this seller is the one selected. Per-resource terms still live in each
-// 402 + the x402 Bazaar; this is the index that ties them together.
-app.get("/.well-known/x402", (_req, res) =>
-  res.json(serviceManifest({
-    baseUrl: BASE_URL, network: NETWORK, networks: enabledNetworks(NETWORK),
-    wallet: WALLET_ADDRESS, walletName: WALLET_ENS, catalog: CATALOG,
-    toolCount: Object.keys(CATALOG).length, powSlugs: POW_SLUGS,
-    powDifficulty: POW_DIFFICULTY, prices: TOOL_PRICES,
-  }))
-);
+// 402 + the x402 Bazaar; this is the index that ties them together. Built once:
+// it depends only on boot-time constants (catalog, prices, networks, wallet).
+const MANIFEST = serviceManifest({
+  baseUrl: BASE_URL, network: NETWORK, networks: enabledNetworks(NETWORK),
+  wallet: WALLET_ADDRESS, walletName: WALLET_ENS, catalog: CATALOG,
+  toolCount: Object.keys(CATALOG).length, powSlugs: POW_SLUGS,
+  powDifficulty: POW_DIFFICULTY, prices: TOOL_PRICES,
+});
+app.get("/.well-known/x402", (_req, res) => res.json(MANIFEST));
 // Structured reliability / trust report — the "safe to depend on" surface, each
 // claim paired with a URL to verify it independently.
 app.get("/api/reliability", (_req, res) =>
