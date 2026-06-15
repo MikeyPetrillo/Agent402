@@ -23,9 +23,13 @@ Sitemap: ${baseUrl}/sitemap.xml
 }
 
 export function sitemapXml(baseUrl, catalog) {
+  // lastmod reflects the deploy that regenerated this sitemap (the pages are
+  // server-rendered, so a deploy is the freshness signal crawlers should see).
+  const lastmod = new Date().toISOString().slice(0, 10);
   const staticUrls = [
     { loc: `${baseUrl}/`, priority: "1.0" },
     { loc: `${baseUrl}/tools`, priority: "0.9" },
+    { loc: `${baseUrl}/faq`, priority: "0.8" },
     { loc: `${baseUrl}/llms.txt`, priority: "0.8" },
     { loc: `${baseUrl}/openapi.json`, priority: "0.7" },
     { loc: `${baseUrl}/api/pricing`, priority: "0.7" },
@@ -39,7 +43,7 @@ export function sitemapXml(baseUrl, catalog) {
   ];
   const toolUrls = toolList(catalog).map((t) => ({ loc: `${baseUrl}/tools/${t.slug}`, priority: "0.8" }));
   const entries = [...staticUrls, ...guideUrls, ...toolUrls]
-    .map((u) => `  <url><loc>${u.loc}</loc><changefreq>weekly</changefreq><priority>${u.priority}</priority></url>`)
+    .map((u) => `  <url><loc>${u.loc}</loc><lastmod>${lastmod}</lastmod><changefreq>weekly</changefreq><priority>${u.priority}</priority></url>`)
     .join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">

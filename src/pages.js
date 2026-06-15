@@ -73,11 +73,18 @@ function card(t) {
   return `<div class="card"><h3><a href="/tools/${t.slug}">${esc(t.name)}</a></h3><div class="price">${priceLine(t)} · <code>${t.method} ${esc(t.path)}</code></div><p>${esc(t.description.length > 120 ? t.description.slice(0, 120) + "…" : t.description)}</p></div>`;
 }
 
-function head({ title, description, canonical, jsonLd }) {
+function head({ title, description, canonical, jsonLd, image }) {
   const blocks = (Array.isArray(jsonLd) ? jsonLd : [jsonLd])
     .filter(Boolean)
     .map((b) => `<script type="application/ld+json">${JSON.stringify(b)}</script>`)
     .join("\n");
+  const social = image
+    ? `<meta name="twitter:card" content="summary_large_image">
+<meta property="og:image" content="${image}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:image" content="${image}">`
+    : `<meta name="twitter:card" content="summary">`;
   return `<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230b0e14'/%3E%3Ctext x='50' y='66' font-size='40' font-weight='700' font-family='monospace' text-anchor='middle' fill='%234ade80'%3E402%3C/text%3E%3C/svg%3E">
@@ -90,7 +97,7 @@ function head({ title, description, canonical, jsonLd }) {
 <meta property="og:site_name" content="Agent402">
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(description)}">
-<meta name="twitter:card" content="summary">
+${social}
 ${blocks}
 <style>${SHARED_CSS}</style>`;
 }
@@ -198,7 +205,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   return `<!doctype html>
 <html lang="en">
 <head>
-${head({ title, description: `${tool.description} ${tool.price} per call via x402 — no API key, no signup.`, canonical, jsonLd })}
+${head({ title, description: `${tool.description} ${tool.price} per call via x402 — no API key, no signup.`, canonical, jsonLd, image: `${baseUrl}/card.png` })}
 </head>
 <body>
 <div class="wrap">
@@ -309,7 +316,7 @@ export function toolsIndexPage(baseUrl, catalog) {
   return `<!doctype html>
 <html lang="en">
 <head>
-${head({ title, description, canonical, jsonLd })}
+${head({ title, description, canonical, jsonLd, image: `${baseUrl}/card.png` })}
 </head>
 <body>
 <div class="wrap">
@@ -319,6 +326,58 @@ ${head({ title, description, canonical, jsonLd })}
   <div class="callout"><b>${freeCount} of ${tools.length} tools are free</b> — no wallet needed. Pay with a few seconds of <a href="/api/pow">proof-of-work</a> (CPU) instead of USDC. The other ${tools.length - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run. Look for the <span class="free">FREE</span> badge below.</div>
   ${sections}
   <footer>Agent402 — pay-per-call tools for AI agents. <a href="/">Home</a> · <a href="/llms.txt">llms.txt</a></footer>
+</div>
+</body>
+</html>`;
+}
+
+// On-site FAQ — surfaces the wiki FAQ for Google (FAQPage rich results) and for
+// humans/agents landing on the site. The Q&A pairs are the single source for
+// BOTH the visible HTML and the JSON-LD, so they can't drift apart. Answers may
+// contain simple inline HTML (links) — allowed in FAQPage and rendered as-is.
+const FAQ_ITEMS = [
+  { q: "Do I need an account or API key?", a: "No. Nothing here has a signup. Payment — USDC or proof-of-work — is the only credential, charged per call." },
+  { q: "What does it cost?", a: 'Flat per-call prices, $0.001–$0.02, published in <a href="/api/pricing">/api/pricing</a> and quoted exactly in every HTTP 402 response. No subscriptions or tiers.' },
+  { q: "Can I use it without any money or a wallet?", a: "Yes. Most pure-CPU tools accept proof-of-work — a sub-second sha256 puzzle solved by your own CPU — and the hosted MCP connector runs that same set for free (rate-limited)." },
+  { q: "What is x402?", a: "An open HTTP payment standard built on the 402 Payment Required status code, for machine-to-machine pay-per-call payments in stablecoins, with settlement infrastructure from Coinbase." },
+  { q: "Which blockchain and asset does it use?", a: "USDC on Base mainnet (eip155:8453). The buyer needs only USDC — gas is sponsored by the facilitator." },
+  { q: "Does using this spend my AI tokens?", a: "No. There is no LLM anywhere in the serving path — every tool is deterministic code. Proof-of-work spends your CPU; x402 spends USDC." },
+  { q: "Is my data stored?", a: 'Tool inputs are processed in memory and not persisted — except the memory tools, whose purpose is storage (wallet-keyed, owner-deletable, with optional TTL). Full policy: <a href="/privacy">/privacy</a>.' },
+  { q: "How do I know the service is honest?", a: "It is fully open source; CI re-tests every endpoint against its own documented example before each deploy; and revenue settles on-chain to agent402.base.eth (the named public receiving wallet), auditable by anyone on Basescan." },
+  { q: "What happens if a tool fails after I pay?", a: "x402 settles before the handler runs, so the operating principle is that anything which can't be served reliably is removed from the catalog rather than left to charge-and-fail. Failure rates are watched by CI and a 15-minute production heartbeat." },
+  { q: "Is Agent402 self-hostable and open source?", a: 'Yes — it is open source under the MIT license. Clone the repo and run it yourself for free, with or without payments enabled. It also ships agent402-tollbooth, an open-source pay-per-crawl gate for charging AI crawlers on your own site.' },
+  { q: "Who runs Agent402?", a: 'Mikey Petrillo, a named maintainer — which most x402 sellers (anonymous wallets) do not offer.' },
+];
+
+export function faqPage(baseUrl) {
+  const canonical = `${baseUrl}/faq`;
+  const title = "Agent402 FAQ — x402 + MCP server for AI agents";
+  const description =
+    "Frequently asked questions about Agent402: pricing, proof-of-work, x402 and USDC on Base, MCP, data handling, and self-hosting the open-source server.";
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: FAQ_ITEMS.map((it) => ({
+      "@type": "Question",
+      name: it.q,
+      acceptedAnswer: { "@type": "Answer", text: it.a },
+    })),
+  };
+  const items = FAQ_ITEMS.map(
+    (it) => `<section class="faq-item"><h2>${esc(it.q)}</h2><p>${it.a}</p></section>`
+  ).join("\n");
+  return `<!doctype html>
+<html lang="en">
+<head>
+${head({ title, description, canonical, jsonLd, image: `${baseUrl}/card.png` })}
+</head>
+<body>
+<div class="wrap">
+  <div class="crumb"><a href="/">Agent402</a> / faq</div>
+  <h1>Frequently asked questions</h1>
+  <p class="sub">Agent402 is the open-source, self-hostable x402 + MCP server: pay-per-call web tools for AI agents, free via proof-of-work or paid in USDC on Base.</p>
+  ${items}
+  <footer>Agent402 — <a href="/">Home</a> · <a href="/tools">Tools</a> · <a href="/guides">Guides</a> · <a href="/llms.txt">llms.txt</a></footer>
 </div>
 </body>
 </html>`;

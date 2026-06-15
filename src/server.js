@@ -29,7 +29,7 @@ import { DATA_TOOLS } from "./tools/data-kit.js";
 import { IMAGE_TOOLS } from "./tools/image-kit.js";
 import { X402_TOOLS } from "./tools/x402-kit.js";
 import { UTIL_TOOLS } from "./tools/util-kit.js";
-import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES } from "./pages.js";
+import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
 
@@ -489,6 +489,7 @@ app.get("/.well-known/glama.json", (_req, res) => {
 });
 app.get("/privacy", (_req, res) => res.type("html").send(privacyPage(BASE_URL)));
 app.get("/terms", (_req, res) => res.type("html").send(termsPage(BASE_URL)));
+app.get("/faq", (_req, res) => res.type("html").send(faqPage(BASE_URL)));
 app.get("/guides", (_req, res) => res.type("html").send(guidesIndex(BASE_URL)));
 app.get("/guides/:slug", (req, res) => {
   const html = guidePage(BASE_URL, req.params.slug);
