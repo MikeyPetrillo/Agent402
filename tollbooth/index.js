@@ -20,6 +20,29 @@ import { makeBotMatcher, AI_BOTS } from "./bots.js";
 export { AI_BOTS, makeBotMatcher } from "./bots.js";
 export { createPow, leadingZeroBits } from "./pow.js";
 
+// Optional auth for the operator dashboard / stats endpoint. If `token` is
+// empty/unset, anyone with network access can read aggregate counters — the
+// back-compat default that keeps `docker compose up -d` a zero-config story.
+// If set, the request must present the token either as `?token=...` or as
+// `Authorization: Bearer <token>`. Comparison is timing-safe.
+export function isStatsAuthorized(req, token) {
+  if (!token) return true;
+  const auth = (req.headers && req.headers.authorization) || "";
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  let queryToken = "";
+  try {
+    const u = new URL(req.url || "/", "http://x");
+    queryToken = u.searchParams.get("token") || "";
+  } catch { /* malformed url — treat as no token */ }
+  return safeEq(bearer, token) || safeEq(queryToken, token);
+}
+function safeEq(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}
+
 const VERIFY_TIMEOUT_MS = Number(process.env.TOLLBOOTH_VERIFY_TIMEOUT_MS) || 10_000;
 // Headers a client must never be able to forge through the proxy: the gate's own
 // trust signals and forwarding/hop-by-hop headers.
@@ -232,8 +255,15 @@ async function startCli() {
   // Operator analytics — aggregate counts only (no per-request data), mounted
   // before the gate so they're always reachable and never themselves charged.
   const { dashboardHtml } = await import("./dashboard.js");
-  app.get("/__tollbooth", (_req, res) => res.type("html").send(dashboardHtml()));
-  app.get("/__tollbooth/stats", (_req, res) => res.json(gate.stats()));
+  const statsToken = process.env.TOLLBOOTH_STATS_TOKEN || "";
+  app.get("/__tollbooth", (req, res) => {
+    if (!isStatsAuthorized(req, statsToken)) return res.status(401).type("text/plain").send("unauthorized");
+    res.type("html").send(dashboardHtml());
+  });
+  app.get("/__tollbooth/stats", (req, res) => {
+    if (!isStatsAuthorized(req, statsToken)) return res.status(401).json({ error: "unauthorized" });
+    res.json(gate.stats());
+  });
   app.use(gate);
   if (upstream) {
     app.use(createProxy(upstream));
