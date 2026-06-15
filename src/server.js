@@ -5,7 +5,7 @@ import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
 import { renderArticle, screenshotPage, rasterizeSvg } from "./tools/render.js";
 import {
-  memoryPut, memoryGet, memoryDelete, memoryIncr,
+  memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas,
   grant, revoke, listGrants, getLog, remember, recall, forget,
 } from "./tools/memory.js";
 import { payerFromRequest } from "./payer.js";
@@ -13,6 +13,7 @@ import { landingPage } from "./landing.js";
 import { privacyPage } from "./privacy.js";
 import { termsPage } from "./terms.js";
 import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
+import { serviceManifest, reliabilityReport } from "./discovery.js";
 import { buildPaymentMiddleware, enabledNetworks } from "./payments.js";
 import { KIT } from "./tools/kit.js";
 import { KIT2 } from "./tools/kit2.js";
@@ -27,11 +28,12 @@ import { BARCODE_TOOLS } from "./tools/barcode-kit.js";
 import { DATA_TOOLS } from "./tools/data-kit.js";
 import { IMAGE_TOOLS } from "./tools/image-kit.js";
 import { X402_TOOLS } from "./tools/x402-kit.js";
-import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES } from "./pages.js";
+import { UTIL_TOOLS } from "./tools/util-kit.js";
+import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
 import { recordServedCall, getStats } from "./stats.js";
 import { timingSafeEqual } from "node:crypto";
@@ -271,6 +273,30 @@ const CATALOG = {
       output: { example: { key: "jobs/processed", value: 43, owner: "0x…" } },
     },
   },
+  "POST /api/memory/cas": {
+    name: "Memory compare-and-set",
+    slug: "memory-cas",
+    category: "memory",
+    price: "$0.001",
+    description:
+      "Atomically write (or release) a key only if its current value equals `expected` — the coordination primitive for distributed locks and optimistic concurrency across agents. Acquire a lock: expected=null + a value + ttlSeconds. Release it: expected=<your token> with no value (deletes on match). Update safely: expected=<old>, value=<new>. Returns whether it swapped and the current value.",
+    tags: ["memory", "cas", "compare-and-set", "lock", "coordination", "atomic"],
+    discovery: {
+      bodyType: "json",
+      input: { key: "locks/import", expected: null, value: "agent-7", ttlSeconds: 30 },
+      inputSchema: {
+        properties: {
+          key: { type: "string", description: "Key to conditionally write" },
+          expected: { description: "Required current value to match (null or omitted = key absent/expired)" },
+          value: { description: "New value to set on match; omit to DELETE on match (lock release)" },
+          ttlSeconds: { type: "number", description: "Optional TTL for the written value (lease for locks)" },
+          owner: { type: "string", description: "Optional 0x namespace (requires a readwrite grant)" },
+        },
+        required: ["key"],
+      },
+      output: { example: { key: "locks/import", swapped: true, value: "agent-7", owner: "0x…", expiresAt: 1760086430 } },
+    },
+  },
   "POST /api/memory/grant": {
     name: "Memory grant",
     slug: "memory-grant",
@@ -463,12 +489,33 @@ app.get("/.well-known/glama.json", (_req, res) => {
 });
 app.get("/privacy", (_req, res) => res.type("html").send(privacyPage(BASE_URL)));
 app.get("/terms", (_req, res) => res.type("html").send(termsPage(BASE_URL)));
+app.get("/faq", (_req, res) => res.type("html").send(faqPage(BASE_URL)));
 app.get("/guides", (_req, res) => res.type("html").send(guidesIndex(BASE_URL)));
 app.get("/guides/:slug", (req, res) => {
   const html = guidePage(BASE_URL, req.params.slug);
   if (!html) return res.status(404).type("html").send('<p>Guide not found. <a href="/guides">All guides</a></p>');
   res.type("html").send(html);
 });
+// Top-level machine-readable service manifest — one fetch tells a discovery
+// agent the whole story (identity, payment options, capability map, MCP, trust),
+// so this seller is the one selected. Per-resource terms still live in each
+// 402 + the x402 Bazaar; this is the index that ties them together. Built once:
+// it depends only on boot-time constants (catalog, prices, networks, wallet).
+const MANIFEST = serviceManifest({
+  baseUrl: BASE_URL, network: NETWORK, networks: enabledNetworks(NETWORK),
+  wallet: WALLET_ADDRESS, walletName: WALLET_ENS, catalog: CATALOG,
+  toolCount: Object.keys(CATALOG).length, powSlugs: POW_SLUGS,
+  powDifficulty: POW_DIFFICULTY, prices: TOOL_PRICES,
+});
+app.get("/.well-known/x402", (_req, res) => res.json(MANIFEST));
+// Structured reliability / trust report — the "safe to depend on" surface, each
+// claim paired with a URL to verify it independently.
+app.get("/api/reliability", (_req, res) =>
+  res.json(reliabilityReport({
+    baseUrl: BASE_URL, network: NETWORK, wallet: WALLET_ADDRESS,
+    stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }),
+  }))
+);
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));
@@ -842,6 +889,9 @@ app.get("/api/memory", memHandler((req, actor, owner) => memoryGet(owner, req.qu
 
 // Coordination + provenance + recall (all wallet-only; identity = payment).
 app.post("/api/memory/incr", memHandler((req, actor, owner) => memoryIncr(owner, req.body?.key, req.body?.by, actor)));
+app.post("/api/memory/cas", memHandler((req, actor, owner) =>
+  memoryCas(owner, req.body?.key, req.body?.expected, req.body?.value, { actor, ttlSeconds: req.body?.ttlSeconds, hasValue: "value" in (req.body || {}) })
+));
 app.post("/api/memory/grant", memHandler((req, actor) => grant(actor, req.body?.grantee, req.body?.mode, req.body?.ttlSeconds)));
 app.post("/api/memory/revoke", memHandler((req, actor) => revoke(actor, req.body?.grantee)));
 app.get("/api/memory/grants", memHandler((req, actor) => listGrants(actor)));

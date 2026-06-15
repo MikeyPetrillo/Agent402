@@ -92,27 +92,38 @@ The same gate is also built on the Web Crypto + Fetch APIs (`edge.js`), so it ru
 anywhere — no Node required. The gate returns a `402 Response` when the client
 must pay, or `null` to let it through.
 
-**Cloudflare Workers** (poetic: the open pay-per-crawl, on the incumbent's own platform). `wrangler.toml`:
+**Ready-to-deploy templates** (copy a folder, don't assemble from docs):
+
+- **Cloudflare Workers** → [`deploy/cloudflare/`](deploy/cloudflare/) — a ready
+  `wrangler.toml` + a 3-step deploy guide (the open pay-per-crawl, on the
+  incumbent's own platform).
+- **Next.js / Vercel** → [`deploy/nextjs/`](deploy/nextjs/) — a drop-in
+  `middleware.js` + a 3-step deploy guide.
+
+The short version of each:
 
 ```toml
+# wrangler.toml  (full template: deploy/cloudflare/wrangler.toml)
 name = "tollbooth"
 main = "node_modules/agent402-tollbooth/worker.js"
+compatibility_date = "2026-01-01"
 [vars]
 TOLLBOOTH_UPSTREAM = "https://your-origin.example.com"
 TOLLBOOTH_PAYTO    = "0xYourWallet"   # optional: advertise a USDC x402 quote
-# wrangler secret put TOLLBOOTH_SECRET
+# npx wrangler secret put TOLLBOOTH_SECRET
 # optional single-use replay store:  [[kv_namespaces]] binding = "TOLLBOOTH_KV"
 ```
 
-**Next.js middleware** (`middleware.ts`):
-
-```ts
+```js
+// middleware.js  (full template: deploy/nextjs/middleware.js)
+import { NextResponse } from "next/server";
 import { createEdgeTollbooth } from "agent402-tollbooth/edge";
-const gate = createEdgeTollbooth({ secret: process.env.TOLLBOOTH_SECRET! });
+const gate = createEdgeTollbooth({ secret: process.env.TOLLBOOTH_SECRET });
 
-export async function middleware(req: Request) {
+export async function middleware(req) {
   return (await gate(req)) ?? NextResponse.next();
 }
+export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] };
 ```
 
 **Any Fetch-API runtime** (Deno, Bun, custom): `const gate = createEdgeTollbooth({ secret }); const blocked = await gate(request); return blocked ?? fetch(request);`
