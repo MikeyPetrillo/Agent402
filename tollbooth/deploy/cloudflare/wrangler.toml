@@ -1,0 +1,29 @@
+# agent402-tollbooth on Cloudflare Workers — open pay-per-crawl on the edge.
+# Copy this to your project root, then: npm i agent402-tollbooth && npx wrangler deploy
+#
+# Humans pass through; AI crawlers get a 402 and pay (USDC via x402) or solve a
+# free proof-of-work. The Worker proxies allowed requests to TOLLBOOTH_UPSTREAM.
+
+name = "tollbooth"
+main = "node_modules/agent402-tollbooth/worker.js"
+compatibility_date = "2026-01-01"
+# worker.js + edge.js use only Web APIs (crypto.subtle, fetch, Headers, URL) —
+# no node:* imports — so nodejs_compat is NOT required.
+
+[vars]
+TOLLBOOTH_UPSTREAM = "https://your-origin.example.com"  # where allowed requests are proxied
+TOLLBOOTH_PAYTO    = "0xYourWallet"                     # optional: advertise a USDC x402 quote
+TOLLBOOTH_PRICE    = "$0.001"                           # optional: price per request
+TOLLBOOTH_NETWORK  = "base"                             # optional: x402 network
+# TOLLBOOTH_POW_BITS = "18"                             # optional: proof-of-work difficulty
+
+# Required secret (never commit it):  npx wrangler secret put TOLLBOOTH_SECRET
+# PoW tokens are HMAC-signed with this; without a stable secret they break across isolates.
+
+# Recommended for production: a durable single-use replay store so a solved
+# proof-of-work token can't be reused across isolates within its TTL.
+#   npx wrangler kv namespace create TOLLBOOTH_KV
+# then paste the returned id below and redeploy:
+# [[kv_namespaces]]
+# binding = "TOLLBOOTH_KV"
+# id = "<paste-the-id-from-the-command-above>"
