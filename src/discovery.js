@@ -120,6 +120,8 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       llmsTxt: `${baseUrl}/llms.txt`,
       stats: `${baseUrl}/api/stats`,
       reliability: `${baseUrl}/api/reliability`,
+      // Resolve a task to the right tool in one call (skip the exploration step).
+      findTool: `${baseUrl}/api/find?q={task}`,
     },
     trust: {
       onchainRevenueProof: wallet

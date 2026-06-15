@@ -72,7 +72,10 @@ curl -s -X POST localhost:3000/api/hash -H 'content-type: application/json' \
 
 Full schemas live in [`/openapi.json`](https://agent402.tools/openapi.json); a
 machine-readable catalog is at [`/api/pricing`](https://agent402.tools/api/pricing)
-and [`/llms.txt`](https://agent402.tools/llms.txt).
+and [`/llms.txt`](https://agent402.tools/llms.txt). Don't know which tool you need?
+[`/api/find?q=<task>`](https://agent402.tools/api/find?q=extract%20article) resolves
+a task description to the right tool — route, price, schema, and a ready example —
+so an agent skips the token-heavy "search around to find a tool" step.
 
 ## Add your own tool (~15 lines)
 
