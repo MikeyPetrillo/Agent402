@@ -2,7 +2,7 @@
 // Exercises the module directly with two simulated wallets — no HTTP, no payments.
 import { createHash } from "node:crypto";
 import {
-  memoryPut, memoryGet, memoryDelete, memoryIncr,
+  memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas,
   grant, revoke, listGrants, getLog, remember, recall, forget,
 } from "../src/tools/memory.js";
 
@@ -58,6 +58,24 @@ ok("listGrants shows B", listGrants(A).grants.some((g) => g.grantee === B.toLowe
 ok("incr shared by B", memoryIncr(A, "shared-ctr", 1, B).value === 1 && memoryIncr(A, "shared-ctr", 1, A).value === 2);
 revoke(A, B);
 throws("B blocked after revoke", () => memoryGet(A, "ctr", { actor: B }), 403);
+
+// --- compare-and-set: locks + optimistic concurrency ---
+let c = memoryCas(A, "locks/job", null, "agent-7", { actor: A, ttlSeconds: 30, hasValue: true });
+ok("cas acquires absent key (lock)", c.swapped === true && c.value === "agent-7");
+ok("cas sets ttl lease ~now+30", Math.abs(c.expiresAt - (Math.floor(Date.now() / 1000) + 30)) <= 2);
+c = memoryCas(A, "locks/job", null, "agent-9", { actor: A, hasValue: true });
+ok("cas contended acquire fails, returns holder", c.swapped === false && c.value === "agent-7");
+c = memoryCas(A, "locks/job", "wrong-token", undefined, { actor: A, hasValue: false });
+ok("cas release with wrong token fails", c.swapped === false);
+c = memoryCas(A, "locks/job", "agent-7", undefined, { actor: A, hasValue: false });
+ok("cas release with right token deletes", c.swapped === true && c.value === null);
+throws("released lock key is gone", () => memoryGet(A, "locks/job", { actor: A }), 404);
+memoryPut(A, "doc", { v: 1 }, { actor: A });
+c = memoryCas(A, "doc", { v: 1 }, { v: 2 }, { actor: A, hasValue: true });
+ok("cas optimistic update on match", c.swapped === true && JSON.stringify(memoryGet(A, "doc", { actor: A }).value) === JSON.stringify({ v: 2 }));
+c = memoryCas(A, "doc", { v: 1 }, { v: 3 }, { actor: A, hasValue: true });
+ok("cas update on stale expected fails", c.swapped === false && JSON.stringify(c.value) === JSON.stringify({ v: 2 }));
+throws("B cas without grant blocked", () => memoryCas(A, "doc", { v: 2 }, { v: 9 }, { actor: B, hasValue: true }), 403);
 
 // --- tamper-evident audit chain ---
 const log = getLog(A, A, 1000);

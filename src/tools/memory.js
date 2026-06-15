@@ -249,6 +249,50 @@ export const memoryIncr = db.transaction((owner, key, by, actor) => {
   return { key, value: next, owner };
 });
 
+/**
+ * Atomic compare-and-set — the general coordination primitive. Writes (or, when
+ * no value is supplied, deletes) a key only if its current value equals
+ * `expected`. This is what distributed locks and optimistic concurrency are
+ * built from:
+ *   - acquire a lock:  expected = null (key absent/expired), value = <token>, ttlSeconds = <lease>
+ *   - release a lock:  expected = <token>, no value  → deletes on match
+ *   - safe update:     expected = <old value>, value = <new value>
+ * `hasValue` distinguishes "set to a value" (even null) from "no value = delete".
+ * Values are compared as JSON values (same canonicalization on both sides).
+ */
+export const memoryCas = db.transaction((owner, key, expected, value, { actor = owner, ttlSeconds, hasValue = false } = {}) => {
+  requireAccess(owner, actor, "write");
+  if (typeof key !== "string" || !key || key.length > MAX_KEY) throw bad(`"key" must be a non-empty string of at most ${MAX_KEY} chars`);
+  const row = freshKv(kvGet.get(owner, key));
+  let current = null;
+  if (row) { try { current = JSON.parse(row.v); } catch { current = row.v; } }
+  const want = expected === undefined ? null : expected;
+  if (JSON.stringify(current) !== JSON.stringify(want)) {
+    return { key, swapped: false, value: current, owner };
+  }
+  // Matched → release (no value supplied) or write the new value.
+  if (!hasValue || value === undefined) {
+    const deleted = kvDel.run(owner, key).changes > 0;
+    if (deleted) appendLog(owner, actor, "cas-del", key, { expected: want });
+    return { key, swapped: true, value: null, owner };
+  }
+  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  if (serialized === undefined || serialized.length > MAX_VALUE) throw bad(`"value" must serialize to at most ${MAX_VALUE} bytes`);
+  if (!row && kvCount.get(owner).n >= MAX_KEYS_PER_NS) {
+    kvPruneExpired.run(owner, nowSec());
+    if (kvCount.get(owner).n >= MAX_KEYS_PER_NS) throw bad(`Namespace is full (${MAX_KEYS_PER_NS} keys)`);
+  }
+  let exp = null;
+  if (ttlSeconds !== undefined && ttlSeconds !== null) {
+    const t = parseInt(ttlSeconds, 10);
+    if (!Number.isFinite(t) || t <= 0) throw bad('"ttlSeconds" must be a positive integer');
+    exp = nowSec() + t;
+  }
+  kvPut.run({ ns: owner, k: key, v: serialized, updated: now(), exp });
+  appendLog(owner, actor, "cas-set", key, { expected: want, bytes: serialized.length, exp });
+  return { key, swapped: true, value, owner, expiresAt: exp };
+});
+
 // --- grants (cross-agent sharing) ----------------------------------------
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;

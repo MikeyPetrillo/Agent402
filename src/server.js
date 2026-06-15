@@ -5,7 +5,7 @@ import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
 import { renderArticle, screenshotPage, rasterizeSvg } from "./tools/render.js";
 import {
-  memoryPut, memoryGet, memoryDelete, memoryIncr,
+  memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas,
   grant, revoke, listGrants, getLog, remember, recall, forget,
 } from "./tools/memory.js";
 import { payerFromRequest } from "./payer.js";
@@ -271,6 +271,30 @@ const CATALOG = {
         required: ["key"],
       },
       output: { example: { key: "jobs/processed", value: 43, owner: "0x…" } },
+    },
+  },
+  "POST /api/memory/cas": {
+    name: "Memory compare-and-set",
+    slug: "memory-cas",
+    category: "memory",
+    price: "$0.001",
+    description:
+      "Atomically write (or release) a key only if its current value equals `expected` — the coordination primitive for distributed locks and optimistic concurrency across agents. Acquire a lock: expected=null + a value + ttlSeconds. Release it: expected=<your token> with no value (deletes on match). Update safely: expected=<old>, value=<new>. Returns whether it swapped and the current value.",
+    tags: ["memory", "cas", "compare-and-set", "lock", "coordination", "atomic"],
+    discovery: {
+      bodyType: "json",
+      input: { key: "locks/import", expected: null, value: "agent-7", ttlSeconds: 30 },
+      inputSchema: {
+        properties: {
+          key: { type: "string", description: "Key to conditionally write" },
+          expected: { description: "Required current value to match (null or omitted = key absent/expired)" },
+          value: { description: "New value to set on match; omit to DELETE on match (lock release)" },
+          ttlSeconds: { type: "number", description: "Optional TTL for the written value (lease for locks)" },
+          owner: { type: "string", description: "Optional 0x namespace (requires a readwrite grant)" },
+        },
+        required: ["key"],
+      },
+      output: { example: { key: "locks/import", swapped: true, value: "agent-7", owner: "0x…", expiresAt: 1760086430 } },
     },
   },
   "POST /api/memory/grant": {
@@ -864,6 +888,9 @@ app.get("/api/memory", memHandler((req, actor, owner) => memoryGet(owner, req.qu
 
 // Coordination + provenance + recall (all wallet-only; identity = payment).
 app.post("/api/memory/incr", memHandler((req, actor, owner) => memoryIncr(owner, req.body?.key, req.body?.by, actor)));
+app.post("/api/memory/cas", memHandler((req, actor, owner) =>
+  memoryCas(owner, req.body?.key, req.body?.expected, req.body?.value, { actor, ttlSeconds: req.body?.ttlSeconds, hasValue: "value" in (req.body || {}) })
+));
 app.post("/api/memory/grant", memHandler((req, actor) => grant(actor, req.body?.grantee, req.body?.mode, req.body?.ttlSeconds)));
 app.post("/api/memory/revoke", memHandler((req, actor) => revoke(actor, req.body?.grantee)));
 app.get("/api/memory/grants", memHandler((req, actor) => listGrants(actor)));
