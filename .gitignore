@@ -6,3 +6,6 @@ node_modules/
 .github/burner-key
 agent-key
 agent-address.txt
+
+# Private, machine-local Claude Code memory (never committed)
+CLAUDE.local.md
