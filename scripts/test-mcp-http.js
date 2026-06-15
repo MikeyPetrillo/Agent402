@@ -37,8 +37,8 @@ assert(init.result?.serverInfo?.name === "agent402", `initialize returns serverI
 const list = await rpc("tools/list", {});
 const names = (list.result?.tools ?? []).map((t) => t.name).sort();
 assert(
-  ["about_agent402", "call_tool", "search_tools"].every((n) => names.includes(n)),
-  `tools/list exposes search_tools, call_tool, about_agent402 (got ${names.join(",")})`
+  ["about_agent402", "call_tool", "find_tool", "search_tools"].every((n) => names.includes(n)),
+  `tools/list exposes search_tools, find_tool, call_tool, about_agent402 (got ${names.join(",")})`
 );
 assert(
   (list.result?.tools ?? []).every((t) => t.title && t.annotations?.readOnlyHint === true),
@@ -51,6 +51,11 @@ assert(privacy.ok && (await privacy.text()).includes("Privacy policy"), "/privac
 const search = await rpc("tools/call", { name: "search_tools", arguments: { query: "kilometers to miles" } });
 const searchText = search.result?.content?.[0]?.text ?? "";
 assert(searchText.includes("convert-kilometers-to-miles"), "search_tools finds convert-kilometers-to-miles");
+
+// find_tool: resolve a plain-language task to a ready-to-call tool.
+const find = await rpc("tools/call", { name: "find_tool", arguments: { task: "convert kilometers to miles", limit: 3 } });
+const findText = find.result?.content?.[0]?.text ?? "";
+assert(!find.result?.isError && findText.includes("convert-kilometers-to-miles") && findText.includes("callWith"), "find_tool resolves a task with a ready call_tool invocation");
 
 const call = await rpc("tools/call", {
   name: "call_tool",

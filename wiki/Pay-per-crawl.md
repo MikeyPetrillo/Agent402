@@ -48,6 +48,29 @@ curl -A "ClaudeBot/1.0" localhost:4021/article   # bot   -> 402 Payment Required
   the standard x402 stack — settlement is reused, not reinvented (see
   [[Paying with x402]]).
 
+## Beyond UA detection (the cat-and-mouse answer)
+
+UA matching is the default, but it's evadable — so the tollbooth lets you stop
+*detecting* bots and instead make access *cost something* (opt-in, defaults
+unchanged):
+
+- **`mode`:** `"bots"` (default) · `"all"` (charge everyone but a `free()` match)
+  · `"strict"` (charge anything that isn't a real-browser request). A more
+  sophisticated bot gains nothing — it pays or solves a proof-of-work like
+  everyone else.
+- **`adaptive: true`:** proof-of-work difficulty **rises with load** (capped), so
+  a high-volume scraper pays escalating CPU per request regardless of disguise.
+  Detection is an arms race; economics isn't.
+- **Analytics:** `gate.stats()` and a `/__tollbooth/stats` endpoint show requests,
+  how many were charged, proof-of-work solves, and USDC collected — so you can see
+  how much of your traffic is bots and what it's worth.
+
+## One-click deploy
+
+Ready-to-copy templates: [`deploy/cloudflare/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare)
+(Cloudflare Workers) and [`deploy/nextjs/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs)
+(Next.js / Vercel middleware).
+
 ## Why it exists
 
 The big platforms shipped pay-per-crawl as a closed, fiat, you-must-be-on-our-CDN

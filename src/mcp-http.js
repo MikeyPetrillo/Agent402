@@ -13,6 +13,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { findTools } from "./find.js";
 
 const VERSION = "0.3.0";
 
@@ -57,6 +58,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     tools.set(def.slug, { def, free: isComputePayable(def) });
   }
   const freeCount = [...tools.values()].filter((t) => t.free).length;
+  const freeSlugs = new Set([...tools.entries()].filter(([, t]) => t.free).map(([slug]) => slug));
   const mcpClients = new Map(); // "name@version" -> initialize count since boot
 
   const schemaOf = (def) => {
@@ -123,6 +125,21 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           },
         },
         {
+          name: "find_tool",
+          title: "Find the right Agent402 tool for a task",
+          annotations: { title: "Find the right Agent402 tool for a task", ...SAFE },
+          description:
+            "Describe a task in plain language and get the best-matching Agent402 tool(s) ready to call — slug, price, input schema, and an example — so you skip searching/exploring. Then run call_tool with the chosen slug + params.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              task: { type: "string", description: 'What you want to do, e.g. "extract the article from this url" or "convert miles to km"' },
+              limit: { type: "number", description: "Max results (default 5)" },
+            },
+            required: ["task"],
+          },
+        },
+        {
           name: "call_tool",
           title: "Run an Agent402 tool",
           annotations: { title: "Run an Agent402 tool", ...SAFE },
@@ -158,6 +175,26 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               text: results.length
                 ? JSON.stringify({ results, usage: 'call_tool {"slug": …, "params": …}' }, null, 2)
                 : `No tools matched "${args.query}". Full catalog: ${baseUrl}/tools`,
+            }],
+          };
+        }
+        if (name === "find_tool") {
+          const r = findTools(catalog, args.task ?? args.query ?? "", { k: args.limit, baseUrl, powSlugs: freeSlugs });
+          const results = r.results.map((t) => ({
+            slug: t.slug,
+            price: t.price,
+            access: t.computePayable ? "free here (rate-limited)" : "wallet required (USDC via x402 — use the agent402-mcp npm server)",
+            description: t.description.length > 200 ? `${t.description.slice(0, 200)}…` : t.description,
+            inputSchema: t.inputSchema,
+            example: t.example,
+            callWith: { name: "call_tool", arguments: { slug: t.slug, params: t.example ?? {} } },
+          }));
+          return {
+            content: [{
+              type: "text",
+              text: results.length
+                ? JSON.stringify({ task: r.query, results, usage: "Run call_tool with the chosen {slug, params}. Free results execute here; wallet-only need the agent402-mcp npm server." }, null, 2)
+                : `No tool matched "${args.task ?? args.query ?? ""}". Browse the catalog: ${baseUrl}/tools`,
             }],
           };
         }
