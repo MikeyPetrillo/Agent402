@@ -1,6 +1,7 @@
 // Server-rendered catalogue pages and the OpenAPI spec — all generated from
 // the tool catalog so they never drift from what the API actually serves.
 import { isComputePayable } from "./pow.js";
+import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 
 export const CATEGORIES = {
   web: { label: "Web & documents", blurb: "Read the live web: browser rendering, screenshots, article extraction, PDFs, metadata." },
@@ -87,7 +88,7 @@ function head({ title, description, canonical, jsonLd, image }) {
     : `<meta name="twitter:card" content="summary">`;
   return `<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230b0e14'/%3E%3Ctext x='50' y='66' font-size='40' font-weight='700' font-family='monospace' text-anchor='middle' fill='%234ade80'%3E402%3C/text%3E%3C/svg%3E">
+${CHROME_HEAD_LINKS}
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
 <link rel="canonical" href="${canonical}">
@@ -99,7 +100,7 @@ function head({ title, description, canonical, jsonLd, image }) {
 <meta property="og:description" content="${esc(description)}">
 ${social}
 ${blocks}
-<style>${SHARED_CSS}</style>`;
+<style>${SHARED_CSS}${CHROME_CSS}</style>`;
 }
 
 function exampleCall(baseUrl, tool) {
@@ -208,6 +209,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
 ${head({ title, description: `${tool.description} ${tool.price} per call via x402 — no API key, no signup.`, canonical, jsonLd, image: `${baseUrl}/card.png` })}
 </head>
 <body>
+${renderHeader("/tools")}
 <div class="wrap">
   <div class="crumb"><a href="/">Agent402</a> / <a href="/tools">tools</a> / ${esc(tool.slug)}</div>
   <h1>${esc(tool.name)}</h1>
@@ -256,12 +258,8 @@ await fetch("${baseUrl}${tool.path}", { method: "${tool.method}", headers: { "X-
 
   <h2>Related tools</h2>
   <div class="grid">${relatedCards}</div>
-
-  <footer>
-    <a href="/tools">All ${"tools"}</a> · <a href="/api/pricing">JSON catalog</a> · <a href="/openapi.json">OpenAPI</a> · <a href="/llms.txt">llms.txt</a> —
-    Agent402: pay-per-call tools for AI agents on the <a href="https://x402.org" rel="noopener">x402 protocol</a>.
-  </footer>
 </div>
+${renderFooter()}
 </body>
 </html>`;
 }
@@ -319,14 +317,15 @@ export function toolsIndexPage(baseUrl, catalog) {
 ${head({ title, description, canonical, jsonLd, image: `${baseUrl}/card.png` })}
 </head>
 <body>
+${renderHeader("/tools")}
 <div class="wrap">
   <div class="crumb"><a href="/">Agent402</a> / tools</div>
   <h1>${tools.length} tools, one base URL, zero API keys</h1>
   <p class="sub">Call any endpoint, get an <code>HTTP 402</code> quote, and either pay a fraction of a cent in USDC on Base via <a href="https://x402.org" rel="noopener">x402</a> — or, on the <span class="free">FREE</span> tools, skip the wallet entirely. Machine-readable: <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>.</p>
   <div class="callout"><b>${freeCount} of ${tools.length} tools are free</b> — no wallet needed. Pay with a few seconds of <a href="/api/pow">proof-of-work</a> (CPU) instead of USDC. The other ${tools.length - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run. Look for the <span class="free">FREE</span> badge below.</div>
   ${sections}
-  <footer>Agent402 — pay-per-call tools for AI agents. <a href="/">Home</a> · <a href="/llms.txt">llms.txt</a></footer>
 </div>
+${renderFooter()}
 </body>
 </html>`;
 }
@@ -372,13 +371,14 @@ export function faqPage(baseUrl) {
 ${head({ title, description, canonical, jsonLd, image: `${baseUrl}/card.png` })}
 </head>
 <body>
+${renderHeader("/faq")}
 <div class="wrap">
   <div class="crumb"><a href="/">Agent402</a> / faq</div>
   <h1>Frequently asked questions</h1>
   <p class="sub">Agent402 is the open-source, self-hostable x402 + MCP server: pay-per-call web tools for AI agents, free via proof-of-work or paid in USDC on Base.</p>
   ${items}
-  <footer>Agent402 — <a href="/">Home</a> · <a href="/tools">Tools</a> · <a href="/guides">Guides</a> · <a href="/llms.txt">llms.txt</a></footer>
 </div>
+${renderFooter()}
 </body>
 </html>`;
 }

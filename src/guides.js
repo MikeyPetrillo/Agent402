@@ -2,6 +2,7 @@
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
 import { marked } from "marked";
+import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 
 const GUIDES = [
   {
@@ -342,20 +343,22 @@ function shell(baseUrl, title, description, path, body) {
 <meta property="og:description" content="${esc(description)}">
 <meta property="og:image" content="${baseUrl}/card.png">
 <meta name="twitter:card" content="summary_large_image">
+${CHROME_HEAD_LINKS}
 <style>
   :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; }
   body { background:var(--bg); color:var(--fg); font:17px/1.7 system-ui,-apple-system,sans-serif; margin:0; }
-  .wrap { max-width:760px; margin:0 auto; padding:48px 20px 64px; }
+  .wrap { max-width:760px; margin:0 auto; padding:48px 20px 24px; }
   h1 { font-size:1.9rem; line-height:1.25; } h2 { font-size:1.25rem; margin-top:36px; color:var(--accent); }
   a { color:var(--accent); } .muted { color:var(--muted); }
   pre { background:#0f1420; border:1px solid #1e2638; border-radius:10px; padding:14px 16px; overflow-x:auto; font-size:.85rem; line-height:1.55; }
   code { font-family:ui-monospace,Menlo,monospace; }
   p > code, li > code { background:#0f1420; padding:1px 6px; border-radius:6px; font-size:.85em; }
+  ${CHROME_CSS}
 </style>
 </head>
-<body><div class="wrap">${body}
-<p class="muted" style="margin-top:48px"><a href="/guides">← All guides</a> · <a href="/">agent402.tools</a> — ${"1,000+"} pay-per-call tools for AI agents.</p>
-</div></body></html>`;
+<body>${renderHeader(path)}<div class="wrap">${body}
+<p class="muted" style="margin-top:36px"><a href="/guides">← All guides</a></p>
+</div>${renderFooter()}</body></html>`;
 }
 
 export function guidesIndex(baseUrl) {
