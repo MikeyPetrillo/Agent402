@@ -175,10 +175,13 @@ app.use(createTollbooth({
 | `free(req)` | – | Custom force-allow predicate (wins over everything) |
 | `verifyX402(req, reqs)` | – | Async USDC settlement check (return `true` to allow) |
 | `resourceBaseUrl` | `""` | Absolute base used for the `resource` field / PoW binding |
+| `observe` | `false` | Observe-only: classify and count, but never 402. For pre-launch traffic measurement. |
+| `statsSink` | in-memory | Durable stats backend. Built-ins: `memorySink`, `kvStatsSink(kv)`, `httpStatsSink(url)`. |
 
 Environment variables: `TOLLBOOTH_UPSTREAM`, `TOLLBOOTH_PAYTO`, `TOLLBOOTH_PRICE`,
 `TOLLBOOTH_NETWORK`, `TOLLBOOTH_POW_BITS`, `TOLLBOOTH_MODE`, `TOLLBOOTH_ADAPTIVE`,
-`TOLLBOOTH_MAX_POW_BITS`, `TOLLBOOTH_ADAPTIVE_PER_BIT`, `TOLLBOOTH_SECRET`, `PORT`.
+`TOLLBOOTH_MAX_POW_BITS`, `TOLLBOOTH_ADAPTIVE_PER_BIT`, `TOLLBOOTH_SECRET`,
+`TOLLBOOTH_OBSERVE`, `TOLLBOOTH_STATS_TOKEN`, `TOLLBOOTH_STATS_BUCKET`, `PORT`.
 
 ## How it decides who pays
 
@@ -199,13 +202,91 @@ something*:
   scraper pays escalating CPU per request regardless of how it looks — detection is
   cat-and-mouse, economics isn't.
 
+## Observe before charging
+
+Don't want to flip a meter on cold? **Run the gate in observe-only mode for a
+week first** — every request is still classified (bot vs. human) and counted,
+but nothing ever gets a 402:
+
+```js
+app.use(createTollbooth({ observe: true })); // or: TOLLBOOTH_OBSERVE=true
+```
+
+On the edge / Cloudflare Worker / Next.js: set `TOLLBOOTH_OBSERVE=true` in env.
+
+The dashboard grows a **"Would charge"** counter so you can show your team —
+or your client — exactly how much of their traffic is AI bots **before** you
+start returning 402s. Removing the flag flips on enforcement with no other
+changes. Bots see a `X-Tollbooth-Observed: would-charge` header in observe mode
+(handy for log filtering); humans see nothing.
+
 ## Analytics
 
-The middleware keeps aggregate counters (no per-request data): `gate.stats()`
-returns `{ requests, freeAllowed, charged, powSolved, x402Paid, difficultyNow }`.
+The middleware keeps aggregate counters (no per-request data):
+- `gate.stats()` → sync, in-process mirror: `{ requests, freeAllowed, wouldCharge, charged, powSolved, x402Paid, difficultyNow, observe }`.
+- `gate.snapshot()` → async, reads from the configured durable sink (defaults to memory).
+- `gate.flush()` → flush any buffered deltas to the durable sink (call inside `ctx.waitUntil` on edge runtimes).
+
 The reverse-proxy CLI exposes them as JSON at **`/__tollbooth/stats`** and as a
 live **dashboard at `/__tollbooth`** — requests, how many were charged,
 proof-of-work solves, USDC collected, and what share of your traffic is bots.
+
+## Durable stats (survive restart, aggregate across instances)
+
+By default, stats live in process memory — fine for single-instance Node,
+useless across multiple replicas or on the edge. Pass a `statsSink` to make
+them survive:
+
+```js
+// Cloudflare Workers: aggregate across all isolates using the same KV namespace
+// that holds the PoW single-use store.
+import { createEdgeTollbooth, kvStatsSink } from "agent402-tollbooth/edge";
+const gate = createEdgeTollbooth({
+  secret: env.TOLLBOOTH_SECRET,
+  statsSink: kvStatsSink(env.TOLLBOOTH_KV, { bucket: "default" }),
+});
+// inside fetch():
+ctx.waitUntil(gate.flush()); // make sure deltas land in KV after the response
+```
+
+```js
+// Any Node deploy: POST batched deltas to a tiny collector (Vercel KV /
+// Upstash / your own API).
+import { createTollbooth, httpStatsSink } from "agent402-tollbooth";
+app.use(createTollbooth({
+  statsSink: httpStatsSink(process.env.TOLLBOOTH_STATS_URL, {
+    token: process.env.TOLLBOOTH_STATS_TOKEN,
+  }),
+}));
+```
+
+Sink interface (build your own — e.g. a Cloudflare Durable Object for strict
+consistency):
+
+```ts
+type StatsSink = {
+  incr(field: string, n?: number): void;        // fire-and-forget
+  flush?(): Promise<void>;                       // optional explicit flush
+  snapshot(): Promise<Record<string, number>>;   // aggregated view
+};
+```
+
+## Edge analytics (Cloudflare Worker / Next.js)
+
+The Cloudflare Worker entry (`worker.js`) auto-mounts both the dashboard and
+JSON endpoint, BEFORE the gate so they're never paywalled:
+
+- **`/__tollbooth`** → live dashboard
+- **`/__tollbooth/stats`** → JSON snapshot (gate with `TOLLBOOTH_STATS_TOKEN` for bearer-auth)
+
+With a `TOLLBOOTH_KV` namespace bound, the stats aggregate across all isolates
+of all Cloudflare colos serving the Worker — one consistent view.
+
+On Next.js / Vercel Edge, middleware can't mount dashboards itself (it'd gate
+them), so a companion **route handler** at `app/__tollbooth/stats/route.js`
+serves the JSON; a static **page** at `app/__tollbooth/page.jsx` renders the
+dashboard HTML. Both are in [`deploy/nextjs/middleware.js`](deploy/nextjs/middleware.js)
+as drop-in copyable snippets.
 
 ## Production checklist (read this)
 

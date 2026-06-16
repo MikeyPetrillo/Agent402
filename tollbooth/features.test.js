@@ -3,7 +3,7 @@
 // are unchanged (so live deployments aren't affected) and the new behavior only
 // kicks in when explicitly enabled. Drives the middleware directly with mocks.
 import { createHash } from "node:crypto";
-import { createTollbooth, createPow } from "./index.js";
+import { createTollbooth, createPow, memorySink, httpStatsSink } from "./index.js";
 import { dashboardHtml } from "./dashboard.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
@@ -70,9 +70,84 @@ const lz = (buf) => { let n = 0; for (const b of buf) { if (b === 0) { n += 8; c
 let nonce = 0; while (lz(createHash("sha256").update(`${ch.challenge}:${nonce}`).digest()) < 14) nonce++;
 ok(pow.verify(`${ch.token}:${nonce}`, "/r").ok === true, "solution at the per-call difficulty verifies");
 
+// --- observe mode: classifies + counts but NEVER returns 402 ---
+gate = createTollbooth({ observe: true, powDifficulty: 12 });
+let r = run(gate, mockReq({ "user-agent": botUA }));
+ok(r.nexted === true && r.status === 200, "observe: bot UA passes through (no 402)");
+ok(r.hdrs["X-Tollbooth-Observed"] === "would-charge", "observe: bot UA gets X-Tollbooth-Observed header");
+r = run(gate, mockReq({ "user-agent": humanUA }));
+ok(r.nexted === true && !r.hdrs["X-Tollbooth-Observed"], "observe: human still classified as free (no would-charge header)");
+const obsStats = gate.stats();
+ok(obsStats.wouldCharge === 1 && obsStats.freeAllowed === 1 && obsStats.observe === true, `observe stats expose wouldCharge + observe flag (got ${JSON.stringify(obsStats)})`);
+
+// --- observe regression: default mode still 402s bots (unchanged for live deploys) ---
+gate = createTollbooth({ powDifficulty: 12 });
+ok(run(gate, mockReq({ "user-agent": botUA })).status === 402, "non-observe: bot UA still charged 402 (regression guard)");
+
+// --- pluggable statsSink: write-through to a sink AND in-process mirror ---
+const sink = memorySink();
+gate = createTollbooth({ statsSink: sink, powDifficulty: 12 });
+run(gate, mockReq({ "user-agent": botUA }));
+run(gate, mockReq({ "user-agent": humanUA }));
+const memSnap = gate.stats();
+ok(memSnap.requests === 2 && memSnap.charged === 1 && memSnap.freeAllowed === 1, "statsSink: in-process mirror still works");
+const durableSnap = await gate.snapshot();
+ok(durableSnap.requests === 2 && durableSnap.charged === 1 && durableSnap.freeAllowed === 1, "statsSink: durable snapshot agrees with in-process mirror");
+
+// --- httpStatsSink batches deltas to a fake collector ---
+const calls = [];
+const fakeFetch = async (url, opts = {}) => {
+  if (opts.method === "POST") {
+    calls.push({ url, body: JSON.parse(opts.body) });
+    return { ok: true, status: 200 };
+  }
+  return { ok: true, status: 200, json: async () => ({ requests: 42 }) };
+};
+const httpSink = httpStatsSink("http://collector.test/stats", { token: "t", batchMs: 1, fetchImpl: fakeFetch });
+gate = createTollbooth({ statsSink: httpSink, powDifficulty: 12 });
+run(gate, mockReq({ "user-agent": botUA }));
+run(gate, mockReq({ "user-agent": humanUA }));
+await new Promise((res) => setTimeout(res, 10)); // let the batched flush fire
+ok(calls.length >= 1, `httpStatsSink batched at least one POST (got ${calls.length})`);
+const batch = calls[calls.length - 1].body;
+ok(batch.incr && batch.incr.requests === 2 && batch.incr.charged === 1 && batch.incr.freeAllowed === 1, `httpStatsSink batch contains correct deltas (got ${JSON.stringify(batch.incr)})`);
+const httpSnap = await gate.snapshot();
+ok(httpSnap.requests === 42, "httpStatsSink: snapshot GETs from collector");
+
+// --- security: a throwing custom statsSink MUST NOT break the gate ---
+const throwingSink = {
+  incr() { throw new Error("sink boom"); },
+  flush() { throw new Error("flush boom"); },
+  snapshot() { throw new Error("snapshot boom"); },
+};
+gate = createTollbooth({ statsSink: throwingSink, powDifficulty: 12 });
+let safe = false;
+try { run(gate, mockReq({ "user-agent": botUA })); safe = true; } catch {}
+ok(safe, "throwing sink.incr() must not propagate out of the gate");
+let flushOk = false;
+try { await gate.flush(); flushOk = true; } catch {}
+ok(flushOk, "throwing sink.flush() must not propagate out of gate.flush()");
+
+// --- security: httpStatsSink.snapshot() sanitizes a malicious collector response ---
+const evil = async (url, opts = {}) => {
+  if (opts.method === "POST") return { ok: true, status: 200 };
+  return {
+    ok: true,
+    status: 200,
+    // Try to inject HTML into the dashboard, arbitrary key, negative value.
+    json: async () => ({ requests: "<img src=x onerror=alert(1)>", evil: "yes", charged: -999, freeAllowed: 12 }),
+  };
+};
+const malSink = httpStatsSink("http://evil.test/stats", { token: "t", batchMs: 1, fetchImpl: evil });
+const malSnap = await malSink.snapshot();
+ok(malSnap.requests === 0, `string requests coerced to 0 (got ${JSON.stringify(malSnap.requests)})`);
+ok(!("evil" in malSnap), "unknown keys are stripped from the snapshot");
+ok(malSnap.charged === 0, "negative values are clamped to 0");
+ok(malSnap.freeAllowed === 12, "valid numeric values still pass through");
+
 // --- dashboard renders and points at the stats endpoint ---
 const html = dashboardHtml();
 ok(html.startsWith("<!doctype html>") && html.includes("/__tollbooth/stats"), "dashboard is HTML that reads /__tollbooth/stats");
-ok(["requests", "freeAllowed", "charged", "powSolved", "x402Paid", "difficultyNow"].every((k) => html.includes(k)), "dashboard references every stat field");
+ok(["requests", "freeAllowed", "wouldCharge", "charged", "powSolved", "x402Paid", "difficultyNow"].every((k) => html.includes(k)), "dashboard references every stat field");
 
 console.log(`\n${pass} passed`);

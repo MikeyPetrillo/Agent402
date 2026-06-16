@@ -1,6 +1,6 @@
 {
   "name": "agent402-tollbooth",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "Open-source, self-hostable x402 pay-per-crawl tollbooth: charge AI bots per request (USDC via x402, or free proof-of-work) while humans browse free. Drop-in Express middleware or reverse proxy — no Cloudflare, no Stripe, no signup.",
   "type": "module",
   "main": "index.js",
@@ -8,7 +8,13 @@
     "agent402-tollbooth": "index.js"
   },
   "exports": {
-    ".": "./index.js"
+    ".": "./index.js",
+    "./edge": "./edge.js",
+    "./edge.js": "./edge.js",
+    "./worker": "./worker.js",
+    "./worker.js": "./worker.js",
+    "./dashboard.js": "./dashboard.js",
+    "./sinks.js": "./sinks.js"
   },
   "files": [
     "index.js",
@@ -17,6 +23,7 @@
     "bots.js",
     "pow.js",
     "dashboard.js",
+    "sinks.js",
     "example.js",
     "demo.js",
     "README.md"
