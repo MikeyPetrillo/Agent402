@@ -28,17 +28,89 @@ import { toolList } from "./pages.js";
 
 const LOCAL_SELLER = "self";
 const CRAWL_INTERVAL_MS = 5 * 60 * 1000; // 5 min — gentle on third-party sellers
+const DISCOVERY_INTERVAL_MS = 60 * 60 * 1000; // 1 hr — registries don't change fast
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_OPENAPI_BYTES = 12 * 1024 * 1024; // Agent402's own is ~5 MB; allow headroom
+const MAX_DISCOVERY_BYTES = 16 * 1024 * 1024;
+const MAX_DISCOVERED_SELLERS = 200; // cap so a misbehaving registry can't blow up memory
 
 // Map<originUrl, { manifest, openapi, tools, fetchedAt, error? }>
 const cache = new Map();
+// Set of origins auto-discovered from public x402 registries (distinct from
+// the env-configured seed list so we can show provenance separately on /index).
+const discoveredSeeds = new Set();
+// Per-source state for the discovery panel on /index.
+const discoveryStatus = new Map(); // name -> { url, fetchedAt, resources, origins, error }
 
-const seedList = () =>
-  String(process.env.X402_INDEX_SEEDS || "")
+// Public x402 seller registries we crawl. Each exposes an unauthenticated
+// discovery endpoint; we extract unique origins from the listings.
+//
+// agent402.app marketplace is intentionally NOT included: its listing-with-URLs
+// view (`/bazaar/quality?details=true`) is already >16MB with 69k+ services and
+// growing; the slim view (`/bazaar/quality`) returns summary stats only with no
+// per-item URLs. Until they ship a paginated origin-list endpoint, Coinbase CDP
+// Bazaar is the canonical source.
+const DISCOVERY_SOURCES = [
+  { name: "Coinbase CDP Bazaar", url: "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources" },
+];
+
+const seedList = () => {
+  const envSeeds = String(process.env.X402_INDEX_SEEDS || "")
     .split(",")
     .map((s) => s.trim().replace(/\/+$/, ""))
     .filter((s) => /^https?:\/\//i.test(s));
+  // env seeds first (operator-curated), then auto-discovered.
+  return [...new Set([...envSeeds, ...discoveredSeeds])];
+};
+
+function extractOrigin(rawUrl) {
+  if (typeof rawUrl !== "string") return null;
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return null;
+  }
+}
+
+async function discoverOneSource(source, selfOrigin) {
+  const status = { url: source.url, fetchedAt: Date.now(), resources: 0, origins: 0, error: null };
+  try {
+    const { html } = await safeFetch(source.url, { maxBytes: MAX_DISCOVERY_BYTES });
+    const data = JSON.parse(html);
+    // Discovery shapes vary by registry: { resources }, { items }, { data }, top-level array, or
+    // agent402.app's { services: [...] }.
+    const list =
+      data.resources ||
+      data.items ||
+      data.data ||
+      data.services ||
+      (Array.isArray(data) ? data : []);
+    status.resources = list.length;
+    const found = new Set();
+    for (const item of list) {
+      const url = item.resource || item.url || item.endpoint || item.homepage;
+      const origin = extractOrigin(url);
+      if (!origin || origin === selfOrigin) continue;
+      found.add(origin);
+    }
+    status.origins = found.size;
+    for (const o of found) {
+      if (discoveredSeeds.size >= MAX_DISCOVERED_SELLERS) break;
+      discoveredSeeds.add(o);
+    }
+  } catch (e) {
+    status.error = String(e.message || e);
+  }
+  discoveryStatus.set(source.name, status);
+}
+
+let selfOriginCache = null;
+async function runDiscovery(selfOrigin) {
+  selfOriginCache = selfOrigin || selfOriginCache;
+  await Promise.allSettled(DISCOVERY_SOURCES.map((s) => discoverOneSource(s, selfOriginCache)));
+}
 
 function parsePrice(p) {
   if (typeof p === "number") return p;
@@ -86,7 +158,6 @@ async function crawlSeller(originUrl) {
     try {
       const openapiRes = await safeFetch(`${originUrl}/openapi.json`, {
         maxBytes: MAX_OPENAPI_BYTES,
-        timeoutMs: CRAWL_TIMEOUT_MS,
       });
       openapi = JSON.parse(openapiRes.html);
       tools = normaliseOpenapiTools(openapi, originUrl);
@@ -108,6 +179,7 @@ async function crawlSeller(originUrl) {
 }
 
 let crawlerTimer = null;
+let discoveryTimer = null;
 let crawlInFlight = false;
 
 async function runCrawl() {
@@ -125,14 +197,23 @@ async function runCrawl() {
  * Boot the periodic crawler. Safe to call multiple times — subsequent calls are
  * no-ops. The first crawl runs immediately (non-blocking) so the page has data
  * as soon as the seeds finish responding.
+ *
+ * @param {Object} [opts]
+ * @param {string} [opts.selfOrigin] our own public origin — used to skip self
+ *   in registry discovery so we don't waste a crawl slot fetching our own
+ *   manifest via the public endpoint.
  */
-export function startCrawler() {
+export function startCrawler(opts = {}) {
   if (crawlerTimer) return;
-  // Fire-and-forget; never await — server boot must not block on third parties.
-  runCrawl();
+  const { selfOrigin = null } = opts;
+  // Kick off discovery first so the first crawl has registry-sourced seeds in
+  // hand (best-effort — if discovery is slow, the first crawl just uses env seeds).
+  runDiscovery(selfOrigin).then(() => runCrawl());
   crawlerTimer = setInterval(runCrawl, CRAWL_INTERVAL_MS);
+  discoveryTimer = setInterval(() => runDiscovery(selfOrigin), DISCOVERY_INTERVAL_MS);
   // Don't keep the event loop alive on shutdown.
   if (typeof crawlerTimer.unref === "function") crawlerTimer.unref();
+  if (typeof discoveryTimer.unref === "function") discoveryTimer.unref();
 }
 
 /** Stop the crawler (used by tests to keep the process exitable). */
@@ -140,6 +221,10 @@ export function stopCrawler() {
   if (crawlerTimer) {
     clearInterval(crawlerTimer);
     crawlerTimer = null;
+  }
+  if (discoveryTimer) {
+    clearInterval(discoveryTimer);
+    discoveryTimer = null;
   }
 }
 
@@ -184,14 +269,27 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
     local: false,
   }));
   const sellers = [local, ...remote];
+  const discoverySources = DISCOVERY_SOURCES.map((s) => {
+    const st = discoveryStatus.get(s.name);
+    return {
+      name: s.name,
+      url: s.url,
+      fetchedAt: st?.fetchedAt || null,
+      resources: st?.resources ?? null,
+      origins: st?.origins ?? null,
+      error: st?.error || null,
+    };
+  });
   return {
     spec: "x402-index/1",
     asOf: new Date().toISOString(),
     sellers,
+    discoverySources,
     totals: {
       sellers: sellers.length,
       tools: sellers.reduce((s, x) => s + (x.toolCount || 0), 0),
       crawled: remote.length,
+      discovered: discoveredSeeds.size,
     },
   };
 }
@@ -273,15 +371,32 @@ const esc = (s) =>
  * shows sellers how to drop a "tools live on x402" widget on their landing.
  */
 export function indexPage(snapshot, { baseUrl }) {
+  const fmtAge = (ts) => {
+    if (!ts) return "—";
+    const age = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    return age < 60 ? `${age}s ago` : age < 3600 ? `${Math.floor(age / 60)}m ago` : `${Math.floor(age / 3600)}h ago`;
+  };
   const rows = snapshot.sellers
     .map((s) => {
-      const age = s.fetchedAt ? Math.max(0, Math.floor((Date.now() - s.fetchedAt) / 1000)) : null;
-      const ageStr = age == null ? "—" : age < 60 ? `${age}s ago` : age < 3600 ? `${Math.floor(age / 60)}m ago` : `${Math.floor(age / 3600)}h ago`;
       return `<tr>
         <td><a href="${esc(s.homepage || s.origin)}" target="_blank" rel="noopener">${esc(s.displayName)}</a>${s.local ? ' <span class="badge local">SELF</span>' : ""}${s.error ? ' <span class="badge err" title="' + esc(s.error) + '">STALE</span>' : ""}</td>
         <td class="num">${esc(s.toolCount)}</td>
         <td>${esc(s.network || "—")}</td>
-        <td class="muted">${esc(ageStr)}</td>
+        <td class="muted">${esc(fmtAge(s.fetchedAt))}</td>
+      </tr>`;
+    })
+    .join("");
+  const discoveryRows = (snapshot.discoverySources || [])
+    .map((d) => {
+      const status = d.error
+        ? `<span class="badge err" title="${esc(d.error)}">ERROR</span>`
+        : d.fetchedAt
+        ? `<span class="muted">${esc(d.resources)} resources → ${esc(d.origins)} origins</span>`
+        : `<span class="muted">pending…</span>`;
+      return `<tr>
+        <td><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.name)}</a></td>
+        <td>${status}</td>
+        <td class="muted">${esc(fmtAge(d.fetchedAt))}</td>
       </tr>`;
     })
     .join("");
@@ -336,6 +451,7 @@ ${CHROME_HEAD_LINKS}
   <div class="stat"><div class="k">Sellers</div><div class="v">${esc(snapshot.totals.sellers)}</div><div class="s">listed in the Index</div></div>
   <div class="stat"><div class="k">Tools online</div><div class="v">${esc(snapshot.totals.tools)}</div><div class="s">across all sellers</div></div>
   <div class="stat"><div class="k">Crawled sellers</div><div class="v">${esc(snapshot.totals.crawled)}</div><div class="s">via /.well-known/x402</div></div>
+  <div class="stat"><div class="k">Auto-discovered</div><div class="v">${esc(snapshot.totals.discovered ?? 0)}</div><div class="s">from public registries</div></div>
   <div class="stat"><div class="k">Snapshot</div><div class="v" style="font-size:1rem">${esc(snapshot.asOf.replace("T", " ").slice(0, 19))}Z</div><div class="s">refresh the page to update</div></div>
 </div>
 
@@ -344,6 +460,14 @@ ${CHROME_HEAD_LINKS}
   <table>
     <thead><tr><th>Seller</th><th class="num">Tools</th><th>Network</th><th>Last fetch</th></tr></thead>
     <tbody>${rows || `<tr><td colspan="4" class="muted" style="text-align:center;padding:24px">No sellers yet — seed via X402_INDEX_SEEDS.</td></tr>`}</tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <div class="ph"><h2>Discovery sources</h2><div class="pn">Public x402 registries we poll hourly to find new sellers automatically.</div></div>
+  <table>
+    <thead><tr><th>Registry</th><th>Result</th><th>Last fetch</th></tr></thead>
+    <tbody>${discoveryRows || `<tr><td colspan="3" class="muted" style="text-align:center;padding:24px">No discovery sources configured.</td></tr>`}</tbody>
   </table>
 </div>
 
