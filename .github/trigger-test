@@ -1,1 +1,1 @@
-2026-06-16T13:30:00Z tier-1 audit fixes: CI gate, real /health, fx-rate determinism, idempotency sweeper
+2026-06-16T17:15:00Z geo-kit: geocode, reverse-geocode, place-search (Nominatim/OSM)
