@@ -10,6 +10,9 @@ import {
 } from "./tools/memory.js";
 import { payerFromRequest } from "./payer.js";
 import { landingPage } from "./landing.js";
+import { statusPage } from "./status.js";
+import { tollboothLandingPage } from "./tollbooth-landing.js";
+import { operatorPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
 import { termsPage } from "./terms.js";
 import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
@@ -36,7 +39,7 @@ import { guidesIndex, guidePage } from "./guides.js";
 
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
-import { recordServedCall, getStats } from "./stats.js";
+import { recordServedCall, getStats, getOperatorBreakdown } from "./stats.js";
 import { timingSafeEqual, createHash } from "node:crypto";
 import { marketplaceSlugToken } from "./marketplace-token.js";
 
@@ -495,6 +498,31 @@ app.get("/.well-known/glama.json", (_req, res) => {
 app.get("/privacy", (_req, res) => res.type("html").send(privacyPage(BASE_URL)));
 app.get("/terms", (_req, res) => res.type("html").send(termsPage(BASE_URL)));
 app.get("/faq", (_req, res) => res.type("html").send(faqPage(BASE_URL)));
+app.get("/status", (_req, res) =>
+  res.type("html").send(
+    statusPage(BASE_URL, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }))
+  )
+);
+app.get("/tollbooth", (_req, res) => res.type("html").send(tollboothLandingPage(BASE_URL)));
+
+// Operator dashboard — full per-tool usage + recent calls feed, gated by
+// AGENT402_OPERATOR_TOKEN. Off unless the env var is set. Timing-safe compare
+// (constant-time byte equality) so token presence/length isn't probeable.
+const OPERATOR_TOKEN = process.env.AGENT402_OPERATOR_TOKEN || "";
+const operatorTokenOk = (t) => {
+  if (!OPERATOR_TOKEN || typeof t !== "string") return false;
+  const a = Buffer.from(t);
+  const b = Buffer.from(OPERATOR_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+};
+app.get("/__operator", (req, res) => {
+  if (!operatorTokenOk(req.query.token)) return res.status(404).type("html").send("<p>Not found.</p>");
+  res.type("html").send(operatorPage(BASE_URL, req.query.token, getOperatorBreakdown({ prices: TOOL_PRICES })));
+});
+app.get("/__operator/stats", (req, res) => {
+  if (!operatorTokenOk(req.query.token)) return res.status(404).json({ error: "Not found" });
+  res.json(getOperatorBreakdown({ prices: TOOL_PRICES }));
+});
 app.get("/guides", (_req, res) => res.type("html").send(guidesIndex(BASE_URL)));
 app.get("/guides/:slug", (req, res) => {
   const html = guidePage(BASE_URL, req.params.slug);
