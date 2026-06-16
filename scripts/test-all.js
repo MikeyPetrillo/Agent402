@@ -19,6 +19,7 @@ const NETWORK = new Set([
   "/api/media-info", "/api/audio-convert", "/api/audio-normalize",
   "/api/gov-data", "/api/weather-alerts", "/api/earthquakes",
   "/api/geocode", "/api/reverse-geocode", "/api/place-search",
+  "/api/image-ocr",
   "/api/barcode-lookup", "/api/fx-rate", "/api/weather-forecast",
   "/api/x402-quote", "/api/usdc-balance", "/api/tx-status", "/api/gas-estimate", "/api/x402-verify", "/api/ens-resolve",
 ]);

@@ -15,6 +15,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS recent_calls (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, method TEXT NOT NULL, ts INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS paid_tool_counts (slug TEXT PRIMARY KEY, n INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS charged_failures (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL, status INTEGER NOT NULL, ts INTEGER NOT NULL);
 `);
 
 const RECENT_KEEP = 200; // rows retained
@@ -34,6 +35,13 @@ const topPaid = db.prepare("SELECT slug, n FROM paid_tool_counts ORDER BY n DESC
 const allPaid = db.prepare("SELECT slug, n FROM paid_tool_counts");
 const allToolsFull = db.prepare("SELECT slug, n FROM tool_counts ORDER BY n DESC");
 const getRecentAll = db.prepare("SELECT slug, method, ts FROM recent_calls ORDER BY id DESC LIMIT ?");
+// Detection for "we charged USDC on-chain but didn't serve a 200" — the worst-
+// case operational failure (we took the buyer's money, gave them nothing). Kept
+// as both a counter and a small retained log so an alarm can show *which* tools
+// failed and when. Pruned to the most recent 200 events, same as recent_calls.
+const insertChargedFailure = db.prepare("INSERT INTO charged_failures (slug, status, ts) VALUES (?, ?, ?)");
+const pruneChargedFailures = db.prepare("DELETE FROM charged_failures WHERE id <= (SELECT MAX(id) FROM charged_failures) - ?");
+const getChargedFailures = db.prepare("SELECT slug, status, ts FROM charged_failures ORDER BY id DESC LIMIT ?");
 
 setMetaIfAbsent.run("firstServed", String(Date.now()));
 const bootedAt = Date.now();
@@ -56,6 +64,26 @@ export function recordServedCall(slug, method) {
     recordCall(slug, method);
   } catch {
     /* counters are best-effort; never break a response */
+  }
+}
+
+/**
+ * Record a "charged but didn't serve" event — the x402 middleware settled USDC
+ * on-chain (X-PAYMENT-RESPONSE header present on the response) but the handler
+ * returned non-200. The buyer was billed for nothing. A non-zero count of these
+ * is an operational red alert; CI surfaces it via /api/stats.chargedButFailed.
+ */
+const recordFailure = db.transaction((slug, status) => {
+  bumpCounter.run("chargedButFailedTotal");
+  insertChargedFailure.run(slug, status, Date.now());
+  pruneChargedFailures.run(RECENT_KEEP);
+});
+
+export function recordChargedFailure(slug, status) {
+  try {
+    recordFailure(slug, status);
+  } catch {
+    /* best-effort */
   }
 }
 
@@ -94,6 +122,10 @@ export function getStats({ wallet, walletName, network, toolCount, baseUrl, pric
       viaUSDC: num("viaUSDC"),
       viaProofOfWork: num("viaProofOfWork"),
     },
+    // Charged on-chain but handler returned non-200 — should always be 0. Any
+    // value here means we billed the buyer and gave them an error. The dashboard
+    // and a daily CI check both alert when this is nonzero.
+    chargedButFailed: num("chargedButFailedTotal"),
     topTools: allTools.all(),
     topPaidTools, // most-PURCHASED tools (USDC only), with estimated revenue
     estimatedRevenueUsd, // sum of price × USDC-purchase count (counters; chain is source of truth)
@@ -138,11 +170,17 @@ export function getOperatorBreakdown({ prices, walletOnlySet, limit = RECENT_KEE
       viaProofOfWork: getCounter.get("viaProofOfWork")?.n ?? 0,
       estimatedRevenueUsd: +tools.reduce((s, t) => s + t.revenueUsd, 0).toFixed(4),
       toolsServed: tools.length,
+      chargedButFailed: getCounter.get("chargedButFailedTotal")?.n ?? 0,
     },
     tools,
     recentCalls: getRecentAll.all(limit).map((r) => ({
       slug: r.slug,
       paidWith: r.method === "pow" ? "proof-of-work" : "usdc",
+      at: new Date(r.ts).toISOString(),
+    })),
+    chargedFailures: getChargedFailures.all(limit).map((r) => ({
+      slug: r.slug,
+      status: r.status,
       at: new Date(r.ts).toISOString(),
     })),
     bootedAt: new Date(bootedAt).toISOString(),

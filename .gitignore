@@ -12,3 +12,4 @@ CLAUDE.local.md
 
 # Local Claude Code per-project settings — never committed
 .claude/
+*.traineddata
