@@ -1,0 +1,15 @@
+{
+  "name": "agent402-agentcore-demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable Strands + Agent402 demo for AWS Bedrock AgentCore",
+  "scripts": {
+    "start": "node run.js",
+    "test": "node run.js"
+  },
+  "dependencies": {
+    "agent402-strands": "^0.1.0",
+    "zod": "^3.23.0"
+  }
+}
