@@ -33,6 +33,7 @@ const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_OPENAPI_BYTES = 12 * 1024 * 1024; // Agent402's own is ~5 MB; allow headroom
 const MAX_DISCOVERY_BYTES = 16 * 1024 * 1024;
 const MAX_DISCOVERED_SELLERS = 200; // cap so a misbehaving registry can't blow up memory
+const HEALTH_WINDOW = 5; // last N crawl outcomes per seller — drives health-aware routing
 
 // Map<originUrl, { manifest, openapi, tools, fetchedAt, error? }>
 const cache = new Map();
@@ -144,7 +145,17 @@ function normaliseOpenapiTools(openapi, originUrl) {
   return out;
 }
 
+// Record a crawl outcome and roll the per-seller history window. `prev` is the
+// existing cache entry (may be undefined on first crawl). Returns the new
+// history array so the caller can derive a health score from it.
+function rollHistory(prev, ok) {
+  const h = Array.isArray(prev?.history) ? prev.history.slice(-(HEALTH_WINDOW - 1)) : [];
+  h.push(ok ? 1 : 0);
+  return h;
+}
+
 async function crawlSeller(originUrl) {
+  const prev = cache.get(originUrl);
   try {
     const manifestRes = await safeFetch(`${originUrl}/.well-known/x402`, {
       maxBytes: MAX_MANIFEST_BYTES,
@@ -171,11 +182,38 @@ async function crawlSeller(originUrl) {
       tools,
       fetchedAt: Date.now(),
       error: null,
+      history: rollHistory(prev, true),
     });
   } catch (e) {
-    const existing = cache.get(originUrl) || {};
-    cache.set(originUrl, { ...existing, error: String(e.message || e), fetchedAt: Date.now() });
+    // Preserve the last good manifest+tools so a transient outage doesn't drop
+    // the seller from the Index — but the history flip marks them unhealthy
+    // for routing decisions.
+    cache.set(originUrl, {
+      ...(prev || {}),
+      error: String(e.message || e),
+      fetchedAt: Date.now(),
+      history: rollHistory(prev, false),
+    });
   }
+}
+
+// Health score in [0,1] = fraction of healthy crawls in the rolling window.
+// A seller with no history yet (just discovered) is treated as healthy so we
+// don't unfairly exclude brand-new sellers on their first crawl cycle.
+function healthScore(entry) {
+  const h = entry?.history;
+  if (!Array.isArray(h) || h.length === 0) return 1;
+  return h.reduce((a, b) => a + b, 0) / h.length;
+}
+
+// A seller is "routable" if its most recent crawl succeeded. This is the
+// strictest signal — a tool we recommend should be from a seller we just
+// observed serving. Falling back to history would be nice but the latest
+// success/failure is the most actionable bit.
+function isRoutable(entry) {
+  const h = entry?.history;
+  if (!Array.isArray(h) || h.length === 0) return true; // never-crawled: give benefit of doubt
+  return h[h.length - 1] === 1;
 }
 
 let crawlerTimer = null;
@@ -267,6 +305,9 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
     fetchedAt: v.fetchedAt,
     error: v.error || null,
     local: false,
+    health: healthScore(v),
+    routable: isRoutable(v),
+    history: Array.isArray(v.history) ? v.history.slice() : [],
   }));
   const sellers = [local, ...remote];
   const discoverySources = DISCOVERY_SOURCES.map((s) => {
@@ -290,6 +331,8 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
       tools: sellers.reduce((s, x) => s + (x.toolCount || 0), 0),
       crawled: remote.length,
       discovered: discoveredSeeds.size,
+      routable: 1 + remote.filter((s) => s.routable).length, // self always routable
+      unhealthy: remote.filter((s) => !s.routable).length,
     },
   };
 }
@@ -308,13 +351,23 @@ export function routeQuery({ query, top, baseUrl, catalog, prices, network, tool
   const k = Math.min(Math.max(parseInt(top, 10) || 5, 1), 25);
   if (!terms.length) return { query: q, count: 0, results: [], sellers: 0 };
 
-  // Always include the local catalog, plus every crawled seller's tools.
+  // Always include the local catalog (we trust ourselves), plus every crawled
+  // seller's tools — but only from sellers whose last crawl succeeded. A buyer
+  // routed to a currently-broken seller would just lose the call, so we'd
+  // rather rank fewer trustworthy options than more flaky ones.
   const local = buildLocalEntry({ baseUrl, catalog, prices, network, toolCount, walletName });
   const all = [
-    ...local.tools.map((t) => ({ ...t, sellerHome: baseUrl, sellerName: local.displayName })),
-    ...[...cache.values()].flatMap((v) =>
-      (v.tools || []).map((t) => ({ ...t, sellerHome: v.manifest?.homepage || t.seller, sellerName: v.manifest?.name || t.seller })),
-    ),
+    ...local.tools.map((t) => ({ ...t, sellerHome: baseUrl, sellerName: local.displayName, health: 1 })),
+    ...[...cache.values()]
+      .filter(isRoutable)
+      .flatMap((v) =>
+        (v.tools || []).map((t) => ({
+          ...t,
+          sellerHome: v.manifest?.homepage || t.seller,
+          sellerName: v.manifest?.name || t.seller,
+          health: healthScore(v),
+        })),
+      ),
   ];
 
   const scored = [];
@@ -331,9 +384,12 @@ export function routeQuery({ query, top, baseUrl, catalog, prices, network, tool
     }
     if (score > 0) scored.push([score, t]);
   }
-  // Highest score first; cheapest seller wins on ties; then shorter slug.
+  // Highest score first; healthier seller wins on ties; then cheapest; then
+  // shorter slug. Health is the strongest tiebreak after match score because a
+  // cheap-but-flaky seller is worse than a slightly pricier reliable one.
   scored.sort((a, b) => {
     if (b[0] !== a[0]) return b[0] - a[0];
+    if (b[1].health !== a[1].health) return b[1].health - a[1].health;
     const pa = parsePrice(a[1].price);
     const pb = parsePrice(b[1].price);
     if (pa !== pb) return pa - pb;
@@ -357,6 +413,7 @@ export function routeQuery({ query, top, baseUrl, catalog, prices, network, tool
       category: t.category,
       description: t.description,
       score,
+      health: t.health,
     };
   });
   return { query: q, count: results.length, sellers: sellersSeen.size, results };
@@ -376,10 +433,17 @@ export function indexPage(snapshot, { baseUrl }) {
     const age = Math.max(0, Math.floor((Date.now() - ts) / 1000));
     return age < 60 ? `${age}s ago` : age < 3600 ? `${Math.floor(age / 60)}m ago` : `${Math.floor(age / 3600)}h ago`;
   };
+  const healthBadge = (s) => {
+    if (s.local) return ' <span class="badge local">SELF</span>';
+    if (s.error) return ' <span class="badge err" title="' + esc(s.error) + '">STALE</span>';
+    // Healthy seller: show rolling history as a tiny sparkline (●=ok, ○=fail)
+    const dots = (s.history || []).map((x) => (x ? "●" : "○")).join("");
+    return dots ? ` <span class="badge ok" title="last ${s.history.length} crawls">${dots}</span>` : "";
+  };
   const rows = snapshot.sellers
     .map((s) => {
       return `<tr>
-        <td><a href="${esc(s.homepage || s.origin)}" target="_blank" rel="noopener">${esc(s.displayName)}</a>${s.local ? ' <span class="badge local">SELF</span>' : ""}${s.error ? ' <span class="badge err" title="' + esc(s.error) + '">STALE</span>' : ""}</td>
+        <td><a href="${esc(s.homepage || s.origin)}" target="_blank" rel="noopener">${esc(s.displayName)}</a>${healthBadge(s)}</td>
         <td class="num">${esc(s.toolCount)}</td>
         <td>${esc(s.network || "—")}</td>
         <td class="muted">${esc(fmtAge(s.fetchedAt))}</td>
@@ -435,6 +499,7 @@ ${CHROME_HEAD_LINKS}
   .badge { display:inline-block; font-size:.62rem; font-weight:600; padding:1px 6px; border-radius:4px; margin-left:6px; letter-spacing:.04em; font-family:ui-monospace,Menlo,monospace; }
   .badge.local { background:rgba(74,222,128,.1); color:var(--accent); border:1px solid rgba(74,222,128,.3); }
   .badge.err { background:rgba(249,115,22,.12); color:var(--warn); border:1px solid rgba(249,115,22,.3); }
+  .badge.ok { background:rgba(74,222,128,.08); color:var(--accent); border:1px solid rgba(74,222,128,.2); letter-spacing:.1em; }
   code { background:#1a2236; padding:1px 5px; border-radius:4px; font-family:ui-monospace,Menlo,monospace; font-size:.85em; }
   pre { background:#0a0d15; border:1px solid var(--line); border-radius:8px; padding:14px 16px; overflow:auto; font-size:.84rem; }
   .foot { color:var(--muted); font-size:.82rem; margin-top:24px; }
@@ -452,6 +517,7 @@ ${CHROME_HEAD_LINKS}
   <div class="stat"><div class="k">Tools online</div><div class="v">${esc(snapshot.totals.tools)}</div><div class="s">across all sellers</div></div>
   <div class="stat"><div class="k">Crawled sellers</div><div class="v">${esc(snapshot.totals.crawled)}</div><div class="s">via /.well-known/x402</div></div>
   <div class="stat"><div class="k">Auto-discovered</div><div class="v">${esc(snapshot.totals.discovered ?? 0)}</div><div class="s">from public registries</div></div>
+  <div class="stat"><div class="k">Routable now</div><div class="v">${esc(snapshot.totals.routable ?? 0)}</div><div class="s">${esc(snapshot.totals.unhealthy ?? 0)} unhealthy excluded from router</div></div>
   <div class="stat"><div class="k">Snapshot</div><div class="v" style="font-size:1rem">${esc(snapshot.asOf.replace("T", " ").slice(0, 19))}Z</div><div class="s">refresh the page to update</div></div>
 </div>
 
