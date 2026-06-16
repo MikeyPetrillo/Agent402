@@ -1053,9 +1053,11 @@ const httpServer = app.listen(PORT, () =>
 );
 
 // x402 Index crawler: warms the cross-seller cache used by /index + /api/route.
-// Seeds come from X402_INDEX_SEEDS (comma-separated origins); absent → local-only
-// Index. Fire-and-forget so a slow upstream can't delay boot or /health.
-startCrawler();
+// Seeds come from X402_INDEX_SEEDS (comma-separated origins) plus auto-discovered
+// origins pulled from public x402 registries (Coinbase CDP Bazaar, agent402.app).
+// selfOrigin is passed so the discovery feeder skips our own listings. Fire-and-
+// forget so a slow upstream can't delay boot or /health.
+startCrawler({ selfOrigin: BASE_URL });
 
 // Graceful shutdown: a Railway redeploy sends SIGTERM. Stop accepting new
 // connections but let in-flight (already paid-for) requests finish before
