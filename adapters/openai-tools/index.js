@@ -44,7 +44,9 @@ const sanitizeName = (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 6
  */
 export async function agent402Tools({ baseUrl = DEFAULT_BASE, slugs, freeOnly = true, fetch: payFetch } = {}) {
   const client = new Agent402({ baseUrl, fetch: payFetch });
-  const r = await (globalThis.fetch)(`${baseUrl}/openapi.json`);
+  // Bounded discovery fetch: caller picks baseUrl, so cap the wait. Node ≥18
+  // exposes AbortSignal.timeout() (declared in package.json engines).
+  const r = await (globalThis.fetch)(`${baseUrl}/openapi.json`, { signal: AbortSignal.timeout(15000) });
   if (!r.ok) throw new Error(`Could not load ${baseUrl}/openapi.json: HTTP ${r.status}`);
   const spec = await r.json();
 
@@ -85,7 +87,7 @@ export async function agent402Tools({ baseUrl = DEFAULT_BASE, slugs, freeOnly = 
   // Authoritative freeOnly filter: /openapi.json doesn't carry computePayable,
   // but /api/pricing does. One extra HTTP call, cached for the life of the result.
   if (freeOnly) {
-    const pr = await (globalThis.fetch)(`${baseUrl}/api/pricing`);
+    const pr = await (globalThis.fetch)(`${baseUrl}/api/pricing`, { signal: AbortSignal.timeout(15000) });
     if (!pr.ok) throw new Error(`Could not load ${baseUrl}/api/pricing: HTTP ${pr.status}`);
     const pricing = await pr.json();
     const free = new Set((pricing.endpoints || []).filter((e) => e.computePayable).map((e) => e.slug));

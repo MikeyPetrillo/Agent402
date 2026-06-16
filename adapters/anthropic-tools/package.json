@@ -1,6 +1,6 @@
 {
   "name": "agent402-anthropic-tools",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Drop-in Anthropic tool-use tools for Agent402: turn 1,000+ pay-per-call web tools into Claude tool definitions, with auto-payment (proof-of-work free, USDC via x402 paid). Works with the messages API. Zero deps.",
   "type": "module",
   "main": "index.js",

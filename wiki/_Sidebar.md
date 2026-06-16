@@ -5,6 +5,7 @@
 - [[Paying with x402]]
 - [[Paying with Compute]]
 - [[MCP Connector]]
+- [[Adapters]]
 - [[Tool Catalog]]
 - [[Payments and x402]]
 - [[Pay-per-crawl]]

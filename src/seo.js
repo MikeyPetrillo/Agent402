@@ -176,6 +176,22 @@ or proof-of-work without):
 High-value tools (extract/render/screenshot/pdf/memory/…) are first-class MCP
 tools; the other ~1000 are reachable via its \`search_tools\` + \`call_tool\`.
 
+## Drop into your agent framework (zero-dep adapters)
+
+For non-MCP integrations, there's a ready-made adapter on npm for each major
+agent stack. Each one fetches the catalog, returns ready-to-pass tool objects
+in the framework's native shape, and handles payment underneath (proof-of-work
+for free tools; USDC via x402 when an \`@x402/fetch\` is passed):
+
+- \`agent402-openai-tools\` — OpenAI function-calling (chat.completions / Assistants v2 / Responses)
+- \`agent402-anthropic-tools\` — Anthropic Messages API (\`tool_use\`)
+- \`agent402-ai-sdk\` — Vercel AI SDK (\`streamText\` / \`generateText\` / \`generateObject\`)
+- \`agent402-langchain\` — LangChain JS / LangGraph (\`DynamicStructuredTool\`)
+- \`agent402-llamaindex\` — LlamaIndex TS (\`FunctionTool\`)
+
+All five share the same surface: \`agent402Tools({ slugs, freeOnly, fetch })\`
+returns \`{ tools, execute, client }\`. Source: https://github.com/MikeyPetrillo/Agent402/tree/main/adapters
+
 ## How to pay with USDC (JavaScript example)
 
 \`\`\`js

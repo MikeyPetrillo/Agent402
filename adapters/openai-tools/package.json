@@ -1,6 +1,6 @@
 {
   "name": "agent402-openai-tools",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Drop-in OpenAI function-calling tools for Agent402: turn 1,000+ pay-per-call web tools into OpenAI tool definitions, with auto-payment (proof-of-work free, USDC via x402 paid). Works with chat.completions, Assistants v2, and the Responses API. Zero deps.",
   "type": "module",
   "main": "index.js",

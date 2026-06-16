@@ -21,13 +21,14 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   const agoStr = (iso) => { const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000); return s < 60 ? `${s | 0}s` : s < 3600 ? `${(s / 60) | 0}m` : s < 86400 ? `${(s / 3600) | 0}h` : `${(s / 86400) | 0}d`; };
   // Defense-in-depth: slugs originate from CATALOG (developer-controlled), but
   // escape on render so the server-side path matches the client-side esc() below.
-  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  // Also escape ' so attribute contexts using single quotes are covered.
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   const activityRows = (rows) => rows.slice(0, 8).map((r) => `<li><span class="a-slug">${esc(r.slug)}</span><span class="a-meta">${r.paidWith === "proof-of-work" ? "⚙ PoW" : "$ USDC"} · ${agoStr(r.at)} ago</span></li>`).join("");
   const activity = recent.length
     ? `<div class="activity">
     <div class="eyebrow" style="margin:0 0 8px">● Live — recent paid calls</div>
     <ul id="activity-list">${activityRows(recent)}</ul>
-    <script>(function(){var el=document.getElementById('activity-list');if(!el)return;function ago(iso){var s=Math.max(0,(Date.now()-new Date(iso).getTime())/1000);return s<60?(s|0)+'s':s<3600?((s/60)|0)+'m':s<86400?((s/3600)|0)+'h':((s/86400)|0)+'d';}function esc(t){return String(t).replace(/[&<>"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c];});}async function tick(){try{var r=await fetch('/api/stats',{cache:'no-store'});var d=await r.json();el.innerHTML=(d.recentCalls||[]).slice(0,8).map(function(x){return '<li><span class="a-slug">'+esc(x.slug)+'</span><span class="a-meta">'+(x.paidWith==='proof-of-work'?'⚙ PoW':'$ USDC')+' · '+ago(x.at)+' ago</span></li>';}).join('');}catch(e){}}setInterval(tick,12000);})();</script>
+    <script>(function(){var el=document.getElementById('activity-list');if(!el)return;function ago(iso){var s=Math.max(0,(Date.now()-new Date(iso).getTime())/1000);return s<60?(s|0)+'s':s<3600?((s/60)|0)+'m':s<86400?((s/3600)|0)+'h':((s/86400)|0)+'d';}function esc(t){return String(t).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}async function tick(){try{var r=await fetch('/api/stats',{cache:'no-store'});var d=await r.json();el.innerHTML=(d.recentCalls||[]).slice(0,8).map(function(x){return '<li><span class="a-slug">'+esc(x.slug)+'</span><span class="a-meta">'+(x.paidWith==='proof-of-work'?'⚙ PoW':'$ USDC')+' · '+ago(x.at)+' ago</span></li>';}).join('');}catch(e){}}setInterval(tick,12000);})();</script>
   </div>`
     : "";
   const categoryCards = Object.entries(CATEGORIES)
@@ -76,7 +77,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "name": "Agent402",
       "url": "${baseUrl}",
       "founder": { "@type": "Person", "name": "Mikey Petrillo", "url": "https://github.com/MikeyPetrillo" },
-      "sameAs": ["https://github.com/MikeyPetrillo", "https://github.com/MikeyPetrillo/Agent402", "https://www.npmjs.com/package/agent402-mcp", "https://www.npmjs.com/package/agent402-client", "https://www.npmjs.com/package/agent402-tollbooth"],
+      "sameAs": ["https://github.com/MikeyPetrillo", "https://github.com/MikeyPetrillo/Agent402", "https://www.npmjs.com/package/agent402-mcp", "https://www.npmjs.com/package/agent402-client", "https://www.npmjs.com/package/agent402-tollbooth", "https://www.npmjs.com/package/agent402-openai-tools", "https://www.npmjs.com/package/agent402-anthropic-tools", "https://www.npmjs.com/package/agent402-ai-sdk", "https://www.npmjs.com/package/agent402-langchain", "https://www.npmjs.com/package/agent402-llamaindex"],
       "description": "Machine-to-machine payments for AI agents: ${count} pay-per-call web tools settled in USDC via the x402 protocol, or free with proof-of-work."
     },
     {
@@ -102,7 +103,8 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
         { "@type": "Question", "name": "How does an AI agent pay for a tool?", "acceptedAnswer": { "@type": "Answer", "text": "The agent calls an endpoint and receives an HTTP 402 Payment Required quote. An x402 client signs a USDC payment from the agent's own wallet on Base and retries; the call settles on-chain in seconds. The wallet is the identity — no account needed. x402 is an open standard with settlement infrastructure from Coinbase and Stripe." } },
         { "@type": "Question", "name": "Are any tools free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes — ${freeCount} of the ${count} pure-CPU tools can be used with no wallet at all by solving a short proof-of-work puzzle (a few seconds of the caller's CPU) instead of paying USDC." } },
         { "@type": "Question", "name": "Why would an agent use this instead of building the tools itself?", "acceptedAnswer": { "@type": "Answer", "text": "Many agents can write code but can't run a headless browser, reach the network from a locked sandbox, or keep durable state across sessions. Agent402 provides a real browser, network access, and wallet-keyed memory and coordination that a single ephemeral agent cannot give itself." } },
-        { "@type": "Question", "name": "Does Agent402 use AI or spend my model tokens?", "acceptedAnswer": { "@type": "Answer", "text": "No. Every tool is deterministic code — parsers, hashes, math, a real browser — with no LLM anywhere in the serving path, and the free tier's proof-of-work is a sha256 puzzle your machine solves in a fraction of a second. Nothing consumes AI tokens. Tools like /api/extract exist to SAVE your tokens: they return clean markdown instead of 100k tokens of raw HTML." } }
+        { "@type": "Question", "name": "Does Agent402 use AI or spend my model tokens?", "acceptedAnswer": { "@type": "Answer", "text": "No. Every tool is deterministic code — parsers, hashes, math, a real browser — with no LLM anywhere in the serving path, and the free tier's proof-of-work is a sha256 puzzle your machine solves in a fraction of a second. Nothing consumes AI tokens. Tools like /api/extract exist to SAVE your tokens: they return clean markdown instead of 100k tokens of raw HTML." } },
+        { "@type": "Question", "name": "Can I use Agent402 from OpenAI / Anthropic / LangChain / LlamaIndex / Vercel AI SDK?", "acceptedAnswer": { "@type": "Answer", "text": "Yes — there is a zero-dependency adapter package on npm for each of the major agent stacks: agent402-openai-tools (OpenAI function-calling), agent402-anthropic-tools (Anthropic Messages API), agent402-ai-sdk (Vercel AI SDK), agent402-langchain (LangChain JS / LangGraph), and agent402-llamaindex (LlamaIndex TS). Each one returns ready-to-pass tool objects in the framework's native shape, with payment handled underneath (proof-of-work for free tools, USDC via x402 for wallet-only). MCP-based clients like Claude can use the hosted https://agent402.tools/mcp connector directly." } }
       ]
     }
   ]
@@ -389,6 +391,18 @@ import { Agent402 } from "agent402-client";
 const a = new Agent402();                 // free tier (proof-of-work)
 const out = await a.call("hash", { text: "hello world", algo: "sha256" });</pre>
 
+    <p class="lbl">Or drop into your agent framework <span>— zero-dep adapters that turn the catalog into native tool objects, with auto-payment underneath.</span></p>
+    <pre># pick your stack
+npm install agent402-openai-tools         # OpenAI function-calling
+npm install agent402-anthropic-tools      # Anthropic Messages API (tool_use)
+npm install agent402-ai-sdk               # Vercel AI SDK (streamText / generateText)
+npm install agent402-langchain            # LangChain JS / LangGraph
+npm install agent402-llamaindex           # LlamaIndex TS
+
+import { agent402Tools } from "agent402-openai-tools";
+const { tools, execute } = await agent402Tools({ slugs: ["extract", "hash", "render"] });
+// pass tools to openai.chat.completions.create({ tools }); call execute(name, args) on a tool_call.</pre>
+
     <p class="lbl">Or try it free <span>— no wallet needed</span></p>
     <pre>curl ${baseUrl}/api/pricing          # machine-readable catalog
 curl ${baseUrl}/openapi.json         # full OpenAPI 3.1 spec
@@ -404,6 +418,7 @@ curl -i -X POST ${baseUrl}/api/extract \\
       <p><b>How does an AI agent pay for a tool?</b><br><span>It calls an endpoint and gets an <code>HTTP 402 Payment Required</code> quote. An x402 client signs a USDC payment from the agent's own wallet on Base and retries; the call settles on-chain in seconds. The wallet is the identity. <a href="https://x402.org" rel="noopener">x402</a> is an open standard with settlement infrastructure from Coinbase and Stripe.</span></p>
       <p><b>Are any tools free?</b><br><span>Yes — ${freeCount} of the ${count} pure-CPU tools work with no wallet at all: solve a short <a href="/api/pow">proof-of-work</a> puzzle (a few seconds of CPU) instead of paying USDC.</span></p>
       <p><b>Does Agent402 use AI or spend my model tokens?</b><br><span>No. Every tool is deterministic code — parsers, hashes, math, a real browser — with no LLM anywhere in the serving path, and the free tier's proof-of-work is a sha256 puzzle your machine solves in a fraction of a second. Nothing here consumes AI tokens. Tools like <code>/api/extract</code> exist to <em>save</em> your tokens: clean markdown out instead of 100k tokens of raw HTML in.</span></p>
+      <p><b>Can I use Agent402 from OpenAI / Anthropic / LangChain / LlamaIndex / Vercel AI SDK?</b><br><span>Yes — there's a zero-dependency adapter on npm for each: <code><a href="https://www.npmjs.com/package/agent402-openai-tools" rel="noopener">agent402-openai-tools</a></code>, <code><a href="https://www.npmjs.com/package/agent402-anthropic-tools" rel="noopener">agent402-anthropic-tools</a></code>, <code><a href="https://www.npmjs.com/package/agent402-ai-sdk" rel="noopener">agent402-ai-sdk</a></code>, <code><a href="https://www.npmjs.com/package/agent402-langchain" rel="noopener">agent402-langchain</a></code>, and <code><a href="https://www.npmjs.com/package/agent402-llamaindex" rel="noopener">agent402-llamaindex</a></code>. Each returns ready-to-pass tool objects in the framework's native shape — payment handled underneath (proof-of-work for free tools, USDC via x402 for wallet-only). MCP-based clients (Claude) can still use the hosted <code>/mcp</code> connector directly.</span></p>
     </div>
   </section>
 
