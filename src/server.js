@@ -27,6 +27,7 @@ import { PDF_TOOLS } from "./tools/pdf-kit.js";
 import { DEMAND_TOOLS } from "./tools/demand-kit.js";
 import { MEDIA_TOOLS } from "./tools/media-kit.js";
 import { GOV_TOOLS } from "./tools/gov-kit.js";
+import { GEO_TOOLS } from "./tools/geo-kit.js";
 import { AGENT_TOOLS } from "./tools/agent-kit.js";
 import { BARCODE_TOOLS } from "./tools/barcode-kit.js";
 import { DATA_TOOLS } from "./tools/data-kit.js";
@@ -37,7 +38,7 @@ import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } 
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS } from "./pow.js";
 import { recordServedCall, getStats, getOperatorBreakdown, dbHealthy } from "./stats.js";
 import { timingSafeEqual, createHash } from "node:crypto";
