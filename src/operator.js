@@ -11,8 +11,11 @@ export function operatorPage(baseUrl, token, data) {
   const t = data?.totals || {};
   const tools = Array.isArray(data?.tools) ? data.tools : [];
   const recent = Array.isArray(data?.recentCalls) ? data.recentCalls : [];
+  const badge = (r) => r.walletOnly
+    ? `<span class="badge wallet" title="USDC only — no proof-of-work path">USDC-ONLY</span>`
+    : `<span class="badge pow" title="Also payable with proof-of-work (free tier)">FREE-W/POW</span>`;
   const rows = tools.map((r) => `<tr>
-    <td><a href="/tools/${esc(r.slug)}">${esc(r.slug)}</a></td>
+    <td><a href="/tools/${esc(r.slug)}">${esc(r.slug)}</a> ${badge(r)}</td>
     <td class="num">${esc(r.calls)}</td>
     <td class="num paid">${esc(r.paid)}</td>
     <td class="num pow">${esc(r.pow)}</td>
@@ -65,6 +68,9 @@ ${CHROME_HEAD_LINKS}
   .feed .rs { font-family:ui-monospace,Menlo,monospace; color:var(--fg); }
   .feed .rm { color:var(--muted); font-size:.78rem; }
   .feed .ra { grid-column:1/-1; color:var(--muted); font-size:.72rem; font-family:ui-monospace,Menlo,monospace; }
+  .badge { display:inline-block; font-size:.62rem; font-weight:600; padding:1px 6px; border-radius:4px; margin-left:6px; letter-spacing:.04em; vertical-align:middle; font-family:ui-monospace,Menlo,monospace; }
+  .badge.pow { background:rgba(96,165,250,.12); color:var(--pow); border:1px solid rgba(96,165,250,.3); }
+  .badge.wallet { background:rgba(74,222,128,.1); color:var(--paid); border:1px solid rgba(74,222,128,.3); }
   ${CHROME_CSS}
 </style>
 </head>
@@ -115,7 +121,10 @@ ${CHROME_HEAD_LINKS}
       return sortDir*((av||0)-(bv||0));
     });
     tbody.innerHTML = rs.length ? rs.map(function(r){
-      return '<tr><td><a href="/tools/'+esc(r.slug)+'">'+esc(r.slug)+'</a></td>'+
+      var b = r.walletOnly
+        ? '<span class="badge wallet" title="USDC only — no proof-of-work path">USDC-ONLY</span>'
+        : '<span class="badge pow" title="Also payable with proof-of-work (free tier)">FREE-W/POW</span>';
+      return '<tr><td><a href="/tools/'+esc(r.slug)+'">'+esc(r.slug)+'</a> '+b+'</td>'+
         '<td class="num">'+esc(r.calls)+'</td>'+
         '<td class="num paid">'+esc(r.paid)+'</td>'+
         '<td class="num pow">'+esc(r.pow)+'</td>'+

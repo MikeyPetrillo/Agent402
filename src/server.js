@@ -38,7 +38,7 @@ import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
 
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS];
-import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY } from "./pow.js";
+import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS } from "./pow.js";
 import { recordServedCall, getStats, getOperatorBreakdown } from "./stats.js";
 import { timingSafeEqual, createHash } from "node:crypto";
 import { marketplaceSlugToken } from "./marketplace-token.js";
@@ -517,11 +517,11 @@ const operatorTokenOk = (t) => {
 };
 app.get("/__operator", (req, res) => {
   if (!operatorTokenOk(req.query.token)) return res.status(404).type("html").send("<p>Not found.</p>");
-  res.type("html").send(operatorPage(BASE_URL, req.query.token, getOperatorBreakdown({ prices: TOOL_PRICES })));
+  res.type("html").send(operatorPage(BASE_URL, req.query.token, getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: WALLET_ONLY_SLUGS })));
 });
 app.get("/__operator/stats", (req, res) => {
   if (!operatorTokenOk(req.query.token)) return res.status(404).json({ error: "Not found" });
-  res.json(getOperatorBreakdown({ prices: TOOL_PRICES }));
+  res.json(getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: WALLET_ONLY_SLUGS }));
 });
 app.get("/guides", (_req, res) => res.type("html").send(guidesIndex(BASE_URL)));
 app.get("/guides/:slug", (req, res) => {
