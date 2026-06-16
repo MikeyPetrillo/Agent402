@@ -250,7 +250,7 @@ jobs:
       - name: Buyer SDK (agent402-client — resolve + auto-pay via PoW; boots paid-mode)
         run: node client/test.js
 
-      - name: Adapter tests (openai-tools + anthropic-tools + ai-sdk + langchain + llamaindex)
+      - name: Adapter tests (openai-tools + anthropic-tools + ai-sdk + langchain + llamaindex + strands)
         run: |
           FREE_MODE=true PORT=3091 node src/server.js > /tmp/a402-test.log 2>&1 &
           ADAPTER_PID=$!
@@ -264,6 +264,7 @@ jobs:
           AGENT402_BASE_URL=http://localhost:3091 node adapters/ai-sdk/test.js
           AGENT402_BASE_URL=http://localhost:3091 node adapters/langchain/test.js
           AGENT402_BASE_URL=http://localhost:3091 node adapters/llamaindex/test.js
+          AGENT402_BASE_URL=http://localhost:3091 node adapters/strands/test.js
           kill $ADAPTER_PID 2>/dev/null || true
 
       - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
@@ -734,6 +735,24 @@ jobs:
           else
             npm publish --access public
             echo "published agent402-llamaindex@$VERSION → https://www.npmjs.com/package/agent402-llamaindex"
+          fi
+
+      - name: Publish agent402-strands to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN secret missing"; exit 1; }
+          # Test self-bootstraps agent402-client + stubs @strands-agents/sdk
+          # so we don't pull AWS Bedrock + uuid + yaml transitively just to
+          # verify the adapter shape.
+          AGENT402_BASE_URL=http://localhost:3090 node adapters/strands/test.js
+          cd adapters/strands
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "agent402-strands@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-strands@$VERSION is already on npm — nothing to do"
+          else
+            npm publish --access public
+            echo "published agent402-strands@$VERSION → https://www.npmjs.com/package/agent402-strands"
           fi
 
       - name: Stop adapter-test server
