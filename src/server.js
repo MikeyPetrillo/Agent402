@@ -18,6 +18,7 @@ import { termsPage } from "./terms.js";
 import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
 import { serviceManifest, reliabilityReport } from "./discovery.js";
 import { findTools } from "./find.js";
+import { indexPage, indexSnapshot, routeQuery, startCrawler } from "./x402-index.js";
 import { buildPaymentMiddleware, enabledNetworks } from "./payments.js";
 import { KIT } from "./tools/kit.js";
 import { KIT2 } from "./tools/kit2.js";
@@ -569,6 +570,24 @@ app.get("/api/reliability", (_req, res) =>
 const findHandler = (q, k, res) => res.json(findTools(CATALOG, q, { k, baseUrl: BASE_URL, powSlugs: POW_SLUGS }));
 app.get("/api/find", (req, res) => findHandler(req.query.q ?? req.query.task ?? req.query.query, req.query.k, res));
 app.post("/api/find", (req, res) => findHandler(req.body?.q ?? req.body?.task ?? req.body?.query, req.body?.k, res));
+
+// x402 Index — public dashboard + Smart Order Router. Free, like /api/find: a
+// discovery layer that exists to make the agent payments economy legible. The
+// Router (cross-seller routing) and the Index page share the same crawler-warmed
+// cache. Crawler boots after listen() — never blocks startup on third parties.
+const indexCtx = () => ({
+  baseUrl: BASE_URL,
+  catalog: CATALOG,
+  prices: TOOL_PRICES,
+  network: NETWORK,
+  toolCount: Object.keys(CATALOG).length,
+  walletName: WALLET_ENS,
+});
+app.get("/index", (_req, res) => res.type("text/html").send(indexPage(indexSnapshot(indexCtx()), { baseUrl: BASE_URL })));
+app.get("/api/index", (_req, res) => res.json(indexSnapshot(indexCtx())));
+const routeHandler = (q, k, res) => res.json(routeQuery({ query: q, top: k, ...indexCtx() }));
+app.get("/api/route", (req, res) => routeHandler(req.query.q ?? req.query.task ?? req.query.query, req.query.top ?? req.query.k, res));
+app.post("/api/route", (req, res) => routeHandler(req.body?.q ?? req.body?.task ?? req.body?.query, req.body?.top ?? req.body?.k, res));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));
@@ -1032,6 +1051,11 @@ for (const tool of ALL_KIT) {
 const httpServer = app.listen(PORT, () =>
   console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`)
 );
+
+// x402 Index crawler: warms the cross-seller cache used by /index + /api/route.
+// Seeds come from X402_INDEX_SEEDS (comma-separated origins); absent → local-only
+// Index. Fire-and-forget so a slow upstream can't delay boot or /health.
+startCrawler();
 
 // Graceful shutdown: a Railway redeploy sends SIGTERM. Stop accepting new
 // connections but let in-flight (already paid-for) requests finish before
