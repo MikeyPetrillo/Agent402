@@ -32,6 +32,8 @@ const getRecent = db.prepare("SELECT slug, method, ts FROM recent_calls ORDER BY
 const bumpPaidTool = db.prepare("INSERT INTO paid_tool_counts (slug, n) VALUES (?, 1) ON CONFLICT(slug) DO UPDATE SET n = n + 1");
 const topPaid = db.prepare("SELECT slug, n FROM paid_tool_counts ORDER BY n DESC LIMIT 10");
 const allPaid = db.prepare("SELECT slug, n FROM paid_tool_counts");
+const allToolsFull = db.prepare("SELECT slug, n FROM tool_counts ORDER BY n DESC");
+const getRecentAll = db.prepare("SELECT slug, method, ts FROM recent_calls ORDER BY id DESC LIMIT ?");
 
 setMetaIfAbsent.run("firstServed", String(Date.now()));
 const bootedAt = Date.now();
@@ -89,5 +91,45 @@ export function getStats({ wallet, walletName, network, toolCount, baseUrl, pric
     servingSince: new Date(firstServed).toISOString(),
     uptimeSeconds: Math.floor((Date.now() - bootedAt) / 1000),
     runTheDemo: `${baseUrl}/llms.txt`,
+  };
+}
+
+/**
+ * Full per-tool breakdown for the operator dashboard — every tool that's ever
+ * been served, USDC purchases per tool, estimated revenue per tool, and the
+ * full retained recent-calls log. Pricing comes from the catalog at the call
+ * site so this module stays decoupled from CATALOG. Operator-only — gated by
+ * AGENT402_OPERATOR_TOKEN at the route layer.
+ */
+export function getOperatorBreakdown({ prices, limit = RECENT_KEEP } = {}) {
+  const priceOf = (slug) => (prices && Number(prices[slug])) || 0;
+  const paidBySlug = new Map(allPaid.all().map((r) => [r.slug, r.n]));
+  const tools = allToolsFull.all().map((r) => {
+    const paid = paidBySlug.get(r.slug) || 0;
+    return {
+      slug: r.slug,
+      calls: r.n,
+      paid,
+      pow: Math.max(0, r.n - paid),
+      revenueUsd: +(paid * priceOf(r.slug)).toFixed(4),
+      pricePerCall: priceOf(r.slug),
+    };
+  });
+  return {
+    totals: {
+      total: getCounter.get("total")?.n ?? 0,
+      viaUSDC: getCounter.get("viaUSDC")?.n ?? 0,
+      viaProofOfWork: getCounter.get("viaProofOfWork")?.n ?? 0,
+      estimatedRevenueUsd: +tools.reduce((s, t) => s + t.revenueUsd, 0).toFixed(4),
+      toolsServed: tools.length,
+    },
+    tools,
+    recentCalls: getRecentAll.all(limit).map((r) => ({
+      slug: r.slug,
+      paidWith: r.method === "pow" ? "proof-of-work" : "usdc",
+      at: new Date(r.ts).toISOString(),
+    })),
+    bootedAt: new Date(bootedAt).toISOString(),
+    uptimeSeconds: Math.floor((Date.now() - bootedAt) / 1000),
   };
 }
