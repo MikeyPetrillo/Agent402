@@ -30,7 +30,7 @@ const pruneStmt = db.prepare("DELETE FROM pow_used WHERE exp < ?");
 
 // Tools that cost real money or reach the network are NOT compute-payable —
 // they stay wallet-only so PoW can't be used to farm Chromium/egress/storage.
-const WALLET_ONLY_SLUGS = new Set([
+export const WALLET_ONLY_SLUGS = new Set([
   "extract", "meta", "dns", "render", "screenshot", "pdf",
   "memory-write", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-revoke",
   "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",

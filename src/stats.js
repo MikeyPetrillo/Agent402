@@ -59,6 +59,20 @@ export function recordServedCall(slug, method) {
   }
 }
 
+/**
+ * Lightweight DB liveness probe for /health. Reads the cheapest possible
+ * statement (PK lookup on a tiny table) and returns true on success. Never
+ * throws — the caller decides what status code to return.
+ */
+export function dbHealthy() {
+  try {
+    getMeta.get("firstServed");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function getStats({ wallet, walletName, network, toolCount, baseUrl, prices }) {
   const num = (k) => getCounter.get(k)?.n ?? 0;
   const priceOf = (slug) => (prices && Number(prices[slug])) || 0;
@@ -101,8 +115,9 @@ export function getStats({ wallet, walletName, network, toolCount, baseUrl, pric
  * site so this module stays decoupled from CATALOG. Operator-only — gated by
  * AGENT402_OPERATOR_TOKEN at the route layer.
  */
-export function getOperatorBreakdown({ prices, limit = RECENT_KEEP } = {}) {
+export function getOperatorBreakdown({ prices, walletOnlySet, limit = RECENT_KEEP } = {}) {
   const priceOf = (slug) => (prices && Number(prices[slug])) || 0;
+  const isWalletOnly = (slug) => !!(walletOnlySet && walletOnlySet.has && walletOnlySet.has(slug));
   const paidBySlug = new Map(allPaid.all().map((r) => [r.slug, r.n]));
   const tools = allToolsFull.all().map((r) => {
     const paid = paidBySlug.get(r.slug) || 0;
@@ -113,6 +128,7 @@ export function getOperatorBreakdown({ prices, limit = RECENT_KEEP } = {}) {
       pow: Math.max(0, r.n - paid),
       revenueUsd: +(paid * priceOf(r.slug)).toFixed(4),
       pricePerCall: priceOf(r.slug),
+      walletOnly: isWalletOnly(r.slug),
     };
   });
   return {

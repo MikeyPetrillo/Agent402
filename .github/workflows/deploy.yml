@@ -202,7 +202,11 @@ jobs:
           fi
 
   test:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'test' || contains(join(github.event.commits.*.message), '[test]')
+    # Test job runs on its own [test] marker AND auto-runs whenever a commit
+    # asks to deploy or publish — so deploy/publish can hard-gate on it via
+    # `needs: test`. This makes "ship without running tests" impossible by
+    # design, not by developer discipline.
+    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'test' || inputs.mode == 'deploy' || inputs.mode == 'publish') || contains(join(github.event.commits.*.message), '[test]') || contains(join(github.event.commits.*.message), '[deploy]') || contains(join(github.event.commits.*.message), '[publish]')
     runs-on: ubuntu-latest
     env:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
@@ -575,6 +579,7 @@ jobs:
           curl -s https://agent402.tools/api/stats | jq '{tools, wallet, onchainRevenueProof, served: .toolCallsServed}' || echo "(/api/stats not live yet — will appear after this image rolls out)"
 
   publish:
+    needs: test
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'publish' || contains(join(github.event.commits.*.message), '[publish]')
     runs-on: ubuntu-latest
     permissions:
@@ -966,6 +971,7 @@ jobs:
           done
 
   deploy:
+    needs: test
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' || contains(join(github.event.commits.*.message), '[deploy]')
     runs-on: ubuntu-latest
     env:
