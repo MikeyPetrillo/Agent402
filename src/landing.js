@@ -52,21 +52,21 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="icon" type="image/png" sizes="512x512" href="/logo.png">
 <link rel="shortcut icon" href="/favicon.ico">
-<link rel="apple-touch-icon" href="/logo.png"><title>Agent402 — the open-source, self-hostable x402 + MCP server (${count}+ tools for AI agents)</title>
-<meta name="description" content="Open-source, self-hostable x402 + MCP server: ${count} tools for AI agents (browser, web search, PDFs, images, live data, payment helpers). Run free with proof-of-work or pay per call in USDC on Base — plus agent402-tollbooth, an open-source pay-per-crawl gate for charging AI bots that crawl your site. No signup, no API key.">
+<link rel="apple-touch-icon" href="/logo.png"><title>Agent402 — open-source x402 + MCP server &amp; Smart Order Router (${count}+ tools, cross-seller routing)</title>
+<meta name="description" content="Open-source, self-hostable x402 + MCP server: ${count} tools for AI agents (browser, web search, PDFs, OCR, images, live data, payment helpers) plus a Smart Order Router that finds the cheapest healthy tool across the whole x402 ecosystem (Coinbase CDP Bazaar auto-discovery). Free via proof-of-work or pay per call in USDC on Base. Includes agent402-tollbooth, an open pay-per-crawl gate. No signup, no API key.">
 <link rel="canonical" href="${baseUrl}/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/">
 <meta property="og:site_name" content="Agent402">
-<meta property="og:title" content="Agent402 — the open-source, self-hostable x402 + MCP server (${count}+ agent tools)">
-<meta property="og:description" content="Where agents pay agents: an open-source x402 + MCP server with ${count} tools for AI agents — browser, search, PDFs, live data, payments. Self-host free (proof-of-work) or pay per call in USDC on Base. No signup, no API key.">
+<meta property="og:title" content="Agent402 — open-source x402 + MCP server &amp; Smart Order Router (${count}+ agent tools)">
+<meta property="og:description" content="Where agents pay agents. Open-source x402 + MCP server with ${count} tools, plus a Smart Order Router that ranks the cheapest healthy tool across the whole x402 ecosystem. Free via proof-of-work or USDC on Base.">
 <meta property="og:image" content="${baseUrl}/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="${baseUrl}/card.png">
-<meta name="twitter:title" content="Agent402 — open-source, self-hostable x402 + MCP server (${count}+ agent tools)">
-<meta name="twitter:description" content="Open-source x402 + MCP server: ${count} tools for AI agents — browser, search, PDFs, live data, payments. Self-host free or pay per call in USDC on Base. No signup, no API key.">
+<meta name="twitter:title" content="Agent402 — open-source x402 server + Smart Order Router">
+<meta name="twitter:description" content="${count} pay-per-call tools, plus a router that finds the cheapest healthy tool across the whole x402 ecosystem. Free via proof-of-work or USDC on Base.">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -257,6 +257,7 @@ ${renderHeader("/", [{ href: "#connect", label: "Connect" }])}
   </header>
 
   <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet</b> — pay with a tiny <a href="/api/pow">sha256 proof-of-work</a> (a fraction of a second of CPU; no money, no AI tokens). The other ${count - freeCount} (browser, network, memory) settle in USDC.</div>
+  <div class="callout">🧭 <b>x402 Index + Smart Order Router</b> — Agent402 isn't just a seller. <code>POST <a href="/api/route">/api/route</a> {"query":"&lt;task&gt;"}</code> ranks tools across <em>every</em> x402 seller we've crawled (auto-discovered from the <a href="https://docs.cdp.coinbase.com/x402/docs/bazaar" rel="noopener">Coinbase CDP Bazaar</a>), filters out unhealthy ones, and tiebreaks on health then price. Browse the live index at <a href="/index">/index</a>. Free, like <code>/api/find</code>.</div>
   <div class="callout">⭐ <b>Open source &amp; self-hostable</b> — don't want the hosted version? Clone the repo and run all ${count} tools yourself for free (MCP + HTTP, no wallet, no signup): <code>FREE_MODE=true npm start</code>. <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">Star / fork it on GitHub →</a></div>
   <div class="callout">🚧 <b>The other side of x402: charge AI bots crawling <em>your</em> site.</b> <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth" rel="noopener">agent402-tollbooth</a> is an open-source, self-hostable <b>pay-per-crawl</b> gate — humans browse free, AI crawlers pay per request (USDC via x402, or free via proof-of-work). The open answer to Cloudflare pay-per-crawl: no CDN, no Stripe, no signup. <b>Deploy in one command</b> (<a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/docker" rel="noopener">Docker</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare" rel="noopener">Cloudflare Workers</a>, or <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs" rel="noopener">Next.js</a>) and watch a live <code>/__tollbooth</code> dashboard of your bot traffic and earnings.</div>
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}

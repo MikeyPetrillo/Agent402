@@ -30,5 +30,8 @@ x402 settles before the handler runs, so the operating principle is: anything th
 **Can I list my own service alongside this, or integrate?**
 Agent402 is also listed on the agent402.app marketplace and the Coinbase CDP Bazaar; the catalog is consumable via OpenAPI/x402 discovery. Open an [issue](https://github.com/MikeyPetrillo/Agent402/issues) to talk integrations.
 
+**Can I find tools on other x402 sellers from here?**
+Yes — Agent402 is also an [[x402 Index + Smart Order Router|x402-Index-and-Router]]. `POST /api/route` ranks tools across every x402 seller it has crawled (auto-discovered from the Coinbase CDP Bazaar, refreshed hourly), filters out unhealthy ones, and tiebreaks on health then price. Browse the live index at [`/index`](https://agent402.tools/index).
+
 **Who runs this?**
 [Mikey Petrillo](https://github.com/MikeyPetrillo) — a named maintainer, which most x402 sellers (anonymous wallets) don't offer.
