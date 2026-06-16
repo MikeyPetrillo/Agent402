@@ -19,7 +19,10 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   // proof. Server-rendered, then refreshed client-side every 12s.
   const recent = Array.isArray(stats?.recentCalls) ? stats.recentCalls : [];
   const agoStr = (iso) => { const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000); return s < 60 ? `${s | 0}s` : s < 3600 ? `${(s / 60) | 0}m` : s < 86400 ? `${(s / 3600) | 0}h` : `${(s / 86400) | 0}d`; };
-  const activityRows = (rows) => rows.slice(0, 8).map((r) => `<li><span class="a-slug">${r.slug}</span><span class="a-meta">${r.paidWith === "proof-of-work" ? "⚙ PoW" : "$ USDC"} · ${agoStr(r.at)} ago</span></li>`).join("");
+  // Defense-in-depth: slugs originate from CATALOG (developer-controlled), but
+  // escape on render so the server-side path matches the client-side esc() below.
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const activityRows = (rows) => rows.slice(0, 8).map((r) => `<li><span class="a-slug">${esc(r.slug)}</span><span class="a-meta">${r.paidWith === "proof-of-work" ? "⚙ PoW" : "$ USDC"} · ${agoStr(r.at)} ago</span></li>`).join("");
   const activity = recent.length
     ? `<div class="activity">
     <div class="eyebrow" style="margin:0 0 8px">● Live — recent paid calls</div>
