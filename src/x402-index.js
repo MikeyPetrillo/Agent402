@@ -32,7 +32,8 @@ const DISCOVERY_INTERVAL_MS = 60 * 60 * 1000; // 1 hr — registries don't chang
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_OPENAPI_BYTES = 12 * 1024 * 1024; // Agent402's own is ~5 MB; allow headroom
 const MAX_DISCOVERY_BYTES = 16 * 1024 * 1024;
-const MAX_DISCOVERED_SELLERS = 200; // cap so a misbehaving registry can't blow up memory
+const MAX_DISCOVERED_SELLERS = 5000; // cap so a misbehaving registry can't blow up memory
+const CRAWL_CONCURRENCY = 25; // max parallel seller crawls per cycle — caps outbound fan-out
 const HEALTH_WINDOW = 5; // last N crawl outcomes per seller — drives health-aware routing
 
 // Map<originUrl, { manifest, openapi, tools, fetchedAt, error? }>
@@ -220,12 +221,28 @@ let crawlerTimer = null;
 let discoveryTimer = null;
 let crawlInFlight = false;
 
+// Bounded worker pool. With thousands of discovered sellers we can't fan out
+// every crawl in parallel — the unbounded `Promise.allSettled(seeds.map(...))`
+// pattern would burn file descriptors and look like an outbound DoS. Each
+// worker pulls the next seed off the queue until it's empty.
+async function runPool(items, limit, worker) {
+  const queue = items.slice();
+  const n = Math.min(Math.max(limit, 1), queue.length);
+  const workers = Array.from({ length: n }, async () => {
+    while (queue.length) {
+      const item = queue.shift();
+      try { await worker(item); } catch { /* crawlSeller already catches; belt+braces */ }
+    }
+  });
+  await Promise.all(workers);
+}
+
 async function runCrawl() {
   if (crawlInFlight) return; // overlapping runs would just rate-limit each other
   crawlInFlight = true;
   try {
     const seeds = seedList();
-    await Promise.allSettled(seeds.map(crawlSeller));
+    await runPool(seeds, CRAWL_CONCURRENCY, crawlSeller);
   } finally {
     crawlInFlight = false;
   }

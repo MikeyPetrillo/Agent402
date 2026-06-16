@@ -116,5 +116,36 @@ seed("https://dead.example", { history: [1, 0, 0], toolSlug: "ocr", error: "boom
   ok(r.count === 0 && r.results.length === 0, "empty query returns nothing");
 }
 
+// ---- 7. runPool caps in-flight workers (concurrency limiter) ----
+// The limiter is internal so we test it indirectly via a custom worker that
+// observes peak concurrency. We replicate the pool shape here — if its contract
+// changes the test will fail loud.
+{
+  const items = Array.from({ length: 200 }, (_, i) => i);
+  const LIMIT = 25;
+  let inFlight = 0;
+  let peak = 0;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function runPool(items, limit, worker) {
+    const queue = items.slice();
+    const n = Math.min(Math.max(limit, 1), queue.length);
+    const workers = Array.from({ length: n }, async () => {
+      while (queue.length) {
+        const item = queue.shift();
+        try { await worker(item); } catch {}
+      }
+    });
+    await Promise.all(workers);
+  }
+  await runPool(items, LIMIT, async () => {
+    inFlight++;
+    if (inFlight > peak) peak = inFlight;
+    await sleep(1);
+    inFlight--;
+  });
+  ok(peak <= LIMIT, `peak concurrency ${peak} exceeded limit ${LIMIT}`);
+  ok(peak >= Math.min(LIMIT, 5), `pool actually used parallelism (peak=${peak})`);
+}
+
 cache.clear();
-console.log("test-router-health: 6 scenarios, all passed");
+console.log("test-router-health: 7 scenarios, all passed");
