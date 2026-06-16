@@ -10,6 +10,7 @@
 - [[Tool Catalog]]
 - [[Payments and x402]]
 - [[Pay-per-crawl]]
+- [[Pay-per-crawl Walkthrough]]
 - [[Memory and Coordination]]
 
 **Under the hood**
