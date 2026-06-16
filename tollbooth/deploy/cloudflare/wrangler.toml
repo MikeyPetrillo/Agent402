@@ -17,13 +17,27 @@ TOLLBOOTH_PRICE    = "$0.001"                           # optional: price per re
 TOLLBOOTH_NETWORK  = "base"                             # optional: x402 network
 # TOLLBOOTH_POW_BITS = "18"                             # optional: proof-of-work difficulty
 
+# Recommended first deploy: observe-only — classifies and counts but never 402s.
+# Run for a week, watch /__tollbooth, then remove this line to start charging.
+# TOLLBOOTH_OBSERVE = "true"
+
+# Optional: namespace the durable stats keys (lets you reset by changing buckets,
+# or run multiple gates against the same KV namespace). Defaults to "default".
+# TOLLBOOTH_STATS_BUCKET = "default"
+
 # Required secret (never commit it):  npx wrangler secret put TOLLBOOTH_SECRET
 # PoW tokens are HMAC-signed with this; without a stable secret they break across isolates.
 
-# Recommended for production: a durable single-use replay store so a solved
-# proof-of-work token can't be reused across isolates within its TTL.
+# Recommended secret for prod:  npx wrangler secret put TOLLBOOTH_STATS_TOKEN
+# When set, /__tollbooth/stats requires `Authorization: Bearer <token>`.
+# The HTML dashboard at /__tollbooth stays public (shareable read-only URL).
+
+# Strongly recommended for production: bind a KV namespace. It serves TWO purposes:
+#   1. Single-use replay store for proof-of-work tokens (cross-isolate).
+#   2. Durable stats — without KV, the dashboard resets on every cold start,
+#      so observe-mode data is useless.
 #   npx wrangler kv namespace create TOLLBOOTH_KV
-# then paste the returned id below and redeploy:
+# then paste the returned id below and redeploy. The Worker auto-detects it.
 # [[kv_namespaces]]
 # binding = "TOLLBOOTH_KV"
 # id = "<paste-the-id-from-the-command-above>"
