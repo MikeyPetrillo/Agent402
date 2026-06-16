@@ -39,7 +39,7 @@ import { guidesIndex, guidePage } from "./guides.js";
 
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS } from "./pow.js";
-import { recordServedCall, getStats, getOperatorBreakdown } from "./stats.js";
+import { recordServedCall, getStats, getOperatorBreakdown, dbHealthy } from "./stats.js";
 import { timingSafeEqual, createHash } from "node:crypto";
 import { marketplaceSlugToken } from "./marketplace-token.js";
 
@@ -483,7 +483,18 @@ app.get("/", (_req, res) =>
     landingPage(BASE_URL, NETWORK, FREE_MODE, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }))
   )
 );
-app.get("/health", (_req, res) => res.json({ ok: true }));
+// Real health check — fails (503) when a load balancer or heartbeat should
+// route around this instance. Verifies the stats DB is readable and that the
+// payment configuration is intact (wallet present unless we're explicitly in
+// FREE_MODE). Kept O(1) so a flood of probes can't degrade the service.
+app.get("/health", (_req, res) => {
+  const checks = {
+    db: dbHealthy(),
+    wallet: FREE_MODE || Boolean(WALLET_ADDRESS),
+  };
+  const ok = checks.db && checks.wallet;
+  res.status(ok ? 200 : 503).json({ ok, checks });
+});
 // Glama connector ownership verification: claims our listing at
 // glama.ai/mcp/connectors/io.github.MikeyPetrillo/agent402. The maintainer email
 // must match the Glama account — set it via the GLAMA_MAINTAINER_EMAIL env var
@@ -788,6 +799,14 @@ app.get("/api/pricing", (_req, res) =>
 const idemStore = new Map(); // hashKey -> { at, body }
 const IDEM_TTL_MS = 10 * 60 * 1000;
 const IDEM_MAX = 5000;
+// Background sweep: entries expire on read at IDEM_TTL_MS, but on a quiet
+// service stale bodies (some kits return large blobs) would sit in memory
+// until pushed out by FIFO. Prune by age every minute so memory tracks
+// actual recent traffic. .unref() so this never blocks process exit.
+setInterval(() => {
+  const cutoff = Date.now() - IDEM_TTL_MS;
+  for (const [k, v] of idemStore) if (v.at < cutoff) idemStore.delete(k);
+}, 60_000).unref();
 const idemHashKey = (req) => {
   const idem = req.header("idempotency-key");
   if (!idem || idem.length > 256) return null;

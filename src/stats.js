@@ -59,6 +59,20 @@ export function recordServedCall(slug, method) {
   }
 }
 
+/**
+ * Lightweight DB liveness probe for /health. Reads the cheapest possible
+ * statement (PK lookup on a tiny table) and returns true on success. Never
+ * throws — the caller decides what status code to return.
+ */
+export function dbHealthy() {
+  try {
+    getMeta.get("firstServed");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function getStats({ wallet, walletName, network, toolCount, baseUrl, prices }) {
   const num = (k) => getCounter.get(k)?.n ?? 0;
   const priceOf = (slug) => (prices && Number(prices[slug])) || 0;

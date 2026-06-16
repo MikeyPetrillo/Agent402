@@ -78,7 +78,14 @@ export const DATA_TOOLS = [
       if (!/^[A-Z]{3}$/.test(from) || !/^[A-Z]{3}$/.test(to)) throw bad("from and to must be 3-letter currency codes (e.g. USD, EUR)");
       const amount = Number(i.amount ?? 1);
       if (!Number.isFinite(amount) || amount <= 0) throw bad('"amount" must be a positive number');
-      if (from === to) return { from, to, amount, rate: 1, result: amount, date: new Date().toISOString().slice(0, 10) };
+      // Hit the upstream even on the identity branch so the `date` field is
+      // always sourced from Frankfurter (the authoritative trading day),
+      // never `new Date()`. Keeps the tool deterministic w.r.t. its inputs +
+      // upstream state, which the catalog contract requires.
+      if (from === to) {
+        const jId = await getJson(`https://api.frankfurter.app/latest?from=USD&to=EUR`);
+        return { from, to, amount, rate: 1, result: amount, date: jId.date };
+      }
       const j = await getJson(`https://api.frankfurter.app/latest?from=${from}&to=${to}&amount=${amount}`);
       const result = j.rates?.[to];
       if (result == null) throw bad(`unsupported currency pair ${from}/${to}`, 502);
