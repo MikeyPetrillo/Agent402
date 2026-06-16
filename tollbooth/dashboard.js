@@ -25,20 +25,33 @@ export function dashboardHtml() {
   a{color:var(--accent)}
 </style></head>
 <body><div class="wrap">
-  <h1><span class="badge">402</span> agent402-tollbooth</h1>
+  <h1><span class="badge">402</span> agent402-tollbooth <span id="mode"></span></h1>
   <div class="sub">Live pay-per-crawl stats · refreshes every 5s · <span id="since"></span></div>
   <div class="grid" id="grid"></div>
-  <footer>Bots are <b id="botpct">—</b> of requests. Aggregate counts only (no per-request data). Raw JSON: <a href="/__tollbooth/stats">/__tollbooth/stats</a>.</footer>
+  <footer><b id="botpct">—</b> of requests were classified as AI bots. Aggregate counts only (no per-request data). Raw JSON: <a href="/__tollbooth/stats">/__tollbooth/stats</a>.</footer>
 </div>
 <script>
-const cards=[["requests","Requests",false],["freeAllowed","Humans (free)",false],["charged","Charged (402)","accent"],["powSolved","Proof-of-work paid","accent"],["x402Paid","USDC paid (x402)","accent"],["difficultyNow","PoW difficulty",false]];
+const cards=[
+  ["requests","Requests",false],
+  ["freeAllowed","Humans (free)",false],
+  ["wouldCharge","Would charge (observe)","accent"],
+  ["charged","Charged (402)","accent"],
+  ["powSolved","Proof-of-work paid","accent"],
+  ["x402Paid","USDC paid (x402)","accent"],
+  ["difficultyNow","PoW difficulty",false]
+];
 async function tick(){
   try{
     const s=await (await fetch("/__tollbooth/stats",{cache:"no-store"})).json();
-    document.getElementById("grid").innerHTML=cards.map(([k,label,acc])=>
-      '<div class="card"><div class="k">'+label+'</div><div class="v '+(acc||"")+'">'+(s[k]??0)+'</div></div>').join("");
-    const pct=s.requests?Math.round((s.charged/s.requests)*100):0;
+    document.getElementById("grid").innerHTML=cards.map(function(c){
+      var k=c[0],label=c[1],acc=c[2];
+      if(k==="wouldCharge" && !(s.wouldCharge>0) && !s.observe) return "";
+      return '<div class="card"><div class="k">'+label+'</div><div class="v '+(acc||"")+'">'+(s[k]??0)+'</div></div>';
+    }).join("");
+    var botish=(s.charged||0)+(s.wouldCharge||0);
+    var pct=s.requests?Math.round((botish/s.requests)*100):0;
     document.getElementById("botpct").textContent=pct+"%";
+    document.getElementById("mode").textContent=s.observe?" · OBSERVE":"";
     if(s.since)document.getElementById("since").textContent="since "+new Date(s.since).toLocaleString();
   }catch(e){/* keep last values */}
 }

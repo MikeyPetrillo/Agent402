@@ -65,6 +65,49 @@ unchanged):
   how many were charged, proof-of-work solves, and USDC collected — so you can see
   how much of your traffic is bots and what it's worth.
 
+## Observe before charging (`observe: true`)
+
+You don't have to flip the meter on cold. **Observe-only mode** classifies every
+request as bot vs. human and counts it, but never returns `402`. Deploy for a
+week, watch the dashboard fill, then flip the flag off to start enforcing — no
+other code changes.
+
+```js
+app.use(createTollbooth({ observe: true })); // or TOLLBOOTH_OBSERVE=true
+```
+
+The dashboard grows a **"Would charge"** counter, and bots see a
+`X-Tollbooth-Observed: would-charge` header for log filtering.
+
+## Durable stats + edge analytics
+
+By default, stats live in process memory: fine for single-instance Node,
+useless on the edge or across replicas. Pass a `statsSink` to make them
+survive restarts and aggregate across instances:
+
+```js
+// Cloudflare Workers: aggregate across every isolate using KV
+import { createEdgeTollbooth, kvStatsSink } from "agent402-tollbooth/edge";
+const gate = createEdgeTollbooth({
+  secret: env.TOLLBOOTH_SECRET,
+  statsSink: kvStatsSink(env.TOLLBOOTH_KV),
+});
+ctx.waitUntil(gate.flush()); // ensure deltas land in KV after the response
+```
+
+On the Cloudflare Worker entry, **`/__tollbooth`** and **`/__tollbooth/stats`**
+are auto-mounted before the gate (so they're free and unblockable). With KV
+bound, the dashboard shows one consistent number across every colo.
+
+On Next.js / Vercel Edge, middleware can't host endpoints itself, so a
+companion **route handler** + dashboard **page** ship as drop-in snippets in
+`deploy/nextjs/middleware.js`. The middleware writes via `httpStatsSink` to
+the route handler, which persists into Vercel KV / Upstash.
+
+Build your own sink by implementing `{ incr(field, n?), flush?(), snapshot() }`
+— e.g. a Durable Object for strongly-consistent counters, or pipe into Cloudflare
+Analytics Engine.
+
 ## One-click deploy
 
 Ready-to-copy templates: [`deploy/cloudflare/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare)

@@ -7,6 +7,9 @@
 //
 // See worker.js for a Cloudflare Worker entry, and the README for Next.js.
 import { makeBotMatcher, AI_BOTS } from "./bots.js";
+import { memorySink } from "./sinks.js";
+
+export { memorySink, kvStatsSink, httpStatsSink } from "./sinks.js";
 
 const te = new TextEncoder();
 
@@ -128,11 +131,22 @@ export function createEdgeTollbooth(config = {}) {
     charge,
     free,
     resourceBaseUrl = "",
+    // Observe-only mode: count what would have been charged but never 402. Lets
+    // operators run the gate on a live site for a week before flipping on enforcement.
+    observe = false,
+    // Pluggable durable-stats sink. Default = in-memory (per-isolate, so on the
+    // edge it dies with the isolate — pass kvStatsSink(env.TOLLBOOTH_KV) for
+    // cross-isolate aggregation).
+    statsSink,
     message = "This resource charges automated / AI clients per request. Humans browse free; bots pay in USDC via x402 or by solving a proof-of-work.",
   } = config;
 
   const isBot = makeBotMatcher(botUserAgents);
   const powEngine = pow ? createEdgePow({ secret, difficulty: powDifficulty, store }) : null;
+  const mem = memorySink();
+  const sink = statsSink || mem;
+  const writeThrough = statsSink && statsSink !== mem;
+  const incr = (k, n = 1) => { mem.incr(k, n); if (writeThrough) sink.incr(k, n); };
 
   const looksHuman = (request) => {
     const ua = request.headers.get("user-agent") || "";
@@ -149,17 +163,20 @@ export function createEdgeTollbooth(config = {}) {
     return isBot(request.headers.get("user-agent") || ""); // "bots" (default)
   };
 
-  return async function gate(request) {
-    if (!shouldCharge(request)) return null;
+  async function gate(request) {
+    incr("requests");
+    if (!shouldCharge(request)) { incr("freeAllowed"); return null; }
+    if (observe) { incr("wouldCharge"); return null; }
     const u = new URL(request.url);
     const resource = (resourceBaseUrl ? resourceBaseUrl.replace(/\/$/, "") : "") + u.pathname + u.search;
 
     const sol = request.headers.get("x-pow-solution");
     if (powEngine && sol) {
       const r = await powEngine.verify(sol, resource);
-      if (r.ok) return null;
+      if (r.ok) { incr("powSolved"); return null; }
     }
 
+    incr("charged");
     const body = {
       error: "Payment Required",
       message,
@@ -170,5 +187,14 @@ export function createEdgeTollbooth(config = {}) {
       status: 402,
       headers: { "content-type": "application/json", "x-tollbooth": "pay-per-crawl" },
     });
-  };
+  }
+
+  // Operator surface: in-process mirror (sync), durable snapshot (async),
+  // and an explicit flush() for edge runtimes — the Worker should call this
+  // inside ctx.waitUntil so buffered KV writes actually happen.
+  gate.observe = observe;
+  gate.stats = () => ({ ...mem.snapshot(), observe });
+  gate.snapshot = async () => ({ ...(await sink.snapshot()), observe });
+  gate.flush = () => Promise.resolve(sink.flush && sink.flush());
+  return gate;
 }

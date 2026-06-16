@@ -16,9 +16,11 @@ import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
 import { createPow } from "./pow.js";
 import { makeBotMatcher, AI_BOTS } from "./bots.js";
+import { memorySink } from "./sinks.js";
 
 export { AI_BOTS, makeBotMatcher } from "./bots.js";
 export { createPow, leadingZeroBits } from "./pow.js";
+export { memorySink, kvStatsSink, httpStatsSink } from "./sinks.js";
 
 const VERIFY_TIMEOUT_MS = Number(process.env.TOLLBOOTH_VERIFY_TIMEOUT_MS) || 10_000;
 // Headers a client must never be able to forge through the proxy: the gate's own
@@ -44,6 +46,8 @@ const STRIP_INBOUND = new Set([
  * @param {(req, requirements)=>boolean|Promise<boolean>} [config.verifyX402]  USDC settlement check
  * @param {string} [config.resourceBaseUrl]    absolute base for the x402 `resource`/PoW binding
  * @param {string} [config.message]            human-readable note included in the 402
+ * @param {boolean} [config.observe]           observe-only: classify, count, never 402 (deploy a week before enforcing)
+ * @param {object} [config.statsSink]          pluggable durable-stats sink (default: in-memory). See sinks.js.
  */
 export function createTollbooth(config = {}) {
   const {
@@ -72,6 +76,13 @@ export function createTollbooth(config = {}) {
     adaptive = config.adaptive ?? (process.env.TOLLBOOTH_ADAPTIVE === "true"),
     adaptivePerBit = Number(process.env.TOLLBOOTH_ADAPTIVE_PER_BIT) || 300, // +1 bit per N charged req/min
     maxDifficulty,
+    // Observe-only mode: classify every request as charge-vs-free and count it,
+    // but always let it through (never return 402). Use it to measure a site's
+    // bot traffic for a week before flipping the meter on. Off by default.
+    observe = config.observe ?? (process.env.TOLLBOOTH_OBSERVE === "true"),
+    // Pluggable durable-stats sink. Default = in-memory (current behavior).
+    // See sinks.js for kvStatsSink (Cloudflare KV) and httpStatsSink.
+    statsSink,
     message = "This resource charges automated / AI clients per request. Humans browse free; bots pay in USDC via x402 or by solving a proof-of-work.",
   } = config;
 
@@ -79,7 +90,13 @@ export function createTollbooth(config = {}) {
   const powEngine = pow ? createPow({ difficulty: powDifficulty, secret: powSecret }) : null;
 
   // Passive analytics — never affects request handling, just counts what happens.
-  const stats = { since: new Date().toISOString(), requests: 0, freeAllowed: 0, charged: 0, powSolved: 0, x402Paid: 0 };
+  // `mem` is an always-on in-process mirror so `.stats()` stays synchronous for
+  // single-process Node deployments. A durable `statsSink` (KV/HTTP) is written
+  // through alongside and is the source of truth for `.snapshot()`.
+  const mem = memorySink();
+  const sink = statsSink || mem;
+  const writeThrough = statsSink && statsSink !== mem;
+  const incr = (k, n = 1) => { mem.incr(k, n); if (writeThrough) sink.incr(k, n); };
 
   const looksHuman = (req) => {
     const ua = req.headers["user-agent"] || "";
@@ -118,12 +135,15 @@ export function createTollbooth(config = {}) {
   };
 
   function tollbooth(req, res, next) {
-    stats.requests++;
-    if (!shouldCharge(req)) { stats.freeAllowed++; return next(); }
+    incr("requests");
+    if (!shouldCharge(req)) { incr("freeAllowed"); return next(); }
+    // Observe-only: classify as would-charge but let it through. Lets operators
+    // measure bot traffic on a live site before turning on enforcement.
+    if (observe) { incr("wouldCharge"); res.setHeader("X-Tollbooth-Observed", "would-charge"); return next(); }
     const resource = resourceOf(req);
 
     const send402 = (extra = {}) => {
-      stats.charged++;
+      incr("charged");
       if (adaptive) chargedWindow.push(Date.now());
       const body = {
         error: "Payment Required",
@@ -141,7 +161,7 @@ export function createTollbooth(config = {}) {
     const powHeader = req.headers["x-pow-solution"];
     if (powEngine && powHeader) {
       const r = powEngine.verify(powHeader, resource);
-      if (r.ok) { stats.powSolved++; res.setHeader("X-Tollbooth-Paid", "pow"); return next(); }
+      if (r.ok) { incr("powSolved"); res.setHeader("X-Tollbooth-Paid", "pow"); return next(); }
       res.setHeader("X-Pow-Error", r.reason);
     }
 
@@ -153,7 +173,7 @@ export function createTollbooth(config = {}) {
       const timeout = new Promise((resolve) => setTimeout(() => resolve(false), VERIFY_TIMEOUT_MS));
       return Promise.race([Promise.resolve(verifyX402(req, { price, network, asset, payTo, resource })), timeout])
         .then((ok) => {
-          if (ok) { stats.x402Paid++; res.setHeader("X-Tollbooth-Paid", "x402"); return next(); }
+          if (ok) { incr("x402Paid"); res.setHeader("X-Tollbooth-Paid", "x402"); return next(); }
           send402();
         })
         .catch(() => { res.setHeader("X-Tollbooth-Error", "x402-verify-failed"); send402(); });
@@ -164,9 +184,13 @@ export function createTollbooth(config = {}) {
 
   tollbooth.shouldCharge = shouldCharge;
   tollbooth.pow = powEngine;
+  tollbooth.observe = observe;
   // Live counters for operators: how much traffic, how much was charged, and how
   // it was settled. A point-in-time snapshot (never mutated by the caller).
-  tollbooth.stats = () => ({ ...stats, difficultyNow: difficultyNow() });
+  // .stats() is sync (in-process mirror). .snapshot() is async (durable sink).
+  tollbooth.stats = () => ({ ...mem.snapshot(), difficultyNow: difficultyNow(), observe });
+  tollbooth.snapshot = async () => ({ ...(await sink.snapshot()), difficultyNow: difficultyNow(), observe });
+  tollbooth.flush = () => Promise.resolve(sink.flush && sink.flush());
   return tollbooth;
 }
 

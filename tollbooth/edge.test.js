@@ -1,5 +1,5 @@
 // Offline test for the edge gate (Web Crypto + Fetch globals; Node 20+).
-import { createEdgeTollbooth } from "./edge.js";
+import { createEdgeTollbooth, memorySink } from "./edge.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
 const lz = (bytes) => { let n = 0; for (const b of bytes) { if (b === 0) { n += 8; continue; } n += Math.clz32(b) - 24; break; } return n; };
@@ -52,5 +52,32 @@ for (const path of ["/blog/post.html", "/a?v=1.2.3", "/feed.xml?since=2024.01"])
   if (rr !== null) fail(`edge dotted path ${path} should unlock with valid PoW, got ${rr && rr.status}`);
 }
 console.log("6. edge: dotted paths + query strings unlock correctly ✓");
+
+// 7. Stats counter exists on the edge gate (regression: didn't before 0.3.0).
+const counted = createEdgeTollbooth({ secret: "test-secret", powDifficulty: 12 });
+await counted(req(HUMAN));
+await counted(req(BOT));
+const s = counted.stats();
+if (s.requests !== 2 || s.freeAllowed !== 1 || s.charged !== 1) fail(`edge stats wrong: ${JSON.stringify(s)}`);
+console.log("7. edge gate exposes .stats() counters ✓");
+
+// 8. Observe mode: never returns a 402; bumps wouldCharge.
+const obs = createEdgeTollbooth({ secret: "test-secret", observe: true, powDifficulty: 12 });
+const oRes = await obs(req(BOT));
+if (oRes !== null) fail(`observe must never 402, got ${oRes && oRes.status}`);
+const oStats = obs.stats();
+if (oStats.wouldCharge !== 1 || oStats.observe !== true) fail(`observe stats wrong: ${JSON.stringify(oStats)}`);
+console.log("8. edge observe mode: bot lets through, wouldCharge counted ✓");
+
+// 9. Pluggable statsSink: snapshot() returns the sink's view (durable path).
+const externalSink = memorySink();
+const piped = createEdgeTollbooth({ secret: "test-secret", powDifficulty: 12, statsSink: externalSink });
+await piped(req(HUMAN));
+await piped(req(BOT));
+const durable = await piped.snapshot();
+if (durable.requests !== 2 || durable.charged !== 1) fail(`edge durable snapshot wrong: ${JSON.stringify(durable)}`);
+// flush() is a no-op for memorySink but must resolve.
+await piped.flush();
+console.log("9. edge statsSink: snapshot() reads from sink, flush() resolves ✓");
 
 console.log("\nedge tollbooth: all assertions passed ✓");

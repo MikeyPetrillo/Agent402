@@ -8,9 +8,13 @@
 //   [vars]
 //   TOLLBOOTH_UPSTREAM = "https://your-origin.example.com"
 //   TOLLBOOTH_PAYTO    = "0xYourWallet"        # optional (advertises USDC quote)
+//   TOLLBOOTH_OBSERVE  = "true"                # optional: observe-only, never 402
+//   TOLLBOOTH_STATS_TOKEN = "any long string"  # optional: gate /__tollbooth/stats
 //   # secret (required): wrangler secret put TOLLBOOTH_SECRET
 //   # optional single-use store: [[kv_namespaces]] binding = "TOLLBOOTH_KV"
-import { createEdgeTollbooth } from "./edge.js";
+//   # ↑ same TOLLBOOTH_KV is reused for durable stats aggregation across isolates.
+import { createEdgeTollbooth, kvStatsSink } from "./edge.js";
+import { dashboardHtml } from "./dashboard.js";
 
 const kvStore = (kv) => ({
   // Best-effort atomic claim. KV has no native compare-and-set, so this is
@@ -24,7 +28,7 @@ const kvStore = (kv) => ({
 });
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (!env.TOLLBOOTH_SECRET) {
       return new Response("Tollbooth misconfigured: set TOLLBOOTH_SECRET (wrangler secret put TOLLBOOTH_SECRET)", { status: 500 });
     }
@@ -33,6 +37,11 @@ export default {
       // can be reused across isolates within its TTL. Bind a KV namespace for prod.
       console.warn("agent402-tollbooth: no TOLLBOOTH_KV bound — proof-of-work replay protection is per-isolate only. Bind a KV namespace for production.");
     }
+    // Durable stats live in KV if a namespace is bound. Without it, the dashboard
+    // is per-isolate (dies on cold start) — fine for dev, useless for prod.
+    const statsSink = env.TOLLBOOTH_KV
+      ? kvStatsSink(env.TOLLBOOTH_KV, { bucket: env.TOLLBOOTH_STATS_BUCKET || "default" })
+      : undefined;
     const gate = createEdgeTollbooth({
       secret: env.TOLLBOOTH_SECRET,
       price: env.TOLLBOOTH_PRICE || "$0.001",
@@ -40,9 +49,30 @@ export default {
       network: env.TOLLBOOTH_NETWORK || "base",
       powDifficulty: env.TOLLBOOTH_POW_BITS ? Number(env.TOLLBOOTH_POW_BITS) : undefined,
       store: env.TOLLBOOTH_KV ? kvStore(env.TOLLBOOTH_KV) : undefined,
+      observe: env.TOLLBOOTH_OBSERVE === "true",
+      statsSink,
     });
 
+    // Free, never-gated operator endpoints. Mounted BEFORE the gate so they
+    // can't be paywalled — and so the dashboard polls work even when the rest
+    // of the origin is fully gated.
+    const u = new URL(request.url);
+    if (u.pathname === "/__tollbooth" || u.pathname === "/__tollbooth/") {
+      return new Response(dashboardHtml(), { headers: { "content-type": "text/html; charset=utf-8" } });
+    }
+    if (u.pathname === "/__tollbooth/stats") {
+      // Optional bearer-token gate — share with your monitoring caller.
+      if (env.TOLLBOOTH_STATS_TOKEN) {
+        const got = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+        if (got !== env.TOLLBOOTH_STATS_TOKEN) return new Response("unauthorized", { status: 401 });
+      }
+      const snap = await gate.snapshot();
+      return new Response(JSON.stringify(snap), { headers: { "content-type": "application/json" } });
+    }
+
     const blocked = await gate(request);
+    // Flush any buffered stats to KV after we've replied — survives the response.
+    if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(gate.flush());
     if (blocked) return blocked;
 
     // Allowed → proxy to the origin.
