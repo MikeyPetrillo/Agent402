@@ -28,6 +28,7 @@ import { DEMAND_TOOLS } from "./tools/demand-kit.js";
 import { MEDIA_TOOLS } from "./tools/media-kit.js";
 import { GOV_TOOLS } from "./tools/gov-kit.js";
 import { GEO_TOOLS } from "./tools/geo-kit.js";
+import { OCR_TOOLS } from "./tools/ocr-kit.js";
 import { AGENT_TOOLS } from "./tools/agent-kit.js";
 import { BARCODE_TOOLS } from "./tools/barcode-kit.js";
 import { DATA_TOOLS } from "./tools/data-kit.js";
@@ -38,9 +39,9 @@ import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } 
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS } from "./pow.js";
-import { recordServedCall, getStats, getOperatorBreakdown, dbHealthy } from "./stats.js";
+import { recordServedCall, recordChargedFailure, getStats, getOperatorBreakdown, dbHealthy } from "./stats.js";
 import { timingSafeEqual, createHash } from "node:crypto";
 import { marketplaceSlugToken } from "./marketplace-token.js";
 
@@ -889,7 +890,18 @@ app.use((req, res, next) => {
     res.on("finish", () => {
       // Attribute by what the gate actually ACCEPTED, not by header presence —
       // an invalid PoW header on a USDC-settled call must count as usdc.
-      if (res.statusCode === 200) recordServedCall(def.slug, res.getHeader("X-Pow-Accepted") === "true" ? "pow" : "usdc");
+      // Heartbeat probe (PoW-accepted + agent402-heartbeat UA) is its own rail
+      // so the operator dashboard reflects real external traffic.
+      if (res.statusCode === 200) {
+        const powAccepted = res.getHeader("X-Pow-Accepted") === "true";
+        const isHeartbeat = powAccepted && /^agent402-heartbeat\//.test(req.header("user-agent") || "");
+        recordServedCall(def.slug, isHeartbeat ? "heartbeat" : powAccepted ? "pow" : "usdc");
+      } else if (res.getHeader("X-PAYMENT-RESPONSE")) {
+        // x402 middleware sets X-PAYMENT-RESPONSE only after USDC settlement
+        // succeeded. A non-200 with this header set means we charged the buyer
+        // on-chain but the handler errored — they paid for nothing. Track it.
+        recordChargedFailure(def.slug, res.statusCode);
+      }
     });
   }
   next();

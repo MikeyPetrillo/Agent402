@@ -864,7 +864,11 @@ jobs:
       - name: Revenue + real-usage check (stats vs on-chain receipts)
         run: |
           echo "=== production /api/stats (calls served, split by settlement) ==="
-          curl -s https://agent402.tools/api/stats | jq '{tools, served: .toolCallsServed, topTools}' || true
+          STATS=$(curl -s https://agent402.tools/api/stats)
+          echo "$STATS" | jq '{tools, served: .toolCallsServed, topTools, topPaidTools, estimatedRevenueUsd}' || true
+          echo
+          echo "=== production /api/stats — last 25 served calls (slug + rail + time) ==="
+          echo "$STATS" | jq '.recentCalls' || true
           echo
           node --input-type=module -e '
           const WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0".toLowerCase();
