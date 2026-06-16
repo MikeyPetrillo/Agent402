@@ -161,12 +161,16 @@ console.log("\n=== D. Attribution integrity ===");
   ok("D2", "PoW call does NOT echo buyer's X-PAYMENT-RESPONSE", r.headers.get("x-payment-response") !== "buyer-set", `got ${r.headers.get("x-payment-response")}`);
 }
 {
-  // FINDING: heartbeat attribution is by User-Agent regex /^agent402-heartbeat/.
-  // Anyone can spoof. Document explicitly.
+  // Heartbeat attribution: was a UA regex (spoofable), now requires a POW_SECRET-
+  // signed X-Heartbeat-Token. A spoofed UA without the token must succeed
+  // (auth-wise) but the server must NOT classify it as heartbeat traffic. We
+  // can't see the stats classification directly from a buyer perspective, so
+  // we just confirm the request still 200s — the unit test in scripts/
+  // test-heartbeat-token.js covers the verify side.
   const ch = await getChallenge("hash");
   const n = solvePow(ch);
   const r = await callTool("/api/hash", { text: "abc" }, { "X-Pow-Solution": `${ch.token}:${n}`, "User-Agent": "agent402-heartbeat/spoofed" });
-  ok("D3-FINDING", "heartbeat attribution is UA-based (spoofable - documented)", r.status === 200, `status=${r.status}`);
+  ok("D3", "spoofed heartbeat UA still served as PoW (attribution gated on signed token)", r.status === 200, `status=${r.status}`);
 }
 
 console.log("\n=== E. Idempotency ===");
