@@ -43,10 +43,15 @@ const cards=[
 async function tick(){
   try{
     const s=await (await fetch("/__tollbooth/stats",{cache:"no-store"})).json();
+    // Counters are always numbers — coerce, never trust raw JSON from the
+    // configured stats endpoint (a compromised collector with httpStatsSink
+    // could otherwise inject HTML through this innerHTML sink).
     document.getElementById("grid").innerHTML=cards.map(function(c){
       var k=c[0],label=c[1],acc=c[2];
-      if(k==="wouldCharge" && !(s.wouldCharge>0) && !s.observe) return "";
-      return '<div class="card"><div class="k">'+label+'</div><div class="v '+(acc||"")+'">'+(s[k]??0)+'</div></div>';
+      if(k==="wouldCharge" && !(Number(s.wouldCharge)>0) && !s.observe) return "";
+      var v=Number(s[k]); if(!Number.isFinite(v)) v=0;
+      var lbl=String(label).replace(/[&<>"']/g,function(ch){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch];});
+      return '<div class="card"><div class="k">'+lbl+'</div><div class="v '+(acc||"")+'">'+v+'</div></div>';
     }).join("");
     var botish=(s.charged||0)+(s.wouldCharge||0);
     var pct=s.requests?Math.round((botish/s.requests)*100):0;

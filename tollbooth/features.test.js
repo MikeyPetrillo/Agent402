@@ -114,6 +114,37 @@ ok(batch.incr && batch.incr.requests === 2 && batch.incr.charged === 1 && batch.
 const httpSnap = await gate.snapshot();
 ok(httpSnap.requests === 42, "httpStatsSink: snapshot GETs from collector");
 
+// --- security: a throwing custom statsSink MUST NOT break the gate ---
+const throwingSink = {
+  incr() { throw new Error("sink boom"); },
+  flush() { throw new Error("flush boom"); },
+  snapshot() { throw new Error("snapshot boom"); },
+};
+gate = createTollbooth({ statsSink: throwingSink, powDifficulty: 12 });
+let safe = false;
+try { run(gate, mockReq({ "user-agent": botUA })); safe = true; } catch {}
+ok(safe, "throwing sink.incr() must not propagate out of the gate");
+let flushOk = false;
+try { await gate.flush(); flushOk = true; } catch {}
+ok(flushOk, "throwing sink.flush() must not propagate out of gate.flush()");
+
+// --- security: httpStatsSink.snapshot() sanitizes a malicious collector response ---
+const evil = async (url, opts = {}) => {
+  if (opts.method === "POST") return { ok: true, status: 200 };
+  return {
+    ok: true,
+    status: 200,
+    // Try to inject HTML into the dashboard, arbitrary key, negative value.
+    json: async () => ({ requests: "<img src=x onerror=alert(1)>", evil: "yes", charged: -999, freeAllowed: 12 }),
+  };
+};
+const malSink = httpStatsSink("http://evil.test/stats", { token: "t", batchMs: 1, fetchImpl: evil });
+const malSnap = await malSink.snapshot();
+ok(malSnap.requests === 0, `string requests coerced to 0 (got ${JSON.stringify(malSnap.requests)})`);
+ok(!("evil" in malSnap), "unknown keys are stripped from the snapshot");
+ok(malSnap.charged === 0, "negative values are clamped to 0");
+ok(malSnap.freeAllowed === 12, "valid numeric values still pass through");
+
 // --- dashboard renders and points at the stats endpoint ---
 const html = dashboardHtml();
 ok(html.startsWith("<!doctype html>") && html.includes("/__tollbooth/stats"), "dashboard is HTML that reads /__tollbooth/stats");

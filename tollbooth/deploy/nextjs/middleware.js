@@ -73,20 +73,36 @@ export const config = {
 //
 //   export const runtime = "edge";
 //
+//   // Whitelist of known counters. The POST body is attacker-controlled (anyone
+//   // who knows the URL + token can call it), so NEVER interpolate the raw
+//   // field name into the KV key — that'd let a misbehaving caller pollute
+//   // the namespace with arbitrary keys (e.g. "../" or "rm -rf"). Also clamp
+//   // deltas to non-negative integers so they can't be used to zero out
+//   // a real counter or write floats.
+//   const FIELDS = ["requests", "freeAllowed", "wouldCharge", "charged", "powSolved", "x402Paid"];
+//
+//   function ctEq(a, b) {           // constant-time compare on the bearer token
+//     a = String(a || ""); b = String(b || "");
+//     if (a.length !== b.length) return false;
+//     let r = 0; for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+//     return r === 0;
+//   }
+//
 //   export async function POST(req) {
-//     const auth = req.headers.get("authorization") || "";
-//     if (auth.replace(/^Bearer\s+/i, "") !== process.env.TOLLBOOTH_STATS_TOKEN) {
+//     const auth = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+//     if (!ctEq(auth, process.env.TOLLBOOTH_STATS_TOKEN)) {
 //       return new NextResponse("unauthorized", { status: 401 });
 //     }
-//     const { incr } = await req.json();
-//     await Promise.all(Object.entries(incr || {}).map(([k, n]) => kv.incrby(`tb:stats:${k}`, Number(n) || 0)));
+//     const { incr = {} } = await req.json();
+//     await Promise.all(FIELDS
+//       .filter((f) => Number(incr[f]) > 0)
+//       .map((f) => kv.incrby(`tb:stats:${f}`, Math.max(0, Math.floor(Number(incr[f]))))));
 //     return NextResponse.json({ ok: true });
 //   }
 //
 //   export async function GET() {
-//     const fields = ["requests", "freeAllowed", "wouldCharge", "charged", "powSolved", "x402Paid"];
-//     const values = await kv.mget(...fields.map((f) => `tb:stats:${f}`));
-//     return NextResponse.json(Object.fromEntries(fields.map((f, i) => [f, Number(values[i] || 0)])));
+//     const values = await kv.mget(...FIELDS.map((f) => `tb:stats:${f}`));
+//     return NextResponse.json(Object.fromEntries(FIELDS.map((f, i) => [f, Number(values[i] || 0)])));
 //   }
 //
 // And drop in app/__tollbooth/page.jsx (or pages/__tollbooth.jsx):

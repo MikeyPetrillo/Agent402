@@ -16,6 +16,17 @@
 import { createEdgeTollbooth, kvStatsSink } from "./edge.js";
 import { dashboardHtml } from "./dashboard.js";
 
+// Constant-time string compare — Cloudflare Workers don't ship node:crypto's
+// timingSafeEqual. Short-circuiting `===` on a secret token leaks length and
+// prefix bits to a sufficiently patient attacker; this doesn't.
+function constEq(a, b) {
+  a = String(a || ""); b = String(b || "");
+  if (a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}
+
 const kvStore = (kv) => ({
   // Best-effort atomic claim. KV has no native compare-and-set, so this is
   // get-then-put (eventually consistent); for strict single-use, back it with a
@@ -61,10 +72,13 @@ export default {
       return new Response(dashboardHtml(), { headers: { "content-type": "text/html; charset=utf-8" } });
     }
     if (u.pathname === "/__tollbooth/stats") {
-      // Optional bearer-token gate — share with your monitoring caller.
+      // Optional bearer-token gate — share with your monitoring caller. We
+      // recommend setting this in any prod deploy: without it, anyone on the
+      // internet can read aggregate counts (no per-request data, but still
+      // potentially sensitive competitive info).
       if (env.TOLLBOOTH_STATS_TOKEN) {
         const got = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
-        if (got !== env.TOLLBOOTH_STATS_TOKEN) return new Response("unauthorized", { status: 401 });
+        if (!constEq(got, env.TOLLBOOTH_STATS_TOKEN)) return new Response("unauthorized", { status: 401 });
       }
       const snap = await gate.snapshot();
       return new Response(JSON.stringify(snap), { headers: { "content-type": "application/json" } });

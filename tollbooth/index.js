@@ -96,7 +96,12 @@ export function createTollbooth(config = {}) {
   const mem = memorySink();
   const sink = statsSink || mem;
   const writeThrough = statsSink && statsSink !== mem;
-  const incr = (k, n = 1) => { mem.incr(k, n); if (writeThrough) sink.incr(k, n); };
+  // Never let a buggy custom sink throw inside the request path — stats are
+  // non-critical and must not be able to break a payment decision.
+  const incr = (k, n = 1) => {
+    try { mem.incr(k, n); } catch { /* ignore */ }
+    if (writeThrough) { try { sink.incr(k, n); } catch { /* ignore */ } }
+  };
 
   const looksHuman = (req) => {
     const ua = req.headers["user-agent"] || "";
@@ -190,7 +195,10 @@ export function createTollbooth(config = {}) {
   // .stats() is sync (in-process mirror). .snapshot() is async (durable sink).
   tollbooth.stats = () => ({ ...mem.snapshot(), difficultyNow: difficultyNow(), observe });
   tollbooth.snapshot = async () => ({ ...(await sink.snapshot()), difficultyNow: difficultyNow(), observe });
-  tollbooth.flush = () => Promise.resolve(sink.flush && sink.flush());
+  // Swallow flush errors — flush() is typically wired to ctx.waitUntil on the
+  // edge; an unhandled rejection there pollutes logs without affecting the
+  // already-sent response.
+  tollbooth.flush = async () => { try { if (sink.flush) await sink.flush(); } catch { /* ignore */ } };
   return tollbooth;
 }
 

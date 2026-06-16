@@ -146,7 +146,12 @@ export function createEdgeTollbooth(config = {}) {
   const mem = memorySink();
   const sink = statsSink || mem;
   const writeThrough = statsSink && statsSink !== mem;
-  const incr = (k, n = 1) => { mem.incr(k, n); if (writeThrough) sink.incr(k, n); };
+  // Stats must never break a request path — a buggy custom sink can throw
+  // synchronously; we shrug and continue.
+  const incr = (k, n = 1) => {
+    try { mem.incr(k, n); } catch { /* ignore */ }
+    if (writeThrough) { try { sink.incr(k, n); } catch { /* ignore */ } }
+  };
 
   const looksHuman = (request) => {
     const ua = request.headers.get("user-agent") || "";
@@ -195,6 +200,8 @@ export function createEdgeTollbooth(config = {}) {
   gate.observe = observe;
   gate.stats = () => ({ ...mem.snapshot(), observe });
   gate.snapshot = async () => ({ ...(await sink.snapshot()), observe });
-  gate.flush = () => Promise.resolve(sink.flush && sink.flush());
+  // flush() is typically wired to ctx.waitUntil — swallow errors so a sink
+  // outage can't surface as an unhandled rejection after the response.
+  gate.flush = async () => { try { if (sink.flush) await sink.flush(); } catch { /* ignore */ } };
   return gate;
 }

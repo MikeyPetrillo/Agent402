@@ -16,14 +16,24 @@
 // Want strong consistency on Cloudflare? Back it with a Durable Object that
 // implements the same { incr, snapshot } interface and pass it as `statsSink`.
 
-const ZERO = () => ({
-  requests: 0,
-  freeAllowed: 0,
-  wouldCharge: 0,
-  charged: 0,
-  powSolved: 0,
-  x402Paid: 0,
-});
+const KNOWN_FIELDS = ["requests", "freeAllowed", "wouldCharge", "charged", "powSolved", "x402Paid"];
+const ZERO = () => Object.fromEntries(KNOWN_FIELDS.map((k) => [k, 0]));
+
+// Filter an untrusted JSON blob (KV value or HTTP collector response) to only
+// the known numeric counters. Prevents a compromised store from injecting
+// arbitrary keys or non-numeric values that downstream renderers (e.g.
+// dashboard.js) might treat as HTML. Defense in depth — the dashboard also
+// coerces, but trim at the boundary.
+const sanitize = (obj) => {
+  const out = ZERO();
+  if (!obj || typeof obj !== "object") return out;
+  for (const k of KNOWN_FIELDS) {
+    const v = Number(obj[k]);
+    if (Number.isFinite(v) && v >= 0) out[k] = v;
+  }
+  if (typeof obj.since === "string" && obj.since.length < 64) out.since = obj.since;
+  return out;
+};
 
 /** In-process counter. Synchronous; loses state on restart. */
 export function memorySink() {
@@ -77,9 +87,11 @@ export function kvStatsSink(kv, { bucket = "default", ttlSeconds = 60 * 60 * 24 
           if (!raw) continue;
           let obj; try { obj = JSON.parse(raw); } catch { continue; }
           if (typeof obj._ts === "number" && obj._ts < oldest) oldest = obj._ts;
-          for (const [k, n] of Object.entries(obj)) {
-            if (k === "_ts") continue;
-            if (typeof n === "number") result[k] = (result[k] || 0) + n;
+          // Whitelist + numeric coerce: a misconfigured (or compromised) KV
+          // entry can't smuggle arbitrary keys or strings into the snapshot.
+          for (const k of KNOWN_FIELDS) {
+            const v = Number(obj[k]);
+            if (Number.isFinite(v) && v >= 0) result[k] = (result[k] || 0) + v;
           }
         }
         cursor = page.cursor;
@@ -140,8 +152,10 @@ export function httpStatsSink(url, { token, batchMs = 2000, fetchImpl } = {}) {
           signal: AbortSignal.timeout(5000),
         });
         if (!r.ok) return ZERO();
-        const j = await r.json();
-        return { ...ZERO(), ...j };
+        // Sanitize at the trust boundary — a compromised or misconfigured
+        // collector cannot inject non-numeric values or extra keys that the
+        // dashboard would render as HTML.
+        return sanitize(await r.json());
       } catch { return ZERO(); }
     },
   };
