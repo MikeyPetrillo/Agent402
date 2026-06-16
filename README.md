@@ -12,6 +12,13 @@
 [![CI](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
+**Framework adapters** (drop-in tools for the major agent stacks — auto-payment underneath):
+[![npm](https://img.shields.io/npm/v/agent402-openai-tools?label=openai-tools)](https://www.npmjs.com/package/agent402-openai-tools)
+[![npm](https://img.shields.io/npm/v/agent402-anthropic-tools?label=anthropic-tools)](https://www.npmjs.com/package/agent402-anthropic-tools)
+[![npm](https://img.shields.io/npm/v/agent402-ai-sdk?label=ai-sdk)](https://www.npmjs.com/package/agent402-ai-sdk)
+[![npm](https://img.shields.io/npm/v/agent402-langchain?label=langchain)](https://www.npmjs.com/package/agent402-langchain)
+[![npm](https://img.shields.io/npm/v/agent402-llamaindex?label=llamaindex)](https://www.npmjs.com/package/agent402-llamaindex)
+
 **Give your AI agent ~1,100 ready-to-use web tools from one server — browser
 rendering, web search, PDFs, images, live data, crypto/payments helpers, and
 ~1,040 pure-CPU utilities.** Run it yourself for free in 30 seconds (MCP **or**
@@ -92,6 +99,31 @@ import { Agent402 } from "agent402-client";
 const a = new Agent402();                       // free tier (proof-of-work)
 const out = await a.call("hash", { text: "hello world", algo: "sha256" });
 ```
+
+## Plug into your agent framework (zero-dep adapters)
+
+If you're already on OpenAI / Anthropic / Vercel AI SDK / LangChain / LlamaIndex, skip the wiring — there's a drop-in package that turns the Agent402 catalog into native tool objects for your framework, with payment handled underneath (proof-of-work for free tools, x402+USDC when you pass an `@x402/fetch`):
+
+| Stack | npm | Returns |
+|---|---|---|
+| OpenAI function-calling (chat.completions / Assistants v2 / Responses) | [`agent402-openai-tools`](https://www.npmjs.com/package/agent402-openai-tools) | `tools[]` for `tools:` param |
+| Anthropic Messages API (`tool_use`) | [`agent402-anthropic-tools`](https://www.npmjs.com/package/agent402-anthropic-tools) | `tools[]` for `tools:` param |
+| Vercel AI SDK (`streamText` / `generateText`) | [`agent402-ai-sdk`](https://www.npmjs.com/package/agent402-ai-sdk) | `Record<name, tool()>` |
+| LangChain JS / LangGraph | [`agent402-langchain`](https://www.npmjs.com/package/agent402-langchain) | `DynamicStructuredTool[]` |
+| LlamaIndex TS | [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) | `FunctionTool[]` |
+
+```js
+// e.g. OpenAI — every adapter has the same surface.
+import OpenAI from "openai";
+import { agent402Tools } from "agent402-openai-tools";
+
+const openai = new OpenAI();
+const { tools, execute } = await agent402Tools({ slugs: ["extract", "hash", "render"] });
+const res = await openai.chat.completions.create({ model: "gpt-4o-mini", tools, messages: [...] });
+// when the model returns a tool call: await execute(call.function.name, JSON.parse(call.function.arguments));
+```
+
+Already a Claude/MCP user? `agent402-mcp` is still the better path — paste `https://agent402.tools/mcp` into your client. The adapters are for direct API integrations where MCP isn't available. Sources: [`adapters/`](adapters).
 
 ## Add your own tool (~15 lines)
 
@@ -205,6 +237,9 @@ Next.js middleware, via one Web-Crypto core). See [tollbooth/README.md](tollboot
 | `src/pow.js` | Proof-of-work tier (signed, single-use, slug-scoped challenges) |
 | `src/payments.js` | Optional x402 v2 wiring: USDC on Base, CDP facilitator, Bazaar discovery |
 | `mcp/` | The `agent402-mcp` npm package (stdio MCP server) |
+| `client/` | The `agent402-client` buyer SDK (`find()` + `call()` with auto-payment) |
+| `tollbooth/` | The `agent402-tollbooth` pay-per-crawl gate (Express / edge / proxy) |
+| `adapters/` | Drop-in tools for OpenAI / Anthropic / AI SDK / LangChain / LlamaIndex |
 | `wiki/` | Source for the [GitHub wiki](https://github.com/MikeyPetrillo/Agent402/wiki) (CI-synced) |
 | `scripts/` | Tests, demos, ops tooling |
 

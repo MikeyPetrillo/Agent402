@@ -1,6 +1,6 @@
 {
   "name": "agent402-langchain",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Drop-in LangChain JS tools for Agent402: turn 1,000+ pay-per-call web tools into DynamicStructuredTool instances, with auto-payment (proof-of-work free, USDC via x402 paid). Works with LangGraph, agents, and LCEL chains. Zero deps.",
   "type": "module",
   "main": "index.js",

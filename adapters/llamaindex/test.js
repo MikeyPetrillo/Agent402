@@ -11,7 +11,9 @@ if (!existsSync(join(HERE, "node_modules", "agent402-client"))) {
   execSync("npm install ../../client --no-save --silent", { cwd: HERE, stdio: "inherit" });
 }
 if (!existsSync(join(HERE, "node_modules", "llamaindex"))) {
-  execSync("npm install llamaindex --no-save --silent", { cwd: HERE, stdio: "inherit" });
+  // Pinned to a known-good major so a future malicious release of `llamaindex`
+  // can't land here unreviewed on the next CI run.
+  execSync("npm install llamaindex@^0.12 --no-save --silent", { cwd: HERE, stdio: "inherit" });
 }
 
 const { agent402Tools, agent402Execute } = await import("./index.js");

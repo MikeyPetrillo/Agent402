@@ -1,6 +1,6 @@
 {
   "name": "agent402-llamaindex",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Drop-in LlamaIndex TS tools for Agent402: turn 1,000+ pay-per-call web tools into FunctionTool instances, with auto-payment (proof-of-work free, USDC via x402 paid). Works with OpenAIAgent, AnthropicAgent, ReActAgent, and Workflows. Zero deps.",
   "type": "module",
   "main": "index.js",

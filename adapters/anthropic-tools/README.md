@@ -56,6 +56,10 @@ const { tools, execute } = await agent402Tools({
 const { tools, execute } = await agent402Tools({ baseUrl: "https://agent402.example.com" });
 ```
 
+## Trust & `baseUrl`
+
+The catalog server you point `baseUrl` at controls the **name, description, and JSON Schema** of every generated tool — and tool descriptions are passed to Claude. Only point `baseUrl` at an Agent402 instance you operate or trust. The default (`https://agent402.tools`) is the maintained, open-source hosted instance.
+
 ## License
 
 MIT

@@ -11,7 +11,9 @@ if (!existsSync(join(HERE, "node_modules", "agent402-client"))) {
   execSync("npm install ../../client --no-save --silent", { cwd: HERE, stdio: "inherit" });
 }
 if (!existsSync(join(HERE, "node_modules", "@langchain", "core"))) {
-  execSync("npm install @langchain/core zod --no-save --silent", { cwd: HERE, stdio: "inherit" });
+  // Pinned to known-good majors so a future malicious release of either
+  // package can't land here unreviewed on the next CI run.
+  execSync("npm install @langchain/core@^1 zod@^4 --no-save --silent", { cwd: HERE, stdio: "inherit" });
 }
 
 const { agent402Tools, agent402Execute } = await import("./index.js");

@@ -17,6 +17,7 @@
 | [[Paying with x402]] | USDC payments: the 402 flow, code, spend controls, Stripe's `purl` |
 | [[Paying with Compute]] | The proof-of-work tier: spec + reference solver |
 | [[MCP Connector]] | Hosted connector + the `agent402-mcp` npm server |
+| [[Adapters]] | Drop-in tools for OpenAI / Anthropic / AI SDK / LangChain / LlamaIndex |
 | [[Tool Catalog]] | What the ~1,100 tools are and how agents discover them |
 | [[Payments and x402]] | Non-custodial multi-chain payment toolkit: quote, verify, balance, gas, transfer-auth, ENS |
 | [[Pay-per-crawl]] | `agent402-tollbooth`: charge AI crawlers to access your site (USDC via x402 or proof-of-work) |
