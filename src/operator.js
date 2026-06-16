@@ -19,10 +19,12 @@ export function operatorPage(baseUrl, token, data) {
     <td class="num">${esc(r.calls)}</td>
     <td class="num paid">${esc(r.paid)}</td>
     <td class="num pow">${esc(r.pow)}</td>
+    <td class="num hb">${esc(r.heartbeat || 0)}</td>
     <td class="num rev">$${esc(r.revenueUsd.toFixed(4))}</td>
     <td class="num muted">$${esc(r.pricePerCall.toFixed(4))}</td>
   </tr>`).join("");
-  const feed = recent.map((r) => `<li><span class="rs">${esc(r.slug)}</span><span class="rm">${r.paidWith === "proof-of-work" ? "⚙ PoW" : "$ USDC"}</span><span class="ra">${esc(r.at)}</span></li>`).join("");
+  const feedIcon = (m) => m === "proof-of-work" ? "⚙ PoW" : m === "heartbeat" ? "♥ HB" : "$ USDC";
+  const feed = recent.map((r) => `<li><span class="rs">${esc(r.slug)}</span><span class="rm">${feedIcon(r.paidWith)}</span><span class="ra">${esc(r.at)}</span></li>`).join("");
 
   return `<!doctype html>
 <html lang="en">
@@ -33,7 +35,7 @@ export function operatorPage(baseUrl, token, data) {
 <meta name="robots" content="noindex,nofollow">
 ${CHROME_HEAD_LINKS}
 <style>
-  :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --line:#1e2638; --card:#0f1320; --pow:#60a5fa; --paid:#4ade80; }
+  :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --line:#1e2638; --card:#0f1320; --pow:#60a5fa; --paid:#4ade80; --hb:#a78bfa; }
   body { background:var(--bg); color:var(--fg); font:14px/1.55 system-ui,-apple-system,sans-serif; margin:0; }
   .wrap { max-width:1180px; margin:0 auto; padding:28px 20px 24px; }
   h1 { font-size:1.4rem; margin:0 0 4px; }
@@ -57,6 +59,7 @@ ${CHROME_HEAD_LINKS}
   td.num { font-family:ui-monospace,Menlo,monospace; text-align:right; }
   td.paid { color:var(--paid); }
   td.pow { color:var(--pow); }
+  td.hb { color:var(--hb); }
   td.rev { color:var(--accent); font-weight:600; }
   td.muted { color:var(--muted); }
   td a { color:var(--fg); text-decoration:none; }
@@ -82,7 +85,8 @@ ${CHROME_HEAD_LINKS}
 <div class="grid">
   <div class="stat"><div class="k">Total calls</div><div class="v" id="t-total">${esc(t.total ?? 0)}</div><div class="s">all tools, all rails</div></div>
   <div class="stat"><div class="k">USDC settled</div><div class="v" id="t-usdc">${esc(t.viaUSDC ?? 0)}</div><div class="s">on-chain proof at wallet</div></div>
-  <div class="stat"><div class="k">Proof-of-work</div><div class="v" id="t-pow">${esc(t.viaProofOfWork ?? 0)}</div><div class="s">free tier</div></div>
+  <div class="stat"><div class="k">PoW (external)</div><div class="v" id="t-pow">${esc(t.viaProofOfWork ?? 0)}</div><div class="s">real free-tier adoption</div></div>
+  <div class="stat"><div class="k">Heartbeat probes</div><div class="v" id="t-hb">${esc(t.viaHeartbeat ?? 0)}</div><div class="s">internal /api/hash probe</div></div>
   <div class="stat"><div class="k">Estimated revenue</div><div class="v" id="t-rev">$${esc((t.estimatedRevenueUsd ?? 0).toFixed ? t.estimatedRevenueUsd.toFixed(4) : t.estimatedRevenueUsd)}</div><div class="s">counter; chain is truth</div></div>
   <div class="stat"><div class="k">Tools served</div><div class="v" id="t-tools">${esc(t.toolsServed ?? 0)}</div><div class="s">distinct slugs</div></div>
   <div class="stat"><div class="k">Uptime</div><div class="v" id="t-up">${esc(Math.floor((data?.uptimeSeconds ?? 0) / 3600))}h</div><div class="s">since process boot</div></div>
@@ -92,8 +96,8 @@ ${CHROME_HEAD_LINKS}
   <div class="panel">
     <div class="ph"><h2>Per-tool breakdown</h2><input id="filter" type="search" placeholder="filter slug…" autocomplete="off"></div>
     <div class="tbody-scroll"><table id="tbl">
-      <thead><tr><th data-k="slug">Slug</th><th class="num" data-k="calls">Calls</th><th class="num" data-k="paid">USDC</th><th class="num" data-k="pow">PoW</th><th class="num" data-k="rev">Revenue</th><th class="num" data-k="price">Price</th></tr></thead>
-      <tbody id="tbody">${rows || `<tr><td colspan="6" class="muted" style="padding:24px;text-align:center;">No tool calls yet.</td></tr>`}</tbody>
+      <thead><tr><th data-k="slug">Slug</th><th class="num" data-k="calls">Calls</th><th class="num" data-k="paid">USDC</th><th class="num" data-k="pow" title="External proof-of-work — does not include the heartbeat probe">PoW</th><th class="num" data-k="heartbeat" title="Internal /api/hash probe (agent402-heartbeat UA, every 15 min)">♥ HB</th><th class="num" data-k="rev">Revenue</th><th class="num" data-k="price">Price</th></tr></thead>
+      <tbody id="tbody">${rows || `<tr><td colspan="7" class="muted" style="padding:24px;text-align:center;">No tool calls yet.</td></tr>`}</tbody>
     </table></div>
   </div>
 
@@ -128,9 +132,10 @@ ${CHROME_HEAD_LINKS}
         '<td class="num">'+esc(r.calls)+'</td>'+
         '<td class="num paid">'+esc(r.paid)+'</td>'+
         '<td class="num pow">'+esc(r.pow)+'</td>'+
+        '<td class="num hb">'+esc(r.heartbeat||0)+'</td>'+
         '<td class="num rev">$'+esc(r.revenueUsd.toFixed(4))+'</td>'+
         '<td class="num muted">$'+esc(r.pricePerCall.toFixed(4))+'</td></tr>';
-    }).join('') : '<tr><td colspan="6" class="muted" style="padding:24px;text-align:center;">No matches.</td></tr>';
+    }).join('') : '<tr><td colspan="7" class="muted" style="padding:24px;text-align:center;">No matches.</td></tr>';
   }
   document.getElementById('filter').addEventListener('input', renderRows);
   document.querySelectorAll('th[data-k]').forEach(function(th){
@@ -150,12 +155,14 @@ ${CHROME_HEAD_LINKS}
       document.getElementById('t-total').textContent=t.total||0;
       document.getElementById('t-usdc').textContent=t.viaUSDC||0;
       document.getElementById('t-pow').textContent=t.viaProofOfWork||0;
+      document.getElementById('t-hb').textContent=t.viaHeartbeat||0;
       document.getElementById('t-rev').textContent='$'+((t.estimatedRevenueUsd||0).toFixed(4));
       document.getElementById('t-tools').textContent=t.toolsServed||0;
       document.getElementById('t-up').textContent=Math.floor((d.uptimeSeconds||0)/3600)+'h';
       rowsCache=d.tools||[]; renderRows();
       feed.innerHTML=(d.recentCalls||[]).map(function(x){
-        return '<li><span class="rs">'+esc(x.slug)+'</span><span class="rm">'+(x.paidWith==='proof-of-work'?'⚙ PoW':'$ USDC')+'</span><span class="ra">'+esc(x.at)+'</span></li>';
+        var m=x.paidWith==='proof-of-work'?'⚙ PoW':x.paidWith==='heartbeat'?'♥ HB':'$ USDC';
+        return '<li><span class="rs">'+esc(x.slug)+'</span><span class="rm">'+m+'</span><span class="ra">'+esc(x.at)+'</span></li>';
       }).join('') || '<li class="muted" style="text-align:center;">No recent activity.</li>';
     } catch(e) { /* ignore */ }
   }

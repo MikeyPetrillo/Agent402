@@ -59,7 +59,9 @@ jobs:
               const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
               const c = await (await fetch(B + "/api/pow/challenge?slug=hash")).json();
               let n = 0; while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
-              const r = await fetch(B + "/api/hash", { method: "POST", headers: { "Content-Type": "application/json", "X-Pow-Solution": c.token + ":" + n }, body: JSON.stringify({ text: "heartbeat" }) });
+              // User-Agent flags this as our internal probe so the operator
+              // dashboard can break heartbeat traffic out of real external PoW.
+              const r = await fetch(B + "/api/hash", { method: "POST", headers: { "Content-Type": "application/json", "X-Pow-Solution": c.token + ":" + n, "User-Agent": "agent402-heartbeat/1.0" }, body: JSON.stringify({ text: "heartbeat" }) });
               if (r.status !== 200) { console.error("pow call -> " + r.status); process.exit(1); }
             ' || FAILS="$FAILS pow-paid-call"
             [ -z "$FAILS" ]

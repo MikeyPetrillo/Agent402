@@ -890,8 +890,12 @@ app.use((req, res, next) => {
     res.on("finish", () => {
       // Attribute by what the gate actually ACCEPTED, not by header presence —
       // an invalid PoW header on a USDC-settled call must count as usdc.
+      // Heartbeat probe (PoW-accepted + agent402-heartbeat UA) is its own rail
+      // so the operator dashboard reflects real external traffic.
       if (res.statusCode === 200) {
-        recordServedCall(def.slug, res.getHeader("X-Pow-Accepted") === "true" ? "pow" : "usdc");
+        const powAccepted = res.getHeader("X-Pow-Accepted") === "true";
+        const isHeartbeat = powAccepted && /^agent402-heartbeat\//.test(req.header("user-agent") || "");
+        recordServedCall(def.slug, isHeartbeat ? "heartbeat" : powAccepted ? "pow" : "usdc");
       } else if (res.getHeader("X-PAYMENT-RESPONSE")) {
         // x402 middleware sets X-PAYMENT-RESPONSE only after USDC settlement
         // succeeded. A non-200 with this header set means we charged the buyer
