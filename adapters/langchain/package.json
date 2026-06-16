@@ -1,0 +1,21 @@
+{
+  "name": "agent402-langchain",
+  "version": "0.1.0",
+  "description": "Drop-in LangChain JS tools for Agent402: turn 1,000+ pay-per-call web tools into DynamicStructuredTool instances, with auto-payment (proof-of-work free, USDC via x402 paid). Works with LangGraph, agents, and LCEL chains. Zero deps.",
+  "type": "module",
+  "main": "index.js",
+  "exports": { ".": "./index.js" },
+  "files": ["index.js", "README.md"],
+  "engines": { "node": ">=18" },
+  "scripts": { "test": "node test.js" },
+  "keywords": [
+    "langchain", "langgraph", "tools", "agents", "structured-tool",
+    "x402", "ai-agents", "agent-tools", "llm-tools",
+    "usdc", "base", "proof-of-work", "http-402", "micropayments", "agent402"
+  ],
+  "author": "Mikey Petrillo (https://github.com/MikeyPetrillo)",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/MikeyPetrillo/Agent402.git", "directory": "adapters/langchain" },
+  "homepage": "https://github.com/MikeyPetrillo/Agent402/tree/main/adapters/langchain",
+  "dependencies": { "agent402-client": "^0.1.0" }
+}

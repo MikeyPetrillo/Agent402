@@ -1,0 +1,21 @@
+{
+  "name": "agent402-ai-sdk",
+  "version": "0.1.0",
+  "description": "Drop-in Vercel AI SDK tools for Agent402: turn 1,000+ pay-per-call web tools into AI SDK tool() instances, with auto-payment (proof-of-work free, USDC via x402 paid). Works with streamText, generateText, generateObject. Zero deps.",
+  "type": "module",
+  "main": "index.js",
+  "exports": { ".": "./index.js" },
+  "files": ["index.js", "README.md"],
+  "engines": { "node": ">=18" },
+  "scripts": { "test": "node test.js" },
+  "keywords": [
+    "ai-sdk", "vercel", "ai", "tools", "streamText", "generateText",
+    "x402", "ai-agents", "agent-tools", "llm-tools",
+    "usdc", "base", "proof-of-work", "http-402", "micropayments", "agent402"
+  ],
+  "author": "Mikey Petrillo (https://github.com/MikeyPetrillo)",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/MikeyPetrillo/Agent402.git", "directory": "adapters/ai-sdk" },
+  "homepage": "https://github.com/MikeyPetrillo/Agent402/tree/main/adapters/ai-sdk",
+  "dependencies": { "agent402-client": "^0.1.0" }
+}
