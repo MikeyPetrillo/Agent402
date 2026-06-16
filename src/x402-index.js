@@ -31,8 +31,10 @@ const CRAWL_INTERVAL_MS = 5 * 60 * 1000; // 5 min — gentle on third-party sell
 const DISCOVERY_INTERVAL_MS = 60 * 60 * 1000; // 1 hr — registries don't change fast
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_OPENAPI_BYTES = 12 * 1024 * 1024; // Agent402's own is ~5 MB; allow headroom
-const MAX_DISCOVERY_BYTES = 16 * 1024 * 1024;
-const MAX_DISCOVERED_SELLERS = 5000; // cap so a misbehaving registry can't blow up memory
+const MAX_DISCOVERY_BYTES = 64 * 1024 * 1024;
+// Effectively uncapped for any realistic registry — kept as a sanity guard so a
+// malicious registry can't OOM us. Real politeness comes from CRAWL_CONCURRENCY.
+const MAX_DISCOVERED_SELLERS = 50000;
 const CRAWL_CONCURRENCY = 25; // max parallel seller crawls per cycle — caps outbound fan-out
 const HEALTH_WINDOW = 5; // last N crawl outcomes per seller — drives health-aware routing
 
