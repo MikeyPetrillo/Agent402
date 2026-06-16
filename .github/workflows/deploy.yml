@@ -250,15 +250,20 @@ jobs:
       - name: Buyer SDK (agent402-client — resolve + auto-pay via PoW; boots paid-mode)
         run: node client/test.js
 
-      - name: Adapter tests (openai-tools + anthropic-tools — catalog → tool defs + execute)
+      - name: Adapter tests (openai-tools + anthropic-tools + ai-sdk + langchain + llamaindex)
         run: |
           FREE_MODE=true PORT=3091 node src/server.js > /tmp/a402-test.log 2>&1 &
           ADAPTER_PID=$!
           for i in $(seq 1 20); do curl -sf http://localhost:3091/health >/dev/null && break || sleep 0.5; done
           curl -sf http://localhost:3091/health >/dev/null || { echo "FREE_MODE server failed to boot"; cat /tmp/a402-test.log; kill $ADAPTER_PID; exit 1; }
+          # Each adapter test self-installs its framework peer (and agent402-client)
+          # into its own node_modules; tests verify tool-shape + execute() round-trip.
           AGENT402_BASE_URL=http://localhost:3091 node adapters/openai-tools/test.js
           ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent )
           AGENT402_BASE_URL=http://localhost:3091 node adapters/anthropic-tools/test.js
+          AGENT402_BASE_URL=http://localhost:3091 node adapters/ai-sdk/test.js
+          AGENT402_BASE_URL=http://localhost:3091 node adapters/langchain/test.js
+          AGENT402_BASE_URL=http://localhost:3091 node adapters/llamaindex/test.js
           kill $ADAPTER_PID 2>/dev/null || true
 
       - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
@@ -681,6 +686,54 @@ jobs:
           else
             npm publish --access public
             echo "published agent402-anthropic-tools@$VERSION → https://www.npmjs.com/package/agent402-anthropic-tools"
+          fi
+
+      - name: Publish agent402-ai-sdk to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN secret missing"; exit 1; }
+          # Test self-bootstraps agent402-client + ai (Vercel AI SDK) into its own node_modules.
+          AGENT402_BASE_URL=http://localhost:3090 node adapters/ai-sdk/test.js
+          cd adapters/ai-sdk
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "agent402-ai-sdk@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-ai-sdk@$VERSION is already on npm — nothing to do"
+          else
+            npm publish --access public
+            echo "published agent402-ai-sdk@$VERSION → https://www.npmjs.com/package/agent402-ai-sdk"
+          fi
+
+      - name: Publish agent402-langchain to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN secret missing"; exit 1; }
+          # Test self-bootstraps agent402-client + @langchain/core + zod.
+          AGENT402_BASE_URL=http://localhost:3090 node adapters/langchain/test.js
+          cd adapters/langchain
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "agent402-langchain@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-langchain@$VERSION is already on npm — nothing to do"
+          else
+            npm publish --access public
+            echo "published agent402-langchain@$VERSION → https://www.npmjs.com/package/agent402-langchain"
+          fi
+
+      - name: Publish agent402-llamaindex to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN secret missing"; exit 1; }
+          # Test self-bootstraps agent402-client + llamaindex.
+          AGENT402_BASE_URL=http://localhost:3090 node adapters/llamaindex/test.js
+          cd adapters/llamaindex
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "agent402-llamaindex@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-llamaindex@$VERSION is already on npm — nothing to do"
+          else
+            npm publish --access public
+            echo "published agent402-llamaindex@$VERSION → https://www.npmjs.com/package/agent402-llamaindex"
           fi
 
       - name: Stop adapter-test server
