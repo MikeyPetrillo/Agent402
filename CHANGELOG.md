@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **x402 Index + Smart Order Router** (`/index`, `GET /api/index`, `POST /api/route`): free, cross-seller routing layer. Crawls the local catalog plus operator seeds plus an auto-discovered set from public x402 registries (Coinbase CDP Bazaar, refreshed hourly). Picks the cheapest healthy seller for a task.
+- **Health-aware routing**: each seller carries a rolling 5-entry crawl history. Sellers whose recent crawls errored are excluded from `/api/route`; healthier sellers tiebreak ahead of cheaper-but-flaky ones at equal match score.
+- **Three-rail attribution** on `/api/stats` and `/__operator`: USDC / proof-of-work / heartbeat counts are tracked separately so the maintainer can see real external demand vs. internal probe noise. The heartbeat rail is now gated on a `POW_SECRET`-signed `X-Heartbeat-Token` (HMAC of UTC minute with ±5 min skew) — not a spoofable User-Agent — closing the audit finding from `scripts/audit-deep.mjs`.
+- **Charged-but-failed counter**: any non-200 response that left an `X-PAYMENT-RESPONSE` header is now tracked so the operator can catch handlers that errored after the buyer was charged.
+- **New kits**: `ocr-image` (pure-CPU OCR) and a deterministic `geo-*` set (distance / bbox / bearing / geohash).
+
 ## v1.0.0 — 2026-06-12
 
 The service is feature-complete as a v1 and battle-tested end to end:

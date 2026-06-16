@@ -33,6 +33,7 @@ export const CHROME_CSS = `
 
 const NAV_LINKS = [
   { href: "/tools", label: "Tools" },
+  { href: "/index", label: "Index" },
   { href: "/guides", label: "Guides" },
   { href: "/faq", label: "FAQ" },
 ];
@@ -66,6 +67,7 @@ export function renderFooter() {
   <div class="row">
     <a href="/">Home</a><span class="sep">·</span>
     <a href="/tools">Tools</a><span class="sep">·</span>
+    <a href="/index">x402 Index</a><span class="sep">·</span>
     <a href="/guides">Guides</a><span class="sep">·</span>
     <a href="/faq">FAQ</a><span class="sep">·</span>
     <a href="/api/pricing">Pricing</a><span class="sep">·</span>

@@ -1,6 +1,8 @@
 # Agent402 Wiki
 
-**Agent402** is an **open-source, self-hostable MCP server + HTTP API with ~1,100 ready-to-use tools for AI agents** — browser rendering, web search, PDFs, images, live data, crypto/payments helpers, and ~1,040 pure-CPU utilities. Clone it and run everything free in 30 seconds (no wallet, no signup), or use the hosted instance. Optionally, the same server can charge per call over the [x402 protocol](https://x402.org) (USDC on Base) — that part is opt-in; by default everything runs free.
+**Agent402** is an **open-source, self-hostable MCP server + HTTP API with ~1,100 ready-to-use tools for AI agents** — browser rendering, web search, PDFs, OCR, images, live data, crypto/payments helpers, and ~1,040 pure-CPU utilities. Clone it and run everything free in 30 seconds (no wallet, no signup), or use the hosted instance. Optionally, the same server can charge per call over the [x402 protocol](https://x402.org) (USDC on Base) — that part is opt-in; by default everything runs free.
+
+It's also an **[[x402 Index and Smart Order Router|x402-Index-and-Router]]**: it crawls public x402 sellers (auto-discovered from the [Coinbase CDP Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar)) and routes a buyer's task to the cheapest healthy seller across the whole ecosystem.
 
 - **Run it yourself (free):** `git clone … && npm install && FREE_MODE=true npm start` — see [[Getting Started]]
 - **Live hosted demo:** https://agent402.tools · **MCP connector (paste into Claude):** `https://agent402.tools/mcp`
@@ -19,6 +21,7 @@
 | [[MCP Connector]] | Hosted connector + the `agent402-mcp` npm server |
 | [[Adapters]] | Drop-in tools for OpenAI / Anthropic / AI SDK / LangChain / LlamaIndex |
 | [[Tool Catalog]] | What the ~1,100 tools are and how agents discover them |
+| [[x402-Index-and-Router]] | The cross-seller index + Smart Order Router (cheapest healthy tool across the ecosystem) |
 | [[Payments and x402]] | Non-custodial multi-chain payment toolkit: quote, verify, balance, gas, transfer-auth, ENS |
 | [[Pay-per-crawl]] | `agent402-tollbooth`: charge AI crawlers to access your site (USDC via x402 or proof-of-work) |
 | [[Memory and Coordination]] | Durable wallet-keyed state, cross-wallet grants, audit log |

@@ -37,6 +37,9 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/.well-known/x402`, priority: "0.7" },
     { loc: `${baseUrl}/api/reliability`, priority: "0.6" },
     { loc: `${baseUrl}/api/stats`, priority: "0.6" },
+    { loc: `${baseUrl}/index`, priority: "0.8" },
+    { loc: `${baseUrl}/api/index`, priority: "0.6" },
+    { loc: `${baseUrl}/api/route`, priority: "0.7" },
   ];
   const guideUrls = [
     { loc: `${baseUrl}/guides`, priority: "0.8" },
@@ -82,6 +85,8 @@ Base URL: ${baseUrl}
 
 > Don't burn tokens exploring to find a tool: \`GET ${baseUrl}/api/find?q=<your task>\` returns the best-matching tools with route, price, input schema, and a ready example — call the result directly. (Also accepts POST {"task": "..."}.)
 
+> Want the cheapest healthy match across the WHOLE x402 ecosystem (not just this seller)? POST to \`${baseUrl}/api/route\` with \`{"query":"<task>", "top":N}\` — the Smart Order Router ranks tools across every x402 seller we've crawled (local catalog + auto-discovered from the Coinbase CDP Bazaar, refreshed hourly), filters out unhealthy sellers, and tiebreaks on health then price. Snapshot of every seller indexed at \`${baseUrl}/api/index\` (JSON) and \`${baseUrl}/index\` (HTML).
+
 > Open source, and two-sided: Agent402 is also the home of \`agent402-tollbooth\` — an open-source, self-hostable x402 pay-per-crawl gate that lets any site charge AI crawlers per request (USDC via x402, or free proof-of-work) while humans browse free. https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth
 
 ## This is machine-to-machine commerce, and you can verify it
@@ -116,6 +121,8 @@ ${sections}
 ## Free endpoints
 
 - \`GET /api/find?q={task}\` — resolve a task description to the best-matching tools (route, price, input schema, ready example) in one call; skips the token-heavy "search to find a tool" step. Also accepts \`POST {"task":"..."}\`.
+- \`POST /api/route {"query":"...", "top":N}\` — Smart Order Router: rank tools across every x402 seller we've crawled (auto-discovered from public registries), filtered to healthy sellers, tiebroken on health then price.
+- \`GET /api/index\` — JSON snapshot of every seller indexed: per-seller health, routable flag, rolling crawl history, total counts; companion HTML view at \`/index\`.
 - \`GET /.well-known/x402\` — one-fetch service manifest: identity, payment options (x402 networks + proof-of-work), capability map, MCP connector, and trust signals.
 - \`GET /api/reliability\` — structured reliability/SLA report: uptime, calls served, on-chain revenue proof, and each operational guarantee with a URL to verify it.
 - \`GET /api/pricing\` — machine-readable catalog (JSON): every endpoint, price, category, and docs URL.

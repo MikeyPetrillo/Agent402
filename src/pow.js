@@ -159,6 +159,41 @@ export function verifySolution(headerValue, slug) {
   return { ok: true };
 }
 
+// --- Heartbeat token --------------------------------------------------------
+// Internal-probe attribution. The /__operator dashboard breaks served traffic
+// into three rails (USDC / PoW / Heartbeat) so the maintainer can see *real*
+// external demand at a glance. We used to identify the probe by a plain
+// User-Agent string ("agent402-heartbeat/1.0"), but anyone could spoof that to
+// poison the heartbeat counter and hide their own traffic in our internal rail.
+//
+// Fix: the probe HMACs the current UTC minute with the same POW_SECRET, so a
+// caller has to know the secret to mint a valid token. A ±5 minute skew window
+// covers clock drift between the scheduler runner and prod, and timingSafeEqual
+// avoids signature timing leaks.
+const HEARTBEAT_WINDOW_MS = 60_000;
+const HEARTBEAT_SKEW_WINDOWS = 5;
+
+function heartbeatTokenForMinute(minute) {
+  return createHmac("sha256", SECRET).update(`heartbeat:${minute}`).digest("base64url").slice(0, 32);
+}
+
+/** Mint a token for the current minute — used by the heartbeat workflow probe. */
+export function issueHeartbeatToken(nowMs = Date.now()) {
+  return heartbeatTokenForMinute(Math.floor(nowMs / HEARTBEAT_WINDOW_MS));
+}
+
+/** Verify a header value against the rolling ±skew window. */
+export function verifyHeartbeatToken(headerValue, nowMs = Date.now()) {
+  if (typeof headerValue !== "string" || !headerValue) return false;
+  const given = Buffer.from(headerValue);
+  const minute = Math.floor(nowMs / HEARTBEAT_WINDOW_MS);
+  for (let offset = -HEARTBEAT_SKEW_WINDOWS; offset <= HEARTBEAT_SKEW_WINDOWS; offset++) {
+    const expected = Buffer.from(heartbeatTokenForMinute(minute + offset));
+    if (given.length === expected.length && timingSafeEqual(given, expected)) return true;
+  }
+  return false;
+}
+
 /** Machine-readable description of the PoW option for discovery surfaces. */
 export function powInfo(baseUrl, computeSlugs) {
   return {

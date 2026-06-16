@@ -38,6 +38,12 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - name: Probe production (3 attempts before declaring an outage)
         id: probe
+        env:
+          # Needed so the probe can mint the same X-Heartbeat-Token the server
+          # verifies — keeps internal probe traffic out of the external PoW rail
+          # on the operator dashboard. Without it the probe still works but its
+          # successful PoW call is counted as real external demand.
+          POW_SECRET: ${{ secrets.POW_SECRET }}
         run: |
           probe() {
             FAILS=""
@@ -55,13 +61,17 @@ jobs:
             [ "$PW" = "402" ] || FAILS="$FAILS paywall($PW)"
             node --input-type=module -e '
               const B = process.env.PROD;
-              const { createHash } = await import("node:crypto");
+              const { createHash, createHmac } = await import("node:crypto");
               const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
               const c = await (await fetch(B + "/api/pow/challenge?slug=hash")).json();
               let n = 0; while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
-              // User-Agent flags this as our internal probe so the operator
-              // dashboard can break heartbeat traffic out of real external PoW.
-              const r = await fetch(B + "/api/hash", { method: "POST", headers: { "Content-Type": "application/json", "X-Pow-Solution": c.token + ":" + n, "User-Agent": "agent402-heartbeat/1.0" }, body: JSON.stringify({ text: "heartbeat" }) });
+              // X-Heartbeat-Token = HMAC(POW_SECRET, "heartbeat:" + UTC-minute),
+              // truncated to 32 base64url chars. The server verifies with the
+              // same secret and a ±5 minute skew window, so spoofed UAs can no
+              // longer poison the operator dashboard heartbeat rail.
+              const minute = Math.floor(Date.now() / 60000);
+              const hb = createHmac("sha256", process.env.POW_SECRET || "").update("heartbeat:" + minute).digest("base64url").slice(0, 32);
+              const r = await fetch(B + "/api/hash", { method: "POST", headers: { "Content-Type": "application/json", "X-Pow-Solution": c.token + ":" + n, "X-Heartbeat-Token": hb, "User-Agent": "agent402-heartbeat/1.0" }, body: JSON.stringify({ text: "heartbeat" }) });
               if (r.status !== 200) { console.error("pow call -> " + r.status); process.exit(1); }
             ' || FAILS="$FAILS pow-paid-call"
             [ -z "$FAILS" ]

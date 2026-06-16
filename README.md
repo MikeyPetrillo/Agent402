@@ -2,8 +2,12 @@
 
 > **What makes it different:** most x402 services are *closed gateways* exposing a
 > handful of tools. Agent402 is the **open-source, self-hostable** one — the whole
-> ~1,100-tool catalog, runnable yourself — **and** it's two-sided: it also ships
-> [`agent402-tollbooth`](tollbooth), an open pay-per-crawl gate for the other side of x402.
+> ~1,100-tool catalog, runnable yourself — **and** it's three-sided:
+> the **x402 Index + Smart Order Router** ([`/index`](https://agent402.tools/index),
+> [`POST /api/route`](https://agent402.tools/api/route)) routes a task to the cheapest
+> healthy seller across the entire x402 ecosystem (auto-discovered from the Coinbase
+> CDP Bazaar, health-aware), and [`agent402-tollbooth`](tollbooth) is an open
+> pay-per-crawl gate for the other side of x402.
 
 [![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
 [![npm](https://img.shields.io/npm/v/agent402-mcp?label=agent402-mcp)](https://www.npmjs.com/package/agent402-mcp)
@@ -74,6 +78,8 @@ curl -s -X POST localhost:3000/api/hash -H 'content-type: application/json' \
 | **Live search** | `search` — a real web index behind one call |
 | **PDFs & media** | `pdf-to-markdown`, `pdf-merge`/`extract-pages`/`rotate`, `images-to-pdf`, `audio-convert`, `audio-normalize` (EBU R128, real ffmpeg) |
 | **Images** | `image-resize`, `image-convert`, `image-thumbnail`, `barcode-decode` (jimp/zxing, pure-CPU) |
+| **OCR** | `ocr-image` (text out of any image — pure-CPU, no model) |
+| **Geo** | `geo-distance`, `geo-bbox`, `geo-bearing`, `geo-geohash` (vincenty / haversine — deterministic) |
 | **Live data** | `fx-rate` (ECB), `barcode-lookup` (Open Food Facts), `gov-data` (data.gov), `weather-forecast`/`weather-alerts`, `earthquakes` (USGS) |
 | **Network truth** | `dns`, `tls-cert`, `whois`, `http-check`, `robots-check`, `email-validate`, `ip-info` |
 | **Crypto & payments** | `usdc-balance`, `tx-status`, `gas-estimate`, `ens-resolve`, `x402-quote`/`verify`, `transfer-authorization` — non-custodial, multi-chain (Base/Polygon/Arbitrum/Optimism/Ethereum) |
@@ -86,6 +92,39 @@ and [`/llms.txt`](https://agent402.tools/llms.txt). Don't know which tool you ne
 [`/api/find?q=<task>`](https://agent402.tools/api/find?q=extract%20article) resolves
 a task description to the right tool — route, price, schema, and a ready example —
 so an agent skips the token-heavy "search around to find a tool" step.
+
+## x402 Index + Smart Order Router
+
+Agent402 is also a **routing layer for the whole x402 ecosystem**: it crawls
+public x402 sellers (the local catalog + an auto-discovered set from the
+[Coinbase CDP Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar), refreshed
+hourly) and exposes them through one Smart Order Router that picks the
+**cheapest healthy seller** for a task. Both surfaces are free — same logic as
+`/api/find`: discovery primitives shouldn't cost money.
+
+| Surface | What |
+|---|---|
+| [`/index`](https://agent402.tools/index) | Public HTML dashboard: every seller, tool count, network, last-fetched, rolling health |
+| [`POST /api/route`](https://agent402.tools/api/route) | Smart Order Router: `{ query, top }` → ranked tools across sellers (match score, then **health**, then price) |
+| [`GET /api/index`](https://agent402.tools/api/index) | JSON snapshot of the same data (totals, per-seller health/routable flags) |
+
+```bash
+# "I need an OCR tool — find me the cheapest healthy one anywhere on x402"
+curl -X POST https://agent402.tools/api/route \
+  -H 'content-type: application/json' \
+  -d '{"query":"ocr image to text","top":5}'
+```
+
+**Health-aware:** sellers whose last few crawls errored are excluded from the
+router (a buyer routed to a dead seller wastes money). Healthier sellers also
+break ties at equal match score and price, so flaky-but-cheap sellers lose to
+reliable ones. Brand-new sellers (no history yet) get the benefit of the doubt.
+
+Operators get **3-rail attribution** on the dashboard ([`/api/stats`](https://agent402.tools/api/stats),
+[`/__operator`](https://agent402.tools/__operator)): USDC vs. proof-of-work vs.
+heartbeat-probe traffic are counted separately — and the heartbeat rail is gated
+on a `POW_SECRET`-signed token (not a spoofable User-Agent), so the operator
+view reflects real external demand.
 
 **From code**, the [`agent402-client`](client) npm package wraps all of this —
 `find()` a tool, then `call()` it, paying automatically (a built-in proof-of-work
@@ -240,6 +279,7 @@ Next.js middleware, via one Web-Crypto core). See [tollbooth/README.md](tollboot
 | `src/mcp-http.js` | Hosted MCP connector (streamable HTTP, authless free tier) |
 | `src/pow.js` | Proof-of-work tier (signed, single-use, slug-scoped challenges) |
 | `src/payments.js` | Optional x402 v2 wiring: USDC on Base, CDP facilitator, Bazaar discovery |
+| `src/x402-index.js` | x402 Index + Smart Order Router: cross-seller crawl, auto-discovery, health-aware routing |
 | `mcp/` | The `agent402-mcp` npm package (stdio MCP server) |
 | `client/` | The `agent402-client` buyer SDK (`find()` + `call()` with auto-payment) |
 | `tollbooth/` | The `agent402-tollbooth` pay-per-crawl gate (Express / edge / proxy) |
