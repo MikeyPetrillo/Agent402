@@ -22,7 +22,7 @@
 //   • Failed crawls log a stale marker; they never crash the process.
 //   • The router uses the same lexical scoring shape as /api/find so rankings
 //     are consistent whether a buyer searches local-only or cross-seller.
-import { CHROME_HEAD_LINKS, CHROME_CSS } from "./chrome.js";
+import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { safeFetch } from "./tools/fetch-guard.js";
 import { toolList } from "./pages.js";
 
@@ -526,7 +526,9 @@ ${CHROME_HEAD_LINKS}
   ${CHROME_CSS}
 </style>
 </head>
-<body><div class="wrap">
+<body>
+${renderHeader("/index")}
+<div class="wrap">
 
 <h1>x402 Index</h1>
 <p class="sub">Live map of the agent payments economy. Every seller below publishes an x402 service manifest at <code>/.well-known/x402</code>; this page crawls them every 5 minutes and shows what's online.</p>
@@ -568,7 +570,9 @@ ${CHROME_HEAD_LINKS}
 
 <p class="foot">x402 Index is open-source — part of <a href="https://github.com/MikeyPetrillo/Agent402">Agent402</a>. To add your seller, publish a manifest at <code>/.well-known/x402</code> and open a PR adding your origin to the seed list (or run your own Index instance).</p>
 
-</div></body></html>`;
+</div>
+${renderFooter()}
+</body></html>`;
 }
 
 /** Internal helper for tests. */
