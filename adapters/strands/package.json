@@ -1,0 +1,21 @@
+{
+  "name": "agent402-strands",
+  "version": "0.1.0",
+  "description": "Drop-in Strands Agents (TypeScript) tools for Agent402: turn 1,000+ pay-per-call web tools into Strands tool() instances, with auto-payment (proof-of-work free, USDC via x402 paid). Snaps into AWS Bedrock AgentCore Payments out of the box. Zero deps.",
+  "type": "module",
+  "main": "index.js",
+  "exports": { ".": "./index.js" },
+  "files": ["index.js", "README.md"],
+  "engines": { "node": ">=18" },
+  "scripts": { "test": "node test.js" },
+  "keywords": [
+    "strands", "strands-agents", "aws", "bedrock", "agentcore", "agentcore-payments",
+    "x402", "ai-agents", "agent-tools", "llm-tools",
+    "usdc", "base", "proof-of-work", "http-402", "micropayments", "agent402"
+  ],
+  "author": "Mikey Petrillo (https://github.com/MikeyPetrillo)",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/MikeyPetrillo/Agent402.git", "directory": "adapters/strands" },
+  "homepage": "https://github.com/MikeyPetrillo/Agent402/tree/main/adapters/strands",
+  "dependencies": { "agent402-client": "^0.1.0" }
+}

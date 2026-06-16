@@ -6,6 +6,7 @@
 - [[Paying with Compute]]
 - [[MCP Connector]]
 - [[Adapters]]
+- [[AWS Bedrock AgentCore]]
 - [[Tool Catalog]]
 - [[Payments and x402]]
 - [[Pay-per-crawl]]

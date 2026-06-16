@@ -18,6 +18,7 @@
 [![npm](https://img.shields.io/npm/v/agent402-ai-sdk?label=ai-sdk)](https://www.npmjs.com/package/agent402-ai-sdk)
 [![npm](https://img.shields.io/npm/v/agent402-langchain?label=langchain)](https://www.npmjs.com/package/agent402-langchain)
 [![npm](https://img.shields.io/npm/v/agent402-llamaindex?label=llamaindex)](https://www.npmjs.com/package/agent402-llamaindex)
+[![npm](https://img.shields.io/npm/v/agent402-strands?label=strands)](https://www.npmjs.com/package/agent402-strands)
 
 **Give your AI agent ~1,100 ready-to-use web tools from one server — browser
 rendering, web search, PDFs, images, live data, crypto/payments helpers, and
@@ -111,6 +112,7 @@ If you're already on OpenAI / Anthropic / Vercel AI SDK / LangChain / LlamaIndex
 | Vercel AI SDK (`streamText` / `generateText`) | [`agent402-ai-sdk`](https://www.npmjs.com/package/agent402-ai-sdk) | `Record<name, tool()>` |
 | LangChain JS / LangGraph | [`agent402-langchain`](https://www.npmjs.com/package/agent402-langchain) | `DynamicStructuredTool[]` |
 | LlamaIndex TS | [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) | `FunctionTool[]` |
+| Strands Agents (AWS Bedrock AgentCore) | [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) | `StrandsTool[]` for `new Agent({ tools })` |
 
 ```js
 // e.g. OpenAI — every adapter has the same surface.
@@ -216,6 +218,8 @@ working tools, so you don't have to build the catalog yourself.
 
 Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)
 and discoverable in the Coinbase [x402 Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar).
+
+**Works with [AWS Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) out of the box** — AgentCore orchestrates x402, which is the protocol Agent402 already speaks. Point the AgentCore Gateway at `https://agent402.tools/mcp` for all ~1,100 tools, or use [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) for a curated subset inside a [Strands](https://strandsagents.com) agent. Five-minute recipe: [wiki: AWS Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore).
 
 ### Sibling: `agent402-tollbooth` (open-source pay-per-crawl)
 

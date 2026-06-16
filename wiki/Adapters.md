@@ -9,6 +9,7 @@ If your agent isn't an MCP client, there's a zero-dependency npm package that tu
 | Vercel AI SDK (`streamText` / `generateText` / `generateObject`) | [`agent402-ai-sdk`](https://www.npmjs.com/package/agent402-ai-sdk) | `Record<name, tool()>` |
 | LangChain JS / LangGraph | [`agent402-langchain`](https://www.npmjs.com/package/agent402-langchain) | `DynamicStructuredTool[]` |
 | LlamaIndex TS | [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) | `FunctionTool[]` |
+| Strands Agents (AWS Bedrock AgentCore) | [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) | `StrandsTool[]` for `new Agent({ tools })` |
 
 Sources live at [`adapters/`](https://github.com/MikeyPetrillo/Agent402/tree/main/adapters).
 
@@ -118,6 +119,19 @@ const { tools } = await agent402Tools({ slugs: ["extract", "hash"] });
 const agent = new OpenAIAgent({ tools });
 const res = await agent.chat({ message: "Get the title of https://example.com/article" });
 ```
+
+## Strands Agents (AWS Bedrock AgentCore)
+
+```js
+import { Agent } from "@strands-agents/sdk";
+import { agent402Tools } from "agent402-strands";
+
+const { tools } = await agent402Tools({ slugs: ["extract", "hash", "render"] });
+const agent = new Agent({ tools });
+const res = await agent.invoke("Get the title of https://example.com/article");
+```
+
+Designed for [AWS Bedrock AgentCore Payments](AWS-Bedrock-AgentCore) — AgentCore orchestrates x402 over the same protocol Agent402 speaks natively, so the adapter is the only glue you need. Wallet-only tools sign via the CDP `PaymentCredentialProvider` you configure in AgentCore Identity.
 
 ## Pay with USDC (wallet-only tools)
 
