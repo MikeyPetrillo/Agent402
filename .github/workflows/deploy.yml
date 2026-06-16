@@ -250,6 +250,17 @@ jobs:
       - name: Buyer SDK (agent402-client — resolve + auto-pay via PoW; boots paid-mode)
         run: node client/test.js
 
+      - name: Adapter tests (openai-tools + anthropic-tools — catalog → tool defs + execute)
+        run: |
+          FREE_MODE=true PORT=3091 node src/server.js > /tmp/a402-test.log 2>&1 &
+          ADAPTER_PID=$!
+          for i in $(seq 1 20); do curl -sf http://localhost:3091/health >/dev/null && break || sleep 0.5; done
+          curl -sf http://localhost:3091/health >/dev/null || { echo "FREE_MODE server failed to boot"; cat /tmp/a402-test.log; kill $ADAPTER_PID; exit 1; }
+          AGENT402_BASE_URL=http://localhost:3091 node adapters/openai-tools/test.js
+          ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent )
+          AGENT402_BASE_URL=http://localhost:3091 node adapters/anthropic-tools/test.js
+          kill $ADAPTER_PID 2>/dev/null || true
+
       - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
         run: node scripts/test-pdf.js
 
@@ -626,6 +637,55 @@ jobs:
             npm publish --access public
             echo "published agent402-client@$VERSION → https://www.npmjs.com/package/agent402-client"
           fi
+
+      - name: Boot FREE_MODE server for adapter tests
+        run: |
+          FREE_MODE=true PORT=3090 node src/server.js > /tmp/a402-adapter.log 2>&1 &
+          echo $! > /tmp/a402-adapter.pid
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:3090/health >/dev/null && { echo "server up"; break; }
+            sleep 0.5
+          done
+          curl -sf http://localhost:3090/health >/dev/null || { echo "FREE_MODE server failed to boot"; cat /tmp/a402-adapter.log; exit 1; }
+
+      - name: Publish agent402-openai-tools to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN secret missing"; exit 1; }
+          # Gate: tool list builds + execute() returns a real result against the FREE_MODE server.
+          AGENT402_BASE_URL=http://localhost:3090 node adapters/openai-tools/test.js
+          cd adapters/openai-tools
+          VERSION=$(node -p "require('./package.json').version")
+          # Idempotent: a re-run after a successful publish is a no-op.
+          if npm view "agent402-openai-tools@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-openai-tools@$VERSION is already on npm — nothing to do"
+          else
+            npm publish --access public
+            echo "published agent402-openai-tools@$VERSION → https://www.npmjs.com/package/agent402-openai-tools"
+          fi
+
+      - name: Publish agent402-anthropic-tools to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN secret missing"; exit 1; }
+          # Install agent402-client locally for the test (same self-bootstrap as openai-tools/test.js).
+          ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent )
+          AGENT402_BASE_URL=http://localhost:3090 node adapters/anthropic-tools/test.js
+          cd adapters/anthropic-tools
+          VERSION=$(node -p "require('./package.json').version")
+          # Idempotent: a re-run after a successful publish is a no-op.
+          if npm view "agent402-anthropic-tools@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-anthropic-tools@$VERSION is already on npm — nothing to do"
+          else
+            npm publish --access public
+            echo "published agent402-anthropic-tools@$VERSION → https://www.npmjs.com/package/agent402-anthropic-tools"
+          fi
+
+      - name: Stop adapter-test server
+        if: always()
+        run: kill "$(cat /tmp/a402-adapter.pid 2>/dev/null)" 2>/dev/null || true
 
       - name: Publish to the official MCP Registry (GitHub OIDC, no secret)
         env:

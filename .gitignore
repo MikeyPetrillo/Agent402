@@ -9,3 +9,6 @@ agent-address.txt
 
 # Private, machine-local Claude Code memory (never committed)
 CLAUDE.local.md
+
+# Local Claude Code per-project settings — never committed
+.claude/

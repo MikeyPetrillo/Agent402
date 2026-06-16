@@ -467,6 +467,10 @@ app.use((_req, res, next) => {
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains");
+  // Disable browser features we never use — defense-in-depth against any future
+  // XSS or third-party script accidentally probing for them.
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()");
+  res.setHeader("X-Permitted-Cross-Domain-Policies", "none");
   next();
 });
 
