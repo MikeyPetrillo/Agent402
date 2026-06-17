@@ -13,10 +13,11 @@ on:
       - ".github/trigger-publish"
       - ".github/trigger-marketplace"
       - ".github/trigger-drain"
+      - ".github/trigger-bazaar-refresh"
   workflow_dispatch:
     inputs:
       mode:
-        description: "probe, test, paytest, purl (Stripe client interop), publish (npm), marketplace (list on agent402.app), or deploy"
+        description: "probe, test, paytest, purl (Stripe client interop), publish (npm), marketplace (list on agent402.app), bazaar-refresh, or deploy"
         default: "deploy"
       burner_key:
         description: "Existing funded burner key for paytest (hex). Leave empty to generate a fresh wallet."
@@ -83,6 +84,30 @@ jobs:
           path: agent-address.txt
       - name: Wait for funding, then buy from the live API
         run: MODE=run KEY_FILE=$RUNNER_TEMP/agent-key node scripts/agent-e2e.js
+
+  bazaar-refresh:
+    # One-shot job: makes a tiny paid request against every Agent402 Bazaar
+    # listing whose serviceName is stale, so the CDP harvester re-observes
+    # the current 402 challenge metadata (description, serviceName, tags).
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-refresh' || contains(join(github.event.commits.*.message), '[bazaar-refresh]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGET_URL: https://agent402.tools
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci && npm install --no-save --ignore-scripts @x402/fetch @x402/core @x402/evm viem
+      - name: Refresh stale Bazaar listings
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY || inputs.burner_key }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "No BURNER_KEY — cannot refresh paid listings"; exit 1; }
+          echo "::add-mask::$BURNER_KEY"
+          node scripts/refresh-bazaar.js
 
   drain:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'drain' || contains(join(github.event.commits.*.message), '[drain]')
