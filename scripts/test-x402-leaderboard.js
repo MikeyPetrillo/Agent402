@@ -109,6 +109,30 @@ const mixed = extractWalletsFromBazaar({ resources: [
 eq(mixed[0].name, "Foo", "most-common serviceName wins");
 eq(mixed[0].endpoints, 3, "endpoint count across all listings");
 
+// Brand-rename lag: most of the wallet's listings still carry the old short
+// name in the crawler's cache, but a few fresh ones publish the canonical
+// domain-shaped extension. The new name should win even though it's outvoted —
+// this is what happens when an existing seller renames "Acme" → "Acme.tools"
+// and the Bazaar harvester drains gradually instead of atomically.
+const renamed = extractWalletsFromBazaar({ resources: [
+  ...Array.from({ length: 63 }, (_, i) => ({
+    serviceName: "Acme", resource: `https://acme.tools/api/x${i}`,
+    accepts: [{ network: "eip155:8453", asset: USDC, payTo: "0xDDDDdddDDDDdddDDDDdddDDDDdddDDDDdddDDDD0" }],
+  })),
+  { serviceName: "Acme.tools", resource: "https://acme.tools/api/fresh",
+    accepts: [{ network: "eip155:8453", asset: USDC, payTo: "0xDDDDdddDDDDdddDDDDdddDDDDdddDDDDdddDDDD0" }] },
+] });
+eq(renamed[0].name, "Acme.tools", "domain-shaped extension wins over outvoted prefix");
+eq(renamed[0].endpoints, 64, "endpoint count still sums everything");
+
+// Unrelated longer names that don't extend the top name shouldn't get promoted.
+const unrelated = extractWalletsFromBazaar({ resources: [
+  { serviceName: "Short", resource: "https://s.io/a", accepts: [{ network: "eip155:8453", asset: USDC, payTo: "0xEEEEeeeEEEEeeeEEEEeeeEEEEeeeEEEEeeeEEEE0" }] },
+  { serviceName: "Short", resource: "https://s.io/b", accepts: [{ network: "eip155:8453", asset: USDC, payTo: "0xEEEEeeeEEEEeeeEEEEeeeEEEEeeeEEEEeeeEEEE0" }] },
+  { serviceName: "Something Different", resource: "https://s.io/c", accepts: [{ network: "eip155:8453", asset: USDC, payTo: "0xEEEEeeeEEEEeeeEEEEeeeEEEEeeeEEEEeeeEEEE0" }] },
+] });
+eq(unrelated[0].name, "Short", "longer-but-unrelated name does NOT win over majority");
+
 // Empty / weird payloads.
 eq(extractWalletsFromBazaar({}), [], "empty payload → []");
 eq(extractWalletsFromBazaar(null), [], "null payload → []");

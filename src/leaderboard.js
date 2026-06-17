@@ -137,7 +137,20 @@ export function extractWalletsFromBazaar(payload) {
     row.endpoints += 1;
   }
   return [...byWallet.values()].map((r) => {
-    const topName = [...r.names.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0];
+    // Pick the most common serviceName the wallet publishes — but allow a
+    // domain-shaped extension (e.g. "Agent402.tools" extending "Agent402") to
+    // win even when the Bazaar crawler hasn't fully re-harvested every endpoint
+    // with the new brand yet. Brand renames almost always *add* a TLD rather
+    // than change letters, so a longer name that starts with the top name + "."
+    // is overwhelmingly the canonical one even if it's outvoted on count.
+    const byCount = [...r.names.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    let topName = byCount[0]?.[0];
+    if (topName) {
+      const extension = byCount.find(([n]) =>
+        n !== topName && n.length > topName.length && n.toLowerCase().startsWith(topName.toLowerCase() + ".")
+      );
+      if (extension) topName = extension[0];
+    }
     const origins = [...r.origins];
     return {
       wallet: r.wallet,
