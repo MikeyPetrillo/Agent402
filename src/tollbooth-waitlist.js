@@ -26,8 +26,16 @@ const PLAN_COPY = {
   partner: { label: "Partner program", h: "Apply as a partner agency", lead: "20% lifetime recurring on every Team or Agency plan you refer. Stripe rev-share, settled monthly." },
 };
 
+// Plan / kind come from query string. Clamp to allow-lists at the function
+// boundary so no attacker-controlled value ever reaches the HTML output —
+// every interpolation of `plan` and `kind` below depends on that guarantee
+// (see the canonical link, form `selected` matchers, and the inline script).
+const ALLOWED_PLANS = new Set(["solo", "team", "agency", "enterprise", "partner"]);
+const ALLOWED_KINDS = new Set(["waitlist", "enterprise", "partner"]);
 export function tollboothWaitlistPage(baseUrl, { plan = "team", kind = "waitlist" } = {}) {
-  const p = PLAN_COPY[plan] || PLAN_COPY.team;
+  plan = ALLOWED_PLANS.has(plan) ? plan : "team";
+  kind = ALLOWED_KINDS.has(kind) ? kind : "waitlist";
+  const p = PLAN_COPY[plan];
   const isPartner = plan === "partner" || kind === "partner";
   const isEnterprise = plan === "enterprise" || kind === "enterprise";
   const ghLabel = isPartner ? "tollbooth-partner" : "tollbooth-cloud";

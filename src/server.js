@@ -1162,6 +1162,26 @@ for (const tool of ALL_KIT) {
   });
 }
 
+// Last-resort error handler. Express's default returns an HTML page with the
+// full stack trace, leaking absolute file paths and module structure. For API
+// routes (anything starting with /api or /__operator) return a small JSON
+// error; for HTML routes return a tiny page. Never expose `err.stack` to the
+// network. Has to be defined after every other route + middleware.
+app.use((err, req, res, _next) => {
+  if (res.headersSent) return; // already started streaming — let it go
+  const status = err && typeof err.statusCode === "number" ? err.statusCode
+              : err && typeof err.status === "number" ? err.status
+              : err && err.type === "entity.too.large" ? 413
+              : err && err.type === "entity.parse.failed" ? 400
+              : 500;
+  const wantsJson = req.path.startsWith("/api") || req.path.startsWith("/__operator") || req.accepts(["html", "json"]) === "json";
+  if (wantsJson) {
+    res.status(status).json({ ok: false, error: status === 400 ? "bad-request" : status === 413 ? "payload-too-large" : status === 429 ? "rate-limited" : "internal" });
+  } else {
+    res.status(status).type("html").send(`<!doctype html><meta charset="utf-8"><title>${status}</title><p>${status === 404 ? "Not found." : "Something went wrong."}</p>`);
+  }
+});
+
 const httpServer = app.listen(PORT, () =>
   console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`)
 );
