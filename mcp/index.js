@@ -23,7 +23,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 
 const BASE = (process.env.AGENT402_URL || "https://agent402.tools").replace(/\/$/, "");
 const AGENT_KEY = process.env.AGENT_KEY || "";
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 
 // Spend controls — enforced BEFORE a payment is ever signed, so a confused or
 // runaway model cannot drain the wallet. Unset = unlimited (back-compat).

@@ -7,7 +7,7 @@ import { CHROME_HEAD_LINKS, CHROME_CSS } from "./chrome.js";
 const esc = (s) =>
   String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
-export function operatorPage(baseUrl, token, data) {
+export function operatorPage(baseUrl, data) {
   const t = data?.totals || {};
   const tools = Array.isArray(data?.tools) ? data.tools : [];
   const recent = Array.isArray(data?.recentCalls) ? data.recentCalls : [];
@@ -80,7 +80,7 @@ ${CHROME_HEAD_LINKS}
 <body><div class="wrap">
 
 <h1>Operator dashboard</h1>
-<p class="sub">Per-tool usage, settlement split, and live activity. Auto-refreshes every 10s. Not public — gated by <code>AGENT402_OPERATOR_TOKEN</code>. <a href="/__operator/leads?token=${esc(token || "")}">Tollbooth leads →</a></p>
+<p class="sub">Per-tool usage, settlement split, and live activity. Auto-refreshes every 10s. Not public — gated by <code>AGENT402_OPERATOR_TOKEN</code>. <a href="/__operator/leads" data-op-link>Tollbooth leads →</a></p>
 
 <div class="grid">
   <div class="stat"><div class="k">Total calls</div><div class="v" id="t-total">${esc(t.total ?? 0)}</div><div class="s">all tools, all rails</div></div>
@@ -109,7 +109,37 @@ ${CHROME_HEAD_LINKS}
 
 <script>
 (function(){
-  var TOKEN=${JSON.stringify(token || "")};
+  // Token-handling for the operator dashboard:
+  // 1. On initial load (the magic-link click) the token is in ?token=. We
+  //    move it into sessionStorage immediately and history.replaceState() to
+  //    strip it from the URL bar — so subsequent access-log lines, browser
+  //    history entries, and Referer headers never see the secret.
+  // 2. All AJAX polls send the token via Authorization: Bearer.
+  // 3. Inter-page links (data-op-link) are intercepted and navigated via
+  //    fetch() + document.write() so the next page also receives the token
+  //    in the header, not the URL.
+  var qs = new URLSearchParams(location.search);
+  if (qs.has('token')) {
+    try { sessionStorage.setItem('agent402-op-token', qs.get('token') || ''); } catch(_) {}
+    qs.delete('token');
+    var clean = location.pathname + (qs.toString() ? '?' + qs.toString() : '');
+    history.replaceState({}, document.title, clean);
+  }
+  var TOKEN = '';
+  try { TOKEN = sessionStorage.getItem('agent402-op-token') || ''; } catch(_) {}
+  var authHeader = function(){ return TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {}; };
+  document.querySelectorAll('a[data-op-link]').forEach(function(a){
+    a.addEventListener('click', function(e){
+      e.preventDefault();
+      fetch(a.getAttribute('href'), { headers: authHeader(), cache: 'no-store' })
+        .then(function(r){ return r.text(); })
+        .then(function(html){
+          document.open(); document.write(html); document.close();
+          history.pushState({}, '', a.getAttribute('href'));
+        })
+        .catch(function(){});
+    });
+  });
   function esc(t){ return String(t==null?'':t).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];}); }
   var tbody=document.getElementById('tbody');
   var feed=document.getElementById('feed');
@@ -148,7 +178,7 @@ ${CHROME_HEAD_LINKS}
 
   async function tick(){
     try {
-      var r=await fetch('/__operator/stats?token='+encodeURIComponent(TOKEN),{cache:'no-store'});
+      var r=await fetch('/__operator/stats',{cache:'no-store', headers: authHeader()});
       if(!r.ok) return;
       var d=await r.json();
       var t=d.totals||{};

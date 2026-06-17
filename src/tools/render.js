@@ -3,6 +3,15 @@ import { htmlToArticle } from "./extract.js";
 
 const NAV_TIMEOUT_MS = 25000;
 const MAX_CONCURRENT = 3;
+// Cap total bytes the page is allowed to download (sum of all subresources).
+// A page that tries to balloon Chromium with a multi-GB asset is treated like
+// a malicious upstream and aborted. 50 MB covers heavy real sites; anything
+// bigger is treated as a render failure.
+const PAGE_BYTE_BUDGET = 50 * 1024 * 1024;
+// Per-resource cap: any single subresource larger than this is aborted up
+// front (Content-Length header sniff) so we never even start streaming a
+// 10-GB zip into the renderer.
+const PER_RESOURCE_MAX = 25 * 1024 * 1024;
 
 let browserPromise = null;
 let active = 0;
@@ -47,8 +56,11 @@ async function withPage(rawUrl, fn) {
       // The browser does its own DNS resolution, so the upfront assertPublicUrl
       // is not enough (rebinding, redirects, subresources). Re-validate every
       // request the page makes at request time with the same public-IP policy.
+      let bytesSeen = 0;
+      let budgetBlown = false;
       await context.route("**/*", async (route) => {
         try {
+          if (budgetBlown) return await route.abort("blockedbyclient");
           const u = new URL(route.request().url());
           if ((u.protocol === "http:" || u.protocol === "https:") && !(await hostIsPublic(u.hostname))) {
             return await route.abort("blockedbyclient");
@@ -57,6 +69,17 @@ async function withPage(rawUrl, fn) {
         } catch {
           await route.abort("blockedbyclient").catch(() => {});
         }
+      });
+      // Track per-page byte budget. Aborts the next route hop once the cap
+      // trips so we don't unbound Chromium's RSS on a hostile origin.
+      context.on("response", async (response) => {
+        try {
+          const lenHdr = response.headers()["content-length"];
+          const len = lenHdr ? Number(lenHdr) : 0;
+          if (len && len > PER_RESOURCE_MAX) { budgetBlown = true; return; }
+          bytesSeen += len || 0;
+          if (bytesSeen > PAGE_BYTE_BUDGET) budgetBlown = true;
+        } catch { /* ignore */ }
       });
       const page = await context.newPage();
       try {

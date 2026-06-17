@@ -103,7 +103,7 @@ const fakeFetch = async (url, opts = {}) => {
   }
   return { ok: true, status: 200, json: async () => ({ requests: 42 }) };
 };
-const httpSink = httpStatsSink("http://collector.test/stats", { token: "t", batchMs: 1, fetchImpl: fakeFetch });
+const httpSink = httpStatsSink("http://collector.test/stats", { token: "t", batchMs: 1, fetchImpl: fakeFetch, allowInsecure: true });
 gate = createTollbooth({ statsSink: httpSink, powDifficulty: 12 });
 run(gate, mockReq({ "user-agent": botUA }));
 run(gate, mockReq({ "user-agent": humanUA }));
@@ -138,12 +138,22 @@ const evil = async (url, opts = {}) => {
     json: async () => ({ requests: "<img src=x onerror=alert(1)>", evil: "yes", charged: -999, freeAllowed: 12 }),
   };
 };
-const malSink = httpStatsSink("http://evil.test/stats", { token: "t", batchMs: 1, fetchImpl: evil });
+const malSink = httpStatsSink("http://evil.test/stats", { token: "t", batchMs: 1, fetchImpl: evil, allowInsecure: true });
 const malSnap = await malSink.snapshot();
 ok(malSnap.requests === 0, `string requests coerced to 0 (got ${JSON.stringify(malSnap.requests)})`);
 ok(!("evil" in malSnap), "unknown keys are stripped from the snapshot");
 ok(malSnap.charged === 0, "negative values are clamped to 0");
 ok(malSnap.freeAllowed === 12, "valid numeric values still pass through");
+
+// --- security: httpStatsSink refuses to send a bearer token over plaintext ---
+let plaintextRejected = false;
+try { httpStatsSink("http://collector.test/stats", { token: "leaky", fetchImpl: async () => ({ ok: true }) }); }
+catch (e) { plaintextRejected = /non-HTTPS/i.test(e.message); }
+ok(plaintextRejected, "httpStatsSink rejects bearer token over http:// without allowInsecure");
+// And accepts HTTPS:
+let httpsAccepted = false;
+try { httpStatsSink("https://collector.example/stats", { token: "t", fetchImpl: async () => ({ ok: true }) }); httpsAccepted = true; } catch {}
+ok(httpsAccepted, "httpStatsSink accepts bearer token over https://");
 
 // --- dashboard renders and points at the stats endpoint ---
 const html = dashboardHtml();

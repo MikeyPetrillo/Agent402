@@ -13,10 +13,11 @@ on:
       - ".github/trigger-publish"
       - ".github/trigger-marketplace"
       - ".github/trigger-drain"
+      - ".github/trigger-bazaar-refresh"
   workflow_dispatch:
     inputs:
       mode:
-        description: "probe, test, paytest, purl (Stripe client interop), publish (npm), marketplace (list on agent402.app), or deploy"
+        description: "probe, test, paytest, purl (Stripe client interop), publish (npm), marketplace (list on agent402.app), bazaar-refresh, or deploy"
         default: "deploy"
       burner_key:
         description: "Existing funded burner key for paytest (hex). Leave empty to generate a fresh wallet."
@@ -83,6 +84,39 @@ jobs:
           path: agent-address.txt
       - name: Wait for funding, then buy from the live API
         run: MODE=run KEY_FILE=$RUNNER_TEMP/agent-key node scripts/agent-e2e.js
+      - name: Shred burner key
+        if: always()
+        run: |
+          # Defense in depth: even though hosted runners are ephemeral, scrub
+          # the on-disk key as soon as the consuming steps are done so any
+          # later step (or rerun reusing cached layers) can't read it.
+          if [ -f "$RUNNER_TEMP/agent-key" ]; then
+            shred -u "$RUNNER_TEMP/agent-key" 2>/dev/null || rm -f "$RUNNER_TEMP/agent-key"
+          fi
+
+  bazaar-refresh:
+    # One-shot job: makes a tiny paid request against every Agent402 Bazaar
+    # listing whose serviceName is stale, so the CDP harvester re-observes
+    # the current 402 challenge metadata (description, serviceName, tags).
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-refresh' || contains(join(github.event.commits.*.message), '[bazaar-refresh]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGET_URL: https://agent402.tools
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci && npm install --no-save --ignore-scripts @x402/fetch @x402/core @x402/evm viem
+      - name: Refresh stale Bazaar listings
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY || inputs.burner_key }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "No BURNER_KEY — cannot refresh paid listings"; exit 1; }
+          echo "::add-mask::$BURNER_KEY"
+          node scripts/refresh-bazaar.js
 
   drain:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'drain' || contains(join(github.event.commits.*.message), '[drain]')
@@ -104,6 +138,12 @@ jobs:
           echo "::add-mask::$BURNER_KEY"
           printf '%s' "$BURNER_KEY" > "$RUNNER_TEMP/agent-key" && chmod 600 "$RUNNER_TEMP/agent-key"
           KEY_FILE="$RUNNER_TEMP/agent-key" node scripts/drain-burner.js
+      - name: Shred burner key
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/agent-key" ]; then
+            shred -u "$RUNNER_TEMP/agent-key" 2>/dev/null || rm -f "$RUNNER_TEMP/agent-key"
+          fi
 
   marketplace:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'marketplace' || contains(join(github.event.commits.*.message), '[marketplace]')
@@ -618,7 +658,7 @@ jobs:
             echo "agent402-mcp@$VERSION is already on npm — nothing to do"
             exit 0
           fi
-          npm publish
+          npm publish --provenance
           echo "published agent402-mcp@$VERSION → https://www.npmjs.com/package/agent402-mcp"
       - name: Verify the public npx path resolves
         run: |
@@ -639,7 +679,7 @@ jobs:
           if npm view "agent402-tollbooth@$VERSION" version >/dev/null 2>&1; then
             echo "agent402-tollbooth@$VERSION is already on npm — nothing to do"
           else
-            npm publish --access public
+            npm publish --provenance --access public
             echo "published agent402-tollbooth@$VERSION → https://www.npmjs.com/package/agent402-tollbooth"
           fi
 
@@ -655,7 +695,7 @@ jobs:
           if npm view "agent402-client@$VERSION" version >/dev/null 2>&1; then
             echo "agent402-client@$VERSION is already on npm — nothing to do"
           else
-            npm publish --access public
+            npm publish --provenance --access public
             echo "published agent402-client@$VERSION → https://www.npmjs.com/package/agent402-client"
           fi
 
@@ -682,7 +722,7 @@ jobs:
           if npm view "agent402-openai-tools@$VERSION" version >/dev/null 2>&1; then
             echo "agent402-openai-tools@$VERSION is already on npm — nothing to do"
           else
-            npm publish --access public
+            npm publish --provenance --access public
             echo "published agent402-openai-tools@$VERSION → https://www.npmjs.com/package/agent402-openai-tools"
           fi
 
@@ -700,7 +740,7 @@ jobs:
           if npm view "agent402-anthropic-tools@$VERSION" version >/dev/null 2>&1; then
             echo "agent402-anthropic-tools@$VERSION is already on npm — nothing to do"
           else
-            npm publish --access public
+            npm publish --provenance --access public
             echo "published agent402-anthropic-tools@$VERSION → https://www.npmjs.com/package/agent402-anthropic-tools"
           fi
 
@@ -716,7 +756,7 @@ jobs:
           if npm view "agent402-ai-sdk@$VERSION" version >/dev/null 2>&1; then
             echo "agent402-ai-sdk@$VERSION is already on npm — nothing to do"
           else
-            npm publish --access public
+            npm publish --provenance --access public
             echo "published agent402-ai-sdk@$VERSION → https://www.npmjs.com/package/agent402-ai-sdk"
           fi
 
@@ -732,7 +772,7 @@ jobs:
           if npm view "agent402-langchain@$VERSION" version >/dev/null 2>&1; then
             echo "agent402-langchain@$VERSION is already on npm — nothing to do"
           else
-            npm publish --access public
+            npm publish --provenance --access public
             echo "published agent402-langchain@$VERSION → https://www.npmjs.com/package/agent402-langchain"
           fi
 
@@ -749,7 +789,7 @@ jobs:
           if npm view "agent402-openai-agents@$VERSION" version >/dev/null 2>&1; then
             echo "agent402-openai-agents@$VERSION is already on npm — nothing to do"
           else
-            npm publish --access public
+            npm publish --provenance --access public
             echo "published agent402-openai-agents@$VERSION → https://www.npmjs.com/package/agent402-openai-agents"
           fi
 
@@ -765,7 +805,7 @@ jobs:
           if npm view "agent402-llamaindex@$VERSION" version >/dev/null 2>&1; then
             echo "agent402-llamaindex@$VERSION is already on npm — nothing to do"
           else
-            npm publish --access public
+            npm publish --provenance --access public
             echo "published agent402-llamaindex@$VERSION → https://www.npmjs.com/package/agent402-llamaindex"
           fi
 
@@ -783,7 +823,7 @@ jobs:
           if npm view "agent402-strands@$VERSION" version >/dev/null 2>&1; then
             echo "agent402-strands@$VERSION is already on npm — nothing to do"
           else
-            npm publish --access public
+            npm publish --provenance --access public
             echo "published agent402-strands@$VERSION → https://www.npmjs.com/package/agent402-strands"
           fi
 
@@ -819,12 +859,31 @@ jobs:
             echo "$MCP_PUBLISHER_SHA256  $asset" | sha256sum -c - && verified=1
           fi
           if [ -z "$verified" ]; then
-            curl -fsSL -o checksums.txt "$base/checksums.txt" 2>/dev/null || true
-            if [ -s checksums.txt ] && grep -q " $asset\$" checksums.txt; then
-              grep " $asset\$" checksums.txt | sha256sum -c - && verified=1
+            # As of registry v1.7.0+ the checksums file is versioned —
+            # registry_<ver>_checksums.txt — instead of a flat checksums.txt.
+            # Resolve the actual filename from the GitHub release API rather
+            # than guessing, then verify with sha256sum.
+            tag_path="${MCP_PUBLISHER_VERSION:-}"
+            if [ -z "$tag_path" ]; then
+              tag_path=$(curl -fsSL "https://api.github.com/repos/modelcontextprotocol/registry/releases/latest" | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
+            fi
+            checksums_name=$(curl -fsSL "https://api.github.com/repos/modelcontextprotocol/registry/releases/tags/$tag_path" \
+              | grep -oP '"name":\s*"\K[^"]*_checksums\.txt(?=")' | head -1)
+            if [ -n "$checksums_name" ]; then
+              curl -fsSL -o "$checksums_name" "https://github.com/modelcontextprotocol/registry/releases/download/$tag_path/$checksums_name" 2>/dev/null || true
+              if [ -s "$checksums_name" ] && grep -q " $asset\$" "$checksums_name"; then
+                grep " $asset\$" "$checksums_name" | sha256sum -c - && verified=1
+              fi
+            fi
+            # Legacy fallback: pre-v1.7.0 releases used a flat checksums.txt.
+            if [ -z "$verified" ]; then
+              curl -fsSL -o checksums.txt "$base/checksums.txt" 2>/dev/null || true
+              if [ -s checksums.txt ] && grep -q " $asset\$" checksums.txt; then
+                grep " $asset\$" checksums.txt | sha256sum -c - && verified=1
+              fi
             fi
           fi
-          [ -n "$verified" ] || { echo "mcp-publisher could not be verified (no MCP_PUBLISHER_SHA256 and no checksums.txt) — refusing to execute"; exit 1; }
+          [ -n "$verified" ] || { echo "mcp-publisher could not be verified (no MCP_PUBLISHER_SHA256 and no checksums file) — refusing to execute"; exit 1; }
           tar -xzf "$asset" mcp-publisher
           cd mcp
           ../mcp-publisher login github-oidc

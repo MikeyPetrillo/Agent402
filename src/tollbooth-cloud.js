@@ -46,6 +46,36 @@ ${CHROME_HEAD_LINKS}
   .who .c { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; }
   .who .c .k { color:var(--pop); font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; margin-bottom:6px; }
   .who .c p { margin:6px 0 0; color:var(--muted); font-size:.92rem; }
+  .hero-cta { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 28px; }
+  .hero-cta a { display:inline-block; padding:10px 18px; border-radius:8px; font-size:.92rem; border:1px solid var(--line); color:var(--fg); }
+  .hero-cta a.primary { background:var(--accent); color:#06120a; border-color:var(--accent); font-weight:600; }
+  .hero-cta a.primary:hover { text-decoration:none; filter:brightness(1.05); }
+  .hero-cta a:hover { border-color:var(--accent); text-decoration:none; }
+  .hero-cta .note { color:var(--muted); font-size:.82rem; align-self:center; margin-left:4px; }
+  .preview { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 20px; margin:0 0 8px; }
+  .preview .ph { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:12px; }
+  .preview .ph .t { color:var(--muted); font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; }
+  .preview .ph .dot { display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--accent); margin-right:6px; vertical-align:middle; }
+  .preview .row { display:grid; grid-template-columns:1.4fr .9fr .9fr .9fr; gap:10px; padding:9px 0; border-bottom:1px dashed #1a2030; font-size:.9rem; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .preview .row.head { color:var(--muted); font-size:.74rem; letter-spacing:.06em; text-transform:uppercase; border-bottom-style:solid; padding-bottom:6px; }
+  .preview .row:last-child { border-bottom:0; }
+  .preview .row .up { color:var(--accent); }
+  .preview .row .dn { color:var(--warn); }
+  @media (max-width:560px){ .preview .row { grid-template-columns:1.2fr .7fr .7fr; } .preview .row .hide-sm { display:none; } }
+  .outcomes { display:grid; gap:14px; grid-template-columns:repeat(3,1fr); margin:18px 0 8px; }
+  @media (max-width:780px){ .outcomes { grid-template-columns:1fr; } }
+  .outcomes .o { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+  .outcomes .o .when { color:var(--accent); font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; margin-bottom:6px; }
+  .outcomes .o p { margin:4px 0 0; color:var(--muted); font-size:.92rem; }
+  .badge-pop { position:absolute; top:-10px; right:14px; background:var(--accent); color:#06120a; font-size:.68rem; letter-spacing:.08em; text-transform:uppercase; font-weight:700; padding:3px 8px; border-radius:999px; }
+  .plan.featured { position:relative; }
+  .cta-strip { background:linear-gradient(180deg,#101626,#0b0e14); border:1px solid var(--line); border-radius:14px; padding:22px; margin:24px 0 8px; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:14px; }
+  .cta-strip .copy h3 { margin:0 0 4px; color:var(--fg); font-size:1.1rem; }
+  .cta-strip .copy p { margin:0; color:var(--muted); font-size:.92rem; max-width:560px; }
+  .cta-strip .actions { display:flex; gap:8px; flex-wrap:wrap; }
+  .cta-strip .actions a { display:inline-block; padding:9px 16px; border-radius:8px; font-size:.9rem; border:1px solid var(--line); color:var(--fg); }
+  .cta-strip .actions a.primary { background:var(--accent); color:#06120a; border-color:var(--accent); font-weight:600; }
+  .cta-strip .actions a:hover { border-color:var(--accent); text-decoration:none; }
   .grid { display:grid; gap:14px; grid-template-columns:repeat(4,1fr); margin:0 0 18px; }
   @media (max-width:980px){ .grid { grid-template-columns:repeat(2,1fr); } }
   @media (max-width:560px){ .grid { grid-template-columns:1fr; } }
@@ -84,6 +114,26 @@ ${CHROME_HEAD_LINKS}
 <span class="pill warn">Cloud · early access</span>
 <h1>Tollbooth Cloud</h1>
 <p class="lede">Hosted multi-site dashboard, alerts, and white-label rollup on top of open-source <a href="${baseUrl}/tollbooth">agent402-tollbooth</a> — the pay-per-crawl gate. The gate stays self-hosted and non-custodial; Cloud just reads aggregate stats from the durable sink and gives publishers and SEO agencies one pane over every site.</p>
+
+<div class="hero-cta">
+  <a class="primary" href="${waitlistUrl("team")}">Join the Cloud waitlist →</a>
+  <a href="${baseUrl}/tollbooth">Install the free OSS gate</a>
+  <span class="note">Waitlist locks in the launch price for life.</span>
+</div>
+
+<h2>What the dashboard looks like</h2>
+<div class="preview" aria-hidden="true">
+  <div class="ph">
+    <div><span class="dot"></span><span class="t">Live · last 24h · 4 sites</span></div>
+    <div class="t">acme-agency.tollbooth.cloud</div>
+  </div>
+  <div class="row head"><div>Site</div><div>Charged</div><div class="hide-sm">Paid</div><div>USDC</div></div>
+  <div class="row"><div>blog.acme.com</div><div>14,208</div><div class="hide-sm">132</div><div class="up">$1.32</div></div>
+  <div class="row"><div>recipes.client-a.io</div><div>9,841</div><div class="hide-sm">88</div><div class="up">$0.88</div></div>
+  <div class="row"><div>guide.client-b.co</div><div>3,402</div><div class="hide-sm">27</div><div class="up">$0.27</div></div>
+  <div class="row"><div>news.client-c.net</div><div>21,067</div><div class="hide-sm">0</div><div class="dn">PoW only</div></div>
+</div>
+<p class="annual" style="margin-top:8px;">Counters update minute-by-minute. No request bodies, no per-call data — Cloud only ever sees aggregate stats.</p>
 
 <h2>Who it's for</h2>
 <div class="who">
@@ -136,6 +186,7 @@ ${CHROME_HEAD_LINKS}
   </div>
 
   <div class="plan featured">
+    <span class="badge-pop">Most popular</span>
     <h3>Cloud Team</h3>
     <p class="sub">For boutique SEO agencies. ~$4/site/mo at the cap.</p>
     <div class="price">$99<small>/mo</small></div>
@@ -182,6 +233,25 @@ ${CHROME_HEAD_LINKS}
   </div>
 </div>
 
+<h2>What you get, when</h2>
+<div class="outcomes">
+  <div class="o">
+    <div class="when">Day 1</div>
+    <h3>The gate is live</h3>
+    <p>Drop the snippet in Express, Next.js, or a Cloudflare Worker. AI crawlers see HTTP 402; classic SEO indexers pass through untouched.</p>
+  </div>
+  <div class="o">
+    <div class="when">Week 1</div>
+    <h3>You see the shape of bot traffic</h3>
+    <p>The dashboard tells you which crawlers hit which paths and how much PoW vs. USDC is settling. Most operators are surprised by the volume.</p>
+  </div>
+  <div class="o">
+    <div class="when">Month 1</div>
+    <h3>You have data to make a policy call</h3>
+    <p>Decide per site: deter (PoW), monetize (USDC), or block. Export a monthly report for clients with charged-vs-paid breakdowns.</p>
+  </div>
+</div>
+
 <h2>Partner program for SEO agencies</h2>
 <div class="tcols">
   <div class="b">
@@ -210,6 +280,17 @@ ${CHROME_HEAD_LINKS}
   <div class="b">
     <h3>USDC bypasses us entirely</h3>
     <p>Settlement is direct: bot wallet → publisher wallet, verified by the standard x402 facilitator. Cloud never sees a transaction. If we vanish tomorrow, your gate keeps charging and your USDC keeps flowing.</p>
+  </div>
+</div>
+
+<div class="cta-strip">
+  <div class="copy">
+    <h3>Ready to see who's scraping you?</h3>
+    <p>Self-host the OSS gate for free, or join the Cloud waitlist for the hosted multi-site dashboard. Cancel anytime — your wallet keeps collecting USDC either way.</p>
+  </div>
+  <div class="actions">
+    <a class="primary" href="${waitlistUrl("team")}">Join the waitlist</a>
+    <a href="${baseUrl}/tollbooth">Install the OSS gate</a>
   </div>
 </div>
 

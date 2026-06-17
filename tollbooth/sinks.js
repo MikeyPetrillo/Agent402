@@ -116,9 +116,20 @@ export function kvStatsSink(kv, { bucket = "default", ttlSeconds = 60 * 60 * 24 
  *
  * Auth: pass `token` to include `Authorization: Bearer <token>`.
  */
-export function httpStatsSink(url, { token, batchMs = 2000, fetchImpl } = {}) {
+export function httpStatsSink(url, { token, batchMs = 2000, fetchImpl, allowInsecure } = {}) {
   const f = fetchImpl || globalThis.fetch;
   if (typeof f !== "function") throw new Error("httpStatsSink: no fetch available (pass fetchImpl or run on Node 18+)");
+  // Bearer tokens MUST NOT leak over plaintext. Require HTTPS unless the caller
+  // explicitly opts in (loopback dev, in-cluster service mesh that terminates
+  // TLS upstream). The token is the only thing protecting the collector from
+  // forged stats batches.
+  if (token) {
+    let proto = "";
+    try { proto = new URL(url).protocol; } catch { /* let fetch surface the error later */ }
+    if (proto && proto !== "https:" && !allowInsecure) {
+      throw new Error("httpStatsSink: refusing to send a bearer token over a non-HTTPS URL. Use https:// or pass { allowInsecure: true } for trusted private networks.");
+    }
+  }
   const buf = {};
   let timer = null;
   const headers = { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) };
