@@ -32,6 +32,23 @@ ok(r.results[0].computePayable === true, "qr flagged compute-payable");
 r = findTools(CATALOG, "sha256 checksum", {});
 ok(r.results.length > 0 && r.results[0].slug === "hash", `tag match → hash (got ${r.results[0]?.slug})`);
 
+// Stopwords are stripped: a stopword-only query matches nothing.
+ok(findTools(CATALOG, "the", {}).count === 0, "single stopword → no results");
+ok(findTools(CATALOG, "of in on to for", {}).count === 0, "all-stopword query → no results");
+
+// Stopwords don't poison NL queries — intent words still rank correctly.
+r = findTools(CATALOG, "i would like to extract an article from the web", {});
+ok(r.results[0]?.slug === "extract", `NL with stopwords → extract still wins (got ${r.results[0]?.slug})`);
+
+// Exact tag match outranks a description-only hit. "barcode" is a tag on qr,
+// not in qr's slug/name; "notes" mentions barcode only in description text.
+const TAG_CATALOG = {
+  "POST /api/qr": { name: "QR code", slug: "qr", category: "identifiers", price: "$0.001", description: "Generate a QR code PNG.", tags: ["qr", "barcode"], discovery: { input: { text: "hi" } } },
+  "POST /api/notes": { name: "Notes", slug: "notes", category: "misc", price: "$0.001", description: "Plain text notes. Discusses barcode formats in passing.", tags: [], discovery: { input: { text: "hi" } } },
+};
+r = findTools(TAG_CATALOG, "barcode", {});
+ok(r.results[0]?.slug === "qr", `exact tag match outranks description-only hit (got ${r.results[0]?.slug})`);
+
 // Empty / no-match / k limit / guards.
 ok(findTools(CATALOG, "", {}).count === 0, "empty query → no results");
 ok(findTools(CATALOG, "   ", {}).count === 0, "whitespace query → no results");

@@ -110,7 +110,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     },
     mcp: {
       remoteConnector: `${baseUrl}/mcp`,
-      remoteNote: "Streamable HTTP, no auth — paste into Claude/ChatGPT custom connectors. Pure-CPU tools run free (rate-limited).",
+      remoteNote: "Streamable HTTP, no auth — paste into Claude, Claude Code, Cursor, ChatGPT (Pro+), or VS Code (GitHub Copilot MCP) custom connectors. Pure-CPU tools run free (rate-limited).",
       package: "agent402-mcp",
       registry: "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402",
     },
