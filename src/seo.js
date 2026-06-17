@@ -42,6 +42,8 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/api/route`, priority: "0.7" },
     { loc: `${baseUrl}/leaderboard`, priority: "0.8" },
     { loc: `${baseUrl}/api/leaderboard`, priority: "0.7" },
+    { loc: `${baseUrl}/tollbooth`, priority: "0.7" },
+    { loc: `${baseUrl}/tollbooth/cloud`, priority: "0.7" },
   ];
   const guideUrls = [
     { loc: `${baseUrl}/guides`, priority: "0.8" },
@@ -91,7 +93,7 @@ Base URL: ${baseUrl}
 
 > Public on-chain ranking of every x402 seller: \`GET ${baseUrl}/api/leaderboard?top=N&include=all|external\` returns the live leaderboard by Base USDC settled volume (callsSettled, totalUsd, uniqueBuyers per seller). Pipeline: Bazaar discovery → \`eth_getLogs\` on Base USDC → per-call ceiling filter → aggregate by payTo. Cached snapshot, refreshed hourly server-side. Free. Use \`include:"external"\` to rank only the rest of the ecosystem (excludes Agent402).
 
-> Open source, and two-sided: Agent402 is also the home of \`agent402-tollbooth\` — an open-source, self-hostable x402 pay-per-crawl gate that lets any site charge AI crawlers per request (USDC via x402, or free proof-of-work) while humans browse free. https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth
+> Open source, and two-sided: Agent402 is also the home of \`agent402-tollbooth\` — an open-source, self-hostable x402 pay-per-crawl gate that lets any site charge AI crawlers per request (USDC via x402, or free proof-of-work) while humans browse free. Install page: ${baseUrl}/tollbooth . Hosted multi-site dashboard, alerts, and white-label for SEO agencies in early access: ${baseUrl}/tollbooth/cloud (Solo $19/mo, Team $99/mo, Agency $299/mo, Enterprise on request; 20% lifetime partner referral). https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth
 
 ## This is machine-to-machine commerce, and you can verify it
 

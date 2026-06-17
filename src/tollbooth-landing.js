@@ -58,6 +58,9 @@ ${CHROME_HEAD_LINKS}
   a { color:var(--accent); text-decoration:none; }
   a:hover { text-decoration:underline; }
   .note { color:var(--muted); font-size:.88rem; margin-top:8px; }
+  .cloud-cta { display:flex; gap:10px; align-items:center; justify-content:space-between; background:linear-gradient(180deg,#0f1320,#0b0e14); border:1px solid var(--line); border-radius:10px; padding:10px 14px; margin:0 0 22px; font-size:.9rem; color:var(--muted); }
+  .cloud-cta a { color:var(--accent); white-space:nowrap; }
+  @media (max-width:520px){ .cloud-cta { flex-direction:column; align-items:flex-start; } }
   ${CHROME_CSS}
 </style>
 </head>
@@ -65,6 +68,11 @@ ${CHROME_HEAD_LINKS}
 
 <h1>Charge AI bots that crawl your site</h1>
 <p class="lede"><b>agent402-tollbooth</b> is an open-source, self-hostable pay-per-crawl gate. Drop it in front of any Node site and AI crawlers pay USDC on Base — or burn CPU — to read your content. Humans browse free. <a href="https://github.com/MikeyPetrillo/Agent402/wiki/Pay-per-crawl-Walkthrough" rel="noopener">30-min walkthrough →</a></p>
+
+<div class="cloud-cta">
+  <span>Managing multiple sites or running an SEO agency? Multi-site rollup, alerts, white-label dashboard, 20% partner program.</span>
+  <a href="/tollbooth/cloud">Tollbooth Cloud →</a>
+</div>
 
 <h2>1 · Configure</h2>
 <div class="config">
