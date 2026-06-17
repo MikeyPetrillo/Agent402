@@ -485,10 +485,17 @@ export function leaderboardPage(snapshot, { baseUrl }) {
   const totalCalls = board.reduce((s, r) => s + (Number(r.callsSettled) || 0), 0);
   const top1 = board[0];
 
+  // Bazaar items are third-party-supplied: a seller can put anything in their
+  // listing's homepage field. esc() HTML-escapes but doesn't filter dangerous
+  // schemes (javascript:, data:, vbscript:) — so re-check protocol before
+  // turning the value into a clickable link. originOf() validates this at
+  // crawl time, but cache entries can drift; cheap defense-in-depth.
+  const safeHref = (u) => (typeof u === "string" && /^https?:\/\//i.test(u) ? u : null);
   const rows = board
     .map((r) => {
-      const nameCell = r.homepage
-        ? `<a href="${esc(r.homepage)}" target="_blank" rel="noopener nofollow">${esc(r.name)}</a>`
+      const href = safeHref(r.homepage);
+      const nameCell = href
+        ? `<a href="${esc(href)}" target="_blank" rel="noopener nofollow">${esc(r.name)}</a>`
         : esc(r.name);
       const walletCell = r.wallet
         ? `<a href="${esc(explorer)}/address/${esc(r.wallet)}#tokentxns" target="_blank" rel="noopener nofollow" title="${esc(r.wallet)}">${esc(shortAddr(r.wallet))}</a>`

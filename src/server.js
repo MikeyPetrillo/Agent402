@@ -562,7 +562,11 @@ app.post("/api/tollbooth/waitlist", async (req, res) => {
   if (!leadsDbEnabled()) {
     return res.status(503).json({ ok: false, error: "leads-db-unavailable" });
   }
-  const ip = (req.headers["x-forwarded-for"] || req.ip || "").toString().split(",")[0].trim();
+  // Use Express's req.ip (honors `trust proxy`, line 470) so the bucket keys
+  // on the real client IP. Reading X-Forwarded-For directly + splitting on
+  // commas would return the attacker-supplied left-most value, letting a
+  // single source mint unlimited fresh buckets and bypass the rate limit.
+  const ip = req.ip || "unknown";
   if (!waitlistRateOk(ip)) {
     return res.status(429).json({ ok: false, error: "rate-limited" });
   }
@@ -593,6 +597,11 @@ app.post("/api/tollbooth/waitlist", async (req, res) => {
 // Operator dashboard — full per-tool usage + recent calls feed, gated by
 // AGENT402_OPERATOR_TOKEN. Off unless the env var is set. Timing-safe compare
 // (constant-time byte equality) so token presence/length isn't probeable.
+// Token is accepted via Authorization: Bearer or X-Operator-Token header
+// (preferred — keeps the secret out of access logs, browser history, Referer)
+// or ?token= query (legacy, for the initial magic-link click — the dashboard
+// HTML strips it from the URL on load and uses header auth for everything
+// else, so the secret only ever appears in one access-log line per session).
 const OPERATOR_TOKEN = process.env.AGENT402_OPERATOR_TOKEN || "";
 const operatorTokenOk = (t) => {
   if (!OPERATOR_TOKEN || typeof t !== "string") return false;
@@ -600,19 +609,27 @@ const operatorTokenOk = (t) => {
   const b = Buffer.from(OPERATOR_TOKEN);
   return a.length === b.length && timingSafeEqual(a, b);
 };
+const getOperatorToken = (req) => {
+  const auth = req.headers["authorization"];
+  if (typeof auth === "string" && auth.startsWith("Bearer ")) return auth.slice(7);
+  const hdr = req.headers["x-operator-token"];
+  if (typeof hdr === "string") return hdr;
+  if (typeof req.query.token === "string") return req.query.token;
+  return "";
+};
 app.get("/__operator", (req, res) => {
-  if (!operatorTokenOk(req.query.token)) return res.status(404).type("html").send("<p>Not found.</p>");
-  res.type("html").send(operatorPage(BASE_URL, req.query.token, getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: WALLET_ONLY_SLUGS })));
+  if (!operatorTokenOk(getOperatorToken(req))) return res.status(404).type("html").send("<p>Not found.</p>");
+  res.type("html").send(operatorPage(BASE_URL, getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: WALLET_ONLY_SLUGS })));
 });
 app.get("/__operator/stats", (req, res) => {
-  if (!operatorTokenOk(req.query.token)) return res.status(404).json({ error: "Not found" });
+  if (!operatorTokenOk(getOperatorToken(req))) return res.status(404).json({ error: "Not found" });
   res.json(getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: WALLET_ONLY_SLUGS }));
 });
 app.get("/__operator/leads", async (req, res) => {
-  if (!operatorTokenOk(req.query.token)) return res.status(404).type("html").send("<p>Not found.</p>");
+  if (!operatorTokenOk(getOperatorToken(req))) return res.status(404).type("html").send("<p>Not found.</p>");
   const list = await listLeads({ limit: 200 });
   const stats = await countLeads();
-  res.type("html").send(operatorLeadsPage(req.query.token, {
+  res.type("html").send(operatorLeadsPage({
     ok: list.ok,
     rows: list.rows,
     total: stats.total,
@@ -984,6 +1001,16 @@ if (FREE_MODE) {
   if (!WALLET_ADDRESS) {
     console.error(
       "WALLET_ADDRESS is not set. Set it to your Base USDC receiving address, or set FREE_MODE=true to run without payments."
+    );
+    process.exit(1);
+  }
+  // Format-validate at startup so a typo'd / truncated address fails loudly
+  // instead of silently directing receipts to a wrong-but-valid-looking string.
+  // EIP-55 mixed-case checksum is optional (some prod stacks lowercase) — we
+  // only require the 0x + 40 hex shape.
+  if (!/^0x[0-9a-fA-F]{40}$/.test(WALLET_ADDRESS)) {
+    console.error(
+      `WALLET_ADDRESS is not a valid EVM address (expected 0x + 40 hex). Got: ${JSON.stringify(WALLET_ADDRESS).slice(0, 80)}`
     );
     process.exit(1);
   }

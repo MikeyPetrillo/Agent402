@@ -1,6 +1,7 @@
 // Token-gated /__operator/leads dashboard — every row in tollbooth_leads.
 // Same auth model and visual language as operator.js (the per-tool dashboard):
-// AGENT402_OPERATOR_TOKEN in the query string, noindex, plain HTML table.
+// AGENT402_OPERATOR_TOKEN accepted via Authorization: Bearer / X-Operator-Token
+// header (preferred) or ?token= query (legacy, stripped from the URL on load).
 //
 // This is the source of truth view for incoming Tollbooth Cloud waitlist and
 // partner applications. The form on /tollbooth/waitlist POSTs to
@@ -30,8 +31,7 @@ const planBadge = (plan) => {
   return `<span class="plan" style="color:${color}; border-color:${color}33;">${esc(plan)}</span>`;
 };
 
-export function operatorLeadsPage(token, { ok, rows, total, byPlan, dbEnabled }) {
-  const tokenQs = `?token=${encodeURIComponent(token)}`;
+export function operatorLeadsPage({ ok, rows, total, byPlan, dbEnabled }) {
   const banner = !dbEnabled
     ? `<div class="warn">DATABASE_URL is not set on this instance. Submissions fall back to the GitHub pre-fill flow and are not stored here.</div>`
     : !ok
@@ -117,11 +117,42 @@ ${CHROME_CSS}
 <body>
 <div class="wrap">
   <h1>Tollbooth leads</h1>
-  <p class="sub">Submissions from <a href="/tollbooth/waitlist">/tollbooth/waitlist</a>. <a href="/__operator${tokenQs}">← Back to operator</a></p>
+  <p class="sub">Submissions from <a href="/tollbooth/waitlist">/tollbooth/waitlist</a>. <a href="/__operator" data-op-link>← Back to operator</a></p>
   ${banner}
   ${summary}
   ${table}
 </div>
+<script>
+(function(){
+  // Mirror operator.js: capture ?token= once, then strip it from the URL +
+  // route inter-page links through fetch() with the Authorization header so
+  // the secret never re-appears in access logs / history / Referer.
+  var qs = new URLSearchParams(location.search);
+  if (qs.has('token')) {
+    try { sessionStorage.setItem('agent402-op-token', qs.get('token') || ''); } catch(_) {}
+    qs.delete('token');
+    var clean = location.pathname + (qs.toString() ? '?' + qs.toString() : '');
+    history.replaceState({}, document.title, clean);
+  }
+  var TOKEN = '';
+  try { TOKEN = sessionStorage.getItem('agent402-op-token') || ''; } catch(_) {}
+  document.querySelectorAll('a[data-op-link]').forEach(function(a){
+    a.addEventListener('click', function(e){
+      e.preventDefault();
+      fetch(a.getAttribute('href'), {
+        headers: TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {},
+        cache: 'no-store',
+      })
+        .then(function(r){ return r.text(); })
+        .then(function(html){
+          document.open(); document.write(html); document.close();
+          history.pushState({}, '', a.getAttribute('href'));
+        })
+        .catch(function(){});
+    });
+  });
+})();
+</script>
 </body>
 </html>`;
 }

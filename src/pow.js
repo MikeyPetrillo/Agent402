@@ -20,7 +20,24 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-const DATA_DIR = existsSync("/data") ? "/data" : "/tmp";
+// Replay-protection lives in /data (persistent volume) so used PoW tokens
+// stay used across restarts. Falling back to /tmp on prod is unsafe: a
+// redeploy resets the table and tokens within their TTL (default 300s) can
+// be replayed against the fresh instance. We require /data when NODE_ENV
+// looks production-ish and FREE_MODE/POW_ALLOW_EPHEMERAL haven't explicitly
+// opted into the ephemeral path (local tests, edge functions, etc.).
+const HAS_DATA_DIR = existsSync("/data");
+const ALLOW_EPHEMERAL =
+  process.env.POW_ALLOW_EPHEMERAL === "true" ||
+  process.env.FREE_MODE === "true" ||
+  process.env.NODE_ENV !== "production";
+if (!HAS_DATA_DIR && !ALLOW_EPHEMERAL) {
+  console.error(
+    "PoW replay store has no persistent volume (/data missing) and NODE_ENV=production. Mount /data, or set POW_ALLOW_EPHEMERAL=true to accept replay risk on restart."
+  );
+  process.exit(1);
+}
+const DATA_DIR = HAS_DATA_DIR ? "/data" : "/tmp";
 const db = new Database(join(DATA_DIR, "agent402-pow.db"));
 db.pragma("journal_mode = WAL");
 db.exec("CREATE TABLE IF NOT EXISTS pow_used (challenge TEXT PRIMARY KEY, exp INTEGER NOT NULL)");
