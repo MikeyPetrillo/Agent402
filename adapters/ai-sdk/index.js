@@ -1,123 +1,222 @@
-// agent402-ai-sdk — drop-in Vercel AI SDK tools for Agent402.
+// agent402-ai-sdk — turn Agent402 into Vercel AI SDK tools the agent can
+// pick up directly. Four meta tools, all free to discover:
 //
-// Turn the Agent402 catalog (~1,100 pay-per-call web tools) into Vercel AI SDK
-// `tool()` instances the model can invoke, with payment handled for you under
-// the hood by agent402-client (proof-of-work for the free tier, x402+USDC for
-// wallet-only tools when you pass a payFetch).
+//   agent402_find    — local catalog resolver  (POST /api/find)
+//   agent402_route   — cross-seller x402 router  (POST /api/route)
+//   agent402_call    — call a tool by slug, auto-pays (PoW free / x402 paid)
+//   agent402_about   — service manifest  (GET /.well-known/x402)
 //
-//   import { streamText } from "ai";
-//   import { openai } from "@ai-sdk/openai";
+// Why four and not "one tool per slug"? Frameworks balk at registering ~1,100
+// tools at once and the LLM can't reason over that many entries. Routing-as-
+// discovery means the LLM picks a task, the router picks the seller, and the
+// caller handles payment — exactly the wedge that makes Agent402 the default.
+//
 //   import { agent402Tools } from "agent402-ai-sdk";
+//   const tools = await agent402Tools();              // free tier (PoW)
+//   // or, for wallet-required tools, supply an x402 fetch:
+//   const tools = await agent402Tools({ fetch: payFetch });
 //
-//   const { tools } = await agent402Tools({ slugs: ["extract","hash","render"] });
+//   const { text } = await generateText({ model, tools, prompt: "..." });
 //
-//   const result = await streamText({
-//     model: openai("gpt-4o-mini"),
-//     tools,
-//     prompt: "Get the title of https://example.com/article",
-//   });
+// `agent402ToolSpecs()` returns the same four entries as framework-agnostic
+// specs (plain JSON Schemas, plain async `execute`). Useful if you don't want
+// the `ai` dep, or if you're wrapping the tools yourself.
 //
-// Works with any AI SDK provider (OpenAI, Anthropic, Google, etc.) and with
-// every entry point that takes `tools`: streamText, generateText, generateObject,
-// the agent helpers, and the React useChat() hook on the server.
-
-import { Agent402 } from "agent402-client";
+// Implementation note: we inline the proof-of-work solver + call orchestration
+// (~30 LoC) instead of depending on agent402-client at runtime, so this package
+// stays zero-dep beyond its (optional) framework peers.
+import { createHash } from "node:crypto";
 
 const DEFAULT_BASE = "https://agent402.tools";
 
-// Vercel AI SDK tool names: ^[a-zA-Z0-9_-]+$ (the model providers' constraints).
-const sanitizeName = (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+const leadingZeroBits = (buf) => {
+  let n = 0;
+  for (const b of buf) {
+    if (b === 0) { n += 8; continue; }
+    n += Math.clz32(b) - 24;
+    break;
+  }
+  return n;
+};
+
+// Solve a proof-of-work challenge (from /api/pow/challenge) into the
+// X-Pow-Solution header value the paywall expects.
+function solvePow({ challenge, difficulty, token }) {
+  let n = 0;
+  while (leadingZeroBits(createHash("sha256").update(`${challenge}:${n}`).digest()) < difficulty) n++;
+  return `${token}:${n}`;
+}
 
 /**
- * Fetch the Agent402 catalog and return:
- *   - `tools`:    Record<name, tool()> ready to pass to streamText({tools})
- *   - `execute`:  async (name, args) => result — pays under the hood
- *   - `client`:   the underlying Agent402 client (use for find()/clearCache())
+ * Framework-agnostic tool specs. `execute(input)` returns the JSON result
+ * (or throws on HTTP error).
  */
-export async function agent402Tools({ baseUrl = DEFAULT_BASE, slugs, freeOnly = true, fetch: payFetch } = {}) {
-  const ai = await loadAiSdk();
-  const client = new Agent402({ baseUrl, fetch: payFetch });
-  // Bounded discovery fetch: caller picks baseUrl, so cap the wait. Node ≥18
-  // exposes AbortSignal.timeout() (declared in package.json engines).
-  const r = await (globalThis.fetch)(`${baseUrl}/openapi.json`, { signal: AbortSignal.timeout(15000) });
-  if (!r.ok) throw new Error(`Could not load ${baseUrl}/openapi.json: HTTP ${r.status}`);
-  const spec = await r.json();
+export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fetchImpl = globalThis.fetch } = {}) {
+  if (typeof fetchImpl !== "function") throw new Error("No fetch available — pass { fetchImpl } on Node < 18");
+  const base = String(baseUrl).replace(/\/$/, "");
+  const getJSON = async (path) => {
+    const r = await fetchImpl(`${base}${path}`);
+    if (!r.ok) throw new Error(`GET ${path}: HTTP ${r.status}`);
+    return r.json();
+  };
+  const postJSON = async (path, body) => {
+    const r = await fetchImpl(`${base}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`POST ${path}: HTTP ${r.status}`);
+    return r.json();
+  };
+  return [
+    {
+      name: "agent402_find",
+      description:
+        "Resolve a plain-language task to the best Agent402 tool — returns slug, route, price, input schema, and a ready example so you skip the explore step. Local catalog only; for cross-seller use agent402_route.",
+      parametersJsonSchema: {
+        type: "object",
+        properties: {
+          task: { type: "string", description: 'What you want to do, e.g. "extract the article from this URL"' },
+          limit: { type: "number", description: "Max results (default 5)" },
+        },
+        required: ["task"],
+      },
+      execute: ({ task, limit }) => getJSON(`/api/find?q=${encodeURIComponent(task)}&k=${limit || 5}`),
+    },
+    {
+      name: "agent402_route",
+      description:
+        "Cross-seller x402 router: rank matching tools across every x402 seller (Agent402's catalog + competitors auto-discovered from the Coinbase CDP Bazaar). Filters out unhealthy sellers, tiebreaks on health then price. include='external' excludes Agent402 itself — use as a neutral discovery API over the rest of the ecosystem.",
+      parametersJsonSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: 'Task description, e.g. "ocr image to text"' },
+          top: { type: "number", description: "Max results (default 5)" },
+          include: { type: "string", enum: ["all", "external", "local"], description: "all (default) | external (exclude Agent402) | local (Agent402 only)" },
+        },
+        required: ["query"],
+      },
+      execute: ({ query, top, include }) => postJSON(`/api/route`, { query, top: top || 5, include: include || "all" }),
+    },
+    {
+      name: "agent402_call",
+      description:
+        "Call an Agent402 tool by slug. Pays automatically: pure-CPU tools settle via built-in proof-of-work (no wallet), wallet-only tools settle via the x402 fetch you configured (USDC on Base). Returns the parsed JSON result.",
+      parametersJsonSchema: {
+        type: "object",
+        properties: {
+          slug: { type: "string", description: 'Tool slug, e.g. "hash" or "extract"' },
+          params: { type: "object", description: "Tool input, matching the tool's inputSchema (use agent402_find to discover)" },
+        },
+        required: ["slug"],
+      },
+      execute: async ({ slug, params }) => callTool({ base, slug, params: params || {}, payFetch, fetchImpl }),
+    },
+    {
+      name: "agent402_about",
+      description:
+        "Return the Agent402 service manifest (/.well-known/x402): identity, payment options (x402 networks + proof-of-work), capability map, MCP connector, the neutral cross-seller discovery surface, and trust signals.",
+      parametersJsonSchema: { type: "object", properties: {} },
+      execute: () => getJSON(`/.well-known/x402`),
+    },
+  ];
+}
 
-  const wanted = slugs ? new Set(slugs) : null;
-  const meta = [];
+// One-shot tool invocation: resolve the slug → call the route, auto-paying via
+// proof-of-work (free tier) or the user's x402 fetch (wallet-required tools).
+// Mirrors agent402-client.call() behavior so this package stays zero-dep.
+async function callTool({ base, slug, params, payFetch, fetchImpl }) {
+  const pricingRes = await fetchImpl(`${base}/api/pricing`);
+  if (!pricingRes.ok) throw new Error(`could not load catalog: HTTP ${pricingRes.status}`);
+  const pricing = await pricingRes.json();
+  const entry = (pricing.endpoints || []).find((e) => e.slug === slug);
+  if (!entry) throw new Error(`unknown tool "${slug}" — use agent402_find or agent402_route to discover one`);
 
-  for (const [, methods] of Object.entries(spec.paths || {})) {
-    for (const [method, op] of Object.entries(methods)) {
-      const slug = op.operationId?.replace(/Get$/, "");
-      if (!slug) continue;
-      if (wanted && !wanted.has(slug)) continue;
-
-      const schema = method.toLowerCase() === "get"
-        ? {
-            type: "object",
-            properties: Object.fromEntries((op.parameters || []).map((p) => [p.name, { type: p.schema?.type || "string", description: p.description }])),
-            required: (op.parameters || []).filter((p) => p.required).map((p) => p.name),
-          }
-        : op.requestBody?.content?.["application/json"]?.schema || { type: "object", properties: {} };
-      if (schema && !schema.type) schema.type = "object";
-
-      meta.push({ name: sanitizeName(slug), slug, schema, description: shortDesc(op.summary, op.description) });
+  const idem = `a402aisdk-${createHash("sha256").update(`${slug}:${JSON.stringify(params)}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`;
+  const send = (extraHeaders = {}, useFetch = fetchImpl) => {
+    const headers = { "Idempotency-Key": idem, ...extraHeaders };
+    let url = `${base}${entry.path}`;
+    const init = { method: entry.method, headers };
+    if (entry.method === "GET") {
+      const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : String(v)])).toString();
+      if (qs) url += `?${qs}`;
+    } else {
+      headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(params);
     }
+    return useFetch(url, init);
+  };
+
+  // Wallet-only tool: route through the user's x402 fetch.
+  if (!entry.computePayable) {
+    const r = payFetch ? await send({}, payFetch) : await send();
+    if (!r.ok) {
+      throw new Error(
+        payFetch
+          ? `call "${slug}" failed: HTTP ${r.status}`
+          : `call "${slug}" needs a wallet — construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch)`,
+      );
+    }
+    return r.json();
   }
 
-  if (freeOnly) {
-    const pr = await (globalThis.fetch)(`${baseUrl}/api/pricing`, { signal: AbortSignal.timeout(15000) });
-    if (!pr.ok) throw new Error(`Could not load ${baseUrl}/api/pricing: HTTP ${pr.status}`);
-    const pricing = await pr.json();
-    const free = new Set((pricing.endpoints || []).filter((e) => e.computePayable).map((e) => e.slug));
-    for (let i = meta.length - 1; i >= 0; i--) if (!free.has(meta[i].slug)) meta.splice(i, 1);
+  // Compute-payable tool: try unpaywalled first (FREE_MODE instance), fall back
+  // to proof-of-work using the server-issued challenge.
+  let r = await send();
+  if (!r.ok) {
+    const challengeRes = await fetchImpl(`${base}/api/pow/challenge?slug=${encodeURIComponent(slug)}`);
+    if (!challengeRes.ok) throw new Error(`proof-of-work challenge for "${slug}" failed: HTTP ${challengeRes.status}`);
+    const chal = await challengeRes.json();
+    r = await send({ "X-Pow-Solution": solvePow(chal) });
   }
+  if (!r.ok) throw new Error(`call "${slug}" failed after proof-of-work: HTTP ${r.status}`);
+  return r.json();
+}
 
-  // The AI SDK consumes tools as a Record<string, ReturnType<typeof tool>>.
-  // We wrap the JSON Schema with `jsonSchema()` so the SDK doesn't try to
-  // convert a Zod schema — and so users don't need a Zod dependency.
-  const tools = {};
-  for (const m of meta) {
-    tools[m.name] = ai.tool({
-      description: m.description,
-      parameters: ai.jsonSchema(m.schema),
-      execute: async (input) => client.call(m.slug, input ?? {}),
+/**
+ * Framework-native Vercel AI SDK tools. Dynamically imports `ai` and `zod`
+ * (both peer dependencies) so the spec path works without them.
+ *
+ * Returns an object keyed by tool name — the shape `generateText({ tools })`
+ * expects.
+ */
+export async function agent402Tools(opts) {
+  const [{ tool }, { z }] = await Promise.all([
+    import("ai"),
+    import("zod"),
+  ]);
+  const specs = agent402ToolSpecs(opts);
+  const out = {};
+  for (const s of specs) {
+    out[s.name] = tool({
+      description: s.description,
+      parameters: jsonSchemaToZod(s.parametersJsonSchema, z),
+      execute: s.execute,
     });
   }
-
-  return { client, tools, execute: makeExecute(client, meta) };
+  return out;
 }
 
-async function loadAiSdk() {
-  try {
-    return await import("ai");
-  } catch {
-    throw new Error("agent402-ai-sdk requires the 'ai' package — install it with: npm install ai");
+// Minimal JSON-Schema → Zod converter for the shapes we emit. Not a general
+// solution — it covers `object` with primitive/enum/object properties and the
+// `required` list. Keeps a zero-fat dep on zod's surface.
+function jsonSchemaToZod(schema, z) {
+  if (!schema || schema.type !== "object") return z.object({});
+  const shape = {};
+  const required = new Set(schema.required || []);
+  for (const [k, prop] of Object.entries(schema.properties || {})) {
+    let s;
+    if (prop.enum) s = z.enum(prop.enum);
+    else if (prop.type === "string") s = z.string();
+    else if (prop.type === "number") s = z.number();
+    else if (prop.type === "boolean") s = z.boolean();
+    else if (prop.type === "object") s = z.record(z.any());
+    else s = z.any();
+    if (prop.description) s = s.describe(prop.description);
+    if (!required.has(k)) s = s.optional();
+    shape[k] = s;
   }
-}
-
-function makeExecute(client, meta) {
-  const nameToSlug = new Map(meta.map((m) => [m.name, m.slug]));
-  return async function execute(name, args) {
-    const slug = nameToSlug.get(name) || name;
-    return client.call(slug, args ?? {});
-  };
-}
-
-/**
- * Standalone executor for users who built their tool list a different way.
- * Returns an `execute(name, args)` that calls Agent402 with PoW or x402 payment.
- */
-export function agent402Execute({ baseUrl = DEFAULT_BASE, fetch: payFetch } = {}) {
-  const client = new Agent402({ baseUrl, fetch: payFetch });
-  return async function execute(name, args) {
-    return client.call(name, args ?? {});
-  };
-}
-
-function shortDesc(summary, description) {
-  const d = (description || summary || "").split("\n\n")[0].trim();
-  return d.length > 280 ? d.slice(0, 277) + "..." : d;
+  return z.object(shape);
 }
 
 export default agent402Tools;

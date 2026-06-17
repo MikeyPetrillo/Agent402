@@ -254,7 +254,7 @@ jobs:
       - name: Buyer SDK (agent402-client — resolve + auto-pay via PoW; boots paid-mode)
         run: node client/test.js
 
-      - name: Adapter tests (openai-tools + anthropic-tools + ai-sdk + langchain + llamaindex + strands)
+      - name: Adapter tests (openai-tools + anthropic-tools + ai-sdk + langchain + openai-agents + llamaindex + strands)
         run: |
           FREE_MODE=true PORT=3091 node src/server.js > /tmp/a402-test.log 2>&1 &
           ADAPTER_PID=$!
@@ -262,11 +262,15 @@ jobs:
           curl -sf http://localhost:3091/health >/dev/null || { echo "FREE_MODE server failed to boot"; cat /tmp/a402-test.log; kill $ADAPTER_PID; exit 1; }
           # Each adapter test self-installs its framework peer (and agent402-client)
           # into its own node_modules; tests verify tool-shape + execute() round-trip.
+          # ai-sdk/langchain/openai-agents tests exercise the framework-agnostic
+          # spec path (no peer install needed); peer wrappers are checked in
+          # consumers' projects via optional peerDeps.
           AGENT402_BASE_URL=http://localhost:3091 node adapters/openai-tools/test.js
           ( cd adapters/anthropic-tools && npm install ../../client --no-save --silent )
           AGENT402_BASE_URL=http://localhost:3091 node adapters/anthropic-tools/test.js
           AGENT402_BASE_URL=http://localhost:3091 node adapters/ai-sdk/test.js
           AGENT402_BASE_URL=http://localhost:3091 node adapters/langchain/test.js
+          AGENT402_BASE_URL=http://localhost:3091 node adapters/openai-agents/test.js
           AGENT402_BASE_URL=http://localhost:3091 node adapters/llamaindex/test.js
           AGENT402_BASE_URL=http://localhost:3091 node adapters/strands/test.js
           kill $ADAPTER_PID 2>/dev/null || true
@@ -724,6 +728,23 @@ jobs:
           else
             npm publish --access public
             echo "published agent402-langchain@$VERSION → https://www.npmjs.com/package/agent402-langchain"
+          fi
+
+      - name: Publish agent402-openai-agents to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN secret missing"; exit 1; }
+          # Test runs framework-agnostic spec path; @openai/agents is an
+          # optional peerDep so consumers install it on their side.
+          AGENT402_BASE_URL=http://localhost:3090 node adapters/openai-agents/test.js
+          cd adapters/openai-agents
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "agent402-openai-agents@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-openai-agents@$VERSION is already on npm — nothing to do"
+          else
+            npm publish --access public
+            echo "published agent402-openai-agents@$VERSION → https://www.npmjs.com/package/agent402-openai-agents"
           fi
 
       - name: Publish agent402-llamaindex to npm

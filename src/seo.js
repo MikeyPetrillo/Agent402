@@ -85,7 +85,7 @@ Base URL: ${baseUrl}
 
 > Don't burn tokens exploring to find a tool: \`GET ${baseUrl}/api/find?q=<your task>\` returns the best-matching tools with route, price, input schema, and a ready example — call the result directly. (Also accepts POST {"task": "..."}.)
 
-> Want the cheapest healthy match across the WHOLE x402 ecosystem (not just this seller)? POST to \`${baseUrl}/api/route\` with \`{"query":"<task>", "top":N}\` — the Smart Order Router ranks tools across every x402 seller we've crawled (local catalog + auto-discovered from the Coinbase CDP Bazaar, refreshed hourly), filters out unhealthy sellers, and tiebreaks on health then price. Snapshot of every seller indexed at \`${baseUrl}/api/index\` (JSON) and \`${baseUrl}/index\` (HTML).
+> Neutral cross-seller discovery for the whole x402 ecosystem: POST \`${baseUrl}/api/route\` with \`{"query":"<task>", "top":N, "include":"all|external|local"}\` — the Smart Order Router ranks tools across every x402 seller we've crawled (auto-discovered from the Coinbase CDP Bazaar, refreshed hourly), filters out unhealthy sellers, and tiebreaks on health then price. Use \`include:"external"\` to *exclude* Agent402 itself from the results — same router used as a neutral discovery API over competitors. Full seller index at \`${baseUrl}/api/index\` (JSON) and \`${baseUrl}/index\` (HTML).
 
 > Open source, and two-sided: Agent402 is also the home of \`agent402-tollbooth\` — an open-source, self-hostable x402 pay-per-crawl gate that lets any site charge AI crawlers per request (USDC via x402, or free proof-of-work) while humans browse free. https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth
 
@@ -121,7 +121,7 @@ ${sections}
 ## Free endpoints
 
 - \`GET /api/find?q={task}\` — resolve a task description to the best-matching tools (route, price, input schema, ready example) in one call; skips the token-heavy "search to find a tool" step. Also accepts \`POST {"task":"..."}\`.
-- \`POST /api/route {"query":"...", "top":N}\` — Smart Order Router: rank tools across every x402 seller we've crawled (auto-discovered from public registries), filtered to healthy sellers, tiebroken on health then price.
+- \`POST /api/route {"query":"...", "top":N, "include":"all|external|local"}\` — Smart Order Router / neutral x402 discovery API: rank tools across every x402 seller crawled (auto-discovered from public registries), filtered to healthy sellers, tiebroken on health then price. \`include:"external"\` excludes Agent402 itself — buyers can use us as a neutral router over the rest of the ecosystem.
 - \`GET /api/index\` — JSON snapshot of every seller indexed: per-seller health, routable flag, rolling crawl history, total counts; companion HTML view at \`/index\`.
 - \`GET /.well-known/x402\` — one-fetch service manifest: identity, payment options (x402 networks + proof-of-work), capability map, MCP connector, and trust signals.
 - \`GET /api/reliability\` — structured reliability/SLA report: uptime, calls served, on-chain revenue proof, and each operational guarantee with a URL to verify it.

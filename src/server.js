@@ -585,9 +585,9 @@ const indexCtx = () => ({
 });
 app.get("/index", (_req, res) => res.type("text/html").send(indexPage(indexSnapshot(indexCtx()), { baseUrl: BASE_URL })));
 app.get("/api/index", (_req, res) => res.json(indexSnapshot(indexCtx())));
-const routeHandler = (q, k, res) => res.json(routeQuery({ query: q, top: k, ...indexCtx() }));
-app.get("/api/route", (req, res) => routeHandler(req.query.q ?? req.query.task ?? req.query.query, req.query.top ?? req.query.k, res));
-app.post("/api/route", (req, res) => routeHandler(req.body?.q ?? req.body?.task ?? req.body?.query, req.body?.top ?? req.body?.k, res));
+const routeHandler = (q, k, include, res) => res.json(routeQuery({ query: q, top: k, include, ...indexCtx() }));
+app.get("/api/route", (req, res) => routeHandler(req.query.q ?? req.query.task ?? req.query.query, req.query.top ?? req.query.k, req.query.include, res));
+app.post("/api/route", (req, res) => routeHandler(req.body?.q ?? req.body?.task ?? req.body?.query, req.body?.top ?? req.body?.k, req.body?.include, res));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));

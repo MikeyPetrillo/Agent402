@@ -1,73 +1,83 @@
 # agent402-langchain
 
-Drop-in **LangChain JS tools** for [Agent402](https://agent402.tools) — the open-source, self-hostable x402 + MCP server with ~1,100 pay-per-call web tools (browser, web search, PDF, images, live data, payment helpers, wallet-keyed memory).
-
-- **Zero new infra.** Get back a ready-to-pass `Tool[]` array for any LangChain agent or LangGraph node.
-- **Free tier by default.** No wallet needed — compute-payable tools settle with a built-in proof-of-work.
-- **Wallet-only tools optional.** Pass an `@x402/fetch`-wrapped fetch to use the full catalog.
-- **JSON Schema → Zod automatically.** No manual schema authoring.
-
-## Install
+LangChain.js tools for [Agent402](https://agent402.tools) — the open-source
+x402 + MCP server with ~1,100 pay-per-call web tools (browser, web search,
+OCR, PDFs, durable memory, ~1,000 pure-CPU utilities) **and** the cross-seller
+[Smart Order Router](https://agent402.tools/index) that ranks tools across the
+whole x402 ecosystem.
 
 ```bash
-npm install @langchain/core @langchain/openai zod agent402-langchain
+npm install agent402-langchain @langchain/core zod
 ```
 
-## Use with LangGraph's prebuilt ReAct agent
+## Quickstart
 
 ```js
-import { createReactAgent } from "@langchain/langgraph/prebuilt";
-import { ChatOpenAI } from "@langchain/openai";
 import { agent402Tools } from "agent402-langchain";
 
-const { tools } = await agent402Tools({ slugs: ["extract", "hash", "render", "screenshot"] });
+// Free tier (proof-of-work auto-pay, no wallet)
+const tools = await agent402Tools();
 
-const agent = createReactAgent({
-  llm: new ChatOpenAI({ model: "gpt-4o-mini" }),
-  tools,
-});
+// Or, for wallet-required tools (browser, search, memory), supply an
+// x402-wrapped fetch (e.g. @x402/fetch with your funded Base wallet):
+const tools = await agent402Tools({ fetch: payFetch });
 
-const res = await agent.invoke({
-  messages: [{ role: "user", content: "Get the title of https://example.com/article" }],
-});
-console.log(res.messages.at(-1).content);
+// Plug into any LangChain agent
+import { createReactAgent } from "@langchain/langgraph/prebuilt";
+const agent = createReactAgent({ llm, tools });
 ```
 
-## Use with a classic LangChain agent
+## What you get — four meta tools
+
+The LLM picks tasks; the router picks sellers; the caller handles payment.
+
+| Tool | Purpose |
+|---|---|
+| `agent402_find` | Resolve a plain-language task to the best **local** Agent402 tool — slug, route, price, input schema, and a ready example. |
+| `agent402_route` | **Cross-seller x402 router**: rank tools across every x402 seller (Agent402 + auto-discovered competitors from the Coinbase CDP Bazaar). `include: "external"` excludes Agent402 itself — neutral discovery API over the rest of the ecosystem. |
+| `agent402_call` | Call a tool by slug. Pays automatically: pure-CPU tools via proof-of-work; wallet-only via your x402 fetch. |
+| `agent402_about` | The Agent402 service manifest — payment options, capability map, MCP connector, trust signals. |
+
+Why four meta tools and not one tool per slug? Registering ~1,100 individual
+tools blows past most agents' tool-budget and the LLM can't reason over
+hundreds of entries. Routing-as-discovery scales — the LLM describes the
+task, the router picks the cheapest healthy seller, the caller handles
+payment.
+
+## Migration from 0.1.x
+
+`agent402-langchain@0.2.0` replaces the per-slug tool generator with the four-
+meta-tool pattern. If you were using `agent402Tools({ slugs: [...] })`, the
+new entry point is just `agent402Tools()` — the LLM picks slugs at runtime
+via `agent402_find` and `agent402_route`.
+
+## Framework-agnostic specs
+
+If you'd rather not pull in `@langchain/core` (or you want to wrap the tools
+with your own factory), use the framework-agnostic export:
 
 ```js
-import { AgentExecutor, createOpenAIFunctionsAgent } from "langchain/agents";
-import { ChatOpenAI } from "@langchain/openai";
+import { agent402ToolSpecs } from "agent402-langchain";
 
-const { tools } = await agent402Tools({ slugs: ["hash"] });
-const agent = await createOpenAIFunctionsAgent({
-  llm: new ChatOpenAI({ model: "gpt-4o-mini" }),
-  tools,
-  prompt: yourPrompt,
-});
-const exec = new AgentExecutor({ agent, tools });
-await exec.invoke({ input: "Compute SHA-256 of 'hello world'" });
-```
-
-## Pay with USDC (wallet-only tools)
-
-```js
-const { tools } = await agent402Tools({
-  freeOnly: false,
-  fetch: payFetch, // your @x402/fetch-wrapped fetch
+const specs = agent402ToolSpecs();
+// specs = [{ name, description, parametersJsonSchema, execute }, ...]
+const result = await specs.find((s) => s.name === "agent402_route").execute({
+  query: "ocr image",
+  top: 3,
+  include: "external",
 });
 ```
 
-## Self-hosted Agent402
+## Options
 
-```js
-const { tools } = await agent402Tools({ baseUrl: "https://agent402.example.com" });
+```ts
+agent402Tools({
+  baseUrl?: string,    // default: "https://agent402.tools"
+  fetch?: typeof fetch, // x402-wrapped fetch for wallet-required tools
+  fetchImpl?: typeof fetch, // base fetch for unpaid lookups (default: global fetch)
+})
 ```
-
-## Trust & `baseUrl`
-
-The catalog server you point `baseUrl` at controls the **name, description, and JSON Schema** of every generated tool — and tool descriptions are passed to your LLM. Only point `baseUrl` at an Agent402 instance you operate or trust. The default (`https://agent402.tools`) is the maintained, open-source hosted instance.
 
 ## License
 
-MIT
+MIT — part of [Agent402](https://github.com/MikeyPetrillo/Agent402).

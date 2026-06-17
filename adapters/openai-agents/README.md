@@ -1,21 +1,20 @@
-# agent402-ai-sdk
+# agent402-openai-agents
 
-Vercel AI SDK tools for [Agent402](https://agent402.tools) — the open-source
+OpenAI Agents SDK tools for [Agent402](https://agent402.tools) — the open-source
 x402 + MCP server with ~1,100 pay-per-call web tools (browser, web search,
 OCR, PDFs, durable memory, ~1,000 pure-CPU utilities) **and** the cross-seller
 [Smart Order Router](https://agent402.tools/index) that ranks tools across the
 whole x402 ecosystem.
 
 ```bash
-npm install agent402-ai-sdk ai zod
+npm install agent402-openai-agents @openai/agents zod
 ```
 
 ## Quickstart
 
 ```js
-import { agent402Tools } from "agent402-ai-sdk";
-import { generateText } from "ai";
-import { openai } from "@ai-sdk/openai";
+import { agent402Tools } from "agent402-openai-agents";
+import { Agent, run } from "@openai/agents";
 
 // Free tier (proof-of-work auto-pay, no wallet)
 const tools = await agent402Tools();
@@ -24,11 +23,12 @@ const tools = await agent402Tools();
 // x402-wrapped fetch (e.g. @x402/fetch with your funded Base wallet):
 const tools = await agent402Tools({ fetch: payFetch });
 
-const { text } = await generateText({
-  model: openai("gpt-4o"),
+const agent = new Agent({
+  name: "x402-agent",
+  instructions: "Use agent402 to find and call paid web tools when needed.",
   tools,
-  prompt: "Hash 'hello world' with sha256",
 });
+const result = await run(agent, "Hash 'hello world' with sha256");
 ```
 
 ## What you get — four meta tools
@@ -48,20 +48,13 @@ hundreds of entries. Routing-as-discovery scales — the LLM describes the
 task, the router picks the cheapest healthy seller, the caller handles
 payment.
 
-## Migration from 0.1.x
-
-`agent402-ai-sdk@0.2.0` replaces the per-slug tool generator with the four-
-meta-tool pattern. If you were using `agent402Tools({ slugs: [...] })`, the
-new entry point is just `agent402Tools()` — the LLM picks slugs at runtime
-via `agent402_find` and `agent402_route`.
-
 ## Framework-agnostic specs
 
-If you'd rather not pull in `ai` (or you want to wrap the tools with your own
-factory), use the framework-agnostic export:
+If you'd rather not pull in `@openai/agents` (or you want to wrap the tools
+with your own factory), use the framework-agnostic export:
 
 ```js
-import { agent402ToolSpecs } from "agent402-ai-sdk";
+import { agent402ToolSpecs } from "agent402-openai-agents";
 
 const specs = agent402ToolSpecs();
 // specs = [{ name, description, parametersJsonSchema, execute }, ...]

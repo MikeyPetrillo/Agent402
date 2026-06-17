@@ -22,7 +22,7 @@
 //   • Failed crawls log a stale marker; they never crash the process.
 //   • The router uses the same lexical scoring shape as /api/find so rankings
 //     are consistent whether a buyer searches local-only or cross-seller.
-import { CHROME_HEAD_LINKS, CHROME_CSS } from "./chrome.js";
+import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { safeFetch } from "./tools/fetch-guard.js";
 import { toolList } from "./pages.js";
 
@@ -31,8 +31,11 @@ const CRAWL_INTERVAL_MS = 5 * 60 * 1000; // 5 min — gentle on third-party sell
 const DISCOVERY_INTERVAL_MS = 60 * 60 * 1000; // 1 hr — registries don't change fast
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_OPENAPI_BYTES = 12 * 1024 * 1024; // Agent402's own is ~5 MB; allow headroom
-const MAX_DISCOVERY_BYTES = 16 * 1024 * 1024;
-const MAX_DISCOVERED_SELLERS = 200; // cap so a misbehaving registry can't blow up memory
+const MAX_DISCOVERY_BYTES = 64 * 1024 * 1024;
+// Effectively uncapped for any realistic registry — kept as a sanity guard so a
+// malicious registry can't OOM us. Real politeness comes from CRAWL_CONCURRENCY.
+const MAX_DISCOVERED_SELLERS = 50000;
+const CRAWL_CONCURRENCY = 25; // max parallel seller crawls per cycle — caps outbound fan-out
 const HEALTH_WINDOW = 5; // last N crawl outcomes per seller — drives health-aware routing
 
 // Map<originUrl, { manifest, openapi, tools, fetchedAt, error? }>
@@ -220,12 +223,28 @@ let crawlerTimer = null;
 let discoveryTimer = null;
 let crawlInFlight = false;
 
+// Bounded worker pool. With thousands of discovered sellers we can't fan out
+// every crawl in parallel — the unbounded `Promise.allSettled(seeds.map(...))`
+// pattern would burn file descriptors and look like an outbound DoS. Each
+// worker pulls the next seed off the queue until it's empty.
+async function runPool(items, limit, worker) {
+  const queue = items.slice();
+  const n = Math.min(Math.max(limit, 1), queue.length);
+  const workers = Array.from({ length: n }, async () => {
+    while (queue.length) {
+      const item = queue.shift();
+      try { await worker(item); } catch { /* crawlSeller already catches; belt+braces */ }
+    }
+  });
+  await Promise.all(workers);
+}
+
 async function runCrawl() {
   if (crawlInFlight) return; // overlapping runs would just rate-limit each other
   crawlInFlight = true;
   try {
     const seeds = seedList();
-    await Promise.allSettled(seeds.map(crawlSeller));
+    await runPool(seeds, CRAWL_CONCURRENCY, crawlSeller);
   } finally {
     crawlInFlight = false;
   }
@@ -337,6 +356,13 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
   };
 }
 
+// `include` controls which seller set the router considers. Defaults to "all"
+// (local catalog + healthy crawled sellers). `external` excludes the local
+// catalog — the explicit "find me a competitor's tool" path that makes Agent402
+// useful as a neutral discovery layer even when the caller isn't using us.
+// `local` is the explicit local-only escape hatch.
+const VALID_INCLUDE = new Set(["all", "external", "local"]);
+
 /**
  * Smart Order Router — given a task description, rank matching tools across
  * every seller in the Index. Cheapest seller wins on score ties.
@@ -344,31 +370,39 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
  * Returns the same shape as /api/find but with a `seller` field per result and
  * cross-seller deduplication left to the buyer (different sellers may legitimately
  * offer the same tool at different prices).
+ *
+ * `include` (`all` | `external` | `local`) lets buyers explicitly route to
+ * non-Agent402 sellers (`external`) — the same router, used as a neutral
+ * discovery API over the whole x402 ecosystem.
  */
-export function routeQuery({ query, top, baseUrl, catalog, prices, network, toolCount, walletName }) {
+export function routeQuery({ query, top, include, baseUrl, catalog, prices, network, toolCount, walletName }) {
   const q = String(query || "").slice(0, 500);
   const terms = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).slice(0, 32);
   const k = Math.min(Math.max(parseInt(top, 10) || 5, 1), 25);
-  if (!terms.length) return { query: q, count: 0, results: [], sellers: 0 };
+  const inc = VALID_INCLUDE.has(include) ? include : "all";
+  if (!terms.length) return { query: q, count: 0, results: [], sellers: 0, include: inc };
 
   // Always include the local catalog (we trust ourselves), plus every crawled
   // seller's tools — but only from sellers whose last crawl succeeded. A buyer
   // routed to a currently-broken seller would just lose the call, so we'd
   // rather rank fewer trustworthy options than more flaky ones.
   const local = buildLocalEntry({ baseUrl, catalog, prices, network, toolCount, walletName });
-  const all = [
-    ...local.tools.map((t) => ({ ...t, sellerHome: baseUrl, sellerName: local.displayName, health: 1 })),
-    ...[...cache.values()]
-      .filter(isRoutable)
-      .flatMap((v) =>
-        (v.tools || []).map((t) => ({
-          ...t,
-          sellerHome: v.manifest?.homepage || t.seller,
-          sellerName: v.manifest?.name || t.seller,
-          health: healthScore(v),
-        })),
-      ),
-  ];
+  const localPool = inc === "external"
+    ? []
+    : local.tools.map((t) => ({ ...t, sellerHome: baseUrl, sellerName: local.displayName, health: 1 }));
+  const remotePool = inc === "local"
+    ? []
+    : [...cache.values()]
+        .filter(isRoutable)
+        .flatMap((v) =>
+          (v.tools || []).map((t) => ({
+            ...t,
+            sellerHome: v.manifest?.homepage || t.seller,
+            sellerName: v.manifest?.name || t.seller,
+            health: healthScore(v),
+          })),
+        );
+  const all = [...localPool, ...remotePool];
 
   const scored = [];
   for (const t of all) {
@@ -416,7 +450,7 @@ export function routeQuery({ query, top, baseUrl, catalog, prices, network, tool
       health: t.health,
     };
   });
-  return { query: q, count: results.length, sellers: sellersSeen.size, results };
+  return { query: q, include: inc, count: results.length, sellers: sellersSeen.size, results };
 }
 
 const esc = (s) =>
@@ -507,7 +541,9 @@ ${CHROME_HEAD_LINKS}
   ${CHROME_CSS}
 </style>
 </head>
-<body><div class="wrap">
+<body>
+${renderHeader("/index")}
+<div class="wrap">
 
 <h1>x402 Index</h1>
 <p class="sub">Live map of the agent payments economy. Every seller below publishes an x402 service manifest at <code>/.well-known/x402</code>; this page crawls them every 5 minutes and shows what's online.</p>
@@ -538,18 +574,20 @@ ${CHROME_HEAD_LINKS}
 </div>
 
 <div class="panel">
-  <div class="ph"><h2>Smart Order Router</h2><div class="pn">Resolve a task to the cheapest matching tool across every seller in one call.</div></div>
+  <div class="ph"><h2>Smart Order Router — neutral x402 discovery</h2><div class="pn">Resolve a task to the cheapest healthy tool across every seller in one call. Use <code>include:"external"</code> to exclude Agent402 itself — we list because we trust the ranking, not because we'd rig it for ourselves.</div></div>
   <div style="padding:14px 18px;">
     <pre>curl -s -X POST ${esc(baseUrl)}/api/route \\
   -H 'Content-Type: application/json' \\
-  -d '{"query":"ocr image","top":3}'</pre>
-    <p class="foot" style="margin:10px 0 0;">Free — same gate as <code>/api/find</code>. Deterministic lexical scoring with cheapest-seller tiebreak.</p>
+  -d '{"query":"ocr image","top":3,"include":"external"}'</pre>
+    <p class="foot" style="margin:10px 0 0;">Free — same gate as <code>/api/find</code>. <code>include</code> = <code>all</code> (default) · <code>external</code> (exclude self) · <code>local</code> (Agent402 only). Deterministic lexical scoring, health-then-price tiebreak.</p>
   </div>
 </div>
 
 <p class="foot">x402 Index is open-source — part of <a href="https://github.com/MikeyPetrillo/Agent402">Agent402</a>. To add your seller, publish a manifest at <code>/.well-known/x402</code> and open a PR adding your origin to the seed list (or run your own Index instance).</p>
 
-</div></body></html>`;
+</div>
+${renderFooter()}
+</body></html>`;
 }
 
 /** Internal helper for tests. */
