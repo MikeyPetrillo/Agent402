@@ -9,6 +9,14 @@ package is the inverse: it lets **any site charge the AI bots that crawl it**.
 > a proof-of-work. The open, self-hostable answer to Cloudflare's closed
 > pay-per-crawl: no CDN lock-in, no Stripe, no Merchant-of-Record, no signup.
 
+### Three ways to use it
+
+| | Best for | Where |
+|---|---|---|
+| **Run it yourself** | 1–2 sites, you control the deploy | `npm i agent402-tollbooth` · [product page](https://agent402.tools/tollbooth) |
+| **Tollbooth Cloud** (managed) | Don't want to host gates, dashboards, KV | [agent402.tools/tollbooth/cloud](https://agent402.tools/tollbooth/cloud) — Solo / Team / Agency / Enterprise, join the waitlist |
+| **For SEO / pay-per-crawl agencies** | 10+ client properties, partner economics | [[Tollbooth for Agencies\|Tollbooth-for-Agencies]] |
+
 ## Two ways to run it
 
 **Express middleware** — humans pass; known AI crawlers get `402`:
