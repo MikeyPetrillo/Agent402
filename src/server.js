@@ -14,6 +14,8 @@ import { statusPage } from "./status.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
 import { tollboothCloudPage } from "./tollbooth-cloud.js";
 import { tollboothWaitlistPage } from "./tollbooth-waitlist.js";
+import { operatorLeadsPage } from "./operator-leads.js";
+import { initLeadsDb, insertLead, listLeads, countLeads, leadsDbEnabled } from "./leads-db.js";
 import { operatorPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
 import { termsPage } from "./terms.js";
@@ -528,6 +530,59 @@ app.get("/tollbooth/waitlist", (req, res) => {
   res.type("html").send(tollboothWaitlistPage(BASE_URL, { plan, kind }));
 });
 
+// Tollbooth waitlist intake. Form on /tollbooth/waitlist POSTs JSON here; we
+// validate, light rate-limit by IP, drop honeypot hits, and persist into
+// Postgres (DATABASE_URL). If the DB isn't configured the endpoint returns
+// 503 and the form falls back to its GitHub pre-fill flow.
+const ALLOWED_PLANS = new Set(["solo", "team", "agency", "enterprise", "partner"]);
+const ALLOWED_KINDS = new Set(["waitlist", "enterprise", "partner"]);
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const waitlistHits = new Map(); // ip -> [timestamps]
+const WAITLIST_LIMIT = 5; // per IP per window
+const WAITLIST_WINDOW_MS = 60_000;
+function waitlistRateOk(ip) {
+  const now = Date.now();
+  const arr = (waitlistHits.get(ip) || []).filter((t) => now - t < WAITLIST_WINDOW_MS);
+  if (arr.length >= WAITLIST_LIMIT) {
+    waitlistHits.set(ip, arr);
+    return false;
+  }
+  arr.push(now);
+  waitlistHits.set(ip, arr);
+  return true;
+}
+app.post("/api/tollbooth/waitlist", async (req, res) => {
+  if (!leadsDbEnabled()) {
+    return res.status(503).json({ ok: false, error: "leads-db-unavailable" });
+  }
+  const ip = (req.headers["x-forwarded-for"] || req.ip || "").toString().split(",")[0].trim();
+  if (!waitlistRateOk(ip)) {
+    return res.status(429).json({ ok: false, error: "rate-limited" });
+  }
+  const b = req.body || {};
+  // Honeypot: real form leaves `website` empty; bots fill every field.
+  if (typeof b.website === "string" && b.website.length > 0) {
+    return res.json({ ok: true, id: 0 });
+  }
+  const name = typeof b.name === "string" ? b.name.trim() : "";
+  const email = typeof b.email === "string" ? b.email.trim() : "";
+  if (!name || !email || !EMAIL_RE.test(email)) {
+    return res.status(400).json({ ok: false, error: "name+email required" });
+  }
+  const plan = ALLOWED_PLANS.has(String(b.plan || "").toLowerCase()) ? String(b.plan).toLowerCase() : "team";
+  const kind = ALLOWED_KINDS.has(String(b.kind || "").toLowerCase()) ? String(b.kind).toLowerCase() : "waitlist";
+  const r = await insertLead({
+    kind, plan, name, email,
+    org: typeof b.org === "string" ? b.org.trim() : "",
+    sites: typeof b.sites === "string" ? b.sites.trim() : "",
+    message: typeof b.message === "string" ? b.message.trim() : "",
+    ip,
+    ua: (req.get("user-agent") || "").toString(),
+  });
+  if (!r.ok) return res.status(500).json({ ok: false, error: "insert-failed" });
+  res.json({ ok: true, id: r.id });
+});
+
 // Operator dashboard — full per-tool usage + recent calls feed, gated by
 // AGENT402_OPERATOR_TOKEN. Off unless the env var is set. Timing-safe compare
 // (constant-time byte equality) so token presence/length isn't probeable.
@@ -545,6 +600,18 @@ app.get("/__operator", (req, res) => {
 app.get("/__operator/stats", (req, res) => {
   if (!operatorTokenOk(req.query.token)) return res.status(404).json({ error: "Not found" });
   res.json(getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: WALLET_ONLY_SLUGS }));
+});
+app.get("/__operator/leads", async (req, res) => {
+  if (!operatorTokenOk(req.query.token)) return res.status(404).type("html").send("<p>Not found.</p>");
+  const list = await listLeads({ limit: 200 });
+  const stats = await countLeads();
+  res.type("html").send(operatorLeadsPage(req.query.token, {
+    ok: list.ok,
+    rows: list.rows,
+    total: stats.total,
+    byPlan: stats.byPlan,
+    dbEnabled: leadsDbEnabled(),
+  }));
 });
 app.get("/guides", (_req, res) => res.type("html").send(guidesIndex(BASE_URL)));
 app.get("/guides/:slug", (req, res) => {
@@ -1098,6 +1165,14 @@ for (const tool of ALL_KIT) {
 const httpServer = app.listen(PORT, () =>
   console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`)
 );
+
+// Tollbooth leads — lazy Postgres init. No-op if DATABASE_URL is unset; in
+// that case /api/tollbooth/waitlist returns 503 and the form falls back to the
+// GitHub pre-fill flow.
+initLeadsDb().then((r) => {
+  if (r.ok) console.log("[leads-db] tollbooth_leads schema ready");
+  else console.log(`[leads-db] disabled (${r.reason || "unknown"})`);
+});
 
 // x402 Index crawler: warms the cross-seller cache used by /index + /api/route.
 // Seeds come from X402_INDEX_SEEDS (comma-separated origins) plus auto-discovered

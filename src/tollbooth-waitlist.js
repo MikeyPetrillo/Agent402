@@ -103,27 +103,38 @@ ${CHROME_HEAD_LINKS}
     </label>
   </div>
   <label><span class="k">Anything else? (optional)</span><textarea id="f_msg" name="message" placeholder="What problem are you trying to solve? Which AI crawlers are hitting you hardest? What stack do these sites run on?"></textarea></label>
-  <button class="cta" type="submit">${isPartner ? "Apply as partner →" : isEnterprise ? "Request a call →" : "Join waitlist →"}</button>
-  <div class="alt">Prefer email? <a id="mail" href="#" rel="noopener">Open your mail client</a> · We'll reply within 1 business day.</div>
+  <!-- honeypot: real visitors leave this empty -->
+  <label style="position:absolute; left:-10000px; top:auto; width:1px; height:1px; overflow:hidden;" aria-hidden="true"><input id="f_hp" name="website" type="text" tabindex="-1" autocomplete="off"></label>
+  <button id="wl_submit" class="cta" type="submit">${isPartner ? "Apply as partner →" : isEnterprise ? "Request a call →" : "Join waitlist →"}</button>
+  <div id="wl_err" style="display:none; color:#fca5a5; font-size:.88rem;"></div>
 </form>
 
-<p class="note">Submitting opens a pre-filled GitHub issue in <a href="${REPO}" rel="noopener">MikeyPetrillo/Agent402</a> with the <code>${ghLabel}</code> label. The repo is public, so don't paste anything you wouldn't want indexed — for sensitive details, use the email fallback above.</p>
+<div id="wl_done" style="display:none; background:#0f1320; border:1px solid #1e4d2d; border-radius:14px; padding:22px;">
+  <h2 style="margin:0 0 6px; color:var(--accent); font-size:1.2rem;">Got it — you're on the list.</h2>
+  <p style="margin:0; color:var(--muted);">We'll be in touch within 1 business day. In the meantime, <a href="/tollbooth">install the OSS gate</a> in observe mode and you'll have a week of bot-traffic data ready when we onboard you.</p>
+</div>
+
+<p class="note">Submissions are stored privately on our server (Postgres on Railway) and never appear in any public repo. We use them to email you about your plan and nothing else.</p>
 
 <script>
 (function(){
   var form = document.getElementById('wl');
-  var mail = document.getElementById('mail');
+  var doneEl = document.getElementById('wl_done');
+  var errEl = document.getElementById('wl_err');
+  var btn = document.getElementById('wl_submit');
   function fields(){
     return {
+      kind: ${JSON.stringify(isPartner ? "partner" : isEnterprise ? "enterprise" : "waitlist")},
       name: (document.getElementById('f_name').value||'').trim(),
       email: (document.getElementById('f_email').value||'').trim(),
       org: (document.getElementById('f_org').value||'').trim(),
       sites: (document.getElementById('f_sites').value||'').trim(),
       plan: document.getElementById('f_plan').value,
-      msg: (document.getElementById('f_msg').value||'').trim()
+      message: (document.getElementById('f_msg').value||'').trim(),
+      website: (document.getElementById('f_hp').value||'')
     };
   }
-  function body(f){
+  function ghBody(f){
     return [
       'Name: ' + (f.name||'-'),
       'Email: ' + (f.email||'-'),
@@ -131,27 +142,55 @@ ${CHROME_HEAD_LINKS}
       'Plan: ' + f.plan,
       (f.sites ? 'Sites: ' + f.sites : ''),
       '',
-      (f.msg || '-')
+      (f.message || '-')
     ].filter(Boolean).join('\\n');
   }
   function ghUrl(f){
     var title = ${JSON.stringify(ghTitle)};
     var label = ${JSON.stringify(ghLabel)};
-    var q = new URLSearchParams({ title: title, labels: label, body: body(f) });
+    var q = new URLSearchParams({ title: title, labels: label, body: ghBody(f) });
     return ${JSON.stringify(REPO)} + '/issues/new?' + q.toString();
   }
-  function mailUrl(f){
-    var subject = ${JSON.stringify(ghTitle)};
-    return 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body(f));
+  function showError(msg){
+    errEl.textContent = msg;
+    errEl.style.display = 'block';
   }
-  function syncMail(){ mail.href = mailUrl(fields()); }
-  form.addEventListener('input', syncMail);
-  syncMail();
-  form.addEventListener('submit', function(e){
+  form.addEventListener('submit', async function(e){
     e.preventDefault();
+    errEl.style.display = 'none';
     var f = fields();
-    if (!f.name || !f.email) return;
-    window.open(ghUrl(f), '_blank', 'noopener');
+    if (!f.name || !f.email) { showError('Name and email are required.'); return; }
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      var r = await fetch('/api/tollbooth/waitlist', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(f),
+      });
+      if (r.ok) {
+        form.style.display = 'none';
+        doneEl.style.display = 'block';
+        return;
+      }
+      if (r.status === 503) {
+        // DB not configured — fall back to GitHub pre-fill so the lead is not lost.
+        window.open(ghUrl(f), '_blank', 'noopener');
+        form.style.display = 'none';
+        doneEl.style.display = 'block';
+        return;
+      }
+      if (r.status === 429) { showError('Too many submissions — please try again in a minute.'); }
+      else if (r.status === 400) { showError('Please double-check your name and email.'); }
+      else { showError('Something went wrong. Please try again.'); }
+    } catch (_) {
+      // Network failed — let them at least file via GitHub rather than lose the submission.
+      window.open(ghUrl(f), '_blank', 'noopener');
+      form.style.display = 'none';
+      doneEl.style.display = 'block';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = ${JSON.stringify(isPartner ? "Apply as partner →" : isEnterprise ? "Request a call →" : "Join waitlist →")};
+    }
   });
 })();
 </script>
