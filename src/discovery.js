@@ -123,6 +123,25 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       // Resolve a task to the right tool in one call (skip the exploration step).
       findTool: `${baseUrl}/api/find?q={task}`,
     },
+    // Neutral cross-seller discovery surface — same router we use ourselves,
+    // exposed as a public API so any x402 buyer can find the cheapest healthy
+    // tool across the whole ecosystem (not just our catalog). `include=external`
+    // explicitly excludes us from the results — we list because we trust the
+    // ranking, not because we'd rig it for ourselves.
+    discovery: {
+      spec: "x402-discovery/1",
+      neutralRouter: `${baseUrl}/api/route`,
+      sellerIndex: `${baseUrl}/api/index`,
+      sellerIndexHtml: `${baseUrl}/index`,
+      includeOptions: ["all", "external", "local"],
+      example: {
+        method: "POST",
+        url: `${baseUrl}/api/route`,
+        body: { query: "ocr image", top: 3, include: "external" },
+      },
+      sources: ["self", "Coinbase CDP Bazaar"],
+      refreshSeconds: { discovery: 3600, crawl: 300 },
+    },
     trust: {
       onchainRevenueProof: wallet
         ? `${network === "base-sepolia" ? "https://sepolia.basescan.org" : "https://basescan.org"}/address/${wallet}#tokentxns`

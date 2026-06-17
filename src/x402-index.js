@@ -356,6 +356,13 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
   };
 }
 
+// `include` controls which seller set the router considers. Defaults to "all"
+// (local catalog + healthy crawled sellers). `external` excludes the local
+// catalog — the explicit "find me a competitor's tool" path that makes Agent402
+// useful as a neutral discovery layer even when the caller isn't using us.
+// `local` is the explicit local-only escape hatch.
+const VALID_INCLUDE = new Set(["all", "external", "local"]);
+
 /**
  * Smart Order Router — given a task description, rank matching tools across
  * every seller in the Index. Cheapest seller wins on score ties.
@@ -363,31 +370,39 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
  * Returns the same shape as /api/find but with a `seller` field per result and
  * cross-seller deduplication left to the buyer (different sellers may legitimately
  * offer the same tool at different prices).
+ *
+ * `include` (`all` | `external` | `local`) lets buyers explicitly route to
+ * non-Agent402 sellers (`external`) — the same router, used as a neutral
+ * discovery API over the whole x402 ecosystem.
  */
-export function routeQuery({ query, top, baseUrl, catalog, prices, network, toolCount, walletName }) {
+export function routeQuery({ query, top, include, baseUrl, catalog, prices, network, toolCount, walletName }) {
   const q = String(query || "").slice(0, 500);
   const terms = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).slice(0, 32);
   const k = Math.min(Math.max(parseInt(top, 10) || 5, 1), 25);
-  if (!terms.length) return { query: q, count: 0, results: [], sellers: 0 };
+  const inc = VALID_INCLUDE.has(include) ? include : "all";
+  if (!terms.length) return { query: q, count: 0, results: [], sellers: 0, include: inc };
 
   // Always include the local catalog (we trust ourselves), plus every crawled
   // seller's tools — but only from sellers whose last crawl succeeded. A buyer
   // routed to a currently-broken seller would just lose the call, so we'd
   // rather rank fewer trustworthy options than more flaky ones.
   const local = buildLocalEntry({ baseUrl, catalog, prices, network, toolCount, walletName });
-  const all = [
-    ...local.tools.map((t) => ({ ...t, sellerHome: baseUrl, sellerName: local.displayName, health: 1 })),
-    ...[...cache.values()]
-      .filter(isRoutable)
-      .flatMap((v) =>
-        (v.tools || []).map((t) => ({
-          ...t,
-          sellerHome: v.manifest?.homepage || t.seller,
-          sellerName: v.manifest?.name || t.seller,
-          health: healthScore(v),
-        })),
-      ),
-  ];
+  const localPool = inc === "external"
+    ? []
+    : local.tools.map((t) => ({ ...t, sellerHome: baseUrl, sellerName: local.displayName, health: 1 }));
+  const remotePool = inc === "local"
+    ? []
+    : [...cache.values()]
+        .filter(isRoutable)
+        .flatMap((v) =>
+          (v.tools || []).map((t) => ({
+            ...t,
+            sellerHome: v.manifest?.homepage || t.seller,
+            sellerName: v.manifest?.name || t.seller,
+            health: healthScore(v),
+          })),
+        );
+  const all = [...localPool, ...remotePool];
 
   const scored = [];
   for (const t of all) {
@@ -435,7 +450,7 @@ export function routeQuery({ query, top, baseUrl, catalog, prices, network, tool
       health: t.health,
     };
   });
-  return { query: q, count: results.length, sellers: sellersSeen.size, results };
+  return { query: q, include: inc, count: results.length, sellers: sellersSeen.size, results };
 }
 
 const esc = (s) =>
@@ -559,12 +574,12 @@ ${renderHeader("/index")}
 </div>
 
 <div class="panel">
-  <div class="ph"><h2>Smart Order Router</h2><div class="pn">Resolve a task to the cheapest matching tool across every seller in one call.</div></div>
+  <div class="ph"><h2>Smart Order Router — neutral x402 discovery</h2><div class="pn">Resolve a task to the cheapest healthy tool across every seller in one call. Use <code>include:"external"</code> to exclude Agent402 itself — we list because we trust the ranking, not because we'd rig it for ourselves.</div></div>
   <div style="padding:14px 18px;">
     <pre>curl -s -X POST ${esc(baseUrl)}/api/route \\
   -H 'Content-Type: application/json' \\
-  -d '{"query":"ocr image","top":3}'</pre>
-    <p class="foot" style="margin:10px 0 0;">Free — same gate as <code>/api/find</code>. Deterministic lexical scoring with cheapest-seller tiebreak.</p>
+  -d '{"query":"ocr image","top":3,"include":"external"}'</pre>
+    <p class="foot" style="margin:10px 0 0;">Free — same gate as <code>/api/find</code>. <code>include</code> = <code>all</code> (default) · <code>external</code> (exclude self) · <code>local</code> (Agent402 only). Deterministic lexical scoring, health-then-price tiebreak.</p>
   </div>
 </div>
 

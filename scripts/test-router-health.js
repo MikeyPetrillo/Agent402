@@ -116,7 +116,37 @@ seed("https://dead.example", { history: [1, 0, 0], toolSlug: "ocr", error: "boom
   ok(r.count === 0 && r.results.length === 0, "empty query returns nothing");
 }
 
-// ---- 7. runPool caps in-flight workers (concurrency limiter) ----
+// ---- 7. include=external excludes the local catalog; include=local excludes remotes ----
+cache.clear();
+seed("https://remote-ocr.example", { history: [1, 1, 1], toolSlug: "ocr", price: 0 });
+{
+  // The local catalog (hash tool) doesn't match "ocr", so use a query that hits both.
+  // Add a local "hash" matcher and a remote "hash" tool to make the toggle observable.
+  seed("https://remote-hash.example", { history: [1, 1, 1], toolSlug: "hash", price: 0 });
+
+  const rAll = routeQuery({ query: "hash", top: 10, ...ctx });
+  const sellersAll = new Set(rAll.results.map((x) => x.seller));
+  ok(sellersAll.has("self"), `include=all (default) includes self (sellers=${[...sellersAll]})`);
+  ok(sellersAll.has("https://remote-hash.example"), "include=all includes remote");
+  ok(rAll.include === "all", `default include reported (got ${rAll.include})`);
+
+  const rExt = routeQuery({ query: "hash", top: 10, include: "external", ...ctx });
+  const sellersExt = new Set(rExt.results.map((x) => x.seller));
+  ok(!sellersExt.has("self"), `include=external excludes self (got ${[...sellersExt]})`);
+  ok(sellersExt.has("https://remote-hash.example"), "include=external still includes remotes");
+  ok(rExt.include === "external", "include=external echoed in response");
+
+  const rLoc = routeQuery({ query: "hash", top: 10, include: "local", ...ctx });
+  const sellersLoc = new Set(rLoc.results.map((x) => x.seller));
+  ok(sellersLoc.has("self"), "include=local includes self");
+  ok(!sellersLoc.has("https://remote-hash.example"), "include=local excludes remotes");
+
+  // Invalid include falls back to "all" (don't fail closed on a typo)
+  const rJunk = routeQuery({ query: "hash", top: 10, include: "garbage", ...ctx });
+  ok(rJunk.include === "all", `invalid include falls back to all (got ${rJunk.include})`);
+}
+
+// ---- 8. runPool caps in-flight workers (concurrency limiter) ----
 // The limiter is internal so we test it indirectly via a custom worker that
 // observes peak concurrency. We replicate the pool shape here — if its contract
 // changes the test will fail loud.
@@ -148,4 +178,4 @@ seed("https://dead.example", { history: [1, 0, 0], toolSlug: "ocr", error: "boom
 }
 
 cache.clear();
-console.log("test-router-health: 7 scenarios, all passed");
+console.log("test-router-health: 8 scenarios, all passed");
