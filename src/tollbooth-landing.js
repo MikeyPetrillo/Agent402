@@ -46,9 +46,9 @@ ${CHROME_HEAD_LINKS}
   .step h3 { margin:0 0 4px; font-size:.95rem; color:var(--fg); }
   .step .mode { font-family:ui-monospace,Menlo,monospace; color:var(--accent); font-size:.85rem; }
   .step p { margin:6px 0 0; color:var(--muted); font-size:.88rem; }
-  .row { display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 24px; }
-  .row a { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 12px; color:var(--fg); text-decoration:none; font-size:.88rem; }
-  .row a:hover { border-color:var(--accent); color:var(--accent); }
+  .links { display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 24px; }
+  .links a { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 12px; color:var(--fg); text-decoration:none; font-size:.88rem; }
+  .links a:hover { border-color:var(--accent); color:var(--accent); }
   .deploy { display:grid; gap:10px; grid-template-columns:repeat(3,1fr); }
   @media (max-width:720px){ .deploy { grid-template-columns:1fr; } }
   .deploy a { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; color:var(--fg); text-decoration:none; }
@@ -116,7 +116,7 @@ ${CHROME_HEAD_LINKS}
 </div>
 
 <h2>More</h2>
-<div class="row">
+<div class="links">
   <a href="https://github.com/MikeyPetrillo/Agent402/wiki/Pay-per-crawl-Walkthrough" rel="noopener">30-min walkthrough</a>
   <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth" rel="noopener">README + reference</a>
   <a href="https://github.com/MikeyPetrillo/Agent402/blob/main/tollbooth/demo.js" rel="noopener"><code>node demo.js</code></a>
