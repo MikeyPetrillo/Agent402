@@ -63,10 +63,10 @@ ${CHROME_HEAD_LINKS}
   .plan .cta a:hover { border-color:var(--accent); text-decoration:none; }
   .annual { color:var(--muted); font-size:.88rem; margin:0 0 14px; }
   .annual b { color:var(--fg); }
-  .row { display:grid; gap:14px; grid-template-columns:1fr 1fr; margin:18px 0; }
-  @media (max-width:780px){ .row { grid-template-columns:1fr; } }
-  .row .b { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; }
-  .row .b p { margin:8px 0 0; color:var(--muted); font-size:.92rem; }
+  .tcols { display:grid; gap:14px; grid-template-columns:1fr 1fr; margin:18px 0; }
+  @media (max-width:780px){ .tcols { grid-template-columns:1fr; } }
+  .tcols .b { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; }
+  .tcols .b p { margin:8px 0 0; color:var(--muted); font-size:.92rem; }
   .flywheel { background:linear-gradient(180deg,#0f1320,#0b0e14); border:1px solid var(--line); border-radius:12px; padding:18px 20px; }
   .flywheel .h { color:var(--pop); font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; margin-bottom:6px; }
   .flywheel p { margin:6px 0 0; color:var(--fg); font-size:.95rem; }
@@ -181,7 +181,7 @@ ${CHROME_HEAD_LINKS}
 </div>
 
 <h2>Partner program for SEO agencies</h2>
-<div class="row">
+<div class="tcols">
   <div class="b">
     <h3 style="color:var(--accent);">20% lifetime recurring</h3>
     <p>On every Team or Agency plan you refer. Paid in normal currency via Stripe — not USDC — so the protocol's non-custodial promise stays clean. Standard rev-share, settled monthly.</p>
@@ -200,7 +200,7 @@ ${CHROME_HEAD_LINKS}
 </div>
 
 <h2>How it stays non-custodial</h2>
-<div class="row">
+<div class="tcols">
   <div class="b">
     <h3>Cloud reads stats, not money</h3>
     <p>The OSS gate already writes aggregate counters to its <code>statsSink</code> (memory, KV, or HTTP). Cloud is an <code>httpStatsSink</code> endpoint that aggregates across instances. <b>No request bodies, no per-call data, no PII</b> — just minute-level counters per install.</p>
