@@ -13,6 +13,7 @@
 - [[Payments and x402]]
 - [[Pay-per-crawl]]
 - [[Pay-per-crawl Walkthrough]]
+- [[Tollbooth for Agencies|Tollbooth-for-Agencies]]
 - [[Memory and Coordination]]
 
 **Under the hood**
