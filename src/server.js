@@ -13,6 +13,7 @@ import { landingPage } from "./landing.js";
 import { statusPage } from "./status.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
 import { tollboothCloudPage } from "./tollbooth-cloud.js";
+import { tollboothWaitlistPage } from "./tollbooth-waitlist.js";
 import { operatorPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
 import { termsPage } from "./terms.js";
@@ -521,6 +522,11 @@ app.get("/status", (_req, res) =>
 );
 app.get("/tollbooth", (_req, res) => res.type("html").send(tollboothLandingPage(BASE_URL)));
 app.get("/tollbooth/cloud", (_req, res) => res.type("html").send(tollboothCloudPage(BASE_URL)));
+app.get("/tollbooth/waitlist", (req, res) => {
+  const plan = String(req.query.plan || "team").toLowerCase();
+  const kind = String(req.query.kind || "waitlist").toLowerCase();
+  res.type("html").send(tollboothWaitlistPage(BASE_URL, { plan, kind }));
+});
 
 // Operator dashboard — full per-tool usage + recent calls feed, gated by
 // AGENT402_OPERATOR_TOKEN. Off unless the env var is set. Timing-safe compare

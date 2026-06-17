@@ -10,8 +10,10 @@
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 
 const REPO = "https://github.com/MikeyPetrillo/Agent402";
-const WAITLIST_URL = `${REPO}/issues/new?title=Tollbooth+Cloud+waitlist&labels=tollbooth-cloud&body=Site%28s%29+I+want+to+gate%3A%0A%0AMy+role+%28publisher+%2F+SEO+agency+%2F+enterprise%29%3A%0A%0APlan+I%27m+interested+in+%28Solo+%2F+Team+%2F+Agency+%2F+Enterprise%29%3A%0A%0AAnything+else%3A`;
-const PARTNER_URL = `${REPO}/issues/new?title=Tollbooth+Cloud+partner+program&labels=tollbooth-partner&body=Agency+name%3A%0A%0ARough+number+of+client+sites%3A%0A%0AWebsite%3A%0A%0AAnything+else%3A`;
+// All CTAs route through the on-site waitlist form (/tollbooth/waitlist) which
+// collects structured intent and then submits a labeled GitHub issue. Keeps the
+// agency-pitch UX out of GitHub's raw issue editor.
+const waitlistUrl = (plan) => `/tollbooth/waitlist?plan=${plan}`;
 
 export function tollboothCloudPage(baseUrl) {
   return `<!doctype html>
@@ -130,7 +132,7 @@ ${CHROME_HEAD_LINKS}
       <li>Weekly email digest</li>
       <li>Charged-vs-paid spike alerts</li>
     </ul>
-    <div class="cta"><a href="${WAITLIST_URL}" rel="noopener">Join waitlist</a></div>
+    <div class="cta"><a href="${waitlistUrl("solo")}">Join waitlist</a></div>
   </div>
 
   <div class="plan featured">
@@ -145,7 +147,7 @@ ${CHROME_HEAD_LINKS}
       <li>Branded dashboard (your logo)</li>
       <li>API access for your own reports</li>
     </ul>
-    <div class="cta"><a href="${WAITLIST_URL}" rel="noopener">Join waitlist</a></div>
+    <div class="cta"><a href="${waitlistUrl("team")}">Join waitlist</a></div>
   </div>
 
   <div class="plan">
@@ -160,7 +162,7 @@ ${CHROME_HEAD_LINKS}
       <li>Priority support</li>
       <li><b>Partner referral program</b> access</li>
     </ul>
-    <div class="cta"><a href="${WAITLIST_URL}" rel="noopener">Join waitlist</a></div>
+    <div class="cta"><a href="${waitlistUrl("agency")}">Join waitlist</a></div>
   </div>
 
 </div>
@@ -176,7 +178,7 @@ ${CHROME_HEAD_LINKS}
       <li>SLA, signed audit log, dedicated support</li>
       <li>Your wallet still owns the USDC — Cloud never custodies funds</li>
     </ul>
-    <div class="cta"><a href="${WAITLIST_URL}" rel="noopener">Talk to us</a></div>
+    <div class="cta"><a href="${waitlistUrl("enterprise")}&kind=enterprise">Talk to us</a></div>
   </div>
 </div>
 
@@ -191,7 +193,7 @@ ${CHROME_HEAD_LINKS}
     <p>Joint launch posts, agency directory listing on this site, and a case-study slot when a client's settled USDC crosses a milestone. We don't do anything we won't put our name on.</p>
   </div>
 </div>
-<p style="margin:8px 0 0;"><a href="${PARTNER_URL}" rel="noopener">Apply as a partner agency →</a></p>
+<p style="margin:8px 0 0;"><a href="${waitlistUrl("partner")}&kind=partner">Apply as a partner agency →</a></p>
 
 <h2>The two-sided flywheel kicker</h2>
 <div class="flywheel">
