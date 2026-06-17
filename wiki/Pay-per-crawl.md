@@ -112,9 +112,14 @@ Analytics Engine.
 
 Ready-to-copy templates: [`deploy/cloudflare/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare)
 (Cloudflare Workers), [`deploy/nextjs/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs)
-(Next.js / Vercel middleware), and [`deploy/docker/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/docker)
-(`docker compose up -d` reverse proxy). The reverse proxy also serves a live
-operator **dashboard at `/__tollbooth`** (and JSON at `/__tollbooth/stats`).
+(Next.js / Vercel middleware), [`deploy/docker/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/docker)
+(`docker compose up -d` reverse proxy), and [`deploy/wordpress/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/wordpress)
+(beta — drop-in WordPress plugin, pure PHP classifier, optional Worker for the
+PoW + USDC rails). The reverse proxy also serves a live operator
+**dashboard at `/__tollbooth`** (and JSON at `/__tollbooth/stats`).
+
+Running 10+ client sites? See [Tollbooth for Agencies](Tollbooth-for-Agencies)
+for the multi-site playbook, partner program, and Cloud pricing.
 
 ## Why it exists
 

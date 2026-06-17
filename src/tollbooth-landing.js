@@ -112,6 +112,7 @@ ${CHROME_HEAD_LINKS}
   <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare" rel="noopener"><span class="t">Cloudflare Worker</span><span class="s">One <code>wrangler deploy</code>. KV-backed.</span></a>
   <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs" rel="noopener"><span class="t">Next.js middleware</span><span class="s">One file in <code>middleware.ts</code>.</span></a>
   <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/docker" rel="noopener"><span class="t">Docker reverse proxy</span><span class="s">Any backend, any language.</span></a>
+  <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/wordpress" rel="noopener"><span class="t">WordPress plugin <small style="color:var(--warn);">beta</small></span><span class="s">Drop-in PHP. Settings → Agent402 Tollbooth.</span></a>
 </div>
 
 <h2>More</h2>
