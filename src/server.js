@@ -500,8 +500,15 @@ app.get("/health", (_req, res) => {
     db: dbHealthy(),
     wallet: FREE_MODE || Boolean(WALLET_ADDRESS),
   };
+  // Non-fatal flags — surface tollbooth-leads wiring so we can verify the
+  // Railway DATABASE_URL / AGENT402_OPERATOR_TOKEN env without poking either.
+  // These don't affect overall ok status; the tollbooth waitlist is optional.
+  const flags = {
+    leadsDb: leadsDbReady,
+    operatorToken: Boolean(OPERATOR_TOKEN),
+  };
   const ok = checks.db && checks.wallet;
-  res.status(ok ? 200 : 503).json({ ok, checks });
+  res.status(ok ? 200 : 503).json({ ok, checks, flags });
 });
 // Glama connector ownership verification: claims our listing at
 // glama.ai/mcp/connectors/io.github.MikeyPetrillo/agent402. The maintainer email
@@ -1188,8 +1195,11 @@ const httpServer = app.listen(PORT, () =>
 
 // Tollbooth leads — lazy Postgres init. No-op if DATABASE_URL is unset; in
 // that case /api/tollbooth/waitlist returns 503 and the form falls back to the
-// GitHub pre-fill flow.
+// GitHub pre-fill flow. Status is surfaced via /health so we can verify the
+// Railway DATABASE_URL wiring without poking the live leads table.
+let leadsDbReady = false;
 initLeadsDb().then((r) => {
+  leadsDbReady = !!r.ok;
   if (r.ok) console.log("[leads-db] tollbooth_leads schema ready");
   else console.log(`[leads-db] disabled (${r.reason || "unknown"})`);
 });
