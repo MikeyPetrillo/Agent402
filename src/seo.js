@@ -40,6 +40,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/index`, priority: "0.8" },
     { loc: `${baseUrl}/api/index`, priority: "0.6" },
     { loc: `${baseUrl}/api/route`, priority: "0.7" },
+    { loc: `${baseUrl}/leaderboard`, priority: "0.8" },
     { loc: `${baseUrl}/api/leaderboard`, priority: "0.7" },
   ];
   const guideUrls = [

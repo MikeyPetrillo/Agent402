@@ -139,6 +139,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       // volume. Same router, different sort key — closes the loop on
       // discovery: find a tool, route to a seller, see who's most used.
       leaderboard: `${baseUrl}/api/leaderboard`,
+      leaderboardHtml: `${baseUrl}/leaderboard`,
       includeOptions: ["all", "external", "local"],
       example: {
         method: "POST",

@@ -19,7 +19,7 @@ import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
 import { serviceManifest, reliabilityReport } from "./discovery.js";
 import { findTools } from "./find.js";
 import { indexPage, indexSnapshot, routeQuery, startCrawler } from "./x402-index.js";
-import { getLeaderboardSnapshot, startLeaderboardRefresh } from "./leaderboard.js";
+import { getLeaderboardSnapshot, startLeaderboardRefresh, leaderboardPage } from "./leaderboard.js";
 import { buildPaymentMiddleware, enabledNetworks } from "./payments.js";
 import { KIT } from "./tools/kit.js";
 import { KIT2 } from "./tools/kit2.js";
@@ -613,6 +613,9 @@ app.get("/api/leaderboard", (req, res) => {
     totalSellers: (snap.leaderboard || []).length,
   });
 });
+// Human-readable companion to /api/leaderboard. Same cached snapshot, rendered
+// as a dashboard so visitors (and the site nav) have something to land on.
+app.get("/leaderboard", (_req, res) => res.type("text/html").send(leaderboardPage(getLeaderboardSnapshot(), { baseUrl: BASE_URL })));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));
