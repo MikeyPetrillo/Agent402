@@ -14,38 +14,21 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { findTools } from "./find.js";
+import {
+  createLimiter,
+  MAX_CALLS_PER_BURST,
+  MAX_CALLS_PER_WINDOW,
+} from "./rate-limit.js";
 
 const VERSION = "0.3.0";
 
 // Per-IP sliding-window rate limit for tool executions (search/info are free).
 // Generous enough for real use of $0.001-grade CPU tools, tight enough that
-// the free tier can't be farmed as infrastructure.
-const WINDOW_MS = 60 * 60 * 1000;
-const BURST_WINDOW_MS = 60 * 1000;
-// Defaults match production policy; overridable via env so the full-catalog
-// connector test can sweep every tool without tripping the limiter.
-const MAX_CALLS_PER_WINDOW = Number(process.env.AGENT402_MCP_MAX_PER_HOUR) || 120;
-const MAX_CALLS_PER_BURST = Number(process.env.AGENT402_MCP_MAX_PER_MIN) || 20;
-const buckets = new Map(); // ip -> number[] (call timestamps)
-
-function rateLimited(ip) {
-  const now = Date.now();
-  let hits = buckets.get(ip);
-  if (!hits) buckets.set(ip, (hits = []));
-  while (hits.length && hits[0] < now - WINDOW_MS) hits.shift();
-  const inBurst = hits.filter((t) => t > now - BURST_WINDOW_MS).length;
-  if (hits.length >= MAX_CALLS_PER_WINDOW || inBurst >= MAX_CALLS_PER_BURST) return true;
-  hits.push(now);
-  return false;
-}
-// Bound the table: drop empty/stale buckets occasionally.
-setInterval(() => {
-  const cutoff = Date.now() - WINDOW_MS;
-  for (const [ip, hits] of buckets) {
-    while (hits.length && hits[0] < cutoff) hits.shift();
-    if (!hits.length) buckets.delete(ip);
-  }
-}, 10 * 60 * 1000).unref();
+// the free tier can't be farmed as infrastructure. Limiter implementation +
+// policy live in src/rate-limit.js so the direct-HTTP PoW redemption path
+// applies the same quota.
+const mcpLimiter = createLimiter("mcp");
+const rateLimited = (ip) => mcpLimiter.check(ip).limited;
 
 /**
  * Mount the MCP endpoint on the express app.

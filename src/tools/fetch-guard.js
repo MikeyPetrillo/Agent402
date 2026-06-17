@@ -116,9 +116,13 @@ export function isSsrfBlock(err) {
 
 // Request-time host check for the browser renderer: every request a page makes
 // (navigation, redirect hop, subresource) is validated against the same policy
-// as the fetch path. Short-TTL cache keeps per-subresource overhead negligible
-// while still re-resolving often enough to catch DNS-rebinding flips.
+// as the fetch path. Very-short-TTL cache: long enough to dedupe the burst of
+// subresources a single page load fires, short enough that a flip from a
+// public to a private answer is observed almost immediately. 30s was the
+// original value; tightened to 2s after the security audit because Chromium
+// can pipeline subresource lookups for minutes during a long render.
 const hostCache = new Map();
+const HOST_CACHE_TTL_MS = 2_000;
 export async function hostIsPublic(hostname) {
   if (isIP(hostname)) return !isPrivateIp(hostname);
   const now = Date.now();
@@ -132,7 +136,7 @@ export async function hostIsPublic(hostname) {
     ok = false;
   }
   if (hostCache.size > 5000) hostCache.clear();
-  hostCache.set(hostname, { ok, exp: now + 30_000 });
+  hostCache.set(hostname, { ok, exp: now + HOST_CACHE_TTL_MS });
   return ok;
 }
 

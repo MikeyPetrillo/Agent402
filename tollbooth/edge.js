@@ -153,6 +153,10 @@ export function createEdgeTollbooth(config = {}) {
     if (writeThrough) { try { sink.incr(k, n); } catch { /* ignore */ } }
   };
 
+  // Heuristic only. A bot can trivially set `User-Agent: Mozilla/5.0 …` and
+  // `Accept: text/html` to pass — `strict` mode uses this as the lower bound
+  // (charge anything that does NOT look like a browser), not as proof of
+  // humanity. For hard guarantees use mode:"all" or `charge:` predicate.
   const looksHuman = (request) => {
     const ua = request.headers.get("user-agent") || "";
     const accept = request.headers.get("accept") || "";

@@ -198,6 +198,10 @@ something*:
   a proof-of-work.
 - `mode: "strict"` charges anything that isn't a real-browser request (browser-like
   UA **and** an HTML `Accept`), letting genuine human page-loads through free.
+  Heads-up: that's a heuristic, not a security boundary — a bot that sets
+  `User-Agent: Mozilla/5.0 …` + `Accept: text/html` gets the same free pass a
+  human gets. Use `mode: "all"` (or your own `charge:` predicate) for hard
+  guarantees.
 - `adaptive: true` makes proof-of-work **harder as load climbs**, so a high-volume
   scraper pays escalating CPU per request regardless of how it looks — detection is
   cat-and-mouse, economics isn't.

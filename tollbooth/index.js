@@ -263,9 +263,50 @@ async function startCli() {
   const gate = createTollbooth({ resourceBaseUrl: process.env.TOLLBOOTH_RESOURCE_BASE || upstream || "" });
   // Operator analytics — aggregate counts only (no per-request data), mounted
   // before the gate so they're always reachable and never themselves charged.
+  // Two opt-in admin tokens (legacy `TOLLBOOTH_STATS_TOKEN` covers /stats only;
+  // `TOLLBOOTH_ADMIN_TOKEN` covers both the HTML dashboard AND /stats). If
+  // neither is set the surfaces remain public (aggregate counts only — current
+  // behavior) so existing deploys don't break. Comparison is timing-safe.
   const { dashboardHtml } = await import("./dashboard.js");
-  app.get("/__tollbooth", (_req, res) => res.type("html").send(dashboardHtml()));
-  app.get("/__tollbooth/stats", (_req, res) => res.json(gate.stats()));
+  const { timingSafeEqual } = await import("node:crypto");
+  const ADMIN_TOKEN = process.env.TOLLBOOTH_ADMIN_TOKEN || "";
+  const STATS_TOKEN = process.env.TOLLBOOTH_STATS_TOKEN || "";
+  const presented = (req) => {
+    const auth = req.headers["authorization"];
+    if (typeof auth === "string" && auth.startsWith("Bearer ")) return auth.slice(7);
+    const hdr = req.headers["x-admin-token"];
+    if (typeof hdr === "string") return hdr;
+    return "";
+  };
+  // tokenMatch returns true only on a real, timing-safe equal match. An empty
+  // `expected` is treated as "no rule configured", NOT as a wildcard — callers
+  // upstream decide whether to invoke this check at all.
+  const tokenMatch = (expected, got) => {
+    if (!expected || typeof got !== "string" || got.length !== expected.length) return false;
+    try { return timingSafeEqual(Buffer.from(got), Buffer.from(expected)); }
+    catch { return false; }
+  };
+  app.get("/__tollbooth", (req, res) => {
+    if (ADMIN_TOKEN && !tokenMatch(ADMIN_TOKEN, presented(req))) {
+      res.setHeader("WWW-Authenticate", 'Bearer realm="tollbooth"');
+      return res.status(401).type("text/plain").send("Unauthorized");
+    }
+    res.type("html").send(dashboardHtml());
+  });
+  app.get("/__tollbooth/stats", (req, res) => {
+    // Either ADMIN_TOKEN or STATS_TOKEN unlocks /stats; either being set turns
+    // the endpoint from public to gated, and the presented value must match
+    // ONE of the configured tokens.
+    const gated = Boolean(ADMIN_TOKEN || STATS_TOKEN);
+    if (gated) {
+      const got = presented(req);
+      if (!tokenMatch(ADMIN_TOKEN, got) && !tokenMatch(STATS_TOKEN, got)) {
+        res.setHeader("WWW-Authenticate", 'Bearer realm="tollbooth"');
+        return res.status(401).type("text/plain").send("Unauthorized");
+      }
+    }
+    res.json(gate.stats());
+  });
   app.use(gate);
   if (upstream) {
     app.use(createProxy(upstream));

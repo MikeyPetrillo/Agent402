@@ -47,8 +47,13 @@ import { guidesIndex, guidePage } from "./guides.js";
 
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken } from "./pow.js";
+import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
+
+// Shared with the MCP free tier (src/mcp-http.js) — same policy, separate
+// per-IP bucket. PoW redemption on the direct HTTP path goes through here.
+const powHttpLimiter = createRateLimiter("pow-http");
 import { recordServedCall, recordChargedFailure, getStats, getOperatorBreakdown, dbHealthy } from "./stats.js";
-import { timingSafeEqual, createHash } from "node:crypto";
+import { timingSafeEqual, createHash, randomUUID } from "node:crypto";
 import { marketplaceSlugToken } from "./marketplace-token.js";
 
 const PORT = process.env.PORT || 3000;
@@ -470,9 +475,23 @@ const app = express();
 app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
 app.use(express.json({ limit: "100kb" }));
 
-// Baseline security headers on every response. No CSP (the HTML landing/tool/
-// guide pages use inline styles), but these are cheap, no-break hardening for
-// an API that also serves a few HTML pages.
+// Per-request id — useful for grepping logs when a buyer or operator forwards
+// a failing response. Honored from upstream (load balancer) if present and
+// well-formed; otherwise generated.
+app.use((req, res, next) => {
+  const incoming = req.header("x-request-id");
+  const rid = (typeof incoming === "string" && /^[A-Za-z0-9_.\-]{6,128}$/.test(incoming))
+    ? incoming
+    : randomUUID();
+  req.requestId = rid;
+  res.setHeader("X-Request-Id", rid);
+  next();
+});
+
+// Baseline security headers on every response. A loose CSP covers the HTML
+// landing/operator/leaderboard pages — they use inline styles + one inline
+// script, no remote scripts, no eval. Anything stricter would break existing
+// pages without changing risk meaningfully.
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
@@ -482,6 +501,10 @@ app.use((_req, res, next) => {
   // XSS or third-party script accidentally probing for them.
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()");
   res.setHeader("X-Permitted-Cross-Domain-Policies", "none");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' https:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+  );
   next();
 });
 
@@ -954,25 +977,38 @@ app.get("/api/pricing", (_req, res) =>
 // never serve a paid result to a non-payer; requests without the header are
 // completely unaffected (default behavior, normal billing). Runs before the
 // paywall so a replay hit skips settlement.
-const idemStore = new Map(); // hashKey -> { at, body }
+const idemStore = new Map(); // hashKey -> { at, body, bytes }
 const IDEM_TTL_MS = 10 * 60 * 1000;
-const IDEM_MAX = 5000;
+const IDEM_MAX_ENTRIES = 5000;
+// Cap total cached body bytes — a single tool returning a large blob shouldn't
+// pin tens of megabytes per slot. 32 MB total, ~1 MB per entry max; oversize
+// responses skip the cache entirely (retry will re-run the tool, no charge
+// because PoW/x402 credentials are single-use anyway).
+const IDEM_MAX_BYTES = 32 * 1024 * 1024;
+const IDEM_MAX_BODY_BYTES = 1024 * 1024;
+let idemBytes = 0;
 // Background sweep: entries expire on read at IDEM_TTL_MS, but on a quiet
 // service stale bodies (some kits return large blobs) would sit in memory
 // until pushed out by FIFO. Prune by age every minute so memory tracks
 // actual recent traffic. .unref() so this never blocks process exit.
 setInterval(() => {
   const cutoff = Date.now() - IDEM_TTL_MS;
-  for (const [k, v] of idemStore) if (v.at < cutoff) idemStore.delete(k);
+  for (const [k, v] of idemStore) {
+    if (v.at < cutoff) { idemBytes -= v.bytes; idemStore.delete(k); }
+  }
 }, 60_000).unref();
 const idemHashKey = (req) => {
   const idem = req.header("idempotency-key");
   if (!idem || idem.length > 256) return null;
   const cred = req.header("x-payment") || req.header("payment-signature") || req.header("x-pow-solution");
   if (!cred) return null; // nothing to securely bind the key to → don't cache
-  // Bind to the exact route too, so the same key+credential on a different
-  // endpoint can never replay another tool's cached result.
-  return createHash("sha256").update(`${req.method} ${req.path}\n${idem}\n${cred}`).digest("hex");
+  // Bind to the exact route AND the request body, so the same key+credential
+  // can't be used to retrieve a cached response from a different payload or
+  // different endpoint. Body is hashed (not stored) so the key stays compact.
+  const bodyHash = req.body && Object.keys(req.body).length
+    ? createHash("sha256").update(JSON.stringify(req.body)).digest("hex")
+    : "-";
+  return createHash("sha256").update(`${req.method} ${req.path}\n${idem}\n${cred}\n${bodyHash}`).digest("hex");
 };
 app.use((req, res, next) => {
   if (!CATALOG[`${req.method} ${req.path}`]) return next();
@@ -986,8 +1022,23 @@ app.use((req, res, next) => {
   const origJson = res.json.bind(res);
   res.json = (body) => {
     if (res.statusCode === 200) {
-      if (idemStore.size >= IDEM_MAX) idemStore.delete(idemStore.keys().next().value);
-      idemStore.set(key, { at: Date.now(), body });
+      let bytes = 0;
+      try { bytes = Buffer.byteLength(JSON.stringify(body), "utf8"); } catch { bytes = 0; }
+      if (bytes && bytes <= IDEM_MAX_BODY_BYTES) {
+        // Evict oldest entries (Map preserves insertion order → FIFO ≈ LRU
+        // for write-heavy access) until we fit by entries AND by bytes.
+        while (
+          (idemStore.size >= IDEM_MAX_ENTRIES || idemBytes + bytes > IDEM_MAX_BYTES)
+          && idemStore.size > 0
+        ) {
+          const firstKey = idemStore.keys().next().value;
+          const ev = idemStore.get(firstKey);
+          if (ev) idemBytes -= ev.bytes;
+          idemStore.delete(firstKey);
+        }
+        idemStore.set(key, { at: Date.now(), body, bytes });
+        idemBytes += bytes;
+      }
     }
     return origJson(body);
   };
@@ -1022,7 +1073,10 @@ if (FREE_MODE) {
   });
   // Gate: for a compute-payable route, a valid proof-of-work bypasses the x402
   // paywall; otherwise the normal USDC paywall applies (and we advertise the
-  // PoW alternative via a response header on its 402).
+  // PoW alternative via a response header on its 402). PoW redemption is
+  // sliding-window rate-limited per IP using the SAME limiter+policy as the
+  // hosted MCP free tier (src/rate-limit.js) — otherwise a client exhausted
+  // on /mcp could keep hammering /api/* with fresh PoW solutions for free.
   app.use((req, res, next) => {
     // Marketplace-forwarded calls already settled USDC to our wallet via
     // agent402.app's facilitator — honor the bridge token and skip our paywall.
@@ -1036,6 +1090,15 @@ if (FREE_MODE) {
       if (solution) {
         const result = verifySolution(solution, slug);
         if (result.ok) {
+          if (powHttpLimiter.check(req.ip || "unknown").limited) {
+            res.setHeader("X-Pow-Rate-Limited", "true");
+            res.setHeader("X-Pow-Limits", POW_LIMITS_LABEL);
+            return res.status(429).json({
+              error: "Free-tier rate limit reached for proof-of-work redemption. Retry later, or pay per call in USDC via x402.",
+              limits: POW_LIMITS_LABEL,
+              docs: `${BASE_URL}/llms.txt`,
+            });
+          }
           res.setHeader("X-Pow-Accepted", "true");
           return next(); // work accepted — skip the USDC paywall
         }
@@ -1153,6 +1216,16 @@ const targetOwner = (req, actor) => {
   return o && /^0x[0-9a-f]{40}$/.test(o) ? o : actor;
 };
 const memHandler = (fn) => async (req, res) => {
+  // Defense in depth: the PoW gate already refuses memory routes via
+  // WALLET_ONLY_SLUGS in src/pow.js, but if that set ever drifts, refuse here
+  // too. Memory's whole identity model is "the paying wallet IS the caller",
+  // so accepting a PoW-only request would silently let an anonymous solver
+  // write to whatever owner namespace they chose.
+  if (req.header("x-pow-accepted") || res.getHeader("X-Pow-Accepted")) {
+    return res.status(402).json({
+      error: "Memory tools are wallet-only (identity = payment). Pay via x402; proof-of-work cannot establish a namespace owner.",
+    });
+  }
   const actor = memoryActor(req, res);
   if (!actor) return;
   try {
