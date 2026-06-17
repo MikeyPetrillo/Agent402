@@ -25,6 +25,7 @@
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { safeFetch } from "./tools/fetch-guard.js";
 import { toolList } from "./pages.js";
+import { fetchAllBazaarItems, isBazaarDiscoveryUrl } from "./bazaar-pager.js";
 
 const LOCAL_SELLER = "self";
 const CRAWL_INTERVAL_MS = 5 * 60 * 1000; // 5 min — gentle on third-party sellers
@@ -78,19 +79,42 @@ function extractOrigin(rawUrl) {
   }
 }
 
+// safeFetch-backed JSON fetcher injected into the Bazaar pager. Each page is
+// independently SSRF-guarded and byte-capped — the pager just chains them.
+async function safeFetchJson(url) {
+  const { html } = await safeFetch(url, { maxBytes: MAX_DISCOVERY_BYTES });
+  return JSON.parse(html);
+}
+
 async function discoverOneSource(source, selfOrigin) {
   const status = { url: source.url, fetchedAt: Date.now(), resources: 0, origins: 0, error: null };
   try {
-    const { html } = await safeFetch(source.url, { maxBytes: MAX_DISCOVERY_BYTES });
-    const data = JSON.parse(html);
-    // Discovery shapes vary by registry: { resources }, { items }, { data }, top-level array, or
-    // agent402.app's { services: [...] }.
-    const list =
-      data.resources ||
-      data.items ||
-      data.data ||
-      data.services ||
-      (Array.isArray(data) ? data : []);
+    // The Bazaar paginates and has 69k+ listings — a single fetch sees the
+    // first page only and the index ends up with <0.2% of sellers. For Bazaar
+    // sources walk every page; for other registries keep the single-fetch path
+    // (their shapes vary and most have no pagination contract).
+    let list;
+    if (isBazaarDiscoveryUrl(source.url)) {
+      const { items } = await fetchAllBazaarItems(
+        source.url,
+        {
+          pageSize: parseInt(process.env.BAZAAR_PAGE_SIZE || "1000", 10),
+          maxPages: parseInt(process.env.BAZAAR_MAX_PAGES || "200", 10),
+        },
+        safeFetchJson
+      );
+      list = items;
+    } else {
+      const data = await safeFetchJson(source.url);
+      // Discovery shapes vary by registry: { resources }, { items }, { data },
+      // top-level array, or agent402.app's { services: [...] }.
+      list =
+        data.resources ||
+        data.items ||
+        data.data ||
+        data.services ||
+        (Array.isArray(data) ? data : []);
+    }
     status.resources = list.length;
     const found = new Set();
     for (const item of list) {

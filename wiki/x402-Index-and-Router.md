@@ -13,6 +13,7 @@ shouldn't cost money, by the same logic as `/api/find`):
 | `GET /index` | HTML dashboard: every seller indexed, tool count, network, last-fetched time, rolling health, discovery sources |
 | `GET /api/index` | JSON snapshot of the same data: per-seller `health`, `routable`, rolling `history`, totals |
 | `POST /api/route` | Smart Order Router / neutral x402 discovery API: `{ query, top, include }` → top-N matching tools across sellers, ranked by match score, then health, then price. `include` = `all` (default) / `external` (exclude Agent402 itself) / `local` |
+| `GET /api/leaderboard` | On-chain ranking of every seller by **Base USDC settled volume** — see [[x402-Leaderboard]] |
 
 ## How a seller gets into the Index
 
@@ -73,4 +74,5 @@ resolved `include` value (invalid values fall back to `all`).
 
 - [[Architecture]] — where the indexer sits in the request flow
 - [[Operations]] — 3-rail attribution (USDC / PoW / Heartbeat) on the operator dashboard
+- [[x402-Leaderboard]] — on-chain ranking using the same Bazaar walk
 - [`/api/find`](https://agent402.tools/api/find) — local-only resolver (older, simpler)

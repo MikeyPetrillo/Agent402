@@ -1,13 +1,17 @@
-# Agent402 — the open-source, self-hostable x402 + MCP server (1,100+ tools for AI agents)
+# Agent402 — the open x402 index (Find · Route · Leaderboard) + 1,100 tools for AI agents
 
 > **What makes it different:** most x402 services are *closed gateways* exposing a
-> handful of tools. Agent402 is the **open-source, self-hostable** one — the whole
-> ~1,100-tool catalog, runnable yourself — **and** it's three-sided:
-> the **x402 Index + Smart Order Router** ([`/index`](https://agent402.tools/index),
-> [`POST /api/route`](https://agent402.tools/api/route)) routes a task to the cheapest
-> healthy seller across the entire x402 ecosystem (auto-discovered from the Coinbase
-> CDP Bazaar, health-aware), and [`agent402-tollbooth`](tollbooth) is an open
-> pay-per-crawl gate for the other side of x402.
+> handful of tools. Agent402 is the **open-source, self-hostable** one — and a
+> single integration gives a buyer **three free primitives over the whole x402
+> ecosystem**:
+>
+> - **Find** — [`/api/find?q={task}`](https://agent402.tools/api/find) resolves a task description to the best-matching tools (route, price, schema, ready example).
+> - **Route** — [`POST /api/route`](https://agent402.tools/api/route) is the **neutral Smart Order Router**: rank tools across every x402 seller crawled (auto-discovered from the Coinbase CDP Bazaar), health-aware, with `include=external` to exclude us.
+> - **Leaderboard** — [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) is the **public on-chain ranking** of every x402 seller by **Base USDC settled volume** — calls served, totalUsd, unique buyers per seller. Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate by `payTo`. Hourly snapshot.
+>
+> Plus the whole ~1,100-tool catalog, runnable yourself, and
+> [`agent402-tollbooth`](tollbooth) — an open pay-per-crawl gate for the other
+> side of x402.
 
 [![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
 [![npm](https://img.shields.io/npm/v/agent402-mcp?label=agent402-mcp)](https://www.npmjs.com/package/agent402-mcp)
@@ -93,19 +97,20 @@ and [`/llms.txt`](https://agent402.tools/llms.txt). Don't know which tool you ne
 a task description to the right tool — route, price, schema, and a ready example —
 so an agent skips the token-heavy "search around to find a tool" step.
 
-## x402 Index + Smart Order Router
+## x402 Index — Find · Route · Leaderboard
 
-Agent402 is also a **routing layer for the whole x402 ecosystem**: it crawls
-public x402 sellers (the local catalog + an auto-discovered set from the
-[Coinbase CDP Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar), refreshed
-hourly) and exposes them through one Smart Order Router that picks the
-**cheapest healthy seller** for a task. Both surfaces are free — same logic as
+Agent402 is also **the open routing + ranking layer for the whole x402
+ecosystem**: it crawls public x402 sellers (the local catalog + an
+auto-discovered set from the [Coinbase CDP Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar),
+refreshed hourly) and exposes them through three free surfaces — same logic as
 `/api/find`: discovery primitives shouldn't cost money.
 
 | Surface | What |
 |---|---|
+| [`GET /api/find?q={task}`](https://agent402.tools/api/find) | Resolve a task to the best-matching tools (route, price, schema, ready example) |
+| [`POST /api/route`](https://agent402.tools/api/route) | Smart Order Router: `{ query, top, include }` → ranked tools across sellers (match score, then **health**, then price). `include=external` excludes Agent402 itself |
+| [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) | **On-chain ranking** of every x402 seller by Base USDC settled volume (callsSettled, totalUsd, uniqueBuyers per seller). Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate. Hourly snapshot |
 | [`/index`](https://agent402.tools/index) | Public HTML dashboard: every seller, tool count, network, last-fetched, rolling health |
-| [`POST /api/route`](https://agent402.tools/api/route) | Smart Order Router: `{ query, top }` → ranked tools across sellers (match score, then **health**, then price) |
 | [`GET /api/index`](https://agent402.tools/api/index) | JSON snapshot of the same data (totals, per-seller health/routable flags) |
 
 ```bash
@@ -113,6 +118,9 @@ hourly) and exposes them through one Smart Order Router that picks the
 curl -X POST https://agent402.tools/api/route \
   -H 'content-type: application/json' \
   -d '{"query":"ocr image to text","top":5}'
+
+# "Who are the most-used x402 sellers right now? (on-chain proof, not self-reports)"
+curl 'https://agent402.tools/api/leaderboard?top=25&include=external'
 ```
 
 **Health-aware:** sellers whose last few crawls errored are excluded from the

@@ -122,6 +122,8 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       reliability: `${baseUrl}/api/reliability`,
       // Resolve a task to the right tool in one call (skip the exploration step).
       findTool: `${baseUrl}/api/find?q={task}`,
+      // Public on-chain ranking of every x402 seller by Base USDC settled volume.
+      leaderboard: `${baseUrl}/api/leaderboard`,
     },
     // Neutral cross-seller discovery surface — same router we use ourselves,
     // exposed as a public API so any x402 buyer can find the cheapest healthy
@@ -133,6 +135,10 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       neutralRouter: `${baseUrl}/api/route`,
       sellerIndex: `${baseUrl}/api/index`,
       sellerIndexHtml: `${baseUrl}/index`,
+      // On-chain ranking of every seller in the Bazaar by Base USDC settled
+      // volume. Same router, different sort key — closes the loop on
+      // discovery: find a tool, route to a seller, see who's most used.
+      leaderboard: `${baseUrl}/api/leaderboard`,
       includeOptions: ["all", "external", "local"],
       example: {
         method: "POST",
@@ -140,7 +146,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
         body: { query: "ocr image", top: 3, include: "external" },
       },
       sources: ["self", "Coinbase CDP Bazaar"],
-      refreshSeconds: { discovery: 3600, crawl: 300 },
+      refreshSeconds: { discovery: 3600, crawl: 300, leaderboard: 3600 },
     },
     trust: {
       onchainRevenueProof: wallet

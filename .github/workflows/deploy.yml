@@ -248,6 +248,12 @@ jobs:
       - name: Tool resolver (/api/find ranking, guards)
         run: node scripts/test-find.js
 
+      - name: x402 Leaderboard pure helpers (offline; Bazaar parsing + ranking)
+        run: node scripts/test-x402-leaderboard.js
+
+      - name: Leaderboard SEO/discovery surfaces (robots, sitemap, llms.txt, manifest, landing JSON-LD)
+        run: node scripts/test-leaderboard-surface.js
+
       - name: Idempotency (opt-in safe retry of paid/proven calls; boots paid-mode)
         run: node scripts/test-idempotency.js
 

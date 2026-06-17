@@ -19,6 +19,7 @@ import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
 import { serviceManifest, reliabilityReport } from "./discovery.js";
 import { findTools } from "./find.js";
 import { indexPage, indexSnapshot, routeQuery, startCrawler } from "./x402-index.js";
+import { getLeaderboardSnapshot, startLeaderboardRefresh } from "./leaderboard.js";
 import { buildPaymentMiddleware, enabledNetworks } from "./payments.js";
 import { KIT } from "./tools/kit.js";
 import { KIT2 } from "./tools/kit2.js";
@@ -588,6 +589,30 @@ app.get("/api/index", (_req, res) => res.json(indexSnapshot(indexCtx())));
 const routeHandler = (q, k, include, res) => res.json(routeQuery({ query: q, top: k, include, ...indexCtx() }));
 app.get("/api/route", (req, res) => routeHandler(req.query.q ?? req.query.task ?? req.query.query, req.query.top ?? req.query.k, req.query.include, res));
 app.post("/api/route", (req, res) => routeHandler(req.body?.q ?? req.body?.task ?? req.body?.query, req.body?.top ?? req.body?.k, req.body?.include, res));
+// x402 Leaderboard — public on-chain ranking of every seller in the Coinbase
+// CDP Bazaar by settled USDC volume on Base. Free, like /api/find + /api/route:
+// discovery primitives shouldn't cost money. Snapshot is cached in memory and
+// refreshed hourly (see startLeaderboardRefresh below) — each request is a
+// sub-millisecond read, never a live Bazaar walk.
+//
+// Query params (all optional):
+//   top      max rows to return (default 25, max 500)
+//   include  "all" (default) | "external" (exclude Agent402 — neutral view)
+//   self     override the wallet treated as "self" for include=external
+app.get("/api/leaderboard", (req, res) => {
+  const snap = getLeaderboardSnapshot();
+  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 25, 1), 500);
+  const include = req.query.include === "external" ? "external" : "all";
+  const self = (req.query.self || WALLET_ADDRESS || "").toLowerCase();
+  let board = snap.leaderboard || [];
+  if (include === "external" && self) board = board.filter((r) => r.wallet !== self);
+  res.json({
+    ...snap,
+    include,
+    leaderboard: board.slice(0, top),
+    totalSellers: (snap.leaderboard || []).length,
+  });
+});
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));
@@ -1059,6 +1084,12 @@ const httpServer = app.listen(PORT, () =>
 // selfOrigin is passed so the discovery feeder skips our own listings. Fire-and-
 // forget so a slow upstream can't delay boot or /health.
 startCrawler({ selfOrigin: BASE_URL });
+
+// x402 Leaderboard cache: warms once at boot, refreshes hourly. Failures keep
+// the previous good snapshot rather than wiping it — a transient RPC outage
+// shouldn't make /api/leaderboard return nothing. Fire-and-forget so a slow
+// Bazaar walk can't delay boot or /health.
+startLeaderboardRefresh();
 
 // Graceful shutdown: a Railway redeploy sends SIGTERM. Stop accepting new
 // connections but let in-flight (already paid-for) requests finish before
