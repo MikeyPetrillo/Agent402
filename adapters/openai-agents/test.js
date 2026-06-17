@@ -1,7 +1,7 @@
-// Smoke test for agent402-ai-sdk. Expects a FREE_MODE server reachable at
-// AGENT402_BASE_URL (defaults to http://localhost:3000). Tests the framework-
-// agnostic spec path only — the AI SDK-native wrapper is verified by the
-// peerDeps install path in consumers' projects.
+// Smoke test for agent402-openai-agents. Expects a FREE_MODE server reachable
+// at AGENT402_BASE_URL (defaults to http://localhost:3000). Tests the
+// framework-agnostic spec path only — the @openai/agents-native wrapper is
+// verified by the peerDeps install path in consumers' projects.
 import { agent402ToolSpecs } from "./index.js";
 
 const BASE = process.env.AGENT402_BASE_URL || "http://localhost:3000";
@@ -44,4 +44,4 @@ ok(routeDefault?.include === "all", `agent402_route default include is "all"`);
 const call = await byName.agent402_call.execute({ slug: "hash", params: { text: "hello world", algo: "sha256" } });
 ok(call?.hex?.startsWith("b94d27b9"), `agent402_call returns the hash result (got ${call?.hex?.slice(0, 8)})`);
 
-console.log(`PASS — agent402-ai-sdk: ${pass} assertions passed against ${BASE}`);
+console.log(`PASS — agent402-openai-agents: ${pass} assertions passed against ${BASE}`);

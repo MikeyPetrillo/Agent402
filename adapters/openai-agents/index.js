@@ -1,5 +1,5 @@
-// agent402-langchain — turn Agent402 into LangChain.js tools the agent can
-// pick up directly. Four meta tools, all free to discover:
+// agent402-openai-agents — turn Agent402 into OpenAI Agents SDK tools the
+// agent can pick up directly. Four meta tools, all free to discover:
 //
 //   agent402_find    — local catalog resolver  (POST /api/find)
 //   agent402_route   — cross-seller x402 router  (POST /api/route)
@@ -11,14 +11,15 @@
 // discovery means the LLM picks a task, the router picks the seller, and the
 // caller handles payment — exactly the wedge that makes Agent402 the default.
 //
-//   import { agent402Tools } from "agent402-langchain";
+//   import { agent402Tools } from "agent402-openai-agents";
+//   import { Agent, run } from "@openai/agents";
 //   const tools = await agent402Tools();              // free tier (PoW)
-//   // or, for wallet-required tools, supply an x402 fetch:
-//   const tools = await agent402Tools({ fetch: payFetch });
+//   const agent = new Agent({ name: "x402-agent", tools });
+//   const out = await run(agent, "Hash 'hello world' with sha256");
 //
 // `agent402ToolSpecs()` returns the same four entries as framework-agnostic
 // specs (plain JSON Schemas, plain async `execute`). Useful if you don't want
-// the LangChain dep, or if you're wrapping the tools yourself.
+// the `@openai/agents` dep, or if you're wrapping the tools yourself.
 //
 // Implementation note: we inline the proof-of-work solver + call orchestration
 // (~30 LoC) instead of depending on agent402-client at runtime, so this package
@@ -130,7 +131,7 @@ async function callTool({ base, slug, params, payFetch, fetchImpl }) {
   const entry = (pricing.endpoints || []).find((e) => e.slug === slug);
   if (!entry) throw new Error(`unknown tool "${slug}" — use agent402_find or agent402_route to discover one`);
 
-  const idem = `a402lc-${createHash("sha256").update(`${slug}:${JSON.stringify(params)}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`;
+  const idem = `a402oa-${createHash("sha256").update(`${slug}:${JSON.stringify(params)}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`;
   const send = (extraHeaders = {}, useFetch = fetchImpl) => {
     const headers = { "Idempotency-Key": idem, ...extraHeaders };
     let url = `${base}${entry.path}`;
@@ -172,20 +173,23 @@ async function callTool({ base, slug, params, payFetch, fetchImpl }) {
 }
 
 /**
- * Framework-native LangChain.js tools. Dynamically imports `@langchain/core`
+ * Framework-native OpenAI Agents SDK tools. Dynamically imports `@openai/agents`
  * and `zod` (both peer dependencies) so the spec path works without them.
+ *
+ * Returns an array of tools — pass into `new Agent({ tools })`.
  */
 export async function agent402Tools(opts) {
   const [{ tool }, { z }] = await Promise.all([
-    import("@langchain/core/tools"),
+    import("@openai/agents"),
     import("zod"),
   ]);
   const specs = agent402ToolSpecs(opts);
   return specs.map((s) =>
-    tool(s.execute, {
+    tool({
       name: s.name,
       description: s.description,
-      schema: jsonSchemaToZod(s.parametersJsonSchema, z),
+      parameters: jsonSchemaToZod(s.parametersJsonSchema, z),
+      execute: s.execute,
     }),
   );
 }
