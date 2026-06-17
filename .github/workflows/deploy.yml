@@ -844,12 +844,31 @@ jobs:
             echo "$MCP_PUBLISHER_SHA256  $asset" | sha256sum -c - && verified=1
           fi
           if [ -z "$verified" ]; then
-            curl -fsSL -o checksums.txt "$base/checksums.txt" 2>/dev/null || true
-            if [ -s checksums.txt ] && grep -q " $asset\$" checksums.txt; then
-              grep " $asset\$" checksums.txt | sha256sum -c - && verified=1
+            # As of registry v1.7.0+ the checksums file is versioned —
+            # registry_<ver>_checksums.txt — instead of a flat checksums.txt.
+            # Resolve the actual filename from the GitHub release API rather
+            # than guessing, then verify with sha256sum.
+            tag_path="${MCP_PUBLISHER_VERSION:-}"
+            if [ -z "$tag_path" ]; then
+              tag_path=$(curl -fsSL "https://api.github.com/repos/modelcontextprotocol/registry/releases/latest" | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
+            fi
+            checksums_name=$(curl -fsSL "https://api.github.com/repos/modelcontextprotocol/registry/releases/tags/$tag_path" \
+              | grep -oP '"name":\s*"\K[^"]*_checksums\.txt(?=")' | head -1)
+            if [ -n "$checksums_name" ]; then
+              curl -fsSL -o "$checksums_name" "https://github.com/modelcontextprotocol/registry/releases/download/$tag_path/$checksums_name" 2>/dev/null || true
+              if [ -s "$checksums_name" ] && grep -q " $asset\$" "$checksums_name"; then
+                grep " $asset\$" "$checksums_name" | sha256sum -c - && verified=1
+              fi
+            fi
+            # Legacy fallback: pre-v1.7.0 releases used a flat checksums.txt.
+            if [ -z "$verified" ]; then
+              curl -fsSL -o checksums.txt "$base/checksums.txt" 2>/dev/null || true
+              if [ -s checksums.txt ] && grep -q " $asset\$" checksums.txt; then
+                grep " $asset\$" checksums.txt | sha256sum -c - && verified=1
+              fi
             fi
           fi
-          [ -n "$verified" ] || { echo "mcp-publisher could not be verified (no MCP_PUBLISHER_SHA256 and no checksums.txt) — refusing to execute"; exit 1; }
+          [ -n "$verified" ] || { echo "mcp-publisher could not be verified (no MCP_PUBLISHER_SHA256 and no checksums file) — refusing to execute"; exit 1; }
           tar -xzf "$asset" mcp-publisher
           cd mcp
           ../mcp-publisher login github-oidc

@@ -46,6 +46,11 @@ const cache = new Map();
 const discoveredSeeds = new Set();
 // Per-source state for the discovery panel on /index.
 const discoveryStatus = new Map(); // name -> { url, fetchedAt, resources, origins, error }
+// Per-origin synthesized tool list assembled directly from Bazaar resource
+// entries. Used as a fallback for sellers whose /.well-known/x402 endpoint
+// 404s (the bulk of the unhealthy cohort — they only ever published settled
+// resources, never a manifest). Map<origin, Array<tool>>.
+const bazaarToolsByOrigin = new Map();
 
 // Public x402 seller registries we crawl. Each exposes an unauthenticated
 // discovery endpoint; we extract unique origins from the listings.
@@ -117,11 +122,27 @@ async function discoverOneSource(source, selfOrigin) {
     }
     status.resources = list.length;
     const found = new Set();
+    // Rebuild the Bazaar→origin tool map from this discovery pass so renamed /
+    // removed resources don't linger. Bazaar is authoritative for itself.
+    const isBazaar = isBazaarDiscoveryUrl(source.url);
+    const toolsByOrigin = isBazaar ? new Map() : null;
     for (const item of list) {
       const url = item.resource || item.url || item.endpoint || item.homepage;
       const origin = extractOrigin(url);
       if (!origin || origin === selfOrigin) continue;
       found.add(origin);
+      if (toolsByOrigin) {
+        const t = bazaarItemToTool(item, origin);
+        if (t) {
+          const arr = toolsByOrigin.get(origin) || [];
+          arr.push(t);
+          toolsByOrigin.set(origin, arr);
+        }
+      }
+    }
+    if (toolsByOrigin) {
+      // Atomic swap-in (per-origin) to avoid stale partial state mid-update.
+      for (const [o, arr] of toolsByOrigin) bazaarToolsByOrigin.set(o, arr);
     }
     status.origins = found.size;
     for (const o of found) {
@@ -144,6 +165,50 @@ function parsePrice(p) {
   if (typeof p === "number") return p;
   const n = parseFloat(String(p ?? "").replace(/[^0-9.]/g, ""));
   return isFinite(n) ? n : 0;
+}
+
+// Convert a single Bazaar resource entry into the tool shape used by the rest
+// of the index. Bazaar gives us the resource URL, the accepts array (with
+// per-network price/asset), an optional serviceName, description, and tags.
+// We deliberately keep the price in atomic USDC units → USD here so the router
+// can compare across sellers without a per-network price lookup.
+function bazaarItemToTool(item, originUrl) {
+  const resource = item.resource || item.url;
+  if (typeof resource !== "string" || !resource.startsWith(originUrl)) return null;
+  const accepts = Array.isArray(item.accepts) ? item.accepts : [];
+  // Prefer the first Base USDC accept; fall back to any USDC; fall back to first.
+  const preferred =
+    accepts.find((a) => a?.network === "eip155:8453" && /USDC|USD Coin/i.test(a?.extra?.name || "")) ||
+    accepts.find((a) => /USDC|USD Coin/i.test(a?.extra?.name || "")) ||
+    accepts[0] ||
+    null;
+  let price = null;
+  if (preferred?.amount != null) {
+    // amount is an atomic-units string; USDC has 6 decimals.
+    const n = Number(preferred.amount);
+    if (Number.isFinite(n)) price = n / 1e6;
+  }
+  let pathStr = "/";
+  try {
+    pathStr = new URL(resource).pathname || "/";
+  } catch {
+    /* keep "/" */
+  }
+  const tags = Array.isArray(item.tags) ? item.tags : [];
+  // Bazaar entries don't always carry a method; assume POST if we can't tell.
+  // The Smart Order Router treats this as a hint and will respect a 405 retry.
+  return {
+    seller: originUrl,
+    method: "POST",
+    route: pathStr,
+    slug: pathStr.replace(/^\//, "").replace(/\//g, "-") || originUrl.replace(/^https?:\/\//, ""),
+    name: item.serviceName || pathStr,
+    description: item.description || "",
+    category: tags[0] || "other",
+    tags,
+    price,
+    provenance: "bazaar",
+  };
 }
 
 function normaliseOpenapiTools(openapi, originUrl) {
@@ -212,6 +277,24 @@ async function crawlSeller(originUrl) {
       history: rollHistory(prev, true),
     });
   } catch (e) {
+    // No /.well-known/x402 — but if the Bazaar carries resource entries for
+    // this origin we can still route to them. Many sellers never publish a
+    // manifest at all; the Bazaar IS their public surface. We treat a
+    // Bazaar-only seller as routable (history flips positive) because we
+    // observed real settled payments on those routes.
+    const bazaarTools = bazaarToolsByOrigin.get(originUrl);
+    if (Array.isArray(bazaarTools) && bazaarTools.length) {
+      cache.set(originUrl, {
+        ...(prev || {}),
+        manifest: prev?.manifest || synthManifestFromBazaar(originUrl, bazaarTools),
+        tools: bazaarTools,
+        fetchedAt: Date.now(),
+        error: null,
+        source: "bazaar-fallback",
+        history: rollHistory(prev, true),
+      });
+      return;
+    }
     // Preserve the last good manifest+tools so a transient outage doesn't drop
     // the seller from the Index — but the history flip marks them unhealthy
     // for routing decisions.
@@ -222,6 +305,21 @@ async function crawlSeller(originUrl) {
       history: rollHistory(prev, false),
     });
   }
+}
+
+// Build a minimal x402 service manifest from Bazaar resource entries — enough
+// for indexSnapshot to render a display name + payment network without
+// pretending the seller actually publishes /.well-known/x402.
+function synthManifestFromBazaar(originUrl, tools) {
+  const first = tools[0] || {};
+  const host = originUrl.replace(/^https?:\/\//, "");
+  return {
+    name: first.name && first.name !== first.route ? first.name : host,
+    homepage: originUrl,
+    payment: { x402: { primaryNetwork: "base" } },
+    capabilities: { tools: tools.length },
+    synthesized: true,
+  };
 }
 
 // Health score in [0,1] = fraction of healthy crawls in the rolling window.
@@ -351,6 +449,7 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
     health: healthScore(v),
     routable: isRoutable(v),
     history: Array.isArray(v.history) ? v.history.slice() : [],
+    source: v.source || (v.manifest && !v.manifest.synthesized ? "manifest" : null),
   }));
   const sellers = [local, ...remote];
   const discoverySources = DISCOVERY_SOURCES.map((s) => {
@@ -376,6 +475,7 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
       discovered: discoveredSeeds.size,
       routable: 1 + remote.filter((s) => s.routable).length, // self always routable
       unhealthy: remote.filter((s) => !s.routable).length,
+      bazaarFallback: remote.filter((s) => s.source === "bazaar-fallback").length,
     },
   };
 }

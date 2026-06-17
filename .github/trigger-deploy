@@ -14,3 +14,4 @@ security-audit-waitlist-xss-and-error-handler: 2026-06-17T22:00:00Z
 health-leadsdb-and-operator-token-flags: 2026-06-17T23:00:00Z
 leaderboard-name-rename-lag-fix: 2026-06-18T00:00:00Z
 mcp-registry-v0.4.0-and-llms-install: 2026-06-17T19:30:00Z
+bazaar-fallback-and-mcp-registry-retry: 2026-06-17T19:45:00Z
