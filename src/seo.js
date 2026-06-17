@@ -17,7 +17,7 @@ User-agent: *
 Allow: /
 Disallow: /api/memory
 
-# Machine-readable catalogs for agents: ${baseUrl}/llms.txt , ${baseUrl}/openapi.json , ${baseUrl}/api/pricing , ${baseUrl}/.well-known/x402 , ${baseUrl}/api/reliability , ${baseUrl}/api/find?q={task}
+# Machine-readable catalogs for agents: ${baseUrl}/llms.txt , ${baseUrl}/openapi.json , ${baseUrl}/api/pricing , ${baseUrl}/.well-known/x402 , ${baseUrl}/api/reliability , ${baseUrl}/api/find?q={task} , ${baseUrl}/api/route , ${baseUrl}/api/leaderboard
 Sitemap: ${baseUrl}/sitemap.xml
 `;
 }
@@ -40,6 +40,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/index`, priority: "0.8" },
     { loc: `${baseUrl}/api/index`, priority: "0.6" },
     { loc: `${baseUrl}/api/route`, priority: "0.7" },
+    { loc: `${baseUrl}/api/leaderboard`, priority: "0.7" },
   ];
   const guideUrls = [
     { loc: `${baseUrl}/guides`, priority: "0.8" },
@@ -87,6 +88,8 @@ Base URL: ${baseUrl}
 
 > Neutral cross-seller discovery for the whole x402 ecosystem: POST \`${baseUrl}/api/route\` with \`{"query":"<task>", "top":N, "include":"all|external|local"}\` — the Smart Order Router ranks tools across every x402 seller we've crawled (auto-discovered from the Coinbase CDP Bazaar, refreshed hourly), filters out unhealthy sellers, and tiebreaks on health then price. Use \`include:"external"\` to *exclude* Agent402 itself from the results — same router used as a neutral discovery API over competitors. Full seller index at \`${baseUrl}/api/index\` (JSON) and \`${baseUrl}/index\` (HTML).
 
+> Public on-chain ranking of every x402 seller: \`GET ${baseUrl}/api/leaderboard?top=N&include=all|external\` returns the live leaderboard by Base USDC settled volume (callsSettled, totalUsd, uniqueBuyers per seller). Pipeline: Bazaar discovery → \`eth_getLogs\` on Base USDC → per-call ceiling filter → aggregate by payTo. Cached snapshot, refreshed hourly server-side. Free. Use \`include:"external"\` to rank only the rest of the ecosystem (excludes Agent402).
+
 > Open source, and two-sided: Agent402 is also the home of \`agent402-tollbooth\` — an open-source, self-hostable x402 pay-per-crawl gate that lets any site charge AI crawlers per request (USDC via x402, or free proof-of-work) while humans browse free. https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth
 
 ## This is machine-to-machine commerce, and you can verify it
@@ -123,6 +126,7 @@ ${sections}
 - \`GET /api/find?q={task}\` — resolve a task description to the best-matching tools (route, price, input schema, ready example) in one call; skips the token-heavy "search to find a tool" step. Also accepts \`POST {"task":"..."}\`.
 - \`POST /api/route {"query":"...", "top":N, "include":"all|external|local"}\` — Smart Order Router / neutral x402 discovery API: rank tools across every x402 seller crawled (auto-discovered from public registries), filtered to healthy sellers, tiebroken on health then price. \`include:"external"\` excludes Agent402 itself — buyers can use us as a neutral router over the rest of the ecosystem.
 - \`GET /api/index\` — JSON snapshot of every seller indexed: per-seller health, routable flag, rolling crawl history, total counts; companion HTML view at \`/index\`.
+- \`GET /api/leaderboard\` — public on-chain ranking of every x402 seller by Base USDC settled volume (callsSettled, totalUsd, uniqueBuyers per seller). Pipeline: Bazaar → \`eth_getLogs\` → per-call ceiling filter → aggregate by payTo. Hourly snapshot. Use \`?include=external\` to exclude Agent402 itself.
 - \`GET /.well-known/x402\` — one-fetch service manifest: identity, payment options (x402 networks + proof-of-work), capability map, MCP connector, and trust signals.
 - \`GET /api/reliability\` — structured reliability/SLA report: uptime, calls served, on-chain revenue proof, and each operational guarantee with a URL to verify it.
 - \`GET /api/pricing\` — machine-readable catalog (JSON): every endpoint, price, category, and docs URL.
