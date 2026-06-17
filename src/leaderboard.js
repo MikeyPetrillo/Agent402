@@ -24,6 +24,8 @@
 // eth_getLogs calls (~30s-2min). We cache the snapshot in memory and refresh
 // hourly; the endpoint reads from cache so each request is sub-millisecond.
 
+import { fetchAllBazaarItems as walkBazaar } from "./bazaar-pager.js";
+
 const DEFAULTS = {
   bazaarUrl: process.env.BAZAAR_URL || "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources",
   spanBlocks: parseInt(process.env.SPAN_BLOCKS || "9000", 10), // ~5h of Base blocks
@@ -204,26 +206,11 @@ async function fetchJson(url, { timeoutMs = 30000, maxBytes = 64 * 1024 * 1024 }
   return JSON.parse(text);
 }
 
-// Fetch every page of the Bazaar discovery endpoint. The Bazaar paginates at
-// up to 1000 items per page (default 100) and reports a `total` we walk to.
+// Fetch every page of the Bazaar discovery endpoint. The pagination loop lives
+// in src/bazaar-pager.js so src/x402-index.js can reuse it; here we just inject
+// the timeout + byte-capped fetcher.
 async function fetchAllBazaarItems(baseUrl, opts) {
-  const { bazaarPageSize, bazaarMaxPages } = opts;
-  const items = [];
-  let offset = 0;
-  let total = null;
-  for (let p = 0; p < bazaarMaxPages; p++) {
-    const sep = baseUrl.includes("?") ? "&" : "?";
-    const url = `${baseUrl}${sep}limit=${bazaarPageSize}&offset=${offset}`;
-    const page = await fetchJson(url);
-    const pageItems = page?.items || page?.resources || (Array.isArray(page) ? page : []);
-    if (!Array.isArray(pageItems) || pageItems.length === 0) break;
-    for (const it of pageItems) items.push(it);
-    total = page?.pagination?.total ?? total;
-    offset += pageItems.length;
-    if (total != null && offset >= total) break;
-    if (pageItems.length < bazaarPageSize) break;
-  }
-  return { items, total };
+  return walkBazaar(baseUrl, { pageSize: opts.bazaarPageSize, maxPages: opts.bazaarMaxPages }, fetchJson);
 }
 
 async function rpcCall(rpcs, method, params, { passes = 2 } = {}) {
