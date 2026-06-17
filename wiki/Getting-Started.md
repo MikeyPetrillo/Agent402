@@ -8,6 +8,10 @@ You can make your first call in under a minute, with no wallet and no money.
 curl https://agent402.tools/api/pricing      # every endpoint, price, category
 curl https://agent402.tools/openapi.json     # full OpenAPI 3.1 with schemas
 curl https://agent402.tools/llms.txt         # the agent-oriented overview
+curl https://agent402.tools/api/find?q=ocr   # resolve a task to the best tool
+curl -X POST https://agent402.tools/api/route -H 'content-type: application/json' \
+     -d '{"query":"ocr image","top":5,"include":"external"}'   # cross-seller Smart Order Router
+curl 'https://agent402.tools/api/leaderboard?top=10'           # on-chain ranking by Base USDC volume
 ```
 
 Each tool also has human-readable docs at `https://agent402.tools/tools/{slug}` with a working example.

@@ -9,6 +9,7 @@
 - [[AWS Bedrock AgentCore]]
 - [[Tool Catalog]]
 - [[x402 Index and Router|x402-Index-and-Router]]
+- [[x402 Leaderboard|x402-Leaderboard]]
 - [[Payments and x402]]
 - [[Pay-per-crawl]]
 - [[Pay-per-crawl Walkthrough]]
