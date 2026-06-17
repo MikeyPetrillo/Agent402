@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.MikeyPetrillo/agent402",
   "title": "Agent402 — pay-per-call web tools",
-  "description": "Open x402 index (Find · Route · Leaderboard) over the whole x402 ecosystem, plus 1,100+ pay-per-call web tools for agents: search, browser, PDF, live data, crypto, memory. x402 USDC on Base or free via proof-of-work.",
+  "description": "Open x402 index (Find/Route/Leaderboard) + 1,100 paid web tools for agents. USDC on Base or PoW.",
   "version": "0.4.0",
   "repository": {
     "url": "https://github.com/MikeyPetrillo/Agent402",

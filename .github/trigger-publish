@@ -1,3 +1,4 @@
 2026-06-17T01:30:00Z publish agent402-langchain 0.2.0, agent402-ai-sdk 0.2.0, agent402-openai-agents 0.1.0
 2026-06-17T19:30:00Z publish agent402-mcp 0.4.0 (refreshed description; index-led framing)
 2026-06-17T19:45:00Z publish retry — mcp-publisher verify now resolves versioned checksums.txt name
+2026-06-18T01:00:00Z publish retry — shorten mcp/server.json description to fit registry's 100-char cap
