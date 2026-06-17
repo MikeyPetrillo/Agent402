@@ -26,7 +26,9 @@ self-reports, no caches you have to trust, no API keys involved.
    reached). Extract each seller's `payTo` wallet from listings whose `network`
    is Base mainnet (`eip155:8453` / `base`) and whose asset is USDC.
 2. **On-chain scan** — call Base USDC `eth_getLogs` in chunks (`9000` blocks
-   per call, `200` wallets per call) for the `Transfer(_, payTo, _)` topic.
+   per call, `200` wallets per call) for the `Transfer(_, payTo, _)` topic
+   across the active window (default `43200` blocks ≈ **24h** — sellers with
+   bursty traffic show real revenue here that a tight 5h scan would miss).
 3. **Per-call ceiling filter** — keep only transfers whose value is ≤ `$0.50`
    (configurable). Anything larger is funding, swap, or a treasury move — not
    a paid x402 call.
@@ -46,6 +48,11 @@ curl https://agent402.tools/api/leaderboard?top=10
 
 # Rank only the rest of the ecosystem (exclude Agent402)
 curl 'https://agent402.tools/api/leaderboard?top=25&include=external'
+
+# Window hint — currently the active 24h cache is served regardless; 7d/30d
+# are reserved for the deep-cache rollout. The response always reports the
+# window actually served in `windowServed`.
+curl 'https://agent402.tools/api/leaderboard?window=24h'
 ```
 
 Returns:

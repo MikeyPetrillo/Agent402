@@ -599,16 +599,26 @@ app.post("/api/route", (req, res) => routeHandler(req.body?.q ?? req.body?.task 
 //   top      max rows to return (default 25, max 500)
 //   include  "all" (default) | "external" (exclude Agent402 — neutral view)
 //   self     override the wallet treated as "self" for include=external
+//   window   requested window hint: "24h" (default, currently the only one
+//            served), "7d" / "30d" / "all" are documented but currently fall
+//            back to the active snapshot — wider windows require a separate
+//            deep-cache pipeline (roadmap). The response always reports the
+//            window actually served in `windowLabel` + `windowRequested`.
+const SUPPORTED_WINDOWS = new Set(["24h", "7d", "30d", "all"]);
 app.get("/api/leaderboard", (req, res) => {
   const snap = getLeaderboardSnapshot();
   const top = Math.min(Math.max(parseInt(req.query.top, 10) || 25, 1), 500);
   const include = req.query.include === "external" ? "external" : "all";
   const self = (req.query.self || WALLET_ADDRESS || "").toLowerCase();
+  const requested = String(req.query.window || "").toLowerCase();
+  const windowRequested = SUPPORTED_WINDOWS.has(requested) ? requested : "24h";
   let board = snap.leaderboard || [];
   if (include === "external" && self) board = board.filter((r) => r.wallet !== self);
   res.json({
     ...snap,
     include,
+    windowRequested,
+    windowServed: snap.windowLabel || "24h",
     leaderboard: board.slice(0, top),
     totalSellers: (snap.leaderboard || []).length,
   });

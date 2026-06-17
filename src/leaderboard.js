@@ -27,9 +27,15 @@
 import { fetchAllBazaarItems as walkBazaar } from "./bazaar-pager.js";
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 
+// Base block time is ~2s, so 24h ≈ 43200 blocks. A wider window than the old
+// 5h default surfaces sellers with bursty (vs. constant) traffic — without it,
+// any seller below ~9 calls/sec averaged over 5h shows $0 even when their
+// lifetime revenue is real. 24h is the right default for "is this seller
+// actually used"; ?window= is the hook for the deep-cache rollout (7d/30d).
+const SECONDS_PER_BASE_BLOCK = 2;
 const DEFAULTS = {
   bazaarUrl: process.env.BAZAAR_URL || "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources",
-  spanBlocks: parseInt(process.env.SPAN_BLOCKS || "9000", 10), // ~5h of Base blocks
+  spanBlocks: parseInt(process.env.SPAN_BLOCKS || "43200", 10), // ~24h of Base blocks
   // Free-tier Base RPCs cap eth_getLogs at 10,000 blocks per call; chunk a wide
   // window into ranges no larger than this so it still scans cleanly.
   chunkBlocks: parseInt(process.env.CHUNK_BLOCKS || "9000", 10),
@@ -242,10 +248,21 @@ async function rpcCall(rpcs, method, params, { passes = 2 } = {}) {
 
 // --- pipeline ---------------------------------------------------------------
 
+/** Render a block count as a human-friendly window label ("5h", "24h", "7d"). */
+export function windowLabelFromBlocks(blocks) {
+  const seconds = (Number(blocks) || 0) * SECONDS_PER_BASE_BLOCK;
+  if (seconds <= 0) return "—";
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  const hours = seconds / 3600;
+  if (hours < 48) return `${Math.round(hours)}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
 const emptySnapshot = (opts, reason) => ({
   spec: "x402-leaderboard/1",
   asOf: new Date().toISOString(),
   scannedBlocks: opts.spanBlocks,
+  windowLabel: windowLabelFromBlocks(opts.spanBlocks),
   maxCallUsd: opts.maxCallUsd,
   scannedSellers: 0,
   walletsQueried: 0,
@@ -320,6 +337,7 @@ export async function runLeaderboard(overrides = {}) {
     spec: "x402-leaderboard/1",
     asOf: new Date().toISOString(),
     scannedBlocks: opts.spanBlocks,
+    windowLabel: windowLabelFromBlocks(opts.spanBlocks),
     maxCallUsd: opts.maxCallUsd,
     scannedSellers: sellers.length,
     walletsQueried: wallets.length,
@@ -402,10 +420,16 @@ export function getLeaderboardSnapshot() {
       },
     };
   }
+  // Pre-warm placeholder: still surface the configured window so the HTML page
+  // and JSON consumers see "Last 24h" instead of an em-dash while the cache
+  // fills. Once a real snapshot lands these get overwritten from the scan.
   return {
     spec: "x402-leaderboard/1",
     asOf: new Date().toISOString(),
     warming: true,
+    scannedBlocks: DEFAULTS.spanBlocks,
+    windowLabel: windowLabelFromBlocks(DEFAULTS.spanBlocks),
+    maxCallUsd: DEFAULTS.maxCallUsd,
     leaderboard: [],
     cache: {
       cachedAt: null,
@@ -475,6 +499,8 @@ export function leaderboardPage(snapshot, { baseUrl }) {
     : `<tr><td colspan="7" class="muted" style="text-align:center;padding:24px">No settled volume yet. Snapshot refreshes hourly.</td></tr>`;
 
   const asOf = snapshot?.asOf ? snapshot.asOf.replace("T", " ").slice(0, 19) + "Z" : "—";
+  const windowLabel = snapshot?.windowLabel || windowLabelFromBlocks(snapshot?.scannedBlocks);
+  const windowHuman = windowLabel === "—" ? "the scan window" : `last ${windowLabel}`;
 
   return `<!doctype html>
 <html lang="en">
@@ -519,20 +545,20 @@ ${renderHeader("/leaderboard")}
 <div class="wrap">
 
 <h1>x402 Leaderboard</h1>
-<p class="sub">Public on-chain ranking of every x402 seller listed on the Coinbase CDP Bazaar, ranked by settled USDC volume on Base. Snapshot is cached and refreshed hourly.</p>
+<p class="sub">Public on-chain ranking of every x402 seller listed on the Coinbase CDP Bazaar, ranked by settled USDC volume on Base. Window: <b>${esc(windowHuman)}</b>. Snapshot is cached and refreshed hourly.</p>
 
 <div class="grid">
-  <div class="stat"><div class="k">Top seller</div><div class="v" style="font-size:1.05rem">${esc(top1?.name || "—")}</div><div class="s">${esc(top1 ? fmtUsd(top1.totalUsd) + " · " + (top1.callsSettled || 0) + " calls" : "no data yet")}</div></div>
+  <div class="stat"><div class="k">Top seller (${esc(windowLabel)})</div><div class="v" style="font-size:1.05rem">${esc(top1?.name || "—")}</div><div class="s">${esc(top1 ? fmtUsd(top1.totalUsd) + " · " + (top1.callsSettled || 0) + " calls" : "no data yet")}</div></div>
   <div class="stat"><div class="k">Sellers ranked</div><div class="v">${esc(board.length)}</div><div class="s">of ${esc(snapshot?.scannedSellers ?? 0)} scanned (${esc(snapshot?.bazaarTotal ?? "?")} Bazaar listings)</div></div>
-  <div class="stat"><div class="k">Total volume</div><div class="v">${esc(fmtUsd(totalUsd))}</div><div class="s">across ${esc(totalCalls)} settled call${totalCalls === 1 ? "" : "s"}</div></div>
-  <div class="stat"><div class="k">Window</div><div class="v" style="font-size:1.05rem">${esc(snapshot?.scannedBlocks ?? "—")} blocks</div><div class="s">per-call ceiling ${esc(fmtUsd(snapshot?.maxCallUsd ?? 0))}</div></div>
+  <div class="stat"><div class="k">Total volume (${esc(windowLabel)})</div><div class="v">${esc(fmtUsd(totalUsd))}</div><div class="s">across ${esc(totalCalls)} settled call${totalCalls === 1 ? "" : "s"}</div></div>
+  <div class="stat"><div class="k">Window</div><div class="v" style="font-size:1.05rem">Last ${esc(windowLabel)}</div><div class="s">${esc(snapshot?.scannedBlocks ?? "—")} blocks · per-call ceiling ${esc(fmtUsd(snapshot?.maxCallUsd ?? 0))}</div></div>
   <div class="stat"><div class="k">Snapshot</div><div class="v" style="font-size:1rem">${esc(asOf)}</div><div class="s">refresh the page to update</div></div>
 </div>
 
 <div class="panel">
-  <div class="ph"><h2>Sellers by settled volume</h2><div class="pn">Wallet links open Basescan token-transfer view for independent verification.</div></div>
+  <div class="ph"><h2>Sellers by settled volume (${esc(windowHuman)})</h2><div class="pn">Wallet links open Basescan token-transfer view for independent verification. <b>$0 ≠ no revenue</b> — sellers with bursty traffic may have lifetime volume outside this window.</div></div>
   <table>
-    <thead><tr><th class="num">#</th><th>Seller</th><th>Wallet</th><th>Network</th><th class="num">Calls</th><th class="num">USDC</th><th class="num">Buyers</th></tr></thead>
+    <thead><tr><th class="num">#</th><th>Seller</th><th>Wallet</th><th>Network</th><th class="num">Calls (${esc(windowLabel)})</th><th class="num">USDC settled (${esc(windowLabel)})</th><th class="num">Buyers</th></tr></thead>
     <tbody>${rows || emptyState}</tbody>
   </table>
 </div>
@@ -542,12 +568,13 @@ ${renderHeader("/leaderboard")}
   <div style="padding:14px 18px;">
     <ol class="foot" style="margin:0 0 10px 18px; padding:0;">
       <li>Walk the Coinbase CDP Bazaar discovery API and extract every Base-mainnet USDC <code>payTo</code> wallet.</li>
-      <li>Query <code>eth_getLogs</code> on Base USDC for Transfer events to those wallets over the last ${esc(snapshot?.scannedBlocks ?? "?")} blocks.</li>
+      <li>Query <code>eth_getLogs</code> on Base USDC for Transfer events to those wallets over the <b>${esc(windowHuman)}</b> (${esc(snapshot?.scannedBlocks ?? "?")} blocks).</li>
       <li>Filter to per-call settlements (≤ ${esc(fmtUsd(snapshot?.maxCallUsd ?? 0))}); larger inbound transfers are funding/swaps, not tool buys.</li>
       <li>Aggregate by recipient wallet → callsSettled, totalUsd, uniqueBuyers. Rank by totalUsd, tiebreak on activity, then alphabetical.</li>
     </ol>
     <pre>curl -s ${esc(baseUrl)}/api/leaderboard?top=10
-curl -s ${esc(baseUrl)}/api/leaderboard?include=external   # exclude Agent402 itself</pre>
+curl -s ${esc(baseUrl)}/api/leaderboard?include=external   # exclude Agent402 itself
+curl -s ${esc(baseUrl)}/api/leaderboard?window=24h         # window hint (default; 7d/30d coming)</pre>
     <p class="foot" style="margin:10px 0 0;">Free — same gate as <code>/api/find</code> and <code>/api/route</code>. JSON snapshot at <code>${esc(baseUrl)}/api/leaderboard</code>.</p>
   </div>
 </div>
