@@ -80,7 +80,7 @@ ${CHROME_HEAD_LINKS}
 <body><div class="wrap">
 
 <h1>Operator dashboard</h1>
-<p class="sub">Per-tool usage, settlement split, and live activity. Auto-refreshes every 10s. Not public — gated by <code>AGENT402_OPERATOR_TOKEN</code>.</p>
+<p class="sub">Per-tool usage, settlement split, and live activity. Auto-refreshes every 10s. Not public — gated by <code>AGENT402_OPERATOR_TOKEN</code>. <a href="/__operator/leads?token=${esc(token || "")}">Tollbooth leads →</a></p>
 
 <div class="grid">
   <div class="stat"><div class="k">Total calls</div><div class="v" id="t-total">${esc(t.total ?? 0)}</div><div class="s">all tools, all rails</div></div>
