@@ -268,15 +268,20 @@ and discoverable in the Coinbase [x402 Bazaar](https://docs.cdp.coinbase.com/x40
 
 **Works with [AWS Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) out of the box** — AgentCore orchestrates x402, which is the protocol Agent402 already speaks. Point the AgentCore Gateway at `https://agent402.tools/mcp` for all ~1,100 tools, or use [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) for a curated subset inside a [Strands](https://strandsagents.com) agent. Five-minute recipe: [wiki: AWS Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore).
 
-### Sibling: `agent402-tollbooth` (open-source pay-per-crawl)
+### Tollbooth — pay-per-crawl for **your** site (the other side of x402)
 
-Want the *other* side of x402 — charging AI bots that crawl **your** site?
-[`tollbooth/`](tollbooth) is a self-hostable **pay-per-crawl** gate: drop it in
-front of any site/API and humans browse free while AI crawlers pay per request
-(USDC via x402, or free via proof-of-work). The open, crypto-native answer to
-Cloudflare's closed pay-per-crawl — no CDN, no Stripe, no signup. Runs as
-Express middleware, a reverse proxy, **or on the edge** (Cloudflare Workers /
-Next.js middleware, via one Web-Crypto core). See [tollbooth/README.md](tollbooth/README.md).
+Charge AI crawlers that hit your site. Humans browse free; known bots get
+`402 Payment Required` and can pay in USDC over x402 — or solve a free
+proof-of-work. The open, crypto-native answer to Cloudflare's closed
+pay-per-crawl: no CDN lock-in, no Stripe, no merchant-of-record, no signup.
+
+- **Product page · pricing · live install:** [agent402.tools/tollbooth](https://agent402.tools/tollbooth)
+- **Managed Tollbooth Cloud (Solo / Team / Agency / Enterprise):** [agent402.tools/tollbooth/cloud](https://agent402.tools/tollbooth/cloud) — join the waitlist
+- **Run it yourself (MIT, npm):** `npm i agent402-tollbooth` · [`tollbooth/`](tollbooth) · [tollbooth/README.md](tollbooth/README.md)
+
+Runs as Express middleware, a Next.js / Vercel Edge middleware, a Cloudflare
+Worker, a reverse proxy, or a WordPress plugin (beta). Drop-in templates in
+[`tollbooth/deploy/`](tollbooth/deploy). One Web-Crypto core powers all of them.
 
 ## Repository map
 

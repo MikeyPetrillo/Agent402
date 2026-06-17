@@ -1,6 +1,6 @@
 **[[Home]]**
 
-**Using it**
+**Using it (for agents / buyers)**
 - [[Getting Started]]
 - [[Paying with x402]]
 - [[Paying with Compute]]
@@ -11,10 +11,13 @@
 - [[x402 Index and Router|x402-Index-and-Router]]
 - [[x402 Leaderboard|x402-Leaderboard]]
 - [[Payments and x402]]
-- [[Pay-per-crawl]]
-- [[Pay-per-crawl Walkthrough]]
-- [[Tollbooth for Agencies|Tollbooth-for-Agencies]]
 - [[Memory and Coordination]]
+
+**Tollbooth (for site owners)**
+- [[Pay-per-crawl]] — what it is, install, modes
+- [[Pay-per-crawl Walkthrough]] — 5-min hands-on
+- [[Tollbooth for Agencies|Tollbooth-for-Agencies]] — many-site playbook
+- [Try Tollbooth Cloud](https://agent402.tools/tollbooth/cloud) (managed)
 
 **Under the hood**
 - [[Architecture]]
