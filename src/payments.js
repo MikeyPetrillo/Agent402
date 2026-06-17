@@ -62,7 +62,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       {
         accepts: acceptsFor(item),
         description: item.description,
-        serviceName: "Agent402",
+        // The brand string the Coinbase CDP Bazaar surfaces for every listing
+        // we publish — also what appears on /api/leaderboard. We use the
+        // domain so the row on every public x402 surface back-links the site.
+        serviceName: "Agent402.tools",
         tags: ["web", "tools", "agents", ...(item.tags ?? [])],
         mimeType: "application/json",
         resource: `${baseUrl}${route.split(" ")[1]}`,

@@ -8,6 +8,9 @@ Add **`https://agent402.tools/mcp`** as a remote MCP server:
 
 - **claude.ai / Claude mobile:** Settings → Connectors → *Add custom connector* → name `Agent402`, that URL, no auth.
 - **Claude Code:** `claude mcp add --transport http agent402 https://agent402.tools/mcp`
+- **Cursor:** Settings → MCP → *Add new MCP server* → name `agent402`, transport `streamable-http`, URL `https://agent402.tools/mcp`. (Or add directly to `~/.cursor/mcp.json`.)
+- **ChatGPT (Pro/Team/Enterprise):** Settings → Connectors → *Add custom connector* → that URL, no auth.
+- **VS Code (GitHub Copilot Chat with MCP):** *MCP: Add Server* → HTTP → `https://agent402.tools/mcp`.
 - Any client speaking **streamable HTTP** (the endpoint is stateless — every JSON-RPC message is self-contained).
 
 It exposes four read-only tools (each carries safety annotations):

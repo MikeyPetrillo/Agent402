@@ -42,6 +42,7 @@ To settle in real USDC instead, fund a wallet on Base and run `AGENT_KEY=0xYOUR_
 | You are… | Use |
 |---|---|
 | A Claude user | Paste `https://agent402.tools/mcp` into Settings → Connectors — see [[MCP Connector]] |
+| A Cursor / ChatGPT (Pro+) / VS Code Copilot user | Paste the same URL into the MCP connector settings — see [[MCP Connector]] |
 | An MCP-based agent | `npx -y agent402-mcp` with optional `AGENT_KEY` — see [[MCP Connector]] |
 | On OpenAI / Anthropic / Vercel AI SDK / LangChain / LlamaIndex | One of the framework adapter packages — see [[Adapters]] |
 | Calling over HTTP with a wallet | One x402-wrapped fetch — see [[Paying with x402]] |

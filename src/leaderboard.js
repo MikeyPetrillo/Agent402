@@ -25,10 +25,17 @@
 // hourly; the endpoint reads from cache so each request is sub-millisecond.
 
 import { fetchAllBazaarItems as walkBazaar } from "./bazaar-pager.js";
+import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 
+// Base block time is ~2s, so 24h ≈ 43200 blocks. A wider window than the old
+// 5h default surfaces sellers with bursty (vs. constant) traffic — without it,
+// any seller below ~9 calls/sec averaged over 5h shows $0 even when their
+// lifetime revenue is real. 24h is the right default for "is this seller
+// actually used"; ?window= is the hook for the deep-cache rollout (7d/30d).
+const SECONDS_PER_BASE_BLOCK = 2;
 const DEFAULTS = {
   bazaarUrl: process.env.BAZAAR_URL || "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources",
-  spanBlocks: parseInt(process.env.SPAN_BLOCKS || "9000", 10), // ~5h of Base blocks
+  spanBlocks: parseInt(process.env.SPAN_BLOCKS || "43200", 10), // ~24h of Base blocks
   // Free-tier Base RPCs cap eth_getLogs at 10,000 blocks per call; chunk a wide
   // window into ranges no larger than this so it still scans cleanly.
   chunkBlocks: parseInt(process.env.CHUNK_BLOCKS || "9000", 10),
@@ -241,10 +248,21 @@ async function rpcCall(rpcs, method, params, { passes = 2 } = {}) {
 
 // --- pipeline ---------------------------------------------------------------
 
+/** Render a block count as a human-friendly window label ("5h", "24h", "7d"). */
+export function windowLabelFromBlocks(blocks) {
+  const seconds = (Number(blocks) || 0) * SECONDS_PER_BASE_BLOCK;
+  if (seconds <= 0) return "—";
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  const hours = seconds / 3600;
+  if (hours < 48) return `${Math.round(hours)}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
 const emptySnapshot = (opts, reason) => ({
   spec: "x402-leaderboard/1",
   asOf: new Date().toISOString(),
   scannedBlocks: opts.spanBlocks,
+  windowLabel: windowLabelFromBlocks(opts.spanBlocks),
   maxCallUsd: opts.maxCallUsd,
   scannedSellers: 0,
   walletsQueried: 0,
@@ -319,6 +337,7 @@ export async function runLeaderboard(overrides = {}) {
     spec: "x402-leaderboard/1",
     asOf: new Date().toISOString(),
     scannedBlocks: opts.spanBlocks,
+    windowLabel: windowLabelFromBlocks(opts.spanBlocks),
     maxCallUsd: opts.maxCallUsd,
     scannedSellers: sellers.length,
     walletsQueried: wallets.length,
@@ -401,10 +420,16 @@ export function getLeaderboardSnapshot() {
       },
     };
   }
+  // Pre-warm placeholder: still surface the configured window so the HTML page
+  // and JSON consumers see "Last 24h" instead of an em-dash while the cache
+  // fills. Once a real snapshot lands these get overwritten from the scan.
   return {
     spec: "x402-leaderboard/1",
     asOf: new Date().toISOString(),
     warming: true,
+    scannedBlocks: DEFAULTS.spanBlocks,
+    windowLabel: windowLabelFromBlocks(DEFAULTS.spanBlocks),
+    maxCallUsd: DEFAULTS.maxCallUsd,
     leaderboard: [],
     cache: {
       cachedAt: null,
@@ -419,4 +444,144 @@ export function getLeaderboardSnapshot() {
 export function _resetLeaderboardCacheForTests() {
   cached = { snapshot: null, warming: false, lastError: null, lastTriedAt: null, refreshIntervalMs: null };
   stopLeaderboardRefresh();
+}
+
+// --- HTML dashboard ---------------------------------------------------------
+
+const esc = (s) =>
+  String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+const fmtUsd = (n) => {
+  const v = Number(n) || 0;
+  if (v >= 100) return `$${v.toFixed(2)}`;
+  if (v >= 1) return `$${v.toFixed(3)}`;
+  return `$${v.toFixed(4)}`;
+};
+
+const shortAddr = (a) => (typeof a === "string" && a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : (a || "—"));
+
+/**
+ * Public HTML dashboard for the x402 leaderboard. Self-contained: no client-side
+ * polling — a page refresh re-renders from the latest cached snapshot. The
+ * underlying snapshot is refreshed hourly by startLeaderboardRefresh().
+ */
+export function leaderboardPage(snapshot, { baseUrl }) {
+  const board = Array.isArray(snapshot?.leaderboard) ? snapshot.leaderboard : [];
+  const explorer = "https://basescan.org";
+  const totalUsd = board.reduce((s, r) => s + (Number(r.totalUsd) || 0), 0);
+  const totalCalls = board.reduce((s, r) => s + (Number(r.callsSettled) || 0), 0);
+  const top1 = board[0];
+
+  const rows = board
+    .map((r) => {
+      const nameCell = r.homepage
+        ? `<a href="${esc(r.homepage)}" target="_blank" rel="noopener nofollow">${esc(r.name)}</a>`
+        : esc(r.name);
+      const walletCell = r.wallet
+        ? `<a href="${esc(explorer)}/address/${esc(r.wallet)}#tokentxns" target="_blank" rel="noopener nofollow" title="${esc(r.wallet)}">${esc(shortAddr(r.wallet))}</a>`
+        : "—";
+      return `<tr>
+        <td class="num">${esc(r.rank)}</td>
+        <td>${nameCell}</td>
+        <td class="muted">${walletCell}</td>
+        <td>${esc(r.network || "base")}</td>
+        <td class="num">${esc(r.callsSettled ?? 0)}</td>
+        <td class="num">${esc(fmtUsd(r.totalUsd))}</td>
+        <td class="num">${esc(r.uniqueBuyers ?? 0)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const emptyState = snapshot?.warming
+    ? `<tr><td colspan="7" class="muted" style="text-align:center;padding:24px">Warming the cache — first snapshot is in flight. Refresh in a few seconds.</td></tr>`
+    : snapshot?.scanSkipped
+    ? `<tr><td colspan="7" class="muted" style="text-align:center;padding:24px">Snapshot skipped: ${esc(snapshot.reason || "no data")}</td></tr>`
+    : `<tr><td colspan="7" class="muted" style="text-align:center;padding:24px">No settled volume yet. Snapshot refreshes hourly.</td></tr>`;
+
+  const asOf = snapshot?.asOf ? snapshot.asOf.replace("T", " ").slice(0, 19) + "Z" : "—";
+  const windowLabel = snapshot?.windowLabel || windowLabelFromBlocks(snapshot?.scannedBlocks);
+  const windowHuman = windowLabel === "—" ? "the scan window" : `last ${windowLabel}`;
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>x402 Leaderboard — Agent402</title>
+<meta name="description" content="Public on-chain ranking of every x402 seller by Base USDC settled volume — callsSettled, totalUsd, uniqueBuyers per seller.">
+${CHROME_HEAD_LINKS}
+<style>
+  :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --line:#1e2638; --card:#0f1320; --warn:#f97316; }
+  body { background:var(--bg); color:var(--fg); font:14px/1.55 system-ui,-apple-system,sans-serif; margin:0; }
+  .wrap { max-width:980px; margin:0 auto; padding:36px 20px 28px; }
+  h1 { font-size:1.6rem; margin:0 0 6px; }
+  .sub { color:var(--muted); margin:0 0 22px; font-size:.95rem; max-width:680px; }
+  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); margin:0 0 22px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .stat .k { color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; }
+  .stat .v { font-family:ui-monospace,Menlo,monospace; font-size:1.65rem; color:var(--fg); margin-top:4px; word-break:break-word; }
+  .stat .s { color:var(--muted); font-size:.78rem; margin-top:3px; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; margin-bottom:18px; }
+  .ph { padding:14px 18px; border-bottom:1px solid var(--line); }
+  .ph h2 { margin:0; font-size:1rem; color:var(--accent); }
+  .ph .pn { color:var(--muted); font-size:.82rem; margin-top:2px; }
+  table { width:100%; border-collapse:collapse; font-size:.9rem; }
+  th { text-align:left; color:var(--muted); font-weight:500; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; padding:10px 18px; border-bottom:1px solid var(--line); }
+  th.num { text-align:right; }
+  td { padding:10px 18px; border-bottom:1px solid var(--line); }
+  td.num { font-family:ui-monospace,Menlo,monospace; text-align:right; }
+  td.muted { color:var(--muted); font-family:ui-monospace,Menlo,monospace; font-size:.85em; }
+  td a { color:var(--fg); text-decoration:none; border-bottom:1px solid transparent; }
+  td a:hover { border-color:var(--accent); }
+  code { background:#1a2236; padding:1px 5px; border-radius:4px; font-family:ui-monospace,Menlo,monospace; font-size:.85em; }
+  pre { background:#0a0d15; border:1px solid var(--line); border-radius:8px; padding:14px 16px; overflow:auto; font-size:.84rem; }
+  .foot { color:var(--muted); font-size:.82rem; margin-top:24px; }
+  .foot a { color:var(--accent); text-decoration:none; }
+  ${CHROME_CSS}
+</style>
+</head>
+<body>
+${renderHeader("/leaderboard")}
+<div class="wrap">
+
+<h1>x402 Leaderboard</h1>
+<p class="sub">Public on-chain ranking of every x402 seller listed on the Coinbase CDP Bazaar, ranked by settled USDC volume on Base. Window: <b>${esc(windowHuman)}</b>. Snapshot is cached and refreshed hourly.</p>
+
+<div class="grid">
+  <div class="stat"><div class="k">Top seller (${esc(windowLabel)})</div><div class="v" style="font-size:1.05rem">${esc(top1?.name || "—")}</div><div class="s">${esc(top1 ? fmtUsd(top1.totalUsd) + " · " + (top1.callsSettled || 0) + " calls" : "no data yet")}</div></div>
+  <div class="stat"><div class="k">Sellers ranked</div><div class="v">${esc(board.length)}</div><div class="s">of ${esc(snapshot?.scannedSellers ?? 0)} scanned (${esc(snapshot?.bazaarTotal ?? "?")} Bazaar listings)</div></div>
+  <div class="stat"><div class="k">Total volume (${esc(windowLabel)})</div><div class="v">${esc(fmtUsd(totalUsd))}</div><div class="s">across ${esc(totalCalls)} settled call${totalCalls === 1 ? "" : "s"}</div></div>
+  <div class="stat"><div class="k">Window</div><div class="v" style="font-size:1.05rem">Last ${esc(windowLabel)}</div><div class="s">${esc(snapshot?.scannedBlocks ?? "—")} blocks · per-call ceiling ${esc(fmtUsd(snapshot?.maxCallUsd ?? 0))}</div></div>
+  <div class="stat"><div class="k">Snapshot</div><div class="v" style="font-size:1rem">${esc(asOf)}</div><div class="s">refresh the page to update</div></div>
+</div>
+
+<div class="panel">
+  <div class="ph"><h2>Sellers by settled volume (${esc(windowHuman)})</h2><div class="pn">Wallet links open Basescan token-transfer view for independent verification. <b>$0 ≠ no revenue</b> — sellers with bursty traffic may have lifetime volume outside this window.</div></div>
+  <table>
+    <thead><tr><th class="num">#</th><th>Seller</th><th>Wallet</th><th>Network</th><th class="num">Calls (${esc(windowLabel)})</th><th class="num">USDC settled (${esc(windowLabel)})</th><th class="num">Buyers</th></tr></thead>
+    <tbody>${rows || emptyState}</tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <div class="ph"><h2>How the ranking is built</h2><div class="pn">Trustless on-chain signal — no self-reported counters.</div></div>
+  <div style="padding:14px 18px;">
+    <ol class="foot" style="margin:0 0 10px 18px; padding:0;">
+      <li>Walk the Coinbase CDP Bazaar discovery API and extract every Base-mainnet USDC <code>payTo</code> wallet.</li>
+      <li>Query <code>eth_getLogs</code> on Base USDC for Transfer events to those wallets over the <b>${esc(windowHuman)}</b> (${esc(snapshot?.scannedBlocks ?? "?")} blocks).</li>
+      <li>Filter to per-call settlements (≤ ${esc(fmtUsd(snapshot?.maxCallUsd ?? 0))}); larger inbound transfers are funding/swaps, not tool buys.</li>
+      <li>Aggregate by recipient wallet → callsSettled, totalUsd, uniqueBuyers. Rank by totalUsd, tiebreak on activity, then alphabetical.</li>
+    </ol>
+    <pre>curl -s ${esc(baseUrl)}/api/leaderboard?top=10
+curl -s ${esc(baseUrl)}/api/leaderboard?include=external   # exclude Agent402 itself
+curl -s ${esc(baseUrl)}/api/leaderboard?window=24h         # window hint (default; 7d/30d coming)</pre>
+    <p class="foot" style="margin:10px 0 0;">Free — same gate as <code>/api/find</code> and <code>/api/route</code>. JSON snapshot at <code>${esc(baseUrl)}/api/leaderboard</code>.</p>
+  </div>
+</div>
+
+<p class="foot">x402 Leaderboard is open-source — part of <a href="https://github.com/MikeyPetrillo/Agent402">Agent402</a>. Sellers don't have to register: any wallet that appears in the Bazaar with Base-mainnet USDC payment options is scanned automatically.</p>
+
+</div>
+${renderFooter()}
+</body></html>`;
 }

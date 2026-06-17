@@ -40,6 +40,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/index`, priority: "0.8" },
     { loc: `${baseUrl}/api/index`, priority: "0.6" },
     { loc: `${baseUrl}/api/route`, priority: "0.7" },
+    { loc: `${baseUrl}/leaderboard`, priority: "0.8" },
     { loc: `${baseUrl}/api/leaderboard`, priority: "0.7" },
   ];
   const guideUrls = [
@@ -169,9 +170,13 @@ const res = await fetch("${baseUrl}/api/hash", {
 ## Connect via MCP (Claude, ChatGPT, any MCP client)
 
 **Hosted connector, zero install:** add \`${baseUrl}/mcp\` as a remote MCP server
-(streamable HTTP, no auth) — e.g. claude.ai → Settings → Connectors → Add custom
-connector. The pure-CPU tools run free there (rate-limited) via \`search_tools\` +
-\`call_tool\`; wallet-only tools return instructions for paid access.
+(streamable HTTP, no auth). Works in claude.ai (Settings → Connectors → Add
+custom connector), Claude Code (\`claude mcp add --transport http agent402
+${baseUrl}/mcp\`), Cursor (Settings → MCP → Add new MCP server, transport
+streamable-http), ChatGPT Pro+ (Settings → Connectors), and VS Code with GitHub
+Copilot MCP. The pure-CPU tools run free there (rate-limited) via
+\`search_tools\` + \`call_tool\`; wallet-only tools return instructions for paid
+access.
 
 For the full catalog with payment underneath, the \`agent402-mcp\` package exposes
 everything as MCP tools and settles per call (USDC via x402 with a wallet key,

@@ -19,7 +19,7 @@ import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
 import { serviceManifest, reliabilityReport } from "./discovery.js";
 import { findTools } from "./find.js";
 import { indexPage, indexSnapshot, routeQuery, startCrawler } from "./x402-index.js";
-import { getLeaderboardSnapshot, startLeaderboardRefresh } from "./leaderboard.js";
+import { getLeaderboardSnapshot, startLeaderboardRefresh, leaderboardPage } from "./leaderboard.js";
 import { buildPaymentMiddleware, enabledNetworks } from "./payments.js";
 import { KIT } from "./tools/kit.js";
 import { KIT2 } from "./tools/kit2.js";
@@ -599,20 +599,33 @@ app.post("/api/route", (req, res) => routeHandler(req.body?.q ?? req.body?.task 
 //   top      max rows to return (default 25, max 500)
 //   include  "all" (default) | "external" (exclude Agent402 — neutral view)
 //   self     override the wallet treated as "self" for include=external
+//   window   requested window hint: "24h" (default, currently the only one
+//            served), "7d" / "30d" / "all" are documented but currently fall
+//            back to the active snapshot — wider windows require a separate
+//            deep-cache pipeline (roadmap). The response always reports the
+//            window actually served in `windowLabel` + `windowRequested`.
+const SUPPORTED_WINDOWS = new Set(["24h", "7d", "30d", "all"]);
 app.get("/api/leaderboard", (req, res) => {
   const snap = getLeaderboardSnapshot();
   const top = Math.min(Math.max(parseInt(req.query.top, 10) || 25, 1), 500);
   const include = req.query.include === "external" ? "external" : "all";
   const self = (req.query.self || WALLET_ADDRESS || "").toLowerCase();
+  const requested = String(req.query.window || "").toLowerCase();
+  const windowRequested = SUPPORTED_WINDOWS.has(requested) ? requested : "24h";
   let board = snap.leaderboard || [];
   if (include === "external" && self) board = board.filter((r) => r.wallet !== self);
   res.json({
     ...snap,
     include,
+    windowRequested,
+    windowServed: snap.windowLabel || "24h",
     leaderboard: board.slice(0, top),
     totalSellers: (snap.leaderboard || []).length,
   });
 });
+// Human-readable companion to /api/leaderboard. Same cached snapshot, rendered
+// as a dashboard so visitors (and the site nav) have something to land on.
+app.get("/leaderboard", (_req, res) => res.type("text/html").send(leaderboardPage(getLeaderboardSnapshot(), { baseUrl: BASE_URL })));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));

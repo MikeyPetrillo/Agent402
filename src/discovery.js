@@ -110,7 +110,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     },
     mcp: {
       remoteConnector: `${baseUrl}/mcp`,
-      remoteNote: "Streamable HTTP, no auth — paste into Claude/ChatGPT custom connectors. Pure-CPU tools run free (rate-limited).",
+      remoteNote: "Streamable HTTP, no auth — paste into Claude, Claude Code, Cursor, ChatGPT (Pro+), or VS Code (GitHub Copilot MCP) custom connectors. Pure-CPU tools run free (rate-limited).",
       package: "agent402-mcp",
       registry: "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402",
     },
@@ -139,6 +139,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       // volume. Same router, different sort key — closes the loop on
       // discovery: find a tool, route to a seller, see who's most used.
       leaderboard: `${baseUrl}/api/leaderboard`,
+      leaderboardHtml: `${baseUrl}/leaderboard`,
       includeOptions: ["all", "external", "local"],
       example: {
         method: "POST",
