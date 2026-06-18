@@ -16,6 +16,9 @@ import { tollboothCloudPage } from "./tollbooth-cloud.js";
 import { tollboothWaitlistPage } from "./tollbooth-waitlist.js";
 import { operatorLeadsPage } from "./operator-leads.js";
 import { initLeadsDb, insertLead, listLeads, countLeads, leadsDbEnabled } from "./leads-db.js";
+import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
+import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled } from "./analytics-db.js";
+import { analyticsPage } from "./analytics-page.js";
 import { operatorPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
 import { termsPage } from "./terms.js";
@@ -677,7 +680,40 @@ const MANIFEST = serviceManifest({
   toolCount: Object.keys(CATALOG).length, powSlugs: POW_SLUGS,
   powDifficulty: POW_DIFFICULTY, prices: TOOL_PRICES,
 });
-app.get("/.well-known/x402", (_req, res) => res.json(MANIFEST));
+// Shared helper: builds a small 24h performance signal from the analytics
+// table (cache hit rate, error rate, p50/p95 latency, dashboard URL). Used by
+// /api/stats and /.well-known/x402 so a discovery agent fetching either one
+// sees the same liveness signal a human sees on /analytics. Returns null when
+// analytics is disabled or the query fails — callers omit the field entirely.
+async function buildPerformance24h() {
+  if (!analyticsEnabled()) return null;
+  try {
+    const a = await getAnalytics({ windowHours: 24, top: 1 });
+    if (!a || !a.ok || !a.totals || !a.totals.calls) return null;
+    const t = a.totals;
+    return {
+      windowHours: 24,
+      calls: t.calls,
+      cacheHitRate: +((t.cached / t.calls) || 0).toFixed(4),
+      errorRate: +((t.errored / t.calls) || 0).toFixed(4),
+      p50LatencyMs: t.p50_latency_ms,
+      p95LatencyMs: t.p95_latency_ms,
+      dashboardUrl: `${BASE_URL}/analytics`,
+    };
+  } catch (_e) {
+    return null;
+  }
+}
+// /.well-known/x402 — discovery agents fetch this once to learn the seller.
+// Most of the manifest is boot-time constants (catalog, networks, wallet) so
+// MANIFEST is built once; we only enrich with the live performance24h block
+// on each request when analytics is enabled. Failing-open: if the analytics
+// query stalls, we serve the static manifest instead of blocking the call.
+app.get("/.well-known/x402", async (_req, res) => {
+  const perf = await buildPerformance24h();
+  if (perf) res.json({ ...MANIFEST, performance24h: perf });
+  else res.json(MANIFEST);
+});
 // Structured reliability / trust report — the "safe to depend on" surface, each
 // claim paired with a URL to verify it independently.
 app.get("/api/reliability", (_req, res) =>
@@ -690,9 +726,63 @@ app.get("/api/reliability", (_req, res) =>
 // best-matching tools with route, price, input schema, and a ready example — so
 // it can call directly instead of burning tokens "exploring" to find a tool.
 // Deterministic lexical ranking; not in CATALOG, so it stays free + unpaywalled.
-const findHandler = (q, k, res) => res.json(findTools(CATALOG, q, { k, baseUrl: BASE_URL, powSlugs: POW_SLUGS }));
-app.get("/api/find", (req, res) => findHandler(req.query.q ?? req.query.task ?? req.query.query, req.query.k, res));
-app.post("/api/find", (req, res) => findHandler(req.body?.q ?? req.body?.task ?? req.body?.query, req.body?.k, res));
+//
+// /api/find and /api/route share a cache wrapper (CACHEABLE_ROUTES policy in
+// cache.js, 60s TTL) and write through to analytics under the synthetic slug
+// "_find" / "_route" so the dashboard counts discovery calls alongside tools.
+// These endpoints are the most-hit routes in the whole server — every agent
+// touches them on the first call of a session — so even a 60s window
+// meaningfully cuts CPU on repeat queries.
+const computeFind = (q, k) => findTools(CATALOG, q, { k, baseUrl: BASE_URL, powSlugs: POW_SLUGS });
+const findCachePath = "/api/find";
+const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
+async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlug, res) {
+  const startedAt = Date.now();
+  let cached = false;
+  let errored = false;
+  try {
+    let cacheKey = null;
+    if (policy && cacheEnabled()) {
+      cacheKey = cacheKeyFor(path, input, policy.keyFields || []);
+      const hit = await cacheGet(cacheKey);
+      if (hit !== null) {
+        cached = true;
+        noteCacheOutcome("hit");
+        res.setHeader("X-Cache", "hit");
+        return res.json(hit);
+      }
+    }
+    const result = computeFn();
+    if (policy) {
+      noteCacheOutcome(cacheKey ? "miss" : "skip");
+      res.setHeader("X-Cache", cacheKey ? "miss" : "skip");
+    }
+    if (cacheKey && result && typeof result === "object" && !result.error) {
+      cacheSet(cacheKey, result, policy.ttl || 60).catch(() => {});
+    }
+    res.json(result);
+  } catch (err) {
+    errored = true;
+    res.status(err.statusCode || 500).json({ error: err.message });
+  } finally {
+    recordToolCall({
+      slug: analyticsSlug,
+      latencyMs: Date.now() - startedAt,
+      cached,
+      errored,
+    }).catch(() => {});
+  }
+}
+app.get("/api/find", (req, res) => {
+  const q = req.query.q ?? req.query.task ?? req.query.query;
+  const k = req.query.k;
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, () => computeFind(q, k), "_find", res);
+});
+app.post("/api/find", (req, res) => {
+  const q = req.body?.q ?? req.body?.task ?? req.body?.query;
+  const k = req.body?.k;
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, () => computeFind(q, k), "_find", res);
+});
 
 // x402 Index — public dashboard + Smart Order Router. Free, like /api/find: a
 // discovery layer that exists to make the agent payments economy legible. The
@@ -708,9 +798,21 @@ const indexCtx = () => ({
 });
 app.get("/index", (_req, res) => res.type("text/html").send(indexPage(indexSnapshot(indexCtx()), { baseUrl: BASE_URL })));
 app.get("/api/index", (_req, res) => res.json(indexSnapshot(indexCtx())));
-const routeHandler = (q, k, include, res) => res.json(routeQuery({ query: q, top: k, include, ...indexCtx() }));
-app.get("/api/route", (req, res) => routeHandler(req.query.q ?? req.query.task ?? req.query.query, req.query.top ?? req.query.k, req.query.include, res));
-app.post("/api/route", (req, res) => routeHandler(req.body?.q ?? req.body?.task ?? req.body?.query, req.body?.top ?? req.body?.k, req.body?.include, res));
+const computeRoute = (q, k, include) => routeQuery({ query: q, top: k, include, ...indexCtx() });
+const routeCachePath = "/api/route";
+const routeCachePolicy = CACHEABLE_ROUTES[routeCachePath];
+app.get("/api/route", (req, res) => {
+  const q = req.query.q ?? req.query.task ?? req.query.query;
+  const top = req.query.top ?? req.query.k;
+  const include = req.query.include;
+  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", res);
+});
+app.post("/api/route", (req, res) => {
+  const q = req.body?.q ?? req.body?.task ?? req.body?.query;
+  const top = req.body?.top ?? req.body?.k;
+  const include = req.body?.include;
+  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", res);
+});
 // x402 Leaderboard — public on-chain ranking of every seller in the Coinbase
 // CDP Bazaar by settled USDC volume on Base. Free, like /api/find + /api/route:
 // discovery primitives shouldn't cost money. Snapshot is cached in memory and
@@ -893,7 +995,8 @@ app.get("/tools/:slug", (req, res) => {
   const tool = tools.find((t) => t.slug === req.params.slug);
   if (!tool) return res.status(404).type("html").send('<p>Tool not found. <a href="/tools">All tools</a></p>');
   const related = tools.filter((t) => t.category === tool.category && t.slug !== tool.slug).slice(0, 3);
-  res.type("html").send(toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY }));
+  const cachePolicy = tool.method === "GET" ? CACHEABLE_ROUTES[tool.path] : null;
+  res.type("html").send(toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null }));
 });
 // Free proof-of-work endpoints: agents without a wallet pay with CPU instead.
 app.get("/api/pow", (_req, res) => res.json(powInfo(BASE_URL, [...POW_SLUGS].sort())));
@@ -930,9 +1033,37 @@ app.get("/api/pow/challenge", (req, res) => {
 
 // Live machine-to-machine economy stats (free). Money is provable on-chain at
 // the wallet; this also tallies calls served and how they were paid for.
-app.get("/api/stats", (_req, res) =>
-  res.json(getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }))
-);
+//
+// When analytics is wired (DB attached), we ALSO enrich with a 24h performance
+// snapshot — cache hit rate + latency percentiles — straight from the
+// tool_calls table. Lets agents shopping the catalog see real performance
+// without navigating to /analytics. Falls back to omitting the field if the
+// query fails / DB is unset, so /api/stats never breaks on a slow Postgres.
+app.get("/api/stats", async (_req, res) => {
+  const base = getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES });
+  const perf = await buildPerformance24h();
+  if (perf) base.performance24h = perf;
+  res.json(base);
+});
+
+// Tool-call analytics (free, public). Aggregates from the tool_calls table:
+// total calls / cache-hit rate / error rate / latency percentiles over a
+// configurable window, plus top tools by volume. Returns { enabled: false }
+// when no analytics DB is wired — the server still works.
+app.get("/api/analytics", async (req, res) => {
+  const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
+  const top = Math.max(1, Math.min(200, parseInt(req.query.top, 10) || 25));
+  res.json(await getAnalytics({ windowHours, top }));
+});
+
+// Human-readable analytics dashboard. Same data as /api/analytics, rendered as
+// HTML with stat cards, a sparkline, and the top-tools table. When no DB is
+// wired, the page shows a clean "not enabled" panel — server still boots.
+app.get("/analytics", async (req, res) => {
+  const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
+  const data = await getAnalytics({ windowHours, top: 25 });
+  res.type("html").send(analyticsPage(data, { baseUrl: BASE_URL }));
+});
 
 // Remote MCP connector (streamable HTTP, authless free tier): paste
 // https://agent402.tools/mcp into Claude/ChatGPT custom connectors. Mounted
@@ -941,7 +1072,20 @@ app.get("/api/stats", (_req, res) =>
 mountMcp(app, CATALOG, {
   baseUrl: BASE_URL,
   isComputePayable,
-  onServed: (slug) => recordServedCall(slug, "pow"),
+  // MCP-served calls land on the same accounting + analytics rails as
+  // direct-HTTP ones. PoW is the gate (no x402 settlement on /mcp's free
+  // tier), so the served-call counter records under "pow". Analytics gets
+  // the full meta (latency, errored). Cache hits don't flow through MCP
+  // today — that path bypasses the central HTTP dispatcher.
+  onServed: (slug, meta = {}) => {
+    recordServedCall(slug, "pow");
+    recordToolCall({
+      slug,
+      latencyMs: meta.latencyMs | 0,
+      cached: false,
+      errored: !!meta.errored,
+    }).catch(() => {});
+  },
 });
 
 app.get("/api/pricing", (_req, res) =>
@@ -966,6 +1110,43 @@ app.get("/api/pricing", (_req, res) =>
     }),
   })
 );
+
+// Public machine-readable cache catalogue: every server-side cached route
+// with its TTL and the request fields that contribute to the cache key.
+// Why this is public:
+//   - Buyer SDKs (agent402-client and any third-party MCP client) can avoid
+//     burning their own local cache on routes the server is already caching.
+//   - Operators evaluating Agent402 can audit cache aggressiveness before
+//     wiring it into agent workflows.
+// Response also reports whether REDIS_URL is wired in this deployment, so a
+// caller can tell "policy exists" (always) from "policy is actually live"
+// (only when Redis is connected). All TTLs are seconds; X-Cache: hit|miss|skip
+// on responses to cached routes is the live signal.
+app.get("/api/cacheable", (_req, res) => {
+  const routes = Object.entries(CACHEABLE_ROUTES)
+    .map(([path, policy]) => ({
+      method: "GET",
+      path,
+      ttlSeconds: policy.ttl,
+      keyFields: policy.keyFields,
+    }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  res.json({
+    enabled: cacheEnabled(),
+    backend: cacheEnabled() ? "redis" : "none",
+    cacheHeader: "X-Cache",
+    cacheHeaderValues: ["hit", "miss", "skip"],
+    routes,
+    note: "Server-side response cache. Buyer SDKs can skip their own cache for these paths — repeated identical calls within the TTL return the same JSON without re-hitting the upstream. Errors are never cached.",
+  });
+});
+
+// Live in-process cache outcome counters since the server started. Independent
+// of the analytics Postgres — works even on instances that never opt into
+// analytics. Gives operators a simple "is the cache earning its keep" signal:
+// look at hitRate. Reset on restart (which is honest: Redis content doesn't
+// survive a fresh boot of a brand-new container with empty keyspace either).
+app.get("/api/cache-stats", (_req, res) => res.json(cacheCounters()));
 
 // Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
 // `Idempotency-Key`, a successful gated call is cached keyed by that key + the
@@ -1256,15 +1437,63 @@ app.post("/api/memory/forget", memHandler((req, actor, owner) => forget(owner, r
 
 // Kit routes: input is merged query + JSON body; handlers return JSON or
 // { __binary, contentType } for image responses.
+//
+// Two cross-cutting features wrap every handler:
+//   1. Redis response cache for routes listed in CACHEABLE_ROUTES (GET-only,
+//      200-only, non-binary, non-error). No-op when REDIS_URL is unset.
+//      Sets X-Cache: hit|miss|skip for transparency.
+//   2. Analytics write-through: records slug, latency, cache flag, error flag
+//      to Postgres after responding. Fire-and-forget, never blocks the call.
+//      No-op when ANALYTICS_DATABASE_URL (or DATABASE_URL) is unset.
 for (const tool of ALL_KIT) {
   const [method, path] = tool.route.split(" ");
-  app[method.toLowerCase()](path, async (req, res) => {
+  const lowerMethod = method.toLowerCase();
+  const cachePolicy = lowerMethod === "get" ? CACHEABLE_ROUTES[path] : null;
+
+  app[lowerMethod](path, async (req, res) => {
+    const startedAt = Date.now();
+    let cached = false;
+    let errored = false;
     try {
-      const result = await tool.handler({ ...req.query, ...(req.body ?? {}) }, req);
+      const input = { ...req.query, ...(req.body ?? {}) };
+
+      let cacheKey = null;
+      if (cachePolicy && cacheEnabled()) {
+        cacheKey = cacheKeyFor(path, input, cachePolicy.keyFields || []);
+        const hit = await cacheGet(cacheKey);
+        if (hit !== null) {
+          cached = true;
+          noteCacheOutcome("hit");
+          res.setHeader("X-Cache", "hit");
+          return res.json(hit);
+        }
+      }
+
+      const result = await tool.handler(input, req);
+
+      if (cachePolicy) {
+        noteCacheOutcome(cacheKey ? "miss" : "skip");
+        res.setHeader("X-Cache", cacheKey ? "miss" : "skip");
+      }
       if (result && result.__binary) return res.type(result.contentType).send(result.__binary);
+
+      // Cache successful, non-error JSON responses. Errors are never cached —
+      // an upstream blip shouldn't poison the key for the whole TTL.
+      if (cacheKey && result && typeof result === "object" && !result.error) {
+        cacheSet(cacheKey, result, cachePolicy.ttl || 300).catch(() => {});
+      }
       res.json(result);
     } catch (err) {
+      errored = true;
       res.status(err.statusCode || 500).json({ error: err.message });
+    } finally {
+      // Fire-and-forget. Analytics outages must NEVER affect agents.
+      recordToolCall({
+        slug: tool.slug,
+        latencyMs: Date.now() - startedAt,
+        cached,
+        errored,
+      }).catch(() => {});
     }
   });
 }
@@ -1302,6 +1531,15 @@ initLeadsDb().then((r) => {
   leadsDbReady = !!r.ok;
   if (r.ok) console.log("[leads-db] tollbooth_leads schema ready");
   else console.log(`[leads-db] disabled (${r.reason || "unknown"})`);
+});
+
+// Tool-call analytics — lazy Postgres init. Same pattern as leads-db: if no
+// ANALYTICS_DATABASE_URL (and no DATABASE_URL to fall back to) it's a no-op.
+// Powers the public /analytics dashboard. Boot fire-and-forget so a slow DB
+// can't hold up /health.
+initAnalyticsDb().then((r) => {
+  if (r.ok) console.log("[analytics-db] tool_calls schema ready");
+  else console.log(`[analytics-db] disabled (${r.reason || "unknown"})`);
 });
 
 // x402 Index crawler: warms the cross-seller cache used by /index + /api/route.

@@ -78,8 +78,8 @@ export async function agent402Tools({ baseUrl = DEFAULT_BASE, slugs, freeOnly = 
 
   // Strands `tool({...})` accepts a Zod schema directly. Convert from the
   // simple JSON Schema shapes Agent402 emits — keeps users off needing their
-  // own conversion step. Unlike LangChain, Strands callbacks can return any
-  // JSON-serializable value, so we skip the JSON.stringify wrapper.
+  // own conversion step. Strands callbacks can return any JSON-serializable
+  // value directly, so no string-wrapping step is needed here.
   const tools = meta.map((m) => strands.tool({
     name: m.name,
     description: m.description,

@@ -1,7 +1,6 @@
 # Agent402 — the open x402 index (Find · Route · Leaderboard) + 1,100 tools for AI agents
 
-> **What makes it different:** most x402 services are *closed gateways* exposing a
-> handful of tools. Agent402 is the **open-source, self-hostable** one — and a
+> **What makes it different:** Agent402 is **open-source and self-hostable** — and a
 > single integration gives a buyer **three free primitives over the whole x402
 > ecosystem**:
 >
@@ -73,6 +72,12 @@ FREE_MODE=true npm start          # → http://localhost:3000  (HTTP API + /mcp)
 curl -s -X POST localhost:3000/api/hash -H 'content-type: application/json' \
   -d '{"text":"hello world","algo":"sha256"}'
 ```
+
+**4. One-click deploy to Railway** (full self-hosted instance — adds optional Postgres + Redis plugins for analytics + response caching):
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https%3A%2F%2Fgithub.com%2FMikeyPetrillo%2FAgent402)
+
+Boots straight from the repo's `railway.toml` + `Dockerfile`. Optional plugins are auto-detected via env: add **Redis** → `REDIS_URL` enables the upstream response cache (`X-Cache: hit|miss`), add **Postgres** → `DATABASE_URL` enables the public `/api/analytics` dashboard and the tollbooth waitlist. No env vars required to boot in free mode.
 
 ## What's in the catalog (~1,100 tools)
 

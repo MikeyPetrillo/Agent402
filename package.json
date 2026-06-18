@@ -2,7 +2,7 @@
   "name": "agent402",
   "version": "1.0.0",
   "private": true,
-  "description": "The open-source, self-hostable x402 + MCP server: 1,100+ tools for AI agents in one place (unlike closed gateways), plus a pay-per-crawl tollbooth. Run free, or charge per call over x402 (USDC on Base).",
+  "description": "The open-source, self-hostable x402 + MCP server: 1,100+ tools for AI agents in one place, plus a pay-per-crawl tollbooth. Run free, or charge per call over x402 (USDC on Base).",
   "main": "src/server.js",
   "engines": {
     "node": ">=20"
@@ -58,6 +58,7 @@
     "playwright": "^1.60.0",
     "pngjs": "^7.0.0",
     "qrcode": "^1.5.4",
+    "redis": "^4.7.0",
     "tesseract.js": "^5.1.1",
     "turndown": "^7.2.4"
   }

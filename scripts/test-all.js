@@ -30,7 +30,33 @@ const paths = Object.entries(spec.paths);
 
 let strictPass = 0, strictFail = 0, lenient = 0, serverErr = 0;
 const failures = [];
+const shapeMismatches = [];
 const cats = {};
+
+// Shape check: compare a 200 JSON response against the documented
+// `responses.200.content.application/json.example` keys. Catches tools whose
+// output drifted from what their description claims.
+//
+// Skiplist: tools whose example documents the happy path but the test invokes
+// them with placeholder inputs that legitimately produce a smaller "not found"
+// response shape. These are NOT bugs — the happy-path example is the
+// user-facing documentation; the test just can't supply real inputs.
+const SHAPE_HAPPY_PATH_ONLY = new Set([
+  "/api/x402-quote",   // example shows 402-detected case; placeholder URL may not 402
+  "/api/tx-status",    // example shows success; 0x0…0 hash returns {status:"not_found"}
+  "/api/x402-verify",  // example shows verified settlement; 0x0…0 hash returns {status:"not_found"}
+]);
+function checkShape(path, method, op, body) {
+  if (SHAPE_HAPPY_PATH_ONLY.has(path)) return;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return;
+  const example = op.responses?.["200"]?.content?.["application/json"]?.example;
+  if (!example || typeof example !== "object" || Array.isArray(example)) return;
+  const expected = Object.keys(example);
+  if (!expected.length) return;
+  const actual = Object.keys(body);
+  const missing = expected.filter((k) => !actual.includes(k));
+  if (missing.length) shapeMismatches.push(`${method} ${path} → missing documented keys: ${missing.join(",")}`);
+}
 
 function buildGetUrl(path, op) {
   const qs = new URLSearchParams();
@@ -69,6 +95,7 @@ for (const [path, methods] of paths) {
     }
 
     const okStrict = status === 200 && !(body && body.error);
+    if (okStrict) checkShape(path, method, op, body);
     if (NETWORK.has(path)) {
       lenient++;
       // Tolerate upstream/egress failures (502/504) and browser-not-available
@@ -92,6 +119,11 @@ console.log(`  lenient (network/memory): ${lenient} exercised, ${serverErr} serv
 if (failures.length) {
   console.error(`\nFAILURES (${failures.length}):\n  ` + failures.slice(0, 40).join("\n  ") + (failures.length > 40 ? `\n  …and ${failures.length - 40} more` : ""));
 }
-// Fail the run only on a pure-CPU strict failure or a real server crash (5xx
-// that isn't an upstream 502/504). Network flakiness alone does not fail.
-process.exit(strictFail === 0 && serverErr === 0 ? 0 : 1);
+console.log(`\n  shape (documented output keys present): ${shapeMismatches.length === 0 ? "all clean" : shapeMismatches.length + " mismatches"}`);
+if (shapeMismatches.length) {
+  console.error(`\nSHAPE MISMATCHES (${shapeMismatches.length}):\n  ` + shapeMismatches.slice(0, 60).join("\n  ") + (shapeMismatches.length > 60 ? `\n  …and ${shapeMismatches.length - 60} more` : ""));
+}
+// Fail the run on: pure-CPU strict failure, a real server crash (5xx that
+// isn't an upstream 502/504), or any shape mismatch (the documented output
+// example no longer matches the live response).
+process.exit(strictFail === 0 && serverErr === 0 && shapeMismatches.length === 0 ? 0 : 1);
