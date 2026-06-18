@@ -279,6 +279,9 @@ jobs:
       - name: Marketplace contract (registration updates existing endpoints)
         run: node scripts/test-marketplace-contract.js
 
+      - name: Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)
+        run: node scripts/test-fetch-guard.js
+
       - name: Discovery & trust surfaces (/.well-known/x402, /api/reliability)
         run: node scripts/test-discovery.js
 

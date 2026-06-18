@@ -202,16 +202,40 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES }
     });
   } catch (err) {
     if (isSsrfBlock(err)) throw badRequest("URL resolves to a private address");
+    const timedOut = err.name === "AbortError";
     throw Object.assign(
-      new Error(err.name === "AbortError" ? "Upstream fetch timed out" : `Fetch failed: ${err.message}`),
+      new Error(
+        timedOut
+          ? `Source URL did not respond within ${Math.round(FETCH_TIMEOUT_MS / 1000)}s — host may be slow or unreachable`
+          : `Could not connect to source URL: ${err.message}`
+      ),
       { statusCode: 504 }
     );
   } finally {
     clearTimeout(timer);
   }
 
+  // Attribute upstream HTTP errors honestly. A 4xx from the upstream means the
+  // caller picked a URL that doesn't serve (wrong path, 403/410, link rotted) —
+  // that's caller-attributable, so surface it as 422 (Unprocessable Entity) and
+  // the dashboard counts it under client_errored. A 5xx from the upstream is a
+  // real upstream outage — surface as 502 and count it under server_errored. In
+  // both cases the message names the upstream status so the agent knows what to
+  // do next (fix the URL vs. retry later).
   if (!response.ok) {
-    throw Object.assign(new Error(`Upstream returned HTTP ${response.status}`), { statusCode: 502 });
+    const upstreamStatus = response.status;
+    if (upstreamStatus >= 400 && upstreamStatus < 500) {
+      throw Object.assign(
+        new Error(
+          `Source URL returned HTTP ${upstreamStatus} — check the URL is correct and publicly reachable`
+        ),
+        { statusCode: 422 }
+      );
+    }
+    throw Object.assign(
+      new Error(`Source URL's host returned HTTP ${upstreamStatus} — upstream issue, try again later`),
+      { statusCode: 502 }
+    );
   }
 
   const reader = response.body.getReader();
@@ -230,6 +254,11 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES }
     chunks.push(value);
   }
   const buffer = Buffer.concat(chunks);
-  if (binary) return { finalUrl: response.url, buffer };
-  return { finalUrl: response.url, html: buffer.toString("utf-8") };
+  // `contentType` is surfaced so kit-specific handlers (e.g. media-kit) can
+  // fail fast when the response shape obviously doesn't match what they need
+  // (text/html when an audio file is expected), instead of burning a worker
+  // slot on a doomed ffprobe/parse and returning a less specific error.
+  const contentType = response.headers.get("content-type") || "";
+  if (binary) return { finalUrl: response.url, buffer, contentType };
+  return { finalUrl: response.url, html: buffer.toString("utf-8"), contentType };
 }
