@@ -16,6 +16,10 @@
 //                  locate by operationId or method+path, substitute path
 //                  params + required query/header params from examples in
 //                  the spec, attach a JSON body if the operation has one.
+//   openapi-mock-response  synthesize a JSON response body for one operation
+//                  and status code — operation-level example wins, then
+//                  schema example, then a type-inferred recursive walk.
+//                  Returns a `source` tag so callers know fidelity.
 //
 // Scope notes for v1:
 //   - Works against OpenAPI 3.x and Swagger 2.x (both share `paths`).
@@ -625,6 +629,107 @@ export const API_TOOLS = [
       return { method, url, headers, body, curl };
     },
   },
+  {
+    route: "POST /api/openapi-mock-response", name: "OpenAPI mock response generator", slug: "openapi-mock-response", category: "conversion", price: "$0.002",
+    description:
+      "Synthesize a JSON response body for one operation + status code in an OpenAPI 3.x or Swagger 2.x spec. Locate the operation by operationId or method+path. Pick the response by explicit `status`, else the first 2xx, else the first documented response. Generation precedence: operation-level `example`/`examples` > schema `example` > recursive type-inferred walk (objects walk properties, arrays return [mock(items)], enums return the first value, $ref is surfaced literally). Returns a `source` tag so callers know the mock's fidelity. Pure CPU — deterministic, no network, no $ref dereferencing.",
+    tags: ["openapi", "swagger", "mock", "response", "api", "agent-readiness"],
+    discovery: {
+      bodyType: "json",
+      input: {
+        spec: {
+          openapi: "3.0.0",
+          paths: {
+            "/users/{id}": {
+              get: {
+                operationId: "getUser",
+                responses: {
+                  "200": {
+                    description: "ok",
+                    content: {
+                      "application/json": {
+                        schema: {
+                          type: "object",
+                          properties: {
+                            id: { type: "string", example: "u_42" },
+                            name: { type: "string", example: "Alice" },
+                            active: { type: "boolean", example: true },
+                            roles: { type: "array", items: { type: "string", example: "admin" } },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        operationId: "getUser",
+      },
+      inputSchema: {
+        properties: {
+          spec: { description: "OpenAPI/Swagger document (object or JSON string)" },
+          operationId: { description: "operationId to mock (preferred)" },
+          method: { description: "HTTP method (use with `path` if no operationId)" },
+          path: { description: "Path template (use with `method` if no operationId)" },
+          status: { description: "Response status to mock (defaults to first 2xx)" },
+        },
+        required: ["spec"],
+      },
+      output: {
+        example: {
+          status: "200",
+          contentType: "application/json",
+          mock: {
+            id: "u_42",
+            name: "Alice",
+            active: true,
+            roles: ["admin"],
+          },
+          source: "generated",
+        },
+      },
+    },
+    handler: (i) => {
+      if (!("spec" in i)) throw bad('Missing "spec"');
+      const spec = parseMaybeJson(i.spec, "spec");
+      if (!spec || typeof spec !== "object") throw bad('"spec" must be an OpenAPI document');
+
+      const { op } = locateOperation(spec, i);
+      const { status, response } = pickResponse(op, i.status);
+
+      // Only application/json is in scope for v1 — most APIs an LLM agent
+      // calls are JSON, and other types (form-data, XML, octet-stream)
+      // don't have a canonical mockable shape.
+      const jc = response && response.content && response.content["application/json"];
+      if (!jc) {
+        return { status, contentType: "application/json", mock: null, source: "none" };
+      }
+
+      // Operation-level example wins (a hand-written example always beats a
+      // type-inferred one). `examples` (multi-example map) is OpenAPI 3 —
+      // pick the first deterministically.
+      if (jc.example !== undefined) {
+        return { status, contentType: "application/json", mock: jc.example, source: "operation-example" };
+      }
+      if (jc.examples && typeof jc.examples === "object") {
+        const firstKey = Object.keys(jc.examples).sort()[0];
+        if (firstKey && jc.examples[firstKey] && jc.examples[firstKey].value !== undefined) {
+          return { status, contentType: "application/json", mock: jc.examples[firstKey].value, source: "operation-example" };
+        }
+      }
+      // Schema-level example next.
+      if (jc.schema && jc.schema.example !== undefined) {
+        return { status, contentType: "application/json", mock: jc.schema.example, source: "schema-example" };
+      }
+      // Last resort: walk the schema. May produce empty {} for an opaque
+      // object — that's a signal to the caller that the spec didn't
+      // document its response shape well enough to mock.
+      const mock = mockFromSchema(jc.schema);
+      return { status, contentType: "application/json", mock, source: "generated" };
+    },
+  },
 ];
 
 // ---- openapi-to-curl helpers (kept below API_TOOLS for readability since
@@ -687,4 +792,61 @@ function paramExample(p) {
 // Works across bash/zsh/sh without interpolation surprises.
 function shellQuote(s) {
   return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
+// ---- openapi-mock-response helpers ----
+
+// Pick the response object to mock. Explicit `status` wins; otherwise prefer
+// the first 2xx (lex-sorted, deterministic), then any first documented
+// response. Returns { status, response } or throws.
+function pickResponse(op, requestedStatus) {
+  const responses = (op && op.responses) || {};
+  const keys = Object.keys(responses);
+  if (requestedStatus) {
+    const s = String(requestedStatus);
+    if (!responses[s]) throw bad(`response status "${s}" not documented on this operation`);
+    return { status: s, response: responses[s] };
+  }
+  const twoXX = keys.filter((k) => /^2\d\d$/.test(k)).sort();
+  if (twoXX.length) return { status: twoXX[0], response: responses[twoXX[0]] };
+  if (keys.length) return { status: keys[0], response: responses[keys[0]] };
+  throw bad("operation has no documented responses");
+}
+
+// Recursive schema-to-mock walker. Depth-capped at 6 — without $ref deref
+// there's no real cycle path, but defense in depth keeps a pathological
+// nested array from blowing the stack.
+function mockFromSchema(schema, depth = 0) {
+  if (depth > 6) return null;
+  if (!schema || typeof schema !== "object") return null;
+  if (schema.example !== undefined) return schema.example;
+  if (schema.default !== undefined) return schema.default;
+  if (Array.isArray(schema.enum) && schema.enum.length) return schema.enum[0];
+  // Unresolved $ref — surface it literally so the caller sees the gap.
+  if (typeof schema.$ref === "string") return { $ref: schema.$ref };
+  // Composite schemas: pick the first arm of oneOf/anyOf/allOf. Not
+  // semantically complete (a real allOf merges arms) but predictable.
+  for (const k of ["oneOf", "anyOf", "allOf"]) {
+    if (Array.isArray(schema[k]) && schema[k].length) {
+      return mockFromSchema(schema[k][0], depth + 1);
+    }
+  }
+  const t = schema.type;
+  if (t === "object" || (schema.properties && !t)) {
+    const out = {};
+    const props = schema.properties || {};
+    for (const [k, sub] of Object.entries(props)) {
+      out[k] = mockFromSchema(sub, depth + 1);
+    }
+    return out;
+  }
+  if (t === "array") {
+    return [mockFromSchema(schema.items || {}, depth + 1)];
+  }
+  if (t === "string") return "string";
+  if (t === "integer") return 0;
+  if (t === "number") return 0;
+  if (t === "boolean") return false;
+  if (t === "null") return null;
+  return null;
 }

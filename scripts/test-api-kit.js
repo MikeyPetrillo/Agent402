@@ -515,5 +515,168 @@ ok(threw, `missing locator rejected`);
 threw = false; try { run("openapi-to-curl", { operationId: "x" }); } catch { threw = true; }
 ok(threw, `missing "spec" rejected`);
 
+// ---------- openapi-mock-response ----------
+
+// M1. Example round-trips exactly.
+{
+  const t = tool("openapi-mock-response");
+  const r = run("openapi-mock-response", t.discovery.input);
+  const expected = t.discovery.output.example;
+  ok(JSON.stringify(r) === JSON.stringify(expected),
+    `mock example round-trips exactly (got ${JSON.stringify(r)})`);
+}
+
+// M2. Operation-level `example` beats schema example.
+{
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: { "200": {
+    content: { "application/json": {
+      example: { from: "op" },
+      schema: { example: { from: "schema" } } } } } } } } } };
+  const r = run("openapi-mock-response", { spec, operationId: "u" });
+  ok(r.mock.from === "op" && r.source === "operation-example",
+    `op example beats schema example`);
+}
+
+// M3. Schema `example` used when no op-level example.
+{
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: { "200": {
+    content: { "application/json": { schema: { example: { from: "schema" } } } } } } } } } };
+  const r = run("openapi-mock-response", { spec, operationId: "u" });
+  ok(r.mock.from === "schema" && r.source === "schema-example",
+    `schema example wins when no op example`);
+}
+
+// M4. `examples` (multi-example map): first key alphabetically wins.
+{
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: { "200": {
+    content: { "application/json": { examples: {
+      zebra: { value: { pick: "z" } },
+      alpha: { value: { pick: "a" } },
+    } } } } } } } } };
+  const r = run("openapi-mock-response", { spec, operationId: "u" });
+  ok(r.mock.pick === "a" && r.source === "operation-example",
+    `examples map → first key alphabetically wins (got ${JSON.stringify(r.mock)})`);
+}
+
+// M5. Status defaults to the first 2xx when not specified.
+{
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: {
+    "404": { description: "nope" },
+    "201": { content: { "application/json": { schema: { example: { ok: true } } } } },
+    "200": { content: { "application/json": { schema: { example: { v: 1 } } } } },
+  } } } } };
+  const r = run("openapi-mock-response", { spec, operationId: "u" });
+  ok(r.status === "200" && r.mock.v === 1, `defaults to first 2xx (got ${r.status})`);
+}
+
+// M6. Explicit status is honored.
+{
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: {
+    "200": { content: { "application/json": { schema: { example: { v: 1 } } } } },
+    "201": { content: { "application/json": { schema: { example: { created: true } } } } },
+  } } } } };
+  const r = run("openapi-mock-response", { spec, operationId: "u", status: "201" });
+  ok(r.status === "201" && r.mock.created === true, `explicit status used`);
+}
+
+// M7. Unknown status rejected.
+threw = false; try {
+  run("openapi-mock-response", { spec: { paths: { "/u": { get: { operationId: "u", responses: { "200": {} } } } } }, operationId: "u", status: "999" });
+} catch { threw = true; }
+ok(threw, `unknown status rejected`);
+
+// M8. Operation with no documented responses → error.
+threw = false; try {
+  run("openapi-mock-response", { spec: { paths: { "/u": { get: { operationId: "u", responses: {} } } } }, operationId: "u" });
+} catch { threw = true; }
+ok(threw, `no responses → error`);
+
+// M9. Response without JSON content → mock:null + source:none (not an error;
+// the route exists, just has no JSON shape to mock).
+{
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: { "204": { description: "gone" } } } } } };
+  const r = run("openapi-mock-response", { spec, operationId: "u" });
+  ok(r.mock === null && r.source === "none" && r.status === "204",
+    `204 with no body → null mock, source:none`);
+}
+
+// M10. Generated walk: object with primitive properties uses type defaults
+// when no example is given.
+{
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: { "200": {
+    content: { "application/json": { schema: {
+      type: "object",
+      properties: { s: { type: "string" }, n: { type: "integer" }, b: { type: "boolean" } },
+    } } } } } } } } };
+  const r = run("openapi-mock-response", { spec, operationId: "u" });
+  ok(r.source === "generated" && r.mock.s === "string" && r.mock.n === 0 && r.mock.b === false,
+    `type defaults applied (got ${JSON.stringify(r.mock)})`);
+}
+
+// M11. Array of primitives → [mock(items)].
+{
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: { "200": {
+    content: { "application/json": { schema: { type: "array", items: { type: "string", example: "hi" } } } } } } } } } };
+  const r = run("openapi-mock-response", { spec, operationId: "u" });
+  ok(Array.isArray(r.mock) && r.mock.length === 1 && r.mock[0] === "hi",
+    `array → [items mock] (got ${JSON.stringify(r.mock)})`);
+}
+
+// M12. Enum → first value.
+{
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: { "200": {
+    content: { "application/json": { schema: {
+      type: "object",
+      properties: { status: { type: "string", enum: ["active", "paused", "deleted"] } },
+    } } } } } } } } };
+  const r = run("openapi-mock-response", { spec, operationId: "u" });
+  ok(r.mock.status === "active", `enum → first value`);
+}
+
+// M13. $ref left as a literal { $ref: "..." } — kit doesn't dereference.
+{
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: { "200": {
+    content: { "application/json": { schema: { $ref: "#/components/schemas/User" } } } } } } } } };
+  const r = run("openapi-mock-response", { spec, operationId: "u" });
+  ok(r.mock && r.mock.$ref === "#/components/schemas/User", `$ref surfaced literally`);
+}
+
+// M14. oneOf / anyOf / allOf picks the first arm.
+{
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: { "200": {
+    content: { "application/json": { schema: {
+      oneOf: [
+        { type: "object", properties: { kind: { type: "string", example: "first" } } },
+        { type: "object", properties: { kind: { type: "string", example: "second" } } },
+      ],
+    } } } } } } } } };
+  const r = run("openapi-mock-response", { spec, operationId: "u" });
+  ok(r.mock.kind === "first", `oneOf picks first arm`);
+}
+
+// M15. method+path locator works.
+{
+  const spec = { paths: { "/u": { post: { responses: { "201": {
+    content: { "application/json": { schema: { example: { id: 1 } } } } } } } } } };
+  const r = run("openapi-mock-response", { spec, method: "post", path: "/u" });
+  ok(r.mock.id === 1 && r.status === "201", `method+path locator works`);
+}
+
+// M16. Deep recursion is depth-capped — pathological nested arrays don't
+// crash or hang. The cap is internal; we just assert it terminates.
+{
+  // Build a 10-level deep nested array schema.
+  let s = { type: "string" };
+  for (let i = 0; i < 10; i++) s = { type: "array", items: s };
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: { "200": {
+    content: { "application/json": { schema: s } } } } } } } };
+  const r = run("openapi-mock-response", { spec, operationId: "u" });
+  ok(r.source === "generated" && Array.isArray(r.mock), `deeply nested array terminates`);
+}
+
+// M17. Missing "spec" rejected.
+threw = false; try { run("openapi-mock-response", { operationId: "x" }); } catch { threw = true; }
+ok(threw, `missing "spec" rejected`);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
