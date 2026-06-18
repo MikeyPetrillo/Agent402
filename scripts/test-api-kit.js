@@ -119,5 +119,130 @@ ok(threw, `missing "after" rejected`);
 threw = false; try { run("openapi-diff", { before: "not json", after: { paths: {} } }); } catch { threw = true; }
 ok(threw, `invalid JSON string rejected`);
 
+// ---------- openapi-lint ----------
+
+// L1. Example round-trips exactly. Same contract test-all.js runs at HTTP.
+{
+  const t = tool("openapi-lint");
+  const r = run("openapi-lint", t.discovery.input);
+  const expected = t.discovery.output.example;
+  ok(JSON.stringify(r) === JSON.stringify(expected),
+    `lint example round-trips exactly (got ${JSON.stringify(r)})`);
+}
+
+// L2. Fully-clean spec → ok:true, score 100, no violations.
+{
+  const spec = {
+    openapi: "3.0.0",
+    info: { title: "Clean", version: "1", description: "fully documented" },
+    servers: [{ url: "https://x" }],
+    paths: {
+      "/u": {
+        get: {
+          operationId: "listU", summary: "list", tags: ["u"],
+          responses: {
+            "200": { description: "ok", content: { "application/json": { schema: { type: "array" } } } },
+            "400": { description: "bad" },
+          },
+        },
+      },
+    },
+  };
+  const r = run("openapi-lint", { spec });
+  ok(r.ok === true && r.score === 100 && r.violations.length === 0,
+    `clean spec → 100 (got score=${r.score}, violations=${JSON.stringify(r.violations)})`);
+}
+
+// L3. Spec with no servers and no host → "no-servers" warning.
+{
+  const spec = { openapi: "3.0.0", info: { title: "x", description: "y" }, paths: {
+    "/u": { get: { operationId: "u", summary: "s", tags: ["t"], responses: { "200": { description: "ok" }, "400": { description: "bad" } } } } } };
+  const r = run("openapi-lint", { spec });
+  ok(r.violations.some((v) => v.rule === "no-servers"), `no servers → no-servers warning`);
+}
+
+// L4. Swagger 2.x `host` satisfies the server check.
+{
+  const spec = { swagger: "2.0", info: { title: "x", description: "y" }, host: "api.example.com", paths: {
+    "/u": { get: { operationId: "u", summary: "s", tags: ["t"], responses: { "200": { description: "ok" }, "400": { description: "bad" } } } } } };
+  const r = run("openapi-lint", { spec });
+  ok(!r.violations.some((v) => v.rule === "no-servers"), `Swagger 2.x host satisfies server check`);
+}
+
+// L5. No paths → error + ok:false.
+{
+  const spec = { openapi: "3.0.0", info: { title: "x", description: "y" }, servers: [{ url: "https://x" }], paths: {} };
+  const r = run("openapi-lint", { spec });
+  ok(r.ok === false && r.violations.some((v) => v.rule === "no-paths" && v.severity === "error"),
+    `empty paths → ok:false + no-paths error`);
+}
+
+// L6. Operation missing 2xx → error.
+{
+  const spec = { openapi: "3.0.0", info: { title: "x", description: "y" }, servers: [{ url: "https://x" }], paths: {
+    "/u": { get: { operationId: "u", summary: "s", tags: ["t"], responses: { "404": { description: "nope" } } } } } };
+  const r = run("openapi-lint", { spec });
+  ok(r.violations.some((v) => v.rule === "operation-missing-2xx-response" && v.severity === "error"),
+    `no 2xx → error`);
+}
+
+// L7. Param missing description, schema, and example → three distinct violations.
+{
+  const spec = { openapi: "3.0.0", info: { title: "x", description: "y" }, servers: [{ url: "https://x" }], paths: {
+    "/u": { get: { operationId: "u", summary: "s", tags: ["t"], parameters: [{ name: "id", in: "query" }],
+      responses: { "200": { description: "ok" }, "400": { description: "bad" } } } } } };
+  const r = run("openapi-lint", { spec });
+  const rules = new Set(r.violations.map((v) => v.rule));
+  ok(rules.has("param-missing-description") && rules.has("param-missing-schema") && rules.has("param-missing-example"),
+    `bare param triggers all three param checks (got ${[...rules].join(",")})`);
+}
+
+// L8. Swagger 2.x top-level `type` on a param counts as typed.
+{
+  const spec = { swagger: "2.0", info: { title: "x", description: "y" }, host: "h", paths: {
+    "/u": { get: { operationId: "u", summary: "s", tags: ["t"],
+      parameters: [{ name: "id", in: "query", description: "the id", type: "string", "x-example": "abc" }],
+      responses: { "200": { description: "ok" }, "400": { description: "bad" } } } } } };
+  const r = run("openapi-lint", { spec });
+  ok(!r.violations.some((v) => v.rule === "param-missing-schema"),
+    `Swagger 2.x top-level type is recognized`);
+}
+
+// L9. JSON-string input is accepted.
+{
+  const spec = JSON.stringify({ openapi: "3.0.0", info: { title: "x", description: "y" }, servers: [{ url: "https://x" }], paths: {
+    "/u": { get: { operationId: "u", summary: "s", tags: ["t"], responses: { "200": { description: "ok" }, "400": { description: "bad" } } } } } });
+  const r = run("openapi-lint", { spec });
+  ok(r.ok === true && r.score === 100, `JSON string input parses + scores`);
+}
+
+// L10. Missing "spec" rejected.
+threw = false; try { run("openapi-lint", {}); } catch { threw = true; }
+ok(threw, `missing "spec" rejected`);
+
+// L11. Score formula: 1 error + 2 warnings + 3 info = 100 - 10 - 6 - 3 = 81.
+{
+  // Path with no 2xx (error), no servers (warning), no operationId on the op
+  // (warning), no tags (info), no description on info (info), no error
+  // response — but we don't have a 2xx so "no-error-responses" won't fire.
+  // Build a precise spec:
+  //   - missing servers      → warning
+  //   - operation no 2xx     → error
+  //   - operation no tags    → info
+  //   - operation no opId    → warning
+  //   - info no description  → info
+  //   - param no example     → info
+  const spec = { openapi: "3.0.0", info: { title: "x" }, paths: {
+    "/u": { get: { summary: "s",
+      parameters: [{ name: "id", in: "query", description: "the id", schema: { type: "string" } }],
+      responses: { "404": { description: "nope" } } } } } };
+  const r = run("openapi-lint", { spec });
+  // error=1 (no 2xx), warning=2 (no-servers, no-operationid), info=3 (no info description, no tags, no param example)
+  ok(r.counts.error === 1 && r.counts.warning === 2 && r.counts.info === 3,
+    `expected 1e/2w/3i, got ${JSON.stringify(r.counts)}`);
+  ok(r.score === 100 - 10 - 6 - 3,
+    `score should be 81, got ${r.score}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

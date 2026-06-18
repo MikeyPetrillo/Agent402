@@ -5,6 +5,9 @@
 // Current:
 //   openapi-diff   compare two OpenAPI / Swagger docs → added / removed /
 //                  changed endpoints + a conservative "is this breaking?" flag.
+//   openapi-lint   score a single spec on agent-readiness (does an LLM-driven
+//                  caller have what it needs to call this API correctly?) and
+//                  return a structured violations list + 0..100 score.
 //
 // Scope notes for v1:
 //   - Works against OpenAPI 3.x and Swagger 2.x (both share `paths`).
@@ -15,6 +18,8 @@
 //     breaks (a caller that worked before will now fail) and ignores cosmetic
 //     changes (description, summary, examples). False negatives are possible
 //     for deeply nested schema changes — those need a schema-graph walker.
+//   - openapi-lint emits violations in deterministic spec-traversal order so
+//     two runs against the same input produce byte-identical output.
 
 function bad(message) {
   const err = new Error(message);
@@ -225,6 +230,162 @@ export const API_TOOLS = [
         breakingCount,
         summary: { added: added.length, removed: removed.length, changed: changed.length },
       };
+    },
+  },
+  {
+    route: "POST /api/openapi-lint", name: "OpenAPI agent-readiness lint", slug: "openapi-lint", category: "validation", price: "$0.002",
+    description:
+      "Score an OpenAPI 3.x or Swagger 2.x spec on agent-readiness — i.e. does an LLM-driven caller have what it needs to call the API correctly without guessing. Returns a 0..100 score, severity counts, and a structured list of violations with stable rule codes. Checks: documented title/servers/paths, per-operation summary/description/operationId/tags, documented 2xx + error responses, param descriptions/schemas/examples, response descriptions, JSON response schemas. Pure CPU — deterministic, no network, no $ref dereferencing.",
+    tags: ["openapi", "swagger", "lint", "score", "agent-readiness", "validation"],
+    discovery: {
+      bodyType: "json",
+      // A nearly-clean spec with one warning (missing operationId) — so the
+      // example output is small and the score is high enough to demonstrate
+      // a pass while still showing what a violation looks like.
+      input: {
+        spec: {
+          openapi: "3.0.0",
+          info: { title: "Demo", version: "1.0.0", description: "An example API" },
+          servers: [{ url: "https://api.example.com" }],
+          paths: {
+            "/users": {
+              get: {
+                summary: "List users",
+                tags: ["users"],
+                parameters: [{ name: "limit", in: "query", description: "Max results", schema: { type: "integer", example: 10 } }],
+                responses: {
+                  "200": { description: "ok", content: { "application/json": { schema: { type: "array" } } } },
+                  "400": { description: "bad input" },
+                },
+              },
+            },
+          },
+        },
+      },
+      inputSchema: {
+        properties: {
+          spec: { description: "OpenAPI/Swagger document (object or JSON string)" },
+        },
+        required: ["spec"],
+      },
+      output: {
+        example: {
+          ok: true,
+          score: 97,
+          counts: { error: 0, warning: 1, info: 0 },
+          violations: [
+            {
+              rule: "operation-missing-operationid",
+              severity: "warning",
+              location: "GET /users",
+              message: "Operation has no operationId — agents can't refer to this call by a stable name.",
+            },
+          ],
+        },
+      },
+    },
+    handler: (i) => {
+      if (!("spec" in i)) throw bad('Missing "spec"');
+      const spec = parseMaybeJson(i.spec, "spec");
+      if (!spec || typeof spec !== "object") throw bad('"spec" must be an OpenAPI document');
+
+      const violations = [];
+      const add = (rule, severity, location, message) =>
+        violations.push({ rule, severity, location, message });
+
+      // Info-level checks — applied once per document.
+      if (!spec.info || typeof spec.info.title !== "string" || !spec.info.title.trim()) {
+        add("info-missing-title", "warning", "info", "info.title is empty.");
+      }
+      if (!spec.info || typeof spec.info.description !== "string" || !spec.info.description.trim()) {
+        add("info-missing-description", "info", "info", "info.description is empty.");
+      }
+      // Swagger 2.x uses `host` instead of `servers`. Accept either.
+      const hasServer = (Array.isArray(spec.servers) && spec.servers.length > 0) || (typeof spec.host === "string" && spec.host.trim());
+      if (!hasServer) {
+        add("no-servers", "warning", "servers", "No servers documented — agents don't know where to call.");
+      }
+
+      const idx = indexEndpoints(spec);
+      if (idx.size === 0) {
+        add("no-paths", "error", "paths", "Spec has no operations.");
+      }
+
+      // Per-operation checks. Iteration order = path-insertion order in the
+      // input doc, then method-insertion order. Deterministic for any one
+      // input; that's the property the example round-trip depends on.
+      for (const [route, entry] of idx) {
+        const { op, pathItem } = entry;
+
+        if (!op.summary && !op.description) {
+          add("operation-missing-summary-or-description", "warning", route,
+            "Operation has no summary or description — agents can't tell what it does.");
+        }
+        if (!op.operationId) {
+          add("operation-missing-operationid", "warning", route,
+            "Operation has no operationId — agents can't refer to this call by a stable name.");
+        }
+        if (!Array.isArray(op.tags) || op.tags.length === 0) {
+          add("operation-missing-tags", "info", route,
+            "Operation has no tags — agents can't browse by category.");
+        }
+
+        const responses = op.responses || {};
+        const statuses = Object.keys(responses);
+        const has2xx = statuses.some((s) => /^2\d\d$/.test(s));
+        const hasErr = statuses.some((s) => /^[45]\d\d$/.test(s));
+        if (!has2xx) {
+          add("operation-missing-2xx-response", "error", route,
+            "Operation documents no 2xx response — agents don't know what success looks like.");
+        }
+        if (has2xx && !hasErr) {
+          add("operation-no-error-responses", "info", route,
+            "Operation documents no 4xx/5xx response — agents won't know how errors are shaped.");
+        }
+
+        for (const p of mergeParams(pathItem, op)) {
+          const ploc = `${route} param '${p.name}' (${p.in})`;
+          if (typeof p.description !== "string" || !p.description.trim()) {
+            add("param-missing-description", "warning", ploc, "Parameter has no description.");
+          }
+          // OpenAPI 3 uses `schema.type` (or schema.$ref / oneOf / anyOf / allOf);
+          // Swagger 2 uses top-level `type`. Accept any of these as "typed".
+          const schemaTyped = p.schema && (
+            p.schema.type || p.schema.$ref || p.schema.oneOf || p.schema.anyOf || p.schema.allOf
+          );
+          if (!schemaTyped && !p.type) {
+            add("param-missing-schema", "warning", ploc, "Parameter has no schema or type.");
+          }
+          const hasExample = (p.example !== undefined) || (p.schema && p.schema.example !== undefined);
+          if (!hasExample) {
+            add("param-missing-example", "info", ploc, "Parameter has no example.");
+          }
+        }
+
+        for (const [status, r] of Object.entries(responses)) {
+          const rloc = `${route} response ${status}`;
+          if (!r || typeof r !== "object" || typeof r.description !== "string" || !r.description.trim()) {
+            add("response-missing-description", "warning", rloc, "Response has no description.");
+          }
+          if (/^2\d\d$/.test(status) && r && r.content) {
+            const jc = r.content["application/json"];
+            if (jc && !jc.schema) {
+              add("response-2xx-missing-schema", "info", rloc,
+                "2xx JSON response has content but no schema — agents can't predict the body shape.");
+            }
+          }
+        }
+      }
+
+      // Score: simple, monotonic, easy to reason about. Errors hurt a lot,
+      // warnings moderately, info-level lightly. Clamped to [0, 100] so a
+      // pathological spec doesn't return a negative score.
+      const counts = { error: 0, warning: 0, info: 0 };
+      for (const v of violations) counts[v.severity]++;
+      const score = Math.max(0, 100 - counts.error * 10 - counts.warning * 3 - counts.info * 1);
+      const ok = counts.error === 0;
+
+      return { ok, score, counts, violations };
     },
   },
 ];
