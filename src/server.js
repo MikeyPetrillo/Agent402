@@ -773,9 +773,29 @@ const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
 // calls fail in 1ms" without leaking PII — only slug + HTTP status + the error
 // message we already serialize to the response body. No body, no IP, no UA.
 // 4xx = caller sent bad input; 5xx = our tool or its upstream broke.
-function logToolError(slug, status, message) {
+function logToolError(slug, status, message, shape) {
   const klass = status >= 500 ? "5xx" : status >= 400 ? "4xx" : "err";
-  console.error(`[tool-error] ${klass} slug=${slug} status=${status} msg=${String(message || "").slice(0, 200)}`);
+  // Log the request's TOP-LEVEL KEYS (no values, no IPs, no payment info) on
+  // 4xx so we can spot shape-mismatch patterns the schema didn't anticipate.
+  // Keys are bounded — privacy-safe and small.
+  const shapeStr = shape && Array.isArray(shape) && shape.length ? ` shape=[${shape.slice(0, 12).join(",")}]` : "";
+  console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr} msg=${String(message || "").slice(0, 200)}`);
+}
+function requestShape(req) {
+  // Return the top-level keys of body + query, deduped and bounded. Values
+  // are never read — this is purely "what fields did the caller send", which
+  // is the diagnostic signal we need to fix schema mismatches without
+  // logging anything sensitive.
+  try {
+    const keys = new Set();
+    if (req.body && typeof req.body === "object" && !Array.isArray(req.body)) {
+      for (const k of Object.keys(req.body).slice(0, 20)) keys.add(`b:${k}`);
+    }
+    if (req.query && typeof req.query === "object") {
+      for (const k of Object.keys(req.query).slice(0, 20)) keys.add(`q:${k}`);
+    }
+    return [...keys];
+  } catch { return []; }
 }
 async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlug, res) {
   const startedAt = Date.now();
@@ -1588,7 +1608,7 @@ for (const tool of ALL_KIT) {
     } catch (err) {
       errored = true;
       status = err.statusCode || 500;
-      logToolError(tool.slug, status, err.message);
+      logToolError(tool.slug, status, err.message, status < 500 ? requestShape(req) : null);
       // Self-correction envelope: echo the tool's input schema + a working
       // example back on 4xx so the LLM has everything it needs to fix the
       // call without searching the catalog again. 5xx stays minimal — the

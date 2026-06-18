@@ -35,3 +35,4 @@ analytics-split-4xx-5xx-and-mcp-flat-args: 2026-06-19T05:30:00Z
 analytics-legacy-fallback-flip-to-4xx: 2026-06-19T06:00:00Z
 tools-input-aliases-and-self-correction-envelope: 2026-06-19T07:00:00Z
 dispatcher-envelope-unwrap-and-honest-4xx-label: 2026-06-19T08:00:00Z
+log-rejected-request-shape-keys-only: 2026-06-19T09:00:00Z
