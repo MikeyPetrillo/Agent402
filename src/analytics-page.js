@@ -133,8 +133,8 @@ export function analyticsPage(data, { baseUrl }) {
 <div class="grid">
   <div class="stat"><div class="k">Tool calls (${esc(windowHuman)})</div><div class="v">${esc(fmtInt(totals.calls))}</div><div class="s">across the whole catalog</div></div>
   <div class="stat"><div class="k">Cache hit rate</div><div class="v">${esc(cacheHitRate)}</div><div class="s">served from Redis without re-fetching upstream</div></div>
-  <div class="stat ${clientErrClass}" title="HTTP 4xx — the caller sent bad input (missing field, wrong shape, validation failure). The tool itself is fine.">
-    <div class="k">Client errors (4xx)</div><div class="v">${esc(clientErrRate)}</div><div class="s">caller sent bad input — tool/upstream is healthy</div>
+  <div class="stat ${clientErrClass}" title="HTTP 4xx — input the tool's schema didn't accept (missing required field, unrecognized shape). Often a UX gap on our side: the caller's intent is clear but we haven't taught the handler to accept their field names. Each one returns the schema + an example so the next call self-corrects.">
+    <div class="k">Schema mismatches (4xx)</div><div class="v">${esc(clientErrRate)}</div><div class="s">input we didn't accept — caller gets back the schema + an example</div>
   </div>
   <div class="stat ${serverErrClass}" title="HTTP 5xx — the handler threw or its upstream failed. This is the rate that needs fixing.">
     <div class="k">Server errors (5xx)</div><div class="v">${esc(serverErrRate)}</div><div class="s">handler or upstream failure — actionable</div>
@@ -153,7 +153,7 @@ export function analyticsPage(data, { baseUrl }) {
 <div class="panel">
   <div class="ph"><h2>Top tools by volume (last ${esc(windowHuman)})</h2><div class="pn">Click a slug to see the tool's docs page.</div></div>
   <table>
-    <thead><tr><th class="num">#</th><th>Tool</th><th class="num">Calls</th><th class="num" title="Share of this tool's calls served from the Redis response cache">Cache %</th><th class="num" title="HTTP 4xx — caller sent bad input. Tool/upstream is fine.">4xx %</th><th class="num" title="HTTP 5xx — handler or upstream failure. Actionable.">5xx %</th><th class="num">p50</th><th class="num">p95</th></tr></thead>
+    <thead><tr><th class="num">#</th><th>Tool</th><th class="num">Calls</th><th class="num" title="Share of this tool's calls served from the Redis response cache">Cache %</th><th class="num" title="HTTP 4xx — input the schema didn't accept. Often a UX gap on our side; the tool returns its schema + an example so the next call self-corrects.">4xx %</th><th class="num" title="HTTP 5xx — handler or upstream failure. Actionable.">5xx %</th><th class="num">p50</th><th class="num">p95</th></tr></thead>
     <tbody>${rows || emptyRow}</tbody>
   </table>
 </div>

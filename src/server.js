@@ -1544,6 +1544,20 @@ for (const tool of ALL_KIT) {
     let status = 200;
     try {
       const input = { ...req.query, ...(req.body ?? {}) };
+      // Accept MCP-style envelopes posted directly to the HTTP route. Agents
+      // frequently mirror the shape they use over /mcp ({slug, params:{…}})
+      // into POST /api/<slug> bodies, or wrap fields in {input:{…}} /
+      // {args:{…}}. Unwrap once at the dispatcher so every tool accepts both
+      // the flat shape AND the wrapped shape without per-tool code. Top-level
+      // fields win on conflict — explicit beats nested.
+      for (const wrap of ["params", "input", "args"]) {
+        const inner = input[wrap];
+        if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+          for (const [k, v] of Object.entries(inner)) {
+            if (input[k] === undefined) input[k] = v;
+          }
+        }
+      }
 
       let cacheKey = null;
       if (cachePolicy && cacheEnabled()) {
