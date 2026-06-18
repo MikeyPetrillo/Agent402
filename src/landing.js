@@ -168,23 +168,25 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   .stat .n { font:800 1.7rem/1 var(--mono); color:var(--accent); letter-spacing:-.02em; }
   .stat .l { color:var(--muted); font-size:.78rem; margin-top:6px; }
 
-  /* terminal (hero right) */
-  .term { background:#080c16; border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:0 24px 60px rgba(0,0,0,.45); }
-  .term-bar { display:flex; gap:7px; padding:11px 14px; border-bottom:1px solid #151c2c; }
-  .term-bar i { width:11px; height:11px; border-radius:50%; display:block; }
-  .term-bar i:nth-child(1){background:#ff5f57}.term-bar i:nth-child(2){background:#febc2e}.term-bar i:nth-child(3){background:#28c840}
-  .term-bar .ttl { margin-left:8px; color:#5b6b8c; font-family:var(--mono); font-size:.72rem; align-self:center; }
-  .term-body { padding:16px 18px; font-family:var(--mono); font-size:.78rem; line-height:1.95; color:#c9d4ec; overflow-x:auto; min-height:230px; }
-  .tline { opacity:0; white-space:nowrap; animation:tcycle 11s infinite; }
-  .tline .p { color:#5b6b8c; } .tline .ok { color:var(--accent); } .tline .warn { color:#fbbf24; }
-  .t1{animation-name:t1}.t2{animation-name:t2}.t3{animation-name:t3}.t4{animation-name:t4}.t5{animation-name:t5}.t6{animation-name:t6}
-  @keyframes t1 { 0%,2%{opacity:0} 4%,90%{opacity:1} 95%,100%{opacity:0} }
-  @keyframes t2 { 0%,13%{opacity:0} 15%,90%{opacity:1} 95%,100%{opacity:0} }
-  @keyframes t3 { 0%,28%{opacity:0} 30%,90%{opacity:1} 95%,100%{opacity:0} }
-  @keyframes t4 { 0%,42%{opacity:0} 44%,90%{opacity:1} 95%,100%{opacity:0} }
-  @keyframes t5 { 0%,57%{opacity:0} 59%,90%{opacity:1} 95%,100%{opacity:0} }
-  @keyframes t6 { 0%,73%{opacity:0} 75%,90%{opacity:1} 95%,100%{opacity:0} }
-  @media (prefers-reduced-motion: reduce){ .tline{ animation:none; opacity:1; } }
+  /* paste-ready snippet (hero right) — Stripe-style "first call in 5 seconds".
+     Replaces the older animated-terminal cycle. The window chrome (mac dots)
+     signals "real code"; the copy button is the call-to-action. */
+  .snippet { background:#080c16; border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:0 24px 60px rgba(0,0,0,.45); }
+  .snippet-bar { display:flex; align-items:center; gap:7px; padding:11px 14px; border-bottom:1px solid #151c2c; }
+  .snippet-bar i { width:11px; height:11px; border-radius:50%; display:block; }
+  .snippet-bar i:nth-child(1){background:#ff5f57}.snippet-bar i:nth-child(2){background:#febc2e}.snippet-bar i:nth-child(3){background:#28c840}
+  .snippet-bar .ttl { margin-left:8px; color:#5b6b8c; font-family:var(--mono); font-size:.72rem; flex:1; }
+  .snippet-bar .copy { background:transparent; border:1px solid var(--line2); color:var(--muted); font:600 .7rem/1 var(--mono); padding:6px 11px; border-radius:7px; cursor:pointer; letter-spacing:.06em; text-transform:uppercase; }
+  .snippet-bar .copy:hover { color:var(--text); border-color:var(--accent); }
+  .snippet pre { background:transparent; border:0; border-radius:0; margin:0; padding:18px 18px 14px; font-family:var(--mono); font-size:.83rem; line-height:1.7; color:#c9d4ec; overflow-x:auto; }
+  .snippet pre .k { color:#7dd3fc; }
+  .snippet pre .s { color:#a7f3d0; }
+  .snippet pre .c { color:#5b6b8c; font-style:italic; }
+  .snippet pre .v { color:var(--accent); }
+  .snippet-foot { border-top:1px solid #151c2c; padding:10px 14px; font-family:var(--mono); font-size:.72rem; color:var(--muted); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .snippet-foot .dot { width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 8px var(--accent); }
+  .snippet-foot a { color:var(--muted); text-decoration:underline; text-decoration-color:var(--line2); }
+  .snippet-foot a:hover { color:var(--accent); }
 
   /* cards / grids */
   .grid { display:grid; gap:14px; margin-top:26px; }
@@ -252,17 +254,39 @@ ${renderHeader("/", [{ href: "#connect", label: "Connect" }])}
         <div class="stat"><div class="n">${served ? served.total.toLocaleString() : "live"}</div><div class="l">${served ? "calls served" : "settling on-chain"}</div></div>
       </div>
     </div>
-    <div class="term" aria-hidden="true">
-      <div class="term-bar"><i></i><i></i><i></i><span class="ttl">agent — machine-to-machine</span></div>
-      <div class="term-body">
-        <div class="tline t1"><span class="p">agent$</span> POST agent402.tools/api/extract {"url":"…/article"}</div>
-        <div class="tline t2"><span class="warn">← HTTP 402 Payment Required</span> &nbsp;{"price":"$0.005","payTo":"0xaBF4…a9D0"}</div>
-        <div class="tline t3"><span class="p">agent$</span> signing USDC from its own wallet… <span class="p">(no human)</span></div>
-        <div class="tline t4"><span class="p">agent$</span> retry with X-PAYMENT header →</div>
-        <div class="tline t5"><span class="ok">← HTTP 200 OK</span> &nbsp;{"title":"…","markdown":"# …"} <span class="p">· ~2s</span></div>
-        <div class="tline t6"><span class="ok">✓</span> machine-to-machine commerce, end to end</div>
+    <div class="snippet">
+      <div class="snippet-bar">
+        <i></i><i></i><i></i>
+        <span class="ttl">node · paste &amp; run</span>
+        <button class="copy" data-copy="hero-snippet" type="button" aria-label="Copy code">Copy</button>
+      </div>
+<pre id="hero-snippet"><span class="c">// Resolve a task to a tool, then call it. No wallet needed — free tier
+// settles with a tiny in-process proof-of-work.</span>
+<span class="k">import</span> { <span class="v">Agent402</span> } <span class="k">from</span> <span class="s">"agent402-client"</span>;
+
+<span class="k">const</span> a = <span class="k">new</span> <span class="v">Agent402</span>();
+<span class="k">const</span> [tool] = <span class="k">await</span> a.<span class="v">find</span>(<span class="s">"how many gpt-4 tokens"</span>);
+<span class="k">const</span> out    = <span class="k">await</span> a.<span class="v">call</span>(tool.slug, { text: <span class="s">"Hello, agent."</span>, model: <span class="s">"gpt-4o"</span> });
+console.log(out);</pre>
+      <div class="snippet-foot">
+        <span class="dot"></span> ${freeCount.toLocaleString()} free via proof-of-work · USDC on Base for the rest · <a href="/llms.txt">llms.txt</a>
       </div>
     </div>
+    <script>
+    (function(){
+      var bs=document.querySelectorAll('.copy[data-copy]');
+      for(var i=0;i<bs.length;i++){(function(b){
+        b.addEventListener('click',function(){
+          var el=document.getElementById(b.getAttribute('data-copy'));
+          if(!el||!navigator.clipboard) return;
+          navigator.clipboard.writeText(el.innerText).then(function(){
+            var t=b.textContent; b.textContent='Copied'; b.style.color='var(--accent)';
+            setTimeout(function(){b.textContent=t;b.style.color='';},1200);
+          });
+        });
+      })(bs[i]);}
+    })();
+    </script>
   </header>
 
   <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet</b> — pay with a tiny <a href="/api/pow">sha256 proof-of-work</a> (a fraction of a second of CPU; no money, no AI tokens). The other ${count - freeCount} (browser, network, memory) settle in USDC.</div>
