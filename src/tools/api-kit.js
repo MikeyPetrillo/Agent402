@@ -25,6 +25,12 @@
 //                  tags/summary > description). Lets an agent find the
 //                  "user invite" flow in a 1000-endpoint spec without
 //                  scanning extract output.
+//   openapi-validate-payload  check a JSON payload against the request or
+//                  response schema for one operation. Deterministic subset
+//                  of JSON Schema: type / required / enum / properties /
+//                  items / additionalProperties / oneOf|anyOf|allOf /
+//                  $ref-detection. Reports `valid`, `schemaPresent` so
+//                  callers can distinguish "passed" from "no contract".
 //
 // Scope notes for v1:
 //   - Works against OpenAPI 3.x and Swagger 2.x (both share `paths`).
@@ -858,6 +864,85 @@ export const API_TOOLS = [
       };
     },
   },
+  {
+    route: "POST /api/openapi-validate-payload", name: "OpenAPI payload validator", slug: "openapi-validate-payload", category: "validation", price: "$0.002",
+    description:
+      "Validate a JSON payload against the request or response schema for one operation in an OpenAPI 3.x or Swagger 2.x spec. Locate the operation by operationId or method+path; choose `part: \"request\"` or `part: \"response\"` (status defaults to the first 2xx). Deterministic subset of JSON Schema: type, required, enum, properties, items, additionalProperties:false, oneOf/anyOf/allOf, $ref-detection (not dereferenced). Returns `valid`, `schemaPresent` (false → no contract to check; result is vacuously valid), and ordered `errors[]` with stable rule codes. Pure CPU — deterministic, no network.",
+    tags: ["openapi", "swagger", "validation", "json-schema", "api", "agent-readiness"],
+    discovery: {
+      bodyType: "json",
+      input: {
+        spec: {
+          openapi: "3.0.0",
+          paths: {
+            "/users": {
+              post: {
+                operationId: "createUser",
+                requestBody: { content: { "application/json": { schema: {
+                  type: "object",
+                  required: ["name", "email"],
+                  properties: {
+                    name: { type: "string" },
+                    email: { type: "string" },
+                    age: { type: "integer" },
+                    role: { type: "string", enum: ["admin", "user"] },
+                  },
+                  additionalProperties: false,
+                } } } },
+                responses: { "201": { description: "ok" } },
+              },
+            },
+          },
+        },
+        operationId: "createUser",
+        part: "request",
+        payload: { name: "Alice", age: "thirty", extra: "noise" },
+      },
+      inputSchema: {
+        properties: {
+          spec: { description: "OpenAPI/Swagger document (object or JSON string)" },
+          operationId: { description: "operationId to validate against (preferred)" },
+          method: { description: "HTTP method (use with `path` if no operationId)" },
+          path: { description: "Path template (use with `method` if no operationId)" },
+          part: { description: "Schema to validate against: \"request\" or \"response\"" },
+          status: { description: "Response status when part=\"response\" (defaults to first 2xx)" },
+          payload: { description: "JSON value to validate" },
+        },
+        required: ["spec", "part", "payload"],
+      },
+      output: {
+        example: {
+          valid: false,
+          schemaPresent: true,
+          errors: [
+            { path: "", rule: "required", message: "missing required field: email" },
+            { path: ".age", rule: "type", message: "expected integer, got string" },
+            { path: ".extra", rule: "additionalProperties", message: "unexpected property: extra" },
+          ],
+        },
+      },
+    },
+    handler: (i) => {
+      if (!("spec" in i)) throw bad('Missing "spec"');
+      if (!("part" in i)) throw bad('Missing "part" (must be "request" or "response")');
+      if (!("payload" in i)) throw bad('Missing "payload"');
+      const spec = parseMaybeJson(i.spec, "spec");
+      if (!spec || typeof spec !== "object") throw bad('"spec" must be an OpenAPI document');
+
+      const { op } = locateOperation(spec, i);
+      const { schema } = locateSchemaForPart(op, i.part, i.status);
+
+      // No schema documented for this part → vacuously valid, but mark
+      // schemaPresent:false so the caller knows nothing was actually checked.
+      if (!schema) {
+        return { valid: true, schemaPresent: false, errors: [] };
+      }
+
+      const errors = [];
+      validatePayload(schema, i.payload, "", errors);
+      return { valid: errors.length === 0, schemaPresent: true, errors };
+    },
+  },
 ];
 
 // ---- openapi-to-curl helpers (kept below API_TOOLS for readability since
@@ -977,4 +1062,132 @@ function mockFromSchema(schema, depth = 0) {
   if (t === "boolean") return false;
   if (t === "null") return null;
   return null;
+}
+
+// ---- openapi-validate-payload helpers ----
+
+// JSON type of a value, with "integer" split out of "number" because most
+// OpenAPI schemas distinguish them.
+function jsonType(v) {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "array";
+  if (typeof v === "string") return "string";
+  if (typeof v === "boolean") return "boolean";
+  if (typeof v === "number") return Number.isInteger(v) ? "integer" : "number";
+  if (typeof v === "object") return "object";
+  return typeof v;
+}
+
+// Type-match check, honoring two OpenAPI/JSON-Schema conventions:
+// (1) schema.type may be an array of allowed types (OpenAPI 3.1 / nullable),
+// (2) an integer value satisfies a "number" constraint (every int is a number).
+function typeMatches(expected, actual) {
+  if (!expected) return true;
+  if (Array.isArray(expected)) {
+    return expected.some((t) => typeMatches(t, actual));
+  }
+  if (expected === "number" && actual === "integer") return true;
+  return expected === actual;
+}
+
+// Stringly-equal deep equality, sufficient for enum membership in JSON-able
+// values. Avoids dragging in a recursive equality helper.
+function jsonEqual(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// Recursive validator. Mutates `errors`. Depth-capped at 8 — defense in
+// depth against accidentally circular schemas (we don't deref $ref, so a
+// real cycle ends at the $ref node, but a hand-written recursive structure
+// could still be deep).
+function validatePayload(schema, value, path, errors, depth = 0) {
+  if (depth > 8) {
+    errors.push({ path, rule: "depth", message: "max validation depth exceeded" });
+    return;
+  }
+  if (!schema || typeof schema !== "object") return;
+
+  // $ref: we don't dereference. Surface it explicitly so the caller knows
+  // they need to resolve upstream rather than seeing a silent pass.
+  if (typeof schema.$ref === "string") {
+    errors.push({ path, rule: "ref-not-resolved", message: `$ref left unresolved: ${schema.$ref}` });
+    return;
+  }
+
+  // oneOf / anyOf: pick the arm that validates cleanly; if none, surface
+  // the arm with the fewest errors (most useful diagnostic).
+  for (const k of ["oneOf", "anyOf"]) {
+    if (Array.isArray(schema[k]) && schema[k].length) {
+      let bestErrs = null;
+      for (const arm of schema[k]) {
+        const armErrs = [];
+        validatePayload(arm, value, path, armErrs, depth + 1);
+        if (armErrs.length === 0) { bestErrs = []; break; }
+        if (bestErrs === null || armErrs.length < bestErrs.length) bestErrs = armErrs;
+      }
+      for (const e of bestErrs) errors.push(e);
+      return;
+    }
+  }
+  // allOf: every arm must validate against the same value.
+  if (Array.isArray(schema.allOf) && schema.allOf.length) {
+    for (const arm of schema.allOf) validatePayload(arm, value, path, errors, depth + 1);
+    // Fall through — allOf can be combined with own type/properties.
+  }
+
+  const actualType = jsonType(value);
+
+  // Type check. If it fails, stop — descending into properties/items
+  // against the wrong type just produces noisy follow-on errors.
+  if (schema.type && !typeMatches(schema.type, actualType)) {
+    const expected = Array.isArray(schema.type) ? schema.type.join("|") : schema.type;
+    errors.push({ path, rule: "type", message: `expected ${expected}, got ${actualType}` });
+    return;
+  }
+
+  if (Array.isArray(schema.enum) && schema.enum.length) {
+    if (!schema.enum.some((e) => jsonEqual(e, value))) {
+      errors.push({ path, rule: "enum", message: `value not in enum: ${JSON.stringify(schema.enum)}` });
+    }
+  }
+
+  if (actualType === "object" && value !== null) {
+    const props = schema.properties || {};
+    // Required: sorted so multiple missing fields report deterministically.
+    const required = Array.isArray(schema.required) ? schema.required.slice().sort() : [];
+    for (const r of required) {
+      if (!(r in value)) {
+        errors.push({ path, rule: "required", message: `missing required field: ${r}` });
+      }
+    }
+    // Properties: iterate in insertion order of the payload (deterministic
+    // for any given input). additionalProperties:false flags strangers.
+    for (const [k, v] of Object.entries(value)) {
+      const childPath = path + "." + k;
+      if (props[k]) {
+        validatePayload(props[k], v, childPath, errors, depth + 1);
+      } else if (schema.additionalProperties === false) {
+        errors.push({ path: childPath, rule: "additionalProperties", message: `unexpected property: ${k}` });
+      }
+    }
+  }
+
+  if (actualType === "array" && schema.items) {
+    value.forEach((item, i) => validatePayload(schema.items, item, `${path}[${i}]`, errors, depth + 1));
+  }
+}
+
+// Locate the schema for a given operation `part` ("request" or "response").
+// Returns the schema (or null) plus the resolved status when part="response".
+function locateSchemaForPart(op, part, requestedStatus) {
+  if (part === "request") {
+    const rb = op && op.requestBody && op.requestBody.content && op.requestBody.content["application/json"];
+    return { schema: (rb && rb.schema) || null, status: null };
+  }
+  if (part === "response") {
+    const { status, response } = pickResponse(op, requestedStatus);
+    const jc = response && response.content && response.content["application/json"];
+    return { schema: (jc && jc.schema) || null, status };
+  }
+  throw bad('"part" must be "request" or "response"');
 }

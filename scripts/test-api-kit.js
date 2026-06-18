@@ -808,5 +808,192 @@ ok(threw, `missing "query" rejected`);
   ok(r.total === 0, `empty paths → 0`);
 }
 
+// ---------- openapi-validate-payload ----------
+
+// Helper: build a spec with one operation + a given request body schema.
+const reqSpec = (schema) => ({
+  paths: { "/u": { post: {
+    operationId: "u",
+    requestBody: { content: { "application/json": { schema } } },
+    responses: { "201": { description: "ok" } },
+  } } },
+});
+
+// V1. Example round-trips exactly.
+{
+  const t = tool("openapi-validate-payload");
+  const r = run("openapi-validate-payload", t.discovery.input);
+  const expected = t.discovery.output.example;
+  ok(JSON.stringify(r) === JSON.stringify(expected),
+    `validate example round-trips exactly (got ${JSON.stringify(r)})`);
+}
+
+// V2. Valid payload → valid:true, errors:[].
+{
+  const spec = reqSpec({ type: "object", required: ["name"],
+    properties: { name: { type: "string" } } });
+  const r = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: { name: "ok" } });
+  ok(r.valid === true && r.schemaPresent === true && r.errors.length === 0,
+    `valid payload passes (got ${JSON.stringify(r)})`);
+}
+
+// V3. Type mismatch is flagged.
+{
+  const spec = reqSpec({ type: "object", properties: { age: { type: "integer" } } });
+  const r = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: { age: "old" } });
+  ok(r.valid === false && r.errors.some((e) => e.rule === "type" && e.path === ".age"),
+    `type mismatch flagged at .age`);
+}
+
+// V4. Multiple required fields missing → reported in sorted order.
+{
+  const spec = reqSpec({ type: "object", required: ["zebra", "alpha", "mango"], properties: {} });
+  const r = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: {} });
+  const missing = r.errors.filter((e) => e.rule === "required").map((e) => e.message);
+  ok(JSON.stringify(missing) === JSON.stringify([
+    "missing required field: alpha",
+    "missing required field: mango",
+    "missing required field: zebra",
+  ]), `required errors sorted alphabetically (got ${JSON.stringify(missing)})`);
+}
+
+// V5. Enum violation.
+{
+  const spec = reqSpec({ type: "object", properties: { role: { type: "string", enum: ["a", "b"] } } });
+  const r = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: { role: "c" } });
+  ok(r.errors.some((e) => e.rule === "enum" && e.path === ".role"), `enum violation flagged`);
+}
+
+// V6. additionalProperties:false flags unknown keys.
+{
+  const spec = reqSpec({ type: "object", properties: { name: { type: "string" } }, additionalProperties: false });
+  const r = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: { name: "x", junk: 1 } });
+  ok(r.errors.some((e) => e.rule === "additionalProperties" && e.path === ".junk"),
+    `unknown key flagged at .junk`);
+}
+// And the opposite: by default additionalProperties is allowed.
+{
+  const spec = reqSpec({ type: "object", properties: { name: { type: "string" } } });
+  const r = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: { name: "x", extra: 1 } });
+  ok(r.valid === true, `extras silently allowed when additionalProperties omitted`);
+}
+
+// V7. Nested object recursion: errors carry the dotted path.
+{
+  const spec = reqSpec({ type: "object", properties: {
+    user: { type: "object", required: ["name"],
+      properties: { name: { type: "string" }, age: { type: "integer" } } } } });
+  const r = run("openapi-validate-payload", { spec, operationId: "u", part: "request",
+    payload: { user: { age: "five" } } });
+  ok(r.errors.some((e) => e.path === ".user" && e.rule === "required" && e.message.includes("name"))
+     && r.errors.some((e) => e.path === ".user.age" && e.rule === "type"),
+    `nested errors carry full path (got ${JSON.stringify(r.errors)})`);
+}
+
+// V8. Array items validated; path uses [i] notation.
+{
+  const spec = reqSpec({ type: "object", properties: {
+    tags: { type: "array", items: { type: "string" } } } });
+  const r = run("openapi-validate-payload", { spec, operationId: "u", part: "request",
+    payload: { tags: ["ok", 123, "also-ok"] } });
+  ok(r.errors.length === 1 && r.errors[0].path === ".tags[1]" && r.errors[0].rule === "type",
+    `array item type checked at [1] (got ${JSON.stringify(r.errors)})`);
+}
+
+// V9. oneOf: passes if any arm passes.
+{
+  const spec = reqSpec({ oneOf: [
+    { type: "object", required: ["a"], properties: { a: { type: "string" } } },
+    { type: "object", required: ["b"], properties: { b: { type: "integer" } } },
+  ] });
+  const r1 = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: { a: "x" } });
+  const r2 = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: { b: 1 } });
+  const r3 = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: {} });
+  ok(r1.valid && r2.valid && !r3.valid,
+    `oneOf: a-arm and b-arm pass; empty fails`);
+}
+
+// V10. allOf: all arms must pass.
+{
+  const spec = reqSpec({ allOf: [
+    { type: "object", required: ["a"] },
+    { type: "object", required: ["b"] },
+  ] });
+  const r = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: { a: 1 } });
+  ok(!r.valid && r.errors.some((e) => e.message.includes("b")),
+    `allOf: missing one arm's required surfaces error`);
+}
+
+// V11. $ref is not dereferenced — surfaced as an error so callers know.
+{
+  const spec = reqSpec({ $ref: "#/components/schemas/User" });
+  const r = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: {} });
+  ok(r.errors.length === 1 && r.errors[0].rule === "ref-not-resolved",
+    `$ref surfaced as ref-not-resolved`);
+}
+
+// V12. No schema documented → vacuously valid, schemaPresent:false.
+{
+  const spec = { paths: { "/u": { post: {
+    operationId: "u", responses: { "201": { description: "ok" } } } } } };
+  const r = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: { anything: 1 } });
+  ok(r.valid === true && r.schemaPresent === false && r.errors.length === 0,
+    `no schema → schemaPresent:false, errors:[]`);
+}
+
+// V13. Response mode: defaults to first 2xx and validates against its schema.
+{
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: {
+    "200": { content: { "application/json": { schema: { type: "object", required: ["id"], properties: { id: { type: "integer" } } } } } },
+    "400": {},
+  } } } } };
+  const r = run("openapi-validate-payload", { spec, operationId: "u", part: "response", payload: { id: 5 } });
+  ok(r.valid === true && r.schemaPresent === true, `response 200 validates`);
+}
+
+// V14. Response mode: explicit status honored.
+{
+  const spec = { paths: { "/u": { get: { operationId: "u", responses: {
+    "200": { content: { "application/json": { schema: { type: "object", properties: { v: { type: "integer" } } } } } },
+    "201": { content: { "application/json": { schema: { type: "object", properties: { created: { type: "boolean" } } } } } },
+  } } } } };
+  const r = run("openapi-validate-payload", {
+    spec, operationId: "u", part: "response", status: "201", payload: { created: "yes" } });
+  ok(r.errors.some((e) => e.path === ".created" && e.rule === "type"),
+    `explicit status uses its schema (got ${JSON.stringify(r.errors)})`);
+}
+
+// V15. Invalid part rejected.
+threw = false; try {
+  run("openapi-validate-payload", { spec: { paths: { "/u": { get: { operationId: "u", responses: { "200": {} } } } } },
+    operationId: "u", part: "headers", payload: {} });
+} catch { threw = true; }
+ok(threw, `part:"headers" rejected`);
+
+// V16. Missing spec / part / payload rejected.
+threw = false; try { run("openapi-validate-payload", { part: "request", payload: {} }); } catch { threw = true; }
+ok(threw, `missing "spec" rejected`);
+threw = false; try { run("openapi-validate-payload", { spec: { paths: {} }, payload: {} }); } catch { threw = true; }
+ok(threw, `missing "part" rejected`);
+threw = false; try { run("openapi-validate-payload", { spec: { paths: {} }, part: "request" }); } catch { threw = true; }
+ok(threw, `missing "payload" rejected`);
+
+// V17. Nullable: schema.type array including "null" accepts null.
+{
+  const spec = reqSpec({ type: "object", properties: { x: { type: ["string", "null"] } } });
+  const r1 = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: { x: null } });
+  const r2 = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: { x: "ok" } });
+  const r3 = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: { x: 5 } });
+  ok(r1.valid && r2.valid && !r3.valid,
+    `nullable via type:[...] accepts null + string, rejects number`);
+}
+
+// V18. integer satisfies number (every int is a number per spec).
+{
+  const spec = reqSpec({ type: "object", properties: { x: { type: "number" } } });
+  const r = run("openapi-validate-payload", { spec, operationId: "u", part: "request", payload: { x: 42 } });
+  ok(r.valid === true, `integer satisfies number constraint`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
