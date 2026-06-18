@@ -8,6 +8,10 @@
 //   openapi-lint   score a single spec on agent-readiness (does an LLM-driven
 //                  caller have what it needs to call this API correctly?) and
 //                  return a structured violations list + 0..100 score.
+//   openapi-extract  flatten a spec into a structured endpoint list (method,
+//                  path, params, response codes, JSON-body flag) plus per-
+//                  method and per-tag counts — what an agent wants when
+//                  picking what to call next without reading the full doc.
 //
 // Scope notes for v1:
 //   - Works against OpenAPI 3.x and Swagger 2.x (both share `paths`).
@@ -386,6 +390,127 @@ export const API_TOOLS = [
       const ok = counts.error === 0;
 
       return { ok, score, counts, violations };
+    },
+  },
+  {
+    route: "POST /api/openapi-extract", name: "OpenAPI endpoint extractor", slug: "openapi-extract", category: "conversion", price: "$0.002",
+    description:
+      "Flatten an OpenAPI 3.x or Swagger 2.x spec into a structured list of callable endpoints — one row per operation with method, path, operationId, summary, tags, parameters (name / in / required / type), JSON-body flag, and documented response codes. Includes per-method and per-tag counts so an agent can pick what to call next without parsing the full spec. Output is sorted by path then method for stable, agent-friendly grouping. Pure CPU — deterministic, no network, no $ref dereferencing.",
+    tags: ["openapi", "swagger", "extract", "endpoints", "api", "agent-readiness"],
+    discovery: {
+      bodyType: "json",
+      input: {
+        spec: {
+          openapi: "3.0.0",
+          paths: {
+            "/users": {
+              get: {
+                operationId: "listUsers",
+                summary: "List users",
+                tags: ["users"],
+                parameters: [{ name: "limit", in: "query", required: false, schema: { type: "integer" } }],
+                responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+              },
+            },
+            "/users/{id}": {
+              delete: {
+                operationId: "deleteUser",
+                summary: "Delete user",
+                tags: ["users"],
+                parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+                responses: { "204": { description: "gone" } },
+              },
+            },
+          },
+        },
+      },
+      inputSchema: {
+        properties: {
+          spec: { description: "OpenAPI/Swagger document (object or JSON string)" },
+        },
+        required: ["spec"],
+      },
+      output: {
+        example: {
+          endpoints: [
+            {
+              method: "GET", path: "/users", operationId: "listUsers", summary: "List users", tags: ["users"],
+              params: [{ name: "limit", in: "query", required: false, type: "integer" }],
+              hasJsonBody: false, responses: ["200", "400"],
+            },
+            {
+              method: "DELETE", path: "/users/{id}", operationId: "deleteUser", summary: "Delete user", tags: ["users"],
+              params: [{ name: "id", in: "path", required: true, type: "string" }],
+              hasJsonBody: false, responses: ["204"],
+            },
+          ],
+          stats: { total: 2, byMethod: { DELETE: 1, GET: 1 }, byTag: { users: 2 } },
+        },
+      },
+    },
+    handler: (i) => {
+      if (!("spec" in i)) throw bad('Missing "spec"');
+      const spec = parseMaybeJson(i.spec, "spec");
+      if (!spec || typeof spec !== "object") throw bad('"spec" must be an OpenAPI document');
+
+      const endpoints = [];
+      const byMethod = {};
+      const byTag = {};
+
+      for (const [route, entry] of indexEndpoints(spec)) {
+        const sp = route.indexOf(" ");
+        const method = route.slice(0, sp);
+        const path = route.slice(sp + 1);
+        const { op, pathItem } = entry;
+
+        const params = mergeParams(pathItem, op).map((p) => ({
+          name: p.name,
+          in: p.in,
+          required: !!p.required,
+          type: paramType(p),
+        }));
+        const hasJsonBody = !!(
+          op.requestBody &&
+          op.requestBody.content &&
+          op.requestBody.content["application/json"]
+        );
+        // Sort response codes lexically — they're already string keys, and
+        // numeric-ascending happens to match lexical for 3-digit HTTP codes.
+        const responses = statusCodes(op).sort();
+        const tags = Array.isArray(op.tags) ? op.tags.slice() : [];
+
+        endpoints.push({
+          method,
+          path,
+          operationId: op.operationId || null,
+          // Prefer summary; fall back to description for a one-line agent hint.
+          summary: op.summary || op.description || null,
+          tags,
+          params,
+          hasJsonBody,
+          responses,
+        });
+
+        byMethod[method] = (byMethod[method] || 0) + 1;
+        for (const t of tags) byTag[t] = (byTag[t] || 0) + 1;
+      }
+
+      // Sort by path, then method. Grouping endpoints on the same path is
+      // what an agent actually wants when scanning an API surface.
+      endpoints.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
+
+      // Alphabetically-sorted stats keys so two runs against the same input
+      // produce byte-identical JSON (the round-trip property).
+      const sortKeys = (o) => Object.fromEntries(Object.keys(o).sort().map((k) => [k, o[k]]));
+
+      return {
+        endpoints,
+        stats: {
+          total: endpoints.length,
+          byMethod: sortKeys(byMethod),
+          byTag: sortKeys(byTag),
+        },
+      };
     },
   },
 ];

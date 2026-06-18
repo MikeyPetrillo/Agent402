@@ -244,5 +244,114 @@ ok(threw, `missing "spec" rejected`);
     `score should be 81, got ${r.score}`);
 }
 
+// ---------- openapi-extract ----------
+
+// E1. Example round-trips exactly. Same HTTP contract test-all.js asserts.
+{
+  const t = tool("openapi-extract");
+  const r = run("openapi-extract", t.discovery.input);
+  const expected = t.discovery.output.example;
+  ok(JSON.stringify(r) === JSON.stringify(expected),
+    `extract example round-trips exactly (got ${JSON.stringify(r)})`);
+}
+
+// E2. Empty spec → empty list + zero stats.
+{
+  const r = run("openapi-extract", { spec: { openapi: "3.0.0", paths: {} } });
+  ok(r.endpoints.length === 0 && r.stats.total === 0
+     && Object.keys(r.stats.byMethod).length === 0
+     && Object.keys(r.stats.byTag).length === 0,
+    `empty paths → empty extract`);
+}
+
+// E3. JSON-string input parses + extracts.
+{
+  const spec = JSON.stringify({ paths: { "/a": { get: { responses: { "200": {} } } } } });
+  const r = run("openapi-extract", { spec });
+  ok(r.endpoints.length === 1 && r.endpoints[0].method === "GET" && r.endpoints[0].path === "/a",
+    `string spec extracted`);
+}
+
+// E4. Path-level params merge with operation-level (path-level appears in extract).
+{
+  const spec = { paths: { "/u": {
+    parameters: [{ name: "trace", in: "header", required: true, schema: { type: "string" } }],
+    get: { responses: { "200": {} } } } } };
+  const r = run("openapi-extract", { spec });
+  const params = r.endpoints[0].params;
+  ok(params.some((p) => p.name === "trace" && p.in === "header" && p.required === true),
+    `path-level params merged into extract (got ${JSON.stringify(params)})`);
+}
+
+// E5. Swagger 2.x top-level `type` on a param surfaces as the type.
+{
+  const spec = { swagger: "2.0", paths: { "/u": { get: {
+    parameters: [{ name: "id", in: "query", type: "integer" }],
+    responses: { "200": {} } } } } };
+  const r = run("openapi-extract", { spec });
+  ok(r.endpoints[0].params[0].type === "integer",
+    `Swagger 2.x top-level type captured (got ${JSON.stringify(r.endpoints[0].params)})`);
+}
+
+// E6. JSON request body detected.
+{
+  const spec = { paths: { "/u": { post: {
+    requestBody: { content: { "application/json": { schema: { type: "object" } } } },
+    responses: { "201": {} } } } } };
+  const r = run("openapi-extract", { spec });
+  ok(r.endpoints[0].hasJsonBody === true, `json body flagged`);
+}
+{
+  const spec = { paths: { "/u": { post: {
+    requestBody: { content: { "application/xml": { schema: {} } } },
+    responses: { "201": {} } } } } };
+  const r = run("openapi-extract", { spec });
+  ok(r.endpoints[0].hasJsonBody === false, `non-json body not flagged`);
+}
+
+// E7. Multi-tag operation counts in each tag bucket.
+{
+  const spec = { paths: { "/u": { get: {
+    tags: ["users", "admin"], responses: { "200": {} } } } } };
+  const r = run("openapi-extract", { spec });
+  ok(r.stats.byTag.users === 1 && r.stats.byTag.admin === 1,
+    `multi-tag counted per tag (got ${JSON.stringify(r.stats.byTag)})`);
+}
+
+// E8. Output is sorted by path, then method.
+{
+  const spec = { paths: {
+    "/z": { get: { responses: { "200": {} } } },
+    "/a": { post: { responses: { "200": {} } } },
+    "/m": { put: { responses: { "200": {} } }, get: { responses: { "200": {} } } },
+  } };
+  const r = run("openapi-extract", { spec });
+  const order = r.endpoints.map((e) => `${e.method} ${e.path}`);
+  ok(JSON.stringify(order) === JSON.stringify(["POST /a", "GET /m", "PUT /m", "GET /z"]),
+    `sorted by path-then-method (got ${JSON.stringify(order)})`);
+}
+
+// E9. summary falls back to description when summary is missing.
+{
+  const spec = { paths: { "/u": { get: {
+    description: "Get a user record", responses: { "200": {} } } } } };
+  const r = run("openapi-extract", { spec });
+  ok(r.endpoints[0].summary === "Get a user record",
+    `summary falls back to description`);
+}
+
+// E10. Operations with no operationId / summary / tags get null/[] placeholders.
+{
+  const spec = { paths: { "/u": { get: { responses: { "200": {} } } } } };
+  const r = run("openapi-extract", { spec });
+  const e = r.endpoints[0];
+  ok(e.operationId === null && e.summary === null && Array.isArray(e.tags) && e.tags.length === 0,
+    `missing op metadata → null/[] (got ${JSON.stringify(e)})`);
+}
+
+// E11. Missing "spec" rejected.
+threw = false; try { run("openapi-extract", {}); } catch { threw = true; }
+ok(threw, `missing "spec" rejected`);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
