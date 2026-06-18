@@ -261,7 +261,22 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             statusCode: handlerErr.statusCode || 500,
             errorMessage: handlerErr.message,
           });
-          return { content: [{ type: "text", text: `Agent402: ${handlerErr.message}` }], isError: true };
+          // Self-correction envelope: when the call fails the LLM caller almost
+          // always has enough information in the original tool description, but
+          // it ignored it. Echo the expected shape + a working example back so
+          // the next attempt can fix itself without another search_tools call.
+          const hint = {
+            error: handlerErr.message,
+            tool: entry.def.slug,
+            expected: entry.def.discovery?.inputSchema?.properties || {},
+            required: entry.def.discovery?.inputSchema?.required || [],
+            example: entry.def.discovery?.input || {},
+            callWith: {
+              name: "call_tool",
+              arguments: { slug: entry.def.slug, params: entry.def.discovery?.input || {} },
+            },
+          };
+          return { content: [{ type: "text", text: JSON.stringify(hint, null, 2) }], isError: true };
         }
         onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: false });
         if (result && result.__binary) {

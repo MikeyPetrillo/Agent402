@@ -785,7 +785,13 @@ const dataTools = [
       output: { example: { markdown: "# Hi\n\n**bold**" } },
     },
     handler: (input) => {
-      const text = capText(need(input, "html"), 100_000, "html");
+      // Accept html under several common aliases; agents frequently call this
+      // with `body`, `content`, or `text` instead of `html`.
+      const raw = input.html ?? input.body ?? input.content ?? input.text;
+      if (typeof raw !== "string" || !raw) {
+        throw bad('Missing "html". Send {"html":"<h1>Hi</h1>..."} — alternate fields body/content/text are also accepted.');
+      }
+      const text = capText(raw, 100_000, "html");
       const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
       return { markdown: td.turndown(text) };
     },
@@ -1724,19 +1730,25 @@ const validationTools = [
       output: { example: { ext: "webp", mime: "image/webp" } },
     },
     handler: (input) => {
-      if (input.ext) {
-        const ext = String(input.ext).toLowerCase().replace(/^\./, "");
+      // Accept common synonyms: `extension` / `filename` for ext; `mime` /
+      // `mimetype` / `contentType` for type. Also handle the case where an
+      // agent sends a full filename ("photo.png") as `ext`.
+      const extRaw = input.ext ?? input.extension ?? input.filename;
+      const typeRaw = input.type ?? input.mime ?? input.mimetype ?? input.contentType;
+      if (extRaw) {
+        // ".png" / "photo.png" / "png" all collapse to "png"
+        const ext = String(extRaw).toLowerCase().replace(/^\./, "").replace(/^.*\./, "");
         const mime = MIME_MAP[ext];
         if (!mime) throw bad(`Unknown extension: ${ext}`);
         return { ext, mime };
       }
-      if (input.type) {
-        const type = String(input.type).toLowerCase();
+      if (typeRaw) {
+        const type = String(typeRaw).toLowerCase();
         const exts = Object.entries(MIME_MAP).filter(([, m]) => m === type).map(([e]) => e);
         if (!exts.length) throw bad(`Unknown MIME type: ${type}`);
         return { type, extensions: exts };
       }
-      throw bad("Provide ?ext= or ?type=");
+      throw bad('Provide ext= (e.g. "png") or type= (e.g. "image/png"). Alternate fields extension/filename/mime/mimetype/contentType are also accepted.');
     },
   },
   {
@@ -1985,8 +1997,20 @@ const networkTools = [
       output: { example: { domain: "example.com", registrar: "IANA", created: "1995-08-14", expires: "2026-08-13", nameservers: ["a.iana-servers.net"], status: ["client transfer prohibited"] } },
     },
     handler: async (input) => {
-      const domain = need(input, "domain").trim().toLowerCase().replace(/\.$/, "");
-      if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain)) throw bad("Invalid domain");
+      // Be permissive about what callers send. Agents routinely pass `url`,
+      // `hostname`, `host`, or even a full URL string in `domain`. Accept all
+      // of those and extract the registrable hostname rather than 400'ing.
+      let raw = input.domain ?? input.url ?? input.hostname ?? input.host ?? "";
+      if (typeof raw !== "string" || !raw.trim()) {
+        throw bad('Missing "domain". Send {"domain":"example.com"} or pass a URL — alternate fields url/hostname/host are also accepted.');
+      }
+      raw = raw.trim();
+      // Strip a URL down to its hostname so http://example.com/foo works.
+      if (/^[a-z]+:\/\//i.test(raw)) {
+        try { raw = new URL(raw).hostname; } catch { /* fall through */ }
+      }
+      const domain = raw.toLowerCase().replace(/\.$/, "");
+      if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain)) throw bad(`Invalid domain "${raw}". Expected a hostname like example.com`);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15_000);
       let data;
@@ -2106,7 +2130,12 @@ const networkTools = [
       output: { example: { contentType: "image/png", body: "(binary PNG image)" } },
     },
     handler: async (input) => {
-      const text = capText(need(input, "text"), 2048);
+      // Accept any reasonable "encode this" alias.
+      const raw = input.text ?? input.data ?? input.content ?? input.url ?? input.value;
+      if (typeof raw !== "string" || !raw) {
+        throw bad('Missing "text". Send {"text":"https://example.com"} — alternate fields data/content/url/value are also accepted.');
+      }
+      const text = capText(raw, 2048);
       const size = Math.min(Math.max(parseInt(input.size, 10) || 256, 128), 1024);
       const buffer = await QRCode.toBuffer(text, { width: size, margin: 2 });
       return { __binary: buffer, contentType: "image/png" };

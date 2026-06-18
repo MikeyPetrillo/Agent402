@@ -34,3 +34,4 @@ redis-cacheget-timeout-hotfix: 2026-06-19T03:30:00Z
 index-snapshot-memo-and-htmlcache: 2026-06-19T04:30:00Z
 analytics-split-4xx-5xx-and-mcp-flat-args: 2026-06-19T05:30:00Z
 analytics-legacy-fallback-flip-to-4xx: 2026-06-19T06:00:00Z
+tools-input-aliases-and-self-correction-envelope: 2026-06-19T07:00:00Z

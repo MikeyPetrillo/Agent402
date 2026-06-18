@@ -1575,7 +1575,21 @@ for (const tool of ALL_KIT) {
       errored = true;
       status = err.statusCode || 500;
       logToolError(tool.slug, status, err.message);
-      res.status(status).json({ error: err.message });
+      // Self-correction envelope: echo the tool's input schema + a working
+      // example back on 4xx so the LLM has everything it needs to fix the
+      // call without searching the catalog again. 5xx stays minimal — the
+      // caller did nothing wrong, no schema hint is useful there.
+      if (status >= 400 && status < 500) {
+        res.status(status).json({
+          error: err.message,
+          tool: tool.slug,
+          expected: tool.discovery?.inputSchema?.properties || {},
+          required: tool.discovery?.inputSchema?.required || [],
+          example: tool.discovery?.input || {},
+        });
+      } else {
+        res.status(status).json({ error: err.message });
+      }
     } finally {
       // Fire-and-forget. Analytics outages must NEVER affect agents.
       recordToolCall({
