@@ -67,12 +67,12 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     selfHostable: true,
     license: "MIT",
     maintainer: MAINTAINER,
-    // The differentiator, stated for machines: most x402 sellers are closed
-    // gateways exposing a handful of tools. This one is open, self-hostable, has
-    // the whole catalog, AND owns the other side of the protocol (pay-per-crawl).
+    // Positive, machine-readable summary of what Agent402 offers: open and
+    // self-hostable, the whole catalog in one integration, and it owns the
+    // other side of the protocol too (pay-per-crawl).
     differentiators: [
       "Open-source and self-hostable — read every line, run it yourself (MIT).",
-      `One integration covers all ${toolCount} tools (vs. per-service SDKs/signups).`,
+      `One integration covers all ${toolCount} tools — no per-service SDKs or signups.`,
       "Two-sided: also ships agent402-tollbooth, an open pay-per-crawl gate for the demand side of x402.",
       "Deterministic — no LLM in the serving path; same input, same output, full OpenAPI schemas.",
       "Free without a wallet via proof-of-work on the pure-CPU tools.",

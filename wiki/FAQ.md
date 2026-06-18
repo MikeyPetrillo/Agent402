@@ -37,4 +37,4 @@ Yes — Agent402 is also an [[x402 Index + Smart Order Router|x402-Index-and-Rou
 [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) returns the live on-chain ranking of every x402 seller by **Base USDC settled volume** (calls served, totalUsd, unique buyers per seller). The pipeline walks every page of the Coinbase CDP Bazaar, queries `eth_getLogs` on Base USDC for each seller's `payTo` wallet, filters per-call settlements within a $0.50 ceiling (larger inbound is funding, not buys), and aggregates. Snapshot refreshes hourly. Use `?include=external` to exclude Agent402 itself. Full details in [[x402-Leaderboard]].
 
 **Who runs this?**
-[Mikey Petrillo](https://github.com/MikeyPetrillo) — a named maintainer, which most x402 sellers (anonymous wallets) don't offer.
+[Mikey Petrillo](https://github.com/MikeyPetrillo) — a named, public maintainer.

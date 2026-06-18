@@ -48,7 +48,7 @@ The tollbooth doesn't change — same `createTollbooth({ payTo: "0xYourWallet" }
 
 ## Why this demo matters
 
-- **Open both sides.** Most x402 demos show *spending* (buyer). Most pay-per-crawl demos show *charging* (seller). This is one script showing **both** working against each other with no closed-source middleman.
+- **Open both sides.** One script shows the **buyer** (spending) and **seller** (charging) sides of x402 working end-to-end against each other — fully open source, no hidden middleman.
 - **AgentCore-ready.** The Strands agent shape is exactly what AgentCore deploys. CloudWatch sees every paid call once you swap in the real `fetch`.
 - **Realistic settlement.** Tollbooth's PoW rail proves the loop closes even when the buying agent has *no wallet*. USDC just changes the rail, not the contract.
 

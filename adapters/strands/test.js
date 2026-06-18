@@ -80,8 +80,9 @@ async function main() {
   const parsed = hashTool.inputSchema.parse({ text: "hi", algo: "sha256" });
   if (parsed.text !== "hi") throw new Error("Zod schema did not pass through 'text'");
 
-  // 3. callback() pays under the hood and returns the structured result —
-  //    NOT JSON-stringified (Strands accepts any return type, unlike LangChain).
+  // 3. callback() pays under the hood and returns the structured result
+  //    directly (Strands accepts any JSON-serializable return type — no
+  //    JSON.stringify wrapper needed).
   const out = await hashTool.callback({ text: "hello world", algo: "sha256" });
   if (!out || typeof out !== "object") throw new Error("expected an object from callback (got " + typeof out + ")");
   if (!out.hex && !out.digest && !out.hash) throw new Error(`expected a hash field in: ${JSON.stringify(out)}`);

@@ -1,7 +1,6 @@
 # Agent402 — the open x402 index (Find · Route · Leaderboard) + 1,100 tools for AI agents
 
-> **What makes it different:** most x402 services are *closed gateways* exposing a
-> handful of tools. Agent402 is the **open-source, self-hostable** one — and a
+> **What makes it different:** Agent402 is **open-source and self-hostable** — and a
 > single integration gives a buyer **three free primitives over the whole x402
 > ecosystem**:
 >
