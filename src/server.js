@@ -690,24 +690,41 @@ const MANIFEST = serviceManifest({
 // /api/stats and /.well-known/x402 so a discovery agent fetching either one
 // sees the same liveness signal a human sees on /analytics. Returns null when
 // analytics is disabled or the query fails — callers omit the field entirely.
+// Memoized for PERF_CACHE_MS so the landing-page activity script (polling
+// /api/stats every 12s) doesn't fire a fresh Postgres aggregation on every
+// caller. One in-flight query is shared across concurrent callers, which is
+// what was previously starving the event loop under load.
+const PERF_CACHE_MS = 30_000;
+let perfCache = { at: 0, value: null };
+let perfInflight = null;
 async function buildPerformance24h() {
   if (!analyticsEnabled()) return null;
-  try {
-    const a = await getAnalytics({ windowHours: 24, top: 1 });
-    if (!a || !a.ok || !a.totals || !a.totals.calls) return null;
-    const t = a.totals;
-    return {
-      windowHours: 24,
-      calls: t.calls,
-      cacheHitRate: +((t.cached / t.calls) || 0).toFixed(4),
-      errorRate: +((t.errored / t.calls) || 0).toFixed(4),
-      p50LatencyMs: t.p50_latency_ms,
-      p95LatencyMs: t.p95_latency_ms,
-      dashboardUrl: `${BASE_URL}/analytics`,
-    };
-  } catch (_e) {
-    return null;
-  }
+  const now = Date.now();
+  if (now - perfCache.at < PERF_CACHE_MS) return perfCache.value;
+  if (perfInflight) return perfInflight;
+  perfInflight = (async () => {
+    try {
+      const a = await getAnalytics({ windowHours: 24, top: 1 });
+      if (!a || !a.ok || !a.totals || !a.totals.calls) return null;
+      const t = a.totals;
+      return {
+        windowHours: 24,
+        calls: t.calls,
+        cacheHitRate: +((t.cached / t.calls) || 0).toFixed(4),
+        errorRate: +((t.errored / t.calls) || 0).toFixed(4),
+        p50LatencyMs: t.p50_latency_ms,
+        p95LatencyMs: t.p95_latency_ms,
+        dashboardUrl: `${BASE_URL}/analytics`,
+      };
+    } catch (_e) {
+      return null;
+    }
+  })().then((value) => {
+    perfCache = { at: Date.now(), value };
+    perfInflight = null;
+    return value;
+  });
+  return perfInflight;
 }
 // /.well-known/x402 — discovery agents fetch this once to learn the seller.
 // Most of the manifest is boot-time constants (catalog, networks, wallet) so
