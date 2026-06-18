@@ -95,7 +95,7 @@ export function analyticsPage(data, { baseUrl }) {
   const rows = top
     .map((r, i) => {
       const safeSlug = esc(r.slug);
-      const cachedPct = totals.calls ? fmtPct(r.cached, r.calls) : "—";
+      const cachedPct = r.calls ? fmtPct(r.cached, r.calls) : "—";
       const errPct = r.calls ? fmtPct(r.errored, r.calls) : "—";
       const route = "/api/" + safeSlug;
       return `<tr>
@@ -131,7 +131,7 @@ export function analyticsPage(data, { baseUrl }) {
 <div class="panel">
   <div class="ph"><h2>Top tools by volume (last ${esc(windowHuman)})</h2><div class="pn">Click a slug to see the tool's docs page.</div></div>
   <table>
-    <thead><tr><th class="num">#</th><th>Tool</th><th class="num">Calls</th><th class="num">Cached</th><th class="num">Errored</th><th class="num">p50</th><th class="num">p95</th></tr></thead>
+    <thead><tr><th class="num">#</th><th>Tool</th><th class="num">Calls</th><th class="num" title="Share of this tool's calls served from the Redis response cache">Cache %</th><th class="num">Error %</th><th class="num">p50</th><th class="num">p95</th></tr></thead>
     <tbody>${rows || emptyRow}</tbody>
   </table>
 </div>

@@ -1106,6 +1106,36 @@ app.get("/api/pricing", (_req, res) =>
   })
 );
 
+// Public machine-readable cache catalogue: every server-side cached route
+// with its TTL and the request fields that contribute to the cache key.
+// Why this is public:
+//   - Buyer SDKs (agent402-client and any third-party MCP client) can avoid
+//     burning their own local cache on routes the server is already caching.
+//   - Operators evaluating Agent402 can audit cache aggressiveness before
+//     wiring it into agent workflows.
+// Response also reports whether REDIS_URL is wired in this deployment, so a
+// caller can tell "policy exists" (always) from "policy is actually live"
+// (only when Redis is connected). All TTLs are seconds; X-Cache: hit|miss|skip
+// on responses to cached routes is the live signal.
+app.get("/api/cacheable", (_req, res) => {
+  const routes = Object.entries(CACHEABLE_ROUTES)
+    .map(([path, policy]) => ({
+      method: "GET",
+      path,
+      ttlSeconds: policy.ttl,
+      keyFields: policy.keyFields,
+    }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  res.json({
+    enabled: cacheEnabled(),
+    backend: cacheEnabled() ? "redis" : "none",
+    cacheHeader: "X-Cache",
+    cacheHeaderValues: ["hit", "miss", "skip"],
+    routes,
+    note: "Server-side response cache. Buyer SDKs can skip their own cache for these paths — repeated identical calls within the TTL return the same JSON without re-hitting the upstream. Errors are never cached.",
+  });
+});
+
 // Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
 // `Idempotency-Key`, a successful gated call is cached keyed by that key + the
 // gate credential it presented (the x402 payment authorization or the

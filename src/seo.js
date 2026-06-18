@@ -17,7 +17,7 @@ User-agent: *
 Allow: /
 Disallow: /api/memory
 
-# Machine-readable catalogs for agents: ${baseUrl}/llms.txt , ${baseUrl}/openapi.json , ${baseUrl}/api/pricing , ${baseUrl}/.well-known/x402 , ${baseUrl}/api/reliability , ${baseUrl}/api/find?q={task} , ${baseUrl}/api/route , ${baseUrl}/api/leaderboard
+# Machine-readable catalogs for agents: ${baseUrl}/llms.txt , ${baseUrl}/openapi.json , ${baseUrl}/api/pricing , ${baseUrl}/api/cacheable , ${baseUrl}/.well-known/x402 , ${baseUrl}/api/reliability , ${baseUrl}/api/find?q={task} , ${baseUrl}/api/route , ${baseUrl}/api/leaderboard
 Sitemap: ${baseUrl}/sitemap.xml
 `;
 }
@@ -44,6 +44,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/api/leaderboard`, priority: "0.7" },
     { loc: `${baseUrl}/analytics`, priority: "0.7" },
     { loc: `${baseUrl}/api/analytics`, priority: "0.6" },
+    { loc: `${baseUrl}/api/cacheable`, priority: "0.6" },
     { loc: `${baseUrl}/tollbooth`, priority: "0.7" },
     { loc: `${baseUrl}/tollbooth/cloud`, priority: "0.7" },
   ];
@@ -135,6 +136,7 @@ ${sections}
 - \`GET /.well-known/x402\` — one-fetch service manifest: identity, payment options (x402 networks + proof-of-work), capability map, MCP connector, and trust signals.
 - \`GET /api/reliability\` — structured reliability/SLA report: uptime, calls served, on-chain revenue proof, and each operational guarantee with a URL to verify it.
 - \`GET /api/pricing\` — machine-readable catalog (JSON): every endpoint, price, category, and docs URL.
+- \`GET /api/cacheable\` — machine-readable list of server-side cached routes (path, TTL, key fields). Buyer SDKs can skip their own cache for these — repeated identical calls within the TTL come straight from Redis. Responses set \`X-Cache: hit|miss|skip\`.
 - \`GET /openapi.json\` — full OpenAPI 3.1 spec with input/output schemas for all tools.
 - \`GET /tools\` and \`GET /tools/{slug}\` — human-readable docs per tool.
 - \`GET /api/pow\` — describes the proof-of-work option below.
