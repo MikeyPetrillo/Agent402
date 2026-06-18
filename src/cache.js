@@ -102,6 +102,14 @@ export const CACHEABLE_ROUTES = {
   "/api/search":   { ttl: 300, keyFields: ["q", "count", "freshness"] },
   "/api/gov-data": { ttl: 3600, keyFields: ["q", "rows"] },
 
+  // Discovery primitives — every agent hits /api/find and /api/route on the
+  // first call of a session, often with the same query repeated as they
+  // explore. The underlying CATALOG only changes when the server reboots, but
+  // we still keep TTLs short (60s) because the resolver is cheap and we'd
+  // rather pick up index refreshes (leaderboard / reliability) within a minute.
+  "/api/find":  { ttl: 60, keyFields: ["q", "task", "query", "k"] },
+  "/api/route": { ttl: 60, keyFields: ["q", "task", "query", "top", "k", "include"] },
+
   // x402 payments helpers. Quotes are mostly static (sellers rarely re-price);
   // x402-verify is fully immutable once a tx confirms; tx-status is short-ttl
   // because pending→confirmed flips matter.

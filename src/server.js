@@ -680,7 +680,40 @@ const MANIFEST = serviceManifest({
   toolCount: Object.keys(CATALOG).length, powSlugs: POW_SLUGS,
   powDifficulty: POW_DIFFICULTY, prices: TOOL_PRICES,
 });
-app.get("/.well-known/x402", (_req, res) => res.json(MANIFEST));
+// Shared helper: builds a small 24h performance signal from the analytics
+// table (cache hit rate, error rate, p50/p95 latency, dashboard URL). Used by
+// /api/stats and /.well-known/x402 so a discovery agent fetching either one
+// sees the same liveness signal a human sees on /analytics. Returns null when
+// analytics is disabled or the query fails — callers omit the field entirely.
+async function buildPerformance24h() {
+  if (!analyticsEnabled()) return null;
+  try {
+    const a = await getAnalytics({ windowHours: 24, top: 1 });
+    if (!a || !a.ok || !a.totals || !a.totals.calls) return null;
+    const t = a.totals;
+    return {
+      windowHours: 24,
+      calls: t.calls,
+      cacheHitRate: +((t.cached / t.calls) || 0).toFixed(4),
+      errorRate: +((t.errored / t.calls) || 0).toFixed(4),
+      p50LatencyMs: t.p50_latency_ms,
+      p95LatencyMs: t.p95_latency_ms,
+      dashboardUrl: `${BASE_URL}/analytics`,
+    };
+  } catch (_e) {
+    return null;
+  }
+}
+// /.well-known/x402 — discovery agents fetch this once to learn the seller.
+// Most of the manifest is boot-time constants (catalog, networks, wallet) so
+// MANIFEST is built once; we only enrich with the live performance24h block
+// on each request when analytics is enabled. Failing-open: if the analytics
+// query stalls, we serve the static manifest instead of blocking the call.
+app.get("/.well-known/x402", async (_req, res) => {
+  const perf = await buildPerformance24h();
+  if (perf) res.json({ ...MANIFEST, performance24h: perf });
+  else res.json(MANIFEST);
+});
 // Structured reliability / trust report — the "safe to depend on" surface, each
 // claim paired with a URL to verify it independently.
 app.get("/api/reliability", (_req, res) =>
@@ -693,9 +726,59 @@ app.get("/api/reliability", (_req, res) =>
 // best-matching tools with route, price, input schema, and a ready example — so
 // it can call directly instead of burning tokens "exploring" to find a tool.
 // Deterministic lexical ranking; not in CATALOG, so it stays free + unpaywalled.
-const findHandler = (q, k, res) => res.json(findTools(CATALOG, q, { k, baseUrl: BASE_URL, powSlugs: POW_SLUGS }));
-app.get("/api/find", (req, res) => findHandler(req.query.q ?? req.query.task ?? req.query.query, req.query.k, res));
-app.post("/api/find", (req, res) => findHandler(req.body?.q ?? req.body?.task ?? req.body?.query, req.body?.k, res));
+//
+// /api/find and /api/route share a cache wrapper (CACHEABLE_ROUTES policy in
+// cache.js, 60s TTL) and write through to analytics under the synthetic slug
+// "_find" / "_route" so the dashboard counts discovery calls alongside tools.
+// These endpoints are the most-hit routes in the whole server — every agent
+// touches them on the first call of a session — so even a 60s window
+// meaningfully cuts CPU on repeat queries.
+const computeFind = (q, k) => findTools(CATALOG, q, { k, baseUrl: BASE_URL, powSlugs: POW_SLUGS });
+const findCachePath = "/api/find";
+const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
+async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlug, res) {
+  const startedAt = Date.now();
+  let cached = false;
+  let errored = false;
+  try {
+    let cacheKey = null;
+    if (policy && cacheEnabled()) {
+      cacheKey = cacheKeyFor(path, input, policy.keyFields || []);
+      const hit = await cacheGet(cacheKey);
+      if (hit !== null) {
+        cached = true;
+        res.setHeader("X-Cache", "hit");
+        return res.json(hit);
+      }
+    }
+    const result = computeFn();
+    if (policy) res.setHeader("X-Cache", cacheKey ? "miss" : "skip");
+    if (cacheKey && result && typeof result === "object" && !result.error) {
+      cacheSet(cacheKey, result, policy.ttl || 60).catch(() => {});
+    }
+    res.json(result);
+  } catch (err) {
+    errored = true;
+    res.status(err.statusCode || 500).json({ error: err.message });
+  } finally {
+    recordToolCall({
+      slug: analyticsSlug,
+      latencyMs: Date.now() - startedAt,
+      cached,
+      errored,
+    }).catch(() => {});
+  }
+}
+app.get("/api/find", (req, res) => {
+  const q = req.query.q ?? req.query.task ?? req.query.query;
+  const k = req.query.k;
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, () => computeFind(q, k), "_find", res);
+});
+app.post("/api/find", (req, res) => {
+  const q = req.body?.q ?? req.body?.task ?? req.body?.query;
+  const k = req.body?.k;
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, () => computeFind(q, k), "_find", res);
+});
 
 // x402 Index — public dashboard + Smart Order Router. Free, like /api/find: a
 // discovery layer that exists to make the agent payments economy legible. The
@@ -711,9 +794,21 @@ const indexCtx = () => ({
 });
 app.get("/index", (_req, res) => res.type("text/html").send(indexPage(indexSnapshot(indexCtx()), { baseUrl: BASE_URL })));
 app.get("/api/index", (_req, res) => res.json(indexSnapshot(indexCtx())));
-const routeHandler = (q, k, include, res) => res.json(routeQuery({ query: q, top: k, include, ...indexCtx() }));
-app.get("/api/route", (req, res) => routeHandler(req.query.q ?? req.query.task ?? req.query.query, req.query.top ?? req.query.k, req.query.include, res));
-app.post("/api/route", (req, res) => routeHandler(req.body?.q ?? req.body?.task ?? req.body?.query, req.body?.top ?? req.body?.k, req.body?.include, res));
+const computeRoute = (q, k, include) => routeQuery({ query: q, top: k, include, ...indexCtx() });
+const routeCachePath = "/api/route";
+const routeCachePolicy = CACHEABLE_ROUTES[routeCachePath];
+app.get("/api/route", (req, res) => {
+  const q = req.query.q ?? req.query.task ?? req.query.query;
+  const top = req.query.top ?? req.query.k;
+  const include = req.query.include;
+  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", res);
+});
+app.post("/api/route", (req, res) => {
+  const q = req.body?.q ?? req.body?.task ?? req.body?.query;
+  const top = req.body?.top ?? req.body?.k;
+  const include = req.body?.include;
+  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", res);
+});
 // x402 Leaderboard — public on-chain ranking of every seller in the Coinbase
 // CDP Bazaar by settled USDC volume on Base. Free, like /api/find + /api/route:
 // discovery primitives shouldn't cost money. Snapshot is cached in memory and
@@ -941,25 +1036,8 @@ app.get("/api/pow/challenge", (req, res) => {
 // query fails / DB is unset, so /api/stats never breaks on a slow Postgres.
 app.get("/api/stats", async (_req, res) => {
   const base = getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES });
-  if (analyticsEnabled()) {
-    try {
-      const a = await getAnalytics({ windowHours: 24, top: 1 });
-      if (a && a.ok && a.totals && a.totals.calls > 0) {
-        const t = a.totals;
-        base.performance24h = {
-          windowHours: 24,
-          calls: t.calls,
-          cacheHitRate: +((t.cached / t.calls) || 0).toFixed(4),
-          errorRate: +((t.errored / t.calls) || 0).toFixed(4),
-          p50LatencyMs: t.p50_latency_ms,
-          p95LatencyMs: t.p95_latency_ms,
-          dashboardUrl: `${BASE_URL}/analytics`,
-        };
-      }
-    } catch (_e) {
-      // ignore — never block /api/stats on analytics
-    }
-  }
+  const perf = await buildPerformance24h();
+  if (perf) base.performance24h = perf;
   res.json(base);
 });
 
