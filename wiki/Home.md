@@ -9,7 +9,8 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 - **Add your own tool:** a few lines in `src/tools/` — see [CONTRIBUTING](https://github.com/MikeyPetrillo/Agent402/blob/main/CONTRIBUTING.md)
 - **The other side of x402** — charge AI bots crawling *your* site with the open-source pay-per-crawl gate: see [[Pay-per-crawl]]
 - **Machine-readable catalog:** [`/api/pricing`](https://agent402.tools/api/pricing) · [`/openapi.json`](https://agent402.tools/openapi.json) · [`/llms.txt`](https://agent402.tools/llms.txt)
-- **Live stats (hosted instance):** [`/api/stats`](https://agent402.tools/api/stats)
+- **Live stats (hosted instance):** [`/api/stats`](https://agent402.tools/api/stats) · [`/analytics`](https://agent402.tools/analytics) (cache-hit %, p50/p95 latency, error rate)
+- **Performance surfaces:** [`/api/cache-stats`](https://agent402.tools/api/cache-stats) (Redis hit-rate counters) · [`/api/cacheable`](https://agent402.tools/api/cacheable) (which routes cache + TTL) · [`/api/analytics`](https://agent402.tools/api/analytics) (24h tool-call timeseries)
 
 ## Start here
 

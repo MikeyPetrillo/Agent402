@@ -6,7 +6,7 @@
 // This is the source of truth view for incoming Tollbooth Cloud waitlist and
 // partner applications. The form on /tollbooth/waitlist POSTs to
 // /api/tollbooth/waitlist, which inserts here.
-import { CHROME_HEAD_LINKS, CHROME_CSS } from "./chrome.js";
+import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 
 const esc = (s) =>
   String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -115,6 +115,7 @@ ${CHROME_CSS}
 </style>
 </head>
 <body>
+${renderHeader("/__operator/leads")}
 <div class="wrap">
   <h1>Tollbooth leads</h1>
   <p class="sub">Submissions from <a href="/tollbooth/waitlist">/tollbooth/waitlist</a>. <a href="/__operator" data-op-link>← Back to operator</a></p>
@@ -153,6 +154,7 @@ ${CHROME_CSS}
   });
 })();
 </script>
+${renderFooter()}
 </body>
 </html>`;
 }

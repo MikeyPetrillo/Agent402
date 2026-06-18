@@ -2,7 +2,7 @@
 // split, estimated revenue, and the full retained recent-calls feed. Gated by
 // AGENT402_OPERATOR_TOKEN (query ?token=…). Nothing here is shown publicly;
 // /api/stats remains the safe public surface.
-import { CHROME_HEAD_LINKS, CHROME_CSS } from "./chrome.js";
+import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 
 const esc = (s) =>
   String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -77,7 +77,9 @@ ${CHROME_HEAD_LINKS}
   ${CHROME_CSS}
 </style>
 </head>
-<body><div class="wrap">
+<body>
+${renderHeader("/__operator")}
+<div class="wrap">
 
 <h1>Operator dashboard</h1>
 <p class="sub">Per-tool usage, settlement split, and live activity. Auto-refreshes every 10s. Not public — gated by <code>AGENT402_OPERATOR_TOKEN</code>. <a href="/__operator/leads" data-op-link>Tollbooth leads →</a></p>
@@ -200,5 +202,7 @@ ${CHROME_HEAD_LINKS}
 })();
 </script>
 
-</div></body></html>`;
+</div>
+${renderFooter()}
+</body></html>`;
 }
