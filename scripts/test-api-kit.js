@@ -353,5 +353,167 @@ ok(threw, `missing "spec" rejected`);
 threw = false; try { run("openapi-extract", {}); } catch { threw = true; }
 ok(threw, `missing "spec" rejected`);
 
+// ---------- openapi-to-curl ----------
+
+// C1. Example round-trips exactly. Same HTTP contract test-all.js asserts.
+{
+  const t = tool("openapi-to-curl");
+  const r = run("openapi-to-curl", t.discovery.input);
+  const expected = t.discovery.output.example;
+  ok(JSON.stringify(r) === JSON.stringify(expected),
+    `to-curl example round-trips exactly (got ${JSON.stringify(r)})`);
+}
+
+// C2. method+path locator works when operationId is absent.
+{
+  const spec = { servers: [{ url: "https://a.test" }], paths: {
+    "/p": { get: { responses: { "200": {} } } } } };
+  const r = run("openapi-to-curl", { spec, method: "get", path: "/p" });
+  ok(r.method === "GET" && r.url === "https://a.test/p"
+     && r.curl === "curl -X GET 'https://a.test/p'",
+    `method+path locator works (got curl=${r.curl})`);
+}
+
+// C3. Unknown operationId rejected.
+threw = false; try { run("openapi-to-curl", { spec: { paths: {} }, operationId: "nope" }); } catch { threw = true; }
+ok(threw, `unknown operationId rejected`);
+
+// C4. Unknown method+path rejected.
+threw = false; try { run("openapi-to-curl", { spec: { paths: { "/x": { get: { responses: {} } } } }, method: "post", path: "/x" }); } catch { threw = true; }
+ok(threw, `unknown method+path rejected`);
+
+// C5. No locator at all rejected.
+threw = false; try { run("openapi-to-curl", { spec: { paths: {} } }); } catch { threw = true; }
+ok(threw, `missing locator rejected`);
+
+// C6. Path param without an example falls back to a typed placeholder.
+{
+  const spec = { servers: [{ url: "https://a.test" }], paths: {
+    "/u/{id}": { get: { operationId: "getU", parameters: [
+      { name: "id", in: "path", required: true, schema: { type: "string" } }],
+      responses: { "200": {} } } } } };
+  const r = run("openapi-to-curl", { spec, operationId: "getU" });
+  ok(r.url === "https://a.test/u/%3Cid%3E",
+    `string path param falls back to <name> placeholder (got ${r.url})`);
+}
+{
+  const spec = { servers: [{ url: "https://a.test" }], paths: {
+    "/u/{n}": { get: { operationId: "getN", parameters: [
+      { name: "n", in: "path", required: true, schema: { type: "integer" } }],
+      responses: { "200": {} } } } } };
+  const r = run("openapi-to-curl", { spec, operationId: "getN" });
+  ok(r.url === "https://a.test/u/0",
+    `integer path param falls back to 0 (got ${r.url})`);
+}
+
+// C7. Optional query params are excluded; required ones are included.
+{
+  const spec = { servers: [{ url: "https://a.test" }], paths: { "/u": { get: {
+    operationId: "listU",
+    parameters: [
+      { name: "limit", in: "query", required: false, schema: { type: "integer", example: 10 } },
+      { name: "cursor", in: "query", required: true, schema: { type: "string", example: "abc" } },
+    ],
+    responses: { "200": {} } } } } };
+  const r = run("openapi-to-curl", { spec, operationId: "listU" });
+  ok(r.url === "https://a.test/u?cursor=abc" && !r.url.includes("limit"),
+    `required query in url, optional omitted (got ${r.url})`);
+}
+
+// C8. Required header params land in headers map.
+{
+  const spec = { servers: [{ url: "https://a.test" }], paths: { "/u": { get: {
+    operationId: "listU",
+    parameters: [{ name: "Authorization", in: "header", required: true, schema: { type: "string", example: "Bearer xyz" } }],
+    responses: { "200": {} } } } } };
+  const r = run("openapi-to-curl", { spec, operationId: "listU" });
+  ok(r.headers.Authorization === "Bearer xyz"
+     && r.curl.includes("-H 'Authorization: Bearer xyz'"),
+    `required header in headers + curl (got curl=${r.curl})`);
+}
+
+// C9. JSON body — operation example wins over schema example.
+{
+  const spec = { servers: [{ url: "https://a.test" }], paths: { "/u": { post: {
+    operationId: "createU",
+    requestBody: { content: { "application/json": {
+      example: { name: "from-op" },
+      schema: { example: { name: "from-schema" } },
+    } } },
+    responses: { "201": {} } } } } };
+  const r = run("openapi-to-curl", { spec, operationId: "createU" });
+  ok(r.body && r.body.name === "from-op"
+     && r.headers["content-type"] === "application/json"
+     && r.curl.endsWith(`-d '{"name":"from-op"}'`),
+    `op example wins; content-type set; -d in curl (got curl=${r.curl})`);
+}
+
+// C10. JSON body — schema example used when no op example.
+{
+  const spec = { servers: [{ url: "https://a.test" }], paths: { "/u": { post: {
+    operationId: "createU",
+    requestBody: { content: { "application/json": { schema: { example: { from: "schema" } } } } },
+    responses: { "201": {} } } } } };
+  const r = run("openapi-to-curl", { spec, operationId: "createU" });
+  ok(r.body && r.body.from === "schema", `schema example used when op example absent`);
+}
+
+// C11. JSON body — empty {} when neither example is provided, so the
+// content-type + -d affordance is still visible.
+{
+  const spec = { servers: [{ url: "https://a.test" }], paths: { "/u": { post: {
+    operationId: "createU",
+    requestBody: { content: { "application/json": { schema: { type: "object" } } } },
+    responses: { "201": {} } } } } };
+  const r = run("openapi-to-curl", { spec, operationId: "createU" });
+  ok(JSON.stringify(r.body) === "{}" && r.headers["content-type"] === "application/json",
+    `no example → empty body + content-type still set`);
+}
+
+// C12. Swagger 2.x scheme + host + basePath assembles a base URL.
+{
+  const spec = { swagger: "2.0", schemes: ["https"], host: "api.test", basePath: "/v1",
+    paths: { "/u": { get: { operationId: "listU", responses: { "200": {} } } } } };
+  const r = run("openapi-to-curl", { spec, operationId: "listU" });
+  ok(r.url === "https://api.test/v1/u", `swagger 2.x base URL assembled (got ${r.url})`);
+}
+
+// C13. No servers / no host → fallback host so curl remains pasteable.
+{
+  const spec = { paths: { "/u": { get: { operationId: "listU", responses: { "200": {} } } } } };
+  const r = run("openapi-to-curl", { spec, operationId: "listU" });
+  ok(r.url === "https://example.com/u", `placeholder base URL when nothing documented`);
+}
+
+// C14. JSON-string spec input is accepted.
+{
+  const spec = JSON.stringify({ servers: [{ url: "https://a.test" }], paths: {
+    "/u": { get: { operationId: "listU", responses: { "200": {} } } } } });
+  const r = run("openapi-to-curl", { spec, operationId: "listU" });
+  ok(r.url === "https://a.test/u", `string spec accepted`);
+}
+
+// C15. Shell-quoting: a single quote in an example value survives end-to-
+// end. RFC 3986 considers ' a sub-delim — encodeURIComponent leaves it
+// alone, so it lands in the URL literal as `it's`. The shell-quote wrapper
+// then escapes it with POSIX `'\''` so the curl is still safe to paste.
+{
+  const spec = { servers: [{ url: "https://a.test" }], paths: { "/u": { get: {
+    operationId: "listU",
+    parameters: [{ name: "q", in: "query", required: true, schema: { type: "string", example: "it's a test" } }],
+    responses: { "200": {} } } } } };
+  const r = run("openapi-to-curl", { spec, operationId: "listU" });
+  // URL preserves the apostrophe (valid per RFC 3986).
+  ok(r.url === "https://a.test/u?q=it's%20a%20test",
+    `apostrophe preserved in URL (got ${r.url})`);
+  // Curl wraps the URL with the apostrophe shell-escaped as '\''.
+  ok(r.curl === "curl -X GET 'https://a.test/u?q=it'\\''s%20a%20test'",
+    `apostrophe shell-escaped via '\\'' in curl (got ${r.curl})`);
+}
+
+// C16. Missing "spec" rejected.
+threw = false; try { run("openapi-to-curl", { operationId: "x" }); } catch { threw = true; }
+ok(threw, `missing "spec" rejected`);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

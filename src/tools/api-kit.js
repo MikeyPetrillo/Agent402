@@ -12,6 +12,10 @@
 //                  path, params, response codes, JSON-body flag) plus per-
 //                  method and per-tag counts — what an agent wants when
 //                  picking what to call next without reading the full doc.
+//   openapi-to-curl  build a runnable curl command for a single operation —
+//                  locate by operationId or method+path, substitute path
+//                  params + required query/header params from examples in
+//                  the spec, attach a JSON body if the operation has one.
 //
 // Scope notes for v1:
 //   - Works against OpenAPI 3.x and Swagger 2.x (both share `paths`).
@@ -513,4 +517,174 @@ export const API_TOOLS = [
       };
     },
   },
+  {
+    route: "POST /api/openapi-to-curl", name: "OpenAPI to curl command", slug: "openapi-to-curl", category: "conversion", price: "$0.002",
+    description:
+      "Build a runnable curl command for one operation in an OpenAPI 3.x or Swagger 2.x spec. Locate the operation by operationId (preferred) or by method + path, substitute path parameters using the spec's example values, include required query and header parameters with their example values, and attach a JSON body when the operation defines one. Returns the structured request (method, url, headers, body) alongside the assembled curl string with POSIX single-quote escaping. Pure CPU — deterministic, no network, no $ref dereferencing.",
+    tags: ["openapi", "swagger", "curl", "client", "api", "agent-readiness"],
+    discovery: {
+      bodyType: "json",
+      input: {
+        spec: {
+          openapi: "3.0.0",
+          servers: [{ url: "https://api.example.com" }],
+          paths: {
+            "/users/{id}": {
+              get: {
+                operationId: "getUser",
+                parameters: [
+                  { name: "id", in: "path", required: true, schema: { type: "string", example: "u_42" } },
+                  { name: "fields", in: "query", required: true, schema: { type: "string", example: "name,email" } },
+                ],
+                responses: { "200": { description: "ok" } },
+              },
+            },
+          },
+        },
+        operationId: "getUser",
+      },
+      inputSchema: {
+        properties: {
+          spec: { description: "OpenAPI/Swagger document (object or JSON string)" },
+          operationId: { description: "operationId of the operation to render (preferred)" },
+          method: { description: "HTTP method (use with `path` if no operationId)" },
+          path: { description: "Path template (use with `method` if no operationId)" },
+        },
+        required: ["spec"],
+      },
+      output: {
+        example: {
+          method: "GET",
+          url: "https://api.example.com/users/u_42?fields=name%2Cemail",
+          headers: {},
+          body: null,
+          curl: "curl -X GET 'https://api.example.com/users/u_42?fields=name%2Cemail'",
+        },
+      },
+    },
+    handler: (i) => {
+      if (!("spec" in i)) throw bad('Missing "spec"');
+      const spec = parseMaybeJson(i.spec, "spec");
+      if (!spec || typeof spec !== "object") throw bad('"spec" must be an OpenAPI document');
+
+      // Locate the operation. operationId wins if both forms are supplied —
+      // it's the stable identifier and avoids ambiguity with case-sensitive
+      // method strings.
+      const located = locateOperation(spec, i);
+      const { method, path: pathTemplate, op, pathItem } = located;
+
+      // Base URL: OpenAPI 3 servers[0].url, else Swagger 2 scheme/host/basePath,
+      // else a placeholder example.com so the curl is still pasteable.
+      const baseUrl = getBaseUrl(spec);
+      const allParams = mergeParams(pathItem, op);
+
+      // Path: substitute every {name} with its example value (URL-encoded).
+      let url = baseUrl + pathTemplate;
+      for (const p of allParams.filter((q) => q.in === "path")) {
+        url = url.replace(new RegExp(`\\{${p.name}\\}`, "g"), encodeURIComponent(String(paramExample(p))));
+      }
+
+      // Query string: required params only. Optional ones are deliberately
+      // omitted — the goal is shortest-working-invocation.
+      const qparams = allParams.filter((q) => q.in === "query" && q.required);
+      if (qparams.length) {
+        const qs = qparams
+          .map((p) => `${encodeURIComponent(p.name)}=${encodeURIComponent(String(paramExample(p)))}`)
+          .join("&");
+        url += "?" + qs;
+      }
+
+      // Headers: required header params, then content-type if there's a body.
+      const headers = {};
+      for (const p of allParams.filter((q) => q.in === "header" && q.required)) {
+        headers[p.name] = String(paramExample(p));
+      }
+
+      // Body: only inspect application/json for v1. Prefer the operation's
+      // own example, then schema.example, then an empty object so callers
+      // see the JSON-body affordance even when nothing else is documented.
+      let body = null;
+      const jc = op.requestBody && op.requestBody.content && op.requestBody.content["application/json"];
+      if (jc) {
+        headers["content-type"] = "application/json";
+        if (jc.example !== undefined) body = jc.example;
+        else if (jc.schema && jc.schema.example !== undefined) body = jc.schema.example;
+        else body = {};
+      }
+
+      // Assemble curl. POSIX single-quote escaping: '\'' to embed a literal.
+      const parts = [`curl -X ${method}`, shellQuote(url)];
+      for (const [k, v] of Object.entries(headers)) {
+        parts.push(`-H ${shellQuote(`${k}: ${v}`)}`);
+      }
+      if (body !== null) {
+        parts.push(`-d ${shellQuote(JSON.stringify(body))}`);
+      }
+      const curl = parts.join(" ");
+
+      return { method, url, headers, body, curl };
+    },
+  },
 ];
+
+// ---- openapi-to-curl helpers (kept below API_TOOLS for readability since
+// the diff/lint/extract tools don't use them) ----
+
+// Locate an operation by operationId (preferred) or method+path.
+function locateOperation(spec, locator) {
+  const paths = (spec && spec.paths) || {};
+  if (locator.operationId) {
+    for (const [p, methods] of Object.entries(paths)) {
+      if (!methods || typeof methods !== "object") continue;
+      for (const [m, op] of Object.entries(methods)) {
+        if (!HTTP_METHODS.has(m.toLowerCase())) continue;
+        if (op && op.operationId === locator.operationId) {
+          return { method: m.toUpperCase(), path: p, op, pathItem: methods };
+        }
+      }
+    }
+    throw bad(`operationId "${locator.operationId}" not found in spec`);
+  }
+  if (locator.method && locator.path) {
+    const m = String(locator.method).toLowerCase();
+    if (!HTTP_METHODS.has(m)) throw bad(`unsupported method: ${locator.method}`);
+    const pi = paths[locator.path];
+    if (!pi || !pi[m]) throw bad(`${String(locator.method).toUpperCase()} ${locator.path} not found in spec`);
+    return { method: m.toUpperCase(), path: locator.path, op: pi[m], pathItem: pi };
+  }
+  throw bad('provide either "operationId" or both "method" and "path"');
+}
+
+// Compute a base URL the curl can prefix. Servers wins; falls back to the
+// Swagger 2.x triple of schemes/host/basePath; finally a placeholder host
+// so the curl string remains pasteable (the user can find/replace).
+function getBaseUrl(spec) {
+  if (Array.isArray(spec.servers) && spec.servers[0] && typeof spec.servers[0].url === "string") {
+    return spec.servers[0].url.replace(/\/+$/, "");
+  }
+  if (typeof spec.host === "string" && spec.host.trim()) {
+    const scheme = (Array.isArray(spec.schemes) && spec.schemes[0]) || "https";
+    const basePath = typeof spec.basePath === "string" ? spec.basePath : "";
+    return `${scheme}://${spec.host}${basePath}`.replace(/\/+$/, "");
+  }
+  return "https://example.com";
+}
+
+// Pick a representative value for a parameter — prefer `example`, fall back
+// to a typed default so the curl is still copy-pasteable. The angle-bracket
+// placeholder for strings is a load-bearing UX signal: it makes it obvious
+// to the caller "this value is fake — replace it".
+function paramExample(p) {
+  if (p.example !== undefined) return p.example;
+  if (p.schema && p.schema.example !== undefined) return p.schema.example;
+  const t = paramType(p);
+  if (t === "integer" || t === "number") return 0;
+  if (t === "boolean") return false;
+  return `<${p.name}>`;
+}
+
+// POSIX single-quote shell escape: 'x' is literal, '\'' embeds a single quote.
+// Works across bash/zsh/sh without interpolation surprises.
+function shellQuote(s) {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
