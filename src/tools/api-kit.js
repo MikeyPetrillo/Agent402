@@ -45,6 +45,13 @@
 //                  Sibling keys of `$ref` are dropped per JSON Schema Draft 7
 //                  semantics. Returns `resolved` / `circular` / `unresolved`
 //                  / `external` so callers know what was and wasn't inlined.
+//   openapi-security-summary  resolve auth requirements across a spec:
+//                  catalog of `securitySchemes` (OpenAPI 3) / `securityDefinitions`
+//                  (Swagger 2), the document-level default, and per-operation
+//                  effective security after layering. Honors the OpenAPI rule
+//                  that `security: []` on an operation overrides the global
+//                  default with "explicitly open" rather than inheriting.
+//                  Output is sorted by route for deterministic diffs.
 //
 // Scope notes for v1:
 //   - Works against OpenAPI 3.x and Swagger 2.x (both share `paths`).
@@ -1083,6 +1090,113 @@ export const API_TOOLS = [
       return { spec: resolved, resolved: report.resolved, circular: report.circular, unresolved: report.unresolved, external: report.external };
     },
   },
+  {
+    route: "POST /api/openapi-security-summary", name: "OpenAPI security summary", slug: "openapi-security-summary", category: "conversion", price: "$0.002",
+    description:
+      "Resolve authentication requirements across an OpenAPI 3.x or Swagger 2.x document. Returns the catalog of security schemes (`components.securitySchemes` in OpenAPI 3, `securityDefinitions` in Swagger 2) verbatim, the document-level default, and the *effective* security for each operation after layering. Honors the OpenAPI rule that `security: []` on an operation overrides the global default with \"explicitly open\" rather than inheriting it — so an agent sees `open: true` for that op and won't try to attach a token. Includes a `schemeUsage` count so callers know which scheme is actually needed. Operations are sorted `METHOD /path` for deterministic output. Pure CPU — deterministic, no network.",
+    tags: ["openapi", "swagger", "security", "auth", "api"],
+    discovery: {
+      bodyType: "json",
+      input: {
+        spec: {
+          openapi: "3.0.0",
+          info: { title: "Demo", version: "1.0.0" },
+          security: [{ bearerAuth: [] }],
+          paths: {
+            "/users": { get: { responses: { "200": {} } } },
+            "/public": { get: { security: [], responses: { "200": {} } } },
+            "/admin": { post: { security: [{ bearerAuth: ["admin"] }], responses: { "201": {} } } },
+          },
+          components: {
+            securitySchemes: {
+              bearerAuth: { type: "http", scheme: "bearer" },
+            },
+          },
+        },
+      },
+      inputSchema: {
+        properties: {
+          spec: { description: "OpenAPI/Swagger document (object or JSON string)" },
+        },
+        required: ["spec"],
+      },
+      output: {
+        example: {
+          schemes: { bearerAuth: { type: "http", scheme: "bearer" } },
+          globalSecurity: [{ bearerAuth: [] }],
+          operations: [
+            { method: "GET", path: "/public", security: [], open: true },
+            { method: "GET", path: "/users", security: [{ bearerAuth: [] }], open: false },
+            { method: "POST", path: "/admin", security: [{ bearerAuth: ["admin"] }], open: false },
+          ],
+          summary: {
+            schemes: 1,
+            operations: 3,
+            openOperations: 1,
+            securedOperations: 2,
+            schemeUsage: { bearerAuth: 2 },
+          },
+        },
+      },
+    },
+    handler: (i) => {
+      if (!("spec" in i)) throw bad('Missing "spec"');
+      const spec = parseMaybeJson(i.spec, "spec");
+      if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+        throw bad('"spec" must be an OpenAPI document');
+      }
+      const schemes = collectSecuritySchemes(spec);
+      const globalSecurity = Array.isArray(spec.security) ? spec.security : [];
+      const operations = [];
+      const schemeUsage = Object.fromEntries(Object.keys(schemes).map((k) => [k, 0]));
+      let openOperations = 0;
+      let securedOperations = 0;
+
+      // Index endpoints so we get a uniform per-op iteration that respects
+      // path-item-level operations only (path-level parameters and shared
+      // fields don't apply to security per the OpenAPI 3 spec).
+      for (const [route, { op }] of indexEndpoints(spec)) {
+        const [method, path] = route.split(" ");
+        const effective = effectiveSecurity(op, globalSecurity);
+        const open = effective.length === 0;
+        const entry = { method, path };
+        if (typeof op.operationId === "string") entry.operationId = op.operationId;
+        entry.security = effective;
+        entry.open = open;
+        operations.push(entry);
+        if (open) openOperations++;
+        else {
+          securedOperations++;
+          // Count each scheme referenced in any requirement of this op once
+          // per op (multiple requirements naming the same scheme don't
+          // inflate the count — usage = "how many ops need this scheme").
+          const seen = new Set();
+          for (const req of effective) {
+            for (const name of Object.keys(req)) {
+              if (seen.has(name)) continue;
+              seen.add(name);
+              if (name in schemeUsage) schemeUsage[name]++;
+            }
+          }
+        }
+      }
+
+      operations.sort((a, b) => `${a.method} ${a.path}`.localeCompare(`${b.method} ${b.path}`));
+
+      return {
+        schemes,
+        globalSecurity,
+        operations,
+        summary: {
+          schemes: Object.keys(schemes).length,
+          operations: operations.length,
+          openOperations,
+          securedOperations,
+          schemeUsage,
+        },
+      };
+    },
+  },
 ];
 
 // ---- openapi-to-curl helpers (kept below API_TOOLS for readability since
@@ -1445,4 +1559,31 @@ function deepResolveRefs(node, root, resolvingPath, report) {
     return out;
   }
   return node;
+}
+
+// ---- openapi-security-summary helpers ----
+//
+// OpenAPI 3 puts security schemes under `components.securitySchemes`. Swagger 2
+// uses the top-level `securityDefinitions` key — different name, same shape per
+// scheme. We return whichever is present (preferring OpenAPI 3 if both exist,
+// which shouldn't happen in a sane document) so the catalog reflects how the
+// document actually declares its schemes.
+function collectSecuritySchemes(spec) {
+  const v3 = spec && spec.components && spec.components.securitySchemes;
+  if (v3 && typeof v3 === "object") return v3;
+  const v2 = spec && spec.securityDefinitions;
+  if (v2 && typeof v2 === "object") return v2;
+  return {};
+}
+
+// Resolve the effective security requirement list for one operation. The
+// OpenAPI rule that distinguishes "inherit global" from "explicitly open" is
+// the presence (not the contents) of `op.security`:
+//   - op.security present (even if []) → that wins, do not consult global
+//   - op.security absent → fall back to the document-level default
+// An empty list (either source) means the op is open. We return the array
+// verbatim so callers can introspect scope strings on OAuth/OpenID flows.
+function effectiveSecurity(op, globalSecurity) {
+  if (Array.isArray(op.security)) return op.security;
+  return globalSecurity;
 }

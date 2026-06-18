@@ -1296,5 +1296,154 @@ ok(threw, `missing "payload" rejected`);
     `missing spec rejected with 400, got: ${err && err.message}`);
 }
 
+// ============================================================================
+// openapi-security-summary
+// ============================================================================
+
+// SS1. Discovery example round-trips byte-for-byte. This also asserts the
+// load-bearing rule that `security: []` on an op renders `open: true` while
+// the rest of the doc still inherits the global default.
+{
+  const t = tool("openapi-security-summary");
+  const out = t.handler(t.discovery.input);
+  const expected = t.discovery.output.example;
+  ok(JSON.stringify(out) === JSON.stringify(expected),
+    `openapi-security-summary example round-trips exactly\n  got      ${JSON.stringify(out)}\n  expected ${JSON.stringify(expected)}`);
+}
+
+// SS2. A spec with no auth at all → empty schemes, every op open.
+{
+  const spec = { openapi: "3.0.0", paths: { "/a": { get: { responses: { "200": {} } } } } };
+  const r = run("openapi-security-summary", { spec });
+  ok(Object.keys(r.schemes).length === 0, `no schemes`);
+  ok(r.operations[0].open === true, `op is open`);
+  ok(r.summary.securedOperations === 0 && r.summary.openOperations === 1, `summary counts match`);
+}
+
+// SS3. Global security only (no op overrides) → every op inherits and shows
+// the same `security` array, all are secured.
+{
+  const spec = {
+    openapi: "3.0.0",
+    security: [{ apiKey: [] }],
+    paths: {
+      "/a": { get: { responses: { "200": {} } } },
+      "/b": { post: { responses: { "201": {} } } },
+    },
+    components: { securitySchemes: { apiKey: { type: "apiKey", name: "X-API-Key", in: "header" } } },
+  };
+  const r = run("openapi-security-summary", { spec });
+  ok(r.operations.every((o) => JSON.stringify(o.security) === JSON.stringify([{ apiKey: [] }])),
+    `every op inherits global security`);
+  ok(r.summary.securedOperations === 2 && r.summary.openOperations === 0,
+    `both ops counted as secured`);
+  ok(r.summary.schemeUsage.apiKey === 2, `schemeUsage credits both ops`);
+}
+
+// SS4. Op-level `security: []` is the load-bearing edge case — explicitly
+// open, NOT inheriting the global default. This is exactly the bug an
+// agent would otherwise hit (attaching a token to a public endpoint).
+{
+  const spec = {
+    openapi: "3.0.0",
+    security: [{ apiKey: [] }],
+    paths: {
+      "/secure": { get: { responses: { "200": {} } } },
+      "/healthz": { get: { security: [], responses: { "200": {} } } },
+    },
+    components: { securitySchemes: { apiKey: { type: "apiKey", name: "X-API-Key", in: "header" } } },
+  };
+  const r = run("openapi-security-summary", { spec });
+  const healthz = r.operations.find((o) => o.path === "/healthz");
+  const secure = r.operations.find((o) => o.path === "/secure");
+  ok(healthz.open === true && healthz.security.length === 0,
+    `op-level [] overrides global → open`);
+  ok(secure.open === false && JSON.stringify(secure.security) === JSON.stringify([{ apiKey: [] }]),
+    `other ops still inherit global`);
+  ok(r.summary.openOperations === 1 && r.summary.securedOperations === 1, `summary splits the count`);
+}
+
+// SS5. Op-level non-empty override replaces the global default for that op.
+{
+  const spec = {
+    openapi: "3.0.0",
+    security: [{ apiKey: [] }],
+    paths: { "/admin": { post: { security: [{ oauth: ["admin:write"] }], responses: { "201": {} } } } },
+    components: { securitySchemes: {
+      apiKey: { type: "apiKey", name: "X-API-Key", in: "header" },
+      oauth: { type: "oauth2", flows: { clientCredentials: { tokenUrl: "https://x/t", scopes: { "admin:write": "x" } } } },
+    } },
+  };
+  const r = run("openapi-security-summary", { spec });
+  ok(JSON.stringify(r.operations[0].security) === JSON.stringify([{ oauth: ["admin:write"] }]),
+    `op-level non-empty override wins`);
+  ok(r.summary.schemeUsage.oauth === 1 && r.summary.schemeUsage.apiKey === 0,
+    `schemeUsage tracks the effective scheme, not the global default`);
+}
+
+// SS6. Multi-scheme catalog passes through `securitySchemes` verbatim so
+// callers can read type-specific fields (apiKey: name+in; http: scheme;
+// oauth2: flows).
+{
+  const spec = {
+    openapi: "3.0.0",
+    paths: { "/a": { get: { responses: { "200": {} } } } },
+    components: { securitySchemes: {
+      apiKey: { type: "apiKey", name: "X-Key", in: "query" },
+      bearer: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
+      oauth: { type: "oauth2", flows: { authorizationCode: { authorizationUrl: "a", tokenUrl: "t", scopes: {} } } },
+    } },
+  };
+  const r = run("openapi-security-summary", { spec });
+  ok(r.schemes.apiKey.in === "query" && r.schemes.apiKey.name === "X-Key", `apiKey type fields preserved`);
+  ok(r.schemes.bearer.scheme === "bearer" && r.schemes.bearer.bearerFormat === "JWT", `http type fields preserved`);
+  ok(r.schemes.oauth.flows.authorizationCode.tokenUrl === "t", `oauth flows preserved`);
+}
+
+// SS7. Swagger 2.x uses `securityDefinitions` instead of
+// `components.securitySchemes`. Same semantics, different home.
+{
+  const spec = {
+    swagger: "2.0",
+    securityDefinitions: { basic: { type: "basic" } },
+    security: [{ basic: [] }],
+    paths: { "/a": { get: { responses: { "200": {} } } } },
+  };
+  const r = run("openapi-security-summary", { spec });
+  ok(r.schemes.basic && r.schemes.basic.type === "basic", `Swagger 2 securityDefinitions cataloged`);
+  ok(r.operations[0].open === false && r.summary.schemeUsage.basic === 1, `usage counted from Swagger global`);
+}
+
+// SS8. Multi-scheme single requirement (AND) and multi-requirement (OR)
+// both contribute exactly +1 to each named scheme — per-op de-duplication.
+{
+  const spec = {
+    openapi: "3.0.0",
+    paths: {
+      "/and": { get: { security: [{ a: [], b: [] }], responses: { "200": {} } } },
+      "/or":  { get: { security: [{ a: [] }, { b: [] }], responses: { "200": {} } } },
+    },
+    components: { securitySchemes: { a: { type: "apiKey", name: "A", in: "header" }, b: { type: "apiKey", name: "B", in: "header" } } },
+  };
+  const r = run("openapi-security-summary", { spec });
+  ok(r.summary.schemeUsage.a === 2 && r.summary.schemeUsage.b === 2,
+    `each op contributes +1 per referenced scheme regardless of AND/OR shape`);
+}
+
+// SS9. JSON-string input is accepted.
+{
+  const spec = { openapi: "3.0.0", paths: { "/a": { get: { responses: { "200": {} } } } } };
+  const r = run("openapi-security-summary", { spec: JSON.stringify(spec) });
+  ok(r.operations.length === 1, `JSON-string spec accepted`);
+}
+
+// SS10. Missing "spec" rejected with a 400-shaped error.
+{
+  let err = null;
+  try { run("openapi-security-summary", {}); } catch (e) { err = e; }
+  ok(err && err.statusCode === 400 && /spec/i.test(err.message),
+    `missing spec rejected with 400, got: ${err && err.message}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
