@@ -828,8 +828,44 @@ const indexCtx = () => ({
   toolCount: Object.keys(CATALOG).length,
   walletName: WALLET_ENS,
 });
-app.get("/index", (_req, res) => res.type("text/html").send(indexPage(indexSnapshot(indexCtx()), { baseUrl: BASE_URL })));
-app.get("/api/index", (_req, res) => res.json(indexSnapshot(indexCtx())));
+// Snapshot memo. indexSnapshot iterates the full CATALOG (~1100 tools) and the
+// crawler's seller cache; building it costs hundreds of ms and was being done
+// on every request. Cache for 30s with a sync read + background refresh so the
+// hot path is a property lookup. Crawler refreshes still propagate within 30s.
+const INDEX_SNAPSHOT_TTL_MS = 30_000;
+let indexSnapshotCache = { at: 0, value: null };
+let indexSnapshotRefreshing = false;
+function refreshIndexSnapshotInBackground() {
+  if (indexSnapshotRefreshing) return;
+  indexSnapshotRefreshing = true;
+  // setImmediate so the current request returns before we recompute.
+  setImmediate(() => {
+    try {
+      indexSnapshotCache = { at: Date.now(), value: indexSnapshot(indexCtx()) };
+    } catch (e) {
+      // Don't poison the cache on a transient error — leave the prior value.
+    } finally {
+      indexSnapshotRefreshing = false;
+    }
+  });
+}
+function getIndexSnapshot() {
+  if (!indexSnapshotCache.value) {
+    // Cold start — block once so the first response isn't empty.
+    indexSnapshotCache = { at: Date.now(), value: indexSnapshot(indexCtx()) };
+    return indexSnapshotCache.value;
+  }
+  if (Date.now() - indexSnapshotCache.at >= INDEX_SNAPSHOT_TTL_MS) {
+    refreshIndexSnapshotInBackground();
+  }
+  return indexSnapshotCache.value;
+}
+app.get("/index", (_req, res) =>
+  htmlCache(res, 60, 300).send(indexPage(getIndexSnapshot(), { baseUrl: BASE_URL }))
+);
+app.get("/api/index", (_req, res) =>
+  res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json(getIndexSnapshot())
+);
 const computeRoute = (q, k, include) => routeQuery({ query: q, top: k, include, ...indexCtx() });
 const routeCachePath = "/api/route";
 const routeCachePolicy = CACHEABLE_ROUTES[routeCachePath];
@@ -1021,14 +1057,14 @@ app.get("/card-1280.png", async (_req, res) => {
   }
 });
 app.get("/openapi.json", (_req, res) => res.json(openapiSpec(BASE_URL, CATALOG)));
-app.get("/tools", (_req, res) => res.type("html").send(toolsIndexPage(BASE_URL, CATALOG)));
+app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(toolsIndexPage(BASE_URL, CATALOG)));
 app.get("/tools/:slug", (req, res) => {
   const tools = toolList(CATALOG);
   const tool = tools.find((t) => t.slug === req.params.slug);
   if (!tool) return res.status(404).type("html").send('<p>Tool not found. <a href="/tools">All tools</a></p>');
   const related = tools.filter((t) => t.category === tool.category && t.slug !== tool.slug).slice(0, 3);
   const cachePolicy = tool.method === "GET" ? CACHEABLE_ROUTES[tool.path] : null;
-  res.type("html").send(toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null }));
+  htmlCache(res, 300, 900).send(toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null }));
 });
 // Free proof-of-work endpoints: agents without a wallet pay with CPU instead.
 app.get("/api/pow", (_req, res) => res.json(powInfo(BASE_URL, [...POW_SLUGS].sort())));
