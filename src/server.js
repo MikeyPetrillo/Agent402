@@ -512,8 +512,13 @@ app.use((_req, res, next) => {
 });
 
 // Free, unauthenticated routes
+// Sets browser/CDN cache headers for static-ish HTML pages so clicking around
+// the top nav doesn't re-render the world every time. stale-while-revalidate
+// gives instant back/forward while a background refresh keeps content fresh.
+const htmlCache = (res, maxAge, swr) =>
+  res.set("Cache-Control", `public, max-age=${maxAge}, stale-while-revalidate=${swr}`).type("html");
 app.get("/", (_req, res) =>
-  res.type("html").send(
+  htmlCache(res, 60, 300).send(
     landingPage(BASE_URL, NETWORK, FREE_MODE, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }))
   )
 );
@@ -547,20 +552,20 @@ app.get("/.well-known/glama.json", (_req, res) => {
     maintainers: email ? [{ email }] : [],
   });
 });
-app.get("/privacy", (_req, res) => res.type("html").send(privacyPage(BASE_URL)));
-app.get("/terms", (_req, res) => res.type("html").send(termsPage(BASE_URL)));
-app.get("/faq", (_req, res) => res.type("html").send(faqPage(BASE_URL)));
+app.get("/privacy", (_req, res) => htmlCache(res, 300, 900).send(privacyPage(BASE_URL)));
+app.get("/terms", (_req, res) => htmlCache(res, 300, 900).send(termsPage(BASE_URL)));
+app.get("/faq", (_req, res) => htmlCache(res, 300, 900).send(faqPage(BASE_URL)));
 app.get("/status", (_req, res) =>
-  res.type("html").send(
+  htmlCache(res, 60, 300).send(
     statusPage(BASE_URL, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }))
   )
 );
-app.get("/tollbooth", (_req, res) => res.type("html").send(tollboothLandingPage(BASE_URL)));
-app.get("/tollbooth/cloud", (_req, res) => res.type("html").send(tollboothCloudPage(BASE_URL)));
+app.get("/tollbooth", (_req, res) => htmlCache(res, 300, 900).send(tollboothLandingPage(BASE_URL)));
+app.get("/tollbooth/cloud", (_req, res) => htmlCache(res, 300, 900).send(tollboothCloudPage(BASE_URL)));
 app.get("/tollbooth/waitlist", (req, res) => {
   const plan = String(req.query.plan || "team").toLowerCase();
   const kind = String(req.query.kind || "waitlist").toLowerCase();
-  res.type("html").send(tollboothWaitlistPage(BASE_URL, { plan, kind }));
+  htmlCache(res, 300, 900).send(tollboothWaitlistPage(BASE_URL, { plan, kind }));
 });
 
 // Tollbooth waitlist intake. Form on /tollbooth/waitlist POSTs JSON here; we
@@ -663,11 +668,11 @@ app.get("/__operator/leads", async (req, res) => {
     dbEnabled: leadsDbEnabled(),
   }));
 });
-app.get("/guides", (_req, res) => res.type("html").send(guidesIndex(BASE_URL)));
+app.get("/guides", (_req, res) => htmlCache(res, 300, 900).send(guidesIndex(BASE_URL)));
 app.get("/guides/:slug", (req, res) => {
   const html = guidePage(BASE_URL, req.params.slug);
   if (!html) return res.status(404).type("html").send('<p>Guide not found. <a href="/guides">All guides</a></p>');
-  res.type("html").send(html);
+  htmlCache(res, 300, 900).send(html);
 });
 // Top-level machine-readable service manifest — one fetch tells a discovery
 // agent the whole story (identity, payment options, capability map, MCP, trust),
@@ -849,7 +854,7 @@ app.get("/api/leaderboard", (req, res) => {
 });
 // Human-readable companion to /api/leaderboard. Same cached snapshot, rendered
 // as a dashboard so visitors (and the site nav) have something to land on.
-app.get("/leaderboard", (_req, res) => res.type("text/html").send(leaderboardPage(getLeaderboardSnapshot(), { baseUrl: BASE_URL })));
+app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(leaderboardPage(getLeaderboardSnapshot(), { baseUrl: BASE_URL })));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));
@@ -1062,7 +1067,7 @@ app.get("/api/analytics", async (req, res) => {
 app.get("/analytics", async (req, res) => {
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
   const data = await getAnalytics({ windowHours, top: 25 });
-  res.type("html").send(analyticsPage(data, { baseUrl: BASE_URL }));
+  htmlCache(res, 30, 60).send(analyticsPage(data, { baseUrl: BASE_URL }));
 });
 
 // Remote MCP connector (streamable HTTP, authless free tier): paste
