@@ -678,5 +678,135 @@ ok(threw, `no responses → error`);
 threw = false; try { run("openapi-mock-response", { operationId: "x" }); } catch { threw = true; }
 ok(threw, `missing "spec" rejected`);
 
+// ---------- openapi-search ----------
+
+// S1. Example round-trips exactly.
+{
+  const t = tool("openapi-search");
+  const r = run("openapi-search", t.discovery.input);
+  const expected = t.discovery.output.example;
+  ok(JSON.stringify(r) === JSON.stringify(expected),
+    `search example round-trips exactly (got ${JSON.stringify(r)})`);
+}
+
+// S2. No matches → total:0 + empty results.
+{
+  const spec = { paths: { "/posts": { get: { operationId: "listPosts", responses: { "200": {} } } } } };
+  const r = run("openapi-search", { spec, query: "user" });
+  ok(r.total === 0 && r.results.length === 0, `no match → empty result`);
+}
+
+// S3. Case-insensitive matching.
+{
+  const spec = { paths: { "/u": { get: { operationId: "GetUser", responses: { "200": {} } } } } };
+  const r = run("openapi-search", { spec, query: "USER" });
+  ok(r.total === 1 && r.results[0].matches.includes("operationId"),
+    `case-insensitive match (got ${JSON.stringify(r)})`);
+}
+
+// S4. operationId match weight is 3; tags-only match is 2.
+{
+  const spec = { paths: {
+    "/op": { get: { operationId: "user", responses: { "200": {} } } },     // opId only: +3
+    "/tg": { get: { operationId: "x", tags: ["user"], responses: { "200": {} } } }, // tags only: +2 (and path "/tg" no match)
+  } };
+  const r = run("openapi-search", { spec, query: "user" });
+  ok(r.results[0].path === "/op" && r.results[0].score === 3
+     && r.results[1].path === "/tg" && r.results[1].score === 2,
+    `opId weight=3 > tags weight=2 (got ${JSON.stringify(r.results.map(x=>[x.path,x.score]))})`);
+}
+
+// S5. Path match contributes.
+{
+  const spec = { paths: { "/users/{id}": { get: { operationId: "x", responses: { "200": {} } } } } };
+  const r = run("openapi-search", { spec, query: "user" });
+  ok(r.results[0].matches.includes("path") && !r.results[0].matches.includes("operationId"),
+    `path match isolated`);
+}
+
+// S6. Description match (lowest weight) still ranks.
+{
+  const spec = { paths: { "/x": { get: { operationId: "x", description: "this is for users", responses: { "200": {} } } } } };
+  const r = run("openapi-search", { spec, query: "user" });
+  ok(r.results[0].score === 1 && r.results[0].matches[0] === "description",
+    `description weight = 1`);
+}
+
+// S7. Multi-token query: each token contributes its own field hits.
+{
+  const spec = { paths: { "/a": { get: { operationId: "createUserSession", responses: { "200": {} } } } } };
+  // Both "user" and "session" hit operationId. Per-token, per-field once:
+  // "user" → opId +3; "session" → opId +3 → total 6.
+  const r = run("openapi-search", { spec, query: "user session" });
+  ok(r.results[0].score === 6, `multi-token: 3+3=6 (got ${r.results[0].score})`);
+}
+
+// S8. Sort tiebreak: same score → path ascending.
+{
+  const spec = { paths: {
+    "/zebra": { get: { operationId: "user", responses: { "200": {} } } },
+    "/alpha": { get: { operationId: "user", responses: { "200": {} } } },
+  } };
+  const r = run("openapi-search", { spec, query: "user" });
+  ok(r.results[0].path === "/alpha" && r.results[1].path === "/zebra",
+    `tiebreak: path ascending`);
+}
+
+// S9. Limit honored.
+{
+  const spec = { paths: {
+    "/a": { get: { operationId: "userA", responses: { "200": {} } } },
+    "/b": { get: { operationId: "userB", responses: { "200": {} } } },
+    "/c": { get: { operationId: "userC", responses: { "200": {} } } },
+  } };
+  const r = run("openapi-search", { spec, query: "user", limit: 2 });
+  ok(r.total === 3 && r.results.length === 2,
+    `total counts all, results capped at limit`);
+}
+
+// S10. Limit clamped to max 100.
+{
+  const spec = { paths: { "/a": { get: { operationId: "user", responses: { "200": {} } } } } };
+  const r = run("openapi-search", { spec, query: "user", limit: 99999 });
+  ok(r.total === 1 && r.results.length === 1, `clamp doesn't break tiny result sets`);
+}
+
+// S11. Invalid limit rejected.
+threw = false; try {
+  run("openapi-search", { spec: { paths: {} }, query: "x", limit: 0 });
+} catch { threw = true; }
+ok(threw, `limit:0 rejected`);
+threw = false; try {
+  run("openapi-search", { spec: { paths: {} }, query: "x", limit: -5 });
+} catch { threw = true; }
+ok(threw, `negative limit rejected`);
+
+// S12. Empty / whitespace / token-less query rejected.
+threw = false; try { run("openapi-search", { spec: { paths: {} }, query: "" }); } catch { threw = true; }
+ok(threw, `empty query rejected`);
+threw = false; try { run("openapi-search", { spec: { paths: {} }, query: "   " }); } catch { threw = true; }
+ok(threw, `whitespace query rejected`);
+threw = false; try { run("openapi-search", { spec: { paths: {} }, query: "!@#$%^&" }); } catch { threw = true; }
+ok(threw, `punctuation-only query yields no tokens → rejected`);
+
+// S13. JSON-string spec input is accepted.
+{
+  const spec = JSON.stringify({ paths: { "/u": { get: { operationId: "getUser", responses: { "200": {} } } } } });
+  const r = run("openapi-search", { spec, query: "user" });
+  ok(r.total === 1, `string spec accepted`);
+}
+
+// S14. Missing "spec" / "query" rejected.
+threw = false; try { run("openapi-search", { query: "x" }); } catch { threw = true; }
+ok(threw, `missing "spec" rejected`);
+threw = false; try { run("openapi-search", { spec: { paths: {} } }); } catch { threw = true; }
+ok(threw, `missing "query" rejected`);
+
+// S15. Empty paths spec → total:0.
+{
+  const r = run("openapi-search", { spec: { paths: {} }, query: "user" });
+  ok(r.total === 0, `empty paths → 0`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

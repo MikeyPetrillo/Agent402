@@ -20,6 +20,11 @@
 //                  and status code — operation-level example wins, then
 //                  schema example, then a type-inferred recursive walk.
 //                  Returns a `source` tag so callers know fidelity.
+//   openapi-search  rank operations in a spec against a free-text query,
+//                  weighted by which field matched (operationId/path >
+//                  tags/summary > description). Lets an agent find the
+//                  "user invite" flow in a 1000-endpoint spec without
+//                  scanning extract output.
 //
 // Scope notes for v1:
 //   - Works against OpenAPI 3.x and Swagger 2.x (both share `paths`).
@@ -728,6 +733,129 @@ export const API_TOOLS = [
       // document its response shape well enough to mock.
       const mock = mockFromSchema(jc.schema);
       return { status, contentType: "application/json", mock, source: "generated" };
+    },
+  },
+  {
+    route: "POST /api/openapi-search", name: "OpenAPI operation search", slug: "openapi-search", category: "conversion", price: "$0.002",
+    description:
+      "Search operations in an OpenAPI 3.x or Swagger 2.x spec against a free-text query. Tokenizes the query (lowercase, alphanumeric runs), scores each operation by which fields the tokens match — operationId +3, path +3, tags +2, summary +2, description +1 per matched token — and returns ranked results with a `matches` array naming the contributing fields. Sort: score descending, then path ascending for stability. Limit defaults to 10 (max 100). Pure CPU — deterministic, no network, no $ref dereferencing.",
+    tags: ["openapi", "swagger", "search", "ranking", "api", "agent-readiness"],
+    discovery: {
+      bodyType: "json",
+      input: {
+        spec: {
+          paths: {
+            "/users/{id}/avatar": { put: {
+              operationId: "uploadUserAvatar", summary: "Upload user avatar", tags: ["users"],
+              responses: { "200": {} } } },
+            "/users/{id}": { get: {
+              operationId: "getUser", summary: "Get a user", tags: ["users"],
+              responses: { "200": {} } } },
+            "/posts": { get: {
+              operationId: "listPosts", summary: "List posts", tags: ["posts"],
+              responses: { "200": {} } } },
+          },
+        },
+        query: "user avatar",
+      },
+      inputSchema: {
+        properties: {
+          spec: { description: "OpenAPI/Swagger document (object or JSON string)" },
+          query: { description: "Free-text search query (tokenized lowercase)" },
+          limit: { description: "Maximum results to return (default 10, max 100)" },
+        },
+        required: ["spec", "query"],
+      },
+      output: {
+        example: {
+          total: 2,
+          results: [
+            {
+              method: "PUT", path: "/users/{id}/avatar",
+              operationId: "uploadUserAvatar", summary: "Upload user avatar",
+              tags: ["users"], score: 18,
+              matches: ["operationId", "path", "summary", "tags"],
+            },
+            {
+              method: "GET", path: "/users/{id}",
+              operationId: "getUser", summary: "Get a user",
+              tags: ["users"], score: 10,
+              matches: ["operationId", "path", "summary", "tags"],
+            },
+          ],
+        },
+      },
+    },
+    handler: (i) => {
+      if (!("spec" in i)) throw bad('Missing "spec"');
+      if (!("query" in i) || typeof i.query !== "string" || !i.query.trim()) {
+        throw bad('"query" must be a non-empty string');
+      }
+      const spec = parseMaybeJson(i.spec, "spec");
+      if (!spec || typeof spec !== "object") throw bad('"spec" must be an OpenAPI document');
+
+      // Limit: default 10, clamp to [1, 100]. The cap exists so a pathological
+      // request can't return all 1000 operations in one go.
+      let limit = 10;
+      if (i.limit !== undefined) {
+        const n = Number(i.limit);
+        if (!Number.isFinite(n) || n < 1) throw bad('"limit" must be a positive number');
+        limit = Math.min(Math.floor(n), 100);
+      }
+
+      // Tokenize: lowercase, split on non-alphanumerics, drop empties.
+      const tokens = i.query.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+      if (!tokens.length) throw bad('"query" yields no searchable tokens');
+
+      // Per-field weights. operationId and path are stable identifiers, so
+      // a hit there is the strongest signal of relevance.
+      const FIELD_WEIGHTS = { operationId: 3, path: 3, tags: 2, summary: 2, description: 1 };
+
+      const scored = [];
+      for (const [route, entry] of indexEndpoints(spec)) {
+        const sp = route.indexOf(" ");
+        const method = route.slice(0, sp);
+        const path = route.slice(sp + 1);
+        const { op } = entry;
+
+        const fields = {
+          operationId: (op.operationId || "").toLowerCase(),
+          path: path.toLowerCase(),
+          tags: (Array.isArray(op.tags) ? op.tags.join(" ") : "").toLowerCase(),
+          summary: (op.summary || "").toLowerCase(),
+          description: (op.description || "").toLowerCase(),
+        };
+
+        let score = 0;
+        const matched = new Set();
+        for (const tok of tokens) {
+          for (const [field, weight] of Object.entries(FIELD_WEIGHTS)) {
+            if (fields[field] && fields[field].includes(tok)) {
+              score += weight;
+              matched.add(field);
+            }
+          }
+        }
+        if (score > 0) {
+          scored.push({
+            method,
+            path,
+            operationId: op.operationId || null,
+            summary: op.summary || op.description || null,
+            tags: Array.isArray(op.tags) ? op.tags.slice() : [],
+            score,
+            matches: [...matched].sort(),
+          });
+        }
+      }
+
+      // Sort by score desc, then path asc for deterministic tiebreaks.
+      scored.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+
+      return {
+        total: scored.length,
+        results: scored.slice(0, limit),
+      };
     },
   },
 ];
