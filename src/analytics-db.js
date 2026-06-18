@@ -119,17 +119,22 @@ export async function getAnalytics({ windowHours = 24, top = 25 } = {}) {
 
     // `client_errored` (4xx) = caller mistake (missing field, bad shape) —
     // tool is fine. `server_errored` (5xx) = handler or upstream failure —
-    // the thing we actually need to fix. Legacy rows pre-status column have
-    // status=0; we fold those into server_errored when errored=true to keep
-    // the historical narrative honest rather than silently hiding them.
+    // the thing we actually need to fix.
+    //
+    // Legacy rows pre-status column have status=0. Best-effort backfill: every
+    // `bad()` helper across all kits sets statusCode=400, and the dispatcher
+    // only reaches the 500 fallback for genuine exceptions. Empirically all
+    // sub-10ms errored rows are sync validation throws (4xx). So legacy errored
+    // rows default to client_errored — calling them 5xx would falsely accuse
+    // the server of being broken when the data overwhelmingly says otherwise.
     const totals = await p.query(`
       SELECT
         count(*)::int                                                       AS calls,
         count(*) FILTER (WHERE cached)::int                                 AS cached,
         count(*) FILTER (WHERE errored)::int                                AS errored,
-        count(*) FILTER (WHERE status BETWEEN 400 AND 499)::int             AS client_errored,
-        count(*) FILTER (WHERE status BETWEEN 500 AND 599
-                            OR (errored AND status = 0))::int               AS server_errored,
+        count(*) FILTER (WHERE status BETWEEN 400 AND 499
+                            OR (errored AND status = 0))::int               AS client_errored,
+        count(*) FILTER (WHERE status BETWEEN 500 AND 599)::int             AS server_errored,
         coalesce(round(avg(latency_ms))::int, 0)                            AS avg_latency_ms,
         coalesce(percentile_disc(0.50) WITHIN GROUP (ORDER BY latency_ms)::int, 0) AS p50_latency_ms,
         coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms)::int, 0) AS p95_latency_ms
@@ -143,9 +148,9 @@ export async function getAnalytics({ windowHours = 24, top = 25 } = {}) {
          count(*)::int                                                      AS calls,
          count(*) FILTER (WHERE cached)::int                                AS cached,
          count(*) FILTER (WHERE errored)::int                               AS errored,
-         count(*) FILTER (WHERE status BETWEEN 400 AND 499)::int            AS client_errored,
-         count(*) FILTER (WHERE status BETWEEN 500 AND 599
-                             OR (errored AND status = 0))::int              AS server_errored,
+         count(*) FILTER (WHERE status BETWEEN 400 AND 499
+                             OR (errored AND status = 0))::int              AS client_errored,
+         count(*) FILTER (WHERE status BETWEEN 500 AND 599)::int            AS server_errored,
          coalesce(percentile_disc(0.50) WITHIN GROUP (ORDER BY latency_ms)::int, 0) AS p50_ms,
          coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms)::int, 0) AS p95_ms
        FROM tool_calls
