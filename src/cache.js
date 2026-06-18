@@ -132,12 +132,19 @@ export function cacheKeyFor(path, input, keyFields) {
   return "a402:" + parts.join("|");
 }
 
+// Hard read timeout so a stalled Redis can never hang a request. The cache is
+// strictly an optimization — falling back to a fresh upstream call is always
+// preferable to making the agent wait on a degraded cache.
+const CACHE_READ_TIMEOUT_MS = 300;
 export async function cacheGet(key) {
   if (!REDIS_URL || unavailable) return null;
   try {
     const c = await getClient();
     if (!c) return null;
-    const v = await c.get(key);
+    const v = await Promise.race([
+      c.get(key),
+      new Promise((resolve) => setTimeout(() => resolve(null), CACHE_READ_TIMEOUT_MS)),
+    ]);
     return v ? JSON.parse(v) : null;
   } catch (e) {
     return null;

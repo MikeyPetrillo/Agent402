@@ -19,6 +19,24 @@ async function getJson(url) {
   }
 }
 
+// Full-name → USPS 2-letter code lookup. Lets weather-alerts accept "California"
+// instead of forcing the agent to know "CA". Includes the 50 states plus DC and
+// the inhabited territories (the NWS area endpoint covers all of them).
+const STATE_NAME_TO_CODE = {
+  alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA",
+  colorado: "CO", connecticut: "CT", delaware: "DE", florida: "FL", georgia: "GA",
+  hawaii: "HI", idaho: "ID", illinois: "IL", indiana: "IN", iowa: "IA",
+  kansas: "KS", kentucky: "KY", louisiana: "LA", maine: "ME", maryland: "MD",
+  massachusetts: "MA", michigan: "MI", minnesota: "MN", mississippi: "MS", missouri: "MO",
+  montana: "MT", nebraska: "NE", nevada: "NV", "new hampshire": "NH", "new jersey": "NJ",
+  "new mexico": "NM", "new york": "NY", "north carolina": "NC", "north dakota": "ND", ohio: "OH",
+  oklahoma: "OK", oregon: "OR", pennsylvania: "PA", "rhode island": "RI", "south carolina": "SC",
+  "south dakota": "SD", tennessee: "TN", texas: "TX", utah: "UT", vermont: "VT",
+  virginia: "VA", washington: "WA", "west virginia": "WV", wisconsin: "WI", wyoming: "WY",
+  "district of columbia": "DC", "puerto rico": "PR", "u.s. virgin islands": "VI",
+  guam: "GU", "american samoa": "AS", "northern mariana islands": "MP",
+};
+
 export const GOV_TOOLS = [
   {
     route: "GET /api/gov-data", name: "US gov dataset search", slug: "gov-data", category: "data", price: "$0.003",
@@ -80,8 +98,15 @@ export const GOV_TOOLS = [
       output: { example: { area: "CA", count: 2, alerts: [{ event: "Red Flag Warning", severity: "Severe", headline: "…", areas: "…", onset: "2026-06-12T12:00:00-07:00", expires: "…" }] } },
     },
     handler: async (i) => {
-      const area = String(i.area ?? "").trim().toUpperCase();
-      if (!/^[A-Z]{2}$/.test(area)) throw bad('"area" must be a two-letter US state code, e.g. CA');
+      // Accept `area`, `state`, OR `region`, and the full state name in any
+      // of them. Agents almost always send "California" instead of "CA".
+      const raw = String(i.area ?? i.state ?? i.region ?? "").trim();
+      let area = raw.toUpperCase();
+      if (!/^[A-Z]{2}$/.test(area)) {
+        const code = STATE_NAME_TO_CODE[raw.toLowerCase()];
+        if (code) area = code;
+        else throw bad(`"area" must be a two-letter US state code (e.g. CA) or full state name. Got "${raw}".`);
+      }
       const data = await getJson(`https://api.weather.gov/alerts/active?area=${area}`);
       const alerts = (data.features ?? []).slice(0, 20).map((f) => ({
         event: f.properties?.event ?? null,

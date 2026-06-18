@@ -44,6 +44,17 @@ async function ensureSchema() {
   if (schemaReady) return true;
   const p = getPool();
   if (!p) return false;
+  // CREATE happens once; the ALTERs are idempotent for older deployments
+  // that were on a previous schema. Both errored and status are recorded so
+  // legacy rows (status defaults to 0) still aggregate correctly when split
+  // by class — we treat status=0 as "unclassified" and fall back to errored.
+  //
+  // `synthetic` marks calls from a trusted internal source (heartbeat probe,
+  // operator-issued test fires) — those that arrived with a valid HMAC-signed
+  // X-Heartbeat-Token. The dashboard excludes them by default so a CI canary
+  // or manual smoke test can never inflate the public error rate. Legacy rows
+  // (which couldn't have been synthetic since the column didn't exist) default
+  // to FALSE = "real", which is the honest backfill.
   await p.query(`
     CREATE TABLE IF NOT EXISTS tool_calls (
       id          BIGSERIAL PRIMARY KEY,
@@ -51,8 +62,12 @@ async function ensureSchema() {
       slug        TEXT NOT NULL,
       latency_ms  INT NOT NULL,
       cached      BOOLEAN NOT NULL DEFAULT FALSE,
-      errored     BOOLEAN NOT NULL DEFAULT FALSE
+      errored     BOOLEAN NOT NULL DEFAULT FALSE,
+      status      SMALLINT NOT NULL DEFAULT 0,
+      synthetic   BOOLEAN NOT NULL DEFAULT FALSE
     );
+    ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS status SMALLINT NOT NULL DEFAULT 0;
+    ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS synthetic BOOLEAN NOT NULL DEFAULT FALSE;
     CREATE INDEX IF NOT EXISTS tool_calls_ts_idx ON tool_calls (ts DESC);
     CREATE INDEX IF NOT EXISTS tool_calls_slug_ts_idx ON tool_calls (slug, ts DESC);
   `);
@@ -77,16 +92,22 @@ export async function initAnalyticsDb() {
 }
 
 // Fire-and-forget. Never throws — analytics outages must not affect agents.
-export async function recordToolCall({ slug, latencyMs, cached, errored }) {
+// `status` is the HTTP status the caller saw (200 for success, 4xx for caller
+// errors like missing fields, 5xx for handler/upstream failures). Splitting on
+// status lets the dashboard distinguish "agent sent bad input" from "our tool
+// or its upstream is broken" — the same `errored: true` would otherwise hide
+// the difference. Defaults to 0 when not provided (older callers).
+export async function recordToolCall({ slug, latencyMs, cached, errored, status, synthetic }) {
   if (!ANALYTICS_URL || unavailable) return;
   if (!slug) return;
   try {
     if (!schemaReady) await ensureSchema();
     const p = getPool();
     if (!p) return;
+    const statusInt = Math.max(0, Math.min(599, status | 0));
     await p.query(
-      "INSERT INTO tool_calls (slug, latency_ms, cached, errored) VALUES ($1, $2, $3, $4)",
-      [String(slug).slice(0, 128), Math.max(0, latencyMs | 0), !!cached, !!errored]
+      "INSERT INTO tool_calls (slug, latency_ms, cached, errored, status, synthetic) VALUES ($1, $2, $3, $4, $5, $6)",
+      [String(slug).slice(0, 128), Math.max(0, latencyMs | 0), !!cached, !!errored, statusInt, !!synthetic]
     );
   } catch (e) {
     // Swallow.
@@ -95,7 +116,13 @@ export async function recordToolCall({ slug, latencyMs, cached, errored }) {
 
 // Aggregates for the public dashboard. Bounded by `windowHours` so a query
 // can't accidentally scan the whole table.
-export async function getAnalytics({ windowHours = 24, top = 25 } = {}) {
+//
+// `includeSynthetic` defaults to false: calls minted by a trusted internal
+// source (heartbeat probe, operator test fires — anything carrying a valid
+// HMAC-signed X-Heartbeat-Token) are excluded so that CI canaries or manual
+// smoke tests can never inflate the public error rate. Pass true to see the
+// full picture (useful when verifying that synthetic traffic is being tagged).
+export async function getAnalytics({ windowHours = 24, top = 25, includeSynthetic = false } = {}) {
   if (!ANALYTICS_URL || unavailable) return { ok: false, enabled: false };
   try {
     await ensureSchema();
@@ -104,33 +131,84 @@ export async function getAnalytics({ windowHours = 24, top = 25 } = {}) {
     const hours = Math.max(1, Math.min(24 * 30, windowHours | 0));
     const topN = Math.max(1, Math.min(200, top | 0));
     const since = `now() - interval '${hours} hours'`;
+    // SQL fragments — inlined (no parameterization) because they're a fixed
+    // boolean toggled by the caller, not user input.
+    const realOnly = includeSynthetic ? "" : "AND NOT synthetic";
+    const realOnlyJoin = includeSynthetic ? "" : "AND NOT t.synthetic";
 
+    // `client_errored` (4xx) = caller mistake (missing field, bad shape) —
+    // tool is fine. `server_errored` (5xx) = handler or upstream failure —
+    // the thing we actually need to fix.
+    //
+    // Legacy rows pre-status column have status=0. Best-effort backfill: every
+    // `bad()` helper across all kits sets statusCode=400, and the dispatcher
+    // only reaches the 500 fallback for genuine exceptions. Empirically all
+    // sub-10ms errored rows are sync validation throws (4xx). So legacy errored
+    // rows default to client_errored — calling them 5xx would falsely accuse
+    // the server of being broken when the data overwhelmingly says otherwise.
     const totals = await p.query(`
       SELECT
-        count(*)::int                          AS calls,
-        count(*) FILTER (WHERE cached)::int    AS cached,
-        count(*) FILTER (WHERE errored)::int   AS errored,
-        coalesce(round(avg(latency_ms))::int, 0) AS avg_latency_ms,
+        count(*)::int                                                       AS calls,
+        count(*) FILTER (WHERE cached)::int                                 AS cached,
+        count(*) FILTER (WHERE errored)::int                                AS errored,
+        count(*) FILTER (WHERE status BETWEEN 400 AND 499
+                            OR (errored AND status = 0))::int               AS client_errored,
+        count(*) FILTER (WHERE status BETWEEN 500 AND 599)::int             AS server_errored,
+        coalesce(round(avg(latency_ms))::int, 0)                            AS avg_latency_ms,
         coalesce(percentile_disc(0.50) WITHIN GROUP (ORDER BY latency_ms)::int, 0) AS p50_latency_ms,
         coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms)::int, 0) AS p95_latency_ms
       FROM tool_calls
-      WHERE ts >= ${since}
+      WHERE ts >= ${since} ${realOnly}
+    `);
+
+    // Synthetic count is always exposed (regardless of includeSynthetic) so the
+    // dashboard can show "N synthetic calls hidden" without a second query.
+    const syn = await p.query(`
+      SELECT count(*)::int AS synthetic_calls
+      FROM tool_calls
+      WHERE ts >= ${since} AND synthetic
     `);
 
     const byTool = await p.query(
       `SELECT
          slug,
-         count(*)::int                          AS calls,
-         count(*) FILTER (WHERE cached)::int    AS cached,
-         count(*) FILTER (WHERE errored)::int   AS errored,
+         count(*)::int                                                      AS calls,
+         count(*) FILTER (WHERE cached)::int                                AS cached,
+         count(*) FILTER (WHERE errored)::int                               AS errored,
+         count(*) FILTER (WHERE status BETWEEN 400 AND 499
+                             OR (errored AND status = 0))::int              AS client_errored,
+         count(*) FILTER (WHERE status BETWEEN 500 AND 599)::int            AS server_errored,
          coalesce(percentile_disc(0.50) WITHIN GROUP (ORDER BY latency_ms)::int, 0) AS p50_ms,
          coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms)::int, 0) AS p95_ms
        FROM tool_calls
-       WHERE ts >= ${since}
+       WHERE ts >= ${since} ${realOnly}
        GROUP BY slug
        ORDER BY calls DESC
        LIMIT $1`,
       [topN]
+    );
+
+    // Top tools by error count. Same shape as byTool but sorted by total
+    // errored calls and filtered to slugs with ≥1 error. This is the operator
+    // triage view — "what's broken right now, ranked" — without paying for an
+    // external error tracker. Bounded to topN/2 so the page doesn't dominate
+    // when one tool has a flood (the volume table still shows full context).
+    const errN = Math.max(1, Math.min(50, Math.floor(topN / 2) || 10));
+    const errorTools = await p.query(
+      `SELECT
+         slug,
+         count(*)::int                                                      AS calls,
+         count(*) FILTER (WHERE status BETWEEN 400 AND 499
+                             OR (errored AND status = 0))::int              AS client_errored,
+         count(*) FILTER (WHERE status BETWEEN 500 AND 599)::int            AS server_errored,
+         count(*) FILTER (WHERE errored)::int                               AS errored
+       FROM tool_calls
+       WHERE ts >= ${since} ${realOnly}
+       GROUP BY slug
+       HAVING count(*) FILTER (WHERE errored) > 0
+       ORDER BY count(*) FILTER (WHERE errored) DESC, slug ASC
+       LIMIT $1`,
+      [errN]
     );
 
     // Hourly buckets for a sparkline. `date_trunc('hour', ts)` groups every
@@ -151,7 +229,7 @@ export async function getAnalytics({ windowHours = 24, top = 25 } = {}) {
         coalesce(count(t.id) FILTER (WHERE t.errored), 0)::int  AS errored
       FROM hours h
       LEFT JOIN tool_calls t
-        ON date_trunc('hour', t.ts) = h.hour
+        ON date_trunc('hour', t.ts) = h.hour ${realOnlyJoin}
       GROUP BY h.hour
       ORDER BY h.hour ASC
     `);
@@ -160,8 +238,11 @@ export async function getAnalytics({ windowHours = 24, top = 25 } = {}) {
       ok: true,
       enabled: true,
       windowHours: hours,
+      includeSynthetic,
+      syntheticHidden: includeSynthetic ? 0 : (syn.rows[0]?.synthetic_calls || 0),
       totals: totals.rows[0],
       topTools: byTool.rows,
+      errorTools: errorTools.rows,
       timeseries: timeseries.rows,
     };
   } catch (e) {

@@ -18,6 +18,8 @@ import { operatorLeadsPage } from "./operator-leads.js";
 import { initLeadsDb, insertLead, listLeads, countLeads, leadsDbEnabled } from "./leads-db.js";
 import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
 import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled } from "./analytics-db.js";
+import { initSentry, captureToolError, sentryEnabled } from "./sentry.js";
+import { initPostHog, capturePostHogToolError, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
@@ -44,11 +46,12 @@ import { DATA_TOOLS } from "./tools/data-kit.js";
 import { IMAGE_TOOLS } from "./tools/image-kit.js";
 import { X402_TOOLS } from "./tools/x402-kit.js";
 import { UTIL_TOOLS } from "./tools/util-kit.js";
+import { API_TOOLS } from "./tools/api-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
 
@@ -512,8 +515,13 @@ app.use((_req, res, next) => {
 });
 
 // Free, unauthenticated routes
+// Sets browser/CDN cache headers for static-ish HTML pages so clicking around
+// the top nav doesn't re-render the world every time. stale-while-revalidate
+// gives instant back/forward while a background refresh keeps content fresh.
+const htmlCache = (res, maxAge, swr) =>
+  res.set("Cache-Control", `public, max-age=${maxAge}, stale-while-revalidate=${swr}`).type("html");
 app.get("/", (_req, res) =>
-  res.type("html").send(
+  htmlCache(res, 60, 300).send(
     landingPage(BASE_URL, NETWORK, FREE_MODE, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }))
   )
 );
@@ -532,6 +540,8 @@ app.get("/health", (_req, res) => {
   const flags = {
     leadsDb: leadsDbReady,
     operatorToken: Boolean(OPERATOR_TOKEN),
+    sentry: sentryEnabled(),
+    posthog: posthogEnabled(),
   };
   const ok = checks.db && checks.wallet;
   res.status(ok ? 200 : 503).json({ ok, checks, flags });
@@ -547,20 +557,20 @@ app.get("/.well-known/glama.json", (_req, res) => {
     maintainers: email ? [{ email }] : [],
   });
 });
-app.get("/privacy", (_req, res) => res.type("html").send(privacyPage(BASE_URL)));
-app.get("/terms", (_req, res) => res.type("html").send(termsPage(BASE_URL)));
-app.get("/faq", (_req, res) => res.type("html").send(faqPage(BASE_URL)));
+app.get("/privacy", (_req, res) => htmlCache(res, 300, 900).send(privacyPage(BASE_URL)));
+app.get("/terms", (_req, res) => htmlCache(res, 300, 900).send(termsPage(BASE_URL)));
+app.get("/faq", (_req, res) => htmlCache(res, 300, 900).send(faqPage(BASE_URL)));
 app.get("/status", (_req, res) =>
-  res.type("html").send(
+  htmlCache(res, 60, 300).send(
     statusPage(BASE_URL, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }))
   )
 );
-app.get("/tollbooth", (_req, res) => res.type("html").send(tollboothLandingPage(BASE_URL)));
-app.get("/tollbooth/cloud", (_req, res) => res.type("html").send(tollboothCloudPage(BASE_URL)));
+app.get("/tollbooth", (_req, res) => htmlCache(res, 300, 900).send(tollboothLandingPage(BASE_URL)));
+app.get("/tollbooth/cloud", (_req, res) => htmlCache(res, 300, 900).send(tollboothCloudPage(BASE_URL)));
 app.get("/tollbooth/waitlist", (req, res) => {
   const plan = String(req.query.plan || "team").toLowerCase();
   const kind = String(req.query.kind || "waitlist").toLowerCase();
-  res.type("html").send(tollboothWaitlistPage(BASE_URL, { plan, kind }));
+  htmlCache(res, 300, 900).send(tollboothWaitlistPage(BASE_URL, { plan, kind }));
 });
 
 // Tollbooth waitlist intake. Form on /tollbooth/waitlist POSTs JSON here; we
@@ -663,11 +673,11 @@ app.get("/__operator/leads", async (req, res) => {
     dbEnabled: leadsDbEnabled(),
   }));
 });
-app.get("/guides", (_req, res) => res.type("html").send(guidesIndex(BASE_URL)));
+app.get("/guides", (_req, res) => htmlCache(res, 300, 900).send(guidesIndex(BASE_URL)));
 app.get("/guides/:slug", (req, res) => {
   const html = guidePage(BASE_URL, req.params.slug);
   if (!html) return res.status(404).type("html").send('<p>Guide not found. <a href="/guides">All guides</a></p>');
-  res.type("html").send(html);
+  htmlCache(res, 300, 900).send(html);
 });
 // Top-level machine-readable service manifest — one fetch tells a discovery
 // agent the whole story (identity, payment options, capability map, MCP, trust),
@@ -685,32 +695,59 @@ const MANIFEST = serviceManifest({
 // /api/stats and /.well-known/x402 so a discovery agent fetching either one
 // sees the same liveness signal a human sees on /analytics. Returns null when
 // analytics is disabled or the query fails — callers omit the field entirely.
-async function buildPerformance24h() {
+// Never blocks the response. Returns the last cached perf snapshot
+// synchronously; if it's stale, fires a background refresh so the NEXT caller
+// sees fresh data. First-ever caller gets null (perf signal just omitted) —
+// the alternative is making /api/stats wait on Postgres, which under
+// concurrent load on the home-page activity poller starved the event loop
+// and made every page take 30s.
+const PERF_CACHE_MS = 30_000;
+let perfCache = { at: 0, value: null };
+let perfRefreshing = false;
+function refreshPerf24hInBackground() {
+  if (perfRefreshing || !analyticsEnabled()) return;
+  perfRefreshing = true;
+  (async () => {
+    try {
+      const a = await getAnalytics({ windowHours: 24, top: 1 });
+      if (a && a.ok && a.totals && a.totals.calls) {
+        const t = a.totals;
+        perfCache = {
+          at: Date.now(),
+          value: {
+            windowHours: 24,
+            calls: t.calls,
+            cacheHitRate: +((t.cached / t.calls) || 0).toFixed(4),
+            errorRate: +((t.errored / t.calls) || 0).toFixed(4),
+            p50LatencyMs: t.p50_latency_ms,
+            p95LatencyMs: t.p95_latency_ms,
+            dashboardUrl: `${BASE_URL}/analytics`,
+          },
+        };
+      } else {
+        // Cache the "no data" verdict too so we don't keep retrying within the
+        // freshness window when analytics is wired but empty.
+        perfCache = { at: Date.now(), value: null };
+      }
+    } catch (_e) {
+      perfCache = { at: Date.now(), value: null };
+    } finally {
+      perfRefreshing = false;
+    }
+  })();
+}
+function getPerformance24h() {
   if (!analyticsEnabled()) return null;
-  try {
-    const a = await getAnalytics({ windowHours: 24, top: 1 });
-    if (!a || !a.ok || !a.totals || !a.totals.calls) return null;
-    const t = a.totals;
-    return {
-      windowHours: 24,
-      calls: t.calls,
-      cacheHitRate: +((t.cached / t.calls) || 0).toFixed(4),
-      errorRate: +((t.errored / t.calls) || 0).toFixed(4),
-      p50LatencyMs: t.p50_latency_ms,
-      p95LatencyMs: t.p95_latency_ms,
-      dashboardUrl: `${BASE_URL}/analytics`,
-    };
-  } catch (_e) {
-    return null;
-  }
+  if (Date.now() - perfCache.at >= PERF_CACHE_MS) refreshPerf24hInBackground();
+  return perfCache.value;
 }
 // /.well-known/x402 — discovery agents fetch this once to learn the seller.
 // Most of the manifest is boot-time constants (catalog, networks, wallet) so
 // MANIFEST is built once; we only enrich with the live performance24h block
 // on each request when analytics is enabled. Failing-open: if the analytics
 // query stalls, we serve the static manifest instead of blocking the call.
-app.get("/.well-known/x402", async (_req, res) => {
-  const perf = await buildPerformance24h();
+app.get("/.well-known/x402", (_req, res) => {
+  const perf = getPerformance24h();
   if (perf) res.json({ ...MANIFEST, performance24h: perf });
   else res.json(MANIFEST);
 });
@@ -736,10 +773,58 @@ app.get("/api/reliability", (_req, res) =>
 const computeFind = (q, k) => findTools(CATALOG, q, { k, baseUrl: BASE_URL, powSlugs: POW_SLUGS });
 const findCachePath = "/api/find";
 const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
-async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlug, res) {
+
+// Diagnostic log for tool errors. Lets us spot patterns like "100% of /api/whois
+// calls fail in 1ms" without leaking PII — only slug + HTTP status + the error
+// message we already serialize to the response body. No body, no IP, no UA.
+// 4xx = caller sent bad input; 5xx = our tool or its upstream broke.
+function logToolError(slug, status, message, shape, synthetic) {
+  const klass = status >= 500 ? "5xx" : status >= 400 ? "4xx" : "err";
+  // Log the request's TOP-LEVEL KEYS (no values, no IPs, no payment info) on
+  // 4xx so we can spot shape-mismatch patterns the schema didn't anticipate.
+  // Keys are bounded — privacy-safe and small.
+  const shapeStr = shape && Array.isArray(shape) && shape.length ? ` shape=[${shape.slice(0, 12).join(",")}]` : "";
+  const synthStr = synthetic ? " synthetic=true" : "";
+  console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr} msg=${String(message || "").slice(0, 200)}`);
+  // Sentry mirrors the same data as searchable tags so we can query/trend
+  // rejected shapes from the Sentry UI. No-op when SENTRY_DSN is unset.
+  captureToolError({ slug, status, message, shape, synthetic });
+  // PostHog mirrors the same payload as a "tool_error" event with slug/
+  // status/errorClass/shape properties. Same privacy posture, same no-op
+  // behavior when POSTHOG_API_KEY is unset. Independent of Sentry — either,
+  // both, or neither can be enabled at any time.
+  capturePostHogToolError({ slug, status, message, shape, synthetic });
+}
+// True iff this request carries a valid HMAC-signed X-Heartbeat-Token (POW_SECRET).
+// Unspoofable: an external caller cannot mint a valid token without POW_SECRET.
+// Used to mark trusted internal traffic (CI canaries, heartbeat probes, operator
+// smoke tests) so the public dashboard can exclude it from real error rates.
+function isSyntheticRequest(req) {
+  try { return !!(req && verifyHeartbeatToken(req.header("x-heartbeat-token"))); }
+  catch { return false; }
+}
+function requestShape(req) {
+  // Return the top-level keys of body + query, deduped and bounded. Values
+  // are never read — this is purely "what fields did the caller send", which
+  // is the diagnostic signal we need to fix schema mismatches without
+  // logging anything sensitive.
+  try {
+    const keys = new Set();
+    if (req.body && typeof req.body === "object" && !Array.isArray(req.body)) {
+      for (const k of Object.keys(req.body).slice(0, 20)) keys.add(`b:${k}`);
+    }
+    if (req.query && typeof req.query === "object") {
+      for (const k of Object.keys(req.query).slice(0, 20)) keys.add(`q:${k}`);
+    }
+    return [...keys];
+  } catch { return []; }
+}
+async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlug, req, res) {
   const startedAt = Date.now();
+  const synthetic = isSyntheticRequest(req);
   let cached = false;
   let errored = false;
+  let status = 200;
   try {
     let cacheKey = null;
     if (policy && cacheEnabled()) {
@@ -763,25 +848,29 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     res.json(result);
   } catch (err) {
     errored = true;
-    res.status(err.statusCode || 500).json({ error: err.message });
+    status = err.statusCode || 500;
+    logToolError(analyticsSlug, status, err.message, undefined, synthetic);
+    res.status(status).json({ error: err.message });
   } finally {
     recordToolCall({
       slug: analyticsSlug,
       latencyMs: Date.now() - startedAt,
       cached,
       errored,
+      status,
+      synthetic,
     }).catch(() => {});
   }
 }
 app.get("/api/find", (req, res) => {
   const q = req.query.q ?? req.query.task ?? req.query.query;
   const k = req.query.k;
-  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, () => computeFind(q, k), "_find", res);
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, () => computeFind(q, k), "_find", req, res);
 });
 app.post("/api/find", (req, res) => {
   const q = req.body?.q ?? req.body?.task ?? req.body?.query;
   const k = req.body?.k;
-  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, () => computeFind(q, k), "_find", res);
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, () => computeFind(q, k), "_find", req, res);
 });
 
 // x402 Index — public dashboard + Smart Order Router. Free, like /api/find: a
@@ -796,8 +885,44 @@ const indexCtx = () => ({
   toolCount: Object.keys(CATALOG).length,
   walletName: WALLET_ENS,
 });
-app.get("/index", (_req, res) => res.type("text/html").send(indexPage(indexSnapshot(indexCtx()), { baseUrl: BASE_URL })));
-app.get("/api/index", (_req, res) => res.json(indexSnapshot(indexCtx())));
+// Snapshot memo. indexSnapshot iterates the full CATALOG (~1100 tools) and the
+// crawler's seller cache; building it costs hundreds of ms and was being done
+// on every request. Cache for 30s with a sync read + background refresh so the
+// hot path is a property lookup. Crawler refreshes still propagate within 30s.
+const INDEX_SNAPSHOT_TTL_MS = 30_000;
+let indexSnapshotCache = { at: 0, value: null };
+let indexSnapshotRefreshing = false;
+function refreshIndexSnapshotInBackground() {
+  if (indexSnapshotRefreshing) return;
+  indexSnapshotRefreshing = true;
+  // setImmediate so the current request returns before we recompute.
+  setImmediate(() => {
+    try {
+      indexSnapshotCache = { at: Date.now(), value: indexSnapshot(indexCtx()) };
+    } catch (e) {
+      // Don't poison the cache on a transient error — leave the prior value.
+    } finally {
+      indexSnapshotRefreshing = false;
+    }
+  });
+}
+function getIndexSnapshot() {
+  if (!indexSnapshotCache.value) {
+    // Cold start — block once so the first response isn't empty.
+    indexSnapshotCache = { at: Date.now(), value: indexSnapshot(indexCtx()) };
+    return indexSnapshotCache.value;
+  }
+  if (Date.now() - indexSnapshotCache.at >= INDEX_SNAPSHOT_TTL_MS) {
+    refreshIndexSnapshotInBackground();
+  }
+  return indexSnapshotCache.value;
+}
+app.get("/index", (_req, res) =>
+  htmlCache(res, 60, 300).send(indexPage(getIndexSnapshot(), { baseUrl: BASE_URL }))
+);
+app.get("/api/index", (_req, res) =>
+  res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json(getIndexSnapshot())
+);
 const computeRoute = (q, k, include) => routeQuery({ query: q, top: k, include, ...indexCtx() });
 const routeCachePath = "/api/route";
 const routeCachePolicy = CACHEABLE_ROUTES[routeCachePath];
@@ -805,13 +930,13 @@ app.get("/api/route", (req, res) => {
   const q = req.query.q ?? req.query.task ?? req.query.query;
   const top = req.query.top ?? req.query.k;
   const include = req.query.include;
-  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", res);
+  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", req, res);
 });
 app.post("/api/route", (req, res) => {
   const q = req.body?.q ?? req.body?.task ?? req.body?.query;
   const top = req.body?.top ?? req.body?.k;
   const include = req.body?.include;
-  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", res);
+  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", req, res);
 });
 // x402 Leaderboard — public on-chain ranking of every seller in the Coinbase
 // CDP Bazaar by settled USDC volume on Base. Free, like /api/find + /api/route:
@@ -849,7 +974,7 @@ app.get("/api/leaderboard", (req, res) => {
 });
 // Human-readable companion to /api/leaderboard. Same cached snapshot, rendered
 // as a dashboard so visitors (and the site nav) have something to land on.
-app.get("/leaderboard", (_req, res) => res.type("text/html").send(leaderboardPage(getLeaderboardSnapshot(), { baseUrl: BASE_URL })));
+app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(leaderboardPage(getLeaderboardSnapshot(), { baseUrl: BASE_URL })));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));
@@ -989,14 +1114,14 @@ app.get("/card-1280.png", async (_req, res) => {
   }
 });
 app.get("/openapi.json", (_req, res) => res.json(openapiSpec(BASE_URL, CATALOG)));
-app.get("/tools", (_req, res) => res.type("html").send(toolsIndexPage(BASE_URL, CATALOG)));
+app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(toolsIndexPage(BASE_URL, CATALOG)));
 app.get("/tools/:slug", (req, res) => {
   const tools = toolList(CATALOG);
   const tool = tools.find((t) => t.slug === req.params.slug);
   if (!tool) return res.status(404).type("html").send('<p>Tool not found. <a href="/tools">All tools</a></p>');
   const related = tools.filter((t) => t.category === tool.category && t.slug !== tool.slug).slice(0, 3);
   const cachePolicy = tool.method === "GET" ? CACHEABLE_ROUTES[tool.path] : null;
-  res.type("html").send(toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null }));
+  htmlCache(res, 300, 900).send(toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null }));
 });
 // Free proof-of-work endpoints: agents without a wallet pay with CPU instead.
 app.get("/api/pow", (_req, res) => res.json(powInfo(BASE_URL, [...POW_SLUGS].sort())));
@@ -1039,9 +1164,9 @@ app.get("/api/pow/challenge", (req, res) => {
 // tool_calls table. Lets agents shopping the catalog see real performance
 // without navigating to /analytics. Falls back to omitting the field if the
 // query fails / DB is unset, so /api/stats never breaks on a slow Postgres.
-app.get("/api/stats", async (_req, res) => {
+app.get("/api/stats", (_req, res) => {
   const base = getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES });
-  const perf = await buildPerformance24h();
+  const perf = getPerformance24h();
   if (perf) base.performance24h = perf;
   res.json(base);
 });
@@ -1053,7 +1178,12 @@ app.get("/api/stats", async (_req, res) => {
 app.get("/api/analytics", async (req, res) => {
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
   const top = Math.max(1, Math.min(200, parseInt(req.query.top, 10) || 25));
-  res.json(await getAnalytics({ windowHours, top }));
+  // `?include_synthetic=1` opts in to seeing CI canaries / heartbeat probes /
+  // operator smoke tests. Default hides them so the public dashboard reflects
+  // real-caller error rates only. The aggregator still reports how many were
+  // hidden via `syntheticHidden` so the toggle has accurate count.
+  const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
+  res.json(await getAnalytics({ windowHours, top, includeSynthetic }));
 });
 
 // Human-readable analytics dashboard. Same data as /api/analytics, rendered as
@@ -1061,8 +1191,9 @@ app.get("/api/analytics", async (req, res) => {
 // wired, the page shows a clean "not enabled" panel — server still boots.
 app.get("/analytics", async (req, res) => {
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
-  const data = await getAnalytics({ windowHours, top: 25 });
-  res.type("html").send(analyticsPage(data, { baseUrl: BASE_URL }));
+  const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
+  const data = await getAnalytics({ windowHours, top: 25, includeSynthetic });
+  htmlCache(res, 30, 60).send(analyticsPage(data, { baseUrl: BASE_URL }));
 });
 
 // Remote MCP connector (streamable HTTP, authless free tier): paste
@@ -1079,11 +1210,21 @@ mountMcp(app, CATALOG, {
   // today — that path bypasses the central HTTP dispatcher.
   onServed: (slug, meta = {}) => {
     recordServedCall(slug, "pow");
+    // MCP doesn't carry an HTTP status, so we synthesize one for the split:
+    // 200 on success, 500 on error (no separate 4xx classification — MCP
+    // tool-call errors come back in-band, not as transport-level failures).
+    const status = meta.errored ? (meta.statusCode | 0 || 500) : 200;
+    // MCP transport has no HTTP header surface, so `X-Heartbeat-Token` can't
+    // ride along — synthetic is always false here. Pass explicitly so future
+    // refactors don't accidentally let a stray truthy value through.
+    if (meta.errored) logToolError(slug, status, meta.errorMessage || "mcp-error", undefined, false);
     recordToolCall({
       slug,
       latencyMs: meta.latencyMs | 0,
       cached: false,
       errored: !!meta.errored,
+      status,
+      synthetic: false,
     }).catch(() => {});
   },
 });
@@ -1452,10 +1593,30 @@ for (const tool of ALL_KIT) {
 
   app[lowerMethod](path, async (req, res) => {
     const startedAt = Date.now();
+    // Unspoofable: requires a valid HMAC-signed X-Heartbeat-Token. CI canaries,
+    // heartbeat probes, and operator smoke tests carry it; real callers don't.
+    // Threaded into analytics + Sentry + PostHog so test traffic never inflates
+    // the public error rate (see /api/analytics ?include_synthetic to override).
+    const synthetic = isSyntheticRequest(req);
     let cached = false;
     let errored = false;
+    let status = 200;
     try {
       const input = { ...req.query, ...(req.body ?? {}) };
+      // Accept MCP-style envelopes posted directly to the HTTP route. Agents
+      // frequently mirror the shape they use over /mcp ({slug, params:{…}})
+      // into POST /api/<slug> bodies, or wrap fields in {input:{…}} /
+      // {args:{…}}. Unwrap once at the dispatcher so every tool accepts both
+      // the flat shape AND the wrapped shape without per-tool code. Top-level
+      // fields win on conflict — explicit beats nested.
+      for (const wrap of ["params", "input", "args"]) {
+        const inner = input[wrap];
+        if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+          for (const [k, v] of Object.entries(inner)) {
+            if (input[k] === undefined) input[k] = v;
+          }
+        }
+      }
 
       let cacheKey = null;
       if (cachePolicy && cacheEnabled()) {
@@ -1485,7 +1646,23 @@ for (const tool of ALL_KIT) {
       res.json(result);
     } catch (err) {
       errored = true;
-      res.status(err.statusCode || 500).json({ error: err.message });
+      status = err.statusCode || 500;
+      logToolError(tool.slug, status, err.message, status < 500 ? requestShape(req) : null, synthetic);
+      // Self-correction envelope: echo the tool's input schema + a working
+      // example back on 4xx so the LLM has everything it needs to fix the
+      // call without searching the catalog again. 5xx stays minimal — the
+      // caller did nothing wrong, no schema hint is useful there.
+      if (status >= 400 && status < 500) {
+        res.status(status).json({
+          error: err.message,
+          tool: tool.slug,
+          expected: tool.discovery?.inputSchema?.properties || {},
+          required: tool.discovery?.inputSchema?.required || [],
+          example: tool.discovery?.input || {},
+        });
+      } else {
+        res.status(status).json({ error: err.message });
+      }
     } finally {
       // Fire-and-forget. Analytics outages must NEVER affect agents.
       recordToolCall({
@@ -1493,6 +1670,8 @@ for (const tool of ALL_KIT) {
         latencyMs: Date.now() - startedAt,
         cached,
         errored,
+        status,
+        synthetic,
       }).catch(() => {});
     }
   });
@@ -1541,6 +1720,21 @@ initAnalyticsDb().then((r) => {
   if (r.ok) console.log("[analytics-db] tool_calls schema ready");
   else console.log(`[analytics-db] disabled (${r.reason || "unknown"})`);
 });
+
+// Sentry — opt-in via SENTRY_DSN. Same env-gated, fire-and-forget pattern
+// as the other optional infra. Captures tool errors with slug + status + the
+// keys-only shape as searchable tags. No values, no IPs, no headers.
+const sentryInit = initSentry();
+if (sentryInit.ok) console.log("[sentry] enabled");
+else console.log(`[sentry] disabled (${sentryInit.reason || "unknown"})`);
+
+// PostHog — opt-in via POSTHOG_API_KEY. Same env-gated, fire-and-forget
+// pattern as Sentry. Captures tool errors as "tool_error" events. Free tier
+// is generous (1M events/mo), and the same key powers product analytics and
+// session replay later without code changes.
+const posthogInit = initPostHog();
+if (posthogInit.ok) console.log("[posthog] enabled");
+else console.log(`[posthog] disabled (${posthogInit.reason || "unknown"})`);
 
 // x402 Index crawler: warms the cross-seller cache used by /index + /api/route.
 // Seeds come from X402_INDEX_SEEDS (comma-separated origins) plus auto-discovered

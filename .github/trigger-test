@@ -26,3 +26,16 @@ find-route-cache-and-x402-perf-and-tollbooth-spark: 2026-06-18T09:00:00Z
 cacheable-endpoint-and-cache-pct-column: 2026-06-18T10:30:00Z
 cache-stats-counters-and-tool-page-badge: 2026-06-18T12:00:00Z
 operator-chrome-fix-and-wiki-cache-surfaces: 2026-06-18T23:30:00Z
+html-page-cache-control: 2026-06-19T01:00:00Z
+perf24h-memoize-hotfix: 2026-06-19T02:00:00Z
+perf24h-never-block-hotfix: 2026-06-19T03:00:00Z
+redis-cacheget-timeout-hotfix: 2026-06-19T03:30:00Z
+index-snapshot-memo-and-htmlcache: 2026-06-19T04:30:00Z
+analytics-split-4xx-5xx-and-mcp-flat-args: 2026-06-19T05:30:00Z
+analytics-legacy-fallback-flip-to-4xx: 2026-06-19T06:00:00Z
+tools-input-aliases-and-self-correction-envelope: 2026-06-19T07:00:00Z
+dispatcher-envelope-unwrap-and-honest-4xx-label: 2026-06-19T08:00:00Z
+log-rejected-request-shape-keys-only: 2026-06-19T09:00:00Z
+operator-recent-errors-endpoint: 2026-06-19T10:00:00Z
+sentry-integration-replaces-ring-buffer: 2026-06-19T11:00:00Z
+analytics-top-errors-panel-and-posthog-adapter: 2026-06-19T13:00:00Z
