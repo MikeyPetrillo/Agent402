@@ -19,6 +19,7 @@ import { initLeadsDb, insertLead, listLeads, countLeads, leadsDbEnabled } from "
 import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
 import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled } from "./analytics-db.js";
 import { initSentry, captureToolError, sentryEnabled } from "./sentry.js";
+import { initPostHog, capturePostHogToolError, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
@@ -539,6 +540,7 @@ app.get("/health", (_req, res) => {
     leadsDb: leadsDbReady,
     operatorToken: Boolean(OPERATOR_TOKEN),
     sentry: sentryEnabled(),
+    posthog: posthogEnabled(),
   };
   const ok = checks.db && checks.wallet;
   res.status(ok ? 200 : 503).json({ ok, checks, flags });
@@ -785,6 +787,11 @@ function logToolError(slug, status, message, shape) {
   // Sentry mirrors the same data as searchable tags so we can query/trend
   // rejected shapes from the Sentry UI. No-op when SENTRY_DSN is unset.
   captureToolError({ slug, status, message, shape });
+  // PostHog mirrors the same payload as a "tool_error" event with slug/
+  // status/errorClass/shape properties. Same privacy posture, same no-op
+  // behavior when POSTHOG_API_KEY is unset. Independent of Sentry — either,
+  // both, or neither can be enabled at any time.
+  capturePostHogToolError({ slug, status, message, shape });
 }
 function requestShape(req) {
   // Return the top-level keys of body + query, deduped and bounded. Values
@@ -1692,6 +1699,14 @@ initAnalyticsDb().then((r) => {
 const sentryInit = initSentry();
 if (sentryInit.ok) console.log("[sentry] enabled");
 else console.log(`[sentry] disabled (${sentryInit.reason || "unknown"})`);
+
+// PostHog — opt-in via POSTHOG_API_KEY. Same env-gated, fire-and-forget
+// pattern as Sentry. Captures tool errors as "tool_error" events. Free tier
+// is generous (1M events/mo), and the same key powers product analytics and
+// session replay later without code changes.
+const posthogInit = initPostHog();
+if (posthogInit.ok) console.log("[posthog] enabled");
+else console.log(`[posthog] disabled (${posthogInit.reason || "unknown"})`);
 
 // x402 Index crawler: warms the cross-seller cache used by /index + /api/route.
 // Seeds come from X402_INDEX_SEEDS (comma-separated origins) plus auto-discovered

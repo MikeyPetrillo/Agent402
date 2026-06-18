@@ -86,6 +86,7 @@ export function analyticsPage(data, { baseUrl }) {
   const windowHuman = hours >= 24 && hours % 24 === 0 ? `${hours / 24}d` : `${hours}h`;
   const totals = data.totals || {};
   const top = Array.isArray(data.topTools) ? data.topTools : [];
+  const errs = Array.isArray(data.errorTools) ? data.errorTools : [];
   const series = Array.isArray(data.timeseries) ? data.timeseries : [];
 
   const cacheHitRate = fmtPct(totals.cached, totals.calls);
@@ -123,6 +124,31 @@ export function analyticsPage(data, { baseUrl }) {
 
   const emptyRow = `<tr><td colspan="8" class="muted" style="text-align:center;padding:24px">No tool calls in the last ${esc(windowHuman)}. The dashboard starts filling as agents call tools.</td></tr>`;
 
+  // Top-error rows. Same data as the volume table, but sorted by total errored
+  // calls and filtered to slugs with ≥1 error. Operator triage view: "what's
+  // broken right now" without paying an external error tracker. When nothing
+  // is broken we celebrate quietly with a clean empty state.
+  const errRows = errs
+    .map((r, i) => {
+      const safeSlug = esc(r.slug);
+      const total = Number(r.errored || 0);
+      const c4 = Number(r.client_errored || 0);
+      const c5 = Number(r.server_errored || 0);
+      const errPct = r.calls ? fmtPct(total, r.calls) : "—";
+      const route = "/api/" + safeSlug;
+      return `<tr>
+        <td class="num muted">${esc(i + 1)}</td>
+        <td><a href="${route}" rel="nofollow">${safeSlug}</a></td>
+        <td class="num">${esc(fmtInt(r.calls))}</td>
+        <td class="num warn">${esc(fmtInt(c4))}</td>
+        <td class="num danger">${esc(fmtInt(c5))}</td>
+        <td class="num">${esc(fmtInt(total))}</td>
+        <td class="num">${esc(errPct)}</td>
+      </tr>`;
+    })
+    .join("");
+  const errEmpty = `<tr><td colspan="7" class="muted" style="text-align:center;padding:24px">No errors in the last ${esc(windowHuman)} — every tool call returned 2xx.</td></tr>`;
+
   // Highlight class on the hero stats so the difference between caller errors
   // (we can't fix that without changes to the SDK or the agent) and server
   // errors (we definitely need to fix that) is visible at a glance.
@@ -155,6 +181,14 @@ export function analyticsPage(data, { baseUrl }) {
   <table>
     <thead><tr><th class="num">#</th><th>Tool</th><th class="num">Calls</th><th class="num" title="Share of this tool's calls served from the Redis response cache">Cache %</th><th class="num" title="HTTP 4xx — input the schema didn't accept. Often a UX gap on our side; the tool returns its schema + an example so the next call self-corrects.">4xx %</th><th class="num" title="HTTP 5xx — handler or upstream failure. Actionable.">5xx %</th><th class="num">p50</th><th class="num">p95</th></tr></thead>
     <tbody>${rows || emptyRow}</tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <div class="ph"><h2>Top error slugs (last ${esc(windowHuman)})</h2><div class="pn">Tools ranked by total errored calls. 4xx = caller sent the wrong shape (often a schema-coverage gap we can fix with input aliases). 5xx = handler or upstream broke (the actionable one).</div></div>
+  <table>
+    <thead><tr><th class="num">#</th><th>Tool</th><th class="num">Calls</th><th class="num" title="HTTP 4xx — schema mismatches">4xx</th><th class="num" title="HTTP 5xx — handler/upstream failures">5xx</th><th class="num">Errors</th><th class="num">Error %</th></tr></thead>
+    <tbody>${errRows || errEmpty}</tbody>
   </table>
 </div>
 

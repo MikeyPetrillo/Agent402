@@ -161,6 +161,29 @@ export async function getAnalytics({ windowHours = 24, top = 25 } = {}) {
       [topN]
     );
 
+    // Top tools by error count. Same shape as byTool but sorted by total
+    // errored calls and filtered to slugs with ≥1 error. This is the operator
+    // triage view — "what's broken right now, ranked" — without paying for an
+    // external error tracker. Bounded to topN/2 so the page doesn't dominate
+    // when one tool has a flood (the volume table still shows full context).
+    const errN = Math.max(1, Math.min(50, Math.floor(topN / 2) || 10));
+    const errorTools = await p.query(
+      `SELECT
+         slug,
+         count(*)::int                                                      AS calls,
+         count(*) FILTER (WHERE status BETWEEN 400 AND 499
+                             OR (errored AND status = 0))::int              AS client_errored,
+         count(*) FILTER (WHERE status BETWEEN 500 AND 599)::int            AS server_errored,
+         count(*) FILTER (WHERE errored)::int                               AS errored
+       FROM tool_calls
+       WHERE ts >= ${since}
+       GROUP BY slug
+       HAVING count(*) FILTER (WHERE errored) > 0
+       ORDER BY count(*) FILTER (WHERE errored) DESC, slug ASC
+       LIMIT $1`,
+      [errN]
+    );
+
     // Hourly buckets for a sparkline. `date_trunc('hour', ts)` groups every
     // call into its UTC hour; we LEFT JOIN against a generated hour series so
     // empty hours show up as 0 instead of being missing.
@@ -190,6 +213,7 @@ export async function getAnalytics({ windowHours = 24, top = 25 } = {}) {
       windowHours: hours,
       totals: totals.rows[0],
       topTools: byTool.rows,
+      errorTools: errorTools.rows,
       timeseries: timeseries.rows,
     };
   } catch (e) {
