@@ -16,6 +16,8 @@ import { tollboothCloudPage } from "./tollbooth-cloud.js";
 import { tollboothWaitlistPage } from "./tollbooth-waitlist.js";
 import { operatorLeadsPage } from "./operator-leads.js";
 import { initLeadsDb, insertLead, listLeads, countLeads, leadsDbEnabled } from "./leads-db.js";
+import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES } from "./cache.js";
+import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled } from "./analytics-db.js";
 import { operatorPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
 import { termsPage } from "./terms.js";
@@ -934,6 +936,16 @@ app.get("/api/stats", (_req, res) =>
   res.json(getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }))
 );
 
+// Tool-call analytics (free, public). Aggregates from the tool_calls table:
+// total calls / cache-hit rate / error rate / latency percentiles over a
+// configurable window, plus top tools by volume. Returns { enabled: false }
+// when no analytics DB is wired — the server still works.
+app.get("/api/analytics", async (req, res) => {
+  const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
+  const top = Math.max(1, Math.min(200, parseInt(req.query.top, 10) || 25));
+  res.json(await getAnalytics({ windowHours, top }));
+});
+
 // Remote MCP connector (streamable HTTP, authless free tier): paste
 // https://agent402.tools/mcp into Claude/ChatGPT custom connectors. Mounted
 // before the paywall — it meters itself (PoW-eligible tools only, per-IP
@@ -1256,15 +1268,59 @@ app.post("/api/memory/forget", memHandler((req, actor, owner) => forget(owner, r
 
 // Kit routes: input is merged query + JSON body; handlers return JSON or
 // { __binary, contentType } for image responses.
+//
+// Two cross-cutting features wrap every handler:
+//   1. Redis response cache for routes listed in CACHEABLE_ROUTES (GET-only,
+//      200-only, non-binary, non-error). No-op when REDIS_URL is unset.
+//      Sets X-Cache: hit|miss|skip for transparency.
+//   2. Analytics write-through: records slug, latency, cache flag, error flag
+//      to Postgres after responding. Fire-and-forget, never blocks the call.
+//      No-op when ANALYTICS_DATABASE_URL (or DATABASE_URL) is unset.
 for (const tool of ALL_KIT) {
   const [method, path] = tool.route.split(" ");
-  app[method.toLowerCase()](path, async (req, res) => {
+  const lowerMethod = method.toLowerCase();
+  const cachePolicy = lowerMethod === "get" ? CACHEABLE_ROUTES[path] : null;
+
+  app[lowerMethod](path, async (req, res) => {
+    const startedAt = Date.now();
+    let cached = false;
+    let errored = false;
     try {
-      const result = await tool.handler({ ...req.query, ...(req.body ?? {}) }, req);
+      const input = { ...req.query, ...(req.body ?? {}) };
+
+      let cacheKey = null;
+      if (cachePolicy && cacheEnabled()) {
+        cacheKey = cacheKeyFor(path, input, cachePolicy.keyFields || []);
+        const hit = await cacheGet(cacheKey);
+        if (hit !== null) {
+          cached = true;
+          res.setHeader("X-Cache", "hit");
+          return res.json(hit);
+        }
+      }
+
+      const result = await tool.handler(input, req);
+
+      if (cachePolicy) res.setHeader("X-Cache", cacheKey ? "miss" : "skip");
       if (result && result.__binary) return res.type(result.contentType).send(result.__binary);
+
+      // Cache successful, non-error JSON responses. Errors are never cached —
+      // an upstream blip shouldn't poison the key for the whole TTL.
+      if (cacheKey && result && typeof result === "object" && !result.error) {
+        cacheSet(cacheKey, result, cachePolicy.ttl || 300).catch(() => {});
+      }
       res.json(result);
     } catch (err) {
+      errored = true;
       res.status(err.statusCode || 500).json({ error: err.message });
+    } finally {
+      // Fire-and-forget. Analytics outages must NEVER affect agents.
+      recordToolCall({
+        slug: tool.slug,
+        latencyMs: Date.now() - startedAt,
+        cached,
+        errored,
+      }).catch(() => {});
     }
   });
 }
@@ -1302,6 +1358,15 @@ initLeadsDb().then((r) => {
   leadsDbReady = !!r.ok;
   if (r.ok) console.log("[leads-db] tollbooth_leads schema ready");
   else console.log(`[leads-db] disabled (${r.reason || "unknown"})`);
+});
+
+// Tool-call analytics — lazy Postgres init. Same pattern as leads-db: if no
+// ANALYTICS_DATABASE_URL (and no DATABASE_URL to fall back to) it's a no-op.
+// Powers the public /analytics dashboard. Boot fire-and-forget so a slow DB
+// can't hold up /health.
+initAnalyticsDb().then((r) => {
+  if (r.ok) console.log("[analytics-db] tool_calls schema ready");
+  else console.log(`[analytics-db] disabled (${r.reason || "unknown"})`);
 });
 
 // x402 Index crawler: warms the cross-seller cache used by /index + /api/route.
