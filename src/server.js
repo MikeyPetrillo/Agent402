@@ -933,9 +933,35 @@ app.get("/api/pow/challenge", (req, res) => {
 
 // Live machine-to-machine economy stats (free). Money is provable on-chain at
 // the wallet; this also tallies calls served and how they were paid for.
-app.get("/api/stats", (_req, res) =>
-  res.json(getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }))
-);
+//
+// When analytics is wired (DB attached), we ALSO enrich with a 24h performance
+// snapshot — cache hit rate + latency percentiles — straight from the
+// tool_calls table. Lets agents shopping the catalog see real performance
+// without navigating to /analytics. Falls back to omitting the field if the
+// query fails / DB is unset, so /api/stats never breaks on a slow Postgres.
+app.get("/api/stats", async (_req, res) => {
+  const base = getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES });
+  if (analyticsEnabled()) {
+    try {
+      const a = await getAnalytics({ windowHours: 24, top: 1 });
+      if (a && a.ok && a.totals && a.totals.calls > 0) {
+        const t = a.totals;
+        base.performance24h = {
+          windowHours: 24,
+          calls: t.calls,
+          cacheHitRate: +((t.cached / t.calls) || 0).toFixed(4),
+          errorRate: +((t.errored / t.calls) || 0).toFixed(4),
+          p50LatencyMs: t.p50_latency_ms,
+          p95LatencyMs: t.p95_latency_ms,
+          dashboardUrl: `${BASE_URL}/analytics`,
+        };
+      }
+    } catch (_e) {
+      // ignore — never block /api/stats on analytics
+    }
+  }
+  res.json(base);
+});
 
 // Tool-call analytics (free, public). Aggregates from the tool_calls table:
 // total calls / cache-hit rate / error rate / latency percentiles over a

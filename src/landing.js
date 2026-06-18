@@ -7,12 +7,20 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   const count = tools.length;
   const freeCount = tools.filter(isComputePayable).length;
   const served = stats?.toolCallsServed;
+  // Performance signal under the odometer, only when analytics is wired and we
+  // have real traffic in the last 24h. Links straight to the dashboard. The
+  // cache-hit% is the trust signal: it's the share of calls served from Redis
+  // without re-hitting upstream. Agents shopping the catalog see real speed.
+  const perf = stats?.performance24h;
+  const perfLine = perf
+    ? ` · <a href="/analytics" title="Open the analytics dashboard">${(perf.cacheHitRate * 100).toFixed(0)}% cache hit · ${perf.p50LatencyMs}ms p50 (24h)</a>`
+    : "";
   // The old-web visitor counter, except every digit is a real served tool call.
   const odometer = served
     ? `<div class="odometer" title="Counted live by the server; settled revenue is independently verifiable on-chain">
     <span class="odo-label">— TOOL CALLS SERVED —</span>
     <span class="odo-digits">${String(served.total).padStart(7, "0").split("").map((d) => `<b>${d}</b>`).join("")}</span>
-    <span class="odo-sub">${served.viaUSDC} settled in USDC${stats.walletName ? ` to ${stats.walletName}` : ""} · ${served.viaProofOfWork} paid with compute${stats.onchainRevenueProof ? ` · <a href="${stats.onchainRevenueProof}" rel="noopener">on-chain proof</a>` : ""} · counting since ${String(stats.servingSince).slice(0, 10)}</span>
+    <span class="odo-sub">${served.viaUSDC} settled in USDC${stats.walletName ? ` to ${stats.walletName}` : ""} · ${served.viaProofOfWork} paid with compute${stats.onchainRevenueProof ? ` · <a href="${stats.onchainRevenueProof}" rel="noopener">on-chain proof</a>` : ""}${perfLine} · counting since ${String(stats.servingSince).slice(0, 10)}</span>
   </div>`
     : "";
   // Live activity strip — the recent paid-call feed from /api/stats as social

@@ -96,6 +96,18 @@ export const CACHEABLE_ROUTES = {
   // On-chain — short TTL, can change every block but agents often poll.
   "/api/gas-estimate":  { ttl: 30, keyFields: ["network"] },
   "/api/usdc-balance":  { ttl: 30, keyFields: ["address", "network"] },
+
+  // Search — shift over time, but for agent batch tasks the same query
+  // repeated within a minute is wasted spend. 5min is a fair middle.
+  "/api/search":   { ttl: 300, keyFields: ["q", "count", "freshness"] },
+  "/api/gov-data": { ttl: 3600, keyFields: ["q", "rows"] },
+
+  // x402 payments helpers. Quotes are mostly static (sellers rarely re-price);
+  // x402-verify is fully immutable once a tx confirms; tx-status is short-ttl
+  // because pending→confirmed flips matter.
+  "/api/x402-quote":  { ttl:   600, keyFields: ["url", "method"] },
+  "/api/x402-verify": { ttl: 86400, keyFields: ["hash", "network", "to", "min"] },
+  "/api/tx-status":   { ttl:    60, keyFields: ["hash", "network"] },
 };
 
 // Build a deterministic cache key from a path + the policy's keyFields. Values
