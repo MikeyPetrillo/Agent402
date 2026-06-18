@@ -16,7 +16,7 @@ import { tollboothCloudPage } from "./tollbooth-cloud.js";
 import { tollboothWaitlistPage } from "./tollbooth-waitlist.js";
 import { operatorLeadsPage } from "./operator-leads.js";
 import { initLeadsDb, insertLead, listLeads, countLeads, leadsDbEnabled } from "./leads-db.js";
-import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES } from "./cache.js";
+import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
 import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled } from "./analytics-db.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage } from "./operator.js";
@@ -747,12 +747,16 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
       const hit = await cacheGet(cacheKey);
       if (hit !== null) {
         cached = true;
+        noteCacheOutcome("hit");
         res.setHeader("X-Cache", "hit");
         return res.json(hit);
       }
     }
     const result = computeFn();
-    if (policy) res.setHeader("X-Cache", cacheKey ? "miss" : "skip");
+    if (policy) {
+      noteCacheOutcome(cacheKey ? "miss" : "skip");
+      res.setHeader("X-Cache", cacheKey ? "miss" : "skip");
+    }
     if (cacheKey && result && typeof result === "object" && !result.error) {
       cacheSet(cacheKey, result, policy.ttl || 60).catch(() => {});
     }
@@ -991,7 +995,8 @@ app.get("/tools/:slug", (req, res) => {
   const tool = tools.find((t) => t.slug === req.params.slug);
   if (!tool) return res.status(404).type("html").send('<p>Tool not found. <a href="/tools">All tools</a></p>');
   const related = tools.filter((t) => t.category === tool.category && t.slug !== tool.slug).slice(0, 3);
-  res.type("html").send(toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY }));
+  const cachePolicy = tool.method === "GET" ? CACHEABLE_ROUTES[tool.path] : null;
+  res.type("html").send(toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null }));
 });
 // Free proof-of-work endpoints: agents without a wallet pay with CPU instead.
 app.get("/api/pow", (_req, res) => res.json(powInfo(BASE_URL, [...POW_SLUGS].sort())));
@@ -1135,6 +1140,13 @@ app.get("/api/cacheable", (_req, res) => {
     note: "Server-side response cache. Buyer SDKs can skip their own cache for these paths — repeated identical calls within the TTL return the same JSON without re-hitting the upstream. Errors are never cached.",
   });
 });
+
+// Live in-process cache outcome counters since the server started. Independent
+// of the analytics Postgres — works even on instances that never opt into
+// analytics. Gives operators a simple "is the cache earning its keep" signal:
+// look at hitRate. Reset on restart (which is honest: Redis content doesn't
+// survive a fresh boot of a brand-new container with empty keyspace either).
+app.get("/api/cache-stats", (_req, res) => res.json(cacheCounters()));
 
 // Opt-in idempotency (safe retry for paid/proven calls). If a client sends an
 // `Idempotency-Key`, a successful gated call is cached keyed by that key + the
@@ -1451,6 +1463,7 @@ for (const tool of ALL_KIT) {
         const hit = await cacheGet(cacheKey);
         if (hit !== null) {
           cached = true;
+          noteCacheOutcome("hit");
           res.setHeader("X-Cache", "hit");
           return res.json(hit);
         }
@@ -1458,7 +1471,10 @@ for (const tool of ALL_KIT) {
 
       const result = await tool.handler(input, req);
 
-      if (cachePolicy) res.setHeader("X-Cache", cacheKey ? "miss" : "skip");
+      if (cachePolicy) {
+        noteCacheOutcome(cacheKey ? "miss" : "skip");
+        res.setHeader("X-Cache", cacheKey ? "miss" : "skip");
+      }
       if (result && result.__binary) return res.type(result.contentType).send(result.__binary);
 
       // Cache successful, non-error JSON responses. Errors are never cached —

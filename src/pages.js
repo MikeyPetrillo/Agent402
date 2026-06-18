@@ -164,7 +164,18 @@ function convertContent(baseUrl, tool) {
   <table><tr><th>${esc(fromL)}</th><th>${esc(toL)}</th></tr>${rows}</table>`;
 }
 
-export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0 } = {}) {
+// Format a cache TTL (in seconds) as the smallest unit that reads cleanly.
+// Used by the "Cached" badge on /tools/{slug}.
+function fmtTtl(seconds) {
+  const s = Number(seconds);
+  if (!Number.isFinite(s) || s <= 0) return "";
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  if (s < 86400) return `${Math.round(s / 3600)}h`;
+  return `${Math.round(s / 86400)}d`;
+}
+
+export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0, cacheTtl = null } = {}) {
   const title = `${tool.name} API for AI agents — ${tool.price} per call | Agent402`;
   const canonical = `${baseUrl}/tools/${tool.slug}`;
   const catLabel = CATEGORIES[tool.category]?.label ?? tool.category;
@@ -217,7 +228,9 @@ ${renderHeader("/tools")}
     computePayable
       ? `<span class="free">FREE</span> with proof-of-work · or ${tool.price} in USDC`
       : `${tool.price} per call · USDC via x402`
-  } · <code>${tool.method} ${esc(tool.path)}</code></div>
+  } · <code>${tool.method} ${esc(tool.path)}</code>${
+    cacheTtl ? ` · <span title="Server caches identical responses for ${esc(fmtTtl(cacheTtl))}. Repeated calls return X-Cache: hit and don't re-hit the upstream.">Cached ${esc(fmtTtl(cacheTtl))}</span>` : ""
+  }</div>
   <p class="sub">${esc(tool.description)}</p>
   ${tool.category === "convert" ? convertContent(baseUrl, tool) : ""}
 

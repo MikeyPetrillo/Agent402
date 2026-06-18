@@ -144,13 +144,42 @@ export async function cacheGet(key) {
   }
 }
 
+// In-process cache outcome counters. The dispatcher calls noteCacheOutcome()
+// after each cached route serves, so even without Redis we always know
+// "X requests hit, Y missed, Z were skipped (no policy)" since the server
+// started. Surfaced at /api/cache-stats. Reset to 0 on restart (cache itself
+// is not durable across restarts either, so per-boot counters are honest).
+const _counters = { hits: 0, misses: 0, skips: 0, sets: 0, errors: 0, startedAt: Date.now() };
+export function noteCacheOutcome(kind) {
+  if (kind === "hit") _counters.hits++;
+  else if (kind === "miss") _counters.misses++;
+  else if (kind === "skip") _counters.skips++;
+  else if (kind === "set") _counters.sets++;
+  else if (kind === "error") _counters.errors++;
+}
+export function cacheCounters() {
+  const total = _counters.hits + _counters.misses;
+  return {
+    enabled: cacheEnabled(),
+    hits: _counters.hits,
+    misses: _counters.misses,
+    skips: _counters.skips,
+    sets: _counters.sets,
+    errors: _counters.errors,
+    hitRate: total > 0 ? +(_counters.hits / total).toFixed(4) : 0,
+    startedAt: new Date(_counters.startedAt).toISOString(),
+  };
+}
+
 export async function cacheSet(key, value, ttlSec) {
   if (!REDIS_URL || unavailable) return;
   try {
     const c = await getClient();
     if (!c) return;
     await c.set(key, JSON.stringify(value), { EX: Math.max(1, ttlSec | 0) });
+    noteCacheOutcome("set");
   } catch (e) {
+    noteCacheOutcome("error");
     // Swallow — caching is best-effort, never block the response path.
   }
 }
