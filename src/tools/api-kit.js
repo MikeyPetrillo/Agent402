@@ -31,6 +31,11 @@
 //                  items / additionalProperties / oneOf|anyOf|allOf /
 //                  $ref-detection. Reports `valid`, `schemaPresent` so
 //                  callers can distinguish "passed" from "no contract".
+//   openapi-redact  strip examples / descriptions / summaries / tags /
+//                  externalDocs / deprecated from a spec to shrink it for
+//                  LLM context. Walker protects user-defined property
+//                  names under `properties` so models aren't damaged.
+//                  Returns `sizeBefore` / `sizeAfter` + per-category counts.
 //
 // Scope notes for v1:
 //   - Works against OpenAPI 3.x and Swagger 2.x (both share `paths`).
@@ -943,6 +948,65 @@ export const API_TOOLS = [
       return { valid: errors.length === 0, schemaPresent: true, errors };
     },
   },
+  {
+    route: "POST /api/openapi-redact", name: "OpenAPI spec redactor", slug: "openapi-redact", category: "conversion", price: "$0.002",
+    description:
+      "Shrink an OpenAPI 3.x or Swagger 2.x document for LLM context by stripping verbose meta-fields (examples, descriptions, summaries, tags, externalDocs, deprecated). Categories are explicit; default is `[\"examples\", \"descriptions\"]`. User-defined property names under `properties: { ... }` are protected — only the meta-field `example` keyword inside a property schema is removed, not a user property literally named \"example\". Returns the redacted spec plus `sizeBefore`/`sizeAfter` (JSON byte length) and per-category removal counts so callers can see how much context they saved. Pure CPU — deterministic, no network.",
+    tags: ["openapi", "swagger", "redact", "shrink", "llm-context", "api"],
+    discovery: {
+      bodyType: "json",
+      input: {
+        spec: {
+          openapi: "3.0.0",
+          info: { title: "Demo", version: "1.0.0", description: "An example API" },
+          paths: { "/users": { get: {
+            summary: "List users",
+            description: "Returns all users.",
+            parameters: [{ name: "limit", in: "query", description: "Max results", schema: { type: "integer", example: 10 } }],
+            responses: { "200": { description: "ok" } },
+          } } },
+        },
+        strip: ["examples", "descriptions"],
+      },
+      inputSchema: {
+        properties: {
+          spec: { description: "OpenAPI/Swagger document (object or JSON string)" },
+          strip: { description: "Categories to remove. Valid: examples, descriptions, summaries, tags, externalDocs, deprecated. Defaults to [\"examples\", \"descriptions\"]." },
+        },
+        required: ["spec"],
+      },
+      output: {
+        example: {
+          spec: {
+            openapi: "3.0.0",
+            info: { title: "Demo", version: "1.0.0" },
+            paths: { "/users": { get: {
+              summary: "List users",
+              parameters: [{ name: "limit", in: "query", schema: { type: "integer" } }],
+              responses: { "200": {} },
+            } } },
+          },
+          sizeBefore: 334,
+          sizeAfter: 209,
+          removed: { examples: 1, descriptions: 4 },
+        },
+      },
+    },
+    handler: (i) => {
+      if (!("spec" in i)) throw bad('Missing "spec"');
+      const spec = parseMaybeJson(i.spec, "spec");
+      if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+        throw bad('"spec" must be an OpenAPI document');
+      }
+      const stripList = Array.isArray(i.strip) ? i.strip : ["examples", "descriptions"];
+      const stripMap = buildStripMap(stripList);
+      const removed = Object.fromEntries(stripList.map((s) => [s, 0]));
+      const sizeBefore = JSON.stringify(spec).length;
+      const redacted = deepRedact(spec, stripMap, removed, null);
+      const sizeAfter = JSON.stringify(redacted).length;
+      return { spec: redacted, sizeBefore, sizeAfter, removed };
+    },
+  },
 ];
 
 // ---- openapi-to-curl helpers (kept below API_TOOLS for readability since
@@ -1190,4 +1254,58 @@ function locateSchemaForPart(op, part, requestedStatus) {
     return { schema: (jc && jc.schema) || null, status };
   }
   throw bad('"part" must be "request" or "response"');
+}
+
+// ---- openapi-redact helpers ----
+//
+// Categories are coarse buckets, not raw key names, so callers don't have to
+// know which fields the OpenAPI spec uses to store free-text. `examples`
+// covers both the singular `example` and the plural `examples` keyword;
+// `descriptions` covers the lone `description` field at every layer.
+const STRIP_KEYS = {
+  examples: ["example", "examples"],
+  descriptions: ["description"],
+  summaries: ["summary"],
+  tags: ["tags"],
+  externalDocs: ["externalDocs"],
+  deprecated: ["deprecated"],
+};
+
+function buildStripMap(stripList) {
+  const map = new Map();
+  for (const category of stripList) {
+    const keys = STRIP_KEYS[category];
+    if (!keys) {
+      throw bad(`unknown strip category: "${category}". Valid: ${Object.keys(STRIP_KEYS).join(", ")}`);
+    }
+    for (const k of keys) map.set(k, category);
+  }
+  return map;
+}
+
+// Walk the spec, dropping any key whose name is in stripMap and counting it
+// against the originating category. The walker tracks `parentKey` so that
+// when we descend into a `properties: { ... }` object, we treat its keys as
+// user-defined property names — meaning a user property literally named
+// "example" or "description" is preserved. We continue recursing into the
+// value of that protected key, so an `example` keyword inside the property's
+// own schema is still stripped (which is what callers want — they're
+// shrinking schema noise, not damaging the user's data model).
+function deepRedact(node, stripMap, removed, parentKey) {
+  if (Array.isArray(node)) {
+    return node.map((n) => deepRedact(n, stripMap, removed, null));
+  }
+  if (node && typeof node === "object") {
+    const out = {};
+    const userKeysHere = parentKey === "properties";
+    for (const [k, v] of Object.entries(node)) {
+      if (!userKeysHere && stripMap.has(k)) {
+        removed[stripMap.get(k)]++;
+        continue;
+      }
+      out[k] = deepRedact(v, stripMap, removed, k);
+    }
+    return out;
+  }
+  return node;
 }

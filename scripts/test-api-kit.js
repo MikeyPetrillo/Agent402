@@ -995,5 +995,129 @@ ok(threw, `missing "payload" rejected`);
   ok(r.valid === true, `integer satisfies number constraint`);
 }
 
+// ============================================================================
+// openapi-redact
+// ============================================================================
+
+// R1. The discovery example round-trips byte-for-byte through the handler —
+// the public contract for every tool in this kit.
+{
+  const t = tool("openapi-redact");
+  const out = t.handler(t.discovery.input);
+  const expected = t.discovery.output.example;
+  ok(JSON.stringify(out) === JSON.stringify(expected),
+    `openapi-redact example round-trips exactly\n  got      ${JSON.stringify(out)}\n  expected ${JSON.stringify(expected)}`);
+}
+
+// R2. Default strip removes examples + descriptions when `strip` is omitted.
+{
+  const spec = {
+    openapi: "3.0.0",
+    info: { title: "x", version: "1", description: "gone" },
+    paths: { "/a": { get: { description: "gone", responses: { "200": { description: "ok" } } } } },
+  };
+  const r = run("openapi-redact", { spec });
+  ok(r.removed.descriptions === 3, `default strips descriptions, got ${r.removed.descriptions}`);
+  ok(r.spec.info.description === undefined && r.spec.paths["/a"].get.description === undefined,
+    `default strip removed all descriptions in tree`);
+}
+
+// R3. Custom strip with a single category leaves other meta-fields alone.
+{
+  const spec = {
+    openapi: "3.0.0",
+    info: { title: "x", version: "1", description: "kept" },
+    paths: { "/a": { get: { summary: "gone", description: "kept", responses: { "200": { description: "kept" } } } } },
+  };
+  const r = run("openapi-redact", { spec, strip: ["summaries"] });
+  ok(r.removed.summaries === 1, `summaries-only strip count=1, got ${r.removed.summaries}`);
+  ok(r.spec.info.description === "kept" && r.spec.paths["/a"].get.description === "kept",
+    `summaries-only strip preserves descriptions`);
+  ok(r.spec.paths["/a"].get.summary === undefined, `summary actually removed`);
+}
+
+// R4. sizeBefore > sizeAfter when anything is removed (and the size matches
+// JSON.stringify of the actual returned spec, not some other computation).
+{
+  const spec = { openapi: "3.0.0", info: { title: "x", version: "1", description: "noise".repeat(50) }, paths: {} };
+  const r = run("openapi-redact", { spec });
+  ok(r.sizeBefore > r.sizeAfter, `size should shrink, before=${r.sizeBefore} after=${r.sizeAfter}`);
+  ok(r.sizeAfter === JSON.stringify(r.spec).length, `sizeAfter matches JSON.stringify(spec).length`);
+}
+
+// R5. Empty strip array → spec unchanged, sizes equal, all counts zero.
+{
+  const spec = { openapi: "3.0.0", info: { title: "x", version: "1", description: "keep" }, paths: { "/a": { get: { summary: "keep", responses: {} } } } };
+  const r = run("openapi-redact", { spec, strip: [] });
+  ok(JSON.stringify(r.spec) === JSON.stringify(spec), `empty strip leaves spec unchanged`);
+  ok(r.sizeBefore === r.sizeAfter, `empty strip → equal sizes`);
+  ok(Object.keys(r.removed).length === 0, `empty strip → no categories in removed`);
+}
+
+// R6. Unknown strip category is rejected with a helpful message listing
+// valid categories.
+{
+  let err = null;
+  try { run("openapi-redact", { spec: { openapi: "3.0.0", paths: {} }, strip: ["bogus"] }); }
+  catch (e) { err = e; }
+  ok(err && /unknown strip category/i.test(err.message),
+    `unknown category should error, got: ${err && err.message}`);
+  ok(err && /examples/.test(err.message) && /descriptions/.test(err.message),
+    `error should list valid categories`);
+}
+
+// R7. User-defined property literally named "example" is PROTECTED. The
+// stripper walks `properties: { ... }` with userKeysHere=true so the key
+// stays, but it continues recursing into the value, so meta-`example` keys
+// inside that schema are still removed.
+{
+  const spec = {
+    openapi: "3.0.0",
+    paths: { "/a": { post: { requestBody: { content: { "application/json": { schema: {
+      type: "object",
+      properties: {
+        example: { type: "string", example: "this-meta-example-goes-away" },
+        description: { type: "string" },
+      },
+    } } } }, responses: {} } } },
+  };
+  const r = run("openapi-redact", { spec, strip: ["examples"] });
+  const props = r.spec.paths["/a"].post.requestBody.content["application/json"].schema.properties;
+  ok(props.example !== undefined, `user property named "example" preserved under properties:`);
+  ok(props.description !== undefined, `user property named "description" preserved under properties:`);
+  ok(props.example.example === undefined, `meta-example inside user property's schema is still stripped`);
+  ok(r.removed.examples === 1, `exactly one meta-example removed, got ${r.removed.examples}`);
+}
+
+// R8. tags strip removes both top-level tags array and per-operation tags.
+{
+  const spec = {
+    openapi: "3.0.0",
+    tags: [{ name: "users", description: "User ops" }],
+    paths: { "/a": { get: { tags: ["users"], responses: {} } } },
+  };
+  const r = run("openapi-redact", { spec, strip: ["tags"] });
+  ok(r.spec.tags === undefined, `top-level tags removed`);
+  ok(r.spec.paths["/a"].get.tags === undefined, `operation tags removed`);
+  ok(r.removed.tags === 2, `tags count=2, got ${r.removed.tags}`);
+}
+
+// R9. JSON-string input is accepted (matches parseMaybeJson contract used
+// by every other tool in this kit).
+{
+  const spec = { openapi: "3.0.0", info: { title: "x", version: "1", description: "gone" }, paths: {} };
+  const r = run("openapi-redact", { spec: JSON.stringify(spec), strip: ["descriptions"] });
+  ok(r.spec.info.description === undefined && r.removed.descriptions === 1,
+    `JSON-string spec accepted and processed identically`);
+}
+
+// R10. Missing "spec" is rejected with a 400-shaped error.
+{
+  let err = null;
+  try { run("openapi-redact", { strip: ["examples"] }); } catch (e) { err = e; }
+  ok(err && err.statusCode === 400 && /spec/i.test(err.message),
+    `missing spec rejected with 400, got: ${err && err.message}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
