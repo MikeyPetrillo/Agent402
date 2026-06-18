@@ -765,7 +765,7 @@ const math = [
     route: "POST /api/cidr", name: "CIDR calculator", slug: "cidr", category: "math", price: "$0.002",
     description: "Parse an IPv4 CIDR block: network address, broadcast, first/last host, netmask, and host count. Optionally test if an IP is inside it.",
     tags: ["cidr", "subnet", "ip", "network"],
-    discovery: { bodyType: "json", input: { cidr: "192.168.1.0/24", contains: "192.168.1.42" }, inputSchema: { properties: { cidr: { type: "string" }, contains: { type: "string", description: "Optional IP to test for membership" } }, required: ["cidr"] }, output: { example: { network: "192.168.1.0", broadcast: "192.168.1.255", hosts: 254, contains: true } } },
+    discovery: { bodyType: "json", input: { cidr: "192.168.1.0/24", contains: "192.168.1.42" }, inputSchema: { properties: { cidr: { type: "string" }, contains: { type: "string", description: "Optional IP to test for membership" } }, required: ["cidr"] }, output: { example: { cidr: "192.168.1.0/24", network: "192.168.1.0", broadcast: "192.168.1.255", netmask: "255.255.255.0", prefix: 24, firstHost: "192.168.1.1", lastHost: "192.168.1.254", totalAddresses: 256, usableHosts: 254, contains: true } } },
     handler: (i) => {
       const cidr = need(i, "cidr").trim();
       const m = cidr.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})$/);
