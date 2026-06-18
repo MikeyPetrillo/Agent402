@@ -58,7 +58,7 @@ export function sentryEnabled() {
 // Capture a tool-handler error. Adds slug + status + errorClass + shape
 // (keys-only) as tags so they're searchable in Sentry. Never blocks, never
 // throws — telemetry must NEVER affect an agent's response.
-export function captureToolError({ slug, status, message, shape }) {
+export function captureToolError({ slug, status, message, shape, synthetic }) {
   if (!enabled) return;
   try {
     Sentry.withScope((scope) => {
@@ -68,6 +68,10 @@ export function captureToolError({ slug, status, message, shape }) {
       if (Array.isArray(shape) && shape.length) {
         scope.setTag("shape", shape.join(","));
       }
+      // Mirror posthog.js: a request is synthetic iff it carried a valid
+      // HMAC-signed X-Heartbeat-Token (see src/pow.js). Tagged so Sentry
+      // filters/alerts can exclude rehearsal traffic.
+      scope.setTag("synthetic", synthetic ? "true" : "false");
       Sentry.captureMessage(
         `${slug}: ${String(message || "").slice(0, 200)}`,
         status >= 500 ? "error" : "warning",

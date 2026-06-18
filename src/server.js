@@ -777,21 +777,30 @@ const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
 // calls fail in 1ms" without leaking PII — only slug + HTTP status + the error
 // message we already serialize to the response body. No body, no IP, no UA.
 // 4xx = caller sent bad input; 5xx = our tool or its upstream broke.
-function logToolError(slug, status, message, shape) {
+function logToolError(slug, status, message, shape, synthetic) {
   const klass = status >= 500 ? "5xx" : status >= 400 ? "4xx" : "err";
   // Log the request's TOP-LEVEL KEYS (no values, no IPs, no payment info) on
   // 4xx so we can spot shape-mismatch patterns the schema didn't anticipate.
   // Keys are bounded — privacy-safe and small.
   const shapeStr = shape && Array.isArray(shape) && shape.length ? ` shape=[${shape.slice(0, 12).join(",")}]` : "";
-  console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr} msg=${String(message || "").slice(0, 200)}`);
+  const synthStr = synthetic ? " synthetic=true" : "";
+  console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr} msg=${String(message || "").slice(0, 200)}`);
   // Sentry mirrors the same data as searchable tags so we can query/trend
   // rejected shapes from the Sentry UI. No-op when SENTRY_DSN is unset.
-  captureToolError({ slug, status, message, shape });
+  captureToolError({ slug, status, message, shape, synthetic });
   // PostHog mirrors the same payload as a "tool_error" event with slug/
   // status/errorClass/shape properties. Same privacy posture, same no-op
   // behavior when POSTHOG_API_KEY is unset. Independent of Sentry — either,
   // both, or neither can be enabled at any time.
-  capturePostHogToolError({ slug, status, message, shape });
+  capturePostHogToolError({ slug, status, message, shape, synthetic });
+}
+// True iff this request carries a valid HMAC-signed X-Heartbeat-Token (POW_SECRET).
+// Unspoofable: an external caller cannot mint a valid token without POW_SECRET.
+// Used to mark trusted internal traffic (CI canaries, heartbeat probes, operator
+// smoke tests) so the public dashboard can exclude it from real error rates.
+function isSyntheticRequest(req) {
+  try { return !!(req && verifyHeartbeatToken(req.header("x-heartbeat-token"))); }
+  catch { return false; }
 }
 function requestShape(req) {
   // Return the top-level keys of body + query, deduped and bounded. Values
@@ -809,8 +818,9 @@ function requestShape(req) {
     return [...keys];
   } catch { return []; }
 }
-async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlug, res) {
+async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlug, req, res) {
   const startedAt = Date.now();
+  const synthetic = isSyntheticRequest(req);
   let cached = false;
   let errored = false;
   let status = 200;
@@ -838,7 +848,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
   } catch (err) {
     errored = true;
     status = err.statusCode || 500;
-    logToolError(analyticsSlug, status, err.message);
+    logToolError(analyticsSlug, status, err.message, undefined, synthetic);
     res.status(status).json({ error: err.message });
   } finally {
     recordToolCall({
@@ -847,18 +857,19 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
       cached,
       errored,
       status,
+      synthetic,
     }).catch(() => {});
   }
 }
 app.get("/api/find", (req, res) => {
   const q = req.query.q ?? req.query.task ?? req.query.query;
   const k = req.query.k;
-  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, () => computeFind(q, k), "_find", res);
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, () => computeFind(q, k), "_find", req, res);
 });
 app.post("/api/find", (req, res) => {
   const q = req.body?.q ?? req.body?.task ?? req.body?.query;
   const k = req.body?.k;
-  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, () => computeFind(q, k), "_find", res);
+  return serveCachedDiscovery(findCachePath, findCachePolicy, { q, task: q, query: q, k }, () => computeFind(q, k), "_find", req, res);
 });
 
 // x402 Index — public dashboard + Smart Order Router. Free, like /api/find: a
@@ -918,13 +929,13 @@ app.get("/api/route", (req, res) => {
   const q = req.query.q ?? req.query.task ?? req.query.query;
   const top = req.query.top ?? req.query.k;
   const include = req.query.include;
-  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", res);
+  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", req, res);
 });
 app.post("/api/route", (req, res) => {
   const q = req.body?.q ?? req.body?.task ?? req.body?.query;
   const top = req.body?.top ?? req.body?.k;
   const include = req.body?.include;
-  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", res);
+  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", req, res);
 });
 // x402 Leaderboard — public on-chain ranking of every seller in the Coinbase
 // CDP Bazaar by settled USDC volume on Base. Free, like /api/find + /api/route:
@@ -1166,7 +1177,12 @@ app.get("/api/stats", (_req, res) => {
 app.get("/api/analytics", async (req, res) => {
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
   const top = Math.max(1, Math.min(200, parseInt(req.query.top, 10) || 25));
-  res.json(await getAnalytics({ windowHours, top }));
+  // `?include_synthetic=1` opts in to seeing CI canaries / heartbeat probes /
+  // operator smoke tests. Default hides them so the public dashboard reflects
+  // real-caller error rates only. The aggregator still reports how many were
+  // hidden via `syntheticHidden` so the toggle has accurate count.
+  const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
+  res.json(await getAnalytics({ windowHours, top, includeSynthetic }));
 });
 
 // Human-readable analytics dashboard. Same data as /api/analytics, rendered as
@@ -1174,7 +1190,8 @@ app.get("/api/analytics", async (req, res) => {
 // wired, the page shows a clean "not enabled" panel — server still boots.
 app.get("/analytics", async (req, res) => {
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
-  const data = await getAnalytics({ windowHours, top: 25 });
+  const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
+  const data = await getAnalytics({ windowHours, top: 25, includeSynthetic });
   htmlCache(res, 30, 60).send(analyticsPage(data, { baseUrl: BASE_URL }));
 });
 
@@ -1196,13 +1213,17 @@ mountMcp(app, CATALOG, {
     // 200 on success, 500 on error (no separate 4xx classification — MCP
     // tool-call errors come back in-band, not as transport-level failures).
     const status = meta.errored ? (meta.statusCode | 0 || 500) : 200;
-    if (meta.errored) logToolError(slug, status, meta.errorMessage || "mcp-error");
+    // MCP transport has no HTTP header surface, so `X-Heartbeat-Token` can't
+    // ride along — synthetic is always false here. Pass explicitly so future
+    // refactors don't accidentally let a stray truthy value through.
+    if (meta.errored) logToolError(slug, status, meta.errorMessage || "mcp-error", undefined, false);
     recordToolCall({
       slug,
       latencyMs: meta.latencyMs | 0,
       cached: false,
       errored: !!meta.errored,
       status,
+      synthetic: false,
     }).catch(() => {});
   },
 });
@@ -1571,6 +1592,11 @@ for (const tool of ALL_KIT) {
 
   app[lowerMethod](path, async (req, res) => {
     const startedAt = Date.now();
+    // Unspoofable: requires a valid HMAC-signed X-Heartbeat-Token. CI canaries,
+    // heartbeat probes, and operator smoke tests carry it; real callers don't.
+    // Threaded into analytics + Sentry + PostHog so test traffic never inflates
+    // the public error rate (see /api/analytics ?include_synthetic to override).
+    const synthetic = isSyntheticRequest(req);
     let cached = false;
     let errored = false;
     let status = 200;
@@ -1620,7 +1646,7 @@ for (const tool of ALL_KIT) {
     } catch (err) {
       errored = true;
       status = err.statusCode || 500;
-      logToolError(tool.slug, status, err.message, status < 500 ? requestShape(req) : null);
+      logToolError(tool.slug, status, err.message, status < 500 ? requestShape(req) : null, synthetic);
       // Self-correction envelope: echo the tool's input schema + a working
       // example back on 4xx so the LLM has everything it needs to fix the
       // call without searching the catalog again. 5xx stays minimal — the
@@ -1644,6 +1670,7 @@ for (const tool of ALL_KIT) {
         cached,
         errored,
         status,
+        synthetic,
       }).catch(() => {});
     }
   });

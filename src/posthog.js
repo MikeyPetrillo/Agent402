@@ -62,7 +62,7 @@ export function posthogEnabled() {
 // Capture a tool-handler error as a PostHog event. Properties mirror the
 // Sentry tags (slug, status, errorClass, shape) so a single privacy-preserving
 // payload feeds both backends. Never blocks, never throws.
-export function capturePostHogToolError({ slug, status, message, shape }) {
+export function capturePostHogToolError({ slug, status, message, shape, synthetic }) {
   if (!enabled || !client) return;
   try {
     client.capture({
@@ -76,6 +76,12 @@ export function capturePostHogToolError({ slug, status, message, shape }) {
         // Bounded — message text is never PII (we author all error messages
         // in the kits) but truncating is cheap defense in depth.
         message: String(message || "").slice(0, 200),
+        // `synthetic` is true iff the caller proved knowledge of POW_SECRET
+        // via an HMAC-signed X-Heartbeat-Token (see src/pow.js). Trusted
+        // internal traffic only — CI canaries, the heartbeat probe, operator
+        // smoke tests. PostHog dashboards can filter on this property to
+        // exclude rehearsal traffic from real-user error rates.
+        synthetic: !!synthetic,
       },
     });
   } catch { /* never throw from telemetry */ }

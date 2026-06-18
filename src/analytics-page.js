@@ -84,6 +84,12 @@ export function analyticsPage(data, { baseUrl }) {
 
   const hours = data.windowHours || 24;
   const windowHuman = hours >= 24 && hours % 24 === 0 ? `${hours / 24}d` : `${hours}h`;
+  // Synthetic = calls that arrived with a valid HMAC-signed X-Heartbeat-Token
+  // (CI canaries / heartbeat probe / operator smoke tests). Hidden by default
+  // so the public dashboard reflects real-caller error rates; the toggle lets
+  // operators flip to the full picture without a separate query.
+  const includeSynthetic = !!data.includeSynthetic;
+  const syntheticHidden = Number(data.syntheticHidden || 0);
   const totals = data.totals || {};
   const top = Array.isArray(data.topTools) ? data.topTools : [];
   const errs = Array.isArray(data.errorTools) ? data.errorTools : [];
@@ -200,10 +206,10 @@ export function analyticsPage(data, { baseUrl }) {
   </div>
 </div>`;
 
-  return renderShell({ baseUrl, windowHuman, hours, body });
+  return renderShell({ baseUrl, windowHuman, hours, includeSynthetic, syntheticHidden, body });
 }
 
-function renderShell({ baseUrl, windowHuman, hours, body }) {
+function renderShell({ baseUrl, windowHuman, hours, includeSynthetic, syntheticHidden, body }) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -260,8 +266,11 @@ ${renderHeader("/analytics")}
 <p class="sub">Live, public usage data for Agent402. Every tool call records four aggregate fields after responding — slug, latency, cache flag, error flag — with no PII. Window: <b>${esc(windowHuman)}</b>.</p>
 
 <div class="winbar">
-  ${[1, 24, 24 * 7, 24 * 30].map((h) => `<a class="${h === hours ? "active" : ""}" href="/analytics?hours=${h}">${h === 1 ? "1h" : h === 24 ? "24h" : h === 168 ? "7d" : "30d"}</a>`).join("")}
+  ${[1, 24, 24 * 7, 24 * 30].map((h) => `<a class="${h === hours ? "active" : ""}" href="/analytics?hours=${h}${includeSynthetic ? "&include_synthetic=1" : ""}">${h === 1 ? "1h" : h === 24 ? "24h" : h === 168 ? "7d" : "30d"}</a>`).join("")}
 </div>
+${(syntheticHidden > 0 || includeSynthetic) ? `<p class="foot" style="margin:6px 0 0;font-size:.85rem;">${includeSynthetic
+    ? `Showing <b>all</b> calls (incl. synthetic test traffic). <a href="/analytics?hours=${hours}">Hide synthetic</a>`
+    : `<b>${esc(String(syntheticHidden))}</b> synthetic call${syntheticHidden === 1 ? "" : "s"} hidden (CI canary / heartbeat probe). <a href="/analytics?hours=${hours}&include_synthetic=1">Show all</a>`}</p>` : ""}
 
 ${body}
 
