@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cursor/plugins/main/schemas/plugin.schema.json",
+  "name": "agent402",
+  "displayName": "Agent402",
+  "version": "0.4.0",
+  "description": "Open-source MCP server with ~1,100 deterministic tools — web search, headless Chromium, PDFs, OCR, images, live data, x402 payments helpers, and ~1,040 pure-CPU utilities. Free to self-host or pay per call in USDC on Base.",
+  "author": { "name": "MikeyPetrillo" },
+  "homepage": "https://agent402.tools",
+  "repository": "https://github.com/MikeyPetrillo/Agent402",
+  "license": "MIT",
+  "keywords": ["mcp", "x402", "tools", "agents", "web-search", "pdf", "ocr", "payments", "usdc"],
+  "tags": ["mcp", "agents", "tools", "payments"],
+  "mcpServers": {
+    "agent402": {
+      "command": "npx",
+      "args": ["-y", "agent402-mcp"]
+    }
+  }
+}
