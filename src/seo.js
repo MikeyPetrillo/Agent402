@@ -42,6 +42,8 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/api/route`, priority: "0.7" },
     { loc: `${baseUrl}/leaderboard`, priority: "0.8" },
     { loc: `${baseUrl}/api/leaderboard`, priority: "0.7" },
+    { loc: `${baseUrl}/analytics`, priority: "0.7" },
+    { loc: `${baseUrl}/api/analytics`, priority: "0.6" },
     { loc: `${baseUrl}/tollbooth`, priority: "0.7" },
     { loc: `${baseUrl}/tollbooth/cloud`, priority: "0.7" },
   ];

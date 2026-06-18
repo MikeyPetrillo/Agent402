@@ -133,12 +133,36 @@ export async function getAnalytics({ windowHours = 24, top = 25 } = {}) {
       [topN]
     );
 
+    // Hourly buckets for a sparkline. `date_trunc('hour', ts)` groups every
+    // call into its UTC hour; we LEFT JOIN against a generated hour series so
+    // empty hours show up as 0 instead of being missing.
+    const timeseries = await p.query(`
+      WITH hours AS (
+        SELECT generate_series(
+          date_trunc('hour', now() - interval '${hours} hours'),
+          date_trunc('hour', now()),
+          interval '1 hour'
+        ) AS hour
+      )
+      SELECT
+        h.hour                                                  AS ts,
+        coalesce(count(t.id), 0)::int                           AS calls,
+        coalesce(count(t.id) FILTER (WHERE t.cached), 0)::int   AS cached,
+        coalesce(count(t.id) FILTER (WHERE t.errored), 0)::int  AS errored
+      FROM hours h
+      LEFT JOIN tool_calls t
+        ON date_trunc('hour', t.ts) = h.hour
+      GROUP BY h.hour
+      ORDER BY h.hour ASC
+    `);
+
     return {
       ok: true,
       enabled: true,
       windowHours: hours,
       totals: totals.rows[0],
       topTools: byTool.rows,
+      timeseries: timeseries.rows,
     };
   } catch (e) {
     console.error("[analytics-db] query failed:", e.message);

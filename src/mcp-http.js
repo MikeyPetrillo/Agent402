@@ -33,7 +33,8 @@ const rateLimited = (ip) => mcpLimiter.check(ip).limited;
 /**
  * Mount the MCP endpoint on the express app.
  * `catalog` is the CATALOG map (route -> tool def), `opts.isComputePayable`
- * decides the free set, `opts.onServed(slug)` feeds the stats counters.
+ * decides the free set. `opts.onServed(slug, { latencyMs, errored })` feeds
+ * both the stats counters and the analytics dashboard with full per-call meta.
  */
 export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {} }) {
   const tools = new Map(); // slug -> { def, free }
@@ -230,8 +231,18 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         }
         if (!params || typeof params !== "object" || Array.isArray(params)) params = {};
         // Same contract as the express kit routes; handlers only see input.
-        const result = await entry.def.handler(params, { headers: {}, query: params, body: params, ip });
-        onServed(entry.def.slug);
+        // Time the call so the analytics dispatcher gets accurate latency for
+        // MCP traffic (same as the HTTP path). Errors here flow into the
+        // catch below and are reported with errored:true.
+        const startedAt = Date.now();
+        let result;
+        try {
+          result = await entry.def.handler(params, { headers: {}, query: params, body: params, ip });
+        } catch (handlerErr) {
+          onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: true });
+          return { content: [{ type: "text", text: `Agent402: ${handlerErr.message}` }], isError: true };
+        }
+        onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: false });
         if (result && result.__binary) {
           return { content: [{ type: "image", data: Buffer.from(result.__binary).toString("base64"), mimeType: result.contentType }] };
         }

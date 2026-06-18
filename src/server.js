@@ -18,6 +18,7 @@ import { operatorLeadsPage } from "./operator-leads.js";
 import { initLeadsDb, insertLead, listLeads, countLeads, leadsDbEnabled } from "./leads-db.js";
 import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES } from "./cache.js";
 import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled } from "./analytics-db.js";
+import { analyticsPage } from "./analytics-page.js";
 import { operatorPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
 import { termsPage } from "./terms.js";
@@ -946,6 +947,15 @@ app.get("/api/analytics", async (req, res) => {
   res.json(await getAnalytics({ windowHours, top }));
 });
 
+// Human-readable analytics dashboard. Same data as /api/analytics, rendered as
+// HTML with stat cards, a sparkline, and the top-tools table. When no DB is
+// wired, the page shows a clean "not enabled" panel — server still boots.
+app.get("/analytics", async (req, res) => {
+  const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
+  const data = await getAnalytics({ windowHours, top: 25 });
+  res.type("html").send(analyticsPage(data, { baseUrl: BASE_URL }));
+});
+
 // Remote MCP connector (streamable HTTP, authless free tier): paste
 // https://agent402.tools/mcp into Claude/ChatGPT custom connectors. Mounted
 // before the paywall — it meters itself (PoW-eligible tools only, per-IP
@@ -953,7 +963,20 @@ app.get("/api/analytics", async (req, res) => {
 mountMcp(app, CATALOG, {
   baseUrl: BASE_URL,
   isComputePayable,
-  onServed: (slug) => recordServedCall(slug, "pow"),
+  // MCP-served calls land on the same accounting + analytics rails as
+  // direct-HTTP ones. PoW is the gate (no x402 settlement on /mcp's free
+  // tier), so the served-call counter records under "pow". Analytics gets
+  // the full meta (latency, errored). Cache hits don't flow through MCP
+  // today — that path bypasses the central HTTP dispatcher.
+  onServed: (slug, meta = {}) => {
+    recordServedCall(slug, "pow");
+    recordToolCall({
+      slug,
+      latencyMs: meta.latencyMs | 0,
+      cached: false,
+      errored: !!meta.errored,
+    }).catch(() => {});
+  },
 });
 
 app.get("/api/pricing", (_req, res) =>
