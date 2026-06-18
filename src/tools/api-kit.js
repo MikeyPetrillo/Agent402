@@ -36,6 +36,15 @@
 //                  LLM context. Walker protects user-defined property
 //                  names under `properties` so models aren't damaged.
 //                  Returns `sizeBefore` / `sizeAfter` + per-category counts.
+//   openapi-resolve-refs  inline every local `$ref` (`#/components/...` for
+//                  OpenAPI 3.x, `#/definitions/...` for Swagger 2.x) so
+//                  downstream tools (diff / mock-response / validate-payload)
+//                  see a self-contained document. Per-branch cycle detection
+//                  leaves the `$ref` intact for circular schemas; external
+//                  refs (http://, file://) are reported but not fetched.
+//                  Sibling keys of `$ref` are dropped per JSON Schema Draft 7
+//                  semantics. Returns `resolved` / `circular` / `unresolved`
+//                  / `external` so callers know what was and wasn't inlined.
 //
 // Scope notes for v1:
 //   - Works against OpenAPI 3.x and Swagger 2.x (both share `paths`).
@@ -1007,6 +1016,73 @@ export const API_TOOLS = [
       return { spec: redacted, sizeBefore, sizeAfter, removed };
     },
   },
+  {
+    route: "POST /api/openapi-resolve-refs", name: "OpenAPI $ref resolver", slug: "openapi-resolve-refs", category: "conversion", price: "$0.002",
+    description:
+      "Inline every local `$ref` in an OpenAPI 3.x or Swagger 2.x document so downstream tools see a self-contained spec. Resolves `#/components/...` (OpenAPI) and `#/definitions/...` (Swagger) JSON-pointer refs anywhere in the document, including inside components themselves. Per-branch cycle detection: if A→B→A, the second A is left as a `$ref` and recorded under `circular`. External refs (http://, file://, ./other.yaml) are never fetched — they're reported under `external` and left as-is. Sibling keys of `$ref` (e.g. a `description` next to a `$ref`) are dropped to match JSON Schema Draft 7 / OpenAPI 3.0 semantics. Returns the dereffed spec plus `resolved` (count inlined) and arrays of any refs that couldn't be inlined. Pure CPU — deterministic, no network.",
+    tags: ["openapi", "swagger", "ref", "dereference", "resolve", "api"],
+    discovery: {
+      bodyType: "json",
+      input: {
+        spec: {
+          openapi: "3.0.0",
+          info: { title: "Demo", version: "1.0.0" },
+          paths: {
+            "/users/{id}": {
+              get: {
+                parameters: [{ $ref: "#/components/parameters/UserId" }],
+                responses: { "200": { description: "ok", content: { "application/json": { schema: { $ref: "#/components/schemas/User" } } } } },
+              },
+            },
+          },
+          components: {
+            schemas: { User: { type: "object", properties: { id: { type: "string" }, name: { type: "string" } } } },
+            parameters: { UserId: { name: "id", in: "path", required: true, schema: { type: "string" } } },
+          },
+        },
+      },
+      inputSchema: {
+        properties: {
+          spec: { description: "OpenAPI/Swagger document (object or JSON string)" },
+        },
+        required: ["spec"],
+      },
+      output: {
+        example: {
+          spec: {
+            openapi: "3.0.0",
+            info: { title: "Demo", version: "1.0.0" },
+            paths: {
+              "/users/{id}": {
+                get: {
+                  parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+                  responses: { "200": { description: "ok", content: { "application/json": { schema: { type: "object", properties: { id: { type: "string" }, name: { type: "string" } } } } } } },
+                },
+              },
+            },
+            components: {
+              schemas: { User: { type: "object", properties: { id: { type: "string" }, name: { type: "string" } } } },
+              parameters: { UserId: { name: "id", in: "path", required: true, schema: { type: "string" } } },
+            },
+          },
+          resolved: 2,
+          circular: [],
+          unresolved: [],
+          external: [],
+        },
+      },
+    },
+    handler: (i) => {
+      if (!("spec" in i)) throw bad('Missing "spec"');
+      const spec = parseMaybeJson(i.spec, "spec");
+      if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+        throw bad('"spec" must be an OpenAPI document');
+      }
+      const report = { resolved: 0, circular: [], unresolved: [], external: [] };
+      const resolved = deepResolveRefs(spec, spec, new Set(), report);
+      return { spec: resolved, resolved: report.resolved, circular: report.circular, unresolved: report.unresolved, external: report.external };
+    },
+  },
 ];
 
 // ---- openapi-to-curl helpers (kept below API_TOOLS for readability since
@@ -1304,6 +1380,67 @@ function deepRedact(node, stripMap, removed, parentKey) {
         continue;
       }
       out[k] = deepRedact(v, stripMap, removed, k);
+    }
+    return out;
+  }
+  return node;
+}
+
+// ---- openapi-resolve-refs helpers ----
+//
+// JSON pointer (RFC 6901) lookup against the root document. Returns
+// `undefined` if any segment of the path doesn't exist or the ref isn't
+// a local fragment pointer.
+function jsonPointerLookup(root, ref) {
+  if (typeof ref !== "string" || !ref.startsWith("#/")) return undefined;
+  const segments = ref.slice(2).split("/").map((s) =>
+    s.replace(/~1/g, "/").replace(/~0/g, "~"),
+  );
+  let cur = root;
+  for (const seg of segments) {
+    if (cur === null || typeof cur !== "object") return undefined;
+    cur = cur[seg];
+  }
+  return cur;
+}
+
+// Walk the spec, replacing `{ $ref: "..." }` nodes with the target value.
+// `resolvingPath` is the set of refs currently in progress on THIS branch of
+// the walk — passing a fresh copy down means sibling refs to the same target
+// both resolve, but re-entering the same ref within its own resolution chain
+// is detected as a cycle and left intact.
+//
+// Sibling keys of `$ref` are dropped to match JSON Schema Draft 7 / OpenAPI
+// 3.0 semantics. Callers needing OpenAPI 3.1 merge behavior should pre-merge
+// upstream — this walker is a "replace, not extend" implementation by design.
+function deepResolveRefs(node, root, resolvingPath, report) {
+  if (Array.isArray(node)) {
+    return node.map((n) => deepResolveRefs(n, root, resolvingPath, report));
+  }
+  if (node && typeof node === "object") {
+    if (typeof node.$ref === "string") {
+      const ref = node.$ref;
+      if (!ref.startsWith("#/")) {
+        if (!report.external.includes(ref)) report.external.push(ref);
+        return node;
+      }
+      if (resolvingPath.has(ref)) {
+        if (!report.circular.includes(ref)) report.circular.push(ref);
+        return node;
+      }
+      const target = jsonPointerLookup(root, ref);
+      if (target === undefined) {
+        if (!report.unresolved.includes(ref)) report.unresolved.push(ref);
+        return node;
+      }
+      report.resolved++;
+      const nextPath = new Set(resolvingPath);
+      nextPath.add(ref);
+      return deepResolveRefs(target, root, nextPath, report);
+    }
+    const out = {};
+    for (const [k, v] of Object.entries(node)) {
+      out[k] = deepResolveRefs(v, root, resolvingPath, report);
     }
     return out;
   }

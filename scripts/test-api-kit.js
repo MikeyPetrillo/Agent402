@@ -1119,5 +1119,182 @@ ok(threw, `missing "payload" rejected`);
     `missing spec rejected with 400, got: ${err && err.message}`);
 }
 
+// ============================================================================
+// openapi-resolve-refs
+// ============================================================================
+
+// RR1. Discovery example round-trips byte-for-byte through the handler.
+{
+  const t = tool("openapi-resolve-refs");
+  const out = t.handler(t.discovery.input);
+  const expected = t.discovery.output.example;
+  ok(JSON.stringify(out) === JSON.stringify(expected),
+    `openapi-resolve-refs example round-trips exactly\n  got      ${JSON.stringify(out)}\n  expected ${JSON.stringify(expected)}`);
+}
+
+// RR2. Simple one-level ref inlines the target value.
+{
+  const spec = {
+    openapi: "3.0.0",
+    paths: { "/u": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/U" } } } } } } } },
+    components: { schemas: { U: { type: "string" } } },
+  };
+  const r = run("openapi-resolve-refs", { spec });
+  ok(r.spec.paths["/u"].get.responses["200"].content["application/json"].schema.type === "string",
+    `simple ref inlined to the target type`);
+  ok(r.resolved === 1, `resolved count=1, got ${r.resolved}`);
+}
+
+// RR3. Nested refs: A points to B, both get inlined.
+{
+  const spec = {
+    paths: { "/x": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/A" } } } } } } } },
+    components: { schemas: {
+      A: { type: "object", properties: { b: { $ref: "#/components/schemas/B" } } },
+      B: { type: "integer" },
+    } },
+  };
+  const r = run("openapi-resolve-refs", { spec });
+  const schema = r.spec.paths["/x"].get.responses["200"].content["application/json"].schema;
+  ok(schema.type === "object" && schema.properties.b.type === "integer",
+    `nested ref fully inlined`);
+  // A resolves once at /x, B resolves twice: once inside the inlined /x copy and
+  // once inside components.schemas.A (we walk components too for consistency).
+  ok(r.resolved === 3, `resolved count=3 (A once, B twice — inside /x + inside components.A), got ${r.resolved}`);
+}
+
+// RR4. Self-referential schema (A → A) is detected as circular; the inner
+// `$ref` stays intact and one occurrence is reported.
+{
+  const spec = {
+    paths: { "/n": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Node" } } } } } } } },
+    components: { schemas: { Node: { type: "object", properties: { next: { $ref: "#/components/schemas/Node" } } } } },
+  };
+  const r = run("openapi-resolve-refs", { spec });
+  const schema = r.spec.paths["/n"].get.responses["200"].content["application/json"].schema;
+  ok(schema.type === "object" && schema.properties.next.$ref === "#/components/schemas/Node",
+    `cycle leaves inner $ref intact`);
+  ok(r.circular.includes("#/components/schemas/Node"), `circular reports the ref`);
+}
+
+// RR5. Two-step cycle A → B → A is also detected. We expect ONE entry per
+// distinct ref in `circular`, regardless of how many times we hit it.
+{
+  const spec = {
+    paths: { "/c": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/A" } } } } } } } },
+    components: { schemas: {
+      A: { type: "object", properties: { b: { $ref: "#/components/schemas/B" } } },
+      B: { type: "object", properties: { a: { $ref: "#/components/schemas/A" } } },
+    } },
+  };
+  const r = run("openapi-resolve-refs", { spec });
+  ok(r.circular.includes("#/components/schemas/A"), `two-step cycle includes A`);
+  ok(r.circular.filter((x) => x === "#/components/schemas/A").length === 1, `each circular ref recorded once`);
+}
+
+// RR6. Unresolved ref: the target doesn't exist. We leave the $ref node as-is
+// and add it to `unresolved`. Never throws.
+{
+  const spec = {
+    paths: { "/m": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Missing" } } } } } } } },
+    components: { schemas: {} },
+  };
+  const r = run("openapi-resolve-refs", { spec });
+  ok(r.spec.paths["/m"].get.responses["200"].content["application/json"].schema.$ref === "#/components/schemas/Missing",
+    `unresolved ref left intact`);
+  ok(r.unresolved[0] === "#/components/schemas/Missing", `unresolved reports the ref`);
+  ok(r.resolved === 0, `nothing actually resolved`);
+}
+
+// RR7. External ref (http://) is never fetched — reported and left as-is.
+{
+  const spec = {
+    paths: { "/e": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "http://example.com/schema.json" } } } } } } } },
+  };
+  const r = run("openapi-resolve-refs", { spec });
+  ok(r.spec.paths["/e"].get.responses["200"].content["application/json"].schema.$ref === "http://example.com/schema.json",
+    `external ref left intact`);
+  ok(r.external[0] === "http://example.com/schema.json", `external reports the ref`);
+}
+
+// RR8. Swagger 2.x: `#/definitions/...` resolves the same way as
+// `#/components/schemas/...` does for OpenAPI 3 — it's just a different
+// JSON pointer, and we follow whatever pointer the spec writes.
+{
+  const spec = {
+    swagger: "2.0",
+    paths: { "/u": { get: { responses: { "200": { schema: { $ref: "#/definitions/User" } } } } } },
+    definitions: { User: { type: "object", properties: { id: { type: "string" } } } },
+  };
+  const r = run("openapi-resolve-refs", { spec });
+  ok(r.spec.paths["/u"].get.responses["200"].schema.type === "object", `Swagger 2.x definitions ref resolves`);
+}
+
+// RR9. Sibling keys of `$ref` are dropped — Draft 7 / OpenAPI 3.0 semantics.
+// The `description` and `nullable` next to the $ref do NOT survive the merge.
+{
+  const spec = {
+    paths: { "/s": { get: { responses: { "200": { content: { "application/json": {
+      schema: { $ref: "#/components/schemas/U", description: "ignored", nullable: true },
+    } } } } } } },
+    components: { schemas: { U: { type: "string" } } },
+  };
+  const r = run("openapi-resolve-refs", { spec });
+  const schema = r.spec.paths["/s"].get.responses["200"].content["application/json"].schema;
+  ok(schema.type === "string", `target value replaces the $ref node`);
+  ok(schema.description === undefined && schema.nullable === undefined, `sibling keys are dropped`);
+}
+
+// RR10. JSON pointer escaping: `~1` decodes to `/`, `~0` decodes to `~`. A
+// component key literally named `weird/key~1` is reachable via
+// `#/components/schemas/weird~1key~01`.
+{
+  const spec = {
+    paths: { "/w": { get: { responses: { "200": { content: { "application/json": {
+      schema: { $ref: "#/components/schemas/weird~1key~01" },
+    } } } } } } },
+    components: { schemas: { "weird/key~1": { type: "boolean" } } },
+  };
+  const r = run("openapi-resolve-refs", { spec });
+  ok(r.spec.paths["/w"].get.responses["200"].content["application/json"].schema.type === "boolean",
+    `pointer escapes (~1 → /, ~0 → ~) decoded correctly`);
+}
+
+// RR11. Same ref used in two independent branches: BOTH resolve, neither is
+// flagged as circular (per-branch tracking, not global).
+{
+  const spec = {
+    paths: {
+      "/a": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/X" } } } } } } },
+      "/b": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/X" } } } } } } },
+    },
+    components: { schemas: { X: { type: "number" } } },
+  };
+  const r = run("openapi-resolve-refs", { spec });
+  ok(r.spec.paths["/a"].get.responses["200"].content["application/json"].schema.type === "number"
+    && r.spec.paths["/b"].get.responses["200"].content["application/json"].schema.type === "number",
+    `sibling refs to same target both resolve`);
+  ok(r.circular.length === 0, `sibling reuse is not a cycle`);
+}
+
+// RR12. JSON-string input is accepted (matches parseMaybeJson contract).
+{
+  const spec = {
+    paths: { "/j": { get: { responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/U" } } } } } } } },
+    components: { schemas: { U: { type: "string" } } },
+  };
+  const r = run("openapi-resolve-refs", { spec: JSON.stringify(spec) });
+  ok(r.spec.paths["/j"].get.responses["200"].content["application/json"].schema.type === "string",
+    `JSON-string spec accepted`);
+}
+
+// RR13. Missing "spec" rejected with a 400-shaped error.
+{
+  let err = null;
+  try { run("openapi-resolve-refs", {}); } catch (e) { err = e; }
+  ok(err && err.statusCode === 400 && /spec/i.test(err.message),
+    `missing spec rejected with 400, got: ${err && err.message}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
