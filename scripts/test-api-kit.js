@@ -1445,5 +1445,156 @@ ok(threw, `missing "payload" rejected`);
     `missing spec rejected with 400, got: ${err && err.message}`);
 }
 
+// ============================================================================
+// openapi-required-params
+// ============================================================================
+
+// RP1. Discovery example round-trips byte-for-byte.
+{
+  const t = tool("openapi-required-params");
+  const out = t.handler(t.discovery.input);
+  const expected = t.discovery.output.example;
+  ok(JSON.stringify(out) === JSON.stringify(expected),
+    `openapi-required-params example round-trips exactly\n  got      ${JSON.stringify(out)}\n  expected ${JSON.stringify(expected)}`);
+}
+
+// RP2. Path params are ALWAYS required per OpenAPI — even when the spec
+// author forgets the explicit `required: true`. We treat them as required
+// to match the spec rule rather than the spec author's typo.
+{
+  const spec = {
+    paths: { "/u/{id}": { get: { operationId: "g",
+      parameters: [{ name: "id", in: "path", schema: { type: "string" } }],
+      responses: { "200": {} } } } },
+  };
+  const r = run("openapi-required-params", { spec, operationId: "g" });
+  ok(r.required.length === 1 && r.required[0].in === "path" && r.required[0].name === "id",
+    `path param required even without explicit required:true`);
+}
+
+// RP3. Optional query/header parameters are filtered out — only the
+// `required: true` ones appear in the output.
+{
+  const spec = {
+    paths: { "/u": { get: { operationId: "g",
+      parameters: [
+        { name: "limit", in: "query", required: false, schema: { type: "integer" } },
+        { name: "token", in: "query", required: true, schema: { type: "string" } },
+        { name: "X-Trace", in: "header", required: false, schema: { type: "string" } },
+      ],
+      responses: { "200": {} } } } },
+  };
+  const r = run("openapi-required-params", { spec, operationId: "g" });
+  ok(r.required.length === 1 && r.required[0].name === "token",
+    `only required:true params survive the filter`);
+}
+
+// RP4. Required JSON body → top-level required field names are enumerated.
+// Nested required (inside a property's own schema) is intentionally NOT
+// recursed — that's v2 territory and would compete with validate-payload.
+{
+  const spec = {
+    paths: { "/u": { post: { operationId: "c",
+      requestBody: { required: true, content: { "application/json": { schema: {
+        type: "object",
+        required: ["email"],
+        properties: {
+          email: { type: "string" },
+          address: { type: "object", required: ["street"], properties: { street: { type: "string" } } },
+        },
+      } } } },
+      responses: { "201": {} } } } },
+  };
+  const r = run("openapi-required-params", { spec, operationId: "c" });
+  ok(r.required.length === 1 && r.required[0].in === "body.field" && r.required[0].name === "email",
+    `top-level body required field surfaced; nested required is NOT recursed (v1 scope)`);
+  ok(r.hasBody === true && r.bodyContentType === "application/json",
+    `body metadata reported`);
+}
+
+// RP5. Op with no required anything → empty array, hasBody false.
+{
+  const spec = {
+    paths: { "/u": { get: { operationId: "g",
+      parameters: [{ name: "limit", in: "query", required: false, schema: { type: "integer" } }],
+      responses: { "200": {} } } } },
+  };
+  const r = run("openapi-required-params", { spec, operationId: "g" });
+  ok(r.required.length === 0 && r.hasBody === false, `op with no required anything → clean empty`);
+}
+
+// RP6. Path-level shared parameters are merged with op-level (per OpenAPI
+// rules: shared params apply unless the op declares its own with the same
+// in+name). The merged path param should appear in `required`.
+{
+  const spec = {
+    paths: { "/u/{id}": {
+      parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+      get: { operationId: "g", responses: { "200": {} } },
+    } },
+  };
+  const r = run("openapi-required-params", { spec, operationId: "g" });
+  ok(r.required.length === 1 && r.required[0].name === "id",
+    `path-item parameters merged into op`);
+}
+
+// RP7. Locate by method+path when operationId is missing.
+{
+  const spec = {
+    paths: { "/x": { post: {
+      parameters: [{ name: "token", in: "query", required: true, schema: { type: "string" } }],
+      responses: { "201": {} },
+    } } },
+  };
+  const r = run("openapi-required-params", { spec, method: "POST", path: "/x" });
+  ok(r.method === "POST" && r.path === "/x" && r.required[0].name === "token",
+    `locate by method+path works`);
+  ok(!("operationId" in r), `no operationId key when op has none`);
+}
+
+// RP8. Locator not found → 400, with the requested operationId in the message.
+{
+  let err = null;
+  try { run("openapi-required-params", { spec: { paths: {} }, operationId: "nope" }); }
+  catch (e) { err = e; }
+  ok(err && err.statusCode === 400 && /nope/.test(err.message),
+    `unknown operationId rejected with 400, got: ${err && err.message}`);
+}
+
+// RP9. Sorted output: path params first, then query, then header. Within a
+// bucket, alphabetical by name. Deterministic regardless of input order.
+{
+  const spec = {
+    paths: { "/u/{a}/{b}": { get: { operationId: "g",
+      parameters: [
+        { name: "X-Two", in: "header", required: true, schema: { type: "string" } },
+        { name: "q2", in: "query", required: true, schema: { type: "string" } },
+        { name: "X-One", in: "header", required: true, schema: { type: "string" } },
+        { name: "q1", in: "query", required: true, schema: { type: "string" } },
+        { name: "b", in: "path", required: true, schema: { type: "string" } },
+        { name: "a", in: "path", required: true, schema: { type: "string" } },
+      ],
+      responses: { "200": {} } } } },
+  };
+  const r = run("openapi-required-params", { spec, operationId: "g" });
+  const order = r.required.map((p) => `${p.in}:${p.name}`).join(",");
+  ok(order === "path:a,path:b,query:q1,query:q2,header:X-One,header:X-Two",
+    `stable sort path>query>header, alpha within bucket. got: ${order}`);
+}
+
+// RP10. JSON-string spec accepted. Missing "spec" → 400.
+{
+  const spec = { paths: { "/u/{id}": { get: { operationId: "g",
+    parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+    responses: { "200": {} } } } } };
+  const r = run("openapi-required-params", { spec: JSON.stringify(spec), operationId: "g" });
+  ok(r.required[0].name === "id", `JSON-string spec accepted`);
+
+  let err = null;
+  try { run("openapi-required-params", { operationId: "g" }); } catch (e) { err = e; }
+  ok(err && err.statusCode === 400 && /spec/i.test(err.message),
+    `missing spec rejected with 400, got: ${err && err.message}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

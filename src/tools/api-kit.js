@@ -52,6 +52,14 @@
 //                  that `security: []` on an operation overrides the global
 //                  default with "explicitly open" rather than inheriting.
 //                  Output is sorted by route for deterministic diffs.
+//   openapi-required-params  for one operation, return the minimum set of
+//                  inputs needed to make a successful call: required path /
+//                  query / header / cookie parameters AND top-level required
+//                  fields of a required JSON request body. Flat array tagged
+//                  by `in` so an agent can scan one list. Reuses
+//                  locateOperation + mergeParams so behavior matches
+//                  openapi-to-curl. Path params are always treated as
+//                  required (per the OpenAPI spec, they MUST be).
 //
 // Scope notes for v1:
 //   - Works against OpenAPI 3.x and Swagger 2.x (both share `paths`).
@@ -1195,6 +1203,150 @@ export const API_TOOLS = [
           schemeUsage,
         },
       };
+    },
+  },
+  {
+    route: "POST /api/openapi-required-params", name: "OpenAPI required-params extractor", slug: "openapi-required-params", category: "conversion", price: "$0.002",
+    description:
+      "For one operation, return the minimum set of inputs an agent must provide to make a successful call. Locate the op by `operationId` (preferred) or by `method`+`path`. Output is a single flat array tagged by `in`: `path` (always required), `query` / `header` / `cookie` (only when `required: true`), and `body.field` entries naming the top-level required fields of a required JSON request body. `hasBody` and `bodyContentType` are included separately so callers can decide whether to serialize a payload at all. Merges path-item-level shared parameters with operation-level ones (operation wins on collision), matching openapi-to-curl behavior. Does NOT recurse into nested object schemas — top-level required fields only. Pure CPU.",
+    tags: ["openapi", "swagger", "required", "params", "api"],
+    discovery: {
+      bodyType: "json",
+      input: {
+        spec: {
+          openapi: "3.0.0",
+          paths: {
+            "/users/{id}": {
+              get: {
+                operationId: "getUser",
+                parameters: [
+                  { name: "id", in: "path", required: true, schema: { type: "string" } },
+                  { name: "verbose", in: "query", required: false, schema: { type: "boolean" } },
+                  { name: "X-Trace-Id", in: "header", required: true, schema: { type: "string" } },
+                ],
+                responses: { "200": {} },
+              },
+            },
+            "/users": {
+              post: {
+                operationId: "createUser",
+                requestBody: { required: true, content: { "application/json": { schema: {
+                  type: "object",
+                  required: ["email", "password"],
+                  properties: {
+                    email: { type: "string" },
+                    password: { type: "string" },
+                    nickname: { type: "string" },
+                  },
+                } } } },
+                responses: { "201": {} },
+              },
+            },
+          },
+        },
+        operationId: "createUser",
+      },
+      inputSchema: {
+        properties: {
+          spec: { description: "OpenAPI/Swagger document (object or JSON string)" },
+          operationId: { description: "Locate by operationId (preferred)" },
+          method: { description: "If no operationId, HTTP method (e.g. GET)" },
+          path: { description: "If no operationId, exact path (e.g. /users/{id})" },
+        },
+        required: ["spec"],
+      },
+      output: {
+        example: {
+          method: "POST",
+          path: "/users",
+          operationId: "createUser",
+          required: [
+            { in: "body.field", name: "email", type: "string" },
+            { in: "body.field", name: "password", type: "string" },
+          ],
+          hasBody: true,
+          bodyContentType: "application/json",
+        },
+      },
+    },
+    handler: (i) => {
+      if (!("spec" in i)) throw bad('Missing "spec"');
+      const spec = parseMaybeJson(i.spec, "spec");
+      if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+        throw bad('"spec" must be an OpenAPI document');
+      }
+      const located = locateOperation(spec, {
+        operationId: i.operationId,
+        method: i.method,
+        path: i.path,
+      });
+      const params = mergeParams(located.pathItem, located.op);
+      const required = [];
+
+      // Sort parameters by location bucket so output ordering is stable
+      // regardless of how the spec listed them. Within a bucket, sort by name.
+      const bucketRank = { path: 0, query: 1, header: 2, cookie: 3 };
+      const sortedParams = [...params].sort((a, b) => {
+        const ra = bucketRank[String(a.in).toLowerCase()] ?? 99;
+        const rb = bucketRank[String(b.in).toLowerCase()] ?? 99;
+        if (ra !== rb) return ra - rb;
+        return String(a.name).localeCompare(String(b.name));
+      });
+
+      for (const p of sortedParams) {
+        const where = String(p.in || "").toLowerCase();
+        // Path params are always required per the OpenAPI spec — we treat
+        // them as required regardless of whether `required: true` was set
+        // (spec compliance, not lenience).
+        const isRequired = where === "path" ? true : p.required === true;
+        if (!isRequired) continue;
+        const entry = { in: where, name: p.name };
+        const t = paramType(p);
+        if (t) entry.type = t;
+        required.push(entry);
+      }
+
+      // Body — only flag as required if `requestBody.required === true`. We
+      // surface the chosen content type (preferring application/json, falling
+      // back to the first one declared) so callers know how to serialize.
+      let hasBody = false;
+      let bodyContentType = null;
+      const rb = located.op.requestBody;
+      if (rb && typeof rb === "object") {
+        const bodyRequired = rb.required === true;
+        const contents = (rb.content && typeof rb.content === "object") ? rb.content : null;
+        if (contents) {
+          if (contents["application/json"]) bodyContentType = "application/json";
+          else bodyContentType = Object.keys(contents)[0] || null;
+        }
+        if (bodyRequired) {
+          hasBody = true;
+          if (bodyContentType && contents[bodyContentType] && contents[bodyContentType].schema) {
+            const schema = contents[bodyContentType].schema;
+            const fieldReq = Array.isArray(schema.required) ? schema.required : [];
+            const props = (schema.properties && typeof schema.properties === "object") ? schema.properties : {};
+            for (const name of fieldReq) {
+              const entry = { in: "body.field", name };
+              const fieldSchema = props[name];
+              if (fieldSchema && typeof fieldSchema === "object" && typeof fieldSchema.type === "string") {
+                entry.type = fieldSchema.type;
+              }
+              required.push(entry);
+            }
+          }
+        } else if (contents) {
+          // Body is OPTIONAL but the content type is still useful context
+          // for callers planning to send one.
+          hasBody = false;
+        }
+      }
+
+      const out = { method: located.method, path: located.path };
+      if (typeof located.op.operationId === "string") out.operationId = located.op.operationId;
+      out.required = required;
+      out.hasBody = hasBody;
+      out.bodyContentType = bodyContentType;
+      return out;
     },
   },
 ];
