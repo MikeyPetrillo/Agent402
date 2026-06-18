@@ -45,6 +45,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/analytics`, priority: "0.7" },
     { loc: `${baseUrl}/api/analytics`, priority: "0.6" },
     { loc: `${baseUrl}/api/cacheable`, priority: "0.6" },
+    { loc: `${baseUrl}/api/cache-stats`, priority: "0.5" },
     { loc: `${baseUrl}/tollbooth`, priority: "0.7" },
     { loc: `${baseUrl}/tollbooth/cloud`, priority: "0.7" },
   ];
@@ -137,6 +138,7 @@ ${sections}
 - \`GET /api/reliability\` — structured reliability/SLA report: uptime, calls served, on-chain revenue proof, and each operational guarantee with a URL to verify it.
 - \`GET /api/pricing\` — machine-readable catalog (JSON): every endpoint, price, category, and docs URL.
 - \`GET /api/cacheable\` — machine-readable list of server-side cached routes (path, TTL, key fields). Buyer SDKs can skip their own cache for these — repeated identical calls within the TTL come straight from Redis. Responses set \`X-Cache: hit|miss|skip\`.
+- \`GET /api/cache-stats\` — live in-process cache outcome counters since the server started (hits, misses, skips, sets, errors, hitRate). Independent of analytics — works on any deployment.
 - \`GET /openapi.json\` — full OpenAPI 3.1 spec with input/output schemas for all tools.
 - \`GET /tools\` and \`GET /tools/{slug}\` — human-readable docs per tool.
 - \`GET /api/pow\` — describes the proof-of-work option below.
