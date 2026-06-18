@@ -89,34 +89,56 @@ export function analyticsPage(data, { baseUrl }) {
   const series = Array.isArray(data.timeseries) ? data.timeseries : [];
 
   const cacheHitRate = fmtPct(totals.cached, totals.calls);
-  const errorRate = fmtPct(totals.errored, totals.calls);
+  // Split: 4xx = caller sent bad input (their bug — wrong field, missing
+  // required, malformed value). 5xx = our handler or its upstream broke
+  // (our bug, or a third-party API blip). Aggregating both into a single
+  // "error rate" hides the only signal that matters for triage.
+  const clientErrRate = fmtPct(totals.client_errored, totals.calls);
+  const serverErrRate = fmtPct(totals.server_errored, totals.calls);
   const peakHour = series.reduce((best, r) => (Number(r.calls || 0) > Number(best?.calls || 0) ? r : best), null);
 
   const rows = top
     .map((r, i) => {
       const safeSlug = esc(r.slug);
       const cachedPct = r.calls ? fmtPct(r.cached, r.calls) : "—";
-      const errPct = r.calls ? fmtPct(r.errored, r.calls) : "—";
+      const clientErrCellPct = r.calls ? fmtPct(r.client_errored, r.calls) : "—";
+      const serverErrCellPct = r.calls ? fmtPct(r.server_errored, r.calls) : "—";
+      // Color code the per-row error cells so a glance tells you which tools
+      // are actually broken vs which are just being called wrong.
+      const clientErrClass = (Number(r.client_errored || 0) > 0) ? "warn" : "muted";
+      const serverErrClass = (Number(r.server_errored || 0) > 0) ? "danger" : "muted";
       const route = "/api/" + safeSlug;
       return `<tr>
         <td class="num muted">${esc(i + 1)}</td>
         <td><a href="${route}" rel="nofollow">${safeSlug}</a></td>
         <td class="num">${esc(fmtInt(r.calls))}</td>
         <td class="num muted">${esc(cachedPct)}</td>
-        <td class="num muted">${esc(errPct)}</td>
+        <td class="num ${clientErrClass}">${esc(clientErrCellPct)}</td>
+        <td class="num ${serverErrClass}">${esc(serverErrCellPct)}</td>
         <td class="num">${esc(fmtMs(r.p50_ms))}</td>
         <td class="num">${esc(fmtMs(r.p95_ms))}</td>
       </tr>`;
     })
     .join("");
 
-  const emptyRow = `<tr><td colspan="7" class="muted" style="text-align:center;padding:24px">No tool calls in the last ${esc(windowHuman)}. The dashboard starts filling as agents call tools.</td></tr>`;
+  const emptyRow = `<tr><td colspan="8" class="muted" style="text-align:center;padding:24px">No tool calls in the last ${esc(windowHuman)}. The dashboard starts filling as agents call tools.</td></tr>`;
+
+  // Highlight class on the hero stats so the difference between caller errors
+  // (we can't fix that without changes to the SDK or the agent) and server
+  // errors (we definitely need to fix that) is visible at a glance.
+  const clientErrClass = (Number(totals.client_errored || 0) > 0) ? "warn" : "";
+  const serverErrClass = (Number(totals.server_errored || 0) > 0) ? "danger" : "";
 
   const body = `
 <div class="grid">
   <div class="stat"><div class="k">Tool calls (${esc(windowHuman)})</div><div class="v">${esc(fmtInt(totals.calls))}</div><div class="s">across the whole catalog</div></div>
   <div class="stat"><div class="k">Cache hit rate</div><div class="v">${esc(cacheHitRate)}</div><div class="s">served from Redis without re-fetching upstream</div></div>
-  <div class="stat"><div class="k">Error rate</div><div class="v">${esc(errorRate)}</div><div class="s">handler exception or non-200 response</div></div>
+  <div class="stat ${clientErrClass}" title="HTTP 4xx — the caller sent bad input (missing field, wrong shape, validation failure). The tool itself is fine.">
+    <div class="k">Client errors (4xx)</div><div class="v">${esc(clientErrRate)}</div><div class="s">caller sent bad input — tool/upstream is healthy</div>
+  </div>
+  <div class="stat ${serverErrClass}" title="HTTP 5xx — the handler threw or its upstream failed. This is the rate that needs fixing.">
+    <div class="k">Server errors (5xx)</div><div class="v">${esc(serverErrRate)}</div><div class="s">handler or upstream failure — actionable</div>
+  </div>
   <div class="stat"><div class="k">Latency p50 / p95</div><div class="v" style="font-size:1.05rem">${esc(fmtMs(totals.p50_latency_ms))} / ${esc(fmtMs(totals.p95_latency_ms))}</div><div class="s">avg ${esc(fmtMs(totals.avg_latency_ms))}</div></div>
   <div class="stat"><div class="k">Peak hour</div><div class="v" style="font-size:1rem">${esc(fmtTs(peakHour?.ts))}</div><div class="s">${esc(fmtInt(peakHour?.calls || 0))} calls</div></div>
 </div>
@@ -131,7 +153,7 @@ export function analyticsPage(data, { baseUrl }) {
 <div class="panel">
   <div class="ph"><h2>Top tools by volume (last ${esc(windowHuman)})</h2><div class="pn">Click a slug to see the tool's docs page.</div></div>
   <table>
-    <thead><tr><th class="num">#</th><th>Tool</th><th class="num">Calls</th><th class="num" title="Share of this tool's calls served from the Redis response cache">Cache %</th><th class="num">Error %</th><th class="num">p50</th><th class="num">p95</th></tr></thead>
+    <thead><tr><th class="num">#</th><th>Tool</th><th class="num">Calls</th><th class="num" title="Share of this tool's calls served from the Redis response cache">Cache %</th><th class="num" title="HTTP 4xx — caller sent bad input. Tool/upstream is fine.">4xx %</th><th class="num" title="HTTP 5xx — handler or upstream failure. Actionable.">5xx %</th><th class="num">p50</th><th class="num">p95</th></tr></thead>
     <tbody>${rows || emptyRow}</tbody>
   </table>
 </div>
@@ -139,7 +161,7 @@ export function analyticsPage(data, { baseUrl }) {
 <div class="panel">
   <div class="ph"><h2>What's recorded</h2><div class="pn">Privacy-by-default: aggregate counters only.</div></div>
   <div style="padding:14px 18px;">
-    <p class="foot" style="margin:0 0 8px;">Each tool call records four fields after responding: <code>slug</code>, <code>latency_ms</code>, <code>cached</code> (Redis hit), <code>errored</code>. No caller identity, wallet, payment, input, output, or IP is logged. The dashboard reflects exactly what's in the table.</p>
+    <p class="foot" style="margin:0 0 8px;">Each tool call records five fields after responding: <code>slug</code>, <code>latency_ms</code>, <code>cached</code> (Redis hit), <code>errored</code>, and the HTTP <code>status</code> (so 4xx caller errors and 5xx handler/upstream failures can be told apart). No caller identity, wallet, payment, input, output, or IP is logged. The dashboard reflects exactly what's in the table.</p>
     <pre>curl -s ${esc(baseUrl)}/api/analytics?hours=24&amp;top=25</pre>
   </div>
 </div>`;
@@ -177,6 +199,12 @@ ${CHROME_HEAD_LINKS}
   td { padding:10px 18px; border-bottom:1px solid var(--line); }
   td.num { font-family:ui-monospace,Menlo,monospace; text-align:right; }
   td.muted { color:var(--muted); font-family:ui-monospace,Menlo,monospace; font-size:.85em; }
+  td.warn { color:#f59e0b; font-family:ui-monospace,Menlo,monospace; }
+  td.danger { color:#ef4444; font-family:ui-monospace,Menlo,monospace; }
+  .stat.warn { border-color:#7a4d10; }
+  .stat.warn .v { color:#f59e0b; }
+  .stat.danger { border-color:#7a1f1f; }
+  .stat.danger .v { color:#ef4444; }
   td a { color:var(--fg); text-decoration:none; border-bottom:1px solid transparent; }
   td a:hover { border-color:var(--accent); }
   code { background:#1a2236; padding:1px 5px; border-radius:4px; font-family:ui-monospace,Menlo,monospace; font-size:.85em; }

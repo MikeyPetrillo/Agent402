@@ -219,6 +219,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // Accept params as an object OR a JSON string — LLM clients (e.g. some
         // Claude Code calls) often stringify object arguments. Parse those so
         // the handler receives real fields instead of an empty object.
+        //
+        // ALSO: many LLMs ignore the {slug, params} envelope and flatten the
+        // arguments — e.g. { slug: "whois", domain: "example.com" } instead of
+        // { slug: "whois", params: { domain: "example.com" } }. Without a
+        // fallback those calls all 4xx in 1ms (the analytics dashboard makes
+        // this brutally visible — whois was 100% errored with p50=1ms). When
+        // `params` is missing/invalid, treat the rest of `args` as params so
+        // the natural-but-wrong shape still works.
         let params = args.params;
         if (typeof params === "string") {
           const s = params.trim();
@@ -229,7 +237,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             params = eq > 0 ? { [s.slice(0, eq).trim()]: s.slice(eq + 1).trim() } : {};
           }
         }
-        if (!params || typeof params !== "object" || Array.isArray(params)) params = {};
+        if (!params || typeof params !== "object" || Array.isArray(params)) {
+          // Flattened args fallback: everything except `slug` becomes params.
+          const { slug: _drop, ...rest } = args;
+          params = rest && typeof rest === "object" && Object.keys(rest).length ? rest : {};
+        }
         // Same contract as the express kit routes; handlers only see input.
         // Time the call so the analytics dispatcher gets accurate latency for
         // MCP traffic (same as the HTTP path). Errors here flow into the
@@ -239,7 +251,16 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         try {
           result = await entry.def.handler(params, { headers: {}, query: params, body: params, ip });
         } catch (handlerErr) {
-          onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: true });
+          // statusCode lets the analytics dispatcher split 4xx (bad input) from
+          // 5xx (handler/upstream broke). errorMessage flows into the diagnostic
+          // log so we can spot patterns like a single bad caller hammering one
+          // tool with the wrong field shape.
+          onServed(entry.def.slug, {
+            latencyMs: Date.now() - startedAt,
+            errored: true,
+            statusCode: handlerErr.statusCode || 500,
+            errorMessage: handlerErr.message,
+          });
           return { content: [{ type: "text", text: `Agent402: ${handlerErr.message}` }], isError: true };
         }
         onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: false });

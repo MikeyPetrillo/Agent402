@@ -768,10 +768,20 @@ app.get("/api/reliability", (_req, res) =>
 const computeFind = (q, k) => findTools(CATALOG, q, { k, baseUrl: BASE_URL, powSlugs: POW_SLUGS });
 const findCachePath = "/api/find";
 const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
+
+// Diagnostic log for tool errors. Lets us spot patterns like "100% of /api/whois
+// calls fail in 1ms" without leaking PII — only slug + HTTP status + the error
+// message we already serialize to the response body. No body, no IP, no UA.
+// 4xx = caller sent bad input; 5xx = our tool or its upstream broke.
+function logToolError(slug, status, message) {
+  const klass = status >= 500 ? "5xx" : status >= 400 ? "4xx" : "err";
+  console.error(`[tool-error] ${klass} slug=${slug} status=${status} msg=${String(message || "").slice(0, 200)}`);
+}
 async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlug, res) {
   const startedAt = Date.now();
   let cached = false;
   let errored = false;
+  let status = 200;
   try {
     let cacheKey = null;
     if (policy && cacheEnabled()) {
@@ -795,13 +805,16 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     res.json(result);
   } catch (err) {
     errored = true;
-    res.status(err.statusCode || 500).json({ error: err.message });
+    status = err.statusCode || 500;
+    logToolError(analyticsSlug, status, err.message);
+    res.status(status).json({ error: err.message });
   } finally {
     recordToolCall({
       slug: analyticsSlug,
       latencyMs: Date.now() - startedAt,
       cached,
       errored,
+      status,
     }).catch(() => {});
   }
 }
@@ -1147,11 +1160,17 @@ mountMcp(app, CATALOG, {
   // today — that path bypasses the central HTTP dispatcher.
   onServed: (slug, meta = {}) => {
     recordServedCall(slug, "pow");
+    // MCP doesn't carry an HTTP status, so we synthesize one for the split:
+    // 200 on success, 500 on error (no separate 4xx classification — MCP
+    // tool-call errors come back in-band, not as transport-level failures).
+    const status = meta.errored ? (meta.statusCode | 0 || 500) : 200;
+    if (meta.errored) logToolError(slug, status, meta.errorMessage || "mcp-error");
     recordToolCall({
       slug,
       latencyMs: meta.latencyMs | 0,
       cached: false,
       errored: !!meta.errored,
+      status,
     }).catch(() => {});
   },
 });
@@ -1522,6 +1541,7 @@ for (const tool of ALL_KIT) {
     const startedAt = Date.now();
     let cached = false;
     let errored = false;
+    let status = 200;
     try {
       const input = { ...req.query, ...(req.body ?? {}) };
 
@@ -1553,7 +1573,9 @@ for (const tool of ALL_KIT) {
       res.json(result);
     } catch (err) {
       errored = true;
-      res.status(err.statusCode || 500).json({ error: err.message });
+      status = err.statusCode || 500;
+      logToolError(tool.slug, status, err.message);
+      res.status(status).json({ error: err.message });
     } finally {
       // Fire-and-forget. Analytics outages must NEVER affect agents.
       recordToolCall({
@@ -1561,6 +1583,7 @@ for (const tool of ALL_KIT) {
         latencyMs: Date.now() - startedAt,
         cached,
         errored,
+        status,
       }).catch(() => {});
     }
   });

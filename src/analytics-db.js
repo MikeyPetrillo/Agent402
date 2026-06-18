@@ -44,6 +44,10 @@ async function ensureSchema() {
   if (schemaReady) return true;
   const p = getPool();
   if (!p) return false;
+  // CREATE happens once; the ALTER is idempotent for older deployments that
+  // were on the pre-status schema. Both errored and status are recorded so
+  // legacy rows (status defaults to 0) still aggregate correctly when split
+  // by class — we treat status=0 as "unclassified" and fall back to errored.
   await p.query(`
     CREATE TABLE IF NOT EXISTS tool_calls (
       id          BIGSERIAL PRIMARY KEY,
@@ -51,8 +55,10 @@ async function ensureSchema() {
       slug        TEXT NOT NULL,
       latency_ms  INT NOT NULL,
       cached      BOOLEAN NOT NULL DEFAULT FALSE,
-      errored     BOOLEAN NOT NULL DEFAULT FALSE
+      errored     BOOLEAN NOT NULL DEFAULT FALSE,
+      status      SMALLINT NOT NULL DEFAULT 0
     );
+    ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS status SMALLINT NOT NULL DEFAULT 0;
     CREATE INDEX IF NOT EXISTS tool_calls_ts_idx ON tool_calls (ts DESC);
     CREATE INDEX IF NOT EXISTS tool_calls_slug_ts_idx ON tool_calls (slug, ts DESC);
   `);
@@ -77,16 +83,22 @@ export async function initAnalyticsDb() {
 }
 
 // Fire-and-forget. Never throws — analytics outages must not affect agents.
-export async function recordToolCall({ slug, latencyMs, cached, errored }) {
+// `status` is the HTTP status the caller saw (200 for success, 4xx for caller
+// errors like missing fields, 5xx for handler/upstream failures). Splitting on
+// status lets the dashboard distinguish "agent sent bad input" from "our tool
+// or its upstream is broken" — the same `errored: true` would otherwise hide
+// the difference. Defaults to 0 when not provided (older callers).
+export async function recordToolCall({ slug, latencyMs, cached, errored, status }) {
   if (!ANALYTICS_URL || unavailable) return;
   if (!slug) return;
   try {
     if (!schemaReady) await ensureSchema();
     const p = getPool();
     if (!p) return;
+    const statusInt = Math.max(0, Math.min(599, status | 0));
     await p.query(
-      "INSERT INTO tool_calls (slug, latency_ms, cached, errored) VALUES ($1, $2, $3, $4)",
-      [String(slug).slice(0, 128), Math.max(0, latencyMs | 0), !!cached, !!errored]
+      "INSERT INTO tool_calls (slug, latency_ms, cached, errored, status) VALUES ($1, $2, $3, $4, $5)",
+      [String(slug).slice(0, 128), Math.max(0, latencyMs | 0), !!cached, !!errored, statusInt]
     );
   } catch (e) {
     // Swallow.
@@ -105,12 +117,20 @@ export async function getAnalytics({ windowHours = 24, top = 25 } = {}) {
     const topN = Math.max(1, Math.min(200, top | 0));
     const since = `now() - interval '${hours} hours'`;
 
+    // `client_errored` (4xx) = caller mistake (missing field, bad shape) —
+    // tool is fine. `server_errored` (5xx) = handler or upstream failure —
+    // the thing we actually need to fix. Legacy rows pre-status column have
+    // status=0; we fold those into server_errored when errored=true to keep
+    // the historical narrative honest rather than silently hiding them.
     const totals = await p.query(`
       SELECT
-        count(*)::int                          AS calls,
-        count(*) FILTER (WHERE cached)::int    AS cached,
-        count(*) FILTER (WHERE errored)::int   AS errored,
-        coalesce(round(avg(latency_ms))::int, 0) AS avg_latency_ms,
+        count(*)::int                                                       AS calls,
+        count(*) FILTER (WHERE cached)::int                                 AS cached,
+        count(*) FILTER (WHERE errored)::int                                AS errored,
+        count(*) FILTER (WHERE status BETWEEN 400 AND 499)::int             AS client_errored,
+        count(*) FILTER (WHERE status BETWEEN 500 AND 599
+                            OR (errored AND status = 0))::int               AS server_errored,
+        coalesce(round(avg(latency_ms))::int, 0)                            AS avg_latency_ms,
         coalesce(percentile_disc(0.50) WITHIN GROUP (ORDER BY latency_ms)::int, 0) AS p50_latency_ms,
         coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms)::int, 0) AS p95_latency_ms
       FROM tool_calls
@@ -120,9 +140,12 @@ export async function getAnalytics({ windowHours = 24, top = 25 } = {}) {
     const byTool = await p.query(
       `SELECT
          slug,
-         count(*)::int                          AS calls,
-         count(*) FILTER (WHERE cached)::int    AS cached,
-         count(*) FILTER (WHERE errored)::int   AS errored,
+         count(*)::int                                                      AS calls,
+         count(*) FILTER (WHERE cached)::int                                AS cached,
+         count(*) FILTER (WHERE errored)::int                               AS errored,
+         count(*) FILTER (WHERE status BETWEEN 400 AND 499)::int            AS client_errored,
+         count(*) FILTER (WHERE status BETWEEN 500 AND 599
+                             OR (errored AND status = 0))::int              AS server_errored,
          coalesce(percentile_disc(0.50) WITHIN GROUP (ORDER BY latency_ms)::int, 0) AS p50_ms,
          coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms)::int, 0) AS p95_ms
        FROM tool_calls
