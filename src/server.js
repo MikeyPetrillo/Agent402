@@ -690,49 +690,59 @@ const MANIFEST = serviceManifest({
 // /api/stats and /.well-known/x402 so a discovery agent fetching either one
 // sees the same liveness signal a human sees on /analytics. Returns null when
 // analytics is disabled or the query fails — callers omit the field entirely.
-// Memoized for PERF_CACHE_MS so the landing-page activity script (polling
-// /api/stats every 12s) doesn't fire a fresh Postgres aggregation on every
-// caller. One in-flight query is shared across concurrent callers, which is
-// what was previously starving the event loop under load.
+// Never blocks the response. Returns the last cached perf snapshot
+// synchronously; if it's stale, fires a background refresh so the NEXT caller
+// sees fresh data. First-ever caller gets null (perf signal just omitted) —
+// the alternative is making /api/stats wait on Postgres, which under
+// concurrent load on the home-page activity poller starved the event loop
+// and made every page take 30s.
 const PERF_CACHE_MS = 30_000;
 let perfCache = { at: 0, value: null };
-let perfInflight = null;
-async function buildPerformance24h() {
-  if (!analyticsEnabled()) return null;
-  const now = Date.now();
-  if (now - perfCache.at < PERF_CACHE_MS) return perfCache.value;
-  if (perfInflight) return perfInflight;
-  perfInflight = (async () => {
+let perfRefreshing = false;
+function refreshPerf24hInBackground() {
+  if (perfRefreshing || !analyticsEnabled()) return;
+  perfRefreshing = true;
+  (async () => {
     try {
       const a = await getAnalytics({ windowHours: 24, top: 1 });
-      if (!a || !a.ok || !a.totals || !a.totals.calls) return null;
-      const t = a.totals;
-      return {
-        windowHours: 24,
-        calls: t.calls,
-        cacheHitRate: +((t.cached / t.calls) || 0).toFixed(4),
-        errorRate: +((t.errored / t.calls) || 0).toFixed(4),
-        p50LatencyMs: t.p50_latency_ms,
-        p95LatencyMs: t.p95_latency_ms,
-        dashboardUrl: `${BASE_URL}/analytics`,
-      };
+      if (a && a.ok && a.totals && a.totals.calls) {
+        const t = a.totals;
+        perfCache = {
+          at: Date.now(),
+          value: {
+            windowHours: 24,
+            calls: t.calls,
+            cacheHitRate: +((t.cached / t.calls) || 0).toFixed(4),
+            errorRate: +((t.errored / t.calls) || 0).toFixed(4),
+            p50LatencyMs: t.p50_latency_ms,
+            p95LatencyMs: t.p95_latency_ms,
+            dashboardUrl: `${BASE_URL}/analytics`,
+          },
+        };
+      } else {
+        // Cache the "no data" verdict too so we don't keep retrying within the
+        // freshness window when analytics is wired but empty.
+        perfCache = { at: Date.now(), value: null };
+      }
     } catch (_e) {
-      return null;
+      perfCache = { at: Date.now(), value: null };
+    } finally {
+      perfRefreshing = false;
     }
-  })().then((value) => {
-    perfCache = { at: Date.now(), value };
-    perfInflight = null;
-    return value;
-  });
-  return perfInflight;
+  })();
+}
+function getPerformance24h() {
+  if (!analyticsEnabled()) return null;
+  if (Date.now() - perfCache.at >= PERF_CACHE_MS) refreshPerf24hInBackground();
+  return perfCache.value;
 }
 // /.well-known/x402 — discovery agents fetch this once to learn the seller.
 // Most of the manifest is boot-time constants (catalog, networks, wallet) so
 // MANIFEST is built once; we only enrich with the live performance24h block
 // on each request when analytics is enabled. Failing-open: if the analytics
 // query stalls, we serve the static manifest instead of blocking the call.
-app.get("/.well-known/x402", async (_req, res) => {
-  const perf = await buildPerformance24h();
+app.get("/.well-known/x402", (_req, res) => {
+  const perf = getPerformance24h();
   if (perf) res.json({ ...MANIFEST, performance24h: perf });
   else res.json(MANIFEST);
 });
@@ -1061,9 +1071,9 @@ app.get("/api/pow/challenge", (req, res) => {
 // tool_calls table. Lets agents shopping the catalog see real performance
 // without navigating to /analytics. Falls back to omitting the field if the
 // query fails / DB is unset, so /api/stats never breaks on a slow Postgres.
-app.get("/api/stats", async (_req, res) => {
+app.get("/api/stats", (_req, res) => {
   const base = getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES });
-  const perf = await buildPerformance24h();
+  const perf = getPerformance24h();
   if (perf) base.performance24h = perf;
   res.json(base);
 });
