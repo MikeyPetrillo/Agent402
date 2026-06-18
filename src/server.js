@@ -18,6 +18,7 @@ import { operatorLeadsPage } from "./operator-leads.js";
 import { initLeadsDb, insertLead, listLeads, countLeads, leadsDbEnabled } from "./leads-db.js";
 import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
 import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled } from "./analytics-db.js";
+import { initSentry, captureToolError, sentryEnabled } from "./sentry.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
@@ -537,6 +538,7 @@ app.get("/health", (_req, res) => {
   const flags = {
     leadsDb: leadsDbReady,
     operatorToken: Boolean(OPERATOR_TOKEN),
+    sentry: sentryEnabled(),
   };
   const ok = checks.db && checks.wallet;
   res.status(ok ? 200 : 503).json({ ok, checks, flags });
@@ -656,16 +658,6 @@ app.get("/__operator/stats", (req, res) => {
   if (!operatorTokenOk(getOperatorToken(req))) return res.status(404).json({ error: "Not found" });
   res.json(getOperatorBreakdown({ prices: TOOL_PRICES, walletOnlySet: WALLET_ONLY_SLUGS }));
 });
-// Recent rejected requests — last 200 in-memory, keys-only (b:<key> / q:<key>),
-// no values. Used to iterate on input aliases without crawling Railway logs.
-// Filter by ?slug= to focus on one tool, ?limit= to cap the response.
-app.get("/__operator/recent-errors", (req, res) => {
-  if (!operatorTokenOk(getOperatorToken(req))) return res.status(404).json({ error: "Not found" });
-  const slug = typeof req.query.slug === "string" ? req.query.slug : null;
-  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), RECENT_ERRORS_MAX);
-  const items = (slug ? recentErrors.filter((e) => e.slug === slug) : recentErrors).slice(-limit).reverse();
-  res.json({ count: items.length, total: recentErrors.length, items });
-});
 app.get("/__operator/leads", async (req, res) => {
   if (!operatorTokenOk(getOperatorToken(req))) return res.status(404).type("html").send("<p>Not found.</p>");
   const list = await listLeads({ limit: 200 });
@@ -783,11 +775,6 @@ const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
 // calls fail in 1ms" without leaking PII — only slug + HTTP status + the error
 // message we already serialize to the response body. No body, no IP, no UA.
 // 4xx = caller sent bad input; 5xx = our tool or its upstream broke.
-// In-memory ring buffer of the most recent tool errors. Operator-only
-// surface lets us inspect rejected shapes without going through Railway logs
-// — useful when iterating on input aliases. No values, no IPs.
-const RECENT_ERRORS_MAX = 200;
-const recentErrors = [];
 function logToolError(slug, status, message, shape) {
   const klass = status >= 500 ? "5xx" : status >= 400 ? "4xx" : "err";
   // Log the request's TOP-LEVEL KEYS (no values, no IPs, no payment info) on
@@ -795,14 +782,9 @@ function logToolError(slug, status, message, shape) {
   // Keys are bounded — privacy-safe and small.
   const shapeStr = shape && Array.isArray(shape) && shape.length ? ` shape=[${shape.slice(0, 12).join(",")}]` : "";
   console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr} msg=${String(message || "").slice(0, 200)}`);
-  recentErrors.push({
-    ts: new Date().toISOString(),
-    slug,
-    status,
-    msg: String(message || "").slice(0, 200),
-    shape: Array.isArray(shape) ? shape.slice(0, 12) : null,
-  });
-  if (recentErrors.length > RECENT_ERRORS_MAX) recentErrors.shift();
+  // Sentry mirrors the same data as searchable tags so we can query/trend
+  // rejected shapes from the Sentry UI. No-op when SENTRY_DSN is unset.
+  captureToolError({ slug, status, message, shape });
 }
 function requestShape(req) {
   // Return the top-level keys of body + query, deduped and bounded. Values
@@ -1703,6 +1685,13 @@ initAnalyticsDb().then((r) => {
   if (r.ok) console.log("[analytics-db] tool_calls schema ready");
   else console.log(`[analytics-db] disabled (${r.reason || "unknown"})`);
 });
+
+// Sentry — opt-in via SENTRY_DSN. Same env-gated, fire-and-forget pattern
+// as the other optional infra. Captures tool errors with slug + status + the
+// keys-only shape as searchable tags. No values, no IPs, no headers.
+const sentryInit = initSentry();
+if (sentryInit.ok) console.log("[sentry] enabled");
+else console.log(`[sentry] disabled (${sentryInit.reason || "unknown"})`);
 
 // x402 Index crawler: warms the cross-seller cache used by /index + /api/route.
 // Seeds come from X402_INDEX_SEEDS (comma-separated origins) plus auto-discovered

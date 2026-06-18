@@ -38,3 +38,4 @@ tools-input-aliases-and-self-correction-envelope: 2026-06-19T07:00:00Z
 dispatcher-envelope-unwrap-and-honest-4xx-label: 2026-06-19T08:00:00Z
 log-rejected-request-shape-keys-only: 2026-06-19T09:00:00Z
 operator-recent-errors-endpoint: 2026-06-19T10:00:00Z
+sentry-integration-replaces-ring-buffer: 2026-06-19T11:00:00Z
