@@ -83,6 +83,23 @@ if (process.env.FRED_API_KEY) {
     (r) => typeof r.current === "number" && Array.isArray(r.history) && r.history.length > 0 && recent(r.date), "unemployment-rate UNRATE 6mo (date must be recent)");
   await live("fed-funds", { days: 10 },
     (r) => typeof r.current === "number" && Array.isArray(r.history) && r.history.length > 0 && recent(r.date), "fed-funds DFF 10d (date must be recent)");
+
+  // FRED API v2 — bulk release/observations. Uses a SEPARATE key (FRED_API_KEY_V2).
+  // If FRED_API_KEY_V2 isn't set, the tool returns 503 — tolerated below.
+  if (process.env.FRED_API_KEY_V2) {
+    console.log("  FRED_API_KEY_V2 is set — testing v2 bulk endpoint");
+    await live("fred-release-observations", { releaseId: 18, startDate: "2026-05-01", endDate: "2026-06-01" },
+      (r) => r.releaseId === 18 && Array.isArray(r.series) && r.series.length > 0 && r.series.some((s) => Array.isArray(s.observations) && s.observations.length > 0),
+      "fred-release-observations releaseId=18 (H.15 Selected Interest Rates)");
+  } else {
+    console.log("  FRED_API_KEY_V2 is NOT set — verifying v2 tool returns 503");
+    try {
+      await h("fred-release-observations")({ releaseId: 18 });
+      ok(false, "fred-release-observations should 503 without FRED_API_KEY_V2");
+    } catch (e) {
+      ok(e.statusCode === 503, `fred-release-observations returns 503 without v2 key (got ${e.statusCode})`);
+    }
+  }
 } else {
   console.log("  FRED_API_KEY is NOT set — verifying each FRED tool returns the documented 503");
   for (const slug of ["fred-series", "fred-search", "fred-series-info", "fred-release-calendar", "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds"]) {

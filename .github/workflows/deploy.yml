@@ -251,6 +251,7 @@ jobs:
     env:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -1079,6 +1080,7 @@ jobs:
       CDP_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
       WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
       NETWORK: ${{ vars.NETWORK || 'base' }}
@@ -1096,6 +1098,7 @@ jobs:
           [ -n "$CDP_KEY_SECRET" ] && echo "::add-mask::$CDP_KEY_SECRET"
           [ -n "$BRAVE_API_KEY" ] && echo "::add-mask::$BRAVE_API_KEY"
           [ -n "$FRED_API_KEY" ] && echo "::add-mask::$FRED_API_KEY"
+          [ -n "$FRED_API_KEY_V2" ] && echo "::add-mask::$FRED_API_KEY_V2"
           [ -n "$MARKETPLACE_TOKEN" ] && echo "::add-mask::$MARKETPLACE_TOKEN"
           [ -n "$RAILWAY_API_TOKEN" ] || { echo "No Railway token provided"; exit 1; }
           [ -n "$WALLET_ADDRESS" ] || { echo "No wallet address provided"; exit 1; }
@@ -1245,6 +1248,9 @@ jobs:
           fi
           if [ -n "$FRED_API_KEY" ]; then
             VARS=$(echo "$VARS" | jq --arg f "$FRED_API_KEY" '. + {FRED_API_KEY:$f}')
+          fi
+          if [ -n "$FRED_API_KEY_V2" ]; then
+            VARS=$(echo "$VARS" | jq --arg f "$FRED_API_KEY_V2" '. + {FRED_API_KEY_V2:$f}')
           fi
           if [ -n "$MARKETPLACE_TOKEN" ]; then
             VARS=$(echo "$VARS" | jq --arg m "$MARKETPLACE_TOKEN" '. + {MARKETPLACE_TOKEN:$m}')

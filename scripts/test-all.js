@@ -31,6 +31,7 @@ const NETWORK = new Set([
   "/api/world-bank-indicator", "/api/world-bank-search",
   "/api/fred-series", "/api/fred-search", "/api/fred-series-info", "/api/fred-release-calendar",
   "/api/sahm-rule", "/api/cpi-yoy", "/api/unemployment-rate", "/api/fed-funds",
+  "/api/fred-release-observations",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 

@@ -64,6 +64,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "world-bank-indicator", "world-bank-search",
   "fred-series", "fred-search", "fred-series-info", "fred-release-calendar",
   "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds",
+  "fred-release-observations",
   // x402 payments toolkit — kept off the free connector (paid surface only).
   "x402-quote", "usdc-balance", "tx-status", "gas-estimate", "x402-verify", "transfer-authorization", "ens-resolve",
 ]);

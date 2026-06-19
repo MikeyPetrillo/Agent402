@@ -416,6 +416,15 @@ function requireFredKey() {
   return key;
 }
 
+// FRED API v2 (launched Nov 4, 2025) issues a separate API key from v1 — they
+// share the same account but are independent credentials. v2 calls must use
+// FRED_API_KEY_V2; never substitute the v1 key (v2 will reject it).
+function requireFredV2Key() {
+  const key = (process.env.FRED_API_KEY_V2 || "").trim();
+  if (!key) throw bad("FRED v2 is not configured on this deployment (set FRED_API_KEY_V2 — distinct from v1 key)", 503);
+  return key;
+}
+
 // FRED's JSON API puts diagnostics in the 4xx response body
 // (e.g. `{"error_code":400,"error_message":"Variable api_key is not registered."}`).
 // safeFetch discards 4xx bodies on principle (right for HTML scrapers, wrong here),
@@ -702,6 +711,80 @@ MACRO_TOOLS.push(
         date: last.date, current: last.value,
         days: obs.length, history: obs,
         source: "FRED DFF (Board of Governors of the Federal Reserve System)",
+      };
+    },
+  },
+  {
+    // FRED API v2 (launched Nov 4, 2025) introduced bulk release/observations:
+    // one call returns observations for EVERY series in a given release. Saves
+    // an agent from making N round-trips (e.g. one call gets every series in
+    // the Employment Situation report; one call gets every CPI subseries).
+    // Uses cursor pagination instead of offset/limit — caller passes the
+    // {lastSeriesId, lastObservationDate} from a previous response back in to
+    // get the next page.
+    //
+    // Common release IDs:
+    //   10  = Consumer Price Index           18  = H.15 Selected Interest Rates
+    //   50  = Employment Situation           53  = Gross Domestic Product
+    //   91  = G.17 Industrial Production     151 = JOLTS
+    // Full release list: https://fred.stlouisfed.org/releases
+    route: "GET /api/fred-release-observations", name: "FRED bulk release observations (v2)", slug: "fred-release-observations", category: "data", price: "$0.015",
+    description:
+      "Bulk-fetch observations for every series in a FRED release in one call. Use it to grab an entire economic report (jobs report, CPI report, GDP release) without enumerating constituent series IDs first. Returns paginated; pass lastSeriesId + lastObservationDate back to fetch the next page. ?releaseId=18 for H.15 (Selected Interest Rates), 10 for CPI, 50 for Employment Situation, 53 for GDP. Source: FRED API v2 /release/observations endpoint.",
+    tags: ["fred", "release", "bulk", "observations", "v2", "cpi", "jobs", "gdp", "h15", "interest-rates", "employment", "macro", "economic-data"],
+    discovery: {
+      input: { releaseId: 18, startDate: "2026-05-01", endDate: "2026-06-01" },
+      inputSchema: {
+        properties: {
+          releaseId: { type: "number", description: "FRED release ID (e.g. 18 for H.15, 10 for CPI, 50 for jobs, 53 for GDP)" },
+          startDate: { type: "string", description: "ISO start date (YYYY-MM-DD), optional" },
+          endDate: { type: "string", description: "ISO end date (YYYY-MM-DD), optional" },
+          lastSeriesId: { type: "string", description: "Pagination cursor: lastSeriesId from previous response (optional)" },
+          lastObservationDate: { type: "string", description: "Pagination cursor: lastObservationDate from previous response (optional)" },
+        },
+        required: ["releaseId"],
+      },
+      output: { example: { releaseId: 18, releaseName: "H.15 Selected Interest Rates", count: 16, series: [{ seriesId: "DGS10", title: "10-Year Treasury Constant Maturity Rate", units: "Percent", observations: [{ date: "2026-06-17", value: 4.49 }] }], cursor: { hasMore: false }, source: "FRED API v2" } },
+    },
+    handler: async (i) => {
+      const releaseId = parseInt(i.releaseId, 10);
+      if (!Number.isFinite(releaseId) || releaseId < 1 || releaseId > 100000) throw bad('"releaseId" must be a positive integer (see https://fred.stlouisfed.org/releases)');
+      const startDate = i.startDate ? String(i.startDate).trim() : undefined;
+      const endDate = i.endDate ? String(i.endDate).trim() : undefined;
+      if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw bad('"startDate" must be ISO YYYY-MM-DD');
+      if (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw bad('"endDate" must be ISO YYYY-MM-DD');
+      const key = requireFredV2Key();
+      const qs = new URLSearchParams({ release_id: String(releaseId), api_key: key, file_type: "json" });
+      if (startDate) qs.set("observation_start", startDate);
+      if (endDate) qs.set("observation_end", endDate);
+      if (i.lastSeriesId) qs.set("last_series_id", String(i.lastSeriesId));
+      if (i.lastObservationDate) qs.set("last_observation_date", String(i.lastObservationDate));
+      const j = await fredGetJson(`${FRED_BASE}/v2/release/observations?${qs}`);
+      if (j?.error_code) throw bad(`FRED v2 upstream error: ${j.error_message || "unknown"}`, 502);
+      // FRED v2 response shape (per docs): { release: {release_id, name, ...}, series: [{series_id, title, units, observations: [...]}], cursor or pagination fields }.
+      // We pass through verbatim with minimal normalization so callers see what FRED returned.
+      const series = (j?.series ?? []).map((s) => ({
+        seriesId: s.series_id,
+        title: s.title,
+        frequency: s.frequency,
+        units: s.units,
+        seasonalAdjustment: s.seasonal_adjustment,
+        lastUpdated: s.last_updated,
+        observations: (s.observations ?? [])
+          .filter((o) => o.value !== ".")
+          .map((o) => ({ date: o.date, value: Number(o.value) })),
+      }));
+      return {
+        releaseId: j?.release?.release_id ?? releaseId,
+        releaseName: j?.release?.name ?? null,
+        count: series.length,
+        series,
+        cursor: {
+          hasMore: Boolean(j?.has_more ?? j?.cursor?.has_more ?? false),
+          lastSeriesId: j?.last_series_id ?? j?.cursor?.last_series_id ?? null,
+          lastObservationDate: j?.last_observation_date ?? j?.cursor?.last_observation_date ?? null,
+        },
+        source: "FRED API v2 /release/observations (St. Louis Fed, launched Nov 2025)",
       };
     },
   },
