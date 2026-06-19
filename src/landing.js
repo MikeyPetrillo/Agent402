@@ -139,7 +139,8 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   @media (max-width:720px){ .nav a.hide-sm{ display:none; } }
 
   .wrap { max-width:1080px; margin:0 auto; padding:0 20px; position:relative; }
-  section { padding:60px 0; border-top:1px solid var(--line); }
+  section { padding:100px 0; border-top:1px solid var(--line); }
+  section + section { padding-top:100px; }
   .eyebrow { font-family:var(--mono); font-size:.72rem; letter-spacing:.2em; text-transform:uppercase; color:var(--accent); margin-bottom:12px; }
   h2 { font-size:clamp(1.5rem,3vw,1.9rem); letter-spacing:-.02em; margin-bottom:12px; }
   .sub { color:var(--muted); font-size:1.08rem; max-width:680px; }
@@ -246,7 +247,7 @@ ${renderHeader("/", [{ href: "#connect", label: "Connect" }])}
     <div>
       <span class="badge"><span class="dot"></span> open source · self-hostable · ${count} x402 tools</span>
       <h1>Where agents pay agents<span class="x">.</span></h1>
-      <p class="sub"><b>The open-source, self-hostable x402 server</b> — ${count} tools for AI agents in one place (and a <a href="/tollbooth">pay-per-crawl gate</a> for the other side). A real headless browser, live web search, durable memory, and a <a href="/guides/x402-payments-toolkit">non-custodial x402 payment toolkit</a> — the things your agent's sandbox <em>doesn't have</em> — rented by the call. The agent hits an endpoint, gets an <code>HTTP 402</code> quote, pays from its own wallet in USDC (or a few seconds of compute), and gets the result. No human, no signup, no API key — the payment <em>is</em> the identity.</p>
+      <p class="sub"><b>The open-source x402 server.</b> ${count} pay-per-call tools for AI agents — browser, web search, finance, EDGAR, memory. USDC on Base, or free via proof-of-work. <b>No signup, no API key</b> — the wallet is the identity.</p>
       <div class="ctas">
         <a class="cta primary" href="/tools">Browse all ${count} tools →</a>
         <a class="cta ghost" href="#connect">Add to Claude</a>
@@ -294,11 +295,8 @@ console.log(out);</pre>
     </script>
   </header>
 
-  <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet</b> — pay with a tiny <a href="/api/pow">sha256 proof-of-work</a> (a fraction of a second of CPU; no money, no AI tokens). The other ${count - freeCount} (browser, network, memory) settle in USDC.</div>
-  <div class="callout">🧭 <b>x402 Index + Smart Order Router — the neutral discovery API for x402.</b> <code>POST <a href="/api/route">/api/route</a> {"query":"&lt;task&gt;","include":"external"}</code> ranks tools across <em>every</em> x402 seller we've crawled (auto-discovered from the <a href="https://docs.cdp.coinbase.com/x402/docs/bazaar" rel="noopener">Coinbase CDP Bazaar</a>), filters out unhealthy ones, and tiebreaks on health then price. <code>include:"external"</code> explicitly excludes Agent402 — use us as a neutral router over the rest of the ecosystem. Browse the live index at <a href="/index">/index</a>. Free, like <code>/api/find</code>.</div>
-  <div class="callout">🏆 <b>x402 Leaderboard — the first public on-chain ranking of x402 sellers.</b> <code>GET <a href="/api/leaderboard">/api/leaderboard</a></code> ranks every seller in the <a href="https://docs.cdp.coinbase.com/x402/docs/bazaar" rel="noopener">Coinbase CDP Bazaar</a> by <em>real settled USDC volume on Base</em> — calls served, total USD, unique buyers per seller. Pipeline: Bazaar discovery → <code>eth_getLogs</code> → per-call ceiling filter → aggregate by payTo. Hourly snapshot. Use <code>?include=external</code> to exclude Agent402 itself and rank only the rest of the ecosystem. Free, like <code>/api/find</code> and <code>/api/route</code>.</div>
-  <div class="callout">⭐ <b>Open source &amp; self-hostable</b> — don't want the hosted version? Clone the repo and run all ${count} tools yourself for free (MCP + HTTP, no wallet, no signup): <code>FREE_MODE=true npm start</code>. <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">Star / fork it on GitHub →</a></div>
-  <div class="callout">🚧 <b>The other side of x402: charge AI bots crawling <em>your</em> site.</b> <a href="/tollbooth"><b>agent402-tollbooth</b></a> is an open-source, self-hostable <b>pay-per-crawl</b> gate — humans browse free, AI crawlers pay per request (USDC via x402, or free via proof-of-work). The open answer to Cloudflare pay-per-crawl: no CDN, no Stripe, no signup. <b>Deploy in one command</b> (Express, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/docker" rel="noopener">Docker</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare" rel="noopener">Cloudflare</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs" rel="noopener">Next.js</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/wordpress" rel="noopener">WordPress</a>) and watch a live <code>/__tollbooth</code> dashboard of your bot traffic and earnings. Running 10+ sites? See <a href="/tollbooth/cloud">Tollbooth Cloud →</a></div>
+  <div class="callout">🏆 <b>The neutral x402 layer.</b> <a href="/index">Index</a> + <a href="/api/route">Smart Order Router</a> + <a href="/leaderboard">Leaderboard</a> — auto-crawled from the <a href="https://docs.cdp.coinbase.com/x402/docs/bazaar" rel="noopener">CDP Bazaar</a>, ranked by real on-chain USDC volume. Use <code>?include=external</code> to exclude Agent402 itself.</div>
+  <div class="callout">🚧 <b>The other side: charge AI bots crawling <em>your</em> site.</b> <a href="/tollbooth"><b>agent402-tollbooth</b></a> is an open-source <b>pay-per-crawl</b> gate — humans browse free, crawlers pay per request. Deploy on <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/docker" rel="noopener">Docker</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare" rel="noopener">Cloudflare</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs" rel="noopener">Next.js</a>, or <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/wordpress" rel="noopener">WordPress</a>. <a href="/tollbooth/cloud">Tollbooth Cloud →</a></div>
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
 
   <section>
