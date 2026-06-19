@@ -100,7 +100,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "name": "Agent402",
       "url": "${baseUrl}",
       "provider": { "@id": "${baseUrl}/#org" },
-      "description": "${count} pay-per-call tools for AI agents via the x402 payment protocol (USDC on Base): live web search, headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed memory & coordination, a non-custodial multi-chain x402 payment toolkit (quote/verify/balance/gas/transfer-authorization/ENS), image transforms, live currency & product data, ${count - freeCount > 0 ? "data conversion, " : ""}unit conversions, validation, and more.",
+      "description": "${count} pay-per-call tools for AI agents via the x402 payment protocol (USDC on Base): live web search and web answers with citations, headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed memory & coordination, a non-custodial multi-chain x402 payment toolkit (quote/verify/balance/gas/transfer-authorization/ENS), image transforms, live financial data (stock quotes, history, earnings) and crypto market data (CoinGecko), macro time-series (FRED, Treasury, ECB FX, World Bank, yield curve), SEC EDGAR filings (10-K/10-Q, XBRL, insider, 13F, IPO calendar), live currency & product data, ${count - freeCount > 0 ? "data conversion, " : ""}unit conversions, validation, and more.",
       "documentation": "${baseUrl}/llms.txt",
       "offers": { "@type": "AggregateOffer", "offerCount": "${count}", "lowPrice": "0.001", "highPrice": "0.02", "priceCurrency": "USD", "description": "Per-call micropayments in USDC via x402, or free with proof-of-work" }
     },
