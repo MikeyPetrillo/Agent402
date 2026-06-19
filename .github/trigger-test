@@ -43,3 +43,4 @@ fetch-guard-upstream-4xx-5xx-attribution-and-media-content-type-fail-fast: 2026-
 macro-kit-fred-yield-curve-treasury-fiscal-ecb-fx-worldbank: 2026-06-19T15:00:00Z
 macro-kit-keyed-fred-series-search-info-calendar-sahm-cpi-unrate-fedfunds: 2026-06-19T15:30:00Z
 fred-api-key-verification-secret-now-set: 2026-06-19T16:00:00Z
+fred-trim-key-and-surface-upstream-error-message: 2026-06-19T17:00:00Z

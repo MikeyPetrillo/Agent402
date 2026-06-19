@@ -21,7 +21,7 @@
 // Covers the cluster of macro/financial routes that show up across the x402
 // ecosystem (yield curves, FX time series, GDP/inflation indicators, CPI YoY,
 // fed funds, recession signals). Pure HTTP wrappers, deterministic.
-import { safeFetch } from "./fetch-guard.js";
+import { safeFetch, assertPublicUrl } from "./fetch-guard.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -408,9 +408,33 @@ export const MACRO_TOOLS = [
 const FRED_BASE = "https://api.stlouisfed.org/fred";
 
 function requireFredKey() {
-  const key = process.env.FRED_API_KEY;
+  // GitHub Secrets sometimes pick up a trailing newline when pasted; URLSearchParams
+  // would percent-encode that into the request, and FRED would reject the resulting
+  // key as unregistered. Trim once at read time so every callsite is safe.
+  const key = (process.env.FRED_API_KEY || "").trim();
   if (!key) throw bad("FRED is not configured on this deployment (set FRED_API_KEY)", 503);
   return key;
+}
+
+// FRED's JSON API puts diagnostics in the 4xx response body
+// (e.g. `{"error_code":400,"error_message":"Variable api_key is not registered."}`).
+// safeFetch discards 4xx bodies on principle (right for HTML scrapers, wrong here),
+// so we use a dedicated helper that still calls assertPublicUrl for SSRF protection
+// but surfaces FRED's error_message verbatim.
+async function fredGetJson(url) {
+  const safeUrl = await assertPublicUrl(url);
+  const res = await fetch(safeUrl, { headers: { Accept: "application/json" } });
+  const text = await res.text();
+  let body = null;
+  try { body = JSON.parse(text); } catch {}
+  if (!res.ok) {
+    const msg = body?.error_message || text.slice(0, 200) || `HTTP ${res.status}`;
+    // FRED 400 with a key set almost always means a bad/expired/whitespace key —
+    // attribute as caller-fixable (422) so it shows up in client_errored.
+    throw bad(`FRED upstream HTTP ${res.status}: ${msg}`, res.status >= 500 ? 502 : 422);
+  }
+  if (!body) throw bad("FRED returned non-JSON response", 502);
+  return body;
 }
 
 // FRED accepts only a controlled set of `units` transformations; reject other
@@ -430,7 +454,7 @@ async function fredObservations({ seriesId, startDate, endDate, limit, units, fr
   if (units) qs.set("units", units);
   if (frequency) qs.set("frequency", frequency);
   qs.set("sort_order", "asc");
-  const j = await getJson(`${FRED_BASE}/series/observations?${qs}`);
+  const j = await fredGetJson(`${FRED_BASE}/series/observations?${qs}`);
   if (j?.error_code) throw bad(`FRED upstream error: ${j.error_message || "unknown"}`, 502);
   const obs = (j?.observations ?? [])
     .filter((o) => o.value !== ".")
@@ -497,7 +521,7 @@ MACRO_TOOLS.push(
       const limit = Math.min(Math.max(parseInt(i.limit, 10) || 10, 1), 100);
       const key = requireFredKey();
       const qs = new URLSearchParams({ search_text: q, api_key: key, file_type: "json", limit: String(limit), order_by: "popularity", sort_order: "desc" });
-      const j = await getJson(`${FRED_BASE}/series/search?${qs}`);
+      const j = await fredGetJson(`${FRED_BASE}/series/search?${qs}`);
       if (j?.error_code) throw bad(`FRED upstream error: ${j.error_message || "unknown"}`, 502);
       const results = (j?.seriess ?? []).map((s) => ({
         id: s.id, title: s.title,
@@ -528,7 +552,7 @@ MACRO_TOOLS.push(
       if (!/^[A-Z0-9_]{1,40}$/.test(seriesId)) throw bad('"seriesId" must look like a FRED series ID');
       const key = requireFredKey();
       const qs = new URLSearchParams({ series_id: seriesId, api_key: key, file_type: "json" });
-      const j = await getJson(`${FRED_BASE}/series?${qs}`);
+      const j = await fredGetJson(`${FRED_BASE}/series?${qs}`);
       if (j?.error_code) throw bad(`FRED upstream error: ${j.error_message || "unknown"}`, 502);
       const s = j?.seriess?.[0];
       if (!s) throw bad(`FRED has no series with ID "${seriesId}"`, 404);
@@ -573,7 +597,7 @@ MACRO_TOOLS.push(
         order_by: "release_date", sort_order: "asc",
         limit: "1000",
       });
-      const j = await getJson(`${FRED_BASE}/releases/dates?${qs}`);
+      const j = await fredGetJson(`${FRED_BASE}/releases/dates?${qs}`);
       if (j?.error_code) throw bad(`FRED upstream error: ${j.error_message || "unknown"}`, 502);
       const releases = (j?.release_dates ?? []).map((r) => ({
         releaseId: r.release_id,
