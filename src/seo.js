@@ -29,6 +29,8 @@ export function sitemapXml(baseUrl, catalog) {
   const staticUrls = [
     { loc: `${baseUrl}/`, priority: "1.0" },
     { loc: `${baseUrl}/tools`, priority: "0.9" },
+    { loc: `${baseUrl}/shop`, priority: "0.9" },
+    { loc: `${baseUrl}/economy`, priority: "0.8" },
     { loc: `${baseUrl}/faq`, priority: "0.8" },
     { loc: `${baseUrl}/llms.txt`, priority: "0.8" },
     { loc: `${baseUrl}/openapi.json`, priority: "0.7" },

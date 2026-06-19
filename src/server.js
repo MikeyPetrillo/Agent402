@@ -51,11 +51,15 @@ import { MACRO_TOOLS } from "./tools/macro-kit.js";
 import { EDGAR_TOOLS } from "./tools/edgar-kit.js";
 import { FINANCE_TOOLS } from "./tools/finance-kit.js";
 import { CRYPTO_TOOLS } from "./tools/crypto-kit.js";
+import { RESEARCH_TOOLS } from "./tools/research-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
+import { docsIndex, docsPage, docsApi } from "./docs.js";
+import { shopPage } from "./shop.js";
+import { economyPage } from "./economy.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
 
@@ -107,7 +111,7 @@ const CATALOG = {
     name: "Extract article",
     slug: "extract",
     category: "web",
-    price: "$0.005",
+    price: "$0.010",
     description:
       "Extract the main article content from any public URL as clean markdown. Returns title, byline, excerpt, word count, and markdown.",
     tags: ["scraping", "markdown", "content-extraction"],
@@ -687,6 +691,17 @@ app.get("/guides/:slug", (req, res) => {
   if (!html) return res.status(404).type("html").send('<p>Guide not found. <a href="/guides">All guides</a></p>');
   htmlCache(res, 300, 900).send(html);
 });
+// /docs hub — server-rendered from wiki/*.md (the same source of truth that
+// syncs to the GitHub wiki via CI). /docs/api is registered *before* the
+// parameterized /docs/:slug so the literal "api" path doesn't get captured
+// as a wiki slug lookup.
+app.get("/docs", (_req, res) => htmlCache(res, 300, 900).send(docsIndex(BASE_URL)));
+app.get("/docs/api", (_req, res) => htmlCache(res, 300, 900).send(docsApi(BASE_URL, Object.values(CATALOG))));
+app.get("/docs/:slug", (req, res) => {
+  const html = docsPage(BASE_URL, req.params.slug);
+  if (!html) return res.status(404).type("html").send('<p>Doc not found. <a href="/docs">All docs</a></p>');
+  htmlCache(res, 300, 900).send(html);
+});
 // Top-level machine-readable service manifest — one fetch tells a discovery
 // agent the whole story (identity, payment options, capability map, MCP, trust),
 // so this seller is the one selected. Per-resource terms still live in each
@@ -1123,6 +1138,8 @@ app.get("/card-1280.png", async (_req, res) => {
 });
 app.get("/openapi.json", (_req, res) => res.json(openapiSpec(BASE_URL, CATALOG)));
 app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(toolsIndexPage(BASE_URL, CATALOG)));
+app.get("/shop", (_req, res) => htmlCache(res, 300, 900).send(shopPage(BASE_URL, CATALOG)));
+app.get("/economy", (_req, res) => htmlCache(res, 300, 900).send(economyPage(BASE_URL, getLeaderboardSnapshot())));
 app.get("/tools/:slug", (req, res) => {
   const tools = toolList(CATALOG);
   const tool = tools.find((t) => t.slug === req.params.slug);

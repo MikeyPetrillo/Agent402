@@ -189,7 +189,7 @@ export const SEARCH_TOOLS = [
     name: "Web search",
     slug: "search",
     category: "web",
-    price: "$0.01",
+    price: "$0.02",
     description:
       "Live web search: ranked results (title, URL, snippet, age) from an independent search index as clean JSON — fresh pages your model's training cutoff has never seen. Optional freshness filter (pd/pw/pm/py = past day/week/month/year).",
     tags: ["search", "web-search", "serp", "fresh-data", "research"],
@@ -235,7 +235,7 @@ export const SEARCH_TOOLS = [
     name: "News search",
     slug: "search-news",
     category: "web",
-    price: "$0.01",
+    price: "$0.02",
     description:
       "Live news search: ranked recent articles (title, URL, snippet, age, source, breaking flag) from an independent search index as clean JSON. Same freshness filter as web search (pd/pw/pm/py). Optimized for current-events queries where the web index lags.",
     tags: ["search", "news", "fresh-data", "breaking-news", "research"],
@@ -285,7 +285,7 @@ export const SEARCH_TOOLS = [
     name: "Image search",
     slug: "search-images",
     category: "web",
-    price: "$0.01",
+    price: "$0.02",
     description:
       "Live image search: ranked image results (title, source page, image URL, thumbnail URL, dimensions) from an independent search index as clean JSON. Strict safe-search is on by default.",
     tags: ["search", "images", "visual", "research"],

@@ -31,12 +31,18 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   // escape on render so the server-side path matches the client-side esc() below.
   // Also escape ' so attribute contexts using single quotes are covered.
   const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  const activityRows = (rows) => rows.slice(0, 8).map((r) => `<li><span class="a-slug">${esc(r.slug)}</span><span class="a-meta">${r.paidWith === "proof-of-work" ? "⚙ PoW" : "$ USDC"} · ${agoStr(r.at)} ago</span></li>`).join("");
+  // Ticker items are rendered twice in the track so the translateX(-50%) loop
+  // is seamless — when the original set scrolls off-left, the duplicate is
+  // already in the same visual position the original started from. Server-side
+  // we esc() slug for HTML; client-side refresh builds nodes with textContent
+  // (no innerHTML — defense-in-depth against any future spec drift on slug).
+  const tickerItem = (r) => `<span class="ticker-item"><span class="slug">${esc(r.slug)}</span><span class="sep">·</span><span class="kind">${r.paidWith === "proof-of-work" ? "⚙ PoW" : "$ USDC"}</span><span class="sep">·</span><span class="time">${agoStr(r.at)} ago</span></span>`;
+  const tickerItems = (rows) => { const m = rows.slice(0, 12).map(tickerItem).join(""); return m + m; };
   const activity = recent.length
-    ? `<div class="activity">
-    <div class="eyebrow" style="margin:0 0 8px">● Live — recent paid calls</div>
-    <ul id="activity-list">${activityRows(recent)}</ul>
-    <script>(function(){var el=document.getElementById('activity-list');if(!el)return;function ago(iso){var s=Math.max(0,(Date.now()-new Date(iso).getTime())/1000);return s<60?(s|0)+'s':s<3600?((s/60)|0)+'m':s<86400?((s/3600)|0)+'h':((s/86400)|0)+'d';}function esc(t){return String(t).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}async function tick(){try{var r=await fetch('/api/stats',{cache:'no-store'});var d=await r.json();el.innerHTML=(d.recentCalls||[]).slice(0,8).map(function(x){return '<li><span class="a-slug">'+esc(x.slug)+'</span><span class="a-meta">'+(x.paidWith==='proof-of-work'?'⚙ PoW':'$ USDC')+' · '+ago(x.at)+' ago</span></li>';}).join('');}catch(e){}}setInterval(tick,12000);})();</script>
+    ? `<div class="ticker" aria-label="Live feed of recent paid calls">
+    <div class="ticker-label"><span class="live-dot"></span> Live</div>
+    <div class="ticker-track" id="ticker-track">${tickerItems(recent)}</div>
+    <script>(function(){var track=document.getElementById('ticker-track');if(!track)return;function ago(iso){var s=Math.max(0,(Date.now()-new Date(iso).getTime())/1000);return s<60?(s|0)+'s':s<3600?((s/60)|0)+'m':s<86400?((s/3600)|0)+'h':((s/86400)|0)+'d';}function span(cls,text){var s=document.createElement('span');s.className=cls;s.textContent=text;return s;}function build(x){var w=document.createElement('span');w.className='ticker-item';w.append(span('slug',x.slug),span('sep','\\u00b7'),span('kind',x.paidWith==='proof-of-work'?'\\u2699 PoW':'$ USDC'),span('sep','\\u00b7'),span('time',ago(x.at)+' ago'));return w;}async function tick(){try{var r=await fetch('/api/stats',{cache:'no-store'});var d=await r.json();var items=(d.recentCalls||[]).slice(0,12);var frag=document.createDocumentFragment();for(var pass=0;pass<2;pass++){for(var i=0;i<items.length;i++){frag.appendChild(build(items[i]));}}while(track.firstChild)track.removeChild(track.firstChild);track.appendChild(frag);}catch(e){}}setInterval(tick,12000);})();</script>
   </div>`
     : "";
   const categoryCards = Object.entries(CATEGORIES)
@@ -139,7 +145,8 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   @media (max-width:720px){ .nav a.hide-sm{ display:none; } }
 
   .wrap { max-width:1080px; margin:0 auto; padding:0 20px; position:relative; }
-  section { padding:60px 0; border-top:1px solid var(--line); }
+  section { padding:100px 0; border-top:1px solid var(--line); }
+  section + section { padding-top:100px; }
   .eyebrow { font-family:var(--mono); font-size:.72rem; letter-spacing:.2em; text-transform:uppercase; color:var(--accent); margin-bottom:12px; }
   h2 { font-size:clamp(1.5rem,3vw,1.9rem); letter-spacing:-.02em; margin-bottom:12px; }
   .sub { color:var(--muted); font-size:1.08rem; max-width:680px; }
@@ -219,17 +226,25 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   .odo-label { display:block; color:var(--muted); font-family:var(--mono); font-size:.7rem; letter-spacing:.3em; margin-bottom:9px; }
   .odo-digits b { display:inline-block; background:#000; color:var(--accent); border:1px solid #1f4a1d; border-radius:6px; font:700 1.9rem/1 var(--mono); padding:9px 8px; margin:0 2px; text-shadow:0 0 9px rgba(74,222,128,.55); }
   .odo-sub { display:block; margin-top:9px; color:var(--muted); font-size:.8rem; font-family:var(--mono); }
-  .activity { margin:26px auto 0; max-width:540px; }
-  /* Reserve vertical space for up to 8 rows so the client-side refresh
-     (setInterval, every 12s) never reflows the page below. Each row is
-     ~38px (12.8px font × 1.65 line-height + 16px padding + 1px border) so
-     8 rows ≈ 304px. Pinning this stops Core Web Vitals CLS dead on mobile,
-     where the live feed sits directly above the dense Why-pay grid. */
-  .activity ul { list-style:none; margin:0; padding:0; border:1px solid #1f4a1d; border-radius:11px; overflow:hidden; min-height:304px; }
-  .activity li { display:flex; justify-content:space-between; gap:12px; padding:8px 13px; border-top:1px solid #14260f; font-family:var(--mono); font-size:.8rem; }
-  .activity li:first-child { border-top:0; }
-  .a-slug { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .a-meta { color:var(--muted); white-space:nowrap; }
+  /* Scrolling ticker — single-line horizontal marquee of recent paid calls.
+     Items flow right→left; the "LIVE" label parks on the left with a gradient
+     mask so items appear to disappear behind it. Track is duplicated so the
+     translateX(-50%) loop is seamless. Fixed height keeps CLS at zero on the
+     12s client-side refresh. Pauses on hover for readability; respects
+     prefers-reduced-motion for accessibility. */
+  .ticker { margin:36px auto 0; max-width:1080px; overflow:hidden; border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:linear-gradient(180deg, rgba(74,222,128,.025), transparent); position:relative; height:48px; min-height:48px; display:flex; align-items:center; }
+  .ticker-label { position:absolute; top:0; bottom:0; left:0; display:flex; align-items:center; gap:9px; padding:0 18px 0 14px; background:linear-gradient(90deg, var(--bg) 78%, transparent); font-family:var(--mono); font-size:.68rem; letter-spacing:.3em; text-transform:uppercase; color:var(--accent); z-index:2; }
+  .ticker-label .live-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 10px var(--accent); animation:tickerlive 1.8s ease-in-out infinite; }
+  @keyframes tickerlive { 0%,100%{opacity:1; transform:scale(1)} 50%{opacity:.35; transform:scale(.82)} }
+  .ticker-track { display:flex; gap:36px; white-space:nowrap; padding-left:120px; animation:tickerscroll 55s linear infinite; will-change:transform; }
+  .ticker:hover .ticker-track { animation-play-state:paused; }
+  @keyframes tickerscroll { 0%{transform:translateX(0)} 100%{transform:translateX(-50%)} }
+  .ticker-item { display:inline-flex; align-items:center; gap:9px; font-family:var(--mono); font-size:.85rem; color:var(--muted); }
+  .ticker-item .slug { color:var(--text); }
+  .ticker-item .kind { color:var(--accent); font-size:.76rem; }
+  .ticker-item .time { color:var(--muted); font-size:.76rem; }
+  .ticker-item .sep { color:var(--line2); }
+  @media (prefers-reduced-motion: reduce) { .ticker-track{ animation:none } .ticker-label .live-dot{ animation:none } }
   .verify { background:var(--bg2); border:1px solid var(--line); border-radius:13px; padding:6px 20px; margin-top:22px; }
   .verify .row { margin:16px 0; }
   .verify .row b { color:var(--text); font-size:.9rem; }
@@ -246,7 +261,7 @@ ${renderHeader("/", [{ href: "#connect", label: "Connect" }])}
     <div>
       <span class="badge"><span class="dot"></span> open source · self-hostable · ${count} x402 tools</span>
       <h1>Where agents pay agents<span class="x">.</span></h1>
-      <p class="sub"><b>The open-source, self-hostable x402 server</b> — ${count} tools for AI agents in one place (and a <a href="/tollbooth">pay-per-crawl gate</a> for the other side). A real headless browser, live web search, durable memory, and a <a href="/guides/x402-payments-toolkit">non-custodial x402 payment toolkit</a> — the things your agent's sandbox <em>doesn't have</em> — rented by the call. The agent hits an endpoint, gets an <code>HTTP 402</code> quote, pays from its own wallet in USDC (or a few seconds of compute), and gets the result. No human, no signup, no API key — the payment <em>is</em> the identity.</p>
+      <p class="sub"><b>The open-source x402 server.</b> ${count} pay-per-call tools for AI agents — browser, web search, finance, EDGAR, memory. USDC on Base, or free via proof-of-work. <b>No signup, no API key</b> — the wallet is the identity.</p>
       <div class="ctas">
         <a class="cta primary" href="/tools">Browse all ${count} tools →</a>
         <a class="cta ghost" href="#connect">Add to Claude</a>
@@ -294,11 +309,8 @@ console.log(out);</pre>
     </script>
   </header>
 
-  <div class="callout"><span class="freebadge">${freeCount} FREE</span> <b>${freeCount} of ${count} tools need no wallet</b> — pay with a tiny <a href="/api/pow">sha256 proof-of-work</a> (a fraction of a second of CPU; no money, no AI tokens). The other ${count - freeCount} (browser, network, memory) settle in USDC.</div>
-  <div class="callout">🧭 <b>x402 Index + Smart Order Router — the neutral discovery API for x402.</b> <code>POST <a href="/api/route">/api/route</a> {"query":"&lt;task&gt;","include":"external"}</code> ranks tools across <em>every</em> x402 seller we've crawled (auto-discovered from the <a href="https://docs.cdp.coinbase.com/x402/docs/bazaar" rel="noopener">Coinbase CDP Bazaar</a>), filters out unhealthy ones, and tiebreaks on health then price. <code>include:"external"</code> explicitly excludes Agent402 — use us as a neutral router over the rest of the ecosystem. Browse the live index at <a href="/index">/index</a>. Free, like <code>/api/find</code>.</div>
-  <div class="callout">🏆 <b>x402 Leaderboard — the first public on-chain ranking of x402 sellers.</b> <code>GET <a href="/api/leaderboard">/api/leaderboard</a></code> ranks every seller in the <a href="https://docs.cdp.coinbase.com/x402/docs/bazaar" rel="noopener">Coinbase CDP Bazaar</a> by <em>real settled USDC volume on Base</em> — calls served, total USD, unique buyers per seller. Pipeline: Bazaar discovery → <code>eth_getLogs</code> → per-call ceiling filter → aggregate by payTo. Hourly snapshot. Use <code>?include=external</code> to exclude Agent402 itself and rank only the rest of the ecosystem. Free, like <code>/api/find</code> and <code>/api/route</code>.</div>
-  <div class="callout">⭐ <b>Open source &amp; self-hostable</b> — don't want the hosted version? Clone the repo and run all ${count} tools yourself for free (MCP + HTTP, no wallet, no signup): <code>FREE_MODE=true npm start</code>. <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">Star / fork it on GitHub →</a></div>
-  <div class="callout">🚧 <b>The other side of x402: charge AI bots crawling <em>your</em> site.</b> <a href="/tollbooth"><b>agent402-tollbooth</b></a> is an open-source, self-hostable <b>pay-per-crawl</b> gate — humans browse free, AI crawlers pay per request (USDC via x402, or free via proof-of-work). The open answer to Cloudflare pay-per-crawl: no CDN, no Stripe, no signup. <b>Deploy in one command</b> (Express, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/docker" rel="noopener">Docker</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare" rel="noopener">Cloudflare</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs" rel="noopener">Next.js</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/wordpress" rel="noopener">WordPress</a>) and watch a live <code>/__tollbooth</code> dashboard of your bot traffic and earnings. Running 10+ sites? See <a href="/tollbooth/cloud">Tollbooth Cloud →</a></div>
+  <div class="callout">🏆 <b>The neutral x402 layer.</b> <a href="/index">Index</a> + <a href="/api/route">Smart Order Router</a> + <a href="/leaderboard">Leaderboard</a> — auto-crawled from the <a href="https://docs.cdp.coinbase.com/x402/docs/bazaar" rel="noopener">CDP Bazaar</a>, ranked by real on-chain USDC volume. Use <code>?include=external</code> to exclude Agent402 itself.</div>
+  <div class="callout">🚧 <b>The other side: charge AI bots crawling <em>your</em> site.</b> <a href="/tollbooth"><b>agent402-tollbooth</b></a> is an open-source <b>pay-per-crawl</b> gate — humans browse free, crawlers pay per request. Deploy on <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/docker" rel="noopener">Docker</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare" rel="noopener">Cloudflare</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs" rel="noopener">Next.js</a>, or <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/wordpress" rel="noopener">WordPress</a>. <a href="/tollbooth/cloud">Tollbooth Cloud →</a></div>
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
 
   <section>

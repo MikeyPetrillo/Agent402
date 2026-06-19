@@ -122,7 +122,7 @@ export const CRYPTO_TOOLS = [
     name: "Crypto price",
     slug: "crypto-price",
     category: "data",
-    price: "$0.005",
+    price: "$0.010",
     description:
       "Live crypto prices for one or many coins in any vs_currency (usd, eur, btc, eth, etc). Returns last price, 24h change %, 24h volume, and market cap per coin. Accepts ticker symbols (BTC, ETH, SOL) for the top ~50 by market cap, or canonical CoinGecko ids (e.g. \"render-token\") for any of the ~15k tracked coins. Batched: up to 25 coins per call. Backed by CoinGecko's public API — keyless.",
     tags: ["crypto", "price", "market-data", "bitcoin", "ethereum", "defi"],
@@ -176,7 +176,7 @@ export const CRYPTO_TOOLS = [
     name: "Crypto market overview",
     slug: "crypto-market",
     category: "data",
-    price: "$0.005",
+    price: "$0.015",
     description:
       "Top N coins by market capitalization with full market snapshot per coin: rank, price, 24h change, 7d change, 24h volume, market cap, circulating supply, and all-time high. Default 10, max 100 per call. Backed by CoinGecko's public API.",
     tags: ["crypto", "market", "ranking", "marketcap", "top-coins"],
@@ -229,7 +229,7 @@ export const CRYPTO_TOOLS = [
     name: "Crypto price history",
     slug: "crypto-history",
     category: "data",
-    price: "$0.005",
+    price: "$0.015",
     description:
       "Historical price, market cap, and volume time series for a coin. Granularity is automatic per CoinGecko: <=1 day = 5-min bars, 2-90 days = hourly, >90 days = daily. Days: 1, 7, 14, 30, 90, 180, 365, or \"max\". Returns aligned arrays of {time, price, marketCap, volume}.",
     tags: ["crypto", "history", "chart", "backtest", "timeseries"],
@@ -286,7 +286,7 @@ export const CRYPTO_TOOLS = [
     name: "Crypto trending",
     slug: "crypto-trending",
     category: "data",
-    price: "$0.005",
+    price: "$0.008",
     description:
       "Trending coins on CoinGecko in the last 24 hours, ranked by user search activity on the site (currently ~15 results). Includes coin id, symbol, market cap rank, current price (BTC-denominated), and score. Useful signal for detecting narrative shifts before they hit price charts.",
     tags: ["crypto", "trending", "discovery", "sentiment"],
@@ -326,7 +326,7 @@ export const CRYPTO_TOOLS = [
     name: "Crypto global market",
     slug: "crypto-global",
     category: "data",
-    price: "$0.005",
+    price: "$0.008",
     description:
       "Global crypto market snapshot: total market cap, total 24h volume, BTC dominance, ETH dominance, active coin count, active exchange count, and 24h market-cap change %. Returned in a chosen vs_currency (default usd). Backed by CoinGecko /global.",
     tags: ["crypto", "global", "market", "dominance", "macro"],
