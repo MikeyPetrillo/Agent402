@@ -15,6 +15,7 @@ These exist because an agent mid-task cannot give itself a browser, a paid searc
 | Tool | Price | What it does |
 |---|---|---|
 | `search` | $0.01 | Live web search over a paid index (Brave) — no signup, the wallet is the credential |
+| `answer` | $0.03 | Web answer with inline citations (Brave Answer API) — a one-call "ask the web" the model couldn't reach otherwise |
 | `render` | $0.02 | Real headless Chromium, JavaScript executed — reads SPAs that `extract` can't |
 | `screenshot` | $0.02 | PNG of any public page (viewport or full-page) |
 | `extract` | $0.005 | Main-article extraction → clean markdown (title, byline, word count) |
@@ -25,6 +26,10 @@ These exist because an agent mid-task cannot give itself a browser, a paid searc
 | `meta`, `dns`, `http-check`, `tls-cert`, `whois`, `robots-check`, `sitemap`, `email-validate`, `ip-info` | $0.002–$0.005 | Network truth: metadata, DNS, TLS, liveness |
 | `openapi-diff`, `openapi-lint`, `openapi-extract`, `openapi-to-curl`, `openapi-mock-response`, `openapi-search`, `openapi-validate-payload`, `openapi-redact`, `openapi-resolve-refs`, `openapi-security-summary`, `openapi-required-params` | $0.002 | **API-kit** — work an OpenAPI 3.x / Swagger 2.x spec end-to-end: find the right operation, see its effective auth, know the minimum inputs, build a runnable curl, mock a response, validate a payload, diff two versions, score agent-readiness, shrink for LLM context, inline `$ref`s |
 | `fx-rate`, `barcode-lookup`, `gov-data`, `weather-forecast`, `weather-alerts`, `earthquakes` | $0.003 | Live keyless data: ECB currency rates, Open Food Facts product lookup, data.gov datasets, NWS weather, USGS quakes |
+| `stock-quote`, `stock-history`, `stock-earnings` | $0.005 | **finance-kit** — Yahoo-backed price + history + upcoming/recent earnings for any ticker. Fresh, no API key required |
+| `crypto-price`, `crypto-market`, `crypto-history`, `crypto-trending`, `crypto-global` | $0.003–$0.005 | **crypto-kit** — CoinGecko-backed: prices, market data, OHLC history, trending coins, total market cap. Multi-coin in one call |
+| FRED yield curve, treasury, fiscal, CPI, unrate, fed funds, Sahm rule, ECB FX, World Bank, FRED bulk release observations | $0.003–$0.01 | **macro-kit** — official macro time-series from the St. Louis Fed (FRED v1 + v2 bulk), Treasury, ECB, World Bank |
+| `edgar-company-lookup`, `edgar-filing-list`, `edgar-10k`, `edgar-13f`, `edgar-insider`, `edgar-ipo`, `edgar-fulltext-search`, `edgar-xbrl-frames` | $0.003–$0.01 | **edgar-kit** — SEC EDGAR: ticker→CIK, filings, 10-K/10-Q text, XBRL frames, insider Form 4, 13F holdings, IPO calendar, full-text search |
 | `image-resize`, `image-convert`, `image-thumbnail`, `barcode-decode` | $0.003–$0.005 | Pure-CPU image transforms + barcode/QR decode (jimp / zxing) |
 
 ## The long tail (pure-CPU, also payable with compute)

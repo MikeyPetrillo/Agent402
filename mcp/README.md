@@ -1,8 +1,8 @@
 # agent402-mcp
 
-MCP server for [Agent402](https://agent402.tools) — 1000+ pay-per-call web tools for AI agents, paid per call in USDC via the [x402 protocol](https://www.x402.org), or **with compute (proof-of-work)** when no wallet is configured. Built by [Mikey Petrillo](https://github.com/MikeyPetrillo).
+MCP server for [Agent402](https://agent402.tools) — 1,100+ pay-per-call web tools for AI agents, paid per call in USDC via the [x402 protocol](https://www.x402.org), or **with compute (proof-of-work)** when no wallet is configured. Built by [Mikey Petrillo](https://github.com/MikeyPetrillo).
 
-Your agent gets browser rendering, screenshots, PDF text extraction, URL→markdown, live DNS/TLS/WHOIS, wallet-keyed shared memory, and ~1000 utility/conversion tools — with payment handled invisibly underneath the MCP calls. No signup, no API key.
+Your agent gets browser rendering, screenshots, PDF text extraction, URL→markdown, live web search **+ web answers with citations**, live **financial/crypto/macro data** (Yahoo stock quotes, CoinGecko, FRED, ECB FX, World Bank, yield curve), **SEC EDGAR filings** (10-K/10-Q text, XBRL, insider, 13F, IPO calendar), DNS/TLS/WHOIS, wallet-keyed shared memory, and ~1,040 utility/conversion tools — with payment handled invisibly underneath the MCP calls. No signup, no API key.
 
 ## Quick start
 

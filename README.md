@@ -84,12 +84,15 @@ Boots straight from the repo's `railway.toml` + `Dockerfile`. Optional plugins a
 | | Examples |
 |---|---|
 | **Browser & web** | `render` (headless Chromium, executes JS), `screenshot`, `extract` (article→markdown), `meta` |
-| **Live search** | `search` — a real web index behind one call |
+| **Live search & answers** | `search` (real web index), `answer` (web answer with citations), depth/news/images variants, `suggest` |
 | **PDFs & media** | `pdf-to-markdown`, `pdf-merge`/`extract-pages`/`rotate`, `images-to-pdf`, `audio-convert`, `audio-normalize` (EBU R128, real ffmpeg) |
 | **Images** | `image-resize`, `image-convert`, `image-thumbnail`, `barcode-decode` (jimp/zxing, pure-CPU) |
 | **OCR** | `ocr-image` (text out of any image — pure-CPU, no model) |
 | **Geo** | `geo-distance`, `geo-bbox`, `geo-bearing`, `geo-geohash` (vincenty / haversine — deterministic) |
 | **Live data** | `fx-rate` (ECB), `barcode-lookup` (Open Food Facts), `gov-data` (data.gov), `weather-forecast`/`weather-alerts`, `earthquakes` (USGS) |
+| **Finance & crypto** | `stock-quote`/`stock-history`/`stock-earnings` (Yahoo), `crypto-price`/`crypto-market`/`crypto-history`/`crypto-trending`/`crypto-global` (CoinGecko) |
+| **Macro (FRED + more)** | yield curve, treasury, fiscal, Fed funds, CPI, unemployment, Sahm rule, ECB FX, World Bank, FRED bulk release observations |
+| **SEC EDGAR** | ticker→CIK, filing list, 10-K/10-Q text, XBRL frames, insider transactions, 13F holdings, IPO calendar, full-text search |
 | **Network truth** | `dns`, `tls-cert`, `whois`, `http-check`, `robots-check`, `email-validate`, `ip-info` |
 | **Crypto & payments** | `usdc-balance`, `tx-status`, `gas-estimate`, `ens-resolve`, `x402-quote`/`verify`, `transfer-authorization` — non-custodial, multi-chain (Base/Polygon/Arbitrum/Optimism/Ethereum) |
 | **Agent memory** | wallet-keyed KV + TTL, atomic counters, cross-wallet grants, hash-chained audit log, similarity recall |

@@ -30,7 +30,7 @@ const SETTLEMENT = "eip155:8453"; // Base mainnet — matches our x402 settlemen
 
 // The services to list. Slugs match our catalog; the bridge dispatches by slug.
 // Prices mirror our own catalog. These are the capabilities worth surfacing —
-// not all 1,071 tools (the conversion long-tail stays discovery-only on our site).
+// not all 1,150+ tools (the conversion long-tail stays discovery-only on our site).
 const SERVICES = [
   { slug: "search", name: "Web Search", price: 0.01, tags: ["search", "web-search", "fresh-data", "research"],
     description: "Live web search: ranked results (title, URL, snippet, age) from an independent index as clean JSON — fresh pages a model's training cutoff has never seen." },
@@ -95,7 +95,7 @@ async function main() {
   if (!agent) {
     const payload = {
       name: AGENT_NAME,
-      description: `1,071 pay-per-call web tools for AI agents via x402 (USDC on Base): live web search, headless-browser rendering & screenshots, PDF extraction, URL-to-markdown, and wallet-keyed memory & coordination. No signup, no API key. ${SITE}`,
+      description: `1,150+ pay-per-call web tools for AI agents via x402 (USDC on Base): live web search & answers, headless-browser rendering & screenshots, PDF extraction, URL-to-markdown, live financial/crypto/macro data, SEC EDGAR filings, and wallet-keyed memory & coordination. No signup, no API key. ${SITE}`,
       identity_provider_id: "erc8004",
       identity_network_caip2: "eip155:8453",
       settlement_network_caip2: SETTLEMENT,
@@ -154,7 +154,7 @@ async function main() {
   }
 
   // 3) Publish to the marketplace.
-  const publish = { is_published: true, tagline: "1,071 web tools agents pay for per call — search, browser, memory. No signup.", tags: ["tools", "web-search", "browser", "memory", "x402", "agents"] };
+  const publish = { is_published: true, tagline: "1,150+ web tools agents pay for per call — search, browser, finance, EDGAR, memory. No signup.", tags: ["tools", "web-search", "browser", "memory", "finance", "edgar", "x402", "agents"] };
   if (DRY) { console.log("[dry-run] would PATCH publish", publish); }
   else { await api("PATCH", `/api/v1/agents/${agent.id}`, publish); console.log(`\npublished agent ${agent.id} to the marketplace`); }
 
