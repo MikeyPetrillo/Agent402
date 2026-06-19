@@ -57,6 +57,9 @@ const NETWORK = new Set([
   // tolerate transient failures, the shape check still gates the happy path.
   "/api/dns-lookup", "/api/dns-propagation", "/api/spf-check", "/api/dmarc-check",
   "/api/dkim-lookup", "/api/email-deliverability",
+  // Network-kit2: crt.sh (CT logs), live HTTP fetch, signature scan, Team Cymru
+  // DNS-whois. All hit free public infra; tolerate transient 4xx/5xx upstream.
+  "/api/cert-transparency", "/api/http-headers", "/api/tech-stack", "/api/asn-info",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 
