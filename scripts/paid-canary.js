@@ -105,6 +105,28 @@ const TOOLS = [
 let passed = 0, failed = 0, spentUsd = 0;
 const failures = [];
 
+// Config preflight: /health.flags.yahooRelay must be true.
+// If it's false, /api/stock-quote will hit Yahoo through Railway's
+// null-routed egress and ETIMEDOUT — wasting USDC on a doomed call when
+// the real cause is a missing env var. Recorded as a regular failure so
+// the rest of the canary still runs and independent regressions surface.
+try {
+  const health = await (await fetch(`${TARGET}/health`)).json();
+  if (health?.flags?.yahooRelay !== true) {
+    failed++;
+    const msg = `preflight: /health.flags.yahooRelay=${health?.flags?.yahooRelay} — set YAHOO_RELAY_URL and YAHOO_RELAY_TOKEN in Railway`;
+    failures.push(msg);
+    console.error(`FAIL  ${msg}`);
+  } else {
+    console.log(`OK    preflight /health.flags.yahooRelay=true`);
+  }
+} catch (e) {
+  failed++;
+  const msg = `preflight: GET ${TARGET}/health failed: ${(e && e.message ? e.message : String(e)).slice(0, 160)}`;
+  failures.push(msg);
+  console.error(`FAIL  ${msg}`);
+}
+
 for (const t of TOOLS) {
   const url = `${TARGET}${t.path}`;
   const init = { method: t.method };
