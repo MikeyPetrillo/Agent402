@@ -67,6 +67,15 @@ export function cacheEnabled() {
 //               Anything not listed is ignored when computing the key.
 //
 // Add new entries here, NOT in the kit files — keeps cache policy in one place.
+//
+// SECURITY INVARIANT — only FREE routes belong in this map.
+//   The cache key is `path + keyFields`; it does NOT include the caller's
+//   gate credential (wallet address, PoW ticket, idempotency key). If a
+//   paid route were ever added here, a free/unauthenticated caller could
+//   read the body of a previously-paid call from cache — the cache would
+//   silently front the paywall. Every route below must be one whose
+//   response we'd serve to anyone. NEVER add memory tools, anything in
+//   WALLET_ONLY_SLUGS, or anything priced above $0.
 export const CACHEABLE_ROUTES = {
   // Net/DNS — stable on the order of minutes-to-hours.
   "/api/dns":            { ttl:   300, keyFields: ["domain", "type"] },
