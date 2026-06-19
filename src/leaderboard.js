@@ -164,17 +164,51 @@ export function extractWalletsFromBazaar(payload) {
 }
 
 /**
- * Aggregate transfer logs into a per-seller leaderboard. Counts only settlements
- * within the per-call ceiling (per-call buys are ≤maxCallUsd; larger inbound is
- * funding/swaps and not what we're ranking).
+ * Canonical host for grouping sellers. Two listings on the same operator-owned
+ * website should be one row even if the operator publishes them under separate
+ * wallets — the leaderboard ranks operators, not addresses. We lowercase + strip
+ * a leading `www.`; we deliberately don't collapse arbitrary subdomains
+ * (api.x.com vs docs.x.com could be different products run by different teams).
+ *
+ * Returns null if the URL doesn't have a usable http(s) host — those rows stay
+ * keyed by wallet and don't merge with anything.
+ */
+export function canonicalHost(rawUrl) {
+  if (typeof rawUrl !== "string") return null;
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.host.toLowerCase().replace(/^www\./, "");
+  } catch { return null; }
+}
+
+/**
+ * Aggregate transfer logs into a per-operator leaderboard. Counts only
+ * settlements within the per-call ceiling (per-call buys are ≤maxCallUsd;
+ * larger inbound is funding/swaps and not what we're ranking).
+ *
+ * The shape is operator-first, not wallet-first: rows are grouped by canonical
+ * host (see canonicalHost). A single operator who lists multiple wallets under
+ * the same website becomes one row with summed volume, unioned buyers, and an
+ * array of all their wallets. This is the right unit of measure for "who's
+ * actually being used" — splitting a single seller's volume across wallets
+ * under-counts them.
  *
  * `transfers`: [{ wallet, payer, usd }]  — `wallet` is the recipient (lowercase)
  * `sellers`:   [{ wallet, name, network, origins, homepage, endpoints }]
+ *
+ * Per-row fields:
+ *   wallet       — primary (highest-volume) wallet in the group; preserved
+ *                  for back-compat with consumers that only read one address
+ *   wallets      — full array of every wallet in the group (≥1 entry)
+ *   walletCount  — wallets.length, surfaced explicitly for templates
  *
  * Returns ranked array. Ties on totalUsd break on callsSettled (more activity
  * wins), then alphabetical (purely deterministic — no informational signal).
  */
 export function aggregateLeaderboard(transfers, sellers, { maxCallUsd = DEFAULTS.maxCallUsd } = {}) {
+  // 1. Per-wallet credit (the join key we have to use because eth_getLogs is
+  //    wallet-addressed).
   const byWallet = new Map();
   for (const s of sellers) {
     byWallet.set(s.wallet, {
@@ -192,22 +226,75 @@ export function aggregateLeaderboard(transfers, sellers, { maxCallUsd = DEFAULTS
     row.totalUsd += t.usd;
     if (t.payer) row.buyers.add(t.payer);
   }
-  const ranked = [...byWallet.values()]
-    .map((r) => ({
-      name: r.name,
-      origins: r.origins || [],
-      homepage: r.homepage,
-      endpoints: r.endpoints ?? null,
-      wallet: r.wallet,
-      network: r.network,
-      callsSettled: r.callsSettled,
-      totalUsd: Number(r.totalUsd.toFixed(6)),
-      uniqueBuyers: r.buyers.size,
-    }))
+
+  // 2. Fold per-wallet rows into per-operator groups. Group key = canonical
+  //    host when we can derive one; otherwise the wallet itself (so listings
+  //    without a homepage stay as standalone rows rather than collapsing into
+  //    a single "no-website" mega-group).
+  const groups = new Map();
+  for (const w of byWallet.values()) {
+    const host = canonicalHost(w.homepage) || canonicalHost(w.origins?.[0]);
+    const key = host ? `host:${host}` : `wallet:${w.wallet}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        name: w.name,
+        origins: new Set(w.origins || []),
+        homepage: w.homepage,
+        endpointsSum: 0,
+        network: w.network,
+        callsSettled: 0,
+        totalUsd: 0,
+        buyers: new Set(),
+        members: [], // [{ wallet, name, callsSettled, totalUsd, endpoints }]
+      });
+    }
+    const g = groups.get(key);
+    g.callsSettled += w.callsSettled;
+    g.totalUsd += w.totalUsd;
+    for (const b of w.buyers) g.buyers.add(b);
+    g.endpointsSum += (w.endpoints || 0);
+    (w.origins || []).forEach((o) => g.origins.add(o));
+    g.members.push({
+      wallet: w.wallet,
+      name: w.name,
+      callsSettled: w.callsSettled,
+      totalUsd: w.totalUsd,
+      endpoints: w.endpoints || 0,
+    });
+  }
+
+  const ranked = [...groups.values()]
+    .map((g) => {
+      // Sort wallets within a group: highest-volume first, then most-active,
+      // then deterministic by address. The first wallet becomes the row's
+      // "primary" — the one shown by default in the wallet column.
+      g.members.sort((a, b) =>
+        b.totalUsd - a.totalUsd ||
+        b.callsSettled - a.callsSettled ||
+        a.wallet.localeCompare(b.wallet)
+      );
+      const primary = g.members[0];
+      // Display name: prefer the most-volume wallet's name, but if it's empty
+      // fall back to any non-empty name in the group.
+      const name = primary?.name || g.members.find((m) => m.name)?.name || g.name;
+      return {
+        name,
+        origins: [...g.origins],
+        homepage: g.homepage,
+        endpoints: g.endpointsSum || null,
+        wallet: primary?.wallet || null,
+        wallets: g.members.map((m) => m.wallet),
+        walletCount: g.members.length,
+        network: g.network,
+        callsSettled: g.callsSettled,
+        totalUsd: Number(g.totalUsd.toFixed(6)),
+        uniqueBuyers: g.buyers.size,
+      };
+    })
     .sort((a, b) => {
       if (b.totalUsd !== a.totalUsd) return b.totalUsd - a.totalUsd;
       if (b.callsSettled !== a.callsSettled) return b.callsSettled - a.callsSettled;
-      return a.name.localeCompare(b.name);
+      return (a.name || "").localeCompare(b.name || "");
     })
     .map((r, i) => ({ rank: i + 1, ...r }));
   return ranked;
@@ -497,8 +584,14 @@ export function leaderboardPage(snapshot, { baseUrl }) {
       const nameCell = href
         ? `<a href="${esc(href)}" target="_blank" rel="noopener nofollow">${esc(r.name)}</a>`
         : esc(r.name);
+      // When an operator runs multiple wallets behind one website we surface
+      // the primary (highest-volume) wallet as the link target and tack on a
+      // "+N more" badge whose title lists every address — so the row stays
+      // compact while staying fully verifiable on Basescan.
+      const allWallets = Array.isArray(r.wallets) && r.wallets.length ? r.wallets : (r.wallet ? [r.wallet] : []);
+      const extraCount = Math.max(0, allWallets.length - 1);
       const walletCell = r.wallet
-        ? `<a href="${esc(explorer)}/address/${esc(r.wallet)}#tokentxns" target="_blank" rel="noopener nofollow" title="${esc(r.wallet)}">${esc(shortAddr(r.wallet))}</a>`
+        ? `<a href="${esc(explorer)}/address/${esc(r.wallet)}#tokentxns" target="_blank" rel="noopener nofollow" title="${esc(allWallets.join("\n"))}">${esc(shortAddr(r.wallet))}</a>${extraCount ? ` <span class="badge" title="${esc(allWallets.join("\n"))}">+${esc(extraCount)} more</span>` : ""}`
         : "—";
       return `<tr>
         <td class="num">${esc(r.rank)}</td>
@@ -551,6 +644,7 @@ ${CHROME_HEAD_LINKS}
   td { padding:10px 18px; border-bottom:1px solid var(--line); }
   td.num { font-family:ui-monospace,Menlo,monospace; text-align:right; }
   td.muted { color:var(--muted); font-family:ui-monospace,Menlo,monospace; font-size:.85em; }
+  .badge { display:inline-block; margin-left:6px; padding:1px 6px; border:1px solid var(--line); border-radius:10px; color:var(--muted); font-size:.72em; font-family:system-ui,-apple-system,sans-serif; cursor:help; }
   td a { color:var(--fg); text-decoration:none; border-bottom:1px solid transparent; }
   td a:hover { border-color:var(--accent); }
   code { background:#1a2236; padding:1px 5px; border-radius:4px; font-family:ui-monospace,Menlo,monospace; font-size:.85em; }
@@ -590,7 +684,8 @@ ${renderHeader("/leaderboard")}
       <li>Walk the Coinbase CDP Bazaar discovery API and extract every Base-mainnet USDC <code>payTo</code> wallet.</li>
       <li>Query <code>eth_getLogs</code> on Base USDC for Transfer events to those wallets over the <b>${esc(windowHuman)}</b> (${esc(snapshot?.scannedBlocks ?? "?")} blocks).</li>
       <li>Filter to per-call settlements (≤ ${esc(fmtUsd(snapshot?.maxCallUsd ?? 0))}); larger inbound transfers are funding/swaps, not tool buys.</li>
-      <li>Aggregate by recipient wallet → callsSettled, totalUsd, uniqueBuyers. Rank by totalUsd, tiebreak on activity, then alphabetical.</li>
+      <li>Aggregate by recipient wallet, then fold by canonical website host → callsSettled, totalUsd, uniqueBuyers per operator. An operator listing multiple wallets under one site becomes one row with summed volume and unioned buyers (and a <code>+N more</code> badge listing the extra wallets).</li>
+      <li>Rank by totalUsd; tiebreak on activity, then alphabetical.</li>
     </ol>
     <pre>curl -s ${esc(baseUrl)}/api/leaderboard?top=10
 curl -s ${esc(baseUrl)}/api/leaderboard?include=external   # exclude Agent402 itself

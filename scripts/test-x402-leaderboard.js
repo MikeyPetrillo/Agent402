@@ -4,6 +4,7 @@ import {
   baseUsdcPayToFromItem,
   extractWalletsFromBazaar,
   aggregateLeaderboard,
+  canonicalHost,
 } from "../src/leaderboard.js";
 
 let pass = 0, fail = 0;
@@ -189,6 +190,69 @@ eq(tied[0].name, "Alpha", "tie-break: alphabetical when volume + calls equal");
 // Empty inputs.
 eq(aggregateLeaderboard([], []), [], "empty inputs → empty ranking");
 eq(aggregateLeaderboard([], sellers).length, sellers.length, "zero transfers → every seller appears with zero volume");
+
+// --- canonicalHost ----------------------------------------------------------
+
+eq(canonicalHost("https://example.com/x"), "example.com", "host lowercased");
+eq(canonicalHost("HTTPS://Example.com/y"), "example.com", "host lowercased even when scheme is upper");
+eq(canonicalHost("https://www.example.com/x"), "example.com", "leading www. stripped");
+eq(canonicalHost("https://api.example.com/x"), "api.example.com", "non-www subdomain preserved (could be a different product)");
+ok(canonicalHost("javascript:alert(1)") === null, "non-http(s) scheme → null");
+ok(canonicalHost(null) === null, "null → null");
+ok(canonicalHost("not a url") === null, "garbage → null");
+
+// --- per-operator (host) merge ----------------------------------------------
+
+// Same operator running two wallets under one website: the row count drops from
+// 2 → 1, volumes sum, both wallets are listed, and a buyer that hit both
+// wallets is counted once (not twice).
+const sharedSiteSellers = [
+  { wallet: "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", name: "Foo (ops-a)", network: "base", origins: ["https://foo.io"], homepage: "https://foo.io", endpoints: 3 },
+  { wallet: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", name: "Foo (ops-b)", network: "base", origins: ["https://foo.io"], homepage: "https://foo.io", endpoints: 2 },
+  { wallet: "0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0", name: "Solo", network: "base", origins: ["https://solo.io"], homepage: "https://solo.io", endpoints: 1 },
+];
+const sharedSiteTransfers = [
+  // Wallet A: 2 calls, buyers X and Y
+  { wallet: "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", payer: "0xpx", usd: 0.02 },
+  { wallet: "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", payer: "0xpy", usd: 0.02 },
+  // Wallet B: 1 call, buyer Y (so unioned that's still 2 unique, not 3)
+  { wallet: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", payer: "0xpy", usd: 0.01 },
+  // Solo: 1 call
+  { wallet: "0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0", payer: "0xpz", usd: 0.04 },
+];
+const merged = aggregateLeaderboard(sharedSiteTransfers, sharedSiteSellers);
+eq(merged.length, 2, "two operators after merge (was three wallets)");
+// Foo: $0.05 across two wallets; Solo: $0.04 single wallet → Foo ranks first.
+eq(merged[1].name, "Solo", "Solo ranks second at $0.04");
+eq(merged[0].callsSettled, 3, "Foo: 2 + 1 = 3 settled calls across both wallets");
+eq(merged[0].totalUsd, 0.05, "Foo: $0.02 + $0.02 + $0.01 = $0.05");
+eq(merged[0].uniqueBuyers, 2, "Foo: buyer Y unioned across wallets (not double-counted)");
+eq(merged[0].walletCount, 2, "Foo: two wallets reported in one row");
+eq(merged[0].wallets.length, 2, "Foo: wallets[] has both addresses");
+eq(merged[0].wallet, merged[0].wallets[0], "Foo: primary wallet = highest-volume member");
+eq(merged[0].endpoints, 5, "Foo: endpoint counts sum across wallets (3 + 2 = 5)");
+
+// www. equivalence: two listings under the same root with one explicitly on
+// www. and one bare should merge into a single row.
+const wwwSellers = [
+  { wallet: "0xc1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1", name: "WwwOp", network: "base", origins: ["https://www.www-op.io"], homepage: "https://www.www-op.io", endpoints: 1 },
+  { wallet: "0xc2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2", name: "WwwOp", network: "base", origins: ["https://www-op.io"], homepage: "https://www-op.io", endpoints: 1 },
+];
+const wwwTransfers = [
+  { wallet: "0xc1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1", payer: "0xq1", usd: 0.01 },
+  { wallet: "0xc2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2", payer: "0xq2", usd: 0.01 },
+];
+const wwwMerged = aggregateLeaderboard(wwwTransfers, wwwSellers);
+eq(wwwMerged.length, 1, "www. and bare host merge into one row");
+eq(wwwMerged[0].walletCount, 2, "merged row carries both wallets");
+
+// No homepage → no merging (operators with no website stay independent).
+const noSiteSellers = [
+  { wallet: "0xd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1", name: "NoSiteA", network: "base", origins: [], homepage: null, endpoints: 1 },
+  { wallet: "0xd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2", name: "NoSiteB", network: "base", origins: [], homepage: null, endpoints: 1 },
+];
+const noSiteRanked = aggregateLeaderboard([], noSiteSellers);
+eq(noSiteRanked.length, 2, "two wallets with no homepage stay as two rows (no merging into a 'null-host' bucket)");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
