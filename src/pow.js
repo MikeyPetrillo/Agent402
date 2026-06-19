@@ -52,7 +52,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "memory-write", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-revoke",
   "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",
   "http-check", "tls-cert", "whois", "robots-check", "sitemap",
-  "email-validate", "ip-info", "search",
+  "email-validate", "ip-info", "search", "search-news", "search-images", "search-suggest",
   "pdf-info", "pdf-merge", "pdf-extract-pages", "pdf-rotate", "images-to-pdf",
   "pdf-to-markdown",
   "media-info", "audio-convert", "audio-normalize",
