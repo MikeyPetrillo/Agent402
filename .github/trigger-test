@@ -62,3 +62,7 @@ cache-routes-security-invariant-comment: 2026-06-20T07:00:00Z
 calc-input-alias-expression-formula: 2026-06-20T08:00:00Z
 landing-activity-feed-min-height-cls-fix: 2026-06-20T09:00:00Z
 discoverability-refresh-finance-crypto-macro-edgar-answer: 2026-06-20T10:00:00Z
+revert-leaderboard-merge-from-dev-branch: 2026-06-20T12:00:00Z
+health-yahoo-relay-flag-and-mcp-version-consistency-ci-check: 2026-06-20T13:00:00Z
+deploy-pipe-yahoo-relay-secrets-into-railway-env-upsert: 2026-06-20T14:00:00Z
+activate-yahoo-relay-railway-env-vars-now-set: 2026-06-20T15:00:00Z
