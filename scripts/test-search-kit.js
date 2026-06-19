@@ -4,11 +4,12 @@
 // fails (which would mean our integration is broken, not Brave's).
 //
 // Notes:
-// - Requires BRAVE_API_KEY for the live calls. Without it the handlers throw
-//   503 ("not configured") and we report those as tolerated upstream errors,
-//   the same way test-macro-kit.js handles a missing FRED_API_KEY.
-// - The validation block does NOT depend on BRAVE_API_KEY — those asserts run
-//   even on PR previews that don't have the secret.
+// - The validation block always runs — no key, no network required.
+// - Live calls are OPT-IN via BRAVE_LIVE_TEST=1. Every `[test]` CI run firing
+//   four Brave calls (4 routes × ~200 [test] commits/month) burns the Brave
+//   subscription with traffic the daily paid-canary already covers post-deploy.
+//   Local devs and special verification runs can still set BRAVE_LIVE_TEST=1
+//   alongside BRAVE_API_KEY to exercise the real integration.
 import { SEARCH_TOOLS } from "../src/tools/search.js";
 
 const h = (slug) => SEARCH_TOOLS.find((t) => t.slug === slug).handler;
@@ -43,37 +44,45 @@ async function live(slug, args, check, label) {
   }
 }
 
-// "agent402" is a high-uniqueness brand string that should hit our own site as
-// one of the top results — a useful smoke that Brave's index is fresh and
-// our parsing pulls the documented fields.
-await live("search", { q: "agent402.tools", count: 3 },
-  (r) => r.query === "agent402.tools" && Array.isArray(r.results) && r.results.length > 0 && typeof r.results[0].title === "string" && typeof r.results[0].url === "string",
-  "search agent402.tools count=3");
+// Live calls are opt-in. Every [test] CI run otherwise burns 4 Brave calls;
+// the daily paid-canary (scripts/paid-canary.js) already exercises the real
+// integration post-deploy and is the system-of-record for "Brave still works".
+if (process.env.BRAVE_LIVE_TEST === "1") {
+  // "agent402" is a high-uniqueness brand string that should hit our own site as
+  // one of the top results — a useful smoke that Brave's index is fresh and
+  // our parsing pulls the documented fields.
+  await live("search", { q: "agent402.tools", count: 3 },
+    (r) => r.query === "agent402.tools" && Array.isArray(r.results) && r.results.length > 0 && typeof r.results[0].title === "string" && typeof r.results[0].url === "string",
+    "search agent402.tools count=3");
 
-// Freshness filter exercises the optional knob. "Federal Reserve" is a
-// near-guaranteed news producer; pw (past week) should always return hits.
-await live("search-news", { q: "Federal Reserve", count: 5, freshness: "pw" },
-  (r) => r.query === "Federal Reserve" && Array.isArray(r.results) && r.results.length > 0 && r.results.every((x) => typeof x.url === "string"),
-  "search-news Federal Reserve freshness=pw");
+  // Freshness filter exercises the optional knob. "Federal Reserve" is a
+  // near-guaranteed news producer; pw (past week) should always return hits.
+  await live("search-news", { q: "Federal Reserve", count: 5, freshness: "pw" },
+    (r) => r.query === "Federal Reserve" && Array.isArray(r.results) && r.results.length > 0 && r.results.every((x) => typeof x.url === "string"),
+    "search-news Federal Reserve freshness=pw");
 
-// Image search with strict safesearch (default). A landmark query is a stable
-// smoke — every result should include both a thumbnail and a source page URL.
-await live("search-images", { q: "golden gate bridge", count: 3 },
-  (r) => r.query === "golden gate bridge" && Array.isArray(r.results) && r.results.length > 0 && r.results.every((x) => typeof x.thumbnail === "string" && typeof x.source === "string"),
-  "search-images golden gate bridge count=3");
+  // Image search with strict safesearch (default). A landmark query is a stable
+  // smoke — every result should include both a thumbnail and a source page URL.
+  await live("search-images", { q: "golden gate bridge", count: 3 },
+    (r) => r.query === "golden gate bridge" && Array.isArray(r.results) && r.results.length > 0 && r.results.every((x) => typeof x.thumbnail === "string" && typeof x.source === "string"),
+    "search-images golden gate bridge count=3");
 
-// Suggest should expand a brand prefix into completions. We don't assert any
-// specific suggestion (Brave can re-rank), just that we get a non-empty array
-// of strings.
-await live("search-suggest", { q: "agent4", count: 5 },
-  (r) => r.query === "agent4" && Array.isArray(r.suggestions) && r.suggestions.length > 0 && r.suggestions.every((s) => typeof s === "string"),
-  "search-suggest agent4 count=5");
+  // Suggest should expand a brand prefix into completions. We don't assert any
+  // specific suggestion (Brave can re-rank), just that we get a non-empty array
+  // of strings.
+  await live("search-suggest", { q: "agent4", count: 5 },
+    (r) => r.query === "agent4" && Array.isArray(r.suggestions) && r.suggestions.length > 0 && r.suggestions.every((s) => typeof s === "string"),
+    "search-suggest agent4 count=5");
+} else {
+  console.log("(skipping live Brave calls — set BRAVE_LIVE_TEST=1 to enable; paid-canary covers post-deploy verification)");
+}
 
 console.log(`\nvalidation asserts failed: ${assertFail} | live ok: ${liveOk} | live upstream-errors (tolerated): ${liveErr}`);
-// Soft-fail mode: if every live call returned 503 "not configured" (i.e., the
-// secret isn't set in this CI job), pass on validation asserts alone. If the
-// secret IS set, require at least one live success — that's the only way to
-// catch a real integration regression.
+// Soft-fail mode: validation asserts are the always-on gate. Live calls only
+// fail the suite when BRAVE_LIVE_TEST=1 was explicitly requested AND the key is
+// set AND every live call failed — that combination genuinely means a broken
+// integration. Without the opt-in we trust the paid-canary's daily live check.
+const liveOptIn = process.env.BRAVE_LIVE_TEST === "1";
 const keyConfigured = !!process.env.BRAVE_API_KEY;
-if (assertFail > 0 || (keyConfigured && liveOk === 0)) { console.error("search-kit: FAILED"); process.exit(1); }
+if (assertFail > 0 || (liveOptIn && keyConfigured && liveOk === 0)) { console.error("search-kit: FAILED"); process.exit(1); }
 console.log("search-kit: OK");
