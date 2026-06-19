@@ -72,6 +72,8 @@ await check("roman", { value: "MMXXIV" }, (o) => o.result === 2024, "roman→int
 await check("calc", { expr: "2 + 3 * (4 - 1) ^ 2" }, (o) => o.result === 29);
 await check("calc", { expr: "-5 + 10 / 2" }, (o) => o.result === 0, "unary minus");
 await check("calc", { expr: "2 ^ 3 ^ 2" }, (o) => o.result === 512, "right-assoc ^");
+await check("calc", { expression: "7 * 6" }, (o) => o.result === 42, "alias: expression");
+await check("calc", { formula: "100 / 4" }, (o) => o.result === 25, "alias: formula");
 await check("stats", { numbers: [2, 4, 4, 4, 5, 5, 7, 9] }, (o) => o.mean === 5 && o.median === 4.5 && o.mode === 4 && o.stddev === 2);
 await check("unit-convert", { value: 100, from: "f", to: "c" }, (o) => Math.abs(o.result - 37.7778) < 0.01);
 await check("unit-convert", { value: 1, from: "km", to: "m" }, (o) => o.result === 1000, "km→m");

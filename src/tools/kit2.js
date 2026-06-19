@@ -691,7 +691,14 @@ const math = [
     description: "Safely evaluate an arithmetic expression (+ - * / % ^ and parentheses). No code execution — a real parser, not eval.",
     tags: ["calc", "math", "expression", "arithmetic"],
     discovery: { bodyType: "json", input: { expr: "2 + 3 * (4 - 1) ^ 2" }, inputSchema: { properties: { expr: { type: "string" } }, required: ["expr"] }, output: { example: { result: 29 } } },
-    handler: (i) => ({ result: evalExpr(cap(need(i, "expr"), 1000, "expr").trim()) }),
+    handler: (i) => {
+      // Accept any reasonable "expression" alias — analytics shows callers send `expression` / `formula`.
+      const raw = i.expr ?? i.expression ?? i.formula;
+      if (typeof raw !== "string" || !raw) {
+        throw bad('Missing "expr". Send {"expr":"2 + 3 * 4"} — alternate fields expression/formula are also accepted.');
+      }
+      return { result: evalExpr(cap(raw, 1000, "expr").trim()) };
+    },
   },
   {
     route: "POST /api/stats", name: "Statistics", slug: "stats", category: "math", price: "$0.001",
