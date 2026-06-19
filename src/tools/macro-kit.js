@@ -445,7 +445,7 @@ const FRED_UNITS = new Set(["lin", "chg", "ch1", "pch", "pc1", "pca", "cca", "lo
 // monthly, quarterly, etc.).
 const FRED_FREQ = new Set(["d", "w", "bw", "m", "q", "sa", "a", "wef", "weth", "wew", "wetu", "wem", "wesu", "wesa", "bwew", "bwem"]);
 
-async function fredObservations({ seriesId, startDate, endDate, limit, units, frequency }) {
+async function fredObservations({ seriesId, startDate, endDate, limit, units, frequency, latest = false }) {
   const key = requireFredKey();
   const qs = new URLSearchParams({ series_id: seriesId, api_key: key, file_type: "json" });
   if (startDate) qs.set("observation_start", startDate);
@@ -453,12 +453,17 @@ async function fredObservations({ seriesId, startDate, endDate, limit, units, fr
   if (limit) qs.set("limit", String(limit));
   if (units) qs.set("units", units);
   if (frequency) qs.set("frequency", frequency);
-  qs.set("sort_order", "asc");
+  // Default to ascending (caller wants a chronological window). For "trailing N
+  // most-recent" callers (cpi-yoy, fed-funds, etc.), `latest: true` flips to
+  // descending so the limit slices the *newest* N, then we reverse client-side
+  // to restore chronological order for the consumer.
+  qs.set("sort_order", latest ? "desc" : "asc");
   const j = await fredGetJson(`${FRED_BASE}/series/observations?${qs}`);
   if (j?.error_code) throw bad(`FRED upstream error: ${j.error_message || "unknown"}`, 502);
-  const obs = (j?.observations ?? [])
+  let obs = (j?.observations ?? [])
     .filter((o) => o.value !== ".")
     .map((o) => ({ date: o.date, value: Number(o.value) }));
+  if (latest) obs = obs.reverse();
   return obs;
 }
 
@@ -618,7 +623,7 @@ MACRO_TOOLS.push(
       output: { example: { date: "2026-05-01", value: 0.43, triggered: false, threshold: 0.5, source: "FRED SAHMREALTIME" } },
     },
     handler: async () => {
-      const obs = await fredObservations({ seriesId: "SAHMREALTIME", limit: 1 });
+      const obs = await fredObservations({ seriesId: "SAHMREALTIME", limit: 1, latest: true });
       if (!obs.length) throw bad("FRED SAHMREALTIME returned no observations", 502);
       const last = obs[obs.length - 1];
       return {
@@ -640,7 +645,7 @@ MACRO_TOOLS.push(
       output: { example: { date: "2026-05-01", inflationYoYPct: 3.4, trailing12mo: [{ date: "2025-06-01", value: 3.0 }], source: "FRED CPIAUCSL (BLS)" } },
     },
     handler: async () => {
-      const obs = await fredObservations({ seriesId: "CPIAUCSL", units: "pc1", limit: 13 });
+      const obs = await fredObservations({ seriesId: "CPIAUCSL", units: "pc1", limit: 13, latest: true });
       if (!obs.length) throw bad("FRED CPIAUCSL returned no observations", 502);
       const last = obs[obs.length - 1];
       return {
@@ -665,7 +670,7 @@ MACRO_TOOLS.push(
     },
     handler: async (i) => {
       const months = Math.min(Math.max(parseInt(i.months, 10) || 12, 1), 120);
-      const obs = await fredObservations({ seriesId: "UNRATE", limit: months });
+      const obs = await fredObservations({ seriesId: "UNRATE", limit: months, latest: true });
       if (!obs.length) throw bad("FRED UNRATE returned no observations", 502);
       const last = obs[obs.length - 1];
       return {
@@ -690,7 +695,7 @@ MACRO_TOOLS.push(
     },
     handler: async (i) => {
       const days = Math.min(Math.max(parseInt(i.days, 10) || 30, 1), 365);
-      const obs = await fredObservations({ seriesId: "DFF", limit: days });
+      const obs = await fredObservations({ seriesId: "DFF", limit: days, latest: true });
       if (!obs.length) throw bad("FRED DFF returned no observations", 502);
       const last = obs[obs.length - 1];
       return {

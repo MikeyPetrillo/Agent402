@@ -70,14 +70,19 @@ if (process.env.FRED_API_KEY) {
     (r) => r.id === "UNRATE" && r.frequency && r.observationStart, "fred-series-info UNRATE");
   await live("fred-release-calendar", { days: 14 },
     (r) => Array.isArray(r.releases), "fred-release-calendar 14d (may be empty on quiet weeks)");
+  // For the "latest reading" tools, assert the returned date is recent (within the
+  // last 18 months). Catches the bug where sort_order=asc + limit=N returned the
+  // *oldest* N observations (1948-vintage data) instead of the newest.
+  const RECENT_FLOOR = new Date(Date.now() - 18 * 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  const recent = (d) => typeof d === "string" && d >= RECENT_FLOOR;
   await live("sahm-rule", {},
-    (r) => typeof r.value === "number" && typeof r.triggered === "boolean", "sahm-rule SAHMREALTIME");
+    (r) => typeof r.value === "number" && typeof r.triggered === "boolean" && recent(r.date), "sahm-rule SAHMREALTIME (date must be recent)");
   await live("cpi-yoy", {},
-    (r) => typeof r.inflationYoYPct === "number" && Array.isArray(r.trailing12mo), "cpi-yoy CPIAUCSL pc1");
+    (r) => typeof r.inflationYoYPct === "number" && Array.isArray(r.trailing12mo) && recent(r.date), "cpi-yoy CPIAUCSL pc1 (date must be recent)");
   await live("unemployment-rate", { months: 6 },
-    (r) => typeof r.current === "number" && Array.isArray(r.history) && r.history.length > 0, "unemployment-rate UNRATE 6mo");
+    (r) => typeof r.current === "number" && Array.isArray(r.history) && r.history.length > 0 && recent(r.date), "unemployment-rate UNRATE 6mo (date must be recent)");
   await live("fed-funds", { days: 10 },
-    (r) => typeof r.current === "number" && Array.isArray(r.history) && r.history.length > 0, "fed-funds DFF 10d");
+    (r) => typeof r.current === "number" && Array.isArray(r.history) && r.history.length > 0 && recent(r.date), "fed-funds DFF 10d (date must be recent)");
 } else {
   console.log("  FRED_API_KEY is NOT set — verifying each FRED tool returns the documented 503");
   for (const slug of ["fred-series", "fred-search", "fred-series-info", "fred-release-calendar", "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds"]) {
