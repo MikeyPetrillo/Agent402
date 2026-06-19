@@ -1,6 +1,6 @@
 // Paid-path canary — buys ONE tool from each live-data kit to prove that
 // *buying* still settles end-to-end AND that each kit's handler still
-// delivers a documented payload. Total spend: ~$0.018 per run (six tools).
+// delivers a documented payload. Total spend: ~$0.027 per run (six tools).
 //
 // Deliberately ordered cheapest → most-likely-to-be-flaky so a fast-fail on
 // the baseline aborts the rest. Each tool has a strict shape check; a 200
@@ -49,11 +49,14 @@ const TOOLS = [
   },
   {
     kit: "search",
-    path: "/api/search-suggest?q=bitcoin",
+    path: "/api/search?q=bitcoin&count=1",
     method: "GET",
-    priceUsd: 0.001,
-    // Brave Autocomplete always returns >=1 suggestion for a popular term.
-    check: (r) => (Array.isArray(r.suggestions) && r.suggestions.length > 0) || `expected non-empty suggestions array, got ${JSON.stringify(r).slice(0, 80)}`,
+    priceUsd: 0.01,
+    // Brave Web Search returns >=1 result for a popular term. Swapped from
+    // /api/search-suggest after canary surfaced that Suggest is on a different
+    // Brave subscription tier than Web Search — the deployment's BRAVE_API_KEY
+    // is authorized for /web/search but not /suggest/search.
+    check: (r) => (Array.isArray(r.results) && r.results.length > 0) || `expected non-empty results array, got ${JSON.stringify(r).slice(0, 80)}`,
   },
   {
     kit: "macro",
