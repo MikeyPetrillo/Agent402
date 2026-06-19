@@ -450,3 +450,427 @@ export const EDGAR_TOOLS = [
     },
   },
 ];
+
+// ---------------------------------------------------------------------------
+// EDGAR full-text search backend (efts.sec.gov)
+//
+// One endpoint powers three of the next four tools: insider-trades (forms=4 +
+// ciks=COMPANY), recent-ipos (forms=S-1 + date range), and the general
+// full-text search. Form 4 is filed by each insider's OWN CIK — not the
+// company's — so it does NOT appear in the company's submissions feed. The
+// efts.sec.gov endpoint indexes by *subject company* CIK, which is the only
+// single-call path to "all insider trades against Apple".
+// ---------------------------------------------------------------------------
+
+function isoDate(d) { return new Date(d).toISOString().slice(0, 10); }
+
+// Map an efts hit to a stable, agent-friendly row. The raw hit shape has
+// _source with adsh (accession), display_names (which embed the ticker in
+// parens), and various other fields with under_score names.
+function mapEftsHit(hit) {
+  const s = hit?._source ?? {};
+  const acc = s.adsh ?? null;
+  const cik = Array.isArray(s.ciks) && s.ciks.length ? padCik(s.ciks[0]) : null;
+  const cikInt = cik ? parseInt(cik, 10) : null;
+  // _id is "<accession>:<filename>" — the filename is the primary doc.
+  const id = hit?._id ?? "";
+  const primaryDoc = id.includes(":") ? id.split(":").slice(1).join(":") : null;
+  const accDir = acc ? acc.replace(/-/g, "") : null;
+  const url = cikInt && accDir && primaryDoc
+    ? `https://www.sec.gov/Archives/edgar/data/${cikInt}/${accDir}/${primaryDoc}`
+    : null;
+  return {
+    accessionNumber: acc,
+    form: s.form ?? null,
+    fileType: s.file_type ?? null,
+    fileDescription: s.file_description ?? null,
+    filedDate: s.file_date ?? null,
+    cik,
+    ciks: Array.isArray(s.ciks) ? s.ciks.map(padCik).filter(Boolean) : [],
+    displayNames: Array.isArray(s.display_names) ? s.display_names : [],
+    primaryDocument: primaryDoc,
+    url,
+  };
+}
+
+// efts.sec.gov requires the same User-Agent policy as data.sec.gov. Same
+// helper, different base URL.
+async function eftsSearch({ q, forms, ciks, startdt, enddt, locationCode, from = 0 }) {
+  const qs = new URLSearchParams();
+  if (q) qs.set("q", q);
+  if (forms) qs.set("forms", forms);
+  if (ciks) qs.set("ciks", ciks);
+  if (locationCode) qs.set("locationCode", locationCode);
+  if (startdt && enddt) {
+    qs.set("dateRange", "custom");
+    qs.set("startdt", startdt);
+    qs.set("enddt", enddt);
+  }
+  if (from) qs.set("from", String(from));
+  const url = `https://efts.sec.gov/LATEST/search-index?${qs}`;
+  return edgarGetJson(url);
+}
+
+// ---------------------------------------------------------------------------
+// 13F-HR holdings parser (informationtable.xml)
+//
+// The 13F holdings table is a standard SEC XML attachment named
+// "*informationtable*.xml" inside the filing's accession archive. We list the
+// archive via index.json, find the table, fetch the XML, and parse the
+// well-known <infoTable> blocks (the format is stable, and pulling in a full
+// XML parser for one repeating shape isn't worth it).
+// ---------------------------------------------------------------------------
+
+function pickXml(re, str) {
+  const m = str.match(re);
+  return m ? m[1].trim() : null;
+}
+
+// Pull the first occurrence of a given child tag (namespace-agnostic) from a
+// parent block. Lets us tolerate variants like <ns1:nameOfIssuer>...</...>
+// that some filers produce.
+function xmlChild(parent, tagName) {
+  const re = new RegExp(`<(?:[A-Za-z0-9_]+:)?${tagName}>([\\s\\S]*?)</(?:[A-Za-z0-9_]+:)?${tagName}>`, "i");
+  return pickXml(re, parent);
+}
+
+// SEC Form 13F's <value> field unit changed effective 2023-01-03: pre-cutoff
+// it's thousands of USD, post-cutoff it's whole USD. Pick the multiplier from
+// the filing's reportDate so callers see actual dollars either way.
+function valueMultiplierFor(reportDate) {
+  if (typeof reportDate !== "string") return 1000; // assume old format if unknown
+  return reportDate >= "2023-01-03" ? 1 : 1000;
+}
+
+function parse13fInformationTable(xml, reportDate) {
+  const mult = valueMultiplierFor(reportDate);
+  // Each holding is one <infoTable>...</infoTable> block. Namespace-agnostic.
+  const blockRe = /<(?:[A-Za-z0-9_]+:)?infoTable>([\s\S]*?)<\/(?:[A-Za-z0-9_]+:)?infoTable>/gi;
+  const rows = [];
+  for (const m of xml.matchAll(blockRe)) {
+    const block = m[1];
+    const rawValue = xmlChild(block, "value");
+    const shrs = xmlChild(block, "sshPrnamt");
+    const shrsType = xmlChild(block, "sshPrnamtType");
+    const valNum = rawValue != null ? Number(rawValue) : null;
+    rows.push({
+      issuer: xmlChild(block, "nameOfIssuer"),
+      titleOfClass: xmlChild(block, "titleOfClass"),
+      cusip: xmlChild(block, "cusip"),
+      // valueUsd: whole USD regardless of filing era. valueRaw: the XML's
+      // literal value field (in whatever unit that era used) for audit.
+      valueUsd: valNum != null ? valNum * mult : null,
+      valueRaw: valNum,
+      shares: shrs != null ? Number(shrs) : null,
+      sharesOrPrincipalAmountType: shrsType,
+      putCall: xmlChild(block, "putCall"),
+      investmentDiscretion: xmlChild(block, "investmentDiscretion"),
+      votingSole: xmlChild(block, "Sole") != null ? Number(xmlChild(block, "Sole")) : null,
+      votingShared: xmlChild(block, "Shared") != null ? Number(xmlChild(block, "Shared")) : null,
+      votingNone: xmlChild(block, "None") != null ? Number(xmlChild(block, "None")) : null,
+    });
+  }
+  return rows;
+}
+
+async function fetchInformationTableUrl(cikInt, accession) {
+  const accDir = accession.replace(/-/g, "");
+  const indexUrl = `https://www.sec.gov/Archives/edgar/data/${cikInt}/${accDir}/index.json`;
+  const idx = await edgarGetJson(indexUrl);
+  const items = idx?.directory?.item ?? [];
+  // SEC only standardizes the cover-page filename ("primary_doc.xml"). The
+  // information-table XML can be named various things — sometimes
+  // "informationtable.xml", sometimes a numeric form code like "53405.xml"
+  // (e.g. Berkshire's recent filings). Strategy:
+  //   1. Prefer an .xml whose name contains "informationtable" or "infotable".
+  //   2. Otherwise, pick the largest .xml that ISN'T primary_doc.xml — the
+  //      cover page is tiny (~5KB), the table is much larger (10s-100s KB).
+  const xmls = items.filter((it) => {
+    const n = String(it?.name ?? "").toLowerCase();
+    return n.endsWith(".xml") && !n.includes("index");
+  });
+  const namedHit = xmls.find((it) => {
+    const n = String(it.name).toLowerCase();
+    return n.includes("informationtable") || n.includes("infotable");
+  });
+  if (namedHit) {
+    return `https://www.sec.gov/Archives/edgar/data/${cikInt}/${accDir}/${namedHit.name}`;
+  }
+  const candidates = xmls
+    .filter((it) => String(it.name).toLowerCase() !== "primary_doc.xml")
+    .map((it) => ({ name: it.name, size: parseInt(it.size, 10) || 0 }))
+    .sort((a, b) => b.size - a.size);
+  if (!candidates.length) return null;
+  return `https://www.sec.gov/Archives/edgar/data/${cikInt}/${accDir}/${candidates[0].name}`;
+}
+
+async function fetchXmlText(url) {
+  const safeUrl = await assertPublicUrl(url);
+  let res;
+  try {
+    res = await fetch(safeUrl, {
+      headers: { "User-Agent": edgarUserAgent(), Accept: "application/xml,text/xml,*/*" },
+    });
+  } catch (e) {
+    throw bad(`EDGAR XML fetch failed: ${e.message}`, 504);
+  }
+  if (!res.ok) {
+    if (res.status === 404) throw bad("EDGAR XML attachment not found (filing may not have the expected layout)", 422);
+    throw bad(`EDGAR XML HTTP ${res.status}`, res.status >= 500 ? 502 : 422);
+  }
+  return await res.text();
+}
+
+EDGAR_TOOLS.push(
+  {
+    route: "GET /api/edgar-insider-trades",
+    name: "EDGAR insider trades (Form 4)",
+    slug: "edgar-insider-trades",
+    category: "data",
+    price: "$0.005",
+    description:
+      "Recent Form 4 insider transactions filed against a company (officer, director, or 10% holder trades). Backed by EDGAR's full-text search (efts.sec.gov) filtered by subject-company CIK — Form 4 is owned by each insider's CIK, not the company's, so this is the only single-call path. ?ticker=AAPL&days=30",
+    tags: ["edgar", "sec", "insider", "form-4", "trades", "officers", "directors", "transactions"],
+    discovery: {
+      input: { ticker: "AAPL", days: 30 },
+      inputSchema: {
+        properties: {
+          ticker: { type: "string", description: "US stock ticker (alternative to cik)" },
+          cik: { type: "string", description: "SEC CIK of the subject company (alternative to ticker)" },
+          days: { type: "number", description: "Lookback window in days, 1-365 (default 30)" },
+          limit: { type: "number", description: "Max filings to return, 1-100 (default 25)" },
+        },
+      },
+      output: {
+        example: {
+          cik: "0000320193",
+          name: "Apple Inc.",
+          windowDays: 30,
+          total: 8,
+          returned: 8,
+          trades: [
+            { accessionNumber: "0001127602-25-009999", form: "4", filedDate: "2025-11-04", cik: "0001214128", displayNames: ["COOK TIMOTHY D (CIK 0001214128)"], url: "https://www.sec.gov/Archives/edgar/data/1214128/000112760225009999/xslF345X05/wf-form4.xml", primaryDocument: "xslF345X05/wf-form4.xml" },
+          ],
+        },
+      },
+    },
+    handler: async (i) => {
+      const { cik, name } = await resolveCompany({ ticker: i.ticker, cik: i.cik });
+      const days = clampInt(i.days, 30, 1, 365);
+      const limit = clampInt(i.limit, 25, 1, 100);
+      const enddt = isoDate(Date.now());
+      const startdt = isoDate(Date.now() - days * 86400 * 1000);
+      const j = await eftsSearch({ forms: "4", ciks: cik, startdt, enddt });
+      const hits = j?.hits?.hits ?? [];
+      const total = j?.hits?.total?.value ?? hits.length;
+      const trades = hits.slice(0, limit).map(mapEftsHit);
+      return {
+        cik,
+        name,
+        windowDays: days,
+        startDate: startdt,
+        endDate: enddt,
+        total,
+        returned: trades.length,
+        trades,
+        source: "SEC EDGAR full-text search (efts.sec.gov, public domain)",
+      };
+    },
+  },
+  {
+    route: "GET /api/edgar-13f-holdings",
+    name: "EDGAR 13F-HR holdings (institutional positions)",
+    slug: "edgar-13f-holdings",
+    category: "data",
+    price: "$0.015",
+    description:
+      "Top holdings from an institutional investment manager's most recent 13F-HR filing (managers >$100M AUM file quarterly). Parses the standard SEC informationtable.xml attached to the filing — returns issuer, CUSIP, shares, USD value, and voting authority for each position. Sorted by USD value, descending. Source: data.sec.gov + filing archive. ?cik=1067983 (Berkshire) or ?ticker=BRK-B",
+    tags: ["edgar", "sec", "13F", "13F-HR", "holdings", "institutional", "fund", "hedge-fund", "portfolio"],
+    discovery: {
+      input: { cik: "1067983", limit: 10 },
+      inputSchema: {
+        properties: {
+          cik: { type: "string", description: "SEC CIK of the institutional manager (e.g. 1067983 = Berkshire Hathaway)" },
+          ticker: { type: "string", description: "US ticker of a publicly-traded manager (alternative to cik; many funds aren't public)" },
+          limit: { type: "number", description: "Top N holdings by USD value, 1-500 (default 50)" },
+        },
+      },
+      output: {
+        example: {
+          cik: "0001067983",
+          managerName: "Berkshire Hathaway Inc",
+          accessionNumber: "0000950123-25-001234",
+          filedDate: "2025-11-14",
+          reportDate: "2025-09-30",
+          informationTableUrl: "https://www.sec.gov/Archives/edgar/data/1067983/000095012325001234/informationtable.xml",
+          totalHoldings: 38,
+          returned: 10,
+          totalValueUsd: 312456000000,
+          holdings: [
+            { issuer: "APPLE INC", titleOfClass: "COM", cusip: "037833100", valueUsd: 176558000000, valueRaw: 176558000000, shares: 905560000, sharesOrPrincipalAmountType: "SH", putCall: null, investmentDiscretion: "DFND", votingSole: 905560000, votingShared: 0, votingNone: 0 },
+          ],
+        },
+      },
+    },
+    handler: async (i) => {
+      const { cik, name } = await resolveCompany({ ticker: i.ticker, cik: i.cik });
+      const limit = clampInt(i.limit, 50, 1, 500);
+      const sub = await edgarGetJson(`https://data.sec.gov/submissions/CIK${cik}.json`);
+      const recent = sub?.filings?.recent;
+      if (!recent || !Array.isArray(recent.form)) throw bad("Manager has no recent filings", 422);
+      const idx = recent.form.findIndex((f) => String(f).toUpperCase() === "13F-HR");
+      if (idx < 0) throw bad(`Manager has no recent 13F-HR filings — confirm CIK ${cik} is an institutional investment manager`, 422);
+      const accession = recent.accessionNumber[idx];
+      const filedDate = recent.filingDate[idx];
+      const reportDate = recent.reportDate[idx];
+      const cikInt = parseInt(cik, 10);
+      const tableUrl = await fetchInformationTableUrl(cikInt, accession);
+      if (!tableUrl) throw bad("13F-HR filing has no informationtable.xml attachment (older filing format?)", 502);
+      const xml = await fetchXmlText(tableUrl);
+      const all = parse13fInformationTable(xml, reportDate);
+      all.sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
+      const totalValueUsd = all.reduce((acc, r) => acc + (r.valueUsd ?? 0), 0);
+      return {
+        cik,
+        managerName: sub?.name ?? name ?? null,
+        accessionNumber: accession,
+        filedDate,
+        reportDate,
+        informationTableUrl: tableUrl,
+        totalHoldings: all.length,
+        returned: Math.min(all.length, limit),
+        totalValueUsd,
+        holdings: all.slice(0, limit),
+        source: "SEC EDGAR 13F-HR informationtable.xml (public domain)",
+      };
+    },
+  },
+  {
+    route: "GET /api/edgar-recent-ipos",
+    name: "EDGAR recent IPO filings (S-1 / 424B4)",
+    slug: "edgar-recent-ipos",
+    category: "data",
+    price: "$0.005",
+    description:
+      "Recently-filed S-1 (initial registration) or 424B4 (final prospectus — actual priced IPO) filings across all US issuers. Default returns S-1 filings (companies preparing to IPO) in the last 30 days; pass form=424B4 for actual IPOs that priced. Source: EDGAR full-text search. ?days=30&form=S-1",
+    tags: ["edgar", "sec", "ipo", "S-1", "424B4", "prospectus", "registration", "new-listings"],
+    discovery: {
+      input: { days: 30, form: "S-1", limit: 25 },
+      inputSchema: {
+        properties: {
+          days: { type: "number", description: "Lookback window in days, 1-365 (default 30)" },
+          form: { type: "string", description: 'Form type. "S-1" = initial registration (default). "424B4" = final prospectus (actual priced IPOs). "S-1/A" = amended registration.' },
+          limit: { type: "number", description: "Max filings, 1-200 (default 25)" },
+        },
+      },
+      output: {
+        example: {
+          form: "S-1",
+          windowDays: 30,
+          startDate: "2025-10-19",
+          endDate: "2025-11-18",
+          total: 142,
+          returned: 25,
+          filings: [
+            { accessionNumber: "0001213900-25-099999", form: "S-1", filedDate: "2025-11-17", cik: "0001999888", displayNames: ["Example Newco Inc."], url: "https://www.sec.gov/Archives/edgar/data/1999888/000121390025099999/exfiling.htm", primaryDocument: "exfiling.htm" },
+          ],
+        },
+      },
+    },
+    handler: async (i) => {
+      const form = String(i.form ?? "S-1").trim().toUpperCase();
+      if (!/^[A-Z0-9./\-]{1,15}$/.test(form)) throw bad("form looks malformed");
+      const days = clampInt(i.days, 30, 1, 365);
+      const limit = clampInt(i.limit, 25, 1, 200);
+      const enddt = isoDate(Date.now());
+      const startdt = isoDate(Date.now() - days * 86400 * 1000);
+      const j = await eftsSearch({ forms: form, startdt, enddt });
+      const hits = j?.hits?.hits ?? [];
+      const total = j?.hits?.total?.value ?? hits.length;
+      const filings = hits.slice(0, limit).map(mapEftsHit);
+      return {
+        form,
+        windowDays: days,
+        startDate: startdt,
+        endDate: enddt,
+        total,
+        returned: filings.length,
+        filings,
+        source: "SEC EDGAR full-text search (efts.sec.gov, public domain)",
+      };
+    },
+  },
+  {
+    route: "GET /api/edgar-search",
+    name: "EDGAR full-text search",
+    slug: "edgar-search",
+    category: "data",
+    price: "$0.010",
+    description:
+      'General-purpose full-text search across every SEC filing since 2001. Find any phrase in any filing — material-weakness language in 10-Ks, going-concern in 10-Qs, "Russia" exposure across all forms. Supports form-type, CIK, US-state, and date-window filters. Source: EDGAR full-text search (efts.sec.gov). ?q=going+concern&forms=10-Q&days=30',
+    tags: ["edgar", "sec", "search", "full-text", "filings", "10-K", "10-Q", "8-K", "screen"],
+    discovery: {
+      input: { q: "going concern", forms: "10-Q", days: 90, limit: 5 },
+      inputSchema: {
+        properties: {
+          q: { type: "string", description: 'Search phrase (quote-wrap for exact match, e.g. "material weakness")' },
+          forms: { type: "string", description: 'Comma-separated form filter, e.g. "10-K,10-Q" or "8-K"' },
+          ticker: { type: "string", description: "Restrict to a single company by ticker" },
+          cik: { type: "string", description: "Restrict to a single company by CIK" },
+          days: { type: "number", description: "Lookback window in days, 1-3650 (default unset = all-time)" },
+          locationCode: { type: "string", description: 'Two-letter US state code to filter by issuer location (e.g. "CA")' },
+          limit: { type: "number", description: "Max hits to return, 1-100 (default 25)" },
+        },
+        required: ["q"],
+      },
+      output: {
+        example: {
+          q: "going concern",
+          forms: "10-Q",
+          windowDays: 90,
+          total: 1287,
+          returned: 5,
+          hits: [
+            { accessionNumber: "0001213900-25-088888", form: "10-Q", filedDate: "2025-11-10", cik: "0001234567", displayNames: ["Example Distressed Co"], url: "https://www.sec.gov/Archives/edgar/data/1234567/000121390025088888/ex10q.htm", primaryDocument: "ex10q.htm" },
+          ],
+        },
+      },
+    },
+    handler: async (i) => {
+      const q = String(i.q ?? "").trim();
+      if (!q) throw bad('"q" is required');
+      if (q.length > 200) throw bad("q is too long (max 200 chars)");
+      const forms = typeof i.forms === "string" && i.forms.trim() ? i.forms.trim().toUpperCase() : null;
+      const locationCode = typeof i.locationCode === "string" && i.locationCode.trim() ? i.locationCode.trim().toUpperCase() : null;
+      if (locationCode && !/^[A-Z]{2}$/.test(locationCode)) throw bad("locationCode must be a 2-letter US state code");
+      const limit = clampInt(i.limit, 25, 1, 100);
+      let ciks = null;
+      if (i.ticker || i.cik) {
+        const r = await resolveCompany({ ticker: i.ticker, cik: i.cik });
+        ciks = r.cik;
+      }
+      let startdt = null, endd = null, days = null;
+      if (i.days != null) {
+        days = clampInt(i.days, 30, 1, 3650);
+        endd = isoDate(Date.now());
+        startdt = isoDate(Date.now() - days * 86400 * 1000);
+      }
+      const j = await eftsSearch({ q, forms, ciks, startdt, enddt: endd, locationCode });
+      const hits = j?.hits?.hits ?? [];
+      const total = j?.hits?.total?.value ?? hits.length;
+      return {
+        q,
+        forms,
+        ciks,
+        locationCode,
+        windowDays: days,
+        startDate: startdt,
+        endDate: endd,
+        total,
+        returned: Math.min(hits.length, limit),
+        hits: hits.slice(0, limit).map(mapEftsHit),
+        source: "SEC EDGAR full-text search (efts.sec.gov, public domain)",
+      };
+    },
+  },
+);
