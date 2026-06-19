@@ -10,6 +10,10 @@
 
 const BRAVE_HOST = "https://api.search.brave.com/res/v1";
 const TIMEOUT_MS = 10000;
+// Answers streams ~5s on average for single-search mode (Brave's published p50)
+// but the SSE response can run longer than the GET routes' fixed budget.
+// 20s gives Brave headroom without holding the dyno indefinitely.
+const ANSWER_TIMEOUT_MS = 20000;
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -22,6 +26,124 @@ function takeQuery(raw) {
   const q = typeof raw === "string" ? raw.trim().slice(0, 400) : "";
   if (!q) throw bad('"q" is required');
   return q;
+}
+
+// Answers is a different shape: POST to an OpenAI-compatible /chat/completions
+// endpoint, streamed SSE, with citations embedded as <citation>...</citation>
+// tags inside the assistant content. We accumulate the stream, then parse out
+// the structured citation tags into a clean { answer, citations[] } payload.
+//
+// Brave issues a DISTINCT subscription token for Answers vs Web Search, even
+// though both products live under api.search.brave.com. Same dual-key pattern
+// as FRED v1 / FRED v2 in macro-kit: separate keys gate separate product SKUs.
+// We read BRAVE_ANSWERS_API_KEY here, with a fallback to BRAVE_API_KEY so a
+// deployer who only has one combined subscription token still works.
+//
+// Unit economics (per Brave's published pricing — confirmed on dashboard):
+//   • $0.004 base per query
+//   • $0.005 per 1M input tokens  (we cap input at 400 chars ≈ ~100 tokens)
+//   • $0.005 per 1M output tokens (typical answer ≈ 1000-1500 tokens)
+// Expected cost per call ≈ $0.012; worst-case (long answer) ≈ $0.025.
+// We charge $0.03 → average ~60% margin, still profitable on tail-length cases.
+async function braveAnswerPost(query, opts = {}) {
+  const token = process.env.BRAVE_ANSWERS_API_KEY || process.env.BRAVE_API_KEY;
+  if (!token) {
+    throw bad("Web answer is not configured on this deployment", 503);
+  }
+  let res;
+  try {
+    res = await fetch(`${BRAVE_HOST}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "X-Subscription-Token": token,
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: query }],
+        model: "brave",
+        // Citations require streaming per Brave's docs. We stream from the
+        // upstream and then return a single JSON envelope to the caller —
+        // the streaming is an implementation detail of the upstream API.
+        stream: true,
+        enable_citations: true,
+        enable_entities: false,
+        // research mode can take minutes — incompatible with a tool budget.
+        enable_research: false,
+        country: opts.country || "us",
+        language: opts.language || "en",
+      }),
+      signal: AbortSignal.timeout(ANSWER_TIMEOUT_MS),
+    });
+  } catch {
+    throw bad("Web answer upstream timed out", 504);
+  }
+  if (res.status === 429) throw bad("Web answer rate limit reached upstream — retry shortly", 503);
+  if (!res.ok) throw bad(`Web answer upstream error (HTTP ${res.status})`, 502);
+
+  // SSE accumulation. Each event line is `data: <json>` or `data: [DONE]`.
+  // We only care about choices[0].delta.content — Brave concatenates plain
+  // text and tag-wrapped JSON into a single string we'll post-process.
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let content = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (data === "[DONE]") continue;
+      try {
+        const chunk = JSON.parse(data);
+        const delta = chunk?.choices?.[0]?.delta?.content;
+        if (typeof delta === "string") content += delta;
+      } catch { /* ignore malformed chunks — Brave occasionally emits keep-alives */ }
+    }
+  }
+  return content;
+}
+
+// Pull the embedded <citation>...</citation> JSON blobs out of the raw answer
+// text, return clean prose + a structured citations array. Also strips
+// <usage> and <enum_item> tags so they don't bleed into the caller-visible
+// answer string. De-dupes citations by URL.
+function parseAnswer(raw) {
+  const citations = [];
+  let answer = "";
+  let last = 0;
+  for (const m of raw.matchAll(/<citation>([\s\S]*?)<\/citation>/g)) {
+    answer += raw.slice(last, m.index);
+    try {
+      const c = JSON.parse(m[1]);
+      citations.push({
+        url: typeof c.url === "string" ? c.url : null,
+        snippet: typeof c.snippet === "string" ? c.snippet : null,
+        favicon: typeof c.favicon === "string" ? c.favicon : null,
+        number: typeof c.number === "number" ? c.number : null,
+      });
+    } catch { /* skip malformed citation tag */ }
+    last = m.index + m[0].length;
+  }
+  answer += raw.slice(last);
+  // Strip remaining structural tags Brave emits inside the content stream.
+  answer = answer
+    .replace(/<usage>[\s\S]*?<\/usage>/g, "")
+    .replace(/<enum_item>[\s\S]*?<\/enum_item>/g, "")
+    .trim();
+  // De-dupe citations by URL (Brave can repeat the same source across paras).
+  const seen = new Set();
+  const unique = citations.filter((c) => {
+    if (!c.url || seen.has(c.url)) return false;
+    seen.add(c.url);
+    return true;
+  });
+  return { answer, citations: unique };
 }
 
 async function braveGet(path, params) {
@@ -236,6 +358,56 @@ export const SEARCH_TOOLS = [
       // separate subscription tier, and a flat string[] is what agents want.
       const suggestions = (data.results ?? []).slice(0, count).map((r) => r.query).filter((s) => typeof s === "string");
       return { query: q, count: suggestions.length, suggestions };
+    },
+  },
+
+  {
+    route: "GET /api/answer",
+    name: "Web answer",
+    slug: "answer",
+    category: "web",
+    // $0.03 chosen against Brave's published unit cost (~$0.012 typical /
+    // ~$0.025 long-answer worst case): ~60% margin on the average call,
+    // still profitable at the tail. See braveAnswerPost above for the math.
+    price: "$0.03",
+    description:
+      "AI-generated answer to a natural-language question, grounded in live web search results with source citations. Returns clean prose plus a structured citations array (URL, snippet, favicon) — backed by an independent search index, not the model's training data. Useful when an agent needs a synthesized answer plus the receipts to verify or follow up.",
+    tags: ["search", "answer", "ai", "rag", "citations", "research", "fresh-data"],
+    discovery: {
+      input: { q: "what is the x402 payment protocol?" },
+      inputSchema: {
+        properties: {
+          q: { type: "string", description: "Natural-language question (max 400 chars)" },
+          country: { type: "string", description: "Optional 2-letter country code (default us)" },
+          language: { type: "string", description: "Optional 2-letter language code (default en)" },
+        },
+        required: ["q"],
+      },
+      output: {
+        example: {
+          query: "what is the x402 payment protocol?",
+          answer:
+            "x402 is an open standard for internet-native, pay-per-request HTTP APIs that uses the HTTP 402 \"Payment Required\" status code to negotiate and settle micro-payments inline with the original request.",
+          citations: [
+            {
+              url: "https://www.x402.org/",
+              snippet: "x402: An open standard for internet-native payments.",
+              favicon: "https://imgs.search.brave.com/...",
+              number: 1,
+            },
+          ],
+          citationCount: 1,
+        },
+      },
+    },
+    handler: async (i) => {
+      const q = takeQuery(i.q);
+      const country = typeof i.country === "string" && /^[A-Za-z]{2}$/.test(i.country) ? i.country.toLowerCase() : undefined;
+      const language = typeof i.language === "string" && /^[A-Za-z]{2}$/.test(i.language) ? i.language.toLowerCase() : undefined;
+      const raw = await braveAnswerPost(q, { country, language });
+      const { answer, citations } = parseAnswer(raw);
+      if (!answer) throw bad("Web answer upstream returned no content", 502);
+      return { query: q, answer, citations, citationCount: citations.length };
     },
   },
 ];
