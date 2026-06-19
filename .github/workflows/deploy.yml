@@ -668,6 +668,28 @@ jobs:
           npm ci
           npm --prefix mcp ci
           node mcp/test.js
+      - name: mcp version consistency (package.json ↔ server.json)
+        # Guards against the drift that bit us once already: mcp-publisher reads
+        # server.json's version, npm reads package.json's, and the registry
+        # rejects a duplicate (name, version) at the storage layer (not the
+        # search index, so checks against the public listing can mislead).
+        # Fail CI here, before we waste a publish attempt and a version bump.
+        run: |
+          node -e '
+            const pkg = require("./mcp/package.json");
+            const srv = require("./mcp/server.json");
+            const a = pkg.version;
+            const b = srv.version;
+            const c = srv.packages && srv.packages[0] && srv.packages[0].version;
+            if (a !== b || a !== c) {
+              console.error("mcp version drift:");
+              console.error("  mcp/package.json.version         =", a);
+              console.error("  mcp/server.json.version          =", b);
+              console.error("  mcp/server.json.packages[0].ver  =", c);
+              process.exit(1);
+            }
+            console.log("mcp versions aligned at", a);
+          '
       - name: Publish agent402-mcp to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
