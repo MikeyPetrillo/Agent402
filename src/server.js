@@ -54,6 +54,7 @@ import { CRYPTO_TOOLS } from "./tools/crypto-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
+import { docsIndex, docsPage, docsApi } from "./docs.js";
 
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken } from "./pow.js";
@@ -685,6 +686,17 @@ app.get("/guides", (_req, res) => htmlCache(res, 300, 900).send(guidesIndex(BASE
 app.get("/guides/:slug", (req, res) => {
   const html = guidePage(BASE_URL, req.params.slug);
   if (!html) return res.status(404).type("html").send('<p>Guide not found. <a href="/guides">All guides</a></p>');
+  htmlCache(res, 300, 900).send(html);
+});
+// /docs hub — server-rendered from wiki/*.md (the same source of truth that
+// syncs to the GitHub wiki via CI). /docs/api is registered *before* the
+// parameterized /docs/:slug so the literal "api" path doesn't get captured
+// as a wiki slug lookup.
+app.get("/docs", (_req, res) => htmlCache(res, 300, 900).send(docsIndex(BASE_URL)));
+app.get("/docs/api", (_req, res) => htmlCache(res, 300, 900).send(docsApi(BASE_URL, Object.values(CATALOG))));
+app.get("/docs/:slug", (req, res) => {
+  const html = docsPage(BASE_URL, req.params.slug);
+  if (!html) return res.status(404).type("html").send('<p>Doc not found. <a href="/docs">All docs</a></p>');
   htmlCache(res, 300, 900).send(html);
 });
 // Top-level machine-readable service manifest — one fetch tells a discovery
