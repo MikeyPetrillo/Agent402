@@ -36,6 +36,9 @@ const NETWORK = new Set([
   "/api/edgar-company-lookup", "/api/edgar-filings", "/api/edgar-company-concept",
   "/api/edgar-company-facts", "/api/edgar-xbrl-frame",
   "/api/edgar-insider-trades", "/api/edgar-13f-holdings", "/api/edgar-recent-ipos", "/api/edgar-search",
+  // Finance-kit: Yahoo Finance chart (quote + history) and Nasdaq earnings
+  // calendar — keyless live upstreams; tolerate transient 502/503/504.
+  "/api/stock-quote", "/api/stock-history", "/api/earnings-calendar",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 

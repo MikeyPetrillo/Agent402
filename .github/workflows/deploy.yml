@@ -358,6 +358,9 @@ jobs:
         env:
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
 
+      - name: Finance-kit tests (Yahoo chart quote+history, Nasdaq earnings calendar — keyless live APIs)
+        run: node scripts/test-finance-kit.js
+
       - name: x402-kit tests (transfer-auth typed data + live Base RPC reads)
         run: node scripts/test-x402-kit.js
 
