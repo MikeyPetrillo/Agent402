@@ -250,6 +250,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -344,6 +345,9 @@ jobs:
 
       - name: Data-kit tests (barcode-lookup, fx-rate, weather-forecast — live keyless APIs)
         run: node scripts/test-data-kit.js
+
+      - name: Macro-kit tests (FRED yield curve, Treasury debt + avg rates, ECB FX series, World Bank — live keyless APIs)
+        run: node scripts/test-macro-kit.js
 
       - name: x402-kit tests (transfer-auth typed data + live Base RPC reads)
         run: node scripts/test-x402-kit.js
@@ -1074,6 +1078,7 @@ jobs:
       CDP_KEY_ID: ${{ secrets.CDP_API_KEY_ID || 'ff16e708-0590-4a24-8a17-b0e978143f68' }}
       CDP_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
       WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
       NETWORK: ${{ vars.NETWORK || 'base' }}
@@ -1090,6 +1095,7 @@ jobs:
           [ -n "$RAILWAY_API_TOKEN" ] && echo "::add-mask::$RAILWAY_API_TOKEN"
           [ -n "$CDP_KEY_SECRET" ] && echo "::add-mask::$CDP_KEY_SECRET"
           [ -n "$BRAVE_API_KEY" ] && echo "::add-mask::$BRAVE_API_KEY"
+          [ -n "$FRED_API_KEY" ] && echo "::add-mask::$FRED_API_KEY"
           [ -n "$MARKETPLACE_TOKEN" ] && echo "::add-mask::$MARKETPLACE_TOKEN"
           [ -n "$RAILWAY_API_TOKEN" ] || { echo "No Railway token provided"; exit 1; }
           [ -n "$WALLET_ADDRESS" ] || { echo "No wallet address provided"; exit 1; }
@@ -1236,6 +1242,9 @@ jobs:
           fi
           if [ -n "$BRAVE_API_KEY" ]; then
             VARS=$(echo "$VARS" | jq --arg b "$BRAVE_API_KEY" '. + {BRAVE_API_KEY:$b}')
+          fi
+          if [ -n "$FRED_API_KEY" ]; then
+            VARS=$(echo "$VARS" | jq --arg f "$FRED_API_KEY" '. + {FRED_API_KEY:$f}')
           fi
           if [ -n "$MARKETPLACE_TOKEN" ]; then
             VARS=$(echo "$VARS" | jq --arg m "$MARKETPLACE_TOKEN" '. + {MARKETPLACE_TOKEN:$m}')

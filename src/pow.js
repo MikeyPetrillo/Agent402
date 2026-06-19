@@ -58,6 +58,12 @@ export const WALLET_ONLY_SLUGS = new Set([
   "media-info", "audio-convert", "audio-normalize",
   "gov-data", "weather-alerts", "earthquakes",
   "barcode-lookup", "fx-rate", "weather-forecast",
+  "treasury-yield-curve", "treasury-yield-history", "yield-curve-spread",
+  "treasury-debt", "treasury-avg-rates",
+  "fx-historical", "fx-timeseries", "fx-dashboard",
+  "world-bank-indicator", "world-bank-search",
+  "fred-series", "fred-search", "fred-series-info", "fred-release-calendar",
+  "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds",
   // x402 payments toolkit — kept off the free connector (paid surface only).
   "x402-quote", "usdc-balance", "tx-status", "gas-estimate", "x402-verify", "transfer-authorization", "ens-resolve",
 ]);

@@ -22,6 +22,15 @@ const NETWORK = new Set([
   "/api/image-ocr",
   "/api/barcode-lookup", "/api/fx-rate", "/api/weather-forecast",
   "/api/x402-quote", "/api/usdc-balance", "/api/tx-status", "/api/gas-estimate", "/api/x402-verify", "/api/ens-resolve",
+  // Macro-kit: all routes hit live upstreams (FRED, Treasury Fiscal Data, ECB,
+  // World Bank). FRED-keyed routes return 503 without FRED_API_KEY — the
+  // 502/503/504 tolerance below covers that.
+  "/api/treasury-yield-curve", "/api/treasury-yield-history", "/api/yield-curve-spread",
+  "/api/treasury-debt", "/api/treasury-avg-rates",
+  "/api/fx-historical", "/api/fx-timeseries", "/api/fx-dashboard",
+  "/api/world-bank-indicator", "/api/world-bank-search",
+  "/api/fred-series", "/api/fred-search", "/api/fred-series-info", "/api/fred-release-calendar",
+  "/api/sahm-rule", "/api/cpi-yoy", "/api/unemployment-rate", "/api/fed-funds",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 

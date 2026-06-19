@@ -64,7 +64,7 @@ Hosted at https://agent402.tools. Maintained by Mikey Petrillo (public).
 
 ## Environment / ops (set on Railway, not in repo)
 `WALLET_ADDRESS`, `WALLET_ENS`, `NETWORK`, `CDP_API_KEY_ID/SECRET`, `FACILITATOR_URL`,
-`MARKETPLACE_TOKEN`, `GLAMA_MAINTAINER_EMAIL`, `POW_SECRET`, `BRAVE_API_KEY`. Never commit secrets or wallet keys.
+`MARKETPLACE_TOKEN`, `GLAMA_MAINTAINER_EMAIL`, `POW_SECRET`, `BRAVE_API_KEY`, `FRED_API_KEY` (macro-kit). Never commit secrets or wallet keys.
 
 ## This sandbox vs. prod
 The Claude Code **web** environment has an egress allowlist (npm + GitHub reachable;
