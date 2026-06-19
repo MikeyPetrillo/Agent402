@@ -10,6 +10,16 @@
 const TARGET = process.env.TARGET_URL || "http://localhost:3000";
 
 // Tools that reach the network/browser — lenient (need real egress).
+// Brave-backed routes — opt-in via BRAVE_LIVE_TEST=1. Every [test] CI run
+// otherwise burns the Brave subscription with calls the daily paid-canary
+// already covers post-deploy. When skipped, these routes are simply not
+// exercised by this sweep — search-kit shape/validation is covered by
+// scripts/test-search-kit.js and post-deploy by scripts/paid-canary.js.
+const BRAVE_ROUTES = new Set([
+  "/api/search", "/api/search-news", "/api/search-images", "/api/search-suggest", "/api/answer",
+]);
+const skipBrave = process.env.BRAVE_LIVE_TEST !== "1";
+
 const NETWORK = new Set([
   "/api/extract", "/api/meta", "/api/dns", "/api/render", "/api/screenshot", "/api/pdf",
   "/api/http-check", "/api/tls-cert", "/api/whois", "/api/robots-check", "/api/sitemap",
@@ -86,7 +96,9 @@ function buildGetUrl(path, op) {
   return `${TARGET}${path}${[...qs].length ? `?${qs}` : ""}`;
 }
 
+let braveSkipped = 0;
 for (const [path, methods] of paths) {
+  if (skipBrave && BRAVE_ROUTES.has(path)) { braveSkipped += Object.keys(methods).length; continue; }
   for (const [method, op] of Object.entries(methods)) {
     const cat = (op.tags && op.tags[0]) || "other";
     cats[cat] = cats[cat] || { pass: 0, total: 0 };
@@ -132,7 +144,7 @@ for (const [path, methods] of paths) {
 }
 
 const totalOps = paths.reduce((a, [, m]) => a + Object.keys(m).length, 0);
-console.log(`\nExercised ${totalOps} endpoints at ${TARGET}\n`);
+console.log(`\nExercised ${totalOps - braveSkipped} endpoints at ${TARGET}${braveSkipped ? ` (skipped ${braveSkipped} Brave route(s) — set BRAVE_LIVE_TEST=1 to include; paid-canary covers post-deploy verification)` : ""}\n`);
 for (const [cat, c] of Object.entries(cats).sort()) console.log(`  ${cat.padEnd(12)} ${c.pass}/${c.total} pure-CPU strict-pass`);
 console.log(`\n  strict (pure-CPU): ${strictPass} passed, ${strictFail} failed`);
 console.log(`  lenient (network/memory): ${lenient} exercised, ${serverErr} server errors`);
