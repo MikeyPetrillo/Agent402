@@ -38,6 +38,7 @@ const NAV_LINKS = [
   { href: "/index", label: "Index" },
   { href: "/leaderboard", label: "Leaderboard" },
   { href: "/economy", label: "Economy" },
+  { href: "/analytics", label: "Analytics" },
   { href: "/tollbooth", label: "Tollbooth" },
   { href: "/guides", label: "Guides" },
   { href: "/faq", label: "FAQ" },
@@ -74,9 +75,9 @@ export function renderFooter() {
     <a href="/tools">Tools</a><span class="sep">·</span>
     <a href="/shop">Shop</a><span class="sep">·</span>
     <a href="/docs">Docs</a><span class="sep">·</span>
-    <a href="/index">x402 Index</a><span class="sep">·</span>
-    <a href="/leaderboard">x402 Leaderboard</a><span class="sep">·</span>
-    <a href="/economy">x402 Economy</a><span class="sep">·</span>
+    <a href="/index">Index</a><span class="sep">·</span>
+    <a href="/leaderboard">Leaderboard</a><span class="sep">·</span>
+    <a href="/economy">Economy</a><span class="sep">·</span>
     <a href="/analytics">Analytics</a><span class="sep">·</span>
     <a href="/tollbooth">Tollbooth</a><span class="sep">·</span>
     <a href="/tollbooth/cloud">Tollbooth Cloud</a><span class="sep">·</span>
