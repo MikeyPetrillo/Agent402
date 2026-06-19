@@ -350,6 +350,9 @@ jobs:
       - name: Macro-kit tests (FRED yield curve, Treasury debt + avg rates, ECB FX series, World Bank — live keyless APIs)
         run: node scripts/test-macro-kit.js
 
+      - name: EDGAR-kit tests (SEC ticker→CIK, filings, XBRL company-concept/facts/frames — live keyless APIs)
+        run: node scripts/test-edgar-kit.js
+
       - name: x402-kit tests (transfer-auth typed data + live Base RPC reads)
         run: node scripts/test-x402-kit.js
 

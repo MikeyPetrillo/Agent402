@@ -32,6 +32,10 @@ const NETWORK = new Set([
   "/api/fred-series", "/api/fred-search", "/api/fred-series-info", "/api/fred-release-calendar",
   "/api/sahm-rule", "/api/cpi-yoy", "/api/unemployment-rate", "/api/fed-funds",
   "/api/fred-release-observations",
+  // EDGAR-kit: every route hits data.sec.gov, www.sec.gov, or efts.sec.gov.
+  "/api/edgar-company-lookup", "/api/edgar-filings", "/api/edgar-company-concept",
+  "/api/edgar-company-facts", "/api/edgar-xbrl-frame",
+  "/api/edgar-insider-trades", "/api/edgar-13f-holdings", "/api/edgar-recent-ipos", "/api/edgar-search",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 
