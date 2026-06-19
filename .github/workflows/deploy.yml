@@ -353,6 +353,11 @@ jobs:
       - name: EDGAR-kit tests (SEC ticker→CIK, filings, XBRL company-concept/facts/frames — live keyless APIs)
         run: node scripts/test-edgar-kit.js
 
+      - name: Search-kit tests (Brave web/news/images/suggest — validation always runs; live calls require BRAVE_API_KEY)
+        run: node scripts/test-search-kit.js
+        env:
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+
       - name: x402-kit tests (transfer-auth typed data + live Base RPC reads)
         run: node scripts/test-x402-kit.js
 

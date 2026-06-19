@@ -13,7 +13,7 @@ const TARGET = process.env.TARGET_URL || "http://localhost:3000";
 const NETWORK = new Set([
   "/api/extract", "/api/meta", "/api/dns", "/api/render", "/api/screenshot", "/api/pdf",
   "/api/http-check", "/api/tls-cert", "/api/whois", "/api/robots-check", "/api/sitemap",
-  "/api/email-validate", "/api/ip-info", "/api/search",
+  "/api/email-validate", "/api/ip-info", "/api/search", "/api/search-news", "/api/search-images", "/api/search-suggest",
   "/api/pdf-info", "/api/pdf-merge", "/api/pdf-extract-pages", "/api/pdf-rotate", "/api/images-to-pdf",
   "/api/pdf-to-markdown",
   "/api/media-info", "/api/audio-convert", "/api/audio-normalize",
