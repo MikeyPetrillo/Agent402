@@ -72,3 +72,4 @@ deploy-pipe-yahoo-relay-secrets-into-railway-env-upsert: 2026-06-20T14:00:00Z
 activate-yahoo-relay-railway-env-vars-now-set: 2026-06-20T15:00:00Z
 docs-hub-scaffold-server-rendered-wiki: 2026-06-20T19:00:00Z
 docs-hub-missing-wiki-boot-crash-hotfix: 2026-06-20T19:30:00Z
+deadlock-fix-prod-catalog-check-non-blocking-rescue-deploy: 2026-06-20T19:45:00Z

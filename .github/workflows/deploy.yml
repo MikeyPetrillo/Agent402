@@ -592,6 +592,12 @@ jobs:
           echo "402 body:"; cat /tmp/402.json | jq -c '{x402Version, error, accepts: ([.accepts[]?.network])}' 2>/dev/null || head -c 400 /tmp/402.json || true
 
       - name: Check production is serving the new catalog
+        # Non-blocking: this is a smoke test against live prod, not a pre-deploy
+        # gate. Making it blocking creates a deadlock — if a bad deploy ever
+        # crashes prod, this check fails on the *next* push and prevents the
+        # rescue deploy from running (the deploy job has needs: test). Railway's
+        # own "Verify deployment" step in the deploy job is the real gate.
+        continue-on-error: true
         run: |
           PROD=https://agent402.tools
           # The deploy job and this test job run concurrently, so production may
