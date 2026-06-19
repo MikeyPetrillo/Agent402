@@ -51,12 +51,15 @@ import { MACRO_TOOLS } from "./tools/macro-kit.js";
 import { EDGAR_TOOLS } from "./tools/edgar-kit.js";
 import { FINANCE_TOOLS } from "./tools/finance-kit.js";
 import { CRYPTO_TOOLS } from "./tools/crypto-kit.js";
+import { RESEARCH_TOOLS } from "./tools/research-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
 import { docsIndex, docsPage, docsApi } from "./docs.js";
+import { shopPage } from "./shop.js";
+import { economyPage } from "./economy.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
 
@@ -108,7 +111,7 @@ const CATALOG = {
     name: "Extract article",
     slug: "extract",
     category: "web",
-    price: "$0.005",
+    price: "$0.010",
     description:
       "Extract the main article content from any public URL as clean markdown. Returns title, byline, excerpt, word count, and markdown.",
     tags: ["scraping", "markdown", "content-extraction"],
@@ -1135,6 +1138,8 @@ app.get("/card-1280.png", async (_req, res) => {
 });
 app.get("/openapi.json", (_req, res) => res.json(openapiSpec(BASE_URL, CATALOG)));
 app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(toolsIndexPage(BASE_URL, CATALOG)));
+app.get("/shop", (_req, res) => htmlCache(res, 300, 900).send(shopPage(BASE_URL, CATALOG)));
+app.get("/economy", (_req, res) => htmlCache(res, 300, 900).send(economyPage(BASE_URL, getLeaderboardSnapshot())));
 app.get("/tools/:slug", (req, res) => {
   const tools = toolList(CATALOG);
   const tool = tools.find((t) => t.slug === req.params.slug);

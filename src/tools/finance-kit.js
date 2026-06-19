@@ -112,7 +112,7 @@ export const FINANCE_TOOLS = [
     name: "Stock quote",
     slug: "stock-quote",
     category: "data",
-    price: "$0.005",
+    price: "$0.010",
     description:
       "Live stock/index/FX/crypto quote: last price, day range, 52-week range, previous close, currency, exchange, and a relative change vs. previous close, as clean JSON. Backed by Yahoo Finance's public chart endpoint — keyless, no rate limits in practice. Symbols: equities (AAPL), indices (^GSPC), FX (EURUSD=X), crypto (BTC-USD).",
     tags: ["finance", "stocks", "quote", "market-data", "price"],
@@ -181,7 +181,7 @@ export const FINANCE_TOOLS = [
     name: "Stock historical bars",
     slug: "stock-history",
     category: "data",
-    price: "$0.005",
+    price: "$0.015",
     description:
       "Historical OHLCV bars for a symbol. Configurable interval (1m, 5m, 15m, 30m, 60m, 1d, 1wk, 1mo, 3mo) and range (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max). Intraday intervals are limited by Yahoo to ~60 days of data. Returns a flat array of bars (time, open, high, low, close, volume) ready for charting or backtests.",
     tags: ["finance", "stocks", "history", "ohlcv", "backtest", "charting"],
@@ -247,7 +247,7 @@ export const FINANCE_TOOLS = [
     name: "Earnings calendar",
     slug: "earnings-calendar",
     category: "data",
-    price: "$0.005",
+    price: "$0.015",
     description:
       "Earnings calendar for a given date — every company reporting that day with EPS estimate, EPS actual (if reported), and reporting time slot. Optional `symbol` filter narrows to one ticker. Defaults to today (UTC). Backed by Nasdaq's public calendar API.",
     tags: ["finance", "earnings", "calendar", "eps", "events"],

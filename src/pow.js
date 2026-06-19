@@ -69,6 +69,9 @@ export const WALLET_ONLY_SLUGS = new Set([
   "edgar-insider-trades", "edgar-13f-holdings", "edgar-recent-ipos", "edgar-search",
   "stock-quote", "stock-history", "earnings-calendar",
   "crypto-price", "crypto-market", "crypto-history", "crypto-trending", "crypto-global",
+  // Composite research tools fan out to multiple paid upstreams; PoW would
+  // turn 1 free request into 5+ paid roundtrips. Wallet-only.
+  "research-company",
   // x402 payments toolkit — kept off the free connector (paid surface only).
   "x402-quote", "usdc-balance", "tx-status", "gas-estimate", "x402-verify", "transfer-authorization", "ens-resolve",
 ]);

@@ -33,10 +33,11 @@ export const CHROME_CSS = `
 
 const NAV_LINKS = [
   { href: "/tools", label: "Tools" },
+  { href: "/shop", label: "Shop" },
   { href: "/docs", label: "Docs" },
   { href: "/index", label: "Index" },
   { href: "/leaderboard", label: "Leaderboard" },
-  { href: "/analytics", label: "Analytics" },
+  { href: "/economy", label: "Economy" },
   { href: "/tollbooth", label: "Tollbooth" },
   { href: "/guides", label: "Guides" },
   { href: "/faq", label: "FAQ" },
@@ -71,9 +72,11 @@ export function renderFooter() {
   <div class="row">
     <a href="/">Home</a><span class="sep">·</span>
     <a href="/tools">Tools</a><span class="sep">·</span>
+    <a href="/shop">Shop</a><span class="sep">·</span>
     <a href="/docs">Docs</a><span class="sep">·</span>
     <a href="/index">x402 Index</a><span class="sep">·</span>
     <a href="/leaderboard">x402 Leaderboard</a><span class="sep">·</span>
+    <a href="/economy">x402 Economy</a><span class="sep">·</span>
     <a href="/analytics">Analytics</a><span class="sep">·</span>
     <a href="/tollbooth">Tollbooth</a><span class="sep">·</span>
     <a href="/tollbooth/cloud">Tollbooth Cloud</a><span class="sep">·</span>
