@@ -39,3 +39,11 @@ log-rejected-request-shape-keys-only: 2026-06-19T09:00:00Z
 operator-recent-errors-endpoint: 2026-06-19T10:00:00Z
 sentry-integration-replaces-ring-buffer: 2026-06-19T11:00:00Z
 analytics-top-errors-panel-and-posthog-adapter: 2026-06-19T13:00:00Z
+fetch-guard-upstream-4xx-5xx-attribution-and-media-content-type-fail-fast: 2026-06-19T14:00:00Z
+macro-kit-fred-yield-curve-treasury-fiscal-ecb-fx-worldbank: 2026-06-19T15:00:00Z
+macro-kit-keyed-fred-series-search-info-calendar-sahm-cpi-unrate-fedfunds: 2026-06-19T15:30:00Z
+fred-api-key-verification-secret-now-set: 2026-06-19T16:00:00Z
+fred-trim-key-and-surface-upstream-error-message: 2026-06-19T17:00:00Z
+fred-latest-reading-tools-return-newest-not-oldest-observations: 2026-06-19T18:00:00Z
+macro-kit-fred-v2-bulk-release-observations-separate-key: 2026-06-19T19:00:00Z
+macro-kit-fred-v2-bearer-auth-header-instead-of-query-param: 2026-06-19T20:00:00Z

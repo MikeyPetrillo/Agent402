@@ -109,7 +109,24 @@ export async function normalizeAudio(buffer, { targetLufs = -16 } = {}) {
   });
 }
 
-const fetchMedia = async (url) => (await safeFetch(url, { binary: true, maxBytes: MAX_MEDIA_BYTES })).buffer;
+// Fetch and pre-screen: ffprobe is happy to chew on anything, but if the URL
+// obviously points to a webpage / JSON / a script (a common caller mistake —
+// pasting an article URL instead of a direct media file URL), fail fast with a
+// message that names the actual problem. Saves ~1s of ffprobe and a worker
+// slot, and turns a generic "media could not be processed" into a specific
+// "you passed a webpage URL." Status 422 → counts as client_errored on the
+// dashboard, which is the honest attribution.
+const NON_MEDIA_CT = /^(text\/|application\/(json|xml|xhtml\+xml|javascript|x-javascript|ld\+json))/i;
+const fetchMedia = async (url) => {
+  const { buffer, contentType } = await safeFetch(url, { binary: true, maxBytes: MAX_MEDIA_BYTES });
+  if (contentType && NON_MEDIA_CT.test(contentType)) {
+    throw bad(
+      `Source URL returned Content-Type "${contentType.split(";")[0]}", not audio/video — did you pass a webpage URL instead of a direct media file URL?`,
+      422
+    );
+  }
+  return buffer;
+};
 
 // ---- catalog tools ---------------------------------------------------------
 export const MEDIA_TOOLS = [
