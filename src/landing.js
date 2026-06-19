@@ -220,7 +220,12 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   .odo-digits b { display:inline-block; background:#000; color:var(--accent); border:1px solid #1f4a1d; border-radius:6px; font:700 1.9rem/1 var(--mono); padding:9px 8px; margin:0 2px; text-shadow:0 0 9px rgba(74,222,128,.55); }
   .odo-sub { display:block; margin-top:9px; color:var(--muted); font-size:.8rem; font-family:var(--mono); }
   .activity { margin:26px auto 0; max-width:540px; }
-  .activity ul { list-style:none; margin:0; padding:0; border:1px solid #1f4a1d; border-radius:11px; overflow:hidden; }
+  /* Reserve vertical space for up to 8 rows so the client-side refresh
+     (setInterval, every 12s) never reflows the page below. Each row is
+     ~38px (12.8px font × 1.65 line-height + 16px padding + 1px border) so
+     8 rows ≈ 304px. Pinning this stops Core Web Vitals CLS dead on mobile,
+     where the live feed sits directly above the dense Why-pay grid. */
+  .activity ul { list-style:none; margin:0; padding:0; border:1px solid #1f4a1d; border-radius:11px; overflow:hidden; min-height:304px; }
   .activity li { display:flex; justify-content:space-between; gap:12px; padding:8px 13px; border-top:1px solid #14260f; font-family:var(--mono); font-size:.8rem; }
   .activity li:first-child { border-top:0; }
   .a-slug { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
