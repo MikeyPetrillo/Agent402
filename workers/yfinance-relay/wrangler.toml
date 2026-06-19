@@ -1,0 +1,14 @@
+name = "agent402-yfinance-relay"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+# No custom domain by default — deploys to <name>.<account>.workers.dev.
+# To attach a custom domain (e.g., yfinance.agent402.tools), add:
+#   [[routes]]
+#   pattern = "yfinance.agent402.tools/*"
+#   zone_name = "agent402.tools"
+
+# RELAY_TOKEN is set as a Worker secret (not a plaintext var). Set it with:
+#   wrangler secret put RELAY_TOKEN
+# Then mirror the same value into Railway as YAHOO_RELAY_TOKEN so finance-kit
+# sends it on every request.
