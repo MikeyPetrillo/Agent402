@@ -39,6 +39,9 @@ const NETWORK = new Set([
   // Finance-kit: Yahoo Finance chart (quote + history) and Nasdaq earnings
   // calendar — keyless live upstreams; tolerate transient 502/503/504.
   "/api/stock-quote", "/api/stock-history", "/api/earnings-calendar",
+  // Crypto-kit: CoinGecko public API — keyless, ~30 req/min from a single IP.
+  // Tolerate transient 429/502/503/504 (rate limit + Cloudflare hiccups).
+  "/api/crypto-price", "/api/crypto-market", "/api/crypto-history", "/api/crypto-trending", "/api/crypto-global",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 
