@@ -20,9 +20,17 @@ const WIKI_DIR = join(__dirname, "..", "wiki");
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 // One-shot load at module init — these files only change on deploy.
+// Tolerant of a missing wiki/ directory: in deployment artifacts that don't
+// include it, docs renders an empty hub rather than crashing server boot.
 function loadWikiFiles() {
   const files = {};
-  for (const name of readdirSync(WIKI_DIR)) {
+  let entries;
+  try {
+    entries = readdirSync(WIKI_DIR);
+  } catch {
+    return files;
+  }
+  for (const name of entries) {
     if (!name.endsWith(".md")) continue;
     if (name.startsWith("_")) continue; // _Sidebar / _Footer handled separately
     const slug = name.replace(/\.md$/, "");
