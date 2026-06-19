@@ -1,6 +1,6 @@
 // Paid-path canary — buys ONE tool from each live-data kit to prove that
 // *buying* still settles end-to-end AND that each kit's handler still
-// delivers a documented payload. Total spend: ~$0.027 per run (six tools).
+// delivers a documented payload. Total spend: ~$0.057 per run (seven tools).
 //
 // Deliberately ordered cheapest → most-likely-to-be-flaky so a fast-fail on
 // the baseline aborts the rest. Each tool has a strict shape check; a 200
@@ -85,6 +85,20 @@ const TOOLS = [
     // BTC has been >$1k since 2017; assertion floor is intentionally generous
     // to ride out a black-swan drawdown without false-positive alerting.
     check: (r) => (r.coins?.bitcoin?.price > 1000) || `expected bitcoin.price > 1000, got ${JSON.stringify(r).slice(0, 80)}`,
+  },
+  {
+    kit: "answer",
+    path: "/api/answer?q=what+is+the+speed+of+light",
+    method: "GET",
+    priceUsd: 0.03,
+    // "Speed of light" is encyclopedia-stable — answer text doesn't drift with
+    // the news cycle, and Brave's index always carries Wikipedia/Britannica
+    // citations for it. Validates both the SSE assembler (answer present) and
+    // the <citation> parser (citationCount > 0). Probes BRAVE_ANSWERS_API_KEY,
+    // which is on a distinct Brave subscription from BRAVE_API_KEY — same
+    // failure mode that bit /api/search-suggest. Placed last because it's the
+    // most expensive AND the most likely to flake on plan-tier issues.
+    check: (r) => (typeof r.answer === "string" && r.answer.length > 0 && r.citationCount > 0) || `expected non-empty answer + citationCount>0, got ${JSON.stringify(r).slice(0, 80)}`,
   },
 ];
 
