@@ -426,19 +426,23 @@ function requireFredV2Key() {
 }
 
 // FRED's JSON API puts diagnostics in the 4xx response body
-// (e.g. `{"error_code":400,"error_message":"Variable api_key is not registered."}`).
+// (v1: `{"error_code":400,"error_message":"Variable api_key is not registered."}`,
+//  v2: `{"code":401,"message":"Missing or invalid credentials."}`).
 // safeFetch discards 4xx bodies on principle (right for HTML scrapers, wrong here),
 // so we use a dedicated helper that still calls assertPublicUrl for SSRF protection
-// but surfaces FRED's error_message verbatim.
-async function fredGetJson(url) {
+// but surfaces FRED's error message verbatim.
+//
+// `extraHeaders` lets v2 callsites pass `Authorization: Bearer <key>` — v2 dropped
+// query-param auth in favor of headers.
+async function fredGetJson(url, extraHeaders = {}) {
   const safeUrl = await assertPublicUrl(url);
-  const res = await fetch(safeUrl, { headers: { Accept: "application/json" } });
+  const res = await fetch(safeUrl, { headers: { Accept: "application/json", ...extraHeaders } });
   const text = await res.text();
   let body = null;
   try { body = JSON.parse(text); } catch {}
   if (!res.ok) {
-    const msg = body?.error_message || text.slice(0, 200) || `HTTP ${res.status}`;
-    // FRED 400 with a key set almost always means a bad/expired/whitespace key —
+    const msg = body?.error_message || body?.message || text.slice(0, 200) || `HTTP ${res.status}`;
+    // FRED 4xx with a key set almost always means a bad/expired/whitespace key —
     // attribute as caller-fixable (422) so it shows up in client_errored.
     throw bad(`FRED upstream HTTP ${res.status}: ${msg}`, res.status >= 500 ? 502 : 422);
   }
@@ -754,13 +758,15 @@ MACRO_TOOLS.push(
       if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw bad('"startDate" must be ISO YYYY-MM-DD');
       if (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw bad('"endDate" must be ISO YYYY-MM-DD');
       const key = requireFredV2Key();
-      const qs = new URLSearchParams({ release_id: String(releaseId), api_key: key, file_type: "json" });
+      // FRED API v2 dropped query-param api_key auth — credentials must be passed
+      // as `Authorization: Bearer <key>` instead (modern OAuth-style).
+      const qs = new URLSearchParams({ release_id: String(releaseId), file_type: "json" });
       if (startDate) qs.set("observation_start", startDate);
       if (endDate) qs.set("observation_end", endDate);
       if (i.lastSeriesId) qs.set("last_series_id", String(i.lastSeriesId));
       if (i.lastObservationDate) qs.set("last_observation_date", String(i.lastObservationDate));
-      const j = await fredGetJson(`${FRED_BASE}/v2/release/observations?${qs}`);
-      if (j?.error_code) throw bad(`FRED v2 upstream error: ${j.error_message || "unknown"}`, 502);
+      const j = await fredGetJson(`${FRED_BASE}/v2/release/observations?${qs}`, { Authorization: `Bearer ${key}` });
+      if (j?.error_code) throw bad(`FRED v2 upstream error: ${j.error_message || j.message || "unknown"}`, 502);
       // FRED v2 response shape (per docs): { release: {release_id, name, ...}, series: [{series_id, title, units, observations: [...]}], cursor or pagination fields }.
       // We pass through verbatim with minimal normalization so callers see what FRED returned.
       const series = (j?.series ?? []).map((s) => ({
