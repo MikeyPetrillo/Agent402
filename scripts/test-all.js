@@ -52,6 +52,11 @@ const NETWORK = new Set([
   // Crypto-kit: CoinGecko public API — keyless, ~30 req/min from a single IP.
   // Tolerate transient 429/502/503/504 (rate limit + Cloudflare hiccups).
   "/api/crypto-price", "/api/crypto-market", "/api/crypto-history", "/api/crypto-trending", "/api/crypto-global",
+  // Network-kit: live DNS resolution against 1.1.1.1/8.8.8.8/9.9.9.9. Public
+  // resolvers can NXDOMAIN, time out, or return SERVFAIL for placeholder inputs —
+  // tolerate transient failures, the shape check still gates the happy path.
+  "/api/dns-lookup", "/api/dns-propagation", "/api/spf-check", "/api/dmarc-check",
+  "/api/dkim-lookup", "/api/email-deliverability",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 
