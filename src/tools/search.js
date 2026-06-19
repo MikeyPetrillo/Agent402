@@ -33,6 +33,12 @@ function takeQuery(raw) {
 // tags inside the assistant content. We accumulate the stream, then parse out
 // the structured citation tags into a clean { answer, citations[] } payload.
 //
+// Brave issues a DISTINCT subscription token for Answers vs Web Search, even
+// though both products live under api.search.brave.com. Same dual-key pattern
+// as FRED v1 / FRED v2 in macro-kit: separate keys gate separate product SKUs.
+// We read BRAVE_ANSWERS_API_KEY here, with a fallback to BRAVE_API_KEY so a
+// deployer who only has one combined subscription token still works.
+//
 // Unit economics (per Brave's published pricing — confirmed on dashboard):
 //   • $0.004 base per query
 //   • $0.005 per 1M input tokens  (we cap input at 400 chars ≈ ~100 tokens)
@@ -40,7 +46,8 @@ function takeQuery(raw) {
 // Expected cost per call ≈ $0.012; worst-case (long answer) ≈ $0.025.
 // We charge $0.03 → average ~60% margin, still profitable on tail-length cases.
 async function braveAnswerPost(query, opts = {}) {
-  if (!process.env.BRAVE_API_KEY) {
+  const token = process.env.BRAVE_ANSWERS_API_KEY || process.env.BRAVE_API_KEY;
+  if (!token) {
     throw bad("Web answer is not configured on this deployment", 503);
   }
   let res;
@@ -48,7 +55,7 @@ async function braveAnswerPost(query, opts = {}) {
     res = await fetch(`${BRAVE_HOST}/chat/completions`, {
       method: "POST",
       headers: {
-        "X-Subscription-Token": process.env.BRAVE_API_KEY,
+        "X-Subscription-Token": token,
         "Content-Type": "application/json",
         Accept: "text/event-stream",
       },
