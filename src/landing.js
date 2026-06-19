@@ -31,12 +31,18 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   // escape on render so the server-side path matches the client-side esc() below.
   // Also escape ' so attribute contexts using single quotes are covered.
   const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  const activityRows = (rows) => rows.slice(0, 8).map((r) => `<li><span class="a-slug">${esc(r.slug)}</span><span class="a-meta">${r.paidWith === "proof-of-work" ? "⚙ PoW" : "$ USDC"} · ${agoStr(r.at)} ago</span></li>`).join("");
+  // Ticker items are rendered twice in the track so the translateX(-50%) loop
+  // is seamless — when the original set scrolls off-left, the duplicate is
+  // already in the same visual position the original started from. Server-side
+  // we esc() slug for HTML; client-side refresh builds nodes with textContent
+  // (no innerHTML — defense-in-depth against any future spec drift on slug).
+  const tickerItem = (r) => `<span class="ticker-item"><span class="slug">${esc(r.slug)}</span><span class="sep">·</span><span class="kind">${r.paidWith === "proof-of-work" ? "⚙ PoW" : "$ USDC"}</span><span class="sep">·</span><span class="time">${agoStr(r.at)} ago</span></span>`;
+  const tickerItems = (rows) => { const m = rows.slice(0, 12).map(tickerItem).join(""); return m + m; };
   const activity = recent.length
-    ? `<div class="activity">
-    <div class="eyebrow" style="margin:0 0 8px">● Live — recent paid calls</div>
-    <ul id="activity-list">${activityRows(recent)}</ul>
-    <script>(function(){var el=document.getElementById('activity-list');if(!el)return;function ago(iso){var s=Math.max(0,(Date.now()-new Date(iso).getTime())/1000);return s<60?(s|0)+'s':s<3600?((s/60)|0)+'m':s<86400?((s/3600)|0)+'h':((s/86400)|0)+'d';}function esc(t){return String(t).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}async function tick(){try{var r=await fetch('/api/stats',{cache:'no-store'});var d=await r.json();el.innerHTML=(d.recentCalls||[]).slice(0,8).map(function(x){return '<li><span class="a-slug">'+esc(x.slug)+'</span><span class="a-meta">'+(x.paidWith==='proof-of-work'?'⚙ PoW':'$ USDC')+' · '+ago(x.at)+' ago</span></li>';}).join('');}catch(e){}}setInterval(tick,12000);})();</script>
+    ? `<div class="ticker" aria-label="Live feed of recent paid calls">
+    <div class="ticker-label"><span class="live-dot"></span> Live</div>
+    <div class="ticker-track" id="ticker-track">${tickerItems(recent)}</div>
+    <script>(function(){var track=document.getElementById('ticker-track');if(!track)return;function ago(iso){var s=Math.max(0,(Date.now()-new Date(iso).getTime())/1000);return s<60?(s|0)+'s':s<3600?((s/60)|0)+'m':s<86400?((s/3600)|0)+'h':((s/86400)|0)+'d';}function span(cls,text){var s=document.createElement('span');s.className=cls;s.textContent=text;return s;}function build(x){var w=document.createElement('span');w.className='ticker-item';w.append(span('slug',x.slug),span('sep','\\u00b7'),span('kind',x.paidWith==='proof-of-work'?'\\u2699 PoW':'$ USDC'),span('sep','\\u00b7'),span('time',ago(x.at)+' ago'));return w;}async function tick(){try{var r=await fetch('/api/stats',{cache:'no-store'});var d=await r.json();var items=(d.recentCalls||[]).slice(0,12);var frag=document.createDocumentFragment();for(var pass=0;pass<2;pass++){for(var i=0;i<items.length;i++){frag.appendChild(build(items[i]));}}while(track.firstChild)track.removeChild(track.firstChild);track.appendChild(frag);}catch(e){}}setInterval(tick,12000);})();</script>
   </div>`
     : "";
   const categoryCards = Object.entries(CATEGORIES)
@@ -220,17 +226,25 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   .odo-label { display:block; color:var(--muted); font-family:var(--mono); font-size:.7rem; letter-spacing:.3em; margin-bottom:9px; }
   .odo-digits b { display:inline-block; background:#000; color:var(--accent); border:1px solid #1f4a1d; border-radius:6px; font:700 1.9rem/1 var(--mono); padding:9px 8px; margin:0 2px; text-shadow:0 0 9px rgba(74,222,128,.55); }
   .odo-sub { display:block; margin-top:9px; color:var(--muted); font-size:.8rem; font-family:var(--mono); }
-  .activity { margin:26px auto 0; max-width:540px; }
-  /* Reserve vertical space for up to 8 rows so the client-side refresh
-     (setInterval, every 12s) never reflows the page below. Each row is
-     ~38px (12.8px font × 1.65 line-height + 16px padding + 1px border) so
-     8 rows ≈ 304px. Pinning this stops Core Web Vitals CLS dead on mobile,
-     where the live feed sits directly above the dense Why-pay grid. */
-  .activity ul { list-style:none; margin:0; padding:0; border:1px solid #1f4a1d; border-radius:11px; overflow:hidden; min-height:304px; }
-  .activity li { display:flex; justify-content:space-between; gap:12px; padding:8px 13px; border-top:1px solid #14260f; font-family:var(--mono); font-size:.8rem; }
-  .activity li:first-child { border-top:0; }
-  .a-slug { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .a-meta { color:var(--muted); white-space:nowrap; }
+  /* Scrolling ticker — single-line horizontal marquee of recent paid calls.
+     Items flow right→left; the "LIVE" label parks on the left with a gradient
+     mask so items appear to disappear behind it. Track is duplicated so the
+     translateX(-50%) loop is seamless. Fixed height keeps CLS at zero on the
+     12s client-side refresh. Pauses on hover for readability; respects
+     prefers-reduced-motion for accessibility. */
+  .ticker { margin:36px auto 0; max-width:1080px; overflow:hidden; border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:linear-gradient(180deg, rgba(74,222,128,.025), transparent); position:relative; height:48px; min-height:48px; display:flex; align-items:center; }
+  .ticker-label { position:absolute; top:0; bottom:0; left:0; display:flex; align-items:center; gap:9px; padding:0 18px 0 14px; background:linear-gradient(90deg, var(--bg) 78%, transparent); font-family:var(--mono); font-size:.68rem; letter-spacing:.3em; text-transform:uppercase; color:var(--accent); z-index:2; }
+  .ticker-label .live-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 10px var(--accent); animation:tickerlive 1.8s ease-in-out infinite; }
+  @keyframes tickerlive { 0%,100%{opacity:1; transform:scale(1)} 50%{opacity:.35; transform:scale(.82)} }
+  .ticker-track { display:flex; gap:36px; white-space:nowrap; padding-left:120px; animation:tickerscroll 55s linear infinite; will-change:transform; }
+  .ticker:hover .ticker-track { animation-play-state:paused; }
+  @keyframes tickerscroll { 0%{transform:translateX(0)} 100%{transform:translateX(-50%)} }
+  .ticker-item { display:inline-flex; align-items:center; gap:9px; font-family:var(--mono); font-size:.85rem; color:var(--muted); }
+  .ticker-item .slug { color:var(--text); }
+  .ticker-item .kind { color:var(--accent); font-size:.76rem; }
+  .ticker-item .time { color:var(--muted); font-size:.76rem; }
+  .ticker-item .sep { color:var(--line2); }
+  @media (prefers-reduced-motion: reduce) { .ticker-track{ animation:none } .ticker-label .live-dot{ animation:none } }
   .verify { background:var(--bg2); border:1px solid var(--line); border-radius:13px; padding:6px 20px; margin-top:22px; }
   .verify .row { margin:16px 0; }
   .verify .row b { color:var(--text); font-size:.9rem; }
