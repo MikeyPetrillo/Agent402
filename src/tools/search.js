@@ -70,6 +70,14 @@ async function braveAnswerPost(query, opts = {}) {
         enable_entities: false,
         // research mode can take minutes — incompatible with a tool budget.
         enable_research: false,
+        // OpenAI-compatible ceiling on generated tokens. Caps the long-answer
+        // tail so a runaway 4000-token response can't blow past our $0.025
+        // worst-case estimate. Default 1024 fits the typical 1000-1500 token
+        // answer; callers can override to expand (research questions) or
+        // shrink (TL;DR use cases). Assumes Brave honors max_tokens on the
+        // brave model — if they ever ignore it, the cost ceiling is lost
+        // silently and we'd need server-side truncation in the SSE loop.
+        max_tokens: opts.maxTokens || 1024,
         country: opts.country || "us",
         language: opts.language || "en",
       }),
@@ -380,6 +388,7 @@ export const SEARCH_TOOLS = [
           q: { type: "string", description: "Natural-language question (max 400 chars)" },
           country: { type: "string", description: "Optional 2-letter country code (default us)" },
           language: { type: "string", description: "Optional 2-letter language code (default en)" },
+          max_tokens: { type: "integer", description: "Optional cap on the generated answer length in tokens (default 1024, min 64, max 4096). Lower for TL;DR; higher for research questions." },
         },
         required: ["q"],
       },
@@ -404,7 +413,15 @@ export const SEARCH_TOOLS = [
       const q = takeQuery(i.q);
       const country = typeof i.country === "string" && /^[A-Za-z]{2}$/.test(i.country) ? i.country.toLowerCase() : undefined;
       const language = typeof i.language === "string" && /^[A-Za-z]{2}$/.test(i.language) ? i.language.toLowerCase() : undefined;
-      const raw = await braveAnswerPost(q, { country, language });
+      // Clamp caller-supplied max_tokens into a sane range. 64 floor prevents
+      // useless one-sentence answers; 4096 ceiling protects the cost-per-call
+      // ceiling even if a caller passes a giant number. Anything outside the
+      // range or non-numeric falls back to the upstream-side default (1024).
+      let maxTokens;
+      if (Number.isFinite(i.max_tokens)) {
+        maxTokens = Math.max(64, Math.min(4096, Math.floor(i.max_tokens)));
+      }
+      const raw = await braveAnswerPost(q, { country, language, maxTokens });
       const { answer, citations } = parseAnswer(raw);
       if (!answer) throw bad("Web answer upstream returned no content", 502);
       return { query: q, answer, citations, citationCount: citations.length };
