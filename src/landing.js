@@ -259,17 +259,17 @@ ${renderHeader("/", [{ href: "#connect", label: "Connect" }])}
 <div class="wrap">
   <header class="hero">
     <div>
-      <span class="badge"><span class="dot"></span> open source · self-hostable · ${count} x402 tools</span>
+      <span class="badge"><span class="dot"></span> open source · <b>x402</b> · ${count} tools · free tier · no API keys</span>
       <h1>Where agents pay agents<span class="x">.</span></h1>
-      <p class="sub"><b>The open-source x402 server.</b> ${count} pay-per-call tools for AI agents — browser, web search, finance, EDGAR, memory. USDC on Base, or free via proof-of-work. <b>No signup, no API key</b> — the wallet is the identity.</p>
+      <p class="sub"><b>Machine-to-machine payments for AI agents — over <a href="https://x402.org" rel="noopener">x402</a>.</b> ${count} deterministic, pay-per-call tools your agent can use mid-task: extract PDFs, search the web, geocode, fetch SEC filings, render JavaScript pages, pull stock quotes &amp; macro data. <b>Free to try</b> via in-process proof-of-work; <b>USDC on Base</b> from $0.001/call when you scale. No signup, no API keys — <b>the wallet is the identity</b>.</p>
       <div class="ctas">
-        <a class="cta primary" href="/tools">Browse all ${count} tools →</a>
-        <a class="cta ghost" href="#connect">Add to Claude</a>
+        <a class="cta primary" href="#connect">Add to Claude in 60 seconds →</a>
+        <a class="cta ghost" href="/tools">Browse all ${count} tools</a>
         <a class="cta ghost" href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">Self-host free →</a>
       </div>
       <div class="stats">
-        <div class="stat"><div class="n">${count.toLocaleString()}</div><div class="l">pay-per-call tools</div></div>
-        <div class="stat"><div class="n">${freeCount.toLocaleString()}</div><div class="l">free via proof-of-work</div></div>
+        <div class="stat"><div class="n">${count.toLocaleString()}</div><div class="l">x402 tools</div></div>
+        <div class="stat"><div class="n">${freeCount.toLocaleString()}</div><div class="l">free tier · no wallet</div></div>
         <div class="stat"><div class="n">$0.001</div><div class="l">starting price / call</div></div>
         <div class="stat"><div class="n">${served ? served.total.toLocaleString() : "live"}</div><div class="l">${served ? "calls served" : "settling on-chain"}</div></div>
       </div>
@@ -277,19 +277,17 @@ ${renderHeader("/", [{ href: "#connect", label: "Connect" }])}
     <div class="snippet">
       <div class="snippet-bar">
         <i></i><i></i><i></i>
-        <span class="ttl">node · paste &amp; run</span>
+        <span class="ttl">terminal · paste &amp; run</span>
         <button class="copy" data-copy="hero-snippet" type="button" aria-label="Copy code">Copy</button>
       </div>
-<pre id="hero-snippet"><span class="c">// Resolve a task to a tool, then call it. No wallet needed — free tier
-// settles with a tiny in-process proof-of-work.</span>
-<span class="k">import</span> { <span class="v">Agent402</span> } <span class="k">from</span> <span class="s">"agent402-client"</span>;
+<pre id="hero-snippet"><span class="c"># Add ${count.toLocaleString()} x402 tools to Claude Code. No signup, no API key.</span>
+claude mcp add agent402 -s user -- npx -y agent402-mcp@latest
 
-<span class="k">const</span> a = <span class="k">new</span> <span class="v">Agent402</span>();
-<span class="k">const</span> [tool] = <span class="k">await</span> a.<span class="v">find</span>(<span class="s">"how many gpt-4 tokens"</span>);
-<span class="k">const</span> out    = <span class="k">await</span> a.<span class="v">call</span>(tool.slug, { text: <span class="s">"Hello, agent."</span>, model: <span class="s">"gpt-4o"</span> });
-console.log(out);</pre>
+<span class="c"># Then ask Claude: "extract the tables from this PDF",
+# "geocode these 50 addresses", "fetch Apple's latest 10-K".
+# Free tier auto-pays in compute. USDC on Base when you scale.</span></pre>
       <div class="snippet-foot">
-        <span class="dot"></span> ${freeCount.toLocaleString()} free via proof-of-work · USDC on Base for the rest · <a href="/llms.txt">llms.txt</a>
+        <span class="dot"></span> ${freeCount.toLocaleString()} tools free via proof-of-work · USDC on Base for the rest · <a href="/llms.txt">llms.txt</a>
       </div>
     </div>
     <script>
