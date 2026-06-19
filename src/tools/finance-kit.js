@@ -63,7 +63,11 @@ async function jsonGet(url, host) {
       signal: AbortSignal.timeout(10000),
     });
   } catch (e) {
-    throw bad(`${host} request failed: ${e.message}`, 504);
+    // e.cause?.code names the underlying network failure (UND_ERR_CONNECT_TIMEOUT,
+    // ECONNRESET, ENETUNREACH, EAI_AGAIN, etc.) — invaluable for distinguishing
+    // WAF/IP blocks from DNS or timeout. Bare e.message is just "fetch failed".
+    const cause = e.cause?.code ? ` (${e.cause.code})` : "";
+    throw bad(`${host} request failed: ${e.message}${cause}`, 504);
   }
   const text = await res.text();
   if (!res.ok) {

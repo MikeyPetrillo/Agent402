@@ -41,9 +41,11 @@ async function braveGet(path, params) {
   } catch {
     throw bad("Search upstream timed out", 504);
   }
-  // Controlled messages only — never echo the upstream body to callers.
+  // Controlled messages only — never echo the upstream body to callers, but
+  // do surface the upstream status code so plan-tier mismatches (401/403) are
+  // distinguishable from real outages (5xx) in logs and error tracking.
   if (res.status === 429) throw bad("Search rate limit reached upstream — retry shortly", 503);
-  if (!res.ok) throw bad("Search upstream error", 502);
+  if (!res.ok) throw bad(`Search upstream error (HTTP ${res.status})`, 502);
   return res.json();
 }
 
