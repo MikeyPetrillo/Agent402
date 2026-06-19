@@ -50,7 +50,7 @@ function normalizeSymbol(raw) {
   return s;
 }
 
-async function jsonGet(url, host) {
+async function jsonGet(url, host, extraHeaders = {}) {
   const safeUrl = await assertPublicUrl(url);
   let res;
   try {
@@ -59,6 +59,7 @@ async function jsonGet(url, host) {
         "User-Agent": financeUserAgent(),
         Accept: "application/json,text/plain,*/*",
         "Accept-Language": "en-US,en;q=0.9",
+        ...extraHeaders,
       },
       signal: AbortSignal.timeout(10000),
     });
@@ -88,9 +89,21 @@ async function jsonGet(url, host) {
 const VALID_INTERVALS = new Set(["1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"]);
 const VALID_RANGES = new Set(["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]);
 
+// Optional Cloudflare Worker relay for Yahoo's chart endpoint. When both env
+// vars are set, we route through the relay instead of hitting Yahoo direct.
+// This exists because some hosting providers' egress IPs are silently
+// null-routed by Yahoo's edge (observed as TCP ETIMEDOUT). See
+// workers/yfinance-relay/README.md. When env vars are unset, we hit Yahoo
+// directly — preserves behavior for deployers whose egress isn't blocked.
 async function fetchChart(symbol, params = {}) {
   const qs = new URLSearchParams(params);
-  return jsonGet(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${qs}`, "Yahoo Finance");
+  const path = `/v8/finance/chart/${encodeURIComponent(symbol)}?${qs}`;
+  const relayUrl = (process.env.YAHOO_RELAY_URL || "").trim().replace(/\/$/, "");
+  const relayToken = (process.env.YAHOO_RELAY_TOKEN || "").trim();
+  if (relayUrl && relayToken) {
+    return jsonGet(`${relayUrl}${path}`, "Yahoo Finance (relay)", { Authorization: `Bearer ${relayToken}` });
+  }
+  return jsonGet(`https://query1.finance.yahoo.com${path}`, "Yahoo Finance");
 }
 
 export const FINANCE_TOOLS = [
