@@ -67,6 +67,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "fred-release-observations",
   "edgar-company-lookup", "edgar-filings", "edgar-company-concept", "edgar-company-facts", "edgar-xbrl-frame",
   "edgar-insider-trades", "edgar-13f-holdings", "edgar-recent-ipos", "edgar-search",
+  "stock-quote", "stock-history", "earnings-calendar",
   // x402 payments toolkit — kept off the free connector (paid surface only).
   "x402-quote", "usdc-balance", "tx-status", "gas-estimate", "x402-verify", "transfer-authorization", "ens-resolve",
 ]);
