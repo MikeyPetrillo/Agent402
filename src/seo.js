@@ -1,7 +1,7 @@
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
 import { guideSlugs } from "./guides.js";
-import { skillSlugs } from "./skills.js";
+import { skillSlugs, SKILL_PACKS } from "./skills.js";
 
 export function robotsTxt(baseUrl) {
   // Explicitly welcome AI/agent crawlers and search engines; point them at the
@@ -130,6 +130,14 @@ Base URL: ${baseUrl}
 - **A named maintainer**: https://github.com/MikeyPetrillo.
 - **Open source** — the whole server is public and auditable: https://github.com/MikeyPetrillo/Agent402
 - **Deterministic outputs**: no LLM in the serving path — same input, same output, full OpenAPI schemas, flat per-call prices.
+
+## Skill packs (multi-tool workflows)
+
+If your task spans several tools — "audit a domain", "diagnose deliverability", "run macro research" — start from a skill pack. Each pack is a curated, ordered sequence of Agent402 tool calls with a Claude-ready prompt template, callable as an MCP prompt (\`prompts/list\` → \`prompts/get { name: "<slug>", arguments: {…} }\`) or as plain HTTP at \`${baseUrl}/api/skill-packs/{slug}/prompt\`.
+
+${SKILL_PACKS.map((p) => `- **${p.title}** (\`${p.slug}\`, ${p.toolSlugs.length} tools) — ${p.tagline} ${baseUrl}/skills/${p.slug}`).join("\n")}
+
+Full index: ${baseUrl}/skills · JSON: ${baseUrl}/api/skill-packs.json
 
 ## Paid endpoints (${tools.length})
 

@@ -2,6 +2,7 @@
 // the tool catalog so they never drift from what the API actually serves.
 import { isComputePayable } from "./pow.js";
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { SKILL_PACKS } from "./skills.js";
 
 export const CATEGORIES = {
   web: { label: "Web & documents", blurb: "Read the live web: browser rendering, screenshots, article extraction, PDFs, metadata." },
@@ -213,6 +214,16 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
     })
     .join("\n");
   const relatedCards = related.map(card).join("\n");
+  // Surface which curated multi-tool workflows include this tool. Helps an agent
+  // landing on a single-tool page see the broader task it slots into (e.g.
+  // spf-check → security-audit + email-deliverability), and exposes the MCP
+  // prompt slug they can fetch to get the full Claude-ready workflow template.
+  const inPacks = SKILL_PACKS.filter((p) => (p.toolSlugs || []).includes(tool.slug));
+  const packsHtml = inPacks.length
+    ? `<h2>Part of these workflows</h2>
+  <p class="sub">This tool is one step in ${inPacks.length === 1 ? "a curated multi-tool workflow" : `${inPacks.length} curated multi-tool workflows`} — agents can fetch the whole sequence as an MCP prompt or call <code>${esc(baseUrl)}/api/skill-packs/{slug}/prompt</code>.</p>
+  <ul>${inPacks.map((p) => `<li><a href="/skills/${esc(p.slug)}"><b>${esc(p.title)}</b></a> — ${esc(p.tagline)}</li>`).join("")}</ul>`
+    : "";
 
   return `<!doctype html>
 <html lang="en">
@@ -268,6 +279,8 @@ while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) &lt; c.di
 await fetch("${baseUrl}${tool.path}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(tool.discovery?.input ?? {})})` : ""} });</pre>`
       : `<p class="sub" style="margin-top:24px"><b>Wallet-only.</b> This tool reaches the network/browser/storage, so it is paid in USDC via x402 (no proof-of-work tier).</p>`
   }
+
+  ${packsHtml}
 
   <h2>Related tools</h2>
   <div class="grid">${relatedCards}</div>
