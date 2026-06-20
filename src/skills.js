@@ -455,3 +455,61 @@ export function buildPromptMessages(pack, args = {}, { freeSlugs } = {}) {
     messages: [{ role: "user", content: { type: "text", text } }],
   };
 }
+
+// Lexical ranker for skill packs, mirroring the one in find.js so /api/find and
+// the MCP search_tools surface can recommend a *workflow* when the agent's query
+// matches a multi-tool task (e.g. "audit a domain" → security-audit) instead of
+// just returning the best individual tool. Scoring stays modest so packs only
+// rank alongside tools when the lexical signal is strong:
+//   slug exact match           = 12  (a pack is a richer answer than a single tool)
+//   slug substring             =  5
+//   title substring            =  3
+//   tagline substring          =  2
+//   useCase substring          =  1
+//   tool slug in pack.toolSlugs =  4 ("check spf" → email-deliverability via spf-check)
+//   workflow narrative hit     =  1
+const PACK_STOPWORDS = new Set([
+  "a", "an", "the", "of", "in", "on", "to", "for", "with", "by", "and", "or",
+  "is", "are", "was", "were", "be", "been", "this", "that", "it", "as", "at",
+  "from", "into", "onto", "my", "me", "i", "you", "your", "we", "our",
+  "do", "does", "did", "can", "will", "would", "should",
+]);
+
+export function rankSkillPacks(query, { k = 2, baseUrl = "", minScore = 4 } = {}) {
+  const q = String(query || "").slice(0, 500);
+  const rawTerms = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const terms = rawTerms.filter((t) => t.length > 1 && !PACK_STOPWORDS.has(t)).slice(0, 32);
+  if (!terms.length) return [];
+
+  const scored = [];
+  for (const pack of SKILL_PACKS) {
+    const slug = pack.slug.toLowerCase();
+    const title = (pack.title || "").toLowerCase();
+    const tagline = (pack.tagline || "").toLowerCase();
+    const useCase = (pack.useCase || "").toLowerCase();
+    const toolSet = new Set((pack.toolSlugs || []).map((s) => String(s).toLowerCase()));
+    const workflowHay = (pack.workflow || []).join(" ").toLowerCase();
+    let score = 0;
+    for (const term of terms) {
+      if (slug === term) score += 12;
+      else if (slug.includes(term)) score += 5;
+      if (title.includes(term)) score += 3;
+      if (tagline.includes(term)) score += 2;
+      if (useCase.includes(term)) score += 1;
+      if (toolSet.has(term)) score += 4;
+      if (workflowHay.includes(term)) score += 1;
+    }
+    if (score >= minScore) scored.push([score, pack]);
+  }
+  scored.sort((a, b) => b[0] - a[0] || a[1].slug.length - b[1].slug.length || a[1].slug.localeCompare(b[1].slug));
+
+  return scored.slice(0, Math.min(Math.max(k, 1), SKILL_PACKS.length)).map(([score, p]) => ({
+    slug: p.slug,
+    title: p.title,
+    tagline: p.tagline,
+    toolSlugs: p.toolSlugs,
+    score,
+    url: baseUrl ? `${baseUrl}/skills/${p.slug}` : `/skills/${p.slug}`,
+    promptName: p.slug, // matches the MCP prompts/list name; agents can prompts/get this directly
+  }));
+}

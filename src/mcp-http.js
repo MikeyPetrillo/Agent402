@@ -19,7 +19,7 @@ import {
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { findTools } from "./find.js";
-import { SKILL_PACKS, buildPromptMessages } from "./skills.js";
+import { SKILL_PACKS, buildPromptMessages, rankSkillPacks } from "./skills.js";
 import {
   createLimiter,
   MAX_CALLS_PER_BURST,
@@ -183,13 +183,22 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const { name, arguments: args = {} } = req.params;
       try {
         if (name === "search_tools") {
-          const results = searchTools(args.query ?? "", args.limit);
+          const q = args.query ?? "";
+          const results = searchTools(q, args.limit);
+          // Multi-tool workflows that match the same query — surface them so an
+          // agent asking "audit a domain" sees the whole security-audit pack
+          // (callable via prompts/get on this connector) alongside the tools.
+          const workflows = rankSkillPacks(q, { k: 2, baseUrl });
           return {
             content: [{
               type: "text",
-              text: results.length
-                ? JSON.stringify({ results, usage: 'call_tool {"slug": …, "params": …}' }, null, 2)
-                : `No tools matched "${args.query}". Full catalog: ${baseUrl}/tools`,
+              text: results.length || workflows.length
+                ? JSON.stringify({
+                    results,
+                    ...(workflows.length ? { workflows, workflowsUsage: "prompts/get { name: workflows[i].promptName, arguments: { …promptArgs } }" } : {}),
+                    usage: 'call_tool {"slug": …, "params": …}',
+                  }, null, 2)
+                : `No tools matched "${q}". Full catalog: ${baseUrl}/tools`,
             }],
           };
         }
@@ -207,8 +216,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           return {
             content: [{
               type: "text",
-              text: results.length
-                ? JSON.stringify({ task: r.query, results, usage: "Run call_tool with the chosen {slug, params}. Free results execute here; wallet-only need the agent402-mcp npm server." }, null, 2)
+              text: results.length || r.packs?.length
+                ? JSON.stringify({
+                    task: r.query,
+                    results,
+                    ...(r.packs?.length ? { workflows: r.packs, workflowsUsage: "prompts/get { name: workflows[i].promptName, arguments: { …promptArgs } }" } : {}),
+                    usage: "Run call_tool with the chosen {slug, params}. Free results execute here; wallet-only need the agent402-mcp npm server.",
+                  }, null, 2)
                 : `No tool matched "${args.task ?? args.query ?? ""}". Browse the catalog: ${baseUrl}/tools`,
             }],
           };

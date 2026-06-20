@@ -5,6 +5,7 @@
 // Deterministic lexical ranking (no LLM, no tokens), consistent with the MCP
 // connector's search_tools weighting.
 import { toolList } from "./pages.js";
+import { rankSkillPacks } from "./skills.js";
 
 // Common English stopwords that contribute noise instead of intent. Kept short
 // on purpose — every word here matches many tool descriptions, so dropping it
@@ -69,5 +70,10 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     example: t.discovery?.input ?? t.discovery?.example,
     docs: baseUrl ? `${baseUrl}/tools/${t.slug}` : undefined,
   }));
-  return { query: String(query), count: results.length, results };
+  // Cross-surface: also recommend the matching skill pack(s) so an agent asking
+  // about a multi-tool task (e.g. "audit a domain") sees the whole workflow,
+  // not just the highest-scoring single tool. Empty array when nothing matches
+  // strongly — packs only show up when the lexical signal is real.
+  const packs = rankSkillPacks(q, { k: 2, baseUrl });
+  return { query: String(query), count: results.length, results, packs };
 }
