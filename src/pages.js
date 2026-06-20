@@ -462,17 +462,73 @@ export function openapiSpec(baseUrl, catalog) {
     paths[path] = paths[path] ?? {};
     paths[path][method.toLowerCase()] = op;
   }
+  // Document the skill-pack discovery surface so SDK generators and agent
+  // frameworks that consume the OpenAPI spec learn about the curated multi-tool
+  // workflows. Free, no payment required — these are discovery/composition
+  // helpers, not paywalled tools.
+  paths["/api/skill-packs.json"] = {
+    get: {
+      operationId: "listSkillPacks",
+      summary: "List curated multi-tool workflows (skill packs)",
+      description:
+        "Curated, ordered sequences of Agent402 tool calls for tasks no single tool covers (e.g. audit a domain, diagnose deliverability). Each pack includes the tool slugs to call in order, a Claude-ready prompt template, and declared prompt arguments. Same data exposed as MCP prompts on the hosted connector. Free.",
+      tags: ["workflows"],
+      responses: {
+        200: {
+          description: "All skill packs.",
+          content: { "application/json": { schema: { type: "object" } } },
+        },
+      },
+    },
+  };
+  paths["/api/skill-packs/{slug}/prompt"] = {
+    get: {
+      operationId: "getSkillPackPrompt",
+      summary: "Get a templated workflow prompt for a single skill pack",
+      description:
+        "Returns the rendered MCP-style messages for the named skill pack with the given arguments substituted in. Same output as MCP prompts/get on the hosted connector — usable directly with any LLM. Per-pack argument names come from /api/skill-packs.json. Free.",
+      tags: ["workflows"],
+      parameters: [
+        {
+          name: "slug",
+          in: "path",
+          required: true,
+          description: `Skill pack slug. Known values: ${SKILL_PACKS.map((p) => p.slug).join(", ")}.`,
+          schema: { type: "string", enum: SKILL_PACKS.map((p) => p.slug) },
+          example: SKILL_PACKS[0]?.slug ?? "security-audit",
+        },
+      ],
+      responses: {
+        200: {
+          description: "Rendered prompt messages.",
+          content: { "application/json": { schema: { type: "object" } } },
+        },
+        404: { description: "Unknown slug. Use /api/skill-packs.json to list." },
+      },
+    },
+  };
   return {
     openapi: "3.1.0",
     info: {
       title: "Agent402 — the open-source, self-hostable x402 server for AI agents",
       version: "2.0.0",
       description:
-        "The open-source, self-hostable x402 server: hundreds of machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) — the whole catalog is open and runnable yourself. Every endpoint is paid per call in USDC on Base via x402 (no signup, no API keys — the first request returns HTTP 402, an x402 client pays and retries) or free with proof-of-work. Free discovery: GET /api/pricing, GET /llms.txt.",
+        "The open-source, self-hostable x402 server: hundreds of machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) — the whole catalog is open and runnable yourself. Every endpoint is paid per call in USDC on Base via x402 (no signup, no API keys — the first request returns HTTP 402, an x402 client pays and retries) or free with proof-of-work. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.",
       contact: { url: baseUrl },
     },
     servers: [{ url: baseUrl }],
-    tags: Object.entries(CATEGORIES).map(([k, v]) => ({ name: k, description: v.label })),
+    tags: [
+      ...Object.entries(CATEGORIES).map(([k, v]) => ({ name: k, description: v.label })),
+      { name: "workflows", description: "Curated multi-tool workflows (skill packs) — task-level templates that compose catalog tools." },
+    ],
     paths,
+    // Top-level extension so OpenAPI consumers can enumerate workflows without
+    // scanning paths. Same `promptName == slug` contract as the other surfaces.
+    "x-skill-packs": SKILL_PACKS.map((p) => ({
+      slug: p.slug,
+      title: p.title,
+      toolCount: (p.toolSlugs || []).length,
+      promptName: p.slug,
+    })),
   };
 }
