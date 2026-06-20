@@ -62,6 +62,14 @@ try {
   if (!text(search).includes("convert-miles-to-kilometers")) fail(`search_tools missed the conversion tool: ${text(search).slice(0, 300)}`);
   console.log("search_tools finds long-tail catalog tools ✓");
 
+  // search_tools surfaces matching multi-tool workflow templates (skill packs)
+  // so a task-shaped query also points the agent at the curated prompt — not
+  // just at individual tools they'd have to stitch together themselves.
+  const workflowSearch = await client.callTool({ name: "search_tools", arguments: { query: "security audit" } });
+  if (!text(workflowSearch).includes("security-audit")) fail(`search_tools should recommend the security-audit workflow: ${text(workflowSearch).slice(0, 400)}`);
+  if (!text(workflowSearch).includes("workflows")) fail(`search_tools response should include the workflows key: ${text(workflowSearch).slice(0, 400)}`);
+  console.log("search_tools recommends matching workflow templates ✓");
+
   // first-class tool, no wallet → settles via proof-of-work
   const hashed = await client.callTool({ name: "hash", arguments: { text: "hello world" } });
   if (hashed.isError || !text(hashed).includes("b94d27b9")) fail(`PoW-paid hash call wrong: ${text(hashed).slice(0, 300)}`);

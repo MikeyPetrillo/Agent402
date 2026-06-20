@@ -219,6 +219,46 @@ function searchTools(query, limit = 10) {
   }));
 }
 
+// Rank the curated multi-tool skill packs against the same query, so a single
+// search_tools call also tells the agent "this looks like a `security-audit`
+// or `email-deliverability` job — fetch the whole template via prompts/get".
+// Weighted slug/title/tagline/useCase/toolSlugs match — same shape as the
+// hosted /api/find ranking, kept inline here so the stdio package stays
+// dependency-free. Returns [] when no pack scores above the noise floor.
+function rankWorkflows(query, k = 2) {
+  const terms = String(query).toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 1);
+  if (!terms.length || !skillPacks.length) return [];
+  const scored = [];
+  for (const p of skillPacks) {
+    const slug = p.slug.toLowerCase();
+    const title = (p.title || "").toLowerCase();
+    const tagline = (p.tagline || "").toLowerCase();
+    const useCase = (p.useCase || "").toLowerCase();
+    const toolSet = new Set((p.toolSlugs || []).map((s) => String(s).toLowerCase()));
+    const workflowHay = (p.workflow || []).join(" ").toLowerCase();
+    let score = 0;
+    for (const term of terms) {
+      if (slug === term) score += 12;
+      else if (slug.includes(term)) score += 5;
+      if (title.includes(term)) score += 3;
+      if (tagline.includes(term)) score += 2;
+      if (useCase.includes(term)) score += 1;
+      if (toolSet.has(term)) score += 4;
+      if (workflowHay.includes(term)) score += 1;
+    }
+    if (score >= 4) scored.push([score, p]);
+  }
+  scored.sort((a, b) => b[0] - a[0] || a[1].slug.length - b[1].slug.length);
+  return scored.slice(0, k).map(([score, p]) => ({
+    slug: p.slug,
+    title: p.title,
+    tagline: p.tagline,
+    toolCount: (p.toolSlugs || []).length,
+    promptName: p.slug,
+    score,
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // MCP wiring
 const server = new Server({ name: "agent402", version: VERSION }, { capabilities: { tools: {}, prompts: {} } });
@@ -265,7 +305,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     {
       name: "search_tools",
       description:
-        `Search the full Agent402 catalog (${catalog.size} pay-per-call tools: encoding, crypto, data conversion, text, time, validation, math, unit conversions, network, browser, memory). Returns matching tools with their price, payment options, and input schema. Call them with call_tool.`,
+        `Search the full Agent402 catalog (${catalog.size} pay-per-call tools: encoding, crypto, data conversion, text, time, validation, math, unit conversions, network, browser, memory). Returns matching tools with price, payment options, and input schema — call them with call_tool. Also returns matching multi-tool workflow templates (skill packs) when the query is task-shaped; fetch the whole template via prompts/get { name: "<slug>", arguments: { … } }.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -301,13 +341,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args = {} } = req.params;
   try {
     if (name === "search_tools") {
-      const results = searchTools(args.query ?? "", args.limit ?? 10);
+      const q = args.query ?? "";
+      const results = searchTools(q, args.limit ?? 10);
+      const workflows = rankWorkflows(q, 2);
       return {
         content: [{
           type: "text",
-          text: results.length
-            ? JSON.stringify({ results, usage: "call_tool {\"slug\": …, \"params\": …}" }, null, 2)
-            : `No tools matched "${args.query}". Browse the catalog at ${BASE}/tools or ${BASE}/api/pricing.`,
+          text: results.length || workflows.length
+            ? JSON.stringify({
+                results,
+                ...(workflows.length ? { workflows, workflowsUsage: "prompts/get { name: workflows[i].promptName, arguments: { …per-pack args } } returns the full Claude-ready task template." } : {}),
+                usage: "call_tool {\"slug\": …, \"params\": …}",
+              }, null, 2)
+            : `No tools matched "${q}". Browse the catalog at ${BASE}/tools or ${BASE}/api/pricing.`,
         }],
       };
     }
@@ -329,6 +375,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             tools: catalog.size,
             payableWithCompute: computePayable,
             walletOnly: catalog.size - computePayable,
+            workflows: skillPacks.length,
             spendControls: AGENT_KEY
               ? {
                   maxPerCallUsd: MAX_PER_CALL === Infinity ? "unlimited" : MAX_PER_CALL,
