@@ -164,6 +164,37 @@ export const SKILL_PACKS = [
       "Run a DNS health check on example.com. Use Agent402 to: pull the apex DNS records, check propagation across major public resolvers, look up the ASN/prefix, pull whois for ownership and expiry, run an HTTP reachability check, and confirm robots.txt isn't broken. Report any inconsistency or near-expiry.",
   },
   {
+    slug: "crypto-research",
+    title: "Crypto research",
+    tagline:
+      "Pull live price, market structure, OHLC history, trending status, global market context, and recent news for a single coin in one pass.",
+    useCase:
+      "Building a one-pager on a token, prepping for a positioning decision, or monitoring a new listing — you want price, supply, sentiment, and headlines without leaving the agent loop.",
+    promptArgs: [
+      { name: "coin", description: "Coin ticker or CoinGecko id (e.g. BTC, ETH, bitcoin)", required: true, substitute: "BTC" },
+    ],
+    toolSlugs: [
+      "crypto-price",
+      "crypto-market",
+      "crypto-history",
+      "crypto-trending",
+      "crypto-global",
+      "search-news",
+      "extract",
+    ],
+    workflow: [
+      "Get the live quote from crypto-price — last price, 24h change, 24h volume, and market cap.",
+      "Pull the market overview from crypto-market — circulating supply, max supply, ATH, ATH date, and 7d/30d performance for the deep dive.",
+      "Pull OHLC history from crypto-history to compute return, volatility, and max drawdown over a chosen window.",
+      "Check crypto-trending to see whether the coin is on CoinGecko's most-searched list — a fast read on retail attention.",
+      "Pull crypto-global for total market cap, BTC dominance, and 24h volume — contextualizes the coin's move against the broader market.",
+      "Pull the last week of search-news headlines for the coin — catalysts, partnerships, exploit reports.",
+      "For the top 2–3 headlines, use extract to convert the article to clean markdown for the brief.",
+    ],
+    claudePrompt:
+      "Build a one-page research brief on BTC. Use Agent402 to pull: (1) live quote (price, 24h change, volume), (2) market overview (supply, ATH, 30d performance), (3) 90 days of OHLC history with return and max drawdown, (4) whether BTC is in CoinGecko's trending list, (5) Bitcoin dominance and total market cap context from crypto-global, (6) the last 7 days of news headlines via search-news, (7) clean markdown of the top 2–3 articles via extract. Output a clean markdown brief.",
+  },
+  {
     slug: "content-extraction",
     title: "Content extraction",
     tagline:
@@ -278,7 +309,7 @@ export function skillsIndex(baseUrl) {
   return shell(
     baseUrl,
     "Skill packs: curated multi-tool workflows for AI agents",
-    "Pre-built workflows — security audit, email deliverability, financial research, macro economics, DNS health, content extraction. Pay per call in USDC or run free with proof-of-work.",
+    "Pre-built workflows — security audit, email deliverability, financial research, macro economics, DNS health, crypto research, content extraction. Pay per call in USDC or run free with proof-of-work.",
     "/skills",
     body
   );
