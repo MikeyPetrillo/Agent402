@@ -57,7 +57,7 @@ import { NETWORK_TOOLS2 } from "./tools/network-kit2.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
-import { skillsIndex, skillPackPage } from "./skills.js";
+import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
 import { docsIndex, docsPage, docsApi } from "./docs.js";
 import { shopPage } from "./shop.js";
 import { economyPage } from "./economy.js";
@@ -702,6 +702,29 @@ app.get("/skills/:slug", (req, res) => {
   const html = skillPackPage(BASE_URL, req.params.slug, CATALOG);
   if (!html) return res.status(404).type("html").send('<p>Skill pack not found. <a href="/skills">All skill packs</a></p>');
   htmlCache(res, 300, 900).send(html);
+});
+// Machine-readable skill packs — the canonical source for the `agent402-mcp`
+// npm package's prompts surface (and any future discovery aggregator). The
+// stdio package fetches this at boot to register its prompts/list response.
+// `/api/skill-packs/:slug/prompt` renders the same MCP messages the hosted
+// /mcp returns, accepting query args matching the pack's promptArgs.
+app.get("/api/skill-packs.json", (_req, res) => {
+  res.set("Cache-Control", "public, max-age=300, s-maxage=900");
+  res.json(skillPacksJson());
+});
+app.get("/api/skill-packs/:slug/prompt", (req, res) => {
+  const pack = SKILL_PACKS.find((p) => p.slug === req.params.slug);
+  if (!pack) return res.status(404).json({ error: `Unknown skill pack "${req.params.slug}". List: /api/skill-packs.json` });
+  // Pull args from the query string by promptArgs name. Anything not
+  // declared is ignored (no surprise substitutions). Compute freeSlugs from
+  // the live catalog so the access split in the rendered prompt is honest.
+  const args = {};
+  for (const a of pack.promptArgs || []) {
+    if (req.query[a.name] != null && req.query[a.name] !== "") args[a.name] = String(req.query[a.name]);
+  }
+  const freeSlugs = new Set(Object.values(CATALOG).filter((def) => isComputePayable(def)).map((def) => def.slug));
+  res.set("Cache-Control", "public, max-age=60");
+  res.json(buildPromptMessages(pack, args, { freeSlugs }));
 });
 // /docs hub — server-rendered from wiki/*.md (the same source of truth that
 // syncs to the GitHub wiki via CI). /docs/api is registered *before* the

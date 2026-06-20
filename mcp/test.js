@@ -82,6 +82,22 @@ try {
   if (!text(info).includes("proof-of-work")) fail(`payment_info should report proof-of-work mode: ${text(info).slice(0, 300)}`);
   console.log("payment_info reports proof-of-work mode ✓");
 
+  // prompts/list: every skill pack registered with typed args; prompts/get
+  // delegates rendering to the hosted service and substitutes args correctly.
+  const { prompts } = await client.listPrompts();
+  if (prompts.length < 6) fail(`prompts/list should expose >=6 skill packs, got ${prompts.length}`);
+  const sa = prompts.find((p) => p.name === "security-audit");
+  if (!sa) fail(`prompts/list should include "security-audit" (got: ${prompts.map((p) => p.name).join(", ")})`);
+  if (!sa.arguments?.some((a) => a.name === "domain")) fail(`security-audit should declare "domain" argument`);
+  console.log(`prompts/list → ${prompts.length} skill packs with typed arguments ✓`);
+
+  const rendered = await client.getPrompt({ name: "security-audit", arguments: { domain: "stripe.com" } });
+  const promptText = rendered.messages?.[0]?.content?.text ?? "";
+  if (!promptText.includes("stripe.com")) fail(`prompts/get should substitute domain into text: ${promptText.slice(0, 300)}`);
+  if (promptText.includes("example.com")) fail(`prompts/get should leave no unsubstituted placeholders: ${promptText.slice(0, 300)}`);
+  if (!promptText.includes("cert-transparency")) fail(`prompts/get should name the tool plan: ${promptText.slice(0, 300)}`);
+  console.log("prompts/get substitutes args and includes the tool plan ✓");
+
   // spend controls: refusals must happen BEFORE any payment is attempted, so a
   // throwaway (unfunded) key is safe here — no facilitator is ever contacted.
   const dummyKey = "0x" + "11".repeat(32);

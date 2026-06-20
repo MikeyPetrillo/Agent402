@@ -19,11 +19,16 @@
 import { createHash } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 
 const BASE = (process.env.AGENT402_URL || "https://agent402.tools").replace(/\/$/, "");
 const AGENT_KEY = process.env.AGENT_KEY || "";
-const VERSION = "0.4.0";
+const VERSION = "0.6.0";
 
 // Spend controls — enforced BEFORE a payment is ever signed, so a confused or
 // runaway model cannot drain the wallet. Unset = unlimited (back-compat).
@@ -46,12 +51,19 @@ const log = (...a) => console.error("[agent402-mcp]", ...a);
 // ---------------------------------------------------------------------------
 // Catalog: built from the service's own machine-readable surfaces.
 const catalog = new Map(); // slug -> { slug, method, path, price, description, category, computePayable, inputSchema }
+// Skill packs — curated multi-tool workflows, fetched at startup from the
+// hosted service so the npm package picks up new packs without a republish.
+// Empty if the discovery fetch fails (older services or transient errors);
+// prompts/list will just return an empty array in that case.
+let skillPacks = [];
 
 async function loadCatalog() {
-  const [pricing, openapi] = await Promise.all([
+  const [pricing, openapi, packs] = await Promise.all([
     fetch(`${BASE}/api/pricing`).then((r) => r.json()),
     fetch(`${BASE}/openapi.json`).then((r) => r.json()),
+    fetch(`${BASE}/api/skill-packs.json`).then((r) => (r.ok ? r.json() : { packs: [] })).catch(() => ({ packs: [] })),
   ]);
+  skillPacks = Array.isArray(packs?.packs) ? packs.packs : [];
   for (const e of pricing.endpoints) {
     const slug = e.slug ?? e.docs?.split("/tools/").pop();
     if (!slug) continue;
@@ -209,7 +221,36 @@ function searchTools(query, limit = 10) {
 
 // ---------------------------------------------------------------------------
 // MCP wiring
-const server = new Server({ name: "agent402", version: VERSION }, { capabilities: { tools: {} } });
+const server = new Server({ name: "agent402", version: VERSION }, { capabilities: { tools: {}, prompts: {} } });
+
+// Skill packs are exposed as MCP prompts — discoverable in slash menus on any
+// MCP-aware client. The list is fetched once at boot in loadCatalog(); the
+// per-prompt rendering is delegated to the hosted service so the npm package
+// stays thin and prompt text stays canonical with the website at /skills.
+server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+  prompts: skillPacks.map((p) => ({
+    name: p.slug,
+    title: p.title,
+    description: p.tagline,
+    arguments: (p.promptArgs || []).map((a) => ({
+      name: a.name,
+      description: a.description,
+      required: a.required ?? true,
+    })),
+  })),
+}));
+server.setRequestHandler(GetPromptRequestSchema, async (req) => {
+  const { name, arguments: args = {} } = req.params;
+  const pack = skillPacks.find((p) => p.slug === name);
+  if (!pack) throw new Error(`Unknown prompt "${name}". List available with prompts/list.`);
+  const url = new URL(`${BASE}/api/skill-packs/${encodeURIComponent(name)}/prompt`);
+  for (const [k, v] of Object.entries(args || {})) {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+  }
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to render prompt "${name}" from ${BASE}: HTTP ${res.status}`);
+  return await res.json();
+});
 
 let curated = [];
 let pricingInfo = null;

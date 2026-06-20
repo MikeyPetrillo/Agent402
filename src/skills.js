@@ -353,6 +353,29 @@ export function skillPackPage(baseUrl, slug, catalog) {
 
 export const skillSlugs = () => SKILL_PACKS.map((p) => p.slug);
 
+// Machine-readable shape served at /api/skill-packs.json — also what the
+// stdio agent402-mcp npm package fetches at startup to register its prompts.
+// We strip internal-only fields like `substitute` (a render hint) and expose
+// the public schema that any MCP client or discovery aggregator needs.
+export function skillPacksJson() {
+  return {
+    packs: SKILL_PACKS.map((p) => ({
+      slug: p.slug,
+      title: p.title,
+      tagline: p.tagline,
+      useCase: p.useCase,
+      toolSlugs: p.toolSlugs,
+      workflow: p.workflow,
+      claudePrompt: p.claudePrompt,
+      promptArgs: (p.promptArgs || []).map((a) => ({
+        name: a.name,
+        description: a.description,
+        required: a.required ?? true,
+      })),
+    })),
+  };
+}
+
 // Build an MCP prompt response for a skill pack — `messages` array + a top-level
 // `description`. Two design choices baked in here, both Option-A from the
 // trade-off matrix:
