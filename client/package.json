@@ -1,6 +1,6 @@
 {
   "name": "agent402-client",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Tiny buyer-side client for Agent402 (x402): resolve a task to a tool and call it with payment handled for you — free tools settle via built-in proof-of-work (no wallet), wallet-only tools via your x402 fetch. Caching + idempotent retries.",
   "type": "module",
   "main": "index.js",

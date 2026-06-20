@@ -45,6 +45,20 @@ Claude Code: `claude mcp add agent402 -- npx -y agent402-mcp`
 - When a call hits HTTP 402: with `AGENT_KEY` set, the server signs an x402 USDC payment and retries; without a key it solves the tool's proof-of-work challenge (~0.2 s of CPU) on the eligible tools.
 - `payment_info` tells the model which mode it's in and what a wallet would unlock.
 
+## Workflows (skill packs)
+
+For jobs that no single tool covers (e.g. "audit a domain", "build a stock
+brief"), Agent402 ships curated multi-tool **skill packs**. They're surfaced
+as standard MCP **prompts**, so any MCP-aware client picks them up
+automatically:
+
+- `prompts/list` returns each pack with typed arguments.
+- `prompts/get { name: "<slug>", arguments: { … } }` returns the rendered
+  task template — a Claude-ready plan with the chosen tools wired in.
+- `search_tools` also surfaces matching workflows alongside individual tools,
+  so a task-shaped query points the agent at the right plan, not just the
+  raw tools.
+
 ## Configuration
 
 | env | default | meaning |
