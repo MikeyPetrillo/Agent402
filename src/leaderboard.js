@@ -358,6 +358,32 @@ export function windowLabelFromBlocks(blocks) {
   return `${Math.round(hours / 24)}d`;
 }
 
+/**
+ * Re-rank an already-aggregated leaderboard by a chosen metric. `sort="usd"`
+ * (default) matches the pipeline's canonical order — total USDC settled, with
+ * activity as tiebreak. `sort="calls"` ranks by raw call volume — useful when
+ * an agent is shopping for the *most-used* tools regardless of price, e.g.
+ * "which seller is everyone hitting?" vs. "who's earning the most?".
+ *
+ * Pure: takes the snapshot board, returns a new array with rank re-numbered.
+ * The summary stats (total volume, total calls) computed by callers don't
+ * change — only the row order and `rank` field.
+ */
+export function rankBy(board, sort = "usd") {
+  const list = Array.isArray(board) ? [...board] : [];
+  const mode = sort === "calls" ? "calls" : "usd";
+  list.sort((a, b) => {
+    const calls = (b.callsSettled || 0) - (a.callsSettled || 0);
+    const usd = (b.totalUsd || 0) - (a.totalUsd || 0);
+    const primary = mode === "calls" ? calls : usd;
+    if (primary) return primary;
+    const secondary = mode === "calls" ? usd : calls;
+    if (secondary) return secondary;
+    return (a.name || "").localeCompare(b.name || "");
+  });
+  return list.map((r, i) => ({ ...r, rank: i + 1 }));
+}
+
 const emptySnapshot = (opts, reason) => ({
   spec: "x402-leaderboard/1",
   asOf: new Date().toISOString(),
@@ -565,12 +591,21 @@ const shortAddr = (a) => (typeof a === "string" && a.length > 12 ? `${a.slice(0,
  * polling — a page refresh re-renders from the latest cached snapshot. The
  * underlying snapshot is refreshed hourly by startLeaderboardRefresh().
  */
-export function leaderboardPage(snapshot, { baseUrl }) {
-  const board = Array.isArray(snapshot?.leaderboard) ? snapshot.leaderboard : [];
+export function leaderboardPage(snapshot, { baseUrl, sort }) {
+  const sortMode = sort === "calls" ? "calls" : "usd";
+  const rawBoard = Array.isArray(snapshot?.leaderboard) ? snapshot.leaderboard : [];
+  const board = rankBy(rawBoard, sortMode);
   const explorer = "https://basescan.org";
   const totalUsd = board.reduce((s, r) => s + (Number(r.totalUsd) || 0), 0);
   const totalCalls = board.reduce((s, r) => s + (Number(r.callsSettled) || 0), 0);
   const top1 = board[0];
+  const metricLabel = sortMode === "calls" ? "calls settled" : "USDC settled";
+  const sortQueryUsd = "";
+  const sortQueryCalls = "?sort=calls";
+  const sortToggle = `<div class="sort-toggle" role="tablist" aria-label="Rank by">
+    <a href="/leaderboard${sortQueryUsd}" class="${sortMode === "usd" ? "active" : ""}"${sortMode === "usd" ? ' aria-current="page"' : ""}>USDC earned</a>
+    <a href="/leaderboard${sortQueryCalls}" class="${sortMode === "calls" ? "active" : ""}"${sortMode === "calls" ? ' aria-current="page"' : ""}>Total calls</a>
+  </div>`;
 
   // Bazaar items are third-party-supplied: a seller can put anything in their
   // listing's homepage field. esc() HTML-escapes but doesn't filter dangerous
@@ -651,6 +686,10 @@ ${CHROME_HEAD_LINKS}
   pre { background:#0a0d15; border:1px solid var(--line); border-radius:8px; padding:14px 16px; overflow:auto; font-size:.84rem; }
   .foot { color:var(--muted); font-size:.82rem; margin-top:24px; }
   .foot a { color:var(--accent); text-decoration:none; }
+  .sort-toggle { display:inline-flex; gap:0; border:1px solid var(--line); border-radius:8px; padding:3px; margin:0 0 18px; background:var(--card); }
+  .sort-toggle a { padding:6px 14px; color:var(--muted); text-decoration:none; border-radius:6px; font-size:.85rem; transition:color .12s, background .12s; }
+  .sort-toggle a:hover { color:var(--fg); }
+  .sort-toggle a.active { background:#1a2236; color:var(--accent); }
   ${CHROME_CSS}
 </style>
 </head>
@@ -659,10 +698,12 @@ ${renderHeader("/leaderboard")}
 <div class="wrap">
 
 <h1>x402 Leaderboard</h1>
-<p class="sub">Public on-chain ranking of every x402 seller listed on the Coinbase CDP Bazaar, ranked by settled USDC volume on Base. Window: <b>${esc(windowHuman)}</b>. Snapshot is cached and refreshed hourly.</p>
+<p class="sub">Public on-chain ranking of every x402 seller listed on the Coinbase CDP Bazaar, ranked by ${sortMode === "calls" ? "raw call volume" : "settled USDC volume"} on Base. Window: <b>${esc(windowHuman)}</b>. Snapshot is cached and refreshed hourly.</p>
+
+${sortToggle}
 
 <div class="grid">
-  <div class="stat"><div class="k">Top seller (${esc(windowLabel)})</div><div class="v" style="font-size:1.05rem">${esc(top1?.name || "—")}</div><div class="s">${esc(top1 ? fmtUsd(top1.totalUsd) + " · " + (top1.callsSettled || 0) + " calls" : "no data yet")}</div></div>
+  <div class="stat"><div class="k">Top seller (${esc(windowLabel)})</div><div class="v" style="font-size:1.05rem">${esc(top1?.name || "—")}</div><div class="s">${esc(top1 ? (sortMode === "calls" ? (top1.callsSettled || 0) + " calls · " + fmtUsd(top1.totalUsd) : fmtUsd(top1.totalUsd) + " · " + (top1.callsSettled || 0) + " calls") : "no data yet")}</div></div>
   <div class="stat"><div class="k">Sellers ranked</div><div class="v">${esc(board.length)}</div><div class="s">of ${esc(snapshot?.scannedSellers ?? 0)} scanned (${esc(snapshot?.bazaarTotal ?? "?")} Bazaar listings)</div></div>
   <div class="stat"><div class="k">Total volume (${esc(windowLabel)})</div><div class="v">${esc(fmtUsd(totalUsd))}</div><div class="s">across ${esc(totalCalls)} settled call${totalCalls === 1 ? "" : "s"}</div></div>
   <div class="stat"><div class="k">Window</div><div class="v" style="font-size:1.05rem">Last ${esc(windowLabel)}</div><div class="s">${esc(snapshot?.scannedBlocks ?? "—")} blocks · per-call ceiling ${esc(fmtUsd(snapshot?.maxCallUsd ?? 0))}</div></div>
@@ -670,7 +711,7 @@ ${renderHeader("/leaderboard")}
 </div>
 
 <div class="panel">
-  <div class="ph"><h2>Sellers by settled volume (${esc(windowHuman)})</h2><div class="pn">Wallet links open Basescan token-transfer view for independent verification. <b>$0 ≠ no revenue</b> — sellers with bursty traffic may have lifetime volume outside this window.</div></div>
+  <div class="ph"><h2>Sellers by ${sortMode === "calls" ? "call count" : "settled volume"} (${esc(windowHuman)})</h2><div class="pn">Wallet links open Basescan token-transfer view for independent verification. <b>${sortMode === "calls" ? "0 calls" : "$0"} ≠ no revenue</b> — sellers with bursty traffic may have lifetime ${sortMode === "calls" ? "activity" : "volume"} outside this window.</div></div>
   <table>
     <thead><tr><th class="num">#</th><th>Seller</th><th>Wallet</th><th>Network</th><th class="num">Calls (${esc(windowLabel)})</th><th class="num">USDC settled (${esc(windowLabel)})</th><th class="num">Buyers</th></tr></thead>
     <tbody>${rows || emptyState}</tbody>

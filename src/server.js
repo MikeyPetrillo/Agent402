@@ -1032,7 +1032,7 @@ app.get("/api/leaderboard", (req, res) => {
 });
 // Human-readable companion to /api/leaderboard. Same cached snapshot, rendered
 // as a dashboard so visitors (and the site nav) have something to land on.
-app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(leaderboardPage(getLeaderboardSnapshot(), { baseUrl: BASE_URL })));
+app.get("/leaderboard", (req, res) => htmlCache(res, 60, 300).send(leaderboardPage(getLeaderboardSnapshot(), { baseUrl: BASE_URL, sort: req.query.sort })));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));
@@ -1174,7 +1174,7 @@ app.get("/card-1280.png", async (_req, res) => {
 app.get("/openapi.json", (_req, res) => res.json(openapiSpec(BASE_URL, CATALOG)));
 app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(toolsIndexPage(BASE_URL, CATALOG)));
 app.get("/shop", (_req, res) => htmlCache(res, 300, 900).send(shopPage(BASE_URL, CATALOG)));
-app.get("/economy", (_req, res) => htmlCache(res, 300, 900).send(economyPage(BASE_URL, getLeaderboardSnapshot())));
+app.get("/economy", (req, res) => htmlCache(res, 300, 900).send(economyPage(BASE_URL, getLeaderboardSnapshot(), { sort: req.query.sort })));
 app.get("/tools/:slug", (req, res) => {
   const tools = toolList(CATALOG);
   const tool = tools.find((t) => t.slug === req.params.slug);
