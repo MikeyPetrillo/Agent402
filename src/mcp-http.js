@@ -173,7 +173,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           name: "about_agent402",
           title: "About this connector",
           annotations: { title: "About this connector", ...SAFE },
-          description: "What this connector is: the free tier of agent402.tools, what's free vs wallet-only, and how paid access works (x402, USDC on Base, proof-of-work).",
+          description: "What this connector is: the free tier of agent402.tools, what's free vs wallet-only, the curated multi-tool workflows (skill packs) available as prompts, and how paid access works (x402, USDC on Base, proof-of-work).",
           inputSchema: { type: "object", properties: {} },
         },
       ],
@@ -238,6 +238,21 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
                 freeHere: freeCount,
                 walletOnly: tools.size - freeCount,
                 rateLimit: `${MAX_CALLS_PER_BURST}/min, ${MAX_CALLS_PER_WINDOW}/hour per client`,
+                // Curated multi-tool workflows callable as MCP prompts. An agent
+                // asking "what can this connector do?" should learn about the
+                // task-level workflows here, not just the atomic tools — the
+                // workflows are usually a better starting point than search_tools
+                // for any task that spans 2+ steps.
+                workflows: {
+                  count: SKILL_PACKS.length,
+                  usage: "prompts/list → prompts/get { name: '<slug>', arguments: { … } } — same slugs as below.",
+                  items: SKILL_PACKS.map((p) => ({
+                    slug: p.slug,
+                    title: p.title,
+                    toolCount: (p.toolSlugs || []).length,
+                    tagline: p.tagline,
+                  })),
+                },
                 clientsSeenSinceBoot: Object.fromEntries([...mcpClients].sort((a, b) => b[1] - a[1]).slice(0, 20)),
                 paidAccess: "Every tool, no rate limit: pay per call in USDC on Base via the x402 protocol — npx agent402-mcp with AGENT_KEY, or any x402 HTTP client. No signup, no API key; prices $0.001–$0.02/call.",
                 docs: `${baseUrl}/llms.txt`,
