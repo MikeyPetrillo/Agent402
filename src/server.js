@@ -28,7 +28,7 @@ import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
 import { serviceManifest, reliabilityReport } from "./discovery.js";
 import { findTools } from "./find.js";
 import { indexPage, indexSnapshot, routeQuery, startCrawler } from "./x402-index.js";
-import { getLeaderboardSnapshot, startLeaderboardRefresh, leaderboardPage } from "./leaderboard.js";
+import { getLeaderboardSnapshot, startLeaderboardRefresh, leaderboardPage, rankBy } from "./leaderboard.js";
 import { buildPaymentMiddleware, enabledNetworks } from "./payments.js";
 import { KIT } from "./tools/kit.js";
 import { KIT2 } from "./tools/kit2.js";
@@ -1019,11 +1019,18 @@ app.get("/api/leaderboard", (req, res) => {
   const self = (req.query.self || WALLET_ADDRESS || "").toLowerCase();
   const requested = String(req.query.window || "").toLowerCase();
   const windowRequested = SUPPORTED_WINDOWS.has(requested) ? requested : "24h";
+  // Mirror the HTML toggle on /leaderboard. Re-rank *after* the include filter
+  // so ranks are consecutive in the caller's view (no gaps from dropped rows).
+  // sortServed echoes what we actually applied, parallelling windowServed —
+  // a caller passing ?sort=bogus can tell from the response which mode ran.
+  const sortServed = req.query.sort === "calls" ? "calls" : "usd";
   let board = snap.leaderboard || [];
   if (include === "external" && self) board = board.filter((r) => r.wallet !== self);
+  board = rankBy(board, sortServed);
   res.json({
     ...snap,
     include,
+    sortServed,
     windowRequested,
     windowServed: snap.windowLabel || "24h",
     leaderboard: board.slice(0, top),

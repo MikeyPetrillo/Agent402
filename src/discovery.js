@@ -162,6 +162,9 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       leaderboard: `${baseUrl}/api/leaderboard`,
       leaderboardHtml: `${baseUrl}/leaderboard`,
       includeOptions: ["all", "external", "local"],
+      // Same lens as the HTML toggle on /leaderboard and /economy.
+      // `usd` = total USDC settled (default); `calls` = raw call count.
+      sortOptions: ["usd", "calls"],
       example: {
         method: "POST",
         url: `${baseUrl}/api/route`,
