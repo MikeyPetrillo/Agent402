@@ -57,6 +57,7 @@ import { NETWORK_TOOLS2 } from "./tools/network-kit2.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
+import { skillsIndex, skillPackPage } from "./skills.js";
 import { docsIndex, docsPage, docsApi } from "./docs.js";
 import { shopPage } from "./shop.js";
 import { economyPage } from "./economy.js";
@@ -691,6 +692,15 @@ app.get("/guides", (_req, res) => htmlCache(res, 300, 900).send(guidesIndex(BASE
 app.get("/guides/:slug", (req, res) => {
   const html = guidePage(BASE_URL, req.params.slug);
   if (!html) return res.status(404).type("html").send('<p>Guide not found. <a href="/guides">All guides</a></p>');
+  htmlCache(res, 300, 900).send(html);
+});
+// /skills — curated multi-tool workflows. Index + per-pack detail pages, both
+// server-rendered from SKILL_PACKS in src/skills.js. The detail page looks each
+// tool slug up in the live CATALOG so prices/descriptions stay accurate.
+app.get("/skills", (_req, res) => htmlCache(res, 300, 900).send(skillsIndex(BASE_URL)));
+app.get("/skills/:slug", (req, res) => {
+  const html = skillPackPage(BASE_URL, req.params.slug, CATALOG);
+  if (!html) return res.status(404).type("html").send('<p>Skill pack not found. <a href="/skills">All skill packs</a></p>');
   htmlCache(res, 300, 900).send(html);
 });
 // /docs hub — server-rendered from wiki/*.md (the same source of truth that
