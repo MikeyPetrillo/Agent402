@@ -51,6 +51,32 @@ export class Agent402 {
     return (await r.json()).results || [];
   }
 
+  /**
+   * Resolve a task to matching multi-tool workflow templates (skill packs).
+   * Each pack composes 5–7 catalog tools into a Claude-ready task template
+   * for jobs that no single tool covers (e.g. audit a domain). Returns
+   * `[{slug, title, tagline, toolSlugs, score, url, promptName}]` (possibly
+   * empty when the lexical signal is weak). Use `getWorkflowPrompt(slug, args)`
+   * to fetch the rendered prompt messages, or hand the slug to an MCP client.
+   */
+  async findWorkflows(task, { k = 2 } = {}) {
+    const r = await this.f(`${this.baseUrl}/api/find?q=${encodeURIComponent(task)}&k=${k}`);
+    if (!r.ok) throw new Error(`findWorkflows failed: HTTP ${r.status}`);
+    return (await r.json()).packs || [];
+  }
+
+  /**
+   * Fetch the rendered prompt messages for a skill pack with arguments
+   * substituted in. Same output as MCP `prompts/get` — usable directly with
+   * any LLM. `args` are passed by promptArg name (see /api/skill-packs.json).
+   */
+  async getWorkflowPrompt(slug, args = {}) {
+    const qs = new URLSearchParams(Object.entries(args).map(([k, v]) => [k, String(v)])).toString();
+    const r = await this.f(`${this.baseUrl}/api/skill-packs/${encodeURIComponent(slug)}/prompt${qs ? `?${qs}` : ""}`);
+    if (!r.ok) throw new Error(`getWorkflowPrompt("${slug}") failed: HTTP ${r.status}`);
+    return r.json();
+  }
+
   /** Solve a proof-of-work challenge object (from a 402 body) into an X-Pow-Solution value. */
   static solvePow(pow) {
     let n = 0;

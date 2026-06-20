@@ -109,6 +109,11 @@ for (const [path, methods] of paths) {
   if (skipBrave && BRAVE_ROUTES.has(path)) { braveSkipped += Object.keys(methods).length; continue; }
   for (const [method, op] of Object.entries(methods)) {
     const cat = (op.tags && op.tags[0]) || "other";
+    // Discovery/composition surfaces (skill packs) live in the OpenAPI spec so
+    // SDK generators know they exist, but they're not paywalled tools — they
+    // take a path param (slug) the generic sweep can't substitute. The
+    // dedicated skill-pack tests in test-mcp-all.js exercise the prompts.
+    if (cat === "workflows") continue;
     cats[cat] = cats[cat] || { pass: 0, total: 0 };
     cats[cat].total++;
 

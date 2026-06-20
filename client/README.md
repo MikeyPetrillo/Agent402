@@ -47,12 +47,30 @@ const a = new Agent402({ fetch: payFetch });
 const article = await a.call("extract", { url: "https://example.com/article" });
 ```
 
+## Workflows (skill packs)
+
+For jobs that no single tool covers — e.g. "audit a domain", "build a stock
+brief" — Agent402 ships curated multi-tool **skill packs**: 5–7 catalog tools
+composed into a Claude-ready task template. Discover them the same way you'd
+discover a tool:
+
+```js
+const packs = await a.findWorkflows("security audit");
+// → [{ slug: "security-audit", title, tagline, toolSlugs, score, url, promptName }]
+
+// Render the full prompt with arguments substituted in (same output as MCP prompts/get).
+const { messages } = await a.getWorkflowPrompt("security-audit", { domain: "stripe.com" });
+// → feed messages straight to any LLM
+```
+
 ## API
 
 | Method | What |
 |---|---|
 | `new Agent402({ baseUrl?, fetch?, cache?, fetchImpl? })` | `fetch` is your x402-wrapped fetch for paid tools (optional); `cache` (default `true`) memoizes deterministic results |
 | `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools (route, price, schema, example) |
+| `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |
+| `await a.getWorkflowPrompt(slug, args)` | Fetch the rendered prompt messages for a skill pack with arguments substituted in |
 | `await a.call(slug, params, { idempotencyKey?, cache? })` | Call a tool; auto-pays (PoW for free tools, x402 for wallet-only); returns the JSON result |
 | `Agent402.solvePow(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value |
 | `a.clearCache()` | Drop the in-memory result cache |

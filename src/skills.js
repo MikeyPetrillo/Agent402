@@ -164,6 +164,37 @@ export const SKILL_PACKS = [
       "Run a DNS health check on example.com. Use Agent402 to: pull the apex DNS records, check propagation across major public resolvers, look up the ASN/prefix, pull whois for ownership and expiry, run an HTTP reachability check, and confirm robots.txt isn't broken. Report any inconsistency or near-expiry.",
   },
   {
+    slug: "crypto-research",
+    title: "Crypto research",
+    tagline:
+      "Pull live price, market structure, OHLC history, trending status, global market context, and recent news for a single coin in one pass.",
+    useCase:
+      "Building a one-pager on a token, prepping for a positioning decision, or monitoring a new listing — you want price, supply, sentiment, and headlines without leaving the agent loop.",
+    promptArgs: [
+      { name: "coin", description: "Coin ticker or CoinGecko id (e.g. BTC, ETH, bitcoin)", required: true, substitute: "BTC" },
+    ],
+    toolSlugs: [
+      "crypto-price",
+      "crypto-market",
+      "crypto-history",
+      "crypto-trending",
+      "crypto-global",
+      "search-news",
+      "extract",
+    ],
+    workflow: [
+      "Get the live quote from crypto-price — last price, 24h change, 24h volume, and market cap.",
+      "Pull the market overview from crypto-market — circulating supply, max supply, ATH, ATH date, and 7d/30d performance for the deep dive.",
+      "Pull OHLC history from crypto-history to compute return, volatility, and max drawdown over a chosen window.",
+      "Check crypto-trending to see whether the coin is on CoinGecko's most-searched list — a fast read on retail attention.",
+      "Pull crypto-global for total market cap, BTC dominance, and 24h volume — contextualizes the coin's move against the broader market.",
+      "Pull the last week of search-news headlines for the coin — catalysts, partnerships, exploit reports.",
+      "For the top 2–3 headlines, use extract to convert the article to clean markdown for the brief.",
+    ],
+    claudePrompt:
+      "Build a one-page research brief on BTC. Use Agent402 to pull: (1) live quote (price, 24h change, volume), (2) market overview (supply, ATH, 30d performance), (3) 90 days of OHLC history with return and max drawdown, (4) whether BTC is in CoinGecko's trending list, (5) Bitcoin dominance and total market cap context from crypto-global, (6) the last 7 days of news headlines via search-news, (7) clean markdown of the top 2–3 articles via extract. Output a clean markdown brief.",
+  },
+  {
     slug: "content-extraction",
     title: "Content extraction",
     tagline:
@@ -278,7 +309,7 @@ export function skillsIndex(baseUrl) {
   return shell(
     baseUrl,
     "Skill packs: curated multi-tool workflows for AI agents",
-    "Pre-built workflows — security audit, email deliverability, financial research, macro economics, DNS health, content extraction. Pay per call in USDC or run free with proof-of-work.",
+    "Pre-built workflows — security audit, email deliverability, financial research, macro economics, DNS health, crypto research, content extraction. Pay per call in USDC or run free with proof-of-work.",
     "/skills",
     body
   );
@@ -352,6 +383,29 @@ export function skillPackPage(baseUrl, slug, catalog) {
 }
 
 export const skillSlugs = () => SKILL_PACKS.map((p) => p.slug);
+
+// Machine-readable shape served at /api/skill-packs.json — also what the
+// stdio agent402-mcp npm package fetches at startup to register its prompts.
+// We strip internal-only fields like `substitute` (a render hint) and expose
+// the public schema that any MCP client or discovery aggregator needs.
+export function skillPacksJson() {
+  return {
+    packs: SKILL_PACKS.map((p) => ({
+      slug: p.slug,
+      title: p.title,
+      tagline: p.tagline,
+      useCase: p.useCase,
+      toolSlugs: p.toolSlugs,
+      workflow: p.workflow,
+      claudePrompt: p.claudePrompt,
+      promptArgs: (p.promptArgs || []).map((a) => ({
+        name: a.name,
+        description: a.description,
+        required: a.required ?? true,
+      })),
+    })),
+  };
+}
 
 // Build an MCP prompt response for a skill pack — `messages` array + a top-level
 // `description`. Two design choices baked in here, both Option-A from the
@@ -431,4 +485,62 @@ export function buildPromptMessages(pack, args = {}, { freeSlugs } = {}) {
     description: `${pack.title}: ${pack.tagline}`,
     messages: [{ role: "user", content: { type: "text", text } }],
   };
+}
+
+// Lexical ranker for skill packs, mirroring the one in find.js so /api/find and
+// the MCP search_tools surface can recommend a *workflow* when the agent's query
+// matches a multi-tool task (e.g. "audit a domain" → security-audit) instead of
+// just returning the best individual tool. Scoring stays modest so packs only
+// rank alongside tools when the lexical signal is strong:
+//   slug exact match           = 12  (a pack is a richer answer than a single tool)
+//   slug substring             =  5
+//   title substring            =  3
+//   tagline substring          =  2
+//   useCase substring          =  1
+//   tool slug in pack.toolSlugs =  4 ("check spf" → email-deliverability via spf-check)
+//   workflow narrative hit     =  1
+const PACK_STOPWORDS = new Set([
+  "a", "an", "the", "of", "in", "on", "to", "for", "with", "by", "and", "or",
+  "is", "are", "was", "were", "be", "been", "this", "that", "it", "as", "at",
+  "from", "into", "onto", "my", "me", "i", "you", "your", "we", "our",
+  "do", "does", "did", "can", "will", "would", "should",
+]);
+
+export function rankSkillPacks(query, { k = 2, baseUrl = "", minScore = 4 } = {}) {
+  const q = String(query || "").slice(0, 500);
+  const rawTerms = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const terms = rawTerms.filter((t) => t.length > 1 && !PACK_STOPWORDS.has(t)).slice(0, 32);
+  if (!terms.length) return [];
+
+  const scored = [];
+  for (const pack of SKILL_PACKS) {
+    const slug = pack.slug.toLowerCase();
+    const title = (pack.title || "").toLowerCase();
+    const tagline = (pack.tagline || "").toLowerCase();
+    const useCase = (pack.useCase || "").toLowerCase();
+    const toolSet = new Set((pack.toolSlugs || []).map((s) => String(s).toLowerCase()));
+    const workflowHay = (pack.workflow || []).join(" ").toLowerCase();
+    let score = 0;
+    for (const term of terms) {
+      if (slug === term) score += 12;
+      else if (slug.includes(term)) score += 5;
+      if (title.includes(term)) score += 3;
+      if (tagline.includes(term)) score += 2;
+      if (useCase.includes(term)) score += 1;
+      if (toolSet.has(term)) score += 4;
+      if (workflowHay.includes(term)) score += 1;
+    }
+    if (score >= minScore) scored.push([score, pack]);
+  }
+  scored.sort((a, b) => b[0] - a[0] || a[1].slug.length - b[1].slug.length || a[1].slug.localeCompare(b[1].slug));
+
+  return scored.slice(0, Math.min(Math.max(k, 1), SKILL_PACKS.length)).map(([score, p]) => ({
+    slug: p.slug,
+    title: p.title,
+    tagline: p.tagline,
+    toolSlugs: p.toolSlugs,
+    score,
+    url: baseUrl ? `${baseUrl}/skills/${p.slug}` : `/skills/${p.slug}`,
+    promptName: p.slug, // matches the MCP prompts/list name; agents can prompts/get this directly
+  }));
 }

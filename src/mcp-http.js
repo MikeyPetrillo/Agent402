@@ -19,7 +19,7 @@ import {
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { findTools } from "./find.js";
-import { SKILL_PACKS, buildPromptMessages } from "./skills.js";
+import { SKILL_PACKS, buildPromptMessages, rankSkillPacks } from "./skills.js";
 import {
   createLimiter,
   MAX_CALLS_PER_BURST,
@@ -173,7 +173,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           name: "about_agent402",
           title: "About this connector",
           annotations: { title: "About this connector", ...SAFE },
-          description: "What this connector is: the free tier of agent402.tools, what's free vs wallet-only, and how paid access works (x402, USDC on Base, proof-of-work).",
+          description: "What this connector is: the free tier of agent402.tools, what's free vs wallet-only, the curated multi-tool workflows (skill packs) available as prompts, and how paid access works (x402, USDC on Base, proof-of-work).",
           inputSchema: { type: "object", properties: {} },
         },
       ],
@@ -183,13 +183,22 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const { name, arguments: args = {} } = req.params;
       try {
         if (name === "search_tools") {
-          const results = searchTools(args.query ?? "", args.limit);
+          const q = args.query ?? "";
+          const results = searchTools(q, args.limit);
+          // Multi-tool workflows that match the same query — surface them so an
+          // agent asking "audit a domain" sees the whole security-audit pack
+          // (callable via prompts/get on this connector) alongside the tools.
+          const workflows = rankSkillPacks(q, { k: 2, baseUrl });
           return {
             content: [{
               type: "text",
-              text: results.length
-                ? JSON.stringify({ results, usage: 'call_tool {"slug": …, "params": …}' }, null, 2)
-                : `No tools matched "${args.query}". Full catalog: ${baseUrl}/tools`,
+              text: results.length || workflows.length
+                ? JSON.stringify({
+                    results,
+                    ...(workflows.length ? { workflows, workflowsUsage: "prompts/get { name: workflows[i].promptName, arguments: { …promptArgs } }" } : {}),
+                    usage: 'call_tool {"slug": …, "params": …}',
+                  }, null, 2)
+                : `No tools matched "${q}". Full catalog: ${baseUrl}/tools`,
             }],
           };
         }
@@ -207,8 +216,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           return {
             content: [{
               type: "text",
-              text: results.length
-                ? JSON.stringify({ task: r.query, results, usage: "Run call_tool with the chosen {slug, params}. Free results execute here; wallet-only need the agent402-mcp npm server." }, null, 2)
+              text: results.length || r.packs?.length
+                ? JSON.stringify({
+                    task: r.query,
+                    results,
+                    ...(r.packs?.length ? { workflows: r.packs, workflowsUsage: "prompts/get { name: workflows[i].promptName, arguments: { …promptArgs } }" } : {}),
+                    usage: "Run call_tool with the chosen {slug, params}. Free results execute here; wallet-only need the agent402-mcp npm server.",
+                  }, null, 2)
                 : `No tool matched "${args.task ?? args.query ?? ""}". Browse the catalog: ${baseUrl}/tools`,
             }],
           };
@@ -224,6 +238,21 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
                 freeHere: freeCount,
                 walletOnly: tools.size - freeCount,
                 rateLimit: `${MAX_CALLS_PER_BURST}/min, ${MAX_CALLS_PER_WINDOW}/hour per client`,
+                // Curated multi-tool workflows callable as MCP prompts. An agent
+                // asking "what can this connector do?" should learn about the
+                // task-level workflows here, not just the atomic tools — the
+                // workflows are usually a better starting point than search_tools
+                // for any task that spans 2+ steps.
+                workflows: {
+                  count: SKILL_PACKS.length,
+                  usage: "prompts/list → prompts/get { name: '<slug>', arguments: { … } } — same slugs as below.",
+                  items: SKILL_PACKS.map((p) => ({
+                    slug: p.slug,
+                    title: p.title,
+                    toolCount: (p.toolSlugs || []).length,
+                    tagline: p.tagline,
+                  })),
+                },
                 clientsSeenSinceBoot: Object.fromEntries([...mcpClients].sort((a, b) => b[1] - a[1]).slice(0, 20)),
                 paidAccess: "Every tool, no rate limit: pay per call in USDC on Base via the x402 protocol — npx agent402-mcp with AGENT_KEY, or any x402 HTTP client. No signup, no API key; prices $0.001–$0.02/call.",
                 docs: `${baseUrl}/llms.txt`,

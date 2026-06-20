@@ -29,10 +29,77 @@ permissions:
   contents: read
 
 jobs:
+  # Single source of truth for marker parsing. Every downstream job gates on
+  # `needs.markers.outputs.<name> == 'true'` instead of calling
+  # `contains(join(github.event.commits.*.message), '[...]')` directly.
+  #
+  # Why: the old contains() check was a substring scan over both subject lines
+  # AND bodies, so prose in a commit message that mentioned a marker (even in
+  # negation, like "publish later via the publish marker") would trip the gate.
+  # This job scans only commit subject lines (%s) across the push range, and
+  # matches each marker as a standalone whitespace-delimited token.
+  markers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      test: ${{ steps.parse.outputs.test }}
+      deploy: ${{ steps.parse.outputs.deploy }}
+      publish: ${{ steps.parse.outputs.publish }}
+      probe: ${{ steps.parse.outputs.probe }}
+      drain: ${{ steps.parse.outputs.drain }}
+      demand: ${{ steps.parse.outputs.demand }}
+      paytest: ${{ steps.parse.outputs.paytest }}
+      purl: ${{ steps.parse.outputs.purl }}
+      marketplace: ${{ steps.parse.outputs.marketplace }}
+      bazaar_refresh: ${{ steps.parse.outputs.bazaar_refresh }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+      - id: parse
+        name: Parse markers from commit subject lines only
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          MARKERS="test deploy publish probe drain demand paytest purl marketplace bazaar-refresh"
+          if [ "$EVENT_NAME" != "push" ]; then
+            echo "Event is $EVENT_NAME (not push) — emitting all markers as false."
+            for m in $MARKERS; do
+              echo "${m//-/_}=false" >> "$GITHUB_OUTPUT"
+            done
+            exit 0
+          fi
+          # Collect subject lines for every commit in this push range.
+          # Fall back to the head commit alone if BEFORE is empty/zero
+          # (new branch or force-push with no shared ancestor) or unreachable.
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            TITLES=$(git log -1 --format='%s' "$AFTER")
+          else
+            TITLES=$(git log --format='%s' "$BEFORE..$AFTER" 2>/dev/null || git log -1 --format='%s' "$AFTER")
+          fi
+          echo "Subject lines scanned for markers:"
+          printf '%s\n' "$TITLES" | sed 's/^/  /'
+          # Standalone token match: marker must be bracketed and bounded by
+          # whitespace or line edges. So "feat: stuff (publish)" never matches
+          # the publish gate, and "publish-config" never matches either.
+          for m in $MARKERS; do
+            out_name="${m//-/_}"
+            if printf '%s\n' "$TITLES" | grep -qE "(^|[[:space:]])\[${m}\]([[:space:]]|\$)"; then
+              echo "${out_name}=true" >> "$GITHUB_OUTPUT"
+              echo "[${m}] matched"
+            else
+              echo "${out_name}=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
   # Isolated demand-board read so its output isn't buried under the probe job's
-  # verbose steps. Gated on [demand]. Pure read; never fails the run.
+  # verbose steps. Gated on the demand marker. Pure read; never fails the run.
   demand:
-    if: contains(join(github.event.commits.*.message), '[demand]')
+    needs: markers
+    if: needs.markers.outputs.demand == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -50,7 +117,8 @@ jobs:
         run: node scripts/supply-scan.js || true
 
   paytest:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'paytest' || contains(join(github.event.commits.*.message), '[paytest]')
+    needs: markers
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'paytest' || needs.markers.outputs.paytest == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
@@ -98,7 +166,8 @@ jobs:
     # One-shot job: makes a tiny paid request against every Agent402 Bazaar
     # listing whose serviceName is stale, so the CDP harvester re-observes
     # the current 402 challenge metadata (description, serviceName, tags).
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-refresh' || contains(join(github.event.commits.*.message), '[bazaar-refresh]')
+    needs: markers
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-refresh' || needs.markers.outputs.bazaar_refresh == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -119,7 +188,8 @@ jobs:
           node scripts/refresh-bazaar.js
 
   drain:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'drain' || contains(join(github.event.commits.*.message), '[drain]')
+    needs: markers
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'drain' || needs.markers.outputs.drain == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -146,7 +216,8 @@ jobs:
           fi
 
   marketplace:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'marketplace' || contains(join(github.event.commits.*.message), '[marketplace]')
+    needs: markers
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'marketplace' || needs.markers.outputs.marketplace == 'true'
     runs-on: ubuntu-latest
     env:
       A402APP_KEY: ${{ secrets.AGENT402_APP_API_KEY }}
@@ -175,7 +246,8 @@ jobs:
   # Stripe's machine-payments quickstart points buyers at purl, so "purl can pay
   # us" means every developer following Stripe's docs can buy from us unchanged.
   purl:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'purl' || contains(join(github.event.commits.*.message), '[purl]')
+    needs: markers
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'purl' || needs.markers.outputs.purl == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -246,7 +318,8 @@ jobs:
     # asks to deploy or publish — so deploy/publish can hard-gate on it via
     # `needs: test`. This makes "ship without running tests" impossible by
     # design, not by developer discipline.
-    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'test' || inputs.mode == 'deploy' || inputs.mode == 'publish') || contains(join(github.event.commits.*.message), '[test]') || contains(join(github.event.commits.*.message), '[deploy]') || contains(join(github.event.commits.*.message), '[publish]')
+    needs: markers
+    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'test' || inputs.mode == 'deploy' || inputs.mode == 'publish') || needs.markers.outputs.test == 'true' || needs.markers.outputs.deploy == 'true' || needs.markers.outputs.publish == 'true'
     runs-on: ubuntu-latest
     env:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
@@ -292,6 +365,9 @@ jobs:
 
       - name: Tool resolver (/api/find ranking, guards)
         run: node scripts/test-find.js
+
+      - name: Skill-pack invariants (toolSlugs resolve in catalog; substitution renders)
+        run: node scripts/test-skill-packs.js
 
       - name: x402 Leaderboard pure helpers (offline; Bazaar parsing + ranking)
         run: node scripts/test-x402-leaderboard.js
@@ -663,8 +739,8 @@ jobs:
           curl -s https://agent402.tools/api/stats | jq '{tools, wallet, onchainRevenueProof, served: .toolCallsServed}' || echo "(/api/stats not live yet — will appear after this image rolls out)"
 
   publish:
-    needs: test
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'publish' || contains(join(github.event.commits.*.message), '[publish]')
+    needs: [markers, test]
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'publish' || needs.markers.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -947,7 +1023,8 @@ jobs:
           echo "published io.github.mikeypetrillo/agent402@$VER → https://registry.modelcontextprotocol.io"
 
   probe:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || contains(join(github.event.commits.*.message), '[probe]')
+    needs: markers
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'probe' || needs.markers.outputs.probe == 'true'
     runs-on: ubuntu-latest
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -1117,8 +1194,8 @@ jobs:
           done
 
   deploy:
-    needs: test
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' || contains(join(github.event.commits.*.message), '[deploy]')
+    needs: [markers, test]
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' || needs.markers.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

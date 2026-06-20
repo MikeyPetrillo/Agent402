@@ -62,6 +62,14 @@ try {
   if (!text(search).includes("convert-miles-to-kilometers")) fail(`search_tools missed the conversion tool: ${text(search).slice(0, 300)}`);
   console.log("search_tools finds long-tail catalog tools ✓");
 
+  // search_tools surfaces matching multi-tool workflow templates (skill packs)
+  // so a task-shaped query also points the agent at the curated prompt — not
+  // just at individual tools they'd have to stitch together themselves.
+  const workflowSearch = await client.callTool({ name: "search_tools", arguments: { query: "security audit" } });
+  if (!text(workflowSearch).includes("security-audit")) fail(`search_tools should recommend the security-audit workflow: ${text(workflowSearch).slice(0, 400)}`);
+  if (!text(workflowSearch).includes("workflows")) fail(`search_tools response should include the workflows key: ${text(workflowSearch).slice(0, 400)}`);
+  console.log("search_tools recommends matching workflow templates ✓");
+
   // first-class tool, no wallet → settles via proof-of-work
   const hashed = await client.callTool({ name: "hash", arguments: { text: "hello world" } });
   if (hashed.isError || !text(hashed).includes("b94d27b9")) fail(`PoW-paid hash call wrong: ${text(hashed).slice(0, 300)}`);
@@ -81,6 +89,22 @@ try {
   const info = await client.callTool({ name: "payment_info", arguments: {} });
   if (!text(info).includes("proof-of-work")) fail(`payment_info should report proof-of-work mode: ${text(info).slice(0, 300)}`);
   console.log("payment_info reports proof-of-work mode ✓");
+
+  // prompts/list: every skill pack registered with typed args; prompts/get
+  // delegates rendering to the hosted service and substitutes args correctly.
+  const { prompts } = await client.listPrompts();
+  if (prompts.length < 6) fail(`prompts/list should expose >=6 skill packs, got ${prompts.length}`);
+  const sa = prompts.find((p) => p.name === "security-audit");
+  if (!sa) fail(`prompts/list should include "security-audit" (got: ${prompts.map((p) => p.name).join(", ")})`);
+  if (!sa.arguments?.some((a) => a.name === "domain")) fail(`security-audit should declare "domain" argument`);
+  console.log(`prompts/list → ${prompts.length} skill packs with typed arguments ✓`);
+
+  const rendered = await client.getPrompt({ name: "security-audit", arguments: { domain: "stripe.com" } });
+  const promptText = rendered.messages?.[0]?.content?.text ?? "";
+  if (!promptText.includes("stripe.com")) fail(`prompts/get should substitute domain into text: ${promptText.slice(0, 300)}`);
+  if (promptText.includes("example.com")) fail(`prompts/get should leave no unsubstituted placeholders: ${promptText.slice(0, 300)}`);
+  if (!promptText.includes("cert-transparency")) fail(`prompts/get should name the tool plan: ${promptText.slice(0, 300)}`);
+  console.log("prompts/get substitutes args and includes the tool plan ✓");
 
   // spend controls: refusals must happen BEFORE any payment is attempted, so a
   // throwaway (unfunded) key is safe here — no facilitator is ever contacted.

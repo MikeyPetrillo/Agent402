@@ -50,6 +50,15 @@ try {
   let threw = false; try { await a.call("definitely-not-a-tool", {}); } catch { threw = true; }
   ok(threw, "unknown slug throws");
 
+  // 7. findWorkflows() surfaces multi-tool skill packs for task-shaped queries.
+  const packs = await a.findWorkflows("security audit");
+  ok(packs.some((p) => p.slug === "security-audit"), `findWorkflows("security audit") returns the security-audit pack (got ${packs.map((p) => p.slug).slice(0, 3).join(",")})`);
+
+  // 8. getWorkflowPrompt() returns rendered messages with args substituted in.
+  const rendered = await a.getWorkflowPrompt("security-audit", { domain: "stripe.com" });
+  const promptText = rendered.messages?.[0]?.content?.text ?? "";
+  ok(promptText.includes("stripe.com") && !promptText.includes("{{domain}}"), "getWorkflowPrompt substitutes args into the rendered prompt");
+
   console.log(`\n${pass} passed`);
   proc.kill("SIGKILL");
   process.exit(0);

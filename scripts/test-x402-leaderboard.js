@@ -5,6 +5,7 @@ import {
   extractWalletsFromBazaar,
   aggregateLeaderboard,
   canonicalHost,
+  rankBy,
 } from "../src/leaderboard.js";
 
 let pass = 0, fail = 0;
@@ -253,6 +254,59 @@ const noSiteSellers = [
 ];
 const noSiteRanked = aggregateLeaderboard([], noSiteSellers);
 eq(noSiteRanked.length, 2, "two wallets with no homepage stay as two rows (no merging into a 'null-host' bucket)");
+
+// --- rankBy ------------------------------------------------------------------
+
+// The pure re-ranker that powers the /leaderboard and /economy sort toggle.
+// Two lenses on the same snapshot: USDC earned (default, matches the on-chain
+// volume story) and total calls served (matches the agent-traffic story).
+const rankByInput = [
+  { name: "Whale", totalUsd: 5.0, callsSettled: 10 },
+  { name: "Volume", totalUsd: 0.5, callsSettled: 100 },
+  { name: "Mid", totalUsd: 1.0, callsSettled: 20 },
+];
+
+const byUsd = rankBy(rankByInput, "usd");
+eq(byUsd.map((r) => r.name), ["Whale", "Mid", "Volume"], "rankBy('usd'): orders by totalUsd desc");
+eq(byUsd.map((r) => r.rank), [1, 2, 3], "rankBy('usd'): rank field re-numbered 1..N");
+eq(rankBy(rankByInput).map((r) => r.name), ["Whale", "Mid", "Volume"], "rankBy() defaults to 'usd'");
+
+const byCalls = rankBy(rankByInput, "calls");
+eq(byCalls.map((r) => r.name), ["Volume", "Mid", "Whale"], "rankBy('calls'): orders by callsSettled desc");
+eq(byCalls.map((r) => r.rank), [1, 2, 3], "rankBy('calls'): rank field re-numbered 1..N");
+
+// Tiebreaker chain — primary metric ties, secondary metric breaks, name as last resort.
+const tieRows = [
+  { name: "Bravo", totalUsd: 1.0, callsSettled: 5 },
+  { name: "Alpha", totalUsd: 1.0, callsSettled: 5 },
+  { name: "Charlie", totalUsd: 1.0, callsSettled: 7 }, // higher calls → breaks usd tie under 'usd'
+];
+const tieByUsd = rankBy(tieRows, "usd");
+eq(tieByUsd.map((r) => r.name), ["Charlie", "Alpha", "Bravo"], "rankBy('usd'): callsSettled breaks usd tie, then name");
+
+const tieByCalls = rankBy(
+  [
+    { name: "Bravo", totalUsd: 0.5, callsSettled: 10 },
+    { name: "Alpha", totalUsd: 0.5, callsSettled: 10 },
+    { name: "Charlie", totalUsd: 0.9, callsSettled: 10 }, // higher usd → breaks calls tie under 'calls'
+  ],
+  "calls"
+);
+eq(tieByCalls.map((r) => r.name), ["Charlie", "Alpha", "Bravo"], "rankBy('calls'): totalUsd breaks calls tie, then name");
+
+// Garbage inputs don't crash.
+eq(rankBy(null), [], "rankBy(null) → []");
+eq(rankBy(undefined), [], "rankBy(undefined) → []");
+eq(rankBy([]), [], "rankBy([]) → []");
+
+// rankBy is pure — original array order untouched.
+const original = [
+  { name: "A", totalUsd: 0.1, callsSettled: 1 },
+  { name: "B", totalUsd: 0.5, callsSettled: 5 },
+];
+const snap = original.map((r) => r.name);
+rankBy(original, "calls");
+eq(original.map((r) => r.name), snap, "rankBy does not mutate input array");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

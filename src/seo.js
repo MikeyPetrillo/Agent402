@@ -1,7 +1,7 @@
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
 import { guideSlugs } from "./guides.js";
-import { skillSlugs } from "./skills.js";
+import { skillSlugs, SKILL_PACKS } from "./skills.js";
 
 export function robotsTxt(baseUrl) {
   // Explicitly welcome AI/agent crawlers and search engines; point them at the
@@ -102,7 +102,7 @@ Base URL: ${baseUrl}
 
 > Neutral cross-seller discovery for the whole x402 ecosystem: POST \`${baseUrl}/api/route\` with \`{"query":"<task>", "top":N, "include":"all|external|local"}\` — the Smart Order Router ranks tools across every x402 seller we've crawled (auto-discovered from the Coinbase CDP Bazaar, refreshed hourly), filters out unhealthy sellers, and tiebreaks on health then price. Use \`include:"external"\` to *exclude* Agent402 itself from the results — same router used as a neutral discovery API over competitors. Full seller index at \`${baseUrl}/api/index\` (JSON) and \`${baseUrl}/index\` (HTML).
 
-> Public on-chain ranking of every x402 seller: \`GET ${baseUrl}/api/leaderboard?top=N&include=all|external\` returns the live leaderboard by Base USDC settled volume (callsSettled, totalUsd, uniqueBuyers per seller). Pipeline: Bazaar discovery → \`eth_getLogs\` on Base USDC → per-call ceiling filter → aggregate by payTo. Cached snapshot, refreshed hourly server-side. Free. Use \`include:"external"\` to rank only the rest of the ecosystem (excludes Agent402).
+> Public on-chain ranking of every x402 seller: \`GET ${baseUrl}/api/leaderboard?top=N&include=all|external&sort=usd|calls\` returns the live leaderboard by Base USDC settled volume (callsSettled, totalUsd, uniqueBuyers per seller). Pipeline: Bazaar discovery → \`eth_getLogs\` on Base USDC → per-call ceiling filter → aggregate by payTo. Cached snapshot, refreshed hourly server-side. Free. Use \`include:"external"\` to rank only the rest of the ecosystem (excludes Agent402). Use \`sort=calls\` to rank by raw call volume instead of USDC earned — useful for finding the most-used tools regardless of price.
 
 > Open source, and two-sided: Agent402 is also the home of \`agent402-tollbooth\` — an open-source, self-hostable x402 pay-per-crawl gate that lets any site charge AI crawlers per request (USDC via x402, or free proof-of-work) while humans browse free. Install page: ${baseUrl}/tollbooth . Hosted multi-site dashboard, alerts, and white-label for SEO agencies in early access: ${baseUrl}/tollbooth/cloud (Solo $19/mo, Team $99/mo, Agency $299/mo, Enterprise on request; 20% lifetime partner referral). https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth
 
@@ -130,6 +130,14 @@ Base URL: ${baseUrl}
 - **A named maintainer**: https://github.com/MikeyPetrillo.
 - **Open source** — the whole server is public and auditable: https://github.com/MikeyPetrillo/Agent402
 - **Deterministic outputs**: no LLM in the serving path — same input, same output, full OpenAPI schemas, flat per-call prices.
+
+## Skill packs (multi-tool workflows)
+
+If your task spans several tools — "audit a domain", "diagnose deliverability", "run macro research" — start from a skill pack. Each pack is a curated, ordered sequence of Agent402 tool calls with a Claude-ready prompt template, callable as an MCP prompt (\`prompts/list\` → \`prompts/get { name: "<slug>", arguments: {…} }\`) or as plain HTTP at \`${baseUrl}/api/skill-packs/{slug}/prompt\`.
+
+${SKILL_PACKS.map((p) => `- **${p.title}** (\`${p.slug}\`, ${p.toolSlugs.length} tools) — ${p.tagline} ${baseUrl}/skills/${p.slug}`).join("\n")}
+
+Full index: ${baseUrl}/skills · JSON: ${baseUrl}/api/skill-packs.json
 
 ## Paid endpoints (${tools.length})
 

@@ -19,11 +19,16 @@
 import { createHash } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 
 const BASE = (process.env.AGENT402_URL || "https://agent402.tools").replace(/\/$/, "");
 const AGENT_KEY = process.env.AGENT_KEY || "";
-const VERSION = "0.4.0";
+const VERSION = "0.6.0";
 
 // Spend controls — enforced BEFORE a payment is ever signed, so a confused or
 // runaway model cannot drain the wallet. Unset = unlimited (back-compat).
@@ -46,12 +51,19 @@ const log = (...a) => console.error("[agent402-mcp]", ...a);
 // ---------------------------------------------------------------------------
 // Catalog: built from the service's own machine-readable surfaces.
 const catalog = new Map(); // slug -> { slug, method, path, price, description, category, computePayable, inputSchema }
+// Skill packs — curated multi-tool workflows, fetched at startup from the
+// hosted service so the npm package picks up new packs without a republish.
+// Empty if the discovery fetch fails (older services or transient errors);
+// prompts/list will just return an empty array in that case.
+let skillPacks = [];
 
 async function loadCatalog() {
-  const [pricing, openapi] = await Promise.all([
+  const [pricing, openapi, packs] = await Promise.all([
     fetch(`${BASE}/api/pricing`).then((r) => r.json()),
     fetch(`${BASE}/openapi.json`).then((r) => r.json()),
+    fetch(`${BASE}/api/skill-packs.json`).then((r) => (r.ok ? r.json() : { packs: [] })).catch(() => ({ packs: [] })),
   ]);
+  skillPacks = Array.isArray(packs?.packs) ? packs.packs : [];
   for (const e of pricing.endpoints) {
     const slug = e.slug ?? e.docs?.split("/tools/").pop();
     if (!slug) continue;
@@ -207,9 +219,78 @@ function searchTools(query, limit = 10) {
   }));
 }
 
+// Rank the curated multi-tool skill packs against the same query, so a single
+// search_tools call also tells the agent "this looks like a `security-audit`
+// or `email-deliverability` job — fetch the whole template via prompts/get".
+// Weighted slug/title/tagline/useCase/toolSlugs match — same shape as the
+// hosted /api/find ranking, kept inline here so the stdio package stays
+// dependency-free. Returns [] when no pack scores above the noise floor.
+function rankWorkflows(query, k = 2) {
+  const terms = String(query).toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 1);
+  if (!terms.length || !skillPacks.length) return [];
+  const scored = [];
+  for (const p of skillPacks) {
+    const slug = p.slug.toLowerCase();
+    const title = (p.title || "").toLowerCase();
+    const tagline = (p.tagline || "").toLowerCase();
+    const useCase = (p.useCase || "").toLowerCase();
+    const toolSet = new Set((p.toolSlugs || []).map((s) => String(s).toLowerCase()));
+    const workflowHay = (p.workflow || []).join(" ").toLowerCase();
+    let score = 0;
+    for (const term of terms) {
+      if (slug === term) score += 12;
+      else if (slug.includes(term)) score += 5;
+      if (title.includes(term)) score += 3;
+      if (tagline.includes(term)) score += 2;
+      if (useCase.includes(term)) score += 1;
+      if (toolSet.has(term)) score += 4;
+      if (workflowHay.includes(term)) score += 1;
+    }
+    if (score >= 4) scored.push([score, p]);
+  }
+  scored.sort((a, b) => b[0] - a[0] || a[1].slug.length - b[1].slug.length);
+  return scored.slice(0, k).map(([score, p]) => ({
+    slug: p.slug,
+    title: p.title,
+    tagline: p.tagline,
+    toolCount: (p.toolSlugs || []).length,
+    promptName: p.slug,
+    score,
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // MCP wiring
-const server = new Server({ name: "agent402", version: VERSION }, { capabilities: { tools: {} } });
+const server = new Server({ name: "agent402", version: VERSION }, { capabilities: { tools: {}, prompts: {} } });
+
+// Skill packs are exposed as MCP prompts — discoverable in slash menus on any
+// MCP-aware client. The list is fetched once at boot in loadCatalog(); the
+// per-prompt rendering is delegated to the hosted service so the npm package
+// stays thin and prompt text stays canonical with the website at /skills.
+server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+  prompts: skillPacks.map((p) => ({
+    name: p.slug,
+    title: p.title,
+    description: p.tagline,
+    arguments: (p.promptArgs || []).map((a) => ({
+      name: a.name,
+      description: a.description,
+      required: a.required ?? true,
+    })),
+  })),
+}));
+server.setRequestHandler(GetPromptRequestSchema, async (req) => {
+  const { name, arguments: args = {} } = req.params;
+  const pack = skillPacks.find((p) => p.slug === name);
+  if (!pack) throw new Error(`Unknown prompt "${name}". List available with prompts/list.`);
+  const url = new URL(`${BASE}/api/skill-packs/${encodeURIComponent(name)}/prompt`);
+  for (const [k, v] of Object.entries(args || {})) {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+  }
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to render prompt "${name}" from ${BASE}: HTTP ${res.status}`);
+  return await res.json();
+});
 
 let curated = [];
 let pricingInfo = null;
@@ -224,7 +305,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     {
       name: "search_tools",
       description:
-        `Search the full Agent402 catalog (${catalog.size} pay-per-call tools: encoding, crypto, data conversion, text, time, validation, math, unit conversions, network, browser, memory). Returns matching tools with their price, payment options, and input schema. Call them with call_tool.`,
+        `Search the full Agent402 catalog (${catalog.size} pay-per-call tools: encoding, crypto, data conversion, text, time, validation, math, unit conversions, network, browser, memory). Returns matching tools with price, payment options, and input schema — call them with call_tool. Also returns matching multi-tool workflow templates (skill packs) when the query is task-shaped; fetch the whole template via prompts/get { name: "<slug>", arguments: { … } }.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -260,13 +341,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args = {} } = req.params;
   try {
     if (name === "search_tools") {
-      const results = searchTools(args.query ?? "", args.limit ?? 10);
+      const q = args.query ?? "";
+      const results = searchTools(q, args.limit ?? 10);
+      const workflows = rankWorkflows(q, 2);
       return {
         content: [{
           type: "text",
-          text: results.length
-            ? JSON.stringify({ results, usage: "call_tool {\"slug\": …, \"params\": …}" }, null, 2)
-            : `No tools matched "${args.query}". Browse the catalog at ${BASE}/tools or ${BASE}/api/pricing.`,
+          text: results.length || workflows.length
+            ? JSON.stringify({
+                results,
+                ...(workflows.length ? { workflows, workflowsUsage: "prompts/get { name: workflows[i].promptName, arguments: { …per-pack args } } returns the full Claude-ready task template." } : {}),
+                usage: "call_tool {\"slug\": …, \"params\": …}",
+              }, null, 2)
+            : `No tools matched "${q}". Browse the catalog at ${BASE}/tools or ${BASE}/api/pricing.`,
         }],
       };
     }
@@ -288,6 +375,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             tools: catalog.size,
             payableWithCompute: computePayable,
             walletOnly: catalog.size - computePayable,
+            workflows: skillPacks.length,
             spendControls: AGENT_KEY
               ? {
                   maxPerCallUsd: MAX_PER_CALL === Infinity ? "unlimited" : MAX_PER_CALL,

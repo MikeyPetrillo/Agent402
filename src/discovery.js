@@ -16,6 +16,7 @@
 // Both are pure functions of already-computed state — no network, no secrets.
 
 import { toolList, CATEGORIES } from "./pages.js";
+import { SKILL_PACKS } from "./skills.js";
 
 const REPO = "https://github.com/MikeyPetrillo/Agent402";
 const MAINTAINER = { name: "Mikey Petrillo", url: "https://github.com/MikeyPetrillo" };
@@ -76,6 +77,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       "Two-sided: also ships agent402-tollbooth, an open pay-per-crawl gate for the demand side of x402.",
       "Deterministic — no LLM in the serving path; same input, same output, full OpenAPI schemas.",
       "Free without a wallet via proof-of-work on the pure-CPU tools.",
+      `${SKILL_PACKS.length} curated multi-tool workflows (skill packs) callable as MCP prompts — agents fetch the whole task template, not just one tool.`,
     ],
     twoSided: {
       tollbooth: {
@@ -107,6 +109,25 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     capabilities: {
       tools: toolCount,
       categories: capabilityMap(catalog, powSlugs),
+    },
+    // Curated multi-tool workflows ("skill packs"). Each pack composes 5–7
+    // catalog tools into a Claude-ready task template for jobs that no single
+    // tool covers (e.g. "audit a domain", "diagnose deliverability"). Callable
+    // as MCP prompts (prompts/list → prompts/get) or via plain HTTP. Same
+    // discovery wedge as `capabilities.tools` but at the *task* granularity.
+    workflows: {
+      count: SKILL_PACKS.length,
+      indexHtml: `${baseUrl}/skills`,
+      index: `${baseUrl}/api/skill-packs.json`,
+      promptHttp: `${baseUrl}/api/skill-packs/{slug}/prompt`,
+      mcpPromptsHint: "On the MCP connector, call prompts/list then prompts/get { name: '<slug>', arguments: {…} } — same slugs as below.",
+      items: SKILL_PACKS.map((p) => ({
+        slug: p.slug,
+        title: p.title,
+        toolCount: (p.toolSlugs || []).length,
+        url: `${baseUrl}/skills/${p.slug}`,
+        promptName: p.slug,
+      })),
     },
     mcp: {
       remoteConnector: `${baseUrl}/mcp`,
@@ -141,6 +162,9 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       leaderboard: `${baseUrl}/api/leaderboard`,
       leaderboardHtml: `${baseUrl}/leaderboard`,
       includeOptions: ["all", "external", "local"],
+      // Same lens as the HTML toggle on /leaderboard and /economy.
+      // `usd` = total USDC settled (default); `calls` = raw call count.
+      sortOptions: ["usd", "calls"],
       example: {
         method: "POST",
         url: `${baseUrl}/api/route`,

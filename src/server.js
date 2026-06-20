@@ -28,7 +28,7 @@ import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
 import { serviceManifest, reliabilityReport } from "./discovery.js";
 import { findTools } from "./find.js";
 import { indexPage, indexSnapshot, routeQuery, startCrawler } from "./x402-index.js";
-import { getLeaderboardSnapshot, startLeaderboardRefresh, leaderboardPage } from "./leaderboard.js";
+import { getLeaderboardSnapshot, startLeaderboardRefresh, leaderboardPage, rankBy } from "./leaderboard.js";
 import { buildPaymentMiddleware, enabledNetworks } from "./payments.js";
 import { KIT } from "./tools/kit.js";
 import { KIT2 } from "./tools/kit2.js";
@@ -57,7 +57,7 @@ import { NETWORK_TOOLS2 } from "./tools/network-kit2.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
-import { skillsIndex, skillPackPage } from "./skills.js";
+import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
 import { docsIndex, docsPage, docsApi } from "./docs.js";
 import { shopPage } from "./shop.js";
 import { economyPage } from "./economy.js";
@@ -703,6 +703,29 @@ app.get("/skills/:slug", (req, res) => {
   if (!html) return res.status(404).type("html").send('<p>Skill pack not found. <a href="/skills">All skill packs</a></p>');
   htmlCache(res, 300, 900).send(html);
 });
+// Machine-readable skill packs — the canonical source for the `agent402-mcp`
+// npm package's prompts surface (and any future discovery aggregator). The
+// stdio package fetches this at boot to register its prompts/list response.
+// `/api/skill-packs/:slug/prompt` renders the same MCP messages the hosted
+// /mcp returns, accepting query args matching the pack's promptArgs.
+app.get("/api/skill-packs.json", (_req, res) => {
+  res.set("Cache-Control", "public, max-age=300, s-maxage=900");
+  res.json(skillPacksJson());
+});
+app.get("/api/skill-packs/:slug/prompt", (req, res) => {
+  const pack = SKILL_PACKS.find((p) => p.slug === req.params.slug);
+  if (!pack) return res.status(404).json({ error: `Unknown skill pack "${req.params.slug}". List: /api/skill-packs.json` });
+  // Pull args from the query string by promptArgs name. Anything not
+  // declared is ignored (no surprise substitutions). Compute freeSlugs from
+  // the live catalog so the access split in the rendered prompt is honest.
+  const args = {};
+  for (const a of pack.promptArgs || []) {
+    if (req.query[a.name] != null && req.query[a.name] !== "") args[a.name] = String(req.query[a.name]);
+  }
+  const freeSlugs = new Set(Object.values(CATALOG).filter((def) => isComputePayable(def)).map((def) => def.slug));
+  res.set("Cache-Control", "public, max-age=60");
+  res.json(buildPromptMessages(pack, args, { freeSlugs }));
+});
 // /docs hub — server-rendered from wiki/*.md (the same source of truth that
 // syncs to the GitHub wiki via CI). /docs/api is registered *before* the
 // parameterized /docs/:slug so the literal "api" path doesn't get captured
@@ -996,11 +1019,18 @@ app.get("/api/leaderboard", (req, res) => {
   const self = (req.query.self || WALLET_ADDRESS || "").toLowerCase();
   const requested = String(req.query.window || "").toLowerCase();
   const windowRequested = SUPPORTED_WINDOWS.has(requested) ? requested : "24h";
+  // Mirror the HTML toggle on /leaderboard. Re-rank *after* the include filter
+  // so ranks are consecutive in the caller's view (no gaps from dropped rows).
+  // sortServed echoes what we actually applied, parallelling windowServed —
+  // a caller passing ?sort=bogus can tell from the response which mode ran.
+  const sortServed = req.query.sort === "calls" ? "calls" : "usd";
   let board = snap.leaderboard || [];
   if (include === "external" && self) board = board.filter((r) => r.wallet !== self);
+  board = rankBy(board, sortServed);
   res.json({
     ...snap,
     include,
+    sortServed,
     windowRequested,
     windowServed: snap.windowLabel || "24h",
     leaderboard: board.slice(0, top),
@@ -1009,7 +1039,7 @@ app.get("/api/leaderboard", (req, res) => {
 });
 // Human-readable companion to /api/leaderboard. Same cached snapshot, rendered
 // as a dashboard so visitors (and the site nav) have something to land on.
-app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(leaderboardPage(getLeaderboardSnapshot(), { baseUrl: BASE_URL })));
+app.get("/leaderboard", (req, res) => htmlCache(res, 60, 300).send(leaderboardPage(getLeaderboardSnapshot(), { baseUrl: BASE_URL, sort: req.query.sort })));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));
@@ -1151,7 +1181,7 @@ app.get("/card-1280.png", async (_req, res) => {
 app.get("/openapi.json", (_req, res) => res.json(openapiSpec(BASE_URL, CATALOG)));
 app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(toolsIndexPage(BASE_URL, CATALOG)));
 app.get("/shop", (_req, res) => htmlCache(res, 300, 900).send(shopPage(BASE_URL, CATALOG)));
-app.get("/economy", (_req, res) => htmlCache(res, 300, 900).send(economyPage(BASE_URL, getLeaderboardSnapshot())));
+app.get("/economy", (req, res) => htmlCache(res, 300, 900).send(economyPage(BASE_URL, getLeaderboardSnapshot(), { sort: req.query.sort })));
 app.get("/tools/:slug", (req, res) => {
   const tools = toolList(CATALOG);
   const tool = tools.find((t) => t.slug === req.params.slug);

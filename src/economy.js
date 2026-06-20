@@ -12,6 +12,7 @@
 // copy. Rank is enough.
 
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { rankBy } from "./leaderboard.js";
 
 const esc = (s) =>
   String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -29,19 +30,25 @@ const fmtPct = (n) => `${(Number(n) || 0).toFixed(1)}%`;
 
 // Compute summary metrics off the ranked leaderboard array. Pure data
 // transformation; no side effects, easy to test if we ever decide to.
-function summarize(rows) {
+// `sortMode` controls the lens — "usd" measures concentration of revenue,
+// "calls" measures concentration of activity. Totals are sort-agnostic.
+function summarize(rows, sortMode = "usd") {
   const total = rows.reduce((s, r) => s + (r.totalUsd || 0), 0);
   const totalCalls = rows.reduce((s, r) => s + (r.callsSettled || 0), 0);
   const activeSellers = rows.filter((r) => r.callsSettled > 0).length;
   const avgCallUsd = totalCalls > 0 ? total / totalCalls : 0;
 
-  // HHI-style concentration: the share of the top 1, top 5, top 10.
-  const sorted = [...rows].sort((a, b) => (b.totalUsd || 0) - (a.totalUsd || 0));
-  const sumTop = (n) =>
-    sorted.slice(0, n).reduce((s, r) => s + (r.totalUsd || 0), 0);
-  const top1Share = total > 0 ? (sumTop(1) / total) * 100 : 0;
-  const top5Share = total > 0 ? (sumTop(5) / total) * 100 : 0;
-  const top10Share = total > 0 ? (sumTop(10) / total) * 100 : 0;
+  // HHI-style concentration in the *chosen* metric: when the page is showing
+  // "top-10 sellers by calls", the top-N share answers "what % of all calls
+  // do those top sellers serve?" — coherent with the displayed ranking. Same
+  // when sortMode === "usd" (the original behaviour).
+  const metric = sortMode === "calls" ? "callsSettled" : "totalUsd";
+  const denom = sortMode === "calls" ? totalCalls : total;
+  const sorted = [...rows].sort((a, b) => (b[metric] || 0) - (a[metric] || 0));
+  const sumTop = (n) => sorted.slice(0, n).reduce((s, r) => s + (r[metric] || 0), 0);
+  const top1Share = denom > 0 ? (sumTop(1) / denom) * 100 : 0;
+  const top5Share = denom > 0 ? (sumTop(5) / denom) * 100 : 0;
+  const top10Share = denom > 0 ? (sumTop(10) / denom) * 100 : 0;
 
   // Network split — how much of the volume settles on each chain.
   const byNet = new Map();
@@ -93,9 +100,16 @@ const ECON_CSS = `
   .our-share { background:#10210f; border:1px solid #1f4a1d; }
   .meta { color:var(--muted); font-size:.82rem; margin-top:24px; }
   .warming { background:#2a1d10; border:1px solid #4a371d; color:#e0b27a; padding:12px 16px; border-radius:10px; }
+  .sort-toggle { display:inline-flex; gap:0; border:1px solid #1e2638; border-radius:8px; padding:3px; margin:0 0 18px; background:var(--card); }
+  .sort-toggle a { padding:6px 14px; color:var(--muted); text-decoration:none; border-radius:6px; font-size:.85rem; transition:color .12s, background .12s; }
+  .sort-toggle a:hover { color:var(--text); }
+  .sort-toggle a.active { background:#1a2236; color:var(--accent); }
 `;
 
-export function economyPage(baseUrl, snapshot) {
+export function economyPage(baseUrl, snapshot, { sort } = {}) {
+  const sortMode = sort === "calls" ? "calls" : "usd";
+  // Both sort variants are views on the same page — canonicalize to the
+  // default URL so we don't split SEO signal across ?sort= query params.
   const canonical = `${baseUrl}/economy`;
   const title = "x402 economy — daily volume, concentration, network split | Agent402";
   const description =
@@ -114,7 +128,12 @@ export function economyPage(baseUrl, snapshot) {
     });
   }
 
-  const s = summarize(snapshot.leaderboard);
+  const ranked = rankBy(snapshot.leaderboard, sortMode);
+  const s = summarize(ranked, sortMode);
+  const sortToggle = `<div class="sort-toggle" role="tablist" aria-label="Rank by">
+    <a href="/economy" class="${sortMode === "usd" ? "active" : ""}"${sortMode === "usd" ? ' aria-current="page"' : ""}>USDC earned</a>
+    <a href="/economy?sort=calls" class="${sortMode === "calls" ? "active" : ""}"${sortMode === "calls" ? ' aria-current="page"' : ""}>Total calls</a>
+  </div>`;
   const windowLabel = snapshot.windowLabel || "24h";
   const asOf = snapshot.asOf || new Date().toISOString();
 
@@ -160,6 +179,8 @@ export function economyPage(baseUrl, snapshot) {
     <h1>The x402 economy, last ${esc(windowLabel)}</h1>
     <p class="sub">Total per-call USDC settled across every public x402 seller our crawler can see, aggregated from on-chain transfers on Base. Sellers are discovered via the public Bazaar index; per-call settlements are filtered to a $0.50 ceiling so funding moves and swaps don't pollute the ranking. Refreshes hourly. Machine-readable: <a href="/api/leaderboard">/api/leaderboard</a>.</p>
 
+    ${sortToggle}
+
     <div class="stat-grid">
       <div class="stat">
         <div class="label">Total volume</div>
@@ -186,7 +207,7 @@ export function economyPage(baseUrl, snapshot) {
     ${ourShareBlock}
 
     <div class="panel">
-      <h2>Top 10 sellers by volume</h2>
+      <h2>Top 10 sellers by ${sortMode === "calls" ? "call count" : "volume"}</h2>
       ${topRows}
       <div class="meta">Full ranking: <a href="/leaderboard">/leaderboard</a></div>
     </div>
