@@ -12,8 +12,14 @@
 // the stdio package by design.
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import { findTools } from "./find.js";
+import { SKILL_PACKS, buildPromptMessages } from "./skills.js";
 import {
   createLimiter,
   MAX_CALLS_PER_BURST,
@@ -84,7 +90,32 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   }
 
   function buildServer(ip) {
-    const server = new Server({ name: "agent402", version: VERSION }, { capabilities: { tools: {} } });
+    const server = new Server({ name: "agent402", version: VERSION }, { capabilities: { tools: {}, prompts: {} } });
+
+    // Skill packs are exposed as MCP prompts: each pack becomes a discoverable
+    // prompt the client can render in a slash menu (Claude Desktop, Cursor,
+    // etc.). The pack data lives in src/skills.js — same source of truth as
+    // the HTML pages at /skills/<slug>. buildPromptMessages does the args
+    // substitution + tool-plan rendering, and gets freeSlugs so it can pre-
+    // split free vs wallet-only tools for the caller.
+    server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+      prompts: SKILL_PACKS.map((p) => ({
+        name: p.slug,
+        title: p.title,
+        description: p.tagline,
+        arguments: (p.promptArgs || []).map((a) => ({
+          name: a.name,
+          description: a.description,
+          required: a.required ?? true,
+        })),
+      })),
+    }));
+    server.setRequestHandler(GetPromptRequestSchema, async (req) => {
+      const { name, arguments: args = {} } = req.params;
+      const pack = SKILL_PACKS.find((p) => p.slug === name);
+      if (!pack) throw new Error(`Unknown prompt "${name}". List available with prompts/list.`);
+      return buildPromptMessages(pack, args, { freeSlugs });
+    });
 
     // Titles + safety annotations on every tool are required for listing in
     // Anthropic's connector directory. The free tier only ever executes
