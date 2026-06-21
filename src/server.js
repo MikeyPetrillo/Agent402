@@ -7,6 +7,7 @@ import { renderArticle, screenshotPage, rasterizeSvg } from "./tools/render.js";
 import {
   memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas,
   grant, revoke, listGrants, getLog, remember, recall, forget,
+  PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
 import { payerFromRequest } from "./payer.js";
 import { landingPage } from "./landing.js";
@@ -563,6 +564,12 @@ app.get("/health", (_req, res) => {
     // makes traffic look thinner than it is. CI auto-attaches /data, but
     // surfacing this here means a misconfigured deploy can't hide.
     statsPersistent,
+    // True when the memory tools' SQLite DB is on /data. Memory is the worst
+    // case for a silent fallback because agents PAY USDC per write — the
+    // value of that storage is its durability. Boot fails loud in prod if
+    // /data is missing, but this flag lets an operator verify externally
+    // before pointing buyers at /api/memory*.
+    memoryPersistent,
   };
   const ok = checks.db && checks.wallet;
   res.status(ok ? 200 : 503).json({ ok, checks, flags });

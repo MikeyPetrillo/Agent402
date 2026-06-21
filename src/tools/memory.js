@@ -14,8 +14,26 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-const DATA_DIR = existsSync("/data") ? "/data" : "/tmp";
-export const PERSISTENT = DATA_DIR === "/data";
+// Memory is the WORST case for a silent /data → /tmp fallback: agents pay
+// USDC per write, and the value of that storage is precisely its durability
+// across restarts. Mirror the same fail-loud contract as pow.js + stats.js —
+// refuse to boot in production without /data unless an explicit opt-out is
+// set (local tests, FREE_MODE sweeps, edge runners). Without this gate a
+// misconfigured deploy would charge buyers for memory that vanishes on the
+// next container restart.
+const HAS_DATA_DIR = existsSync("/data");
+const ALLOW_EPHEMERAL =
+  process.env.MEMORY_ALLOW_EPHEMERAL === "true" ||
+  process.env.FREE_MODE === "true" ||
+  process.env.NODE_ENV !== "production";
+if (!HAS_DATA_DIR && !ALLOW_EPHEMERAL) {
+  console.error(
+    "Memory DB has no persistent volume (/data missing) and NODE_ENV=production. Mount /data, or set MEMORY_ALLOW_EPHEMERAL=true to accept losing paid agent memory on restart."
+  );
+  process.exit(1);
+}
+const DATA_DIR = HAS_DATA_DIR ? "/data" : "/tmp";
+export const PERSISTENT = HAS_DATA_DIR;
 
 const db = new Database(join(DATA_DIR, "agent402.db"));
 db.pragma("journal_mode = WAL");
