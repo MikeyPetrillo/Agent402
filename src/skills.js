@@ -385,6 +385,54 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Run a full trend analysis on AAPL over the last 1y using Agent402, then project the next quarter forward. (1) Fetch the daily closes via stock-history (ticker=AAPL, range=1y). (2) Run stats-summary on the closes for the descriptive panel. (3) Run moving-average with window=20, which=\"both\" — compare SMA vs EMA. (4) Run linear-regression with x=[0..n-1], y=closes; report slope (annualized = slope·252), intercept, r². (5) Run outliers method=\"iqr\" and map the flagged indices back to actual dates from the fetch. (6) Pick a forecast method: call forecast-eval three times with method=\"drift\", \"ses\", \"holt\" and testSize=50 (≈ 20% of a 252-day year); pick the lowest RMSE. (7) Forecast the next ~63 trading days using the winning method (forecast-naive / forecast-ses / forecast-holt) and report both point and 95% interval. (8) Return a single JSON object: {summary, trend, outlierDates, forecastMethod, forecastWithIntervals, oneLineConclusion}. The stats + forecast steps are free over PoW; only the stock-history fetch is paid.",
   },
+  {
+    slug: "forecasting-bake-off",
+    title: "Forecasting bake-off",
+    tagline:
+      "Don't guess which forecasting method to trust. Backtest all four (naive/drift, SES, Holt, Holt-Winters) on a real series, rank by out-of-sample RMSE, then forecast forward with the winner and its 95% prediction interval. Method selection without the hand-waving.",
+    useCase:
+      "You need a forecast and you're not sure whether the series is stationary, trending, or seasonal. Instead of picking a method by gut and praying, the bake-off lets the data choose: every method runs the same holdout backtest, the lowest RMSE wins, and you forecast forward with that winner only. Pure-CPU and free over PoW — only the upstream data fetch is paid.",
+    promptArgs: [
+      {
+        name: "series",
+        description: "What to forecast — a ticker (AAPL) or a FRED series id (UNRATE, CPIAUCSL)",
+        required: true,
+        substitute: "AAPL",
+      },
+      {
+        name: "horizon",
+        description: "How many periods to project forward — e.g. 30 (days for daily data, months for monthly)",
+        required: false,
+        substitute: "30",
+      },
+    ],
+    // Ordered as: fetch (equity OR macro) → bake-off (forecast-eval is the
+    // ranker, called once per method) → conditional forward forecast with the
+    // winner. The four method-specific tools are listed so the agent has the
+    // full menu — only one will be called for the forward forecast based on
+    // which won the bake-off. Holt-Winters is included for seasonal series
+    // (monthly macro, quarterly earnings) where it usually wins outright.
+    toolSlugs: [
+      "stock-history",
+      "fred-series",
+      "forecast-eval",
+      "forecast-naive",
+      "forecast-ses",
+      "forecast-holt",
+      "forecast-holt-winters",
+    ],
+    workflow: [
+      "Fetch the equity series with stock-history (ticker, range=horizon-scaled — e.g. \"2y\" if you want to forecast ~6 months out). Pull `close` in chronological order; you want at least ~50 observations for the backtest to be meaningful, more if you suspect seasonality.",
+      "If the user is asking about a macro indicator instead (unemployment, CPI, fed funds), fetch via fred-series with the series id. Monthly FRED data with 10+ years of history is the sweet spot for Holt-Winters with period=12.",
+      "Run the bake-off. Call forecast-eval four times on the same values with testSize ≈ 20% of the series (capped at half): method=\"naive\" or \"drift\", \"ses\", \"holt\", \"holt-winters\" (the last only if you have ≥ 2·period observations and suspect seasonality). Compare RMSE; lowest wins. Watch the `warnings` field — \"insufficient data\" or \"could not detect seasonal period\" means treat that method's score as suspect, not as a clean win/loss.",
+      "If forecast-naive (or drift, the mean-reversion variant) won, the series is essentially random-walk and there's nothing to extrapolate — call forecast-naive with the full values + horizon. The point forecast is just the last value (or last + average drift); the interval widens with √h. This is the honest answer for noisy series; don't over-engineer.",
+      "If forecast-ses won, the series has no trend but local level matters more than the long-run mean. Call forecast-ses with the full values + horizon; the alpha SES picked tells you how much weight goes on recent vs. older observations (high alpha = react fast, low alpha = smooth heavy). Report alpha alongside the forecast — it's diagnostic.",
+      "If forecast-holt won, the series has a persistent trend worth extrapolating. Call forecast-holt with full values + horizon; it returns level + trend smoothing parameters (alpha, beta) and a forecast that walks forward at the fitted trend slope. The 95% interval grows faster than SES because trend uncertainty compounds.",
+      "If forecast-holt-winters won, the series has seasonality you should respect (e.g. monthly macro with annual cycle, quarterly retail with year-end peak). Call forecast-holt-winters with the full values + horizon + period (12 for monthly-annual, 4 for quarterly-annual, 7 for daily-weekly) and seasonality=\"additive\" or \"multiplicative\". The forecast carries the seasonal pattern forward; never report the point forecast without the interval — seasonal forecasts look confident but compound multiple sources of error.",
+    ],
+    claudePrompt:
+      "Run a forecasting bake-off on AAPL over the last 2y and project the next 30 trading days using Agent402. (1) Fetch the daily closes via stock-history (ticker=AAPL, range=2y). (2) Run forecast-eval four times on the closes with testSize=100: method=\"drift\", \"ses\", \"holt\", and \"holt-winters\" with period=21 and seasonality=\"multiplicative\" (try the seasonal one — equities usually don't have strong calendar seasonality but the backtest will tell you). (3) Rank by RMSE ascending; the lowest is the winner. Note any `warnings` returned. (4) Call the winning forecast tool (forecast-naive / forecast-ses / forecast-holt / forecast-holt-winters) with the full closes + horizon=30 to get the forward forecast and 95% interval. (5) Return a single JSON object: {rankings: [{method, rmse, mape, warnings}, ...], winner: \"holt\", forecast: {point: [...], lower95: [...], upper95: [...]}, oneLineConclusion}. All bake-off + forecast calls are free over PoW; only stock-history is paid.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
