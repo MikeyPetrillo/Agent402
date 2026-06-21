@@ -811,6 +811,44 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Profile this CSV using Agent402:\nyear,revenue,cost\n2022,1000,800\n2023,1500,1100\n2024,2100,1400\n\nColumns to profile: revenue (primary), cost (for pairwise checks). (1) csv-to-json the input. Confirm parsed row count matches expectations and surface the parsed columns. (2) json-query with $.[*].revenue to get the revenue array; do the same for cost. Confirm both are numeric (no string leakage from currency symbols / thousands separators). (3) stats-summary on the revenue array — report mean, median, stddev, q1/q3/IQR. Same for cost. Note skew (mean vs. median) and spread (IQR). (4) outliers on the revenue array, then on cost. If any are flagged, list them with their row indices and decide: keep, cap at fence, or drop. Use the same decision consistently for the next two steps. (5) correlation with x=revenue, y=cost. Report r and r². Flag if r > 0.99 as 'likely mechanically related, not independent' and warn before treating as a real finding. (6) linear-regression with x=revenue, y=cost. Report slope (cost-per-dollar-of-revenue), intercept, and r². If r² < 0.3, recommend a non-linear functional form in the writeup. Final return: {columns: [...], parsedRows: N, revenue: {summary, outliers}, cost: {summary, outliers}, correlation: {r, rSquared, interpretation}, regression: {slope, intercept, rSquared}, takeaways: [3-5 bullet points], suggestedNextStep}. All six tools are pure-CPU (free tier eligible). Budget ≤ $0.01 even paid.",
   },
+  {
+    slug: "location-intel",
+    title: "Location intel",
+    tagline:
+      "Point at an address (or even a rough place name) and assemble the situational brief: precise coordinates, the canonical postal address, what's within walking distance, the live weather forecast, active NWS hazard alerts, and recent seismic activity. The deterministic 'what should I know about this place right now?' workup.",
+    useCase:
+      "A field-ops agent (sales rep about to visit a customer, contractor scoping a job site, traveler arriving in a new city, emergency-response coordinator) hands the pack an address and needs the full pre-arrival brief in one workup. Geocode pins the spot, reverse-geocode confirms the canonical postal form (catches stale addresses where the building number changed), place-search surfaces nearby POIs (gas, coffee, hospital, supplies), weather-forecast covers the next 24-48h conditions, weather-alerts surfaces any active NWS warning (red flag / flood / heat / tornado), and earthquakes filters recent seismic activity in the region. US-centric for hazards/forecast; geocoding works globally.",
+    promptArgs: [
+      { name: "address", description: "Address or place name (e.g. '1600 Pennsylvania Ave NW Washington DC' or 'Joshua Tree National Park')", required: true, substitute: "1600 Pennsylvania Ave NW Washington DC" },
+    ],
+    // Six tools, ordered as the standard situational-brief workup: pin
+    // (geocode) → verify (reverse-geocode catches typos and stale addresses
+    // by round-tripping back to canonical form) → context (place-search for
+    // POIs) → conditions (weather-forecast) → hazards (weather-alerts for
+    // active warnings, earthquakes for recent seismic activity in the
+    // region). geocode/reverse-geocode/place-search work globally (OSM /
+    // Nominatim); weather-forecast + weather-alerts are US-only (NWS);
+    // earthquakes is global (USGS). Composes geo-kit + data-kit + gov-kit.
+    // All six tools touch external egress — wallet-only / not PoW-eligible.
+    toolSlugs: [
+      "geocode",
+      "reverse-geocode",
+      "place-search",
+      "weather-forecast",
+      "weather-alerts",
+      "earthquakes",
+    ],
+    workflow: [
+      "Pin the location with geocode. Free-form input ('1600 Penn Ave', 'Joshua Tree', 'Eiffel Tower') resolves to lat/lon + display name + bounding box via OpenStreetMap/Nominatim. The bounding box matters: a query like 'New York' resolves to a city-sized box, whereas '1600 Penn Ave' resolves to a building-sized box. The box size tells you immediately whether the next steps will return city-wide or building-specific results.",
+      "Round-trip with reverse-geocode using the lat/lon from step 1. This is the verification step — if you got the wrong place (an obscure 'Springfield' in a different state, a homonym match in another country) the canonical postal address surfaced here won't match what the user expected, and the agent should stop and ask rather than confidently brief on the wrong location. It also returns the structured ISO country code, which gates whether the US-only steps (4 and 5) will work at all.",
+      "Pull nearby POIs with place-search around the lat/lon. Useful pre-arrival categories: gas stations, coffee, ATM, hospital, hardware store, supplies. Each result includes distance + bearing, so the agent can render directional context ('coffee 200m N'). For pure tourism arrivals this surfaces sights; for emergency contexts this surfaces critical infrastructure (hospital, police, fire). For sales/customer-visit contexts, surface restaurants near the customer site for the post-meeting lunch suggestion.",
+      "Layer current conditions with weather-forecast. US-only (api.weather.gov / NWS) — takes the lat/lon and returns a 7-day forecast in 12-hour blocks. If reverse-geocode in step 2 returned a non-US country code, skip this step and surface in the writeup. Pre-arrival you want the next 24-48h: temp range, precip probability, wind, hazards (ice/snow/heat). For multi-day deployments include the full 7-day window so the team can pack accordingly.",
+      "Check for active hazards with weather-alerts using the two-letter US state code from step 2's reverse-geocode result. Active NWS alerts cover everything from severe thunderstorms to red flag (fire-weather) warnings to coastal flood watches. Even if the forecast looks calm, an active alert in the state is critical: 'no rain at this address tomorrow but a red flag warning means an avoidable burn restriction'. Skip with a note if the location isn't in the US.",
+      "Survey recent seismic activity with earthquakes (USGS, global). Filter the result list by proximity to the lat/lon from step 1 — recent activity within ~200km matters; a 5.0 across the planet doesn't. For non-seismic regions (most of the Midwest, most of Europe) the result is reassuringly empty. For Pacific Rim regions / California / Japan / New Zealand / Italy the historical baseline isn't zero, so the framing is 'is recent activity within 200km elevated vs. the regional baseline?' Composes nicely with the structured-scrape pack if the user wants to chase a quake into a deeper bulletin.",
+    ],
+    claudePrompt:
+      "Build a location situational brief for: 1600 Pennsylvania Ave NW Washington DC. (1) geocode 'q=1600 Pennsylvania Ave NW Washington DC&limit=1'. Record the lat / lon / display name / bounding-box size. Flag if bounding box is city-sized when the user clearly asked for a specific building. (2) reverse-geocode with the lat/lon from step 1. Confirm the canonical postal address matches what the user asked for. Extract the two-letter US state code (e.g. DC) and the country code (e.g. US) — these gate the next steps. (3) place-search around the lat/lon at a 1km radius. Categorize results into: food (cafes/restaurants), services (gas/ATM/pharmacy), and critical (hospital/police/fire). Top 5 in each category by distance. (4) IF country == US: weather-forecast for lat/lon. Surface next-24h temp range, precip probability, wind, any in-period hazards (NWS sometimes embeds advisory text in the forecast itself). Otherwise note 'weather-forecast US-only, skipped'. (5) IF country == US: weather-alerts for the state code from step 2. List active alerts: event, severity, headline, area, onset/expires. Flag severity in (Severe, Extreme) as a hard 'do not travel' signal. (6) earthquakes for period=week, minMag=2.5. Filter to events within ~200km of the lat/lon from step 1 — use the haversine of (lat,lon) vs each quake's (lat,lon). If the filtered list is non-empty, sort by magnitude desc and report the top 3. If empty for a non-seismic region, report 'baseline quiet'. Final return: {location: {displayName, lat, lon, country, state}, nearby: {food, services, critical}, weather: {next24h, precipProbability, hazards}, activeAlerts: [{event, severity, headline}], seismic: {recentNear, status}, travelRecommendation: 'green'|'yellow'|'red', oneLineBrief}. All six tools touch external APIs (egress) — wallet-only, budget ≤ $0.02 per address.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
