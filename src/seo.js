@@ -148,7 +148,7 @@ ${sections}
 - \`GET /api/find?q={task}\` — resolve a task description to the best-matching tools (route, price, input schema, ready example) in one call; skips the token-heavy "search to find a tool" step. Also accepts \`POST {"task":"..."}\`.
 - \`POST /api/route {"query":"...", "top":N, "include":"all|external|local"}\` — Smart Order Router / neutral x402 discovery API: rank tools across every x402 seller crawled (auto-discovered from public registries), filtered to healthy sellers, tiebroken on health then price. \`include:"external"\` excludes Agent402 itself — buyers can use us as a neutral router over the rest of the ecosystem.
 - \`GET /api/index\` — JSON snapshot of every seller indexed: per-seller health, routable flag, rolling crawl history, total counts; companion HTML view at \`/index\`.
-- \`GET /api/leaderboard\` — public on-chain ranking of every x402 seller by Base USDC settled volume (callsSettled, totalUsd, uniqueBuyers per seller). Pipeline: Bazaar → \`eth_getLogs\` → per-call ceiling filter → aggregate by payTo. Hourly snapshot. Use \`?include=external\` to exclude Agent402 itself.
+- \`GET /api/leaderboard\` — public on-chain ranking of every x402 seller by Base USDC settled volume (callsSettled, totalUsd, uniqueBuyers per seller). Pipeline: Bazaar → \`eth_getLogs\` → per-call ceiling filter → aggregate by payTo. Hourly snapshot. Params: \`?top=N\` (max 500), \`?sort=usd|calls\`, \`?include=external|all\` (default \`external\` excludes Agent402's own wallet so you rank the rest of the ecosystem). Same data also reachable as MCP tool \`top_x402_sellers\` (on \`/mcp\` and the \`agent402-mcp\` npm package) and as \`agent402-client\` SDK method \`topSellers()\` — single primitive, three surfaces.
 - \`GET /.well-known/x402\` — one-fetch service manifest: identity, payment options (x402 networks + proof-of-work), capability map, MCP connector, and trust signals.
 - \`GET /api/reliability\` — structured reliability/SLA report: uptime, calls served, on-chain revenue proof, and each operational guarantee with a URL to verify it.
 - \`GET /api/pricing\` — machine-readable catalog (JSON): every endpoint, price, category, and docs URL.
@@ -199,7 +199,9 @@ ${baseUrl}/mcp\`), Cursor (Settings → MCP → Add new MCP server, transport
 streamable-http), ChatGPT Pro+ (Settings → Connectors), and VS Code with GitHub
 Copilot MCP. The pure-CPU tools run free there (rate-limited) via
 \`search_tools\` + \`call_tool\`; wallet-only tools return instructions for paid
-access.
+access. The connector also exposes \`top_x402_sellers\` (free) so agents can
+discover the live x402 economy — which sellers are settling the most USDC
+on Base in the last ~24h, on-chain — without leaving the MCP transport.
 
 For the full catalog with payment underneath, the \`agent402-mcp\` package exposes
 everything as MCP tools and settles per call (USDC via x402 with a wallet key,

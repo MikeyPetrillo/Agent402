@@ -49,7 +49,7 @@ try {
   // tools/list: curated + meta tools present, catalog NOT dumped wholesale
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name);
-  for (const required of ["search_tools", "call_tool", "payment_info", "extract", "render", "hash", "memory-write"]) {
+  for (const required of ["search_tools", "call_tool", "payment_info", "top_x402_sellers", "extract", "render", "hash", "memory-write"]) {
     if (!names.includes(required)) fail(`tools/list missing "${required}" (got: ${names.join(", ")})`);
   }
   if (tools.length > 30) fail(`tools/list too large (${tools.length}) — must stay curated, not dump the catalog`);
@@ -89,6 +89,18 @@ try {
   const info = await client.callTool({ name: "payment_info", arguments: {} });
   if (!text(info).includes("proof-of-work")) fail(`payment_info should report proof-of-work mode: ${text(info).slice(0, 300)}`);
   console.log("payment_info reports proof-of-work mode ✓");
+
+  // top_x402_sellers: thin proxy over /api/leaderboard, free to call (no
+  // payment / no PoW). Even when the leaderboard cache is warming (CI may run
+  // before the first chain scan finishes) the envelope must be well-formed
+  // and link back to the canonical /api/leaderboard.
+  const sellers = await client.callTool({ name: "top_x402_sellers", arguments: { limit: 5, sort: "calls", include: "all" } });
+  if (sellers.isError) fail(`top_x402_sellers should not error on warming cache: ${text(sellers).slice(0, 300)}`);
+  const sellersJson = JSON.parse(text(sellers));
+  if (sellersJson.sort !== "calls" || sellersJson.include !== "all") fail(`top_x402_sellers should echo sort+include (got sort=${sellersJson.sort}, include=${sellersJson.include})`);
+  if (!Array.isArray(sellersJson.results) || sellersJson.results.length > 5) fail(`top_x402_sellers should honor limit (got ${sellersJson.results?.length} rows)`);
+  if (typeof sellersJson.source !== "string" || !sellersJson.source.endsWith("/api/leaderboard")) fail(`top_x402_sellers should link to /api/leaderboard`);
+  console.log("top_x402_sellers proxies the leaderboard with limit/sort/include ✓");
 
   // prompts/list: every skill pack registered with typed args; prompts/get
   // delegates rendering to the hosted service and substitutes args correctly.

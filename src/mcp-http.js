@@ -19,6 +19,7 @@ import {
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { findTools } from "./find.js";
+import { rankBy as rankLeaderboard } from "./leaderboard.js";
 import { SKILL_PACKS, buildPromptMessages, rankSkillPacks } from "./skills.js";
 import {
   createLimiter,
@@ -42,7 +43,7 @@ const rateLimited = (ip) => mcpLimiter.check(ip).limited;
  * decides the free set. `opts.onServed(slug, { latencyMs, errored })` feeds
  * both the stats counters and the analytics dashboard with full per-call meta.
  */
-export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {} }) {
+export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, getLeaderboard = null }) {
   const tools = new Map(); // slug -> { def, free }
   for (const def of Object.values(catalog)) {
     tools.set(def.slug, { def, free: isComputePayable(def) });
@@ -176,6 +177,27 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           description: "What this connector is: the free tier of agent402.tools, what's free vs wallet-only, the curated multi-tool workflows (skill packs) available as prompts, and how paid access works (x402, USDC on Base, proof-of-work).",
           inputSchema: { type: "object", properties: {} },
         },
+        // Hosted leaderboard of x402 sellers settled in the recent window
+        // (default 24h). The same data backs /api/leaderboard + /leaderboard;
+        // surfacing it on MCP lets agents discover *which* sellers are getting
+        // paid in the wild, not just *what* tools exist in this catalog. The
+        // snapshot is shared across the process (hourly refresh) so this call
+        // is O(rows-returned) and never hits the chain on the request path.
+        ...(getLeaderboard ? [{
+          name: "top_x402_sellers",
+          title: "Top x402 sellers in the recent window",
+          annotations: { title: "Top x402 sellers in the recent window", ...SAFE },
+          description:
+            "List the x402 sellers earning the most USDC (or serving the most calls) on Base in the last ~24h, derived from on-chain USDC transfers. Cached snapshot — safe to call freely. Useful for agents discovering the live x402 economy: who's getting paid, which networks, and where to point demand. Defaults: top 10, sort by USDC, exclude this host's own wallet.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              limit: { type: "number", description: "Max rows to return (default 10, max 50)" },
+              sort: { type: "string", enum: ["usd", "calls"], description: "Rank by USDC settled (default) or by call count" },
+              include: { type: "string", enum: ["external", "all"], description: "'external' (default) hides this host's own wallet; 'all' includes it" },
+            },
+          },
+        }] : []),
       ],
     }));
 
@@ -255,7 +277,51 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
                 },
                 clientsSeenSinceBoot: Object.fromEntries([...mcpClients].sort((a, b) => b[1] - a[1]).slice(0, 20)),
                 paidAccess: "Every tool, no rate limit: pay per call in USDC on Base via the x402 protocol — npx agent402-mcp with AGENT_KEY, or any x402 HTTP client. No signup, no API key; prices $0.001–$0.02/call.",
+                ...(getLeaderboard ? { ecosystem: "Call top_x402_sellers to see which x402 sellers (any wallet, not just this host) are settling the most USDC on Base in the last 24h — discovers the live economy beyond this catalog." } : {}),
                 docs: `${baseUrl}/llms.txt`,
+              }, null, 2),
+            }],
+          };
+        }
+        if (name === "top_x402_sellers" && getLeaderboard) {
+          const snap = getLeaderboard() || {};
+          const limit = Math.min(Math.max(parseInt(args.limit, 10) || 10, 1), 50);
+          const sort = args.sort === "calls" ? "calls" : "usd";
+          const include = args.include === "all" ? "all" : "external";
+          // Self-wallet filter: agents asking "who else is on x402?" want the
+          // host's own wallet hidden by default. The hosted catalog ranks
+          // because of this very tool process, so leaving it in skews the top
+          // toward Agent402 itself.
+          const self = (process.env.WALLET_ADDRESS || "").toLowerCase();
+          let board = Array.isArray(snap.leaderboard) ? snap.leaderboard : [];
+          if (include === "external" && self) board = board.filter((r) => (r.wallet || "").toLowerCase() !== self);
+          board = rankLeaderboard(board, sort).slice(0, limit);
+          // Trim to a token-cheap row shape — full row (origins, endpoints,
+          // etc.) is at /api/leaderboard for agents that want it. Round USDC
+          // to 4dp to match the HTML page's display precision and keep the
+          // JSON compact.
+          const rows = board.map((r) => ({
+            rank: r.rank,
+            name: r.name,
+            network: r.network,
+            wallet: r.wallet,
+            homepage: r.homepage || null,
+            callsSettled: r.callsSettled || 0,
+            totalUsd: Math.round((r.totalUsd || 0) * 10000) / 10000,
+            uniqueBuyers: r.uniqueBuyers || 0,
+          }));
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                window: snap.windowLabel || "24h",
+                asOf: snap.asOf,
+                sort,
+                include,
+                totalSellers: (snap.leaderboard || []).length,
+                results: rows,
+                ...(snap.warming || snap.scanSkipped ? { note: "Cache is warming — results may be partial. Retry in ~60s." } : {}),
+                source: `${baseUrl}/api/leaderboard`,
               }, null, 2),
             }],
           };

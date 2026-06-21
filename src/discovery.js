@@ -161,6 +161,16 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       // discovery: find a tool, route to a seller, see who's most used.
       leaderboard: `${baseUrl}/api/leaderboard`,
       leaderboardHtml: `${baseUrl}/leaderboard`,
+      // The leaderboard primitive ships on three equivalent surfaces so an
+      // agent can consume it however it already talks to Agent402. The HTTP
+      // endpoint is the source of truth; the MCP tool and SDK method are thin
+      // proxies that hit it. Naming them here as a typed shape (instead of
+      // only prose in llms.txt) lets cross-protocol routers dispatch on it.
+      leaderboardSurfaces: {
+        http: `${baseUrl}/api/leaderboard`,
+        mcpTool: "top_x402_sellers",
+        sdkMethod: "topSellers",
+      },
       includeOptions: ["all", "external", "local"],
       // Same lens as the HTML toggle on /leaderboard and /economy.
       // `usd` = total USDC settled (default); `calls` = raw call count.

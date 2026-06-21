@@ -375,6 +375,9 @@ jobs:
       - name: Leaderboard SEO/discovery surfaces (robots, sitemap, llms.txt, manifest, landing JSON-LD)
         run: node scripts/test-leaderboard-surface.js
 
+      - name: /data volume contract — stats + memory DBs fail loud in prod when missing
+        run: node scripts/test-stats-persistence.js
+
       - name: Idempotency (opt-in safe retry of paid/proven calls; boots paid-mode)
         run: node scripts/test-idempotency.js
 
@@ -445,6 +448,15 @@ jobs:
 
       - name: Util-kit tests (jwt-sign, uuid-v5, group-by, json-to-xml, geo-distance, color-contrast)
         run: node scripts/test-util-kit.js
+
+      - name: Html-kit tests (html-select, html-table, html-strip, html-links, html-meta)
+        run: node scripts/test-html-kit.js
+
+      - name: Compression-kit tests (gzip, gunzip, brotli, compress-compare — pure CPU, zip-bomb guard)
+        run: node scripts/test-compression-kit.js
+
+      - name: Stats-kit tests (summary, correlation, regression, moving-average, outliers — pure CPU)
+        run: node scripts/test-stats-kit.js
 
       - name: Tollbooth tests (pay-per-crawl gate — node + edge/Web-Crypto)
         run: node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js

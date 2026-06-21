@@ -7,6 +7,7 @@ import { renderArticle, screenshotPage, rasterizeSvg } from "./tools/render.js";
 import {
   memoryPut, memoryGet, memoryDelete, memoryIncr, memoryCas,
   grant, revoke, listGrants, getLog, remember, recall, forget,
+  PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
 import { payerFromRequest } from "./payer.js";
 import { landingPage } from "./landing.js";
@@ -54,6 +55,9 @@ import { CRYPTO_TOOLS } from "./tools/crypto-kit.js";
 import { RESEARCH_TOOLS } from "./tools/research-kit.js";
 import { NETWORK_TOOLS } from "./tools/network-kit.js";
 import { NETWORK_TOOLS2 } from "./tools/network-kit2.js";
+import { HTML_TOOLS } from "./tools/html-kit.js";
+import { COMPRESSION_TOOLS } from "./tools/compression-kit.js";
+import { STATS_TOOLS } from "./tools/stats-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
@@ -62,14 +66,14 @@ import { docsIndex, docsPage, docsApi } from "./docs.js";
 import { shopPage } from "./shop.js";
 import { economyPage } from "./economy.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
 
 // Shared with the MCP free tier (src/mcp-http.js) — same policy, separate
 // per-IP bucket. PoW redemption on the direct HTTP path goes through here.
 const powHttpLimiter = createRateLimiter("pow-http");
-import { recordServedCall, recordChargedFailure, getStats, getOperatorBreakdown, dbHealthy } from "./stats.js";
+import { recordServedCall, recordChargedFailure, getStats, getOperatorBreakdown, dbHealthy, statsPersistent } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID } from "node:crypto";
 import { marketplaceSlugToken } from "./marketplace-token.js";
 
@@ -557,6 +561,18 @@ app.get("/health", (_req, res) => {
     // (src/tools/finance-kit.js). Either unset = direct-to-Yahoo, which is
     // currently null-routed by Railway egress and causes ETIMEDOUT canaries.
     yahooRelay: Boolean((process.env.YAHOO_RELAY_URL || "").trim()) && Boolean((process.env.YAHOO_RELAY_TOKEN || "").trim()),
+    // True when the stats SQLite DB is on the /data volume (counters + the
+    // recentCalls ring buffer survive restarts). False = silent fallback to
+    // /tmp, which wipes the activity feed on every container restart and
+    // makes traffic look thinner than it is. CI auto-attaches /data, but
+    // surfacing this here means a misconfigured deploy can't hide.
+    statsPersistent,
+    // True when the memory tools' SQLite DB is on /data. Memory is the worst
+    // case for a silent fallback because agents PAY USDC per write — the
+    // value of that storage is its durability. Boot fails loud in prod if
+    // /data is missing, but this flag lets an operator verify externally
+    // before pointing buyers at /api/memory*.
+    memoryPersistent,
   };
   const ok = checks.db && checks.wallet;
   res.status(ok ? 200 : 503).json({ ok, checks, flags });
@@ -1270,6 +1286,11 @@ app.get("/analytics", async (req, res) => {
 mountMcp(app, CATALOG, {
   baseUrl: BASE_URL,
   isComputePayable,
+  // Hosted leaderboard snapshot powers the new `top_x402_sellers` MCP tool —
+  // same data the HTML /leaderboard and /api/leaderboard surfaces use, so
+  // agents see the same numbers no matter which surface they hit. Hourly-
+  // refreshed in-process; safe to call freely from /mcp.
+  getLeaderboard: getLeaderboardSnapshot,
   // MCP-served calls land on the same accounting + analytics rails as
   // direct-HTTP ones. PoW is the gate (no x402 settlement on /mcp's free
   // tier), so the served-call counter records under "pow". Analytics gets

@@ -39,6 +39,12 @@ ok(llms.includes("/api/leaderboard"), "llms.txt mentions /api/leaderboard");
 ok(/leaderboard/i.test(llms), "llms.txt uses the word 'leaderboard'");
 ok(/eth_getLogs/.test(llms), "llms.txt explains the pipeline (eth_getLogs)");
 ok(llms.includes("/api/route") && llms.includes("/api/find"), "llms.txt still advertises route + find");
+// MCP + SDK parity: the leaderboard primitive lives on three surfaces now;
+// llms.txt must mention all three so an LLM crawling the doc learns it can
+// reach the same data via the MCP tool or the SDK method, not just the JSON.
+ok(llms.includes("top_x402_sellers"), "llms.txt names the MCP tool top_x402_sellers");
+ok(llms.includes("topSellers"), "llms.txt names the SDK method topSellers()");
+ok(/\?sort=usd\|calls/.test(llms), "llms.txt documents the ?sort=usd|calls param");
 
 // ---- service manifest (/.well-known/x402) ----
 const manifest = serviceManifest({
@@ -55,6 +61,13 @@ ok(manifest.discovery.refreshSeconds.leaderboard === 3600, "manifest.discovery.r
 // "calls" ranks by raw call volume.
 ok(Array.isArray(manifest.discovery.sortOptions), "manifest.discovery.sortOptions is an array");
 ok(manifest.discovery.sortOptions.includes("usd") && manifest.discovery.sortOptions.includes("calls"), "manifest.discovery.sortOptions advertises both 'usd' and 'calls'");
+// Cross-protocol surface index: the leaderboard primitive ships on three
+// equivalent surfaces. The manifest must name all three so a Bazaar crawler
+// or custom router can dispatch on the typed shape (not just prose).
+ok(manifest.discovery.leaderboardSurfaces && typeof manifest.discovery.leaderboardSurfaces === "object", "manifest.discovery.leaderboardSurfaces present");
+ok(manifest.discovery.leaderboardSurfaces.http === `${BASE}/api/leaderboard`, "leaderboardSurfaces.http = /api/leaderboard");
+ok(manifest.discovery.leaderboardSurfaces.mcpTool === "top_x402_sellers", "leaderboardSurfaces.mcpTool = top_x402_sellers");
+ok(manifest.discovery.leaderboardSurfaces.sdkMethod === "topSellers", "leaderboardSurfaces.sdkMethod = topSellers");
 ok(manifest.machineReadable.findTool && manifest.discovery.neutralRouter, "manifest still exposes find + router");
 // Must serialize (it is served as JSON).
 JSON.parse(JSON.stringify(manifest));
@@ -70,6 +83,11 @@ ok(/og:image[^>]*\/card\.png/.test(html), "og:image points at /card.png");
 ok(/twitter:card[^>]*summary_large_image/.test(html), "twitter card present");
 ok(html.includes('href="/api/leaderboard"'), "landing has a visible link to /api/leaderboard");
 ok(/How do I see which x402 sellers are most used\?/.test(html), "FAQ JSON-LD/visible includes the leaderboard question");
+// The leaderboard FAQ answer is the entry point for any LLM crawling SEO;
+// since the same primitive now ships as an MCP tool + SDK method, the answer
+// must name those paths or agents will only discover the HTTP one.
+ok(/top_x402_sellers/.test(html), "leaderboard FAQ answer names MCP tool top_x402_sellers");
+ok(/topSellers/.test(html), "leaderboard FAQ answer names SDK method topSellers()");
 
 // JSON-LD FAQPage must include the leaderboard question on the machine side too.
 const ldBlocks = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => m[1]);

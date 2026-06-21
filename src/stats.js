@@ -6,7 +6,26 @@ import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-const DATA_DIR = existsSync("/data") ? "/data" : "/tmp";
+// Counters + recent-calls + meta live in /data (persistent volume) so they
+// survive redeploys — recentCalls is the live activity feed on the landing
+// page, and a silent fallback to /tmp would wipe it on every container
+// restart. Mirrors the same contract as pow.js: refuse to boot in production
+// without /data unless an explicit ephemeral opt-in is set (local tests,
+// FREE_MODE sweeps, edge runners). Exported as `statsPersistent` so /health
+// can surface which path was actually picked.
+const HAS_DATA_DIR = existsSync("/data");
+const ALLOW_EPHEMERAL =
+  process.env.STATS_ALLOW_EPHEMERAL === "true" ||
+  process.env.FREE_MODE === "true" ||
+  process.env.NODE_ENV !== "production";
+if (!HAS_DATA_DIR && !ALLOW_EPHEMERAL) {
+  console.error(
+    "Stats DB has no persistent volume (/data missing) and NODE_ENV=production. Mount /data, or set STATS_ALLOW_EPHEMERAL=true to accept losing recentCalls + counters on restart."
+  );
+  process.exit(1);
+}
+const DATA_DIR = HAS_DATA_DIR ? "/data" : "/tmp";
+export const statsPersistent = HAS_DATA_DIR;
 const db = new Database(join(DATA_DIR, "agent402-stats.db"));
 db.pragma("journal_mode = WAL");
 db.exec(`

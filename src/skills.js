@@ -223,6 +223,165 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Ingest these 10 URLs into clean markdown using Agent402. For each: try extract first; if it returns no body, fall back to render→extract; for any PDF URL, use pdf-to-markdown. Return one markdown blob per URL with the source URL as the H1.",
   },
+  {
+    slug: "sec-filings-deep-dive",
+    title: "SEC filings deep-dive",
+    tagline:
+      "Pull the full EDGAR picture of a US public company in one workflow: recent filings, key financial time series, insider trades, and full-text search across the corpus.",
+    useCase:
+      "Pre-earnings prep, an investment thesis, M&A diligence, or journalism — anywhere you need the source documents instead of a paid terminal's summary.",
+    promptArgs: [
+      { name: "ticker", description: "US stock ticker (e.g. AAPL, NVDA, BRK.B)", required: true, substitute: "AAPL" },
+    ],
+    // 7 tools, 4 of which weren't used in any other pack before this one
+    // (edgar-company-lookup, edgar-company-concept, edgar-search,
+    // edgar-13f-holdings). Ordered to mirror an analyst's real workflow:
+    // resolve the entity first, then go wide on what's been filed.
+    toolSlugs: [
+      "edgar-company-lookup",
+      "edgar-filings",
+      "edgar-company-facts",
+      "edgar-company-concept",
+      "edgar-insider-trades",
+      "edgar-search",
+      "edgar-13f-holdings",
+    ],
+    workflow: [
+      "Resolve the ticker to a SEC CIK with edgar-company-lookup — every other tool keys off CIK, and tickers change (mergers, listings, spinoffs) while CIKs are stable.",
+      "Pull the recent filing history with edgar-filings — 10-K (annual), 10-Q (quarterly), 8-K (material events), DEF 14A (proxy). The 8-K stream is the freshest signal: M&A, exec departures, material agreements, restatements.",
+      "Use edgar-company-facts for a structured snapshot of every XBRL tag the company has ever filed (revenue, net income, assets, cash, etc.) — one call returns the full time series for tagging in your own model.",
+      "Drill into a single concept with edgar-company-concept (e.g. us-gaap:Revenues, NetIncomeLoss) to compare a specific metric across years without parsing 10-K HTML.",
+      "Run edgar-insider-trades to surface Form 4 transactions (officer/director buys + sells) in the last N days — concentrated insider selling around an event is one of the highest-signal-to-noise flags in public-markets research.",
+      "Run edgar-search to full-text query the filing corpus for any phrase the company has ever filed — useful for finding the exact 10-K paragraph mentioning a competitor, a risk factor, or a litigation matter.",
+      "Optional: pull edgar-13f-holdings on a known institutional manager (Berkshire = CIK 1067983, Bridgewater, etc.) to see whether they hold the target company and at what dollar weight.",
+    ],
+    claudePrompt:
+      "Build a research brief on AAPL using Agent402's EDGAR tools. (1) Resolve the ticker → CIK with edgar-company-lookup. (2) List the 25 most recent filings via edgar-filings — flag any 8-K from the last 90 days. (3) Pull edgar-company-facts and report the 4-quarter trend for Revenues, NetIncomeLoss, and Assets. (4) Run edgar-insider-trades over the last 90 days and flag any director/officer who sold >$1M. (5) Run edgar-search for 'going concern' restricted to this CIK to surface auditor risk language. Output a markdown brief with each section linking back to the source filing URL.",
+  },
+  {
+    slug: "structured-scrape",
+    title: "Structured scrape",
+    tagline:
+      "Pull structured data out of any web page deterministically — articles to clean text, tables to JSON rows, specific elements via CSS selector — without writing regex against raw HTML.",
+    useCase:
+      "Extracting a product price, a sports stats table, a roster, a pricing tier, an outlink list — anything where the page has the data but no public API exposes it, and you need a repeatable deterministic answer instead of an LLM guess.",
+    promptArgs: [
+      { name: "url", description: "Page to scrape (e.g. https://example.com/product/42)", required: true, substitute: "https://example.com/product/42" },
+      { name: "target", description: "What to extract — a price, a table, a list, a paragraph, etc.", required: true, substitute: "the price and SKU" },
+    ],
+    // Ordered as a real decision tree: try the cheapest fetch first (extract
+    // for prose, meta for headers-only), fall back to render for SPAs, then
+    // drill into the resulting HTML with the html-kit. Composes the kit that
+    // shipped in src/tools/html-kit.js with the existing fetch tools.
+    toolSlugs: [
+      "extract",
+      "render",
+      "html-select",
+      "html-table",
+      "html-strip",
+      "html-links",
+      "html-meta",
+    ],
+    workflow: [
+      "If the page is prose (an article, a blog post, a docs page), try extract first — it returns clean Readability-style markdown in one call, no HTML wrangling needed.",
+      "If the page is a SPA, paywalled-but-bypassable-with-render, or has data that lives outside the article body, fall back to render — it runs Chromium and returns the post-JS HTML you can then drill into.",
+      "Pipe the HTML from render into html-select with a CSS selector to pull specific elements (a price, a header, a button label). Use the `attr` parameter when you only need href/id/data-* values — keeps the response tight.",
+      "If the data is in a <table>, use html-table — it returns header-keyed JSON rows by default, or RFC 4180 CSV if you'd rather paste it into a spreadsheet. It picks the first matching table; pass a selector for more specificity.",
+      "If you need plain text from a specific subtree (e.g. \"give me the body of <article>\"), use html-strip with a selector — it preserves block-level newlines and removes <script>/<style>.",
+      "To enumerate outlinks (link audits, crawl seeds, footnote URLs), use html-links — it resolves relative hrefs against a base URL and dedups by href. Filter by regex when you only want one host or path prefix.",
+      "If you already have the rendered HTML and just want the metadata (title, description, OpenGraph, Twitter, canonical, JSON-LD), use html-meta on the string — avoids paying for a second fetch from /api/meta.",
+    ],
+    claudePrompt:
+      "Scrape the price and SKU from https://example.com/product/42 using Agent402. (1) Try extract first; if the price isn't in the article body, (2) call render to get the post-JS HTML. (3) Use html-select with a precise CSS selector to pull the price element — fall back to a broader selector if the first returns 0 matches. (4) Use html-select again with attr=\"data-sku\" or similar to read the SKU. Return a single JSON object {price, sku, url, source} where source = \"extract\" or \"render\" depending on which path worked.",
+  },
+  {
+    slug: "decode-blob",
+    title: "Decode this blob",
+    tagline:
+      "Hand the agent an opaque string — a JWT, a base64'd JSON payload, a gzip-encoded API response, a hex-encoded hash — and walk it through identifying what it is and unwrapping it layer by layer until it's human-readable.",
+    useCase:
+      "You pulled a suspicious string out of a log, a webhook body, a network capture, a cookie, or an API response, and you need to know what's inside without writing a one-off Node script. The tools in this pack are all deterministic and pure-CPU — every step is free over the proof-of-work tier.",
+    promptArgs: [
+      {
+        name: "blob",
+        description: "The opaque string to identify and decode",
+        required: true,
+        // A real JWT (HS256, header+payload only, signature stripped) so the
+        // example prompt actually executes end-to-end via jwt-decode.
+        substitute: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ",
+      },
+    ],
+    // Ordered by cheapest-test-first: prefix inspection costs nothing, then
+    // we try the encodings most likely to match (JWT for "eyJ", gzip for the
+    // 1f 8b magic, base64 as the universal fallback). Composes the compression
+    // kit shipped in src/tools/compression-kit.js with existing primitives.
+    toolSlugs: [
+      "jwt-decode",
+      "gunzip",
+      "brotli-decompress",
+      "base64",
+      "hex",
+      "json-format",
+      "hash",
+    ],
+    workflow: [
+      "Look at the first few characters before calling anything. \"eyJ\" → almost certainly a JWT (it's base64url for `{\"`). \"H4sI\" → base64-encoded gzip (gzip's 1f 8b magic, base64'd). All hex chars and a multiple-of-2 length → likely hex-encoded bytes. Mostly A-Z/a-z/0-9/+// with optional `=` padding → base64.",
+      "If it looks like a JWT, call jwt-decode — returns the header + payload as JSON without verifying the signature. The header tells you the algorithm; the payload is your answer. If decoded successfully but the payload is itself base64'd or gzipped, recurse with this pack.",
+      "If the prefix is \"H4sI\" (or starts with bytes 1f 8b after a base64 decode), it's gzipped. Call gunzip with the base64 string directly — outputFormat \"utf8\" if you expect text, \"base64\" if you expect another binary layer.",
+      "Brotli has no fixed magic in the stream, but if you've ruled out gzip and the bytes still don't look like text after base64 decode, try brotli-decompress. Failure is cheap (a 400, not a 500) so this is safe to attempt.",
+      "Fall back to base64 with mode=\"decode\" — it's the most common wrapper. If the result is human-readable text, you're done; if it looks like more binary, you're peeling another layer (very common: base64(gzip(json))).",
+      "If everything is in [0-9a-f] pairs and an even length, use hex with mode=\"decode\". This is how a lot of crypto/hash tooling formats output — sha256 digests, wallet addresses, encryption ciphertexts.",
+      "When you finally land on something that parses as JSON, run json-format to pretty-print it — much easier to inspect a 50-key payload with indented keys than as one long line. If the original blob was a hash you wanted to verify, call hash on the source content and compare hex outputs.",
+    ],
+    claudePrompt:
+      "Identify and decode this opaque string using Agent402: \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ\". (1) Inspect the prefix — \"eyJ\" suggests a JWT. (2) Call jwt-decode and return the header + payload. (3) If any field in the payload is itself a base64 / gzip / hex string, peel it: base64 → gunzip → brotli-decompress → hex, trying each only if the prefix suggests it. (4) When you reach plain text or JSON, return a single object describing what each layer was (e.g. {layers: [\"jwt\", \"base64\", \"gzip\", \"json\"], finalPayload: {...}}). All steps are free over the proof-of-work tier — no payment needed.",
+  },
+  {
+    slug: "trend-analysis",
+    title: "Trend analysis",
+    tagline:
+      "Take any numeric time series — a stock's daily close, a FRED macro indicator, a treasury yield history — and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark. Everything an analyst writes a notebook for, in one chain of cheap calls.",
+    useCase:
+      "You have a question like \"is AAPL trending up over the last year?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates) instead of a hand-wavy LLM summary. The stats steps are pure-CPU and free over PoW; only the upstream data fetch (finance/macro) is paid.",
+    promptArgs: [
+      {
+        name: "series",
+        description: "What to analyze — a ticker (AAPL), a FRED series id (UNRATE), or a treasury maturity (10Y)",
+        required: true,
+        substitute: "AAPL",
+      },
+      {
+        name: "horizon",
+        description: "Lookback window for the fetch — e.g. \"1y\", \"5y\", \"6mo\". Maps to the upstream tool's range parameter.",
+        required: false,
+        substitute: "1y",
+      },
+    ],
+    // Ordered as: fetch → describe → smooth → trend → anomalies → benchmark.
+    // Each step takes the array of close prices / observations from the prior
+    // step. Composes the stats kit (shipped in src/tools/stats-kit.js) with
+    // the finance/macro fetchers that already existed.
+    toolSlugs: [
+      "stock-history",
+      "fred-series",
+      "stats-summary",
+      "moving-average",
+      "linear-regression",
+      "outliers",
+      "correlation",
+    ],
+    workflow: [
+      "Fetch the series. For an equity ticker, call stock-history with range=horizon (or \"1y\" if unspecified) and pull the array of `close` prices in chronological order. For a macro indicator, call fred-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",
+      "Run stats-summary on the values to get the full descriptive panel (mean, median, stddev, min, max, q1/q3, IQR). This is the one-line \"what does this series even look like\" answer — agents that skip this step end up reporting trends without context.",
+      "Smooth the noise with moving-average. A 20-day SMA is the textbook short-term trend smoother for daily prices; a 12-month MA suits monthly macro data. Use which=\"both\" so you can compare SMA (lagging but stable) with EMA (responsive but jittery).",
+      "Fit linear-regression with x = [0, 1, ..., n-1] (just the index) and y = values. Slope tells you direction + magnitude per unit time; r² tells you how clean the trend is (>0.7 = strong trend, <0.3 = mostly noise). Pass `predict` for next-N-period extrapolation if the user wants a projection.",
+      "Flag anomalies with outliers method=\"iqr\" — Tukey fences (1.5·IQR) are the conservative default. Report the indices + values; agents should then map indices back to dates from the original fetch so the answer says \"2024-03-14: $187.23 outlier\" not just \"index 142\".",
+      "If the user asked a comparison question (\"is AAPL correlated with the S&P?\", \"do CPI and fed funds move together?\"), repeat steps 1-2 for the benchmark series, then call correlation with the two equal-length arrays. r above 0.7 = strong same-direction move; near 0 = independent; negative = inverse. Use the `interpretation` field as your one-line answer.",
+      "Return a single JSON object combining the summary, trend (slope/r²/equation), outlier dates, and optional correlation. That's the deterministic analyst-grade reply — no LLM second-guessing required.",
+    ],
+    claudePrompt:
+      "Run a full trend analysis on AAPL over the last 1y using Agent402. (1) Fetch the daily closes via stock-history (ticker=AAPL, range=1y). (2) Run stats-summary on the closes for the descriptive panel. (3) Run moving-average with window=20, which=\"both\" — compare SMA vs EMA. (4) Run linear-regression with x=[0..n-1], y=closes; report slope (annualized = slope·252), intercept, r². (5) Run outliers method=\"iqr\" and map the flagged indices back to actual dates from the fetch. (6) Return a single JSON object: {summary, trend, outlierDates, oneLineConclusion}. The stats steps are free over PoW; only the stock-history fetch is paid.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.

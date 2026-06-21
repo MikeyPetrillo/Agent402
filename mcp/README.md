@@ -44,6 +44,7 @@ Claude Code: `claude mcp add agent402 -- npx -y agent402-mcp`
 - The other ~1000 tools are reachable via `search_tools` (find by description) + `call_tool` (call by slug) — keeping your context window small.
 - When a call hits HTTP 402: with `AGENT_KEY` set, the server signs an x402 USDC payment and retries; without a key it solves the tool's proof-of-work challenge (~0.2 s of CPU) on the eligible tools.
 - `payment_info` tells the model which mode it's in and what a wallet would unlock.
+- `top_x402_sellers` returns the live x402 leaderboard — which sellers are settling the most USDC on Base in the last ~24h, derived from on-chain transfers. Free to call (no payment, no proof-of-work). Useful for agents discovering the wider x402 economy beyond this single service's catalog.
 
 ## Workflows (skill packs)
 
