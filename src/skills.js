@@ -258,6 +258,42 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Build a research brief on AAPL using Agent402's EDGAR tools. (1) Resolve the ticker → CIK with edgar-company-lookup. (2) List the 25 most recent filings via edgar-filings — flag any 8-K from the last 90 days. (3) Pull edgar-company-facts and report the 4-quarter trend for Revenues, NetIncomeLoss, and Assets. (4) Run edgar-insider-trades over the last 90 days and flag any director/officer who sold >$1M. (5) Run edgar-search for 'going concern' restricted to this CIK to surface auditor risk language. Output a markdown brief with each section linking back to the source filing URL.",
   },
+  {
+    slug: "structured-scrape",
+    title: "Structured scrape",
+    tagline:
+      "Pull structured data out of any web page deterministically — articles to clean text, tables to JSON rows, specific elements via CSS selector — without writing regex against raw HTML.",
+    useCase:
+      "Extracting a product price, a sports stats table, a roster, a pricing tier, an outlink list — anything where the page has the data but no public API exposes it, and you need a repeatable deterministic answer instead of an LLM guess.",
+    promptArgs: [
+      { name: "url", description: "Page to scrape (e.g. https://example.com/product/42)", required: true, substitute: "https://example.com/product/42" },
+      { name: "target", description: "What to extract — a price, a table, a list, a paragraph, etc.", required: true, substitute: "the price and SKU" },
+    ],
+    // Ordered as a real decision tree: try the cheapest fetch first (extract
+    // for prose, meta for headers-only), fall back to render for SPAs, then
+    // drill into the resulting HTML with the html-kit. Composes the kit that
+    // shipped in src/tools/html-kit.js with the existing fetch tools.
+    toolSlugs: [
+      "extract",
+      "render",
+      "html-select",
+      "html-table",
+      "html-strip",
+      "html-links",
+      "html-meta",
+    ],
+    workflow: [
+      "If the page is prose (an article, a blog post, a docs page), try extract first — it returns clean Readability-style markdown in one call, no HTML wrangling needed.",
+      "If the page is a SPA, paywalled-but-bypassable-with-render, or has data that lives outside the article body, fall back to render — it runs Chromium and returns the post-JS HTML you can then drill into.",
+      "Pipe the HTML from render into html-select with a CSS selector to pull specific elements (a price, a header, a button label). Use the `attr` parameter when you only need href/id/data-* values — keeps the response tight.",
+      "If the data is in a <table>, use html-table — it returns header-keyed JSON rows by default, or RFC 4180 CSV if you'd rather paste it into a spreadsheet. It picks the first matching table; pass a selector for more specificity.",
+      "If you need plain text from a specific subtree (e.g. \"give me the body of <article>\"), use html-strip with a selector — it preserves block-level newlines and removes <script>/<style>.",
+      "To enumerate outlinks (link audits, crawl seeds, footnote URLs), use html-links — it resolves relative hrefs against a base URL and dedups by href. Filter by regex when you only want one host or path prefix.",
+      "If you already have the rendered HTML and just want the metadata (title, description, OpenGraph, Twitter, canonical, JSON-LD), use html-meta on the string — avoids paying for a second fetch from /api/meta.",
+    ],
+    claudePrompt:
+      "Scrape the price and SKU from https://example.com/product/42 using Agent402. (1) Try extract first; if the price isn't in the article body, (2) call render to get the post-JS HTML. (3) Use html-select with a precise CSS selector to pull the price element — fall back to a broader selector if the first returns 0 matches. (4) Use html-select again with attr=\"data-sku\" or similar to read the SKU. Return a single JSON object {price, sku, url, source} where source = \"extract\" or \"render\" depending on which path worked.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
