@@ -650,6 +650,44 @@ export const SKILL_PACKS = [
     claudePrompt:
       "I want to save $1,000,000 for retirement in 30 years. I currently have $50,000 saved. Use Agent402 to compute how much I need to contribute monthly at a 7% expected return, and pressure-test the plan. (1) Project current $50k forward 30 years: compound-interest(principal=50000, annualRate=0.07, years=30, compoundingPerYear=12) — expect ~$406k. Gap = $1,000,000 - $406k = $594k FV still needed. (2) Discount the gap to PV: PV_of_gap = 594000 / (1+0.07/12)^360 ≈ $73,200. Now call loan-payment(principal=73200, annualRate=0.07, termYears=30, paymentsPerYear=12) → the 'payment' is your required monthly contribution. Expect ~$487/mo. (3) Sanity-check the target in today's dollars: build cashflows=[0, 0, ..., 1000000] (index 30 = $1M), call npv at discountRate=0.03 → ~$412k in today's-dollars terms. Surface both. (4) Optional back-solve: if the user can only afford $300/mo, build cashflow=[-50000, -3600, -3600, ..., +1000000] (30 years of $3600/yr contributions) and call irr → required return. If the irr > 10%, the plan is aggressive — recommend lowering the target, extending the horizon, or increasing the contribution. (5) Return: {requiredMonthlyContribution, targetInTodaysDollars, gapAfterCurrentSavings, plausibilityFlag: \"realistic\"|\"aggressive\"|\"unrealistic\", oneLineConclusion}. All four tools are free over PoW.",
   },
+  {
+    slug: "fraud-signals",
+    title: "Fraud signals",
+    tagline:
+      "Is this domain trustworthy, or is it a phishing site / typosquat / scam? Pull the reputation signals an analyst checks before clicking anything: domain age, cert issuance history, hosting reputation, DNS topology, tech-stack fingerprint, and page-content red flags. Different from a security audit — this is about whether the domain is what it claims to be.",
+    useCase:
+      "You got a link from email, a webhook, a referral, or a search result and you need to decide whether to trust it before authenticating, paying, or downloading. The security-audit pack tells you whether a domain you own is configured securely; fraud-signals tells you whether a domain you don't own is who it says it is. Newly registered domain + Let's Encrypt cert from yesterday + hosted on a bulletproof ASN + WordPress restaurant theme imitating a bank = the agent should refuse, not click.",
+    promptArgs: [
+      { name: "domain", description: "Domain to evaluate (e.g. example.com or suspicious-bank-login.com)", required: true, substitute: "example.com" },
+    ],
+    // Seven tools, ordered by signal strength: whois first (domain age is
+    // the single best predictor), then certificate evidence (transparency
+    // log + live cert), then hosting reputation (ASN), then DNS topology,
+    // then the fingerprintable application layer (tech-stack + page
+    // content). Each step is independent — you can short-circuit on any
+    // strong red flag — but combining all 7 gives the most confident
+    // assessment. Composes network-kit + network-kit2 + extract.
+    toolSlugs: [
+      "whois",
+      "cert-transparency",
+      "tls-cert",
+      "asn-info",
+      "dns-lookup",
+      "tech-stack",
+      "extract",
+    ],
+    workflow: [
+      "Start with whois — domain age is the single best fraud predictor. Established brands have domains registered years ago; impersonators are usually using domains < 90 days old. Also surfaces the registrar (some — like privacy-shrouded resellers operating out of jurisdictions with slow abuse response — are over-represented in fraud) and registrant info (privacy-protected WHOIS is normal for personal sites, suspicious for a business claiming to be Fortune-500 established).",
+      "Pull the cert-transparency log. CT logs every TLS cert ever issued for the domain. A legitimate long-running site shows years of cert renewals from major CAs. A classic phishing pattern is a brand-new domain with exactly one Let's Encrypt cert issued in the last few days — there's no history because there's no history. Burst issuance across many subdomains in a short window can indicate a phishing kit operator.",
+      "Inspect the live cert with tls-cert. Self-signed = major red flag, period. Wildcard certs across a sprawling subdomain set on a brand-new domain can indicate a phishing kit operator running many landing pages off one cert. Cert validity window matters too — Let's Encrypt's 90-day cert on a domain claiming to be an established bank is anomalous (real banks use OV/EV certs with longer validity and the green-bar / org-name treatment).",
+      "Run asn-info on the resolved IP. Cloudflare / AWS / GCP / Azure are neutral — most of the internet runs there. Known abuse-friendly hosters (specific ASNs in Russia, China, and certain Eastern European countries) over-index on fraud. Geographic mismatch matters: a US-targeted brand impersonator hosted in a country with no business presence there is a meaningful signal. Cross-reference the ASN against public abuse databases if the user wants depth.",
+      "Map the DNS topology with dns-lookup. MX records: a site claiming to be a business with no MX records (can't receive email) is a red flag. CNAMEs to shared hosting (Wix / Webflow / Squarespace on a domain impersonating a bank) are common in scams — legitimate financial institutions don't host on shared CMS platforms. Many A records spread across disparate subnets can indicate a fast-flux network rotating IPs to evade takedowns.",
+      "Fingerprint the application layer with tech-stack. Off-the-shelf scam templates are detectable: certain WordPress themes ('AI investment platform' kits, 'crypto exchange' kits), specific obfuscated jQuery patterns, telltale Bitrix or older CMS versions. Mismatch between detected tech and the claimed brand is meaningful — a 'bank' running on a WordPress theme designed for restaurants doesn't pass even a casual review.",
+      "Pull the page content with extract and scan for fraud-pattern keywords. Phishing kits use predictable language: urgency ('act now', 'limited time'), unsolicited payment requests, crypto-only payment ('USDT only'), dubious testimonials, broken English on a site claiming to be US-headquartered, gift-card payment instructions. Combine all 7 signal sources into a single rollup: low / medium / high fraud likelihood with each piece of cited evidence — let the user see exactly which signals fired, not just a black-box score.",
+    ],
+    claudePrompt:
+      "Evaluate example.com for fraud signals using Agent402. (1) whois — record the domain creation date and the registrar. If age < 90 days, flag as a strong fraud signal. (2) cert-transparency — pull the cert log. Count entries; first issuance date should match (or predate) the whois creation date by at most a few days. (3) tls-cert — inspect the live cert: issuer (Let's Encrypt is fine, self-signed is a hard red flag), validity window, wildcard scope. (4) asn-info — resolve the A record, pull the ASN: is it a mainstream cloud (Cloudflare/AWS/GCP) or a known abuse-friendly hoster? Surface country. (5) dns-lookup — MX records (a 'business' with no MX is suspicious), CNAMEs (shared-hosting CNAMEs on a brand-impersonator site are a red flag). (6) tech-stack — fingerprint the running stack; flag mismatches with the claimed brand (e.g., a 'bank' on a WordPress restaurant theme). (7) extract — pull the home-page text, scan for urgency language, crypto-only payment requests, gift-card mentions, broken English. Return: {domain, age_days, certHistoryCount, hostingProvider, hostingCountry, hasMX, techStack, redFlags: [{signal, evidence}], fraudLikelihood: \"low\"|\"medium\"|\"high\", oneLineRecommendation}. All seven tools are wallet-only (egress) — budget ≤ $0.05 per domain check.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
