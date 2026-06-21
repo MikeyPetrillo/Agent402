@@ -894,6 +894,49 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Schedule a cross-TZ meeting using Agent402. Proposed: 2026-07-15T14:00:00Z. Attendees in: America/New_York, Europe/London, Asia/Tokyo. Duration: 1h. (1) time for each of the three attendee timezones. Record current local time + day-of-week per attendee to ground the rest of the workup. (2) time-convert the proposed UTC slot for each tz. Surface {tz, local, offsetVsUTC}. Watch for DST boundaries — Europe/London is +0 or +1 depending on the date, Asia/Tokyo is +9 year-round, America/New_York is -4 or -5. (3) business-days from today to the proposed date in each tz. If the proposed local date lands on a weekend or known public holiday for any attendee region, flag it. (4) add-time the proposed UTC start + duration '1h' → endIso. time-convert endIso per attendee → local end time. Surface 'start–end' per attendee. (5) relative-time the proposed UTC slot from now → render 'in X' string for the invite body. (6) IF the user said this is recurring: cron-next with the user-provided cron expression, count=5. For each instance, run time-convert per attendee and report. Otherwise skip. (7) date-diff between now() and the proposed UTC slot. Use the human-readable result as the invite headline. Final return: {proposedUtc, perAttendee: [{tz, localStart, localEnd, dayOfWeek, businessDayCount, weekendOrHolidayFlag}], reminder: 'starts in 2d 4h', recurrencePreview: [...], oneLineHeader: 'July 15, 14:00 UTC — 1h — 10am EDT / 15:00 BST / 23:00 JST'}. All seven tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.01 even paid.",
   },
+  {
+    slug: "jwt-forensics",
+    title: "JWT forensics",
+    tagline:
+      "Someone hands you a JWT and asks 'is this valid?' Decode without verification first to see the shape, render the time claims (iat/nbf/exp) in human time, compute exactly how long until expiry, then HMAC-verify against the secret. Optional follow-ups: decode any base64-looking custom claims, verify embedded SHA fingerprints.",
+    useCase:
+      "An SSO/OAuth/API-token debugging session: a developer pasted a JWT into a support thread and asks 'why is the gateway rejecting this?' The pack runs the deterministic workup: decode reveals the alg + claims (you immediately see if the algorithm is HS256/384/512 or something asymmetric the verify step can't handle); time-convert + date-diff render the exp claim as ISO + 'expires in 14 minutes' (the most common gateway-reject reason — token already expired); jwt-verify confirms the HMAC signature against the shared secret. Two optional follow-ups handle the long tail: base64 decodes custom claims that look base64-encoded (common pattern for embedded metadata), and hash verifies any SHA fingerprint claims (common in mTLS pinning + sender-constrained tokens).",
+    promptArgs: [
+      { name: "token", description: "The JWT to inspect (three dot-separated base64url segments)", required: true, substitute: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZ2VudDQwMiIsIm5hbWUiOiJkZW1vIGFnZW50IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9.NqggPBGuLX1OA7YuSlQ4S0INJfCOWnwXWT0XUIUrt3s" },
+      { name: "secret", description: "Shared HMAC secret to verify the signature against (only used in step 4)", required: true, substitute: "my-secret" },
+    ],
+    // Six tools, ordered to match the standard JWT debugging workup: decode
+    // BEFORE verify (you need to know the alg before you can decide whether
+    // HMAC verify is even applicable — RS256 / ES256 / EdDSA tokens fail
+    // jwt-verify by design and you should report 'unsupported alg' instead
+    // of 'invalid signature'). time-convert + date-diff make exp/iat/nbf
+    // human-readable — 'token expires in 14 minutes' is far more useful
+    // than 'exp: 1781172000'. jwt-verify is the conclusive answer for
+    // HMAC tokens. base64 + hash are the two long-tail follow-ups that
+    // catch the patterns simpler inspectors miss: base64-encoded custom
+    // claims (a common embedded-metadata trick) and SHA-fingerprint claims
+    // (mTLS pinning, sender-constrained tokens). All six tools are
+    // pure-CPU and PoW-eligible. Composes kit (jwt-decode, time-convert,
+    // date-diff, base64, hash) + kit2 (jwt-verify).
+    toolSlugs: [
+      "jwt-decode",
+      "time-convert",
+      "date-diff",
+      "jwt-verify",
+      "base64",
+      "hash",
+    ],
+    workflow: [
+      "Decode the token with jwt-decode first — no verification, just see the shape. Returns header, payload, signaturePresent, expired (computed from the exp claim against current time), and expiresInSeconds. The header.alg field is the gating signal: HS256/HS384/HS512 means step 4 (HMAC verify) is applicable; RS256/ES256/EdDSA means asymmetric crypto and the verify step won't work with a shared secret — you'd need a JWKS / public key flow instead. The signaturePresent flag catches the classic mistake of pasting just the header.payload without the third segment.",
+      "Render the time claims with time-convert. Loop over iat, nbf, and exp from the payload — each is an epoch-seconds integer that time-convert renders as ISO + (optionally) a human timezone. Doing this surfaces three concrete numbers that the user can sanity-check: 'issued at 2026-06-21T14:00:00Z' tells you whether the token came from the issuer you expected; 'not-before at 2026-06-21T14:00:01Z' surfaces clock-skew bugs; 'expires at 2026-06-21T15:00:00Z' is the headline. If the payload has no exp / iat / nbf, surface that — opaque tokens with no time bounds are themselves a security finding.",
+      "Compute the headline countdown with date-diff between now() and the exp claim. The human-readable output ('expires in 14 minutes' / 'expired 3 hours ago') is the single most useful sentence in the report. It also reveals two more subtle problems: a token whose exp is years in the future is suspicious (overly long-lived tokens are a common misconfiguration); a token whose iat is in the future indicates a clock-skew issue between the issuer and your server.",
+      "Verify the HMAC signature with jwt-verify against the shared secret. Returns {valid, algorithm, expired, payload}. Three outcomes to handle distinctly: (a) valid=true → signature is correct, secret is right, token is authentic; (b) valid=false with reason='Unsupported alg' → the token uses asymmetric crypto and you can't verify it here, surface that and recommend the JWKS flow; (c) valid=false without a reason → either the secret is wrong, the token was tampered with, or the token was signed by a different issuer than the secret you're checking against. The expired field is recomputed here too — re-check it against step 3 for consistency.",
+      "Long-tail follow-up: decode any base64-looking custom claims with base64. Some issuers pack metadata into custom claims as base64-encoded JSON or base64-encoded raw bytes (Kubernetes service-account tokens, vendor SDKs, custom RBAC payloads). For each payload key whose value matches /^[A-Za-z0-9+/_-]+={0,2}$/ and is at least 16 characters, try decoding — if the result is valid UTF-8 (especially JSON), surface it. Skip the standard registered claims (iss, sub, aud, exp, iat, nbf, jti) — those are never base64-encoded.",
+      "Final long-tail: verify any SHA fingerprint claims with hash. Patterns like cnf.x5t#S256 (RFC 8705 mTLS sender-constrained tokens), cnf.jkt (DPoP proof-of-possession), or vendor 'fingerprint'/'hash' claims encode a SHA-256 of a client certificate or public key. If the user has the underlying material (cert PEM, public key bytes), run hash on it and compare to the claim value — a mismatch means the token was issued for a different client and is being replayed. For standard tokens with no such claims, this step is a no-op.",
+    ],
+    claudePrompt:
+      "Inspect this JWT using Agent402. Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZ2VudDQwMiIsIm5hbWUiOiJkZW1vIGFnZW50IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9.NqggPBGuLX1OA7YuSlQ4S0INJfCOWnwXWT0XUIUrt3s. Secret: my-secret. (1) jwt-decode — extract header.alg, payload claims, signaturePresent, and the computed expired flag. If alg is not HS256/HS384/HS512, surface 'asymmetric algorithm, HMAC verify not applicable' and continue with steps 2-3, skip 4. (2) time-convert each of payload.iat, payload.nbf, payload.exp (if present) — render as ISO 8601 UTC. Note any that are missing (especially exp — opaque, never-expiring tokens are a security finding). (3) date-diff between now() and payload.exp. Headline: 'expires in X' or 'expired X ago'. Flag iat in the future as a clock-skew bug. Flag exp > now + 1 year as 'unusually long-lived token, double-check this is intentional'. (4) IF alg is HS256/HS384/HS512: jwt-verify with token + secret. Report {valid, algorithm, expired}. If valid=false, distinguish: 'unsupported alg' / 'signature mismatch (wrong secret or tampered)' / 'malformed'. (5) For each payload key NOT in [iss, sub, aud, exp, iat, nbf, jti]: if the value is a base64-looking string ≥16 chars, run base64 decode. If the decoded result parses as JSON or is valid UTF-8, surface it under 'embeddedClaims'. (6) IF payload contains cnf.x5t#S256, cnf.jkt, or any 'fingerprint'/'hash' claim: prompt the user for the underlying material (cert PEM or public key), run hash with alg=sha256, compare. Report match/mismatch. Final return: {alg, sigValid, expired, expiresIn, claims: {iat, nbf, exp, iss, sub, aud}, embeddedClaims, fingerprintChecks, oneLineVerdict: 'authentic / expired in 14m / wrong-secret / unsupported-alg / opaque-no-exp'}. All six tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.01 even paid.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
