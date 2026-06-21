@@ -771,6 +771,46 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Clean this support log dump using Agent402. (1) text-stats on the raw input — record characters / words / sentences / estimatedTokens as the baseline. If words < 100, stop and tell the user the input is too small to be worth running the full pipeline. (2) redact the text. Save the result; also record counts.email / counts.phone / counts.card / counts.ssn / counts.ip — these are the headline 'how much PII did we strip' numbers. From here forward, work only on the redacted text — never reference the raw input again. (3) dedupe-lines on the redacted output. Record before/after line counts. (4) sort-lines on the deduped output — skip this step only if the user said the order matters semantically. (5) extract-entities on the final cleaned text. Surface emails / urls / ipv4 — if emails or ipv4 are non-empty, that's a signal redact missed something (alert the user, don't fail silently). Report URL count and the top 10 by frequency, plus all @mentions and #hashtags. (6) keywords on the cleaned text — return top 15 unigrams and top 10 bigrams as a tagging signal. (7) readability on the cleaned text — return readingEase + gradeLevel. Compare to a reasonable benchmark (gradeLevel between 7 and 14 = normal human prose). Final return: {baseline: {words, tokens}, redactionCounts: {email, phone, card, ssn, ip}, beforeLines, afterLines, residualEntities: {emails, urls, ipv4}, topKeywords, topBigrams, readingEase, gradeLevel, cleanedText, oneLineSummary: 'Started at X tokens, removed Y PII items, deduped to Z lines, grade level G.'}. All seven tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.012 even paid.",
   },
+  {
+    slug: "csv-profile",
+    title: "CSV profile",
+    tagline:
+      "Hand the pack a CSV and get back a column-by-column profile: descriptive stats, outliers, pairwise correlations, and a baseline linear regression. The deterministic 'what's in this dataset?' workup before deciding what to actually model.",
+    useCase:
+      "You inherited a CSV (export from a data warehouse, a CSV from finance, a survey dump, scraped table from a wiki). Before deciding what's worth analyzing, you need to know: which columns are numeric? what are the ranges? are there outliers that will distort everything downstream? do any two columns move together? would a straight-line fit even be reasonable? This pack runs that workup mechanically — no model required, no judgment calls, just the numbers — so you walk into the actual analysis already knowing the shape of the data.",
+    promptArgs: [
+      { name: "csv", description: "Raw CSV text (max 500KB; first row is treated as the header)", required: true, substitute: "year,revenue,cost\n2022,1000,800\n2023,1500,1100\n2024,2100,1400" },
+      { name: "columnA", description: "Primary numeric column to profile in depth (e.g. revenue)", required: true, substitute: "revenue" },
+      { name: "columnB", description: "Second numeric column for correlation + regression (e.g. cost)", required: true, substitute: "cost" },
+    ],
+    // Six tools, ordered as the standard data-profiling workup: load (csv-to-json
+    // gives you rows of objects), extract one column as an array of numbers
+    // (json-query with $.[*].columnName), then run the four stats-kit tools
+    // in cost-and-information order: descriptive stats first (cheapest, sets
+    // the scale), outliers next (decide whether you trust the stats), then
+    // pairwise correlation (do any two columns move together?), and finally
+    // a baseline linear regression (the simplest model — if this can't fit,
+    // nothing will). Composes kit (csv-to-json, json-query) + stats-kit.
+    // All six tools are pure-CPU and PoW-eligible.
+    toolSlugs: [
+      "csv-to-json",
+      "json-query",
+      "stats-summary",
+      "outliers",
+      "correlation",
+      "linear-regression",
+    ],
+    workflow: [
+      "Load the CSV with csv-to-json. Returns an array of objects keyed by the header row. Inspect the keys to inventory the columns and a small sample of values to spot-check parsing (a stray quote or unescaped comma in the source CSV will surface here as junk fields). If the first row isn't actually headers — some exports use a metadata banner row — fail loudly and ask the user to strip it; don't silently treat data as headers.",
+      "Extract one column at a time with json-query. JSONPath $.[*].columnName collapses the row-objects into a flat array of values for that column. Do this once per numeric column you care about. Catch the silent failures here: a column that looks numeric in Excel but is actually strings (because of a stray '$' or thousands separator) will show up as an array of strings — surface that as a parse warning, don't just NaN it downstream.",
+      "Run stats-summary on the column array. Twelve descriptive stats in one call: count, sum, mean, median, mode, stddev, variance, min, max, range, q1, q3, IQR. This is the cheapest possible 'know the shape of this column' step. Mean vs. median tells you skew; stddev vs. range tells you whether outliers are dragging the spread; IQR is the robust spread measure to quote when stddev is misleading.",
+      "Find anomalies with outliers. Combines IQR-based (1.5×IQR fence) and z-score (>3σ) methods so you catch both heavy-tailed and gross-error outliers. Critical second step: if you skip this and feed an outlier-laden column into correlation or regression, you'll get an apparent strong fit driven entirely by a handful of leverage points. Decide here whether to keep, cap, or drop them — and remember the decision when interpreting steps 5-6.",
+      "Check pairwise relationships with correlation. Pearson r on two columns of equal length. r near +1 / -1 = strong linear relationship; r near 0 = no linear relationship (but possibly a non-linear one — Pearson doesn't see U-shapes). r² is the 'fraction of variance explained' — useful for setting expectations on the regression in step 6. A perfect r of 1.0 on real-world data is almost always a sign that the two columns are mechanically the same thing (column B is column A in different units, or column B is computed from column A).",
+      "Fit a baseline with linear-regression. Ordinary least squares: y = mx + b, with slope, intercept, and r² returned. Even when you know the real relationship is non-linear, the OLS line is still the right first benchmark — it tells you the dominant linear trend and surfaces the residuals you'd need to model with something fancier. If r² < 0.3, the linear model is genuinely bad and you should reach for a different functional form (log, polynomial, segmented) rather than tweaking it. Composes cleanly with the forecasting-bake-off pack if this column is time-indexed.",
+    ],
+    claudePrompt:
+      "Profile this CSV using Agent402:\nyear,revenue,cost\n2022,1000,800\n2023,1500,1100\n2024,2100,1400\n\nColumns to profile: revenue (primary), cost (for pairwise checks). (1) csv-to-json the input. Confirm parsed row count matches expectations and surface the parsed columns. (2) json-query with $.[*].revenue to get the revenue array; do the same for cost. Confirm both are numeric (no string leakage from currency symbols / thousands separators). (3) stats-summary on the revenue array — report mean, median, stddev, q1/q3/IQR. Same for cost. Note skew (mean vs. median) and spread (IQR). (4) outliers on the revenue array, then on cost. If any are flagged, list them with their row indices and decide: keep, cap at fence, or drop. Use the same decision consistently for the next two steps. (5) correlation with x=revenue, y=cost. Report r and r². Flag if r > 0.99 as 'likely mechanically related, not independent' and warn before treating as a real finding. (6) linear-regression with x=revenue, y=cost. Report slope (cost-per-dollar-of-revenue), intercept, and r². If r² < 0.3, recommend a non-linear functional form in the writeup. Final return: {columns: [...], parsedRows: N, revenue: {summary, outliers}, cost: {summary, outliers}, correlation: {r, rSquared, interpretation}, regression: {slope, intercept, rSquared}, takeaways: [3-5 bullet points], suggestedNextStep}. All six tools are pure-CPU (free tier eligible). Budget ≤ $0.01 even paid.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
