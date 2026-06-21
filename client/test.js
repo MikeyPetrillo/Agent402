@@ -59,6 +59,14 @@ try {
   const promptText = rendered.messages?.[0]?.content?.text ?? "";
   ok(promptText.includes("stripe.com") && !promptText.includes("{{domain}}"), "getWorkflowPrompt substitutes args into the rendered prompt");
 
+  // 9. topSellers() proxies /api/leaderboard with the right envelope. CI runs
+  // before the first chain scan finishes, so results may be empty — but the
+  // envelope shape and sort/include echo must be correct regardless.
+  const sellers = await a.topSellers({ limit: 5, sort: "calls", include: "all" });
+  ok(sellers.sort === "calls" && sellers.include === "all", `topSellers echoes sort+include (got sort=${sellers.sort}, include=${sellers.include})`);
+  ok(Array.isArray(sellers.results) && sellers.results.length <= 5, `topSellers honors limit (got ${sellers.results?.length} rows)`);
+  ok(typeof sellers.source === "string" && sellers.source.endsWith("/api/leaderboard"), "topSellers links to /api/leaderboard");
+
   console.log(`\n${pass} passed`);
   proc.kill("SIGKILL");
   process.exit(0);

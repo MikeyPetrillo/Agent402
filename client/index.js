@@ -77,6 +77,39 @@ export class Agent402 {
     return r.json();
   }
 
+  /**
+   * Live x402 leaderboard — the sellers earning the most USDC (or serving the
+   * most calls) on Base in the last ~24h, derived from on-chain USDC
+   * transfers. Free; no payment, no wallet, no proof-of-work. Useful when
+   * building agents that want to discover the live x402 economy beyond a
+   * single service's catalog. Hourly snapshot — safe to call freely.
+   *
+   * @param {object} [opts]
+   * @param {number} [opts.limit=10]                  max rows (1-50)
+   * @param {"usd"|"calls"} [opts.sort="usd"]          rank by USDC settled or call count
+   * @param {"external"|"all"} [opts.include="external"] hide this service's own wallet (default) or include it
+   * @returns {Promise<{window:string, asOf:string, sort:string, include:string, totalSellers:number, results:Array<object>, source:string}>}
+   */
+  async topSellers({ limit = 10, sort = "usd", include = "external" } = {}) {
+    const top = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 50);
+    const sortParam = sort === "calls" ? "calls" : "usd";
+    const includeParam = include === "all" ? "all" : "external";
+    const url = `${this.baseUrl}/api/leaderboard?top=${top}&sort=${sortParam}&include=${includeParam}`;
+    const r = await this.f(url);
+    if (!r.ok) throw new Error(`topSellers failed: HTTP ${r.status}`);
+    const snap = await r.json();
+    return {
+      window: snap.windowLabel || snap.windowServed || "24h",
+      asOf: snap.asOf,
+      sort: snap.sortServed || sortParam,
+      include: snap.include || includeParam,
+      totalSellers: snap.totalSellers ?? (snap.leaderboard || []).length,
+      results: snap.leaderboard || [],
+      ...(snap.warming || snap.scanSkipped ? { warming: true } : {}),
+      source: `${this.baseUrl}/api/leaderboard`,
+    };
+  }
+
   /** Solve a proof-of-work challenge object (from a 402 body) into an X-Pow-Solution value. */
   static solvePow(pow) {
     let n = 0;
