@@ -731,6 +731,46 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Investigate this API endpoint using Agent402: https://api.example.com/v1/users. (1) url-parse the URL: scheme=https, host=api.example.com, path=/v1/users — flag that this is a versioned, multi-tenant-ish path. (2) http-check it (unauthenticated). Expect a 401 — record the response time and confirm the host resolves. If you get 404 or connection-refused, stop and ask the user for the correct URL. (3) http-headers — record Content-Type, WWW-Authenticate scheme, all X-RateLimit-* values, any X-API-Version header, and any vendor-prefixed (X-*) hints. (4) extract https://docs.example.com (or /docs, /api, /reference — try in that order until one returns a real article body). Skim for auth + rate-limit + versioning sections. (5) feed the docs HTML to html-links and filter for hrefs matching /openapi|swagger|schema|\\.json$|\\.yaml$/. If found, that's the spec URL — note it. If not found, try probing /openapi.json directly via http-check. (6) Once you have any sample JSON response from the API (provided by the user or fetched via http-check on an OPTIONS endpoint), json-format it for easy reading. (7) Use json-query to verify the expected fields are where you think they are: $.data[*].id for resource IDs, $.meta.next_cursor for pagination, $.errors[*] for error envelope. Return: {baseUrl, authScheme, contentType, version, rateLimit: {requests, window}, openApiSpecUrl, sampleResponseStructure: {pagination, dataLocation, errorEnvelope}, integrationNotes}.",
   },
+  {
+    slug: "text-hygiene",
+    title: "Text hygiene",
+    tagline:
+      "Turn a wall of dirty text — chat logs, scraped pages, user-generated content, log dumps — into something safe to store, search, and pipe into the next step. Measure first, redact PII before anything else touches the data, then dedupe, sort, extract entities, surface keywords, and grade the readability of what's left.",
+    useCase:
+      "You inherited a text dump (support tickets, exported chat history, scraped reviews, log files) and need to prepare it for analysis or storage. The pack enforces the one ordering that matters: redact PII before any other step caches an intermediate result. Every step after redact is allowed to be sloppy with retention because the secrets are already gone. Output: a cleaned, deduped, sorted stream plus an entity index and a readability score telling you whether the cleaned text is still human-grade.",
+    promptArgs: [
+      { name: "text", description: "The raw text dump to clean (max 500KB)", required: true, substitute: "support log dump" },
+    ],
+    // Seven tools, ordered to enforce a single security-relevant invariant:
+    // measure → REDACT FIRST → mutate freely. text-stats measures the
+    // baseline so you can report what got dropped; redact strips PII before
+    // any cache, log, or intermediate result can capture it; dedupe + sort
+    // normalize the cleaned stream; extract-entities indexes what survived;
+    // keywords gives a routing/tagging signal; readability grades whether
+    // the cleaned output is still human-grade. Composes kit (text-stats,
+    // keywords) + kit2 (redact, dedupe-lines, sort-lines, extract-entities,
+    // readability). All seven tools are pure-CPU and PoW-eligible.
+    toolSlugs: [
+      "text-stats",
+      "redact",
+      "dedupe-lines",
+      "sort-lines",
+      "extract-entities",
+      "keywords",
+      "readability",
+    ],
+    workflow: [
+      "Measure the baseline with text-stats. Get the raw counts (characters, words, sentences, paragraphs, estimated LLM tokens) before any mutation. This is what you'll compare against at the end to report how much noise was actually removed — 'started at 50k tokens, deduped + cleaned to 12k tokens' is a much better summary than 'cleaned the text'. It also catches the silly case where the input is too small to bother with the rest of the pipeline.",
+      "Redact PII with redact — this MUST run before any other step. The redact tool strips emails, phone numbers, credit-card-shaped digits, SSNs, and IPv4 addresses, replacing them with [EMAIL] / [PHONE] / [CARD] / [SSN] / [IP] markers and returning a count by type. Doing this first is the only safe ordering: if you dedupe + sort + extract first, intermediate results have already cached the PII in your logs, retry buffers, and downstream queues. Get the secrets out of the data while you're still inside the pack, not after.",
+      "Dedupe-lines on the redacted text. Chat logs and scraped pages are full of exact-duplicate lines (timestamps stripped, boilerplate footers, repeated error messages). Removing them tightens the signal-to-noise ratio without losing anything. Note: dedupe runs after redact deliberately, so two messages that differed only by phone number now collapse to one — a tiny privacy-positive side effect.",
+      "Sort-lines to normalize ordering. Once duplicates are gone, sort gives you a stable canonical form — diffable across runs, mergeable across sources, and friendly to downstream chunking. Optional, skip if order is semantically meaningful (timeline data) — but for tickets / reviews / unstructured comments, sort is almost always the right call.",
+      "Index entities with extract-entities. Pulls deduped lists of emails, URLs, IPv4s, @mentions, and #hashtags out of what survived redaction. The interesting outputs here are URLs (where users were linking) and mentions/hashtags (who/what users were talking about) — emails and IPs should be mostly empty if redact did its job, and a non-zero count is a useful audit signal that redact missed something (custom email formats, IPv6, weird Unicode).",
+      "Surface topics with keywords. Returns top words and two-word phrases by frequency with stopwords removed — cheap, deterministic, no model required. Use the top-N as routing tags (route to the right support queue, the right analyst, the right downstream pipeline) or as a quick gist for human triage. Two-word phrases catch domain language that single-word frequency misses ('refund request', 'login failed', 'card declined').",
+      "Grade the cleaned output with readability. Returns Flesch Reading Ease and Flesch–Kincaid grade level. The score tells you whether the cleaned text is still human-grade or whether dedupe + sort destroyed enough context that the result is now incoherent. A grade level that jumped from 9 (high school) to 22 (post-doc) is a sign that sentence boundaries got mangled by sort; a reading-ease that dropped to single digits means the surviving content is dense terminology you should hand to a domain expert. This is the closing audit step.",
+    ],
+    claudePrompt:
+      "Clean this support log dump using Agent402. (1) text-stats on the raw input — record characters / words / sentences / estimatedTokens as the baseline. If words < 100, stop and tell the user the input is too small to be worth running the full pipeline. (2) redact the text. Save the result; also record counts.email / counts.phone / counts.card / counts.ssn / counts.ip — these are the headline 'how much PII did we strip' numbers. From here forward, work only on the redacted text — never reference the raw input again. (3) dedupe-lines on the redacted output. Record before/after line counts. (4) sort-lines on the deduped output — skip this step only if the user said the order matters semantically. (5) extract-entities on the final cleaned text. Surface emails / urls / ipv4 — if emails or ipv4 are non-empty, that's a signal redact missed something (alert the user, don't fail silently). Report URL count and the top 10 by frequency, plus all @mentions and #hashtags. (6) keywords on the cleaned text — return top 15 unigrams and top 10 bigrams as a tagging signal. (7) readability on the cleaned text — return readingEase + gradeLevel. Compare to a reasonable benchmark (gradeLevel between 7 and 14 = normal human prose). Final return: {baseline: {words, tokens}, redactionCounts: {email, phone, card, ssn, ip}, beforeLines, afterLines, residualEntities: {emails, urls, ipv4}, topKeywords, topBigrams, readingEase, gradeLevel, cleanedText, oneLineSummary: 'Started at X tokens, removed Y PII items, deduped to Z lines, grade level G.'}. All seven tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.012 even paid.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
