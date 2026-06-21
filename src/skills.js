@@ -519,6 +519,50 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Compare these two mortgage offers using Agent402: A) $300,000 at 6.5% for 30 years, B) $300,000 at 6.0% for 15 years. (1) Call loan-payment on each — record monthly payment + totalInterest. Expect A ≈ $1896/mo and B ≈ $2531/mo. (2) Call amortization with maxRows=12 on each; report each loan's balance after 12 payments to show equity build (B's year-1 principal paydown should be ~4x A's). (3) Compute opportunity cost: the monthly payment differential is ~$635 (B - A). Call compound-interest with principal=0, but instead approximate by treating the differential as an annuity: take the differential × 12 months × 30 years and run compound-interest on that as if invested at 7%/yr to get the upper-bound forgone investment. (4) Build cashflow streams for npv: A = [300000, -1896, -1896, ... (360 times)], B = [300000, -2531, -2531, ... (180 times)], call npv on each at discountRate=0.05 — compare the (negative) NPVs. (5) Skip irr because both are plain fixed-rate loans with no points / balloon / fees. (6) Return: {a: {monthly, totalInterest, year1Balance, npvAt5pct}, b: {monthly, totalInterest, year1Balance, npvAt5pct}, recommendation: \"A\" | \"B\", reasoning: \"...one sentence explaining which layer was decisive.\"}. All five tools are free over PoW — only pay if you also fetch live rate data via finance-kit.",
   },
+  {
+    slug: "investment-decision",
+    title: "Investment decision",
+    tagline:
+      "Should we do this project? Run a capital allocation decision (equipment, expansion, acquisition, build-vs-buy) through the textbook CFO workflow: NPV at your hurdle rate, IRR vs. cost of capital, opportunity cost against a passive benchmark, and levered cashflow analysis if the project is debt-financed. Deterministic answers, not a gut call.",
+    useCase:
+      "You're evaluating a $500,000 equipment purchase returning $150,000/year for 5 years; a market expansion with $2M upfront and an uncertain return; an acquisition target with a forecasted cashflow stream; or a build-vs-buy decision with different upfront costs and operating profiles. Standard capital-budgeting rules say accept if NPV > 0 at your hurdle rate AND IRR > cost of capital — but the inputs (especially hurdle rate and the cashflow forecast) deserve sanity checks, which this pack walks the agent through layer by layer.",
+    promptArgs: [
+      {
+        name: "project",
+        description: "What's being evaluated (e.g. \"$500,000 equipment purchase returning $150,000/year for 5 years\")",
+        required: true,
+        substitute: "$500,000 equipment purchase returning $150,000/year for 5 years",
+      },
+      {
+        name: "hurdleRate",
+        description: "Your cost of capital / required return as a decimal (default 0.10 = 10%). Higher for riskier projects.",
+        required: false,
+        substitute: "0.10",
+      },
+    ],
+    // Five tools, each catching a different way the naive answer is wrong:
+    // NPV anchors the accept/reject call at the hurdle rate, IRR surfaces
+    // the effective return, compound-interest grounds it against the passive
+    // alternative, and the two debt tools (loan-payment + amortization)
+    // handle the levered case which usually flips small-NPV projects either
+    // way. Composes the finance-math kit (src/tools/finance-math-kit.js).
+    toolSlugs: [
+      "npv",
+      "irr",
+      "compound-interest",
+      "loan-payment",
+      "amortization",
+    ],
+    workflow: [
+      "Build the cashflow stream: index 0 = upfront investment (negative), 1..n = expected annual cashflows (positive), with any salvage/terminal value rolled into the final year. Pass to npv with discountRate = your hurdle rate (typically 8-12% for a small business, 10-15% for VC-backed risk, your weighted average cost of capital if you have one). Positive NPV = the project creates value above your hurdle; negative = it destroys value. This is the primary accept/reject signal.",
+      "Call irr on the same cashflow stream. The IRR is the discount rate at which NPV = 0 — i.e., the project's effective annualized return. Accept if IRR > hurdle rate; reject if IRR < hurdle. If the response has converged=false, the cashflow shape has multiple sign changes (common with mid-project re-investments) and NPV is the more reliable metric — flag the IRR as indicative not definitive.",
+      "Sanity-check against the passive alternative with compound-interest. Take the same upfront capital, invest at your benchmark rate (7-8% for long-run equity, 4-5% for bonds, your actual savings rate for cash), project forward over the same horizon. If the project's NPV + initial investment doesn't beat the passive future value, the project is destroying value relative to doing nothing — even if NPV at hurdle rate is positive. This catches projects that 'pass NPV' only because the hurdle rate is set unrealistically low.",
+      "If the project will be debt-financed (most real-world deals are not all-equity), call loan-payment to compute the periodic debt service. Subtract this from the project's annual operating cashflow to get the levered free cashflow to equity. Then re-run npv and irr on the *levered* stream (index 0 = your equity check, not the full purchase price). Leverage almost always boosts IRR (positive leverage when project yield > debt cost) and increases risk — surface both numbers so the user sees the trade-off.",
+      "Call amortization on the financing loan to get the year-by-year interest + principal split. The interest expense is typically tax-deductible — multiply by your tax rate to get the annual tax shield, which improves the levered cashflows. The remaining balance at each year is what you'd owe if you sold/refinanced — useful for modeling an early exit or refinance scenario. Skip if the project is all-equity; required if you want to model the levered IRR honestly.",
+    ],
+    claudePrompt:
+      "Evaluate this capital project using Agent402: $500,000 equipment purchase returning $150,000/year for 5 years with $50,000 salvage value at the end. Use a 10% hurdle rate. (1) Build cashflows = [-500000, 150000, 150000, 150000, 150000, 200000] (year 5 includes salvage). Call npv at discountRate=0.10 — record the NPV. (2) Call irr on the same cashflows — record the IRR (it should be ~17-18% on these numbers; converged should be true). (3) Sanity-check the passive alternative: call compound-interest(principal=500000, annualRate=0.07, years=5, compoundingPerYear=1) — compare the future value of the cashflow scenario (cumulative undiscounted = $750k + $50k = $800k) against the passive S&P 7% future value (~$701k). If the project beats passive even before discounting, that's a real positive signal beyond NPV. (4) Model financing: if a $400k loan at 8% for 5 years funds most of it, call loan-payment(400000, 0.08, 5). Compute the annual debt service (payment × 12); subtract from $150k cashflow → levered cashflow. Build levered stream = [-100000, leveredCF, leveredCF, leveredCF, leveredCF, leveredCF + 50000] and re-run npv + irr on this — the levered IRR will be meaningfully higher than the unlevered, reflecting the equity returns. (5) Call amortization(400000, 0.08, 5, maxRows=5) for the per-year interest schedule (for tax-shield modeling). (6) Return: {unleveredNpv, unleveredIrr, passiveAlternativeFV, leveredNpv, leveredIrr, recommendation: \"ACCEPT\"|\"REJECT\", reasoning}. All five tools are free over PoW.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
