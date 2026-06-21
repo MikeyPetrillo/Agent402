@@ -608,6 +608,48 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Build a retirement plan for: 35 years old with $100,000 saved, contributing $1,500/month, retiring at 65, expecting 30 years of retirement, current annual spending of $60,000 (assume 80% replacement = $48,000/yr in retirement). Use Agent402's finance-math kit. (1) Project current $100k forward 30 years at 7%/yr monthly compounding: compound-interest(principal=100000, annualRate=0.07, years=30, compoundingPerYear=12) → expect ~$811k. (2) Project the $1,500/mo contribution stream: easiest is the closed-form PMT-to-FV identity = 1500 · ((1+0.07/12)^360 - 1) / (0.07/12). Compute it (~$1.83M) and add to step 1 → projected nest egg ≈ $2.64M. (3) Target nest egg: build a cashflow stream of [-48000] × 30 (annual retirement spending), call npv at discountRate=0.05 (drawdown-era return) → |NPV| ≈ $738k. Compare projected ($2.64M) vs target ($738k) — comfortably above. (4) Sustainable monthly withdrawal: loan-payment(principal=2640000, annualRate=0.05, termYears=30) → the 'payment' is the monthly draw — expect ~$14,170/mo (~$170k/yr), well above the $48k/yr target. (5) Year-by-year drawdown: amortization(principal=2640000, annualRate=0.05, termYears=30, maxRows=30) — confirm balance trajectory and that final balance is 0. (6) Return: {projectedNestEgg, targetNestEgg, gap, sustainableMonthlyWithdrawal, sustainableAnnualWithdrawal, onTrack: true|false, oneLineConclusion}. All five tools are free over PoW.",
   },
+  {
+    slug: "savings-goal",
+    title: "Savings goal",
+    tagline:
+      "How much do I need to save each month to hit $X in N years? Pin down the required contribution with a clever PV-discount trick: discount the target back to today, then call loan-payment with the discounted target as principal — the 'payment' the tool returns IS your required monthly savings. Same PMT formula a mortgage uses; different decision.",
+    useCase:
+      "You have a concrete goal — save $1,000,000 for retirement in 30 years, $500k for a child's college in 18 years, $80k for a down payment in 5 years, $20k for a wedding in 2 years — and want the deterministic answer to: how much per month? What's the gap if I keep saving at my current rate? What return would I need on a fixed contribution? This pack walks the agent through projecting current savings, computing the gap, and back-solving the required PMT — all with the finance-math kit, all free over PoW.",
+    promptArgs: [
+      {
+        name: "goal",
+        description: "What you're saving for, with the target amount and time horizon (e.g. \"save $1,000,000 for retirement in 30 years\")",
+        required: true,
+        substitute: "save $1,000,000 for retirement in 30 years",
+      },
+      {
+        name: "expectedReturn",
+        description: "Expected annual return as a decimal (default 0.07 = 7% for long-horizon equity; use 0.04 for bond-heavy or short-horizon goals)",
+        required: false,
+        substitute: "0.07",
+      },
+    ],
+    // Four tools, one core insight: the PMT formula loan-payment implements
+    // solves "save $X to reach $Y" if you discount the target to PV first.
+    // The other three tools (compound-interest, npv, irr) handle the baseline
+    // projection, the inflation-adjustment, and the back-solved return rate.
+    // No amortization here — savings accumulation builds up rather than
+    // amortizing down, so the schedule shape doesn't apply.
+    toolSlugs: [
+      "compound-interest",
+      "loan-payment",
+      "npv",
+      "irr",
+    ],
+    workflow: [
+      "Project the current balance forward with compound-interest. Pass principal=current_savings, annualRate=expected_return, years=time_horizon, compoundingPerYear=12. This is the 'no further contributions' future value — what's already covered. Subtract from the target → the gap that new contributions need to fill.",
+      "Solve for the required monthly contribution with the PV-discount trick. The PMT formula loan-payment implements is PMT = PV · r / (1 - (1+r)^-n). The same formula in reverse computes: 'what regular contribution accumulates to a given FV?' To use loan-payment directly, first discount the gap back to present value: PV_of_gap = gap / (1 + r)^n (or use npv with cashflows=[0, ..., gap] to do this). Then call loan-payment(principal=PV_of_gap, annualRate=r, termYears=n, paymentsPerYear=12) — the 'payment' the tool returns IS your required monthly contribution. Same PMT formula, different decision: you're not borrowing, you're paying yourself.",
+      "Sanity-check the target in today's dollars with npv. A $1M target in 30 years isn't $1M in spending power — at 3% inflation it's worth ~$412k today. Build a single-cashflow stream [0, ..., target] over the horizon and call npv at discountRate = inflation rate (3% historical, 2.5% recent Fed target). The (positive) NPV is the target in today's-dollars terms. Surface both nominal and real targets to the user — many people set savings targets without realizing they're undershooting because they thought in nominal dollars.",
+      "If the user has a fixed contribution and wants to know 'what return do I need?', back-solve with irr. Build the cashflow stream [-current_savings, -annual_contribution, -annual_contribution, ..., +target] over the horizon and call irr. The returned rate is the required annual return to hit the target — compare to historical asset class returns (cash ~2%, bonds ~4%, balanced ~6%, stocks ~7-10%) to ground-truth whether the plan is plausible. If irr > 10% on a long horizon, the plan is aggressive; if irr > 15%, the user should expect to either save more, extend the horizon, or accept higher risk.",
+    ],
+    claudePrompt:
+      "I want to save $1,000,000 for retirement in 30 years. I currently have $50,000 saved. Use Agent402 to compute how much I need to contribute monthly at a 7% expected return, and pressure-test the plan. (1) Project current $50k forward 30 years: compound-interest(principal=50000, annualRate=0.07, years=30, compoundingPerYear=12) — expect ~$406k. Gap = $1,000,000 - $406k = $594k FV still needed. (2) Discount the gap to PV: PV_of_gap = 594000 / (1+0.07/12)^360 ≈ $73,200. Now call loan-payment(principal=73200, annualRate=0.07, termYears=30, paymentsPerYear=12) → the 'payment' is your required monthly contribution. Expect ~$487/mo. (3) Sanity-check the target in today's dollars: build cashflows=[0, 0, ..., 1000000] (index 30 = $1M), call npv at discountRate=0.03 → ~$412k in today's-dollars terms. Surface both. (4) Optional back-solve: if the user can only afford $300/mo, build cashflow=[-50000, -3600, -3600, ..., +1000000] (30 years of $3600/yr contributions) and call irr → required return. If the irr > 10%, the plan is aggressive — recommend lowering the target, extending the horizon, or increasing the contribution. (5) Return: {requiredMonthlyContribution, targetInTodaysDollars, gapAfterCurrentSavings, plausibilityFlag: \"realistic\"|\"aggressive\"|\"unrealistic\", oneLineConclusion}. All four tools are free over PoW.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
