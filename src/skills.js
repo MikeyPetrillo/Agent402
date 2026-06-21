@@ -223,6 +223,41 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Ingest these 10 URLs into clean markdown using Agent402. For each: try extract first; if it returns no body, fall back to render→extract; for any PDF URL, use pdf-to-markdown. Return one markdown blob per URL with the source URL as the H1.",
   },
+  {
+    slug: "sec-filings-deep-dive",
+    title: "SEC filings deep-dive",
+    tagline:
+      "Pull the full EDGAR picture of a US public company in one workflow: recent filings, key financial time series, insider trades, and full-text search across the corpus.",
+    useCase:
+      "Pre-earnings prep, an investment thesis, M&A diligence, or journalism — anywhere you need the source documents instead of a paid terminal's summary.",
+    promptArgs: [
+      { name: "ticker", description: "US stock ticker (e.g. AAPL, NVDA, BRK.B)", required: true, substitute: "AAPL" },
+    ],
+    // 7 tools, 4 of which weren't used in any other pack before this one
+    // (edgar-company-lookup, edgar-company-concept, edgar-search,
+    // edgar-13f-holdings). Ordered to mirror an analyst's real workflow:
+    // resolve the entity first, then go wide on what's been filed.
+    toolSlugs: [
+      "edgar-company-lookup",
+      "edgar-filings",
+      "edgar-company-facts",
+      "edgar-company-concept",
+      "edgar-insider-trades",
+      "edgar-search",
+      "edgar-13f-holdings",
+    ],
+    workflow: [
+      "Resolve the ticker to a SEC CIK with edgar-company-lookup — every other tool keys off CIK, and tickers change (mergers, listings, spinoffs) while CIKs are stable.",
+      "Pull the recent filing history with edgar-filings — 10-K (annual), 10-Q (quarterly), 8-K (material events), DEF 14A (proxy). The 8-K stream is the freshest signal: M&A, exec departures, material agreements, restatements.",
+      "Use edgar-company-facts for a structured snapshot of every XBRL tag the company has ever filed (revenue, net income, assets, cash, etc.) — one call returns the full time series for tagging in your own model.",
+      "Drill into a single concept with edgar-company-concept (e.g. us-gaap:Revenues, NetIncomeLoss) to compare a specific metric across years without parsing 10-K HTML.",
+      "Run edgar-insider-trades to surface Form 4 transactions (officer/director buys + sells) in the last N days — concentrated insider selling around an event is one of the highest-signal-to-noise flags in public-markets research.",
+      "Run edgar-search to full-text query the filing corpus for any phrase the company has ever filed — useful for finding the exact 10-K paragraph mentioning a competitor, a risk factor, or a litigation matter.",
+      "Optional: pull edgar-13f-holdings on a known institutional manager (Berkshire = CIK 1067983, Bridgewater, etc.) to see whether they hold the target company and at what dollar weight.",
+    ],
+    claudePrompt:
+      "Build a research brief on AAPL using Agent402's EDGAR tools. (1) Resolve the ticker → CIK with edgar-company-lookup. (2) List the 25 most recent filings via edgar-filings — flag any 8-K from the last 90 days. (3) Pull edgar-company-facts and report the 4-quarter trend for Revenues, NetIncomeLoss, and Assets. (4) Run edgar-insider-trades over the last 90 days and flag any director/officer who sold >$1M. (5) Run edgar-search for 'going concern' restricted to this CIK to surface auditor risk language. Output a markdown brief with each section linking back to the source filing URL.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
