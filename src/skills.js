@@ -336,6 +336,52 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Identify and decode this opaque string using Agent402: \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ\". (1) Inspect the prefix — \"eyJ\" suggests a JWT. (2) Call jwt-decode and return the header + payload. (3) If any field in the payload is itself a base64 / gzip / hex string, peel it: base64 → gunzip → brotli-decompress → hex, trying each only if the prefix suggests it. (4) When you reach plain text or JSON, return a single object describing what each layer was (e.g. {layers: [\"jwt\", \"base64\", \"gzip\", \"json\"], finalPayload: {...}}). All steps are free over the proof-of-work tier — no payment needed.",
   },
+  {
+    slug: "trend-analysis",
+    title: "Trend analysis",
+    tagline:
+      "Take any numeric time series — a stock's daily close, a FRED macro indicator, a treasury yield history — and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark. Everything an analyst writes a notebook for, in one chain of cheap calls.",
+    useCase:
+      "You have a question like \"is AAPL trending up over the last year?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates) instead of a hand-wavy LLM summary. The stats steps are pure-CPU and free over PoW; only the upstream data fetch (finance/macro) is paid.",
+    promptArgs: [
+      {
+        name: "series",
+        description: "What to analyze — a ticker (AAPL), a FRED series id (UNRATE), or a treasury maturity (10Y)",
+        required: true,
+        substitute: "AAPL",
+      },
+      {
+        name: "horizon",
+        description: "Lookback window for the fetch — e.g. \"1y\", \"5y\", \"6mo\". Maps to the upstream tool's range parameter.",
+        required: false,
+        substitute: "1y",
+      },
+    ],
+    // Ordered as: fetch → describe → smooth → trend → anomalies → benchmark.
+    // Each step takes the array of close prices / observations from the prior
+    // step. Composes the stats kit (shipped in src/tools/stats-kit.js) with
+    // the finance/macro fetchers that already existed.
+    toolSlugs: [
+      "stock-history",
+      "fred-series",
+      "stats-summary",
+      "moving-average",
+      "linear-regression",
+      "outliers",
+      "correlation",
+    ],
+    workflow: [
+      "Fetch the series. For an equity ticker, call stock-history with range=horizon (or \"1y\" if unspecified) and pull the array of `close` prices in chronological order. For a macro indicator, call fred-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",
+      "Run stats-summary on the values to get the full descriptive panel (mean, median, stddev, min, max, q1/q3, IQR). This is the one-line \"what does this series even look like\" answer — agents that skip this step end up reporting trends without context.",
+      "Smooth the noise with moving-average. A 20-day SMA is the textbook short-term trend smoother for daily prices; a 12-month MA suits monthly macro data. Use which=\"both\" so you can compare SMA (lagging but stable) with EMA (responsive but jittery).",
+      "Fit linear-regression with x = [0, 1, ..., n-1] (just the index) and y = values. Slope tells you direction + magnitude per unit time; r² tells you how clean the trend is (>0.7 = strong trend, <0.3 = mostly noise). Pass `predict` for next-N-period extrapolation if the user wants a projection.",
+      "Flag anomalies with outliers method=\"iqr\" — Tukey fences (1.5·IQR) are the conservative default. Report the indices + values; agents should then map indices back to dates from the original fetch so the answer says \"2024-03-14: $187.23 outlier\" not just \"index 142\".",
+      "If the user asked a comparison question (\"is AAPL correlated with the S&P?\", \"do CPI and fed funds move together?\"), repeat steps 1-2 for the benchmark series, then call correlation with the two equal-length arrays. r above 0.7 = strong same-direction move; near 0 = independent; negative = inverse. Use the `interpretation` field as your one-line answer.",
+      "Return a single JSON object combining the summary, trend (slope/r²/equation), outlier dates, and optional correlation. That's the deterministic analyst-grade reply — no LLM second-guessing required.",
+    ],
+    claudePrompt:
+      "Run a full trend analysis on AAPL over the last 1y using Agent402. (1) Fetch the daily closes via stock-history (ticker=AAPL, range=1y). (2) Run stats-summary on the closes for the descriptive panel. (3) Run moving-average with window=20, which=\"both\" — compare SMA vs EMA. (4) Run linear-regression with x=[0..n-1], y=closes; report slope (annualized = slope·252), intercept, r². (5) Run outliers method=\"iqr\" and map the flagged indices back to actual dates from the fetch. (6) Return a single JSON object: {summary, trend, outlierDates, oneLineConclusion}. The stats steps are free over PoW; only the stock-history fetch is paid.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
