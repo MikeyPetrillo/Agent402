@@ -28,7 +28,7 @@ import {
 
 const BASE = (process.env.AGENT402_URL || "https://agent402.tools").replace(/\/$/, "");
 const AGENT_KEY = process.env.AGENT_KEY || "";
-const VERSION = "0.6.0";
+const VERSION = "0.8.0";
 
 // Spend controls — enforced BEFORE a payment is ever signed, so a confused or
 // runaway model cannot drain the wallet. Unset = unlimited (back-compat).
@@ -332,6 +332,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       name: "payment_info",
       description: "How this MCP server is paying for Agent402 calls (USDC wallet vs proof-of-work), and what that unlocks.",
       inputSchema: { type: "object", properties: {} },
+    },
+    // Discovery primitive: who's earning USDC on x402 right now? Proxies the
+    // hosted /api/leaderboard (free, unpaywalled) and trims to the same compact
+    // shape as the hosted MCP connector so cross-surface agents see the same UX.
+    {
+      name: "top_x402_sellers",
+      description:
+        "List the x402 sellers earning the most USDC (or serving the most calls) on Base in the last ~24h, derived from on-chain USDC transfers. Useful for agents discovering the live x402 economy: who's getting paid, which networks, and where to point demand. Free to call (no payment, no proof-of-work). Defaults: top 10, sort by USDC, exclude this service's own wallet.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          limit: { type: "number", description: "Max rows to return (default 10, max 50)" },
+          sort: { type: "string", enum: ["usd", "calls"], description: "Rank by USDC settled (default) or by call count" },
+          include: { type: "string", enum: ["external", "all"], description: "'external' (default) hides this service's own wallet; 'all' includes it" },
+        },
+      },
     }
   );
   return { tools };
@@ -387,6 +403,52 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             note: AGENT_KEY
               ? "Every tool is available; each call is paid in USDC via x402 from the configured wallet, within the spend controls above."
               : `No AGENT_KEY configured: ${computePayable} pure-CPU tools are free via proof-of-work; the ${catalog.size - computePayable} network/browser/memory tools need a funded wallet (set AGENT_KEY).`,
+            ecosystem: "Call top_x402_sellers to see which x402 sellers (any wallet, not just this host) are settling the most USDC on Base in the last 24h — discovers the live economy beyond this catalog.",
+          }, null, 2),
+        }],
+      };
+    }
+    if (name === "top_x402_sellers") {
+      const limit = Math.min(Math.max(parseInt(args.limit, 10) || 10, 1), 50);
+      const sort = args.sort === "calls" ? "calls" : "usd";
+      const include = args.include === "all" ? "all" : "external";
+      // /api/leaderboard is free + unpaywalled, so this stays free regardless
+      // of payment mode. Honor its query params verbatim so the surface is a
+      // thin pass-through — single source of truth for ranking + filtering.
+      const url = new URL(`${BASE}/api/leaderboard`);
+      url.searchParams.set("top", String(limit));
+      url.searchParams.set("sort", sort);
+      url.searchParams.set("include", include);
+      const res = await fetch(url);
+      if (!res.ok) {
+        return { content: [{ type: "text", text: `Failed to fetch leaderboard from ${BASE}: HTTP ${res.status}` }], isError: true };
+      }
+      const snap = await res.json();
+      // Trim to the same compact row shape the hosted MCP connector returns —
+      // cross-surface agents see one mental model. Full row (origins,
+      // endpoints, scan metadata) stays accessible at /api/leaderboard.
+      const rows = (snap.leaderboard || []).map((r) => ({
+        rank: r.rank,
+        name: r.name,
+        network: r.network,
+        wallet: r.wallet,
+        homepage: r.homepage || null,
+        callsSettled: r.callsSettled || 0,
+        totalUsd: Math.round((r.totalUsd || 0) * 10000) / 10000,
+        uniqueBuyers: r.uniqueBuyers || 0,
+      }));
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            window: snap.windowLabel || snap.windowServed || "24h",
+            asOf: snap.asOf,
+            sort: snap.sortServed || sort,
+            include: snap.include || include,
+            totalSellers: snap.totalSellers ?? (snap.leaderboard || []).length,
+            results: rows,
+            ...(snap.warming || snap.scanSkipped ? { note: "Cache is warming — results may be partial. Retry in ~60s." } : {}),
+            source: `${BASE}/api/leaderboard`,
           }, null, 2),
         }],
       };
