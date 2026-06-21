@@ -476,6 +476,49 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Process this invoice with Agent402: https://example.com/invoice.pdf. (1) Run pdf-info to confirm it's a PDF, get the page count, check the `encrypted` flag. (2) If not encrypted, call pdf-to-markdown with the URL. (3) Inspect the returned markdown — if it has <50 chars of text, the PDF is scanned: call pdf-extract-pages to get each page as an image, then run image-ocr on each. (4) If you still can't find a tracking number after parsing the OCR text, run barcode-decode on page 1 to surface an embedded QR / barcode payload. (5) Return a single JSON object: {invoiceNumber, totalAmount, vendor, lineItems, trackingNumber, source: \"pdf-to-markdown\" | \"image-ocr\" | \"barcode-decode\"} — populate `source` based on which extraction path actually produced the data. Budget ≤ $0.05 per document; all of these tools are wallet-only (paid per call).",
   },
+  {
+    slug: "loan-comparison",
+    title: "Loan comparison",
+    tagline:
+      "Compare two or more loan offers — different rates, terms, fees, prepayment structures — on the metrics that actually matter (monthly payment, total interest, year-1 equity build, NPV at your discount rate, effective rate). Apples-to-apples math without opening a spreadsheet.",
+    useCase:
+      "You're choosing between two mortgage offers, a fixed vs. variable auto loan, a student-loan refinance, or a 15-year vs. 30-year structure. Raw totals lie (you can't compare $300k of 15-year payments to $300k of 30-year payments on total dollars — the 30-year wins on total cost only because you held the money longer). Compare on present-value terms and opportunity cost. All deterministic, all free over PoW.",
+    promptArgs: [
+      {
+        name: "loanA",
+        description: "First loan offer (e.g. \"$300,000 at 6.5% for 30 years\")",
+        required: true,
+        substitute: "$300,000 at 6.5% for 30 years",
+      },
+      {
+        name: "loanB",
+        description: "Second loan offer (e.g. \"$300,000 at 6.0% for 15 years\")",
+        required: true,
+        substitute: "$300,000 at 6.0% for 15 years",
+      },
+    ],
+    // Five tools, one per analytical layer. Ordered cheapest-first: payment
+    // alone decides ~60% of comparisons; the deeper layers (amortization,
+    // opportunity cost, NPV, IRR) only matter when offers are close or when
+    // the loan structures are genuinely different. Composes the finance-math
+    // kit shipped in src/tools/finance-math-kit.js.
+    toolSlugs: [
+      "loan-payment",
+      "amortization",
+      "compound-interest",
+      "npv",
+      "irr",
+    ],
+    workflow: [
+      "Call loan-payment on each offer to get the monthly payment, total paid over the term, and total interest. For most plain fixed-rate comparisons (same principal, same term, just different rates), this single comparison settles it — pick the lower payment. Only keep going when the comparison is non-trivial (different terms, points, balloon payments, etc.).",
+      "Call amortization on each loan with maxRows=12 (or paymentsPerYear, whichever you'd rather inspect). Report the year-1 ending balance to surface equity-build differences — a 15-year loan pays off ~$13k of principal in year 1 on a $300k mortgage where a 30-year pays off ~$3k. That's the 'why pay more per month?' answer, and it's invisible from the payment number alone.",
+      "Compute opportunity cost with compound-interest. Take the per-period payment difference (Loan A monthly minus Loan B monthly) and ask: if I invested the savings instead, what would I have at the end of the term? Use the longer term and your assumed market return (default 7-8% for stocks, 4-5% for bonds). This is the layer that flips most 'obvious' comparisons — a higher-payment 15-year loan often loses to a 30-year + invest-the-difference once you price the opportunity cost honestly.",
+      "Run npv on each loan's full cashflow stream using your personal discount rate (default 5%). Build the stream as: [principal, -payment, -payment, ...] over the loan's periods. The loan with the less-negative NPV is cheaper in present-value terms. This is the right comparison metric when the terms differ — comparing raw total-paid on a 15y vs. 30y is dishonest because the dollars in year 30 are worth less than the dollars in year 1.",
+      "Use irr only for non-standard structures: loans with discount points (you pay $X upfront for a lower rate), balloon payments (low monthly + a giant final payment), prepayment penalties, or fees rolled into the loan. Build the actual cashflow stream and call irr — that's the all-in effective rate the loan is really costing you, comparable across structures. Plain fixed-rate loans don't need this step; their irr equals their stated rate.",
+    ],
+    claudePrompt:
+      "Compare these two mortgage offers using Agent402: A) $300,000 at 6.5% for 30 years, B) $300,000 at 6.0% for 15 years. (1) Call loan-payment on each — record monthly payment + totalInterest. Expect A ≈ $1896/mo and B ≈ $2531/mo. (2) Call amortization with maxRows=12 on each; report each loan's balance after 12 payments to show equity build (B's year-1 principal paydown should be ~4x A's). (3) Compute opportunity cost: the monthly payment differential is ~$635 (B - A). Call compound-interest with principal=0, but instead approximate by treating the differential as an annuity: take the differential × 12 months × 30 years and run compound-interest on that as if invested at 7%/yr to get the upper-bound forgone investment. (4) Build cashflow streams for npv: A = [300000, -1896, -1896, ... (360 times)], B = [300000, -2531, -2531, ... (180 times)], call npv on each at discountRate=0.05 — compare the (negative) NPVs. (5) Skip irr because both are plain fixed-rate loans with no points / balloon / fees. (6) Return: {a: {monthly, totalInterest, year1Balance, npvAt5pct}, b: {monthly, totalInterest, year1Balance, npvAt5pct}, recommendation: \"A\" | \"B\", reasoning: \"...one sentence explaining which layer was decisive.\"}. All five tools are free over PoW — only pay if you also fetch live rate data via finance-kit.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
