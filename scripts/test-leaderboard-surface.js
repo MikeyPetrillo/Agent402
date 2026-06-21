@@ -61,6 +61,13 @@ ok(manifest.discovery.refreshSeconds.leaderboard === 3600, "manifest.discovery.r
 // "calls" ranks by raw call volume.
 ok(Array.isArray(manifest.discovery.sortOptions), "manifest.discovery.sortOptions is an array");
 ok(manifest.discovery.sortOptions.includes("usd") && manifest.discovery.sortOptions.includes("calls"), "manifest.discovery.sortOptions advertises both 'usd' and 'calls'");
+// Cross-protocol surface index: the leaderboard primitive ships on three
+// equivalent surfaces. The manifest must name all three so a Bazaar crawler
+// or custom router can dispatch on the typed shape (not just prose).
+ok(manifest.discovery.leaderboardSurfaces && typeof manifest.discovery.leaderboardSurfaces === "object", "manifest.discovery.leaderboardSurfaces present");
+ok(manifest.discovery.leaderboardSurfaces.http === `${BASE}/api/leaderboard`, "leaderboardSurfaces.http = /api/leaderboard");
+ok(manifest.discovery.leaderboardSurfaces.mcpTool === "top_x402_sellers", "leaderboardSurfaces.mcpTool = top_x402_sellers");
+ok(manifest.discovery.leaderboardSurfaces.sdkMethod === "topSellers", "leaderboardSurfaces.sdkMethod = topSellers");
 ok(manifest.machineReadable.findTool && manifest.discovery.neutralRouter, "manifest still exposes find + router");
 // Must serialize (it is served as JSON).
 JSON.parse(JSON.stringify(manifest));
