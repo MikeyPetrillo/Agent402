@@ -688,6 +688,49 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Evaluate example.com for fraud signals using Agent402. (1) whois — record the domain creation date and the registrar. If age < 90 days, flag as a strong fraud signal. (2) cert-transparency — pull the cert log. Count entries; first issuance date should match (or predate) the whois creation date by at most a few days. (3) tls-cert — inspect the live cert: issuer (Let's Encrypt is fine, self-signed is a hard red flag), validity window, wildcard scope. (4) asn-info — resolve the A record, pull the ASN: is it a mainstream cloud (Cloudflare/AWS/GCP) or a known abuse-friendly hoster? Surface country. (5) dns-lookup — MX records (a 'business' with no MX is suspicious), CNAMEs (shared-hosting CNAMEs on a brand-impersonator site are a red flag). (6) tech-stack — fingerprint the running stack; flag mismatches with the claimed brand (e.g., a 'bank' on a WordPress restaurant theme). (7) extract — pull the home-page text, scan for urgency language, crypto-only payment requests, gift-card mentions, broken English. Return: {domain, age_days, certHistoryCount, hostingProvider, hostingCountry, hasMX, techStack, redFlags: [{signal, evidence}], fraudLikelihood: \"low\"|\"medium\"|\"high\", oneLineRecommendation}. All seven tools are wallet-only (egress) — budget ≤ $0.05 per domain check.",
   },
+  {
+    slug: "api-investigation",
+    title: "API investigation",
+    tagline:
+      "Point at an unknown API endpoint and figure out how to use it: auth scheme, content type, version, rate limits, OpenAPI/Swagger spec discovery, and JSON response structure. The deterministic recon workflow before writing a single line of integration code.",
+    useCase:
+      "A developer just got handed an API base URL with minimal docs (\"here's the endpoint, integrate it\"). The pack walks through the recon-before-code workflow: decompose the URL, probe headers for auth + versioning + rate-limit signals, find the human-readable docs page, hunt for an OpenAPI/Swagger link in the docs page, and once a real response is in hand, pretty-print and drill into the JSON structure. Saves the cycle of \"send request → 401 → guess auth header → 415 → guess content-type → ...\" by surfacing it all in one workup.",
+    promptArgs: [
+      {
+        name: "endpoint",
+        description: "API URL to investigate (e.g. https://api.example.com/v1/users)",
+        required: true,
+        substitute: "https://api.example.com/v1/users",
+      },
+    ],
+    // Seven tools, ordered as the real recon-before-code flow: decompose
+    // the URL first (cheapest), then live-probe with http-check + http-headers
+    // (where auth scheme + content type + rate-limit hints all live), then
+    // hunt for human docs (extract) and the machine spec (html-links chasing
+    // /openapi.json or /swagger.json), then finally inspect actual response
+    // payloads (json-format + json-query). Composes util-kit + html-kit +
+    // network-kit2 + extract — no new tools needed.
+    toolSlugs: [
+      "url-parse",
+      "http-check",
+      "http-headers",
+      "extract",
+      "html-links",
+      "json-format",
+      "json-query",
+    ],
+    workflow: [
+      "Decompose the URL first with url-parse. Surfaces scheme, host, port (default-or-explicit matters for whether you're hitting a non-standard reverse proxy), path, and parsed query parameters. The host alone often tells you whether the API is multi-tenant (api.example.com vs. tenant.example.com vs. example.com/api) which affects how rate limits will work. Cheap, deterministic, and orients the rest of the investigation.",
+      "Liveness-probe with http-check. Returns the status code, response time, and (most importantly) confirms whether the host even resolves and answers TCP/443. A 401 here is the friendliest answer — it tells you the endpoint exists and what auth scheme is expected (Bearer, Basic, Digest via the WWW-Authenticate header). A 404 might mean the path is wrong; a 502 / connection refused means you have a different problem (DNS, infra, or simply wrong URL). Don't burn calls on the next steps until http-check returns a 2xx or an authenticated 4xx.",
+      "Inspect the full response headers with http-headers — this is where most of the API contract leaks out. Watch for: Content-Type (application/json, application/hal+json, application/vnd.api+json, etc. — each implies a different response convention), WWW-Authenticate (auth scheme + realm), X-RateLimit-* (anticipate quotas before you hit them), X-API-Version / API-Version (call out the version you're actually pinned to), CORS headers (whether browser-side calls will work), and any vendor-prefixed headers (X-Stripe-*, X-GitHub-*, X-Twilio-*) that hint at the platform and unlock platform-specific patterns.",
+      "Pull the human-readable docs page with extract. Most APIs publish at a guessable path: api.example.com → docs.example.com, /docs, /api, /reference, /developer. extract returns clean markdown, suitable for skimming. Look for: an authentication section (token format, where to put it), a rate-limit section (quotas + retry behavior), a versioning/changelog section (deprecations), and a base URL section (sometimes the URL the user handed you is not the canonical base).",
+      "Hunt for the machine-readable spec by feeding the docs page HTML to html-links. Filter for hrefs matching openapi, swagger, postman, schema, or .json / .yaml suffixes. An OpenAPI spec is gold — it documents every endpoint, every parameter, every response shape deterministically. If found, fetch it (separate call outside this pack) and feed it to json-format / json-query in steps 6-7 to navigate the schema. If not found, fall back to fishing on conventional paths: /openapi.json, /swagger.json, /v1/openapi, /.well-known/openapi.",
+      "Once you have an actual JSON response (from the live API or the spec), pretty-print it with json-format. Two-space-indented JSON is much faster to scan than a flat line, especially for nested envelopes (RFC 7807 errors, JSON:API resource objects, HAL _links/_embedded structures). This is the cheapest possible reality check that you've correctly understood the wire format.",
+      "Drill into specific fields with json-query — JSONPath ($.data[*].id) is the deterministic way to verify 'does this response actually contain the field I'm going to depend on?' Use it to validate assumptions before writing integration code: confirm the pagination cursor is at $.meta.next_cursor not $.next_page; confirm the array of items is at $.data not $.results; confirm error envelopes are at $.errors[*].detail not $.error.message. Wrong assumption here = the entire integration breaks later when the second-page response shape differs from the first.",
+    ],
+    claudePrompt:
+      "Investigate this API endpoint using Agent402: https://api.example.com/v1/users. (1) url-parse the URL: scheme=https, host=api.example.com, path=/v1/users — flag that this is a versioned, multi-tenant-ish path. (2) http-check it (unauthenticated). Expect a 401 — record the response time and confirm the host resolves. If you get 404 or connection-refused, stop and ask the user for the correct URL. (3) http-headers — record Content-Type, WWW-Authenticate scheme, all X-RateLimit-* values, any X-API-Version header, and any vendor-prefixed (X-*) hints. (4) extract https://docs.example.com (or /docs, /api, /reference — try in that order until one returns a real article body). Skim for auth + rate-limit + versioning sections. (5) feed the docs HTML to html-links and filter for hrefs matching /openapi|swagger|schema|\\.json$|\\.yaml$/. If found, that's the spec URL — note it. If not found, try probing /openapi.json directly via http-check. (6) Once you have any sample JSON response from the API (provided by the user or fetched via http-check on an OPTIONS endpoint), json-format it for easy reading. (7) Use json-query to verify the expected fields are where you think they are: $.data[*].id for resource IDs, $.meta.next_cursor for pagination, $.errors[*] for error envelope. Return: {baseUrl, authScheme, contentType, version, rateLimit: {requests, window}, openApiSpecUrl, sampleResponseStructure: {pagination, dataLocation, errorEnvelope}, integrationNotes}.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
