@@ -849,6 +849,51 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Build a location situational brief for: 1600 Pennsylvania Ave NW Washington DC. (1) geocode 'q=1600 Pennsylvania Ave NW Washington DC&limit=1'. Record the lat / lon / display name / bounding-box size. Flag if bounding box is city-sized when the user clearly asked for a specific building. (2) reverse-geocode with the lat/lon from step 1. Confirm the canonical postal address matches what the user asked for. Extract the two-letter US state code (e.g. DC) and the country code (e.g. US) — these gate the next steps. (3) place-search around the lat/lon at a 1km radius. Categorize results into: food (cafes/restaurants), services (gas/ATM/pharmacy), and critical (hospital/police/fire). Top 5 in each category by distance. (4) IF country == US: weather-forecast for lat/lon. Surface next-24h temp range, precip probability, wind, any in-period hazards (NWS sometimes embeds advisory text in the forecast itself). Otherwise note 'weather-forecast US-only, skipped'. (5) IF country == US: weather-alerts for the state code from step 2. List active alerts: event, severity, headline, area, onset/expires. Flag severity in (Severe, Extreme) as a hard 'do not travel' signal. (6) earthquakes for period=week, minMag=2.5. Filter to events within ~200km of the lat/lon from step 1 — use the haversine of (lat,lon) vs each quake's (lat,lon). If the filtered list is non-empty, sort by magnitude desc and report the top 3. If empty for a non-seismic region, report 'baseline quiet'. Final return: {location: {displayName, lat, lon, country, state}, nearby: {food, services, critical}, weather: {next24h, precipProbability, hazards}, activeAlerts: [{event, severity, headline}], seismic: {recentNear, status}, travelRecommendation: 'green'|'yellow'|'red', oneLineBrief}. All six tools touch external APIs (egress) — wallet-only, budget ≤ $0.02 per address.",
   },
+  {
+    slug: "meeting-scheduler",
+    title: "Meeting scheduler",
+    tagline:
+      "Schedule a meeting across timezones without the round-tripping. Convert a proposed UTC slot into every attendee's local time, verify it lands on a working day for each, project the end time, generate human-readable countdowns, expand recurring rules, and report exactly how far out the slot sits — in one deterministic pass.",
+    useCase:
+      "A scheduling agent (admin coordinating an exec sync, hiring manager booking an interview panel across three regions, project lead spinning up a weekly standup for a globally distributed team) needs to translate one proposed slot into per-attendee local context. The pack chains the standard scheduling questions: 'what time is it now in their TZ?', 'when is this meeting in their local clock?', 'is that a business day for them?', 'when does it end?', 'how do I phrase the reminder?', 'when does the recurring instance next fire?', and 'how far out is this from now?'. No back-and-forth needed.",
+    promptArgs: [
+      { name: "proposedTime", description: "Proposed start time in UTC ISO 8601 (e.g. '2026-07-15T14:00:00Z')", required: true, substitute: "2026-07-15T14:00:00Z" },
+      { name: "attendeeTzs", description: "Comma-separated IANA timezones (e.g. 'America/New_York, Europe/London, Asia/Tokyo')", required: true, substitute: "America/New_York, Europe/London, Asia/Tokyo" },
+      { name: "durationStr", description: "Meeting duration as a duration string (e.g. '1h30m' or '45m')", required: true, substitute: "1h" },
+    ],
+    // Seven tools, ordered as the natural scheduling-agent workflow: anchor
+    // (time gives you 'now' in each attendee's TZ to establish the reference
+    // frame), translate (time-convert renders the proposed UTC slot in each
+    // attendee local clock), validate (business-days confirms it's a working
+    // day per region — Friday in Tel Aviv ≠ Friday in NYC), project
+    // (add-time computes the end-time slot), narrate (relative-time turns
+    // ISO timestamps into 'in 3 days, 6 hours' for invite reminders),
+    // recur (cron-next expands 'every Monday 9am' into the next 5 dates),
+    // confirm (date-diff produces the headline 'this meeting is 2d 4h
+    // from now' for the calendar invite). All seven tools are pure-CPU
+    // and PoW-eligible. Composes kit (time/time-convert/cron-next/duration/
+    // date-diff) + kit2 (business-days, relative-time, add-time).
+    toolSlugs: [
+      "time",
+      "time-convert",
+      "business-days",
+      "add-time",
+      "relative-time",
+      "cron-next",
+      "date-diff",
+    ],
+    workflow: [
+      "Anchor with time — call it once per attendee IANA timezone to establish 'what time is it right now over there?'. This is the reference frame for the rest of the workup. An attendee currently at 23:00 local is going to feel a 'morning' invite differently than one at 09:00. The dayOfWeek field also surfaces the lurking weekend-boundary bug: it's Saturday in Tokyo when it's Friday afternoon in NYC, and a 'Friday 5pm Eastern' meeting silently lands on Saturday for the Tokyo attendee.",
+      "Translate the proposed UTC slot with time-convert into every attendee's local timezone. Pass the same UTC ISO timestamp and rotate the tz parameter across attendees. The output gives you {utc, local, timezone} per attendee — render the local time + offset prominently in the invite ('14:00 UTC / 10:00 EDT / 16:00 CEST / 23:00 JST'). This is the single most important translation step; getting it wrong by one DST boundary is the classic scheduling mistake.",
+      "Validate working-day with business-days. For each attendee TZ, compute business-days between today and the proposed date. If the count is zero (proposed date is a weekend or public holiday for that region), surface it — the meeting will land outside working hours for that attendee even if the clock-time looks reasonable. Bonus signal: the same call gives you 'this meeting is N business days out', useful for SLA-driven scheduling ('two business days lead time required for this kind of review').",
+      "Project the end time with add-time using the meeting duration. add-time on the proposed UTC start + the duration string ('1h30m') returns the ISO end timestamp. Pipe that back through time-convert per attendee to render the local end time — invites that show only the start time are notoriously incomplete for cross-TZ teams who need to know whether the meeting eats their entire lunch or runs into bedtime.",
+      "Narrate with relative-time. Takes any ISO timestamp and renders 'in 3 days, 6 hours' or '2 weeks ago'. Use this to generate the natural-language countdown in the invite body and follow-up reminders ('your interview is in 4 hours'). The output is locale-neutral and deterministic — exactly what an agent wants for templated comms rather than a date-fns localized string that varies by runtime environment.",
+      "Expand recurrence with cron-next if the meeting is recurring. Pass the cron expression (e.g. '0 14 * * 1' for every Monday 14:00 UTC) and a count of 5 — get back the next 5 ISO instances. Round-trip these through time-convert + business-days to surface 'next 5 Mondays + each attendee's local time + whether any hits a US holiday'. For non-recurring meetings, skip this step.",
+      "Confirm with date-diff between now() and the proposed UTC slot — the headline 'this meeting is 2d 4h from now' line that goes at the top of the invite. Also surfaces the absolute difference in every unit (ms / seconds / minutes / hours / days), which is the right shape for downstream reminder scheduling: 'fire a reminder webhook at start - 30m' is much easier when you know the start is at start.epochMillis - 1800000 directly.",
+    ],
+    claudePrompt:
+      "Schedule a cross-TZ meeting using Agent402. Proposed: 2026-07-15T14:00:00Z. Attendees in: America/New_York, Europe/London, Asia/Tokyo. Duration: 1h. (1) time for each of the three attendee timezones. Record current local time + day-of-week per attendee to ground the rest of the workup. (2) time-convert the proposed UTC slot for each tz. Surface {tz, local, offsetVsUTC}. Watch for DST boundaries — Europe/London is +0 or +1 depending on the date, Asia/Tokyo is +9 year-round, America/New_York is -4 or -5. (3) business-days from today to the proposed date in each tz. If the proposed local date lands on a weekend or known public holiday for any attendee region, flag it. (4) add-time the proposed UTC start + duration '1h' → endIso. time-convert endIso per attendee → local end time. Surface 'start–end' per attendee. (5) relative-time the proposed UTC slot from now → render 'in X' string for the invite body. (6) IF the user said this is recurring: cron-next with the user-provided cron expression, count=5. For each instance, run time-convert per attendee and report. Otherwise skip. (7) date-diff between now() and the proposed UTC slot. Use the human-readable result as the invite headline. Final return: {proposedUtc, perAttendee: [{tz, localStart, localEnd, dayOfWeek, businessDayCount, weekendOrHolidayFlag}], reminder: 'starts in 2d 4h', recurrencePreview: [...], oneLineHeader: 'July 15, 14:00 UTC — 1h — 10am EDT / 15:00 BST / 23:00 JST'}. All seven tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.01 even paid.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
