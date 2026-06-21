@@ -563,6 +563,51 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Evaluate this capital project using Agent402: $500,000 equipment purchase returning $150,000/year for 5 years with $50,000 salvage value at the end. Use a 10% hurdle rate. (1) Build cashflows = [-500000, 150000, 150000, 150000, 150000, 200000] (year 5 includes salvage). Call npv at discountRate=0.10 — record the NPV. (2) Call irr on the same cashflows — record the IRR (it should be ~17-18% on these numbers; converged should be true). (3) Sanity-check the passive alternative: call compound-interest(principal=500000, annualRate=0.07, years=5, compoundingPerYear=1) — compare the future value of the cashflow scenario (cumulative undiscounted = $750k + $50k = $800k) against the passive S&P 7% future value (~$701k). If the project beats passive even before discounting, that's a real positive signal beyond NPV. (4) Model financing: if a $400k loan at 8% for 5 years funds most of it, call loan-payment(400000, 0.08, 5). Compute the annual debt service (payment × 12); subtract from $150k cashflow → levered cashflow. Build levered stream = [-100000, leveredCF, leveredCF, leveredCF, leveredCF, leveredCF + 50000] and re-run npv + irr on this — the levered IRR will be meaningfully higher than the unlevered, reflecting the equity returns. (5) Call amortization(400000, 0.08, 5, maxRows=5) for the per-year interest schedule (for tax-shield modeling). (6) Return: {unleveredNpv, unleveredIrr, passiveAlternativeFV, leveredNpv, leveredIrr, recommendation: \"ACCEPT\"|\"REJECT\", reasoning}. All five tools are free over PoW.",
   },
+  {
+    slug: "retirement-planning",
+    title: "Retirement planning",
+    tagline:
+      "Will my retirement plan actually work? Project the accumulation phase forward with compound interest, compute the target nest egg from your expected spending, then model the drawdown phase using the same PMT formula a mortgage uses — your retirement is mathematically a loan you're paying yourself. Deterministic numbers, no glossy advisor PowerPoint.",
+    useCase:
+      "You're 35 years old with $100,000 saved, contributing $1,500/month, retiring at 65 and you want an honest answer to: will the nest egg get there? How much can I draw down per year without running out? What happens if I retire 5 years earlier — or contribute $500/mo less? The accumulation phase, the target calculation, and the drawdown phase are all the same handful of textbook formulas the finance-math kit already implements; this pack composes them into the full plan.",
+    promptArgs: [
+      {
+        name: "scenario",
+        description: "Your retirement scenario (current age, balance, contributions, retirement age, etc.)",
+        required: true,
+        substitute: "35 years old with $100,000 saved, contributing $1,500/month, retiring at 65",
+      },
+      {
+        name: "expectedReturn",
+        description: "Long-run expected annual return as a decimal (default 0.07 = 7% — historical S&P after inflation runs ~6-7%; use 5% for a conservative bond-heavy mix)",
+        required: false,
+        substitute: "0.07",
+      },
+    ],
+    // Five tools, two phases. Accumulation phase (steps 1-3): project the
+    // current balance forward, add the contribution stream's future value,
+    // sum for the projected nest egg, then compute the target lump sum from
+    // expected spending via NPV in reverse. Drawdown phase (steps 4-5):
+    // repurpose loan-payment + amortization to compute sustainable
+    // withdrawals and the year-by-year retirement balance — same PMT math,
+    // different label on the principal. Composes finance-math-kit.
+    toolSlugs: [
+      "compound-interest",
+      "npv",
+      "irr",
+      "loan-payment",
+      "amortization",
+    ],
+    workflow: [
+      "Project the current balance forward with compound-interest. Pass principal=current_savings, annualRate=expected_return, years=years_to_retirement, compoundingPerYear=12 (or 1 for annual). The future value is what your existing balance grows to if you never add another dollar — the 'do-nothing' baseline. Use the post-inflation return (e.g., 7% nominal - 3% inflation = 4% real) if you want today's-dollars output; use nominal if you'll discount spending in nominal terms later.",
+      "Add the contribution stream's future value. The PMT-to-FV identity says a $X/month contribution for N years at rate r compounds to PMT · ((1+r/12)^(12N) - 1) / (r/12). Easiest path: call compound-interest twice — once on a hypothetical $1/month contribution to get the per-dollar multiplier, then scale by actual monthly contribution. Or use a per-period proxy by calling it with principal=annual_contribution, years=N, and approximating. Sum step 1's result + this contribution FV → projected nest egg at retirement.",
+      "Compute the target nest egg from expected retirement spending. Build a cashflow stream of negative annual spending over the expected retirement horizon (e.g., 30 years from age 65-95) and call npv with discountRate = expected drawdown return (often lower than accumulation rate — say 4-5% for a bond-heavier retirement allocation). The (negative) NPV's absolute value is the lump sum you need at retirement to fund that spending — your target. Compare against step 2's projected nest egg: if projected > target, you're on track; if projected < target, you have a gap.",
+      "Compute the sustainable annual withdrawal using loan-payment. Pass principal=projected_nest_egg, annualRate=drawdown_return, termYears=expected_retirement_years, paymentsPerYear=12. The 'payment' the tool returns IS your sustainable monthly withdrawal — the same PMT formula that amortizes a mortgage amortizes a retirement portfolio. The math doesn't care whether you're paying a bank or paying yourself. This is the 'how much can I spend each month?' answer with no rule-of-thumb (e.g. the 4% rule) hand-waving.",
+      "Pressure-test the trajectory with amortization. Same inputs as step 4 (principal=nest egg, etc.). The schedule's `balance` column shows the year-by-year retirement portfolio balance — useful for sequence-of-returns risk (if early returns underperform the average, the trajectory is much steeper than the smooth assumption suggests). The `interest` column is what your portfolio is earning each year; the `principal` column is what you're actually drawing down. A real plan should have a buffer — if the schedule shows balance hitting zero at exactly your assumed end age, one bad year of returns breaks it. Optional: call irr to back-solve the required return given your target and contributions — useful when the user asks 'what return do I need to retire at 60 instead of 65?'",
+    ],
+    claudePrompt:
+      "Build a retirement plan for: 35 years old with $100,000 saved, contributing $1,500/month, retiring at 65, expecting 30 years of retirement, current annual spending of $60,000 (assume 80% replacement = $48,000/yr in retirement). Use Agent402's finance-math kit. (1) Project current $100k forward 30 years at 7%/yr monthly compounding: compound-interest(principal=100000, annualRate=0.07, years=30, compoundingPerYear=12) → expect ~$811k. (2) Project the $1,500/mo contribution stream: easiest is the closed-form PMT-to-FV identity = 1500 · ((1+0.07/12)^360 - 1) / (0.07/12). Compute it (~$1.83M) and add to step 1 → projected nest egg ≈ $2.64M. (3) Target nest egg: build a cashflow stream of [-48000] × 30 (annual retirement spending), call npv at discountRate=0.05 (drawdown-era return) → |NPV| ≈ $738k. Compare projected ($2.64M) vs target ($738k) — comfortably above. (4) Sustainable monthly withdrawal: loan-payment(principal=2640000, annualRate=0.05, termYears=30) → the 'payment' is the monthly draw — expect ~$14,170/mo (~$170k/yr), well above the $48k/yr target. (5) Year-by-year drawdown: amortization(principal=2640000, annualRate=0.05, termYears=30, maxRows=30) — confirm balance trajectory and that final balance is 0. (6) Return: {projectedNestEgg, targetNestEgg, gap, sustainableMonthlyWithdrawal, sustainableAnnualWithdrawal, onTrack: true|false, oneLineConclusion}. All five tools are free over PoW.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
