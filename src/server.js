@@ -1270,6 +1270,11 @@ app.get("/analytics", async (req, res) => {
 mountMcp(app, CATALOG, {
   baseUrl: BASE_URL,
   isComputePayable,
+  // Hosted leaderboard snapshot powers the new `top_x402_sellers` MCP tool —
+  // same data the HTML /leaderboard and /api/leaderboard surfaces use, so
+  // agents see the same numbers no matter which surface they hit. Hourly-
+  // refreshed in-process; safe to call freely from /mcp.
+  getLeaderboard: getLeaderboardSnapshot,
   // MCP-served calls land on the same accounting + analytics rails as
   // direct-HTTP ones. PoW is the gate (no x402 settlement on /mcp's free
   // tier), so the served-call counter records under "pow". Analytics gets

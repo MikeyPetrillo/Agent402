@@ -40,6 +40,12 @@ assert(
   ["about_agent402", "call_tool", "find_tool", "search_tools"].every((n) => names.includes(n)),
   `tools/list exposes search_tools, find_tool, call_tool, about_agent402 (got ${names.join(",")})`
 );
+// top_x402_sellers is mounted iff the server passes a getLeaderboard fn. The
+// real server.js always does, so this is a hard requirement in CI.
+assert(
+  names.includes("top_x402_sellers"),
+  `tools/list exposes top_x402_sellers (got ${names.join(",")})`
+);
 assert(
   (list.result?.tools ?? []).every((t) => t.title && t.annotations?.readOnlyHint === true),
   "every tool carries a title + read-only safety annotations (directory requirement)"
@@ -80,5 +86,17 @@ assert(!paidText.includes("<html"), "wallet-only tool did NOT execute");
 
 const about = await rpc("tools/call", { name: "about_agent402", arguments: {} });
 assert((about.result?.content?.[0]?.text ?? "").includes("x402"), "about_agent402 describes paid access via x402");
+
+// top_x402_sellers: snapshot-backed, must answer even when warming. Don't
+// require non-empty results (CI may run before the first chain scan finishes)
+// — just verify the envelope, sort/include args, and link back to /api/leaderboard.
+const sellers = await rpc("tools/call", { name: "top_x402_sellers", arguments: { limit: 5, sort: "calls", include: "all" } });
+const sellersText = sellers.result?.content?.[0]?.text ?? "";
+assert(!sellers.result?.isError, `top_x402_sellers returns without error (got ${sellersText.slice(0, 160)})`);
+let sellersJson;
+try { sellersJson = JSON.parse(sellersText); } catch { throw new Error(`top_x402_sellers output is not JSON: ${sellersText.slice(0, 200)}`); }
+assert(sellersJson.sort === "calls" && sellersJson.include === "all", `top_x402_sellers echoes sort+include (got sort=${sellersJson.sort}, include=${sellersJson.include})`);
+assert(Array.isArray(sellersJson.results) && sellersJson.results.length <= 5, "top_x402_sellers honors limit");
+assert(typeof sellersJson.source === "string" && sellersJson.source.endsWith("/api/leaderboard"), "top_x402_sellers links back to /api/leaderboard");
 
 console.log("\nremote MCP connector: all checks passed");
