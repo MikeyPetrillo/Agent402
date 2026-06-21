@@ -340,9 +340,9 @@ export const SKILL_PACKS = [
     slug: "trend-analysis",
     title: "Trend analysis",
     tagline:
-      "Take any numeric time series — a stock's daily close, a FRED macro indicator, a treasury yield history — and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark. Everything an analyst writes a notebook for, in one chain of cheap calls.",
+      "Take any numeric time series — a stock's daily close, a FRED macro indicator, a treasury yield history — and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
     useCase:
-      "You have a question like \"is AAPL trending up over the last year?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates) instead of a hand-wavy LLM summary. The stats steps are pure-CPU and free over PoW; only the upstream data fetch (finance/macro) is paid.",
+      "You have a question like \"is AAPL trending up over the last year — and what does the next quarter look like?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates, point forecast + 95% interval) instead of a hand-wavy LLM summary or hallucinated projection. The stats + forecast steps are pure-CPU and free over PoW; only the upstream data fetch (finance/macro) is paid.",
     promptArgs: [
       {
         name: "series",
@@ -357,10 +357,11 @@ export const SKILL_PACKS = [
         substitute: "1y",
       },
     ],
-    // Ordered as: fetch → describe → smooth → trend → anomalies → benchmark.
-    // Each step takes the array of close prices / observations from the prior
-    // step. Composes the stats kit (shipped in src/tools/stats-kit.js) with
-    // the finance/macro fetchers that already existed.
+    // Ordered as: fetch → describe → smooth → trend → anomalies → benchmark →
+    // forecast. Each step takes the array of close prices / observations from
+    // the prior step. Composes the stats + forecast kits (shipped in
+    // src/tools/stats-kit.js and src/tools/forecast-kit.js) with the
+    // finance/macro fetchers that already existed.
     toolSlugs: [
       "stock-history",
       "fred-series",
@@ -369,6 +370,7 @@ export const SKILL_PACKS = [
       "linear-regression",
       "outliers",
       "correlation",
+      "forecast-eval",
     ],
     workflow: [
       "Fetch the series. For an equity ticker, call stock-history with range=horizon (or \"1y\" if unspecified) and pull the array of `close` prices in chronological order. For a macro indicator, call fred-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",
@@ -377,10 +379,11 @@ export const SKILL_PACKS = [
       "Fit linear-regression with x = [0, 1, ..., n-1] (just the index) and y = values. Slope tells you direction + magnitude per unit time; r² tells you how clean the trend is (>0.7 = strong trend, <0.3 = mostly noise). Pass `predict` for next-N-period extrapolation if the user wants a projection.",
       "Flag anomalies with outliers method=\"iqr\" — Tukey fences (1.5·IQR) are the conservative default. Report the indices + values; agents should then map indices back to dates from the original fetch so the answer says \"2024-03-14: $187.23 outlier\" not just \"index 142\".",
       "If the user asked a comparison question (\"is AAPL correlated with the S&P?\", \"do CPI and fed funds move together?\"), repeat steps 1-2 for the benchmark series, then call correlation with the two equal-length arrays. r above 0.7 = strong same-direction move; near 0 = independent; negative = inverse. Use the `interpretation` field as your one-line answer.",
-      "Return a single JSON object combining the summary, trend (slope/r²/equation), outlier dates, and optional correlation. That's the deterministic analyst-grade reply — no LLM second-guessing required.",
+      "Pick a forecast method honestly by backtesting. Call forecast-eval three times — once each with method=\"drift\", \"ses\", \"holt\" — passing the same values + testSize (≈ 20% of the series, capped at half). Compare RMSE; the lowest wins. Check `warnings` — non-empty means treat the result as indicative not predictive. Skip the bake-off only if you already know the series shape (e.g. holt-winters for clearly seasonal data with a known period).",
+      "Forecast forward with the winning method. Call forecast-naive / forecast-ses / forecast-holt (whichever won) with the full values + the user's horizon. Return the point forecast AND lower95/upper95 — never report a point estimate without its interval; that's the whole reason these tools exist instead of an LLM guess. Combine summary + trend + outliers + optional correlation + forecast into a single JSON object. That's the deterministic analyst-grade reply.",
     ],
     claudePrompt:
-      "Run a full trend analysis on AAPL over the last 1y using Agent402. (1) Fetch the daily closes via stock-history (ticker=AAPL, range=1y). (2) Run stats-summary on the closes for the descriptive panel. (3) Run moving-average with window=20, which=\"both\" — compare SMA vs EMA. (4) Run linear-regression with x=[0..n-1], y=closes; report slope (annualized = slope·252), intercept, r². (5) Run outliers method=\"iqr\" and map the flagged indices back to actual dates from the fetch. (6) Return a single JSON object: {summary, trend, outlierDates, oneLineConclusion}. The stats steps are free over PoW; only the stock-history fetch is paid.",
+      "Run a full trend analysis on AAPL over the last 1y using Agent402, then project the next quarter forward. (1) Fetch the daily closes via stock-history (ticker=AAPL, range=1y). (2) Run stats-summary on the closes for the descriptive panel. (3) Run moving-average with window=20, which=\"both\" — compare SMA vs EMA. (4) Run linear-regression with x=[0..n-1], y=closes; report slope (annualized = slope·252), intercept, r². (5) Run outliers method=\"iqr\" and map the flagged indices back to actual dates from the fetch. (6) Pick a forecast method: call forecast-eval three times with method=\"drift\", \"ses\", \"holt\" and testSize=50 (≈ 20% of a 252-day year); pick the lowest RMSE. (7) Forecast the next ~63 trading days using the winning method (forecast-naive / forecast-ses / forecast-holt) and report both point and 95% interval. (8) Return a single JSON object: {summary, trend, outlierDates, forecastMethod, forecastWithIntervals, oneLineConclusion}. The stats + forecast steps are free over PoW; only the stock-history fetch is paid.",
   },
 ];
 

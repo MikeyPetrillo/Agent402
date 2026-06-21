@@ -111,3 +111,4 @@ compression-kit-5-tools-gzip-brotli-deflate-pure-cpu: 2026-06-22T04:00:00Z
 decode-blob-pack-jwt-gzip-brotli-base64-hex-decision-tree: 2026-06-22T05:00:00Z
 stats-kit-5-tools-summary-correlation-regression-ma-outliers: 2026-06-22T06:00:00Z
 trend-analysis-pack-fetch-describe-smooth-trend-anomalies-benchmark: 2026-06-22T07:00:00Z
+forecast-kit-5-tools-naive-ses-holt-holt-winters-eval-pure-cpu: 2026-06-22T08:00:00Z
