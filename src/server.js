@@ -69,7 +69,7 @@ import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL } 
 // Shared with the MCP free tier (src/mcp-http.js) — same policy, separate
 // per-IP bucket. PoW redemption on the direct HTTP path goes through here.
 const powHttpLimiter = createRateLimiter("pow-http");
-import { recordServedCall, recordChargedFailure, getStats, getOperatorBreakdown, dbHealthy } from "./stats.js";
+import { recordServedCall, recordChargedFailure, getStats, getOperatorBreakdown, dbHealthy, statsPersistent } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID } from "node:crypto";
 import { marketplaceSlugToken } from "./marketplace-token.js";
 
@@ -557,6 +557,12 @@ app.get("/health", (_req, res) => {
     // (src/tools/finance-kit.js). Either unset = direct-to-Yahoo, which is
     // currently null-routed by Railway egress and causes ETIMEDOUT canaries.
     yahooRelay: Boolean((process.env.YAHOO_RELAY_URL || "").trim()) && Boolean((process.env.YAHOO_RELAY_TOKEN || "").trim()),
+    // True when the stats SQLite DB is on the /data volume (counters + the
+    // recentCalls ring buffer survive restarts). False = silent fallback to
+    // /tmp, which wipes the activity feed on every container restart and
+    // makes traffic look thinner than it is. CI auto-attaches /data, but
+    // surfacing this here means a misconfigured deploy can't hide.
+    statsPersistent,
   };
   const ok = checks.db && checks.wallet;
   res.status(ok ? 200 : 503).json({ ok, checks, flags });

@@ -375,6 +375,9 @@ jobs:
       - name: Leaderboard SEO/discovery surfaces (robots, sitemap, llms.txt, manifest, landing JSON-LD)
         run: node scripts/test-leaderboard-surface.js
 
+      - name: Stats DB persistence contract (must fail loud in prod without /data)
+        run: node scripts/test-stats-persistence.js
+
       - name: Idempotency (opt-in safe retry of paid/proven calls; boots paid-mode)
         run: node scripts/test-idempotency.js
 
