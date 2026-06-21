@@ -452,6 +452,9 @@ jobs:
       - name: Html-kit tests (html-select, html-table, html-strip, html-links, html-meta)
         run: node scripts/test-html-kit.js
 
+      - name: Compression-kit tests (gzip, gunzip, brotli, compress-compare — pure CPU, zip-bomb guard)
+        run: node scripts/test-compression-kit.js
+
       - name: Tollbooth tests (pay-per-crawl gate — node + edge/Web-Crypto)
         run: node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js
 
