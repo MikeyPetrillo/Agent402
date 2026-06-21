@@ -294,6 +294,48 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Scrape the price and SKU from https://example.com/product/42 using Agent402. (1) Try extract first; if the price isn't in the article body, (2) call render to get the post-JS HTML. (3) Use html-select with a precise CSS selector to pull the price element — fall back to a broader selector if the first returns 0 matches. (4) Use html-select again with attr=\"data-sku\" or similar to read the SKU. Return a single JSON object {price, sku, url, source} where source = \"extract\" or \"render\" depending on which path worked.",
   },
+  {
+    slug: "decode-blob",
+    title: "Decode this blob",
+    tagline:
+      "Hand the agent an opaque string — a JWT, a base64'd JSON payload, a gzip-encoded API response, a hex-encoded hash — and walk it through identifying what it is and unwrapping it layer by layer until it's human-readable.",
+    useCase:
+      "You pulled a suspicious string out of a log, a webhook body, a network capture, a cookie, or an API response, and you need to know what's inside without writing a one-off Node script. The tools in this pack are all deterministic and pure-CPU — every step is free over the proof-of-work tier.",
+    promptArgs: [
+      {
+        name: "blob",
+        description: "The opaque string to identify and decode",
+        required: true,
+        // A real JWT (HS256, header+payload only, signature stripped) so the
+        // example prompt actually executes end-to-end via jwt-decode.
+        substitute: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ",
+      },
+    ],
+    // Ordered by cheapest-test-first: prefix inspection costs nothing, then
+    // we try the encodings most likely to match (JWT for "eyJ", gzip for the
+    // 1f 8b magic, base64 as the universal fallback). Composes the compression
+    // kit shipped in src/tools/compression-kit.js with existing primitives.
+    toolSlugs: [
+      "jwt-decode",
+      "gunzip",
+      "brotli-decompress",
+      "base64",
+      "hex",
+      "json-format",
+      "hash",
+    ],
+    workflow: [
+      "Look at the first few characters before calling anything. \"eyJ\" → almost certainly a JWT (it's base64url for `{\"`). \"H4sI\" → base64-encoded gzip (gzip's 1f 8b magic, base64'd). All hex chars and a multiple-of-2 length → likely hex-encoded bytes. Mostly A-Z/a-z/0-9/+// with optional `=` padding → base64.",
+      "If it looks like a JWT, call jwt-decode — returns the header + payload as JSON without verifying the signature. The header tells you the algorithm; the payload is your answer. If decoded successfully but the payload is itself base64'd or gzipped, recurse with this pack.",
+      "If the prefix is \"H4sI\" (or starts with bytes 1f 8b after a base64 decode), it's gzipped. Call gunzip with the base64 string directly — outputFormat \"utf8\" if you expect text, \"base64\" if you expect another binary layer.",
+      "Brotli has no fixed magic in the stream, but if you've ruled out gzip and the bytes still don't look like text after base64 decode, try brotli-decompress. Failure is cheap (a 400, not a 500) so this is safe to attempt.",
+      "Fall back to base64 with mode=\"decode\" — it's the most common wrapper. If the result is human-readable text, you're done; if it looks like more binary, you're peeling another layer (very common: base64(gzip(json))).",
+      "If everything is in [0-9a-f] pairs and an even length, use hex with mode=\"decode\". This is how a lot of crypto/hash tooling formats output — sha256 digests, wallet addresses, encryption ciphertexts.",
+      "When you finally land on something that parses as JSON, run json-format to pretty-print it — much easier to inspect a 50-key payload with indented keys than as one long line. If the original blob was a hash you wanted to verify, call hash on the source content and compare hex outputs.",
+    ],
+    claudePrompt:
+      "Identify and decode this opaque string using Agent402: \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ\". (1) Inspect the prefix — \"eyJ\" suggests a JWT. (2) Call jwt-decode and return the header + payload. (3) If any field in the payload is itself a base64 / gzip / hex string, peel it: base64 → gunzip → brotli-decompress → hex, trying each only if the prefix suggests it. (4) When you reach plain text or JSON, return a single object describing what each layer was (e.g. {layers: [\"jwt\", \"base64\", \"gzip\", \"json\"], finalPayload: {...}}). All steps are free over the proof-of-work tier — no payment needed.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
