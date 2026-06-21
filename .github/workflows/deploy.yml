@@ -455,6 +455,9 @@ jobs:
       - name: Compression-kit tests (gzip, gunzip, brotli, compress-compare — pure CPU, zip-bomb guard)
         run: node scripts/test-compression-kit.js
 
+      - name: Stats-kit tests (summary, correlation, regression, moving-average, outliers — pure CPU)
+        run: node scripts/test-stats-kit.js
+
       - name: Tollbooth tests (pay-per-crawl gate — node + edge/Web-Crypto)
         run: node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js
 
