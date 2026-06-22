@@ -89,6 +89,9 @@ const NETWORK = new Set([
   // example inputs (0x000…0 may return null/empty).
   "/api/ens-bulk-resolve", "/api/farcaster-profile", "/api/farcaster-by-address",
   "/api/eas-attestations",
+  // NFT-market-kit: Alchemy NFT v3 (503 without key in CI without secrets;
+  // 4xx on placeholder contracts that don't exist on a given chain).
+  "/api/nft-collection", "/api/nft-floor", "/api/nft-sales",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 
