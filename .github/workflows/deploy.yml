@@ -405,6 +405,21 @@ jobs:
       - name: /api/pow/challenge envelope (free-tier gate — full shape + slug scoping + 404s)
         run: node scripts/test-pow-challenge-envelope.js
 
+      - name: /api/leaderboard envelope (spec, defaults, per-row shape — MCP top_x402_sellers piggybacks on this)
+        run: node scripts/test-leaderboard-envelope.js
+
+      - name: /api/route neutral cross-seller router envelope (per-row shape, include filter, missing-query)
+        run: node scripts/test-route-envelope.js
+
+      - name: /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)
+        run: node scripts/test-reliability-envelope.js
+
+      - name: PoW solve roundtrip (paid-mode boot, honest solver unlocks /api/hash, replay rejected)
+        run: node scripts/test-pow-solve-roundtrip.js
+
+      - name: Static page renders smoke (every HTML surface returns 200 with the right page-specific title)
+        run: node scripts/test-static-pages.js
+
       - name: Skill-pack invariants (toolSlugs resolve in catalog; substitution renders)
         run: node scripts/test-skill-packs.js
 

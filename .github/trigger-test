@@ -167,3 +167,8 @@ skill-packs-json-shape-stdio-mcp-consumer: 2026-06-24T14:00:00Z
 robots-txt-policy-llm-bots-allowed-memory-disallowed-sitemap: 2026-06-24T15:00:00Z
 mcp-prompts-list-and-get-substitution-renders: 2026-06-24T16:00:00Z
 pow-challenge-envelope-free-tier-gate-shape-and-slug-scoping: 2026-06-24T17:00:00Z
+leaderboard-envelope-spec-defaults-per-row-shape-lock: 2026-06-24T18:00:00Z
+route-envelope-neutral-cross-seller-router-per-row-shape: 2026-06-24T19:00:00Z
+reliability-envelope-guarantees-claim-verify-pairing: 2026-06-24T20:00:00Z
+pow-solve-roundtrip-paid-mode-honest-solver-unlocks-hash-replay-rejected: 2026-06-24T21:00:00Z
+static-pages-render-smoke-privacy-terms-economy-shop-leaderboard-index-tools-skills: 2026-06-24T22:00:00Z
