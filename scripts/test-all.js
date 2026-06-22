@@ -84,6 +84,11 @@ const NETWORK = new Set([
   // placeholder example inputs (e.g. specific block-number lookups may miss).
   "/api/mev-recent-blocks", "/api/mev-builder-share", "/api/mev-block-payment",
   "/api/l2-tvl", "/api/l2-gas-comparison",
+  // Onchain-identity-kit: keyless public APIs (ensideas, Warpcast, Lens v2,
+  // EAS indexers). Tolerate transient upstream errors + 4xx from placeholder
+  // example inputs (0x000…0 may return null/empty; lens/dne handle 404).
+  "/api/ens-bulk-resolve", "/api/farcaster-profile", "/api/farcaster-by-address",
+  "/api/lens-profile", "/api/eas-attestations",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 
@@ -107,6 +112,7 @@ const SHAPE_HAPPY_PATH_ONLY = new Set([
   "/api/x402-quote",   // example shows 402-detected case; placeholder URL may not 402
   "/api/tx-status",    // example shows success; 0x0…0 hash returns {status:"not_found"}
   "/api/x402-verify",  // example shows verified settlement; 0x0…0 hash returns {status:"not_found"}
+  "/api/mev-block-payment", // example shows found=true; placeholder block 22000000 returns {found:false}
 ]);
 function checkShape(path, method, op, body) {
   if (SHAPE_HAPPY_PATH_ONLY.has(path)) return;
