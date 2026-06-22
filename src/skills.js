@@ -1291,6 +1291,45 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "regulatory-watch",
+    title: "SEC regulatory monitoring",
+    tagline:
+      "The 'who just filed / who just bought / what just IPO'd / what does the full-text search say' monitoring loop. Five EDGAR tools composed: full-text search for a keyword, surface recent filings on the matched companies, pull insider Form 4 transactions, pull 13F institutional holdings changes, and check the IPO calendar. Different from sec-filings-deep-dive (which goes deep on one company's earnings) — this is the wide-and-recent radar.",
+    useCase:
+      "Most EDGAR workflows fall into two modes: 'tell me everything about company X' (covered by sec-filings-deep-dive) or 'what just happened across the universe that I care about?' (this pack). The monitoring mode powers competitor watch, M&A signal scanning, insider-buying screens, and 'is the IPO window open' market-timing checks. The full-text search seeds the watch list; insider trades + 13F changes are the canonical informed-money signals; the IPO calendar is the supply-side gauge. All five tools are egress to SEC EDGAR (free upstream, but counted as paid for the deterministic-tool wrapper).",
+    toolSlugs: [
+      "edgar-search",
+      "edgar-filings",
+      "edgar-insider-trades",
+      "edgar-13f-holdings",
+      "edgar-recent-ipos",
+    ],
+    workflow: [
+      "Seed the watch list with edgar-search. Full-text search across the EDGAR filing corpus for the keyword/theme — e.g. 'AI infrastructure', 'GLP-1', 'small modular reactor'. Returns matched filings with company CIK, ticker, filing type, and date. The query language is EDGAR's own (supports exact phrases, AND/OR, and date filters). This is the 'who is talking about this' step — the resulting CIK list seeds every downstream step. Cap the result set at 25 to keep the pack budget bounded.",
+      "Pull recent filings on each matched company with edgar-filings. One call per CIK from step 1. Returns the company's last N filings (10-K, 10-Q, 8-K, S-1, etc.) with dates and accession numbers. The 8-K filings are the disclosure firehose — material events (acquisitions, exec departures, going-concern doubt). Surface any 8-K filed in the last 7 days as 'fresh material event' — those are typically the actionable signal in a monitoring loop, not the 10-K/10-Q (which are scheduled and pre-baked into the price).",
+      "Pull insider Form 4 transactions with edgar-insider-trades. One call per CIK. Returns recent buys and sells by officers and directors with transaction value. The classical signal: clusters of *open-market buys* by multiple insiders within a short window are the highest-conviction informed-money signal in equity markets (sells are noisy — insiders sell for diversification, taxes, divorce; they only buy for one reason). Surface buy clusters (≥ 2 insiders, ≥ $100k each, within 30 days) prominently. Sales without context are deprioritized.",
+      "Pull 13F institutional holdings changes with edgar-13f-holdings. One call per CIK. Returns the latest quarterly snapshot of which 13F-filing institutions hold the stock and how their position changed (new, increased, decreased, sold-out). New positions by concentrated managers (Berkshire, Pershing Square, Baupost, etc.) are the canonical 'smart money rotated in' signal. Caveat: 13F is delayed 45 days from quarter-end, so this is a confirmation signal, not a leading one — useful for narrative, not for timing.",
+      "Check the IPO calendar with edgar-recent-ipos. Returns S-1 / S-1/A filings in the recent window — both freshly filed (signals coming-soon) and recently effective (signals just-launched). This is the supply-side gauge: open IPO window = capital markets are absorbing risk; closed = risk-off regime. If the search theme from step 1 has IPO-stage entrants showing up here, that's the 'thematic capital is being raised' confirmation. Final radar synthesizes all five signals into a one-screen actionable summary.",
+    ],
+    claudePrompt:
+      "Run a regulatory monitoring sweep using Agent402.\n\nTheme: 'AI infrastructure datacenter'.\nLookback: last 30 days.\nAs-of: 2026-06-22.\n\n(1) edgar-search with q='AI infrastructure datacenter', dateRange=last-30-days, limit=25. Return {matches: [{cik, ticker, companyName, filingType, filingDate, snippet}, ...]}. Dedupe to unique CIKs — call that list `watchlist`. (2) edgar-filings for each CIK in watchlist (cap watchlist to 10 to bound budget). For each: return the last 6 filings with type + date + accession. Flag any 8-K filed in the last 7 days as 'fresh_8k=true'. (3) edgar-insider-trades for each CIK. Return {buys: [], sells: []} with {insiderName, role, date, value, sharesAfter}. Compute `buyCluster: true` if ≥ 2 insiders, each ≥ $100k, all within a 30-day window. Surface buy clusters prominently in the writeup; deprioritize standalone sells. (4) edgar-13f-holdings for each CIK. Return {newPositions: [{filerName, value}, ...], increases: [], decreases: [], soldOut: []} for the latest quarter (caveat: 45-day delayed). Flag any newPosition from a 'name-brand' concentrated holder (Berkshire, Pershing Square, Baupost, Greenlight, etc.). (5) edgar-recent-ipos with theme='AI infrastructure datacenter' if supported, else unfiltered, lookback=30d. Return {filed: [{cik, companyName, filingType, date}, ...], effective: [...]}. Cross-reference: any IPO entrant whose company description matches the theme is a 'theme-stage entrant'. Final return: {asOf: '2026-06-22', theme, watchlist: [...], fresh_8ks: [...], buyClusters: [...], smartMoneyNewPositions: [...], themeIpos: [...], synthesis: '<one-paragraph radar summary: which CIKs got buy clusters, which got smart-money entries, which had fresh material 8-Ks, whether the IPO window for the theme is open or closed>', oneLineSummary: '5 CIKs on AI-infrastructure watch; 1 fresh insider buy cluster (NVDA), 2 smart-money new positions (CRWV, NBIS), 1 theme IPO effective (Astera Labs add-on) — capital is rotating in, no fresh 8-K surprises this week.'}. All five tools are egress to SEC EDGAR. Budget ~$0.30 paid. Cache per session.",
+    promptArgs: [
+      {
+        name: "theme",
+        description: "the keyword or theme to monitor (e.g. 'AI infrastructure datacenter', 'GLP-1', 'nuclear small modular reactor')",
+        required: true,
+        substitute: "AI infrastructure datacenter",
+      },
+      {
+        name: "lookbackDays",
+        description: "the lookback window in days for fresh filings (default 30)",
+        required: false,
+        substitute: "30",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
