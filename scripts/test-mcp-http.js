@@ -62,6 +62,13 @@ assert(searchText.includes("convert-kilometers-to-miles"), "search_tools finds c
 const find = await rpc("tools/call", { name: "find_tool", arguments: { task: "convert kilometers to miles", limit: 3 } });
 const findText = find.result?.content?.[0]?.text ?? "";
 assert(!find.result?.isError && findText.includes("convert-kilometers-to-miles") && findText.includes("callWith"), "find_tool resolves a task with a ready call_tool invocation");
+// Discovery prominence: top result carries `required` (always array) and the
+// actionable fields (callWith / example / required) come before description.
+const findParsed = (() => { try { return JSON.parse(findText); } catch { return null; } })();
+const findTop = findParsed?.results?.[0];
+assert(findTop && Array.isArray(findTop.required), `find_tool top result carries required:[] (got ${JSON.stringify(findTop?.required)})`);
+const findKeys = findTop ? Object.keys(findTop) : [];
+assert(findKeys.indexOf("callWith") < findKeys.indexOf("description") && findKeys.indexOf("example") < findKeys.indexOf("description"), `callWith + example come before description (keys: ${findKeys.join(",")})`);
 
 const call = await rpc("tools/call", {
   name: "call_tool",

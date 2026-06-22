@@ -230,10 +230,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             slug: t.slug,
             price: t.price,
             access: t.computePayable ? "free here (rate-limited)" : "wallet required (USDC via x402 — use the agent402-mcp npm server)",
-            description: t.description.length > 200 ? `${t.description.slice(0, 200)}…` : t.description,
-            inputSchema: t.inputSchema,
-            example: t.example,
+            // Discovery up top: same ordering as /api/find — the answer to
+            // "how do I call this" (callWith / example / required) should be
+            // visible before the verbose description/schema fields. `required`
+            // is always an array so callers can scan without a guard.
             callWith: { name: "call_tool", arguments: { slug: t.slug, params: t.example ?? {} } },
+            example: t.example,
+            required: Array.isArray(t.required) ? t.required : [],
+            inputSchema: t.inputSchema,
+            description: t.description.length > 200 ? `${t.description.slice(0, 200)}…` : t.description,
           }));
           return {
             content: [{
