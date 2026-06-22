@@ -1,6 +1,6 @@
 # x402 Index & Smart Order Router
 
-Agent402 is not only a seller of 1,199 tools — it's also a **routing layer for
+Agent402 is not only a seller of 1,204 tools — it's also a **routing layer for
 the whole x402 ecosystem**. It crawls public x402 sellers, tracks their health,
 and lets a buyer ask *"find me the cheapest healthy tool that does X"* across
 every seller it knows about.
@@ -66,7 +66,7 @@ resolved `include` value (invalid values fall back to `all`).
 ## Why this matters — the router as the x402 front door
 
 - **Neutral discovery layer.** `include:"external"` lets buyers explicitly route to non-Agent402 sellers. We list because we trust the ranking, not because we'd rig it for ourselves — and that makes the same endpoint usable as a public discovery API for the whole protocol, not just our catalog.
-- **One integration, the whole ecosystem.** A buyer that integrates Agent402's `agent402-client` SDK or the hosted `/mcp` connector already has access to 1,199 local tools *and* can route across every other x402 seller without per-seller wiring.
+- **One integration, the whole ecosystem.** A buyer that integrates Agent402's `agent402-client` SDK or the hosted `/mcp` connector already has access to 1,204 local tools *and* can route across every other x402 seller without per-seller wiring.
 - **Discoverability that compounds.** Sellers don't have to register with Agent402 — appearing in any public x402 registry is enough. The Index pulls them in automatically.
 - **Trust signals are checkable.** Health scores are derived from real crawl outcomes, not self-reports. The full `history` is in `/api/index` for anyone to verify. Agent402 advertises this surface in its own [`/.well-known/x402` manifest](https://agent402.tools/.well-known/x402) under the `discovery` field so other indexes and agents can find the router programmatically.
 

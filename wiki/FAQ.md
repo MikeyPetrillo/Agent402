@@ -7,7 +7,7 @@ No. Nothing here has a signup. Payment (USDC or proof-of-work) is the only crede
 Flat per-call prices, $0.001–$0.02, published in [`/api/pricing`](https://agent402.tools/api/pricing) and quoted exactly in every 402 response. No subscriptions or tiers.
 
 **Can I use it without any money?**
-Yes — ~1,101 pure-CPU tools accept proof-of-work (sub-second of your CPU), and the hosted MCP connector runs the same set free (rate-limited). See [[Paying with Compute]].
+Yes — ~1,106 pure-CPU tools accept proof-of-work (sub-second of your CPU), and the hosted MCP connector runs the same set free (rate-limited). See [[Paying with Compute]].
 
 **What is x402?**
 An open HTTP payment standard built on the `402 Payment Required` status code, with settlement infrastructure from Coinbase and Stripe. See [[Paying with x402]].

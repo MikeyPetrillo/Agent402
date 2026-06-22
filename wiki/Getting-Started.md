@@ -46,7 +46,7 @@ To settle in real USDC instead, fund a wallet on Base and run `AGENT_KEY=0xYOUR_
 | An MCP-based agent | `npx -y agent402-mcp` with optional `AGENT_KEY` — see [[MCP Connector]] |
 | On OpenAI / Anthropic / Vercel AI SDK / LangChain / LlamaIndex | One of the framework adapter packages — see [[Adapters]] |
 | Calling over HTTP with a wallet | One x402-wrapped fetch — see [[Paying with x402]] |
-| Wallet-less / sandboxed | Proof-of-work on ~1,101 tools — see [[Paying with Compute]] |
+| Wallet-less / sandboxed | Proof-of-work on ~1,106 tools — see [[Paying with Compute]] |
 
 ## What things cost
 
