@@ -143,7 +143,7 @@ Packs live in [`src/skills.js`](https://github.com/MikeyPetrillo/Agent402/blob/m
 
 ## See also
 
-- [[Tool Catalog]] — the underlying 1,214 tools the packs orchestrate
+- [[Tool Catalog]] — the underlying 1,218 tools the packs orchestrate
 - [[MCP Connector]] — how to wire the connector into Claude / Cline / any MCP-aware client
 - [[Getting Started]] — your first call (free, no wallet) in 60 seconds
 - [[x402-Index-and-Router]] — what Agent402 looks like inside the wider x402 ecosystem
