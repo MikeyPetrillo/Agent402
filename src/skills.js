@@ -989,6 +989,48 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Onboard this signup using Agent402: email=ada@example.com, password=S0meStrongPassw0rd!, displayName=Ada Lovelace, totpSecret=JBSWY3DPEHPK3PXP, totpCode=492039. (1) email-validate the email. If invalid, return {accepted: false, reason: 'invalid-email', detail}. If 'likely-typo', surface the suggested correction and ask the user to confirm rather than rejecting outright. (2) password-strength on the password. If score < 3, return {accepted: false, reason: 'weak-password', specifically: <why>, suggestion: 'add length / drop common-pattern / vary character classes'}. Hard-reject signups that contain the email local-part or the displayName. (3) uuid (v4). Save as userId — this is the dedupe key for the rest of the steps. (4) slugify the displayName. If the slug collides with a reserved word (admin/api/login/root/help/about) or an existing handle, append the first 6 chars of userId hex. (5) password — generate one recovery code (length=20, alphanumeric) and one API key (length=48, alphanumeric+symbol). Return both to the user ONCE; persist only the hash. (6) hash the recovery code with alg=sha256 — this is what you'll store. Separately, hash the user-chosen password ONLY for the pwned-password k-anonymity probe (first 5 chars of SHA-1) — DO NOT use the SHA-256 output as the password store; the prompt MUST recommend bcrypt/argon2 for real persistence. (7) totp with secret=totpSecret. Compare computed code to totpCode. If match, set enrollment=confirmed. If off-by-one window, accept-with-warning. If mismatch, reject 2FA and instruct re-enroll (don't reject the whole signup; let the user retry the QR). Final return: {accepted: true|false, reason?, userId, handle, email, recoveryCodeHash, apiKey, twofaConfirmed, persistableRecord: {userId, email, handle, passwordStorage: 'TODO: replace SHA-256 with bcrypt/argon2', recoveryCodeHash, totpSecretEncrypted}}. All seven tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.01 even paid. Never log plaintext password / recovery code / API key — these appear in the return value only.",
   },
+  {
+    slug: "data-interchange",
+    title: "Data interchange",
+    tagline:
+      "Bring data in from any structured format, normalize through JSON as the universal pivot, merge with overrides, audit the diff, flatten for downstream systems, and emit to whatever format the next stage actually consumes — CSV for spreadsheets, YAML for config systems, JSON for everything else. The deterministic universal-format-bridge workflow.",
+    useCase:
+      "A common ops/integration pattern: base config lives in YAML (12-factor / k8s convention), environment-specific overrides arrive as JSON (from a vault, an env API, a feature-flag service), and the downstream system that consumes the result wants either a CSV (for an audit spreadsheet), a flattened key=value envelope (for env-var injection), or the canonical YAML back (for committing to git). Doing this by hand involves three format-conversion utilities, a merge tool, and a diff to prove what changed — this pack chains them in one pass and produces every output format at once.",
+    promptArgs: [
+      { name: "baseYaml", description: "Base configuration document in YAML", required: true, substitute: "server:\n  host: localhost\n  port: 8080\n  tls: false\ndatabase:\n  pool: 10\n  timeout: 30\nfeatures:\n  betaApi: false" },
+      { name: "overridesJson", description: "Environment-specific overrides as JSON (deep-merged onto the base)", required: true, substitute: "{\"server\":{\"host\":\"api.production.example.com\",\"tls\":true},\"features\":{\"betaApi\":true}}" },
+    ],
+    // Six tools, ordered as the canonical merge-and-export workflow:
+    // parse the base YAML into JSON (the universal pivot — every other
+    // tool in the pack takes JSON as input), apply JSON overrides via
+    // deep-merge (defaults-and-overrides pattern, deterministic key-by-key
+    // resolution), audit the diff to prove exactly which keys changed
+    // (critical for production config rollouts and compliance review),
+    // flatten the merged result (gives you the env-var key=value envelope
+    // for runtime injection), then dual-emit: CSV for the audit-trail
+    // spreadsheet stakeholders want, YAML for the canonical config-system
+    // / git-commit output. All six tools are pure-CPU and PoW-eligible.
+    // Composes kit (yaml-to-json, json-merge - wait json-merge is kit2,
+    // json-diff, json-to-csv, json-to-yaml) + kit2 (json-merge, json-flatten).
+    toolSlugs: [
+      "yaml-to-json",
+      "json-merge",
+      "json-diff",
+      "json-flatten",
+      "json-to-csv",
+      "json-to-yaml",
+    ],
+    workflow: [
+      "Parse the base YAML with yaml-to-json. YAML is the most config-friendly source format (comments, anchors, multi-line strings) but JSON is the only sensible pivot — every downstream merge/diff/flatten tool takes JSON in and returns JSON out. Catch the silent failure here: YAML with tabs (forbidden), inconsistent indentation, or unquoted strings that look like booleans ('yes'/'no'/'on'/'off' all become actual booleans in YAML 1.1) — surface these as parse warnings rather than letting the override merge inherit a wrong type.",
+      "Apply the overrides with json-merge. Deep-merge is the right primitive for config: scalar values get replaced, objects get recursively merged, arrays get concatenated (this is the json-merge tool's contract — see the source). For environment overrides this is exactly right: the base ships defaults, the env supplies the specifics. Reject any override key in {__proto__, constructor, prototype} as the tool's prototype-pollution guard, which gives you 'safe to load from arbitrary user-controlled JSON' as a free property.",
+      "Audit the merge with json-diff against the original base. Returns a structured diff (added / removed / changed paths). This is the most important step for production rollouts: 'we changed server.host and enabled features.betaApi — was that intentional?' is the compliance question, and json-diff produces the artifact that answers it. Generate this diff at deploy time and ship it to your audit log so the next outage post-mortem can pin a config change to a moment in time.",
+      "Flatten the merged document with json-flatten. Nested {server: {host: 'x', port: 8080}} collapses to {'server.host': 'x', 'server.port': 8080} — the exact shape an env-var emitter or a Vault writer or a k8s ConfigMap data-block expects. This is the bridge between human-friendly nested structure and machine-friendly key=value transport. Note that the json-flatten tool also supports the reverse direction (unflatten) when you need to round-trip from key=value back to nested.",
+      "Emit CSV with json-to-csv. Two-column shape (key,value) is what stakeholders want when reviewing config in a spreadsheet: filterable by key prefix, sortable, easy to diff in a code-review tool that doesn't natively render YAML. For a more report-y form, the csv-to-md tool can render the same data as a markdown table — but CSV is the right primary export because every downstream tool consumes it.",
+      "Emit YAML with json-to-yaml. Round-trips the merged document back to YAML for git commit, ConfigMap creation, or human review — closing the loop and giving you a canonical 'this is the effective config at this version' artifact. Note that comments in the original YAML do NOT survive the JSON pivot (JSON has no comment grammar) — call this out in the prompt so the user knows to either inline comments as $comment-style keys, maintain them out-of-band, or accept that the round-tripped YAML is reformatted.",
+    ],
+    claudePrompt:
+      "Merge and re-emit this config using Agent402.\n\nBase YAML:\nserver:\n  host: localhost\n  port: 8080\n  tls: false\ndatabase:\n  pool: 10\n  timeout: 30\nfeatures:\n  betaApi: false\n\nOverrides JSON: {\"server\":{\"host\":\"api.production.example.com\",\"tls\":true},\"features\":{\"betaApi\":true}}\n\n(1) yaml-to-json on the base. Confirm parsed structure (server/database/features). Flag any of the YAML 1.1 boolean-coercion traps (yes/no/on/off) if present. (2) json-merge — deep-merge the parsed base with the overrides JSON. Result should show server.host = production hostname, server.tls = true, features.betaApi = true, all other keys unchanged. (3) json-diff between the parsed base and the merged result. Surface the change set as a list: [{path, op, before, after}]. This is the audit artifact — log it and attach it to the deploy record. (4) json-flatten on the merged document. Emit the key=value envelope: SERVER_HOST=… / SERVER_PORT=… / SERVER_TLS=… etc. Convention: dot-separated keys map to underscore-separated UPPER_SNAKE env vars; describe the convention in the writeup. (5) json-to-csv on the flattened map. Two columns: key,value. This is the stakeholder-friendly export. (6) json-to-yaml on the merged document. This is the canonical 'effective config' YAML — call out that comments from the input YAML did NOT survive the JSON pivot. Final return: {parsedBase, merged, changeAudit: [{path, op, before, after}], envVars: {…}, csvExport, canonicalYaml, oneLineSummary: 'merged N override keys onto base; M paths changed; ready for deploy'}. All six tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.01 even paid.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
