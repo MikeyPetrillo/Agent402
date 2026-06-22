@@ -1330,6 +1330,39 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "search-and-cite",
+    title: "Answer-a-question with sources",
+    tagline:
+      "The 'research a question, return an answer with citations' workflow. Brave answer for the AI-synthesized take with citations, Brave web for the canonical SERP, Brave news for time-sensitive context, then a deterministic web-fetch + extract pass on the top citations to verify the answer hasn't hallucinated. Five tools, one cited paragraph, every claim traced back to a fetched URL.",
+    useCase:
+      "Most agent research workflows have the same failure mode: an LLM answer with confident-sounding citations that don't actually contain the claim. This pack solves that by separating the *answer-generating* surface (Brave's answer endpoint) from the *evidence-fetching* surface (web-fetch + extract on the citations). The agent's final response cites only claims that survive both the search-answer hit AND a deterministic re-fetch of the cited page. Pairs with rag-prep when the answer needs to be turned into a structured knowledge document; pairs with macro-context for time-sensitive 'is this still current' questions.",
+    toolSlugs: [
+      "answer",
+      "search",
+      "search-news",
+      "extract",
+      "extract-entities",
+    ],
+    workflow: [
+      "Get the AI-synthesized answer with answer. Brave's answer endpoint returns a short prose paragraph synthesized from the top SERP results, plus a citations array (URL + title + snippet per source). This is the *starter* answer — never the final answer, because Brave's synthesis can still hallucinate connections between citations or misquote them. Treat the answer text as a hypothesis and the citations as the evidence to verify. Keep the maxTokens cap modest (≤ 250) so the synthesis stays close to the source material rather than wandering.",
+      "Pull the canonical SERP with search. Brave web search, top 10 organic results. This gives you (a) the search-engine consensus on which pages are authoritative for the query (so you can sanity-check Brave's answer didn't pick fringe sources), and (b) backup sources if the answer's citations turn out to be wrong or paywalled. Compare the SERP's top URLs against the answer's citation URLs — if they barely overlap, the answer is probably weighted toward an unusual angle and deserves extra skepticism.",
+      "Pull time-sensitive context with search-news. Brave news search on the same query. For evergreen questions ('what is a closure in JavaScript') this returns mostly noise and can be skipped; for time-sensitive questions ('is the IPO market open', 'did the Fed raise rates last week') the news pass is essential — the regular web search is heavily SEO-optimized and stale-friendly, while news is recency-biased. Always check the news result dates: if the most recent news result on a time-sensitive query is more than 30 days old, the answer might already be wrong even if it was correct when Brave indexed it.",
+      "Re-fetch and clean the top 2-3 citation URLs with extract. This is the verification step that turns a citation from a URL into actual readable bytes — extract runs Readability over the page and returns clean markdown of the article body, stripping nav, footer, ads, comments. One call per citation. If extract returns empty (page is a SPA, paywalled, or anti-bot-blocked), that's signal: a citation that can't be re-extracted is effectively dead and any claim resting on it should be downgraded or dropped. Cap at 3 citations to bound budget — the marginal value of citation #4 is low.",
+      "Cross-reference named entities with extract-entities on each cleaned article body. Returns people, organizations, places, dates mentioned in the extracted text. The agent now grep-checks: every named entity in Brave's answer (step 1) should appear in at least one extracted article's entity list. If the answer claims 'according to Powell at the FOMC meeting' but neither 'Powell' nor 'FOMC' appears in any cited article's entities, the answer is hallucinating attribution. Final output: a paragraph where every sentence has at least one URL footnote pointing at content that was re-fetched, re-read, and entity-checked against the original claim.",
+    ],
+    claudePrompt:
+      "Answer this research question with sources, using Agent402.\n\nQuestion: 'What is the Sahm Rule and has it triggered recently?'\nMax answer length: 250 tokens.\nAs-of: 2026-06-22.\n\n(1) answer with q='What is the Sahm Rule and has it triggered recently?', maxTokens=250. Return {answer: '<paragraph>', citations: [{url, title, snippet}, ...]}. Treat this answer as a *hypothesis*. (2) search with q='Sahm Rule recession indicator current', topN=10. Return {results: [{url, title, snippet}, ...]}. Compute overlap with step 1's citation URLs — if overlap < 30%, flag 'answer drew from non-canonical sources'. (3) search-news with q='Sahm Rule triggered', topN=5. Return {results: [{url, title, snippet, age}, ...]}. Critical for the 'triggered recently' half of the question: pick the freshest news result. If the freshest news result is > 30 days old, caveat the answer with 'most recent news coverage is from [date]'. (4) extract on the top 3 citation URLs from step 1. Return {extracted: [{url, ok, markdown|err}, ...]}. Drop any citation where ok=false or markdown is empty. (5) extract-entities on each successfully-extracted markdown body. Return {entities: [{url, people: [], orgs: [], places: [], dates: []}, ...]}. For each named entity in step-1 answer text, verify it appears in at least one citation's entity list. Drop any claim whose key entity isn't supported by any citation. Final return: {question, answer: '<rewritten paragraph where every sentence has a [url] footnote pointing to a citation whose markdown was re-extracted AND whose entities support the claim>', citations: [{url, title, verified: true|false}, ...], droppedClaims: [...], freshness: {newsLatestDate, isStale: true|false}, oneLineSummary: 'Sahm Rule is the 0.5pp 3M-vs-12M-low UE trigger; not currently triggered (0.33 as of May 26); cited 2 verifiable sources (FRED, Bloomberg), dropped 1 unsupported claim.'}. Five tools: answer + search + search-news are egress (Brave API); extract is egress (raw web + Readability); extract-entities is pure-CPU. Budget ~$0.08 paid.",
+    promptArgs: [
+      {
+        name: "question",
+        description: "the research question to answer with citations",
+        required: true,
+        substitute: "What is the Sahm Rule and has it triggered recently?",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
