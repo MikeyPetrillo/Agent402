@@ -37,6 +37,24 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   const limit = Math.min(Math.max(parseInt(k, 10) || 5, 1), 25);
   if (!terms.length) return { query: q, count: 0, results: [] };
 
+  // Directional alignment: how many adjacent (q[i], q[i+1]) query-term pairs
+  // appear in the slug *in the same order*. This is the tiebreaker that fixes
+  // the symmetric-convert problem — "convert miles to kilometers" should rank
+  // `convert-miles-to-kilometers` above `convert-kilometers-to-miles`, since
+  // their lexical scores tie and their slug lengths tie, but the first slug
+  // honors the directional intent of the query and the second reverses it.
+  // Cheap to compute (O(terms) per tool) and contributes only to the tiebreak,
+  // so it never overrides a stronger lexical match.
+  const directionScore = (slug) => {
+    let s = 0;
+    for (let i = 0; i < terms.length - 1; i++) {
+      const a = slug.indexOf(terms[i]);
+      const b = slug.indexOf(terms[i + 1]);
+      if (a !== -1 && b !== -1 && a < b) s++;
+    }
+    return s;
+  };
+
   const scored = [];
   for (const t of toolList(catalog)) {
     const slug = t.slug.toLowerCase();
@@ -52,10 +70,16 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
       if (tagSet.has(term)) score += 3;
       if (hay.includes(term)) score += 1;
     }
-    if (score > 0) scored.push([score, t]);
+    if (score > 0) scored.push([score, t, directionScore(slug)]);
   }
-  // Highest score first; break ties by shorter slug (more specific) then alpha.
-  scored.sort((a, b) => b[0] - a[0] || a[1].slug.length - b[1].slug.length || a[1].slug.localeCompare(b[1].slug));
+  // Highest score first; then more in-order term pairs win (directional intent);
+  // then shorter slug (more specific); then alpha for full determinism.
+  scored.sort((a, b) =>
+    b[0] - a[0] ||
+    b[2] - a[2] ||
+    a[1].slug.length - b[1].slug.length ||
+    a[1].slug.localeCompare(b[1].slug)
+  );
 
   const results = scored.slice(0, limit).map(([score, t]) => {
     const example = t.discovery?.input ?? t.discovery?.example;

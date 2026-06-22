@@ -57,14 +57,17 @@ const TOP1 = [
   ["compute HMAC signature",       "hmac"],
   ["current price of bitcoin",     "crypto-price"],
   ["earthquake feed",               "earthquakes"],
+  // Symmetric convert slugs (miles<->km, kg<->lbs, etc.) tie on score and slug
+  // length. The directional tiebreaker in findTools() (more in-order query-term
+  // pairs wins) lifts the slug whose token order matches the query intent.
+  // Locking top-1 here is the regression guard — if someone weakens or removes
+  // the direction signal, the reverse-direction slug will float to the top and
+  // these assertions break loudly.
+  ["convert miles to kilometers",   "convert-miles-to-kilometers"],
+  ["convert kilometers to miles",   "convert-kilometers-to-miles"],
 ];
 
-// Symmetric convert slugs (miles<->km, etc.) tie on score and slug length,
-// so the alpha tiebreaker can put the reverse direction first. Top-3 is the
-// honest lock: an agent will see the right tool either way.
-const TOPN = [
-  ["convert miles to kilometers", "convert-miles-to-kilometers", 3],
-];
+const TOPN = [];
 
 const slugs = async (q, k = 3) => {
   const r = await fetch(`${BASE}/api/find?q=${encodeURIComponent(q)}&k=${k}`);
