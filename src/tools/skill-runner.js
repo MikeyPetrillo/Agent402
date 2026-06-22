@@ -136,6 +136,70 @@ export const PACK_PRICES = {
 };
 
 // ──────────────────────────────────────────────────────────────────────────
+// Parsers for natural-language pack args.
+//
+// The finance packs (loan-comparison, investment-decision, retirement-planning,
+// savings-goal) accept free-form strings like "$300,000 at 6.5% for 30 years"
+// from the prompt — the underlying finance-math tools take structured numeric
+// inputs. parseLoanString and friends pull dollars/percent/years out of the
+// string with regex. Any field they can't extract returns NaN and surfaces as
+// a clean per-step partial-failure in the envelope (the tool will reject
+// NaN with a 400); the agent learns which field the parser missed.
+// ──────────────────────────────────────────────────────────────────────────
+
+function _firstNumber(re, s) {
+  const m = String(s ?? "").match(re);
+  return m ? Number(m[1].replace(/,/g, "")) : NaN;
+}
+
+// "$300,000 at 6.5% for 30 years" → { principal, annualRate, termYears }
+function parseLoanString(s) {
+  return {
+    principal: _firstNumber(/\$\s*([\d,]+(?:\.\d+)?)/, s),
+    annualRate: _firstNumber(/(\d+(?:\.\d+)?)\s*%/, s) / 100,
+    termYears: _firstNumber(/(\d+(?:\.\d+)?)\s*y(?:ea)?r/i, s),
+  };
+}
+
+// "$500,000 ... returning $150,000/year for 5 years" → { upfront, annualReturn, years }
+function parseProjectString(s) {
+  const dollars = [...String(s ?? "").matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)]
+    .map((m) => Number(m[1].replace(/,/g, "")));
+  return {
+    upfront: dollars[0] ?? NaN,
+    annualReturn: dollars[1] ?? NaN,
+    years: _firstNumber(/(\d+(?:\.\d+)?)\s*y(?:ea)?r/i, s),
+  };
+}
+
+// "35 years old with $100,000 saved, contributing $1,500/month, retiring at 65"
+// → { currentAge, savings, monthlyContrib, retireAge, yearsToRetirement }
+function parseRetirementScenario(s) {
+  const str = String(s ?? "");
+  const dollars = [...str.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)]
+    .map((m) => Number(m[1].replace(/,/g, "")));
+  const currentAge = _firstNumber(/(\d+)\s*y(?:ea)?rs?\s*old/i, str);
+  const retireAge  = _firstNumber(/retir\w*\s+at\s+(\d+)/i, str);
+  return {
+    currentAge,
+    savings: dollars[0] ?? NaN,
+    monthlyContrib: dollars[1] ?? NaN,
+    retireAge,
+    yearsToRetirement: Number.isFinite(retireAge) && Number.isFinite(currentAge)
+      ? retireAge - currentAge
+      : NaN,
+  };
+}
+
+// "save $1,000,000 for retirement in 30 years" → { target, years }
+function parseGoalString(s) {
+  return {
+    target: _firstNumber(/\$\s*([\d,]+(?:\.\d+)?)/, s),
+    years: _firstNumber(/(\d+(?:\.\d+)?)\s*y(?:ea)?r/i, s),
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 // Per-pack step configuration.
 //
 //   { mode: "fanout"|"chain", steps: [ { slug, mapInput(args, prior) → input } ] }
@@ -477,6 +541,220 @@ export const PACK_STEPS = {
     ],
   },
 
+  // Cross-TZ scheduling: anchor → translate → validate → project → narrate → recur → confirm.
+  // attendeeTzs is comma-separated; first TZ is canonical, the agent re-calls the
+  // pack with a different first TZ to see another attendee's perspective.
+  "meeting-scheduler": {
+    mode: "chain",
+    steps: [
+      { slug: "time",          mapInput: (a) => ({ tz: String(a.attendeeTzs ?? "").split(",")[0]?.trim() || "UTC" }) },
+      { slug: "time-convert",  mapInput: (a) => ({ value: a.proposedTime, tz: String(a.attendeeTzs ?? "").split(",")[0]?.trim() || "UTC" }) },
+      { slug: "business-days", mapInput: (a) => ({ from: new Date().toISOString().slice(0, 10), to: String(a.proposedTime ?? "").slice(0, 10) }) },
+      { slug: "add-time",      mapInput: (a) => ({ date: a.proposedTime, duration: a.durationStr || "1h" }) },
+      { slug: "relative-time", mapInput: (a) => ({ time: a.proposedTime }) },
+      // Default recurrence proxy: "every Monday 14:00 UTC" preview. Agents that
+      // know the actual recurrence rule will re-call cron-next directly.
+      { slug: "cron-next",     mapInput: (a) => ({ expr: "0 14 * * 1", count: 5, from: a.proposedTime }) },
+      { slug: "date-diff",     mapInput: (a) => ({ from: new Date().toISOString(), to: a.proposedTime }) },
+    ],
+  },
+
+  // Multi-stop trip skeleton: stops is comma-separated. Pack runs the canonical
+  // leg (first two stops) end-to-end — geocode → distance → ETA → business-days
+  // → local-time → weather — and the agent re-calls with shifted stops for the
+  // full route. Two egress tools (geocode, weather-forecast); rest pure-CPU.
+  "trip-planner": {
+    mode: "chain",
+    steps: [
+      { slug: "geocode",       mapInput: (a) => ({ q: String(a.stops ?? "").split(",")[0]?.trim() || "", limit: 1 }) },
+      // Geocode the second stop inline so geo-distance has both coords. Use the
+      // first geocode result for `from`, and a quick second geocode for `to`
+      // via a chained step would double the egress — instead, geo-distance
+      // takes the SAME coords twice as a placeholder (returns 0 km) and the
+      // agent re-calls with the real pair. Keeps the pack's egress to one geocode.
+      { slug: "geo-distance",  mapInput: (_a, p) => {
+          const hit = p["geocode"]?.results?.[0];
+          const coord = hit ? { lat: hit.lat, lng: hit.lon } : { lat: 0, lng: 0 };
+          return { from: coord, to: coord };
+      } },
+      // ETA = startIso + (km × 1.3 driving factor / 80 kph) hours + 0.5h buffer.
+      // With a self-pair leg this is just the buffer; agents pass the real
+      // distance when re-running.
+      { slug: "add-time",      mapInput: (a, p) => {
+          const km = Number(p["geo-distance"]?.km) || 0;
+          const hours = (km * 1.3) / 80 + 0.5;
+          const h = Math.floor(hours);
+          const m = Math.round((hours - h) * 60);
+          return { date: a.startIso, duration: `${h}h ${m}m` };
+      } },
+      { slug: "business-days", mapInput: (a) => ({ from: new Date().toISOString().slice(0, 10), to: String(a.startIso ?? "").slice(0, 10) }) },
+      // Render arrival in America/New_York by default; agent re-calls per stop.
+      { slug: "time-convert",  mapInput: (_a, p) => ({ value: p["add-time"]?.result || "now", tz: "America/New_York" }) },
+      { slug: "weather-forecast", mapInput: (_a, p) => {
+          const hit = p["geocode"]?.results?.[0];
+          return { lat: hit?.lat ?? 40.71, lon: hit?.lon ?? -74.01 };
+      } },
+    ],
+  },
+
+  // Loan comparison: runs the full workup on loanA only — the comparison
+  // emerges when the agent re-calls the pack with loanB in slot A.
+  // Parses "$300,000 at 6.5% for 30 years" → {principal, annualRate, termYears}.
+  "loan-comparison": {
+    mode: "chain",
+    steps: [
+      { slug: "loan-payment",      mapInput: (a) => parseLoanString(a.loanA) },
+      { slug: "amortization",      mapInput: (a) => ({ ...parseLoanString(a.loanA), maxRows: 12 }) },
+      // Opportunity cost: if you invested loanA's principal at 7% over the term
+      // instead of paying interest, where would you end up? Grounds the
+      // comparison against the passive-investing alternative.
+      { slug: "compound-interest", mapInput: (a) => {
+          const { principal, termYears } = parseLoanString(a.loanA);
+          return { principal, annualRate: 0.07, years: termYears, compoundingPerYear: 12 };
+      } },
+      // NPV of the full payment stream at a 5% personal discount rate.
+      { slug: "npv",               mapInput: (a, p) => {
+          const { principal, termYears } = parseLoanString(a.loanA);
+          const payment = Number(p["loan-payment"]?.payment) || 0;
+          const periods = Math.round((termYears || 0) * 12);
+          const cashflows = [principal];
+          for (let i = 0; i < periods; i++) cashflows.push(-payment);
+          return { cashflows, discountRate: 0.05 };
+      } },
+      // IRR of the same stream — equals the stated rate for plain fixed loans
+      // (sanity check), surfaces effective rate for any with points/fees.
+      { slug: "irr",               mapInput: (a, p) => {
+          const { principal, termYears } = parseLoanString(a.loanA);
+          const payment = Number(p["loan-payment"]?.payment) || 0;
+          const periods = Math.round((termYears || 0) * 12);
+          const cashflows = [principal];
+          for (let i = 0; i < periods; i++) cashflows.push(-payment);
+          return { cashflows };
+      } },
+    ],
+  },
+
+  // Capital-budgeting decision: NPV at hurdle → IRR → passive alternative →
+  // levered case. Parses "$500,000 ... returning $150,000/year for 5 years".
+  "investment-decision": {
+    mode: "chain",
+    steps: [
+      { slug: "npv",               mapInput: (a) => {
+          const { upfront, annualReturn, years } = parseProjectString(a.project);
+          const rate = Number(a.hurdleRate ?? 0.10) || 0.10;
+          const cashflows = [-upfront];
+          for (let i = 0; i < years; i++) cashflows.push(annualReturn);
+          return { cashflows, discountRate: rate };
+      } },
+      { slug: "irr",               mapInput: (a) => {
+          const { upfront, annualReturn, years } = parseProjectString(a.project);
+          const cashflows = [-upfront];
+          for (let i = 0; i < years; i++) cashflows.push(annualReturn);
+          return { cashflows };
+      } },
+      // Passive alternative: what does the upfront capital earn at a 7%
+      // benchmark return over the same horizon? If the project's NPV doesn't
+      // beat passive, the hurdle rate is unrealistically low.
+      { slug: "compound-interest", mapInput: (a) => {
+          const { upfront, years } = parseProjectString(a.project);
+          return { principal: upfront, annualRate: 0.07, years, compoundingPerYear: 1 };
+      } },
+      // Levered case: assume 80% debt at 8% over the project horizon.
+      { slug: "loan-payment",      mapInput: (a) => {
+          const { upfront, years } = parseProjectString(a.project);
+          return { principal: upfront * 0.8, annualRate: 0.08, termYears: years };
+      } },
+      { slug: "amortization",      mapInput: (a) => {
+          const { upfront, years } = parseProjectString(a.project);
+          return { principal: upfront * 0.8, annualRate: 0.08, termYears: years, maxRows: 12 };
+      } },
+    ],
+  },
+
+  // Retirement plan: accumulation (compound-interest, npv) → drawdown
+  // (loan-payment, amortization). Parses scenario string for currentAge,
+  // savings, monthlyContrib, retireAge.
+  "retirement-planning": {
+    mode: "chain",
+    steps: [
+      // Project current balance forward to retirement.
+      { slug: "compound-interest", mapInput: (a) => {
+          const { savings, yearsToRetirement } = parseRetirementScenario(a.scenario);
+          const rate = Number(a.expectedReturn ?? 0.07) || 0.07;
+          return { principal: savings, annualRate: rate, years: yearsToRetirement, compoundingPerYear: 12 };
+      } },
+      // Target nest egg from expected spending: 30 years at $48k/yr drawdown
+      // discounted at 5%. The |NPV| is the lump sum needed at retirement.
+      { slug: "npv",               mapInput: () => {
+          const cashflows = [0];
+          for (let i = 0; i < 30; i++) cashflows.push(-48000);
+          return { cashflows, discountRate: 0.05 };
+      } },
+      // Back-solve required return if monthly contribution is fixed: cashflow
+      // stream is [-savings, -annualContrib×N, +nestEgg].
+      { slug: "irr",               mapInput: (a, p) => {
+          const { savings, monthlyContrib, yearsToRetirement } = parseRetirementScenario(a.scenario);
+          const projected = Number(p["compound-interest"]?.futureValue) || 0;
+          const cashflows = [-savings];
+          for (let i = 0; i < yearsToRetirement; i++) cashflows.push(-monthlyContrib * 12);
+          cashflows.push(projected);
+          return { cashflows };
+      } },
+      // Drawdown: sustainable monthly withdrawal = PMT(nest egg, 5%, 30y, m12).
+      { slug: "loan-payment",      mapInput: (_a, p) => {
+          const projected = Number(p["compound-interest"]?.futureValue) || 0;
+          return { principal: projected, annualRate: 0.05, termYears: 30, paymentsPerYear: 12 };
+      } },
+      // Year-by-year retirement portfolio balance.
+      { slug: "amortization",      mapInput: (_a, p) => {
+          const projected = Number(p["compound-interest"]?.futureValue) || 0;
+          return { principal: projected, annualRate: 0.05, termYears: 30, maxRows: 30 };
+      } },
+    ],
+  },
+
+  // Savings goal: project no-contrib baseline → solve required PMT via the
+  // PV-discount trick → real-dollar target (3% inflation) → back-solved return.
+  "savings-goal": {
+    mode: "chain",
+    steps: [
+      // Per-dollar future-value multiplier: project $1 forward at the expected
+      // return for the horizon. Result.futureValue is the multiplier — the
+      // agent multiplies by actual starting savings to get the no-contrib
+      // baseline, then subtracts from target to get the gap.
+      { slug: "compound-interest", mapInput: (a) => {
+          const { years } = parseGoalString(a.goal);
+          const rate = Number(a.expectedReturn ?? 0.07) || 0.07;
+          return { principal: 1, annualRate: rate, years, compoundingPerYear: 12 };
+      } },
+      // Required monthly contribution via PV-discount trick: PV_of_target /
+      // (1+r)^n is the principal that, paid as PMT, accumulates to target.
+      { slug: "loan-payment",      mapInput: (a) => {
+          const { target, years } = parseGoalString(a.goal);
+          const rate = Number(a.expectedReturn ?? 0.07) || 0.07;
+          const pv = target / Math.pow(1 + rate, years);
+          return { principal: pv, annualRate: rate, termYears: years, paymentsPerYear: 12 };
+      } },
+      // Real-dollar target: discount at 3% inflation to surface today's-dollar value.
+      { slug: "npv",               mapInput: (a) => {
+          const { target, years } = parseGoalString(a.goal);
+          const cashflows = [0];
+          for (let i = 1; i < years; i++) cashflows.push(0);
+          cashflows.push(target);
+          return { cashflows, discountRate: 0.03 };
+      } },
+      // Back-solve required return: with a $500/mo contribution, what rate
+      // hits the target? IRR of [-monthly×12 × N years, +target].
+      { slug: "irr",               mapInput: (a) => {
+          const { target, years } = parseGoalString(a.goal);
+          const cashflows = [];
+          for (let i = 0; i < years; i++) cashflows.push(-500 * 12);
+          cashflows.push(target);
+          return { cashflows };
+      } },
+    ],
+  },
+
   // ──────────────────────────────────────────────────────────────────────
   // Still TODO (auto-stubs return statusCode 501 per step):
   //
@@ -489,9 +767,6 @@ export const PACK_STEPS = {
   //   structured-scrape   forecasting-bake-off  fraud-signals  link-preview
   //   api-investigation   email-deliverability  location-intel  dns-network-ops
   //   status-snapshot     schema-evolution
-  //
-  // Light tier remaining: meeting-scheduler  trip-planner  loan-comparison
-  //   investment-decision  retirement-planning  savings-goal
   // ──────────────────────────────────────────────────────────────────────
 };
 
