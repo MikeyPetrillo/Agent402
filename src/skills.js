@@ -1112,6 +1112,56 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "a11y-audit",
+    title: "WCAG accessibility audit",
+    tagline:
+      "Run a deterministic WCAG 2.x audit of an HTML page from a string and a fg/bg color pair. Checks language attribute (3.1.1), document title (2.4.2), heading order (1.3.1), link-text presence (2.4.4), color contrast (1.4.3), and reading grade level (3.1.5 AAA). Seven pure-CPU tools, no headless browser needed — the canonical accessibility-first-pass workflow done as a single round-trip of tool calls.",
+    useCase:
+      "Accessibility audits are typically a Lighthouse run + a manual code review + a screenreader test, taking hours to days. This pack covers the deterministic subset — the WCAG checks that don't require executing JS or rendering CSS — in a single sub-second pipeline. It's the right primitive for CI ('block merge if contrast < 4.5'), for content-team self-serve ('does this blog post pass'), and for agents iterating on a design without firing up a browser. The user supplies the canonical brand color pair because CSS-from-HTML-string is a guessing game and we don't guess.",
+    toolSlugs: [
+      "html-meta",
+      "html-strip",
+      "html-links",
+      "html-select",
+      "color-contrast",
+      "readability",
+      "text-stats",
+    ],
+    workflow: [
+      "Parse document metadata with html-meta. Returns {title, description, lang, viewport, ogImage, …}. Two WCAG checks land here: 2.4.2 (page has a title element that describes its topic — empty/missing/placeholder titles like 'Document' fail) and 3.1.1 (the <html lang> attribute is present and is a valid BCP 47 language tag — missing lang fails AA and breaks screenreader pronunciation). Surface both as separate boolean checks. Also flag if title is shorter than 6 characters or longer than 70 — both are usability smells even when not strict WCAG failures.",
+      "Strip to visible text with html-strip. Returns the document text content as a single string with whitespace collapsed. This becomes the input for readability and text-stats below. It also reveals the 'empty page' failure mode: a page that lives entirely inside <script> tags (SPAs without server-rendered content) strips to almost nothing — important to surface because the rest of the audit would otherwise pass on an empty page.",
+      "Enumerate hyperlinks with html-links. Returns [{href, text, rel}] for every <a> in the document. Run two WCAG 2.4.4 checks on the result: (a) every link has non-empty text content OR a non-empty aria-label (links with text === '' that aren't decorated fail); (b) link text is descriptive — flag links whose text is exactly 'click here', 'here', 'read more', 'link' as a usability warning (still passes WCAG but flagged for content teams). Also count external links (href starts with http and host !== this domain) and flag any external href without rel containing 'noopener' as a tabnabbing risk — not strictly WCAG but adjacent security hygiene.",
+      "Audit heading order with html-select using selector 'h1, h2, h3, h4, h5, h6'. Returns the headings in document order. Run WCAG 1.3.1 (info and relationships): exactly one h1 (zero h1s = orientation failure; multiple h1s = sectioning ambiguity); heading levels don't skip (h1 → h3 with no h2 in between is a structural break, fails AA in some interpretations). Surface the heading outline as a tree so the agent can describe the document structure in the writeup. This is the check Lighthouse usually flags as 'Heading elements are not in a sequentially-descending order.'",
+      "Audit color contrast with color-contrast on the user-supplied (foreground, background) pair. Returns {ratio, AA:{normal,large}, AAA:{normal,large}}. WCAG 1.4.3 requires 4.5:1 for normal body text (AA); 3:1 for large text (≥18pt or ≥14pt bold); 7:1 for AAA. Surface all four booleans and the raw ratio. Important framing for the agent: this is ONE color pair, not the whole page — the user provides their canonical brand body/background combination because we cannot extract computed CSS from a plain HTML string. If multiple pairs need checking, the agent re-runs this tool once per pair.",
+      "Score reading level with readability on the stripped text. Returns Flesch ease score and Flesch-Kincaid grade level. WCAG 3.1.5 (AAA) asks for content readable at lower-secondary education level (grade 9 or lower) when the topic permits. Surface the grade and flag pass/fail against 9.0. For pages with grade > 12 the writeup should suggest splitting long sentences and replacing jargon — practical content guidance that maps cleanly to the AAA criterion. Note: WCAG only applies AAA-readability to non-technical content; the agent should label this 'aspirational for technical content' rather than a hard fail.",
+      "Final shape with text-stats on the stripped text. Returns character/word/sentence/paragraph counts. Two purposes: (a) sanity-check the page isn't empty (paragraphs === 0 means html-strip didn't find anything to strip — usually a JS-only page); (b) provide context for the readability score (a 5-sentence page with a low grade level isn't comparable to a 50-sentence page with the same grade). Include this as the final block of the writeup — the metric numbers ground the qualitative WCAG findings.",
+    ],
+    claudePrompt:
+      "Run a WCAG accessibility audit on this page using Agent402.\n\nHTML:\n<!doctype html><html lang=\"en\"><head><title>Quarterly Earnings Brief</title><meta name=\"viewport\" content=\"width=device-width\"></head><body><h1>Q4 Earnings Summary</h1><h3>Revenue</h3><p>Total revenue was $4.2M, up 18% year-over-year. The increase was driven primarily by enterprise SaaS contracts and a one-time licensing arrangement.</p><h2>Costs</h2><p>Operating costs grew 12% to $2.9M. Headcount expansion in engineering accounted for the majority of the increase.</p><p>Read the <a href=\"/full-report\">full report</a> or <a href=\"https://investor.example.com\">visit investor relations</a>. Click <a href=\"/contact\">here</a> for questions.</p></body></html>\n\nBrand colors: foreground #333333, background #ffffff.\n\n(1) html-meta on the HTML string. Confirm title='Quarterly Earnings Brief' (pass 2.4.2) and lang='en' (pass 3.1.1). Report viewport present (responsive design signal). (2) html-strip to get visible text. Sanity-check paragraphs > 0. (3) html-links on the HTML. Confirm every link has non-empty text. FLAG the 'here' link as undescriptive (WCAG 2.4.4 usability warning). FLAG the external link to investor.example.com as missing rel='noopener' (tabnabbing risk). (4) html-select with selector='h1, h2, h3, h4, h5, h6'. Returns: h1='Q4 Earnings Summary', h3='Revenue', h2='Costs'. FLAG: heading order skips from h1 to h3 (1.3.1 structural break) — h3 should be h2. (5) color-contrast with foreground='#333333', background='#ffffff'. Returns ratio≈12.6, AA.normal=true, AAA.normal=true. Pass 1.4.3 at AAA. (6) readability on the stripped text. Report Flesch grade. If > 9, suggest splitting long sentences. (7) text-stats on the stripped text. Report char/word/sentence/paragraph counts. Final return: {meta: {title, lang, viewport}, checks: {pageTitle: pass, language: pass, headingOrder: FAIL with reason, linkText: warn with details, colorContrast: {ratio, levels}, readingGrade: pass|aspirational}, contentMetrics, severity: 'one structural fail + two warnings; overall AA-eligible after fixing h3→h2', oneLineSummary: 'WCAG audit: 1 fail (heading order), 2 warnings (undescriptive link, missing noopener), contrast AAA, grade 11'}. All seven tools are pure-CPU and PoW-eligible. Budget ≤ $0.01 even paid.",
+    promptArgs: [
+      {
+        name: "html",
+        description: "the HTML document to audit (full document or fragment, as a string)",
+        required: true,
+        substitute:
+          "<!doctype html><html lang=\"en\"><head><title>Quarterly Earnings Brief</title><meta name=\"viewport\" content=\"width=device-width\"></head><body><h1>Q4 Earnings Summary</h1><h3>Revenue</h3><p>Total revenue was $4.2M, up 18% year-over-year. The increase was driven primarily by enterprise SaaS contracts and a one-time licensing arrangement.</p><h2>Costs</h2><p>Operating costs grew 12% to $2.9M. Headcount expansion in engineering accounted for the majority of the increase.</p><p>Read the <a href=\"/full-report\">full report</a> or <a href=\"https://investor.example.com\">visit investor relations</a>. Click <a href=\"/contact\">here</a> for questions.</p></body></html>",
+      },
+      {
+        name: "foreground",
+        description: "the canonical body text color as a hex string (e.g. '#333333')",
+        required: true,
+        substitute: "#333333",
+      },
+      {
+        name: "background",
+        description: "the canonical body background color as a hex string (e.g. '#ffffff')",
+        required: true,
+        substitute: "#ffffff",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
