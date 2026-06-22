@@ -375,6 +375,21 @@ jobs:
       - name: Tool pages backlink to the skill packs they belong to
         run: node scripts/test-tool-page-backlinks.js
 
+      - name: /skills/<slug> contract (every pack renders workflow + tools + claudePrompt + JSON-LD)
+        run: node scripts/test-skill-page-contract.js
+
+      - name: /openapi.json coverage (every CATALOG tool has a path + operationId + x-price)
+        run: node scripts/test-openapi-coverage.js
+
+      - name: /.well-known/x402 manifest contract (envelope + payment + capabilities + discovery)
+        run: node scripts/test-x402-manifest.js
+
+      - name: /sitemap.xml coverage (every skill pack, sample tools, static surfaces)
+        run: node scripts/test-sitemap-coverage.js
+
+      - name: /.well-known/glama.json maintainer email env pass-through (with + without override)
+        run: node scripts/test-glama-manifest.js
+
       - name: Skill-pack invariants (toolSlugs resolve in catalog; substitution renders)
         run: node scripts/test-skill-packs.js
 

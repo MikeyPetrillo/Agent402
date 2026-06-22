@@ -157,3 +157,8 @@ health-flags-shape-contract-test-published-flags-present-and-boolean: 2026-06-24
 tool-page-backlinks-regression-test-skill-packs-listed-on-tool-pages: 2026-06-24T03:00:00Z
 mcp-top-x402-sellers-default-args-and-row-shape-lock: 2026-06-24T04:00:00Z
 tollbooth-dashboard-runtime-smoke-boots-cli-and-hits-dashboard-stats-routes: 2026-06-24T05:00:00Z
+openapi-coverage-every-catalog-tool-has-path: 2026-06-24T06:00:00Z
+x402-manifest-envelope-payment-capabilities-discovery: 2026-06-24T07:00:00Z
+sitemap-coverage-every-skill-pack-and-sample-tools: 2026-06-24T08:00:00Z
+skill-page-contract-walks-all-packs-with-full-render: 2026-06-24T09:00:00Z
+glama-manifest-maintainer-email-env-passthrough: 2026-06-24T10:00:00Z
