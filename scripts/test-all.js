@@ -60,6 +60,16 @@ const NETWORK = new Set([
   // Network-kit2: crt.sh (CT logs), live HTTP fetch, signature scan, Team Cymru
   // DNS-whois. All hit free public infra; tolerate transient 4xx/5xx upstream.
   "/api/cert-transparency", "/api/http-headers", "/api/tech-stack", "/api/asn-info",
+  // Chain-kit: Alchemy-backed reads (JSON-RPC + NFT + Prices + Data APIs).
+  // Returns 503 without ALCHEMY_API_KEY (CI env may not have it); the
+  // 502/503/504 tolerance below covers that. Daily paid-canary covers
+  // post-deploy verification once the key is set in Railway.
+  "/api/wallet-balance", "/api/token-metadata", "/api/token-price",
+  "/api/wallet-transactions", "/api/nft-holdings", "/api/nft-metadata",
+  "/api/gas-snapshot", "/api/eth-call",
+  // Price-feed-kit: keyless public upstreams (Pyth Hermes, CoinGecko, DeFiLlama).
+  // CoinGecko's free tier shares a per-IP ~30 rpm limit; tolerate 429/502/503/504.
+  "/api/price-pyth", "/api/price-coingecko", "/api/defi-tvl",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 
