@@ -234,7 +234,7 @@ export const CRYPTO_TOOLS = [
       "Historical price, market cap, and volume time series for a coin. Granularity is automatic per CoinGecko: <=1 day = 5-min bars, 2-90 days = hourly, >90 days = daily. Days: 1, 7, 14, 30, 90, 180, 365, or \"max\". Returns aligned arrays of {time, price, marketCap, volume}.",
     tags: ["crypto", "history", "chart", "backtest", "timeseries"],
     discovery: {
-      input: { coin: "BTC", days: 7, currency: "usd" },
+      input: { coin: "BTC", days: "7", currency: "usd" },
       inputSchema: {
         properties: {
           coin: { type: "string", description: "Symbol (BTC) or id (bitcoin)" },
