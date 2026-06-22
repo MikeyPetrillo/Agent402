@@ -29,6 +29,9 @@ export function dashboardHtml() {
   .spark{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-top:18px}
   .spark .row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:12px;flex-wrap:wrap}
   .spark h2{font-size:.95rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+  .spark .meta{display:flex;gap:16px;align-items:center;font:600 .8rem/1 var(--mono);color:var(--muted)}
+  .spark .meta b{color:var(--text);font-weight:700;margin-left:6px}
+  .spark .meta .paid{color:#4ade80}
   .spark .windows{display:flex;gap:6px}
   .spark .w{font:600 .8rem/1 var(--mono);color:var(--muted);background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}
   .spark .w.active{color:var(--accent);border-color:#1f4a1d;background:#000}
@@ -46,6 +49,11 @@ export function dashboardHtml() {
   <div class="spark">
     <div class="row">
       <h2>Requests / poll</h2>
+      <div class="meta">
+        <span>rate<b id="ratenow">—</b></span>
+        <span>peak<b id="ratepeak">—</b></span>
+        <span class="paid">paid<b id="paidnow">—</b></span>
+      </div>
       <div class="windows" id="windows">
         <button class="w" data-n="12">1m</button>
         <button class="w active" data-n="60">5m</button>
@@ -53,8 +61,9 @@ export function dashboardHtml() {
       </div>
     </div>
     <svg viewBox="0 0 720 80" preserveAspectRatio="none" id="sparksvg" aria-hidden="true">
-      <polyline id="sparkline" fill="none" stroke="#4ade80" stroke-width="1.5" points=""/>
       <polygon id="sparkfill" fill="#4ade80" fill-opacity="0.08" points=""/>
+      <polyline id="sparkline" fill="none" stroke="#4ade80" stroke-width="1.5" points=""/>
+      <polyline id="sparkpaid" fill="none" stroke="#facc15" stroke-width="1.2" stroke-dasharray="2 3" points=""/>
     </svg>
   </div>
   <div class="ratios">
@@ -79,14 +88,23 @@ const cards=[
 // many of the tail points are plotted. Built client-side — no server-side
 // timeseries store needed, and the data dies with the tab.
 var MAX_POINTS=180; // 15 minutes at one poll per 5s
-var series=[]; var lastRequests=null; var activeWindow=60;
+// Parallel deltas: total requests AND paid requests (PoW + USDC). Both are
+// computed off the same tick cadence so they share an x-axis and a single
+// y-scale. paidSeries is the dashed overlay — "is the bot traffic actually
+// paying, or just arriving?" at a glance, no math required.
+var series=[]; var paidSeries=[]; var lastRequests=null; var lastPaid=null; var activeWindow=60;
 function drawSpark(){
   var poly=document.getElementById("sparkline");
   var fill=document.getElementById("sparkfill");
+  var paid=document.getElementById("sparkpaid");
   if(!poly||!fill) return;
   var pts=series.slice(-activeWindow);
-  if(!pts.length){poly.setAttribute("points","");fill.setAttribute("points","");return;}
+  var ppts=paidSeries.slice(-activeWindow);
+  if(!pts.length){poly.setAttribute("points","");fill.setAttribute("points","");if(paid)paid.setAttribute("points","");return;}
+  // Shared y-scale across both series so the paid overlay is comparable to
+  // the total. max>=1 keeps a zero-traffic chart from collapsing to NaN.
   var max=1; for(var i=0;i<pts.length;i++){if(pts[i]>max)max=pts[i];}
+  for(var i2=0;i2<ppts.length;i2++){if(ppts[i2]>max)max=ppts[i2];}
   var stepX=pts.length>1?720/(pts.length-1):0;
   var coords=[];
   for(var j=0;j<pts.length;j++){
@@ -96,6 +114,33 @@ function drawSpark(){
   }
   poly.setAttribute("points",coords.join(" "));
   fill.setAttribute("points","0,80 "+coords.join(" ")+" "+(720).toFixed(1)+",80");
+  if(paid){
+    var pcoords=[];
+    for(var k=0;k<ppts.length;k++){
+      var px=(k*stepX).toFixed(1);
+      var py=(80-(ppts[k]/max)*76-2).toFixed(1);
+      pcoords.push(px+","+py);
+    }
+    paid.setAttribute("points",pcoords.join(" "));
+  }
+}
+// Operator meta: rate-now is the mean of the last 12 deltas (≈1m at 5s/tick),
+// peak is the max delta inside the active window. Both answer "what's
+// happening right now?" without forcing operators to eyeball the sparkline.
+function updateMeta(){
+  var lastN=series.slice(-12);
+  var sum=0; for(var i=0;i<lastN.length;i++) sum+=lastN[i];
+  // Per-poll → per-minute: deltas are 5s apart, so * (60/5) = *12 / N points.
+  // Use *12 directly on the sum: 12 polls/minute / lastN.length gives per-min.
+  var perMin=lastN.length?Math.round((sum/lastN.length)*12):0;
+  var winPts=series.slice(-activeWindow);
+  var peak=0; for(var j=0;j<winPts.length;j++){if(winPts[j]>peak)peak=winPts[j];}
+  var paidLast=paidSeries.slice(-12);
+  var psum=0; for(var k=0;k<paidLast.length;k++) psum+=paidLast[k];
+  var paidPerMin=paidLast.length?Math.round((psum/paidLast.length)*12):0;
+  var elR=document.getElementById("ratenow"); if(elR) elR.textContent=perMin+"/min";
+  var elP=document.getElementById("ratepeak"); if(elP) elP.textContent=peak+"/poll";
+  var elPd=document.getElementById("paidnow"); if(elPd) elPd.textContent=paidPerMin+"/min";
 }
 function bindWindows(){
   var bs=document.querySelectorAll("#windows .w");
@@ -106,6 +151,7 @@ function bindWindows(){
         for(var j=0;j<bs.length;j++) bs[j].classList.remove("active");
         b.classList.add("active");
         drawSpark();
+        updateMeta();
       });
     })(bs[i]);
   }
@@ -142,15 +188,22 @@ async function tick(){
     document.getElementById("mode").textContent=s.observe?" \u00B7 OBSERVE":"";
     if(s.since)document.getElementById("since").textContent="since "+new Date(s.since).toLocaleString();
     // Roll the series: delta of total requests since the last tick is the
-    // per-poll arrival rate. First tick seeds lastRequests with no plot.
+    // per-poll arrival rate. First tick seeds lastRequests/lastPaid with no
+    // plot — we need a baseline to subtract on tick #2.
     var now=Number(s.requests); if(!Number.isFinite(now)) now=0;
+    var nowPaid=(Number(s.powSolved)||0)+(Number(s.x402Paid)||0);
     if(lastRequests!==null){
       var delta=Math.max(0,now-lastRequests);
+      var pDelta=Math.max(0,nowPaid-lastPaid);
       series.push(delta);
+      paidSeries.push(pDelta);
       if(series.length>MAX_POINTS) series.shift();
+      if(paidSeries.length>MAX_POINTS) paidSeries.shift();
       drawSpark();
+      updateMeta();
     }
     lastRequests=now;
+    lastPaid=nowPaid;
   }catch(e){/* keep last values */}
 }
 bindWindows();

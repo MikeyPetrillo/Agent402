@@ -169,5 +169,16 @@ ok(html.includes('id="usdcpct"') && html.includes("Paid in USDC"), "dashboard re
 // in tick() — assert the source has the guards so we don't regress them.
 ok(/reqs\s*\?/.test(html), "paid conversion guards requests==0");
 ok(/paid\s*\?/.test(html), "USDC share guards paid==0 (no NaN)");
+// Sparkline meta (rate-now, peak, paid overlay) — operator-friendly numbers
+// that mean operators don't have to eyeball the chart for magnitude. All
+// derived client-side from the existing snapshot fields, no sink changes.
+ok(html.includes('id="ratenow"') && html.includes('id="ratepeak"'), "dashboard renders rate + peak meta near sparkline");
+ok(html.includes('id="paidnow"'), "dashboard renders paid arrival rate meta");
+ok(html.includes('id="sparkpaid"'), "dashboard renders the paid-arrivals overlay polyline");
+ok(html.includes("paidSeries"), "dashboard tracks a paidSeries parallel to series");
+// rateperminute math: deltas are 5s apart, so * (60/5) = *12 — locking the
+// scalar means an operator-visible "rate/min" stays correct if the poll
+// interval changes (the test reminds you to update both spots).
+ok(/\*\s*12\b/.test(html), "rate/min math (*12 from 5s polls) is present");
 
 console.log(`\n${pass} passed`);
