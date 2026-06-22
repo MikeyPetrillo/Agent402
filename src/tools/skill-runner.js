@@ -1020,14 +1020,139 @@ export const PACK_STEPS = {
   },
 
   // ──────────────────────────────────────────────────────────────────────
+  // Premium tier — paid-upstream heavy. All chain-mode so downstream steps
+  // can thread off the resolver step (ticker→CIK, theme→first-match CIK,
+  // question→first-citation URL).
+  // ──────────────────────────────────────────────────────────────────────
+
+  // Canonical US macro dataset. Pure fanout — all 7 tools take {} args.
+  // No prompt args; the as-of date is implicit in each tool's response.
+  "macro-economics": {
+    mode: "fanout",
+    steps: [
+      { slug: "treasury-yield-curve",  mapInput: () => ({}) },
+      { slug: "yield-curve-spread",    mapInput: () => ({}) },
+      { slug: "cpi-yoy",               mapInput: () => ({}) },
+      { slug: "unemployment-rate",     mapInput: () => ({ months: 12 }) },
+      { slug: "fed-funds",             mapInput: () => ({ days: 30 }) },
+      { slug: "sahm-rule",             mapInput: () => ({}) },
+      { slug: "fred-release-calendar", mapInput: () => ({ days: 14 }) },
+    ],
+  },
+
+  // Crypto one-pager. Chain so the final extract step can read a URL out
+  // of search-news. crypto-history days=90 picks the deep-dive window the
+  // claudePrompt hard-codes; agents can re-call with a different range.
+  "crypto-research": {
+    mode: "chain",
+    steps: [
+      { slug: "crypto-price",    mapInput: (a) => ({ coins: a.coin, currency: "usd" }) },
+      { slug: "crypto-market",   mapInput: () => ({ limit: 10, currency: "usd" }) },
+      { slug: "crypto-history",  mapInput: (a) => ({ coin: a.coin, days: "90", currency: "usd" }) },
+      { slug: "crypto-trending", mapInput: () => ({}) },
+      { slug: "crypto-global",   mapInput: () => ({ currency: "usd" }) },
+      { slug: "search-news",     mapInput: (a) => ({ q: `${a.coin} crypto`, count: 5, freshness: "pw" }) },
+      { slug: "extract",         mapInput: (_a, p) => {
+          const url = p["search-news"]?.results?.[0]?.url;
+          if (!url) throw Object.assign(new Error("no news URL to extract"), { statusCode: 422 });
+          return { url };
+      } },
+    ],
+  },
+
+  // Analyst's EDGAR workflow. Chain: ticker→CIK is the resolver, every
+  // step downstream uses the original ticker (most edgar tools accept it
+  // directly so we don't have to thread CIK manually). The 13F step uses
+  // Berkshire's CIK (1067983) per the claudePrompt's "known manager" recipe.
+  "sec-filings-deep-dive": {
+    mode: "chain",
+    steps: [
+      { slug: "edgar-company-lookup",  mapInput: (a) => ({ ticker: a.ticker }) },
+      { slug: "edgar-filings",         mapInput: (a) => ({ ticker: a.ticker, limit: 25 }) },
+      { slug: "edgar-company-facts",   mapInput: (a) => ({ ticker: a.ticker, tags: "Revenues,NetIncomeLoss,Assets" }) },
+      { slug: "edgar-company-concept", mapInput: (a) => ({ ticker: a.ticker, taxonomy: "us-gaap", tag: "Revenues" }) },
+      { slug: "edgar-insider-trades",  mapInput: (a) => ({ ticker: a.ticker, days: 90, limit: 25 }) },
+      { slug: "edgar-search",          mapInput: (a) => ({ q: "going concern", ticker: a.ticker, limit: 5 }) },
+      { slug: "edgar-13f-holdings",    mapInput: () => ({ cik: "1067983", limit: 10 }) },
+    ],
+  },
+
+  // Macro backdrop. Same tools as macro-economics plus fx-dashboard;
+  // fanout because none of them depend on each other and the as-of-date
+  // arg is captured by the envelope, not the tool inputs.
+  "macro-context": {
+    mode: "fanout",
+    steps: [
+      { slug: "cpi-yoy",               mapInput: () => ({}) },
+      { slug: "unemployment-rate",     mapInput: () => ({ months: 6 }) },
+      { slug: "fed-funds",             mapInput: () => ({ days: 365 }) },
+      { slug: "treasury-yield-curve",  mapInput: () => ({}) },
+      { slug: "yield-curve-spread",    mapInput: () => ({}) },
+      { slug: "sahm-rule",             mapInput: () => ({}) },
+      { slug: "fx-dashboard",          mapInput: () => ({}) },
+      { slug: "fred-release-calendar", mapInput: () => ({ days: 14 }) },
+    ],
+  },
+
+  // Theme-monitoring radar. Chain: edgar-search seeds the watchlist, the
+  // first hit's CIK threads through the next 3 calls. Insider/13F/filings
+  // run against the top match — agents loop over the rest of `hits` to
+  // expand the radar; that's outside the chain envelope.
+  "regulatory-watch": {
+    mode: "chain",
+    steps: [
+      { slug: "edgar-search",         mapInput: (a) => ({
+          q: a.theme,
+          days: parseInt(a.lookbackDays, 10) || 30,
+          limit: 25,
+      }) },
+      { slug: "edgar-filings",        mapInput: (_a, p) => {
+          const cik = p["edgar-search"]?.hits?.[0]?.cik;
+          if (!cik) throw Object.assign(new Error("no theme match — empty watchlist"), { statusCode: 422 });
+          return { cik, limit: 10 };
+      } },
+      { slug: "edgar-insider-trades", mapInput: (_a, p) => {
+          const cik = p["edgar-search"]?.hits?.[0]?.cik;
+          if (!cik) throw Object.assign(new Error("no theme match — empty watchlist"), { statusCode: 422 });
+          return { cik, days: 90, limit: 25 };
+      } },
+      { slug: "edgar-13f-holdings",   mapInput: () => ({ cik: "1067983", limit: 10 }) },
+      { slug: "edgar-recent-ipos",    mapInput: (a) => ({
+          days: parseInt(a.lookbackDays, 10) || 30,
+          form: "S-1",
+          limit: 25,
+      }) },
+    ],
+  },
+
+  // Cited-answer workflow. Chain: answer hypothesizes, search/search-news
+  // give the SERP + freshness check, extract verifies the first citation
+  // body, extract-entities feeds the agent's claim-attribution audit.
+  "search-and-cite": {
+    mode: "chain",
+    steps: [
+      { slug: "answer",           mapInput: (a) => ({ q: a.question }) },
+      { slug: "search",           mapInput: (a) => ({ q: a.question, count: 10 }) },
+      { slug: "search-news",      mapInput: (a) => ({ q: a.question, count: 5, freshness: "pm" }) },
+      { slug: "extract",          mapInput: (_a, p) => {
+          const url =
+            p["answer"]?.citations?.[0]?.url ||
+            p["search"]?.results?.[0]?.url;
+          if (!url) throw Object.assign(new Error("no citation URL to verify"), { statusCode: 422 });
+          return { url };
+      } },
+      { slug: "extract-entities", mapInput: (_a, p) => ({
+          text: String(p["extract"]?.markdown ?? ""),
+      }) },
+    ],
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
   // Still TODO (auto-stubs return statusCode 501 per step):
   //
-  // Premium tier (paid-upstream heavy — highest revenue per call):
-  //   sec-filings-deep-dive  macro-context  crypto-research  regulatory-watch
-  //   search-and-cite        macro-economics
-  //
-  // Standard tier (network/render):
-  //   media-pipeline  document-intel  forecasting-bake-off
+  // Standard tier (network/render): media-pipeline, document-intel,
+  // forecasting-bake-off — all need either base64 uploads or live equity
+  // data threading that doesn't fit the URL/ticker arg shape.
   // ──────────────────────────────────────────────────────────────────────
 };
 
