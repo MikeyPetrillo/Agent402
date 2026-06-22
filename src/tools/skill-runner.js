@@ -304,6 +304,179 @@ export const PACK_STEPS = {
     ],
   },
 
+  // The classic "is this JWT valid?" workflow: decode (without verifying — you
+  // need the alg to decide which verification path to take), render exp/iat in
+  // human time, compute time-to-expiry, then HMAC-verify against the supplied
+  // secret. base64+hash are long-tail follow-ups (custom-claim decoding, SHA
+  // fingerprints). Chain mode so time-convert/date-diff can read the decoded
+  // payload's exp claim from prior["jwt-decode"].
+  "jwt-forensics": {
+    mode: "chain",
+    steps: [
+      { slug: "jwt-decode",   mapInput: (a) => ({ token: a.token }) },
+      // Render exp claim as ISO/local; fall back to "now" if exp is missing so
+      // the step doesn't fail on tokens without an expiry (rare but valid).
+      { slug: "time-convert", mapInput: (_a, p) => ({ value: p["jwt-decode"]?.payload?.exp ?? "now" }) },
+      // Time-to-expiry — negative for expired tokens, positive for live ones.
+      { slug: "date-diff",    mapInput: (_a, p) => {
+          const exp = p["jwt-decode"]?.payload?.exp;
+          return { from: "now", to: exp ? Number(exp) : "now" };
+      } },
+      // The conclusive answer for HMAC-signed tokens. Non-HMAC algs (RS256
+      // etc.) fail by design — that failure surfaces as a partial-failure step.
+      { slug: "jwt-verify",   mapInput: (a) => ({ token: a.token, secret: a.secret }) },
+      // Decode the header segment as a fingerprint — catches tokens with
+      // base64-encoded custom claims in the header.
+      { slug: "base64",       mapInput: (a) => ({ text: (a.token.split(".")[0] || ""), mode: "decode" }) },
+      // sha256 fingerprint of the full token — useful for log correlation and
+      // detecting reuse without leaking the token itself.
+      { slug: "hash",         mapInput: (a) => ({ text: a.token, algo: "sha256" }) },
+    ],
+  },
+
+  // Inbound-webhook triage: pretty-print, decode any JWT auth header (will
+  // fail loudly on plain JSON bodies — that's the design signal that the
+  // body itself isn't a token), HMAC-verify the body against the shared
+  // secret, schema-check the parsed payload, translate the event timestamp,
+  // redact PII before logging, and index entities. Chain mode so json-validate
+  // / time-convert / redact / extract-entities all read the parsed body from
+  // prior["json-format"].parsed instead of re-parsing per step.
+  "webhook-debug": {
+    mode: "chain",
+    steps: [
+      { slug: "json-format",     mapInput: (a) => ({ json: a.rawBody, indent: 2 }) },
+      // Try the body as a JWT — expected to fail for JSON webhooks. The
+      // failure itself tells the agent "no JWT auth header embedded".
+      { slug: "jwt-decode",      mapInput: (a) => ({ token: a.rawBody }) },
+      // Compute the expected signature so the agent can compare against the
+      // provider's X-Hub-Signature-256 / Stripe-Signature / etc. The tool
+      // returns both hex and base64 so the agent picks the right one.
+      { slug: "hmac",            mapInput: (a) => ({ text: a.rawBody, key: a.signingSecret, algo: "sha256" }) },
+      // Minimal envelope schema — every webhook of this shape has id+type.
+      // Replace with a provider-specific schema in your own integration.
+      // json-format returns {valid, formatted} only, so parse rawBody locally
+      // for the actual payload. Try/catch keeps a malformed body from killing
+      // the whole step before json-validate gets to surface the schema gap.
+      { slug: "json-validate",   mapInput: (a) => {
+          let data = {};
+          try { data = JSON.parse(a.rawBody); } catch {}
+          return {
+            data,
+            schema: { type: "object", required: ["id", "type"], properties: {
+                id:      { type: "string" },
+                type:    { type: "string" },
+                created: { type: "integer" },
+            } },
+          };
+      } },
+      // Render the event timestamp (Stripe-style epoch seconds) as ISO + local.
+      // Defaults to "now" if no created field — keeps the step from failing.
+      { slug: "time-convert",    mapInput: (a) => {
+          let created;
+          try { created = JSON.parse(a.rawBody)?.created; } catch {}
+          return { value: created ?? "now" };
+      } },
+      { slug: "redact",          mapInput: (a) => ({ text: a.rawBody }) },
+      { slug: "extract-entities", mapInput: (a) => ({ text: a.rawBody }) },
+    ],
+  },
+
+  // Deterministic WCAG 2.x first-pass: meta (title + lang), strip-to-text,
+  // link enumeration, heading order, color contrast on the supplied brand
+  // pair, reading grade, and final shape stats. Chain mode so readability and
+  // text-stats reuse the stripped text from prior["html-strip"] instead of
+  // re-stripping. color-contrast keys off the user-supplied fg/bg pair (we
+  // don't try to compute CSS from a plain HTML string).
+  "a11y-audit": {
+    mode: "chain",
+    steps: [
+      { slug: "html-meta",   mapInput: (a) => ({ html: a.html }) },
+      { slug: "html-strip",  mapInput: (a) => ({ html: a.html }) },
+      { slug: "html-links",  mapInput: (a) => ({ html: a.html }) },
+      { slug: "html-select", mapInput: (a) => ({ html: a.html, selector: "h1, h2, h3, h4, h5, h6" }) },
+      { slug: "color-contrast", mapInput: (a) => ({ foreground: a.foreground, background: a.background }) },
+      { slug: "readability", mapInput: (_a, p) => ({ text: p["html-strip"]?.text ?? "" }) },
+      { slug: "text-stats",  mapInput: (_a, p) => ({ text: p["html-strip"]?.text ?? "" }) },
+    ],
+  },
+
+  // Universal format bridge: YAML → JSON → deep-merge with overrides →
+  // diff (so you can prove which keys changed) → flatten (dot-path for
+  // env-var injection) → emit CSV (audit trail) and YAML (canonical config).
+  // Chain mode is essential — every step except the YAML parse reads the
+  // previous step's parsed JSON. overridesJson arrives as a JSON string;
+  // json-merge accepts a JSON string under either input so we pass it raw.
+  "data-interchange": {
+    mode: "chain",
+    steps: [
+      { slug: "yaml-to-json",  mapInput: (a) => ({ yaml: a.baseYaml }) },
+      { slug: "json-merge",    mapInput: (a, p) => ({
+          a: p["yaml-to-json"]?.json ?? {},
+          b: a.overridesJson,
+      }) },
+      // Diff base vs merged — produces the rollout audit trail.
+      { slug: "json-diff",     mapInput: (_a, p) => ({
+          a: p["yaml-to-json"]?.json ?? {},
+          b: p["json-merge"]?.result ?? {},
+      }) },
+      // Flatten the merged config — gives you the env-var key=value envelope.
+      { slug: "json-flatten",  mapInput: (_a, p) => ({
+          json: p["json-merge"]?.result ?? {},
+          mode: "flatten",
+      }) },
+      // CSV needs a non-empty array of objects — wrap the flat dot-path
+      // object as a single row so every key becomes a column.
+      { slug: "json-to-csv",   mapInput: (_a, p) => ({
+          json: [p["json-flatten"]?.result ?? {}],
+      }) },
+      // YAML emission — the canonical config-system / git-commit output.
+      { slug: "json-to-yaml",  mapInput: (_a, p) => ({ json: p["json-merge"]?.result ?? {} }) },
+    ],
+  },
+
+  // Standard data-profiling workup over a CSV: load rows, sanity-check column
+  // access, then run four stats-kit tools (descriptive → outliers → pairwise
+  // correlation → linear regression) over the two named numeric columns. The
+  // stats steps extract the columns directly from prior["csv-to-json"].rows in
+  // JS — json-query supports indexed paths only, not column wildcards, so we
+  // use it as a discovery primitive (first-row value) and do the column-pull
+  // in mapInput where the agent can see what was extracted.
+  "csv-profile": {
+    mode: "chain",
+    steps: [
+      { slug: "csv-to-json", mapInput: (a) => ({ csv: a.csv }) },
+      // Discovery / sanity-check: confirm the named column exists by pulling
+      // the first row's value. Fails cleanly if columnA isn't a header.
+      { slug: "json-query",  mapInput: (a, p) => ({
+          json: p["csv-to-json"]?.rows ?? [],
+          path: `[0].${a.columnA}`,
+      }) },
+      { slug: "stats-summary", mapInput: (a, p) => ({
+          values: (p["csv-to-json"]?.rows ?? []).map((r) => Number(r[a.columnA])).filter((n) => Number.isFinite(n)),
+      }) },
+      { slug: "outliers",     mapInput: (a, p) => ({
+          values: (p["csv-to-json"]?.rows ?? []).map((r) => Number(r[a.columnA])).filter((n) => Number.isFinite(n)),
+      }) },
+      // Pairwise correlation between the two named columns — drops any row
+      // where either value isn't numeric so the series stay aligned.
+      { slug: "correlation",  mapInput: (a, p) => {
+          const rows = p["csv-to-json"]?.rows ?? [];
+          const pairs = rows
+            .map((r) => [Number(r[a.columnA]), Number(r[a.columnB])])
+            .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
+          return { x: pairs.map((p) => p[0]), y: pairs.map((p) => p[1]) };
+      } },
+      // Baseline OLS of columnB on columnA — if this can't fit, no model can.
+      { slug: "linear-regression", mapInput: (a, p) => {
+          const rows = p["csv-to-json"]?.rows ?? [];
+          const pairs = rows
+            .map((r) => [Number(r[a.columnA]), Number(r[a.columnB])])
+            .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
+          return { x: pairs.map((p) => p[0]), y: pairs.map((p) => p[1]) };
+      } },
+    ],
+  },
+
   // ──────────────────────────────────────────────────────────────────────
   // Still TODO (auto-stubs return statusCode 501 per step):
   //
@@ -317,9 +490,8 @@ export const PACK_STEPS = {
   //   api-investigation   email-deliverability  location-intel  dns-network-ops
   //   status-snapshot     schema-evolution
   //
-  // Light tier remaining: csv-profile  meeting-scheduler  jwt-forensics
-  //   data-interchange  webhook-debug  a11y-audit  trip-planner
-  //   loan-comparison   investment-decision  retirement-planning  savings-goal
+  // Light tier remaining: meeting-scheduler  trip-planner  loan-comparison
+  //   investment-decision  retirement-planning  savings-goal
   // ──────────────────────────────────────────────────────────────────────
 };
 
