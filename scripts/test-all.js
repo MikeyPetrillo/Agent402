@@ -84,11 +84,11 @@ const NETWORK = new Set([
   // placeholder example inputs (e.g. specific block-number lookups may miss).
   "/api/mev-recent-blocks", "/api/mev-builder-share", "/api/mev-block-payment",
   "/api/l2-tvl", "/api/l2-gas-comparison",
-  // Onchain-identity-kit: keyless public APIs (ensideas, Warpcast, Lens v2,
-  // EAS indexers). Tolerate transient upstream errors + 4xx from placeholder
-  // example inputs (0x000…0 may return null/empty; lens/dne handle 404).
+  // Onchain-identity-kit: keyless public APIs (ensideas, Warpcast, EAS
+  // indexers). Tolerate transient upstream errors + 4xx from placeholder
+  // example inputs (0x000…0 may return null/empty).
   "/api/ens-bulk-resolve", "/api/farcaster-profile", "/api/farcaster-by-address",
-  "/api/lens-profile", "/api/eas-attestations",
+  "/api/eas-attestations",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 

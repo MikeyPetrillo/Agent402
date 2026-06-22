@@ -4,7 +4,7 @@
 
 import { ONCHAIN_IDENTITY_TOOLS, __test } from "../src/tools/onchain-identity-kit.js";
 
-const { takeAddress, pickEasNetwork, ENS_API, WARPCAST_API, LENS_API, EAS_INDEXERS } = __test;
+const { takeAddress, pickEasNetwork, ENS_API, WARPCAST_API, EAS_INDEXERS } = __test;
 
 const h = (slug) => ONCHAIN_IDENTITY_TOOLS.find((t) => t.slug === slug).handler;
 let fail = 0, pass = 0;
@@ -13,9 +13,9 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 // ----------------------------------------------------------------------------
 // Catalog envelope
 // ----------------------------------------------------------------------------
-ok(ONCHAIN_IDENTITY_TOOLS.length === 5, `5 tools exported (got ${ONCHAIN_IDENTITY_TOOLS.length})`);
+ok(ONCHAIN_IDENTITY_TOOLS.length === 4, `4 tools exported (got ${ONCHAIN_IDENTITY_TOOLS.length})`);
 
-const expectedSlugs = ["ens-bulk-resolve", "farcaster-profile", "farcaster-by-address", "lens-profile", "eas-attestations"];
+const expectedSlugs = ["ens-bulk-resolve", "farcaster-profile", "farcaster-by-address", "eas-attestations"];
 for (const slug of expectedSlugs) {
   ok(!!ONCHAIN_IDENTITY_TOOLS.find((t) => t.slug === slug), `slug present: ${slug}`);
 }
@@ -57,7 +57,6 @@ catch (e) { if (e.statusCode === 400) { pass++; console.log("ok - pickEasNetwork
 // Endpoint URLs are well-known constants — confirm they didn't drift.
 ok(ENS_API === "https://api.ensideas.com/ens", "ENS_API constant unchanged");
 ok(WARPCAST_API === "https://api.warpcast.com/v2", "WARPCAST_API constant unchanged");
-ok(LENS_API === "https://api-v2.lens.dev", "LENS_API constant unchanged");
 ok(EAS_INDEXERS.base === "https://base.easscan.org/graphql", "EAS_INDEXERS.base unchanged");
 
 // ----------------------------------------------------------------------------
@@ -86,10 +85,6 @@ await throws(h("farcaster-profile")({ username: "" }), 400, "farcaster-profile: 
 await throws(h("farcaster-by-address")({}), 400, "farcaster-by-address: missing address");
 await throws(h("farcaster-by-address")({ address: "not-an-address" }), 400, "farcaster-by-address: bad address");
 
-// lens-profile
-await throws(h("lens-profile")({}), 400, "lens-profile: missing handle+address");
-await throws(h("lens-profile")({ address: "not-an-address" }), 400, "lens-profile: bad address");
-
 // eas-attestations
 await throws(h("eas-attestations")({}), 400, "eas-attestations: missing address");
 await throws(h("eas-attestations")({ address: "not-an-address" }), 400, "eas-attestations: bad address");
@@ -108,13 +103,6 @@ if (process.env.IDENTITY_LIVE_TEST === "1") {
 
     const fc = await h("farcaster-profile")({ username: "dwr.eth" });
     ok(typeof fc.fid === "number", `live farcaster-profile: dwr.eth fid (${fc.fid})`);
-
-    try {
-      const lens = await h("lens-profile")({ handle: "stani" });
-      ok(typeof lens.profileId === "string", `live lens-profile: stani profileId returned`);
-    } catch (e) {
-      console.error(`LENS LIVE WARN: ${e.message}`);
-    }
 
     const eas = await h("eas-attestations")({ address: "0xd8da6bf26964af9d7eed9e03e53415d37aa96045", network: "mainnet", limit: 3 });
     ok(typeof eas.count === "number", `live eas-attestations: count returned (${eas.count})`);

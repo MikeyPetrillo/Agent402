@@ -1,25 +1,24 @@
-// Onchain identity kit — resolve an Ethereum address (or handle) to a human
-// across the four largest onchain identity surfaces: ENS, Farcaster, Lens,
-// and EAS (Ethereum Attestation Service).
+// Onchain identity kit — resolve an Ethereum address to a human across the
+// three most reliable onchain identity surfaces: ENS, Farcaster, and EAS
+// (Ethereum Attestation Service).
 //
 // Why this kit: agents that read blockchain data need to know *who* an
 // address belongs to. The chain-kit family answers "what is this address
 // holding/doing?"; this kit answers "who is this address?" with the same
 // pay-per-call envelope.
 //
-// Honest scoping: read-only metadata. We don't mint ENS subnames, don't post
-// Lens publications, don't sign EAS attestations. All five tools surface
-// public profile data that the underlying protocol publishes.
+// Honest scoping: read-only metadata. We don't mint ENS subnames and don't
+// sign EAS attestations. All four tools surface public profile data that
+// the underlying protocol publishes.
 //
 // Upstreams (all keyless):
 //   • ensideas.com    — community-maintained ENS reverse + avatar API
 //                       (used by Rainbow, Coinbase Wallet, etc.)
 //   • api.warpcast.com — Warpcast public Farcaster API (read endpoints
 //                       don't require auth)
-//   • api-v2.lens.dev — Lens v2 public GraphQL (read endpoints keyless)
 //   • easscan.org     — EAS-funded GraphQL indexer for mainnet/Base/Optimism
 //
-// All 5 tools are wallet-only — every handler reaches external HTTP and
+// All 4 tools are wallet-only — every handler reaches external HTTP and
 // shares a per-IP rate limit with the public pool.
 //
 // Covered by scripts/test-onchain-identity-kit.js (offline + opt-in live).
@@ -30,7 +29,6 @@ const TIMEOUT_MS = 12_000;
 // post-migration) is a one-line change.
 const ENS_API = "https://api.ensideas.com/ens";
 const WARPCAST_API = "https://api.warpcast.com/v2";
-const LENS_API = "https://api-v2.lens.dev";
 const EAS_INDEXERS = {
   mainnet:  "https://easscan.org/graphql",
   base:     "https://base.easscan.org/graphql",
@@ -211,66 +209,7 @@ async function farcasterByAddress({ address } = {}) {
 }
 
 // ----------------------------------------------------------------------------
-// 4. lens-profile — lookup by Lens handle or owner address (Lens v2 GraphQL)
-// ----------------------------------------------------------------------------
-async function lensProfile({ handle, address } = {}) {
-  const h = typeof handle === "string" ? handle.trim().replace(/\.lens$/, "").replace(/^lens\//, "") : "";
-  const a = typeof address === "string" ? address.trim() : "";
-  if (!h && !a) throw bad('"handle" or "address" is required');
-  if (a && !ADDR_RE.test(a)) throw bad('"address" must be a 0x-prefixed 40-char hex Ethereum address');
-  // Lens v2 schema: Profile { handle, metadata { displayName, bio, picture { ... } }, stats { ... }, ownedBy }
-  // Query by handle uses ProfileRequest with handle filter; by address uses ownedBy.
-  let query, variables;
-  if (h) {
-    query = `
-      query ProfileByHandle($req: ProfileRequest!) {
-        profile(request: $req) {
-          id
-          handle { fullHandle localName }
-          ownedBy { address }
-          metadata { displayName bio picture { ... on ImageSet { optimized { uri } } } }
-          stats { followers following posts }
-        }
-      }`;
-    variables = { req: { forHandle: `lens/${h}` } };
-  } else {
-    query = `
-      query ProfilesByOwner($req: ProfilesRequest!) {
-        profiles(request: $req) {
-          items {
-            id
-            handle { fullHandle localName }
-            ownedBy { address }
-            metadata { displayName bio picture { ... on ImageSet { optimized { uri } } } }
-            stats { followers following posts }
-          }
-        }
-      }`;
-    variables = { req: { where: { ownedBy: [a.toLowerCase()] } } };
-  }
-  const data = await gqlFetch(LENS_API, query, variables, "Lens");
-  const profile = h ? data.profile : data.profiles?.items?.[0];
-  if (!profile) {
-    throw bad(`Lens profile not found for ${h ? `handle=${h}` : `address=${a}`}`, 404);
-  }
-  return {
-    profileId: profile.id,
-    handle: profile.handle?.localName ?? null,
-    fullHandle: profile.handle?.fullHandle ?? null,
-    ownedBy: profile.ownedBy?.address ?? null,
-    displayName: profile.metadata?.displayName ?? null,
-    bio: profile.metadata?.bio ?? null,
-    pictureUrl: profile.metadata?.picture?.optimized?.uri ?? null,
-    followers: profile.stats?.followers ?? null,
-    following: profile.stats?.following ?? null,
-    posts: profile.stats?.posts ?? null,
-    venueUrl: profile.handle?.localName ? `https://hey.xyz/u/${profile.handle.localName}` : null,
-    source: "lens-v2",
-  };
-}
-
-// ----------------------------------------------------------------------------
-// 5. eas-attestations — list EAS attestations (recipient or attester) on chain
+// 4. eas-attestations — list EAS attestations (recipient or attester) on chain
 // ----------------------------------------------------------------------------
 async function easAttestations({ address, network, role, limit } = {}) {
   const addr = takeAddress(address);
@@ -450,44 +389,6 @@ export const ONCHAIN_IDENTITY_TOOLS = [
     handler: farcasterByAddress,
   },
   {
-    route: "POST /api/lens-profile",
-    name: "Lens profile",
-    slug: "lens-profile",
-    category: "crypto",
-    price: "$0.002",
-    description:
-      "Lookup a Lens Protocol v2 profile by handle (e.g. stani.lens) or owner address. Returns profile id, handle, owner, display name, bio, picture, and follower/following/posts counts. Use to label authors of Lens publications or validate a creator's Lens identity.",
-    tags: ["lens", "identity", "profile", "social", "creator"],
-    discovery: {
-      bodyType: "json",
-      input: { handle: "stani" },
-      inputSchema: {
-        type: "object",
-        properties: {
-          handle: { type: "string", description: 'Lens localName (e.g. "stani") or "stani.lens"; one of handle/address required.' },
-          address: { type: "string", description: "Owner Ethereum address (one of handle/address required)." },
-        },
-      },
-      output: {
-        example: {
-          profileId: "0x05",
-          handle: "stani",
-          fullHandle: "lens/stani",
-          ownedBy: "0x7241dddec3a6af367882eaf9651b87e1c7549dff",
-          displayName: "Stani",
-          bio: "Founder Lens & Aave",
-          pictureUrl: "https://...",
-          followers: 200000,
-          following: 1000,
-          posts: 500,
-          venueUrl: "https://hey.xyz/u/stani",
-          source: "lens-v2",
-        },
-      },
-    },
-    handler: lensProfile,
-  },
-  {
     route: "POST /api/eas-attestations",
     name: "EAS attestations",
     slug: "eas-attestations",
@@ -539,6 +440,5 @@ export const __test = {
   pickEasNetwork,
   ENS_API,
   WARPCAST_API,
-  LENS_API,
   EAS_INDEXERS,
 };
