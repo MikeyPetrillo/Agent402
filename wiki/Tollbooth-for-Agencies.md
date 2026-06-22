@@ -45,7 +45,7 @@ the Cloud page.
 
 **Two-sided kicker**: any wallet running a verified Tollbooth install
 earns **1.5× bonus Agent402.tools credit** per dollar of settled USDC. Your
-clients can spend it on the [~1,100 paid tools](https://agent402.tools/tools)
+clients can spend it on the [1,199 paid tools](https://agent402.tools/tools)
 they'd otherwise be paying API vendors for — useful for client deliverables
 (content extraction, SERP scraping, geocoding, OCR, PDF tooling, …).
 
