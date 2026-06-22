@@ -903,6 +903,123 @@ export const PACK_STEPS = {
   },
 
   // ──────────────────────────────────────────────────────────────────────
+  // Standard-tier content/extraction packs.
+  // ──────────────────────────────────────────────────────────────────────
+
+  // Email auth posture: end-to-end deliverability + per-mechanism detail.
+  // dkim-lookup needs a selector — read the first found-selector out of
+  // the email-deliverability report, or fall back to a common default.
+  "email-deliverability": {
+    mode: "chain",
+    steps: [
+      { slug: "spf-check",            mapInput: (a) => ({ domain: a.domain }) },
+      { slug: "dmarc-check",          mapInput: (a) => ({ domain: a.domain }) },
+      { slug: "email-deliverability", mapInput: (a) => ({ domain: a.domain }) },
+      { slug: "dkim-lookup",          mapInput: (a, p) => {
+          const sel = p["email-deliverability"]?.dkim?.found?.[0]?.selector || "default";
+          return { domain: a.domain, selector: sel };
+      } },
+      { slug: "email-validate",       mapInput: (a) => ({ email: `postmaster@${a.domain}` }) },
+      { slug: "dns-lookup",           mapInput: (a) => ({ host: a.domain, type: "MX" }) },
+    ],
+  },
+
+  // RAG corpus ingest: take the first URL from the comma/newline list and
+  // fanout to extract, meta, pdf-to-markdown, pdf-extract-pages, render, OCR.
+  // Tools that don't match the content-type fail cleanly (partial-success).
+  "content-extraction": {
+    mode: "chain",
+    steps: [
+      { slug: "extract",          mapInput: (a) => ({ url: firstUrl(a.urls) }) },
+      { slug: "meta",             mapInput: (a) => ({ url: firstUrl(a.urls) }) },
+      { slug: "pdf-to-markdown",  mapInput: (a) => ({ url: firstUrl(a.urls) }) },
+      { slug: "pdf-extract-pages",mapInput: (a) => ({ url: firstUrl(a.urls), pages: "1" }) },
+      { slug: "render",           mapInput: (a) => ({ url: firstUrl(a.urls) }) },
+      { slug: "image-ocr",        mapInput: (a) => ({ url: firstUrl(a.urls) }) },
+    ],
+  },
+
+  // URL → clean markdown decision tree. http-headers triages; the right
+  // extractor runs, the others fail cleanly. text-stats reads whichever
+  // body landed (extract → pdf-to-markdown → image-ocr in priority order).
+  "any-to-markdown": {
+    mode: "chain",
+    steps: [
+      { slug: "http-headers",    mapInput: (a) => ({ url: a.url }) },
+      { slug: "extract",         mapInput: (a) => ({ url: a.url }) },
+      { slug: "pdf-to-markdown", mapInput: (a) => ({ url: a.url }) },
+      { slug: "image-ocr",       mapInput: (a) => ({ url: a.url }) },
+      { slug: "html-to-markdown",mapInput: (_a, p) => ({ html: String(p["extract"]?.markdown ?? "") }) },
+      { slug: "text-stats",      mapInput: (_a, p) => ({
+          text: String(
+            p["extract"]?.markdown ??
+            p["pdf-to-markdown"]?.markdown ??
+            p["image-ocr"]?.text ??
+            "",
+          ),
+      }) },
+    ],
+  },
+
+  // Scrape a page deterministically. extract → render covers the prose
+  // happy path; the html-* tools run against the rendered/extracted body
+  // when it's HTML-shaped. Markdown bodies will return empty hits — the
+  // agent re-calls html-* against raw HTML it fetches separately.
+  "structured-scrape": {
+    mode: "chain",
+    steps: [
+      { slug: "extract",     mapInput: (a) => ({ url: a.url }) },
+      { slug: "render",      mapInput: (a) => ({ url: a.url }) },
+      { slug: "html-select", mapInput: (_a, p) => ({
+          html: String(p["render"]?.markdown ?? p["extract"]?.markdown ?? ""),
+          selector: "h1, h2, .price, [itemprop=\"price\"]",
+          limit: 25,
+      }) },
+      { slug: "html-table",  mapInput: (_a, p) => ({
+          html: String(p["render"]?.markdown ?? p["extract"]?.markdown ?? ""),
+          format: "json",
+      }) },
+      { slug: "html-strip",  mapInput: (_a, p) => ({
+          html: String(p["render"]?.markdown ?? p["extract"]?.markdown ?? ""),
+      }) },
+      { slug: "html-links",  mapInput: (_a, p) => ({
+          html: String(p["render"]?.markdown ?? p["extract"]?.markdown ?? ""),
+          limit: 50,
+      }) },
+    ],
+  },
+
+  // OpenAPI drift diagnosis. Two specs in, structural diff + lint + surface
+  // inventory + required-params + payload validation + security delta out.
+  // All pure-CPU openapi-* tools; no egress to the actual API.
+  "schema-evolution": {
+    mode: "chain",
+    steps: [
+      { slug: "openapi-diff",             mapInput: (a) => ({ before: a.oldSpec, after: a.newSpec }) },
+      { slug: "openapi-lint",             mapInput: (a) => ({ spec: a.newSpec }) },
+      { slug: "openapi-extract",          mapInput: (a) => ({ spec: a.newSpec }) },
+      { slug: "openapi-required-params",  mapInput: (a, p) => {
+          const first = p["openapi-extract"]?.endpoints?.[0];
+          return first?.operationId
+            ? { spec: a.newSpec, operationId: first.operationId }
+            : { spec: a.newSpec, method: first?.method || "get", path: first?.path || "/" };
+      } },
+      { slug: "openapi-validate-payload", mapInput: (a, p) => {
+          const first = p["openapi-extract"]?.endpoints?.[0];
+          return {
+            spec: a.newSpec,
+            payload: {},
+            ...(first?.operationId
+              ? { operationId: first.operationId }
+              : { method: first?.method || "get", path: first?.path || "/" }),
+            part: "request",
+          };
+      } },
+      { slug: "openapi-security-summary", mapInput: (a) => ({ spec: a.newSpec }) },
+    ],
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
   // Still TODO (auto-stubs return statusCode 501 per step):
   //
   // Premium tier (paid-upstream heavy — highest revenue per call):
@@ -910,11 +1027,16 @@ export const PACK_STEPS = {
   //   search-and-cite        macro-economics
   //
   // Standard tier (network/render):
-  //   content-extraction  media-pipeline  document-intel  any-to-markdown
-  //   structured-scrape   forecasting-bake-off  email-deliverability
-  //   schema-evolution
+  //   media-pipeline  document-intel  forecasting-bake-off
   // ──────────────────────────────────────────────────────────────────────
 };
+
+// Pull the first URL out of a comma/newline-separated list for the
+// content-extraction pack's single-URL chain.
+function firstUrl(urls) {
+  if (!urls) return "";
+  return String(urls).split(/[\s,]+/).map((s) => s.trim()).filter(Boolean)[0] || "";
+}
 
 // Auto-generate a step config for any pack not explicitly in PACK_STEPS.
 // All steps get TODO_MAPINPUT — they fail cleanly with statusCode 501 but
