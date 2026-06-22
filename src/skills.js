@@ -1439,6 +1439,39 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "link-preview",
+    title: "Link preview card",
+    tagline:
+      "The 'turn a URL into a card-shaped preview' workflow. Pull OpenGraph/Twitter card metadata, fetch the article body as a description fallback, normalize the og:image into a standard 1200×630 social card variant and a 400×400 square thumbnail, and extract URL/mention entities from the body for related-link surfacing. Five tools, one structured card payload ready for chat embeds, social shares, or RSS-to-card pipelines.",
+    useCase:
+      "An agent (or a bot, or a chat client, or a CMS) is handed a URL and needs to render a card-shaped preview — like the rich link previews Slack/Discord/iMessage show inline. The naive approach (one HTTP GET + a regex on <meta property=\"og:*\">) breaks when the page is JS-heavy, the og:image is non-standard, or the og:description is missing. This pack does the whole thing deterministically: metadata + readable-text fallback + image normalization to two standard sizes (1200×630 social card and 400×400 inline thumbnail) + outbound-link discovery. Returns a single card-ready JSON payload — agents stop hand-rolling og: scrapers, embed builders get a normalized image they can drop into a <img>, and chat surfaces get a thumbnail that won't blow out the layout.",
+    toolSlugs: [
+      "meta",
+      "extract",
+      "image-resize",
+      "image-thumbnail",
+      "extract-entities",
+    ],
+    workflow: [
+      "Call meta with the URL to pull the page's OpenGraph + Twitter card metadata: og:title, og:description, og:image, twitter:card, twitter:image, canonical URL, and favicon. This is the *card-shape* answer — every downstream step normalizes or augments fields this step surfaced. If og:image is missing, fall back to twitter:image; if both are missing, the card will be image-less (still valid, but degrade gracefully in the final payload). canonical_url is the link the card should point at — not the input URL, which might be a tracker-wrapped redirect. favicon is the small site mark most chat clients show alongside the title.",
+      "Call extract on the same URL for the readable article body as clean markdown. Two uses: (1) when og:description is short (<60 chars) or missing, derive the card's description from the first paragraph of the markdown body — most chat clients show 2–4 lines, so 240 chars is the working budget; (2) feed the body text into step 5 for entity extraction. extract handles paywalls and JS-light pages cleanly; if it returns empty or 4xx (heavy SPA), the agent should fall back to render (more expensive — $0.02 — but executes JavaScript) before deciding the page is unreachable.",
+      "Call image-resize on the og:image (or twitter:image) with width=1200, height=630, fit=cover. This is the standard social-card aspect ratio that Facebook, LinkedIn, and most chat clients expect; serving a card with a non-standard image ratio either gets it cropped poorly or rejected by the embed builder. Returns a base64 PNG the card payload can either inline (small images) or hand to a CDN for a stable URL. If the source og:image is *already* 1200×630, image-resize is idempotent — cheap insurance against weirdly-sized source images.",
+      "Call image-thumbnail on the same og:image with size=400. Square 400×400 is the standard inline-thumbnail dimension for chat clients (Discord, Slack DMs, Matrix), and it's what an RSS-to-card pipeline wants for the per-item icon. Two variants in the final payload — the 1200×630 hero for full cards and the 400×400 square for compact previews — means a single Agent402 call serves both the rich and the compact rendering contexts without forcing the caller to re-fetch + re-resize.",
+      "Call extract-entities on the markdown body from step 2. Returns deduped lists of URLs, emails, IPv4s, @mentions, and #hashtags. The URLs list is the highest-value output here: it's the 'related links' set most card surfaces show beneath the main preview (e.g. 'this article links to 3 other sources'). The @mentions and #hashtags lists are exactly the metadata social embed builders surface for X/Bluesky-style cards. Final payload shape: { canonical, title, description, hero: <1200×630 base64>, thumbnail: <400×400 base64>, favicon, relatedUrls: [...], mentions: [...], hashtags: [...] } — a single object the caller's embed builder or CDN-upload step consumes.",
+    ],
+    claudePrompt:
+      "Build a structured link-preview card for https://example.com using Agent402.\n\n(1) meta with url=https://example.com — return {title, description, og: {image, title, description, type}, twitter: {card, image, title}, canonical, favicon}. (2) extract with url=https://example.com — return {title, byline, excerpt, wordCount, markdown}. Use the markdown's first paragraph as the description fallback if og.description and twitter.title are both empty or shorter than 60 chars. (3) image-resize with imageUrl=<og.image or twitter.image>, width=1200, height=630, fit='cover' — return {base64, contentType, width, height}. Skip this step (set hero=null) if no source image is available. (4) image-thumbnail with imageUrl=<same source image>, size=400 — return {base64, contentType, width, height}. Same skip rule. (5) extract-entities with text=<markdown body from step 2> — return {urls: [], emails: [], ips: [], mentions: [], hashtags: []}. Final return: {url: 'https://example.com', canonical: <step 1 canonical || input>, title: <og.title || meta.title>, description: <og.description || twitter.description || first-paragraph-of-markdown || ''>, hero: {base64, width: 1200, height: 630} | null, thumbnail: {base64, width: 400, height: 400} | null, favicon: <step 1 favicon || null>, relatedUrls: <step 5 urls, filtered to exclude same-host as canonical, max 8>, mentions: <step 5 mentions>, hashtags: <step 5 hashtags>, oneLineSummary: '<plain-text card description, ~140 chars, no markdown>'}. Budget ~$0.024 paid; 4 of 5 tools are PoW-eligible (extract is wallet-only).",
+    promptArgs: [
+      {
+        name: "url",
+        description: "Public http(s) URL to build a preview card for (e.g. https://example.com/article)",
+        required: true,
+        substitute: "https://example.com",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
