@@ -851,6 +851,11 @@ jobs:
         # server.json's version, npm reads package.json's, and the registry
         # rejects a duplicate (name, version) at the storage layer (not the
         # search index, so checks against the public listing can mislead).
+        # Also asserts the MCP Registry's ≤100-char limit on server.json's
+        # description, which is enforced by the registry at publish time —
+        # fail-fast here so we don't burn an npm publish on a registry-only
+        # validation error (caught us once: 0.8.1 shipped to npm but bounced
+        # at the registry with a 287-char description).
         # Fail CI here, before we waste a publish attempt and a version bump.
         run: |
           node -e '
@@ -866,7 +871,13 @@ jobs:
               console.error("  mcp/server.json.packages[0].ver  =", c);
               process.exit(1);
             }
-            console.log("mcp versions aligned at", a);
+            const dlen = (srv.description || "").length;
+            if (dlen > 100) {
+              console.error("mcp/server.json.description is", dlen, "chars — MCP Registry limit is 100");
+              console.error("  current:", JSON.stringify(srv.description));
+              process.exit(1);
+            }
+            console.log("mcp versions aligned at", a, "· server.json.description =", dlen, "chars");
           '
       - name: Publish agent402-mcp to npm
         env:

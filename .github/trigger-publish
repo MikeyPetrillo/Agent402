@@ -9,3 +9,5 @@
 2026-06-21T20:00:00Z publish agent402-client 0.3.0 (topSellers method — completes discovery trifecta across hosted MCP, stdio MCP, SDK)
 
 2026-06-22T15:30:00Z publish agent402-mcp 0.8.1 (description + skill-packs callout + new keywords from batch A)
+
+2026-06-22T15:50:00Z publish agent402-mcp 0.8.1 retry — registry description trimmed to ≤100 chars + new CI gate
