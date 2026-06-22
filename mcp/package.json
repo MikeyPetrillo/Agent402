@@ -2,7 +2,7 @@
   "name": "agent402-mcp",
   "version": "0.8.0",
   "mcpName": "io.github.MikeyPetrillo/agent402",
-  "author": "Mikey Petrillo (https://github.com/MikeyPetrillo)",
+  "author": "Mikey Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
   "homepage": "https://agent402.tools",
   "repository": {
     "type": "git",

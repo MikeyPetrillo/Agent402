@@ -340,9 +340,9 @@ export const SKILL_PACKS = [
     slug: "trend-analysis",
     title: "Trend analysis",
     tagline:
-      "Take any numeric time series — a stock's daily close, a FRED macro indicator, a treasury yield history — and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark. Everything an analyst writes a notebook for, in one chain of cheap calls.",
+      "Take any numeric time series — a stock's daily close, a FRED macro indicator, a treasury yield history — and run it through the full quantitative workup: descriptives, moving averages, trend line, outliers, optional correlation against a benchmark, and a deterministic forecast forward with a 95% prediction interval. Everything an analyst writes a notebook for, in one chain of cheap calls.",
     useCase:
-      "You have a question like \"is AAPL trending up over the last year?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates) instead of a hand-wavy LLM summary. The stats steps are pure-CPU and free over PoW; only the upstream data fetch (finance/macro) is paid.",
+      "You have a question like \"is AAPL trending up over the last year — and what does the next quarter look like?\" or \"is unemployment a leading indicator for fed-funds moves?\" and want a deterministic numerical answer (slope, r², outlier dates, point forecast + 95% interval) instead of a hand-wavy LLM summary or hallucinated projection. The stats + forecast steps are pure-CPU and free over PoW; only the upstream data fetch (finance/macro) is paid.",
     promptArgs: [
       {
         name: "series",
@@ -357,10 +357,11 @@ export const SKILL_PACKS = [
         substitute: "1y",
       },
     ],
-    // Ordered as: fetch → describe → smooth → trend → anomalies → benchmark.
-    // Each step takes the array of close prices / observations from the prior
-    // step. Composes the stats kit (shipped in src/tools/stats-kit.js) with
-    // the finance/macro fetchers that already existed.
+    // Ordered as: fetch → describe → smooth → trend → anomalies → benchmark →
+    // forecast. Each step takes the array of close prices / observations from
+    // the prior step. Composes the stats + forecast kits (shipped in
+    // src/tools/stats-kit.js and src/tools/forecast-kit.js) with the
+    // finance/macro fetchers that already existed.
     toolSlugs: [
       "stock-history",
       "fred-series",
@@ -369,6 +370,7 @@ export const SKILL_PACKS = [
       "linear-regression",
       "outliers",
       "correlation",
+      "forecast-eval",
     ],
     workflow: [
       "Fetch the series. For an equity ticker, call stock-history with range=horizon (or \"1y\" if unspecified) and pull the array of `close` prices in chronological order. For a macro indicator, call fred-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",
@@ -377,10 +379,1065 @@ export const SKILL_PACKS = [
       "Fit linear-regression with x = [0, 1, ..., n-1] (just the index) and y = values. Slope tells you direction + magnitude per unit time; r² tells you how clean the trend is (>0.7 = strong trend, <0.3 = mostly noise). Pass `predict` for next-N-period extrapolation if the user wants a projection.",
       "Flag anomalies with outliers method=\"iqr\" — Tukey fences (1.5·IQR) are the conservative default. Report the indices + values; agents should then map indices back to dates from the original fetch so the answer says \"2024-03-14: $187.23 outlier\" not just \"index 142\".",
       "If the user asked a comparison question (\"is AAPL correlated with the S&P?\", \"do CPI and fed funds move together?\"), repeat steps 1-2 for the benchmark series, then call correlation with the two equal-length arrays. r above 0.7 = strong same-direction move; near 0 = independent; negative = inverse. Use the `interpretation` field as your one-line answer.",
-      "Return a single JSON object combining the summary, trend (slope/r²/equation), outlier dates, and optional correlation. That's the deterministic analyst-grade reply — no LLM second-guessing required.",
+      "Pick a forecast method honestly by backtesting. Call forecast-eval three times — once each with method=\"drift\", \"ses\", \"holt\" — passing the same values + testSize (≈ 20% of the series, capped at half). Compare RMSE; the lowest wins. Check `warnings` — non-empty means treat the result as indicative not predictive. Skip the bake-off only if you already know the series shape (e.g. holt-winters for clearly seasonal data with a known period).",
+      "Forecast forward with the winning method. Call forecast-naive / forecast-ses / forecast-holt (whichever won) with the full values + the user's horizon. Return the point forecast AND lower95/upper95 — never report a point estimate without its interval; that's the whole reason these tools exist instead of an LLM guess. Combine summary + trend + outliers + optional correlation + forecast into a single JSON object. That's the deterministic analyst-grade reply.",
     ],
     claudePrompt:
-      "Run a full trend analysis on AAPL over the last 1y using Agent402. (1) Fetch the daily closes via stock-history (ticker=AAPL, range=1y). (2) Run stats-summary on the closes for the descriptive panel. (3) Run moving-average with window=20, which=\"both\" — compare SMA vs EMA. (4) Run linear-regression with x=[0..n-1], y=closes; report slope (annualized = slope·252), intercept, r². (5) Run outliers method=\"iqr\" and map the flagged indices back to actual dates from the fetch. (6) Return a single JSON object: {summary, trend, outlierDates, oneLineConclusion}. The stats steps are free over PoW; only the stock-history fetch is paid.",
+      "Run a full trend analysis on AAPL over the last 1y using Agent402, then project the next quarter forward. (1) Fetch the daily closes via stock-history (ticker=AAPL, range=1y). (2) Run stats-summary on the closes for the descriptive panel. (3) Run moving-average with window=20, which=\"both\" — compare SMA vs EMA. (4) Run linear-regression with x=[0..n-1], y=closes; report slope (annualized = slope·252), intercept, r². (5) Run outliers method=\"iqr\" and map the flagged indices back to actual dates from the fetch. (6) Pick a forecast method: call forecast-eval three times with method=\"drift\", \"ses\", \"holt\" and testSize=50 (≈ 20% of a 252-day year); pick the lowest RMSE. (7) Forecast the next ~63 trading days using the winning method (forecast-naive / forecast-ses / forecast-holt) and report both point and 95% interval. (8) Return a single JSON object: {summary, trend, outlierDates, forecastMethod, forecastWithIntervals, oneLineConclusion}. The stats + forecast steps are free over PoW; only the stock-history fetch is paid.",
+  },
+  {
+    slug: "forecasting-bake-off",
+    title: "Forecasting bake-off",
+    tagline:
+      "Don't guess which forecasting method to trust. Backtest all four (naive/drift, SES, Holt, Holt-Winters) on a real series, rank by out-of-sample RMSE, then forecast forward with the winner and its 95% prediction interval. Method selection without the hand-waving.",
+    useCase:
+      "You need a forecast and you're not sure whether the series is stationary, trending, or seasonal. Instead of picking a method by gut and praying, the bake-off lets the data choose: every method runs the same holdout backtest, the lowest RMSE wins, and you forecast forward with that winner only. Pure-CPU and free over PoW — only the upstream data fetch is paid.",
+    promptArgs: [
+      {
+        name: "series",
+        description: "What to forecast — a ticker (AAPL) or a FRED series id (UNRATE, CPIAUCSL)",
+        required: true,
+        substitute: "AAPL",
+      },
+      {
+        name: "horizon",
+        description: "How many periods to project forward — e.g. 30 (days for daily data, months for monthly)",
+        required: false,
+        substitute: "30",
+      },
+    ],
+    // Ordered as: fetch (equity OR macro) → bake-off (forecast-eval is the
+    // ranker, called once per method) → conditional forward forecast with the
+    // winner. The four method-specific tools are listed so the agent has the
+    // full menu — only one will be called for the forward forecast based on
+    // which won the bake-off. Holt-Winters is included for seasonal series
+    // (monthly macro, quarterly earnings) where it usually wins outright.
+    toolSlugs: [
+      "stock-history",
+      "fred-series",
+      "forecast-eval",
+      "forecast-naive",
+      "forecast-ses",
+      "forecast-holt",
+      "forecast-holt-winters",
+    ],
+    workflow: [
+      "Fetch the equity series with stock-history (ticker, range=horizon-scaled — e.g. \"2y\" if you want to forecast ~6 months out). Pull `close` in chronological order; you want at least ~50 observations for the backtest to be meaningful, more if you suspect seasonality.",
+      "If the user is asking about a macro indicator instead (unemployment, CPI, fed funds), fetch via fred-series with the series id. Monthly FRED data with 10+ years of history is the sweet spot for Holt-Winters with period=12.",
+      "Run the bake-off. Call forecast-eval four times on the same values with testSize ≈ 20% of the series (capped at half): method=\"naive\" or \"drift\", \"ses\", \"holt\", \"holt-winters\" (the last only if you have ≥ 2·period observations and suspect seasonality). Compare RMSE; lowest wins. Watch the `warnings` field — \"insufficient data\" or \"could not detect seasonal period\" means treat that method's score as suspect, not as a clean win/loss.",
+      "If forecast-naive (or drift, the mean-reversion variant) won, the series is essentially random-walk and there's nothing to extrapolate — call forecast-naive with the full values + horizon. The point forecast is just the last value (or last + average drift); the interval widens with √h. This is the honest answer for noisy series; don't over-engineer.",
+      "If forecast-ses won, the series has no trend but local level matters more than the long-run mean. Call forecast-ses with the full values + horizon; the alpha SES picked tells you how much weight goes on recent vs. older observations (high alpha = react fast, low alpha = smooth heavy). Report alpha alongside the forecast — it's diagnostic.",
+      "If forecast-holt won, the series has a persistent trend worth extrapolating. Call forecast-holt with full values + horizon; it returns level + trend smoothing parameters (alpha, beta) and a forecast that walks forward at the fitted trend slope. The 95% interval grows faster than SES because trend uncertainty compounds.",
+      "If forecast-holt-winters won, the series has seasonality you should respect (e.g. monthly macro with annual cycle, quarterly retail with year-end peak). Call forecast-holt-winters with the full values + horizon + period (12 for monthly-annual, 4 for quarterly-annual, 7 for daily-weekly) and seasonality=\"additive\" or \"multiplicative\". The forecast carries the seasonal pattern forward; never report the point forecast without the interval — seasonal forecasts look confident but compound multiple sources of error.",
+    ],
+    claudePrompt:
+      "Run a forecasting bake-off on AAPL over the last 2y and project the next 30 trading days using Agent402. (1) Fetch the daily closes via stock-history (ticker=AAPL, range=2y). (2) Run forecast-eval four times on the closes with testSize=100: method=\"drift\", \"ses\", \"holt\", and \"holt-winters\" with period=21 and seasonality=\"multiplicative\" (try the seasonal one — equities usually don't have strong calendar seasonality but the backtest will tell you). (3) Rank by RMSE ascending; the lowest is the winner. Note any `warnings` returned. (4) Call the winning forecast tool (forecast-naive / forecast-ses / forecast-holt / forecast-holt-winters) with the full closes + horizon=30 to get the forward forecast and 95% interval. (5) Return a single JSON object: {rankings: [{method, rmse, mape, warnings}, ...], winner: \"holt\", forecast: {point: [...], lower95: [...], upper95: [...]}, oneLineConclusion}. All bake-off + forecast calls are free over PoW; only stock-history is paid.",
+  },
+  {
+    slug: "document-intel",
+    title: "Document intelligence",
+    tagline:
+      "Turn any PDF or image URL into structured data — metadata, extracted text, sliced page ranges, OCR for scanned docs, decoded barcodes / QR codes — without falling back to a vision LLM guess. Built for the messy 30% of documents where pdf-to-markdown alone returns nothing useful.",
+    useCase:
+      "An agent gets a PDF link from a webhook (invoice, contract, receipt, regulatory filing) or an image URL (shipping label, scanned form, photographed ticket) and needs to extract structured fields deterministically. content-extraction handles the easy path; document-intel adds metadata inspection, page slicing, OCR fallback for scanned PDFs, embedded barcode / QR decoding, and PDF reassembly for downstream sharing.",
+    promptArgs: [
+      {
+        name: "url",
+        description: "PDF or image URL to process (e.g. https://example.com/invoice.pdf)",
+        required: true,
+        substitute: "https://example.com/invoice.pdf",
+      },
+    ],
+    // Ordered by realistic-agent decision tree: cheapest inspection first
+    // (pdf-info), then happy-path text extraction (pdf-to-markdown), then
+    // narrowing (pdf-extract-pages), then fallbacks for the failure modes
+    // (image-ocr for scans, barcode-decode for the 2D-barcode payload), then
+    // reassembly tools (pdf-merge, images-to-pdf). All 7 are paid (egress +
+    // CPU-heavy) — they're wallet-only and not free over PoW. Composes
+    // pdf-kit + ocr-kit + barcode-kit with the existing pdf-to-markdown.
+    toolSlugs: [
+      "pdf-info",
+      "pdf-to-markdown",
+      "pdf-extract-pages",
+      "image-ocr",
+      "barcode-decode",
+      "pdf-merge",
+      "images-to-pdf",
+    ],
+    workflow: [
+      "Start with pdf-info — confirms the URL actually serves a PDF (some webhooks lie about content-type), returns the page count for scoping, and surfaces flags like `encrypted` so you don't waste a pdf-to-markdown call that will fail. Skip only if you already know the document's shape.",
+      "Run pdf-to-markdown for the happy path. Digital-native PDFs — invoices generated by accounting software, Word/Google-Docs exports, EDGAR filings — come back as clean markdown in one call. This handles ~70% of real-world PDF intake; the next steps are for the other 30%.",
+      "If the document is long (>20 pages) and you only need a slice — the signature page on a contract, the line-item table on an invoice, an appendix from a research report — call pdf-extract-pages with the page range first. Then run pdf-to-markdown on the extracted slice. Cheaper, faster, and the smaller payload reduces noise downstream.",
+      "If pdf-to-markdown returns <50 characters of text, the PDF is a raster (a scanned document, a photo-of-a-receipt PDF, or a contract that was printed and re-scanned). Fall back to image-ocr — feed it the rendered page image. Tesseract-grade OCR is deterministic and surfaces the text that pdf-to-markdown couldn't.",
+      "For invoices, shipping labels, event tickets, and packaging, the high-value structured payload is often encoded in a barcode or QR code rather than visible text. Run barcode-decode on the page image — it returns the raw payload (shipping tracking numbers, EAN/UPC product codes, base64 / JWT ticket payloads). Feed JWT-shaped payloads to the decode-blob pack for further unwrapping.",
+      "Use pdf-merge when you've extracted slices from multiple PDFs and want to combine them into a single artifact — building a deal package (term sheet + signature page + appendix), or stitching a multi-vendor invoice export back together for accounting.",
+      "Use images-to-pdf when the source material was a set of phone photos (receipts, whiteboard captures, scanned pages handed to you out-of-order) and you need to wrap them into one shareable PDF — either as the final deliverable or as the input to a re-run of this same pipeline at higher quality.",
+    ],
+    claudePrompt:
+      "Process this invoice with Agent402: https://example.com/invoice.pdf. (1) Run pdf-info to confirm it's a PDF, get the page count, check the `encrypted` flag. (2) If not encrypted, call pdf-to-markdown with the URL. (3) Inspect the returned markdown — if it has <50 chars of text, the PDF is scanned: call pdf-extract-pages to get each page as an image, then run image-ocr on each. (4) If you still can't find a tracking number after parsing the OCR text, run barcode-decode on page 1 to surface an embedded QR / barcode payload. (5) Return a single JSON object: {invoiceNumber, totalAmount, vendor, lineItems, trackingNumber, source: \"pdf-to-markdown\" | \"image-ocr\" | \"barcode-decode\"} — populate `source` based on which extraction path actually produced the data. Budget ≤ $0.05 per document; all of these tools are wallet-only (paid per call).",
+  },
+  {
+    slug: "loan-comparison",
+    title: "Loan comparison",
+    tagline:
+      "Compare two or more loan offers — different rates, terms, fees, prepayment structures — on the metrics that actually matter (monthly payment, total interest, year-1 equity build, NPV at your discount rate, effective rate). Apples-to-apples math without opening a spreadsheet.",
+    useCase:
+      "You're choosing between two mortgage offers, a fixed vs. variable auto loan, a student-loan refinance, or a 15-year vs. 30-year structure. Raw totals lie (you can't compare $300k of 15-year payments to $300k of 30-year payments on total dollars — the 30-year wins on total cost only because you held the money longer). Compare on present-value terms and opportunity cost. All deterministic, all free over PoW.",
+    promptArgs: [
+      {
+        name: "loanA",
+        description: "First loan offer (e.g. \"$300,000 at 6.5% for 30 years\")",
+        required: true,
+        substitute: "$300,000 at 6.5% for 30 years",
+      },
+      {
+        name: "loanB",
+        description: "Second loan offer (e.g. \"$300,000 at 6.0% for 15 years\")",
+        required: true,
+        substitute: "$300,000 at 6.0% for 15 years",
+      },
+    ],
+    // Five tools, one per analytical layer. Ordered cheapest-first: payment
+    // alone decides ~60% of comparisons; the deeper layers (amortization,
+    // opportunity cost, NPV, IRR) only matter when offers are close or when
+    // the loan structures are genuinely different. Composes the finance-math
+    // kit shipped in src/tools/finance-math-kit.js.
+    toolSlugs: [
+      "loan-payment",
+      "amortization",
+      "compound-interest",
+      "npv",
+      "irr",
+    ],
+    workflow: [
+      "Call loan-payment on each offer to get the monthly payment, total paid over the term, and total interest. For most plain fixed-rate comparisons (same principal, same term, just different rates), this single comparison settles it — pick the lower payment. Only keep going when the comparison is non-trivial (different terms, points, balloon payments, etc.).",
+      "Call amortization on each loan with maxRows=12 (or paymentsPerYear, whichever you'd rather inspect). Report the year-1 ending balance to surface equity-build differences — a 15-year loan pays off ~$13k of principal in year 1 on a $300k mortgage where a 30-year pays off ~$3k. That's the 'why pay more per month?' answer, and it's invisible from the payment number alone.",
+      "Compute opportunity cost with compound-interest. Take the per-period payment difference (Loan A monthly minus Loan B monthly) and ask: if I invested the savings instead, what would I have at the end of the term? Use the longer term and your assumed market return (default 7-8% for stocks, 4-5% for bonds). This is the layer that flips most 'obvious' comparisons — a higher-payment 15-year loan often loses to a 30-year + invest-the-difference once you price the opportunity cost honestly.",
+      "Run npv on each loan's full cashflow stream using your personal discount rate (default 5%). Build the stream as: [principal, -payment, -payment, ...] over the loan's periods. The loan with the less-negative NPV is cheaper in present-value terms. This is the right comparison metric when the terms differ — comparing raw total-paid on a 15y vs. 30y is dishonest because the dollars in year 30 are worth less than the dollars in year 1.",
+      "Use irr only for non-standard structures: loans with discount points (you pay $X upfront for a lower rate), balloon payments (low monthly + a giant final payment), prepayment penalties, or fees rolled into the loan. Build the actual cashflow stream and call irr — that's the all-in effective rate the loan is really costing you, comparable across structures. Plain fixed-rate loans don't need this step; their irr equals their stated rate.",
+    ],
+    claudePrompt:
+      "Compare these two mortgage offers using Agent402: A) $300,000 at 6.5% for 30 years, B) $300,000 at 6.0% for 15 years. (1) Call loan-payment on each — record monthly payment + totalInterest. Expect A ≈ $1896/mo and B ≈ $2531/mo. (2) Call amortization with maxRows=12 on each; report each loan's balance after 12 payments to show equity build (B's year-1 principal paydown should be ~4x A's). (3) Compute opportunity cost: the monthly payment differential is ~$635 (B - A). Call compound-interest with principal=0, but instead approximate by treating the differential as an annuity: take the differential × 12 months × 30 years and run compound-interest on that as if invested at 7%/yr to get the upper-bound forgone investment. (4) Build cashflow streams for npv: A = [300000, -1896, -1896, ... (360 times)], B = [300000, -2531, -2531, ... (180 times)], call npv on each at discountRate=0.05 — compare the (negative) NPVs. (5) Skip irr because both are plain fixed-rate loans with no points / balloon / fees. (6) Return: {a: {monthly, totalInterest, year1Balance, npvAt5pct}, b: {monthly, totalInterest, year1Balance, npvAt5pct}, recommendation: \"A\" | \"B\", reasoning: \"...one sentence explaining which layer was decisive.\"}. All five tools are free over PoW — only pay if you also fetch live rate data via finance-kit.",
+  },
+  {
+    slug: "investment-decision",
+    title: "Investment decision",
+    tagline:
+      "Should we do this project? Run a capital allocation decision (equipment, expansion, acquisition, build-vs-buy) through the textbook CFO workflow: NPV at your hurdle rate, IRR vs. cost of capital, opportunity cost against a passive benchmark, and levered cashflow analysis if the project is debt-financed. Deterministic answers, not a gut call.",
+    useCase:
+      "You're evaluating a $500,000 equipment purchase returning $150,000/year for 5 years; a market expansion with $2M upfront and an uncertain return; an acquisition target with a forecasted cashflow stream; or a build-vs-buy decision with different upfront costs and operating profiles. Standard capital-budgeting rules say accept if NPV > 0 at your hurdle rate AND IRR > cost of capital — but the inputs (especially hurdle rate and the cashflow forecast) deserve sanity checks, which this pack walks the agent through layer by layer.",
+    promptArgs: [
+      {
+        name: "project",
+        description: "What's being evaluated (e.g. \"$500,000 equipment purchase returning $150,000/year for 5 years\")",
+        required: true,
+        substitute: "$500,000 equipment purchase returning $150,000/year for 5 years",
+      },
+      {
+        name: "hurdleRate",
+        description: "Your cost of capital / required return as a decimal (default 0.10 = 10%). Higher for riskier projects.",
+        required: false,
+        substitute: "0.10",
+      },
+    ],
+    // Five tools, each catching a different way the naive answer is wrong:
+    // NPV anchors the accept/reject call at the hurdle rate, IRR surfaces
+    // the effective return, compound-interest grounds it against the passive
+    // alternative, and the two debt tools (loan-payment + amortization)
+    // handle the levered case which usually flips small-NPV projects either
+    // way. Composes the finance-math kit (src/tools/finance-math-kit.js).
+    toolSlugs: [
+      "npv",
+      "irr",
+      "compound-interest",
+      "loan-payment",
+      "amortization",
+    ],
+    workflow: [
+      "Build the cashflow stream: index 0 = upfront investment (negative), 1..n = expected annual cashflows (positive), with any salvage/terminal value rolled into the final year. Pass to npv with discountRate = your hurdle rate (typically 8-12% for a small business, 10-15% for VC-backed risk, your weighted average cost of capital if you have one). Positive NPV = the project creates value above your hurdle; negative = it destroys value. This is the primary accept/reject signal.",
+      "Call irr on the same cashflow stream. The IRR is the discount rate at which NPV = 0 — i.e., the project's effective annualized return. Accept if IRR > hurdle rate; reject if IRR < hurdle. If the response has converged=false, the cashflow shape has multiple sign changes (common with mid-project re-investments) and NPV is the more reliable metric — flag the IRR as indicative not definitive.",
+      "Sanity-check against the passive alternative with compound-interest. Take the same upfront capital, invest at your benchmark rate (7-8% for long-run equity, 4-5% for bonds, your actual savings rate for cash), project forward over the same horizon. If the project's NPV + initial investment doesn't beat the passive future value, the project is destroying value relative to doing nothing — even if NPV at hurdle rate is positive. This catches projects that 'pass NPV' only because the hurdle rate is set unrealistically low.",
+      "If the project will be debt-financed (most real-world deals are not all-equity), call loan-payment to compute the periodic debt service. Subtract this from the project's annual operating cashflow to get the levered free cashflow to equity. Then re-run npv and irr on the *levered* stream (index 0 = your equity check, not the full purchase price). Leverage almost always boosts IRR (positive leverage when project yield > debt cost) and increases risk — surface both numbers so the user sees the trade-off.",
+      "Call amortization on the financing loan to get the year-by-year interest + principal split. The interest expense is typically tax-deductible — multiply by your tax rate to get the annual tax shield, which improves the levered cashflows. The remaining balance at each year is what you'd owe if you sold/refinanced — useful for modeling an early exit or refinance scenario. Skip if the project is all-equity; required if you want to model the levered IRR honestly.",
+    ],
+    claudePrompt:
+      "Evaluate this capital project using Agent402: $500,000 equipment purchase returning $150,000/year for 5 years with $50,000 salvage value at the end. Use a 10% hurdle rate. (1) Build cashflows = [-500000, 150000, 150000, 150000, 150000, 200000] (year 5 includes salvage). Call npv at discountRate=0.10 — record the NPV. (2) Call irr on the same cashflows — record the IRR (it should be ~17-18% on these numbers; converged should be true). (3) Sanity-check the passive alternative: call compound-interest(principal=500000, annualRate=0.07, years=5, compoundingPerYear=1) — compare the future value of the cashflow scenario (cumulative undiscounted = $750k + $50k = $800k) against the passive S&P 7% future value (~$701k). If the project beats passive even before discounting, that's a real positive signal beyond NPV. (4) Model financing: if a $400k loan at 8% for 5 years funds most of it, call loan-payment(400000, 0.08, 5). Compute the annual debt service (payment × 12); subtract from $150k cashflow → levered cashflow. Build levered stream = [-100000, leveredCF, leveredCF, leveredCF, leveredCF, leveredCF + 50000] and re-run npv + irr on this — the levered IRR will be meaningfully higher than the unlevered, reflecting the equity returns. (5) Call amortization(400000, 0.08, 5, maxRows=5) for the per-year interest schedule (for tax-shield modeling). (6) Return: {unleveredNpv, unleveredIrr, passiveAlternativeFV, leveredNpv, leveredIrr, recommendation: \"ACCEPT\"|\"REJECT\", reasoning}. All five tools are free over PoW.",
+  },
+  {
+    slug: "retirement-planning",
+    title: "Retirement planning",
+    tagline:
+      "Will my retirement plan actually work? Project the accumulation phase forward with compound interest, compute the target nest egg from your expected spending, then model the drawdown phase using the same PMT formula a mortgage uses — your retirement is mathematically a loan you're paying yourself. Deterministic numbers, no glossy advisor PowerPoint.",
+    useCase:
+      "You're 35 years old with $100,000 saved, contributing $1,500/month, retiring at 65 and you want an honest answer to: will the nest egg get there? How much can I draw down per year without running out? What happens if I retire 5 years earlier — or contribute $500/mo less? The accumulation phase, the target calculation, and the drawdown phase are all the same handful of textbook formulas the finance-math kit already implements; this pack composes them into the full plan.",
+    promptArgs: [
+      {
+        name: "scenario",
+        description: "Your retirement scenario (current age, balance, contributions, retirement age, etc.)",
+        required: true,
+        substitute: "35 years old with $100,000 saved, contributing $1,500/month, retiring at 65",
+      },
+      {
+        name: "expectedReturn",
+        description: "Long-run expected annual return as a decimal (default 0.07 = 7% — historical S&P after inflation runs ~6-7%; use 5% for a conservative bond-heavy mix)",
+        required: false,
+        substitute: "0.07",
+      },
+    ],
+    // Five tools, two phases. Accumulation phase (steps 1-3): project the
+    // current balance forward, add the contribution stream's future value,
+    // sum for the projected nest egg, then compute the target lump sum from
+    // expected spending via NPV in reverse. Drawdown phase (steps 4-5):
+    // repurpose loan-payment + amortization to compute sustainable
+    // withdrawals and the year-by-year retirement balance — same PMT math,
+    // different label on the principal. Composes finance-math-kit.
+    toolSlugs: [
+      "compound-interest",
+      "npv",
+      "irr",
+      "loan-payment",
+      "amortization",
+    ],
+    workflow: [
+      "Project the current balance forward with compound-interest. Pass principal=current_savings, annualRate=expected_return, years=years_to_retirement, compoundingPerYear=12 (or 1 for annual). The future value is what your existing balance grows to if you never add another dollar — the 'do-nothing' baseline. Use the post-inflation return (e.g., 7% nominal - 3% inflation = 4% real) if you want today's-dollars output; use nominal if you'll discount spending in nominal terms later.",
+      "Add the contribution stream's future value. The PMT-to-FV identity says a $X/month contribution for N years at rate r compounds to PMT · ((1+r/12)^(12N) - 1) / (r/12). Easiest path: call compound-interest twice — once on a hypothetical $1/month contribution to get the per-dollar multiplier, then scale by actual monthly contribution. Or use a per-period proxy by calling it with principal=annual_contribution, years=N, and approximating. Sum step 1's result + this contribution FV → projected nest egg at retirement.",
+      "Compute the target nest egg from expected retirement spending. Build a cashflow stream of negative annual spending over the expected retirement horizon (e.g., 30 years from age 65-95) and call npv with discountRate = expected drawdown return (often lower than accumulation rate — say 4-5% for a bond-heavier retirement allocation). The (negative) NPV's absolute value is the lump sum you need at retirement to fund that spending — your target. Compare against step 2's projected nest egg: if projected > target, you're on track; if projected < target, you have a gap.",
+      "Compute the sustainable annual withdrawal using loan-payment. Pass principal=projected_nest_egg, annualRate=drawdown_return, termYears=expected_retirement_years, paymentsPerYear=12. The 'payment' the tool returns IS your sustainable monthly withdrawal — the same PMT formula that amortizes a mortgage amortizes a retirement portfolio. The math doesn't care whether you're paying a bank or paying yourself. This is the 'how much can I spend each month?' answer with no rule-of-thumb (e.g. the 4% rule) hand-waving.",
+      "Pressure-test the trajectory with amortization. Same inputs as step 4 (principal=nest egg, etc.). The schedule's `balance` column shows the year-by-year retirement portfolio balance — useful for sequence-of-returns risk (if early returns underperform the average, the trajectory is much steeper than the smooth assumption suggests). The `interest` column is what your portfolio is earning each year; the `principal` column is what you're actually drawing down. A real plan should have a buffer — if the schedule shows balance hitting zero at exactly your assumed end age, one bad year of returns breaks it. Optional: call irr to back-solve the required return given your target and contributions — useful when the user asks 'what return do I need to retire at 60 instead of 65?'",
+    ],
+    claudePrompt:
+      "Build a retirement plan for: 35 years old with $100,000 saved, contributing $1,500/month, retiring at 65, expecting 30 years of retirement, current annual spending of $60,000 (assume 80% replacement = $48,000/yr in retirement). Use Agent402's finance-math kit. (1) Project current $100k forward 30 years at 7%/yr monthly compounding: compound-interest(principal=100000, annualRate=0.07, years=30, compoundingPerYear=12) → expect ~$811k. (2) Project the $1,500/mo contribution stream: easiest is the closed-form PMT-to-FV identity = 1500 · ((1+0.07/12)^360 - 1) / (0.07/12). Compute it (~$1.83M) and add to step 1 → projected nest egg ≈ $2.64M. (3) Target nest egg: build a cashflow stream of [-48000] × 30 (annual retirement spending), call npv at discountRate=0.05 (drawdown-era return) → |NPV| ≈ $738k. Compare projected ($2.64M) vs target ($738k) — comfortably above. (4) Sustainable monthly withdrawal: loan-payment(principal=2640000, annualRate=0.05, termYears=30) → the 'payment' is the monthly draw — expect ~$14,170/mo (~$170k/yr), well above the $48k/yr target. (5) Year-by-year drawdown: amortization(principal=2640000, annualRate=0.05, termYears=30, maxRows=30) — confirm balance trajectory and that final balance is 0. (6) Return: {projectedNestEgg, targetNestEgg, gap, sustainableMonthlyWithdrawal, sustainableAnnualWithdrawal, onTrack: true|false, oneLineConclusion}. All five tools are free over PoW.",
+  },
+  {
+    slug: "savings-goal",
+    title: "Savings goal",
+    tagline:
+      "How much do I need to save each month to hit $X in N years? Pin down the required contribution with a clever PV-discount trick: discount the target back to today, then call loan-payment with the discounted target as principal — the 'payment' the tool returns IS your required monthly savings. Same PMT formula a mortgage uses; different decision.",
+    useCase:
+      "You have a concrete goal — save $1,000,000 for retirement in 30 years, $500k for a child's college in 18 years, $80k for a down payment in 5 years, $20k for a wedding in 2 years — and want the deterministic answer to: how much per month? What's the gap if I keep saving at my current rate? What return would I need on a fixed contribution? This pack walks the agent through projecting current savings, computing the gap, and back-solving the required PMT — all with the finance-math kit, all free over PoW.",
+    promptArgs: [
+      {
+        name: "goal",
+        description: "What you're saving for, with the target amount and time horizon (e.g. \"save $1,000,000 for retirement in 30 years\")",
+        required: true,
+        substitute: "save $1,000,000 for retirement in 30 years",
+      },
+      {
+        name: "expectedReturn",
+        description: "Expected annual return as a decimal (default 0.07 = 7% for long-horizon equity; use 0.04 for bond-heavy or short-horizon goals)",
+        required: false,
+        substitute: "0.07",
+      },
+    ],
+    // Four tools, one core insight: the PMT formula loan-payment implements
+    // solves "save $X to reach $Y" if you discount the target to PV first.
+    // The other three tools (compound-interest, npv, irr) handle the baseline
+    // projection, the inflation-adjustment, and the back-solved return rate.
+    // No amortization here — savings accumulation builds up rather than
+    // amortizing down, so the schedule shape doesn't apply.
+    toolSlugs: [
+      "compound-interest",
+      "loan-payment",
+      "npv",
+      "irr",
+    ],
+    workflow: [
+      "Project the current balance forward with compound-interest. Pass principal=current_savings, annualRate=expected_return, years=time_horizon, compoundingPerYear=12. This is the 'no further contributions' future value — what's already covered. Subtract from the target → the gap that new contributions need to fill.",
+      "Solve for the required monthly contribution with the PV-discount trick. The PMT formula loan-payment implements is PMT = PV · r / (1 - (1+r)^-n). The same formula in reverse computes: 'what regular contribution accumulates to a given FV?' To use loan-payment directly, first discount the gap back to present value: PV_of_gap = gap / (1 + r)^n (or use npv with cashflows=[0, ..., gap] to do this). Then call loan-payment(principal=PV_of_gap, annualRate=r, termYears=n, paymentsPerYear=12) — the 'payment' the tool returns IS your required monthly contribution. Same PMT formula, different decision: you're not borrowing, you're paying yourself.",
+      "Sanity-check the target in today's dollars with npv. A $1M target in 30 years isn't $1M in spending power — at 3% inflation it's worth ~$412k today. Build a single-cashflow stream [0, ..., target] over the horizon and call npv at discountRate = inflation rate (3% historical, 2.5% recent Fed target). The (positive) NPV is the target in today's-dollars terms. Surface both nominal and real targets to the user — many people set savings targets without realizing they're undershooting because they thought in nominal dollars.",
+      "If the user has a fixed contribution and wants to know 'what return do I need?', back-solve with irr. Build the cashflow stream [-current_savings, -annual_contribution, -annual_contribution, ..., +target] over the horizon and call irr. The returned rate is the required annual return to hit the target — compare to historical asset class returns (cash ~2%, bonds ~4%, balanced ~6%, stocks ~7-10%) to ground-truth whether the plan is plausible. If irr > 10% on a long horizon, the plan is aggressive; if irr > 15%, the user should expect to either save more, extend the horizon, or accept higher risk.",
+    ],
+    claudePrompt:
+      "I want to save $1,000,000 for retirement in 30 years. I currently have $50,000 saved. Use Agent402 to compute how much I need to contribute monthly at a 7% expected return, and pressure-test the plan. (1) Project current $50k forward 30 years: compound-interest(principal=50000, annualRate=0.07, years=30, compoundingPerYear=12) — expect ~$406k. Gap = $1,000,000 - $406k = $594k FV still needed. (2) Discount the gap to PV: PV_of_gap = 594000 / (1+0.07/12)^360 ≈ $73,200. Now call loan-payment(principal=73200, annualRate=0.07, termYears=30, paymentsPerYear=12) → the 'payment' is your required monthly contribution. Expect ~$487/mo. (3) Sanity-check the target in today's dollars: build cashflows=[0, 0, ..., 1000000] (index 30 = $1M), call npv at discountRate=0.03 → ~$412k in today's-dollars terms. Surface both. (4) Optional back-solve: if the user can only afford $300/mo, build cashflow=[-50000, -3600, -3600, ..., +1000000] (30 years of $3600/yr contributions) and call irr → required return. If the irr > 10%, the plan is aggressive — recommend lowering the target, extending the horizon, or increasing the contribution. (5) Return: {requiredMonthlyContribution, targetInTodaysDollars, gapAfterCurrentSavings, plausibilityFlag: \"realistic\"|\"aggressive\"|\"unrealistic\", oneLineConclusion}. All four tools are free over PoW.",
+  },
+  {
+    slug: "fraud-signals",
+    title: "Fraud signals",
+    tagline:
+      "Is this domain trustworthy, or is it a phishing site / typosquat / scam? Pull the reputation signals an analyst checks before clicking anything: domain age, cert issuance history, hosting reputation, DNS topology, tech-stack fingerprint, and page-content red flags. Different from a security audit — this is about whether the domain is what it claims to be.",
+    useCase:
+      "You got a link from email, a webhook, a referral, or a search result and you need to decide whether to trust it before authenticating, paying, or downloading. The security-audit pack tells you whether a domain you own is configured securely; fraud-signals tells you whether a domain you don't own is who it says it is. Newly registered domain + Let's Encrypt cert from yesterday + hosted on a bulletproof ASN + WordPress restaurant theme imitating a bank = the agent should refuse, not click.",
+    promptArgs: [
+      { name: "domain", description: "Domain to evaluate (e.g. example.com or suspicious-bank-login.com)", required: true, substitute: "example.com" },
+    ],
+    // Seven tools, ordered by signal strength: whois first (domain age is
+    // the single best predictor), then certificate evidence (transparency
+    // log + live cert), then hosting reputation (ASN), then DNS topology,
+    // then the fingerprintable application layer (tech-stack + page
+    // content). Each step is independent — you can short-circuit on any
+    // strong red flag — but combining all 7 gives the most confident
+    // assessment. Composes network-kit + network-kit2 + extract.
+    toolSlugs: [
+      "whois",
+      "cert-transparency",
+      "tls-cert",
+      "asn-info",
+      "dns-lookup",
+      "tech-stack",
+      "extract",
+    ],
+    workflow: [
+      "Start with whois — domain age is the single best fraud predictor. Established brands have domains registered years ago; impersonators are usually using domains < 90 days old. Also surfaces the registrar (some — like privacy-shrouded resellers operating out of jurisdictions with slow abuse response — are over-represented in fraud) and registrant info (privacy-protected WHOIS is normal for personal sites, suspicious for a business claiming to be Fortune-500 established).",
+      "Pull the cert-transparency log. CT logs every TLS cert ever issued for the domain. A legitimate long-running site shows years of cert renewals from major CAs. A classic phishing pattern is a brand-new domain with exactly one Let's Encrypt cert issued in the last few days — there's no history because there's no history. Burst issuance across many subdomains in a short window can indicate a phishing kit operator.",
+      "Inspect the live cert with tls-cert. Self-signed = major red flag, period. Wildcard certs across a sprawling subdomain set on a brand-new domain can indicate a phishing kit operator running many landing pages off one cert. Cert validity window matters too — Let's Encrypt's 90-day cert on a domain claiming to be an established bank is anomalous (real banks use OV/EV certs with longer validity and the green-bar / org-name treatment).",
+      "Run asn-info on the resolved IP. Cloudflare / AWS / GCP / Azure are neutral — most of the internet runs there. Known abuse-friendly hosters (specific ASNs in Russia, China, and certain Eastern European countries) over-index on fraud. Geographic mismatch matters: a US-targeted brand impersonator hosted in a country with no business presence there is a meaningful signal. Cross-reference the ASN against public abuse databases if the user wants depth.",
+      "Map the DNS topology with dns-lookup. MX records: a site claiming to be a business with no MX records (can't receive email) is a red flag. CNAMEs to shared hosting (Wix / Webflow / Squarespace on a domain impersonating a bank) are common in scams — legitimate financial institutions don't host on shared CMS platforms. Many A records spread across disparate subnets can indicate a fast-flux network rotating IPs to evade takedowns.",
+      "Fingerprint the application layer with tech-stack. Off-the-shelf scam templates are detectable: certain WordPress themes ('AI investment platform' kits, 'crypto exchange' kits), specific obfuscated jQuery patterns, telltale Bitrix or older CMS versions. Mismatch between detected tech and the claimed brand is meaningful — a 'bank' running on a WordPress theme designed for restaurants doesn't pass even a casual review.",
+      "Pull the page content with extract and scan for fraud-pattern keywords. Phishing kits use predictable language: urgency ('act now', 'limited time'), unsolicited payment requests, crypto-only payment ('USDT only'), dubious testimonials, broken English on a site claiming to be US-headquartered, gift-card payment instructions. Combine all 7 signal sources into a single rollup: low / medium / high fraud likelihood with each piece of cited evidence — let the user see exactly which signals fired, not just a black-box score.",
+    ],
+    claudePrompt:
+      "Evaluate example.com for fraud signals using Agent402. (1) whois — record the domain creation date and the registrar. If age < 90 days, flag as a strong fraud signal. (2) cert-transparency — pull the cert log. Count entries; first issuance date should match (or predate) the whois creation date by at most a few days. (3) tls-cert — inspect the live cert: issuer (Let's Encrypt is fine, self-signed is a hard red flag), validity window, wildcard scope. (4) asn-info — resolve the A record, pull the ASN: is it a mainstream cloud (Cloudflare/AWS/GCP) or a known abuse-friendly hoster? Surface country. (5) dns-lookup — MX records (a 'business' with no MX is suspicious), CNAMEs (shared-hosting CNAMEs on a brand-impersonator site are a red flag). (6) tech-stack — fingerprint the running stack; flag mismatches with the claimed brand (e.g., a 'bank' on a WordPress restaurant theme). (7) extract — pull the home-page text, scan for urgency language, crypto-only payment requests, gift-card mentions, broken English. Return: {domain, age_days, certHistoryCount, hostingProvider, hostingCountry, hasMX, techStack, redFlags: [{signal, evidence}], fraudLikelihood: \"low\"|\"medium\"|\"high\", oneLineRecommendation}. All seven tools are wallet-only (egress) — budget ≤ $0.05 per domain check.",
+  },
+  {
+    slug: "api-investigation",
+    title: "API investigation",
+    tagline:
+      "Point at an unknown API endpoint and figure out how to use it: auth scheme, content type, version, rate limits, OpenAPI/Swagger spec discovery, and JSON response structure. The deterministic recon workflow before writing a single line of integration code.",
+    useCase:
+      "A developer just got handed an API base URL with minimal docs (\"here's the endpoint, integrate it\"). The pack walks through the recon-before-code workflow: decompose the URL, probe headers for auth + versioning + rate-limit signals, find the human-readable docs page, hunt for an OpenAPI/Swagger link in the docs page, and once a real response is in hand, pretty-print and drill into the JSON structure. Saves the cycle of \"send request → 401 → guess auth header → 415 → guess content-type → ...\" by surfacing it all in one workup.",
+    promptArgs: [
+      {
+        name: "endpoint",
+        description: "API URL to investigate (e.g. https://api.example.com/v1/users)",
+        required: true,
+        substitute: "https://api.example.com/v1/users",
+      },
+    ],
+    // Seven tools, ordered as the real recon-before-code flow: decompose
+    // the URL first (cheapest), then live-probe with http-check + http-headers
+    // (where auth scheme + content type + rate-limit hints all live), then
+    // hunt for human docs (extract) and the machine spec (html-links chasing
+    // /openapi.json or /swagger.json), then finally inspect actual response
+    // payloads (json-format + json-query). Composes util-kit + html-kit +
+    // network-kit2 + extract — no new tools needed.
+    toolSlugs: [
+      "url-parse",
+      "http-check",
+      "http-headers",
+      "extract",
+      "html-links",
+      "json-format",
+      "json-query",
+    ],
+    workflow: [
+      "Decompose the URL first with url-parse. Surfaces scheme, host, port (default-or-explicit matters for whether you're hitting a non-standard reverse proxy), path, and parsed query parameters. The host alone often tells you whether the API is multi-tenant (api.example.com vs. tenant.example.com vs. example.com/api) which affects how rate limits will work. Cheap, deterministic, and orients the rest of the investigation.",
+      "Liveness-probe with http-check. Returns the status code, response time, and (most importantly) confirms whether the host even resolves and answers TCP/443. A 401 here is the friendliest answer — it tells you the endpoint exists and what auth scheme is expected (Bearer, Basic, Digest via the WWW-Authenticate header). A 404 might mean the path is wrong; a 502 / connection refused means you have a different problem (DNS, infra, or simply wrong URL). Don't burn calls on the next steps until http-check returns a 2xx or an authenticated 4xx.",
+      "Inspect the full response headers with http-headers — this is where most of the API contract leaks out. Watch for: Content-Type (application/json, application/hal+json, application/vnd.api+json, etc. — each implies a different response convention), WWW-Authenticate (auth scheme + realm), X-RateLimit-* (anticipate quotas before you hit them), X-API-Version / API-Version (call out the version you're actually pinned to), CORS headers (whether browser-side calls will work), and any vendor-prefixed headers (X-Stripe-*, X-GitHub-*, X-Twilio-*) that hint at the platform and unlock platform-specific patterns.",
+      "Pull the human-readable docs page with extract. Most APIs publish at a guessable path: api.example.com → docs.example.com, /docs, /api, /reference, /developer. extract returns clean markdown, suitable for skimming. Look for: an authentication section (token format, where to put it), a rate-limit section (quotas + retry behavior), a versioning/changelog section (deprecations), and a base URL section (sometimes the URL the user handed you is not the canonical base).",
+      "Hunt for the machine-readable spec by feeding the docs page HTML to html-links. Filter for hrefs matching openapi, swagger, postman, schema, or .json / .yaml suffixes. An OpenAPI spec is gold — it documents every endpoint, every parameter, every response shape deterministically. If found, fetch it (separate call outside this pack) and feed it to json-format / json-query in steps 6-7 to navigate the schema. If not found, fall back to fishing on conventional paths: /openapi.json, /swagger.json, /v1/openapi, /.well-known/openapi.",
+      "Once you have an actual JSON response (from the live API or the spec), pretty-print it with json-format. Two-space-indented JSON is much faster to scan than a flat line, especially for nested envelopes (RFC 7807 errors, JSON:API resource objects, HAL _links/_embedded structures). This is the cheapest possible reality check that you've correctly understood the wire format.",
+      "Drill into specific fields with json-query — JSONPath ($.data[*].id) is the deterministic way to verify 'does this response actually contain the field I'm going to depend on?' Use it to validate assumptions before writing integration code: confirm the pagination cursor is at $.meta.next_cursor not $.next_page; confirm the array of items is at $.data not $.results; confirm error envelopes are at $.errors[*].detail not $.error.message. Wrong assumption here = the entire integration breaks later when the second-page response shape differs from the first.",
+    ],
+    claudePrompt:
+      "Investigate this API endpoint using Agent402: https://api.example.com/v1/users. (1) url-parse the URL: scheme=https, host=api.example.com, path=/v1/users — flag that this is a versioned, multi-tenant-ish path. (2) http-check it (unauthenticated). Expect a 401 — record the response time and confirm the host resolves. If you get 404 or connection-refused, stop and ask the user for the correct URL. (3) http-headers — record Content-Type, WWW-Authenticate scheme, all X-RateLimit-* values, any X-API-Version header, and any vendor-prefixed (X-*) hints. (4) extract https://docs.example.com (or /docs, /api, /reference — try in that order until one returns a real article body). Skim for auth + rate-limit + versioning sections. (5) feed the docs HTML to html-links and filter for hrefs matching /openapi|swagger|schema|\\.json$|\\.yaml$/. If found, that's the spec URL — note it. If not found, try probing /openapi.json directly via http-check. (6) Once you have any sample JSON response from the API (provided by the user or fetched via http-check on an OPTIONS endpoint), json-format it for easy reading. (7) Use json-query to verify the expected fields are where you think they are: $.data[*].id for resource IDs, $.meta.next_cursor for pagination, $.errors[*] for error envelope. Return: {baseUrl, authScheme, contentType, version, rateLimit: {requests, window}, openApiSpecUrl, sampleResponseStructure: {pagination, dataLocation, errorEnvelope}, integrationNotes}.",
+  },
+  {
+    slug: "text-hygiene",
+    title: "Text hygiene",
+    tagline:
+      "Turn a wall of dirty text — chat logs, scraped pages, user-generated content, log dumps — into something safe to store, search, and pipe into the next step. Measure first, redact PII before anything else touches the data, then dedupe, sort, extract entities, surface keywords, and grade the readability of what's left.",
+    useCase:
+      "You inherited a text dump (support tickets, exported chat history, scraped reviews, log files) and need to prepare it for analysis or storage. The pack enforces the one ordering that matters: redact PII before any other step caches an intermediate result. Every step after redact is allowed to be sloppy with retention because the secrets are already gone. Output: a cleaned, deduped, sorted stream plus an entity index and a readability score telling you whether the cleaned text is still human-grade.",
+    promptArgs: [
+      { name: "text", description: "The raw text dump to clean (max 500KB)", required: true, substitute: "support log dump" },
+    ],
+    // Seven tools, ordered to enforce a single security-relevant invariant:
+    // measure → REDACT FIRST → mutate freely. text-stats measures the
+    // baseline so you can report what got dropped; redact strips PII before
+    // any cache, log, or intermediate result can capture it; dedupe + sort
+    // normalize the cleaned stream; extract-entities indexes what survived;
+    // keywords gives a routing/tagging signal; readability grades whether
+    // the cleaned output is still human-grade. Composes kit (text-stats,
+    // keywords) + kit2 (redact, dedupe-lines, sort-lines, extract-entities,
+    // readability). All seven tools are pure-CPU and PoW-eligible.
+    toolSlugs: [
+      "text-stats",
+      "redact",
+      "dedupe-lines",
+      "sort-lines",
+      "extract-entities",
+      "keywords",
+      "readability",
+    ],
+    workflow: [
+      "Measure the baseline with text-stats. Get the raw counts (characters, words, sentences, paragraphs, estimated LLM tokens) before any mutation. This is what you'll compare against at the end to report how much noise was actually removed — 'started at 50k tokens, deduped + cleaned to 12k tokens' is a much better summary than 'cleaned the text'. It also catches the silly case where the input is too small to bother with the rest of the pipeline.",
+      "Redact PII with redact — this MUST run before any other step. The redact tool strips emails, phone numbers, credit-card-shaped digits, SSNs, and IPv4 addresses, replacing them with [EMAIL] / [PHONE] / [CARD] / [SSN] / [IP] markers and returning a count by type. Doing this first is the only safe ordering: if you dedupe + sort + extract first, intermediate results have already cached the PII in your logs, retry buffers, and downstream queues. Get the secrets out of the data while you're still inside the pack, not after.",
+      "Dedupe-lines on the redacted text. Chat logs and scraped pages are full of exact-duplicate lines (timestamps stripped, boilerplate footers, repeated error messages). Removing them tightens the signal-to-noise ratio without losing anything. Note: dedupe runs after redact deliberately, so two messages that differed only by phone number now collapse to one — a tiny privacy-positive side effect.",
+      "Sort-lines to normalize ordering. Once duplicates are gone, sort gives you a stable canonical form — diffable across runs, mergeable across sources, and friendly to downstream chunking. Optional, skip if order is semantically meaningful (timeline data) — but for tickets / reviews / unstructured comments, sort is almost always the right call.",
+      "Index entities with extract-entities. Pulls deduped lists of emails, URLs, IPv4s, @mentions, and #hashtags out of what survived redaction. The interesting outputs here are URLs (where users were linking) and mentions/hashtags (who/what users were talking about) — emails and IPs should be mostly empty if redact did its job, and a non-zero count is a useful audit signal that redact missed something (custom email formats, IPv6, weird Unicode).",
+      "Surface topics with keywords. Returns top words and two-word phrases by frequency with stopwords removed — cheap, deterministic, no model required. Use the top-N as routing tags (route to the right support queue, the right analyst, the right downstream pipeline) or as a quick gist for human triage. Two-word phrases catch domain language that single-word frequency misses ('refund request', 'login failed', 'card declined').",
+      "Grade the cleaned output with readability. Returns Flesch Reading Ease and Flesch–Kincaid grade level. The score tells you whether the cleaned text is still human-grade or whether dedupe + sort destroyed enough context that the result is now incoherent. A grade level that jumped from 9 (high school) to 22 (post-doc) is a sign that sentence boundaries got mangled by sort; a reading-ease that dropped to single digits means the surviving content is dense terminology you should hand to a domain expert. This is the closing audit step.",
+    ],
+    claudePrompt:
+      "Clean this support log dump using Agent402. (1) text-stats on the raw input — record characters / words / sentences / estimatedTokens as the baseline. If words < 100, stop and tell the user the input is too small to be worth running the full pipeline. (2) redact the text. Save the result; also record counts.email / counts.phone / counts.card / counts.ssn / counts.ip — these are the headline 'how much PII did we strip' numbers. From here forward, work only on the redacted text — never reference the raw input again. (3) dedupe-lines on the redacted output. Record before/after line counts. (4) sort-lines on the deduped output — skip this step only if the user said the order matters semantically. (5) extract-entities on the final cleaned text. Surface emails / urls / ipv4 — if emails or ipv4 are non-empty, that's a signal redact missed something (alert the user, don't fail silently). Report URL count and the top 10 by frequency, plus all @mentions and #hashtags. (6) keywords on the cleaned text — return top 15 unigrams and top 10 bigrams as a tagging signal. (7) readability on the cleaned text — return readingEase + gradeLevel. Compare to a reasonable benchmark (gradeLevel between 7 and 14 = normal human prose). Final return: {baseline: {words, tokens}, redactionCounts: {email, phone, card, ssn, ip}, beforeLines, afterLines, residualEntities: {emails, urls, ipv4}, topKeywords, topBigrams, readingEase, gradeLevel, cleanedText, oneLineSummary: 'Started at X tokens, removed Y PII items, deduped to Z lines, grade level G.'}. All seven tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.012 even paid.",
+  },
+  {
+    slug: "csv-profile",
+    title: "CSV profile",
+    tagline:
+      "Hand the pack a CSV and get back a column-by-column profile: descriptive stats, outliers, pairwise correlations, and a baseline linear regression. The deterministic 'what's in this dataset?' workup before deciding what to actually model.",
+    useCase:
+      "You inherited a CSV (export from a data warehouse, a CSV from finance, a survey dump, scraped table from a wiki). Before deciding what's worth analyzing, you need to know: which columns are numeric? what are the ranges? are there outliers that will distort everything downstream? do any two columns move together? would a straight-line fit even be reasonable? This pack runs that workup mechanically — no model required, no judgment calls, just the numbers — so you walk into the actual analysis already knowing the shape of the data.",
+    promptArgs: [
+      { name: "csv", description: "Raw CSV text (max 500KB; first row is treated as the header)", required: true, substitute: "year,revenue,cost\n2022,1000,800\n2023,1500,1100\n2024,2100,1400" },
+      { name: "columnA", description: "Primary numeric column to profile in depth (e.g. revenue)", required: true, substitute: "revenue" },
+      { name: "columnB", description: "Second numeric column for correlation + regression (e.g. cost)", required: true, substitute: "cost" },
+    ],
+    // Six tools, ordered as the standard data-profiling workup: load (csv-to-json
+    // gives you rows of objects), extract one column as an array of numbers
+    // (json-query with $.[*].columnName), then run the four stats-kit tools
+    // in cost-and-information order: descriptive stats first (cheapest, sets
+    // the scale), outliers next (decide whether you trust the stats), then
+    // pairwise correlation (do any two columns move together?), and finally
+    // a baseline linear regression (the simplest model — if this can't fit,
+    // nothing will). Composes kit (csv-to-json, json-query) + stats-kit.
+    // All six tools are pure-CPU and PoW-eligible.
+    toolSlugs: [
+      "csv-to-json",
+      "json-query",
+      "stats-summary",
+      "outliers",
+      "correlation",
+      "linear-regression",
+    ],
+    workflow: [
+      "Load the CSV with csv-to-json. Returns an array of objects keyed by the header row. Inspect the keys to inventory the columns and a small sample of values to spot-check parsing (a stray quote or unescaped comma in the source CSV will surface here as junk fields). If the first row isn't actually headers — some exports use a metadata banner row — fail loudly and ask the user to strip it; don't silently treat data as headers.",
+      "Extract one column at a time with json-query. JSONPath $.[*].columnName collapses the row-objects into a flat array of values for that column. Do this once per numeric column you care about. Catch the silent failures here: a column that looks numeric in Excel but is actually strings (because of a stray '$' or thousands separator) will show up as an array of strings — surface that as a parse warning, don't just NaN it downstream.",
+      "Run stats-summary on the column array. Twelve descriptive stats in one call: count, sum, mean, median, mode, stddev, variance, min, max, range, q1, q3, IQR. This is the cheapest possible 'know the shape of this column' step. Mean vs. median tells you skew; stddev vs. range tells you whether outliers are dragging the spread; IQR is the robust spread measure to quote when stddev is misleading.",
+      "Find anomalies with outliers. Combines IQR-based (1.5×IQR fence) and z-score (>3σ) methods so you catch both heavy-tailed and gross-error outliers. Critical second step: if you skip this and feed an outlier-laden column into correlation or regression, you'll get an apparent strong fit driven entirely by a handful of leverage points. Decide here whether to keep, cap, or drop them — and remember the decision when interpreting steps 5-6.",
+      "Check pairwise relationships with correlation. Pearson r on two columns of equal length. r near +1 / -1 = strong linear relationship; r near 0 = no linear relationship (but possibly a non-linear one — Pearson doesn't see U-shapes). r² is the 'fraction of variance explained' — useful for setting expectations on the regression in step 6. A perfect r of 1.0 on real-world data is almost always a sign that the two columns are mechanically the same thing (column B is column A in different units, or column B is computed from column A).",
+      "Fit a baseline with linear-regression. Ordinary least squares: y = mx + b, with slope, intercept, and r² returned. Even when you know the real relationship is non-linear, the OLS line is still the right first benchmark — it tells you the dominant linear trend and surfaces the residuals you'd need to model with something fancier. If r² < 0.3, the linear model is genuinely bad and you should reach for a different functional form (log, polynomial, segmented) rather than tweaking it. Composes cleanly with the forecasting-bake-off pack if this column is time-indexed.",
+    ],
+    claudePrompt:
+      "Profile this CSV using Agent402:\nyear,revenue,cost\n2022,1000,800\n2023,1500,1100\n2024,2100,1400\n\nColumns to profile: revenue (primary), cost (for pairwise checks). (1) csv-to-json the input. Confirm parsed row count matches expectations and surface the parsed columns. (2) json-query with $.[*].revenue to get the revenue array; do the same for cost. Confirm both are numeric (no string leakage from currency symbols / thousands separators). (3) stats-summary on the revenue array — report mean, median, stddev, q1/q3/IQR. Same for cost. Note skew (mean vs. median) and spread (IQR). (4) outliers on the revenue array, then on cost. If any are flagged, list them with their row indices and decide: keep, cap at fence, or drop. Use the same decision consistently for the next two steps. (5) correlation with x=revenue, y=cost. Report r and r². Flag if r > 0.99 as 'likely mechanically related, not independent' and warn before treating as a real finding. (6) linear-regression with x=revenue, y=cost. Report slope (cost-per-dollar-of-revenue), intercept, and r². If r² < 0.3, recommend a non-linear functional form in the writeup. Final return: {columns: [...], parsedRows: N, revenue: {summary, outliers}, cost: {summary, outliers}, correlation: {r, rSquared, interpretation}, regression: {slope, intercept, rSquared}, takeaways: [3-5 bullet points], suggestedNextStep}. All six tools are pure-CPU (free tier eligible). Budget ≤ $0.01 even paid.",
+  },
+  {
+    slug: "location-intel",
+    title: "Location intel",
+    tagline:
+      "Point at an address (or even a rough place name) and assemble the situational brief: precise coordinates, the canonical postal address, what's within walking distance, the live weather forecast, active NWS hazard alerts, and recent seismic activity. The deterministic 'what should I know about this place right now?' workup.",
+    useCase:
+      "A field-ops agent (sales rep about to visit a customer, contractor scoping a job site, traveler arriving in a new city, emergency-response coordinator) hands the pack an address and needs the full pre-arrival brief in one workup. Geocode pins the spot, reverse-geocode confirms the canonical postal form (catches stale addresses where the building number changed), place-search surfaces nearby POIs (gas, coffee, hospital, supplies), weather-forecast covers the next 24-48h conditions, weather-alerts surfaces any active NWS warning (red flag / flood / heat / tornado), and earthquakes filters recent seismic activity in the region. US-centric for hazards/forecast; geocoding works globally.",
+    promptArgs: [
+      { name: "address", description: "Address or place name (e.g. '1600 Pennsylvania Ave NW Washington DC' or 'Joshua Tree National Park')", required: true, substitute: "1600 Pennsylvania Ave NW Washington DC" },
+    ],
+    // Six tools, ordered as the standard situational-brief workup: pin
+    // (geocode) → verify (reverse-geocode catches typos and stale addresses
+    // by round-tripping back to canonical form) → context (place-search for
+    // POIs) → conditions (weather-forecast) → hazards (weather-alerts for
+    // active warnings, earthquakes for recent seismic activity in the
+    // region). geocode/reverse-geocode/place-search work globally (OSM /
+    // Nominatim); weather-forecast + weather-alerts are US-only (NWS);
+    // earthquakes is global (USGS). Composes geo-kit + data-kit + gov-kit.
+    // All six tools touch external egress — wallet-only / not PoW-eligible.
+    toolSlugs: [
+      "geocode",
+      "reverse-geocode",
+      "place-search",
+      "weather-forecast",
+      "weather-alerts",
+      "earthquakes",
+    ],
+    workflow: [
+      "Pin the location with geocode. Free-form input ('1600 Penn Ave', 'Joshua Tree', 'Eiffel Tower') resolves to lat/lon + display name + bounding box via OpenStreetMap/Nominatim. The bounding box matters: a query like 'New York' resolves to a city-sized box, whereas '1600 Penn Ave' resolves to a building-sized box. The box size tells you immediately whether the next steps will return city-wide or building-specific results.",
+      "Round-trip with reverse-geocode using the lat/lon from step 1. This is the verification step — if you got the wrong place (an obscure 'Springfield' in a different state, a homonym match in another country) the canonical postal address surfaced here won't match what the user expected, and the agent should stop and ask rather than confidently brief on the wrong location. It also returns the structured ISO country code, which gates whether the US-only steps (4 and 5) will work at all.",
+      "Pull nearby POIs with place-search around the lat/lon. Useful pre-arrival categories: gas stations, coffee, ATM, hospital, hardware store, supplies. Each result includes distance + bearing, so the agent can render directional context ('coffee 200m N'). For pure tourism arrivals this surfaces sights; for emergency contexts this surfaces critical infrastructure (hospital, police, fire). For sales/customer-visit contexts, surface restaurants near the customer site for the post-meeting lunch suggestion.",
+      "Layer current conditions with weather-forecast. US-only (api.weather.gov / NWS) — takes the lat/lon and returns a 7-day forecast in 12-hour blocks. If reverse-geocode in step 2 returned a non-US country code, skip this step and surface in the writeup. Pre-arrival you want the next 24-48h: temp range, precip probability, wind, hazards (ice/snow/heat). For multi-day deployments include the full 7-day window so the team can pack accordingly.",
+      "Check for active hazards with weather-alerts using the two-letter US state code from step 2's reverse-geocode result. Active NWS alerts cover everything from severe thunderstorms to red flag (fire-weather) warnings to coastal flood watches. Even if the forecast looks calm, an active alert in the state is critical: 'no rain at this address tomorrow but a red flag warning means an avoidable burn restriction'. Skip with a note if the location isn't in the US.",
+      "Survey recent seismic activity with earthquakes (USGS, global). Filter the result list by proximity to the lat/lon from step 1 — recent activity within ~200km matters; a 5.0 across the planet doesn't. For non-seismic regions (most of the Midwest, most of Europe) the result is reassuringly empty. For Pacific Rim regions / California / Japan / New Zealand / Italy the historical baseline isn't zero, so the framing is 'is recent activity within 200km elevated vs. the regional baseline?' Composes nicely with the structured-scrape pack if the user wants to chase a quake into a deeper bulletin.",
+    ],
+    claudePrompt:
+      "Build a location situational brief for: 1600 Pennsylvania Ave NW Washington DC. (1) geocode 'q=1600 Pennsylvania Ave NW Washington DC&limit=1'. Record the lat / lon / display name / bounding-box size. Flag if bounding box is city-sized when the user clearly asked for a specific building. (2) reverse-geocode with the lat/lon from step 1. Confirm the canonical postal address matches what the user asked for. Extract the two-letter US state code (e.g. DC) and the country code (e.g. US) — these gate the next steps. (3) place-search around the lat/lon at a 1km radius. Categorize results into: food (cafes/restaurants), services (gas/ATM/pharmacy), and critical (hospital/police/fire). Top 5 in each category by distance. (4) IF country == US: weather-forecast for lat/lon. Surface next-24h temp range, precip probability, wind, any in-period hazards (NWS sometimes embeds advisory text in the forecast itself). Otherwise note 'weather-forecast US-only, skipped'. (5) IF country == US: weather-alerts for the state code from step 2. List active alerts: event, severity, headline, area, onset/expires. Flag severity in (Severe, Extreme) as a hard 'do not travel' signal. (6) earthquakes for period=week, minMag=2.5. Filter to events within ~200km of the lat/lon from step 1 — use the haversine of (lat,lon) vs each quake's (lat,lon). If the filtered list is non-empty, sort by magnitude desc and report the top 3. If empty for a non-seismic region, report 'baseline quiet'. Final return: {location: {displayName, lat, lon, country, state}, nearby: {food, services, critical}, weather: {next24h, precipProbability, hazards}, activeAlerts: [{event, severity, headline}], seismic: {recentNear, status}, travelRecommendation: 'green'|'yellow'|'red', oneLineBrief}. All six tools touch external APIs (egress) — wallet-only, budget ≤ $0.02 per address.",
+  },
+  {
+    slug: "meeting-scheduler",
+    title: "Meeting scheduler",
+    tagline:
+      "Schedule a meeting across timezones without the round-tripping. Convert a proposed UTC slot into every attendee's local time, verify it lands on a working day for each, project the end time, generate human-readable countdowns, expand recurring rules, and report exactly how far out the slot sits — in one deterministic pass.",
+    useCase:
+      "A scheduling agent (admin coordinating an exec sync, hiring manager booking an interview panel across three regions, project lead spinning up a weekly standup for a globally distributed team) needs to translate one proposed slot into per-attendee local context. The pack chains the standard scheduling questions: 'what time is it now in their TZ?', 'when is this meeting in their local clock?', 'is that a business day for them?', 'when does it end?', 'how do I phrase the reminder?', 'when does the recurring instance next fire?', and 'how far out is this from now?'. No back-and-forth needed.",
+    promptArgs: [
+      { name: "proposedTime", description: "Proposed start time in UTC ISO 8601 (e.g. '2026-07-15T14:00:00Z')", required: true, substitute: "2026-07-15T14:00:00Z" },
+      { name: "attendeeTzs", description: "Comma-separated IANA timezones (e.g. 'America/New_York, Europe/London, Asia/Tokyo')", required: true, substitute: "America/New_York, Europe/London, Asia/Tokyo" },
+      { name: "durationStr", description: "Meeting duration as a duration string (e.g. '1h30m' or '45m')", required: true, substitute: "1h" },
+    ],
+    // Seven tools, ordered as the natural scheduling-agent workflow: anchor
+    // (time gives you 'now' in each attendee's TZ to establish the reference
+    // frame), translate (time-convert renders the proposed UTC slot in each
+    // attendee local clock), validate (business-days confirms it's a working
+    // day per region — Friday in Tel Aviv ≠ Friday in NYC), project
+    // (add-time computes the end-time slot), narrate (relative-time turns
+    // ISO timestamps into 'in 3 days, 6 hours' for invite reminders),
+    // recur (cron-next expands 'every Monday 9am' into the next 5 dates),
+    // confirm (date-diff produces the headline 'this meeting is 2d 4h
+    // from now' for the calendar invite). All seven tools are pure-CPU
+    // and PoW-eligible. Composes kit (time/time-convert/cron-next/duration/
+    // date-diff) + kit2 (business-days, relative-time, add-time).
+    toolSlugs: [
+      "time",
+      "time-convert",
+      "business-days",
+      "add-time",
+      "relative-time",
+      "cron-next",
+      "date-diff",
+    ],
+    workflow: [
+      "Anchor with time — call it once per attendee IANA timezone to establish 'what time is it right now over there?'. This is the reference frame for the rest of the workup. An attendee currently at 23:00 local is going to feel a 'morning' invite differently than one at 09:00. The dayOfWeek field also surfaces the lurking weekend-boundary bug: it's Saturday in Tokyo when it's Friday afternoon in NYC, and a 'Friday 5pm Eastern' meeting silently lands on Saturday for the Tokyo attendee.",
+      "Translate the proposed UTC slot with time-convert into every attendee's local timezone. Pass the same UTC ISO timestamp and rotate the tz parameter across attendees. The output gives you {utc, local, timezone} per attendee — render the local time + offset prominently in the invite ('14:00 UTC / 10:00 EDT / 16:00 CEST / 23:00 JST'). This is the single most important translation step; getting it wrong by one DST boundary is the classic scheduling mistake.",
+      "Validate working-day with business-days. For each attendee TZ, compute business-days between today and the proposed date. If the count is zero (proposed date is a weekend or public holiday for that region), surface it — the meeting will land outside working hours for that attendee even if the clock-time looks reasonable. Bonus signal: the same call gives you 'this meeting is N business days out', useful for SLA-driven scheduling ('two business days lead time required for this kind of review').",
+      "Project the end time with add-time using the meeting duration. add-time on the proposed UTC start + the duration string ('1h30m') returns the ISO end timestamp. Pipe that back through time-convert per attendee to render the local end time — invites that show only the start time are notoriously incomplete for cross-TZ teams who need to know whether the meeting eats their entire lunch or runs into bedtime.",
+      "Narrate with relative-time. Takes any ISO timestamp and renders 'in 3 days, 6 hours' or '2 weeks ago'. Use this to generate the natural-language countdown in the invite body and follow-up reminders ('your interview is in 4 hours'). The output is locale-neutral and deterministic — exactly what an agent wants for templated comms rather than a date-fns localized string that varies by runtime environment.",
+      "Expand recurrence with cron-next if the meeting is recurring. Pass the cron expression (e.g. '0 14 * * 1' for every Monday 14:00 UTC) and a count of 5 — get back the next 5 ISO instances. Round-trip these through time-convert + business-days to surface 'next 5 Mondays + each attendee's local time + whether any hits a US holiday'. For non-recurring meetings, skip this step.",
+      "Confirm with date-diff between now() and the proposed UTC slot — the headline 'this meeting is 2d 4h from now' line that goes at the top of the invite. Also surfaces the absolute difference in every unit (ms / seconds / minutes / hours / days), which is the right shape for downstream reminder scheduling: 'fire a reminder webhook at start - 30m' is much easier when you know the start is at start.epochMillis - 1800000 directly.",
+    ],
+    claudePrompt:
+      "Schedule a cross-TZ meeting using Agent402. Proposed: 2026-07-15T14:00:00Z. Attendees in: America/New_York, Europe/London, Asia/Tokyo. Duration: 1h. (1) time for each of the three attendee timezones. Record current local time + day-of-week per attendee to ground the rest of the workup. (2) time-convert the proposed UTC slot for each tz. Surface {tz, local, offsetVsUTC}. Watch for DST boundaries — Europe/London is +0 or +1 depending on the date, Asia/Tokyo is +9 year-round, America/New_York is -4 or -5. (3) business-days from today to the proposed date in each tz. If the proposed local date lands on a weekend or known public holiday for any attendee region, flag it. (4) add-time the proposed UTC start + duration '1h' → endIso. time-convert endIso per attendee → local end time. Surface 'start–end' per attendee. (5) relative-time the proposed UTC slot from now → render 'in X' string for the invite body. (6) IF the user said this is recurring: cron-next with the user-provided cron expression, count=5. For each instance, run time-convert per attendee and report. Otherwise skip. (7) date-diff between now() and the proposed UTC slot. Use the human-readable result as the invite headline. Final return: {proposedUtc, perAttendee: [{tz, localStart, localEnd, dayOfWeek, businessDayCount, weekendOrHolidayFlag}], reminder: 'starts in 2d 4h', recurrencePreview: [...], oneLineHeader: 'July 15, 14:00 UTC — 1h — 10am EDT / 15:00 BST / 23:00 JST'}. All seven tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.01 even paid.",
+  },
+  {
+    slug: "jwt-forensics",
+    title: "JWT forensics",
+    tagline:
+      "Someone hands you a JWT and asks 'is this valid?' Decode without verification first to see the shape, render the time claims (iat/nbf/exp) in human time, compute exactly how long until expiry, then HMAC-verify against the secret. Optional follow-ups: decode any base64-looking custom claims, verify embedded SHA fingerprints.",
+    useCase:
+      "An SSO/OAuth/API-token debugging session: a developer pasted a JWT into a support thread and asks 'why is the gateway rejecting this?' The pack runs the deterministic workup: decode reveals the alg + claims (you immediately see if the algorithm is HS256/384/512 or something asymmetric the verify step can't handle); time-convert + date-diff render the exp claim as ISO + 'expires in 14 minutes' (the most common gateway-reject reason — token already expired); jwt-verify confirms the HMAC signature against the shared secret. Two optional follow-ups handle the long tail: base64 decodes custom claims that look base64-encoded (common pattern for embedded metadata), and hash verifies any SHA fingerprint claims (common in mTLS pinning + sender-constrained tokens).",
+    promptArgs: [
+      { name: "token", description: "The JWT to inspect (three dot-separated base64url segments)", required: true, substitute: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZ2VudDQwMiIsIm5hbWUiOiJkZW1vIGFnZW50IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9.NqggPBGuLX1OA7YuSlQ4S0INJfCOWnwXWT0XUIUrt3s" },
+      { name: "secret", description: "Shared HMAC secret to verify the signature against (only used in step 4)", required: true, substitute: "my-secret" },
+    ],
+    // Six tools, ordered to match the standard JWT debugging workup: decode
+    // BEFORE verify (you need to know the alg before you can decide whether
+    // HMAC verify is even applicable — RS256 / ES256 / EdDSA tokens fail
+    // jwt-verify by design and you should report 'unsupported alg' instead
+    // of 'invalid signature'). time-convert + date-diff make exp/iat/nbf
+    // human-readable — 'token expires in 14 minutes' is far more useful
+    // than 'exp: 1781172000'. jwt-verify is the conclusive answer for
+    // HMAC tokens. base64 + hash are the two long-tail follow-ups that
+    // catch the patterns simpler inspectors miss: base64-encoded custom
+    // claims (a common embedded-metadata trick) and SHA-fingerprint claims
+    // (mTLS pinning, sender-constrained tokens). All six tools are
+    // pure-CPU and PoW-eligible. Composes kit (jwt-decode, time-convert,
+    // date-diff, base64, hash) + kit2 (jwt-verify).
+    toolSlugs: [
+      "jwt-decode",
+      "time-convert",
+      "date-diff",
+      "jwt-verify",
+      "base64",
+      "hash",
+    ],
+    workflow: [
+      "Decode the token with jwt-decode first — no verification, just see the shape. Returns header, payload, signaturePresent, expired (computed from the exp claim against current time), and expiresInSeconds. The header.alg field is the gating signal: HS256/HS384/HS512 means step 4 (HMAC verify) is applicable; RS256/ES256/EdDSA means asymmetric crypto and the verify step won't work with a shared secret — you'd need a JWKS / public key flow instead. The signaturePresent flag catches the classic mistake of pasting just the header.payload without the third segment.",
+      "Render the time claims with time-convert. Loop over iat, nbf, and exp from the payload — each is an epoch-seconds integer that time-convert renders as ISO + (optionally) a human timezone. Doing this surfaces three concrete numbers that the user can sanity-check: 'issued at 2026-06-21T14:00:00Z' tells you whether the token came from the issuer you expected; 'not-before at 2026-06-21T14:00:01Z' surfaces clock-skew bugs; 'expires at 2026-06-21T15:00:00Z' is the headline. If the payload has no exp / iat / nbf, surface that — opaque tokens with no time bounds are themselves a security finding.",
+      "Compute the headline countdown with date-diff between now() and the exp claim. The human-readable output ('expires in 14 minutes' / 'expired 3 hours ago') is the single most useful sentence in the report. It also reveals two more subtle problems: a token whose exp is years in the future is suspicious (overly long-lived tokens are a common misconfiguration); a token whose iat is in the future indicates a clock-skew issue between the issuer and your server.",
+      "Verify the HMAC signature with jwt-verify against the shared secret. Returns {valid, algorithm, expired, payload}. Three outcomes to handle distinctly: (a) valid=true → signature is correct, secret is right, token is authentic; (b) valid=false with reason='Unsupported alg' → the token uses asymmetric crypto and you can't verify it here, surface that and recommend the JWKS flow; (c) valid=false without a reason → either the secret is wrong, the token was tampered with, or the token was signed by a different issuer than the secret you're checking against. The expired field is recomputed here too — re-check it against step 3 for consistency.",
+      "Long-tail follow-up: decode any base64-looking custom claims with base64. Some issuers pack metadata into custom claims as base64-encoded JSON or base64-encoded raw bytes (Kubernetes service-account tokens, vendor SDKs, custom RBAC payloads). For each payload key whose value matches /^[A-Za-z0-9+/_-]+={0,2}$/ and is at least 16 characters, try decoding — if the result is valid UTF-8 (especially JSON), surface it. Skip the standard registered claims (iss, sub, aud, exp, iat, nbf, jti) — those are never base64-encoded.",
+      "Final long-tail: verify any SHA fingerprint claims with hash. Patterns like cnf.x5t#S256 (RFC 8705 mTLS sender-constrained tokens), cnf.jkt (DPoP proof-of-possession), or vendor 'fingerprint'/'hash' claims encode a SHA-256 of a client certificate or public key. If the user has the underlying material (cert PEM, public key bytes), run hash on it and compare to the claim value — a mismatch means the token was issued for a different client and is being replayed. For standard tokens with no such claims, this step is a no-op.",
+    ],
+    claudePrompt:
+      "Inspect this JWT using Agent402. Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZ2VudDQwMiIsIm5hbWUiOiJkZW1vIGFnZW50IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9.NqggPBGuLX1OA7YuSlQ4S0INJfCOWnwXWT0XUIUrt3s. Secret: my-secret. (1) jwt-decode — extract header.alg, payload claims, signaturePresent, and the computed expired flag. If alg is not HS256/HS384/HS512, surface 'asymmetric algorithm, HMAC verify not applicable' and continue with steps 2-3, skip 4. (2) time-convert each of payload.iat, payload.nbf, payload.exp (if present) — render as ISO 8601 UTC. Note any that are missing (especially exp — opaque, never-expiring tokens are a security finding). (3) date-diff between now() and payload.exp. Headline: 'expires in X' or 'expired X ago'. Flag iat in the future as a clock-skew bug. Flag exp > now + 1 year as 'unusually long-lived token, double-check this is intentional'. (4) IF alg is HS256/HS384/HS512: jwt-verify with token + secret. Report {valid, algorithm, expired}. If valid=false, distinguish: 'unsupported alg' / 'signature mismatch (wrong secret or tampered)' / 'malformed'. (5) For each payload key NOT in [iss, sub, aud, exp, iat, nbf, jti]: if the value is a base64-looking string ≥16 chars, run base64 decode. If the decoded result parses as JSON or is valid UTF-8, surface it under 'embeddedClaims'. (6) IF payload contains cnf.x5t#S256, cnf.jkt, or any 'fingerprint'/'hash' claim: prompt the user for the underlying material (cert PEM or public key), run hash with alg=sha256, compare. Report match/mismatch. Final return: {alg, sigValid, expired, expiresIn, claims: {iat, nbf, exp, iss, sub, aud}, embeddedClaims, fingerprintChecks, oneLineVerdict: 'authentic / expired in 14m / wrong-secret / unsupported-alg / opaque-no-exp'}. All six tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.01 even paid.",
+  },
+  {
+    slug: "user-onboarding",
+    title: "User onboarding",
+    tagline:
+      "Take a signup form submission and run the full onboarding workup deterministically: validate the email, score the chosen password, mint a stable internal ID, derive a URL-safe handle from the display name, generate a recovery / API secret, hash the password for storage, and verify the 2FA setup code. One pass, every step a pure-CPU call.",
+    useCase:
+      "An onboarding/account-provisioning agent receives a signup payload ({email, password, displayName, totpCode, totpSecret}) and needs to validate every field, mint every supporting identifier, and produce a storable record — without leaking the plaintext password into intermediate logs. The pack chains the steps in dependency order: validate before mint, mint stable IDs before deriving display fields, hash before storing. Output is a clean 'persistable record' shape plus a 'reject this signup because…' explanation when any step fails.",
+    promptArgs: [
+      { name: "email", description: "User-supplied email address", required: true, substitute: "ada@example.com" },
+      { name: "password", description: "User-chosen password (plaintext, will be scored then hashed; never logged)", required: true, substitute: "S0meStrongPassw0rd!" },
+      { name: "displayName", description: "User-supplied display name (will be slugified into a URL handle)", required: true, substitute: "Ada Lovelace" },
+      { name: "totpSecret", description: "Base32 TOTP secret generated during 2FA enrollment (server-side state)", required: true, substitute: "JBSWY3DPEHPK3PXP" },
+      { name: "totpCode", description: "6-digit code the user typed in to confirm their authenticator app is wired up", required: true, substitute: "492039" },
+    ],
+    // Seven tools, ordered by the dependency graph of a real signup:
+    // validate inputs FIRST (email-validate, password-strength) so a
+    // rejected signup never burns the mint steps; then mint the stable
+    // primary key (uuid) — every other field can change but the UUID
+    // must be assigned once; then derive display surfaces (slugify) from
+    // user-controlled input AFTER you have the immutable UUID as the
+    // dedupe key; then generate auxiliary secrets (password) for API
+    // keys / recovery codes; then hash the user-chosen password
+    // (note: hash is for fingerprinting/dedupe — real password storage
+    // needs bcrypt/argon2/scrypt with per-user salt, surface that in
+    // the prompt); finally verify the 2FA setup with totp. The ordering
+    // is also security-driven: never call hash on the plaintext before
+    // password-strength has accepted it (otherwise you've stored a
+    // fingerprint of a password the user is about to be told to change).
+    // All seven tools are pure-CPU and PoW-eligible. Composes kit
+    // (email-validate, uuid, slugify, password, hash, totp) + kit2
+    // (password-strength).
+    toolSlugs: [
+      "email-validate",
+      "password-strength",
+      "uuid",
+      "slugify",
+      "password",
+      "hash",
+      "totp",
+    ],
+    workflow: [
+      "Validate the email with email-validate. Returns a structured verdict beyond a regex — surfaces whether the local-part / domain are well-formed, whether the domain looks like a typo of a major provider (gmial.com), and whether the address has obvious red flags. Reject here on hard failures (malformed) and surface soft warnings (likely typo) for the agent to confirm with the user. Every step after assumes a valid email so any downstream 'send confirmation email' step doesn't fail silently.",
+      "Score the password with password-strength. Returns a score (0-4 or similar zxcvbn-style band) plus the actual weakness reason ('common password', 'contains username', 'too short'). Reject below a threshold and surface the *specific* weakness — 'your password is too weak' is unhelpful, 'your password contains your username' tells the user exactly what to change. Doing this here, before any hashing or mint step, means a rejected signup leaves no trace of the bad password anywhere.",
+      "Mint the stable internal ID with uuid. UUID v4 is the right default — globally unique, no information leakage, decoupled from any user-controlled field. This is the dedupe / primary-key for the rest of the workup; every downstream record (user record, audit row, related entity) references this UUID rather than email or handle, both of which can change. Generate ONCE per signup and never regenerate.",
+      "Derive the URL-safe handle with slugify on displayName. 'Ada Lovelace' → 'ada-lovelace'; 'Søren Kierkegaard' → 'soren-kierkegaard' (diacritics folded). Two failure modes to handle: collision with an existing handle (append the first 6 chars of the UUID), and reserved / forbidden slugs (admin, api, login — match against a denylist). The UUID from step 3 is the collision-resolution suffix because it's the only stable thing you have.",
+      "Generate auxiliary secrets with password. Use this for: a one-time recovery code (16-20 alphanumeric, presented to the user and never stored plaintext server-side), an API key for the user's first programmatic access (32-48 chars), or a temporary password for an admin-created account that the user must change at first login. Output is uniformly random and meets common entropy requirements out of the box — no need to argue policy with the user.",
+      "Hash with hash. NOTE: this is for FINGERPRINTING and dedupe lookups — real password storage MUST use bcrypt / argon2 / scrypt with per-user salt + work factor, not a bare SHA-256. Legitimate use cases for hash here: pwned-password fingerprint (SHA-1 of the password, sent as a 5-char prefix to a k-anonymity API), recovery-code fingerprint for fast lookup (the recovery code itself is shown to the user once and stored only as a hash), and integrity fingerprints for audit logging. Surface the algorithm choice (sha256 by default) and never use hash output as the primary password store.",
+      "Verify 2FA setup with totp. Takes the base32 secret you generated server-side during enrollment, computes the current code, compares to what the user typed in. Three outcomes: (a) match → 2FA is wired up correctly, persist the secret encrypted-at-rest; (b) off by one window (the user took 30+ seconds to type) → accept and warn; (c) mismatch → either the user scanned the QR but typed wrong, or the QR encoded a different secret — re-issue the secret rather than letting them retry indefinitely. Doing this BEFORE finalizing the account means a broken 2FA enrollment fails the entire signup, not the next login attempt.",
+    ],
+    claudePrompt:
+      "Onboard this signup using Agent402: email=ada@example.com, password=S0meStrongPassw0rd!, displayName=Ada Lovelace, totpSecret=JBSWY3DPEHPK3PXP, totpCode=492039. (1) email-validate the email. If invalid, return {accepted: false, reason: 'invalid-email', detail}. If 'likely-typo', surface the suggested correction and ask the user to confirm rather than rejecting outright. (2) password-strength on the password. If score < 3, return {accepted: false, reason: 'weak-password', specifically: <why>, suggestion: 'add length / drop common-pattern / vary character classes'}. Hard-reject signups that contain the email local-part or the displayName. (3) uuid (v4). Save as userId — this is the dedupe key for the rest of the steps. (4) slugify the displayName. If the slug collides with a reserved word (admin/api/login/root/help/about) or an existing handle, append the first 6 chars of userId hex. (5) password — generate one recovery code (length=20, alphanumeric) and one API key (length=48, alphanumeric+symbol). Return both to the user ONCE; persist only the hash. (6) hash the recovery code with alg=sha256 — this is what you'll store. Separately, hash the user-chosen password ONLY for the pwned-password k-anonymity probe (first 5 chars of SHA-1) — DO NOT use the SHA-256 output as the password store; the prompt MUST recommend bcrypt/argon2 for real persistence. (7) totp with secret=totpSecret. Compare computed code to totpCode. If match, set enrollment=confirmed. If off-by-one window, accept-with-warning. If mismatch, reject 2FA and instruct re-enroll (don't reject the whole signup; let the user retry the QR). Final return: {accepted: true|false, reason?, userId, handle, email, recoveryCodeHash, apiKey, twofaConfirmed, persistableRecord: {userId, email, handle, passwordStorage: 'TODO: replace SHA-256 with bcrypt/argon2', recoveryCodeHash, totpSecretEncrypted}}. All seven tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.01 even paid. Never log plaintext password / recovery code / API key — these appear in the return value only.",
+  },
+  {
+    slug: "data-interchange",
+    title: "Data interchange",
+    tagline:
+      "Bring data in from any structured format, normalize through JSON as the universal pivot, merge with overrides, audit the diff, flatten for downstream systems, and emit to whatever format the next stage actually consumes — CSV for spreadsheets, YAML for config systems, JSON for everything else. The deterministic universal-format-bridge workflow.",
+    useCase:
+      "A common ops/integration pattern: base config lives in YAML (12-factor / k8s convention), environment-specific overrides arrive as JSON (from a vault, an env API, a feature-flag service), and the downstream system that consumes the result wants either a CSV (for an audit spreadsheet), a flattened key=value envelope (for env-var injection), or the canonical YAML back (for committing to git). Doing this by hand involves three format-conversion utilities, a merge tool, and a diff to prove what changed — this pack chains them in one pass and produces every output format at once.",
+    promptArgs: [
+      { name: "baseYaml", description: "Base configuration document in YAML", required: true, substitute: "server:\n  host: localhost\n  port: 8080\n  tls: false\ndatabase:\n  pool: 10\n  timeout: 30\nfeatures:\n  betaApi: false" },
+      { name: "overridesJson", description: "Environment-specific overrides as JSON (deep-merged onto the base)", required: true, substitute: "{\"server\":{\"host\":\"api.production.example.com\",\"tls\":true},\"features\":{\"betaApi\":true}}" },
+    ],
+    // Six tools, ordered as the canonical merge-and-export workflow:
+    // parse the base YAML into JSON (the universal pivot — every other
+    // tool in the pack takes JSON as input), apply JSON overrides via
+    // deep-merge (defaults-and-overrides pattern, deterministic key-by-key
+    // resolution), audit the diff to prove exactly which keys changed
+    // (critical for production config rollouts and compliance review),
+    // flatten the merged result (gives you the env-var key=value envelope
+    // for runtime injection), then dual-emit: CSV for the audit-trail
+    // spreadsheet stakeholders want, YAML for the canonical config-system
+    // / git-commit output. All six tools are pure-CPU and PoW-eligible.
+    // Composes kit (yaml-to-json, json-merge - wait json-merge is kit2,
+    // json-diff, json-to-csv, json-to-yaml) + kit2 (json-merge, json-flatten).
+    toolSlugs: [
+      "yaml-to-json",
+      "json-merge",
+      "json-diff",
+      "json-flatten",
+      "json-to-csv",
+      "json-to-yaml",
+    ],
+    workflow: [
+      "Parse the base YAML with yaml-to-json. YAML is the most config-friendly source format (comments, anchors, multi-line strings) but JSON is the only sensible pivot — every downstream merge/diff/flatten tool takes JSON in and returns JSON out. Catch the silent failure here: YAML with tabs (forbidden), inconsistent indentation, or unquoted strings that look like booleans ('yes'/'no'/'on'/'off' all become actual booleans in YAML 1.1) — surface these as parse warnings rather than letting the override merge inherit a wrong type.",
+      "Apply the overrides with json-merge. Deep-merge is the right primitive for config: scalar values get replaced, objects get recursively merged, arrays get concatenated (this is the json-merge tool's contract — see the source). For environment overrides this is exactly right: the base ships defaults, the env supplies the specifics. Reject any override key in {__proto__, constructor, prototype} as the tool's prototype-pollution guard, which gives you 'safe to load from arbitrary user-controlled JSON' as a free property.",
+      "Audit the merge with json-diff against the original base. Returns a structured diff (added / removed / changed paths). This is the most important step for production rollouts: 'we changed server.host and enabled features.betaApi — was that intentional?' is the compliance question, and json-diff produces the artifact that answers it. Generate this diff at deploy time and ship it to your audit log so the next outage post-mortem can pin a config change to a moment in time.",
+      "Flatten the merged document with json-flatten. Nested {server: {host: 'x', port: 8080}} collapses to {'server.host': 'x', 'server.port': 8080} — the exact shape an env-var emitter or a Vault writer or a k8s ConfigMap data-block expects. This is the bridge between human-friendly nested structure and machine-friendly key=value transport. Note that the json-flatten tool also supports the reverse direction (unflatten) when you need to round-trip from key=value back to nested.",
+      "Emit CSV with json-to-csv. Two-column shape (key,value) is what stakeholders want when reviewing config in a spreadsheet: filterable by key prefix, sortable, easy to diff in a code-review tool that doesn't natively render YAML. For a more report-y form, the csv-to-md tool can render the same data as a markdown table — but CSV is the right primary export because every downstream tool consumes it.",
+      "Emit YAML with json-to-yaml. Round-trips the merged document back to YAML for git commit, ConfigMap creation, or human review — closing the loop and giving you a canonical 'this is the effective config at this version' artifact. Note that comments in the original YAML do NOT survive the JSON pivot (JSON has no comment grammar) — call this out in the prompt so the user knows to either inline comments as $comment-style keys, maintain them out-of-band, or accept that the round-tripped YAML is reformatted.",
+    ],
+    claudePrompt:
+      "Merge and re-emit this config using Agent402.\n\nBase YAML:\nserver:\n  host: localhost\n  port: 8080\n  tls: false\ndatabase:\n  pool: 10\n  timeout: 30\nfeatures:\n  betaApi: false\n\nOverrides JSON: {\"server\":{\"host\":\"api.production.example.com\",\"tls\":true},\"features\":{\"betaApi\":true}}\n\n(1) yaml-to-json on the base. Confirm parsed structure (server/database/features). Flag any of the YAML 1.1 boolean-coercion traps (yes/no/on/off) if present. (2) json-merge — deep-merge the parsed base with the overrides JSON. Result should show server.host = production hostname, server.tls = true, features.betaApi = true, all other keys unchanged. (3) json-diff between the parsed base and the merged result. Surface the change set as a list: [{path, op, before, after}]. This is the audit artifact — log it and attach it to the deploy record. (4) json-flatten on the merged document. Emit the key=value envelope: SERVER_HOST=… / SERVER_PORT=… / SERVER_TLS=… etc. Convention: dot-separated keys map to underscore-separated UPPER_SNAKE env vars; describe the convention in the writeup. (5) json-to-csv on the flattened map. Two columns: key,value. This is the stakeholder-friendly export. (6) json-to-yaml on the merged document. This is the canonical 'effective config' YAML — call out that comments from the input YAML did NOT survive the JSON pivot. Final return: {parsedBase, merged, changeAudit: [{path, op, before, after}], envVars: {…}, csvExport, canonicalYaml, oneLineSummary: 'merged N override keys onto base; M paths changed; ready for deploy'}. All six tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.01 even paid.",
+  },
+
+  {
+    slug: "rag-prep",
+    title: "RAG corpus prep",
+    tagline:
+      "Take a raw document and turn it into a vector-DB-ready JSONL dataset, deterministically. Measures the corpus, token-counts it with the real OpenAI BPE, chunks at the right token boundary, attaches entities + keywords as metadata, emits NDJSON, then validates every record against a JSON Schema before you ingest it. Seven pure-CPU tools, free-tier eligible — the canonical 'prep my docs for embeddings' workflow done as deterministic tool calls instead of a hand-rolled Python script.",
+    useCase:
+      "The 'prep my docs for embeddings' workflow is the universal first step for every RAG pipeline, fine-tuning dataset, and agent corpus — and it's almost always done with a hand-rolled Python script that silently drops malformed records, chunks by character instead of token, and ships unvalidated JSONL to the vector DB. This pack does the whole pipeline as deterministic tool calls so the output is reproducible across runs, the schema gate catches corruption at the boundary, and the agent can re-run a single step (re-chunk with a different size) without re-doing the rest.",
+    toolSlugs: [
+      "text-stats",
+      "token-count",
+      "text-chunk",
+      "extract-entities",
+      "keywords",
+      "jsonl",
+      "json-validate",
+    ],
+    workflow: [
+      "Size the corpus with text-stats. Returns characters / words / sentences / paragraphs / tokens (cheap heuristic, not the real LLM tokenizer). This is the budget probe: if the doc is 50k characters you can afford to chunk and embed it; if it's 50MB you need a different strategy (streaming, summarization-first, or sharding). Treat the heuristic-token count as an upper bound; the real count comes from token-count next.",
+      "Count exact LLM tokens with token-count. Uses the real OpenAI BPE (o200k_base for gpt-4o/o-series, cl100k_base for gpt-4/gpt-3.5) — same tokens the embedding model will actually consume. The reason this matters: a chunk that text-stats counts as 800 'tokens' (whitespace-split) is often 1100+ real tokens (BPE splits subwords), and OpenAI's text-embedding-3-small caps at 8191 input tokens. Knowing the true count before you chunk lets you pick a size that fits the embedding model's context window with safety margin.",
+      "Chunk with text-chunk in token mode. Pass unit='tokens' and size=512 (or whatever your embedding model + retrieval strategy wants). Returns the chunks plus offsets. Token-mode chunking is the correct primitive: char-mode is a convenient default but will split mid-word and produce chunks that mismatch embedding-model context boundaries. Overlap of ~10-20% (e.g., 64 tokens on a 512 chunk) is the conventional sweet spot for retrieval recall.",
+      "Per chunk: enrich with extract-entities. Returns deduped emails / urls / ipv4 / mentions / hashtags — exactly the metadata fields you want indexed alongside the embedding so you can hybrid-search ('chunks mentioning user@example.com' OR semantic-similarity). The agent runs this once per chunk and attaches the result as a metadata block on each JSONL record.",
+      "Per chunk: extract keywords with keywords. Top-N tokens by frequency with stopword removal — your hybrid-search BM25 / tag-filter index. Conventional payload: keep top 10. This is the 'sparse retrieval' lane on top of dense embeddings; modern vector DBs (Pinecone, Weaviate) expect both.",
+      "Emit JSONL with jsonl in to-jsonl mode. Input: an array of {id, text, metadata: {entities, keywords, chunkIndex, sourceDoc, tokens}} records. Output: newline-delimited JSON — the canonical format for OpenAI fine-tuning (.jsonl), Pinecone batch upserts, Weaviate import scripts, and HuggingFace datasets. One-record-per-line means downstream tools can stream-process without loading the whole file.",
+      "Final gate: json-validate the emitted records against a JSON Schema. Schema defines required fields (id, text, metadata.tokens within model limit, metadata.chunkIndex ≥ 0), types, and constraints. This is the boundary check the rest of the pipeline takes for granted: if any record is missing 'id' or has tokens > 8191 the validator returns errors and the agent can re-chunk or drop those records BEFORE they hit the vector DB and become silent failures (missing search results, broken citations) downstream.",
+    ],
+    claudePrompt:
+      "Prep this document for vector-DB ingestion using Agent402.\n\nDocument:\n\"\"\"\nAlice from acme@example.com filed a support ticket on 2026-06-21 about the checkout flow returning a 502 from api.acme.com/v2/orders. Engineer Bob investigated and found the issue was a connection-pool exhaustion in the order-service: postgres max_connections was 100 and the pool had been silently leaking since the rollout of feature flag #orders-2026. Fix landed in commit 9a3b2c1; deploy went out 2026-06-22. Follow-up: add pgbouncer in front of the order-service and an alert on pool.in_use / max_connections > 0.8 in PagerDuty. Slack thread: #incident-orders-502. Mentioned engineers: @alice @bob @carol.\n\"\"\"\n\nTarget embedding model: text-embedding-3-small (8191 token cap).\nTarget chunk size: 512 tokens with 64-token overlap.\n\n(1) text-stats on the full doc. Report char / word / sentence / token (heuristic) counts. (2) token-count on the full doc with model=gpt-4o. This is the BPE-accurate count; compare against the heuristic and report the delta — the BPE count is usually 1.3-1.5x the whitespace-split count. (3) text-chunk with unit='tokens', size=512, overlap=64. Returns N chunks. For each chunk, attach chunkIndex (0-based), sourceDoc ('input'), and tokens (the chunk's exact token count). (4) For each chunk: extract-entities. Attach the result as metadata.entities (emails, urls, ipv4, mentions, hashtags). (5) For each chunk: keywords with n=10. Attach as metadata.keywords. (6) Assemble the array: [{id: '<sourceDoc>#<chunkIndex>', text: <chunk>, metadata: {chunkIndex, sourceDoc, tokens, entities, keywords}}, …]. Call jsonl in to-jsonl mode to emit the NDJSON string. (7) Define a JSON Schema with required: ['id','text','metadata'], metadata.properties.tokens.maximum: 8191, metadata.properties.chunkIndex.minimum: 0. For each record in the array, call json-validate. Collect any records with errors. Final return: {totalChunks, totalTokens, ndjson, schemaPassed: N, schemaFailed: M, failingRecords: [{id, errors}], oneLineSummary: 'prepped N chunks (avg X tokens, max Y); M failed schema; ready for upsert'}. All seven tools are pure-CPU and PoW-eligible — the whole pipeline runs on the free tier. Budget ≤ $0.01 even paid.",
+    promptArgs: [
+      {
+        name: "doc",
+        description: "the source document to prep for embedding (raw text, no markup required)",
+        substitute:
+          "Alice from acme@example.com filed a support ticket on 2026-06-21 about the checkout flow returning a 502 from api.acme.com/v2/orders. Engineer Bob investigated and found the issue was a connection-pool exhaustion in the order-service: postgres max_connections was 100 and the pool had been silently leaking since the rollout of feature flag #orders-2026. Fix landed in commit 9a3b2c1; deploy went out 2026-06-22. Follow-up: add pgbouncer in front of the order-service and an alert on pool.in_use / max_connections > 0.8 in PagerDuty. Slack thread: #incident-orders-502. Mentioned engineers: @alice @bob @carol.",
+      },
+    ],
+  },
+
+  {
+    slug: "webhook-debug",
+    title: "Webhook debug",
+    tagline:
+      "A webhook hit your endpoint and you need to confirm it's authentic, valid, and safe to log. Pretty-print the payload, decode any JWT auth header, verify the HMAC signature against the raw body, schema-validate the parsed JSON, translate timestamps to human time, redact sensitive fields before they hit your log pipeline, and pull out URLs/emails/IPs for fast indexing. Seven pure-CPU tools — the canonical webhook-receiver debugging round-trip.",
+    useCase:
+      "Webhook debugging is a per-provider Stack-Overflow scavenger hunt: GitHub uses X-Hub-Signature-256 (HMAC-SHA256 of the raw body with the secret), Stripe uses Stripe-Signature (HMAC-SHA256 over `t=<ts>.<body>`), Shopify uses X-Shopify-Hmac-Sha256 (HMAC-SHA256 base64), Slack uses X-Slack-Signature (HMAC-SHA256 with `v0:<ts>:<body>`). Every developer reimplements this dance every time, and a typo in the signing-base-string is silent — the signature just doesn't match, and the agent guesses at why. This pack does signature verification as a single deterministic tool call (hmac with the right algo) and lets the rest of the workflow — schema-validate, timestamp-translate, redact — run on the now-trusted payload.",
+    toolSlugs: [
+      "json-format",
+      "jwt-decode",
+      "hmac",
+      "json-validate",
+      "time-convert",
+      "redact",
+      "extract-entities",
+    ],
+    workflow: [
+      "Pretty-print the raw payload with json-format. Webhook bodies arrive as a single minified line on the wire; reading them at debug time means indenting them first. json-format normalizes whitespace AND surfaces a clean parse error if the body isn't valid JSON at all — which is a real-world failure mode (some providers send form-encoded bodies for legacy webhooks; some send empty bodies on retries). This is the cheapest possible 'is the body even JSON?' triage step.",
+      "If the request carries a JWT auth header (X-Webhook-Token, Authorization: Bearer …), decode it with jwt-decode. Returns header, payload, signaturePresent, expired, expiresInSeconds. Critical at this step: jwt-decode does NOT verify — it just renders the claims. The point is to surface alg, iss, sub, exp BEFORE you decide which verification path to take. Watch for the classic alg='none' attack here: if the header says alg='none' and signaturePresent is false, the token is forged and the request should be rejected before HMAC verification even runs. Also surface 'expired' — an expired but otherwise valid token is a replay attempt.",
+      "Verify the HMAC signature with hmac. This is the integrity gate. Per-provider conventions: GitHub = hmac(body, secret, sha256) compared to X-Hub-Signature-256 (strip the 'sha256=' prefix); Stripe = hmac(`${ts}.${body}`, secret, sha256) compared to v1 in Stripe-Signature (also enforce |now-ts| < 5min); Shopify = hmac(body, secret, sha256) base64-compared to X-Shopify-Hmac-Sha256; Slack = hmac(`v0:${ts}:${body}`, secret, sha256) hex-prefixed with 'v0='. Always compare against the raw request body (the bytes as received), NOT the re-serialized JSON — re-serialization changes whitespace and key order and breaks the signature. The tool returns hex AND base64 so you can match whichever the provider sends without re-running.",
+      "Now that the body is trusted, schema-validate with json-validate. Define a JSON Schema for the expected webhook payload shape: required event type, signature on event-specific fields. This catches the provider-API-version mismatch — Stripe v2026-06-01 added new fields that older code silently ignored; Shopify removes deprecated fields on schedule. The schema check surfaces the deprecation/addition as a loud, traceable error instead of a NullPointerException three layers down in the handler. Run this AFTER signature verification, not before — schema-validating an unverified body wastes cycles on garbage.",
+      "Translate timestamps with time-convert. Webhook payloads carry event timestamps in mixed formats: Stripe uses Unix epoch seconds (integer), GitHub uses ISO 8601 strings, Shopify uses RFC 3339 with timezone. The agent often needs to compare to 'now' (replay detection — drop events older than 5 min), to a stored last-processed timestamp (deduplication), or to render for a human reader. time-convert normalizes to UTC ISO 8601 + epoch + offset, giving you all three at once. The replay-detection check (timestamp within ±5 min of now) is a security primitive — stale signatures are the attack surface for replay attacks even with valid HMAC.",
+      "Before logging anything, redact the body. Webhooks routinely carry: customer emails, IP addresses, partial card numbers, phone numbers, SSNs (for KYC providers), session tokens. redact strips all of these from the string by pattern and returns the count of each kind so you can log 'redacted 2 emails, 1 phone, 0 cards' as a metric. Redact-first ordering is the invariant here: never log the raw body, even at DEBUG level, even briefly. A redact step before the logger is the difference between a clean GDPR audit and a regulated incident.",
+      "Extract entities from the redacted body with extract-entities. Returns deduped {emails, urls, ipv4, mentions, hashtags} — your fast-lookup index for 'find all events involving this email/URL/IP'. Note this runs on the redacted text intentionally (emails redact to '[email]', URLs survive) so the index won't leak PII. Persist these as columns alongside the event for query performance: 'show me all webhooks mentioning api.stripe.com in the last 24h' becomes a SQL lookup instead of a full-text scan.",
+    ],
+    claudePrompt:
+      "Debug this incoming webhook using Agent402.\n\nRaw body (as received on the wire):\n{\"id\":\"evt_3O2eYxL5d8\",\"type\":\"checkout.session.completed\",\"created\":1750982400,\"data\":{\"object\":{\"id\":\"cs_test_a1b2c3\",\"customer_email\":\"alice@example.com\",\"amount_total\":4999,\"client_ip\":\"203.0.113.42\",\"success_url\":\"https://app.example.com/orders/cs_test_a1b2c3\"}}}\n\nHeaders:\n  X-Webhook-Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ3ZWJob29rIiwiaXNzIjoic3RyaXBlIiwiaWF0IjoxNzUwOTgyNDAwLCJleHAiOjE3NTA5ODI3MDB9.sig\n  X-Hub-Signature-256: sha256=<provided>\nSigning secret (shared): whsec_demo_secret_do_not_use\n\n(1) json-format on the raw body. Confirm it parses; report any errors. (2) jwt-decode on the X-Webhook-Token. Surface alg, iss, sub, iat, exp. Flag alg='none' as forged; flag expired=true as stale. (3) hmac on the RAW body string with key=signing_secret, algo='sha256'. Compare the returned hex to the X-Hub-Signature-256 value (strip the 'sha256=' prefix first). Constant-time compare logic recommended (note that to the agent — don't suggest plain string equality in the production handler). Report match/mismatch. (4) json-validate the parsed body against this schema: {type:'object', required:['id','type','created','data'], properties:{type:{type:'string'}, created:{type:'integer'}, id:{type:'string', pattern:'^evt_'}}}. Report any violations. (5) time-convert the 'created' field (1750982400) — pass as fromIso='1970-01-01T00:00:00Z' offset trick is overkill; just describe it as 'Unix epoch 1750982400 = 2025-06-27T02:00:00Z'. Compute |now - created| and flag if > 300s (replay window). (6) redact on the JSON-stringified body. Report counts: emails, phones, ips, cards. Persist only the redacted string for logging. (7) extract-entities on the redacted body. Return {emails: [], urls: ['https://app.example.com/...'], ipv4: []} (note: alice@example.com became '[email]' and is gone; client_ip became '[ip]'). Index these alongside the event row. Final return: {parsed, jwtClaims, hmacMatched: bool, schemaValid: bool, schemaErrors: [], eventTimestampUtc, withinReplayWindow: bool, redactedBody, redactionCounts, entities, oneLineSummary: 'webhook evt_3O2eYxL5d8 verified, in replay window, 1 email + 1 IP redacted, ready to process'}. All seven tools are pure-CPU and PoW-eligible. Budget ≤ $0.01 even paid.",
+    promptArgs: [
+      {
+        name: "rawBody",
+        description: "the raw webhook body as received on the wire (single-line JSON string)",
+        required: true,
+        substitute:
+          "{\"id\":\"evt_3O2eYxL5d8\",\"type\":\"checkout.session.completed\",\"created\":1750982400,\"data\":{\"object\":{\"id\":\"cs_test_a1b2c3\",\"customer_email\":\"alice@example.com\",\"amount_total\":4999,\"client_ip\":\"203.0.113.42\",\"success_url\":\"https://app.example.com/orders/cs_test_a1b2c3\"}}}",
+      },
+      {
+        name: "signingSecret",
+        description: "the shared webhook signing secret from the provider dashboard",
+        required: true,
+        substitute: "whsec_demo_secret_do_not_use",
+      },
+    ],
+  },
+
+  {
+    slug: "a11y-audit",
+    title: "WCAG accessibility audit",
+    tagline:
+      "Run a deterministic WCAG 2.x audit of an HTML page from a string and a fg/bg color pair. Checks language attribute (3.1.1), document title (2.4.2), heading order (1.3.1), link-text presence (2.4.4), color contrast (1.4.3), and reading grade level (3.1.5 AAA). Seven pure-CPU tools, no headless browser needed — the canonical accessibility-first-pass workflow done as a single round-trip of tool calls.",
+    useCase:
+      "Accessibility audits are typically a Lighthouse run + a manual code review + a screenreader test, taking hours to days. This pack covers the deterministic subset — the WCAG checks that don't require executing JS or rendering CSS — in a single sub-second pipeline. It's the right primitive for CI ('block merge if contrast < 4.5'), for content-team self-serve ('does this blog post pass'), and for agents iterating on a design without firing up a browser. The user supplies the canonical brand color pair because CSS-from-HTML-string is a guessing game and we don't guess.",
+    toolSlugs: [
+      "html-meta",
+      "html-strip",
+      "html-links",
+      "html-select",
+      "color-contrast",
+      "readability",
+      "text-stats",
+    ],
+    workflow: [
+      "Parse document metadata with html-meta. Returns {title, description, lang, viewport, ogImage, …}. Two WCAG checks land here: 2.4.2 (page has a title element that describes its topic — empty/missing/placeholder titles like 'Document' fail) and 3.1.1 (the <html lang> attribute is present and is a valid BCP 47 language tag — missing lang fails AA and breaks screenreader pronunciation). Surface both as separate boolean checks. Also flag if title is shorter than 6 characters or longer than 70 — both are usability smells even when not strict WCAG failures.",
+      "Strip to visible text with html-strip. Returns the document text content as a single string with whitespace collapsed. This becomes the input for readability and text-stats below. It also reveals the 'empty page' failure mode: a page that lives entirely inside <script> tags (SPAs without server-rendered content) strips to almost nothing — important to surface because the rest of the audit would otherwise pass on an empty page.",
+      "Enumerate hyperlinks with html-links. Returns [{href, text, rel}] for every <a> in the document. Run two WCAG 2.4.4 checks on the result: (a) every link has non-empty text content OR a non-empty aria-label (links with text === '' that aren't decorated fail); (b) link text is descriptive — flag links whose text is exactly 'click here', 'here', 'read more', 'link' as a usability warning (still passes WCAG but flagged for content teams). Also count external links (href starts with http and host !== this domain) and flag any external href without rel containing 'noopener' as a tabnabbing risk — not strictly WCAG but adjacent security hygiene.",
+      "Audit heading order with html-select using selector 'h1, h2, h3, h4, h5, h6'. Returns the headings in document order. Run WCAG 1.3.1 (info and relationships): exactly one h1 (zero h1s = orientation failure; multiple h1s = sectioning ambiguity); heading levels don't skip (h1 → h3 with no h2 in between is a structural break, fails AA in some interpretations). Surface the heading outline as a tree so the agent can describe the document structure in the writeup. This is the check Lighthouse usually flags as 'Heading elements are not in a sequentially-descending order.'",
+      "Audit color contrast with color-contrast on the user-supplied (foreground, background) pair. Returns {ratio, AA:{normal,large}, AAA:{normal,large}}. WCAG 1.4.3 requires 4.5:1 for normal body text (AA); 3:1 for large text (≥18pt or ≥14pt bold); 7:1 for AAA. Surface all four booleans and the raw ratio. Important framing for the agent: this is ONE color pair, not the whole page — the user provides their canonical brand body/background combination because we cannot extract computed CSS from a plain HTML string. If multiple pairs need checking, the agent re-runs this tool once per pair.",
+      "Score reading level with readability on the stripped text. Returns Flesch ease score and Flesch-Kincaid grade level. WCAG 3.1.5 (AAA) asks for content readable at lower-secondary education level (grade 9 or lower) when the topic permits. Surface the grade and flag pass/fail against 9.0. For pages with grade > 12 the writeup should suggest splitting long sentences and replacing jargon — practical content guidance that maps cleanly to the AAA criterion. Note: WCAG only applies AAA-readability to non-technical content; the agent should label this 'aspirational for technical content' rather than a hard fail.",
+      "Final shape with text-stats on the stripped text. Returns character/word/sentence/paragraph counts. Two purposes: (a) sanity-check the page isn't empty (paragraphs === 0 means html-strip didn't find anything to strip — usually a JS-only page); (b) provide context for the readability score (a 5-sentence page with a low grade level isn't comparable to a 50-sentence page with the same grade). Include this as the final block of the writeup — the metric numbers ground the qualitative WCAG findings.",
+    ],
+    claudePrompt:
+      "Run a WCAG accessibility audit on this page using Agent402.\n\nHTML:\n<!doctype html><html lang=\"en\"><head><title>Quarterly Earnings Brief</title><meta name=\"viewport\" content=\"width=device-width\"></head><body><h1>Q4 Earnings Summary</h1><h3>Revenue</h3><p>Total revenue was $4.2M, up 18% year-over-year. The increase was driven primarily by enterprise SaaS contracts and a one-time licensing arrangement.</p><h2>Costs</h2><p>Operating costs grew 12% to $2.9M. Headcount expansion in engineering accounted for the majority of the increase.</p><p>Read the <a href=\"/full-report\">full report</a> or <a href=\"https://investor.example.com\">visit investor relations</a>. Click <a href=\"/contact\">here</a> for questions.</p></body></html>\n\nBrand colors: foreground #333333, background #ffffff.\n\n(1) html-meta on the HTML string. Confirm title='Quarterly Earnings Brief' (pass 2.4.2) and lang='en' (pass 3.1.1). Report viewport present (responsive design signal). (2) html-strip to get visible text. Sanity-check paragraphs > 0. (3) html-links on the HTML. Confirm every link has non-empty text. FLAG the 'here' link as undescriptive (WCAG 2.4.4 usability warning). FLAG the external link to investor.example.com as missing rel='noopener' (tabnabbing risk). (4) html-select with selector='h1, h2, h3, h4, h5, h6'. Returns: h1='Q4 Earnings Summary', h3='Revenue', h2='Costs'. FLAG: heading order skips from h1 to h3 (1.3.1 structural break) — h3 should be h2. (5) color-contrast with foreground='#333333', background='#ffffff'. Returns ratio≈12.6, AA.normal=true, AAA.normal=true. Pass 1.4.3 at AAA. (6) readability on the stripped text. Report Flesch grade. If > 9, suggest splitting long sentences. (7) text-stats on the stripped text. Report char/word/sentence/paragraph counts. Final return: {meta: {title, lang, viewport}, checks: {pageTitle: pass, language: pass, headingOrder: FAIL with reason, linkText: warn with details, colorContrast: {ratio, levels}, readingGrade: pass|aspirational}, contentMetrics, severity: 'one structural fail + two warnings; overall AA-eligible after fixing h3→h2', oneLineSummary: 'WCAG audit: 1 fail (heading order), 2 warnings (undescriptive link, missing noopener), contrast AAA, grade 11'}. All seven tools are pure-CPU and PoW-eligible. Budget ≤ $0.01 even paid.",
+    promptArgs: [
+      {
+        name: "html",
+        description: "the HTML document to audit (full document or fragment, as a string)",
+        required: true,
+        substitute:
+          "<!doctype html><html lang=\"en\"><head><title>Quarterly Earnings Brief</title><meta name=\"viewport\" content=\"width=device-width\"></head><body><h1>Q4 Earnings Summary</h1><h3>Revenue</h3><p>Total revenue was $4.2M, up 18% year-over-year. The increase was driven primarily by enterprise SaaS contracts and a one-time licensing arrangement.</p><h2>Costs</h2><p>Operating costs grew 12% to $2.9M. Headcount expansion in engineering accounted for the majority of the increase.</p><p>Read the <a href=\"/full-report\">full report</a> or <a href=\"https://investor.example.com\">visit investor relations</a>. Click <a href=\"/contact\">here</a> for questions.</p></body></html>",
+      },
+      {
+        name: "foreground",
+        description: "the canonical body text color as a hex string (e.g. '#333333')",
+        required: true,
+        substitute: "#333333",
+      },
+      {
+        name: "background",
+        description: "the canonical body background color as a hex string (e.g. '#ffffff')",
+        required: true,
+        substitute: "#ffffff",
+      },
+    ],
+  },
+
+  {
+    slug: "trip-planner",
+    title: "Multi-stop trip planner",
+    tagline:
+      "Plan a multi-stop journey deterministically: geocode each stop, sum the pairwise haversine distances, estimate arrival times by adding driving hours per leg, count business days from today to each arrival, and pull the weather forecast at every US stop. Six tools — three pure-CPU (math + time), three egress (geocoding + weather) — covering the deterministic skeleton of every road-trip / sales-tour / delivery-route planning problem.",
+    useCase:
+      "Trip planning bounces between three or four single-purpose apps: a maps tool for distance, a calendar for business-day windows, a weather site per stop, a spreadsheet to add it all up. Each handoff is a place to copy a wrong number. This pack does the whole skeleton — locate, measure, time-shift, weather-check — as a single round-trip of tool calls so the final itinerary is reproducible and the agent can re-run a single step (e.g. shift the start date by a day) without re-doing the rest. Weather is US-only via NWS; geocoding is global via OSM Nominatim.",
+    toolSlugs: [
+      "geocode",
+      "geo-distance",
+      "add-time",
+      "business-days",
+      "time-convert",
+      "weather-forecast",
+    ],
+    workflow: [
+      "Resolve every stop to coordinates with geocode. One call per stop name: 'New York, NY' → {lat: 40.7128, lng: -74.006}. Use the OSM Nominatim backend (free, global). Watch for ambiguous names ('Portland' returns Maine before Oregon by default unless you pass a countryCodes filter or a more specific query) — surface the resolved display_name back to the user so they can confirm. This is one of two egress tools in the pack — it counts toward the wallet/paid budget; the other four pure-CPU steps run free via proof-of-work.",
+      "Sum the pairwise great-circle distances with geo-distance. One call per consecutive pair of stops: (stop[0], stop[1]) → km/miles, (stop[1], stop[2]) → km/miles, etc. The haversine formula gives the as-the-crow-flies distance on a sphere; real driving distance is typically 1.2–1.4x this (winding roads, no straight-line bridges). The writeup should multiply by 1.3 as a reasonable driving-distance estimate and label it as such — don't pretend haversine is road distance. Total trip distance = sum of legs × ~1.3.",
+      "Estimate arrival timestamps with add-time. Start from the user-supplied start ISO; for each leg, add (legDistanceKm / averageSpeedKph) + a buffer (lunch break, fuel, traffic). Conventional defaults: 80 km/h average highway speed, 30 min buffer per stop. This gives you a per-stop arrival ISO. The compounding here is important: a 30-min buffer per stop on a 6-stop trip is 3 hours of cumulative delay that a naive 'distance / speed' calc would miss. add-time also handles cross-day rollover so multi-day trips don't silently wrap timestamps.",
+      "Count business days to each arrival with business-days. From today to the arrival date for each stop. Two purposes: (a) staffing — if a stop arrives on weekend day, the agent flags it for the user ('your Tuesday Chicago stop falls on Memorial Day Monday'); (b) deadline check — if the arrival is fewer business days away than tasks-to-complete-before-arrival, the agent surfaces the conflict. business-days respects weekends by default; passing the `holidays` array adds the US federal calendar.",
+      "Render arrival times in local timezone with time-convert. Driving across time zones (EST → CST → MST → PST is common on a US trip) silently breaks naive itinerary printouts. time-convert turns each arrival ISO into the local clock time at each stop's coordinates. The agent should also flag the timezone-crossing legs explicitly ('you gain an hour entering CST') so the user understands the lived experience of the schedule, not just the UTC math.",
+      "Pull weather at each stop with weather-forecast. NWS-backed, US-only — one call per stop on the arrival date. Returns hourly + daily forecast: temperature, precipitation probability, wind. The writeup should flag any stop with rain probability > 60% (delay risk), high winds > 25 mph (bridge/RV risk), or extreme temperatures (heat advisory or freeze). For non-US stops, skip this step with a one-line note — the pack stays deterministic on the parts that work and is honest about the parts that don't, rather than falling back to a fabricated forecast.",
+    ],
+    claudePrompt:
+      "Plan this multi-stop trip using Agent402.\n\nStops (in order): New York NY, Pittsburgh PA, Cleveland OH, Chicago IL.\nStart: 2026-07-20T08:00:00Z (8am UTC, ~4am ET local Monday morning).\nAverage driving speed: 80 km/h. Stop buffer: 30 min per stop.\n\n(1) geocode each of the 4 stops. Return display_name + {lat, lng} per stop. Confirm 'Pittsburgh' resolves to PA, not Kansas — flag ambiguous resolutions. (2) geo-distance for each consecutive leg: NY→PIT, PIT→CLE, CLE→CHI. Multiply each leg by 1.3 to estimate driving distance and label as such. Total trip distance = sum. (3) add-time to compute arrival ISO per stop: leg duration = (km_driving / 80) hours + 0.5 hour buffer. Start from 2026-07-20T08:00:00Z; chain the deltas. (4) business-days from today (use 2026-06-22 as 'today' since that's the demo date) to each arrival date. Report business days remaining per stop. Flag any arrival that lands on a Saturday or Sunday. (5) time-convert each arrival ISO to local time: New York/Pittsburgh/Cleveland = America/New_York; Chicago = America/Chicago. Flag the CST entry: 'you gain an hour entering Chicago'. (6) weather-forecast for each stop on its arrival date. Surface high temp, low temp, precipitation %, wind. Flag any stop with precipitation > 60% (delay risk) or wind > 25 mph. Final return: {stops: [{name, coords, arrivalUtc, arrivalLocal, businessDaysUntil, weather: {high, low, precipPct, wind, flags: []}}], legs: [{from, to, km, drivingKmEstimate, hours}], total: {km, drivingKmEstimate, hours, businessDaysUsed}, warnings: [...], oneLineSummary: '4-stop trip, ~1380 driving km, 17 driving hours, all weekday arrivals, 1 weather warning (Cleveland 70% rain Tuesday)'}. Two egress tools (geocode, weather-forecast) — budget ~$0.05. Four pure-CPU tools — free via proof-of-work.",
+    promptArgs: [
+      {
+        name: "stops",
+        description: "comma-separated ordered list of stops (e.g. 'New York NY, Pittsburgh PA, Cleveland OH, Chicago IL')",
+        required: true,
+        substitute: "New York NY, Pittsburgh PA, Cleveland OH, Chicago IL",
+      },
+      {
+        name: "startIso",
+        description: "trip start time as UTC ISO 8601 (e.g. '2026-07-20T08:00:00Z')",
+        required: true,
+        substitute: "2026-07-20T08:00:00Z",
+      },
+    ],
+  },
+
+  {
+    slug: "identity-mint",
+    title: "Server-side identity mint",
+    tagline:
+      "The server-side identity-issuance round-trip: mint a random user-id (UUIDv4), derive a deterministic cross-system correlation-id (UUIDv5), turn the display name into a URL-safe handle, generate a one-time recovery password, hash it for storage, sign a session JWT with HMAC, and base64-encode the recovery bundle for transport. Seven pure-CPU tools — the canonical 'create-user' write path done as one deterministic pipeline.",
+    useCase:
+      "Identity issuance is where every backend ships subtle bugs: collisions on user-id, recovery codes generated with Math.random, JWTs signed without an exp claim, recovery emails sent as plaintext. This pack composes the seven primitives every signup flow needs — random ID, deterministic correlation ID, slug handle, random recovery code, stored hash, signed token, transport encoding — into a single deterministic pipeline so the bytes that hit the database are always the same shape, and the agent can re-issue any single artifact (rotate the JWT, regenerate the recovery code) without re-doing the rest. Note: this is the issuance pipeline, NOT the long-term password-storage primitive — the workflow calls out where bcrypt/argon2 belongs in production.",
+    toolSlugs: [
+      "uuid",
+      "uuid-v5",
+      "slugify",
+      "password",
+      "hash",
+      "jwt-sign",
+      "base64",
+    ],
+    workflow: [
+      "Mint the random user-id with uuid. Version 4 = 122 bits of entropy from the OS CSPRNG — unguessable by any other party, suitable for the primary key in the users table. Distinguish this from the *correlation* ID generated next: the random UUID is the system-of-record identity; an attacker who guesses it should still get an auth failure because the JWT signature won't match. Default UUIDv4 is the right choice here.",
+      "Mint the deterministic correlation-id with uuid-v5. namespace='url', name=`mailto:${email}`. UUIDv5 is SHA-1 of (namespace || name) — the same email always produces the same UUID across every system in the federation. This is what every CRM/billing/analytics SaaS expects as 'send me a stable customer ID' without forcing every system through a central directory. Critical: store BOTH the random UUIDv4 (internal) AND the v5 (cross-system) — never expose the v4 externally; never use the v5 internally as the auth subject.",
+      "Derive the URL-safe handle with slugify on the user's display name. 'Alice O''Connor' → 'alice-o-connor'. Strips diacritics, lowercases, collapses runs of separators, removes non-URL-safe chars. The handle goes into profile URLs (/u/alice-o-connor). Watch for collisions in production: slugify is deterministic, so two users named 'Alice Smith' will produce the same handle — append the v5 UUID's first 6 chars as a disambiguator if your schema needs uniqueness.",
+      "Generate a one-time recovery password with password. Default length 24, with upper/lower/digit/symbol classes — high enough entropy that even a fast offline cracker takes years. This is NOT the user's chosen password; it's the recovery code printed once at signup and stored only as a hash. Treat it as bearer credential equivalent to the JWT until used. The tool uses the OS CSPRNG (not Math.random), so the result is suitable for security contexts.",
+      "Hash the recovery code with hash, algorithm=sha256. CRITICAL CAVEAT: sha256 is the right hash for this recovery-code context (the code itself is high-entropy random, so brute-force is infeasible regardless of hash speed). It is NOT the right hash for storing user-chosen passwords — those need a memory-hard KDF (bcrypt, argon2, scrypt) which Agent402 doesn't ship because deterministic CPU tools and CPU-hard hashing are different security primitives. The pack workflow says this explicitly so the agent doesn't reach for hash(userPassword) and call it secure.",
+      "Sign a session JWT with jwt-sign, alg='HS256'. Payload: {sub: <UUIDv4>, iss: 'agent402.tools', iat: <now>, exp: <now+3600>, jti: <UUIDv4 again, for revocation>}. The exp claim is mandatory — JWTs without exp are perpetual bearer tokens and the #1 security incident category. The jti claim enables revocation: store revoked jtis in a fast-expiring cache and reject tokens with matching jti during verification. HS256 is symmetric (verifier = same server) which is correct for first-party session tokens; for federated tokens (verifier = different org) you'd want RS256 instead, which Agent402 doesn't ship — call this out if the use-case demands cross-org verification.",
+      "Encode the recovery bundle for transport with base64. The bundle = JSON {recoveryCode, sessionToken, handle}, base64'd → a single ASCII string the user can copy-paste, encode as QR, or paste into a password manager. base64 is transport-encoding, NOT encryption — anyone who intercepts the bundle has the credentials. Pair with TLS at the transport boundary; never log the bundle even at DEBUG level. The same redact-first invariant from the webhook-debug pack applies here: a redact step belongs between the bundle and any logger.",
+    ],
+    claudePrompt:
+      "Mint a fresh user identity using Agent402.\n\nInput:\n  displayName: Alice O'Connor\n  email: alice.oconnor@example.com\n  signingSecret: server_demo_jwt_secret_do_not_use_in_prod\n  sessionTtlSeconds: 3600\n  nowIso: 2026-06-22T00:00:00Z\n\n(1) uuid — get the random user-id (the internal primary key). Call this `internalUserId`. (2) uuid-v5 with namespace='url', name='mailto:alice.oconnor@example.com'. Call this `correlationId` — the same email always produces this UUID. Note: distinct from internalUserId; both stored. (3) slugify on 'Alice O''Connor' → handle. If your schema enforces unique handles, append correlationId.slice(0,6) as disambiguator. (4) password with length=24, upper=true, lower=true, digits=true, symbols=true. Call this `recoveryCode`. Bearer-credential equivalent — store only the hash. (5) hash with algo='sha256' on recoveryCode → hex digest. This goes in the users.recovery_hash column. CALL OUT in the writeup: this hash is appropriate for recovery codes (high entropy) but NOT for user-chosen passwords (which need bcrypt/argon2; out of scope for this pack). (6) jwt-sign with payload={sub: internalUserId, iss: 'agent402.tools', iat: epoch(nowIso), exp: epoch(nowIso) + 3600, jti: <another uuid call result>}, secret=signingSecret, alg='HS256'. Call this `sessionToken`. Confirm exp is set — JWTs without exp are perpetual bearer tokens. (7) base64 on the recovery bundle JSON.stringify({recoveryCode, sessionToken, handle}) → `transportBlob`. The user copies this to a password manager. Final return: {internalUserId, correlationId, handle, recoveryHash, sessionToken: <header.payload.signature>, sessionExpiresAt: <iso>, transportBlob, securityNotes: ['recovery_hash is sha256 — only valid because recovery codes are high-entropy random', 'session JWT is HS256 — verifier must be same server (or share secret); use RS256 for federated', 'transportBlob is base64-encoded, NOT encrypted — TLS at transport, never log'], oneLineSummary: 'minted user {handle} ({internalUserId}); 1h session; recovery bundle ready'}. All seven tools are pure-CPU and PoW-eligible. Budget ≤ $0.01 even paid.",
+    promptArgs: [
+      {
+        name: "displayName",
+        description: "the user's display name (will be slugified for the URL handle)",
+        required: true,
+        substitute: "Alice O'Connor",
+      },
+      {
+        name: "email",
+        description: "the user's email (used to derive the deterministic UUIDv5 correlation ID)",
+        required: true,
+        substitute: "alice.oconnor@example.com",
+      },
+      {
+        name: "signingSecret",
+        description: "the server's JWT HMAC signing secret",
+        required: true,
+        substitute: "server_demo_jwt_secret_do_not_use_in_prod",
+      },
+    ],
+  },
+
+  {
+    slug: "macro-context",
+    title: "Macro backdrop snapshot",
+    tagline:
+      "The 'is the economic backdrop you're modeling against still current?' pack. Pull the canonical macro signals — CPI year-over-year, unemployment, fed funds, the Treasury yield curve, a G10 FX dashboard, the Sahm Rule recession indicator, and the next scheduled economic releases — in one composed workflow. Seven egress tools, one composite snapshot the agent can cite before doing any forecast or investment math.",
+    useCase:
+      "Every finance/forecast pack in Agent402 assumes the macro backdrop is known. This pack makes that assumption explicit and dated. Before you NPV a 10-year cashflow, before you forecast a revenue series, before you recommend a savings vehicle — pull this snapshot, cite the as-of date, and pin the assumptions. The Sahm Rule + yield curve combination is the canonical 'are we in or near a recession' diagnostic; CPI + fed funds gives you the real-rate environment; FX dashboard tells you whether your USD assumption is even the right denominator. Pairs with investment-decision, loan-comparison, savings-goal, and forecasting-bake-off — none of those packs check macro state themselves.",
+    toolSlugs: [
+      "cpi-yoy",
+      "unemployment-rate",
+      "fed-funds",
+      "treasury-yield-curve",
+      "yield-curve-spread",
+      "sahm-rule",
+      "fx-dashboard",
+      "fred-release-calendar",
+    ],
+    workflow: [
+      "Pull current US CPI year-over-year with cpi-yoy. FRED series CPIAUCSL converted to YoY % change. This is the headline inflation number every cashflow assumption is implicitly indexed to — if you're discounting at a nominal rate, you need to know real-vs-nominal spread. Returns the latest observation date and value; flag if the latest observation is more than 45 days stale (BLS publishes monthly with ~2-week lag — anything older signals a FRED outage or a holiday).",
+      "Pull current US unemployment rate with unemployment-rate. FRED series UNRATE. The level matters less than the trend: U3 going from 3.5 → 4.5 over 6 months is the historical recession signal (formalized as the Sahm Rule, called in step 6). Report both the latest level AND the 6-month delta. A rising-unemployment regime invalidates 'steady-state' forecasting assumptions in every downstream pack.",
+      "Pull effective federal funds rate with fed-funds. FRED series FEDFUNDS. This is the risk-free rate every NPV/IRR calc should be discounting against (or close to it — treasury yields are the more precise instrument but fed funds is the policy anchor). Report the latest level and the YoY delta. A rising-rate environment systematically biases NPV calculations toward 'reject the project' — make sure the loan-comparison / investment-decision packs are using a current rate, not a stale one.",
+      "Pull the current Treasury yield curve with treasury-yield-curve. Returns the daily snapshot of yields at 1M, 3M, 6M, 1Y, 2Y, 5Y, 10Y, 30Y maturities. This is the shape of the risk-free curve the entire fixed-income world prices off. The shape itself is the signal: upward-sloping = normal, flat = transitional, inverted = recession-priced. The next step quantifies the inversion explicitly.",
+      "Compute yield-curve spreads with yield-curve-spread. Returns the canonical inversion gauges: 10Y-2Y (the academic favorite) and 10Y-3M (the Fed's preferred recession predictor per Estrella & Mishkin). Negative = inverted = market is pricing rate cuts = historical recession signal with 6-18 month lead. The tool returns both spreads plus a boolean isInverted flag per spread. Surface inversions prominently — every downstream forecast needs to know if the curve is signaling regime change.",
+      "Compute the Sahm Rule with sahm-rule. Defined as: current 3-month moving average of UNRATE minus its 12-month minimum. Triggers when ≥ 0.5 percentage points. This is the most-cited contemporaneous recession indicator (it has historically triggered within the recession's first few months, not as a lagging confirmation). Returns the current value and the triggered boolean. Pair this with the yield-curve inversion from step 5 — the two together are the canonical 'recession probability is non-trivial' signal.",
+      "Pull G10 FX dashboard with fx-dashboard. Returns USD vs EUR, JPY, GBP, CHF, AUD, CAD, NZD, SEK, NOK — the standard developed-market basket. Critical for any cashflow denominated in non-USD: a 10% USD strengthening turns a 12% EUR-denominated return into 2%. The dashboard returns the current cross plus the YTD change per pair. Surface any pair with >10% YTD change as a 'denomination matters here' callout.",
+      "Pull the next 14 days of economic releases with fred-release-calendar. Returns the schedule of upcoming releases (next CPI, next NFP, next FOMC, etc.) with their release dates. This tells the agent which numbers in the snapshot are about to be refreshed — if CPI prints in 3 days, the agent should caveat any inflation-sensitive recommendation with 'reassess after the CPI print on date X'. Closes the snapshot with a forward-looking 'what will be stale soon' list.",
+    ],
+    claudePrompt:
+      "Pull the current macro backdrop using Agent402 before doing any finance/forecast math.\n\nAs-of: 2026-06-22 (use today's date). USD-denominated assumptions.\n\n(1) cpi-yoy — return {asOfDate, yoyPct}. Flag if asOfDate > 45 days stale. (2) unemployment-rate — return {asOfDate, level, sixMonthDelta}. (3) fed-funds — return {asOfDate, level, yoyDelta}. (4) treasury-yield-curve — return {asOfDate, points: [{maturity, yield}, ...]} for the standard 1M/3M/6M/1Y/2Y/5Y/10Y/30Y set. (5) yield-curve-spread — return {asOfDate, tenTwo: {spread, isInverted}, tenThreeM: {spread, isInverted}}. (6) sahm-rule — return {asOfDate, value, triggered}. Pair with the yield-curve inversion from step 5 in the writeup: both triggered = strong recession signal. (7) fx-dashboard — return {asOfDate, crosses: [{pair, level, ytdPct}, ...]}. Flag any pair with |ytdPct| > 10 with a 'denomination matters here' note. (8) fred-release-calendar with daysAhead=14 — return {nextReleases: [{date, seriesName}, ...]}. Final return: {asOf: '2026-06-22', cpiYoy, unemployment, fedFunds, yieldCurve, spreads, sahm, fx, nextReleases, regimeAssessment: '<one paragraph synthesizing CPI direction + fed-funds direction + curve shape + Sahm Rule into rising-rate-late-cycle / cutting-cycle-early-recession / normal-expansion etc.>', oneLineSummary: 'CPI 2.4% YoY (Apr 26), UE 4.1% (May 26, +0.4 over 6m), fed funds 4.25%, curve disinverted 10Y-2Y at +12bps, Sahm not triggered (0.33), USD broadly flat YTD, next CPI prints 2026-07-10 — reassess any inflation-sensitive recommendation after that date.'}. All eight tools are egress (FRED + Treasury + ECB FX). Budget ~$0.10 paid. Cache this snapshot per session — do not re-call within the same agent task.",
+    promptArgs: [
+      {
+        name: "asOfDate",
+        description: "the as-of date for the snapshot in YYYY-MM-DD (use today if unspecified)",
+        required: false,
+        substitute: "2026-06-22",
+      },
+    ],
+  },
+
+  {
+    slug: "regulatory-watch",
+    title: "SEC regulatory monitoring",
+    tagline:
+      "The 'who just filed / who just bought / what just IPO'd / what does the full-text search say' monitoring loop. Five EDGAR tools composed: full-text search for a keyword, surface recent filings on the matched companies, pull insider Form 4 transactions, pull 13F institutional holdings changes, and check the IPO calendar. Different from sec-filings-deep-dive (which goes deep on one company's earnings) — this is the wide-and-recent radar.",
+    useCase:
+      "Most EDGAR workflows fall into two modes: 'tell me everything about company X' (covered by sec-filings-deep-dive) or 'what just happened across the universe that I care about?' (this pack). The monitoring mode powers competitor watch, M&A signal scanning, insider-buying screens, and 'is the IPO window open' market-timing checks. The full-text search seeds the watch list; insider trades + 13F changes are the canonical informed-money signals; the IPO calendar is the supply-side gauge. All five tools are egress to SEC EDGAR (free upstream, but counted as paid for the deterministic-tool wrapper).",
+    toolSlugs: [
+      "edgar-search",
+      "edgar-filings",
+      "edgar-insider-trades",
+      "edgar-13f-holdings",
+      "edgar-recent-ipos",
+    ],
+    workflow: [
+      "Seed the watch list with edgar-search. Full-text search across the EDGAR filing corpus for the keyword/theme — e.g. 'AI infrastructure', 'GLP-1', 'small modular reactor'. Returns matched filings with company CIK, ticker, filing type, and date. The query language is EDGAR's own (supports exact phrases, AND/OR, and date filters). This is the 'who is talking about this' step — the resulting CIK list seeds every downstream step. Cap the result set at 25 to keep the pack budget bounded.",
+      "Pull recent filings on each matched company with edgar-filings. One call per CIK from step 1. Returns the company's last N filings (10-K, 10-Q, 8-K, S-1, etc.) with dates and accession numbers. The 8-K filings are the disclosure firehose — material events (acquisitions, exec departures, going-concern doubt). Surface any 8-K filed in the last 7 days as 'fresh material event' — those are typically the actionable signal in a monitoring loop, not the 10-K/10-Q (which are scheduled and pre-baked into the price).",
+      "Pull insider Form 4 transactions with edgar-insider-trades. One call per CIK. Returns recent buys and sells by officers and directors with transaction value. The classical signal: clusters of *open-market buys* by multiple insiders within a short window are the highest-conviction informed-money signal in equity markets (sells are noisy — insiders sell for diversification, taxes, divorce; they only buy for one reason). Surface buy clusters (≥ 2 insiders, ≥ $100k each, within 30 days) prominently. Sales without context are deprioritized.",
+      "Pull 13F institutional holdings changes with edgar-13f-holdings. One call per CIK. Returns the latest quarterly snapshot of which 13F-filing institutions hold the stock and how their position changed (new, increased, decreased, sold-out). New positions by concentrated managers (Berkshire, Pershing Square, Baupost, etc.) are the canonical 'smart money rotated in' signal. Caveat: 13F is delayed 45 days from quarter-end, so this is a confirmation signal, not a leading one — useful for narrative, not for timing.",
+      "Check the IPO calendar with edgar-recent-ipos. Returns S-1 / S-1/A filings in the recent window — both freshly filed (signals coming-soon) and recently effective (signals just-launched). This is the supply-side gauge: open IPO window = capital markets are absorbing risk; closed = risk-off regime. If the search theme from step 1 has IPO-stage entrants showing up here, that's the 'thematic capital is being raised' confirmation. Final radar synthesizes all five signals into a one-screen actionable summary.",
+    ],
+    claudePrompt:
+      "Run a regulatory monitoring sweep using Agent402.\n\nTheme: 'AI infrastructure datacenter'.\nLookback: last 30 days.\nAs-of: 2026-06-22.\n\n(1) edgar-search with q='AI infrastructure datacenter', dateRange=last-30-days, limit=25. Return {matches: [{cik, ticker, companyName, filingType, filingDate, snippet}, ...]}. Dedupe to unique CIKs — call that list `watchlist`. (2) edgar-filings for each CIK in watchlist (cap watchlist to 10 to bound budget). For each: return the last 6 filings with type + date + accession. Flag any 8-K filed in the last 7 days as 'fresh_8k=true'. (3) edgar-insider-trades for each CIK. Return {buys: [], sells: []} with {insiderName, role, date, value, sharesAfter}. Compute `buyCluster: true` if ≥ 2 insiders, each ≥ $100k, all within a 30-day window. Surface buy clusters prominently in the writeup; deprioritize standalone sells. (4) edgar-13f-holdings for each CIK. Return {newPositions: [{filerName, value}, ...], increases: [], decreases: [], soldOut: []} for the latest quarter (caveat: 45-day delayed). Flag any newPosition from a 'name-brand' concentrated holder (Berkshire, Pershing Square, Baupost, Greenlight, etc.). (5) edgar-recent-ipos with theme='AI infrastructure datacenter' if supported, else unfiltered, lookback=30d. Return {filed: [{cik, companyName, filingType, date}, ...], effective: [...]}. Cross-reference: any IPO entrant whose company description matches the theme is a 'theme-stage entrant'. Final return: {asOf: '2026-06-22', theme, watchlist: [...], fresh_8ks: [...], buyClusters: [...], smartMoneyNewPositions: [...], themeIpos: [...], synthesis: '<one-paragraph radar summary: which CIKs got buy clusters, which got smart-money entries, which had fresh material 8-Ks, whether the IPO window for the theme is open or closed>', oneLineSummary: '5 CIKs on AI-infrastructure watch; 1 fresh insider buy cluster (NVDA), 2 smart-money new positions (CRWV, NBIS), 1 theme IPO effective (Astera Labs add-on) — capital is rotating in, no fresh 8-K surprises this week.'}. All five tools are egress to SEC EDGAR. Budget ~$0.30 paid. Cache per session.",
+    promptArgs: [
+      {
+        name: "theme",
+        description: "the keyword or theme to monitor (e.g. 'AI infrastructure datacenter', 'GLP-1', 'nuclear small modular reactor')",
+        required: true,
+        substitute: "AI infrastructure datacenter",
+      },
+      {
+        name: "lookbackDays",
+        description: "the lookback window in days for fresh filings (default 30)",
+        required: false,
+        substitute: "30",
+      },
+    ],
+  },
+
+  {
+    slug: "search-and-cite",
+    title: "Answer-a-question with sources",
+    tagline:
+      "The 'research a question, return an answer with citations' workflow. Brave answer for the AI-synthesized take with citations, Brave web for the canonical SERP, Brave news for time-sensitive context, then a deterministic web-fetch + extract pass on the top citations to verify the answer hasn't hallucinated. Five tools, one cited paragraph, every claim traced back to a fetched URL.",
+    useCase:
+      "Most agent research workflows have the same failure mode: an LLM answer with confident-sounding citations that don't actually contain the claim. This pack solves that by separating the *answer-generating* surface (Brave's answer endpoint) from the *evidence-fetching* surface (web-fetch + extract on the citations). The agent's final response cites only claims that survive both the search-answer hit AND a deterministic re-fetch of the cited page. Pairs with rag-prep when the answer needs to be turned into a structured knowledge document; pairs with macro-context for time-sensitive 'is this still current' questions.",
+    toolSlugs: [
+      "answer",
+      "search",
+      "search-news",
+      "extract",
+      "extract-entities",
+    ],
+    workflow: [
+      "Get the AI-synthesized answer with answer. Brave's answer endpoint returns a short prose paragraph synthesized from the top SERP results, plus a citations array (URL + title + snippet per source). This is the *starter* answer — never the final answer, because Brave's synthesis can still hallucinate connections between citations or misquote them. Treat the answer text as a hypothesis and the citations as the evidence to verify. Keep the maxTokens cap modest (≤ 250) so the synthesis stays close to the source material rather than wandering.",
+      "Pull the canonical SERP with search. Brave web search, top 10 organic results. This gives you (a) the search-engine consensus on which pages are authoritative for the query (so you can sanity-check Brave's answer didn't pick fringe sources), and (b) backup sources if the answer's citations turn out to be wrong or paywalled. Compare the SERP's top URLs against the answer's citation URLs — if they barely overlap, the answer is probably weighted toward an unusual angle and deserves extra skepticism.",
+      "Pull time-sensitive context with search-news. Brave news search on the same query. For evergreen questions ('what is a closure in JavaScript') this returns mostly noise and can be skipped; for time-sensitive questions ('is the IPO market open', 'did the Fed raise rates last week') the news pass is essential — the regular web search is heavily SEO-optimized and stale-friendly, while news is recency-biased. Always check the news result dates: if the most recent news result on a time-sensitive query is more than 30 days old, the answer might already be wrong even if it was correct when Brave indexed it.",
+      "Re-fetch and clean the top 2-3 citation URLs with extract. This is the verification step that turns a citation from a URL into actual readable bytes — extract runs Readability over the page and returns clean markdown of the article body, stripping nav, footer, ads, comments. One call per citation. If extract returns empty (page is a SPA, paywalled, or anti-bot-blocked), that's signal: a citation that can't be re-extracted is effectively dead and any claim resting on it should be downgraded or dropped. Cap at 3 citations to bound budget — the marginal value of citation #4 is low.",
+      "Cross-reference named entities with extract-entities on each cleaned article body. Returns people, organizations, places, dates mentioned in the extracted text. The agent now grep-checks: every named entity in Brave's answer (step 1) should appear in at least one extracted article's entity list. If the answer claims 'according to Powell at the FOMC meeting' but neither 'Powell' nor 'FOMC' appears in any cited article's entities, the answer is hallucinating attribution. Final output: a paragraph where every sentence has at least one URL footnote pointing at content that was re-fetched, re-read, and entity-checked against the original claim.",
+    ],
+    claudePrompt:
+      "Answer this research question with sources, using Agent402.\n\nQuestion: 'What is the Sahm Rule and has it triggered recently?'\nMax answer length: 250 tokens.\nAs-of: 2026-06-22.\n\n(1) answer with q='What is the Sahm Rule and has it triggered recently?', maxTokens=250. Return {answer: '<paragraph>', citations: [{url, title, snippet}, ...]}. Treat this answer as a *hypothesis*. (2) search with q='Sahm Rule recession indicator current', topN=10. Return {results: [{url, title, snippet}, ...]}. Compute overlap with step 1's citation URLs — if overlap < 30%, flag 'answer drew from non-canonical sources'. (3) search-news with q='Sahm Rule triggered', topN=5. Return {results: [{url, title, snippet, age}, ...]}. Critical for the 'triggered recently' half of the question: pick the freshest news result. If the freshest news result is > 30 days old, caveat the answer with 'most recent news coverage is from [date]'. (4) extract on the top 3 citation URLs from step 1. Return {extracted: [{url, ok, markdown|err}, ...]}. Drop any citation where ok=false or markdown is empty. (5) extract-entities on each successfully-extracted markdown body. Return {entities: [{url, people: [], orgs: [], places: [], dates: []}, ...]}. For each named entity in step-1 answer text, verify it appears in at least one citation's entity list. Drop any claim whose key entity isn't supported by any citation. Final return: {question, answer: '<rewritten paragraph where every sentence has a [url] footnote pointing to a citation whose markdown was re-extracted AND whose entities support the claim>', citations: [{url, title, verified: true|false}, ...], droppedClaims: [...], freshness: {newsLatestDate, isStale: true|false}, oneLineSummary: 'Sahm Rule is the 0.5pp 3M-vs-12M-low UE trigger; not currently triggered (0.33 as of May 26); cited 2 verifiable sources (FRED, Bloomberg), dropped 1 unsupported claim.'}. Five tools: answer + search + search-news are egress (Brave API); extract is egress (raw web + Readability); extract-entities is pure-CPU. Budget ~$0.08 paid.",
+    promptArgs: [
+      {
+        name: "question",
+        description: "the research question to answer with citations",
+        required: true,
+        substitute: "What is the Sahm Rule and has it triggered recently?",
+      },
+    ],
+  },
+
+  {
+    slug: "media-pipeline",
+    title: "Uploaded-media normalize",
+    tagline:
+      "The 'user uploaded a thing, normalize it before storing' workflow. Probe the file (image or audio/video) with media-info, decode any embedded barcodes/QRs, resize and thumbnail the image, convert it to a web-friendly format, and normalize audio loudness to broadcast standard. Six tools, one canonical normalize-on-upload pipeline that turns arbitrary user uploads into predictable storage artifacts.",
+    useCase:
+      "Every product that accepts user uploads ships the same five bugs: the receipt photo nobody can read because it's 11MB and rotated, the audio voice-memo that's 6dB louder than every other voice-memo because the user had headphone gain cranked, the QR code in the uploaded business card that the app never scanned because it looked at the filename instead of the bytes, the AVIF that the iOS WebView can't display, the 4K hero image that blew up the thumbnail grid. This pack runs the canonical normalize-then-store pipeline so every uploaded artifact lands in storage with predictable dimensions, predictable codec, predictable loudness, and any embedded payload (QR/barcode) already extracted into metadata. Pairs with document-intel when the upload is a PDF.",
+    toolSlugs: [
+      "media-info",
+      "barcode-decode",
+      "image-resize",
+      "image-thumbnail",
+      "image-convert",
+      "audio-normalize",
+    ],
+    workflow: [
+      "Probe the file with media-info. Runs ffprobe under the hood — returns format, codec, dimensions (width x height for images/video), duration (audio/video), bitrate, sample rate, color space, EXIF orientation. This is the *triage* call: it tells the agent which downstream branch to take. Image? → barcode + resize + thumbnail + convert. Audio? → normalize. Video? → probe-only, video transcoding is outside this pack's scope. Critical edge case: a file with extension `.jpg` and MIME `image/jpeg` that ffprobe identifies as `image/heic` is a real production case (iOS sends HEIC named .jpg). Trust media-info, not the extension.",
+      "Try to decode embedded barcodes/QR codes with barcode-decode. One call on the image bytes. Returns the decoded payload (URL, EAN-13, UPC, etc.) and the symbology. Many uploads have actionable payloads the agent should extract before treating the image as 'just a photo': uploaded business cards contain vCard QRs, uploaded receipts contain GS1 product codes, uploaded shipping labels contain tracking URLs. If decode returns empty, that's fine — most images don't have barcodes, and the pack continues. If decode returns a payload, surface it as metadata alongside the stored image.",
+      "Resize the image to a max long-edge with image-resize. Default cap: 2000px on the long edge. Most uploaded photos from modern phones are 4000+ px wide; 2000px is the sweet spot where retina displays still look sharp but storage and bandwidth costs drop 4-8x. Critical: preserve aspect ratio (don't squish), and respect EXIF orientation from step 1 (rotate to upright before resize, so the stored bytes are already the right way up — never trust the consuming client to handle orientation). image-resize also strips EXIF GPS by default — good for privacy, since uploaded photos often carry the user's home coordinates.",
+      "Generate a small thumbnail for grid/list views with image-thumbnail. Default size: 200x200 cover crop. The thumbnail is a separate stored artifact from the resized image — UIs grid-displaying 50 thumbnails should not be loading 50 × 2000px resized images. Cover crop (not contain) is the right default for grid UIs because mixed aspect ratios in a grid look chaotic; the small loss of edge content is a fair tradeoff for visual consistency.",
+      "Convert the resized image to a web-friendly format with image-convert. Default target: WebP, quality 82. WebP is the universal-support sweet spot in 2026 — supported by every browser including iOS Safari, 25-35% smaller than JPEG at equivalent quality. AVIF compresses better but Safari + many in-app WebViews still have gaps; HEIC is iOS-native but Android can't display it. Skip conversion if the source is already WebP. The thumbnail from step 4 should be converted too — same WebP target.",
+      "Normalize audio loudness with audio-normalize. Only runs if the file probed as audio in step 1 (skip for images). Applies EBU R128 loudness normalization to -23 LUFS (broadcast standard) or -16 LUFS (podcast/voice standard). This is the difference between 'every uploaded voice-memo plays at the same volume' and 'half the user's library hits the volume limiter and the other half is whispers'. Critical: this changes loudness, not peak — the dynamic range of the original is preserved, just shifted into a predictable absolute range. After this step, the artifact is canonical and ready to store. Pack returns: {storedKey, dimensions, format, sizeBytes, thumbnailKey, barcodePayload|null, audioLufs|null, processingTimeMs}.",
+    ],
+    claudePrompt:
+      "Normalize this user upload using Agent402.\n\nInput: uploaded file at temp path /tmp/upload-abc123 (1 file per invocation).\nMax stored long-edge: 2000px.\nThumbnail size: 200x200.\nTarget image format: WebP quality 82.\nAudio target: -16 LUFS (voice-memo standard).\n\n(1) media-info — return {kind: 'image'|'audio'|'video'|'other', format, codec, width, height, durationSec, bitrate, sampleRate, colorSpace, exifOrientation, declaredMime, detectedMime}. If declaredMime ≠ detectedMime, log 'mime mismatch' and trust detectedMime. Branch on kind: 'image' → steps 2-5, 'audio' → step 6 only, 'video' → return as-is with kind=video and stop (out of scope), 'other' → reject. (2) barcode-decode on the image bytes — return {payload: '<decoded text>'|null, symbology: 'qr'|'ean13'|'upc'|...|null}. Pure-CPU. Null = no decodable barcode, that's fine. (3) image-resize with maxLongEdge=2000, preserveAspect=true, applyExifRotation=true, stripExifGps=true — return {bytes: <resized>, width, height}. (4) image-thumbnail with size=200, mode='cover' — return {bytes: <thumb>}. (5) image-convert on both step-3 output and step-4 output, format='webp', quality=82, skipIfAlreadyTarget=true — return {primary: {bytes, sizeBytes}, thumb: {bytes, sizeBytes}}. (6) audio-normalize with targetLufs=-16, format='mp3' — return {bytes, lufsBefore, lufsAfter, peakDbfs}. ONLY if step 1 said kind='audio'. Final return: {kind, normalized: {primaryBytes: <ref>, primarySize, thumbBytes: <ref>, thumbSize, width, height, format} | audio: {bytes: <ref>, durationSec, lufsAfter, format}, metadata: {barcodePayload, originalSizeBytes, sizeSavingsPct, exifOrientation, declaredVsDetectedMime}, oneLineSummary: 'image normalized: 4032x3024 HEIC → 2000x1500 WebP (847KB → 162KB, 81% smaller), 1 QR decoded (https://example.com/menu/42), thumb 200x200 → 8KB' | 'audio normalized: 6m 12s, -23.4 LUFS → -16.0 LUFS, peak -1.2 dBFS'}. media-info + barcode-decode + image-* + audio-normalize all involve ffmpeg/ffprobe/imagemagick under the hood — egress is 0, but CPU is meaningful, so this is a wallet/paid pack, not PoW. Budget ~$0.06 per upload.",
+    promptArgs: [
+      {
+        name: "uploadPath",
+        description: "the temp path or URL of the uploaded file (e.g. '/tmp/upload-abc123')",
+        required: true,
+        substitute: "/tmp/upload-abc123",
+      },
+    ],
+  },
+
+  {
+    slug: "schema-evolution",
+    title: "API contract drift check",
+    tagline:
+      "The 'did this API contract change in a way that breaks our integration?' workflow. Diff two OpenAPI snapshots structurally, lint the new one for agent-readiness regressions, extract the endpoint surface for inventory comparison, validate a known-good payload against the new contract, and summarize security-relevant changes. Six tools, one go/no-go answer on whether the upstream API broke us.",
+    useCase:
+      "Every integration eventually hits the 'upstream changed something and now our requests 422' incident. The fix-time is dominated by figuring out *what* changed: was it a renamed field, a tightened enum, a new required parameter, a moved endpoint, a security scheme change? This pack runs that diagnosis deterministically the moment a new OpenAPI snapshot lands — before traffic breaks. Pairs with api-investigation when you don't yet have an OpenAPI snapshot (that pack discovers one); this pack assumes you have two snapshots (yesterday's and today's) and want to know what changed and whether it matters.",
+    toolSlugs: [
+      "openapi-diff",
+      "openapi-lint",
+      "openapi-extract",
+      "openapi-required-params",
+      "openapi-validate-payload",
+      "openapi-security-summary",
+    ],
+    workflow: [
+      "Diff the two snapshots with openapi-diff. Pass the old spec and new spec; returns a structural diff: added/removed endpoints, added/removed parameters per endpoint, changed schemas, changed response codes, changed security schemes. The diff is *structural*, not textual — a reordering of fields or a whitespace change won't show up; a renamed property will. This is the raw change-list every downstream step interprets. Bucket changes by breaking-vs-additive: removed endpoint = breaking, added endpoint = additive, new required param = breaking, new optional param = additive, tightened enum = breaking, widened enum = additive.",
+      "Lint the new snapshot with openapi-lint for agent-readiness regressions. Even if the diff is empty, the *quality* of the new spec might have degraded — descriptions removed, examples deleted, response schemas downgraded to free-form objects. Returns a score and a list of regressions. This is the signal for 'the upstream maintainer is taking the spec less seriously over time' — it predicts future drift even when this diff was clean. Cross-reference with the diff: drops in lint score that coincide with endpoint changes are the highest-priority concerns.",
+      "Extract the endpoint surface from the new snapshot with openapi-extract. Returns the full {path, method, operationId, summary} table — the inventory the integration code is coded against. Compare this inventory to your client code's call sites: any operationId your code calls that's missing from the inventory is an integration that's about to fail. Conversely, any operationId in the inventory that your code doesn't call is a new capability you might want to expose. The diff in step 1 surfaces *changes*; this step surfaces the *full current surface*.",
+      "Pull the required-params delta with openapi-required-params on both old and new specs. For each endpoint, returns the list of required parameters. Compare old vs new: any param newly required is a breaking change that the diff in step 1 also caught, but this step gives you the *concrete request shape* a client has to send — easier to translate into client-code patches than the abstract structural diff. If a previously optional field is now required, your existing client code probably doesn't send it, and every request 400s the moment the new contract is live.",
+      "Replay a known-good payload through openapi-validate-payload against the new spec. Pass your fixture (the request body you've been sending successfully for months); the tool validates it against the new schema. If validation fails, the failure messages tell you exactly which field is the problem — much faster than reading the diff and guessing. If validation passes, you have positive evidence the existing client code's request shape is still acceptable; the breakage if any is elsewhere (auth, headers, query params). This is the single most decision-relevant check in the pack.",
+      "Diff security schemes with openapi-security-summary on both specs. Auth changes are usually filed under 'breaking' but spec-diff tools often surface them as just-another-field-change rather than the migration project they actually are. This step bubbles them to the top: 'apiKey moved from header to query', 'oauth2 scope renamed', 'new scope required for endpoint X'. Security-scheme drift is the most expensive kind of breakage because it requires credential rotation, not just a code patch — flag prominently. Final return is a single 'breaking | additive | clean' verdict plus a per-endpoint impact table the integration team can prioritize from.",
+    ],
+    claudePrompt:
+      "Check if this OpenAPI contract drifted in a breaking way, using Agent402.\n\nInputs:\n  oldSpec: <yesterday's snapshot, JSON or YAML>\n  newSpec: <today's snapshot, JSON or YAML>\n  knownGoodPayload: { endpoint: 'POST /v1/orders', body: {customerId: 'cust_abc', items: [{sku: 'SKU-42', qty: 1}], currency: 'USD'} }\n\n(1) openapi-diff with oldSpec + newSpec — return {added: {endpoints: [], params: [], schemas: []}, removed: {endpoints: [], params: [], schemas: []}, changed: {endpoints: [{path, what: 'response-schema|request-schema|param-required|param-removed|...'}, ...]}}. Bucket every change as breaking|additive in the writeup. (2) openapi-lint on newSpec — return {score, regressions: [{severity, what}], comparisonToPriorLint: 'manual — note if score dropped'}. Note: this pack doesn't store prior lint scores; surface the current score and ask the integration team whether it dropped. (3) openapi-extract on newSpec — return {endpoints: [{path, method, operationId, summary}, ...]}. Compare in the writeup against the diff from step 1 to confirm no endpoint your client calls is missing. (4) openapi-required-params on BOTH specs separately — return {old: [{endpoint, requiredParams: []}, ...], new: [{endpoint, requiredParams: []}, ...], newlyRequired: [{endpoint, paramName}, ...]}. Every entry in newlyRequired is a guaranteed 400 for existing clients. (5) openapi-validate-payload with spec=newSpec, endpoint='POST /v1/orders', body=knownGoodPayload.body — return {valid: true|false, errors: [...]}. This is the decisive check. (6) openapi-security-summary on BOTH specs — return {old: {schemes: [...], requirements: [...]}, new: {schemes, requirements}, drift: [{endpoint, change: 'scope-added|scheme-changed|location-moved|...'}]}. Final return: {verdict: 'breaking'|'additive'|'clean', breakingItems: [...], additiveItems: [...], requiredClientChanges: [{file: '<guess based on operationId>', change: '<what to patch>'}], knownGoodPayloadStillValid: true|false, securityDrift: [...], lintScoreNow: <number>, oneLineSummary: 'BREAKING: POST /v1/orders now requires currencyOverride; 2 endpoints removed (/v1/legacy/quote, /v1/legacy/refund); auth unchanged; existing fixture fails validation — patch client before next deploy.'}. All six tools are pure-CPU schema operations (no egress to the API itself). Budget ~$0.015 paid; PoW-eligible.",
+    promptArgs: [
+      {
+        name: "oldSpec",
+        description: "the prior OpenAPI snapshot as JSON or YAML",
+        required: true,
+        substitute: "yesterday's snapshot",
+      },
+      {
+        name: "newSpec",
+        description: "the current OpenAPI snapshot as JSON or YAML",
+        required: true,
+        substitute: "today's snapshot",
+      },
+    ],
   },
 ];
 

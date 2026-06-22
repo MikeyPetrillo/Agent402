@@ -8,7 +8,8 @@ taken seriously and acted on fast.
 
 - **Preferred:** open a [private security advisory](https://github.com/MikeyPetrillo/Agent402/security/advisories/new) on this repository.
 - Or open a regular issue *without exploit details* and ask for a private channel.
-- Maintainer contact: [github.com/MikeyPetrillo](https://github.com/MikeyPetrillo).
+- Direct email: **mike@agent402.tools**.
+- Maintainer profile: [github.com/MikeyPetrillo](https://github.com/MikeyPetrillo).
 
 Please include reproduction steps and impact. You can expect an initial response
 within a few days; fixes for real issues ship through the normal CI pipeline

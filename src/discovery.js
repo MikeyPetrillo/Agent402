@@ -19,7 +19,7 @@ import { toolList, CATEGORIES } from "./pages.js";
 import { SKILL_PACKS } from "./skills.js";
 
 const REPO = "https://github.com/MikeyPetrillo/Agent402";
-const MAINTAINER = { name: "Mikey Petrillo", url: "https://github.com/MikeyPetrillo" };
+const MAINTAINER = { name: "Mikey Petrillo", email: "mike@agent402.tools", url: "https://github.com/MikeyPetrillo" };
 
 function priceRange(prices) {
   const nums = prices.filter((n) => n > 0);

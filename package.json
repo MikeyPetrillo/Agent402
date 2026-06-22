@@ -32,7 +32,7 @@
     "http-402",
     "tools"
   ],
-  "author": "Mikey Petrillo (https://github.com/MikeyPetrillo)",
+  "author": "Mikey Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
   "license": "MIT",
   "type": "module",
   "dependencies": {

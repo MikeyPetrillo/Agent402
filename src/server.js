@@ -58,6 +58,8 @@ import { NETWORK_TOOLS2 } from "./tools/network-kit2.js";
 import { HTML_TOOLS } from "./tools/html-kit.js";
 import { COMPRESSION_TOOLS } from "./tools/compression-kit.js";
 import { STATS_TOOLS } from "./tools/stats-kit.js";
+import { FORECAST_TOOLS } from "./tools/forecast-kit.js";
+import { FINANCE_MATH_TOOLS } from "./tools/finance-math-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
@@ -66,7 +68,7 @@ import { docsIndex, docsPage, docsApi } from "./docs.js";
 import { shopPage } from "./shop.js";
 import { economyPage } from "./economy.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS];
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
 
@@ -579,13 +581,13 @@ app.get("/health", (_req, res) => {
 });
 // Glama connector ownership verification: claims our listing at
 // glama.ai/mcp/connectors/io.github.MikeyPetrillo/agent402. The maintainer email
-// must match the Glama account — set it via the GLAMA_MAINTAINER_EMAIL env var
-// (kept out of source so a personal address isn't committed/served by default).
+// must match the Glama account. Defaults to the project's domain-scoped
+// maintainer address; GLAMA_MAINTAINER_EMAIL env override exists for forks.
 app.get("/.well-known/glama.json", (_req, res) => {
-  const email = process.env.GLAMA_MAINTAINER_EMAIL;
+  const email = process.env.GLAMA_MAINTAINER_EMAIL || "mike@agent402.tools";
   res.json({
     $schema: "https://glama.ai/mcp/schemas/connector.json",
-    maintainers: email ? [{ email }] : [],
+    maintainers: [{ email }],
   });
 });
 app.get("/privacy", (_req, res) => htmlCache(res, 300, 900).send(privacyPage(BASE_URL)));
