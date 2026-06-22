@@ -61,7 +61,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     about: `${REPO}#agent402-in-the-x402-ecosystem`,
     name: "Agent402",
     summary:
-      "The open-source, self-hostable x402 + MCP server: one integration, a full catalog of web tools for AI agents — browser, search, PDFs, images, live data, payments — plus ~1,000 deterministic utilities.",
+      `The open-source, self-hostable x402 + MCP server: ${toolCount} pay-per-call tools for AI agents in one integration — browser, search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, ${SKILL_PACKS.length} curated multi-tool skill packs callable as MCP prompts, and wallet-keyed memory. Free via proof-of-work or pay per call in USDC via x402.`,
     homepage: baseUrl,
     repository: REPO,
     openSource: true,

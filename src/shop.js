@@ -219,7 +219,7 @@ ${renderHeader("/shop")}
 <div class="wrap">
   <div class="crumb"><a href="/">Agent402</a> / shop</div>
   <h1>What does your agent want to do?</h1>
-  <p class="shop-intro">A task-indexed buyer's guide to the 1,164 APIs at Agent402 — written from the agent's side of the call. Each row maps a real goal to the cheapest tool that solves it. Browse the full category-organized catalogue at <a href="/tools">/tools</a>, or ask the discovery endpoint directly: <code>/api/find?q=&lt;your task&gt;</code>.</p>
+  <p class="shop-intro">A task-indexed buyer's guide to the ${Object.keys(catalog).length.toLocaleString()} APIs at Agent402 — written from the agent's side of the call. Each row maps a real goal to the cheapest tool that solves it. Browse the full category-organized catalogue at <a href="/tools">/tools</a>, walk the multi-tool workflows at <a href="/skills">/skills</a>, or ask the discovery endpoint directly: <code>/api/find?q=&lt;your task&gt;</code>.</p>
   ${missingNotice}
   ${tasks}
 </div>

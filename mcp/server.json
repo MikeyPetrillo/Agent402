@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.MikeyPetrillo/agent402",
   "title": "Agent402 — pay-per-call web tools",
-  "description": "1,100+ paid web tools: search/answers, browser, PDF, finance/crypto/macro, EDGAR. USDC on Base.",
+  "description": "1,199 paid web tools + 39 multi-tool skill packs (security-audit, trend-analysis, structured-scrape, decode-blob, forecasting-bake-off, document-intel...). Search/answers, browser, PDF, OCR, finance, crypto, macro, EDGAR, stats, compression. USDC on Base or free via proof-of-work.",
   "version": "0.8.0",
   "repository": {
     "url": "https://github.com/MikeyPetrillo/Agent402",
