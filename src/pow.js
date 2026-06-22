@@ -79,6 +79,14 @@ export const WALLET_ONLY_SLUGS = new Set([
   "cert-transparency", "http-headers", "tech-stack", "asn-info",
   // x402 payments toolkit — kept off the free connector (paid surface only).
   "x402-quote", "usdc-balance", "tx-status", "gas-estimate", "x402-verify", "transfer-authorization", "ens-resolve",
+  // Chain-kit: every tool talks to Alchemy and counts against our compute-unit
+  // quota. PoW would let one client farm our paid upstream.
+  "wallet-balance", "token-metadata", "token-price", "wallet-transactions",
+  "nft-holdings", "nft-metadata", "gas-snapshot", "eth-call",
+  // Price-feed-kit: keyless public upstreams (Pyth Hermes, CoinGecko, DeFiLlama)
+  // but the rate limits are shared per-IP. PoW would let one client exhaust the
+  // shared quota for every other caller.
+  "price-pyth", "price-coingecko", "defi-tvl",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */
