@@ -111,6 +111,22 @@ export const WALLET_ONLY_SLUGS = new Set([
   // pool with chain-kit / dex-kit / mev-and-l2-kit). 3 net-new market-side
   // tools that complement chain-kit's existing nft-holdings + nft-metadata.
   "nft-collection", "nft-floor", "nft-sales",
+  // Skill packs (bundled execution endpoints) — premium + standard tiers
+  // orchestrate paid-upstream tools (EDGAR / FRED / Alchemy / Brave /
+  // Yahoo / CoinGecko / DefiLlama / DNS resolvers / Chromium). PoW would
+  // turn one free request into N paid sub-calls. Light-tier packs (the 16
+  // pure-CPU bundles below this block) are deliberately omitted — every
+  // tool they orchestrate is itself PoW-eligible, so the bundle stays free
+  // over PoW too.
+  "skill-financial-research", "skill-sec-filings-deep-dive", "skill-macro-context",
+  "skill-crypto-research", "skill-regulatory-watch", "skill-search-and-cite",
+  "skill-macro-economics",
+  "skill-content-extraction", "skill-media-pipeline", "skill-document-intel",
+  "skill-trend-analysis", "skill-any-to-markdown", "skill-structured-scrape",
+  "skill-forecasting-bake-off", "skill-fraud-signals", "skill-security-audit",
+  "skill-link-preview", "skill-api-investigation", "skill-email-deliverability",
+  "skill-location-intel", "skill-dns-network-ops", "skill-status-snapshot",
+  "skill-schema-evolution",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */

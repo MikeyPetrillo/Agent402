@@ -92,6 +92,24 @@ const NETWORK = new Set([
   // NFT-market-kit: Alchemy NFT v3 (503 without key in CI without secrets;
   // 4xx on placeholder contracts that don't exist on a given chain).
   "/api/nft-collection", "/api/nft-floor", "/api/nft-sales",
+  // Skill packs (bundled execution endpoints) — orchestrate up to 8 underlying
+  // tool calls per request; sequential chains can exceed the 20s AbortSignal in
+  // CI even when each underlying call is fast. The partial-success envelope
+  // always returns 200 with {pack, args, steps, summary}, so strict mode would
+  // also pass — NETWORK membership is a timeout safety hedge. All 39 packs:
+  "/api/skill/security-audit", "/api/skill/email-deliverability", "/api/skill/financial-research",
+  "/api/skill/macro-economics", "/api/skill/dns-network-ops", "/api/skill/crypto-research",
+  "/api/skill/content-extraction", "/api/skill/sec-filings-deep-dive", "/api/skill/structured-scrape",
+  "/api/skill/decode-blob", "/api/skill/trend-analysis", "/api/skill/forecasting-bake-off",
+  "/api/skill/document-intel", "/api/skill/loan-comparison", "/api/skill/investment-decision",
+  "/api/skill/retirement-planning", "/api/skill/savings-goal", "/api/skill/fraud-signals",
+  "/api/skill/api-investigation", "/api/skill/text-hygiene", "/api/skill/csv-profile",
+  "/api/skill/location-intel", "/api/skill/meeting-scheduler", "/api/skill/jwt-forensics",
+  "/api/skill/user-onboarding", "/api/skill/data-interchange", "/api/skill/rag-prep",
+  "/api/skill/webhook-debug", "/api/skill/a11y-audit", "/api/skill/trip-planner",
+  "/api/skill/identity-mint", "/api/skill/macro-context", "/api/skill/regulatory-watch",
+  "/api/skill/search-and-cite", "/api/skill/media-pipeline", "/api/skill/schema-evolution",
+  "/api/skill/link-preview", "/api/skill/any-to-markdown", "/api/skill/status-snapshot",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 

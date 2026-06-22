@@ -77,6 +77,7 @@ import { shopPage } from "./shop.js";
 import { economyPage } from "./economy.js";
 
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...COLOR_TOOLS, ...CHAIN_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS];
+import { buildSkillTools } from "./tools/skill-runner.js";
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
 
@@ -481,6 +482,28 @@ const CATALOG = {
 for (const tool of ALL_KIT) {
   if (CATALOG[tool.route]) throw new Error(`Duplicate route in kit: ${tool.route}`);
   CATALOG[tool.route] = tool;
+}
+
+// Skill packs as paid bundled-execution endpoints. Built AFTER ALL_KIT
+// finishes populating CATALOG so each skill handler can resolve underlying
+// tool handlers at call time via the live CATALOG. The inline handlers map
+// covers routes that are bound inline in this file (extract/meta/dns/render/
+// pdf) rather than declared in a kit — the runner tries this map first.
+const SKILL_INLINE_HANDLERS = {
+  extract: async ({ url } = {}) => extractArticle(url),
+  meta:    async ({ url } = {}) => fetchPageMeta(url),
+  dns:     async ({ name, type } = {}) => dnsLookup(name, type),
+  render:  async ({ url } = {}) => renderArticle(url),
+  pdf:     async ({ url } = {}) => pdfToText(url),
+};
+const SKILL_TOOLS = buildSkillTools({
+  getCatalog: () => CATALOG,
+  inlineHandlers: SKILL_INLINE_HANDLERS,
+});
+for (const tool of SKILL_TOOLS) {
+  if (CATALOG[tool.route]) throw new Error(`Duplicate route in skill set: ${tool.route}`);
+  CATALOG[tool.route] = tool;
+  ALL_KIT.push(tool); // so the route-binding loop below picks them up too
 }
 
 // Routes that accept proof-of-work in lieu of payment: the pure-CPU tools.
