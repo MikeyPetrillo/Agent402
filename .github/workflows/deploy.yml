@@ -14,10 +14,11 @@ on:
       - ".github/trigger-marketplace"
       - ".github/trigger-drain"
       - ".github/trigger-bazaar-refresh"
+      - ".github/trigger-bazaar-register"
   workflow_dispatch:
     inputs:
       mode:
-        description: "probe, test, paytest, purl (Stripe client interop), publish (npm), marketplace (list on agent402.app), bazaar-refresh, or deploy"
+        description: "probe, test, paytest, purl (Stripe client interop), publish (npm), marketplace (list on agent402.app), bazaar-refresh, bazaar-register (one-shot: pay missing routes so the Coinbase harvester registers them), or deploy"
         default: "deploy"
       burner_key:
         description: "Existing funded burner key for paytest (hex). Leave empty to generate a fresh wallet."
@@ -52,6 +53,7 @@ jobs:
       purl: ${{ steps.parse.outputs.purl }}
       marketplace: ${{ steps.parse.outputs.marketplace }}
       bazaar_refresh: ${{ steps.parse.outputs.bazaar_refresh }}
+      bazaar_register: ${{ steps.parse.outputs.bazaar_register }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -64,7 +66,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          MARKERS="test deploy publish probe drain demand paytest purl marketplace bazaar-refresh"
+          MARKERS="test deploy publish probe drain demand paytest purl marketplace bazaar-refresh bazaar-register"
           if [ "$EVENT_NAME" != "push" ]; then
             echo "Event is $EVENT_NAME (not push) — emitting all markers as false."
             for m in $MARKERS; do
@@ -184,6 +186,38 @@ jobs:
           BURNER_KEY: ${{ secrets.BURNER_KEY || inputs.burner_key }}
         run: |
           [ -n "$BURNER_KEY" ] || { echo "No BURNER_KEY — cannot refresh paid listings"; exit 1; }
+          echo "::add-mask::$BURNER_KEY"
+          node scripts/refresh-bazaar.js
+
+  bazaar-register:
+    # One-shot job: discovers catalog routes that the Coinbase CDP Bazaar
+    # harvester has never observed and pays one tiny request against each so
+    # the harvester registers them. Idempotent — already-registered routes
+    # drop out of the missing set, so partial runs can be resumed.
+    #
+    # Cost is bounded by MAX_SPEND_USD; the script refuses to run if the
+    # estimate exceeds that ceiling. As of writing the missing set sums to
+    # under $2.
+    needs: markers
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-register' || needs.markers.outputs.bazaar_register == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TARGET_URL: https://agent402.tools
+      MODE: missing
+      MAX_SPEND_USD: "10"
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci && npm install --no-save --ignore-scripts @x402/fetch @x402/core @x402/evm viem
+      - name: Register missing Bazaar routes
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY || inputs.burner_key }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "No BURNER_KEY — cannot pay to register missing routes"; exit 1; }
           echo "::add-mask::$BURNER_KEY"
           node scripts/refresh-bazaar.js
 
