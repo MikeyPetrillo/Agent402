@@ -1203,6 +1203,55 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "identity-mint",
+    title: "Server-side identity mint",
+    tagline:
+      "The server-side identity-issuance round-trip: mint a random user-id (UUIDv4), derive a deterministic cross-system correlation-id (UUIDv5), turn the display name into a URL-safe handle, generate a one-time recovery password, hash it for storage, sign a session JWT with HMAC, and base64-encode the recovery bundle for transport. Seven pure-CPU tools — the canonical 'create-user' write path done as one deterministic pipeline.",
+    useCase:
+      "Identity issuance is where every backend ships subtle bugs: collisions on user-id, recovery codes generated with Math.random, JWTs signed without an exp claim, recovery emails sent as plaintext. This pack composes the seven primitives every signup flow needs — random ID, deterministic correlation ID, slug handle, random recovery code, stored hash, signed token, transport encoding — into a single deterministic pipeline so the bytes that hit the database are always the same shape, and the agent can re-issue any single artifact (rotate the JWT, regenerate the recovery code) without re-doing the rest. Note: this is the issuance pipeline, NOT the long-term password-storage primitive — the workflow calls out where bcrypt/argon2 belongs in production.",
+    toolSlugs: [
+      "uuid",
+      "uuid-v5",
+      "slugify",
+      "password",
+      "hash",
+      "jwt-sign",
+      "base64",
+    ],
+    workflow: [
+      "Mint the random user-id with uuid. Version 4 = 122 bits of entropy from the OS CSPRNG — unguessable by any other party, suitable for the primary key in the users table. Distinguish this from the *correlation* ID generated next: the random UUID is the system-of-record identity; an attacker who guesses it should still get an auth failure because the JWT signature won't match. Default UUIDv4 is the right choice here.",
+      "Mint the deterministic correlation-id with uuid-v5. namespace='url', name=`mailto:${email}`. UUIDv5 is SHA-1 of (namespace || name) — the same email always produces the same UUID across every system in the federation. This is what every CRM/billing/analytics SaaS expects as 'send me a stable customer ID' without forcing every system through a central directory. Critical: store BOTH the random UUIDv4 (internal) AND the v5 (cross-system) — never expose the v4 externally; never use the v5 internally as the auth subject.",
+      "Derive the URL-safe handle with slugify on the user's display name. 'Alice O''Connor' → 'alice-o-connor'. Strips diacritics, lowercases, collapses runs of separators, removes non-URL-safe chars. The handle goes into profile URLs (/u/alice-o-connor). Watch for collisions in production: slugify is deterministic, so two users named 'Alice Smith' will produce the same handle — append the v5 UUID's first 6 chars as a disambiguator if your schema needs uniqueness.",
+      "Generate a one-time recovery password with password. Default length 24, with upper/lower/digit/symbol classes — high enough entropy that even a fast offline cracker takes years. This is NOT the user's chosen password; it's the recovery code printed once at signup and stored only as a hash. Treat it as bearer credential equivalent to the JWT until used. The tool uses the OS CSPRNG (not Math.random), so the result is suitable for security contexts.",
+      "Hash the recovery code with hash, algorithm=sha256. CRITICAL CAVEAT: sha256 is the right hash for this recovery-code context (the code itself is high-entropy random, so brute-force is infeasible regardless of hash speed). It is NOT the right hash for storing user-chosen passwords — those need a memory-hard KDF (bcrypt, argon2, scrypt) which Agent402 doesn't ship because deterministic CPU tools and CPU-hard hashing are different security primitives. The pack workflow says this explicitly so the agent doesn't reach for hash(userPassword) and call it secure.",
+      "Sign a session JWT with jwt-sign, alg='HS256'. Payload: {sub: <UUIDv4>, iss: 'agent402.tools', iat: <now>, exp: <now+3600>, jti: <UUIDv4 again, for revocation>}. The exp claim is mandatory — JWTs without exp are perpetual bearer tokens and the #1 security incident category. The jti claim enables revocation: store revoked jtis in a fast-expiring cache and reject tokens with matching jti during verification. HS256 is symmetric (verifier = same server) which is correct for first-party session tokens; for federated tokens (verifier = different org) you'd want RS256 instead, which Agent402 doesn't ship — call this out if the use-case demands cross-org verification.",
+      "Encode the recovery bundle for transport with base64. The bundle = JSON {recoveryCode, sessionToken, handle}, base64'd → a single ASCII string the user can copy-paste, encode as QR, or paste into a password manager. base64 is transport-encoding, NOT encryption — anyone who intercepts the bundle has the credentials. Pair with TLS at the transport boundary; never log the bundle even at DEBUG level. The same redact-first invariant from the webhook-debug pack applies here: a redact step belongs between the bundle and any logger.",
+    ],
+    claudePrompt:
+      "Mint a fresh user identity using Agent402.\n\nInput:\n  displayName: Alice O'Connor\n  email: alice.oconnor@example.com\n  signingSecret: server_demo_jwt_secret_do_not_use_in_prod\n  sessionTtlSeconds: 3600\n  nowIso: 2026-06-22T00:00:00Z\n\n(1) uuid — get the random user-id (the internal primary key). Call this `internalUserId`. (2) uuid-v5 with namespace='url', name='mailto:alice.oconnor@example.com'. Call this `correlationId` — the same email always produces this UUID. Note: distinct from internalUserId; both stored. (3) slugify on 'Alice O''Connor' → handle. If your schema enforces unique handles, append correlationId.slice(0,6) as disambiguator. (4) password with length=24, upper=true, lower=true, digits=true, symbols=true. Call this `recoveryCode`. Bearer-credential equivalent — store only the hash. (5) hash with algo='sha256' on recoveryCode → hex digest. This goes in the users.recovery_hash column. CALL OUT in the writeup: this hash is appropriate for recovery codes (high entropy) but NOT for user-chosen passwords (which need bcrypt/argon2; out of scope for this pack). (6) jwt-sign with payload={sub: internalUserId, iss: 'agent402.tools', iat: epoch(nowIso), exp: epoch(nowIso) + 3600, jti: <another uuid call result>}, secret=signingSecret, alg='HS256'. Call this `sessionToken`. Confirm exp is set — JWTs without exp are perpetual bearer tokens. (7) base64 on the recovery bundle JSON.stringify({recoveryCode, sessionToken, handle}) → `transportBlob`. The user copies this to a password manager. Final return: {internalUserId, correlationId, handle, recoveryHash, sessionToken: <header.payload.signature>, sessionExpiresAt: <iso>, transportBlob, securityNotes: ['recovery_hash is sha256 — only valid because recovery codes are high-entropy random', 'session JWT is HS256 — verifier must be same server (or share secret); use RS256 for federated', 'transportBlob is base64-encoded, NOT encrypted — TLS at transport, never log'], oneLineSummary: 'minted user {handle} ({internalUserId}); 1h session; recovery bundle ready'}. All seven tools are pure-CPU and PoW-eligible. Budget ≤ $0.01 even paid.",
+    promptArgs: [
+      {
+        name: "displayName",
+        description: "the user's display name (will be slugified for the URL handle)",
+        required: true,
+        substitute: "Alice O'Connor",
+      },
+      {
+        name: "email",
+        description: "the user's email (used to derive the deterministic UUIDv5 correlation ID)",
+        required: true,
+        substitute: "alice.oconnor@example.com",
+      },
+      {
+        name: "signingSecret",
+        description: "the server's JWT HMAC signing secret",
+        required: true,
+        substitute: "server_demo_jwt_secret_do_not_use_in_prod",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
