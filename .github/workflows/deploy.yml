@@ -390,6 +390,21 @@ jobs:
       - name: /.well-known/glama.json maintainer email env pass-through (with + without override)
         run: node scripts/test-glama-manifest.js
 
+      - name: /llms.txt content lock (tool count + discovery URLs + PoW/MCP/wallet signals)
+        run: node scripts/test-llms-txt.js
+
+      - name: /api/skill-packs.json shape (what stdio agent402-mcp consumes at startup)
+        run: node scripts/test-skill-packs-json.js
+
+      - name: /robots.txt policy (every LLM bot explicitly allowed + /api/memory disallowed + sitemap)
+        run: node scripts/test-robots-policy.js
+
+      - name: MCP prompts/list + prompts/get (one prompt per skill pack; substitution renders)
+        run: node scripts/test-mcp-prompts.js
+
+      - name: /api/pow/challenge envelope (free-tier gate — full shape + slug scoping + 404s)
+        run: node scripts/test-pow-challenge-envelope.js
+
       - name: Skill-pack invariants (toolSlugs resolve in catalog; substitution renders)
         run: node scripts/test-skill-packs.js
 
