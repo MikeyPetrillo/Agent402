@@ -69,11 +69,33 @@ const TOP1 = [
 
 const TOPN = [];
 
+// Pack locks: /api/find returns up to 2 skill packs alongside the tool results.
+// An agent asking a *task-shaped* question ("scrape a website", "decode a JWT")
+// should see the matching workflow pack as the obvious first pack, not just
+// the highest-scoring single tool. Regression target: a future pack-ranker
+// tweak (or a new pack that swamps the tag space) silently demotes the
+// intent-pack out of the top slot.
+const PACK_TOP1 = [
+  ["scrape a website",              "structured-scrape"],
+  ["decode a JWT",                  "jwt-forensics"],
+  ["convert anything to markdown",  "any-to-markdown"],
+  ["trip planning",                 "trip-planner"],
+  ["investment decision",           "investment-decision"],
+  ["site status snapshot",          "status-snapshot"],
+];
+
 const slugs = async (q, k = 3) => {
   const r = await fetch(`${BASE}/api/find?q=${encodeURIComponent(q)}&k=${k}`);
   if (!r.ok) throw new Error(`/api/find returned ${r.status} for "${q}"`);
   const j = await r.json();
   return (j.results || []).map((x) => x.slug);
+};
+
+const packSlugs = async (q) => {
+  const r = await fetch(`${BASE}/api/find?q=${encodeURIComponent(q)}&k=1`);
+  if (!r.ok) throw new Error(`/api/find returned ${r.status} for "${q}"`);
+  const j = await r.json();
+  return (j.packs || []).map((p) => p.slug);
 };
 
 try {
@@ -90,6 +112,11 @@ try {
   for (const [q, expected, k] of TOPN) {
     const found = await slugs(q, k);
     ok(found.includes(expected), `top-${k} for "${q}" includes ${expected} (got ${found.join(",") || "none"})`);
+  }
+
+  for (const [q, expected] of PACK_TOP1) {
+    const found = await packSlugs(q);
+    ok(found[0] === expected, `pack top-1 for "${q}" is ${expected} (got ${found.join(",") || "none"})`);
   }
 
   // Field-shape lock: assert the same discovery-prominence guarantees the unit
