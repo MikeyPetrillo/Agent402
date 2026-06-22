@@ -13,7 +13,7 @@
     "usdc", "base", "proof-of-work", "http-402", "micropayments", "mcp",
     "tool-discovery", "smart-order-router"
   ],
-  "author": "Mikey Petrillo (https://github.com/MikeyPetrillo)",
+  "author": "Mikey Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/MikeyPetrillo/Agent402.git", "directory": "adapters/langchain" },
   "homepage": "https://github.com/MikeyPetrillo/Agent402/tree/main/adapters/langchain",

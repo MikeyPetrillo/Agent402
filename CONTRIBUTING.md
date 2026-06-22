@@ -5,6 +5,7 @@ tool** — Agent402 is a catalog, and every good tool makes the whole thing more
 useful to every agent that connects. Bug fixes and docs are just as welcome.
 
 Issues and tool ideas: [open an issue](https://github.com/MikeyPetrillo/Agent402/issues).
+For anything that doesn't fit a public issue, email **mike@agent402.tools**.
 MIT licensed — by contributing you agree your contribution is too.
 
 ## Dev quickstart

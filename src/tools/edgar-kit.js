@@ -29,7 +29,7 @@ function bad(message, statusCode = 400) {
 // the hard 403 from SEC but operators should set their own for friendlier rate
 // treatment.
 function edgarUserAgent() {
-  return (process.env.EDGAR_USER_AGENT || "").trim() || "Agent402 hello@agent402.tools";
+  return (process.env.EDGAR_USER_AGENT || "").trim() || "Agent402 mike@agent402.tools";
 }
 
 async function edgarGetJson(url) {

@@ -127,7 +127,7 @@ Base URL: ${baseUrl}
 - **Open and complete**: Agent402 is **open-source and self-hostable** with ${tools.length} tools in a single integration — *and* it's two-sided: the same project ships \`agent402-tollbooth\`, an open pay-per-crawl gate. You can read every line and run it yourself.
 - **Auditable revenue**: every USDC call settles on Base to **agent402.base.eth** (the named receiving wallet, shown at ${baseUrl}/api/stats) — check it on Basescan; the served-call counters are real operational tallies.
 - **Tested before every deploy**: CI calls all ${tools.length} endpoints with their own documented examples and blocks the release on any failure. A 15-minute production heartbeat and a daily real-USDC paid canary watch the live instance — full reliability report with verification links at ${baseUrl}/api/reliability.
-- **A named maintainer**: https://github.com/MikeyPetrillo.
+- **A named maintainer**: Mikey Petrillo — mike@agent402.tools — https://github.com/MikeyPetrillo.
 - **Open source** — the whole server is public and auditable: https://github.com/MikeyPetrillo/Agent402
 - **Deterministic outputs**: no LLM in the serving path — same input, same output, full OpenAPI schemas, flat per-call prices.
 

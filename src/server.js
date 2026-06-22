@@ -581,13 +581,13 @@ app.get("/health", (_req, res) => {
 });
 // Glama connector ownership verification: claims our listing at
 // glama.ai/mcp/connectors/io.github.MikeyPetrillo/agent402. The maintainer email
-// must match the Glama account — set it via the GLAMA_MAINTAINER_EMAIL env var
-// (kept out of source so a personal address isn't committed/served by default).
+// must match the Glama account. Defaults to the project's domain-scoped
+// maintainer address; GLAMA_MAINTAINER_EMAIL env override exists for forks.
 app.get("/.well-known/glama.json", (_req, res) => {
-  const email = process.env.GLAMA_MAINTAINER_EMAIL;
+  const email = process.env.GLAMA_MAINTAINER_EMAIL || "mike@agent402.tools";
   res.json({
     $schema: "https://glama.ai/mcp/schemas/connector.json",
-    maintainers: email ? [{ email }] : [],
+    maintainers: [{ email }],
   });
 });
 app.get("/privacy", (_req, res) => htmlCache(res, 300, 900).send(privacyPage(BASE_URL)));
