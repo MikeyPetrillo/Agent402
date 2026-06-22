@@ -1068,6 +1068,50 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "webhook-debug",
+    title: "Webhook debug",
+    tagline:
+      "A webhook hit your endpoint and you need to confirm it's authentic, valid, and safe to log. Pretty-print the payload, decode any JWT auth header, verify the HMAC signature against the raw body, schema-validate the parsed JSON, translate timestamps to human time, redact sensitive fields before they hit your log pipeline, and pull out URLs/emails/IPs for fast indexing. Seven pure-CPU tools — the canonical webhook-receiver debugging round-trip.",
+    useCase:
+      "Webhook debugging is a per-provider Stack-Overflow scavenger hunt: GitHub uses X-Hub-Signature-256 (HMAC-SHA256 of the raw body with the secret), Stripe uses Stripe-Signature (HMAC-SHA256 over `t=<ts>.<body>`), Shopify uses X-Shopify-Hmac-Sha256 (HMAC-SHA256 base64), Slack uses X-Slack-Signature (HMAC-SHA256 with `v0:<ts>:<body>`). Every developer reimplements this dance every time, and a typo in the signing-base-string is silent — the signature just doesn't match, and the agent guesses at why. This pack does signature verification as a single deterministic tool call (hmac with the right algo) and lets the rest of the workflow — schema-validate, timestamp-translate, redact — run on the now-trusted payload.",
+    toolSlugs: [
+      "json-format",
+      "jwt-decode",
+      "hmac",
+      "json-validate",
+      "time-convert",
+      "redact",
+      "extract-entities",
+    ],
+    workflow: [
+      "Pretty-print the raw payload with json-format. Webhook bodies arrive as a single minified line on the wire; reading them at debug time means indenting them first. json-format normalizes whitespace AND surfaces a clean parse error if the body isn't valid JSON at all — which is a real-world failure mode (some providers send form-encoded bodies for legacy webhooks; some send empty bodies on retries). This is the cheapest possible 'is the body even JSON?' triage step.",
+      "If the request carries a JWT auth header (X-Webhook-Token, Authorization: Bearer …), decode it with jwt-decode. Returns header, payload, signaturePresent, expired, expiresInSeconds. Critical at this step: jwt-decode does NOT verify — it just renders the claims. The point is to surface alg, iss, sub, exp BEFORE you decide which verification path to take. Watch for the classic alg='none' attack here: if the header says alg='none' and signaturePresent is false, the token is forged and the request should be rejected before HMAC verification even runs. Also surface 'expired' — an expired but otherwise valid token is a replay attempt.",
+      "Verify the HMAC signature with hmac. This is the integrity gate. Per-provider conventions: GitHub = hmac(body, secret, sha256) compared to X-Hub-Signature-256 (strip the 'sha256=' prefix); Stripe = hmac(`${ts}.${body}`, secret, sha256) compared to v1 in Stripe-Signature (also enforce |now-ts| < 5min); Shopify = hmac(body, secret, sha256) base64-compared to X-Shopify-Hmac-Sha256; Slack = hmac(`v0:${ts}:${body}`, secret, sha256) hex-prefixed with 'v0='. Always compare against the raw request body (the bytes as received), NOT the re-serialized JSON — re-serialization changes whitespace and key order and breaks the signature. The tool returns hex AND base64 so you can match whichever the provider sends without re-running.",
+      "Now that the body is trusted, schema-validate with json-validate. Define a JSON Schema for the expected webhook payload shape: required event type, signature on event-specific fields. This catches the provider-API-version mismatch — Stripe v2026-06-01 added new fields that older code silently ignored; Shopify removes deprecated fields on schedule. The schema check surfaces the deprecation/addition as a loud, traceable error instead of a NullPointerException three layers down in the handler. Run this AFTER signature verification, not before — schema-validating an unverified body wastes cycles on garbage.",
+      "Translate timestamps with time-convert. Webhook payloads carry event timestamps in mixed formats: Stripe uses Unix epoch seconds (integer), GitHub uses ISO 8601 strings, Shopify uses RFC 3339 with timezone. The agent often needs to compare to 'now' (replay detection — drop events older than 5 min), to a stored last-processed timestamp (deduplication), or to render for a human reader. time-convert normalizes to UTC ISO 8601 + epoch + offset, giving you all three at once. The replay-detection check (timestamp within ±5 min of now) is a security primitive — stale signatures are the attack surface for replay attacks even with valid HMAC.",
+      "Before logging anything, redact the body. Webhooks routinely carry: customer emails, IP addresses, partial card numbers, phone numbers, SSNs (for KYC providers), session tokens. redact strips all of these from the string by pattern and returns the count of each kind so you can log 'redacted 2 emails, 1 phone, 0 cards' as a metric. Redact-first ordering is the invariant here: never log the raw body, even at DEBUG level, even briefly. A redact step before the logger is the difference between a clean GDPR audit and a regulated incident.",
+      "Extract entities from the redacted body with extract-entities. Returns deduped {emails, urls, ipv4, mentions, hashtags} — your fast-lookup index for 'find all events involving this email/URL/IP'. Note this runs on the redacted text intentionally (emails redact to '[email]', URLs survive) so the index won't leak PII. Persist these as columns alongside the event for query performance: 'show me all webhooks mentioning api.stripe.com in the last 24h' becomes a SQL lookup instead of a full-text scan.",
+    ],
+    claudePrompt:
+      "Debug this incoming webhook using Agent402.\n\nRaw body (as received on the wire):\n{\"id\":\"evt_3O2eYxL5d8\",\"type\":\"checkout.session.completed\",\"created\":1750982400,\"data\":{\"object\":{\"id\":\"cs_test_a1b2c3\",\"customer_email\":\"alice@example.com\",\"amount_total\":4999,\"client_ip\":\"203.0.113.42\",\"success_url\":\"https://app.example.com/orders/cs_test_a1b2c3\"}}}\n\nHeaders:\n  X-Webhook-Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ3ZWJob29rIiwiaXNzIjoic3RyaXBlIiwiaWF0IjoxNzUwOTgyNDAwLCJleHAiOjE3NTA5ODI3MDB9.sig\n  X-Hub-Signature-256: sha256=<provided>\nSigning secret (shared): whsec_demo_secret_do_not_use\n\n(1) json-format on the raw body. Confirm it parses; report any errors. (2) jwt-decode on the X-Webhook-Token. Surface alg, iss, sub, iat, exp. Flag alg='none' as forged; flag expired=true as stale. (3) hmac on the RAW body string with key=signing_secret, algo='sha256'. Compare the returned hex to the X-Hub-Signature-256 value (strip the 'sha256=' prefix first). Constant-time compare logic recommended (note that to the agent — don't suggest plain string equality in the production handler). Report match/mismatch. (4) json-validate the parsed body against this schema: {type:'object', required:['id','type','created','data'], properties:{type:{type:'string'}, created:{type:'integer'}, id:{type:'string', pattern:'^evt_'}}}. Report any violations. (5) time-convert the 'created' field (1750982400) — pass as fromIso='1970-01-01T00:00:00Z' offset trick is overkill; just describe it as 'Unix epoch 1750982400 = 2025-06-27T02:00:00Z'. Compute |now - created| and flag if > 300s (replay window). (6) redact on the JSON-stringified body. Report counts: emails, phones, ips, cards. Persist only the redacted string for logging. (7) extract-entities on the redacted body. Return {emails: [], urls: ['https://app.example.com/...'], ipv4: []} (note: alice@example.com became '[email]' and is gone; client_ip became '[ip]'). Index these alongside the event row. Final return: {parsed, jwtClaims, hmacMatched: bool, schemaValid: bool, schemaErrors: [], eventTimestampUtc, withinReplayWindow: bool, redactedBody, redactionCounts, entities, oneLineSummary: 'webhook evt_3O2eYxL5d8 verified, in replay window, 1 email + 1 IP redacted, ready to process'}. All seven tools are pure-CPU and PoW-eligible. Budget ≤ $0.01 even paid.",
+    promptArgs: [
+      {
+        name: "rawBody",
+        description: "the raw webhook body as received on the wire (single-line JSON string)",
+        required: true,
+        substitute:
+          "{\"id\":\"evt_3O2eYxL5d8\",\"type\":\"checkout.session.completed\",\"created\":1750982400,\"data\":{\"object\":{\"id\":\"cs_test_a1b2c3\",\"customer_email\":\"alice@example.com\",\"amount_total\":4999,\"client_ip\":\"203.0.113.42\",\"success_url\":\"https://app.example.com/orders/cs_test_a1b2c3\"}}}",
+      },
+      {
+        name: "signingSecret",
+        description: "the shared webhook signing secret from the provider dashboard",
+        required: true,
+        substitute: "whsec_demo_secret_do_not_use",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
