@@ -180,5 +180,14 @@ ok(html.includes("paidSeries"), "dashboard tracks a paidSeries parallel to serie
 // scalar means an operator-visible "rate/min" stays correct if the poll
 // interval changes (the test reminds you to update both spots).
 ok(/\*\s*12\b/.test(html), "rate/min math (*12 from 5s polls) is present");
+// Operator probes panel — copy-paste curls let operators verify the gate is
+// doing what the counters say without leaving the page. <origin> placeholders
+// must be present in the source (initProbes substitutes them client-side from
+// window.location.origin so what the operator copies is what they can run).
+ok(html.includes('id="probes"') && html.includes("Operator probes"), "dashboard renders the Operator probes panel");
+ok(html.includes("/__tollbooth/stats") && /curl/.test(html), "probes include a stats-scrape curl");
+ok(/GPTBot/.test(html) && /Mozilla\/5\.0/.test(html), "probes include both a bot UA and a browser UA curl");
+ok(html.includes("&lt;origin&gt;"), "probes carry an <origin> placeholder for client-side host substitution");
+ok(html.includes("initProbes") && html.includes("navigator.clipboard"), "probes wire a copy-to-clipboard handler (with execCommand fallback)");
 
 console.log(`\n${pass} passed`);

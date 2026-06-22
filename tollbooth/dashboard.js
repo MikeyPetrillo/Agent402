@@ -39,6 +39,15 @@ export function dashboardHtml() {
   .ratios{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-top:18px}
   .ratios .card .v{font-size:1.5rem}
   .ratios .card .hint{color:var(--muted);font-size:.75rem;margin-top:6px;font-family:var(--mono)}
+  .probes{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-top:18px}
+  .probes h2{font-size:.95rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:6px}
+  .probes .sub{color:var(--muted);font-size:.8rem;margin-bottom:14px}
+  .probe{margin-top:10px}
+  .probe .label{color:var(--muted);font-size:.78rem;letter-spacing:.04em;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .probe .copy{font:600 .7rem/1 var(--mono);color:var(--muted);background:transparent;border:1px solid var(--line);border-radius:6px;padding:5px 8px;cursor:pointer}
+  .probe .copy:hover{color:var(--accent);border-color:#1f4a1d}
+  .probe .copy.done{color:var(--accent);border-color:#1f4a1d}
+  .probe pre{background:#000;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:6px;overflow-x:auto;font:600 .82rem/1.45 var(--mono);color:var(--text)}
   footer{color:var(--muted);font-size:.8rem;margin-top:28px}
   a{color:var(--accent)}
 </style></head>
@@ -70,6 +79,30 @@ export function dashboardHtml() {
     <div class="card"><div class="k">Bot share</div><div class="v" id="botpct">—</div><div class="hint">charged + would-charge</div></div>
     <div class="card"><div class="k">Paid conversion</div><div class="v accent" id="paidpct">—</div><div class="hint">of all requests, paid (PoW or USDC)</div></div>
     <div class="card"><div class="k">Paid in USDC</div><div class="v accent" id="usdcpct">—</div><div class="hint">of paid, settled on Base</div></div>
+  </div>
+  <div class="probes" id="probes">
+    <h2>Operator probes</h2>
+    <div class="sub">Copy-paste curls — verify the gate is doing what these counters say.</div>
+    <div class="probe">
+      <div class="label"><span>Raw stats JSON (scrape this for metrics / alerts)</span><button class="copy" data-target="p1">copy</button></div>
+      <pre id="p1">curl -s &lt;origin&gt;/__tollbooth/stats | jq</pre>
+    </div>
+    <div class="probe">
+      <div class="label"><span>Probe as a known bot — should see 402 (or pass-through in observe mode)</span><button class="copy" data-target="p2">copy</button></div>
+      <pre id="p2">curl -i -A 'GPTBot/1.0' &lt;origin&gt;/</pre>
+    </div>
+    <div class="probe">
+      <div class="label"><span>Probe as a browser — should be free</span><button class="copy" data-target="p3">copy</button></div>
+      <pre id="p3">curl -i -A 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15' &lt;origin&gt;/</pre>
+    </div>
+    <div class="probe">
+      <div class="label"><span>Inspect the 402 challenge body (PoW or x402 instructions)</span><button class="copy" data-target="p4">copy</button></div>
+      <pre id="p4">curl -s -A 'GPTBot/1.0' &lt;origin&gt;/ | jq .</pre>
+    </div>
+    <div class="probe">
+      <div class="label"><span>KPI grep — single-line dashboard for a shell</span><button class="copy" data-target="p5">copy</button></div>
+      <pre id="p5">curl -s &lt;origin&gt;/__tollbooth/stats | jq '{requests, charged, powSolved, x402Paid}'</pre>
+    </div>
   </div>
   <footer>Aggregate counts only (no per-request data). Raw JSON: <a href="/__tollbooth/stats">/__tollbooth/stats</a>.</footer>
 </div>
@@ -206,7 +239,44 @@ async function tick(){
     lastPaid=nowPaid;
   }catch(e){/* keep last values */}
 }
+// Operator probes — replace the literal <origin> placeholder with the actual
+// host so what the operator copies is what they can run, no edit step. Done
+// once on load; probe text doesn't change after.
+function initProbes(){
+  var origin=window.location.origin;
+  var pres=document.querySelectorAll("#probes pre");
+  for(var i=0;i<pres.length;i++){
+    pres[i].textContent=pres[i].textContent.replace(/&lt;origin&gt;/g,origin).replace(/<origin>/g,origin);
+  }
+  var btns=document.querySelectorAll("#probes .copy");
+  for(var j=0;j<btns.length;j++){
+    (function(b){
+      b.addEventListener("click",function(){
+        var t=document.getElementById(b.getAttribute("data-target"));
+        if(!t) return;
+        var txt=t.textContent;
+        // Prefer the modern Clipboard API; fall back to a hidden textarea
+        // selection for older browsers / non-secure contexts (file://).
+        var done=function(){
+          b.classList.add("done");
+          var orig=b.textContent; b.textContent="copied";
+          setTimeout(function(){b.classList.remove("done");b.textContent=orig;},1200);
+        };
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(txt).then(done,function(){});
+        }else{
+          var ta=document.createElement("textarea");
+          ta.value=txt;ta.style.position="fixed";ta.style.left="-9999px";
+          document.body.appendChild(ta);ta.select();
+          try{document.execCommand("copy");done();}catch(e){}
+          document.body.removeChild(ta);
+        }
+      });
+    })(btns[j]);
+  }
+}
 bindWindows();
+initProbes();
 tick();setInterval(tick,5000);
 </script>
 </body></html>`;
