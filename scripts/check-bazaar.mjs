@@ -60,6 +60,7 @@ for (const file of files) {
 if (issues.length === 0) {
   console.log("clean");
 } else {
-  console.log(`${issues.length} issue(s):`);
-  for (const i of issues) console.log(`  ${i.file}  ${i.route}\n    ${i.problem}`);
+  console.error(`${issues.length} issue(s):`);
+  for (const i of issues) console.error(`  ${i.file}  ${i.route}\n    ${i.problem}`);
+  process.exit(1);
 }

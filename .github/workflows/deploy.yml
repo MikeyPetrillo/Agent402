@@ -369,6 +369,9 @@ jobs:
       - name: Skill-pack invariants (toolSlugs resolve in catalog; substitution renders)
         run: node scripts/test-skill-packs.js
 
+      - name: x402 Bazaar discovery shape (POST→bodyType, GET→queryParams, example types match schema)
+        run: node scripts/check-bazaar.mjs
+
       - name: x402 Leaderboard pure helpers (offline; Bazaar parsing + ranking)
         run: node scripts/test-x402-leaderboard.js
 
