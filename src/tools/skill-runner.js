@@ -1147,12 +1147,46 @@ export const PACK_STEPS = {
     ],
   },
 
+  // The "user uploaded a thing, normalize it before storing" workflow. The
+  // pack takes a URL (the upload's public location); media-info + audio-normalize
+  // consume URLs directly, while barcode-decode and the image-* tools need
+  // base64 bytes — fetchAsBase64 bridges the gap. Async mapInputs are now
+  // awaited by runStep so the inline fetch is safe. image-convert reads the
+  // resize step's Buffer output from `prior` and re-encodes it; if the file
+  // isn't an image the resize step fails and convert short-circuits with 422.
+  "media-pipeline": {
+    mode: "chain",
+    steps: [
+      { slug: "media-info",      mapInput: (a) => ({ url: a.uploadPath }) },
+      { slug: "barcode-decode",  mapInput: async (a) => ({ image: await fetchAsBase64(a.uploadPath) }) },
+      { slug: "image-resize",    mapInput: async (a) => ({
+          image: await fetchAsBase64(a.uploadPath),
+          width: 2000,
+          format: "png",
+      }) },
+      { slug: "image-thumbnail", mapInput: async (a) => ({
+          image: await fetchAsBase64(a.uploadPath),
+          size: 200,
+          format: "png",
+      }) },
+      { slug: "image-convert",   mapInput: (_a, p) => {
+          // image-resize / -thumbnail / -convert all return { __binary: Buffer, contentType }.
+          const buf = p["image-resize"]?.__binary;
+          if (!Buffer.isBuffer(buf) || buf.length === 0) {
+            throw Object.assign(new Error("no resized image to convert"), { statusCode: 422 });
+          }
+          return { image: buf.toString("base64"), format: "jpeg", quality: 82 };
+      } },
+      { slug: "audio-normalize", mapInput: (a) => ({ url: a.uploadPath, targetLufs: -16 }) },
+    ],
+  },
+
   // ──────────────────────────────────────────────────────────────────────
   // Still TODO (auto-stubs return statusCode 501 per step):
   //
-  // Standard tier (network/render): media-pipeline, document-intel,
-  // forecasting-bake-off — all need either base64 uploads or live equity
-  // data threading that doesn't fit the URL/ticker arg shape.
+  // Standard tier: document-intel, forecasting-bake-off — both need
+  // multi-modal arg shapes (PDF-or-image branching, live equity threading)
+  // that don't fit the single-URL pattern cleanly.
   // ──────────────────────────────────────────────────────────────────────
 };
 
@@ -1161,6 +1195,20 @@ export const PACK_STEPS = {
 function firstUrl(urls) {
   if (!urls) return "";
   return String(urls).split(/[\s,]+/).map((s) => s.trim()).filter(Boolean)[0] || "";
+}
+
+// Fetch a URL and return its bytes as base64. Used by media-pipeline's chain
+// because image-kit tools take base64 inputs while media-info / audio-normalize
+// take URLs — the chain needs to bridge between the two shapes.
+async function fetchAsBase64(url) {
+  if (!url || !/^https?:\/\//i.test(String(url))) {
+    throw Object.assign(new Error(`not a fetchable URL: ${url}`), { statusCode: 422 });
+  }
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw Object.assign(new Error(`fetch ${res.status} for ${url}`), { statusCode: res.status });
+  }
+  return Buffer.from(await res.arrayBuffer()).toString("base64");
 }
 
 // Auto-generate a step config for any pack not explicitly in PACK_STEPS.
@@ -1202,7 +1250,7 @@ async function runPack(packSlug, args, ctx) {
 
   const runStep = async (step) => {
     try {
-      const input = step.mapInput(args, prior);
+      const input = await step.mapInput(args, prior);
       const handler = lookupHandler(step.slug, ctx);
       if (!handler) {
         throw Object.assign(
