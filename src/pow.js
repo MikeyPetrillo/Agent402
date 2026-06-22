@@ -97,6 +97,11 @@ export const WALLET_ONLY_SLUGS = new Set([
   // limits we share with everyone else.
   "polymarket-search", "polymarket-market", "polymarket-orderbook", "polymarket-price-history",
   "kalshi-markets", "kalshi-event",
+  // MEV + L2 kit: Flashbots relay (keyless, per-IP rate-limited), DeFiLlama
+  // (per-IP shared with defi-tvl), and Alchemy (compute-unit quota shared with
+  // chain-kit/dex-kit). All wallet-only for the same reasons.
+  "mev-recent-blocks", "mev-builder-share", "mev-block-payment",
+  "l2-tvl", "l2-gas-comparison",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */

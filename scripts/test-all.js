@@ -79,6 +79,11 @@ const NETWORK = new Set([
   // search returns 0 results out of cycle, or a fake tokenId yields 404).
   "/api/polymarket-search", "/api/polymarket-market", "/api/polymarket-orderbook",
   "/api/polymarket-price-history", "/api/kalshi-markets", "/api/kalshi-event",
+  // MEV + L2 kit: Flashbots relay (keyless), DeFiLlama (keyless), and Alchemy
+  // (503 without key). Tolerate transient upstream errors + 4xx from
+  // placeholder example inputs (e.g. specific block-number lookups may miss).
+  "/api/mev-recent-blocks", "/api/mev-builder-share", "/api/mev-block-payment",
+  "/api/l2-tvl", "/api/l2-gas-comparison",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 
