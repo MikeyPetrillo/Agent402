@@ -92,6 +92,11 @@ export const WALLET_ONLY_SLUGS = new Set([
   // shares the per-IP quota with defi-tvl). All wallet-only for the same
   // reasons as their underlying upstreams.
   "dex-pair", "dex-pool", "dex-quote", "dex-top-pools",
+  // Prediction-market-kit: Polymarket Gamma + CLOB + Kalshi. All keyless but
+  // all hit external HTTP; PoW would let one client farm the per-IP rate
+  // limits we share with everyone else.
+  "polymarket-search", "polymarket-market", "polymarket-orderbook", "polymarket-price-history",
+  "kalshi-markets", "kalshi-event",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */
