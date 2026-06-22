@@ -756,6 +756,153 @@ export const PACK_STEPS = {
   },
 
   // ──────────────────────────────────────────────────────────────────────
+  // Standard-tier network/render packs — all egress-heavy, wallet-only.
+  // ──────────────────────────────────────────────────────────────────────
+
+  // End-to-end DNS health: records, multi-resolver propagation, ASN, WHOIS,
+  // HTTP reachability, robots policy. Keyed off a bare domain.
+  "dns-network-ops": {
+    mode: "chain",
+    steps: [
+      { slug: "dns-lookup",       mapInput: (a) => ({ host: a.domain, type: "A" }) },
+      { slug: "dns-propagation",  mapInput: (a) => ({ host: a.domain, type: "A" }) },
+      { slug: "asn-info",         mapInput: (a) => ({ host: a.domain }) },
+      { slug: "whois",            mapInput: (a) => ({ domain: a.domain }) },
+      { slug: "http-check",       mapInput: (a) => ({ url: `https://${a.domain}` }) },
+      { slug: "robots-check",     mapInput: (a) => ({ url: `https://${a.domain}`, userAgent: "*" }) },
+    ],
+  },
+
+  // Fraud reputation workup: domain age (whois) → cert history (CT) → live
+  // cert → hosting (ASN) → DNS topology (MX) → tech-stack fingerprint →
+  // page-content red-flag scan.
+  "fraud-signals": {
+    mode: "chain",
+    steps: [
+      { slug: "whois",             mapInput: (a) => ({ domain: a.domain }) },
+      { slug: "cert-transparency", mapInput: (a) => ({ domain: a.domain }) },
+      { slug: "tls-cert",          mapInput: (a) => ({ host: a.domain }) },
+      { slug: "asn-info",          mapInput: (a) => ({ host: a.domain }) },
+      // MX records — "business" with no MX is a fraud signal.
+      { slug: "dns-lookup",        mapInput: (a) => ({ host: a.domain, type: "MX" }) },
+      { slug: "tech-stack",        mapInput: (a) => ({ url: `https://${a.domain}` }) },
+      { slug: "extract",           mapInput: (a) => ({ url: `https://${a.domain}` }) },
+    ],
+  },
+
+  // API recon-before-code: decompose URL → liveness → headers (auth + rate
+  // limits) → docs page → spec discovery → JSON inspection. extract returns
+  // markdown (not HTML) so html-links scans markdown (count:0 expected; agent
+  // re-calls with real HTML). json-format/query use a placeholder so the
+  // schema-navigation primitives are exercised on the example.
+  "api-investigation": {
+    mode: "chain",
+    steps: [
+      { slug: "url-parse",    mapInput: (a) => ({ url: a.endpoint }) },
+      { slug: "http-check",   mapInput: (a) => ({ url: a.endpoint }) },
+      { slug: "http-headers", mapInput: (a) => ({ url: a.endpoint }) },
+      // Try the canonical docs path: scheme://host/docs.
+      { slug: "extract",      mapInput: (a, p) => {
+          const u = p["url-parse"];
+          const base = u ? `${u.protocol}//${u.hostname}${u.port ? ":" + u.port : ""}` : a.endpoint;
+          return { url: `${base}/docs` };
+      } },
+      // Scan the docs markdown for openapi/swagger hrefs. Markdown bodies
+      // don't have <a href> tags so count is usually 0 — agent re-calls
+      // html-links with raw HTML from a separate fetch. Still surfaces the
+      // empty-result envelope so the agent knows the step ran.
+      { slug: "html-links",   mapInput: (_a, p) => ({
+          html: String(p["extract"]?.markdown ?? ""),
+          filter: "openapi|swagger|schema|\\.json$|\\.yaml$",
+          limit: 20,
+      }) },
+      // Placeholder sample response — the agent passes a real one in a follow-up.
+      { slug: "json-format",  mapInput: () => ({ json: '{"data":[],"meta":{"next_cursor":null}}', indent: 2 }) },
+      { slug: "json-query",   mapInput: () => ({ json: { data: [], meta: { next_cursor: null } }, path: "meta.next_cursor" }) },
+    ],
+  },
+
+  // Address situational brief: geocode → reverse-geocode (canonical form) →
+  // nearby POIs → weather → US hazards → recent seismic activity. geocode
+  // returns `lon` (NWS); place-search/weather/earthquakes also use `lon`.
+  "location-intel": {
+    mode: "chain",
+    steps: [
+      { slug: "geocode",          mapInput: (a) => ({ q: a.address, limit: 1 }) },
+      { slug: "reverse-geocode",  mapInput: (_a, p) => {
+          const hit = p["geocode"]?.results?.[0];
+          return { lat: hit?.lat ?? 38.8977, lon: hit?.lon ?? -77.0365 };
+      } },
+      // Nearby food/services — generic "restaurant" query around the resolved point.
+      { slug: "place-search",     mapInput: (_a, p) => {
+          const hit = p["geocode"]?.results?.[0];
+          const bb = hit?.boundingBox;
+          const viewbox = bb ? `${bb.west},${bb.north},${bb.east},${bb.south}` : "";
+          return { q: "restaurant", limit: 5, ...(viewbox ? { viewbox, bounded: "1" } : {}) };
+      } },
+      { slug: "weather-forecast", mapInput: (_a, p) => {
+          const hit = p["geocode"]?.results?.[0];
+          return { lat: hit?.lat ?? 38.8977, lon: hit?.lon ?? -77.0365 };
+      } },
+      // US-only — pull state code from reverse-geocode; default to DC for the
+      // example, agents re-call with the actual state for non-DC addresses.
+      { slug: "weather-alerts",   mapInput: (_a, p) => {
+          const state = p["reverse-geocode"]?.address?.state || "";
+          // Map full state name → two-letter code is handled server-side; pass through.
+          return { area: state || "DC" };
+      } },
+      { slug: "earthquakes",      mapInput: () => ({ period: "week", minMag: "2.5" }) },
+    ],
+  },
+
+  // URL → card-shaped preview: metadata + readable body + normalized image
+  // variants + entity discovery. image-resize/thumbnail take base64 bytes
+  // (not URLs) so the chain runs them against a 1×1 placeholder PNG — agents
+  // re-call with the real og:image bytes for the actual card.
+  "link-preview": {
+    mode: "chain",
+    steps: [
+      { slug: "meta",              mapInput: (a) => ({ url: a.url }) },
+      { slug: "extract",           mapInput: (a) => ({ url: a.url }) },
+      // 8×8 placeholder PNG (jimp-decodable) — exercises the resize codepath;
+      // final card requires fetching og:image bytes and re-calling.
+      { slug: "image-resize",      mapInput: () => ({
+          image: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==",
+          width: 1200,
+          height: 630,
+          format: "png",
+      }) },
+      { slug: "image-thumbnail",   mapInput: () => ({
+          image: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==",
+          size: 400,
+          format: "png",
+      }) },
+      { slug: "extract-entities", mapInput: (_a, p) => ({ text: String(p["extract"]?.markdown ?? "") }) },
+    ],
+  },
+
+  // Site pre-flight: DNS → reachability → security headers → cert expiry →
+  // robots policy. All keyed off the URL; host derived inline.
+  "status-snapshot": {
+    mode: "chain",
+    steps: [
+      { slug: "dns-lookup",   mapInput: (a) => {
+          let host = a.url;
+          try { host = new URL(a.url).hostname; } catch {}
+          return { host, type: "A" };
+      } },
+      { slug: "http-check",   mapInput: (a) => ({ url: a.url }) },
+      { slug: "http-headers", mapInput: (a) => ({ url: a.url }) },
+      { slug: "tls-cert",     mapInput: (a) => {
+          let host = a.url;
+          try { host = new URL(a.url).hostname; } catch {}
+          return { host };
+      } },
+      { slug: "robots-check", mapInput: (a) => ({ url: a.url, userAgent: "*" }) },
+    ],
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
   // Still TODO (auto-stubs return statusCode 501 per step):
   //
   // Premium tier (paid-upstream heavy — highest revenue per call):
@@ -764,9 +911,8 @@ export const PACK_STEPS = {
   //
   // Standard tier (network/render):
   //   content-extraction  media-pipeline  document-intel  any-to-markdown
-  //   structured-scrape   forecasting-bake-off  fraud-signals  link-preview
-  //   api-investigation   email-deliverability  location-intel  dns-network-ops
-  //   status-snapshot     schema-evolution
+  //   structured-scrape   forecasting-bake-off  email-deliverability
+  //   schema-evolution
   // ──────────────────────────────────────────────────────────────────────
 };
 
