@@ -33,6 +33,9 @@ export function dashboardHtml() {
   .spark .w{font:600 .8rem/1 var(--mono);color:var(--muted);background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}
   .spark .w.active{color:var(--accent);border-color:#1f4a1d;background:#000}
   .spark svg{display:block;width:100%;height:80px}
+  .ratios{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-top:18px}
+  .ratios .card .v{font-size:1.5rem}
+  .ratios .card .hint{color:var(--muted);font-size:.75rem;margin-top:6px;font-family:var(--mono)}
   footer{color:var(--muted);font-size:.8rem;margin-top:28px}
   a{color:var(--accent)}
 </style></head>
@@ -54,7 +57,12 @@ export function dashboardHtml() {
       <polygon id="sparkfill" fill="#4ade80" fill-opacity="0.08" points=""/>
     </svg>
   </div>
-  <footer><b id="botpct">—</b> of requests were classified as AI bots. Aggregate counts only (no per-request data). Raw JSON: <a href="/__tollbooth/stats">/__tollbooth/stats</a>.</footer>
+  <div class="ratios">
+    <div class="card"><div class="k">Bot share</div><div class="v" id="botpct">—</div><div class="hint">charged + would-charge</div></div>
+    <div class="card"><div class="k">Paid conversion</div><div class="v accent" id="paidpct">—</div><div class="hint">of all requests, paid (PoW or USDC)</div></div>
+    <div class="card"><div class="k">Paid in USDC</div><div class="v accent" id="usdcpct">—</div><div class="hint">of paid, settled on Base</div></div>
+  </div>
+  <footer>Aggregate counts only (no per-request data). Raw JSON: <a href="/__tollbooth/stats">/__tollbooth/stats</a>.</footer>
 </div>
 <script>
 const cards=[
@@ -115,9 +123,22 @@ async function tick(){
       var lbl=String(label).replace(/[&<>"']/g,function(ch){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch];});
       return '<div class="card"><div class="k">'+lbl+'</div><div class="v '+(acc||"")+'">'+v+'</div></div>';
     }).join("");
-    var botish=(s.charged||0)+(s.wouldCharge||0);
-    var pct=s.requests?Math.round((botish/s.requests)*100):0;
+    // Derived operator ratios — computed client-side so the gate stays a
+    // pure counter store. All inputs are coerced numbers (see render loop
+    // above), so a malicious snapshot can't smuggle non-numerics here.
+    var reqs=Number(s.requests)||0;
+    var botish=(Number(s.charged)||0)+(Number(s.wouldCharge)||0);
+    var pct=reqs?Math.round((botish/reqs)*100):0;
     document.getElementById("botpct").textContent=pct+"%";
+    // Paid conversion: of all requests, what share actually settled (either
+    // PoW or USDC). Answers "is the gate converting traffic into payment?"
+    var pow=Number(s.powSolved)||0, usd=Number(s.x402Paid)||0, paid=pow+usd;
+    var paidPct=reqs?Math.round((paid/reqs)*100):0;
+    document.getElementById("paidpct").textContent=paidPct+"%";
+    // Paid-in-USDC share: of *paid* requests, how many settled in USDC vs PoW.
+    // Answers "are bots paying me real money, or just grinding compute?" "—"
+    // when there are no paid requests yet (avoids 0/0 NaN).
+    document.getElementById("usdcpct").textContent=paid?Math.round((usd/paid)*100)+"%":"\u2014";
     document.getElementById("mode").textContent=s.observe?" \u00B7 OBSERVE":"";
     if(s.since)document.getElementById("since").textContent="since "+new Date(s.since).toLocaleString();
     // Roll the series: delta of total requests since the last tick is the

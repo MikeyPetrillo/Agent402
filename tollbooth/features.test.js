@@ -159,5 +159,15 @@ ok(httpsAccepted, "httpStatsSink accepts bearer token over https://");
 const html = dashboardHtml();
 ok(html.startsWith("<!doctype html>") && html.includes("/__tollbooth/stats"), "dashboard is HTML that reads /__tollbooth/stats");
 ok(["requests", "freeAllowed", "wouldCharge", "charged", "powSolved", "x402Paid", "difficultyNow"].every((k) => html.includes(k)), "dashboard references every stat field");
+// Derived operator ratios — answer "is the gate converting?" and "are they
+// paying USDC or just grinding PoW?" without forcing operators to do
+// the arithmetic mentally.
+ok(html.includes('id="paidpct"') && html.includes("Paid conversion"), "dashboard renders Paid conversion ratio card");
+ok(html.includes('id="usdcpct"') && html.includes("Paid in USDC"), "dashboard renders Paid-in-USDC share card");
+// The client-side denominator must guard the 0-requests case (no NaN%) and
+// the no-paid-requests case (no 0/0 in the USDC share). Both are computed
+// in tick() — assert the source has the guards so we don't regress them.
+ok(/reqs\s*\?/.test(html), "paid conversion guards requests==0");
+ok(/paid\s*\?/.test(html), "USDC share guards paid==0 (no NaN)");
 
 console.log(`\n${pass} passed`);
