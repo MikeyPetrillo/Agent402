@@ -1472,6 +1472,41 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "any-to-markdown",
+    title: "Any URL to markdown",
+    tagline:
+      "The 'I have a URL but it might be HTML, PDF, or an image — give me clean markdown either way' workflow. HEAD-detect the content-type, branch to the right deterministic extractor (article extract for HTML, pdf-to-markdown for PDFs, OCR for images), and report token/word stats on the output so the caller can budget the result against an LLM context window.",
+    useCase:
+      "An agent is handed a URL by a user and needs LLM-clean text out — but the URL might point at an HTML article, a PDF whitepaper, or a JPG screenshot, and the naive single-tool approach (just call extract on everything) silently fails on PDFs (returns empty) and images (returns nothing at all). Agents currently hand-roll the content-type detection + branching, often badly: they call extract first, get an empty body, then guess at a PDF extractor. This pack hands them the canonical decision tree — HEAD probe → branch → extract → stat — as a single workflow. Output is markdown plus a {chars, words, est_tokens} block so the caller can decide whether to chunk before feeding an LLM. The same pattern powers any 'ingest the document at this URL' agent step: research assistants, RAG ingest pipelines, document QA bots, archive-to-knowledge-base scripts.",
+    toolSlugs: [
+      "http-headers",
+      "extract",
+      "pdf-to-markdown",
+      "image-ocr",
+      "html-to-markdown",
+      "text-stats",
+    ],
+    workflow: [
+      "Call http-headers with the URL to fetch the response headers without downloading the body. The decisive field is Content-Type — `text/html` → step 2, `application/pdf` → step 3, `image/*` → step 4. If Content-Type is missing or generic (`application/octet-stream`), fall back to extension sniffing on the path (`.pdf`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp` for images; everything else default to HTML). http-headers is cheaper than a full fetch and returns the HTTP status too — bail early with a clear message if the URL is 4xx/5xx before spending money on a downstream extractor.",
+      "HTML branch — call extract on the URL for the readable article body as clean markdown. extract handles the boilerplate-stripping (nav, footer, sidebars, cookie banners) and returns title + byline + excerpt + markdown. If extract returns an empty markdown body (some heavy SPAs render fully client-side and extract can't see the article without JS), fall back to html-to-markdown on the same URL — it converts the raw DOM verbatim, which is noisier but never empty. Cost: extract is wallet-only ($0.005); html-to-markdown is PoW-eligible.",
+      "PDF branch — call pdf-to-markdown with the URL. Returns markdown preserving headings, paragraphs, and bullet structure from the PDF's text layer. For scanned PDFs (image-only, no text layer), pdf-to-markdown will return empty or near-empty — in that case the caller should hand the PDF pages to image-ocr (step 4) page-by-page, which is more expensive but the only path that works on scans. Most modern PDF whitepapers and research papers have proper text layers and don't need OCR fallback.",
+      "Image branch — call image-ocr with the imageUrl. Returns the recognized text plus per-word confidence scores. Confidence < 60 on most words signals a low-resolution or low-contrast source — surface this to the caller so they don't trust the output as authoritative text. image-ocr is the catch-all for screenshots, scanned receipts, whiteboard photos, and image-only PDF pages. The output is plain text (not markdown) — wrap it in a single fenced code block if downstream needs a markdown payload.",
+      "Optional: re-render — if the HTML branch picked extract and the agent wants *raw* HTML-to-markdown instead of the boilerplate-stripped article (e.g. for archiving a documentation page where the nav links matter), swap step 2 for html-to-markdown directly. It's the same shape (URL → markdown), just verbose. Both extract and html-to-markdown return the same field name (`markdown`) so the rest of the workflow is interchangeable.",
+      "Finalize — call text-stats with the markdown body to compute word count, character count, and estimated token count (≈chars/4). This is a budget step: it tells the caller whether the result fits in a single LLM call (<32k tokens), needs chunking (32k-200k), or warrants a RAG-style ingestion (>200k). Final payload: { url, contentType, branch: 'html'|'pdf'|'image'|'html-raw', markdown: '<body>', stats: { chars, words, est_tokens } } — a single object the caller's LLM-input layer consumes directly.",
+    ],
+    claudePrompt:
+      "Convert https://example.com to clean markdown using Agent402, branching on content-type.\n\n(1) http-headers with url=https://example.com — return {status, headers}. Read headers['content-type']. If status >= 400, abort with {error: 'unreachable', status}. (2) Branch: if content-type starts with 'text/html' → call extract with url=https://example.com, return {title, markdown}. If empty markdown, retry with html-to-markdown (url=https://example.com). If content-type is 'application/pdf' or the path ends in .pdf → call pdf-to-markdown with url=https://example.com, return {markdown}. If content-type starts with 'image/' or the path ends in .png/.jpg/.jpeg/.gif/.webp → call image-ocr with imageUrl=https://example.com, return {text, confidence}. Wrap the text in a single fenced code block as the markdown. (3) text-stats with text=<markdown from step 2> — return {chars, words}. Compute est_tokens = Math.ceil(chars/4). Final return: {url: 'https://example.com', contentType: <from step 1>, branch: 'html'|'pdf'|'image'|'html-raw', markdown: <step 2 result>, stats: {chars, words, est_tokens}, warnings: [<'low OCR confidence' if image branch and confidence<60, 'empty extract — used raw html-to-markdown' if html-raw fallback>]}. Budget ~$0.018 paid; 4 of 6 tools are PoW-eligible (extract and pdf-to-markdown are wallet-only).",
+    promptArgs: [
+      {
+        name: "url",
+        description: "Public http(s) URL to convert to markdown. Can point at an HTML article, a PDF, or an image — the workflow auto-detects.",
+        required: true,
+        substitute: "https://example.com",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
