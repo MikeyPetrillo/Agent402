@@ -479,6 +479,9 @@ jobs:
       - name: "Every tool through the MCP connector (call_tool — free executes, wallet refuses)"
         run: TARGET_URL=http://localhost:3000 node scripts/test-mcp-all.js
 
+      - name: MCP search_tools — live-catalog smoke test (locks top-1 for agent queries)
+        run: node scripts/test-mcp-search-ranking.js
+
       - name: Exercise tools against live sites
         run: |
           echo "=== extract: BBC News article ==="
