@@ -1507,6 +1507,39 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "status-snapshot",
+    title: "Site status snapshot",
+    tagline:
+      "The 'is this site healthy, addressable, and crawlable — right now?' workflow. DNS resolution → HTTP reachability → security headers → TLS certificate expiry → robots policy. Five tools, one structured status payload an operator (or an uptime bot, or a pre-flight check before an extract/crawl) can act on.",
+    useCase:
+      "An agent (or an on-call operator, or a crawler about to spend money on extract/render) needs a one-shot answer to 'can I talk to this site and should I?' The naive approach (one curl) tells you only that the door opened — not whether DNS is healthy, whether the cert expires next week, whether security headers are sane, or whether robots.txt actually allows the path you're about to crawl. This pack runs the canonical pre-flight in a fixed order: resolve DNS first (cheapest, fails earliest), then check HTTP reachability, then inspect security/cache headers, then verify the TLS cert isn't about to expire, then ask robots.txt whether the agent is allowed in. Output is a single status object with a top-level rollup (ok|warn|fail) plus per-step findings — usable as the gate condition before a paid extract, as the body of an uptime alert, or as the first step in a site-audit run.",
+    toolSlugs: [
+      "dns-lookup",
+      "http-check",
+      "http-headers",
+      "tls-cert",
+      "robots-check",
+    ],
+    workflow: [
+      "Call dns-lookup with host=<URL host> and type=A to confirm the hostname actually resolves. This is the cheapest, fastest failure mode — NXDOMAIN or zero answers means the site is unreachable for a reason no downstream tool can fix, and the workflow should fail fast with {ok: false, stage: 'dns'} rather than spend money on http-check + tls-cert + headers all returning the same connection error. Optional: re-run with type=NS to capture nameservers for an alert payload (helpful when the failure is 'wrong DNS' vs 'origin down').",
+      "Call http-check with url=<URL> for the basic reachability signal: HTTP status code, response latency (ms), and the final URL after following redirects. This is the 'is the door open' check — status 2xx is healthy, 3xx with a redirect chain might mean the canonical URL moved (record finalUrl for the caller), 4xx means the path is wrong (not necessarily a site outage), 5xx means the origin is broken. Latency > 3000ms is a soft warn even when status is 200 — flag it in the rollup so a slow site doesn't masquerade as fully healthy.",
+      "Call http-headers with url=<URL> to capture the response headers in full. The fields that matter for the snapshot: Strict-Transport-Security (HSTS — present = good, missing on an HTTPS site = warn), Content-Security-Policy (present = good, missing = info), X-Content-Type-Options (should be `nosniff`), Cache-Control (informational — tells the caller whether downstream extract will hit cache), Server (informational — useful for tech-stack notes). Surface a security-header subscore (count of expected headers present / total expected) so the rollup can flag a site with a working HTTPS cert but a weak header posture.",
+      "Call tls-cert with host=<URL host> to inspect the live certificate: issuer, subject, validity window, days remaining, SANs, fingerprint. The single most important field is daysRemaining — < 14 days is a *fail* in the rollup (cert is about to break and break production), < 30 days is a *warn* (renewal window), >= 30 days is *ok*. Also surface altNames so the caller can verify the URL host matches a SAN (mismatch = browser will reject regardless of expiry). Skipped automatically if the URL is http:// (not https://) — no cert to inspect.",
+      "Call robots-check with url=<URL> and userAgent=<caller's agent token> to verify the agent is actually allowed to crawl the path. Returns {allowed, matchedRule, sitemaps}. This is the policy gate that should run *before* the caller spends money on extract/render — calling extract on a Disallow'd path is wasteful at best, hostile at worst. The sitemaps[] list is a bonus side-benefit: hand it to the caller's crawl planner so it doesn't have to discover sitemaps separately. Final payload: { url, host, ok: true|false, rollup: 'ok'|'warn'|'fail', dns: {...}, http: {status, latencyMs, finalUrl}, headers: {securityScore, hsts, csp, server, cacheControl}, tls: {daysRemaining, issuer, altNames} | null, robots: {allowed, matchedRule, sitemaps}, warnings: [<string flags>] } — a single object the caller's monitor/gate consumes directly.",
+    ],
+    claudePrompt:
+      "Run a status snapshot for https://example.com using Agent402. Derive host = new URL(url).host. Initialize warnings = [].\n\n(1) dns-lookup with host=<host>, type='A' — return {answers}. If answers is empty, return {url, host, ok: false, rollup: 'fail', stage: 'dns', warnings: ['NXDOMAIN or no A records']}. (2) http-check with url=https://example.com — return {status, latencyMs, finalUrl}. If status >= 500, push warnings += ['origin 5xx']. If latencyMs > 3000, push warnings += ['slow response (>3s)']. (3) http-headers with url=https://example.com — return {headers}. Compute securityScore = ['strict-transport-security','content-security-policy','x-content-type-options'].filter(h => headers[h]).length / 3. If securityScore < 0.67, push warnings += ['weak security headers']. (4) tls-cert with host=<host> ONLY if URL starts with 'https://' — return {daysRemaining, issuer, altNames}. If daysRemaining < 14, push warnings += ['cert expires in <14 days']. If daysRemaining < 30, push warnings += ['cert renewal window (<30 days)']. (5) robots-check with url=https://example.com, userAgent='*' — return {allowed, matchedRule, sitemaps}. If !allowed, push warnings += ['robots.txt disallows this path']. Compute rollup: 'fail' if step 2 status>=500 OR step 4 daysRemaining<14 OR step 5 !allowed; 'warn' if any warnings remain; else 'ok'. Final return: {url: 'https://example.com', host, ok: rollup !== 'fail', rollup, dns: {answers: <step 1>}, http: {status, latencyMs, finalUrl}, headers: {securityScore, hsts: !!headers['strict-transport-security'], csp: !!headers['content-security-policy'], server: headers.server || null, cacheControl: headers['cache-control'] || null}, tls: <step 4 or null>, robots: {allowed, matchedRule, sitemaps}, warnings}. Budget ~$0.013 paid; all 5 tools are PoW-eligible (pure network I/O, free here on the hosted connector after a small PoW).",
+    promptArgs: [
+      {
+        name: "url",
+        description: "Public http(s) URL to snapshot (e.g. https://example.com/path)",
+        required: true,
+        substitute: "https://example.com",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
