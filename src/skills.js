@@ -937,6 +937,58 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Inspect this JWT using Agent402. Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZ2VudDQwMiIsIm5hbWUiOiJkZW1vIGFnZW50IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9.NqggPBGuLX1OA7YuSlQ4S0INJfCOWnwXWT0XUIUrt3s. Secret: my-secret. (1) jwt-decode — extract header.alg, payload claims, signaturePresent, and the computed expired flag. If alg is not HS256/HS384/HS512, surface 'asymmetric algorithm, HMAC verify not applicable' and continue with steps 2-3, skip 4. (2) time-convert each of payload.iat, payload.nbf, payload.exp (if present) — render as ISO 8601 UTC. Note any that are missing (especially exp — opaque, never-expiring tokens are a security finding). (3) date-diff between now() and payload.exp. Headline: 'expires in X' or 'expired X ago'. Flag iat in the future as a clock-skew bug. Flag exp > now + 1 year as 'unusually long-lived token, double-check this is intentional'. (4) IF alg is HS256/HS384/HS512: jwt-verify with token + secret. Report {valid, algorithm, expired}. If valid=false, distinguish: 'unsupported alg' / 'signature mismatch (wrong secret or tampered)' / 'malformed'. (5) For each payload key NOT in [iss, sub, aud, exp, iat, nbf, jti]: if the value is a base64-looking string ≥16 chars, run base64 decode. If the decoded result parses as JSON or is valid UTF-8, surface it under 'embeddedClaims'. (6) IF payload contains cnf.x5t#S256, cnf.jkt, or any 'fingerprint'/'hash' claim: prompt the user for the underlying material (cert PEM or public key), run hash with alg=sha256, compare. Report match/mismatch. Final return: {alg, sigValid, expired, expiresIn, claims: {iat, nbf, exp, iss, sub, aud}, embeddedClaims, fingerprintChecks, oneLineVerdict: 'authentic / expired in 14m / wrong-secret / unsupported-alg / opaque-no-exp'}. All six tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.01 even paid.",
   },
+  {
+    slug: "user-onboarding",
+    title: "User onboarding",
+    tagline:
+      "Take a signup form submission and run the full onboarding workup deterministically: validate the email, score the chosen password, mint a stable internal ID, derive a URL-safe handle from the display name, generate a recovery / API secret, hash the password for storage, and verify the 2FA setup code. One pass, every step a pure-CPU call.",
+    useCase:
+      "An onboarding/account-provisioning agent receives a signup payload ({email, password, displayName, totpCode, totpSecret}) and needs to validate every field, mint every supporting identifier, and produce a storable record — without leaking the plaintext password into intermediate logs. The pack chains the steps in dependency order: validate before mint, mint stable IDs before deriving display fields, hash before storing. Output is a clean 'persistable record' shape plus a 'reject this signup because…' explanation when any step fails.",
+    promptArgs: [
+      { name: "email", description: "User-supplied email address", required: true, substitute: "ada@example.com" },
+      { name: "password", description: "User-chosen password (plaintext, will be scored then hashed; never logged)", required: true, substitute: "S0meStrongPassw0rd!" },
+      { name: "displayName", description: "User-supplied display name (will be slugified into a URL handle)", required: true, substitute: "Ada Lovelace" },
+      { name: "totpSecret", description: "Base32 TOTP secret generated during 2FA enrollment (server-side state)", required: true, substitute: "JBSWY3DPEHPK3PXP" },
+      { name: "totpCode", description: "6-digit code the user typed in to confirm their authenticator app is wired up", required: true, substitute: "492039" },
+    ],
+    // Seven tools, ordered by the dependency graph of a real signup:
+    // validate inputs FIRST (email-validate, password-strength) so a
+    // rejected signup never burns the mint steps; then mint the stable
+    // primary key (uuid) — every other field can change but the UUID
+    // must be assigned once; then derive display surfaces (slugify) from
+    // user-controlled input AFTER you have the immutable UUID as the
+    // dedupe key; then generate auxiliary secrets (password) for API
+    // keys / recovery codes; then hash the user-chosen password
+    // (note: hash is for fingerprinting/dedupe — real password storage
+    // needs bcrypt/argon2/scrypt with per-user salt, surface that in
+    // the prompt); finally verify the 2FA setup with totp. The ordering
+    // is also security-driven: never call hash on the plaintext before
+    // password-strength has accepted it (otherwise you've stored a
+    // fingerprint of a password the user is about to be told to change).
+    // All seven tools are pure-CPU and PoW-eligible. Composes kit
+    // (email-validate, uuid, slugify, password, hash, totp) + kit2
+    // (password-strength).
+    toolSlugs: [
+      "email-validate",
+      "password-strength",
+      "uuid",
+      "slugify",
+      "password",
+      "hash",
+      "totp",
+    ],
+    workflow: [
+      "Validate the email with email-validate. Returns a structured verdict beyond a regex — surfaces whether the local-part / domain are well-formed, whether the domain looks like a typo of a major provider (gmial.com), and whether the address has obvious red flags. Reject here on hard failures (malformed) and surface soft warnings (likely typo) for the agent to confirm with the user. Every step after assumes a valid email so any downstream 'send confirmation email' step doesn't fail silently.",
+      "Score the password with password-strength. Returns a score (0-4 or similar zxcvbn-style band) plus the actual weakness reason ('common password', 'contains username', 'too short'). Reject below a threshold and surface the *specific* weakness — 'your password is too weak' is unhelpful, 'your password contains your username' tells the user exactly what to change. Doing this here, before any hashing or mint step, means a rejected signup leaves no trace of the bad password anywhere.",
+      "Mint the stable internal ID with uuid. UUID v4 is the right default — globally unique, no information leakage, decoupled from any user-controlled field. This is the dedupe / primary-key for the rest of the workup; every downstream record (user record, audit row, related entity) references this UUID rather than email or handle, both of which can change. Generate ONCE per signup and never regenerate.",
+      "Derive the URL-safe handle with slugify on displayName. 'Ada Lovelace' → 'ada-lovelace'; 'Søren Kierkegaard' → 'soren-kierkegaard' (diacritics folded). Two failure modes to handle: collision with an existing handle (append the first 6 chars of the UUID), and reserved / forbidden slugs (admin, api, login — match against a denylist). The UUID from step 3 is the collision-resolution suffix because it's the only stable thing you have.",
+      "Generate auxiliary secrets with password. Use this for: a one-time recovery code (16-20 alphanumeric, presented to the user and never stored plaintext server-side), an API key for the user's first programmatic access (32-48 chars), or a temporary password for an admin-created account that the user must change at first login. Output is uniformly random and meets common entropy requirements out of the box — no need to argue policy with the user.",
+      "Hash with hash. NOTE: this is for FINGERPRINTING and dedupe lookups — real password storage MUST use bcrypt / argon2 / scrypt with per-user salt + work factor, not a bare SHA-256. Legitimate use cases for hash here: pwned-password fingerprint (SHA-1 of the password, sent as a 5-char prefix to a k-anonymity API), recovery-code fingerprint for fast lookup (the recovery code itself is shown to the user once and stored only as a hash), and integrity fingerprints for audit logging. Surface the algorithm choice (sha256 by default) and never use hash output as the primary password store.",
+      "Verify 2FA setup with totp. Takes the base32 secret you generated server-side during enrollment, computes the current code, compares to what the user typed in. Three outcomes: (a) match → 2FA is wired up correctly, persist the secret encrypted-at-rest; (b) off by one window (the user took 30+ seconds to type) → accept and warn; (c) mismatch → either the user scanned the QR but typed wrong, or the QR encoded a different secret — re-issue the secret rather than letting them retry indefinitely. Doing this BEFORE finalizing the account means a broken 2FA enrollment fails the entire signup, not the next login attempt.",
+    ],
+    claudePrompt:
+      "Onboard this signup using Agent402: email=ada@example.com, password=S0meStrongPassw0rd!, displayName=Ada Lovelace, totpSecret=JBSWY3DPEHPK3PXP, totpCode=492039. (1) email-validate the email. If invalid, return {accepted: false, reason: 'invalid-email', detail}. If 'likely-typo', surface the suggested correction and ask the user to confirm rather than rejecting outright. (2) password-strength on the password. If score < 3, return {accepted: false, reason: 'weak-password', specifically: <why>, suggestion: 'add length / drop common-pattern / vary character classes'}. Hard-reject signups that contain the email local-part or the displayName. (3) uuid (v4). Save as userId — this is the dedupe key for the rest of the steps. (4) slugify the displayName. If the slug collides with a reserved word (admin/api/login/root/help/about) or an existing handle, append the first 6 chars of userId hex. (5) password — generate one recovery code (length=20, alphanumeric) and one API key (length=48, alphanumeric+symbol). Return both to the user ONCE; persist only the hash. (6) hash the recovery code with alg=sha256 — this is what you'll store. Separately, hash the user-chosen password ONLY for the pwned-password k-anonymity probe (first 5 chars of SHA-1) — DO NOT use the SHA-256 output as the password store; the prompt MUST recommend bcrypt/argon2 for real persistence. (7) totp with secret=totpSecret. Compare computed code to totpCode. If match, set enrollment=confirmed. If off-by-one window, accept-with-warning. If mismatch, reject 2FA and instruct re-enroll (don't reject the whole signup; let the user retry the QR). Final return: {accepted: true|false, reason?, userId, handle, email, recoveryCodeHash, apiKey, twofaConfirmed, persistableRecord: {userId, email, handle, passwordStorage: 'TODO: replace SHA-256 with bcrypt/argon2', recoveryCodeHash, totpSecretEncrypted}}. All seven tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.01 even paid. Never log plaintext password / recovery code / API key — these appear in the return value only.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
