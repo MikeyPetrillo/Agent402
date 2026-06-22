@@ -366,6 +366,9 @@ jobs:
       - name: Tool resolver (/api/find ranking, guards)
         run: node scripts/test-find.js
 
+      - name: Find ranker — live-catalog smoke test (boots free-mode, locks top-1 for agent queries)
+        run: node scripts/test-find-ranking.js
+
       - name: Skill-pack invariants (toolSlugs resolve in catalog; substitution renders)
         run: node scripts/test-skill-packs.js
 
