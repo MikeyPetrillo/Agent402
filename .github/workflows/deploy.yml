@@ -420,6 +420,21 @@ jobs:
       - name: Static page renders smoke (every HTML surface returns 200 with the right page-specific title)
         run: node scripts/test-static-pages.js
 
+      - name: /api/stats envelope (M2M economy counters — rail breakdown, revenue proof, tools floor)
+        run: node scripts/test-stats-envelope.js
+
+      - name: /api/find envelope + top-1 ranking lock (per-row shape + known queries → known top slugs)
+        run: node scripts/test-find-envelope.js
+
+      - name: /api/pricing envelope contract (every scraper reads this — per-endpoint shape, slug uniqueness)
+        run: node scripts/test-pricing-envelope.js
+
+      - name: MCP call_tool contract (canonical + flattened + stringified + wallet-refusal + self-correction envelope)
+        run: node scripts/test-mcp-call-tool-contract.js
+
+      - name: /health envelope + .flags shape (boolean discipline locks the Yahoo-relay-flap class)
+        run: node scripts/test-health-envelope.js
+
       - name: Skill-pack invariants (toolSlugs resolve in catalog; substitution renders)
         run: node scripts/test-skill-packs.js
 
