@@ -1252,6 +1252,45 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "macro-context",
+    title: "Macro backdrop snapshot",
+    tagline:
+      "The 'is the economic backdrop you're modeling against still current?' pack. Pull the canonical macro signals — CPI year-over-year, unemployment, fed funds, the Treasury yield curve, a G10 FX dashboard, the Sahm Rule recession indicator, and the next scheduled economic releases — in one composed workflow. Seven egress tools, one composite snapshot the agent can cite before doing any forecast or investment math.",
+    useCase:
+      "Every finance/forecast pack in Agent402 assumes the macro backdrop is known. This pack makes that assumption explicit and dated. Before you NPV a 10-year cashflow, before you forecast a revenue series, before you recommend a savings vehicle — pull this snapshot, cite the as-of date, and pin the assumptions. The Sahm Rule + yield curve combination is the canonical 'are we in or near a recession' diagnostic; CPI + fed funds gives you the real-rate environment; FX dashboard tells you whether your USD assumption is even the right denominator. Pairs with investment-decision, loan-comparison, savings-goal, and forecasting-bake-off — none of those packs check macro state themselves.",
+    toolSlugs: [
+      "cpi-yoy",
+      "unemployment-rate",
+      "fed-funds",
+      "treasury-yield-curve",
+      "yield-curve-spread",
+      "sahm-rule",
+      "fx-dashboard",
+      "fred-release-calendar",
+    ],
+    workflow: [
+      "Pull current US CPI year-over-year with cpi-yoy. FRED series CPIAUCSL converted to YoY % change. This is the headline inflation number every cashflow assumption is implicitly indexed to — if you're discounting at a nominal rate, you need to know real-vs-nominal spread. Returns the latest observation date and value; flag if the latest observation is more than 45 days stale (BLS publishes monthly with ~2-week lag — anything older signals a FRED outage or a holiday).",
+      "Pull current US unemployment rate with unemployment-rate. FRED series UNRATE. The level matters less than the trend: U3 going from 3.5 → 4.5 over 6 months is the historical recession signal (formalized as the Sahm Rule, called in step 6). Report both the latest level AND the 6-month delta. A rising-unemployment regime invalidates 'steady-state' forecasting assumptions in every downstream pack.",
+      "Pull effective federal funds rate with fed-funds. FRED series FEDFUNDS. This is the risk-free rate every NPV/IRR calc should be discounting against (or close to it — treasury yields are the more precise instrument but fed funds is the policy anchor). Report the latest level and the YoY delta. A rising-rate environment systematically biases NPV calculations toward 'reject the project' — make sure the loan-comparison / investment-decision packs are using a current rate, not a stale one.",
+      "Pull the current Treasury yield curve with treasury-yield-curve. Returns the daily snapshot of yields at 1M, 3M, 6M, 1Y, 2Y, 5Y, 10Y, 30Y maturities. This is the shape of the risk-free curve the entire fixed-income world prices off. The shape itself is the signal: upward-sloping = normal, flat = transitional, inverted = recession-priced. The next step quantifies the inversion explicitly.",
+      "Compute yield-curve spreads with yield-curve-spread. Returns the canonical inversion gauges: 10Y-2Y (the academic favorite) and 10Y-3M (the Fed's preferred recession predictor per Estrella & Mishkin). Negative = inverted = market is pricing rate cuts = historical recession signal with 6-18 month lead. The tool returns both spreads plus a boolean isInverted flag per spread. Surface inversions prominently — every downstream forecast needs to know if the curve is signaling regime change.",
+      "Compute the Sahm Rule with sahm-rule. Defined as: current 3-month moving average of UNRATE minus its 12-month minimum. Triggers when ≥ 0.5 percentage points. This is the most-cited contemporaneous recession indicator (it has historically triggered within the recession's first few months, not as a lagging confirmation). Returns the current value and the triggered boolean. Pair this with the yield-curve inversion from step 5 — the two together are the canonical 'recession probability is non-trivial' signal.",
+      "Pull G10 FX dashboard with fx-dashboard. Returns USD vs EUR, JPY, GBP, CHF, AUD, CAD, NZD, SEK, NOK — the standard developed-market basket. Critical for any cashflow denominated in non-USD: a 10% USD strengthening turns a 12% EUR-denominated return into 2%. The dashboard returns the current cross plus the YTD change per pair. Surface any pair with >10% YTD change as a 'denomination matters here' callout.",
+      "Pull the next 14 days of economic releases with fred-release-calendar. Returns the schedule of upcoming releases (next CPI, next NFP, next FOMC, etc.) with their release dates. This tells the agent which numbers in the snapshot are about to be refreshed — if CPI prints in 3 days, the agent should caveat any inflation-sensitive recommendation with 'reassess after the CPI print on date X'. Closes the snapshot with a forward-looking 'what will be stale soon' list.",
+    ],
+    claudePrompt:
+      "Pull the current macro backdrop using Agent402 before doing any finance/forecast math.\n\nAs-of: 2026-06-22 (use today's date). USD-denominated assumptions.\n\n(1) cpi-yoy — return {asOfDate, yoyPct}. Flag if asOfDate > 45 days stale. (2) unemployment-rate — return {asOfDate, level, sixMonthDelta}. (3) fed-funds — return {asOfDate, level, yoyDelta}. (4) treasury-yield-curve — return {asOfDate, points: [{maturity, yield}, ...]} for the standard 1M/3M/6M/1Y/2Y/5Y/10Y/30Y set. (5) yield-curve-spread — return {asOfDate, tenTwo: {spread, isInverted}, tenThreeM: {spread, isInverted}}. (6) sahm-rule — return {asOfDate, value, triggered}. Pair with the yield-curve inversion from step 5 in the writeup: both triggered = strong recession signal. (7) fx-dashboard — return {asOfDate, crosses: [{pair, level, ytdPct}, ...]}. Flag any pair with |ytdPct| > 10 with a 'denomination matters here' note. (8) fred-release-calendar with daysAhead=14 — return {nextReleases: [{date, seriesName}, ...]}. Final return: {asOf: '2026-06-22', cpiYoy, unemployment, fedFunds, yieldCurve, spreads, sahm, fx, nextReleases, regimeAssessment: '<one paragraph synthesizing CPI direction + fed-funds direction + curve shape + Sahm Rule into rising-rate-late-cycle / cutting-cycle-early-recession / normal-expansion etc.>', oneLineSummary: 'CPI 2.4% YoY (Apr 26), UE 4.1% (May 26, +0.4 over 6m), fed funds 4.25%, curve disinverted 10Y-2Y at +12bps, Sahm not triggered (0.33), USD broadly flat YTD, next CPI prints 2026-07-10 — reassess any inflation-sensitive recommendation after that date.'}. All eight tools are egress (FRED + Treasury + ECB FX). Budget ~$0.10 paid. Cache this snapshot per session — do not re-call within the same agent task.",
+    promptArgs: [
+      {
+        name: "asOfDate",
+        description: "the as-of date for the snapshot in YYYY-MM-DD (use today if unspecified)",
+        required: false,
+        substitute: "2026-06-22",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
