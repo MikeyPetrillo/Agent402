@@ -473,6 +473,9 @@ jobs:
       - name: Tollbooth tests (pay-per-crawl gate — node + edge/Web-Crypto)
         run: node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js
 
+      - name: Tollbooth dashboard runtime smoke (boots CLI, hits /__tollbooth + /__tollbooth/stats over HTTP)
+        run: node scripts/test-tollbooth-runtime.js
+
       - name: Conversion tools (~970 endpoints, exact + round-trip)
         run: node scripts/test-convert.js
 
