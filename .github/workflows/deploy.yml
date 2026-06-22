@@ -369,6 +369,9 @@ jobs:
       - name: Find ranker — live-catalog smoke test (boots free-mode, locks top-1 for agent queries)
         run: node scripts/test-find-ranking.js
 
+      - name: /health flag shape contract (every documented flag present + boolean-typed)
+        run: node scripts/test-health-flags.js
+
       - name: Skill-pack invariants (toolSlugs resolve in catalog; substitution renders)
         run: node scripts/test-skill-packs.js
 
