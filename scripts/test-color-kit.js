@@ -82,28 +82,8 @@ const white = convert.handler({ color: "#ffffff" });
 ok(white.hex === "#ffffff" && white.hsl.l === 100, "convert: #fff → l=100");
 
 // ============================================================================
-// color-contrast — verify against published WCAG examples.
+// (color-contrast lives in util-kit; covered by scripts/test-util-kit.js.)
 // ============================================================================
-const contrast = bySlug["color-contrast"];
-
-// Black on white = 21 (the maximum possible WCAG ratio).
-const max = contrast.handler({ foreground: "#000000", background: "#ffffff" });
-ok(max.ratio === 21, "contrast: black on white = exactly 21");
-ok(max.passes.aaNormal && max.passes.aaaNormal, "contrast: black/white passes every level");
-
-// White on same = 1 (no contrast).
-const same = contrast.handler({ foreground: "#ffffff", background: "#ffffff" });
-ok(same.ratio === 1, "contrast: identical colors = 1");
-ok(!same.passes.aaNormal && !same.passes.aaLarge, "contrast: identical fails every level");
-
-// White on #1d4ed8 (Tailwind blue-700) — a real-world checkpoint.
-const tailwind = contrast.handler({ foreground: "#ffffff", background: "#1d4ed8" });
-ok(tailwind.ratio > 6 && tailwind.ratio < 8, "contrast: white on blue-700 in [6, 8] range");
-ok(tailwind.passes.aaNormal && tailwind.passes.aaLarge, "contrast: white on blue-700 passes AA both sizes");
-
-// Order shouldn't matter — contrast is symmetric.
-const reversed = contrast.handler({ foreground: "#1d4ed8", background: "#ffffff" });
-ok(reversed.ratio === tailwind.ratio, "contrast: ratio is symmetric");
 
 // ============================================================================
 // color-blindness — verify the three simulations all produce valid RGB
@@ -181,10 +161,6 @@ throws(() => convert.handler({ color: 42 }), 400, "convert: non-string color →
 throws(() => convert.handler({ color: "#zzz" }), 400, "convert: invalid hex → 400");
 throws(() => convert.handler({ color: "rgb(1, 2)" }), 400, "convert: rgb with too few channels → 400");
 throws(() => convert.handler({ color: "not-a-color" }), 400, "convert: unknown notation → 400");
-
-throws(() => contrast.handler({ foreground: "#fff" }), 400, "contrast: missing background → 400");
-throws(() => contrast.handler({ background: "#000" }), 400, "contrast: missing foreground → 400");
-throws(() => contrast.handler({ foreground: "garbage", background: "#000" }), 400, "contrast: invalid foreground → 400");
 
 throws(() => cb.handler({}), 400, "color-blindness: missing color → 400");
 

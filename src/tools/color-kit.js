@@ -370,58 +370,8 @@ export const COLOR_TOOLS = [
     },
   },
   // ---------------------------------------------------------------------------
-  {
-    route: "POST /api/color-contrast", name: "WCAG contrast ratio", slug: "color-contrast",
-    category: "data", price: "$0.001",
-    description:
-      "Compute the WCAG 2.x contrast ratio between two colors and report which accessibility levels (AA / AAA, at normal and large text sizes) the pair passes. Returns a ratio between 1 (no contrast) and 21 (black on white). Use before shipping any color combo that carries text — a button background and its label, a chart line on a panel, etc.",
-    tags: ["color", "contrast", "wcag", "accessibility", "a11y"],
-    discovery: {
-      bodyType: "json",
-      input: { foreground: "#ffffff", background: "#1d4ed8" },
-      inputSchema: {
-        properties: {
-          foreground: { type: "string", description: "Text/foreground color (any notation parseColor accepts)." },
-          background: { type: "string", description: "Background color (any notation parseColor accepts)." },
-        },
-        required: ["foreground", "background"],
-      },
-      output: {
-        example: {
-          foreground: "#ffffff", background: "#1d4ed8",
-          ratio: 6.94,
-          passes: { aaNormal: true, aaLarge: true, aaaNormal: false, aaaLarge: true },
-          recommendation: "AA pass for both sizes; AAA passes large text only — fine for body, swap for headlines if AAA is required.",
-        },
-      },
-    },
-    handler: (i) => {
-      if (typeof i.foreground !== "string") throw bad(`Missing or invalid "foreground"`);
-      if (typeof i.background !== "string") throw bad(`Missing or invalid "background"`);
-      const fg = parseColor(i.foreground);
-      const bg = parseColor(i.background);
-      const ratio = contrastRatio(fg, bg);
-      const passes = {
-        aaNormal: ratio >= 4.5,
-        aaLarge: ratio >= 3.0,
-        aaaNormal: ratio >= 7.0,
-        aaaLarge: ratio >= 4.5,
-      };
-      let recommendation;
-      if (passes.aaaNormal) recommendation = "Passes every WCAG level — safe for any text.";
-      else if (passes.aaNormal && passes.aaaLarge) recommendation = "AA pass for both sizes; AAA passes large text only — fine for body, swap for headlines if AAA is required.";
-      else if (passes.aaNormal) recommendation = "AA pass at normal sizes; below AAA. Acceptable for general use.";
-      else if (passes.aaLarge) recommendation = "Only AA-large passes — restrict to headlines (≥18pt or 14pt bold).";
-      else recommendation = "Fails every WCAG threshold — pick a higher-contrast pair.";
-      return {
-        foreground: i.foreground,
-        background: i.background,
-        ratio: r2(ratio),
-        passes,
-        recommendation,
-      };
-    },
-  },
+  // NOTE: WCAG contrast lives in util-kit as the hex-only `color-contrast` slug.
+  // Agents needing any-notation contrast can chain color-convert → color-contrast.
   // ---------------------------------------------------------------------------
   {
     route: "POST /api/color-blindness", name: "Color blindness simulation", slug: "color-blindness",
