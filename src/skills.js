@@ -1398,6 +1398,47 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "schema-evolution",
+    title: "API contract drift check",
+    tagline:
+      "The 'did this API contract change in a way that breaks our integration?' workflow. Diff two OpenAPI snapshots structurally, lint the new one for agent-readiness regressions, extract the endpoint surface for inventory comparison, validate a known-good payload against the new contract, and summarize security-relevant changes. Six tools, one go/no-go answer on whether the upstream API broke us.",
+    useCase:
+      "Every integration eventually hits the 'upstream changed something and now our requests 422' incident. The fix-time is dominated by figuring out *what* changed: was it a renamed field, a tightened enum, a new required parameter, a moved endpoint, a security scheme change? This pack runs that diagnosis deterministically the moment a new OpenAPI snapshot lands — before traffic breaks. Pairs with api-investigation when you don't yet have an OpenAPI snapshot (that pack discovers one); this pack assumes you have two snapshots (yesterday's and today's) and want to know what changed and whether it matters.",
+    toolSlugs: [
+      "openapi-diff",
+      "openapi-lint",
+      "openapi-extract",
+      "openapi-required-params",
+      "openapi-validate-payload",
+      "openapi-security-summary",
+    ],
+    workflow: [
+      "Diff the two snapshots with openapi-diff. Pass the old spec and new spec; returns a structural diff: added/removed endpoints, added/removed parameters per endpoint, changed schemas, changed response codes, changed security schemes. The diff is *structural*, not textual — a reordering of fields or a whitespace change won't show up; a renamed property will. This is the raw change-list every downstream step interprets. Bucket changes by breaking-vs-additive: removed endpoint = breaking, added endpoint = additive, new required param = breaking, new optional param = additive, tightened enum = breaking, widened enum = additive.",
+      "Lint the new snapshot with openapi-lint for agent-readiness regressions. Even if the diff is empty, the *quality* of the new spec might have degraded — descriptions removed, examples deleted, response schemas downgraded to free-form objects. Returns a score and a list of regressions. This is the signal for 'the upstream maintainer is taking the spec less seriously over time' — it predicts future drift even when this diff was clean. Cross-reference with the diff: drops in lint score that coincide with endpoint changes are the highest-priority concerns.",
+      "Extract the endpoint surface from the new snapshot with openapi-extract. Returns the full {path, method, operationId, summary} table — the inventory the integration code is coded against. Compare this inventory to your client code's call sites: any operationId your code calls that's missing from the inventory is an integration that's about to fail. Conversely, any operationId in the inventory that your code doesn't call is a new capability you might want to expose. The diff in step 1 surfaces *changes*; this step surfaces the *full current surface*.",
+      "Pull the required-params delta with openapi-required-params on both old and new specs. For each endpoint, returns the list of required parameters. Compare old vs new: any param newly required is a breaking change that the diff in step 1 also caught, but this step gives you the *concrete request shape* a client has to send — easier to translate into client-code patches than the abstract structural diff. If a previously optional field is now required, your existing client code probably doesn't send it, and every request 400s the moment the new contract is live.",
+      "Replay a known-good payload through openapi-validate-payload against the new spec. Pass your fixture (the request body you've been sending successfully for months); the tool validates it against the new schema. If validation fails, the failure messages tell you exactly which field is the problem — much faster than reading the diff and guessing. If validation passes, you have positive evidence the existing client code's request shape is still acceptable; the breakage if any is elsewhere (auth, headers, query params). This is the single most decision-relevant check in the pack.",
+      "Diff security schemes with openapi-security-summary on both specs. Auth changes are usually filed under 'breaking' but spec-diff tools often surface them as just-another-field-change rather than the migration project they actually are. This step bubbles them to the top: 'apiKey moved from header to query', 'oauth2 scope renamed', 'new scope required for endpoint X'. Security-scheme drift is the most expensive kind of breakage because it requires credential rotation, not just a code patch — flag prominently. Final return is a single 'breaking | additive | clean' verdict plus a per-endpoint impact table the integration team can prioritize from.",
+    ],
+    claudePrompt:
+      "Check if this OpenAPI contract drifted in a breaking way, using Agent402.\n\nInputs:\n  oldSpec: <yesterday's snapshot, JSON or YAML>\n  newSpec: <today's snapshot, JSON or YAML>\n  knownGoodPayload: { endpoint: 'POST /v1/orders', body: {customerId: 'cust_abc', items: [{sku: 'SKU-42', qty: 1}], currency: 'USD'} }\n\n(1) openapi-diff with oldSpec + newSpec — return {added: {endpoints: [], params: [], schemas: []}, removed: {endpoints: [], params: [], schemas: []}, changed: {endpoints: [{path, what: 'response-schema|request-schema|param-required|param-removed|...'}, ...]}}. Bucket every change as breaking|additive in the writeup. (2) openapi-lint on newSpec — return {score, regressions: [{severity, what}], comparisonToPriorLint: 'manual — note if score dropped'}. Note: this pack doesn't store prior lint scores; surface the current score and ask the integration team whether it dropped. (3) openapi-extract on newSpec — return {endpoints: [{path, method, operationId, summary}, ...]}. Compare in the writeup against the diff from step 1 to confirm no endpoint your client calls is missing. (4) openapi-required-params on BOTH specs separately — return {old: [{endpoint, requiredParams: []}, ...], new: [{endpoint, requiredParams: []}, ...], newlyRequired: [{endpoint, paramName}, ...]}. Every entry in newlyRequired is a guaranteed 400 for existing clients. (5) openapi-validate-payload with spec=newSpec, endpoint='POST /v1/orders', body=knownGoodPayload.body — return {valid: true|false, errors: [...]}. This is the decisive check. (6) openapi-security-summary on BOTH specs — return {old: {schemes: [...], requirements: [...]}, new: {schemes, requirements}, drift: [{endpoint, change: 'scope-added|scheme-changed|location-moved|...'}]}. Final return: {verdict: 'breaking'|'additive'|'clean', breakingItems: [...], additiveItems: [...], requiredClientChanges: [{file: '<guess based on operationId>', change: '<what to patch>'}], knownGoodPayloadStillValid: true|false, securityDrift: [...], lintScoreNow: <number>, oneLineSummary: 'BREAKING: POST /v1/orders now requires currencyOverride; 2 endpoints removed (/v1/legacy/quote, /v1/legacy/refund); auth unchanged; existing fixture fails validation — patch client before next deploy.'}. All six tools are pure-CPU schema operations (no egress to the API itself). Budget ~$0.015 paid; PoW-eligible.",
+    promptArgs: [
+      {
+        name: "oldSpec",
+        description: "the prior OpenAPI snapshot as JSON or YAML",
+        required: true,
+        substitute: "yesterday's snapshot",
+      },
+      {
+        name: "newSpec",
+        description: "the current OpenAPI snapshot as JSON or YAML",
+        required: true,
+        substitute: "today's snapshot",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
