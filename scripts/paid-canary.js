@@ -1,6 +1,6 @@
 // Paid-path canary — buys ONE tool from each live-data kit to prove that
 // *buying* still settles end-to-end AND that each kit's handler still
-// delivers a documented payload. Total spend: ~$0.057 per run (seven tools).
+// delivers a documented payload. Total spend: ~$0.059 per run (nine tools).
 //
 // Deliberately ordered cheapest → most-likely-to-be-flaky so a fast-fail on
 // the baseline aborts the rest. Each tool has a strict shape check; a 200
@@ -85,6 +85,40 @@ const TOOLS = [
     // BTC has been >$1k since 2017; assertion floor is intentionally generous
     // to ride out a black-swan drawdown without false-positive alerting.
     check: (r) => (r.coins?.bitcoin?.price > 1000) || `expected bitcoin.price > 1000, got ${JSON.stringify(r).slice(0, 80)}`,
+  },
+  {
+    kit: "chain",
+    path: "/api/gas-snapshot",
+    method: "POST",
+    body: { network: "base" },
+    priceUsd: 0.001,
+    // End-to-end probe of ALCHEMY_API_KEY: x402 settles BEFORE the handler
+    // runs, so a missing/expired key returns 503 AFTER payment — same env-var-
+    // flap class that bit yahoo-relay. Base gas has lived between 0.001 and
+    // 50 gwei since launch; baseFeeGwei outside (0, 1000) means Alchemy
+    // returned junk OR our fee parser broke. fast.totalGwei must be at least
+    // baseFeeGwei (priority can be 0 in idle blocks).
+    check: (r) => (
+      typeof r.baseFeeGwei === "number" && r.baseFeeGwei > 0 && r.baseFeeGwei < 1000 &&
+      r.fast && typeof r.fast.totalGwei === "number" && r.fast.totalGwei >= r.baseFeeGwei &&
+      r.chainId === 8453
+    ) || `expected baseFeeGwei (0,1000) + fast.totalGwei>=baseFee + chainId=8453, got ${JSON.stringify(r).slice(0, 120)}`,
+  },
+  {
+    kit: "price-feed",
+    path: "/api/price-pyth",
+    method: "POST",
+    body: { ids: ["ETHUSD"] },
+    priceUsd: 0.001,
+    // Pyth Hermes is keyless but rate-limited per-IP; the 5xx retry above
+    // absorbs a transient throttle. ETH has traded between $80 and $5000
+    // across every minute since 2018 — assertion floor/ceiling deliberately
+    // wide so a black-swan move doesn't false-alert.
+    check: (r) => {
+      const eth = Array.isArray(r.feeds) && r.feeds.find((f) => f.alias === "ETHUSD");
+      return (eth && typeof eth.price === "number" && eth.price > 80 && eth.price < 50000)
+        || `expected feeds[ETHUSD].price in (80, 50000), got ${JSON.stringify(r).slice(0, 120)}`;
+    },
   },
   {
     kit: "answer",
