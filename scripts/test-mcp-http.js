@@ -106,4 +106,28 @@ assert(sellersJson.sort === "calls" && sellersJson.include === "all", `top_x402_
 assert(Array.isArray(sellersJson.results) && sellersJson.results.length <= 5, "top_x402_sellers honors limit");
 assert(typeof sellersJson.source === "string" && sellersJson.source.endsWith("/api/leaderboard"), "top_x402_sellers links back to /api/leaderboard");
 
+// Defaults: with no args, sort='usd' and include='external'. The default-args
+// path is what agents hit first (no schema, just "show me the leaderboard")
+// and a silent default flip would skew every uninformed query.
+const sellersDefault = await rpc("tools/call", { name: "top_x402_sellers", arguments: {} });
+let sellersDefaultJson;
+try { sellersDefaultJson = JSON.parse(sellersDefault.result?.content?.[0]?.text ?? ""); } catch { throw new Error("top_x402_sellers default output is not JSON"); }
+assert(sellersDefaultJson.sort === "usd", `default sort is 'usd' (got ${sellersDefaultJson.sort})`);
+assert(sellersDefaultJson.include === "external", `default include is 'external' (got ${sellersDefaultJson.include})`);
+assert(typeof sellersDefaultJson.totalSellers === "number", `totalSellers is a number (got ${typeof sellersDefaultJson.totalSellers})`);
+assert(typeof sellersDefaultJson.window === "string" && sellersDefaultJson.window.length > 0, `window label is a non-empty string (got ${JSON.stringify(sellersDefaultJson.window)})`);
+
+// Per-row shape — only locked when there are rows to inspect. CI may run with
+// a warming cache (results=[]); when populated, every row carries the documented
+// token-cheap shape. A silent rename here would break any agent rendering a
+// "who else is on x402?" table.
+if (sellersDefaultJson.results?.length) {
+  const row = sellersDefaultJson.results[0];
+  for (const key of ["rank", "name", "network", "wallet", "callsSettled", "totalUsd", "uniqueBuyers"]) {
+    assert(key in row, `top_x402_sellers row carries ${key} (got keys: ${Object.keys(row).join(",")})`);
+  }
+  assert(typeof row.totalUsd === "number", `row.totalUsd is a number (got ${typeof row.totalUsd})`);
+  assert(typeof row.callsSettled === "number", `row.callsSettled is a number (got ${typeof row.callsSettled})`);
+}
+
 console.log("\nremote MCP connector: all checks passed");
