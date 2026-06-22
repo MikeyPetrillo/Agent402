@@ -1363,6 +1363,41 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "media-pipeline",
+    title: "Uploaded-media normalize",
+    tagline:
+      "The 'user uploaded a thing, normalize it before storing' workflow. Probe the file (image or audio/video) with media-info, decode any embedded barcodes/QRs, resize and thumbnail the image, convert it to a web-friendly format, and normalize audio loudness to broadcast standard. Six tools, one canonical normalize-on-upload pipeline that turns arbitrary user uploads into predictable storage artifacts.",
+    useCase:
+      "Every product that accepts user uploads ships the same five bugs: the receipt photo nobody can read because it's 11MB and rotated, the audio voice-memo that's 6dB louder than every other voice-memo because the user had headphone gain cranked, the QR code in the uploaded business card that the app never scanned because it looked at the filename instead of the bytes, the AVIF that the iOS WebView can't display, the 4K hero image that blew up the thumbnail grid. This pack runs the canonical normalize-then-store pipeline so every uploaded artifact lands in storage with predictable dimensions, predictable codec, predictable loudness, and any embedded payload (QR/barcode) already extracted into metadata. Pairs with document-intel when the upload is a PDF.",
+    toolSlugs: [
+      "media-info",
+      "barcode-decode",
+      "image-resize",
+      "image-thumbnail",
+      "image-convert",
+      "audio-normalize",
+    ],
+    workflow: [
+      "Probe the file with media-info. Runs ffprobe under the hood — returns format, codec, dimensions (width x height for images/video), duration (audio/video), bitrate, sample rate, color space, EXIF orientation. This is the *triage* call: it tells the agent which downstream branch to take. Image? → barcode + resize + thumbnail + convert. Audio? → normalize. Video? → probe-only, video transcoding is outside this pack's scope. Critical edge case: a file with extension `.jpg` and MIME `image/jpeg` that ffprobe identifies as `image/heic` is a real production case (iOS sends HEIC named .jpg). Trust media-info, not the extension.",
+      "Try to decode embedded barcodes/QR codes with barcode-decode. One call on the image bytes. Returns the decoded payload (URL, EAN-13, UPC, etc.) and the symbology. Many uploads have actionable payloads the agent should extract before treating the image as 'just a photo': uploaded business cards contain vCard QRs, uploaded receipts contain GS1 product codes, uploaded shipping labels contain tracking URLs. If decode returns empty, that's fine — most images don't have barcodes, and the pack continues. If decode returns a payload, surface it as metadata alongside the stored image.",
+      "Resize the image to a max long-edge with image-resize. Default cap: 2000px on the long edge. Most uploaded photos from modern phones are 4000+ px wide; 2000px is the sweet spot where retina displays still look sharp but storage and bandwidth costs drop 4-8x. Critical: preserve aspect ratio (don't squish), and respect EXIF orientation from step 1 (rotate to upright before resize, so the stored bytes are already the right way up — never trust the consuming client to handle orientation). image-resize also strips EXIF GPS by default — good for privacy, since uploaded photos often carry the user's home coordinates.",
+      "Generate a small thumbnail for grid/list views with image-thumbnail. Default size: 200x200 cover crop. The thumbnail is a separate stored artifact from the resized image — UIs grid-displaying 50 thumbnails should not be loading 50 × 2000px resized images. Cover crop (not contain) is the right default for grid UIs because mixed aspect ratios in a grid look chaotic; the small loss of edge content is a fair tradeoff for visual consistency.",
+      "Convert the resized image to a web-friendly format with image-convert. Default target: WebP, quality 82. WebP is the universal-support sweet spot in 2026 — supported by every browser including iOS Safari, 25-35% smaller than JPEG at equivalent quality. AVIF compresses better but Safari + many in-app WebViews still have gaps; HEIC is iOS-native but Android can't display it. Skip conversion if the source is already WebP. The thumbnail from step 4 should be converted too — same WebP target.",
+      "Normalize audio loudness with audio-normalize. Only runs if the file probed as audio in step 1 (skip for images). Applies EBU R128 loudness normalization to -23 LUFS (broadcast standard) or -16 LUFS (podcast/voice standard). This is the difference between 'every uploaded voice-memo plays at the same volume' and 'half the user's library hits the volume limiter and the other half is whispers'. Critical: this changes loudness, not peak — the dynamic range of the original is preserved, just shifted into a predictable absolute range. After this step, the artifact is canonical and ready to store. Pack returns: {storedKey, dimensions, format, sizeBytes, thumbnailKey, barcodePayload|null, audioLufs|null, processingTimeMs}.",
+    ],
+    claudePrompt:
+      "Normalize this user upload using Agent402.\n\nInput: uploaded file at temp path /tmp/upload-abc123 (1 file per invocation).\nMax stored long-edge: 2000px.\nThumbnail size: 200x200.\nTarget image format: WebP quality 82.\nAudio target: -16 LUFS (voice-memo standard).\n\n(1) media-info — return {kind: 'image'|'audio'|'video'|'other', format, codec, width, height, durationSec, bitrate, sampleRate, colorSpace, exifOrientation, declaredMime, detectedMime}. If declaredMime ≠ detectedMime, log 'mime mismatch' and trust detectedMime. Branch on kind: 'image' → steps 2-5, 'audio' → step 6 only, 'video' → return as-is with kind=video and stop (out of scope), 'other' → reject. (2) barcode-decode on the image bytes — return {payload: '<decoded text>'|null, symbology: 'qr'|'ean13'|'upc'|...|null}. Pure-CPU. Null = no decodable barcode, that's fine. (3) image-resize with maxLongEdge=2000, preserveAspect=true, applyExifRotation=true, stripExifGps=true — return {bytes: <resized>, width, height}. (4) image-thumbnail with size=200, mode='cover' — return {bytes: <thumb>}. (5) image-convert on both step-3 output and step-4 output, format='webp', quality=82, skipIfAlreadyTarget=true — return {primary: {bytes, sizeBytes}, thumb: {bytes, sizeBytes}}. (6) audio-normalize with targetLufs=-16, format='mp3' — return {bytes, lufsBefore, lufsAfter, peakDbfs}. ONLY if step 1 said kind='audio'. Final return: {kind, normalized: {primaryBytes: <ref>, primarySize, thumbBytes: <ref>, thumbSize, width, height, format} | audio: {bytes: <ref>, durationSec, lufsAfter, format}, metadata: {barcodePayload, originalSizeBytes, sizeSavingsPct, exifOrientation, declaredVsDetectedMime}, oneLineSummary: 'image normalized: 4032x3024 HEIC → 2000x1500 WebP (847KB → 162KB, 81% smaller), 1 QR decoded (https://example.com/menu/42), thumb 200x200 → 8KB' | 'audio normalized: 6m 12s, -23.4 LUFS → -16.0 LUFS, peak -1.2 dBFS'}. media-info + barcode-decode + image-* + audio-normalize all involve ffmpeg/ffprobe/imagemagick under the hood — egress is 0, but CPU is meaningful, so this is a wallet/paid pack, not PoW. Budget ~$0.06 per upload.",
+    promptArgs: [
+      {
+        name: "uploadPath",
+        description: "the temp path or URL of the uploaded file (e.g. '/tmp/upload-abc123')",
+        required: true,
+        substitute: "/tmp/upload-abc123",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
