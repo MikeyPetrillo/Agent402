@@ -127,6 +127,22 @@ try {
   console.error(`FAIL  ${msg}`);
 }
 
+// One-shot retry on 5xx — absorbs transient upstream throttles (CoinGecko
+// rate-limits, Yahoo blips, Brave plan-tier hiccups) without papering over
+// real paywall/facilitator outages: those persist past a 10s backoff and
+// the second attempt fails again. The cost is one extra paid call in the
+// failure case (Agent402 settles USDC before the handler runs, so a 5xx
+// has already spent); at ≤$0.03/tool the insurance is cheap.
+async function payOnceWithRetryOn5xx(url, init) {
+  const first = await payFetch(url, init);
+  if (first.status < 500 || first.status > 599) return first;
+  // Read+discard the first body so the connection releases, then back off.
+  await first.text().catch(() => "");
+  console.warn(`  retry ${init.method} ${url} after HTTP ${first.status} (10s backoff)`);
+  await new Promise((r) => setTimeout(r, 10000));
+  return payFetch(url, init);
+}
+
 for (const t of TOOLS) {
   const url = `${TARGET}${t.path}`;
   const init = { method: t.method };
@@ -135,7 +151,7 @@ for (const t of TOOLS) {
     init.body = JSON.stringify(t.body);
   }
   try {
-    const res = await payFetch(url, init);
+    const res = await payOnceWithRetryOn5xx(url, init);
     const body = await res.json().catch(() => ({}));
     if (res.status !== 200) {
       failed++;
