@@ -1162,6 +1162,47 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "trip-planner",
+    title: "Multi-stop trip planner",
+    tagline:
+      "Plan a multi-stop journey deterministically: geocode each stop, sum the pairwise haversine distances, estimate arrival times by adding driving hours per leg, count business days from today to each arrival, and pull the weather forecast at every US stop. Six tools — three pure-CPU (math + time), three egress (geocoding + weather) — covering the deterministic skeleton of every road-trip / sales-tour / delivery-route planning problem.",
+    useCase:
+      "Trip planning bounces between three or four single-purpose apps: a maps tool for distance, a calendar for business-day windows, a weather site per stop, a spreadsheet to add it all up. Each handoff is a place to copy a wrong number. This pack does the whole skeleton — locate, measure, time-shift, weather-check — as a single round-trip of tool calls so the final itinerary is reproducible and the agent can re-run a single step (e.g. shift the start date by a day) without re-doing the rest. Weather is US-only via NWS; geocoding is global via OSM Nominatim.",
+    toolSlugs: [
+      "geocode",
+      "geo-distance",
+      "add-time",
+      "business-days",
+      "time-convert",
+      "weather-forecast",
+    ],
+    workflow: [
+      "Resolve every stop to coordinates with geocode. One call per stop name: 'New York, NY' → {lat: 40.7128, lng: -74.006}. Use the OSM Nominatim backend (free, global). Watch for ambiguous names ('Portland' returns Maine before Oregon by default unless you pass a countryCodes filter or a more specific query) — surface the resolved display_name back to the user so they can confirm. This is one of two egress tools in the pack — it counts toward the wallet/paid budget; the other four pure-CPU steps run free via proof-of-work.",
+      "Sum the pairwise great-circle distances with geo-distance. One call per consecutive pair of stops: (stop[0], stop[1]) → km/miles, (stop[1], stop[2]) → km/miles, etc. The haversine formula gives the as-the-crow-flies distance on a sphere; real driving distance is typically 1.2–1.4x this (winding roads, no straight-line bridges). The writeup should multiply by 1.3 as a reasonable driving-distance estimate and label it as such — don't pretend haversine is road distance. Total trip distance = sum of legs × ~1.3.",
+      "Estimate arrival timestamps with add-time. Start from the user-supplied start ISO; for each leg, add (legDistanceKm / averageSpeedKph) + a buffer (lunch break, fuel, traffic). Conventional defaults: 80 km/h average highway speed, 30 min buffer per stop. This gives you a per-stop arrival ISO. The compounding here is important: a 30-min buffer per stop on a 6-stop trip is 3 hours of cumulative delay that a naive 'distance / speed' calc would miss. add-time also handles cross-day rollover so multi-day trips don't silently wrap timestamps.",
+      "Count business days to each arrival with business-days. From today to the arrival date for each stop. Two purposes: (a) staffing — if a stop arrives on weekend day, the agent flags it for the user ('your Tuesday Chicago stop falls on Memorial Day Monday'); (b) deadline check — if the arrival is fewer business days away than tasks-to-complete-before-arrival, the agent surfaces the conflict. business-days respects weekends by default; passing the `holidays` array adds the US federal calendar.",
+      "Render arrival times in local timezone with time-convert. Driving across time zones (EST → CST → MST → PST is common on a US trip) silently breaks naive itinerary printouts. time-convert turns each arrival ISO into the local clock time at each stop's coordinates. The agent should also flag the timezone-crossing legs explicitly ('you gain an hour entering CST') so the user understands the lived experience of the schedule, not just the UTC math.",
+      "Pull weather at each stop with weather-forecast. NWS-backed, US-only — one call per stop on the arrival date. Returns hourly + daily forecast: temperature, precipitation probability, wind. The writeup should flag any stop with rain probability > 60% (delay risk), high winds > 25 mph (bridge/RV risk), or extreme temperatures (heat advisory or freeze). For non-US stops, skip this step with a one-line note — the pack stays deterministic on the parts that work and is honest about the parts that don't, rather than falling back to a fabricated forecast.",
+    ],
+    claudePrompt:
+      "Plan this multi-stop trip using Agent402.\n\nStops (in order): New York NY, Pittsburgh PA, Cleveland OH, Chicago IL.\nStart: 2026-07-20T08:00:00Z (8am UTC, ~4am ET local Monday morning).\nAverage driving speed: 80 km/h. Stop buffer: 30 min per stop.\n\n(1) geocode each of the 4 stops. Return display_name + {lat, lng} per stop. Confirm 'Pittsburgh' resolves to PA, not Kansas — flag ambiguous resolutions. (2) geo-distance for each consecutive leg: NY→PIT, PIT→CLE, CLE→CHI. Multiply each leg by 1.3 to estimate driving distance and label as such. Total trip distance = sum. (3) add-time to compute arrival ISO per stop: leg duration = (km_driving / 80) hours + 0.5 hour buffer. Start from 2026-07-20T08:00:00Z; chain the deltas. (4) business-days from today (use 2026-06-22 as 'today' since that's the demo date) to each arrival date. Report business days remaining per stop. Flag any arrival that lands on a Saturday or Sunday. (5) time-convert each arrival ISO to local time: New York/Pittsburgh/Cleveland = America/New_York; Chicago = America/Chicago. Flag the CST entry: 'you gain an hour entering Chicago'. (6) weather-forecast for each stop on its arrival date. Surface high temp, low temp, precipitation %, wind. Flag any stop with precipitation > 60% (delay risk) or wind > 25 mph. Final return: {stops: [{name, coords, arrivalUtc, arrivalLocal, businessDaysUntil, weather: {high, low, precipPct, wind, flags: []}}], legs: [{from, to, km, drivingKmEstimate, hours}], total: {km, drivingKmEstimate, hours, businessDaysUsed}, warnings: [...], oneLineSummary: '4-stop trip, ~1380 driving km, 17 driving hours, all weekday arrivals, 1 weather warning (Cleveland 70% rain Tuesday)'}. Two egress tools (geocode, weather-forecast) — budget ~$0.05. Four pure-CPU tools — free via proof-of-work.",
+    promptArgs: [
+      {
+        name: "stops",
+        description: "comma-separated ordered list of stops (e.g. 'New York NY, Pittsburgh PA, Cleveland OH, Chicago IL')",
+        required: true,
+        substitute: "New York NY, Pittsburgh PA, Cleveland OH, Chicago IL",
+      },
+      {
+        name: "startIso",
+        description: "trip start time as UTC ISO 8601 (e.g. '2026-07-20T08:00:00Z')",
+        required: true,
+        substitute: "2026-07-20T08:00:00Z",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
