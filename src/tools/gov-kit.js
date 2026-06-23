@@ -11,7 +11,15 @@ function bad(message, statusCode = 400) {
 }
 
 async function getJson(url) {
-  const { html } = await safeFetch(url, { maxBytes: 5 * 1024 * 1024 });
+  let html;
+  try {
+    ({ html } = await safeFetch(url, { maxBytes: 5 * 1024 * 1024 }));
+  } catch (e) {
+    // safeFetch maps upstream 4xx → 422 ("check the URL"), designed for user URLs.
+    // Gov-kit endpoints are hardcoded — upstream 4xx is a gov-side issue, not caller error.
+    if (e.statusCode === 422) throw bad(e.message, 502);
+    throw e;
+  }
   try {
     return JSON.parse(html);
   } catch {

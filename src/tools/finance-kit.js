@@ -52,23 +52,27 @@ function normalizeSymbol(raw) {
 
 async function jsonGet(url, host, extraHeaders = {}) {
   const safeUrl = await assertPublicUrl(url);
+  const headers = {
+    "User-Agent": financeUserAgent(),
+    Accept: "application/json,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    ...extraHeaders,
+  };
   let res;
   try {
-    res = await fetch(safeUrl, {
-      headers: {
-        "User-Agent": financeUserAgent(),
-        Accept: "application/json,text/plain,*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        ...extraHeaders,
-      },
-      signal: AbortSignal.timeout(10000),
-    });
-  } catch (e) {
-    // e.cause?.code names the underlying network failure (UND_ERR_CONNECT_TIMEOUT,
-    // ECONNRESET, ENETUNREACH, EAI_AGAIN, etc.) — invaluable for distinguishing
-    // WAF/IP blocks from DNS or timeout. Bare e.message is just "fetch failed".
-    const cause = e.cause?.code ? ` (${e.cause.code})` : "";
-    throw bad(`${host} request failed: ${e.message}${cause}`, 504);
+    res = await fetch(safeUrl, { headers, signal: AbortSignal.timeout(10_000) });
+  } catch (firstErr) {
+    // Single retry on network/timeout failure — handles transient upstream
+    // slowness (Nasdaq CloudFront, Yahoo edge) without raising the base timeout.
+    try {
+      res = await fetch(safeUrl, { headers, signal: AbortSignal.timeout(12_000) });
+    } catch (e) {
+      // e.cause?.code names the underlying network failure (UND_ERR_CONNECT_TIMEOUT,
+      // ECONNRESET, ENETUNREACH, EAI_AGAIN, etc.) — invaluable for distinguishing
+      // WAF/IP blocks from DNS or timeout. Bare e.message is just "fetch failed".
+      const cause = e.cause?.code ? ` (${e.cause.code})` : "";
+      throw bad(`${host} request failed: ${e.message}${cause}`, 504);
+    }
   }
   const text = await res.text();
   if (!res.ok) {
@@ -104,6 +108,18 @@ async function fetchChart(symbol, params = {}) {
     return jsonGet(`${relayUrl}${path}`, "Yahoo Finance (relay)", { Authorization: `Bearer ${relayToken}` });
   }
   return jsonGet(`https://query1.finance.yahoo.com${path}`, "Yahoo Finance");
+}
+
+// Optional Cloudflare Worker relay for Nasdaq's calendar endpoint. Same
+// pattern as fetchChart/yfinance-relay: Railway egress IPs are null-routed
+// by Nasdaq's CloudFront. See workers/nasdaq-relay/README.md.
+async function fetchNasdaq(path) {
+  const relayUrl = (process.env.NASDAQ_RELAY_URL || "").trim().replace(/\/$/, "");
+  const relayToken = (process.env.NASDAQ_RELAY_TOKEN || "").trim();
+  if (relayUrl && relayToken) {
+    return jsonGet(`${relayUrl}${path}`, "Nasdaq (relay)", { Authorization: `Bearer ${relayToken}` });
+  }
+  return jsonGet(`https://api.nasdaq.com${path}`, "Nasdaq");
 }
 
 export const FINANCE_TOOLS = [
@@ -273,9 +289,8 @@ export const FINANCE_TOOLS = [
     handler: async (i) => {
       const date = typeof i.date === "string" && i.date ? i.date : new Date().toISOString().slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw bad('"date" must be YYYY-MM-DD');
-      const data = await jsonGet(
-        `https://api.nasdaq.com/api/calendar/earnings?date=${encodeURIComponent(date)}`,
-        "Nasdaq",
+      const data = await fetchNasdaq(
+        `/api/calendar/earnings?date=${encodeURIComponent(date)}`,
       );
       // Nasdaq wraps every response in { data: { rows: [...] }, status: {...} }.
       // When there are no earnings on a date, `data` is null — surface as empty

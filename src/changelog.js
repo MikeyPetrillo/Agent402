@@ -3,6 +3,14 @@ import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chr
 const ENTRIES = [
   {
     date: "2026-06-23",
+    title: "Upstream reliability: finance-kit retry, gov-kit error reclassification",
+    items: [
+      "finance-kit jsonGet: automatic single retry on network/timeout failure (Nasdaq, Yahoo)",
+      "gov-kit getJson: upstream 4xx now correctly surfaced as 502, not 422",
+    ],
+  },
+  {
+    date: "2026-06-23",
     title: "Infrastructure hardening and developer experience",
     items: [
       "Cache-Control headers added to 11 static/SEO routes (robots.txt, sitemap.xml, llms.txt, openapi.json, logos, cards, demo.js, glama.json)",
