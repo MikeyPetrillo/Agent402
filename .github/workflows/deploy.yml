@@ -196,8 +196,8 @@ jobs:
     # drop out of the missing set, so partial runs can be resumed.
     #
     # Cost is bounded by MAX_SPEND_USD; the script refuses to run if the
-    # estimate exceeds that ceiling. As of writing the missing set sums to
-    # under $2.
+    # estimate exceeds that ceiling. With 39 skill packs ($0.05-$1.50 each)
+    # the missing set can sum to ~$11 on a fresh pass.
     needs: markers
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-register' || needs.markers.outputs.bazaar_register == 'true'
     runs-on: ubuntu-latest
@@ -205,7 +205,7 @@ jobs:
     env:
       TARGET_URL: https://agent402.tools
       MODE: missing
-      MAX_SPEND_USD: "10"
+      MAX_SPEND_USD: "12"
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
