@@ -52,23 +52,27 @@ function normalizeSymbol(raw) {
 
 async function jsonGet(url, host, extraHeaders = {}) {
   const safeUrl = await assertPublicUrl(url);
+  const headers = {
+    "User-Agent": financeUserAgent(),
+    Accept: "application/json,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    ...extraHeaders,
+  };
   let res;
   try {
-    res = await fetch(safeUrl, {
-      headers: {
-        "User-Agent": financeUserAgent(),
-        Accept: "application/json,text/plain,*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        ...extraHeaders,
-      },
-      signal: AbortSignal.timeout(10000),
-    });
-  } catch (e) {
-    // e.cause?.code names the underlying network failure (UND_ERR_CONNECT_TIMEOUT,
-    // ECONNRESET, ENETUNREACH, EAI_AGAIN, etc.) — invaluable for distinguishing
-    // WAF/IP blocks from DNS or timeout. Bare e.message is just "fetch failed".
-    const cause = e.cause?.code ? ` (${e.cause.code})` : "";
-    throw bad(`${host} request failed: ${e.message}${cause}`, 504);
+    res = await fetch(safeUrl, { headers, signal: AbortSignal.timeout(10_000) });
+  } catch (firstErr) {
+    // Single retry on network/timeout failure — handles transient upstream
+    // slowness (Nasdaq CloudFront, Yahoo edge) without raising the base timeout.
+    try {
+      res = await fetch(safeUrl, { headers, signal: AbortSignal.timeout(12_000) });
+    } catch (e) {
+      // e.cause?.code names the underlying network failure (UND_ERR_CONNECT_TIMEOUT,
+      // ECONNRESET, ENETUNREACH, EAI_AGAIN, etc.) — invaluable for distinguishing
+      // WAF/IP blocks from DNS or timeout. Bare e.message is just "fetch failed".
+      const cause = e.cause?.code ? ` (${e.cause.code})` : "";
+      throw bad(`${host} request failed: ${e.message}${cause}`, 504);
+    }
   }
   const text = await res.text();
   if (!res.ok) {
