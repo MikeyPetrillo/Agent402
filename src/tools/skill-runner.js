@@ -1181,12 +1181,31 @@ export const PACK_STEPS = {
     ],
   },
 
+  // PDF or image URL → structured data. The chain doesn't branch explicitly;
+  // each step fires unconditionally and non-applicable ones produce clean
+  // partial-failures (e.g., image-ocr 422s on a PDF URL, pdf-info 422s on an
+  // image URL). pdf-merge requires ≥2 URLs, so we pass [url, url] to exercise
+  // the merge handler on the same source — useful for re-pagination or as a
+  // dedup self-check. images-to-pdf accepts a single image URL.
+  "document-intel": {
+    mode: "chain",
+    steps: [
+      { slug: "pdf-info",          mapInput: (a) => ({ url: a.url }) },
+      { slug: "pdf-to-markdown",   mapInput: (a) => ({ url: a.url }) },
+      { slug: "pdf-extract-pages", mapInput: (a) => ({ url: a.url, pages: "1" }) },
+      { slug: "image-ocr",         mapInput: (a) => ({ url: a.url }) },
+      { slug: "barcode-decode",    mapInput: async (a) => ({ image: await fetchAsBase64(a.url) }) },
+      { slug: "pdf-merge",         mapInput: (a) => ({ urls: [a.url, a.url] }) },
+      { slug: "images-to-pdf",     mapInput: (a) => ({ urls: [a.url] }) },
+    ],
+  },
+
   // ──────────────────────────────────────────────────────────────────────
   // Still TODO (auto-stubs return statusCode 501 per step):
   //
-  // Standard tier: document-intel, forecasting-bake-off — both need
-  // multi-modal arg shapes (PDF-or-image branching, live equity threading)
-  // that don't fit the single-URL pattern cleanly.
+  // Standard tier: forecasting-bake-off — needs a multi-tool bake-off shape
+  // (rank-by-RMSE across naive/SES/Holt/Holt-Winters then re-forecast with
+  // the winner) that's not a straight chain.
   // ──────────────────────────────────────────────────────────────────────
 };
 
