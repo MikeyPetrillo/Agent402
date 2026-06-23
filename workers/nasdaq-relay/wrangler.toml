@@ -1,0 +1,8 @@
+name = "agent402-nasdaq-relay"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+# RELAY_TOKEN is set as a Worker secret (not a plaintext var). Set it with:
+#   wrangler secret put RELAY_TOKEN
+# Then mirror the same value into Railway as NASDAQ_RELAY_TOKEN so finance-kit
+# sends it on every request.

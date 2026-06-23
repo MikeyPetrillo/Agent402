@@ -110,6 +110,18 @@ async function fetchChart(symbol, params = {}) {
   return jsonGet(`https://query1.finance.yahoo.com${path}`, "Yahoo Finance");
 }
 
+// Optional Cloudflare Worker relay for Nasdaq's calendar endpoint. Same
+// pattern as fetchChart/yfinance-relay: Railway egress IPs are null-routed
+// by Nasdaq's CloudFront. See workers/nasdaq-relay/README.md.
+async function fetchNasdaq(path) {
+  const relayUrl = (process.env.NASDAQ_RELAY_URL || "").trim().replace(/\/$/, "");
+  const relayToken = (process.env.NASDAQ_RELAY_TOKEN || "").trim();
+  if (relayUrl && relayToken) {
+    return jsonGet(`${relayUrl}${path}`, "Nasdaq (relay)", { Authorization: `Bearer ${relayToken}` });
+  }
+  return jsonGet(`https://api.nasdaq.com${path}`, "Nasdaq");
+}
+
 export const FINANCE_TOOLS = [
   {
     route: "GET /api/stock-quote",
@@ -277,9 +289,8 @@ export const FINANCE_TOOLS = [
     handler: async (i) => {
       const date = typeof i.date === "string" && i.date ? i.date : new Date().toISOString().slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw bad('"date" must be YYYY-MM-DD');
-      const data = await jsonGet(
-        `https://api.nasdaq.com/api/calendar/earnings?date=${encodeURIComponent(date)}`,
-        "Nasdaq",
+      const data = await fetchNasdaq(
+        `/api/calendar/earnings?date=${encodeURIComponent(date)}`,
       );
       // Nasdaq wraps every response in { data: { rows: [...] }, status: {...} }.
       // When there are no earnings on a date, `data` is null — surface as empty
