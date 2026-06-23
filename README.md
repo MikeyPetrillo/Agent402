@@ -1,4 +1,4 @@
-# Agent402 — the open x402 index (Find · Route · Leaderboard) + 1,308 tools & 42 skill packs for AI agents
+# Agent402 — the open x402 index (Find · Route · Leaderboard) + 1,323 tools & 42 skill packs for AI agents
 
 > **What makes it different:** Agent402 is **open-source and self-hostable** — and a
 > single integration gives a buyer **three free primitives over the whole x402
@@ -8,7 +8,7 @@
 > - **Route** — [`POST /api/route`](https://agent402.tools/api/route) is the **neutral Smart Order Router**: rank tools across every x402 seller crawled (auto-discovered from the Coinbase CDP Bazaar), health-aware, with `include=external` to exclude us.
 > - **Leaderboard** — [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) is the **public on-chain ranking** of every x402 seller by **Base USDC settled volume** — calls served, totalUsd, unique buyers per seller. Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate by `payTo`. Hourly snapshot.
 >
-> Plus the whole **1,308-tool catalog** and **42 curated skill packs** (multi-tool
+> Plus the whole **1,323-tool catalog** and **42 curated skill packs** (multi-tool
 > workflows callable as MCP prompts), all runnable yourself, plus
 > [`agent402-tollbooth`](tollbooth) — an open pay-per-crawl gate for the other
 > side of x402.
@@ -28,7 +28,7 @@
 [![npm](https://img.shields.io/npm/v/agent402-llamaindex?label=llamaindex)](https://www.npmjs.com/package/agent402-llamaindex)
 [![npm](https://img.shields.io/npm/v/agent402-strands?label=strands)](https://www.npmjs.com/package/agent402-strands)
 
-**Give your AI agent 1,308 ready-to-use web tools — plus 42 multi-tool skill packs — from one server. Browser
+**Give your AI agent 1,323 ready-to-use web tools — plus 42 multi-tool skill packs — from one server. Browser
 rendering, web search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, deterministic stats and forecasting, compression, and ~1,000 pure-CPU utilities.** Run it yourself for free in 30 seconds (MCP **or**
 plain HTTP, no API keys, no signup), connect it to Claude/ChatGPT/any MCP
 client, and add your own tools in a few lines. Every tool is deterministic —
@@ -59,7 +59,7 @@ npx -y agent402-mcp
 # in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp
 ```
 
-**3. Clone and host the whole thing** (all 1,308 tools as an HTTP API + MCP, free mode, no payments):
+**3. Clone and host the whole thing** (all 1,323 tools as an HTTP API + MCP, free mode, no payments):
 
 ```bash
 git clone https://github.com/MikeyPetrillo/Agent402 && cd Agent402
@@ -79,7 +79,7 @@ curl -s -X POST localhost:3000/api/hash -H 'content-type: application/json' \
 
 Boots straight from the repo's `railway.toml` + `Dockerfile`. Optional plugins are auto-detected via env: add **Redis** → `REDIS_URL` enables the upstream response cache (`X-Cache: hit|miss`), add **Postgres** → `DATABASE_URL` enables the public `/api/analytics` dashboard and the tollbooth waitlist. No env vars required to boot in free mode.
 
-## What's in the catalog (1,308 tools)
+## What's in the catalog (1,323 tools)
 
 | | Examples |
 |---|---|
@@ -270,7 +270,7 @@ sha256 proof-of-work (sub-second; the MCP servers do it automatically). Details:
 
 ## Why it's solid
 
-- **Everything is tested** — CI calls all 1,308 tools with their own documented
+- **Everything is tested** — CI calls all 1,323 tools with their own documented
   examples and blocks the release on any failure; a production heartbeat checks
   the live instance every 15 minutes.
 - **Hardened** — connect-time SSRF guard on every URL tool (DNS-rebind safe),
@@ -291,7 +291,7 @@ sha256 proof-of-work (sub-second; the MCP servers do it automatically). Details:
 Required` for machine-to-machine, pay-per-call payments in stablecoins (USDC).
 Most projects in the space are the [protocol + SDKs](https://github.com/coinbase/x402),
 a starter template, or a payment facilitator. **Agent402 is the applied layer** —
-a ready-to-run **x402 server** that already speaks the protocol and ships 1,308
+a ready-to-run **x402 server** that already speaks the protocol and ships 1,323
 working tools, so you don't have to build the catalog yourself.
 
 - **Want the protocol or an SDK?** → [coinbase/x402](https://github.com/coinbase/x402).
@@ -302,7 +302,7 @@ working tools, so you don't have to build the catalog yourself.
 Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)
 and discoverable in the Coinbase [x402 Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar).
 
-**Works with [AWS Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) out of the box** — AgentCore orchestrates x402, which is the protocol Agent402 already speaks. Point the AgentCore Gateway at `https://agent402.tools/mcp` for all 1,308 tools, or use [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) for a curated subset inside a [Strands](https://strandsagents.com) agent. Five-minute recipe: [wiki: AWS Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore).
+**Works with [AWS Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) out of the box** — AgentCore orchestrates x402, which is the protocol Agent402 already speaks. Point the AgentCore Gateway at `https://agent402.tools/mcp` for all 1,323 tools, or use [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) for a curated subset inside a [Strands](https://strandsagents.com) agent. Five-minute recipe: [wiki: AWS Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore).
 
 ### Tollbooth — pay-per-crawl for **your** site (the other side of x402)
 
