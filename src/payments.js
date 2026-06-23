@@ -56,12 +56,25 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // One payment option per enabled chain — an array of accepts the agent can choose from.
   const acceptsFor = (item) => caip2List.map((caip2) => ({ scheme: "exact", payTo: walletAddress, price: item.price, network: caip2 }));
 
+  // The payment-required header is one base64-encoded JSON blob carrying
+  // description + discovery extensions.  Skill packs and tools with rich
+  // schemas can push it past ~2900 bytes, which @x402/fetch fails to
+  // negotiate.  Cap description and strip bulky output examples here; full
+  // text lives on /api/pricing, /openapi.json, tool pages, and MCP surfaces.
+  const capDesc = (s) => (s && s.length > 250 ? s.slice(0, 247) + "..." : s);
+  const slimDiscovery = (d) => {
+    if (!d) return d;
+    const slim = { ...d };
+    if (slim.output) slim.output = { type: slim.output.type || "json" };
+    return slim;
+  };
+
   const routes = Object.fromEntries(
     Object.entries(catalog).map(([route, item]) => [
       route,
       {
         accepts: acceptsFor(item),
-        description: item.description,
+        description: capDesc(item.description),
         // The brand string the Coinbase CDP Bazaar surfaces for every listing
         // we publish — also what appears on /api/leaderboard. We use the
         // domain so the row on every public x402 surface back-links the site.
@@ -73,7 +86,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         // (/api/pricing, /openapi.json, /tools) but not individually declared to
         // the x402 Bazaar — this keeps the boot-time facilitator sync light when
         // the catalog is large (e.g. the ~1000 generated conversion endpoints).
-        extensions: item.bazaar === false ? undefined : declareDiscoveryExtension(item.discovery),
+        extensions: item.bazaar === false ? undefined : declareDiscoveryExtension(slimDiscovery(item.discovery)),
       },
     ])
   );
