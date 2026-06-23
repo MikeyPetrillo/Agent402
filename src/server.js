@@ -25,7 +25,8 @@ import { analyticsPage } from "./analytics-page.js";
 import { operatorPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
 import { termsPage } from "./terms.js";
-import { robotsTxt, sitemapXml, llmsTxt } from "./seo.js";
+import { quickstartPage } from "./quickstart.js";
+import { robotsTxt, sitemapXml, llmsTxt, sitemapIndex, sitemapPages, sitemapTools, sitemapGuides, sitemapSkills } from "./seo.js";
 import { serviceManifest, reliabilityReport } from "./discovery.js";
 import { findTools } from "./find.js";
 import { indexPage, indexSnapshot, routeQuery, startCrawler } from "./x402-index.js";
@@ -86,7 +87,9 @@ import { shopPage } from "./shop.js";
 import { economyPage } from "./economy.js";
 import { integrationsPage } from "./integrations.js";
 import { pricingPage } from "./pricing-page.js";
-import { changelogPage } from "./changelog.js";
+import { changelogPage, changelogRss } from "./changelog.js";
+import { useCasesPage } from "./use-cases.js";
+import { playgroundPage } from "./playground.js";
 
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...COLOR_TOOLS, ...CHAIN_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...ENCODING_TOOLS, ...MATH_TOOLS, ...CRYPTO_HASH_TOOLS, ...STRING_TOOLS, ...CALENDAR_TOOLS];
 import { buildSkillTools } from "./tools/skill-runner.js";
@@ -635,10 +638,19 @@ app.get("/.well-known/glama.json", (_req, res) => {
 });
 app.get("/privacy", (_req, res) => htmlCache(res, 300, 900).send(privacyPage(BASE_URL)));
 app.get("/terms", (_req, res) => htmlCache(res, 300, 900).send(termsPage(BASE_URL)));
+app.get("/quickstart", (_req, res) => htmlCache(res, 300, 900).send(quickstartPage(BASE_URL)));
 app.get("/faq", (_req, res) => htmlCache(res, 300, 900).send(faqPage(BASE_URL)));
 app.get("/integrations", (_req, res) => htmlCache(res, 300, 900).send(integrationsPage(BASE_URL)));
 app.get("/pricing", (_req, res) => htmlCache(res, 300, 900).send(pricingPage(BASE_URL, CATALOG)));
 app.get("/changelog", (_req, res) => htmlCache(res, 300, 900).send(changelogPage(BASE_URL)));
+app.get("/use-cases", (_req, res) => htmlCache(res, 300, 900).send(useCasesPage(BASE_URL)));
+app.get("/playground", (_req, res) => htmlCache(res, 300, 900).send(playgroundPage(BASE_URL)));
+app.get("/changelog.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=600"); res.type("application/rss+xml").send(changelogRss(BASE_URL)); });
+app.get("/sitemapindex.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapIndex(BASE_URL)); });
+app.get("/sitemap-pages.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapPages(BASE_URL, CATALOG)); });
+app.get("/sitemap-tools.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapTools(BASE_URL, CATALOG)); });
+app.get("/sitemap-guides.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapGuides(BASE_URL)); });
+app.get("/sitemap-skills.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapSkills(BASE_URL)); });
 app.get("/status", (_req, res) =>
   htmlCache(res, 60, 300).send(
     statusPage(BASE_URL, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }))
@@ -1254,6 +1266,22 @@ app.get("/tools/:slug", (req, res) => {
   const cachePolicy = tool.method === "GET" ? CACHEABLE_ROUTES[tool.path] : null;
   htmlCache(res, 300, 900).send(toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null }));
 });
+const toolCardCache = new Map();
+app.get("/tools/:slug/card.png", async (req, res) => {
+  const tools = toolList(CATALOG);
+  const tool = tools.find((t) => t.slug === req.params.slug);
+  if (!tool) return res.status(404).json({ error: "not found" });
+  const catLabel = CATEGORIES[tool.category]?.label ?? tool.category;
+  const svgEsc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const nameT = tool.name.length > 36 ? tool.name.slice(0, 34) + "\u2026" : tool.name;
+  const descT = tool.description.length > 100 ? tool.description.slice(0, 98) + "\u2026" : tool.description;
+  const free = POW_SLUGS.has(tool.slug) ? "FREE w/ PoW \u00b7 " : "";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630"><rect width="1200" height="630" fill="#0a0d13"/><g><rect x="40" y="40" width="1120" height="550" rx="28" fill="none" stroke="#1e2638" stroke-width="2"/><rect x="86" y="96" width="100" height="100" rx="22" fill="#000" stroke="#1f4a1d" stroke-width="2"/><text x="136" y="158" font-size="40" font-weight="700" font-family="ui-monospace,Menlo,monospace" text-anchor="middle" fill="#4ade80">402</text><text x="210" y="130" font-size="24" font-weight="600" font-family="system-ui,sans-serif" fill="#8b93a7">agent402.tools</text><text x="210" y="168" font-size="22" font-family="ui-monospace,Menlo,monospace" fill="#4ade80">${svgEsc(catLabel)}</text><text x="86" y="300" font-size="56" font-weight="800" font-family="system-ui,-apple-system,sans-serif" fill="#e6e9f0">${svgEsc(nameT)}</text><text x="88" y="370" font-size="28" font-family="system-ui,-apple-system,sans-serif" fill="#8b93a7">${svgEsc(descT)}</text><text x="88" y="450" font-size="30" font-weight="600" font-family="ui-monospace,Menlo,monospace" fill="#4ade80">${svgEsc(free)}${svgEsc(tool.price)} per call \u00b7 ${svgEsc(tool.method)} ${svgEsc(tool.path)}</text><text x="88" y="520" font-size="24" font-family="system-ui,sans-serif" fill="#8b93a7">Pay in USDC on Base via x402 \u2014 no API key, no signup</text></g></svg>`;
+  try {
+    if (!toolCardCache.has(tool.slug)) toolCardCache.set(tool.slug, await rasterizeSvg(svg, { width: 1200, height: 630 }));
+    res.set("Cache-Control", "public, max-age=86400").type("image/png").send(toolCardCache.get(tool.slug));
+  } catch { res.redirect(302, "/card.png"); }
+});
 // Free proof-of-work endpoints: agents without a wallet pay with CPU instead.
 app.get("/api/pow", (_req, res) => res.json(powInfo(BASE_URL, [...POW_SLUGS].sort())));
 // Light per-IP rate limit on challenge issuance. Issuing is cheap (one HMAC,
@@ -1830,7 +1858,10 @@ app.use((err, req, res, _next) => {
   if (wantsJson) {
     res.status(status).json({ ok: false, error: status === 400 ? "bad-request" : status === 413 ? "payload-too-large" : status === 429 ? "rate-limited" : "internal" });
   } else {
-    res.status(status).type("html").send(`<!doctype html><meta charset="utf-8"><title>${status}</title><p>${status === 404 ? "Not found." : "Something went wrong."}</p>`);
+    const is404 = status === 404;
+    const t = is404 ? "Page not found" : `Error ${status}`;
+    const m = is404 ? "The page you\u2019re looking for doesn\u2019t exist." : "Something went wrong. Try again in a moment.";
+    res.status(status).type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${CHROME_HEAD_LINKS}<title>${t} \u2014 Agent402</title><style>${CHROME_CSS}:root{--bg:#0b0e14;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 system-ui,sans-serif}.e{max-width:600px;margin:0 auto;padding:80px 20px;text-align:center}.e .code{font:700 5rem/1 var(--mono);color:var(--accent);text-shadow:0 0 30px rgba(74,222,128,.3);margin-bottom:16px}.e h1{font-size:1.5rem;margin:0 0 12px}.e p{color:var(--muted);margin:0 0 28px}.e a.btn{display:inline-block;padding:10px 20px;background:var(--accent);color:#06210f;border-radius:10px;text-decoration:none;font-weight:600;margin:0 6px}.e a.ghost{background:transparent;border:1px solid #2a3550;color:var(--text)}.e a.ghost:hover{border-color:var(--accent)}.e .links{margin-top:32px;color:var(--muted);font-size:.9rem}.e .links a{color:var(--accent);margin:0 8px}</style></head><body>${renderHeader("")}<div class="e"><div class="code">${status}</div><h1>${t}</h1><p>${m}</p><a class="btn" href="/">Home</a><a class="btn ghost" href="/tools">Browse tools</a><a class="btn ghost" href="/api/find">Find a tool</a><div class="links">or try: <a href="/playground">Playground</a><a href="/docs">Docs</a><a href="/quickstart">Quickstart</a></div></div>${renderFooter()}</body></html>`);
   }
 });
 

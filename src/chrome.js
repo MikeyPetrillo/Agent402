@@ -44,6 +44,9 @@ const NAV_LINKS = [
   { href: "/tollbooth", label: "Tollbooth" },
   { href: "/guides", label: "Guides" },
   { href: "/skills", label: "Skills" },
+  { href: "/use-cases", label: "Use Cases" },
+  { href: "/playground", label: "Playground" },
+  { href: "/quickstart", label: "Quickstart" },
   { href: "/changelog", label: "Changelog" },
   { href: "/faq", label: "FAQ" },
 ];
@@ -87,6 +90,9 @@ export function renderFooter() {
     <a href="/tollbooth/cloud">Tollbooth Cloud</a><span class="sep">·</span>
     <a href="/guides">Guides</a><span class="sep">·</span>
     <a href="/skills">Skills</a><span class="sep">·</span>
+    <a href="/use-cases">Use Cases</a><span class="sep">·</span>
+    <a href="/playground">Playground</a><span class="sep">·</span>
+    <a href="/quickstart">Quickstart</a><span class="sep">·</span>
     <a href="/changelog">Changelog</a><span class="sep">·</span>
     <a href="/faq">FAQ</a><span class="sep">·</span>
     <a href="/pricing">Pricing</a><span class="sep">·</span>

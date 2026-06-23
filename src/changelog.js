@@ -74,6 +74,30 @@ const ENTRIES = [
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+export function changelogRss(baseUrl) {
+  const xmlEsc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const items = ENTRIES.map((e) =>
+    `  <item>
+    <title>${xmlEsc(e.title)}</title>
+    <link>${baseUrl}/changelog</link>
+    <guid isPermaLink="false">agent402-changelog-${e.date}</guid>
+    <pubDate>${new Date(e.date + "T12:00:00Z").toUTCString()}</pubDate>
+    <description>${xmlEsc(e.items.join(". ") + ".")}</description>
+  </item>`
+  ).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+<channel>
+  <title>Agent402 Changelog</title>
+  <link>${baseUrl}/changelog</link>
+  <description>Recent additions to Agent402: new tools, skill packs, framework adapters, and platform features.</description>
+  <language>en</language>
+  <atom:link href="${baseUrl}/changelog.xml" rel="self" type="application/rss+xml"/>
+${items}
+</channel>
+</rss>`;
+}
+
 export function changelogPage(baseUrl) {
   const canonical = `${baseUrl}/changelog`;
   const title = "Changelog — what's new at Agent402";
@@ -111,6 +135,7 @@ export function changelogPage(baseUrl) {
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}"/>
 <link rel="canonical" href="${esc(canonical)}"/>
+<link rel="alternate" type="application/rss+xml" title="Agent402 Changelog" href="${baseUrl}/changelog.xml"/>
 ${CHROME_HEAD_LINKS}
 <script type="application/ld+json">${jsonLd}</script>
 <style>
