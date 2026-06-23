@@ -1,0 +1,14 @@
+{
+  "name": "agent402-ai-sdk-demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable Vercel AI SDK + Agent402 demo",
+  "scripts": {
+    "start": "node run.js",
+    "test": "node run.js"
+  },
+  "dependencies": {
+    "agent402-ai-sdk": "file:../../adapters/ai-sdk"
+  }
+}

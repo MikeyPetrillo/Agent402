@@ -1,0 +1,15 @@
+{
+  "name": "agent402-openai-tools-demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable OpenAI function-calling + Agent402 demo",
+  "scripts": {
+    "start": "node run.js",
+    "test": "node run.js"
+  },
+  "dependencies": {
+    "agent402-openai-tools": "file:../../adapters/openai-tools",
+    "agent402-client": "file:../../client"
+  }
+}

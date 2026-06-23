@@ -1,7 +1,7 @@
 {
   "name": "agent402-ai-sdk",
   "version": "0.2.0",
-  "description": "Vercel AI SDK tools for Agent402: turn 1,275 pay-per-call x402 tools (browser, web search, OCR, PDFs, memory) into AI SDK tools via four meta-tools (find/route/call/about), plus the cross-seller x402 Smart Order Router. Free via proof-of-work or pay per call in USDC on Base.",
+  "description": "Vercel AI SDK tools for Agent402: turn 1,280 pay-per-call x402 tools (browser, web search, OCR, PDFs, memory) into AI SDK tools via four meta-tools (find/route/call/about), plus the cross-seller x402 Smart Order Router. Free via proof-of-work or pay per call in USDC on Base.",
   "type": "module",
   "main": "index.js",
   "exports": { ".": "./index.js" },

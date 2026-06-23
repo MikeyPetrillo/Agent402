@@ -6,13 +6,13 @@ This page is a 5-minute recipe to wire the two together — buy side (let an Age
 
 ## What you get out of the box
 
-- 1,275 deterministic, pay-per-call tools + 39 multi-tool skill packs from Agent402, callable from an AgentCore-hosted agent
+- 1,280 deterministic, pay-per-call tools + 39 multi-tool skill packs from Agent402, callable from an AgentCore-hosted agent
 - Free tier with **no wallet** (proof-of-work; AgentCore Identity is optional for that path)
 - USDC-on-Base settlement for wallet-only tools, via AgentCore's `PaymentCredentialProvider` + CDP
 - CloudWatch observability for every payment (AgentCore handles this)
 - Strands SDK as the agent framework — AgentCore's preferred Python/TS surface
 
-## Option 1: Gateway target (zero code, all 1,275 tools)
+## Option 1: Gateway target (zero code, all 1,280 tools)
 
 The fastest path. Agent402 exposes a hosted [MCP](https://modelcontextprotocol.io) endpoint at `https://agent402.tools/mcp`; point AgentCore Gateway at it and every tool shows up in your agent.
 
@@ -20,7 +20,7 @@ The fastest path. Agent402 exposes a hosted [MCP](https://modelcontextprotocol.i
 2. **Gateway target:** in AgentCore Gateway, add an MCP target:
    - URL: `https://agent402.tools/mcp`
    - Auth: none (free tier) or attach the `PaymentCredentialProvider` from step 1 (wallet tier)
-3. **Done.** Your agent sees the four Agent402 MCP tools (`search_tools`, `find_tool`, `call_tool`, `about_agent402`) plus, via `call_tool`, the full 1,275-tool catalog. Payments — proof-of-work for free tools, USDC for wallet-only — happen in the request path; AgentCore logs every settled call to CloudWatch.
+3. **Done.** Your agent sees the four Agent402 MCP tools (`search_tools`, `find_tool`, `call_tool`, `about_agent402`) plus, via `call_tool`, the full 1,280-tool catalog. Payments — proof-of-work for free tools, USDC for wallet-only — happen in the request path; AgentCore logs every settled call to CloudWatch.
 
 > Want to host the catalog yourself instead? Run Agent402 anywhere (`FREE_MODE=false` with `WALLET_ADDRESS` + CDP keys), and point Gateway at `https://your-host/mcp` the same way.
 
