@@ -634,7 +634,12 @@ app.get("/health", (_req, res) => {
     memoryPersistent,
   };
   const ok = checks.db && checks.wallet;
-  res.status(ok ? 200 : 503).json({ ok, checks, flags });
+  const meta = {
+    toolCount: Object.keys(CATALOG).length,
+    uptime: Math.floor(process.uptime()),
+    freeMode: FREE_MODE,
+  };
+  res.status(ok ? 200 : 503).json({ ok, checks, flags, meta });
 });
 // Glama connector ownership verification: claims our listing at
 // glama.ai/mcp/connectors/io.github.MikeyPetrillo/agent402. The maintainer email
@@ -642,7 +647,7 @@ app.get("/health", (_req, res) => {
 // maintainer address; GLAMA_MAINTAINER_EMAIL env override exists for forks.
 app.get("/.well-known/glama.json", (_req, res) => {
   const email = process.env.GLAMA_MAINTAINER_EMAIL || "mike@agent402.tools";
-  res.json({
+  res.set("Cache-Control", "public, max-age=86400").json({
     $schema: "https://glama.ai/mcp/schemas/connector.json",
     maintainers: [{ email }],
   });
@@ -1141,20 +1146,20 @@ app.get("/api/leaderboard", (req, res) => {
 // Human-readable companion to /api/leaderboard. Same cached snapshot, rendered
 // as a dashboard so visitors (and the site nav) have something to land on.
 app.get("/leaderboard", (req, res) => htmlCache(res, 60, 300).send(leaderboardPage(getLeaderboardSnapshot(), { baseUrl: BASE_URL, sort: req.query.sort })));
-app.get("/robots.txt", (_req, res) => res.type("text/plain").send(robotsTxt(BASE_URL)));
-app.get("/sitemap.xml", (_req, res) => res.type("application/xml").send(sitemapXml(BASE_URL, CATALOG)));
-app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt(BASE_URL, CATALOG)));
+app.get("/robots.txt", (_req, res) => res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(robotsTxt(BASE_URL)));
+app.get("/sitemap.xml", (_req, res) => res.type("application/xml").set("Cache-Control", "public, max-age=3600").send(sitemapXml(BASE_URL, CATALOG)));
+app.get("/llms.txt", (_req, res) => res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(llmsTxt(BASE_URL, CATALOG)));
 // The runnable buyer demo, served from the site itself (the repo is private,
 // so "git clone" is not a path a visitor can take).
 app.get("/demo.js", (_req, res) =>
-  res.type("text/javascript").send(readFileSync(new URL("../scripts/demo-payment.js", import.meta.url), "utf-8"))
+  res.type("text/javascript").set("Cache-Control", "public, max-age=3600").send(readFileSync(new URL("../scripts/demo-payment.js", import.meta.url), "utf-8"))
 );
 
 // Brand mark — the same 402 glyph as the favicon, at logo size. The PNG is
 // rasterized once via the existing headless Chromium and cached for the
 // process lifetime (marketplaces and link previews often refuse SVG).
 const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#0b0e14"/><text x="256" y="295" font-size="170" font-weight="700" font-family="ui-monospace,Menlo,monospace" text-anchor="middle" fill="#4ade80">402</text><text x="256" y="408" font-size="42" font-family="ui-monospace,Menlo,monospace" text-anchor="middle" fill="#8b93a7">agent402.tools</text></svg>`;
-app.get("/logo.svg", (_req, res) => res.type("image/svg+xml").send(LOGO_SVG));
+app.get("/logo.svg", (_req, res) => res.type("image/svg+xml").set("Cache-Control", "public, max-age=86400").send(LOGO_SVG));
 
 // Marketplace bridge endpoint. agent402.app POSTs the caller's JSON body here
 // after collecting payment; we authenticate via the PER-SLUG token in the path
@@ -1216,7 +1221,7 @@ let logoPngCache = null;
 app.get("/logo.png", async (_req, res) => {
   try {
     logoPngCache ??= await rasterizeSvg(LOGO_SVG, 512);
-    res.type("image/png").send(logoPngCache);
+    res.type("image/png").set("Cache-Control", "public, max-age=86400").send(logoPngCache);
   } catch {
     // No Chromium on this instance — the SVG is always available.
     res.redirect(302, "/logo.svg");
@@ -1259,12 +1264,12 @@ const cardSvg = (width = 1200, height = 630) => {
   </g>
 </svg>`;
 };
-app.get("/card.svg", (_req, res) => res.type("image/svg+xml").send(cardSvg()));
+app.get("/card.svg", (_req, res) => res.type("image/svg+xml").set("Cache-Control", "public, max-age=86400").send(cardSvg()));
 let cardPngCache = null;
 app.get("/card.png", async (_req, res) => {
   try {
     cardPngCache ??= await rasterizeSvg(cardSvg(), { width: 1200, height: 630 });
-    res.type("image/png").send(cardPngCache);
+    res.type("image/png").set("Cache-Control", "public, max-age=86400").send(cardPngCache);
   } catch {
     res.redirect(302, "/card.svg");
   }
@@ -1274,12 +1279,12 @@ let cardGithubCache = null;
 app.get("/card-1280.png", async (_req, res) => {
   try {
     cardGithubCache ??= await rasterizeSvg(cardSvg(1280, 640), { width: 1280, height: 640 });
-    res.type("image/png").send(cardGithubCache);
+    res.type("image/png").set("Cache-Control", "public, max-age=86400").send(cardGithubCache);
   } catch {
     res.redirect(302, "/card.svg");
   }
 });
-app.get("/openapi.json", (_req, res) => res.json(openapiSpec(BASE_URL, CATALOG)));
+app.get("/openapi.json", (_req, res) => res.set("Cache-Control", "public, max-age=3600").json(openapiSpec(BASE_URL, CATALOG)));
 app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(toolsIndexPage(BASE_URL, CATALOG)));
 app.get("/shop", (_req, res) => htmlCache(res, 300, 900).send(shopPage(BASE_URL, CATALOG)));
 app.get("/economy", (req, res) => htmlCache(res, 300, 900).send(economyPage(BASE_URL, getLeaderboardSnapshot(), { sort: req.query.sort })));
