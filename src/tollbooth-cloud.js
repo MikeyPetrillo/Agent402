@@ -268,7 +268,7 @@ ${CHROME_HEAD_LINKS}
 <h2>The two-sided flywheel kicker</h2>
 <div class="flywheel">
   <div class="h">Bonus for verified Tollbooth installs</div>
-  <p>Any wallet that runs a verified Tollbooth install earns <b>1.5× bonus Agent402.tools credit</b> per dollar of settled USDC its install charges. Spend it on the ~1,100 paid tools in the <a href="${baseUrl}/tools">catalog</a> (browser, search, PDFs, images, live data, identifiers) or against the <a href="${baseUrl}/index">Smart Order Router</a>. Tollbooth installs feed Agent402 demand; Agent402 buyers feed Tollbooth supply.</p>
+  <p>Any wallet that runs a verified Tollbooth install earns <b>1.5× bonus Agent402.tools credit</b> per dollar of settled USDC its install charges. Spend it on the 1,275 paid tools in the <a href="${baseUrl}/tools">catalog</a> (browser, search, PDFs, images, live data, identifiers) or against the <a href="${baseUrl}/index">Smart Order Router</a>. Tollbooth installs feed Agent402 demand; Agent402 buyers feed Tollbooth supply.</p>
 </div>
 
 <h2>How it stays non-custodial</h2>

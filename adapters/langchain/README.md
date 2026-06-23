@@ -1,7 +1,7 @@
 # agent402-langchain
 
 LangChain.js tools for [Agent402](https://agent402.tools) — the open-source
-x402 + MCP server with ~1,100 pay-per-call web tools (browser, web search,
+x402 + MCP server with 1,275 pay-per-call web tools (browser, web search,
 OCR, PDFs, durable memory, ~1,000 pure-CPU utilities) **and** the cross-seller
 [Smart Order Router](https://agent402.tools/index) that ranks tools across the
 whole x402 ecosystem.
@@ -38,7 +38,7 @@ The LLM picks tasks; the router picks sellers; the caller handles payment.
 | `agent402_call` | Call a tool by slug. Pays automatically: pure-CPU tools via proof-of-work; wallet-only via your x402 fetch. |
 | `agent402_about` | The Agent402 service manifest — payment options, capability map, MCP connector, trust signals. |
 
-Why four meta tools and not one tool per slug? Registering ~1,100 individual
+Why four meta tools and not one tool per slug? Registering 1,275 individual
 tools blows past most agents' tool-budget and the LLM can't reason over
 hundreds of entries. Routing-as-discovery scales — the LLM describes the
 task, the router picks the cheapest healthy seller, the caller handles
