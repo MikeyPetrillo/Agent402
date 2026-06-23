@@ -1540,6 +1540,115 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "weather-brief",
+    title: "Weather briefing",
+    tagline:
+      "Full weather briefing for a location: current conditions, 7-day forecast, and air quality index in one pass.",
+    useCase:
+      "An agent needs a comprehensive weather picture for a location — not just 'is it raining now?' but 'what's the full outlook?' Common triggers: a user asks about weather before a trip, a scheduling agent needs to warn about upcoming severe weather, or a logistics system needs outdoor conditions + AQI for worker safety. Running the three weather tools individually loses the composite picture; this pack sequences them and produces a unified briefing with current snapshot, daily forecast, and air quality side-by-side.",
+    toolSlugs: [
+      "weather-current",
+      "weather-daily",
+      "weather-air-quality",
+    ],
+    workflow: [
+      "Call weather-current with lat and lon to get the real-time snapshot: temperature, wind speed and direction, humidity, apparent temperature, weather condition code. This is the 'what's happening right now' answer. If the response includes a condition like 'Thunderstorm' or wind > 60 km/h, flag it as a severe-weather alert in the final briefing.",
+      "Call weather-daily with the same lat and lon (days=7 or the caller's horizon) for the extended forecast. Each day returns high/low temperatures, precipitation probability and sum, max wind gust, and dominant weather code. Scan for any day with precipitation probability > 70% or max gust > 80 km/h and add to a warnings list. Also compute the temperature trend (rising/falling/stable) across the 7 days for a one-line summary.",
+      "Call weather-air-quality with the same lat and lon for the current AQI reading: PM2.5, PM10, ozone, NO2, SO2, CO, and the US AQI category (Good/Moderate/Unhealthy/etc.). AQI category 'Unhealthy for Sensitive Groups' or worse should appear as a health advisory in the final briefing. Final payload: { location: {lat, lon}, current: {temperature, feelsLike, humidity, windSpeed, windDirection, condition}, forecast: [{date, high, low, precipProbability, precipSum, maxGust, condition}], airQuality: {aqi, category, pm25, pm10, ozone}, trend: 'warming'|'cooling'|'stable', warnings: [<string flags>] }.",
+    ],
+    claudePrompt:
+      "Generate a weather briefing for coordinates lat=48.8566, lon=2.3522 using Agent402.\n\n(1) weather-current with lat=48.8566, lon=2.3522 — returns {temperature, feelsLike, humidity, windSpeed, windDirection, condition, conditionCode}. Initialize warnings = []. If conditionCode >= 95 (thunderstorm), push 'Thunderstorm in progress'. If windSpeed > 60, push 'High winds (>{windSpeed} km/h)'.\n\n(2) weather-daily with lat=48.8566, lon=2.3522, days=7 — returns {days: [{date, high, low, precipProbability, precipSum, maxGust, condition}]}. For each day: if precipProbability > 70, push 'Rain likely on {date} ({precipProbability}%)'. If maxGust > 80, push 'Strong gusts on {date} ({maxGust} km/h)'. Compute trend: compare days[0].high vs days[6].high — diff > 3 = 'warming', diff < -3 = 'cooling', else 'stable'.\n\n(3) weather-air-quality with lat=48.8566, lon=2.3522 — returns {aqi, category, pm25, pm10, ozone, no2, so2, co}. If category is not 'Good' and not 'Moderate', push 'Air quality advisory: {category}'.\n\nFinal return: {location: {lat: 48.8566, lon: 2.3522}, current: <step 1>, forecast: <step 2 days>, airQuality: {aqi, category, pm25, pm10, ozone}, trend: <computed>, warnings}. Budget ~$0.005 paid; all 3 tools are wallet-only (external API calls to Open-Meteo).",
+    promptArgs: [
+      {
+        name: "lat",
+        description: "Latitude of the location (e.g. 48.8566 for Paris)",
+        required: true,
+        substitute: "48.8566",
+      },
+      {
+        name: "lon",
+        description: "Longitude of the location (e.g. 2.3522 for Paris)",
+        required: true,
+        substitute: "2.3522",
+      },
+    ],
+  },
+
+  {
+    slug: "price-monitor",
+    title: "Cross-asset price monitor",
+    tagline:
+      "Side-by-side snapshot of a stock and a crypto asset: live quotes, 1-year history, and a date-stamped comparison.",
+    useCase:
+      "An agent or analyst wants to compare a traditional equity with a crypto asset — e.g. 'How has AAPL performed versus BTC over the last year?' Running stock-quote and crypto-price individually gives two disconnected numbers; adding historical data from both sides plus a date-format timestamp turns it into a dated comparison card the caller can track over time or feed into a report. Useful for portfolio dashboards, market-update bots, newsletter generators, and any agent that needs a quick cross-asset health check.",
+    toolSlugs: [
+      "stock-quote",
+      "stock-history",
+      "crypto-price",
+      "crypto-history",
+      "date-format",
+    ],
+    workflow: [
+      "Call date-format with datetime='now' (or the current ISO timestamp) to get a formatted snapshot timestamp — ISO, date-only, and day of week. This anchors the comparison to a specific point in time so the caller can track changes across repeated runs. The unix timestamp is useful as a cache key or filename.",
+      "Call stock-quote with symbol=<ticker> to get the live equity price: price, change, changePercent, volume, marketCap. This is the 'right now' read for the traditional side. If the market is closed, the quote reflects the last close — note the timestamp from step 1 so the caller knows whether this is live or stale.",
+      "Call stock-history with symbol=<ticker> and range='1y' to get the 1-year price series. Extract the first and last data points to compute the year-over-year return: ((last - first) / first * 100). This is the equity's trailing-12-month performance.",
+      "Call crypto-price with coins=<coin> and currency=usd to get the live crypto price: price, market_cap, 24h_volume, 24h_change. This is the 'right now' read for the crypto side.",
+      "Call crypto-history with coin=<coin>, days=365, and currency=usd to get the 1-year price series. Compute the year-over-year return the same way as step 3. Final payload: { timestamp: <step 1>, stock: { symbol, price, change, changePercent, yearReturn }, crypto: { coin, price, change24h, yearReturn }, comparison: { stockOutperforms: stockYearReturn > cryptoYearReturn, spreadPct: Math.abs(stockYearReturn - cryptoYearReturn) } }.",
+    ],
+    claudePrompt:
+      "Build a cross-asset price comparison for ticker=AAPL vs coin=bitcoin using Agent402.\n\n(1) date-format with datetime=new Date().toISOString() — returns {iso, date, dayOfWeek, unix}. Save as snapshot timestamp.\n\n(2) stock-quote with symbol=AAPL — returns {price, change, changePercent, volume, marketCap}.\n\n(3) stock-history with symbol=AAPL, range='1y' — returns {history: [{date, close}]}. Compute stockYearReturn = ((history[last].close - history[0].close) / history[0].close * 100).toFixed(2).\n\n(4) crypto-price with coins=bitcoin, currency='usd' — returns [{price, market_cap, change_24h}].\n\n(5) crypto-history with coin=bitcoin, days='365', currency='usd' — returns {prices: [[timestamp, price]]}. Compute cryptoYearReturn = ((prices[last][1] - prices[0][1]) / prices[0][1] * 100).toFixed(2).\n\nFinal return: {timestamp: {iso: <step 1 iso>, date: <step 1 date>, dayOfWeek: <step 1 dayOfWeek>}, stock: {symbol: 'AAPL', price: <step 2 price>, change: <step 2 change>, changePercent: <step 2 changePercent>, yearReturn: stockYearReturn}, crypto: {coin: 'bitcoin', price: <step 4 price>, change24h: <step 4 change_24h>, yearReturn: cryptoYearReturn}, comparison: {stockOutperforms: parseFloat(stockYearReturn) > parseFloat(cryptoYearReturn), spreadPct: Math.abs(parseFloat(stockYearReturn) - parseFloat(cryptoYearReturn)).toFixed(2)}}. Budget ~$0.005 paid; all 5 tools are wallet-only (external API calls).",
+    promptArgs: [
+      {
+        name: "ticker",
+        description: "Stock ticker symbol (e.g. AAPL, MSFT, TSLA)",
+        required: true,
+        substitute: "AAPL",
+      },
+      {
+        name: "coin",
+        description: "Crypto coin ID from CoinGecko (e.g. bitcoin, ethereum, solana)",
+        required: true,
+        substitute: "bitcoin",
+      },
+    ],
+  },
+
+  {
+    slug: "content-quality",
+    title: "Content quality report",
+    tagline:
+      "Readability scores, keyword density, and a URL-ready slug from a block of text — a one-pass content-quality check for writers and SEO tools.",
+    useCase:
+      "A content writer or SEO agent has drafted copy and wants a quality gate before publishing: Is the reading level appropriate for the audience? Which words dominate (keyword stuffing check)? What's the ideal URL slug? Running readability-score, word-frequency, and slug-generate individually produces three disconnected results; this pack sequences them and assembles a single quality card with pass/warn/fail signals the caller can act on. Useful for CMS pre-publish checks, blog-post pipelines, newsletter QA, and any agent that writes prose and needs a confidence score before shipping.",
+    toolSlugs: [
+      "readability-score",
+      "word-frequency",
+      "slug-generate",
+    ],
+    workflow: [
+      "Call readability-score with the full text. Returns fleschReadingEase, fleschKincaidGrade, gunningFog, automatedReadability, plus word/sentence/syllable counts. The decisive metric depends on the audience: grade level < 8 is good for general web content, < 12 for professional/technical, > 12 for academic. Flesch Reading Ease > 60 is 'easy', 30-60 is 'moderate', < 30 is 'difficult'. Flag a warning if grade > 12 and the caller didn't explicitly request academic tone.",
+      "Call word-frequency with the same text and top=10. Returns the top 10 words (stop-words filtered) and top 10 bigrams. Check for keyword concentration: if any single word accounts for > 5% of total non-stop-word occurrences, flag it as potential keyword stuffing. The bigram list surfaces repeated phrases — useful for catching unintentional repetition ('in order to', 'as well as').",
+      "Call slug-generate with the text's title or first sentence (caller provides or you extract the first sentence). Returns a clean URL slug plus its length. If length > 60, suggest truncation (Google typically displays ~60 chars in search results). Final payload: { readability: { fleschEase, gradeLevel, fogIndex, level: 'easy'|'moderate'|'difficult' }, keywords: { top: [{word, count, pct}], bigrams: [{bigram, count}], stuffingWarning: boolean }, slug: { value, length, truncateWarning: boolean }, wordCount, sentenceCount, qualityScore: 'pass'|'warn'|'review' }.",
+    ],
+    claudePrompt:
+      "Run a content quality check using Agent402. Example text: \"Artificial intelligence is transforming the way businesses operate. Companies across every industry are adopting AI tools to automate repetitive tasks, analyze large datasets, and make better decisions. The impact of AI on productivity has been significant, with studies showing up to 40% improvement in certain workflows.\" Title for slug: \"How AI Is Transforming Business Operations\".\n\n(1) readability-score with text=<the input text> — returns {words, sentences, syllables, fleschReadingEase, fleschKincaidGrade, gunningFog, automatedReadability}. Compute level: fleschReadingEase >= 60 ? 'easy' : fleschReadingEase >= 30 ? 'moderate' : 'difficult'. Initialize warnings = []. If fleschKincaidGrade > 12, push 'Grade level above 12 — may be too complex for general audiences'.\n\n(2) word-frequency with text=<the input text>, top=10 — returns {words: [{word, count}], bigrams: [{bigram, count}], totalWords, uniqueWords}. For each word in top 10: compute pct = (count / totalWords * 100).toFixed(1). If any pct > 5, push 'Potential keyword stuffing: \"{word}\" at {pct}%'. Set stuffingWarning = any pct > 5.\n\n(3) slug-generate with text=<title or first sentence>, maxLength=60 — returns {slug, length}. Set truncateWarning = original slug would have been > 60 chars.\n\nCompute qualityScore: 'review' if fleschKincaidGrade > 14 or stuffingWarning; 'warn' if fleschKincaidGrade > 10 or any word pct > 3; else 'pass'.\n\nFinal return: {readability: {fleschEase: fleschReadingEase, gradeLevel: fleschKincaidGrade, fogIndex: gunningFog, level}, keywords: {top: words.map(w => ({...w, pct})), bigrams, stuffingWarning}, slug: {value: slug, length, truncateWarning}, wordCount: words count from step 1, sentenceCount: sentences from step 1, qualityScore, warnings}. Budget ~$0.003 paid; all 3 tools are pure-CPU (PoW-eligible, free with compute payment).",
+    promptArgs: [
+      {
+        name: "text",
+        description: "The content to analyze (article body, blog post, email copy, etc.)",
+        required: true,
+        substitute: "Artificial intelligence is transforming the way businesses operate. Companies across every industry are adopting AI tools to automate repetitive tasks, analyze large datasets, and make better decisions. The impact of AI on productivity has been significant, with studies showing up to 40% improvement in certain workflows.",
+      },
+      {
+        name: "title",
+        description: "Title or headline for slug generation (optional — uses first sentence if omitted)",
+        required: false,
+        substitute: "How AI Is Transforming Business Operations",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.

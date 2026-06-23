@@ -1350,7 +1350,7 @@ async function runPack(packSlug, args, ctx) {
   };
 }
 
-// Factory — produces the 39 skill tool definitions to splice into ALL_KIT.
+// Factory — produces the 42 skill tool definitions to splice into ALL_KIT.
 // getCatalog is a thunk so handler closures see the fully-populated CATALOG
 // at call time (after the ALL_KIT loop has finished populating it).
 export function buildSkillTools({ getCatalog, inlineHandlers = {} }) {

@@ -1,6 +1,6 @@
 # Skill Packs
 
-**39 curated multi-tool workflows.** Each pack solves a real job that no single tool covers — auditing a domain, working up a time series, decoding an opaque blob, pulling the macro backdrop — and ships as a single MCP **prompt**. An agent calls `prompts/get { name: "<pack>", arguments: { … } }` and gets back a ready-to-run plan with the right Agent402 tools wired in (in the right order, with the right inputs).
+**42 curated multi-tool workflows.** Each pack solves a real job that no single tool covers — auditing a domain, working up a time series, decoding an opaque blob, pulling the macro backdrop — and ships as a single MCP **prompt**. An agent calls `prompts/get { name: "<pack>", arguments: { … } }` and gets back a ready-to-run plan with the right Agent402 tools wired in (in the right order, with the right inputs).
 
 - **Browse on the live site:** [`agent402.tools/skills`](https://agent402.tools/skills) (full templates, arguments, examples)
 - **MCP discovery:** every MCP-aware client picks them up via `prompts/list` → `prompts/get`
@@ -143,7 +143,7 @@ Packs live in [`src/skills.js`](https://github.com/MikeyPetrillo/Agent402/blob/m
 
 ## See also
 
-- [[Tool Catalog]] — the underlying 1,280 tools the packs orchestrate
+- [[Tool Catalog]] — the underlying 1,293 tools the packs orchestrate
 - [[MCP Connector]] — how to wire the connector into Claude / Cline / any MCP-aware client
 - [[Getting Started]] — your first call (free, no wallet) in 60 seconds
 - [[x402-Index-and-Router]] — what Agent402 looks like inside the wider x402 ecosystem

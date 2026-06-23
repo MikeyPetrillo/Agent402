@@ -196,7 +196,7 @@ jobs:
     # drop out of the missing set, so partial runs can be resumed.
     #
     # Cost is bounded by MAX_SPEND_USD; the script refuses to run if the
-    # estimate exceeds that ceiling. With 39 skill packs ($0.05-$1.50 each)
+    # estimate exceeds that ceiling. With 42 skill packs ($0.05-$1.50 each)
     # the missing set can sum to ~$11 on a fresh pass.
     needs: markers
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-register' || needs.markers.outputs.bazaar_register == 'true'

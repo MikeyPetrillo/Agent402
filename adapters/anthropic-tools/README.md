@@ -1,6 +1,6 @@
 # agent402-anthropic-tools
 
-Drop-in **Anthropic tool-use tools** for [Agent402](https://agent402.tools) — the open-source, self-hostable x402 + MCP server with 1,280 pay-per-call web tools (browser, web search, PDF, images, live data, payment helpers, wallet-keyed memory).
+Drop-in **Anthropic tool-use tools** for [Agent402](https://agent402.tools) — the open-source, self-hostable x402 + MCP server with 1,293 pay-per-call web tools (browser, web search, PDF, images, live data, payment helpers, wallet-keyed memory).
 
 > Already using Claude with **MCP**? `agent402-mcp` is the better path — paste `https://agent402.tools/mcp` into your client. This package is for direct **Messages API** integrations (server-side agents, custom tool loops) where MCP isn't available.
 

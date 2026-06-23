@@ -24,6 +24,8 @@
 - [[Architecture]]
 - [[Security Model]]
 - [[Operations]]
+- [[Self-Hosting]]
+- [[API Reference|API-Reference]]
 
 **[[FAQ]]**
 
