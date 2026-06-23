@@ -91,7 +91,7 @@ Add to `.vscode/mcp.json` in the workspace, or to the user-level `mcp.json`:
 
 ## What you get
 
-Four MCP tools that cover all 1,308 underlying Agent402 tools:
+Four MCP tools that cover all 1,323 underlying Agent402 tools:
 
 - `search_tools(query)` — lexical search across the catalog.
 - `find_tool(query)` — the single best-match tool with its input schema.

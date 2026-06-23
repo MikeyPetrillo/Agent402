@@ -1,7 +1,7 @@
 {
   "name": "agent402-google-adk",
   "version": "0.1.0",
-  "description": "Google ADK (Agent Development Kit) tools for Agent402: turn 1,308 pay-per-call x402 tools into ADK FunctionTool instances via four meta-tools (find/route/call/about), with auto-payment (proof-of-work free, USDC via x402 paid). Zero deps beyond peer deps.",
+  "description": "Google ADK (Agent Development Kit) tools for Agent402: turn 1,323 pay-per-call x402 tools into ADK FunctionTool instances via four meta-tools (find/route/call/about), with auto-payment (proof-of-work free, USDC via x402 paid). Zero deps beyond peer deps.",
   "type": "module",
   "main": "index.js",
   "exports": { ".": "./index.js" },

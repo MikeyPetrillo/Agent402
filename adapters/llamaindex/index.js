@@ -1,6 +1,6 @@
 // agent402-llamaindex — drop-in LlamaIndex TS tools for Agent402.
 //
-// Turn the Agent402 catalog (1,308 pay-per-call web tools) into LlamaIndex
+// Turn the Agent402 catalog (1,323 pay-per-call web tools) into LlamaIndex
 // `FunctionTool` instances any agent can invoke, with payment handled for you
 // under the hood by agent402-client (proof-of-work for the free tier,
 // x402+USDC for wallet-only tools when you pass a payFetch).

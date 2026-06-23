@@ -1,6 +1,6 @@
 # agent402-llamaindex
 
-Drop-in **LlamaIndex TS tools** for [Agent402](https://agent402.tools) — the open-source, self-hostable x402 + MCP server with 1,308 pay-per-call web tools (browser, web search, PDF, images, live data, payment helpers, wallet-keyed memory).
+Drop-in **LlamaIndex TS tools** for [Agent402](https://agent402.tools) — the open-source, self-hostable x402 + MCP server with 1,323 pay-per-call web tools (browser, web search, PDF, images, live data, payment helpers, wallet-keyed memory).
 
 - **Zero new infra.** Get back a ready-to-pass `FunctionTool[]` array for any LlamaIndex agent.
 - **Free tier by default.** No wallet needed — compute-payable tools settle with a built-in proof-of-work.

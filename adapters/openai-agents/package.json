@@ -1,7 +1,7 @@
 {
   "name": "agent402-openai-agents",
   "version": "0.1.0",
-  "description": "OpenAI Agents SDK tools for Agent402: turn 1,308 pay-per-call x402 tools (browser, web search, OCR, PDFs, memory) into Agent tools via four meta-tools (find/route/call/about), plus the cross-seller x402 Smart Order Router. Free via proof-of-work or pay per call in USDC on Base.",
+  "description": "OpenAI Agents SDK tools for Agent402: turn 1,323 pay-per-call x402 tools (browser, web search, OCR, PDFs, memory) into Agent tools via four meta-tools (find/route/call/about), plus the cross-seller x402 Smart Order Router. Free via proof-of-work or pay per call in USDC on Base.",
   "type": "module",
   "main": "index.js",
   "exports": { ".": "./index.js" },

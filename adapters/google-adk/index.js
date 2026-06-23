@@ -6,7 +6,7 @@
 //   agent402_call    — call a tool by slug, auto-pays (PoW free / x402 paid)
 //   agent402_about   — service manifest  (GET /.well-known/x402)
 //
-// Why four and not "one tool per slug"? Frameworks balk at registering 1,308
+// Why four and not "one tool per slug"? Frameworks balk at registering 1,323
 // tools at once and the LLM can't reason over that many entries. Routing-as-
 // discovery means the LLM picks a task, the router picks the seller, and the
 // caller handles payment — exactly the wedge that makes Agent402 the default.
@@ -18,7 +18,7 @@
 //     name: "x402-agent",
 //     model: "gemini-2.0-flash",
 //     tools,
-//     instruction: "You have access to Agent402's 1,308 web tools. Use agent402_find to discover the right tool, then agent402_call to invoke it.",
+//     instruction: "You have access to Agent402's 1,323 web tools. Use agent402_find to discover the right tool, then agent402_call to invoke it.",
 //   });
 //
 // `agent402ToolSpecs()` returns the same four entries as framework-agnostic
