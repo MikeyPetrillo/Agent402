@@ -164,7 +164,7 @@ async function runMissingMode() {
   ]);
   const missing = catalog
     .filter((t) => !registered.has(t.path))
-    .sort((a, b) => a.priceUsd - b.priceUsd); // cheapest first
+    .sort((a, b) => b.priceUsd - a.priceUsd); // expensive first — skill packs register before timeout
   console.log(`Catalog: ${catalog.length} · already on Bazaar: ${registered.size} · missing: ${missing.length}`);
   if (!missing.length) {
     console.log("Nothing to register.");
