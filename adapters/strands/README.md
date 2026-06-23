@@ -1,7 +1,7 @@
 # agent402-strands
 
 Drop-in [Strands Agents](https://strandsagents.com) (TypeScript) tools for
-[Agent402](https://agent402.tools) — turn ~1,100 pay-per-call web tools into
+[Agent402](https://agent402.tools) — turn 1,275 pay-per-call web tools into
 Strands `tool({...})` instances your agent can invoke. Payment is handled
 underneath: proof-of-work for the free tier (no wallet), x402 + USDC on Base
 for wallet-only tools.
@@ -41,7 +41,7 @@ If you're using AgentCore Payments + Gateway, the typical setup is:
 
 1. Store CDP API keys in **AgentCore Identity** as a `PaymentCredentialProvider`.
 2. Add `https://agent402.tools/mcp` as a Gateway target — instantly get all
-   1,100+ tools via MCP, no adapter needed.
+   1,275 tools via MCP, no adapter needed.
 3. Or, for finer control, use this adapter to pull a *curated subset* of
    tools and embed them directly in a Strands agent. The Strands agent runs
    on AgentCore; payment limits and CloudWatch observability are AgentCore's

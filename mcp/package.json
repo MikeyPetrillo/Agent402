@@ -8,7 +8,7 @@
     "type": "git",
     "url": "git+https://github.com/MikeyPetrillo/Agent402.git"
   },
-  "description": "Open-source MCP server exposing Agent402's 1,236 self-hostable tools + 39 multi-tool skill packs (security-audit, trend-analysis, structured-scrape, decode-blob, forecasting-bake-off) for AI agents — browser, web search & answers, PDFs, OCR, images, live financial/crypto/macro data, SEC EDGAR filings, deterministic stats & forecasting, compression, payments. Free via proof-of-work, or pay per call in USDC via the x402 protocol.",
+  "description": "Open-source MCP server exposing Agent402's 1,275 self-hostable tools + 39 multi-tool skill packs (security-audit, trend-analysis, structured-scrape, decode-blob, forecasting-bake-off) for AI agents — browser, web search & answers, PDFs, OCR, images, live financial/crypto/macro data, SEC EDGAR filings, deterministic stats & forecasting, compression, payments. Free via proof-of-work, or pay per call in USDC via the x402 protocol.",
   "type": "module",
   "bin": {
     "agent402-mcp": "index.js"
