@@ -54,6 +54,8 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/integrations`, priority: "0.8" },
     { loc: `${baseUrl}/pricing`, priority: "0.8" },
     { loc: `${baseUrl}/changelog`, priority: "0.7" },
+    { loc: `${baseUrl}/use-cases`, priority: "0.8" },
+    { loc: `${baseUrl}/quickstart`, priority: "0.9" },
   ];
   const guideUrls = [
     { loc: `${baseUrl}/guides`, priority: "0.8" },
@@ -72,6 +74,56 @@ export function sitemapXml(baseUrl, catalog) {
 ${entries}
 </urlset>
 `;
+}
+
+// Sitemap index — splits the single sitemap into sub-sitemaps so crawlers
+// don't have to parse 1,400+ URLs in one file. /sitemap.xml stays as the
+// monolith for backwards compat; /sitemapindex.xml points to the splits.
+function subSitemap(urls, lastmod) {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>${u.loc}</loc><lastmod>${lastmod}</lastmod><changefreq>weekly</changefreq><priority>${u.priority}</priority></url>`).join("\n")}\n</urlset>`;
+}
+export function sitemapIndex(baseUrl) {
+  const lastmod = new Date().toISOString().slice(0, 10);
+  const subs = ["sitemap-pages.xml", "sitemap-tools.xml", "sitemap-guides.xml", "sitemap-skills.xml"];
+  const entries = subs.map((s) => `  <sitemap><loc>${baseUrl}/${s}</loc><lastmod>${lastmod}</lastmod></sitemap>`).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries}\n</sitemapindex>`;
+}
+export function sitemapPages(baseUrl, catalog) {
+  const lastmod = new Date().toISOString().slice(0, 10);
+  const urls = [
+    { loc: `${baseUrl}/`, priority: "1.0" },
+    { loc: `${baseUrl}/tools`, priority: "0.9" },
+    { loc: `${baseUrl}/shop`, priority: "0.9" },
+    { loc: `${baseUrl}/quickstart`, priority: "0.9" },
+    { loc: `${baseUrl}/pricing`, priority: "0.8" },
+    { loc: `${baseUrl}/integrations`, priority: "0.8" },
+    { loc: `${baseUrl}/use-cases`, priority: "0.8" },
+    { loc: `${baseUrl}/economy`, priority: "0.8" },
+    { loc: `${baseUrl}/faq`, priority: "0.8" },
+    { loc: `${baseUrl}/index`, priority: "0.8" },
+    { loc: `${baseUrl}/leaderboard`, priority: "0.8" },
+    { loc: `${baseUrl}/docs`, priority: "0.8" },
+    { loc: `${baseUrl}/changelog`, priority: "0.7" },
+    { loc: `${baseUrl}/analytics`, priority: "0.7" },
+    { loc: `${baseUrl}/tollbooth`, priority: "0.7" },
+    { loc: `${baseUrl}/tollbooth/cloud`, priority: "0.7" },
+    { loc: `${baseUrl}/playground`, priority: "0.8" },
+    { loc: `${baseUrl}/privacy`, priority: "0.4" },
+    { loc: `${baseUrl}/terms`, priority: "0.4" },
+  ];
+  return subSitemap(urls, lastmod);
+}
+export function sitemapTools(baseUrl, catalog) {
+  const lastmod = new Date().toISOString().slice(0, 10);
+  return subSitemap(toolList(catalog).map((t) => ({ loc: `${baseUrl}/tools/${t.slug}`, priority: "0.8" })), lastmod);
+}
+export function sitemapGuides(baseUrl) {
+  const lastmod = new Date().toISOString().slice(0, 10);
+  return subSitemap([{ loc: `${baseUrl}/guides`, priority: "0.8" }, ...guideSlugs().map((s) => ({ loc: `${baseUrl}/guides/${s}`, priority: "0.8" }))], lastmod);
+}
+export function sitemapSkills(baseUrl) {
+  const lastmod = new Date().toISOString().slice(0, 10);
+  return subSitemap([{ loc: `${baseUrl}/skills`, priority: "0.8" }, ...skillSlugs().map((s) => ({ loc: `${baseUrl}/skills/${s}`, priority: "0.8" }))], lastmod);
 }
 
 export function llmsTxt(baseUrl, catalog) {
