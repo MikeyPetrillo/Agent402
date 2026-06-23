@@ -1200,12 +1200,55 @@ export const PACK_STEPS = {
     ],
   },
 
+  // Bake-off: backtest 4 methods, then forecast forward with all 4. Both
+  // fetchers fire — stock-history wins for tickers, fred-series wins for
+  // FRED series ids; the loser fails cleanly. forecast-eval is called 4×
+  // (one per method); the envelope preserves all 4 RMSE/MAPE rows for the
+  // agent to rank. Then all 4 forward forecasts run, so the agent has the
+  // full menu without a second round-trip. The slug-collision on the 4
+  // forecast-eval entries is intentional and harmless: nothing downstream
+  // reads prior["forecast-eval"] — the steps[] array is what matters.
+  "forecasting-bake-off": {
+    mode: "chain",
+    steps: [
+      { slug: "stock-history", mapInput: (a) => ({ symbol: a.series, range: "2y" }) },
+      { slug: "fred-series",   mapInput: (a) => ({ seriesId: a.series }) },
+      // Helper: closes from whichever fetcher succeeded.
+      ...["naive", "ses", "holt", "holt-winters"].map((method) => ({
+        slug: "forecast-eval",
+        mapInput: (_a, p) => {
+          const values = bakeOffValues(p);
+          if (values.length < 6) {
+            throw Object.assign(new Error(`need ≥6 observations for backtest, got ${values.length}`), { statusCode: 422 });
+          }
+          const testSize = Math.max(2, Math.round(values.length * 0.2));
+          return { values, testSize, method };
+        },
+      })),
+      { slug: "forecast-naive",        mapInput: (a, p) => ({
+          values: bakeOffValues(p),
+          horizon: parseInt(a.horizon, 10) || 30,
+          method: "drift",
+      }) },
+      { slug: "forecast-ses",          mapInput: (a, p) => ({
+          values: bakeOffValues(p),
+          horizon: parseInt(a.horizon, 10) || 30,
+      }) },
+      { slug: "forecast-holt",         mapInput: (a, p) => ({
+          values: bakeOffValues(p),
+          horizon: parseInt(a.horizon, 10) || 30,
+      }) },
+      { slug: "forecast-holt-winters", mapInput: (a, p) => ({
+          values: bakeOffValues(p),
+          horizon: parseInt(a.horizon, 10) || 30,
+      }) },
+    ],
+  },
+
   // ──────────────────────────────────────────────────────────────────────
-  // Still TODO (auto-stubs return statusCode 501 per step):
-  //
-  // Standard tier: forecasting-bake-off — needs a multi-tool bake-off shape
-  // (rank-by-RMSE across naive/SES/Holt/Holt-Winters then re-forecast with
-  // the winner) that's not a straight chain.
+  // All 39 packs wired. Auto-stubs no longer reachable. Default mapInput
+  // (defaultMapInput) remains as a safety net for any pack added to
+  // SKILL_PACKS without a PACK_STEPS entry.
   // ──────────────────────────────────────────────────────────────────────
 };
 
@@ -1214,6 +1257,21 @@ export const PACK_STEPS = {
 function firstUrl(urls) {
   if (!urls) return "";
   return String(urls).split(/[\s,]+/).map((s) => s.trim()).filter(Boolean)[0] || "";
+}
+
+// Pull a closes/values series out of whichever fetcher succeeded in the
+// forecasting-bake-off chain. stock-history wins for tickers (returns bars
+// with .close); fred-series wins for FRED ids (returns observations with
+// .value). Returns the first non-empty source.
+function bakeOffValues(prior) {
+  const fromStock = (prior?.["stock-history"]?.bars ?? [])
+    .map((b) => Number(b?.close))
+    .filter(Number.isFinite);
+  if (fromStock.length) return fromStock;
+  const fromFred = (prior?.["fred-series"]?.observations ?? [])
+    .map((o) => Number(o?.value))
+    .filter(Number.isFinite);
+  return fromFred;
 }
 
 // Fetch a URL and return its bytes as base64. Used by media-pipeline's chain
