@@ -13,7 +13,7 @@ One Node 22 / Express process serving everything; deliberately boring where poss
                       │     valid X-Pow-Solution? ──▶ bypass         │
                       │     else ──▶ x402 paywall (402 quote /       │
                       │              verify+settle via facilitator)  │
-                      │   1,280 tool handlers (pure fns + kits)      │
+                      │   1,293 tool handlers (pure fns + kits)      │
                       └──────┬───────────────┬───────────────────────┘
                              │               │
                    Playwright Chromium   SQLite (WAL) on /data volume
