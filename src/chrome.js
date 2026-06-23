@@ -23,34 +23,26 @@ export const CHROME_CSS = `
 .site-nav a.gh { border:1px solid #2a3550; border-radius:8px; padding:6px 13px; color:#e6e9f0; font-size:.85rem; text-decoration:none; }
 .site-nav a.gh:hover { border-color:#4ade80; }
 @media (max-width:720px){ .site-nav a.hide-sm{ display:none; } }
-.site-footer { max-width:1080px; margin:48px auto 0; padding:24px 20px 56px; border-top:1px solid #1e2638; color:#8b93a7; font:14px/1.7 system-ui,-apple-system,sans-serif; }
+.site-footer { max-width:1080px; margin:48px auto 0; padding:32px 20px 56px; border-top:1px solid #1e2638; color:#8b93a7; font:14px/1.7 system-ui,-apple-system,sans-serif; }
 .site-footer a { color:#8b93a7; text-decoration:none; }
 .site-footer a:hover { color:#4ade80; }
-.site-footer .row { margin:6px 0; }
-.site-footer .sep { color:#2a3550; margin:0 6px; }
-.site-footer .row.tag { color:#8b93a7; font-size:.8rem; margin-top:14px; }
+.site-footer .ft-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:24px 32px; margin-bottom:28px; }
+.site-footer .ft-col h4 { color:#e6e9f0; font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; margin:0 0 10px; font-weight:600; }
+.site-footer .ft-col a { display:block; padding:2px 0; font-size:.88rem; }
+.site-footer .ft-bottom { border-top:1px solid #1e2638; padding-top:16px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+.site-footer .ft-legal a { font-size:.85rem; }
+.site-footer .ft-legal .sep { color:#2a3550; margin:0 6px; }
+.site-footer .ft-tag { color:#8b93a7; font-size:.8rem; }
+@media(max-width:600px){ .site-footer .ft-grid{grid-template-columns:repeat(2,1fr);} .site-footer .ft-bottom{flex-direction:column;align-items:flex-start;} }
 `;
 
 const NAV_LINKS = [
   { href: "/tools", label: "Tools" },
-  { href: "/shop", label: "Shop" },
+  { href: "/docs", label: "Docs" },
   { href: "/pricing", label: "Pricing" },
   { href: "/integrations", label: "Integrations" },
-  { href: "/docs", label: "Docs" },
-  { href: "/index", label: "Index" },
-  { href: "/leaderboard", label: "Leaderboard" },
-  { href: "/economy", label: "Economy" },
-  { href: "/analytics", label: "Analytics" },
-  { href: "/tollbooth", label: "Tollbooth" },
-  { href: "/guides", label: "Guides" },
-  { href: "/skills", label: "Skills" },
-  { href: "/use-cases", label: "Use Cases" },
-  { href: "/playground", label: "Playground" },
-  { href: "/quickstart", label: "Quickstart" },
   { href: "/blog", label: "Blog" },
   { href: "/changelog", label: "Changelog" },
-  { href: "/community", label: "Community" },
-  { href: "/faq", label: "FAQ" },
 ];
 
 const isActive = (linkHref, currentPath) =>
@@ -80,44 +72,52 @@ export function renderHeader(currentPath = "", extraLinks = []) {
  */
 export function renderFooter() {
   return `<footer class="site-footer">
-  <div class="row">
-    <a href="/">Home</a><span class="sep">·</span>
-    <a href="/tools">Tools</a><span class="sep">·</span>
-    <a href="/shop">Shop</a><span class="sep">·</span>
-    <a href="/docs">Docs</a><span class="sep">·</span>
-    <a href="/index">Index</a><span class="sep">·</span>
-    <a href="/leaderboard">Leaderboard</a><span class="sep">·</span>
-    <a href="/economy">Economy</a><span class="sep">·</span>
-    <a href="/analytics">Analytics</a><span class="sep">·</span>
-    <a href="/tollbooth">Tollbooth</a><span class="sep">·</span>
-    <a href="/tollbooth/cloud">Tollbooth Cloud</a><span class="sep">·</span>
-    <a href="/guides">Guides</a><span class="sep">·</span>
-    <a href="/skills">Skills</a><span class="sep">·</span>
-    <a href="/use-cases">Use Cases</a><span class="sep">·</span>
-    <a href="/playground">Playground</a><span class="sep">·</span>
-    <a href="/quickstart">Quickstart</a><span class="sep">·</span>
-    <a href="/blog">Blog</a><span class="sep">·</span>
-    <a href="/compare">Compare</a><span class="sep">·</span>
-    <a href="/workflows">Workflows</a><span class="sep">·</span>
-    <a href="/community">Community</a><span class="sep">·</span>
-    <a href="/contribute">Contribute</a><span class="sep">·</span>
-    <a href="/badges">Badges</a><span class="sep">·</span>
-    <a href="/uptime">Uptime</a><span class="sep">·</span>
-    <a href="/sdk-playground">SDK REPL</a><span class="sep">·</span>
-    <a href="/changelog">Changelog</a><span class="sep">·</span>
-    <a href="/faq">FAQ</a><span class="sep">·</span>
-    <a href="/pricing">Pricing</a><span class="sep">·</span>
-    <a href="/integrations">Integrations</a><span class="sep">·</span>
-    <a href="/openapi.json">OpenAPI</a><span class="sep">·</span>
-    <a href="/llms.txt">llms.txt</a><span class="sep">·</span>
-    <a href="/api/stats">Stats</a>
+  <div class="ft-grid">
+    <div class="ft-col">
+      <h4>Product</h4>
+      <a href="/tools">Tools</a>
+      <a href="/pricing">Pricing</a>
+      <a href="/integrations">Integrations</a>
+      <a href="/shop">Shop</a>
+      <a href="/tollbooth">Tollbooth</a>
+      <a href="/tollbooth/cloud">Tollbooth Cloud</a>
+    </div>
+    <div class="ft-col">
+      <h4>Learn</h4>
+      <a href="/docs">Docs</a>
+      <a href="/quickstart">Quickstart</a>
+      <a href="/guides">Guides</a>
+      <a href="/skills">Skills</a>
+      <a href="/use-cases">Use Cases</a>
+      <a href="/faq">FAQ</a>
+    </div>
+    <div class="ft-col">
+      <h4>Ecosystem</h4>
+      <a href="/index">Index</a>
+      <a href="/leaderboard">Leaderboard</a>
+      <a href="/economy">Economy</a>
+      <a href="/analytics">Analytics</a>
+      <a href="/playground">Playground</a>
+      <a href="/community">Community</a>
+    </div>
+    <div class="ft-col">
+      <h4>Developers</h4>
+      <a href="/openapi.json">OpenAPI</a>
+      <a href="/llms.txt">llms.txt</a>
+      <a href="/api/stats">Stats</a>
+      <a href="/blog">Blog</a>
+      <a href="/changelog">Changelog</a>
+      <a href="/uptime">Uptime</a>
+    </div>
   </div>
-  <div class="row">
-    <a href="/privacy">Privacy</a><span class="sep">·</span>
-    <a href="/terms">Terms</a><span class="sep">·</span>
-    <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub</a><span class="sep">·</span>
-    <a href="https://x.com/Agent402Tools" rel="noopener">𝕏 @Agent402Tools</a>
+  <div class="ft-bottom">
+    <div class="ft-legal">
+      <a href="/privacy">Privacy</a><span class="sep">·</span>
+      <a href="/terms">Terms</a><span class="sep">·</span>
+      <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub</a><span class="sep">·</span>
+      <a href="https://x.com/Agent402Tools" rel="noopener">𝕏 @Agent402Tools</a>
+    </div>
+    <div class="ft-tag">Agent402 — open-source x402 + MCP server. Built by <a href="https://github.com/MikeyPetrillo" rel="noopener">Mikey Petrillo</a>.</div>
   </div>
-  <div class="row tag">Agent402 — open-source, self-hostable x402 + MCP server. Built by <a href="https://github.com/MikeyPetrillo" rel="noopener">Mikey Petrillo</a> on the <a href="https://x402.org" rel="noopener">x402 protocol</a>.</div>
 </footer>`;
 }
