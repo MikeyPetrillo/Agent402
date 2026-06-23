@@ -34,6 +34,8 @@ export const CHROME_CSS = `
 const NAV_LINKS = [
   { href: "/tools", label: "Tools" },
   { href: "/shop", label: "Shop" },
+  { href: "/pricing", label: "Pricing" },
+  { href: "/integrations", label: "Integrations" },
   { href: "/docs", label: "Docs" },
   { href: "/index", label: "Index" },
   { href: "/leaderboard", label: "Leaderboard" },
@@ -42,6 +44,7 @@ const NAV_LINKS = [
   { href: "/tollbooth", label: "Tollbooth" },
   { href: "/guides", label: "Guides" },
   { href: "/skills", label: "Skills" },
+  { href: "/changelog", label: "Changelog" },
   { href: "/faq", label: "FAQ" },
 ];
 
@@ -84,8 +87,10 @@ export function renderFooter() {
     <a href="/tollbooth/cloud">Tollbooth Cloud</a><span class="sep">·</span>
     <a href="/guides">Guides</a><span class="sep">·</span>
     <a href="/skills">Skills</a><span class="sep">·</span>
+    <a href="/changelog">Changelog</a><span class="sep">·</span>
     <a href="/faq">FAQ</a><span class="sep">·</span>
-    <a href="/api/pricing">Pricing</a><span class="sep">·</span>
+    <a href="/pricing">Pricing</a><span class="sep">·</span>
+    <a href="/integrations">Integrations</a><span class="sep">·</span>
     <a href="/openapi.json">OpenAPI</a><span class="sep">·</span>
     <a href="/llms.txt">llms.txt</a><span class="sep">·</span>
     <a href="/api/stats">Stats</a>
