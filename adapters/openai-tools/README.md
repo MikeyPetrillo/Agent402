@@ -1,6 +1,6 @@
 # agent402-openai-tools
 
-Drop-in **OpenAI function-calling tools** for [Agent402](https://agent402.tools) — the open-source, self-hostable x402 + MCP server with 1,293 pay-per-call web tools (browser, web search, PDF, images, live data, payment helpers, wallet-keyed memory).
+Drop-in **OpenAI function-calling tools** for [Agent402](https://agent402.tools) — the open-source, self-hostable x402 + MCP server with 1,308 pay-per-call web tools (browser, web search, PDF, images, live data, payment helpers, wallet-keyed memory).
 
 - **Zero new infra.** Get back a ready-to-pass `tools` array for `chat.completions`, Assistants v2, or the Responses API.
 - **Free tier by default.** No wallet needed — the compute-payable tools settle with a built-in proof-of-work (sub-second sha256 puzzle).

@@ -1,6 +1,6 @@
 // agent402-strands — drop-in Strands Agents (TypeScript) tools for Agent402.
 //
-// Turn the Agent402 catalog (1,293 pay-per-call web tools) into Strands
+// Turn the Agent402 catalog (1,308 pay-per-call web tools) into Strands
 // `tool({...})` instances the agent can invoke, with payment handled for you
 // under the hood by agent402-client (proof-of-work for the free tier,
 // x402+USDC for wallet-only tools when you pass a payFetch).
