@@ -27,26 +27,12 @@
 //   standard ($0.06–$0.30)  network/render mix
 //   light    ($0.05 floor)  pure-CPU bundles, PoW-eligible
 //
-// ──────────────────────────────────────────────────────────────────────────
-// learning-mode v1 TODOs left for the user:
-//
-//   (1) PACK_STEPS — fill in `mapInput` functions for each of the 39 packs.
-//       Two worked examples (security-audit, trend-analysis) and one premium
-//       worked example (financial-research) show the patterns. Packs not yet
-//       in PACK_STEPS auto-generate from SKILL_PACKS with TODO_MAPINPUT for
-//       every step; those steps return {ok: false, error: "mapInput not yet
-//       implemented", statusCode: 501} so the envelope is still well-formed.
-//
-//   (2) INLINE_HANDLERS in src/server.js — wire any inline-bound routes that
-//       a pack references (extract, meta, dns, render, pdf, screenshot). The
-//       runner looks here before falling back to catalog tool.handler.
-// ──────────────────────────────────────────────────────────────────────────
-
 import { SKILL_PACKS } from "../skills.js";
 
 // Sentinel error thrown by stub mapInput functions. The runner converts it to
 // a per-step partial-failure {ok:false, statusCode:501} so the rest of the
-// pack still runs and the envelope shape stays consistent.
+// pack still runs and the envelope shape stays consistent. Reachable only
+// for any pack added to SKILL_PACKS without a corresponding PACK_STEPS entry.
 function todoError() {
   return Object.assign(new Error("mapInput not yet implemented for this step"), {
     statusCode: 501,
@@ -204,9 +190,9 @@ function parseGoalString(s) {
 //
 //   { mode: "fanout"|"chain", steps: [ { slug, mapInput(args, prior) → input } ] }
 //
-// THREE WORKED EXAMPLES are populated below. The remaining 36 packs are
-// auto-stubbed with TODO_MAPINPUT for every step (see getStepConfig). The
-// user fills these in — typically 1–3 lines per step.
+// All 39 packs have explicit entries. Any pack added to SKILL_PACKS without
+// a matching PACK_STEPS entry falls back to the auto-stub in getStepConfig
+// (every step returns 501 — the envelope is still well-formed).
 // ──────────────────────────────────────────────────────────────────────────
 export const PACK_STEPS = {
   // ▼ Example 1: simple fanout. All tools key off one prompt arg (domain).
@@ -1246,9 +1232,8 @@ export const PACK_STEPS = {
   },
 
   // ──────────────────────────────────────────────────────────────────────
-  // All 39 packs wired. Auto-stubs no longer reachable. Default mapInput
-  // (defaultMapInput) remains as a safety net for any pack added to
-  // SKILL_PACKS without a PACK_STEPS entry.
+  // End of PACK_STEPS. All 39 packs above; getStepConfig auto-stubs any
+  // SKILL_PACKS entry that lands here without a matching PACK_STEPS row.
   // ──────────────────────────────────────────────────────────────────────
 };
 
