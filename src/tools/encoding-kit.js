@@ -122,6 +122,7 @@ export const ENCODING_TOOLS = [
       "Convert an internationalized domain name to Punycode (ASCII-compatible encoding, RFC 3492) or decode Punycode back to Unicode. Uses Node.js built-in IDNA support. Deterministic, pure CPU.",
     tags: ["punycode", "domain", "idn"],
     discovery: {
+      bodyType: "json",
       input: { domain: "münchen.de" },
       inputSchema: {
         type: "object",
@@ -156,6 +157,7 @@ export const ENCODING_TOOLS = [
       "Convert text to the NATO phonetic alphabet (Alpha, Bravo, Charlie...) or decode phonetic words back to text. Letters and digits supported. Word boundaries marked with \" | \". Deterministic, pure CPU.",
     tags: ["nato", "phonetic", "alphabet"],
     discovery: {
+      bodyType: "json",
       input: { text: "SOS 42" },
       inputSchema: {
         type: "object",
@@ -203,6 +205,7 @@ export const ENCODING_TOOLS = [
       "Compute the American Soundex (NARA) phonetic hash code for one or more words. Soundex maps similar-sounding names to the same 4-character code (letter + 3 digits). Useful for fuzzy name matching. Deterministic, pure CPU.",
     tags: ["soundex", "phonetic", "hash"],
     discovery: {
+      bodyType: "json",
       input: { text: "Robert Rupert" },
       inputSchema: {
         type: "object",
@@ -229,6 +232,7 @@ export const ENCODING_TOOLS = [
       "Convert text to its binary (base-2) representation (8-bit per character, space-separated) or decode binary back to text. Deterministic, pure CPU.",
     tags: ["binary", "encode", "decode"],
     discovery: {
+      bodyType: "json",
       input: { text: "Hi" },
       inputSchema: {
         type: "object",
@@ -264,6 +268,7 @@ export const ENCODING_TOOLS = [
       "Convert text to Unicode Braille characters (Grade 1 / uncontracted) or decode Braille back to text. Supports letters, digits, and common punctuation. Deterministic, pure CPU.",
     tags: ["braille", "unicode", "accessibility"],
     discovery: {
+      bodyType: "json",
       input: { text: "hello" },
       inputSchema: {
         type: "object",

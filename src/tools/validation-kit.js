@@ -128,6 +128,7 @@ export const VALIDATION_TOOLS = [
       "Parse and format phone numbers into E.164 and national formats. Supports US (+1), UK (+44), DE (+49), FR (+33), AU (+61), IN (+91). Pure regex — no libphonenumber dependency.",
     tags: ["phone", "validation", "format"],
     discovery: {
+      bodyType: "json",
       input: { phone: "+1 (555) 234-5678" },
       inputSchema: {
         type: "object",
@@ -189,6 +190,7 @@ export const VALIDATION_TOOLS = [
       "Check XML well-formedness: balanced open/close tags, proper nesting, unescaped entities. No DTD/schema validation — syntax only. Pure CPU, deterministic.",
     tags: ["xml", "validation", "parse"],
     discovery: {
+      bodyType: "json",
       input: { xml: "<root><item id=\"1\">Hello</item></root>" },
       inputSchema: {
         type: "object",
@@ -219,6 +221,7 @@ export const VALIDATION_TOOLS = [
       "Validate CSV structure: consistent column counts across rows, properly closed quotes, delimiter detection. Returns row/column counts and any structural errors. Pure CPU.",
     tags: ["csv", "validation", "lint"],
     discovery: {
+      bodyType: "json",
       input: { text: "name,age,city\nAlice,30,NYC\nBob,25,LA" },
       inputSchema: {
         type: "object",
@@ -244,6 +247,7 @@ export const VALIDATION_TOOLS = [
       "Auto-detect the encoding format of a string: base64, base32, hex, binary, decimal, or plain text. Returns confidence scores and decoded preview for each candidate. Pure CPU, deterministic.",
     tags: ["base64", "hex", "detect", "encoding"],
     discovery: {
+      bodyType: "json",
       input: { text: "SGVsbG8gV29ybGQ=" },
       inputSchema: {
         type: "object",
@@ -319,6 +323,7 @@ export const VALIDATION_TOOLS = [
       "Expand a compressed IPv6 address to full 8-group notation (:: to 0000:...) or compress a full address by collapsing the longest zero run. Also validates format. Pure CPU, deterministic.",
     tags: ["ipv6", "network", "validation"],
     discovery: {
+      bodyType: "json",
       input: { address: "2001:db8::1" },
       inputSchema: {
         type: "object",
