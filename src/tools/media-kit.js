@@ -137,7 +137,7 @@ export const MEDIA_TOOLS = [
     tags: ["ffmpeg", "ffprobe", "audio", "video", "metadata"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://example.com/podcast.mp3" },
+      input: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
       inputSchema: { properties: { url: { type: "string", description: "Public URL of the media file (max 30MB)" } }, required: ["url"] },
       output: { example: { formatName: "mp3", durationSec: 1832.4, bitrate: 192000, bytes: 4404000, streams: [{ type: "audio", codec: "mp3", sampleRate: 44100, channels: 2 }] } },
     },
@@ -150,7 +150,7 @@ export const MEDIA_TOOLS = [
     tags: ["ffmpeg", "mp4-to-mp3", "audio", "convert", "mp3"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://example.com/talk.mp4" },
+      input: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Public URL of the media file (max 30MB)" },
@@ -169,7 +169,7 @@ export const MEDIA_TOOLS = [
     tags: ["ffmpeg", "normalize", "loudnorm", "audio", "lufs"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://example.com/episode.wav" },
+      input: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "Public URL of the media file (max 30MB)" },

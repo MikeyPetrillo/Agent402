@@ -154,8 +154,9 @@ function parseAnswer(raw) {
   return { answer, citations: unique };
 }
 
-async function braveGet(path, params) {
-  if (!process.env.BRAVE_API_KEY) {
+async function braveGet(path, params, apiKey) {
+  const key = apiKey || process.env.BRAVE_API_KEY;
+  if (!key) {
     throw bad("Web search is not configured on this deployment", 503);
   }
   const url = new URL(`${BRAVE_HOST}${path}`);
@@ -165,7 +166,7 @@ async function braveGet(path, params) {
   let res;
   try {
     res = await fetch(url, {
-      headers: { "X-Subscription-Token": process.env.BRAVE_API_KEY, Accept: "application/json" },
+      headers: { "X-Subscription-Token": key, Accept: "application/json" },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch {
@@ -360,7 +361,10 @@ export const SEARCH_TOOLS = [
     handler: async (i) => {
       const q = takeQuery(i.q);
       const count = Math.min(Math.max(parseInt(i.count, 10) || 5, 1), 20);
-      const data = await braveGet("/suggest/search", { q, count });
+      // Brave issues distinct subscription tokens per product SKU; Suggest
+      // may need its own key, same pattern as Answers (BRAVE_ANSWERS_API_KEY).
+      const key = process.env.BRAVE_SUGGEST_API_KEY || process.env.BRAVE_API_KEY;
+      const data = await braveGet("/suggest/search", { q, count }, key);
       // Brave returns { results: [{query, ...rich fields requiring paid plan}, ...] }.
       // We surface only the suggestion string — `rich` enrichment requires a
       // separate subscription tier, and a flat string[] is what agents want.

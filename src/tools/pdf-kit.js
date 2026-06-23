@@ -137,7 +137,7 @@ export const PDF_TOOLS = [
     tags: ["pdf", "merge", "combine", "convert-pdf", "documents"],
     discovery: {
       bodyType: "json",
-      input: { urls: ["https://example.com/a.pdf", "https://example.com/b.pdf"] },
+      input: { urls: ["https://arxiv.org/pdf/1706.03762", "https://arxiv.org/pdf/1706.03762"] },
       inputSchema: { properties: { urls: { type: "array", description: "2–20 public PDF URLs, merged in order" } }, required: ["urls"] },
       output: { example: { pages: 8, bytes: 51234, pdfBase64: "JVBERi0xLjcK…" } },
     },
@@ -196,7 +196,7 @@ export const PDF_TOOLS = [
     tags: ["pdf", "images", "convert", "convert-pdf", "documents"],
     discovery: {
       bodyType: "json",
-      input: { urls: ["https://example.com/a.png", "https://example.com/b.jpg"] },
+      input: { urls: ["https://tesseract.projectnaptha.com/img/eng_bw.png", "https://tesseract.projectnaptha.com/img/eng_bw.png"] },
       inputSchema: { properties: { urls: { type: "array", description: "1–20 public PNG/JPEG image URLs" } }, required: ["urls"] },
       output: { example: { pages: 2, bytes: 88123, pdfBase64: "JVBERi0xLjcK…" } },
     },

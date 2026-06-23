@@ -359,7 +359,7 @@ export const PREDICTION_MARKET_TOOLS = [
     tags: ["polymarket", "prediction-market", "market-detail", "odds"],
     discovery: {
       bodyType: "json",
-      input: { slug: "will-x-win-election" },
+      input: { slug: "will-norway-win-the-2026-fifa-world-cup-893" },
       inputSchema: {
         type: "object",
         properties: {
@@ -401,7 +401,7 @@ export const PREDICTION_MARKET_TOOLS = [
     tags: ["polymarket", "orderbook", "bids-asks", "spread", "liquidity"],
     discovery: {
       bodyType: "json",
-      input: { tokenId: "72909859729837290837290837290837290837290837290837290837290837290", depth: 5 },
+      input: { tokenId: "60447443643099453130956385288904175887233107411078568881602330835010340506057", depth: 5 },
       inputSchema: {
         type: "object",
         required: ["tokenId"],
