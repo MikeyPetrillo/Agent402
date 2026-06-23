@@ -326,12 +326,12 @@ export function toolsIndexPage(baseUrl, catalog) {
           .slice(0, 24)
           .map((t) => `<a href="/tools/${t.slug}">${esc(t.name)}</a>`)
           .join(" · ");
-        return `<h2>${esc(label)} <span style="color:var(--muted);font-size:.85rem">(${inCat.length})</span>${tag}</h2>
+        return `<h2><a href="/tools/category/${key}" style="color:inherit;text-decoration:none">${esc(label)}</a> <span style="color:var(--muted);font-size:.85rem">(${inCat.length})</span>${tag}</h2>
 <p class="cat-blurb">${esc(blurb)}</p>
-<p class="sub" style="font-size:.85rem">${sample} · <a href="/api/pricing">…and ${inCat.length - 24} more →</a></p>`;
+<p class="sub" style="font-size:.85rem">${sample} · <a href="/tools/category/${key}">…and ${inCat.length - 24} more →</a></p>`;
       }
       const cards = inCat.map(card).join("\n");
-      return `<h2>${esc(label)} <span style="color:var(--muted);font-size:.85rem">(${inCat.length})</span>${tag}</h2>
+      return `<h2><a href="/tools/category/${key}" style="color:inherit;text-decoration:none">${esc(label)}</a> <span style="color:var(--muted);font-size:.85rem">(${inCat.length})</span>${tag}</h2>
 <p class="cat-blurb">${esc(blurb)}</p>
 <div class="grid">${cards}</div>`;
     })
@@ -352,6 +352,45 @@ ${renderHeader("/tools")}
   <div class="callout"><b>${freeCount} of ${tools.length} tools are free</b> — no wallet needed. Pay with a few seconds of <a href="/api/pow">proof-of-work</a> (CPU) instead of USDC. The other ${tools.length - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run. Look for the <span class="free">FREE</span> badge below.</div>
   ${sections}
   <script>(function(){var input=document.getElementById('tool-search'),count=document.getElementById('tool-search-count');if(!input)return;input.addEventListener('input',function(){var q=this.value.toLowerCase().trim();var cards=document.querySelectorAll('.card');var sections=document.querySelectorAll('h2');var shown=0;cards.forEach(function(c){var text=(c.textContent||'').toLowerCase();var match=!q||text.indexOf(q)!==-1;c.style.display=match?'':'none';if(match)shown++;});sections.forEach(function(s){if(!q){s.style.display='';return;}var next=s.nextElementSibling;while(next&&!next.matches('h2')){if(next.classList&&next.classList.contains('grid')){var vis=next.querySelectorAll('.card:not([style*="display: none"])');s.style.display=vis.length?'':'none';break;}if(next.classList&&next.classList.contains('cat-blurb')){next.style.display=s.style.display;next=next.nextElementSibling;continue;}next=next.nextElementSibling;}});count.textContent=q?shown+' match'+(shown===1?'':'es'):'';});})();</script>
+</div>
+${renderFooter()}
+</body>
+</html>`;
+}
+
+/** Category landing page — /tools/:category shows all tools in one category. */
+export function categoryPage(baseUrl, catalog, catKey) {
+  const cat = CATEGORIES[catKey];
+  if (!cat) return null;
+  const tools = toolList(catalog).filter((t) => t.category === catKey);
+  if (!tools.length) return null;
+  const freeCount = tools.filter(isComputePayable).length;
+  const canonical = `${baseUrl}/tools/category/${catKey}`;
+  const title = `${cat.label} — ${tools.length} tools | Agent402`;
+  const description = `${cat.blurb} ${tools.length} tools, ${freeCount} free via proof-of-work.`;
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "ItemList",
+    name: cat.label,
+    description: cat.blurb,
+    url: canonical,
+    numberOfItems: tools.length,
+    itemListElement: tools.map((t, i) => ({ "@type": "ListItem", position: i + 1, name: t.name, url: `${baseUrl}/tools/${t.slug}` })),
+  };
+  const cards = tools.map(card).join("\n");
+  return `<!doctype html>
+<html lang="en">
+<head>
+${head({ title, description, canonical, jsonLd, image: `${baseUrl}/card.png` })}
+</head>
+<body>
+${renderHeader("/tools")}
+<div class="wrap">
+  <div class="crumb"><a href="/">Agent402</a> / <a href="/tools">tools</a> / ${esc(cat.label)}</div>
+  <h1>${esc(cat.label)}</h1>
+  <p class="sub">${esc(cat.blurb)}</p>
+  <div class="callout"><b>${tools.length} tools</b> in this category${freeCount ? ` — <b>${freeCount} free</b> via proof-of-work` : ""}. <a href="/tools">← All tools</a></div>
+  <div class="grid">${cards}</div>
 </div>
 ${renderFooter()}
 </body>

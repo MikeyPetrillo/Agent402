@@ -47,7 +47,9 @@ const NAV_LINKS = [
   { href: "/use-cases", label: "Use Cases" },
   { href: "/playground", label: "Playground" },
   { href: "/quickstart", label: "Quickstart" },
+  { href: "/blog", label: "Blog" },
   { href: "/changelog", label: "Changelog" },
+  { href: "/community", label: "Community" },
   { href: "/faq", label: "FAQ" },
 ];
 
@@ -68,6 +70,7 @@ export function renderHeader(currentPath = "", extraLinks = []) {
   <span class="spacer"></span>
   ${links}
   <a class="gh" href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub ★</a>
+  <a class="gh" href="https://x.com/Agent402Tools" rel="noopener">𝕏</a>
 </div></nav>`;
 }
 
@@ -93,6 +96,14 @@ export function renderFooter() {
     <a href="/use-cases">Use Cases</a><span class="sep">·</span>
     <a href="/playground">Playground</a><span class="sep">·</span>
     <a href="/quickstart">Quickstart</a><span class="sep">·</span>
+    <a href="/blog">Blog</a><span class="sep">·</span>
+    <a href="/compare">Compare</a><span class="sep">·</span>
+    <a href="/workflows">Workflows</a><span class="sep">·</span>
+    <a href="/community">Community</a><span class="sep">·</span>
+    <a href="/contribute">Contribute</a><span class="sep">·</span>
+    <a href="/badges">Badges</a><span class="sep">·</span>
+    <a href="/uptime">Uptime</a><span class="sep">·</span>
+    <a href="/sdk-playground">SDK REPL</a><span class="sep">·</span>
     <a href="/changelog">Changelog</a><span class="sep">·</span>
     <a href="/faq">FAQ</a><span class="sep">·</span>
     <a href="/pricing">Pricing</a><span class="sep">·</span>
@@ -104,7 +115,8 @@ export function renderFooter() {
   <div class="row">
     <a href="/privacy">Privacy</a><span class="sep">·</span>
     <a href="/terms">Terms</a><span class="sep">·</span>
-    <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub</a>
+    <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub</a><span class="sep">·</span>
+    <a href="https://x.com/Agent402Tools" rel="noopener">𝕏 @Agent402Tools</a>
   </div>
   <div class="row tag">Agent402 — open-source, self-hostable x402 + MCP server. Built by <a href="https://github.com/MikeyPetrillo" rel="noopener">Mikey Petrillo</a> on the <a href="https://x402.org" rel="noopener">x402 protocol</a>.</div>
 </footer>`;
