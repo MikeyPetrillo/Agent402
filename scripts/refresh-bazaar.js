@@ -33,6 +33,7 @@
 //   or KEY_FILE=/tmp/agent-key node scripts/refresh-bazaar.js
 // Optional env:
 //   MODE              "stale" (default) or "missing"
+//   SLUGS             comma-separated slug filter for missing-mode (register only these)
 //   TARGET_URL        (default https://agent402.tools)
 //   EXPECT_NAME       (default "Agent402.tools")
 //   MAX_SPEND_USD     missing-mode cost ceiling (default 5)
@@ -49,6 +50,7 @@ const KEY_FILE = process.env.KEY_FILE || "/tmp/agent-key";
 const DRY_RUN = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
 const MODE = (process.env.MODE || "stale").toLowerCase();
 const MAX_SPEND_USD = Number(process.env.MAX_SPEND_USD || "5");
+const SLUGS_FILTER = process.env.SLUGS ? new Set(process.env.SLUGS.split(",").map(s => s.trim())) : null;
 const BAZAAR_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
 const PAGE_SIZE = 1000;
 const HOST = new URL(TARGET).host;
@@ -164,6 +166,7 @@ async function runMissingMode() {
   ]);
   const missing = catalog
     .filter((t) => !registered.has(t.path))
+    .filter((t) => !SLUGS_FILTER || SLUGS_FILTER.has(t.slug))
     .sort((a, b) => b.priceUsd - a.priceUsd); // expensive first — skill packs register before timeout
   console.log(`Catalog: ${catalog.length} · already on Bazaar: ${registered.size} · missing: ${missing.length}`);
   if (!missing.length) {

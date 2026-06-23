@@ -27,7 +27,12 @@ async function feedFetch(url) {
   if (res.status === 429) throw bad("Price feed rate limit reached upstream — retry shortly", 503);
   if (res.status === 404) throw bad("Price feed upstream: not found (check ids / contract)", 404);
   if (!res.ok) throw bad(`Price feed upstream error (HTTP ${res.status})`, 502);
-  return res.json();
+  const ct = res.headers.get("content-type") || "";
+  if (!ct.includes("json")) {
+    throw bad(`Price feed upstream returned non-JSON (${ct.split(";")[0] || "unknown"})`, 502);
+  }
+  try { return await res.json(); }
+  catch { throw bad("Price feed upstream returned malformed JSON", 502); }
 }
 
 // Pyth quotes prices as { price, expo } where the human value is price * 10**expo.
