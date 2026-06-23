@@ -111,13 +111,16 @@ export const WALLET_ONLY_SLUGS = new Set([
   // pool with chain-kit / dex-kit / mev-and-l2-kit). 3 net-new market-side
   // tools that complement chain-kit's existing nft-holdings + nft-metadata.
   "nft-collection", "nft-floor", "nft-sales",
+  // Geo-kit: all 3 tools fetch from Nominatim (shared per-IP rate limit).
+  "geocode", "reverse-geocode", "place-search",
+  // OCR-kit: image-ocr conditionally fetches external URLs (url param).
+  "image-ocr",
   // Skill packs (bundled execution endpoints) — premium + standard tiers
   // orchestrate paid-upstream tools (EDGAR / FRED / Alchemy / Brave /
   // Yahoo / CoinGecko / DefiLlama / DNS resolvers / Chromium). PoW would
-  // turn one free request into N paid sub-calls. Light-tier packs (the 16
-  // pure-CPU bundles below this block) are deliberately omitted — every
-  // tool they orchestrate is itself PoW-eligible, so the bundle stays free
-  // over PoW too.
+  // turn one free request into N paid sub-calls. Light-tier packs that
+  // call at least one wallet-only tool must also be listed here — the
+  // skill runner calls handlers in-process, bypassing the route paywall.
   "skill-financial-research", "skill-sec-filings-deep-dive", "skill-macro-context",
   "skill-crypto-research", "skill-regulatory-watch", "skill-search-and-cite",
   "skill-macro-economics",
@@ -127,6 +130,9 @@ export const WALLET_ONLY_SLUGS = new Set([
   "skill-link-preview", "skill-api-investigation", "skill-email-deliverability",
   "skill-location-intel", "skill-dns-network-ops", "skill-status-snapshot",
   "skill-schema-evolution",
+  // Light-tier packs that call wallet-only tools in-process:
+  "skill-trip-planner",       // calls weather-forecast (wallet-only)
+  "skill-user-onboarding",   // calls email-validate (wallet-only)
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */
