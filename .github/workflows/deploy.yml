@@ -510,6 +510,7 @@ jobs:
           AGENT402_BASE_URL=http://localhost:3091 node adapters/openai-agents/test.js
           AGENT402_BASE_URL=http://localhost:3091 node adapters/llamaindex/test.js
           AGENT402_BASE_URL=http://localhost:3091 node adapters/strands/test.js
+          AGENT402_BASE_URL=http://localhost:3091 node adapters/google-adk/test.js
           kill $ADAPTER_PID 2>/dev/null || true
 
       - name: PDF toolkit tests (merge/split/rotate/info/images-to-pdf)
@@ -1093,6 +1094,21 @@ jobs:
           else
             npm publish --provenance --access public
             echo "published agent402-strands@$VERSION → https://www.npmjs.com/package/agent402-strands"
+          fi
+
+      - name: Publish agent402-google-adk to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "NPM_TOKEN secret missing"; exit 1; }
+          AGENT402_BASE_URL=http://localhost:3090 node adapters/google-adk/test.js
+          cd adapters/google-adk
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "agent402-google-adk@$VERSION" version >/dev/null 2>&1; then
+            echo "agent402-google-adk@$VERSION is already on npm — nothing to do"
+          else
+            npm publish --provenance --access public
+            echo "published agent402-google-adk@$VERSION → https://www.npmjs.com/package/agent402-google-adk"
           fi
 
       - name: Stop adapter-test server

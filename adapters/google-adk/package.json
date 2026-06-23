@@ -1,0 +1,29 @@
+{
+  "name": "agent402-google-adk",
+  "version": "0.1.0",
+  "description": "Google ADK (Agent Development Kit) tools for Agent402: turn 1,308 pay-per-call x402 tools into ADK FunctionTool instances via four meta-tools (find/route/call/about), with auto-payment (proof-of-work free, USDC via x402 paid). Zero deps beyond peer deps.",
+  "type": "module",
+  "main": "index.js",
+  "exports": { ".": "./index.js" },
+  "files": ["index.js", "README.md"],
+  "engines": { "node": ">=18" },
+  "scripts": { "test": "node test.js" },
+  "keywords": [
+    "google-adk", "adk", "agent-development-kit", "gemini", "google",
+    "x402", "ai-agents", "agent-tools", "llm-tools",
+    "usdc", "base", "proof-of-work", "http-402", "micropayments",
+    "mcp", "tool-discovery", "smart-order-router", "agent402"
+  ],
+  "author": "Mikey Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/MikeyPetrillo/Agent402.git", "directory": "adapters/google-adk" },
+  "homepage": "https://github.com/MikeyPetrillo/Agent402/tree/main/adapters/google-adk",
+  "peerDependencies": {
+    "@google/adk": ">=1 <2",
+    "zod": ">=3 <5"
+  },
+  "peerDependenciesMeta": {
+    "@google/adk": { "optional": true },
+    "zod": { "optional": true }
+  }
+}
