@@ -87,6 +87,29 @@ export function capturePostHogToolError({ slug, status, message, shape, syntheti
   } catch { /* never throw from telemetry */ }
 }
 
+// Capture every tool call (success AND failure) as a PostHog event. Fires
+// from the `finally` block of the tool handler, so it covers the full picture:
+// total volume, latency, cache hits, and success rates per slug. Errors are
+// also captured separately via capturePostHogToolError with richer detail;
+// this event is the volume/latency layer.
+export function capturePostHogToolCall({ slug, latencyMs, cached, errored, status, synthetic }) {
+  if (!enabled || !client) return;
+  try {
+    client.capture({
+      distinctId: DISTINCT_ID,
+      event: "tool_call",
+      properties: {
+        slug,
+        latencyMs: Number(latencyMs) || 0,
+        cached: !!cached,
+        errored: !!errored,
+        status: Number(status) || 200,
+        synthetic: !!synthetic,
+      },
+    });
+  } catch { /* never throw from telemetry */ }
+}
+
 // Graceful shutdown helper — call from a SIGTERM handler if you want
 // in-flight events flushed before Railway kills the process. Optional;
 // PostHog's own batching usually catches them anyway.

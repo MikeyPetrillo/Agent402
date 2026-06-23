@@ -3,9 +3,11 @@ import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chr
 const ENTRIES = [
   {
     date: "2026-06-23",
-    title: "Upstream reliability: finance-kit retry, gov-kit error reclassification",
+    title: "PostHog tool_call event + upstream reliability fixes",
     items: [
-      "finance-kit jsonGet: automatic single retry on network/timeout failure (Nasdaq, Yahoo)",
+      "PostHog tool_call event: every tool call (success + failure) now streams to PostHog with slug, latency, cached, errored, status, synthetic",
+      "Nasdaq CF Worker relay: earnings-calendar routes through Cloudflare to bypass Railway egress null-route",
+      "finance-kit jsonGet: automatic single retry on network/timeout failure",
       "gov-kit getJson: upstream 4xx now correctly surfaced as 502, not 422",
     ],
   },

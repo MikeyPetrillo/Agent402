@@ -20,7 +20,7 @@ import { initLeadsDb, insertLead, listLeads, countLeads, leadsDbEnabled } from "
 import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES, noteCacheOutcome, cacheCounters } from "./cache.js";
 import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled } from "./analytics-db.js";
 import { initSentry, captureToolError, sentryEnabled } from "./sentry.js";
-import { initPostHog, capturePostHogToolError, posthogEnabled } from "./posthog.js";
+import { initPostHog, capturePostHogToolError, capturePostHogToolCall, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
@@ -1017,14 +1017,9 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     logToolError(analyticsSlug, status, err.message, undefined, synthetic);
     res.status(status).json({ error: err.message });
   } finally {
-    recordToolCall({
-      slug: analyticsSlug,
-      latencyMs: Date.now() - startedAt,
-      cached,
-      errored,
-      status,
-      synthetic,
-    }).catch(() => {});
+    const latencyMs = Date.now() - startedAt;
+    recordToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic }).catch(() => {});
+    capturePostHogToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic });
   }
 }
 app.get("/api/find", (req, res) => {
@@ -1418,14 +1413,10 @@ mountMcp(app, CATALOG, {
     // ride along — synthetic is always false here. Pass explicitly so future
     // refactors don't accidentally let a stray truthy value through.
     if (meta.errored) logToolError(slug, status, meta.errorMessage || "mcp-error", undefined, false);
-    recordToolCall({
-      slug,
-      latencyMs: meta.latencyMs | 0,
-      cached: false,
-      errored: !!meta.errored,
-      status,
-      synthetic: false,
-    }).catch(() => {});
+    const latencyMs = meta.latencyMs | 0;
+    const errored = !!meta.errored;
+    recordToolCall({ slug, latencyMs, cached: false, errored, status, synthetic: false }).catch(() => {});
+    capturePostHogToolCall({ slug, latencyMs, cached: false, errored, status, synthetic: false });
   },
 });
 
@@ -1865,15 +1856,10 @@ for (const tool of ALL_KIT) {
         res.status(status).json({ error: err.message });
       }
     } finally {
+      const latencyMs = Date.now() - startedAt;
       // Fire-and-forget. Analytics outages must NEVER affect agents.
-      recordToolCall({
-        slug: tool.slug,
-        latencyMs: Date.now() - startedAt,
-        cached,
-        errored,
-        status,
-        synthetic,
-      }).catch(() => {});
+      recordToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic }).catch(() => {});
+      capturePostHogToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic });
     }
   });
 }
