@@ -51,6 +51,9 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/api/cache-stats`, priority: "0.5" },
     { loc: `${baseUrl}/tollbooth`, priority: "0.7" },
     { loc: `${baseUrl}/tollbooth/cloud`, priority: "0.7" },
+    { loc: `${baseUrl}/integrations`, priority: "0.8" },
+    { loc: `${baseUrl}/pricing`, priority: "0.8" },
+    { loc: `${baseUrl}/changelog`, priority: "0.7" },
   ];
   const guideUrls = [
     { loc: `${baseUrl}/guides`, priority: "0.8" },
@@ -229,8 +232,11 @@ for free tools; USDC via x402 when an \`@x402/fetch\` is passed):
 - \`agent402-ai-sdk\` — Vercel AI SDK (\`streamText\` / \`generateText\` / \`generateObject\`)
 - \`agent402-langchain\` — LangChain JS / LangGraph (\`DynamicStructuredTool\`)
 - \`agent402-llamaindex\` — LlamaIndex TS (\`FunctionTool\`)
+- \`agent402-google-adk\` — Google ADK (Gemini agents, \`FunctionTool\`)
+- \`agent402-openai-agents\` — OpenAI Agents SDK
+- \`agent402-strands\` — AWS Strands agent framework
 
-All five share the same surface: \`agent402Tools({ slugs, freeOnly, fetch })\`
+All eight share the same surface: \`agent402Tools({ slugs, freeOnly, fetch })\`
 returns \`{ tools, execute, client }\`. Source: https://github.com/MikeyPetrillo/Agent402/tree/main/adapters
 
 ## How to pay with USDC (JavaScript example)

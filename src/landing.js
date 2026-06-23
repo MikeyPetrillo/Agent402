@@ -92,7 +92,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "name": "Agent402",
       "url": "${baseUrl}",
       "founder": { "@type": "Person", "name": "Mikey Petrillo", "url": "https://github.com/MikeyPetrillo" },
-      "sameAs": ["https://github.com/MikeyPetrillo", "https://github.com/MikeyPetrillo/Agent402", "https://www.npmjs.com/package/agent402-mcp", "https://www.npmjs.com/package/agent402-client", "https://www.npmjs.com/package/agent402-tollbooth", "https://www.npmjs.com/package/agent402-openai-tools", "https://www.npmjs.com/package/agent402-anthropic-tools", "https://www.npmjs.com/package/agent402-ai-sdk", "https://www.npmjs.com/package/agent402-langchain", "https://www.npmjs.com/package/agent402-llamaindex"],
+      "sameAs": ["https://github.com/MikeyPetrillo", "https://github.com/MikeyPetrillo/Agent402", "https://www.npmjs.com/package/agent402-mcp", "https://www.npmjs.com/package/agent402-client", "https://www.npmjs.com/package/agent402-tollbooth", "https://www.npmjs.com/package/agent402-openai-tools", "https://www.npmjs.com/package/agent402-anthropic-tools", "https://www.npmjs.com/package/agent402-ai-sdk", "https://www.npmjs.com/package/agent402-langchain", "https://www.npmjs.com/package/agent402-llamaindex", "https://www.npmjs.com/package/agent402-google-adk", "https://www.npmjs.com/package/agent402-strands"],
       "description": "Machine-to-machine payments for AI agents: ${count} pay-per-call web tools settled in USDC via the x402 protocol, or free with proof-of-work."
     },
     {
@@ -450,10 +450,13 @@ npm install agent402-anthropic-tools      # Anthropic Messages API (tool_use)
 npm install agent402-ai-sdk               # Vercel AI SDK (streamText / generateText)
 npm install agent402-langchain            # LangChain JS / LangGraph
 npm install agent402-llamaindex           # LlamaIndex TS
+npm install agent402-google-adk           # Google ADK (Gemini agents)
+npm install agent402-strands              # AWS Strands
 
 import { agent402Tools } from "agent402-openai-tools";
 const { tools, execute } = await agent402Tools({ slugs: ["extract", "hash", "render"] });
 // pass tools to openai.chat.completions.create({ tools }); call execute(name, args) on a tool_call.</pre>
+    <p class="sub" style="margin-top:12px">All <a href="/integrations">8 framework adapters</a> share the same surface: zero-dep, native tool objects, payment handled underneath.</p>
 
     <p class="lbl">Or try it free <span>— no wallet needed</span></p>
     <pre>curl ${baseUrl}/api/pricing          # machine-readable catalog
