@@ -299,9 +299,9 @@ export const DATE_TIME_TOOLS = [
     },
   },
   {
-    route: "GET /api/date-diff",
-    name: "Date difference",
-    slug: "date-diff",
+    route: "GET /api/calendar-diff",
+    name: "Calendar difference",
+    slug: "calendar-diff",
     category: "data",
     price: "$0.001",
     description:
@@ -438,9 +438,9 @@ export const DATE_TIME_TOOLS = [
     },
   },
   {
-    route: "GET /api/business-days",
-    name: "Business days counter",
-    slug: "business-days",
+    route: "GET /api/workday-count",
+    name: "Workday counter",
+    slug: "workday-count",
     category: "data",
     price: "$0.001",
     description:

@@ -18,20 +18,20 @@ catch (e) { ok(e.statusCode === 400, "tz-convert rejects bad tz"); }
 try { await h("timezone-convert")({ datetime: "", from: "UTC", to: "UTC" }); ok(false, "tz-convert rejects empty datetime"); }
 catch (e) { ok(e.statusCode === 400, "tz-convert rejects empty datetime"); }
 
-// --- date-diff ---
+// --- calendar-diff ---
 {
-  const r = await h("date-diff")({ from: "2024-01-15", to: "2026-06-23" });
-  ok(r.diff.years === 2, "date-diff years=2");
-  ok(r.diff.months === 5, "date-diff months=5");
-  ok(r.total.days === 890, "date-diff total days=890");
-  ok(r.direction === "forward", "date-diff direction=forward");
+  const r = await h("calendar-diff")({ from: "2024-01-15", to: "2026-06-23" });
+  ok(r.diff.years === 2, "calendar-diff years=2");
+  ok(r.diff.months === 5, "calendar-diff months=5");
+  ok(r.total.days === 890, "calendar-diff total days=890");
+  ok(r.direction === "forward", "calendar-diff direction=forward");
 }
 {
-  const r = await h("date-diff")({ from: "2026-06-23", to: "2024-01-15" });
-  ok(r.direction === "backward", "date-diff backward direction");
+  const r = await h("calendar-diff")({ from: "2026-06-23", to: "2024-01-15" });
+  ok(r.direction === "backward", "calendar-diff backward direction");
 }
-try { await h("date-diff")({ from: "bad", to: "2026-01-01" }); ok(false, "date-diff rejects bad from"); }
-catch (e) { ok(e.statusCode === 400, "date-diff rejects bad from"); }
+try { await h("calendar-diff")({ from: "bad", to: "2026-01-01" }); ok(false, "calendar-diff rejects bad from"); }
+catch (e) { ok(e.statusCode === 400, "calendar-diff rejects bad from"); }
 
 // --- cron-explain ---
 {
@@ -69,22 +69,22 @@ catch (e) { ok(e.statusCode === 400, "date-format rejects bad input"); }
 // --- business-days ---
 {
   // 2026 full year: 365 days, 261 weekdays, 104 weekend days
-  const r = await h("business-days")({ start: "2026-01-01", end: "2026-12-31", holidays: "false" });
-  ok(r.businessDays === 261, "biz-days 2026 no holidays = 261");
-  ok(r.weekendDays === 104, "biz-days 2026 weekends = 104");
-  ok(r.totalDays === 365, "biz-days 2026 total = 365");
+  const r = await h("workday-count")({ start: "2026-01-01", end: "2026-12-31", holidays: "false" });
+  ok(r.businessDays === 261, "workday-count 2026 no holidays = 261");
+  ok(r.weekendDays === 104, "workday-count 2026 weekends = 104");
+  ok(r.totalDays === 365, "workday-count 2026 total = 365");
 }
 {
-  const r = await h("business-days")({ start: "2026-01-01", end: "2026-12-31", holidays: "true" });
-  ok(r.holidayDays > 0, "biz-days with holidays subtracts some");
-  ok(r.businessDays < 261, "biz-days with holidays < 261");
-  ok(r.businessDays + r.weekendDays + r.holidayDays === 365, "biz-days totals add up");
+  const r = await h("workday-count")({ start: "2026-01-01", end: "2026-12-31", holidays: "true" });
+  ok(r.holidayDays > 0, "workday-count with holidays subtracts some");
+  ok(r.businessDays < 261, "workday-count with holidays < 261");
+  ok(r.businessDays + r.weekendDays + r.holidayDays === 365, "workday-count totals add up");
 }
-try { await h("business-days")({ start: "2026-12-31", end: "2026-01-01" }); ok(false, "biz-days rejects end<start"); }
-catch (e) { ok(e.statusCode === 400, "biz-days rejects end<start"); }
+try { await h("workday-count")({ start: "2026-12-31", end: "2026-01-01" }); ok(false, "workday-count rejects end<start"); }
+catch (e) { ok(e.statusCode === 400, "workday-count rejects end<start"); }
 
-try { await h("business-days")({ start: "", end: "2026-01-01" }); ok(false, "biz-days rejects empty start"); }
-catch (e) { ok(e.statusCode === 400, "biz-days rejects empty start"); }
+try { await h("workday-count")({ start: "", end: "2026-01-01" }); ok(false, "workday-count rejects empty start"); }
+catch (e) { ok(e.statusCode === 400, "workday-count rejects empty start"); }
 
 // --- summary ---
 console.log(`\n=== date-time-kit: ${pass}/${pass + fail} PASS ===`);
