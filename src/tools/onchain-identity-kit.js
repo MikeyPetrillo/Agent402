@@ -11,12 +11,12 @@
 // sign EAS attestations. All four tools surface public profile data that
 // the underlying protocol publishes.
 //
-// Upstreams (all keyless):
+// Upstreams:
 //   • ensideas.com    — community-maintained ENS reverse + avatar API
-//                       (used by Rainbow, Coinbase Wallet, etc.)
-//   • api.warpcast.com — Warpcast public Farcaster API (read endpoints
-//                       don't require auth)
-//   • easscan.org     — EAS-funded GraphQL indexer for mainnet/Base/Optimism
+//                       (used by Rainbow, Coinbase Wallet, etc.) [keyless]
+//   • api.warpcast.com — Warpcast Farcaster API (now requires auth —
+//                       set WARPCAST_API_KEY to enable Farcaster tools)
+//   • easscan.org     — EAS-funded GraphQL indexer for mainnet/Base/Optimism [keyless]
 //
 // All 4 tools are wallet-only — every handler reaches external HTTP and
 // shares a per-IP rate limit with the public pool.
@@ -141,8 +141,16 @@ async function ensBulkResolve({ addresses } = {}) {
   };
 }
 
+// Warpcast API auth — the read endpoints now require a bearer token.
+// WARPCAST_API_KEY env var; without it the Farcaster tools return 503.
+function warpcastInit() {
+  const key = process.env.WARPCAST_API_KEY;
+  if (!key) throw bad("Farcaster lookups require WARPCAST_API_KEY (Warpcast now requires auth)", 503);
+  return { headers: { authorization: `Bearer ${key}` } };
+}
+
 // ----------------------------------------------------------------------------
-// 2. farcaster-profile — lookup by FID or username via Warpcast public API
+// 2. farcaster-profile — lookup by FID or username via Warpcast API
 // ----------------------------------------------------------------------------
 async function farcasterProfile({ fid, username } = {}) {
   const f = Number.parseInt(fid, 10);
@@ -153,7 +161,7 @@ async function farcasterProfile({ fid, username } = {}) {
   const url = Number.isFinite(f)
     ? `${WARPCAST_API}/user?fid=${f}`
     : `${WARPCAST_API}/user-by-username?username=${encodeURIComponent(u)}`;
-  const json = await fetchJson(url, "Warpcast");
+  const json = await fetchJson(url, "Warpcast", warpcastInit());
   const user = json.result?.user;
   if (!user) {
     throw bad(`Farcaster user not found for ${Number.isFinite(f) ? `fid=${f}` : `username=${u}`}`, 404);
@@ -184,7 +192,7 @@ async function farcasterByAddress({ address } = {}) {
   // surface that as { found: false } so the agent doesn't have to handle 404.
   let json;
   try {
-    json = await fetchJson(`${WARPCAST_API}/user-by-verification?address=${addr}`, "Warpcast");
+    json = await fetchJson(`${WARPCAST_API}/user-by-verification?address=${addr}`, "Warpcast", warpcastInit());
   } catch (e) {
     if (e.statusCode === 404) {
       return { found: false, address: addr, source: "warpcast" };
