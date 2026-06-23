@@ -2,6 +2,8 @@ import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, POW_DIFFICULTY } from "./pow.js";
 import { guideSlugs } from "./guides.js";
 import { skillSlugs, SKILL_PACKS } from "./skills.js";
+import { BLOG_POSTS } from "./blog.js";
+import { ADAPTERS } from "./adapter-docs.js";
 
 export function robotsTxt(baseUrl) {
   // Explicitly welcome AI/agent crawlers and search engines; point them at the
@@ -20,6 +22,7 @@ Disallow: /api/memory
 
 # Machine-readable catalogs for agents: ${baseUrl}/llms.txt , ${baseUrl}/openapi.json , ${baseUrl}/api/pricing , ${baseUrl}/api/cacheable , ${baseUrl}/.well-known/x402 , ${baseUrl}/api/reliability , ${baseUrl}/api/find?q={task} , ${baseUrl}/api/route , ${baseUrl}/api/leaderboard
 Sitemap: ${baseUrl}/sitemap.xml
+Sitemap: ${baseUrl}/sitemapindex.xml
 `;
 }
 
@@ -66,6 +69,10 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/sdk-playground`, priority: "0.7" },
     { loc: `${baseUrl}/docs/api/explorer`, priority: "0.8" },
     { loc: `${baseUrl}/docs/adapters`, priority: "0.8" },
+    { loc: `${baseUrl}/docs/webhooks`, priority: "0.7" },
+    { loc: `${baseUrl}/playground`, priority: "0.8" },
+    ...BLOG_POSTS.map((p) => ({ loc: `${baseUrl}/blog/${p.slug}`, priority: "0.7" })),
+    ...ADAPTERS.map((a) => ({ loc: `${baseUrl}/docs/adapters/${a.slug}`, priority: "0.7" })),
   ];
   const guideUrls = [
     { loc: `${baseUrl}/guides`, priority: "0.8" },
@@ -128,6 +135,9 @@ export function sitemapPages(baseUrl, catalog) {
     { loc: `${baseUrl}/badges`, priority: "0.5" },
     { loc: `${baseUrl}/docs/api/explorer`, priority: "0.8" },
     { loc: `${baseUrl}/docs/adapters`, priority: "0.8" },
+    { loc: `${baseUrl}/docs/webhooks`, priority: "0.7" },
+    ...BLOG_POSTS.map((p) => ({ loc: `${baseUrl}/blog/${p.slug}`, priority: "0.7" })),
+    ...ADAPTERS.map((a) => ({ loc: `${baseUrl}/docs/adapters/${a.slug}`, priority: "0.7" })),
     { loc: `${baseUrl}/privacy`, priority: "0.4" },
     { loc: `${baseUrl}/terms`, priority: "0.4" },
   ];

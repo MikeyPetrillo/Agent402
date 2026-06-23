@@ -20,6 +20,15 @@
 - [[Tollbooth for Agencies|Tollbooth-for-Agencies]] — many-site playbook
 - [Try Tollbooth Cloud](https://agent402.tools/tollbooth/cloud) (managed)
 
+**Website & Developer**
+- [Quickstart](https://agent402.tools/quickstart) — first call in 60 seconds
+- [Playground](https://agent402.tools/playground) — try tools in your browser
+- [SDK REPL](https://agent402.tools/sdk-playground) — live code editor
+- [API Explorer](https://agent402.tools/docs/api/explorer) — browse OpenAPI
+- [Adapter Docs](https://agent402.tools/docs/adapters) — per-framework guides
+- [Workflows](https://agent402.tools/workflows) — chaining patterns
+- [Blog](https://agent402.tools/blog) · [Changelog](https://agent402.tools/changelog)
+
 **Under the hood**
 - [[Architecture]]
 - [[Security Model]]

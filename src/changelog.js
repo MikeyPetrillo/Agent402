@@ -3,6 +3,17 @@ import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chr
 const ENTRIES = [
   {
     date: "2026-06-23",
+    title: "Infrastructure hardening and developer experience",
+    items: [
+      "Cache-Control headers added to 11 static/SEO routes (robots.txt, sitemap.xml, llms.txt, openapi.json, logos, cards, demo.js, glama.json)",
+      "/health endpoint enhanced with meta block (toolCount, uptime, freeMode)",
+      "Sitemap updated with blog posts, adapter docs, and webhook pages",
+      "robots.txt now references both sitemap.xml and sitemapindex.xml",
+      "Wiki sidebar and home page updated with developer experience links",
+    ],
+  },
+  {
+    date: "2026-06-23",
     title: "Crypto-hash, string, and calendar kits — 15 new tools (1,323 total)",
     items: [
       "crypto-hash-kit: pbkdf2, scrypt-derive, hkdf-expand, constant-compare, checksum (CRC32/Adler32)",
