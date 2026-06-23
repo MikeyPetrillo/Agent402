@@ -129,8 +129,58 @@ tollbooth-gated endpoint paid by an AgentCore agent.
 
 ---
 
+## 5. mcpservers.org (Awesome MCP Servers — hosted site)
+
+A curated MCP server site (separate from `punkpeye/awesome-mcp-servers` —
+mcpservers.org maintains its own index). Submission is a single form post
+that takes a GitHub repo URL; no PR, no fork.
+
+**Steps**
+1. Visit https://mcpservers.org/submit
+2. Fill the form:
+
+   - **GitHub repo URL:** `https://github.com/MikeyPetrillo/Agent402`
+   - **Name:** `Agent402`
+   - **Short description (one line, ~150 chars):**
+
+     ```
+     1,100+ pay-per-call web tools for AI agents over x402 (USDC on Base) — or free via proof-of-work. Browser, search, OCR, finance, EDGAR, durable memory.
+     ```
+
+   - **Long description / why (if asked):**
+
+     ```
+     Agent402 gives AI agents the headless browser, live web search + answers
+     with citations, OCR, PDF text extraction, financial/crypto/macro data
+     (Yahoo, CoinGecko, FRED, ECB, World Bank), SEC EDGAR filings, DNS/TLS/WHOIS,
+     wallet-keyed shared memory, and ~1,000 deterministic utilities (hash, JWT,
+     regex, compression, forecasting, statistics, finance math, etc.) — paid per
+     call in USDC on Base via the x402 protocol, or free via built-in
+     proof-of-work for the pure-CPU tools.
+
+     One config block, no per-tool signups, no API keys. Self-hostable
+     (open source MIT) or use the hosted remote at https://agent402.tools/mcp.
+     Also publishes 36 curated multi-tool skill packs as MCP prompts.
+     ```
+
+   - **Category / tags (pick what's offered):** `aggregator`, `payments`,
+     `web-search`, `browser-automation`, `finance`, `developer-tools`
+   - **Author:** `Mikey Petrillo / MikeyPetrillo`
+   - **License:** MIT
+   - **Logo URL:** `https://raw.githubusercontent.com/MikeyPetrillo/Agent402/main/docs/logo-400.png`
+
+3. Submit. mcpservers.org auto-reviews; turnaround is usually a few days.
+
+---
+
 Already listed (no action): official MCP Registry (with the hosted remote),
 npm, Coinbase CDP Bazaar discovery (verified 2026-06-16: 64 Agent402 endpoints
-in the public Bazaar index), agent402.app marketplace, Glama, mcp.so.
+in the public Bazaar index), agent402.app marketplace, Glama, mcp.so
+(verified 2026-06-21: live at mcp.so/server/agent402).
+Pending review: Cline MCP Marketplace (filed 2026-06-21 as
+cline/mcp-marketplace#1849).
+Not a submittable directory: Cursor (users add MCP servers to their own
+`~/.cursor/mcp.json`; cursor.directory is a third-party Cursor *rules* site,
+not an MCP listing).
 Next up once submitted: the Anthropic connector directory
 (see anthropic-directory-submission.md).

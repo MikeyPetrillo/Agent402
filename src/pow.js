@@ -79,6 +79,54 @@ export const WALLET_ONLY_SLUGS = new Set([
   "cert-transparency", "http-headers", "tech-stack", "asn-info",
   // x402 payments toolkit — kept off the free connector (paid surface only).
   "x402-quote", "usdc-balance", "tx-status", "gas-estimate", "x402-verify", "transfer-authorization", "ens-resolve",
+  // Chain-kit: every tool talks to Alchemy and counts against our compute-unit
+  // quota. PoW would let one client farm our paid upstream.
+  "wallet-balance", "token-metadata", "token-price", "wallet-transactions",
+  "nft-holdings", "nft-metadata", "gas-snapshot", "eth-call",
+  // Price-feed-kit: keyless public upstreams (Pyth Hermes, CoinGecko, DeFiLlama)
+  // but the rate limits are shared per-IP. PoW would let one client exhaust the
+  // shared quota for every other caller.
+  "price-pyth", "price-coingecko", "defi-tvl",
+  // Dex-kit: 3 Alchemy-backed (dex-pair, dex-pool, dex-quote share the same
+  // compute-unit quota as chain-kit) and 1 DeFiLlama-backed (dex-top-pools
+  // shares the per-IP quota with defi-tvl). All wallet-only for the same
+  // reasons as their underlying upstreams.
+  "dex-pair", "dex-pool", "dex-quote", "dex-top-pools",
+  // Prediction-market-kit: Polymarket Gamma + CLOB + Kalshi. All keyless but
+  // all hit external HTTP; PoW would let one client farm the per-IP rate
+  // limits we share with everyone else.
+  "polymarket-search", "polymarket-market", "polymarket-orderbook", "polymarket-price-history",
+  "kalshi-markets", "kalshi-event",
+  // MEV + L2 kit: Flashbots relay (keyless, per-IP rate-limited), DeFiLlama
+  // (per-IP shared with defi-tvl), and Alchemy (compute-unit quota shared with
+  // chain-kit/dex-kit). All wallet-only for the same reasons.
+  "mev-recent-blocks", "mev-builder-share", "mev-block-payment",
+  "l2-tvl", "l2-gas-comparison",
+  // Onchain-identity-kit: ensideas (keyless), Warpcast public API (keyless),
+  // EAS GraphQL indexers (keyless). All external HTTP with per-IP rate
+  // limits; wallet-only for the same reasons as the other crypto kits.
+  "ens-bulk-resolve", "farcaster-profile", "farcaster-by-address",
+  "eas-attestations",
+  // NFT-market-kit: Alchemy NFT API v3 (shares ALCHEMY_API_KEY + compute-unit
+  // pool with chain-kit / dex-kit / mev-and-l2-kit). 3 net-new market-side
+  // tools that complement chain-kit's existing nft-holdings + nft-metadata.
+  "nft-collection", "nft-floor", "nft-sales",
+  // Skill packs (bundled execution endpoints) — premium + standard tiers
+  // orchestrate paid-upstream tools (EDGAR / FRED / Alchemy / Brave /
+  // Yahoo / CoinGecko / DefiLlama / DNS resolvers / Chromium). PoW would
+  // turn one free request into N paid sub-calls. Light-tier packs (the 16
+  // pure-CPU bundles below this block) are deliberately omitted — every
+  // tool they orchestrate is itself PoW-eligible, so the bundle stays free
+  // over PoW too.
+  "skill-financial-research", "skill-sec-filings-deep-dive", "skill-macro-context",
+  "skill-crypto-research", "skill-regulatory-watch", "skill-search-and-cite",
+  "skill-macro-economics",
+  "skill-content-extraction", "skill-media-pipeline", "skill-document-intel",
+  "skill-trend-analysis", "skill-any-to-markdown", "skill-structured-scrape",
+  "skill-forecasting-bake-off", "skill-fraud-signals", "skill-security-audit",
+  "skill-link-preview", "skill-api-investigation", "skill-email-deliverability",
+  "skill-location-intel", "skill-dns-network-ops", "skill-status-snapshot",
+  "skill-schema-evolution",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */

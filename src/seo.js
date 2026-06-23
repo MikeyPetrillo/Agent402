@@ -166,9 +166,9 @@ Agents that cannot pay USDC can access the **pure-CPU tools** by solving a
 sha256 puzzle — a fraction of a second of the caller's own CPU. This costs no
 money and **no AI tokens**: there is no model anywhere in the loop, and every
 tool on this service is deterministic code (no LLM in the serving path).
-The network/browser/storage tools (extract, meta, dns, render,
-screenshot, pdf, memory, http-check, tls-cert, whois, robots-check, sitemap,
-email-validate, ip-info) stay wallet-only; everything else accepts proof-of-work.
+${tools.filter(isComputePayable).length} of the ${tools.length} tools accept proof-of-work; the network/browser/storage
+tools that need wallet-bound identity or live external egress stay wallet-only
+(${tools.filter((t) => !isComputePayable(t)).map((t) => t.slug).sort().join(", ")}).
 
 1. \`GET ${baseUrl}/api/pow/challenge?slug=hash\` → returns \`{ challenge, difficulty, token, ... }\`.
 2. Find an integer \`nonce\` such that \`sha256(challenge + ":" + nonce)\` has at least
@@ -215,7 +215,7 @@ or proof-of-work without):
 \`\`\`
 
 High-value tools (extract/render/screenshot/pdf/memory/…) are first-class MCP
-tools; the other ~1000 are reachable via its \`search_tools\` + \`call_tool\`.
+tools; the remaining ${tools.length - 14} are reachable via its \`search_tools\` + \`call_tool\`.
 
 ## Drop into your agent framework (zero-dep adapters)
 

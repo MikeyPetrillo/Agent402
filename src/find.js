@@ -37,6 +37,24 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   const limit = Math.min(Math.max(parseInt(k, 10) || 5, 1), 25);
   if (!terms.length) return { query: q, count: 0, results: [] };
 
+  // Directional alignment: how many adjacent (q[i], q[i+1]) query-term pairs
+  // appear in the slug *in the same order*. This is the tiebreaker that fixes
+  // the symmetric-convert problem — "convert miles to kilometers" should rank
+  // `convert-miles-to-kilometers` above `convert-kilometers-to-miles`, since
+  // their lexical scores tie and their slug lengths tie, but the first slug
+  // honors the directional intent of the query and the second reverses it.
+  // Cheap to compute (O(terms) per tool) and contributes only to the tiebreak,
+  // so it never overrides a stronger lexical match.
+  const directionScore = (slug) => {
+    let s = 0;
+    for (let i = 0; i < terms.length - 1; i++) {
+      const a = slug.indexOf(terms[i]);
+      const b = slug.indexOf(terms[i + 1]);
+      if (a !== -1 && b !== -1 && a < b) s++;
+    }
+    return s;
+  };
+
   const scored = [];
   for (const t of toolList(catalog)) {
     const slug = t.slug.toLowerCase();
@@ -52,24 +70,48 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
       if (tagSet.has(term)) score += 3;
       if (hay.includes(term)) score += 1;
     }
-    if (score > 0) scored.push([score, t]);
+    if (score > 0) scored.push([score, t, directionScore(slug)]);
   }
-  // Highest score first; break ties by shorter slug (more specific) then alpha.
-  scored.sort((a, b) => b[0] - a[0] || a[1].slug.length - b[1].slug.length || a[1].slug.localeCompare(b[1].slug));
+  // Highest score first; then more in-order term pairs win (directional intent);
+  // then shorter slug (more specific); then alpha for full determinism.
+  scored.sort((a, b) =>
+    b[0] - a[0] ||
+    b[2] - a[2] ||
+    a[1].slug.length - b[1].slug.length ||
+    a[1].slug.localeCompare(b[1].slug)
+  );
 
-  const results = scored.slice(0, limit).map(([score, t]) => ({
-    slug: t.slug,
-    name: t.name,
-    route: t.route,
-    price: t.price,
-    category: t.category,
-    description: t.description,
-    score,
-    computePayable: powSlugs ? powSlugs.has(t.slug) : undefined,
-    inputSchema: t.discovery?.inputSchema,
-    example: t.discovery?.input ?? t.discovery?.example,
-    docs: baseUrl ? `${baseUrl}/tools/${t.slug}` : undefined,
-  }));
+  const results = scored.slice(0, limit).map(([score, t]) => {
+    const example = t.discovery?.input ?? t.discovery?.example;
+    const required = Array.isArray(t.discovery?.inputSchema?.required) ? t.discovery.inputSchema.required : [];
+    // Pre-assemble the call so an agent doesn't have to split the route string
+    // and decide body-vs-query itself. Body for write methods, query for the rest.
+    // Skipped when there's no example — `callExample` should always be runnable.
+    let callExample;
+    if (example && t.route) {
+      const [method, path] = t.route.split(" ");
+      callExample = ["POST", "PUT", "PATCH"].includes(method)
+        ? { method, path, body: example }
+        : { method, path, query: example };
+    }
+    return {
+      slug: t.slug,
+      name: t.name,
+      route: t.route,
+      price: t.price,
+      // Discovery up top: the answer to "how do I call this" should be visible
+      // before the verbose description/schema/score fields.
+      callExample,
+      example,
+      required,
+      inputSchema: t.discovery?.inputSchema,
+      category: t.category,
+      description: t.description,
+      score,
+      computePayable: powSlugs ? powSlugs.has(t.slug) : undefined,
+      docs: baseUrl ? `${baseUrl}/tools/${t.slug}` : undefined,
+    };
+  });
   // Cross-surface: also recommend the matching skill pack(s) so an agent asking
   // about a multi-tool task (e.g. "audit a domain") sees the whole workflow,
   // not just the highest-scoring single tool. Empty array when nothing matches

@@ -60,6 +60,56 @@ const NETWORK = new Set([
   // Network-kit2: crt.sh (CT logs), live HTTP fetch, signature scan, Team Cymru
   // DNS-whois. All hit free public infra; tolerate transient 4xx/5xx upstream.
   "/api/cert-transparency", "/api/http-headers", "/api/tech-stack", "/api/asn-info",
+  // Chain-kit: Alchemy-backed reads (JSON-RPC + NFT + Prices + Data APIs).
+  // Returns 503 without ALCHEMY_API_KEY (CI env may not have it); the
+  // 502/503/504 tolerance below covers that. Daily paid-canary covers
+  // post-deploy verification once the key is set in Railway.
+  "/api/wallet-balance", "/api/token-metadata", "/api/token-price",
+  "/api/wallet-transactions", "/api/nft-holdings", "/api/nft-metadata",
+  "/api/gas-snapshot", "/api/eth-call",
+  // Price-feed-kit: keyless public upstreams (Pyth Hermes, CoinGecko, DeFiLlama).
+  // CoinGecko's free tier shares a per-IP ~30 rpm limit; tolerate 429/502/503/504.
+  "/api/price-pyth", "/api/price-coingecko", "/api/defi-tvl",
+  // Dex-kit: 3 Alchemy-backed (dex-pair / dex-pool / dex-quote) — 503 without
+  // ALCHEMY_API_KEY, same as chain-kit. dex-top-pools hits DeFiLlama keylessly.
+  "/api/dex-pair", "/api/dex-pool", "/api/dex-quote", "/api/dex-top-pools",
+  // Prediction-market-kit: keyless public upstreams (Polymarket Gamma + CLOB,
+  // Kalshi). Per-IP rate-limited; tolerate transient 429/502/503/504. The
+  // placeholder example inputs may also return 4xx (e.g. "election" keyword
+  // search returns 0 results out of cycle, or a fake tokenId yields 404).
+  "/api/polymarket-search", "/api/polymarket-market", "/api/polymarket-orderbook",
+  "/api/polymarket-price-history", "/api/kalshi-markets", "/api/kalshi-event",
+  // MEV + L2 kit: Flashbots relay (keyless), DeFiLlama (keyless), and Alchemy
+  // (503 without key). Tolerate transient upstream errors + 4xx from
+  // placeholder example inputs (e.g. specific block-number lookups may miss).
+  "/api/mev-recent-blocks", "/api/mev-builder-share", "/api/mev-block-payment",
+  "/api/l2-tvl", "/api/l2-gas-comparison",
+  // Onchain-identity-kit: keyless public APIs (ensideas, Warpcast, EAS
+  // indexers). Tolerate transient upstream errors + 4xx from placeholder
+  // example inputs (0x000…0 may return null/empty).
+  "/api/ens-bulk-resolve", "/api/farcaster-profile", "/api/farcaster-by-address",
+  "/api/eas-attestations",
+  // NFT-market-kit: Alchemy NFT v3 (503 without key in CI without secrets;
+  // 4xx on placeholder contracts that don't exist on a given chain).
+  "/api/nft-collection", "/api/nft-floor", "/api/nft-sales",
+  // Skill packs (bundled execution endpoints) — orchestrate up to 8 underlying
+  // tool calls per request; sequential chains can exceed the 20s AbortSignal in
+  // CI even when each underlying call is fast. The partial-success envelope
+  // always returns 200 with {pack, args, steps, summary}, so strict mode would
+  // also pass — NETWORK membership is a timeout safety hedge. All 39 packs:
+  "/api/skill/security-audit", "/api/skill/email-deliverability", "/api/skill/financial-research",
+  "/api/skill/macro-economics", "/api/skill/dns-network-ops", "/api/skill/crypto-research",
+  "/api/skill/content-extraction", "/api/skill/sec-filings-deep-dive", "/api/skill/structured-scrape",
+  "/api/skill/decode-blob", "/api/skill/trend-analysis", "/api/skill/forecasting-bake-off",
+  "/api/skill/document-intel", "/api/skill/loan-comparison", "/api/skill/investment-decision",
+  "/api/skill/retirement-planning", "/api/skill/savings-goal", "/api/skill/fraud-signals",
+  "/api/skill/api-investigation", "/api/skill/text-hygiene", "/api/skill/csv-profile",
+  "/api/skill/location-intel", "/api/skill/meeting-scheduler", "/api/skill/jwt-forensics",
+  "/api/skill/user-onboarding", "/api/skill/data-interchange", "/api/skill/rag-prep",
+  "/api/skill/webhook-debug", "/api/skill/a11y-audit", "/api/skill/trip-planner",
+  "/api/skill/identity-mint", "/api/skill/macro-context", "/api/skill/regulatory-watch",
+  "/api/skill/search-and-cite", "/api/skill/media-pipeline", "/api/skill/schema-evolution",
+  "/api/skill/link-preview", "/api/skill/any-to-markdown", "/api/skill/status-snapshot",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 
@@ -83,6 +133,7 @@ const SHAPE_HAPPY_PATH_ONLY = new Set([
   "/api/x402-quote",   // example shows 402-detected case; placeholder URL may not 402
   "/api/tx-status",    // example shows success; 0x0…0 hash returns {status:"not_found"}
   "/api/x402-verify",  // example shows verified settlement; 0x0…0 hash returns {status:"not_found"}
+  "/api/mev-block-payment", // example shows found=true; placeholder block 22000000 returns {found:false}
 ]);
 function checkShape(path, method, op, body) {
   if (SHAPE_HAPPY_PATH_ONLY.has(path)) return;

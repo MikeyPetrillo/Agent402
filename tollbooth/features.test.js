@@ -159,5 +159,35 @@ ok(httpsAccepted, "httpStatsSink accepts bearer token over https://");
 const html = dashboardHtml();
 ok(html.startsWith("<!doctype html>") && html.includes("/__tollbooth/stats"), "dashboard is HTML that reads /__tollbooth/stats");
 ok(["requests", "freeAllowed", "wouldCharge", "charged", "powSolved", "x402Paid", "difficultyNow"].every((k) => html.includes(k)), "dashboard references every stat field");
+// Derived operator ratios — answer "is the gate converting?" and "are they
+// paying USDC or just grinding PoW?" without forcing operators to do
+// the arithmetic mentally.
+ok(html.includes('id="paidpct"') && html.includes("Paid conversion"), "dashboard renders Paid conversion ratio card");
+ok(html.includes('id="usdcpct"') && html.includes("Paid in USDC"), "dashboard renders Paid-in-USDC share card");
+// The client-side denominator must guard the 0-requests case (no NaN%) and
+// the no-paid-requests case (no 0/0 in the USDC share). Both are computed
+// in tick() — assert the source has the guards so we don't regress them.
+ok(/reqs\s*\?/.test(html), "paid conversion guards requests==0");
+ok(/paid\s*\?/.test(html), "USDC share guards paid==0 (no NaN)");
+// Sparkline meta (rate-now, peak, paid overlay) — operator-friendly numbers
+// that mean operators don't have to eyeball the chart for magnitude. All
+// derived client-side from the existing snapshot fields, no sink changes.
+ok(html.includes('id="ratenow"') && html.includes('id="ratepeak"'), "dashboard renders rate + peak meta near sparkline");
+ok(html.includes('id="paidnow"'), "dashboard renders paid arrival rate meta");
+ok(html.includes('id="sparkpaid"'), "dashboard renders the paid-arrivals overlay polyline");
+ok(html.includes("paidSeries"), "dashboard tracks a paidSeries parallel to series");
+// rateperminute math: deltas are 5s apart, so * (60/5) = *12 — locking the
+// scalar means an operator-visible "rate/min" stays correct if the poll
+// interval changes (the test reminds you to update both spots).
+ok(/\*\s*12\b/.test(html), "rate/min math (*12 from 5s polls) is present");
+// Operator probes panel — copy-paste curls let operators verify the gate is
+// doing what the counters say without leaving the page. <origin> placeholders
+// must be present in the source (initProbes substitutes them client-side from
+// window.location.origin so what the operator copies is what they can run).
+ok(html.includes('id="probes"') && html.includes("Operator probes"), "dashboard renders the Operator probes panel");
+ok(html.includes("/__tollbooth/stats") && /curl/.test(html), "probes include a stats-scrape curl");
+ok(/GPTBot/.test(html) && /Mozilla\/5\.0/.test(html), "probes include both a bot UA and a browser UA curl");
+ok(html.includes("&lt;origin&gt;"), "probes carry an <origin> placeholder for client-side host substitution");
+ok(html.includes("initProbes") && html.includes("navigator.clipboard"), "probes wire a copy-to-clipboard handler (with execCommand fallback)");
 
 console.log(`\n${pass} passed`);

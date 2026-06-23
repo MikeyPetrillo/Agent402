@@ -1,6 +1,7 @@
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 import { CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { SKILL_PACKS } from "./skills.js";
 
 export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   const tools = toolList(catalog);
@@ -308,6 +309,7 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@latest
   </header>
 
   <div class="callout">🏆 <b>The neutral x402 layer.</b> <a href="/index">Index</a> + <a href="/api/route">Smart Order Router</a> + <a href="/leaderboard">Leaderboard</a> — auto-crawled from the <a href="https://docs.cdp.coinbase.com/x402/docs/bazaar" rel="noopener">CDP Bazaar</a>, ranked by real on-chain USDC volume. Use <code>?include=external</code> to exclude Agent402 itself.</div>
+  <div class="callout">🧩 <b>${SKILL_PACKS.length} multi-tool skill packs.</b> Curated workflows for jobs no single tool covers — <a href="/skills/security-audit">audit a domain</a>, <a href="/skills/trend-analysis">work up a time-series</a>, <a href="/skills/decode-blob">peel an opaque blob</a>, <a href="/skills/structured-scrape">deterministically scrape a page</a>. Each pack is a Claude-ready prompt template callable as an MCP prompt (<code>prompts/list</code> → <code>prompts/get</code>) or plain HTTP. <a href="/skills"><b>Browse all packs →</b></a></div>
   <div class="callout">🚧 <b>The other side: charge AI bots crawling <em>your</em> site.</b> <a href="/tollbooth"><b>agent402-tollbooth</b></a> is an open-source <b>pay-per-crawl</b> gate — humans browse free, crawlers pay per request. Deploy on <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/docker" rel="noopener">Docker</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare" rel="noopener">Cloudflare</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs" rel="noopener">Next.js</a>, or <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/wordpress" rel="noopener">WordPress</a>. <a href="/tollbooth/cloud">Tollbooth Cloud →</a></div>
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
 

@@ -60,6 +60,14 @@ import { COMPRESSION_TOOLS } from "./tools/compression-kit.js";
 import { STATS_TOOLS } from "./tools/stats-kit.js";
 import { FORECAST_TOOLS } from "./tools/forecast-kit.js";
 import { FINANCE_MATH_TOOLS } from "./tools/finance-math-kit.js";
+import { COLOR_TOOLS } from "./tools/color-kit.js";
+import { CHAIN_TOOLS } from "./tools/chain-kit.js";
+import { PRICE_FEED_TOOLS } from "./tools/price-feed-kit.js";
+import { DEX_TOOLS } from "./tools/dex-kit.js";
+import { PREDICTION_MARKET_TOOLS } from "./tools/prediction-market-kit.js";
+import { MEV_AND_L2_TOOLS } from "./tools/mev-and-l2-kit.js";
+import { ONCHAIN_IDENTITY_TOOLS } from "./tools/onchain-identity-kit.js";
+import { NFT_MARKET_TOOLS } from "./tools/nft-market-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage } from "./pages.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage } from "./guides.js";
@@ -68,7 +76,8 @@ import { docsIndex, docsPage, docsApi } from "./docs.js";
 import { shopPage } from "./shop.js";
 import { economyPage } from "./economy.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...COLOR_TOOLS, ...CHAIN_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS];
+import { buildSkillTools } from "./tools/skill-runner.js";
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
 
@@ -473,6 +482,28 @@ const CATALOG = {
 for (const tool of ALL_KIT) {
   if (CATALOG[tool.route]) throw new Error(`Duplicate route in kit: ${tool.route}`);
   CATALOG[tool.route] = tool;
+}
+
+// Skill packs as paid bundled-execution endpoints. Built AFTER ALL_KIT
+// finishes populating CATALOG so each skill handler can resolve underlying
+// tool handlers at call time via the live CATALOG. The inline handlers map
+// covers routes that are bound inline in this file (extract/meta/dns/render/
+// pdf) rather than declared in a kit — the runner tries this map first.
+const SKILL_INLINE_HANDLERS = {
+  extract: async ({ url } = {}) => extractArticle(url),
+  meta:    async ({ url } = {}) => fetchPageMeta(url),
+  dns:     async ({ name, type } = {}) => dnsLookup(name, type),
+  render:  async ({ url } = {}) => renderArticle(url),
+  pdf:     async ({ url } = {}) => pdfToText(url),
+};
+const SKILL_TOOLS = buildSkillTools({
+  getCatalog: () => CATALOG,
+  inlineHandlers: SKILL_INLINE_HANDLERS,
+});
+for (const tool of SKILL_TOOLS) {
+  if (CATALOG[tool.route]) throw new Error(`Duplicate route in skill set: ${tool.route}`);
+  CATALOG[tool.route] = tool;
+  ALL_KIT.push(tool); // so the route-binding loop below picks them up too
 }
 
 // Routes that accept proof-of-work in lieu of payment: the pure-CPU tools.
@@ -1319,10 +1350,11 @@ mountMcp(app, CATALOG, {
   },
 });
 
-app.get("/api/pricing", (_req, res) =>
-  res.json({
+app.get("/api/pricing", (_req, res) => {
+  const endpointCount = Object.keys(CATALOG).length;
+  return res.json({
     name: "Agent402",
-    description: "Pay-per-call tools for AI agents via the x402 payment protocol.",
+    description: `Pay-per-call tools for AI agents via the x402 payment protocol — ${endpointCount} deterministic tools (browser, search, PDFs, OCR, finance, EDGAR, crypto, macro, memory) plus ${SKILL_PACKS.length} curated multi-tool skill packs callable as MCP prompts. Free via in-process proof-of-work or pay per call in USDC on Base. Open-source and self-hostable. MCP connector: ${BASE_URL}/mcp.`,
     payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC", networks: enabledNetworks(NETWORK) },
     altPayment: {
       protocol: "proof-of-work",
@@ -1339,8 +1371,8 @@ app.get("/api/pricing", (_req, res) =>
       const [method, path] = route.split(" ");
       return { method, path, price, category, slug, description, docs: `${BASE_URL}/tools/${slug}`, computePayable: POW_SLUGS.has(slug) };
     }),
-  })
-);
+  });
+});
 
 // Public machine-readable cache catalogue: every server-side cached route
 // with its TTL and the request fields that contribute to the cache key.

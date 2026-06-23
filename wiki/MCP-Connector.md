@@ -19,7 +19,7 @@ It exposes four read-only tools (each carries safety annotations):
 |---|---|
 | `find_tool` | Describe a task in plain language; returns the best-matching tool(s) **ready to call** — slug, price, input schema, an example, and the exact `call_tool` invocation. Skips the token-heavy "explore to find a tool" step |
 | `search_tools` | Find tools by description across the catalog; returns slugs + input schemas |
-| `call_tool` | Execute a tool by slug. The ~1,040 pure-CPU tools run **free** (rate-limited: 20/min, 120/hr per client); wallet-only tools return paid-path instructions instead of executing |
+| `call_tool` | Execute a tool by slug. The ~1,105 pure-CPU tools run **free** (rate-limited: 20/min, 120/hr per client); wallet-only tools return paid-path instructions instead of executing |
 | `about_agent402` | Service description, free-vs-paid breakdown |
 
 ## 2. `agent402-mcp` (npm) — the full catalog, payment underneath

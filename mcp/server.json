@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.MikeyPetrillo/agent402",
   "title": "Agent402 — pay-per-call web tools",
-  "description": "1,100+ paid web tools: search/answers, browser, PDF, finance/crypto/macro, EDGAR. USDC on Base.",
-  "version": "0.8.0",
+  "description": "1,236 paid agent tools + 39 multi-tool skill packs. USDC on Base or free via proof-of-work.",
+  "version": "0.8.1",
   "repository": {
     "url": "https://github.com/MikeyPetrillo/Agent402",
     "source": "github"
@@ -20,7 +20,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "agent402-mcp",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "transport": {
         "type": "stdio"
       },

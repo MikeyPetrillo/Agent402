@@ -1,4 +1,4 @@
-# Agent402 — the open x402 index (Find · Route · Leaderboard) + 1,100 tools for AI agents
+# Agent402 — the open x402 index (Find · Route · Leaderboard) + 1,236 tools & 39 skill packs for AI agents
 
 > **What makes it different:** Agent402 is **open-source and self-hostable** — and a
 > single integration gives a buyer **three free primitives over the whole x402
@@ -8,7 +8,8 @@
 > - **Route** — [`POST /api/route`](https://agent402.tools/api/route) is the **neutral Smart Order Router**: rank tools across every x402 seller crawled (auto-discovered from the Coinbase CDP Bazaar), health-aware, with `include=external` to exclude us.
 > - **Leaderboard** — [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) is the **public on-chain ranking** of every x402 seller by **Base USDC settled volume** — calls served, totalUsd, unique buyers per seller. Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate by `payTo`. Hourly snapshot.
 >
-> Plus the whole ~1,100-tool catalog, runnable yourself, and
+> Plus the whole **1,236-tool catalog** and **39 curated skill packs** (multi-tool
+> workflows callable as MCP prompts), all runnable yourself, plus
 > [`agent402-tollbooth`](tollbooth) — an open pay-per-crawl gate for the other
 > side of x402.
 
@@ -27,9 +28,8 @@
 [![npm](https://img.shields.io/npm/v/agent402-llamaindex?label=llamaindex)](https://www.npmjs.com/package/agent402-llamaindex)
 [![npm](https://img.shields.io/npm/v/agent402-strands?label=strands)](https://www.npmjs.com/package/agent402-strands)
 
-**Give your AI agent ~1,100 ready-to-use web tools from one server — browser
-rendering, web search, PDFs, images, live data, crypto/payments helpers, and
-~1,040 pure-CPU utilities.** Run it yourself for free in 30 seconds (MCP **or**
+**Give your AI agent 1,236 ready-to-use web tools — plus 39 multi-tool skill packs — from one server. Browser
+rendering, web search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, deterministic stats and forecasting, compression, and ~1,000 pure-CPU utilities.** Run it yourself for free in 30 seconds (MCP **or**
 plain HTTP, no API keys, no signup), connect it to Claude/ChatGPT/any MCP
 client, and add your own tools in a few lines. Every tool is deterministic —
 **no LLM in the serving path** — and re-tested against its own example before
@@ -59,7 +59,7 @@ npx -y agent402-mcp
 # in Claude Code:  claude mcp add agent402 -- npx -y agent402-mcp
 ```
 
-**3. Clone and host the whole thing** (all ~1,100 tools as an HTTP API + MCP, free mode, no payments):
+**3. Clone and host the whole thing** (all 1,236 tools as an HTTP API + MCP, free mode, no payments):
 
 ```bash
 git clone https://github.com/MikeyPetrillo/Agent402 && cd Agent402
@@ -79,7 +79,7 @@ curl -s -X POST localhost:3000/api/hash -H 'content-type: application/json' \
 
 Boots straight from the repo's `railway.toml` + `Dockerfile`. Optional plugins are auto-detected via env: add **Redis** → `REDIS_URL` enables the upstream response cache (`X-Cache: hit|miss`), add **Postgres** → `DATABASE_URL` enables the public `/api/analytics` dashboard and the tollbooth waitlist. No env vars required to boot in free mode.
 
-## What's in the catalog (~1,100 tools)
+## What's in the catalog (1,236 tools)
 
 | | Examples |
 |---|---|
@@ -96,7 +96,12 @@ Boots straight from the repo's `railway.toml` + `Dockerfile`. Optional plugins a
 | **Network truth** | `dns`, `tls-cert`, `whois`, `http-check`, `robots-check`, `email-validate`, `ip-info` |
 | **Crypto & payments** | `usdc-balance`, `tx-status`, `gas-estimate`, `ens-resolve`, `x402-quote`/`verify`, `transfer-authorization` — non-custodial, multi-chain (Base/Polygon/Arbitrum/Optimism/Ethereum) |
 | **Agent memory** | wallet-keyed KV + TTL, atomic counters, cross-wallet grants, hash-chained audit log, similarity recall |
-| **~1,040 pure-CPU utilities** | hashing, JWT, base58, JSON⇄CSV/YAML, `token-count`, `text-chunk`, `json-validate`, text stats, cron math, validators, ~970 unit conversions |
+| **Stats & forecasting** | `stats-summary`, `stats-correlation`, `linear-regression`, `moving-average`, `outliers`; `forecast-naive`/`ses`/`holt`/`holt-winters` + `forecast-eval` (MAPE/RMSE backtest) |
+| **Finance math** | `compound-interest`, `loan-payment`, `amortization`, `npv`, `irr` (pure-CPU, deterministic) |
+| **Compression** | `gzip`/`gunzip`, `brotli-compress`/`decompress`, `compress-compare` (algorithm shootout, pure-CPU via node:zlib) |
+| **HTML extraction** | `html-select` (CSS query), `html-table`, `html-strip`, `html-links`, `html-meta` — deterministic counterpart to `extract` |
+| **Network ops** | `dns-lookup`, `dns-propagation`, `spf`/`dmarc`/`dkim` checks, `email-deliverability`; `cert-transparency`, `http-headers` (security audit), `tech-stack`, `asn-info` (IP geo) |
+| **~1,000 pure-CPU utilities** | hashing, JWT, base58, JSON⇄CSV/YAML, `token-count`, `text-chunk`, `json-validate`, text stats, cron math, validators, ~970 unit conversions |
 
 Full schemas live in [`/openapi.json`](https://agent402.tools/openapi.json); a
 machine-readable catalog is at [`/api/pricing`](https://agent402.tools/api/pricing)
@@ -104,6 +109,29 @@ and [`/llms.txt`](https://agent402.tools/llms.txt). Don't know which tool you ne
 [`/api/find?q=<task>`](https://agent402.tools/api/find?q=extract%20article) resolves
 a task description to the right tool — route, price, schema, and a ready example —
 so an agent skips the token-heavy "search around to find a tool" step.
+
+## Skill packs — 39 multi-tool workflows
+
+For jobs that span several tools — "audit a domain", "diagnose deliverability",
+"work up a time-series", "peel an opaque blob" — Agent402 ships curated
+**skill packs**: ordered, typed sequences of tool calls with a Claude-ready
+prompt template. Callable as **MCP prompts** (`prompts/list` → `prompts/get { name, arguments }`)
+or plain HTTP at [`/api/skill-packs/{slug}/prompt`](https://agent402.tools/api/skill-packs).
+A task-shaped query to `search_tools` returns the matching pack alongside individual tools.
+
+| Featured pack | Chains | Use it for |
+|---|---|---|
+| [`security-audit`](https://agent402.tools/skills/security-audit) | dns · dmarc · spf · dkim · cert-transparency · http-headers · tech-stack | Domain security posture |
+| [`trend-analysis`](https://agent402.tools/skills/trend-analysis) | stock-history · fred-series · stats-summary · moving-average · linear-regression · outliers · correlation · forecast-eval | Quant workup on any time series |
+| [`structured-scrape`](https://agent402.tools/skills/structured-scrape) | extract · render · html-select · html-table · html-strip · html-links · html-meta | Deterministic scraping decision tree |
+| [`decode-blob`](https://agent402.tools/skills/decode-blob) | jwt-decode · gunzip · brotli-decompress · base64 · hex · json-format · hash | Identify and peel any opaque string |
+| [`forecasting-bake-off`](https://agent402.tools/skills/forecasting-bake-off) | forecast-naive · ses · holt · holt-winters · forecast-eval | Rank 4 forecasters by RMSE, pick the winner |
+| [`document-intel`](https://agent402.tools/skills/document-intel) | pdf-info · pdf-extract · image-ocr · barcode-decode · pdf-merge | PDF/OCR/barcode pipeline |
+| [`status-snapshot`](https://agent402.tools/skills/status-snapshot) | dns · http-check · http-headers · tls-cert · robots | One-shot service-health sweep |
+| [`webhook-debug`](https://agent402.tools/skills/webhook-debug) | json-format · jwt-decode · hmac-verify · json-schema-validate · time-render · redact · extract-entities | Triage a webhook payload |
+
+All 39 packs at [`/skills`](https://agent402.tools/skills) · JSON index at [`/api/skill-packs.json`](https://agent402.tools/api/skill-packs.json) ·
+on MCP the packs appear under `prompts/list` so any MCP-aware client picks them up automatically.
 
 ## x402 Index — Find · Route · Leaderboard
 
@@ -242,7 +270,7 @@ sha256 proof-of-work (sub-second; the MCP servers do it automatically). Details:
 
 ## Why it's solid
 
-- **Everything is tested** — CI calls all ~1,100 tools with their own documented
+- **Everything is tested** — CI calls all 1,236 tools with their own documented
   examples and blocks the release on any failure; a production heartbeat checks
   the live instance every 15 minutes.
 - **Hardened** — connect-time SSRF guard on every URL tool (DNS-rebind safe),
@@ -263,7 +291,7 @@ sha256 proof-of-work (sub-second; the MCP servers do it automatically). Details:
 Required` for machine-to-machine, pay-per-call payments in stablecoins (USDC).
 Most projects in the space are the [protocol + SDKs](https://github.com/coinbase/x402),
 a starter template, or a payment facilitator. **Agent402 is the applied layer** —
-a ready-to-run **x402 server** that already speaks the protocol and ships ~1,100
+a ready-to-run **x402 server** that already speaks the protocol and ships 1,236
 working tools, so you don't have to build the catalog yourself.
 
 - **Want the protocol or an SDK?** → [coinbase/x402](https://github.com/coinbase/x402).
@@ -274,7 +302,7 @@ working tools, so you don't have to build the catalog yourself.
 Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)
 and discoverable in the Coinbase [x402 Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar).
 
-**Works with [AWS Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) out of the box** — AgentCore orchestrates x402, which is the protocol Agent402 already speaks. Point the AgentCore Gateway at `https://agent402.tools/mcp` for all ~1,100 tools, or use [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) for a curated subset inside a [Strands](https://strandsagents.com) agent. Five-minute recipe: [wiki: AWS Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore).
+**Works with [AWS Bedrock AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments.html) out of the box** — AgentCore orchestrates x402, which is the protocol Agent402 already speaks. Point the AgentCore Gateway at `https://agent402.tools/mcp` for all 1,236 tools, or use [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) for a curated subset inside a [Strands](https://strandsagents.com) agent. Five-minute recipe: [wiki: AWS Bedrock AgentCore](https://github.com/MikeyPetrillo/Agent402/wiki/AWS-Bedrock-AgentCore).
 
 ### Tollbooth — pay-per-crawl for **your** site (the other side of x402)
 

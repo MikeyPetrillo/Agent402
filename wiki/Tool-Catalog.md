@@ -1,6 +1,6 @@
 # Tool Catalog
 
-~1,100 endpoints. All deterministic — **no LLM in the serving path**: same input, same output, full input/output schemas. Discover them machine-readably (don't hardcode this page):
+**1,236 endpoints + 39 multi-tool [[Skill Packs|Skill-Packs]].** All deterministic — **no LLM in the serving path**: same input, same output, full input/output schemas. Discover them machine-readably (don't hardcode this page):
 
 - [`/api/find?q={task}`](https://agent402.tools/api/find?q=extract%20article) — **resolve a plain-language task to the right tool** (route, price, schema, ready example) in one call, so an agent skips the token-heavy "search to find a tool" step. Also a `find_tool` MCP tool on the connector.
 - [`/api/pricing`](https://agent402.tools/api/pricing) — slug, route, price, category, description for everything
@@ -34,7 +34,7 @@ These exist because an agent mid-task cannot give itself a browser, a paid searc
 
 ## The long tail (pure-CPU, also payable with compute)
 
-~1,040 utilities at mostly **$0.001**: hashing/HMAC, base58/base32/base64, JWT decode+verify, UUIDs, CRC32, morse, HTML entities, `token-count` (exact OpenAI BPE), `text-chunk` (RAG), `json-validate` (JSON Schema), `jsonl`, text stats/dedupe/sort/truncate/diff (Levenshtein), JSON/CSV/YAML conversion and querying, date math and cron calculators, validators (email syntax, IP, IBAN-style checksums…), math/stats, QR codes, and ~970 generated **unit conversions** (`GET /api/convert/{from}-to-{to}?value=N` across length, mass, volume, area, speed, time, data, pressure, energy, power, angle, frequency, temperature).
+~1,105 utilities at mostly **$0.001**: hashing/HMAC, base58/base32/base64, JWT decode+verify, UUIDs, CRC32, morse, HTML entities, `token-count` (exact OpenAI BPE), `text-chunk` (RAG), `json-validate` (JSON Schema), `jsonl`, text stats/dedupe/sort/truncate/diff (Levenshtein), JSON/CSV/YAML conversion and querying, date math and cron calculators, validators (email syntax, IP, IBAN-style checksums…), math/stats, QR codes, and ~970 generated **unit conversions** (`GET /api/convert/{from}-to-{to}?value=N` across length, mass, volume, area, speed, time, data, pressure, energy, power, angle, frequency, temperature).
 
 Why would an agent pay $0.001 instead of writing the code? Because writing, testing, and debugging a CSV parser mid-task burns 10–100× that in tokens — and some sandboxes can't execute code at all.
 

@@ -83,7 +83,7 @@ try {
   // 6. End-to-end: hit /api/skill-packs/<slug>/prompt with the first required
   // arg to confirm substitution flows through the HTTP path the SDK + MCP both
   // use. Pick one canonical example value per arg so the test is deterministic.
-  const examples = { domain: "stripe.com", ticker: "AAPL", coin: "ETH", urls: "https://example.com" };
+  const examples = { domain: "stripe.com", ticker: "AAPL", coin: "ETH", urls: "https://example.com", url: "https://example.com" };
   for (const pack of SKILL_PACKS) {
     const required = (pack.promptArgs || []).filter((a) => a.required !== false);
     if (!required.length) continue; // packs without args (macro-economics) skip this assertion

@@ -19,10 +19,21 @@ ok(r.results[0].route === "POST /api/extract" && r.results[0].price === "$0.005"
 ok(r.results[0].inputSchema && r.results[0].example?.url, "result carries inputSchema + example");
 ok(r.results[0].docs === "https://agent402.tools/tools/extract", "result carries docs link");
 ok(r.results[0].computePayable === false, "extract flagged not compute-payable");
+// Prominent discovery: required keys + a pre-assembled callExample so an agent
+// can call without splitting route or guessing body-vs-query.
+ok(Array.isArray(r.results[0].required) && r.results[0].required[0] === "url", `result carries required keys (got ${JSON.stringify(r.results[0].required)})`);
+ok(r.results[0].callExample?.method === "POST" && r.results[0].callExample?.path === "/api/extract" && r.results[0].callExample?.body?.url === "https://example.com/article", `POST callExample is method+path+body (got ${JSON.stringify(r.results[0].callExample)})`);
+// Field order: callExample / example / required must come before description.
+const k = Object.keys(r.results[0]);
+ok(k.indexOf("callExample") < k.indexOf("description") && k.indexOf("example") < k.indexOf("description"), `callExample + example come before description (keys: ${k.join(",")})`);
 
 // Natural-language task resolves to the right tool.
 r = findTools(CATALOG, "convert miles to kilometers", {});
 ok(r.results[0].slug === "convert-miles-to-kilometers", `NL task → convert tool (got ${r.results[0]?.slug})`);
+// GET tools put the example values on query, not body.
+ok(r.results[0].callExample?.method === "GET" && r.results[0].callExample?.path === "/api/convert/miles-to-kilometers" && r.results[0].callExample?.query?.value === 5 && !("body" in r.results[0].callExample), `GET callExample uses query, not body (got ${JSON.stringify(r.results[0].callExample)})`);
+// A tool with no required[] returns required:[] (not undefined) so agents can scan safely.
+ok(Array.isArray(r.results[0].required) && r.results[0].required.length === 0, `no-required tool returns required:[] (got ${JSON.stringify(r.results[0].required)})`);
 
 r = findTools(CATALOG, "make a qr code for a url", { powSlugs: POW });
 ok(r.results[0].slug === "qr", `"qr code" → qr (got ${r.results[0]?.slug})`);

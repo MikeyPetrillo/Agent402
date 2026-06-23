@@ -14,10 +14,11 @@ on:
       - ".github/trigger-marketplace"
       - ".github/trigger-drain"
       - ".github/trigger-bazaar-refresh"
+      - ".github/trigger-bazaar-register"
   workflow_dispatch:
     inputs:
       mode:
-        description: "probe, test, paytest, purl (Stripe client interop), publish (npm), marketplace (list on agent402.app), bazaar-refresh, or deploy"
+        description: "probe, test, paytest, purl (Stripe client interop), publish (npm), marketplace (list on agent402.app), bazaar-refresh, bazaar-register (one-shot: pay missing routes so the Coinbase harvester registers them), or deploy"
         default: "deploy"
       burner_key:
         description: "Existing funded burner key for paytest (hex). Leave empty to generate a fresh wallet."
@@ -52,6 +53,7 @@ jobs:
       purl: ${{ steps.parse.outputs.purl }}
       marketplace: ${{ steps.parse.outputs.marketplace }}
       bazaar_refresh: ${{ steps.parse.outputs.bazaar_refresh }}
+      bazaar_register: ${{ steps.parse.outputs.bazaar_register }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -64,7 +66,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          MARKERS="test deploy publish probe drain demand paytest purl marketplace bazaar-refresh"
+          MARKERS="test deploy publish probe drain demand paytest purl marketplace bazaar-refresh bazaar-register"
           if [ "$EVENT_NAME" != "push" ]; then
             echo "Event is $EVENT_NAME (not push) — emitting all markers as false."
             for m in $MARKERS; do
@@ -184,6 +186,38 @@ jobs:
           BURNER_KEY: ${{ secrets.BURNER_KEY || inputs.burner_key }}
         run: |
           [ -n "$BURNER_KEY" ] || { echo "No BURNER_KEY — cannot refresh paid listings"; exit 1; }
+          echo "::add-mask::$BURNER_KEY"
+          node scripts/refresh-bazaar.js
+
+  bazaar-register:
+    # One-shot job: discovers catalog routes that the Coinbase CDP Bazaar
+    # harvester has never observed and pays one tiny request against each so
+    # the harvester registers them. Idempotent — already-registered routes
+    # drop out of the missing set, so partial runs can be resumed.
+    #
+    # Cost is bounded by MAX_SPEND_USD; the script refuses to run if the
+    # estimate exceeds that ceiling. With 39 skill packs ($0.05-$1.50 each)
+    # the missing set can sum to ~$11 on a fresh pass.
+    needs: markers
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-register' || needs.markers.outputs.bazaar_register == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TARGET_URL: https://agent402.tools
+      MODE: missing
+      MAX_SPEND_USD: "12"
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci && npm install --no-save --ignore-scripts @x402/fetch @x402/core @x402/evm viem
+      - name: Register missing Bazaar routes
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY || inputs.burner_key }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "No BURNER_KEY — cannot pay to register missing routes"; exit 1; }
           echo "::add-mask::$BURNER_KEY"
           node scripts/refresh-bazaar.js
 
@@ -366,8 +400,80 @@ jobs:
       - name: Tool resolver (/api/find ranking, guards)
         run: node scripts/test-find.js
 
+      - name: Find ranker — live-catalog smoke test (boots free-mode, locks top-1 for agent queries)
+        run: node scripts/test-find-ranking.js
+
+      - name: /health flag shape contract (every documented flag present + boolean-typed)
+        run: node scripts/test-health-flags.js
+
+      - name: Tool pages backlink to the skill packs they belong to
+        run: node scripts/test-tool-page-backlinks.js
+
+      - name: /skills/<slug> contract (every pack renders workflow + tools + claudePrompt + JSON-LD)
+        run: node scripts/test-skill-page-contract.js
+
+      - name: /openapi.json coverage (every CATALOG tool has a path + operationId + x-price)
+        run: node scripts/test-openapi-coverage.js
+
+      - name: /.well-known/x402 manifest contract (envelope + payment + capabilities + discovery)
+        run: node scripts/test-x402-manifest.js
+
+      - name: /sitemap.xml coverage (every skill pack, sample tools, static surfaces)
+        run: node scripts/test-sitemap-coverage.js
+
+      - name: /.well-known/glama.json maintainer email env pass-through (with + without override)
+        run: node scripts/test-glama-manifest.js
+
+      - name: /llms.txt content lock (tool count + discovery URLs + PoW/MCP/wallet signals)
+        run: node scripts/test-llms-txt.js
+
+      - name: /api/skill-packs.json shape (what stdio agent402-mcp consumes at startup)
+        run: node scripts/test-skill-packs-json.js
+
+      - name: /robots.txt policy (every LLM bot explicitly allowed + /api/memory disallowed + sitemap)
+        run: node scripts/test-robots-policy.js
+
+      - name: MCP prompts/list + prompts/get (one prompt per skill pack; substitution renders)
+        run: node scripts/test-mcp-prompts.js
+
+      - name: /api/pow/challenge envelope (free-tier gate — full shape + slug scoping + 404s)
+        run: node scripts/test-pow-challenge-envelope.js
+
+      - name: /api/leaderboard envelope (spec, defaults, per-row shape — MCP top_x402_sellers piggybacks on this)
+        run: node scripts/test-leaderboard-envelope.js
+
+      - name: /api/route neutral cross-seller router envelope (per-row shape, include filter, missing-query)
+        run: node scripts/test-route-envelope.js
+
+      - name: /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)
+        run: node scripts/test-reliability-envelope.js
+
+      - name: PoW solve roundtrip (paid-mode boot, honest solver unlocks /api/hash, replay rejected)
+        run: node scripts/test-pow-solve-roundtrip.js
+
+      - name: Static page renders smoke (every HTML surface returns 200 with the right page-specific title)
+        run: node scripts/test-static-pages.js
+
+      - name: /api/stats envelope (M2M economy counters — rail breakdown, revenue proof, tools floor)
+        run: node scripts/test-stats-envelope.js
+
+      - name: /api/find envelope + top-1 ranking lock (per-row shape + known queries → known top slugs)
+        run: node scripts/test-find-envelope.js
+
+      - name: /api/pricing envelope contract (every scraper reads this — per-endpoint shape, slug uniqueness)
+        run: node scripts/test-pricing-envelope.js
+
+      - name: MCP call_tool contract (canonical + flattened + stringified + wallet-refusal + self-correction envelope)
+        run: node scripts/test-mcp-call-tool-contract.js
+
+      - name: /health envelope + .flags shape (boolean discipline locks the Yahoo-relay-flap class)
+        run: node scripts/test-health-envelope.js
+
       - name: Skill-pack invariants (toolSlugs resolve in catalog; substitution renders)
         run: node scripts/test-skill-packs.js
+
+      - name: x402 Bazaar discovery shape (POST→bodyType, GET→queryParams, example types match schema)
+        run: node scripts/check-bazaar.mjs
 
       - name: x402 Leaderboard pure helpers (offline; Bazaar parsing + ranking)
         run: node scripts/test-x402-leaderboard.js
@@ -461,6 +567,9 @@ jobs:
       - name: Tollbooth tests (pay-per-crawl gate — node + edge/Web-Crypto)
         run: node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js
 
+      - name: Tollbooth dashboard runtime smoke (boots CLI, hits /__tollbooth + /__tollbooth/stats over HTTP)
+        run: node scripts/test-tollbooth-runtime.js
+
       - name: Conversion tools (~970 endpoints, exact + round-trip)
         run: node scripts/test-convert.js
 
@@ -472,6 +581,9 @@ jobs:
 
       - name: "Every tool through the MCP connector (call_tool — free executes, wallet refuses)"
         run: TARGET_URL=http://localhost:3000 node scripts/test-mcp-all.js
+
+      - name: MCP search_tools — live-catalog smoke test (locks top-1 for agent queries)
+        run: node scripts/test-mcp-search-ranking.js
 
       - name: Exercise tools against live sites
         run: |
@@ -773,6 +885,11 @@ jobs:
         # server.json's version, npm reads package.json's, and the registry
         # rejects a duplicate (name, version) at the storage layer (not the
         # search index, so checks against the public listing can mislead).
+        # Also asserts the MCP Registry's ≤100-char limit on server.json's
+        # description, which is enforced by the registry at publish time —
+        # fail-fast here so we don't burn an npm publish on a registry-only
+        # validation error (caught us once: 0.8.1 shipped to npm but bounced
+        # at the registry with a 287-char description).
         # Fail CI here, before we waste a publish attempt and a version bump.
         run: |
           node -e '
@@ -788,7 +905,13 @@ jobs:
               console.error("  mcp/server.json.packages[0].ver  =", c);
               process.exit(1);
             }
-            console.log("mcp versions aligned at", a);
+            const dlen = (srv.description || "").length;
+            if (dlen > 100) {
+              console.error("mcp/server.json.description is", dlen, "chars — MCP Registry limit is 100");
+              console.error("  current:", JSON.stringify(srv.description));
+              process.exit(1);
+            }
+            console.log("mcp versions aligned at", a, "· server.json.description =", dlen, "chars");
           '
       - name: Publish agent402-mcp to npm
         env:
