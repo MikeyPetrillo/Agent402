@@ -4,7 +4,7 @@
 
 import { ONCHAIN_IDENTITY_TOOLS, __test } from "../src/tools/onchain-identity-kit.js";
 
-const { takeAddress, pickEasNetwork, ENS_API, WARPCAST_API, EAS_INDEXERS } = __test;
+const { takeAddress, pickEasNetwork, ENS_API, NEYNAR_API, EAS_INDEXERS } = __test;
 
 const h = (slug) => ONCHAIN_IDENTITY_TOOLS.find((t) => t.slug === slug).handler;
 let fail = 0, pass = 0;
@@ -56,7 +56,7 @@ catch (e) { if (e.statusCode === 400) { pass++; console.log("ok - pickEasNetwork
 
 // Endpoint URLs are well-known constants — confirm they didn't drift.
 ok(ENS_API === "https://api.ensideas.com/ens", "ENS_API constant unchanged");
-ok(WARPCAST_API === "https://api.warpcast.com/v2", "WARPCAST_API constant unchanged");
+ok(NEYNAR_API === "https://api.neynar.com/v2/farcaster", "NEYNAR_API constant correct");
 ok(EAS_INDEXERS.base === "https://base.easscan.org/graphql", "EAS_INDEXERS.base unchanged");
 
 // ----------------------------------------------------------------------------

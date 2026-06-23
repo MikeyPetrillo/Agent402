@@ -14,8 +14,8 @@
 // Upstreams:
 //   • ensideas.com    — community-maintained ENS reverse + avatar API
 //                       (used by Rainbow, Coinbase Wallet, etc.) [keyless]
-//   • api.warpcast.com — Warpcast Farcaster API (now requires auth —
-//                       set WARPCAST_API_KEY to enable Farcaster tools)
+//   • api.neynar.com  — Neynar Farcaster API (requires API key —
+//                       set NEYNAR_API_KEY or WARPCAST_API_KEY to enable)
 //   • easscan.org     — EAS-funded GraphQL indexer for mainnet/Base/Optimism [keyless]
 //
 // All 4 tools are wallet-only — every handler reaches external HTTP and
@@ -25,10 +25,9 @@
 
 const TIMEOUT_MS = 12_000;
 
-// Endpoints. Keep them at the top so a swap (e.g. Warpcast → Snapchain hub
-// post-migration) is a one-line change.
+// Endpoints. Keep them at the top so a swap is a one-line change.
 const ENS_API = "https://api.ensideas.com/ens";
-const WARPCAST_API = "https://api.warpcast.com/v2";
+const NEYNAR_API = "https://api.neynar.com/v2/farcaster";
 const EAS_INDEXERS = {
   mainnet:  "https://easscan.org/graphql",
   base:     "https://base.easscan.org/graphql",
@@ -141,16 +140,16 @@ async function ensBulkResolve({ addresses } = {}) {
   };
 }
 
-// Warpcast API auth — the read endpoints now require a bearer token.
-// WARPCAST_API_KEY env var; without it the Farcaster tools return 503.
-function warpcastInit() {
-  const key = process.env.WARPCAST_API_KEY;
-  if (!key) throw bad("Farcaster lookups require WARPCAST_API_KEY (Warpcast now requires auth)", 503);
-  return { headers: { authorization: `Bearer ${key}` } };
+// Neynar API auth — Farcaster lookups go through Neynar (api.neynar.com).
+// Accepts NEYNAR_API_KEY or legacy WARPCAST_API_KEY env var.
+function neynarInit() {
+  const key = process.env.NEYNAR_API_KEY || process.env.WARPCAST_API_KEY;
+  if (!key) throw bad("Farcaster lookups require NEYNAR_API_KEY (Neynar Farcaster API key)", 503);
+  return { headers: { "x-api-key": key } };
 }
 
 // ----------------------------------------------------------------------------
-// 2. farcaster-profile — lookup by FID or username via Warpcast API
+// 2. farcaster-profile — lookup by FID or username via Neynar API
 // ----------------------------------------------------------------------------
 async function farcasterProfile({ fid, username } = {}) {
   const f = Number.parseInt(fid, 10);
@@ -158,27 +157,30 @@ async function farcasterProfile({ fid, username } = {}) {
   if (!Number.isFinite(f) && !u) {
     throw bad('"fid" (integer) or "username" (string) is required');
   }
-  const url = Number.isFinite(f)
-    ? `${WARPCAST_API}/user?fid=${f}`
-    : `${WARPCAST_API}/user-by-username?username=${encodeURIComponent(u)}`;
-  const json = await fetchJson(url, "Warpcast", warpcastInit());
-  const user = json.result?.user;
+  const init = neynarInit();
+  let user;
+  if (Number.isFinite(f)) {
+    const json = await fetchJson(`${NEYNAR_API}/user/bulk?fids=${f}`, "Neynar", init);
+    user = json.users?.[0];
+  } else {
+    const json = await fetchJson(`${NEYNAR_API}/user/by_username?username=${encodeURIComponent(u)}`, "Neynar", init);
+    user = json.user;
+  }
   if (!user) {
     throw bad(`Farcaster user not found for ${Number.isFinite(f) ? `fid=${f}` : `username=${u}`}`, 404);
   }
   return {
     fid: user.fid,
     username: user.username,
-    displayName: user.displayName ?? null,
-    pfpUrl: user.pfp?.url ?? null,
+    displayName: user.display_name ?? null,
+    pfpUrl: user.pfp_url ?? null,
     bio: user.profile?.bio?.text ?? null,
-    location: user.profile?.location?.placeId ?? user.profile?.location?.description ?? null,
-    followerCount: user.followerCount ?? null,
-    followingCount: user.followingCount ?? null,
-    activeOnFcNetwork: !!user.activeOnFcNetwork,
-    powerBadge: !!user.viewerContext?.followedBy ? null : (user.activeOnFcNetwork || null),
+    followerCount: user.follower_count ?? null,
+    followingCount: user.following_count ?? null,
+    activeOnFcNetwork: user.active_status === "active",
+    powerBadge: !!user.power_badge,
     venueUrl: user.username ? `https://warpcast.com/${user.username}` : null,
-    source: "warpcast",
+    source: "neynar",
   };
 }
 
@@ -187,32 +189,29 @@ async function farcasterProfile({ fid, username } = {}) {
 // ----------------------------------------------------------------------------
 async function farcasterByAddress({ address } = {}) {
   const addr = takeAddress(address);
-  // Warpcast's `user-by-verification` returns the Farcaster account that has
-  // verified this address. Addresses without a verification return 404 — we
-  // surface that as { found: false } so the agent doesn't have to handle 404.
-  let json;
-  try {
-    json = await fetchJson(`${WARPCAST_API}/user-by-verification?address=${addr}`, "Warpcast", warpcastInit());
-  } catch (e) {
-    if (e.statusCode === 404) {
-      return { found: false, address: addr, source: "warpcast" };
-    }
-    throw e;
-  }
-  const user = json.result?.user;
-  if (!user) return { found: false, address: addr, source: "warpcast" };
+  // Neynar's bulk-by-address returns { "0x…": [user, …] } keyed by address.
+  // An address with no Farcaster verification comes back as an empty array or
+  // missing key — we surface that as { found: false }.
+  const json = await fetchJson(
+    `${NEYNAR_API}/user/bulk-by-address?addresses=${addr}`,
+    "Neynar",
+    neynarInit(),
+  );
+  const users = json[addr] || json[addr.toLowerCase()] || [];
+  const user = users[0];
+  if (!user) return { found: false, address: addr, source: "neynar" };
   return {
     found: true,
     address: addr,
     fid: user.fid,
     username: user.username,
-    displayName: user.displayName ?? null,
-    pfpUrl: user.pfp?.url ?? null,
+    displayName: user.display_name ?? null,
+    pfpUrl: user.pfp_url ?? null,
     bio: user.profile?.bio?.text ?? null,
-    followerCount: user.followerCount ?? null,
-    followingCount: user.followingCount ?? null,
+    followerCount: user.follower_count ?? null,
+    followingCount: user.following_count ?? null,
     venueUrl: user.username ? `https://warpcast.com/${user.username}` : null,
-    source: "warpcast",
+    source: "neynar",
   };
 }
 
@@ -347,13 +346,12 @@ export const ONCHAIN_IDENTITY_TOOLS = [
           displayName: "Dan Romero",
           pfpUrl: "https://...",
           bio: "Working on Farcaster.",
-          location: null,
           followerCount: 500000,
           followingCount: 1000,
           activeOnFcNetwork: true,
           powerBadge: true,
           venueUrl: "https://warpcast.com/dwr.eth",
-          source: "warpcast",
+          source: "neynar",
         },
       },
     },
@@ -390,7 +388,7 @@ export const ONCHAIN_IDENTITY_TOOLS = [
           followerCount: 500000,
           followingCount: 1000,
           venueUrl: "https://warpcast.com/dwr.eth",
-          source: "warpcast",
+          source: "neynar",
         },
       },
     },
@@ -447,6 +445,6 @@ export const __test = {
   takeAddress,
   pickEasNetwork,
   ENS_API,
-  WARPCAST_API,
+  NEYNAR_API,
   EAS_INDEXERS,
 };

@@ -102,7 +102,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // chain-kit/dex-kit). All wallet-only for the same reasons.
   "mev-recent-blocks", "mev-builder-share", "mev-block-payment",
   "l2-tvl", "l2-gas-comparison",
-  // Onchain-identity-kit: ensideas (keyless), Warpcast API (WARPCAST_API_KEY),
+  // Onchain-identity-kit: ensideas (keyless), Neynar API (NEYNAR_API_KEY),
   // EAS GraphQL indexers (keyless). All external HTTP; wallet-only for the
   // same reasons as the other crypto kits.
   "ens-bulk-resolve", "farcaster-profile", "farcaster-by-address",
