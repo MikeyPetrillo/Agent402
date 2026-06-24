@@ -29,6 +29,7 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 | [[x402-Leaderboard]] | Public on-chain ranking of every x402 seller by Base USDC settled volume |
 | [[LLM Proxy Gateway|LLM-Proxy]] | Three tiers of OpenAI inference via x402 — GPT-4o-mini, GPT-4o/4.1, o3-mini |
 | [[Image Generation Gateway|Image-Gen]] | Three tiers of GPT Image generation via x402 — text-to-image, no API key needed |
+| [[Code Execution Sandbox|Code-Execution]] | Sandboxed Python/JS execution via E2B — isolated cloud VMs, pay per run |
 | [[Payments and x402]] | Non-custodial multi-chain payment toolkit: quote, verify, balance, gas, transfer-auth, ENS |
 | [[Pay-per-crawl]] | `agent402-tollbooth`: charge AI crawlers to access your site (USDC via x402 or proof-of-work) |
 | [[Memory and Coordination]] | Durable wallet-keyed state, cross-wallet grants, audit log |
