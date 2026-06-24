@@ -3,6 +3,17 @@ import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chr
 const ENTRIES = [
   {
     date: "2026-06-24",
+    title: "Image generation gateway — 3-tier GPT Image via x402",
+    items: [
+      "Image gen: POST /api/image-gen ($0.03), /api/image-gen-hd ($0.10), /api/image-gen-premium ($0.30)",
+      "GPT Image models: gpt-image-1-mini (standard/HD), gpt-image-2 (premium)",
+      "Text-to-image — no API key needed, pay per call, returns base64 PNG",
+      "Per-tier prompt caps and locked quality/size to bound upstream cost",
+      "Wallet-only (no PoW free tier) — every call uses real upstream inference",
+    ],
+  },
+  {
+    date: "2026-06-24",
     title: "LLM proxy gateway — 3-tier OpenAI inference via x402",
     items: [
       "LLM proxy: POST /api/llm ($0.01), /api/llm-pro ($0.10), /api/llm-premium ($0.50)",
