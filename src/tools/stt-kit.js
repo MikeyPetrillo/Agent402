@@ -74,7 +74,7 @@ async function callOpenAI(audioBuffer, filename, model, language) {
   const form = new FormData();
   form.append("file", new Blob([audioBuffer]), filename);
   form.append("model", model);
-  form.append("response_format", "verbose_json");
+  form.append("response_format", "json");
   if (language) form.append("language", language);
 
   let res;
