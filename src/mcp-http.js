@@ -52,6 +52,21 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   const freeSlugs = new Set([...tools.entries()].filter(([, t]) => t.free).map(([slug]) => slug));
   const mcpClients = new Map(); // "name@version" -> initialize count since boot
 
+  // Curated first-class tools: popular free tools exposed directly in
+  // tools/list so MCP directories (Glama, etc.) surface them alongside the
+  // meta-tools. All must be PoW-eligible (free). Calling them by name is
+  // equivalent to call_tool({slug, params}) — same handler, same rate limit.
+  const CURATED_SLUGS = [
+    "hash", "base64", "jwt-decode", "json-diff", "json-format", "cron-next",
+    "unit-convert", "timezone-convert", "stats-summary", "gzip",
+    "readability-score", "qr",
+  ];
+  const curatedSet = new Set();
+  for (const slug of CURATED_SLUGS) {
+    const entry = tools.get(slug);
+    if (entry?.free) curatedSet.add(slug);
+  }
+
   const schemaOf = (def) => {
     const s = def.discovery?.inputSchema;
     return s ? { type: "object", ...s } : { type: "object" };
@@ -198,6 +213,19 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             },
           },
         }] : []),
+        // Curated free tools — exposed first-class so directory listings
+        // (Glama, etc.) show what agents can actually run on this connector
+        // without needing search_tools first. Each is callable by name.
+        ...[...curatedSet].map((slug) => {
+          const { def } = tools.get(slug);
+          return {
+            name: slug,
+            title: def.name,
+            annotations: { title: def.name, ...SAFE },
+            description: `[free] ${def.description}`,
+            inputSchema: schemaOf(def),
+          };
+        }),
       ],
     }));
 
@@ -331,12 +359,16 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             }],
           };
         }
-        if (name !== "call_tool") {
+        // Curated tools called by name: route to the same handler as
+        // call_tool but use `name` as the slug and `args` as params directly.
+        const isCurated = curatedSet.has(name);
+        if (name !== "call_tool" && !isCurated) {
           return { content: [{ type: "text", text: `Unknown tool "${name}".` }], isError: true };
         }
-        const entry = tools.get(String(args.slug ?? ""));
+        const resolvedSlug = isCurated ? name : String(args.slug ?? "");
+        const entry = tools.get(resolvedSlug);
         if (!entry) {
-          return { content: [{ type: "text", text: `Unknown slug "${args.slug}". Use search_tools to find the right slug.` }], isError: true };
+          return { content: [{ type: "text", text: `Unknown slug "${resolvedSlug}". Use search_tools to find the right slug.` }], isError: true };
         }
         if (!entry.free) {
           return { content: [{ type: "text", text: walletRequiredText(entry.def) }], isError: true };
@@ -347,31 +379,32 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             isError: true,
           };
         }
-        // Accept params as an object OR a JSON string — LLM clients (e.g. some
-        // Claude Code calls) often stringify object arguments. Parse those so
-        // the handler receives real fields instead of an empty object.
-        //
-        // ALSO: many LLMs ignore the {slug, params} envelope and flatten the
-        // arguments — e.g. { slug: "whois", domain: "example.com" } instead of
-        // { slug: "whois", params: { domain: "example.com" } }. Without a
-        // fallback those calls all 4xx in 1ms (the analytics dashboard makes
-        // this brutally visible — whois was 100% errored with p50=1ms). When
-        // `params` is missing/invalid, treat the rest of `args` as params so
-        // the natural-but-wrong shape still works.
-        let params = args.params;
-        if (typeof params === "string") {
-          const s = params.trim();
-          try { params = JSON.parse(s); }
-          catch {
-            // tolerate a single "key=value" pair as a last resort
-            const eq = s.indexOf("=");
-            params = eq > 0 ? { [s.slice(0, eq).trim()]: s.slice(eq + 1).trim() } : {};
+        // Curated tools called by name: args IS the params (no envelope).
+        // call_tool path: accept params as object, JSON string, or flattened.
+        let params;
+        if (isCurated) {
+          params = args;
+        } else {
+          // Accept params as an object OR a JSON string — LLM clients (e.g.
+          // some Claude Code calls) often stringify object arguments.
+          //
+          // ALSO: many LLMs ignore the {slug, params} envelope and flatten —
+          // e.g. { slug: "whois", domain: "example.com" } instead of
+          // { slug: "whois", params: { domain: "example.com" } }. When
+          // `params` is missing/invalid, treat the rest of `args` as params.
+          params = args.params;
+          if (typeof params === "string") {
+            const s = params.trim();
+            try { params = JSON.parse(s); }
+            catch {
+              const eq = s.indexOf("=");
+              params = eq > 0 ? { [s.slice(0, eq).trim()]: s.slice(eq + 1).trim() } : {};
+            }
           }
-        }
-        if (!params || typeof params !== "object" || Array.isArray(params)) {
-          // Flattened args fallback: everything except `slug` becomes params.
-          const { slug: _drop, ...rest } = args;
-          params = rest && typeof rest === "object" && Object.keys(rest).length ? rest : {};
+          if (!params || typeof params !== "object" || Array.isArray(params)) {
+            const { slug: _drop, ...rest } = args;
+            params = rest && typeof rest === "object" && Object.keys(rest).length ? rest : {};
+          }
         }
         // Same contract as the express kit routes; handlers only see input.
         // Time the call so the analytics dispatcher gets accurate latency for
