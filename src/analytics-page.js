@@ -90,6 +90,11 @@ export function analyticsPage(data, { baseUrl }) {
   // operators flip to the full picture without a separate query.
   const includeSynthetic = !!data.includeSynthetic;
   const syntheticHidden = Number(data.syntheticHidden || 0);
+  // Probes = empty-input scanning calls (agent probing endpoints without
+  // arguments). Hidden by default — they inflate 4xx without representing
+  // real callers. Same toggle pattern as synthetic.
+  const includeProbes = !!data.includeProbes;
+  const probesHidden = Number(data.probesHidden || 0);
   const totals = data.totals || {};
   const top = Array.isArray(data.topTools) ? data.topTools : [];
   const errs = Array.isArray(data.errorTools) ? data.errorTools : [];
@@ -266,11 +271,17 @@ ${renderHeader("/analytics")}
 <p class="sub">Live, public usage data for Agent402. Every tool call records four aggregate fields after responding — slug, latency, cache flag, error flag — with no PII. Window: <b>${esc(windowHuman)}</b>.</p>
 
 <div class="winbar">
-  ${[1, 24, 24 * 7, 24 * 30].map((h) => `<a class="${h === hours ? "active" : ""}" href="/analytics?hours=${h}${includeSynthetic ? "&include_synthetic=1" : ""}">${h === 1 ? "1h" : h === 24 ? "24h" : h === 168 ? "7d" : "30d"}</a>`).join("")}
+  ${[1, 24, 24 * 7, 24 * 30].map((h) => {
+    const qs = [includeSynthetic ? "include_synthetic=1" : "", includeProbes ? "include_probes=1" : ""].filter(Boolean).join("&");
+    return `<a class="${h === hours ? "active" : ""}" href="/analytics?hours=${h}${qs ? "&" + qs : ""}">${h === 1 ? "1h" : h === 24 ? "24h" : h === 168 ? "7d" : "30d"}</a>`;
+  }).join("")}
 </div>
 ${(syntheticHidden > 0 || includeSynthetic) ? `<p class="foot" style="margin:6px 0 0;font-size:.85rem;">${includeSynthetic
-    ? `Showing <b>all</b> calls (incl. synthetic test traffic). <a href="/analytics?hours=${hours}">Hide synthetic</a>`
-    : `<b>${esc(String(syntheticHidden))}</b> synthetic call${syntheticHidden === 1 ? "" : "s"} hidden (CI canary / heartbeat probe). <a href="/analytics?hours=${hours}&include_synthetic=1">Show all</a>`}</p>` : ""}
+    ? `Showing <b>all</b> calls (incl. synthetic test traffic). <a href="/analytics?hours=${hours}${includeProbes ? "&include_probes=1" : ""}">Hide synthetic</a>`
+    : `<b>${esc(String(syntheticHidden))}</b> synthetic call${syntheticHidden === 1 ? "" : "s"} hidden (CI canary / heartbeat probe). <a href="/analytics?hours=${hours}&include_synthetic=1${includeProbes ? "&include_probes=1" : ""}">Show all</a>`}</p>` : ""}
+${(probesHidden > 0 || includeProbes) ? `<p class="foot" style="margin:6px 0 0;font-size:.85rem;">${includeProbes
+    ? `Showing <b>probe</b> calls (empty-input scans). <a href="/analytics?hours=${hours}${includeSynthetic ? "&include_synthetic=1" : ""}">Hide probes</a>`
+    : `<b>${esc(String(probesHidden))}</b> probe call${probesHidden === 1 ? "" : "s"} hidden (empty-input scans — not real errors). <a href="/analytics?hours=${hours}${includeSynthetic ? "&include_synthetic=1" : ""}&include_probes=1">Show all</a>`}</p>` : ""}
 
 ${body}
 
