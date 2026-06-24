@@ -2,6 +2,16 @@ import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chr
 
 const ENTRIES = [
   {
+    date: "2026-06-24",
+    title: "LLM proxy gateway — 3-tier inference via x402",
+    items: [
+      "LLM proxy: POST /api/llm ($0.01), /api/llm-pro ($0.05), /api/llm-premium ($0.25)",
+      "OpenAI-compatible format for all models — Anthropic translated server-side",
+      "Models: GPT-4o-mini, GPT-4o, GPT-4.1, o3, o3-mini, Claude Haiku/Sonnet/Opus",
+      "Wallet-only (no PoW free tier) — every call uses real upstream inference",
+    ],
+  },
+  {
     date: "2026-06-23",
     title: "PostHog tool_call event + upstream reliability fixes",
     items: [
