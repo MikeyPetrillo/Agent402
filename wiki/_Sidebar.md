@@ -11,6 +11,7 @@
 - [[Skill Packs|Skill-Packs]]
 - [[x402 Index and Router|x402-Index-and-Router]]
 - [[x402 Leaderboard|x402-Leaderboard]]
+- [[LLM Proxy Gateway|LLM-Proxy]]
 - [[Payments and x402]]
 - [[Memory and Coordination]]
 

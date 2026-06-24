@@ -110,6 +110,9 @@ const NETWORK = new Set([
   "/api/skill/identity-mint", "/api/skill/macro-context", "/api/skill/regulatory-watch",
   "/api/skill/search-and-cite", "/api/skill/media-pipeline", "/api/skill/schema-evolution",
   "/api/skill/link-preview", "/api/skill/any-to-markdown", "/api/skill/status-snapshot",
+  // LLM proxy kit: every call hits OpenAI upstream. Returns 503 without
+  // OPENAI_API_KEY — the 502/503/504 tolerance below covers that.
+  "/api/llm", "/api/llm-pro", "/api/llm-premium",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 
