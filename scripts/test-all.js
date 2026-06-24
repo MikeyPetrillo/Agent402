@@ -119,6 +119,12 @@ const NETWORK = new Set([
   // Code execution kit: every call spins up an E2B sandbox. Returns 503
   // without E2B_API_KEY — the 502/503/504 tolerance below covers that.
   "/api/code-run", "/api/code-run-pro",
+  // TTS kit: every call hits OpenAI TTS API upstream.
+  "/api/tts", "/api/tts-hd",
+  // STT kit: fetches external audio + hits OpenAI transcription API.
+  "/api/transcribe", "/api/transcribe-pro",
+  // Embeddings kit: every call hits OpenAI embeddings API upstream.
+  "/api/embed", "/api/embed-large",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 
