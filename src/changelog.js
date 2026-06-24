@@ -33,11 +33,11 @@ const ENTRIES = [
   },
   {
     date: "2026-06-24",
-    title: "LLM proxy gateway — 3-tier OpenAI inference via x402",
+    title: "LLM proxy gateway — 3-tier inference via x402",
     items: [
       "Chat completions: /api/llm ($0.01), /api/llm-pro ($0.10), /api/llm-premium ($0.50)",
-      "OpenAI-compatible format — no API key needed, pay per call",
-      "Models: GPT-4o-mini, GPT-4o, GPT-4.1, o3-mini",
+      "OpenAI-format interface — no API key needed, pay per call",
+      "Models: GPT-4o-mini, GPT-4o, GPT-4.1, o3, o3-mini",
     ],
   },
   {
