@@ -211,10 +211,10 @@ export function analyticsPage(data, { baseUrl }) {
   </div>
 </div>`;
 
-  return renderShell({ baseUrl, windowHuman, hours, includeSynthetic, syntheticHidden, body });
+  return renderShell({ baseUrl, windowHuman, hours, includeSynthetic, syntheticHidden, includeProbes, probesHidden, body });
 }
 
-function renderShell({ baseUrl, windowHuman, hours, includeSynthetic, syntheticHidden, body }) {
+function renderShell({ baseUrl, windowHuman, hours, includeSynthetic, syntheticHidden, includeProbes, probesHidden, body }) {
   return `<!doctype html>
 <html lang="en">
 <head>
