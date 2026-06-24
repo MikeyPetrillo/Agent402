@@ -72,6 +72,17 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS tool_calls_ts_idx ON tool_calls (ts DESC);
     CREATE INDEX IF NOT EXISTS tool_calls_slug_ts_idx ON tool_calls (slug, ts DESC);
   `);
+  // One-time backfill: tag historical empty-input probes. Every probe we've
+  // observed was a 400 rejected in ≤10ms (instant validation throw, no I/O).
+  // Idempotent — only touches rows where probe is still FALSE.
+  await p.query(`
+    UPDATE tool_calls
+       SET probe = TRUE
+     WHERE errored = TRUE
+       AND status = 400
+       AND latency_ms <= 10
+       AND probe = FALSE
+  `).catch(() => {});
   schemaReady = true;
   return true;
 }
