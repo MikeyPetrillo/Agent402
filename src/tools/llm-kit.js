@@ -1,10 +1,11 @@
 // LLM proxy kit — three tiers of x402-paywalled LLM inference via OpenAI.
-// Env-gated: missing OPENAI_API_KEY → 503 at call time, not boot failure.
+// Callers send the OpenAI chat/completions format and get a response back.
+// Env-gated: missing API key → 503 at call time, not boot failure.
 //
 // Tiers:
-//   llm          $0.01  — gpt-4o-mini         (16k input, 4096 output)
-//   llm-pro      $0.10  — gpt-4o, gpt-4.1     (16k input, 2048 output)
-//   llm-premium  $0.50  — o3-mini             (32k input, 2048 output)
+//   llm          $0.01  — gpt-4o-mini        (16k input, 4096 output)
+//   llm-pro      $0.10  — gpt-4o, gpt-4.1    (16k input, 2048 output)
+//   llm-premium  $0.50  — o3, o3-mini         (32k input, 2048 output)
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
@@ -15,9 +16,9 @@ function bad(message, statusCode = 400) {
 // Tier → allowed model prefixes, input char budget, and output token cap.
 // Caps are set so worst-case upstream cost stays well below the x402 price.
 const TIERS = {
-  llm:           { prefixes: ["gpt-4o-mini"],        maxInputChars: 16_000, maxTokens: 4096 },
+  llm:           { prefixes: ["gpt-4o-mini"],       maxInputChars: 16_000, maxTokens: 4096 },
   "llm-pro":     { prefixes: ["gpt-4o", "gpt-4.1"], maxInputChars: 16_000, maxTokens: 2048 },
-  "llm-premium": { prefixes: ["o3-mini"],            maxInputChars: 32_000, maxTokens: 2048 },
+  "llm-premium": { prefixes: ["o3", "o3-mini"],     maxInputChars: 32_000, maxTokens: 2048 },
 };
 
 function isAllowed(model, tierSlug) {
