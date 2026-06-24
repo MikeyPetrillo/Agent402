@@ -12,6 +12,7 @@
 - [[x402 Index and Router|x402-Index-and-Router]]
 - [[x402 Leaderboard|x402-Leaderboard]]
 - [[LLM Proxy Gateway|LLM-Proxy]]
+- [[Image Generation Gateway|Image-Gen]]
 - [[Payments and x402]]
 - [[Memory and Coordination]]
 

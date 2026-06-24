@@ -1,6 +1,6 @@
 # Agent402 Wiki
 
-**Agent402** is an **open-source, self-hostable MCP server + HTTP API with 1,323 ready-to-use tools and 42 multi-tool skill packs for AI agents** — browser rendering, web search, PDFs, OCR, images, live data, crypto/payments helpers, ~1,000 pure-CPU utilities, plus curated workflows ([[Skill Packs|Skill-Packs]]) for jobs no single tool covers. Clone it and run everything free in 30 seconds (no wallet, no signup), or use the hosted instance. Optionally, the same server can charge per call over the [x402 protocol](https://x402.org) (USDC on Base) — that part is opt-in; by default everything runs free.
+**Agent402** is an **open-source, self-hostable MCP server + HTTP API with 1,329 ready-to-use tools and 42 multi-tool skill packs for AI agents** — browser rendering, web search, PDFs, OCR, images, live data, crypto/payments helpers, ~1,000 pure-CPU utilities, plus curated workflows ([[Skill Packs|Skill-Packs]]) for jobs no single tool covers. Clone it and run everything free in 30 seconds (no wallet, no signup), or use the hosted instance. Optionally, the same server can charge per call over the [x402 protocol](https://x402.org) (USDC on Base) — that part is opt-in; by default everything runs free.
 
 It's also **the open x402 index**: a single integration gives a buyer three primitives over the whole ecosystem — **Find** ([`/api/find`](https://agent402.tools/api/find), resolve a task to a tool), **Route** ([`/api/route`](https://agent402.tools/api/route), the neutral [[x402 Index and Smart Order Router|x402-Index-and-Router]] across every seller crawled from the [Coinbase CDP Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar)), and **Leaderboard** ([`/api/leaderboard`](https://agent402.tools/api/leaderboard), the [[x402 Leaderboard]] — public on-chain ranking of every seller by Base USDC settled volume). All three are free and unpaywalled — discovery primitives shouldn't cost money.
 
@@ -23,11 +23,12 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 | [[Paying with Compute]] | The proof-of-work tier: spec + reference solver |
 | [[MCP Connector]] | Hosted connector + the `agent402-mcp` npm server |
 | [[Adapters]] | Drop-in tools for OpenAI / Anthropic / AI SDK / LangChain / LlamaIndex |
-| [[Tool Catalog]] | What the 1,323 tools are and how agents discover them |
+| [[Tool Catalog]] | What the 1,329 tools are and how agents discover them |
 | [[Skill-Packs]] | 42 multi-tool workflows — `prompts/list` → `prompts/get`, ready-to-run plans |
 | [[x402-Index-and-Router]] | The cross-seller index + Smart Order Router (cheapest healthy tool across the ecosystem) |
 | [[x402-Leaderboard]] | Public on-chain ranking of every x402 seller by Base USDC settled volume |
 | [[LLM Proxy Gateway|LLM-Proxy]] | Three tiers of OpenAI inference via x402 — GPT-4o-mini, GPT-4o/4.1, o3-mini |
+| [[Image Generation Gateway|Image-Gen]] | Three tiers of GPT Image generation via x402 — text-to-image, no API key needed |
 | [[Payments and x402]] | Non-custodial multi-chain payment toolkit: quote, verify, balance, gas, transfer-auth, ENS |
 | [[Pay-per-crawl]] | `agent402-tollbooth`: charge AI crawlers to access your site (USDC via x402 or proof-of-work) |
 | [[Memory and Coordination]] | Durable wallet-keyed state, cross-wallet grants, audit log |

@@ -135,9 +135,12 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Light-tier packs that call wallet-only tools in-process:
   "skill-trip-planner",       // calls weather-forecast (wallet-only)
   "skill-user-onboarding",   // calls email-validate (wallet-only)
-  // LLM proxy kit: every call burns real upstream inference credit (OpenAI /
-  // Anthropic API). PoW would let one client farm our API keys for free.
+  // LLM proxy kit: every call burns real upstream inference credit (OpenAI).
+  // PoW would let one client farm our API keys for free.
   "llm", "llm-pro", "llm-premium",
+  // Image generation kit: every call burns real upstream inference credit
+  // (OpenAI GPT Image API). Same rationale as LLM proxy.
+  "image-gen", "image-gen-hd", "image-gen-premium",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */
