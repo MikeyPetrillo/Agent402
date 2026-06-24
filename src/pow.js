@@ -141,6 +141,9 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Image generation kit: every call burns real upstream inference credit
   // (OpenAI GPT Image API). Same rationale as LLM proxy.
   "image-gen", "image-gen-hd", "image-gen-premium",
+  // Code execution kit: every call spins up an E2B sandbox (compute cost).
+  // PoW would let one client farm our E2B quota for free.
+  "code-run", "code-run-pro",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */

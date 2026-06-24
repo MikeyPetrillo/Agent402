@@ -13,6 +13,7 @@
 - [[x402 Leaderboard|x402-Leaderboard]]
 - [[LLM Proxy Gateway|LLM-Proxy]]
 - [[Image Generation Gateway|Image-Gen]]
+- [[Code Execution Sandbox|Code-Execution]]
 - [[Payments and x402]]
 - [[Memory and Coordination]]
 
