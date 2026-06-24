@@ -5,10 +5,10 @@ const ENTRIES = [
     date: "2026-06-24",
     title: "LLM proxy gateway — 3-tier OpenAI inference via x402",
     items: [
-      "LLM proxy: POST /api/llm ($0.01), /api/llm-pro ($0.05), /api/llm-premium ($0.25)",
+      "LLM proxy: POST /api/llm ($0.01), /api/llm-pro ($0.10), /api/llm-premium ($0.50)",
       "OpenAI chat/completions format — no API key needed, pay per call",
-      "Models: GPT-4o-mini, GPT-4o, GPT-4.1, o3, o3-mini",
-      "Input size caps per tier (16k/32k/64k chars) to bound upstream cost",
+      "Models: GPT-4o-mini, GPT-4o, GPT-4.1, o3-mini",
+      "Per-tier input/output caps to bound upstream cost",
       "Wallet-only (no PoW free tier) — every call uses real upstream inference",
     ],
   },

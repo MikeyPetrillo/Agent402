@@ -2,9 +2,9 @@
 // Env-gated: missing OPENAI_API_KEY → 503 at call time, not boot failure.
 //
 // Tiers:
-//   llm          $0.01  — gpt-4o-mini
-//   llm-pro      $0.05  — gpt-4o, gpt-4.1
-//   llm-premium  $0.25  — o3, o3-mini
+//   llm          $0.01  — gpt-4o-mini         (16k input, 4096 output)
+//   llm-pro      $0.10  — gpt-4o, gpt-4.1     (16k input, 2048 output)
+//   llm-premium  $0.50  — o3-mini             (32k input, 2048 output)
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
@@ -12,14 +12,12 @@ function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-const MAX_TOKENS_CAP = 4096;
-
-// Tier → allowed model prefixes + input char budget. The char cap bounds
-// upstream cost so a $0.01 call can't burn $2 of input tokens.
+// Tier → allowed model prefixes, input char budget, and output token cap.
+// Caps are set so worst-case upstream cost stays well below the x402 price.
 const TIERS = {
-  llm:           { prefixes: ["gpt-4o-mini"],    maxInputChars: 16_000 },
-  "llm-pro":     { prefixes: ["gpt-4o", "gpt-4.1"], maxInputChars: 32_000 },
-  "llm-premium": { prefixes: ["o3", "o3-mini"],  maxInputChars: 64_000 },
+  llm:           { prefixes: ["gpt-4o-mini"],        maxInputChars: 16_000, maxTokens: 4096 },
+  "llm-pro":     { prefixes: ["gpt-4o", "gpt-4.1"], maxInputChars: 16_000, maxTokens: 2048 },
+  "llm-premium": { prefixes: ["o3-mini"],            maxInputChars: 32_000, maxTokens: 2048 },
 };
 
 function isAllowed(model, tierSlug) {
@@ -56,9 +54,10 @@ function validateInput(input, tierSlug) {
     throw bad(`Input too large (${totalChars} chars). The ${tierSlug} tier allows up to ${charCap} chars`);
   }
 
+  const tokenCap = TIERS[tierSlug].maxTokens;
   let maxTokens = input.max_tokens != null ? parseInt(input.max_tokens, 10) : 1024;
   if (Number.isNaN(maxTokens) || maxTokens < 1) maxTokens = 1024;
-  if (maxTokens > MAX_TOKENS_CAP) maxTokens = MAX_TOKENS_CAP;
+  if (maxTokens > tokenCap) maxTokens = tokenCap;
 
   const opts = {};
   if (input.temperature != null) opts.temperature = Number(input.temperature);
@@ -149,7 +148,7 @@ export const LLM_TOOLS = [
         properties: {
           model: { type: "string", description: "Model ID — gpt-4o-mini" },
           messages: { type: "array", description: "Array of {role, content} message objects" },
-          max_tokens: { type: "number", description: "Max completion tokens (default 1024, cap 4096)" },
+          max_tokens: { type: "number", description: "Max output tokens (default 1024, cap 4096)" },
           temperature: { type: "number", description: "Sampling temperature (0-2)" },
           top_p: { type: "number", description: "Nucleus sampling (0-1)" },
           stop: { type: "string", description: "Stop sequence(s)" },
@@ -172,9 +171,9 @@ export const LLM_TOOLS = [
     name: "LLM inference (Pro)",
     slug: "llm-pro",
     category: "ai",
-    price: "$0.050",
+    price: "$0.100",
     description:
-      "LLM inference proxy (Pro tier) — GPT-4o or GPT-4.1. Same OpenAI-format interface as /api/llm but with more capable models. No API key needed; pay per call via x402. Input capped at 32k chars.",
+      "LLM inference proxy (Pro tier) — GPT-4o or GPT-4.1. Same OpenAI-format interface as /api/llm but with more capable models. No API key needed; pay per call via x402. Input capped at 16k chars, output at 2048 tokens.",
     tags: [...SHARED_TAGS, "gpt-4o", "gpt-4.1"],
     discovery: {
       bodyType: "json",
@@ -183,7 +182,7 @@ export const LLM_TOOLS = [
         properties: {
           model: { type: "string", description: "Model ID — gpt-4o or gpt-4.1" },
           messages: { type: "array", description: "Array of {role, content} message objects" },
-          max_tokens: { type: "number", description: "Max completion tokens (default 1024, cap 4096)" },
+          max_tokens: { type: "number", description: "Max output tokens (default 1024, cap 2048)" },
           temperature: { type: "number", description: "Sampling temperature (0-2)" },
           top_p: { type: "number", description: "Nucleus sampling (0-1)" },
           stop: { type: "string", description: "Stop sequence(s)" },
@@ -206,18 +205,18 @@ export const LLM_TOOLS = [
     name: "LLM inference (Premium)",
     slug: "llm-premium",
     category: "ai",
-    price: "$0.250",
+    price: "$0.500",
     description:
-      "LLM inference proxy (Premium tier) — o3 or o3-mini. Frontier reasoning models via the same OpenAI-format interface. No API key needed; pay per call via x402. Input capped at 64k chars.",
-    tags: [...SHARED_TAGS, "o3", "o3-mini"],
+      "LLM inference proxy (Premium tier) — o3-mini reasoning model via the same OpenAI-format interface. No API key needed; pay per call via x402. Input capped at 32k chars, output at 2048 tokens.",
+    tags: [...SHARED_TAGS, "o3-mini"],
     discovery: {
       bodyType: "json",
       input: { model: "o3-mini", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
       inputSchema: {
         properties: {
-          model: { type: "string", description: "Model ID — o3 or o3-mini" },
+          model: { type: "string", description: "Model ID — o3-mini" },
           messages: { type: "array", description: "Array of {role, content} message objects" },
-          max_tokens: { type: "number", description: "Max completion tokens (default 1024, cap 4096)" },
+          max_tokens: { type: "number", description: "Max output tokens (default 1024, cap 2048)" },
           temperature: { type: "number", description: "Sampling temperature (0-2)" },
           top_p: { type: "number", description: "Nucleus sampling (0-1)" },
           stop: { type: "string", description: "Stop sequence(s)" },
