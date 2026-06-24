@@ -27,6 +27,7 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 | [[Skill-Packs]] | 42 multi-tool workflows — `prompts/list` → `prompts/get`, ready-to-run plans |
 | [[x402-Index-and-Router]] | The cross-seller index + Smart Order Router (cheapest healthy tool across the ecosystem) |
 | [[x402-Leaderboard]] | Public on-chain ranking of every x402 seller by Base USDC settled volume |
+| [[LLM Proxy Gateway|LLM-Proxy]] | Three tiers of OpenAI inference via x402 — GPT-4o-mini, GPT-4o/4.1, o3-mini |
 | [[Payments and x402]] | Non-custodial multi-chain payment toolkit: quote, verify, balance, gas, transfer-auth, ENS |
 | [[Pay-per-crawl]] | `agent402-tollbooth`: charge AI crawlers to access your site (USDC via x402 or proof-of-work) |
 | [[Memory and Coordination]] | Durable wallet-keyed state, cross-wallet grants, audit log |
