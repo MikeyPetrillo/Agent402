@@ -361,6 +361,7 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
       MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
+      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -565,6 +566,12 @@ jobs:
 
       - name: Stats-kit tests (summary, correlation, regression, moving-average, outliers — pure CPU)
         run: node scripts/test-stats-kit.js
+
+      - name: Code-run-kit tests (E2B sandbox — validation always runs; live calls opt-in via E2B_LIVE_TEST=1)
+        run: node scripts/test-code-run-kit.js
+        env:
+          E2B_LIVE_TEST: ${{ secrets.E2B_API_KEY && '1' || '' }}
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
 
       - name: Tollbooth tests (pay-per-crawl gate — node + edge/Web-Crypto)
         run: node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js
