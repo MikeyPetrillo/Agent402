@@ -949,14 +949,15 @@ const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
 // calls fail in 1ms" without leaking PII — only slug + HTTP status + the error
 // message we already serialize to the response body. No body, no IP, no UA.
 // 4xx = caller sent bad input; 5xx = our tool or its upstream broke.
-function logToolError(slug, status, message, shape, synthetic) {
+function logToolError(slug, status, message, shape, synthetic, probe) {
   const klass = status >= 500 ? "5xx" : status >= 400 ? "4xx" : "err";
   // Log the request's TOP-LEVEL KEYS (no values, no IPs, no payment info) on
   // 4xx so we can spot shape-mismatch patterns the schema didn't anticipate.
   // Keys are bounded — privacy-safe and small.
   const shapeStr = shape && Array.isArray(shape) && shape.length ? ` shape=[${shape.slice(0, 12).join(",")}]` : "";
   const synthStr = synthetic ? " synthetic=true" : "";
-  console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr} msg=${String(message || "").slice(0, 200)}`);
+  const probeStr = probe ? " probe=true" : "";
+  console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr}${probeStr} msg=${String(message || "").slice(0, 200)}`);
   // Sentry mirrors the same data as searchable tags so we can query/trend
   // rejected shapes from the Sentry UI. No-op when SENTRY_DSN is unset.
   captureToolError({ slug, status, message, shape, synthetic });
@@ -964,7 +965,7 @@ function logToolError(slug, status, message, shape, synthetic) {
   // status/errorClass/shape properties. Same privacy posture, same no-op
   // behavior when POSTHOG_API_KEY is unset. Independent of Sentry — either,
   // both, or neither can be enabled at any time.
-  capturePostHogToolError({ slug, status, message, shape, synthetic });
+  capturePostHogToolError({ slug, status, message, shape, synthetic, probe });
 }
 // True iff this request carries a valid HMAC-signed X-Heartbeat-Token (POW_SECRET).
 // Unspoofable: an external caller cannot mint a valid token without POW_SECRET.
@@ -1379,7 +1380,10 @@ app.get("/api/analytics", async (req, res) => {
   // real-caller error rates only. The aggregator still reports how many were
   // hidden via `syntheticHidden` so the toggle has accurate count.
   const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
-  res.json(await getAnalytics({ windowHours, top, includeSynthetic }));
+  // `?include_probes=1` opts in to seeing empty-input scanning calls. Default
+  // hides them — they inflate the 4xx rate without representing real callers.
+  const includeProbes = req.query.include_probes === "1" || req.query.include_probes === "true";
+  res.json(await getAnalytics({ windowHours, top, includeSynthetic, includeProbes }));
 });
 
 // Human-readable analytics dashboard. Same data as /api/analytics, rendered as
@@ -1388,7 +1392,8 @@ app.get("/api/analytics", async (req, res) => {
 app.get("/analytics", async (req, res) => {
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
   const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
-  const data = await getAnalytics({ windowHours, top: 25, includeSynthetic });
+  const includeProbes = req.query.include_probes === "1" || req.query.include_probes === "true";
+  const data = await getAnalytics({ windowHours, top: 25, includeSynthetic, includeProbes });
   htmlCache(res, 30, 60).send(analyticsPage(data, { baseUrl: BASE_URL }));
 });
 
@@ -1415,14 +1420,17 @@ mountMcp(app, CATALOG, {
     // 200 on success, 500 on error (no separate 4xx classification — MCP
     // tool-call errors come back in-band, not as transport-level failures).
     const status = meta.errored ? (meta.statusCode | 0 || 500) : 200;
+    // Probe detection: a 4xx with zero input keys = scanning/discovery call.
+    const isProbe = meta.errored && status >= 400 && status < 500
+      && Array.isArray(meta.inputKeys) && meta.inputKeys.filter((k) => k !== "slug").length === 0;
     // MCP transport has no HTTP header surface, so `X-Heartbeat-Token` can't
     // ride along — synthetic is always false here. Pass explicitly so future
     // refactors don't accidentally let a stray truthy value through.
-    if (meta.errored) logToolError(slug, status, meta.errorMessage || "mcp-error", undefined, false);
+    if (meta.errored) logToolError(slug, status, meta.errorMessage || "mcp-error", undefined, false, isProbe);
     const latencyMs = meta.latencyMs | 0;
     const errored = !!meta.errored;
-    recordToolCall({ slug, latencyMs, cached: false, errored, status, synthetic: false }).catch(() => {});
-    capturePostHogToolCall({ slug, latencyMs, cached: false, errored, status, synthetic: false });
+    recordToolCall({ slug, latencyMs, cached: false, errored, status, synthetic: false, probe: isProbe }).catch(() => {});
+    capturePostHogToolCall({ slug, latencyMs, cached: false, errored, status, synthetic: false, probe: isProbe });
   },
 });
 
@@ -1798,6 +1806,7 @@ for (const tool of ALL_KIT) {
     const synthetic = isSyntheticRequest(req);
     let cached = false;
     let errored = false;
+    let probe = false;
     let status = 200;
     try {
       const input = { ...req.query, ...(req.body ?? {}) };
@@ -1845,7 +1854,15 @@ for (const tool of ALL_KIT) {
     } catch (err) {
       errored = true;
       status = err.statusCode || 500;
-      logToolError(tool.slug, status, err.message, status < 500 ? requestShape(req) : null, synthetic);
+      // Probe detection: a 4xx with zero meaningful input keys is a scanning/
+      // discovery call (agent probing endpoints without arguments), not a real
+      // schema mismatch. Tag it so the dashboard can exclude it from error rates.
+      const shape = status < 500 ? requestShape(req) : null;
+      if (status >= 400 && status < 500) {
+        const meaningfulKeys = (shape || []).filter((k) => !["b:params", "b:input", "b:args", "b:slug"].includes(k));
+        probe = meaningfulKeys.length === 0;
+      }
+      logToolError(tool.slug, status, err.message, shape, synthetic, probe);
       // Self-correction envelope: echo the tool's input schema + a working
       // example back on 4xx so the LLM has everything it needs to fix the
       // call without searching the catalog again. 5xx stays minimal — the
@@ -1864,8 +1881,8 @@ for (const tool of ALL_KIT) {
     } finally {
       const latencyMs = Date.now() - startedAt;
       // Fire-and-forget. Analytics outages must NEVER affect agents.
-      recordToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic }).catch(() => {});
-      capturePostHogToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic });
+      recordToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic, probe }).catch(() => {});
+      capturePostHogToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic, probe });
     }
   });
 }

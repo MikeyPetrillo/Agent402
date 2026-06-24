@@ -391,6 +391,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             errored: true,
             statusCode: handlerErr.statusCode || 500,
             errorMessage: handlerErr.message,
+            inputKeys: params && typeof params === "object" ? Object.keys(params) : [],
           });
           // Self-correction envelope: when the call fails the LLM caller almost
           // always has enough information in the original tool description, but

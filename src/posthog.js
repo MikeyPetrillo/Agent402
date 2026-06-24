@@ -62,7 +62,7 @@ export function posthogEnabled() {
 // Capture a tool-handler error as a PostHog event. Properties mirror the
 // Sentry tags (slug, status, errorClass, shape) so a single privacy-preserving
 // payload feeds both backends. Never blocks, never throws.
-export function capturePostHogToolError({ slug, status, message, shape, synthetic }) {
+export function capturePostHogToolError({ slug, status, message, shape, synthetic, probe }) {
   if (!enabled || !client) return;
   try {
     client.capture({
@@ -82,6 +82,11 @@ export function capturePostHogToolError({ slug, status, message, shape, syntheti
         // smoke tests. PostHog dashboards can filter on this property to
         // exclude rehearsal traffic from real-user error rates.
         synthetic: !!synthetic,
+        // `probe` is true when the caller sent a completely empty input and
+        // the handler rejected it with 4xx. These are discovery/scanning
+        // calls — not real schema mismatches — and inflate the error rate
+        // if counted alongside genuine caller mistakes.
+        probe: !!probe,
       },
     });
   } catch { /* never throw from telemetry */ }
@@ -92,7 +97,7 @@ export function capturePostHogToolError({ slug, status, message, shape, syntheti
 // total volume, latency, cache hits, and success rates per slug. Errors are
 // also captured separately via capturePostHogToolError with richer detail;
 // this event is the volume/latency layer.
-export function capturePostHogToolCall({ slug, latencyMs, cached, errored, status, synthetic }) {
+export function capturePostHogToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe }) {
   if (!enabled || !client) return;
   try {
     client.capture({
@@ -105,6 +110,7 @@ export function capturePostHogToolCall({ slug, latencyMs, cached, errored, statu
         errored: !!errored,
         status: Number(status) || 200,
         synthetic: !!synthetic,
+        probe: !!probe,
       },
     });
   } catch { /* never throw from telemetry */ }
