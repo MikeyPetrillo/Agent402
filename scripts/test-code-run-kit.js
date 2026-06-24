@@ -31,11 +31,12 @@ for (const [slug, args, label] of [
 ]) {
   try {
     await h(slug)(args);
-    // If label is null, we expected it to pass validation (then fail on E2B 503)
-    if (label === null) ok(false, "case-insensitive language should reach E2B gate, not throw 400");
+    // If label is null, we expected it to pass validation. Success means
+    // E2B key is set and code ran — that's a pass (validation didn't reject).
+    if (label === null) ok(true, "case-insensitive language passes validation (E2B ran)");
   } catch (e) {
     if (label === null) {
-      // Expected to pass validation → either 503 (no key) or success
+      // Expected to pass validation → 503 (no key) or 502 (SDK missing) both mean validation passed
       ok(e.statusCode === 503 || e.statusCode === 502, `case-insensitive language passes validation (got ${e.statusCode})`);
     } else {
       ok(e.statusCode === 400, label + ` (got ${e.statusCode})`);
@@ -54,8 +55,10 @@ for (const [slug, args, label] of [
   const medCode = "x = 1\n".repeat(2001); // ~12k < 50k
   try {
     await h("code-run-pro")({ code: medCode });
-    ok(false, "code-run-pro accepts 12k code (should reach E2B gate)");
+    // Success = E2B key is set and code ran — validation passed (12k < 50k cap)
+    ok(true, "code-run-pro accepts 12k code (E2B ran)");
   } catch (e) {
+    // 503/502 = no key or SDK, but validation still passed (didn't throw 400)
     ok(e.statusCode === 503 || e.statusCode === 502, `code-run-pro accepts 12k code, hits E2B gate (got ${e.statusCode})`);
   }
 }
