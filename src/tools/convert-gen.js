@@ -76,7 +76,6 @@ function makeFactorTool(category, fromId, toId, fromFactor, toFactor, tags) {
     slug,
     category: "convert",
     price: "$0.001",
-    bazaar: false, // payable + on our own surfaces, but not individually pushed to the Bazaar (keeps boot light)
     description: `Convert ${pretty(fromId)} to ${pretty(toId)} (${category}). Pass ?value=N.`,
     tags: ["convert", "units", category, ...tags],
     discovery: {
@@ -107,7 +106,6 @@ function makeTempTool(fromId, toId) {
     slug: `convert-${fromId}-to-${toId}`,
     category: "convert",
     price: "$0.001",
-    bazaar: false,
     description: `Convert temperature from ${fromId} to ${toId}. Pass ?value=N.`,
     tags: ["convert", "units", "temperature", fromId, toId],
     discovery: {

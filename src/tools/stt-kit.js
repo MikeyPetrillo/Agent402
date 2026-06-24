@@ -74,7 +74,7 @@ async function callOpenAI(audioBuffer, filename, model, language) {
   const form = new FormData();
   form.append("file", new Blob([audioBuffer]), filename);
   form.append("model", model);
-  form.append("response_format", "verbose_json");
+  form.append("response_format", "json");
   if (language) form.append("language", language);
 
   let res;
@@ -134,7 +134,7 @@ export const STT_TOOLS = [
     tags: [...SHARED_TAGS, "gpt-4o-mini-transcribe"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://example.com/audio.mp3" },
+      input: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm)" },
@@ -165,7 +165,7 @@ export const STT_TOOLS = [
     tags: [...SHARED_TAGS, "gpt-4o-transcribe", "pro"],
     discovery: {
       bodyType: "json",
-      input: { url: "https://example.com/audio.mp3" },
+      input: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" },
       inputSchema: {
         properties: {
           url: { type: "string", description: "URL of the audio file to transcribe (mp3, wav, m4a, ogg, flac, webm)" },

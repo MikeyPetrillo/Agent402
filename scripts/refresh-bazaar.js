@@ -207,26 +207,44 @@ async function runMissingMode() {
     const url = isGet
       ? `${TARGET}${t.path}${Object.keys(example).length ? "?" + new URLSearchParams(example).toString() : ""}`
       : `${TARGET}${t.path}`;
-    try {
-      const res = await payFetch(url, {
-        method: t.method,
-        headers: isGet ? {} : { "Content-Type": "application/json" },
-        body: isGet ? undefined : JSON.stringify(example),
-      });
-      if (res.status === 200) {
-        results.ok++;
-        if (i % 50 === 0 || i === missing.length - 1) console.log(`  [${i + 1}/${missing.length}] OK ${key} (${t.price})`);
-      } else {
+    let lastStatus = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await payFetch(url, {
+          method: t.method,
+          headers: isGet ? {} : { "Content-Type": "application/json" },
+          body: isGet ? undefined : JSON.stringify(example),
+        });
+        lastStatus = res.status;
+        if (res.status === 200) {
+          results.ok++;
+          if (i % 50 === 0 || i === missing.length - 1) console.log(`  [${i + 1}/${missing.length}] OK ${key} (${t.price})`);
+          break;
+        }
+        // 402 = facilitator hiccup (settlement timeout); retry after a pause.
+        // 502/503/504 = upstream flap; also worth retrying.
+        if ((res.status === 402 || res.status >= 502) && attempt < 2) {
+          console.warn(`  RETRY ${key} → HTTP ${res.status} (attempt ${attempt + 1}/3, waiting 5s)`);
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
         const body = await res.text().catch(() => "");
         console.warn(`  FAIL ${key} → HTTP ${res.status} ${body.slice(0, 120)}`);
         results.fail++;
         results.errors.push(`${t.path}: HTTP ${res.status}`);
+        break;
+      } catch (e) {
+        if (attempt < 2) {
+          console.warn(`  RETRY ${key} → ${(e.message || "").slice(0, 80)} (attempt ${attempt + 1}/3, waiting 5s)`);
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+        const msg = (e && e.message ? e.message : String(e)).slice(0, 160);
+        console.warn(`  FAIL ${key} → ${msg}`);
+        results.fail++;
+        results.errors.push(`${t.path}: ${msg}`);
+        break;
       }
-    } catch (e) {
-      const msg = (e && e.message ? e.message : String(e)).slice(0, 160);
-      console.warn(`  FAIL ${key} → ${msg}`);
-      results.fail++;
-      results.errors.push(`${t.path}: ${msg}`);
     }
   }
   console.log(`\nRegistration pass complete: ${results.ok} ok, ${results.fail} failed.`);
@@ -294,26 +312,42 @@ async function main() {
     const url = isGet
       ? `${TARGET}${meta.path}?${new URLSearchParams(meta.example).toString()}`
       : `${TARGET}${meta.path}`;
-    try {
-      const res = await payFetch(url, {
-        method,
-        headers: isGet ? {} : { "Content-Type": "application/json" },
-        body: isGet ? undefined : JSON.stringify(meta.example),
-      });
-      if (res.status === 200) {
-        console.log(`  OK   ${method} ${meta.path} (${meta.price})`);
-        results.ok++;
-      } else {
+    let lastStatus = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await payFetch(url, {
+          method,
+          headers: isGet ? {} : { "Content-Type": "application/json" },
+          body: isGet ? undefined : JSON.stringify(meta.example),
+        });
+        lastStatus = res.status;
+        if (res.status === 200) {
+          console.log(`  OK   ${method} ${meta.path} (${meta.price})`);
+          results.ok++;
+          break;
+        }
+        if ((res.status === 402 || res.status >= 502) && attempt < 2) {
+          console.warn(`  RETRY ${method} ${meta.path} → HTTP ${res.status} (attempt ${attempt + 1}/3, waiting 5s)`);
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
         const body = await res.text().catch(() => "");
         console.warn(`  FAIL ${method} ${meta.path} → HTTP ${res.status} ${body.slice(0, 120)}`);
         results.fail++;
         results.errors.push(`${meta.path}: HTTP ${res.status}`);
+        break;
+      } catch (e) {
+        if (attempt < 2) {
+          console.warn(`  RETRY ${method} ${meta.path} → ${(e.message || "").slice(0, 80)} (attempt ${attempt + 1}/3, waiting 5s)`);
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+        const msg = (e && e.message ? e.message : String(e)).slice(0, 160);
+        console.warn(`  FAIL ${method} ${meta.path} → ${msg}`);
+        results.fail++;
+        results.errors.push(`${meta.path}: ${msg}`);
+        break;
       }
-    } catch (e) {
-      const msg = (e && e.message ? e.message : String(e)).slice(0, 160);
-      console.warn(`  FAIL ${method} ${meta.path} → ${msg}`);
-      results.fail++;
-      results.errors.push(`${meta.path}: ${msg}`);
     }
   }
   console.log(`\nPaid refresh complete: ${results.ok} ok, ${results.fail} failed, ${results.skipped} skipped`);
