@@ -144,6 +144,12 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Code execution kit: every call spins up an E2B sandbox (compute cost).
   // PoW would let one client farm our E2B quota for free.
   "code-run", "code-run-pro",
+  // TTS kit: every call burns OpenAI TTS credit.
+  "tts", "tts-hd",
+  // STT kit: fetches external audio + burns OpenAI transcription credit.
+  "transcribe", "transcribe-pro",
+  // Embeddings kit: every call burns OpenAI embedding credit.
+  "embed", "embed-large",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */

@@ -30,6 +30,9 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 | [[LLM Proxy Gateway|LLM-Proxy]] | Three tiers of OpenAI inference via x402 — GPT-4o-mini, GPT-4o/4.1, o3-mini |
 | [[Image Generation Gateway|Image-Gen]] | Three tiers of GPT Image generation via x402 — text-to-image, no API key needed |
 | [[Code Execution Sandbox|Code-Execution]] | Sandboxed Python/JS execution via E2B — isolated cloud VMs, pay per run |
+| [[Text-to-Speech|TTS]] | Convert text to speech via OpenAI TTS — 10 voices, 6 formats, pay per call |
+| [[Speech-to-Text|STT]] | Transcribe audio to text via OpenAI — URL-based input, multi-language |
+| [[Text Embeddings|Embeddings]] | Generate embedding vectors via OpenAI — 1536/3072 dimensions for RAG and search |
 | [[Payments and x402]] | Non-custodial multi-chain payment toolkit: quote, verify, balance, gas, transfer-auth, ENS |
 | [[Pay-per-crawl]] | `agent402-tollbooth`: charge AI crawlers to access your site (USDC via x402 or proof-of-work) |
 | [[Memory and Coordination]] | Durable wallet-keyed state, cross-wallet grants, audit log |

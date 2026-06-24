@@ -3,6 +3,17 @@ import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chr
 const ENTRIES = [
   {
     date: "2026-06-24",
+    title: "Full AI suite — TTS, STT, embeddings via x402",
+    items: [
+      "Text-to-speech: POST /api/tts ($0.05), /api/tts-hd ($0.10) — 10 voices, 6 audio formats",
+      "Speech-to-text: POST /api/transcribe ($0.03), /api/transcribe-pro ($0.10) — URL-based audio input",
+      "Embeddings: POST /api/embed ($0.005), /api/embed-large ($0.01) — 1536/3072 dimensions for RAG",
+      "All use OPENAI_API_KEY — same env-gated pattern as LLM proxy",
+      "Wallet-only (no PoW free tier) — every call uses real upstream inference",
+    ],
+  },
+  {
+    date: "2026-06-24",
     title: "Code execution sandbox — Python/JS via E2B + x402",
     items: [
       "Code execution: POST /api/code-run ($0.02), /api/code-run-pro ($0.05)",
