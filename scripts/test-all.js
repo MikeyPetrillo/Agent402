@@ -116,6 +116,9 @@ const NETWORK = new Set([
   // Image generation kit: every call hits OpenAI GPT Image API upstream.
   // Returns 503 without OPENAI_API_KEY — same tolerance as LLM proxy.
   "/api/image-gen", "/api/image-gen-hd", "/api/image-gen-premium",
+  // Code execution kit: every call spins up an E2B sandbox. Returns 503
+  // without E2B_API_KEY — the 502/503/504 tolerance below covers that.
+  "/api/code-run", "/api/code-run-pro",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 

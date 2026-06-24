@@ -3,6 +3,17 @@ import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chr
 const ENTRIES = [
   {
     date: "2026-06-24",
+    title: "Code execution sandbox — Python/JS via E2B + x402",
+    items: [
+      "Code execution: POST /api/code-run ($0.02), /api/code-run-pro ($0.05)",
+      "Isolated cloud sandboxes via E2B — Python and JavaScript",
+      "Returns stdout, stderr, expression result, and error traceback",
+      "Pro tier: 60s timeout and 50k char code limit for longer computations",
+      "Wallet-only (no PoW free tier) — every call spins up a real VM",
+    ],
+  },
+  {
+    date: "2026-06-24",
     title: "Image generation gateway — 3-tier GPT Image via x402",
     items: [
       "Image gen: POST /api/image-gen ($0.03), /api/image-gen-hd ($0.10), /api/image-gen-premium ($0.30)",

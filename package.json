@@ -37,6 +37,7 @@
   "type": "module",
   "dependencies": {
     "@coinbase/x402": "^2.1.0",
+    "@e2b/code-interpreter": "^2.6.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
     "@sentry/node": "^10.0.0",
