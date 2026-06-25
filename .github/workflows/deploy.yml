@@ -399,6 +399,9 @@ jobs:
       - name: Revenue detector classification (real x402 buys vs funding/tests)
         run: node scripts/test-revenue-scan.js
 
+      - name: Paid-canary verdict (pages on real buying breaks, warns on upstream)
+        run: node scripts/test-paid-canary.js
+
       - name: Tool resolver (/api/find ranking, guards)
         run: node scripts/test-find.js
 
