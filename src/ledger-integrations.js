@@ -29,7 +29,7 @@ export function ledgerIntegrationsPage(baseUrl) {
     name: title,
     url: canonical,
     description,
-    isPartOf: { "@type": "WebSite", name: "Agent402", url: baseUrl },
+    isPartOf: { "@type": "WebSite", name: "Agent402.Tools", url: baseUrl },
   };
 
   const extraCss = `

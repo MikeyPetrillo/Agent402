@@ -124,4 +124,4 @@ The kit reads `OPENAI_API_KEY` at call time, not at boot. If the key is missing 
 - [[Paying with x402]] -- the USDC payment flow these endpoints require
 - [[Security Model]] -- why these tools are wallet-only (no PoW free tier)
 - [[API Reference|API-Reference]] -- full HTTP endpoint reference
-- [[Tool Catalog]] -- where these three tools sit in the 1,323-tool catalog
+- [[Tool Catalog]] -- where these three tools sit in the 1,338-tool catalog

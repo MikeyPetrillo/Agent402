@@ -50,7 +50,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
     name: "Agent402 Pricing",
     url: canonical,
     description,
-    isPartOf: { "@type": "WebSite", name: "Agent402", url: baseUrl + "/" },
+    isPartOf: { "@type": "WebSite", name: "Agent402.Tools", url: baseUrl + "/" },
   };
 
   const body = `

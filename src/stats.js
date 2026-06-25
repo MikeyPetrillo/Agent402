@@ -139,7 +139,7 @@ export function getStats({ wallet, walletName, network, toolCount, baseUrl, pric
   const firstServed = parseInt(getMeta.get("firstServed")?.v ?? Date.now(), 10);
   const explorer = network === "base-sepolia" ? "https://sepolia.basescan.org" : "https://basescan.org";
   return {
-    service: "Agent402",
+    service: "Agent402.Tools",
     summary: "A live node in the machine-to-machine economy: autonomous agents pay per call in USDC (or with compute) and get the result — no human, no signup.",
     tools: toolCount,
     payment: { protocol: "x402", network, currency: "USDC" },

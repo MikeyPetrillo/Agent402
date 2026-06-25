@@ -1446,7 +1446,7 @@ mountMcp(app, CATALOG, {
 app.get("/api/pricing", (_req, res) => {
   const endpointCount = Object.keys(CATALOG).length;
   return res.json({
-    name: "Agent402",
+    name: "Agent402.Tools",
     description: `Pay-per-call tools for AI agents via the x402 payment protocol — ${endpointCount} deterministic tools (browser, search, PDFs, OCR, finance, EDGAR, crypto, macro, memory) plus ${SKILL_PACKS.length} curated multi-tool skill packs callable as MCP prompts. Free via in-process proof-of-work or pay per call in USDC on Base. Open-source and self-hostable. MCP connector: ${BASE_URL}/mcp.`,
     payment: { protocol: "x402", version: 2, network: NETWORK, currency: "USDC", networks: enabledNetworks(NETWORK) },
     altPayment: {

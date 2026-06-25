@@ -22,7 +22,7 @@ privacy policy, public docs, and a no-auth streamable-HTTP endpoint.
 | Public docs | https://agent402.tools/llms.txt (also /tools and /openapi.json) |
 | Privacy policy | https://agent402.tools/privacy |
 | Support contact | https://github.com/MikeyPetrillo/Agent402/issues |
-| Maintainer | Mikey Petrillo — https://github.com/MikeyPetrillo |
+| Maintainer | Mike Petrillo — https://github.com/MikeyPetrillo |
 | Source code | https://github.com/MikeyPetrillo/Agent402 (MIT, fully open source) |
 
 ## Tagline (short)

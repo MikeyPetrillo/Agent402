@@ -92,7 +92,7 @@ export function ledgerCatalogPage(baseUrl, catalog, skillPacks) {
     name: `Agent402 Tool Catalog`,
     url: canonical,
     description,
-    isPartOf: { "@type": "WebSite", name: "Agent402", url: baseUrl },
+    isPartOf: { "@type": "WebSite", name: "Agent402.Tools", url: baseUrl },
   };
 
   // ---- extra CSS for responsive + search highlight ----

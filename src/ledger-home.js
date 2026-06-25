@@ -48,7 +48,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
     {
       "@context": "https://schema.org",
       "@type": "WebSite",
-      name: "Agent402",
+      name: "Agent402.Tools",
       url: baseUrl,
       description,
       potentialAction: { "@type": "SearchAction", target: `${baseUrl}/api/find?q={search_term_string}`, "query-input": "required name=search_term_string" },
@@ -56,7 +56,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
     {
       "@context": "https://schema.org",
       "@type": "WebApplication",
-      name: "Agent402",
+      name: "Agent402.Tools",
       url: baseUrl,
       applicationCategory: "DeveloperApplication",
       operatingSystem: "Any",
