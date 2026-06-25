@@ -6,10 +6,7 @@
 // This is the source of truth view for incoming Tollbooth Cloud waitlist and
 // partner applications. The form on /tollbooth/waitlist POSTs to
 // /api/tollbooth/waitlist, which inserts here.
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-
-const esc = (s) =>
-  String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const fmtDate = (d) => {
   try {
@@ -22,44 +19,44 @@ const fmtDate = (d) => {
 
 const planBadge = (plan) => {
   const color = {
-    solo: "#60a5fa",
-    team: "#4ade80",
-    agency: "#a78bfa",
-    enterprise: "#fbbf24",
-    partner: "#f472b6",
-  }[plan] || "#8b93a7";
-  return `<span class="plan" style="color:${color}; border-color:${color}33;">${esc(plan)}</span>`;
+    solo: "#7cb3e0",
+    team: "#6fae8d",
+    agency: "#b0a0d0",
+    enterprise: "#c4a44e",
+    partner: "#c87090",
+  }[plan] || "#8A8475";
+  return `<span class="ol-plan" style="color:${color}; border-color:${color}55;">${esc(plan)}</span>`;
 };
 
 export function operatorLeadsPage({ ok, rows, total, byPlan, dbEnabled }) {
   const banner = !dbEnabled
-    ? `<div class="warn">DATABASE_URL is not set on this instance. Submissions fall back to the GitHub pre-fill flow and are not stored here.</div>`
+    ? `<div class="ol-warn">DATABASE_URL is not set on this instance. Submissions fall back to the GitHub pre-fill flow and are not stored here.</div>`
     : !ok
-      ? `<div class="warn">Database is configured but the query failed. Check server logs for [leads-db].</div>`
+      ? `<div class="ol-warn">Database is configured but the query failed. Check server logs for [leads-db].</div>`
       : "";
 
   const summary = dbEnabled && ok
-    ? `<div class="grid">
-        <div class="stat"><div class="k">Total leads</div><div class="v">${esc(total)}</div></div>
+    ? `<div class="ol-grid">
+        <div class="ol-stat"><div class="ol-k">Total leads</div><div class="ol-v">${esc(total)}</div></div>
         ${["solo","team","agency","enterprise","partner"].map(p =>
-          `<div class="stat"><div class="k">${p}</div><div class="v">${esc(byPlan?.[p] || 0)}</div></div>`
+          `<div class="ol-stat"><div class="ol-k">${p}</div><div class="ol-v">${esc(byPlan?.[p] || 0)}</div></div>`
         ).join("")}
       </div>`
     : "";
 
   const tbody = (rows || []).map((r) => `<tr>
-    <td class="mono">${esc(fmtDate(r.created_at))}</td>
-    <td>${planBadge(r.plan)} ${r.kind && r.kind !== "waitlist" ? `<span class="kind">${esc(r.kind)}</span>` : ""}</td>
-    <td><b>${esc(r.name)}</b><br><a class="mail" href="mailto:${encodeURIComponent(r.email)}">${esc(r.email)}</a></td>
+    <td class="ol-mono">${esc(fmtDate(r.created_at))}</td>
+    <td>${planBadge(r.plan)} ${r.kind && r.kind !== "waitlist" ? `<span class="ol-kind">${esc(r.kind)}</span>` : ""}</td>
+    <td><b>${esc(r.name)}</b><br><a class="ol-mail" href="mailto:${encodeURIComponent(r.email)}">${esc(r.email)}</a></td>
     <td>${esc(r.org || "—")}</td>
-    <td class="sites">${esc(r.sites || "—")}</td>
-    <td class="msg">${esc(r.message || "")}</td>
-    <td class="mono small muted">${esc(r.ip || "")}<br>${esc((r.ua || "").slice(0, 70))}</td>
+    <td class="ol-sites">${esc(r.sites || "—")}</td>
+    <td class="ol-msg">${esc(r.message || "")}</td>
+    <td class="ol-mono ol-small ol-faint">${esc(r.ip || "")}<br>${esc((r.ua || "").slice(0, 70))}</td>
   </tr>`).join("");
 
   const table = dbEnabled && ok
     ? (rows && rows.length
-        ? `<table>
+        ? `<div class="ol-tbl-wrap"><table>
             <thead>
               <tr>
                 <th>Received</th>
@@ -72,62 +69,54 @@ export function operatorLeadsPage({ ok, rows, total, byPlan, dbEnabled }) {
               </tr>
             </thead>
             <tbody>${tbody}</tbody>
-          </table>`
-        : `<p class="empty">No leads yet. The form on <a href="/tollbooth/waitlist">/tollbooth/waitlist</a> POSTs into this table.</p>`)
+          </table></div>`
+        : `<p class="ol-empty">No leads yet. The form on <a href="/tollbooth/waitlist">/tollbooth/waitlist</a> POSTs into this table.</p>`)
     : "";
 
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Operator · Tollbooth leads — Agent402</title>
-<meta name="robots" content="noindex,nofollow">
-${CHROME_HEAD_LINKS}
-<style>
-  :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --line:#1e2638; --card:#0f1320; --warn:#fbbf24; }
-  body { background:var(--bg); color:var(--fg); font:14px/1.55 system-ui,-apple-system,sans-serif; margin:0; }
-  .wrap { max-width:1280px; margin:0 auto; padding:28px 20px 60px; }
-  h1 { font-size:1.4rem; margin:0 0 4px; }
-  .sub { color:var(--muted); margin:0 0 22px; font-size:.9rem; }
-  .sub a { color:var(--accent); text-decoration:none; }
-  .warn { background:#231a05; border:1px solid #5b3f00; color:var(--warn); border-radius:8px; padding:10px 14px; margin-bottom:18px; font-size:.9rem; }
-  .grid { display:grid; gap:10px; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); margin:0 0 22px; }
-  .stat { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 14px; }
-  .stat .k { color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; }
-  .stat .v { font-family:ui-monospace,Menlo,monospace; font-size:1.25rem; color:var(--fg); margin-top:2px; }
-  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
-  th { text-align:left; color:var(--muted); font-weight:500; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; padding:10px 14px; border-bottom:1px solid var(--line); background:#0a0d15; }
-  td { padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; font-size:.88rem; }
-  tr:last-child td { border-bottom:0; }
-  .mono { font-family:ui-monospace,Menlo,monospace; }
-  .small { font-size:.78rem; }
-  .muted { color:var(--muted); }
-  .mail { color:var(--accent); text-decoration:none; word-break:break-all; }
-  .mail:hover { text-decoration:underline; }
-  .plan { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:1px 10px; font-size:.74rem; text-transform:uppercase; letter-spacing:.04em; }
-  .kind { display:inline-block; color:var(--warn); border:1px solid #5b3f00; border-radius:999px; padding:1px 8px; font-size:.7rem; margin-left:4px; text-transform:uppercase; letter-spacing:.04em; }
-  .sites { max-width:240px; word-break:break-word; }
-  .msg { max-width:320px; white-space:pre-wrap; color:var(--muted); }
-  .empty { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:30px; text-align:center; color:var(--muted); }
-  .empty a { color:var(--accent); }
-${CHROME_CSS}
-</style>
-</head>
-<body>
-${renderHeader("/__operator/leads")}
-<div class="wrap">
-  <h1>Tollbooth leads</h1>
-  <p class="sub">Submissions from <a href="/tollbooth/waitlist">/tollbooth/waitlist</a>. <a href="/__operator" data-op-link>← Back to operator</a></p>
+  const extraCss = `
+.ol-wrap{max-width:1180px;margin:0 auto;padding:56px 30px}
+.ol-h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 6px}
+.ol-sub{color:var(--muted);margin:0 0 22px;font-size:14px;line-height:1.55}
+.ol-sub a{color:var(--accent);text-decoration:none}
+.ol-sub a:hover{text-decoration:underline}
+.ol-warn{background:var(--card);border:1.5px solid var(--ink);color:#b8842e;padding:12px 16px;margin-bottom:18px;font-size:14px}
+.ol-grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));margin:0 0 22px}
+.ol-stat{background:var(--ink);border:1.5px solid var(--ink);padding:12px 16px}
+.ol-stat .ol-k{color:var(--dk-muted);font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.ol-stat .ol-v{font-family:var(--font-mono);font-size:1.25rem;color:var(--cream);margin-top:2px}
+.ol-tbl-wrap{background:var(--ink);border:1.5px solid var(--ink);overflow:hidden}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;color:var(--dk-muted);font-weight:500;font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:10px 14px;border-bottom:1px solid var(--dark-border);background:var(--ink-panel)}
+td{padding:12px 14px;border-bottom:1px solid var(--dark-border);vertical-align:top;font-size:13px;color:var(--cream)}
+tr:last-child td{border-bottom:0}
+.ol-mono{font-family:var(--font-mono)}
+.ol-small{font-size:12px}
+.ol-faint{color:var(--dk-muted)}
+.ol-mail{color:var(--accent);text-decoration:none;word-break:break-all}
+.ol-mail:hover{text-decoration:underline}
+.ol-plan{display:inline-block;border:1px solid var(--dark-border);padding:1px 10px;font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.ol-kind{display:inline-block;color:#c4a44e;border:1px solid rgba(196,164,78,.3);padding:1px 8px;font-family:var(--font-mono);font-size:10px;margin-left:4px;text-transform:uppercase;letter-spacing:.04em}
+.ol-sites{max-width:240px;word-break:break-word}
+.ol-msg{max-width:320px;white-space:pre-wrap;color:var(--dk-muted)}
+.ol-empty{background:var(--card);border:1.5px solid var(--ink);padding:30px;text-align:center;color:var(--faint)}
+.ol-empty a{color:var(--accent)}
+@media(max-width:600px){.ol-h1{font-size:36px !important}}
+`;
+
+  // NOTE: The inline <script> preserves the existing operator auth pattern:
+  // token capture from ?token= into sessionStorage, URL stripping via
+  // replaceState, and inter-page navigation via fetch()+document.write() so
+  // the token travels in the Authorization header, never in the URL.
+  const body = `
+<div class="ol-wrap">
+  <h1 class="ol-h1">Tollbooth leads</h1>
+  <p class="ol-sub">Submissions from <a href="/tollbooth/waitlist">/tollbooth/waitlist</a>. <a href="/__operator" data-op-link>Back to operator</a></p>
   ${banner}
   ${summary}
   ${table}
 </div>
 <script>
 (function(){
-  // Mirror operator.js: capture ?token= once, then strip it from the URL +
-  // route inter-page links through fetch() with the Authorization header so
-  // the secret never re-appears in access logs / history / Referer.
   var qs = new URLSearchParams(location.search);
   if (qs.has('token')) {
     try { sessionStorage.setItem('agent402-op-token', qs.get('token') || ''); } catch(_) {}
@@ -145,8 +134,8 @@ ${renderHeader("/__operator/leads")}
         cache: 'no-store',
       })
         .then(function(r){ return r.text(); })
-        .then(function(html){
-          document.open(); document.write(html); document.close();
+        .then(function(t){
+          document.open(); document.write(t); document.close();
           history.pushState({}, '', a.getAttribute('href'));
         })
         .catch(function(){});
@@ -154,7 +143,15 @@ ${renderHeader("/__operator/leads")}
   });
 })();
 </script>
-${renderFooter()}
-</body>
-</html>`;
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({
+    title: "Operator · Tollbooth leads — Agent402",
+    description: "Agent402 operator dashboard — Tollbooth Cloud waitlist and partner application leads.",
+    canonical: `${baseUrl}/__operator/leads`,
+    baseUrl,
+    activePath: "__none__",
+    extraCss,
+    body,
+  });
 }

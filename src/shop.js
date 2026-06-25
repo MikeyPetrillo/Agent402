@@ -12,6 +12,7 @@
 // and the missing tool shows up as a soft-warning at the top.
 
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chrome.js";
 import { isComputePayable } from "./pow.js";
 
 const esc = (s) =>
@@ -141,23 +142,24 @@ function renderTask(task, catalog) {
 }
 
 const SHOP_CSS = `
-  .shop-intro { color:var(--muted); max-width:680px; margin-bottom:8px; }
-  .task { background:var(--card); border:1px solid #1e2638; border-radius:12px; padding:18px 20px; margin:14px 0; }
-  .task h2 { font-size:1.1rem; margin:0 0 6px; }
-  .task-answer { color:var(--muted); font-size:.92rem; margin-bottom:10px; }
-  .task-primary { font-size:.95rem; margin-bottom:4px; }
-  .task-name { color:var(--text); text-decoration:none; font-weight:600; }
-  .task-name:hover { color:var(--accent); }
-  .task-price { color:var(--muted); font-family:var(--mono); font-size:.8rem; margin-left:10px; }
-  .task-alts { color:var(--muted); font-size:.82rem; margin-top:4px; }
-  .task-alts a { color:#a5b4d4; text-decoration:none; }
-  .task-alts a:hover { color:var(--accent); }
-  .task-example { margin-top:8px; }
-  .task-example code { background:#0d1220; border:1px solid #1e2638; padding:4px 10px; border-radius:6px; font-size:.78rem; color:#c9d4ec; }
-  .missing { background:#2a1d10; border:1px solid #4a371d; border-radius:8px; padding:8px 12px; margin:12px 0; font-size:.85rem; color:#e0b27a; }
+  .sh-task { background:var(--card); border:1.5px solid var(--ink); padding:20px 22px; margin:14px 0; }
+  .sh-task h2 { font-family:var(--font-body); font-weight:800; font-size:18px; margin:0 0 6px; }
+  .sh-task-answer { color:var(--muted); font-size:14px; margin-bottom:10px; line-height:1.6; }
+  .sh-task-primary { font-size:15px; margin-bottom:4px; }
+  .sh-task-name { color:var(--ink); text-decoration:none; font-weight:700; }
+  .sh-task-name:hover { color:var(--accent); }
+  .sh-task-price { color:var(--faint); font-family:var(--font-mono); font-size:12px; margin-left:10px; }
+  .sh-task-alts { color:var(--faint); font-size:13px; margin-top:4px; }
+  .sh-task-alts a { color:var(--muted); text-decoration:none; }
+  .sh-task-alts a:hover { color:var(--accent); }
+  .sh-task-example { margin-top:8px; }
+  .sh-task-example code { background:var(--ink); color:var(--cream); padding:4px 10px; font-family:var(--font-mono); font-size:12px; }
+  .sh-missing { background:var(--card); border:1.5px solid var(--accent); padding:10px 14px; margin:12px 0; font-size:14px; color:var(--accent); }
+  .sh-free { display:inline-block; background:var(--green); color:#08130b; font-weight:700; font-size:11px; letter-spacing:.02em; padding:1px 7px; font-family:var(--font-mono); }
 `;
 
 export function shopPage(baseUrl, catalog) {
+  const e = ledgerEsc;
   const canonical = `${baseUrl}/shop`;
   const title = "Agent402 shop — pay-per-call APIs indexed by what an agent wants to do";
   const description =
@@ -167,10 +169,10 @@ export function shopPage(baseUrl, catalog) {
     t.slugs.filter((s) => !Object.values(catalog).find((c) => c.slug === s))
   );
   const missingNotice = missingSlugs.length
-    ? `<div class="missing">Note: ${missingSlugs.length} tool slug(s) listed here are no longer in the catalog: <code>${esc(missingSlugs.join(", "))}</code>. Rest of the page is still accurate.</div>`
+    ? `<div class="sh-missing">Note: ${missingSlugs.length} tool slug(s) listed here are no longer in the catalog: <code style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);padding:2px 6px;font-size:13px;">${e(missingSlugs.join(", "))}</code>. Rest of the page is still accurate.</div>`
     : "";
 
-  const tasks = TASKS.map((t) => renderTask(t, catalog)).join("\n");
+  const tasks = TASKS.map((t) => renderTaskLedger(t, catalog)).join("\n");
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -183,47 +185,65 @@ export function shopPage(baseUrl, catalog) {
     })),
   };
 
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-${CHROME_HEAD_LINKS}
-<title>${esc(title)}</title>
-<meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${canonical}">
-<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1">
-<meta property="og:type" content="website">
-<meta property="og:url" content="${canonical}">
-<meta property="og:site_name" content="Agent402">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
-<meta name="twitter:card" content="summary">
-<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
-<style>
-  :root { --bg:#0b0e14; --card:#131826; --text:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --mono:ui-monospace,SFMono-Regular,Menlo,monospace; }
-  * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--text); font:16px/1.6 system-ui,-apple-system,sans-serif; }
-  .wrap { max-width:840px; margin:0 auto; padding:40px 20px 80px; }
-  a { color:var(--accent); }
-  h1 { font-size:1.9rem; line-height:1.2; margin-bottom:8px; }
-  .crumb { font-size:.85rem; color:var(--muted); margin-bottom:18px; }
-  .free { display:inline-block; background:var(--accent); color:#08130b; font-weight:700; font-size:.68rem; letter-spacing:.02em; padding:1px 7px; border-radius:999px; }
-  .paidtag { display:inline-block; background:#1b2336; color:var(--muted); font-size:.68rem; padding:1px 7px; border-radius:999px; }
-  ${SHOP_CSS}
-  ${CHROME_CSS}
-</style>
-</head>
-<body>
-${renderHeader("/shop")}
-<div class="wrap">
-  <div class="crumb"><a href="/">Agent402</a> / shop</div>
-  <h1>What does your agent want to do?</h1>
-  <p class="shop-intro">A task-indexed buyer's guide to the ${Object.keys(catalog).length.toLocaleString()} APIs at Agent402 — written from the agent's side of the call. Each row maps a real goal to the cheapest tool that solves it. Browse the full category-organized catalogue at <a href="/tools">/tools</a>, walk the multi-tool workflows at <a href="/skills">/skills</a>, or ask the discovery endpoint directly: <code>/api/find?q=&lt;your task&gt;</code>.</p>
+  const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
+  <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;">SHOP</div>
+  <h1 style="font-family:var(--font-body);font-weight:800;font-size:42px;line-height:.96;letter-spacing:-.03em;margin-bottom:14px;">What does your agent want to do?</h1>
+  <p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;margin-bottom:8px;">A task-indexed buyer's guide to the ${Object.keys(catalog).length.toLocaleString()} APIs at Agent402 — written from the agent's side of the call. Each row maps a real goal to the cheapest tool that solves it. Browse the full category-organized catalogue at <a href="/tools" style="color:var(--accent);">/tools</a>, walk the multi-tool workflows at <a href="/skills" style="color:var(--accent);">/skills</a>, or ask the discovery endpoint directly: <code style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);padding:2px 6px;font-size:13px;">/api/find?q=&lt;your task&gt;</code>.</p>
   ${missingNotice}
   ${tasks}
 </div>
-${renderFooter()}
-</body>
-</html>`;
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({
+    title,
+    description,
+    canonical,
+    baseUrl,
+    activePath: "/shop",
+    jsonLd,
+    extraCss: SHOP_CSS,
+    body,
+  });
+}
+
+function renderTaskLedger(task, catalog) {
+  const e = ledgerEsc;
+  const tools = task.slugs
+    .map((slug) => Object.values(catalog).find((t) => t.slug === slug))
+    .filter(Boolean);
+  const primary = tools[0];
+  const others = tools.slice(1);
+  const extra = (task.extraLinks ?? [])
+    .map((l) => `<a href="${e(l.href)}" style="color:var(--accent);text-decoration:none;">${e(l.label)}</a>`)
+    .join(" · ");
+  const primaryBlock = primary
+    ? `<div class="sh-task-primary">
+        <a href="/tools/${e(primary.slug)}" class="sh-task-name">${e(primary.name)}</a>
+        <span class="sh-task-price">${shopPriceTag(primary)}</span>
+      </div>`
+    : extra
+      ? `<div class="sh-task-primary"><span class="sh-task-name">${extra}</span></div>`
+      : "";
+  const othersBlock = others.length
+    ? `<div class="sh-task-alts">also: ${others
+        .map((t) => `<a href="/tools/${e(t.slug)}">${e(t.name)}</a>`)
+        .join(" \u00b7 ")}</div>`
+    : "";
+  const exampleBlock = task.example
+    ? `<div class="sh-task-example"><code>GET ${e(task.example)}</code></div>`
+    : "";
+
+  return `<section class="sh-task">
+    <h2>${e(task.goal)}</h2>
+    <p class="sh-task-answer">${e(task.answer)}</p>
+    ${primaryBlock}
+    ${othersBlock}
+    ${exampleBlock}
+  </section>`;
+}
+
+function shopPriceTag(tool) {
+  return isComputePayable(tool)
+    ? `<span class="sh-free">FREE w/ PoW</span> \u00b7 ${esc(tool.price)}`
+    : `${esc(tool.price)}`;
 }

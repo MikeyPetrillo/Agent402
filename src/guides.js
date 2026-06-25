@@ -2,7 +2,7 @@
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
 import { marked } from "marked";
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const GUIDES = [
   {
@@ -328,69 +328,105 @@ USDC (or proof-of-work on the free tools).
   },
 ];
 
-const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const GUIDE_INDEX_CSS = `
+.gi-wrap{max-width:1180px;margin:0 auto;padding:56px 30px;}
+.gi-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;}
+.gi-wrap h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;}
+.gi-desc{font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
+.gi-list{display:flex;flex-direction:column;gap:20px;}
+.gi-card{display:block;background:var(--card);border:1.5px solid var(--ink);padding:24px 26px;text-decoration:none;transition:border-color .2s;}
+.gi-card:hover{border-color:var(--accent);}
+.gi-card h2{font-family:var(--font-body);font-weight:800;font-size:20px;line-height:1.15;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink);}
+.gi-card p{font-size:15px;line-height:1.55;color:var(--muted);margin:0;}
+@media(max-width:600px){.gi-wrap h1{font-size:40px;}}
+`;
 
-function shell(baseUrl, title, description, path, body) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title)} — Agent402</title>
-<meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${baseUrl}${path}">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
-<meta property="og:image" content="${baseUrl}/card.png">
-<meta name="twitter:card" content="summary_large_image">
-${CHROME_HEAD_LINKS}
-<style>
-  :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; }
-  body { background:var(--bg); color:var(--fg); font:17px/1.7 system-ui,-apple-system,sans-serif; margin:0; }
-  .wrap { max-width:760px; margin:0 auto; padding:48px 20px 24px; }
-  h1 { font-size:1.9rem; line-height:1.25; } h2 { font-size:1.25rem; margin-top:36px; color:var(--accent); }
-  a { color:var(--accent); } .muted { color:var(--muted); }
-  pre { background:#0f1420; border:1px solid #1e2638; border-radius:10px; padding:14px 16px; overflow-x:auto; font-size:.85rem; line-height:1.55; }
-  code { font-family:ui-monospace,Menlo,monospace; }
-  p > code, li > code { background:#0f1420; padding:1px 6px; border-radius:6px; font-size:.85em; }
-  ${CHROME_CSS}
-</style>
-</head>
-<body>${renderHeader(path)}<div class="wrap">${body}
-<p class="muted" style="margin-top:36px"><a href="/guides">← All guides</a></p>
-</div>${renderFooter()}</body></html>`;
-}
+const GUIDE_PAGE_CSS = `
+.gp-wrap{max-width:760px;margin:0 auto;padding:56px 30px 48px;}
+.gp-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;}
+.gp-crumb{font-family:var(--font-mono);font-size:13px;color:var(--faint);margin-bottom:20px;}
+.gp-crumb a{color:var(--accent);text-decoration:none;}
+.gp-crumb a:hover{text-decoration:underline;}
+.gp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 28px;color:var(--ink);}
+.gp-body{font-size:15px;line-height:1.55;color:var(--muted);}
+.gp-body h2{font-family:var(--font-body);font-weight:800;font-size:22px;line-height:1.1;letter-spacing:-.02em;color:var(--ink);margin:32px 0 12px;}
+.gp-body p{margin:0 0 16px;}
+.gp-body ul,.gp-body ol{margin:0 0 16px;padding-left:24px;}
+.gp-body li{margin-bottom:6px;}
+.gp-body strong{color:var(--ink);}
+.gp-body em{font-style:italic;}
+.gp-body a{color:var(--accent);text-decoration:none;}
+.gp-body a:hover{text-decoration:underline;}
+.gp-body code{font-family:var(--font-mono);font-size:13px;background:var(--card);border:1px solid var(--hairline);padding:2px 6px;}
+.gp-body pre{background:var(--ink);color:var(--cream);font-family:var(--font-mono);font-size:13px;line-height:1.55;padding:16px 20px;overflow-x:auto;margin:0 0 16px;border:1.5px solid var(--ink);}
+.gp-body pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;}
+.gp-back{display:inline-block;margin-top:28px;font-family:var(--font-mono);font-size:13px;color:var(--accent);text-decoration:none;font-weight:700;}
+.gp-back:hover{text-decoration:underline;}
+`;
 
 export function guidesIndex(baseUrl) {
+  const title = "Guides: payments and memory for AI agents";
+  const description = "Practical guides to the machine-to-machine economy: paying APIs with x402 or proof-of-work, and durable wallet-keyed memory for autonomous agents.";
+  const canonical = `${baseUrl}/guides`;
+
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    name: title,
+    description,
+    url: canonical,
+    isPartOf: { "@type": "WebSite", url: baseUrl },
+  };
+
   const items = GUIDES.map(
-    (g) => `<h2 style="margin-top:28px"><a href="/guides/${g.slug}">${esc(g.title)}</a></h2><p class="muted">${esc(g.description)}</p>`
-  ).join("\n");
-  return shell(
-    baseUrl,
-    "Guides: payments and memory for AI agents",
-    "Practical guides to the machine-to-machine economy: paying APIs with x402 or proof-of-work, and durable wallet-keyed memory for autonomous agents.",
-    "/guides",
-    `<h1>Guides</h1>\n<p class="muted">Working code, no fluff — everything here runs against the live service.</p>\n${items}`
-  );
+    (g) => `<a href="/guides/${esc(g.slug)}" class="gi-card">
+        <h2>${esc(g.title)}</h2>
+        <p>${esc(g.description)}</p>
+      </a>`
+  ).join("\n      ");
+
+  const body = `<div class="gi-wrap">
+  <div class="gi-eyebrow">$ GET /guides</div>
+  <h1>Guides</h1>
+  <p class="gi-desc">Working code, no fluff — everything here runs against the live service.</p>
+  <div class="gi-list">
+      ${items}
+  </div>
+</div>
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss: GUIDE_INDEX_CSS, body });
 }
 
 export function guidePage(baseUrl, slug) {
   const g = GUIDES.find((x) => x.slug === slug);
   if (!g) return null;
+
+  const title = `${g.title} — Agent402`;
+  const canonical = `${baseUrl}/guides/${g.slug}`;
+
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "TechArticle",
     headline: g.title,
     description: g.description,
-    url: `${baseUrl}/guides/${g.slug}`,
+    url: canonical,
     image: `${baseUrl}/card.png`,
     author: { "@type": "Person", name: "Mikey Petrillo", url: "https://github.com/MikeyPetrillo" },
     publisher: { "@type": "Organization", name: "Agent402", url: baseUrl },
   };
-  const body = `<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
-<h1>${esc(g.title)}</h1>
-${marked.parse(g.md)}`;
-  return shell(baseUrl, g.title, g.description, `/guides/${g.slug}`, body);
+
+  const body = `<div class="gp-wrap">
+  <div class="gp-crumb"><a href="/">Home</a> / <a href="/guides">Guides</a> / ${esc(g.title)}</div>
+  <h1>${esc(g.title)}</h1>
+  <div class="gp-body">
+    ${marked.parse(g.md)}
+  </div>
+  <a href="/guides" class="gp-back">Back to guides</a>
+</div>
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({ title, description: g.description, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss: GUIDE_PAGE_CSS, body });
 }
 
 export const guideSlugs = () => GUIDES.map((g) => g.slug);

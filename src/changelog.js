@@ -1,4 +1,4 @@
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
@@ -138,8 +138,6 @@ const ENTRIES = [
   },
 ];
 
-const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
 export function changelogRss(baseUrl) {
   const xmlEsc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const items = ENTRIES.map((e) =>
@@ -169,14 +167,14 @@ export function changelogPage(baseUrl) {
   const title = "Changelog — what's new at Agent402";
   const description = "Recent additions to Agent402: new tools, skill packs, framework adapters, and platform features.";
 
-  const jsonLd = JSON.stringify({
+  const jsonLd = {
     "@context": "https://schema.org",
     "@type": "WebPage",
     name: title,
     description,
     url: canonical,
     isPartOf: { "@type": "WebSite", url: baseUrl },
-  });
+  };
 
   const timelineHtml = ENTRIES.map((entry) => {
     const itemsHtml = entry.items.map((item) => `<li>${esc(item)}</li>`).join("\n              ");
@@ -193,52 +191,36 @@ export function changelogPage(baseUrl) {
           </div>`;
   }).join("\n");
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>${esc(title)}</title>
-<meta name="description" content="${esc(description)}"/>
-<link rel="canonical" href="${esc(canonical)}"/>
-<link rel="alternate" type="application/rss+xml" title="Agent402 Changelog" href="${baseUrl}/changelog.xml"/>
-${CHROME_HEAD_LINKS}
-<script type="application/ld+json">${jsonLd}</script>
-<style>
-${CHROME_CSS}
-:root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-*,*::before,*::after{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;line-height:1.6}
-.crumb{max-width:960px;margin:0 auto;padding:1rem 1.5rem 0;font-size:.85rem;color:var(--muted)}
-.crumb a{color:var(--accent);text-decoration:none}
-.crumb a:hover{text-decoration:underline}
-.page-title{max-width:960px;margin:0 auto;padding:1.5rem 1.5rem .5rem}
-.page-title h1{font-size:1.6rem;margin:0 0 .25rem;color:var(--text)}
-.page-title p{margin:0;color:var(--muted);font-size:.95rem}
-.timeline{max-width:960px;margin:2rem auto 3rem;padding:0 1.5rem;position:relative}
-.timeline::before{content:"";position:absolute;left:calc(1.5rem + 7px);top:0;bottom:0;width:2px;background:var(--card)}
-.tl-entry{position:relative;padding-left:2.5rem;margin-bottom:1.5rem}
-.tl-dot{position:absolute;left:0;top:.6rem;width:16px;height:16px;border-radius:50%;background:var(--accent);border:3px solid var(--bg);z-index:1}
-.tl-card{background:var(--card);border-radius:8px;padding:1.25rem 1.5rem}
-.tl-date{display:inline-block;font-family:var(--mono);font-size:.78rem;color:var(--accent);margin-bottom:.25rem}
-.tl-card h2{font-size:1.1rem;margin:.15rem 0 .75rem;color:var(--text);font-weight:600}
-.tl-card ul{margin:0;padding-left:1.25rem;color:var(--muted);font-size:.9rem}
-.tl-card li{margin-bottom:.35rem}
-.tl-card li:last-child{margin-bottom:0}
-@media(max-width:600px){.page-title h1{font-size:1.3rem}.tl-card{padding:1rem}}
-</style>
-</head>
-<body>
-${renderHeader("/changelog")}
-<div class="crumb"><a href="/">Agent402</a> / changelog</div>
-<div class="page-title">
+  const extraCss = `
+.cl-wrap{max-width:1180px;margin:0 auto;padding:56px 30px;}
+.cl-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;}
+.cl-wrap h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;}
+.cl-desc{font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
+.cl-rss{font-family:var(--font-mono);font-size:13px;color:var(--accent);text-decoration:none;display:inline-block;margin-bottom:32px;}
+.cl-rss:hover{text-decoration:underline;}
+.timeline{position:relative;padding-left:28px;}
+.timeline::before{content:"";position:absolute;left:7px;top:0;bottom:0;width:1.5px;background:var(--hairline);}
+.tl-entry{position:relative;margin-bottom:24px;}
+.tl-dot{position:absolute;left:-28px;top:8px;width:16px;height:16px;background:var(--accent);border:3px solid var(--paper);}
+.tl-card{background:var(--card);border:1.5px solid var(--ink);padding:20px 24px;}
+.tl-date{display:inline-block;font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:4px;}
+.tl-card h2{font-family:var(--font-body);font-weight:800;font-size:20px;line-height:1.15;letter-spacing:-.02em;margin:4px 0 12px;color:var(--ink);}
+.tl-card ul{margin:0;padding-left:20px;color:var(--muted);font-size:15px;line-height:1.55;}
+.tl-card li{margin-bottom:5px;}
+.tl-card li:last-child{margin-bottom:0;}
+@media(max-width:600px){.cl-wrap h1{font-size:40px;}.tl-card{padding:16px 18px;}}
+`;
+
+  const body = `<div class="cl-wrap">
+  <div class="cl-eyebrow">$ GET /changelog</div>
   <h1>Changelog</h1>
-  <p>${esc(description)}</p>
-</div>
-<div class="timeline">
+  <p class="cl-desc">${esc(description)}</p>
+  <a class="cl-rss" href="${baseUrl}/changelog.xml">RSS feed</a>
+  <div class="timeline">
 ${timelineHtml}
+  </div>
 </div>
-${renderFooter()}
-</body>
-</html>`;
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss, body });
 }

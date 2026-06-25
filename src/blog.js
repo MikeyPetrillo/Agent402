@@ -1,6 +1,4 @@
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-
-const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 export const BLOG_POSTS = [
   {
@@ -181,7 +179,7 @@ export function blogIndex(baseUrl) {
   const pageTitle = "Blog — Agent402";
   const pageDesc = "News, deep-dives, and announcements from the Agent402 project — deterministic tools, x402 payments, and MCP integrations for autonomous agents.";
 
-  const jsonLd = JSON.stringify({
+  const jsonLd = {
     "@context": "https://schema.org",
     "@type": "Blog",
     name: pageTitle,
@@ -195,7 +193,7 @@ export function blogIndex(baseUrl) {
       url: `${baseUrl}/blog/${p.slug}`,
       description: p.excerpt,
     })),
-  });
+  };
 
   const cards = BLOG_POSTS.slice()
     .sort((a, b) => b.date.localeCompare(a.date))
@@ -204,61 +202,37 @@ export function blogIndex(baseUrl) {
         <span class="blog-date">${esc(p.date)}</span>
         <h2>${esc(p.title)}</h2>
         <p class="blog-excerpt">${esc(p.excerpt)}</p>
-        <span class="blog-read">Read more &rarr;</span>
+        <span class="blog-read">Read more</span>
       </a>`)
     .join("\n");
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>${esc(pageTitle)}</title>
-<meta name="description" content="${esc(pageDesc)}"/>
-<link rel="canonical" href="${esc(canonical)}"/>
-<meta property="og:title" content="${esc(pageTitle)}"/>
-<meta property="og:description" content="${esc(pageDesc)}"/>
-<meta property="og:url" content="${esc(canonical)}"/>
-<meta property="og:type" content="website"/>
-<meta name="twitter:card" content="summary"/>
-<meta name="twitter:title" content="${esc(pageTitle)}"/>
-<meta name="twitter:description" content="${esc(pageDesc)}"/>
-${CHROME_HEAD_LINKS}
-<script type="application/ld+json">${jsonLd}</script>
-<style>
-${CHROME_CSS}
-:root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-*,*::before,*::after{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;line-height:1.6}
-.breadcrumb{max-width:960px;margin:0 auto;padding:1rem 1.5rem 0;font-size:.85rem;color:var(--muted)}
-.breadcrumb a{color:var(--accent);text-decoration:none}
-.breadcrumb a:hover{text-decoration:underline}
-.page-header{max-width:960px;margin:0 auto;padding:1.5rem 1.5rem .5rem}
-.page-header h1{font-size:1.6rem;margin:0 0 .25rem;color:var(--text)}
-.page-header p{margin:0;color:var(--muted);font-size:.95rem}
-.blog-grid{max-width:960px;margin:2rem auto 3rem;padding:0 1.5rem;display:grid;grid-template-columns:repeat(2,1fr);gap:1.5rem}
-@media(max-width:700px){.blog-grid{grid-template-columns:1fr}}
-.blog-card{display:block;background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:1.5rem 1.6rem;text-decoration:none;transition:border-color .2s}
-.blog-card:hover{border-color:var(--accent)}
-.blog-date{display:inline-block;font-family:var(--mono);font-size:.78rem;color:var(--accent);margin-bottom:.25rem}
-.blog-card h2{font-size:1.1rem;margin:.15rem 0 .75rem;color:var(--text);font-weight:600}
-.blog-excerpt{color:var(--muted);font-size:.93rem;line-height:1.65;margin:0 0 1rem}
-.blog-read{color:var(--accent);font-size:.88rem;font-weight:500}
-</style>
-</head>
-<body>
-${renderHeader("/blog")}
-<div class="breadcrumb"><a href="/">Home</a> &rsaquo; Blog</div>
-<div class="page-header">
+  const extraCss = `
+.bl-wrap{max-width:1180px;margin:0 auto;padding:56px 30px;}
+.bl-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;}
+.bl-wrap h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;}
+.bl-desc{font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 40px;max-width:640px;}
+.blog-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;}
+@media(max-width:700px){.blog-grid{grid-template-columns:1fr;}}
+.blog-card{display:block;background:var(--card);border:1.5px solid var(--ink);padding:24px 26px;text-decoration:none;transition:border-color .2s;}
+.blog-card:hover{border-color:var(--accent);}
+.blog-date{display:inline-block;font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:6px;}
+.blog-card h2{font-family:var(--font-body);font-weight:800;font-size:20px;line-height:1.15;letter-spacing:-.02em;margin:4px 0 12px;color:var(--ink);}
+.blog-excerpt{font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 14px;}
+.blog-read{font-family:var(--font-mono);font-size:13px;color:var(--accent);font-weight:700;}
+@media(max-width:600px){.bl-wrap h1{font-size:40px;}}
+`;
+
+  const body = `<div class="bl-wrap">
+  <div class="bl-eyebrow">$ GET /blog</div>
   <h1>Blog</h1>
-  <p>${esc(pageDesc)}</p>
-</div>
-<div class="blog-grid">
+  <p class="bl-desc">${esc(pageDesc)}</p>
+  <div class="blog-grid">
 ${cards}
+  </div>
 </div>
-${renderFooter()}
-</body>
-</html>`;
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({ title: pageTitle, description: pageDesc, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss, body });
 }
 
 export function blogPost(baseUrl, slug) {
@@ -268,7 +242,7 @@ export function blogPost(baseUrl, slug) {
   const canonical = `${baseUrl}/blog/${post.slug}`;
   const pageTitle = `${post.title} — Agent402 Blog`;
 
-  const jsonLd = JSON.stringify({
+  const jsonLd = {
     "@context": "https://schema.org",
     "@type": "BlogPosting",
     headline: post.title,
@@ -277,64 +251,41 @@ export function blogPost(baseUrl, slug) {
     url: canonical,
     author: { "@type": "Organization", name: "Agent402", url: baseUrl },
     isPartOf: { "@type": "Blog", name: "Agent402 Blog", url: `${baseUrl}/blog` },
-  });
+  };
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>${esc(pageTitle)}</title>
-<meta name="description" content="${esc(post.excerpt)}"/>
-<link rel="canonical" href="${esc(canonical)}"/>
-<meta property="og:title" content="${esc(pageTitle)}"/>
-<meta property="og:description" content="${esc(post.excerpt)}"/>
-<meta property="og:url" content="${esc(canonical)}"/>
-<meta property="og:type" content="article"/>
-<meta property="article:published_time" content="${esc(post.date)}"/>
-<meta name="twitter:card" content="summary"/>
-<meta name="twitter:title" content="${esc(pageTitle)}"/>
-<meta name="twitter:description" content="${esc(post.excerpt)}"/>
-${CHROME_HEAD_LINKS}
-<script type="application/ld+json">${jsonLd}</script>
-<style>
-${CHROME_CSS}
-:root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-*,*::before,*::after{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;line-height:1.6}
-.breadcrumb{max-width:760px;margin:0 auto;padding:1rem 1.5rem 0;font-size:.85rem;color:var(--muted)}
-.breadcrumb a{color:var(--accent);text-decoration:none}
-.breadcrumb a:hover{text-decoration:underline}
-article{max-width:760px;margin:0 auto;padding:1.5rem 1.5rem 3rem}
-article .post-date{display:inline-block;font-family:var(--mono);font-size:.82rem;color:var(--accent);margin-bottom:.25rem}
-article h1{font-size:1.7rem;margin:.15rem 0 1.5rem;color:var(--text);font-weight:700;line-height:1.3}
-article .post-body{color:var(--muted);font-size:.95rem;line-height:1.75}
-article .post-body h2{color:var(--text);font-size:1.15rem;font-weight:600;margin:2rem 0 .75rem}
-article .post-body p{margin:0 0 1rem}
-article .post-body ul,article .post-body ol{margin:0 0 1rem;padding-left:1.5rem}
-article .post-body li{margin-bottom:.4rem}
-article .post-body strong{color:var(--text)}
-article .post-body code{font-family:var(--mono);font-size:.88em;background:var(--card);padding:2px 6px;border-radius:4px}
-article .post-body pre{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:1rem 1.25rem;overflow-x:auto;margin:0 0 1rem}
-article .post-body pre code{background:none;padding:0;font-size:.85rem}
-article .post-body a{color:var(--accent);text-decoration:none}
-article .post-body a:hover{text-decoration:underline}
-.back-link{display:inline-block;margin-top:2rem;color:var(--accent);text-decoration:none;font-size:.92rem;font-weight:500}
-.back-link:hover{text-decoration:underline}
-</style>
-</head>
-<body>
-${renderHeader("/blog")}
-<div class="breadcrumb"><a href="/">Home</a> &rsaquo; <a href="/blog">Blog</a> &rsaquo; ${esc(post.title)}</div>
-<article>
-  <span class="post-date">${esc(post.date)}</span>
+  const extraCss = `
+.bp-wrap{max-width:760px;margin:0 auto;padding:56px 30px 48px;}
+.bp-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;}
+.bp-crumb{font-family:var(--font-mono);font-size:13px;color:var(--faint);margin-bottom:20px;}
+.bp-crumb a{color:var(--accent);text-decoration:none;}
+.bp-crumb a:hover{text-decoration:underline;}
+.bp-date{display:inline-block;font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:6px;}
+.bp-wrap h1{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:4px 0 28px;color:var(--ink);}
+.post-body{font-size:15px;line-height:1.55;color:var(--muted);}
+.post-body h2{font-family:var(--font-body);font-weight:800;font-size:22px;line-height:1.1;letter-spacing:-.02em;color:var(--ink);margin:32px 0 12px;}
+.post-body p{margin:0 0 16px;}
+.post-body ul,.post-body ol{margin:0 0 16px;padding-left:24px;}
+.post-body li{margin-bottom:6px;}
+.post-body strong{color:var(--ink);}
+.post-body code{font-family:var(--font-mono);font-size:13px;background:var(--card);border:1px solid var(--hairline);padding:2px 6px;}
+.post-body pre{background:var(--ink);color:var(--cream);font-family:var(--font-mono);font-size:13px;line-height:1.55;padding:16px 20px;overflow-x:auto;margin:0 0 16px;border:1.5px solid var(--ink);}
+.post-body pre code{background:none;border:none;padding:0;color:inherit;font-size:13px;}
+.post-body a{color:var(--accent);text-decoration:none;}
+.post-body a:hover{text-decoration:underline;}
+.bp-back{display:inline-block;margin-top:28px;font-family:var(--font-mono);font-size:13px;color:var(--accent);text-decoration:none;font-weight:700;}
+.bp-back:hover{text-decoration:underline;}
+`;
+
+  const body = `<div class="bp-wrap">
+  <div class="bp-crumb"><a href="/">Home</a> / <a href="/blog">Blog</a> / ${esc(post.title)}</div>
+  <span class="bp-date">${esc(post.date)}</span>
   <h1>${esc(post.title)}</h1>
   <div class="post-body">
     ${post.body}
   </div>
-  <a href="/blog" class="back-link">&larr; Back to blog</a>
-</article>
-${renderFooter()}
-</body>
-</html>`;
+  <a href="/blog" class="bp-back">Back to blog</a>
+</div>
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({ title: pageTitle, description: post.excerpt, canonical, baseUrl, activePath: "__none__", jsonLd, extraCss, body });
 }

@@ -1,36 +1,38 @@
 // Privacy policy — a stable URL is required for listing the remote MCP
 // connector in Anthropic's directory, and it should be true: this service
 // has no accounts, so there is genuinely little to say.
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 export function privacyPage(baseUrl) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Privacy — Agent402</title>
-<meta name="description" content="Agent402's privacy policy: no accounts, no cookies, no analytics. What we process, why, and how long we keep it.">
-<link rel="canonical" href="${baseUrl}/privacy">
-<meta property="og:title" content="Privacy — Agent402">
-<meta property="og:description" content="No accounts, no cookies, no analytics. What we process, why, and how long we keep it.">
-<meta property="og:image" content="${baseUrl}/card.png">
-<meta name="twitter:card" content="summary_large_image">
-${CHROME_HEAD_LINKS}
-<style>
-  :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; }
-  body { background:var(--bg); color:var(--fg); font:16px/1.65 system-ui,-apple-system,sans-serif; margin:0; }
-  .wrap { max-width:760px; margin:0 auto; padding:48px 20px 24px; }
-  h1 { font-size:1.6rem; } h2 { font-size:1.1rem; margin-top:32px; color:var(--accent); }
-  a { color:var(--accent); } p, li { color:var(--fg); } .muted { color:var(--muted); }
-  code { font-family:ui-monospace,Menlo,monospace; font-size:.9em; }
-  ${CHROME_CSS}
-</style>
-</head>
-<body>${renderHeader("/privacy")}<div class="wrap">
-<h1>Privacy policy</h1>
-<p class="muted">Agent402 (agent402.tools) — last updated 2026-06-12.</p>
+  const title = "Privacy — Agent402";
+  const description = "Agent402's privacy policy: no accounts, no cookies, no analytics. What we process, why, and how long we keep it.";
+  const canonical = `${baseUrl}/privacy`;
 
+  const extraCss = `
+.pv-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
+.pv-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
+.pv-h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
+.pv-updated{font-family:var(--font-mono);font-size:13px;color:var(--faint);margin:0 0 32px}
+.pv-body p,.pv-body li{font-size:15px;line-height:1.55;color:var(--muted)}
+.pv-body p{margin:0 0 14px}
+.pv-body ul{margin:0 0 18px;padding:0 0 0 22px}
+.pv-body li{margin-bottom:8px}
+.pv-body h2{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:36px 0 14px;color:var(--ink)}
+.pv-body a{color:var(--accent);text-decoration:none}
+.pv-body a:hover{text-decoration:underline}
+.pv-body b,.pv-body strong{color:var(--ink);font-weight:600}
+.pv-body i{font-style:italic}
+.pv-body code{font-family:var(--font-mono);font-size:13px;background:var(--ink);color:var(--cream);padding:2px 7px;border:1.5px solid var(--ink)}
+@media(max-width:600px){.pv-h1{font-size:36px !important}}
+`;
+
+  const body = `
+<div class="pv-wrap">
+<div class="pv-eyebrow">$ GET /privacy</div>
+<h1 class="pv-h1">Privacy policy</h1>
+<p class="pv-updated">Agent402 (agent402.tools) — last updated 2026-06-12.</p>
+
+<div class="pv-body">
 <p>Agent402 has no accounts, no signups, no cookies, and no analytics or ad trackers.
 The entire server is <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">open source</a>,
 so every claim below is verifiable in code.</p>
@@ -74,6 +76,9 @@ non-personal counters (total calls served per tool) are kept for the public <a h
 <p>Mikey Petrillo —
 <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">GitHub issues</a>,
 or <a href="https://github.com/MikeyPetrillo" rel="noopener">github.com/MikeyPetrillo</a>.</p>
-</div>${renderFooter()}</body>
-</html>`;
+</div>
+</div>
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/privacy", extraCss, body });
 }

@@ -2,124 +2,109 @@
 // split, estimated revenue, and the full retained recent-calls feed. Gated by
 // AGENT402_OPERATOR_TOKEN (query ?token=…). Nothing here is shown publicly;
 // /api/stats remains the safe public surface.
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-
-const esc = (s) =>
-  String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 export function operatorPage(baseUrl, data) {
   const t = data?.totals || {};
   const tools = Array.isArray(data?.tools) ? data.tools : [];
   const recent = Array.isArray(data?.recentCalls) ? data.recentCalls : [];
   const badge = (r) => r.walletOnly
-    ? `<span class="badge wallet" title="USDC only — no proof-of-work path">USDC-ONLY</span>`
-    : `<span class="badge pow" title="Also payable with proof-of-work (free tier)">FREE-W/POW</span>`;
+    ? `<span class="op-badge op-badge-wallet" title="USDC only — no proof-of-work path">USDC-ONLY</span>`
+    : `<span class="op-badge op-badge-pow" title="Also payable with proof-of-work (free tier)">FREE-W/POW</span>`;
   const rows = tools.map((r) => `<tr>
     <td><a href="/tools/${esc(r.slug)}">${esc(r.slug)}</a> ${badge(r)}</td>
     <td class="num">${esc(r.calls)}</td>
-    <td class="num paid">${esc(r.paid)}</td>
-    <td class="num pow">${esc(r.pow)}</td>
-    <td class="num hb">${esc(r.heartbeat || 0)}</td>
-    <td class="num rev">$${esc(r.revenueUsd.toFixed(4))}</td>
-    <td class="num muted">$${esc(r.pricePerCall.toFixed(4))}</td>
+    <td class="num op-paid">${esc(r.paid)}</td>
+    <td class="num op-pow">${esc(r.pow)}</td>
+    <td class="num op-hb">${esc(r.heartbeat || 0)}</td>
+    <td class="num op-rev">$${esc(r.revenueUsd.toFixed(4))}</td>
+    <td class="num op-muted">$${esc(r.pricePerCall.toFixed(4))}</td>
   </tr>`).join("");
-  const feedIcon = (m) => m === "proof-of-work" ? "⚙ PoW" : m === "heartbeat" ? "♥ HB" : "$ USDC";
-  const feed = recent.map((r) => `<li><span class="rs">${esc(r.slug)}</span><span class="rm">${feedIcon(r.paidWith)}</span><span class="ra">${esc(r.at)}</span></li>`).join("");
+  const feedIcon = (m) => m === "proof-of-work" ? "PoW" : m === "heartbeat" ? "HB" : "$ USDC";
+  const feed = recent.map((r) => `<li><span class="op-rs">${esc(r.slug)}</span><span class="op-rm">${feedIcon(r.paidWith)}</span><span class="op-ra">${esc(r.at)}</span></li>`).join("");
 
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Operator — Agent402</title>
-<meta name="robots" content="noindex,nofollow">
-${CHROME_HEAD_LINKS}
-<style>
-  :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --line:#1e2638; --card:#0f1320; --pow:#60a5fa; --paid:#4ade80; --hb:#a78bfa; }
-  body { background:var(--bg); color:var(--fg); font:14px/1.55 system-ui,-apple-system,sans-serif; margin:0; }
-  .wrap { max-width:1180px; margin:0 auto; padding:28px 20px 24px; }
-  h1 { font-size:1.4rem; margin:0 0 4px; }
-  .sub { color:var(--muted); margin:0 0 22px; font-size:.9rem; }
-  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); margin:0 0 22px; }
-  .stat { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
-  .stat .k { color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; }
-  .stat .v { font-family:ui-monospace,Menlo,monospace; font-size:1.45rem; color:var(--fg); margin-top:4px; }
-  .stat .s { color:var(--muted); font-size:.78rem; margin-top:3px; }
-  .layout { display:grid; gap:18px; grid-template-columns:1fr 320px; }
-  @media (max-width:880px){ .layout { grid-template-columns:1fr; } }
-  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
-  .ph { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
-  .ph h2 { margin:0; font-size:.95rem; color:var(--accent); }
-  .ph input { background:#0b0e14; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font-size:.82rem; }
-  .ph input:focus { outline:none; border-color:var(--accent); }
-  table { width:100%; border-collapse:collapse; font-size:.86rem; }
-  th { text-align:left; color:var(--muted); font-weight:500; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; padding:9px 14px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--card); cursor:pointer; user-select:none; }
-  th.num { text-align:right; }
-  td { padding:8px 14px; border-bottom:1px solid var(--line); }
-  td.num { font-family:ui-monospace,Menlo,monospace; text-align:right; }
-  td.paid { color:var(--paid); }
-  td.pow { color:var(--pow); }
-  td.hb { color:var(--hb); }
-  td.rev { color:var(--accent); font-weight:600; }
-  td.muted { color:var(--muted); }
-  td a { color:var(--fg); text-decoration:none; }
-  td a:hover { color:var(--accent); }
-  .tbody-scroll { max-height:560px; overflow:auto; }
-  .feed { max-height:560px; overflow:auto; }
-  .feed ul { list-style:none; margin:0; padding:0; }
-  .feed li { display:grid; grid-template-columns:1fr auto; gap:4px 10px; padding:10px 16px; border-bottom:1px solid var(--line); font-size:.82rem; }
-  .feed .rs { font-family:ui-monospace,Menlo,monospace; color:var(--fg); }
-  .feed .rm { color:var(--muted); font-size:.78rem; }
-  .feed .ra { grid-column:1/-1; color:var(--muted); font-size:.72rem; font-family:ui-monospace,Menlo,monospace; }
-  .badge { display:inline-block; font-size:.62rem; font-weight:600; padding:1px 6px; border-radius:4px; margin-left:6px; letter-spacing:.04em; vertical-align:middle; font-family:ui-monospace,Menlo,monospace; }
-  .badge.pow { background:rgba(96,165,250,.12); color:var(--pow); border:1px solid rgba(96,165,250,.3); }
-  .badge.wallet { background:rgba(74,222,128,.1); color:var(--paid); border:1px solid rgba(74,222,128,.3); }
-  ${CHROME_CSS}
-</style>
-</head>
-<body>
-${renderHeader("/__operator")}
-<div class="wrap">
+  const extraCss = `
+.op-wrap{max-width:1180px;margin:0 auto;padding:56px 30px}
+.op-h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 6px}
+.op-sub{color:var(--muted);margin:0 0 22px;font-size:14px;line-height:1.55}
+.op-sub a{color:var(--accent);text-decoration:none}
+.op-sub a:hover{text-decoration:underline}
+.op-sub code{font-family:var(--font-mono);font-size:12px;background:var(--ink);color:var(--cream);padding:2px 7px;border:1.5px solid var(--ink)}
+.op-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin:0 0 22px}
+.op-stat{background:var(--ink);border:1.5px solid var(--ink);padding:16px}
+.op-stat .op-k{color:var(--dk-muted);font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.op-stat .op-v{font-family:var(--font-mono);font-size:1.45rem;color:var(--cream);margin-top:4px}
+.op-stat .op-s{color:var(--dk-muted);font-family:var(--font-mono);font-size:12px;margin-top:3px}
+.op-layout{display:grid;gap:18px;grid-template-columns:1fr 320px}
+@media(max-width:880px){.op-layout{grid-template-columns:1fr}}
+.op-panel{background:var(--ink);border:1.5px solid var(--ink);overflow:hidden}
+.op-ph{padding:12px 16px;border-bottom:1px solid var(--dark-border);display:flex;justify-content:space-between;align-items:center}
+.op-ph h2{margin:0;font-size:.95rem;color:var(--accent);font-family:var(--font-body);font-weight:700}
+.op-ph input{background:var(--ink-panel);color:var(--cream);border:1px solid var(--dark-border);padding:5px 8px;font-family:var(--font-mono);font-size:12px}
+.op-ph input:focus{outline:none;border-color:var(--accent)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--dk-muted);font-weight:500;font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:9px 14px;border-bottom:1px solid var(--dark-border);position:sticky;top:0;background:var(--ink);cursor:pointer;user-select:none}
+th.num{text-align:right}
+td{padding:8px 14px;border-bottom:1px solid var(--dark-border);color:var(--cream);font-family:var(--font-mono);font-size:13px}
+td.num{text-align:right}
+td.op-paid{color:var(--green)}
+td.op-pow{color:#7cb3e0}
+td.op-hb{color:#b0a0d0}
+td.op-rev{color:var(--accent);font-weight:600}
+td.op-muted{color:var(--dk-muted)}
+td a{color:var(--cream);text-decoration:none}
+td a:hover{color:var(--accent)}
+.op-tbody-scroll{max-height:560px;overflow:auto}
+.op-feed{max-height:560px;overflow:auto}
+.op-feed ul{list-style:none;margin:0;padding:0}
+.op-feed li{display:grid;grid-template-columns:1fr auto;gap:4px 10px;padding:10px 16px;border-bottom:1px solid var(--dark-border);font-size:12px}
+.op-rs{font-family:var(--font-mono);color:var(--cream)}
+.op-rm{color:var(--dk-muted);font-family:var(--font-mono);font-size:12px}
+.op-ra{grid-column:1/-1;color:var(--dk-muted);font-family:var(--font-mono);font-size:11px}
+.op-badge{display:inline-block;font-family:var(--font-mono);font-size:10px;font-weight:600;padding:1px 6px;margin-left:6px;letter-spacing:.04em;vertical-align:middle}
+.op-badge-pow{background:rgba(124,179,224,.12);color:#7cb3e0;border:1px solid rgba(124,179,224,.3)}
+.op-badge-wallet{background:rgba(111,174,141,.12);color:var(--green);border:1px solid rgba(111,174,141,.3)}
+@media(max-width:600px){.op-h1{font-size:36px !important}}
+`;
 
-<h1>Operator dashboard</h1>
-<p class="sub">Per-tool usage, settlement split, and live activity. Auto-refreshes every 10s. Not public — gated by <code>AGENT402_OPERATOR_TOKEN</code>. <a href="/__operator/leads" data-op-link>Tollbooth leads →</a></p>
+  // NOTE: The inline <script> preserves the existing operator auth pattern:
+  // token capture from ?token= into sessionStorage, URL stripping via
+  // replaceState, and inter-page navigation via fetch()+document.write() so
+  // the token travels in the Authorization header, never in the URL. The
+  // table/feed refresh uses the same AJAX + DOM update pattern as before.
+  const body = `
+<div class="op-wrap">
 
-<div class="grid">
-  <div class="stat"><div class="k">Total calls</div><div class="v" id="t-total">${esc(t.total ?? 0)}</div><div class="s">all tools, all rails</div></div>
-  <div class="stat"><div class="k">USDC settled</div><div class="v" id="t-usdc">${esc(t.viaUSDC ?? 0)}</div><div class="s">on-chain proof at wallet</div></div>
-  <div class="stat"><div class="k">PoW (external)</div><div class="v" id="t-pow">${esc(t.viaProofOfWork ?? 0)}</div><div class="s">real free-tier adoption</div></div>
-  <div class="stat"><div class="k">Heartbeat probes</div><div class="v" id="t-hb">${esc(t.viaHeartbeat ?? 0)}</div><div class="s">internal /api/hash probe</div></div>
-  <div class="stat"><div class="k">Estimated revenue</div><div class="v" id="t-rev">$${esc((t.estimatedRevenueUsd ?? 0).toFixed ? t.estimatedRevenueUsd.toFixed(4) : t.estimatedRevenueUsd)}</div><div class="s">counter; chain is truth</div></div>
-  <div class="stat"><div class="k">Tools served</div><div class="v" id="t-tools">${esc(t.toolsServed ?? 0)}</div><div class="s">distinct slugs</div></div>
-  <div class="stat"><div class="k">Uptime</div><div class="v" id="t-up">${esc(Math.floor((data?.uptimeSeconds ?? 0) / 3600))}h</div><div class="s">since process boot</div></div>
+<h1 class="op-h1">Operator dashboard</h1>
+<p class="op-sub">Per-tool usage, settlement split, and live activity. Auto-refreshes every 10s. Not public — gated by <code>AGENT402_OPERATOR_TOKEN</code>. <a href="/__operator/leads" data-op-link>Tollbooth leads</a></p>
+
+<div class="op-grid">
+  <div class="op-stat"><div class="op-k">Total calls</div><div class="op-v" id="t-total">${esc(t.total ?? 0)}</div><div class="op-s">all tools, all rails</div></div>
+  <div class="op-stat"><div class="op-k">USDC settled</div><div class="op-v" id="t-usdc">${esc(t.viaUSDC ?? 0)}</div><div class="op-s">on-chain proof at wallet</div></div>
+  <div class="op-stat"><div class="op-k">PoW (external)</div><div class="op-v" id="t-pow">${esc(t.viaProofOfWork ?? 0)}</div><div class="op-s">real free-tier adoption</div></div>
+  <div class="op-stat"><div class="op-k">Heartbeat probes</div><div class="op-v" id="t-hb">${esc(t.viaHeartbeat ?? 0)}</div><div class="op-s">internal /api/hash probe</div></div>
+  <div class="op-stat"><div class="op-k">Estimated revenue</div><div class="op-v" id="t-rev">$${esc((t.estimatedRevenueUsd ?? 0).toFixed ? t.estimatedRevenueUsd.toFixed(4) : t.estimatedRevenueUsd)}</div><div class="op-s">counter; chain is truth</div></div>
+  <div class="op-stat"><div class="op-k">Tools served</div><div class="op-v" id="t-tools">${esc(t.toolsServed ?? 0)}</div><div class="op-s">distinct slugs</div></div>
+  <div class="op-stat"><div class="op-k">Uptime</div><div class="op-v" id="t-up">${esc(Math.floor((data?.uptimeSeconds ?? 0) / 3600))}h</div><div class="op-s">since process boot</div></div>
 </div>
 
-<div class="layout">
-  <div class="panel">
-    <div class="ph"><h2>Per-tool breakdown</h2><input id="filter" type="search" placeholder="filter slug…" autocomplete="off"></div>
-    <div class="tbody-scroll"><table id="tbl">
-      <thead><tr><th data-k="slug">Slug</th><th class="num" data-k="calls">Calls</th><th class="num" data-k="paid">USDC</th><th class="num" data-k="pow" title="External proof-of-work — does not include the heartbeat probe">PoW</th><th class="num" data-k="heartbeat" title="Internal /api/hash probe (agent402-heartbeat UA, every 15 min)">♥ HB</th><th class="num" data-k="rev">Revenue</th><th class="num" data-k="price">Price</th></tr></thead>
-      <tbody id="tbody">${rows || `<tr><td colspan="7" class="muted" style="padding:24px;text-align:center;">No tool calls yet.</td></tr>`}</tbody>
+<div class="op-layout">
+  <div class="op-panel">
+    <div class="op-ph"><h2>Per-tool breakdown</h2><input id="filter" type="search" placeholder="filter slug…" autocomplete="off"></div>
+    <div class="op-tbody-scroll"><table id="tbl">
+      <thead><tr><th data-k="slug">Slug</th><th class="num" data-k="calls">Calls</th><th class="num" data-k="paid">USDC</th><th class="num" data-k="pow" title="External proof-of-work — does not include the heartbeat probe">PoW</th><th class="num" data-k="heartbeat" title="Internal /api/hash probe (agent402-heartbeat UA, every 15 min)">HB</th><th class="num" data-k="rev">Revenue</th><th class="num" data-k="price">Price</th></tr></thead>
+      <tbody id="tbody">${rows || `<tr><td colspan="7" class="op-muted" style="padding:24px;text-align:center;">No tool calls yet.</td></tr>`}</tbody>
     </table></div>
   </div>
 
-  <div class="panel feed">
-    <div class="ph"><h2>Recent calls</h2></div>
-    <ul id="feed">${feed || `<li class="muted" style="text-align:center;">No recent activity.</li>`}</ul>
+  <div class="op-panel op-feed">
+    <div class="op-ph"><h2>Recent calls</h2></div>
+    <ul id="feed">${feed || `<li style="text-align:center;color:var(--dk-muted);padding:16px;">No recent activity.</li>`}</ul>
   </div>
 </div>
 
 <script>
 (function(){
-  // Token-handling for the operator dashboard:
-  // 1. On initial load (the magic-link click) the token is in ?token=. We
-  //    move it into sessionStorage immediately and history.replaceState() to
-  //    strip it from the URL bar — so subsequent access-log lines, browser
-  //    history entries, and Referer headers never see the secret.
-  // 2. All AJAX polls send the token via Authorization: Bearer.
-  // 3. Inter-page links (data-op-link) are intercepted and navigated via
-  //    fetch() + document.write() so the next page also receives the token
-  //    in the header, not the URL.
   var qs = new URLSearchParams(location.search);
   if (qs.has('token')) {
     try { sessionStorage.setItem('agent402-op-token', qs.get('token') || ''); } catch(_) {}
@@ -135,8 +120,8 @@ ${renderHeader("/__operator")}
       e.preventDefault();
       fetch(a.getAttribute('href'), { headers: authHeader(), cache: 'no-store' })
         .then(function(r){ return r.text(); })
-        .then(function(html){
-          document.open(); document.write(html); document.close();
+        .then(function(t){
+          document.open(); document.write(t); document.close();
           history.pushState({}, '', a.getAttribute('href'));
         })
         .catch(function(){});
@@ -156,18 +141,19 @@ ${renderHeader("/__operator")}
       if(typeof av==='string') return sortDir*av.localeCompare(bv);
       return sortDir*((av||0)-(bv||0));
     });
-    tbody.innerHTML = rs.length ? rs.map(function(r){
+    var html = rs.length ? rs.map(function(r){
       var b = r.walletOnly
-        ? '<span class="badge wallet" title="USDC only — no proof-of-work path">USDC-ONLY</span>'
-        : '<span class="badge pow" title="Also payable with proof-of-work (free tier)">FREE-W/POW</span>';
+        ? '<span class="op-badge op-badge-wallet" title="USDC only">USDC-ONLY</span>'
+        : '<span class="op-badge op-badge-pow" title="Also payable with proof-of-work">FREE-W/POW</span>';
       return '<tr><td><a href="/tools/'+esc(r.slug)+'">'+esc(r.slug)+'</a> '+b+'</td>'+
         '<td class="num">'+esc(r.calls)+'</td>'+
-        '<td class="num paid">'+esc(r.paid)+'</td>'+
-        '<td class="num pow">'+esc(r.pow)+'</td>'+
-        '<td class="num hb">'+esc(r.heartbeat||0)+'</td>'+
-        '<td class="num rev">$'+esc(r.revenueUsd.toFixed(4))+'</td>'+
-        '<td class="num muted">$'+esc(r.pricePerCall.toFixed(4))+'</td></tr>';
-    }).join('') : '<tr><td colspan="7" class="muted" style="padding:24px;text-align:center;">No matches.</td></tr>';
+        '<td class="num op-paid">'+esc(r.paid)+'</td>'+
+        '<td class="num op-pow">'+esc(r.pow)+'</td>'+
+        '<td class="num op-hb">'+esc(r.heartbeat||0)+'</td>'+
+        '<td class="num op-rev">$'+esc(r.revenueUsd.toFixed(4))+'</td>'+
+        '<td class="num op-muted">$'+esc(r.pricePerCall.toFixed(4))+'</td></tr>';
+    }).join('') : '<tr><td colspan="7" class="op-muted" style="padding:24px;text-align:center;">No matches.</td></tr>';
+    tbody.innerHTML = html; /* eslint-disable-line -- pre-existing AJAX table refresh; all values esc()-d */
   }
   document.getElementById('filter').addEventListener('input', renderRows);
   document.querySelectorAll('th[data-k]').forEach(function(th){
@@ -183,19 +169,20 @@ ${renderHeader("/__operator")}
       var r=await fetch('/__operator/stats',{cache:'no-store', headers: authHeader()});
       if(!r.ok) return;
       var d=await r.json();
-      var t=d.totals||{};
-      document.getElementById('t-total').textContent=t.total||0;
-      document.getElementById('t-usdc').textContent=t.viaUSDC||0;
-      document.getElementById('t-pow').textContent=t.viaProofOfWork||0;
-      document.getElementById('t-hb').textContent=t.viaHeartbeat||0;
-      document.getElementById('t-rev').textContent='$'+((t.estimatedRevenueUsd||0).toFixed(4));
-      document.getElementById('t-tools').textContent=t.toolsServed||0;
+      var tt=d.totals||{};
+      document.getElementById('t-total').textContent=tt.total||0;
+      document.getElementById('t-usdc').textContent=tt.viaUSDC||0;
+      document.getElementById('t-pow').textContent=tt.viaProofOfWork||0;
+      document.getElementById('t-hb').textContent=tt.viaHeartbeat||0;
+      document.getElementById('t-rev').textContent='$'+((tt.estimatedRevenueUsd||0).toFixed(4));
+      document.getElementById('t-tools').textContent=tt.toolsServed||0;
       document.getElementById('t-up').textContent=Math.floor((d.uptimeSeconds||0)/3600)+'h';
       rowsCache=d.tools||[]; renderRows();
-      feed.innerHTML=(d.recentCalls||[]).map(function(x){
-        var m=x.paidWith==='proof-of-work'?'⚙ PoW':x.paidWith==='heartbeat'?'♥ HB':'$ USDC';
-        return '<li><span class="rs">'+esc(x.slug)+'</span><span class="rm">'+m+'</span><span class="ra">'+esc(x.at)+'</span></li>';
-      }).join('') || '<li class="muted" style="text-align:center;">No recent activity.</li>';
+      var feedHtml=(d.recentCalls||[]).map(function(x){
+        var m=x.paidWith==='proof-of-work'?'PoW':x.paidWith==='heartbeat'?'HB':'$ USDC';
+        return '<li><span class="op-rs">'+esc(x.slug)+'</span><span class="op-rm">'+m+'</span><span class="op-ra">'+esc(x.at)+'</span></li>';
+      }).join('') || '<li style="text-align:center;color:var(--dk-muted);padding:16px;">No recent activity.</li>';
+      feed.innerHTML = feedHtml; /* eslint-disable-line -- pre-existing AJAX feed refresh; all values esc()-d */
     } catch(e) { /* ignore */ }
   }
   setInterval(tick, 10000);
@@ -203,6 +190,15 @@ ${renderHeader("/__operator")}
 </script>
 
 </div>
-${renderFooter()}
-</body></html>`;
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({
+    title: "Operator — Agent402",
+    description: "Agent402 operator dashboard — per-tool usage, settlement split, and live activity.",
+    canonical: `${baseUrl}/__operator`,
+    baseUrl,
+    activePath: "__none__",
+    extraCss,
+    body,
+  });
 }

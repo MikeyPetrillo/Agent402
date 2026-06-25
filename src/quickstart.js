@@ -1,12 +1,4 @@
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-
-function esc(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 export function quickstartPage(baseUrl) {
   const canonical = `${baseUrl}/quickstart`;
@@ -14,81 +6,58 @@ export function quickstartPage(baseUrl) {
   const description =
     "Get started with Agent402 in under a minute. Pick your stack \u2014 MCP, curl, JavaScript, OpenAI, or direct USDC \u2014 and make your first call.";
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}</title>
-<meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${esc(canonical)}">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
-<meta property="og:url" content="${esc(canonical)}">
-<meta property="og:type" content="website">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="${esc(title)}">
-<meta name="twitter:description" content="${esc(description)}">
-${CHROME_HEAD_LINKS}
-<style>
-${CHROME_CSS}
-:root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-*,*::before,*::after{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;line-height:1.6}
-.qs-wrap{max-width:860px;margin:0 auto;padding:2rem 1.25rem 4rem}
-.qs-breadcrumb{font-size:.85rem;color:var(--muted);margin-bottom:1.5rem}
-.qs-breadcrumb a{color:var(--accent);text-decoration:none}
-.qs-breadcrumb a:hover{text-decoration:underline}
-.qs-title{font-size:2rem;font-weight:700;margin:0 0 .5rem;line-height:1.2}
-.qs-subtitle{color:var(--muted);font-size:1.05rem;margin:0 0 2.5rem}
+  const extraCss = `
+.qs-wrap{max-width:860px;margin:0 auto;padding:56px 30px}
+.qs-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
+.qs-title{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 10px}
+.qs-subtitle{font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 36px}
 
 /* tabs */
-.qs-tab-bar{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:0;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:.75rem}
-.qs-tab{background:transparent;border:1px solid rgba(255,255,255,.08);color:var(--muted);font-size:.85rem;padding:.45rem 1rem;border-radius:999px;cursor:pointer;font-family:inherit;transition:all .15s}
-.qs-tab:hover{color:var(--text);border-color:rgba(255,255,255,.15)}
-.qs-tab.active{background:var(--accent);color:#0b0e14;border-color:var(--accent);font-weight:600}
+.qs-tab-bar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:0;border-bottom:1.5px solid var(--ink);padding-bottom:10px}
+.qs-tab{background:transparent;border:1.5px solid var(--ink);color:var(--muted);font-family:var(--font-mono);font-size:13px;padding:8px 16px;cursor:pointer;transition:all .15s}
+.qs-tab:hover{color:var(--ink);border-color:var(--ink)}
+.qs-tab.active{background:var(--ink);color:var(--cream);border-color:var(--ink);font-weight:700}
 
-.qs-panel{display:none;padding:1.75rem 0 0}
+.qs-panel{display:none;padding:28px 0 0}
 .qs-panel.active{display:block}
-.qs-panel h3{font-size:1.1rem;margin:0 0 .5rem;font-weight:600}
-.qs-panel .qs-oneliner{color:var(--muted);margin:0 0 1.25rem;font-size:.95rem}
+.qs-panel h3{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink)}
+.qs-panel .qs-oneliner{color:var(--muted);margin:0 0 20px;font-size:15px;line-height:1.55}
 
-.qs-code-wrap{position:relative;margin-bottom:1.5rem}
-.qs-code-wrap pre{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:1.25rem 1.25rem 1.25rem 1.25rem;overflow-x:auto;margin:0;font-family:var(--mono);font-size:.82rem;line-height:1.55;color:var(--text)}
-.qs-code-wrap .qs-copy{position:absolute;top:.6rem;right:.6rem;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:var(--muted);font-size:.72rem;padding:.3rem .6rem;border-radius:4px;cursor:pointer;font-family:inherit;transition:all .15s}
-.qs-code-wrap .qs-copy:hover{color:var(--text);background:rgba(255,255,255,.1)}
+.qs-code-wrap{position:relative;margin-bottom:20px}
+.qs-code-wrap pre{background:var(--ink);border:1.5px solid var(--ink);padding:20px;overflow-x:auto;margin:0;font-family:var(--font-mono);font-size:13px;line-height:1.55;color:var(--cream)}
+.qs-code-wrap .qs-copy{position:absolute;top:8px;right:8px;background:var(--ink);border:1.5px solid var(--cream);color:var(--cream);font-family:var(--font-mono);font-size:11px;padding:4px 10px;cursor:pointer;transition:all .15s}
+.qs-code-wrap .qs-copy:hover{background:var(--cream);color:var(--ink)}
 .qs-code-wrap .qs-copy.copied{color:var(--accent);border-color:var(--accent)}
 
-.qs-label{display:inline-block;font-size:.78rem;color:var(--muted);background:rgba(255,255,255,.04);padding:.2rem .6rem;border-radius:4px;margin-bottom:.6rem}
-.qs-alt{color:var(--muted);font-size:.88rem;margin-top:1.25rem}
-.qs-alt code{font-family:var(--mono);background:var(--card);padding:.15rem .45rem;border-radius:4px;font-size:.82rem}
+.qs-label{display:inline-block;font-family:var(--font-mono);font-size:13px;color:var(--faint);margin-bottom:8px}
+.qs-alt{color:var(--muted);font-size:15px;line-height:1.55;margin-top:18px}
+.qs-alt code{font-family:var(--font-mono);background:var(--ink);color:var(--cream);padding:2px 7px;font-size:13px;border:1.5px solid var(--ink)}
 
-.qs-next{margin-top:1rem}
-.qs-next-title{font-size:.82rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:.4rem}
-.qs-next ul{margin:0;padding:0 0 0 1.2rem;font-size:.9rem}
-.qs-next li{margin-bottom:.25rem}
+.qs-next{margin-top:18px}
+.qs-next-title{font-family:var(--font-mono);font-size:13px;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+.qs-next ul{margin:0;padding:0 0 0 20px;font-size:15px;line-height:1.55}
+.qs-next li{margin-bottom:4px;color:var(--muted)}
 .qs-next a{color:var(--accent);text-decoration:none}
 .qs-next a:hover{text-decoration:underline}
 
 /* bottom cards */
-.qs-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem;margin-top:3rem}
-.qs-card{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:1.5rem;text-decoration:none;color:var(--text);transition:border-color .15s,transform .15s}
+.qs-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:48px}
+.qs-card{background:var(--card);border:1.5px solid var(--ink);padding:24px;text-decoration:none;color:var(--ink);transition:border-color .15s,transform .15s}
 .qs-card:hover{border-color:var(--accent);transform:translateY(-2px)}
-.qs-card h4{margin:0 0 .4rem;font-size:1rem;font-weight:600}
-.qs-card p{margin:0;color:var(--muted);font-size:.88rem}
+.qs-card h4{margin:0 0 6px;font-family:var(--font-body);font-weight:800;font-size:18px}
+.qs-card p{margin:0;color:var(--muted);font-size:14px;line-height:1.55}
 
 @media(max-width:600px){
-  .qs-title{font-size:1.5rem}
-  .qs-tab-bar{gap:.35rem}
-  .qs-tab{font-size:.78rem;padding:.35rem .7rem}
+  .qs-title{font-size:36px !important}
+  .qs-tab-bar{gap:4px}
+  .qs-tab{font-size:12px;padding:6px 10px}
 }
-</style>
-</head>
-<body>
-${renderHeader("/quickstart")}
+`;
+
+  const body = `
 <div class="qs-wrap">
 
-<div class="qs-breadcrumb"><a href="/">Home</a> &rsaquo; Quickstart</div>
+<div class="qs-eyebrow">$ GET /quickstart</div>
 <h1 class="qs-title">Your first Agent402 call in 60 seconds</h1>
 <p class="qs-subtitle">Pick your stack, copy the snippet, and you're live.</p>
 
@@ -302,7 +271,7 @@ const res = await payFetch("https://agent402.tools/api/extract", {
 </div>
 
 </div>
-${renderFooter()}
+${ledgerFooterCompact()}
 
 <script>
 (function(){
@@ -331,7 +300,7 @@ ${renderFooter()}
     });
   });
 })();
-</script>
-</body>
-</html>`;
+</script>`;
+
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/quickstart", extraCss, body });
 }

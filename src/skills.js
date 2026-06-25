@@ -13,6 +13,7 @@
 // references a tool that's been removed, the page surfaces a "missing" placeholder
 // rather than crashing — useful for catching dead references in the test suite.
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chrome.js";
 
 export const SKILL_PACKS = [
   {
@@ -1666,106 +1667,89 @@ function indexCatalog(catalog) {
 }
 
 const SKILLS_CSS = `
-.skill-grid { display:grid; gap:14px; margin-top:24px; }
-.skill-card { display:block; padding:18px 20px; border:1px solid #1e2638; border-radius:12px; background:#0f1420; color:inherit; text-decoration:none; transition:border-color .15s; }
-.skill-card:hover { border-color:#4ade80; }
-.skill-card h3 { margin:0 0 6px; font-size:1.1rem; color:#e6e9f0; }
-.skill-card p { margin:0; color:#8b93a7; font-size:.93rem; line-height:1.55; }
-.skill-card .meta { display:block; margin-top:10px; color:#4ade80; font-size:.78rem; letter-spacing:.06em; text-transform:uppercase; }
-.tool-list { margin:18px 0 8px; padding:0; list-style:none; }
-.tool-list li { padding:14px 16px; border:1px solid #1e2638; border-radius:10px; margin-bottom:10px; background:#0f1420; }
-.tool-list .row { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
-.tool-list .name { font-weight:600; color:#e6e9f0; }
-.tool-list .price { color:#4ade80; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; }
-.tool-list .route { color:#8b93a7; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; }
-.tool-list .desc { display:block; margin-top:6px; color:#8b93a7; font-size:.9rem; line-height:1.55; }
-.tool-list .missing { color:#f87171; font-style:italic; }
-.workflow { counter-reset: step; margin:18px 0; padding:0; list-style:none; }
-.workflow li { position:relative; padding:14px 16px 14px 56px; border-left:2px solid #1e2638; margin-bottom:8px; color:#c5cad8; font-size:.95rem; line-height:1.6; counter-increment: step; }
-.workflow li::before { content: counter(step); position:absolute; left:14px; top:14px; width:26px; height:26px; border-radius:50%; background:#1e2638; color:#4ade80; font-family:ui-monospace,Menlo,monospace; font-weight:700; font-size:.85rem; display:flex; align-items:center; justify-content:center; }
-.prompt-box { position:relative; margin:14px 0; }
-.prompt-box pre { background:#0f1420; border:1px solid #1e2638; border-radius:10px; padding:14px 16px; overflow-x:auto; font-size:.85rem; line-height:1.55; white-space:pre-wrap; color:#e6e9f0; }
+.sk-grid { display:grid; gap:14px; margin-top:24px; }
+@media (min-width:640px){ .sk-grid { grid-template-columns:repeat(2,1fr); } }
+.sk-card { display:block; padding:20px 22px; border:1.5px solid var(--ink); background:var(--card); color:inherit; text-decoration:none; transition:border-color .15s; }
+.sk-card:hover { border-color:var(--accent); }
+.sk-card h3 { margin:0 0 6px; font-family:var(--font-body); font-weight:800; font-size:17px; color:var(--ink); }
+.sk-card p { margin:0; color:var(--muted); font-size:14px; line-height:1.55; }
+.sk-card .sk-meta { display:block; margin-top:10px; color:var(--accent); font-family:var(--font-mono); font-size:12px; letter-spacing:.06em; text-transform:uppercase; }
+.sk-tl { margin:18px 0 8px; padding:0; list-style:none; }
+.sk-tl li { padding:16px 18px; border:1.5px solid var(--ink); margin-bottom:10px; background:var(--card); }
+.sk-tl .row { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+.sk-tl .name { font-weight:700; color:var(--ink); }
+.sk-tl .name a { color:var(--ink); text-decoration:none; }
+.sk-tl .name a:hover { color:var(--accent); }
+.sk-tl .price { color:var(--accent); font-family:var(--font-mono); font-size:13px; }
+.sk-tl .route { color:var(--faint); font-family:var(--font-mono); font-size:12px; }
+.sk-tl .desc { display:block; margin-top:6px; color:var(--muted); font-size:14px; line-height:1.55; }
+.sk-tl .missing { color:var(--accent); font-style:italic; }
+.sk-wf { counter-reset:step; margin:18px 0; padding:0; list-style:none; }
+.sk-wf li { position:relative; padding:16px 18px 16px 56px; border-left:2px solid var(--hairline); margin-bottom:8px; color:var(--muted); font-size:15px; line-height:1.65; counter-increment:step; }
+.sk-wf li::before { content:counter(step); position:absolute; left:14px; top:16px; width:26px; height:26px; background:var(--ink); color:var(--accent); font-family:var(--font-mono); font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center; }
+.sk-prompt { position:relative; margin:14px 0; }
+.sk-prompt pre { background:var(--ink); color:var(--cream); font-family:var(--font-mono); padding:18px 20px; overflow-x:auto; font-size:13px; line-height:1.6; white-space:pre-wrap; border:none; }
 `;
 
-function shell(baseUrl, title, description, path, body) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title)} — Agent402</title>
-<meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${baseUrl}${path}">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
-<meta property="og:image" content="${baseUrl}/card.png">
-<meta name="twitter:card" content="summary_large_image">
-${CHROME_HEAD_LINKS}
-<style>
-  :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; }
-  body { background:var(--bg); color:var(--fg); font:17px/1.7 system-ui,-apple-system,sans-serif; margin:0; }
-  .wrap { max-width:820px; margin:0 auto; padding:48px 20px 24px; }
-  h1 { font-size:1.9rem; line-height:1.25; margin:0 0 8px; }
-  h2 { font-size:1.25rem; margin-top:36px; color:var(--accent); }
-  a { color:var(--accent); } .muted { color:var(--muted); }
-  pre { background:#0f1420; border:1px solid #1e2638; border-radius:10px; padding:14px 16px; overflow-x:auto; font-size:.85rem; line-height:1.55; }
-  code { font-family:ui-monospace,Menlo,monospace; }
-  p > code, li > code { background:#0f1420; padding:1px 6px; border-radius:6px; font-size:.85em; }
-  ${CHROME_CSS}
-  ${SKILLS_CSS}
-</style>
-</head>
-<body>${renderHeader(path)}<div class="wrap">${body}</div>${renderFooter()}</body></html>`;
-}
-
 export function skillsIndex(baseUrl) {
+  const e = ledgerEsc;
   const cards = SKILL_PACKS.map(
-    (p) => `<a class="skill-card" href="/skills/${p.slug}">
-  <h3>${esc(p.title)}</h3>
-  <p>${esc(p.tagline)}</p>
-  <span class="meta">${p.toolSlugs.length} tools</span>
+    (p) => `<a class="sk-card" href="/skills/${p.slug}">
+  <h3>${e(p.title)}</h3>
+  <p>${e(p.tagline)}</p>
+  <span class="sk-meta">${p.toolSlugs.length} tools</span>
 </a>`
   ).join("\n");
-  const body = `<h1>Skill packs</h1>
-<p class="muted">Curated, multi-tool workflows for specific jobs — pay per call (USDC on Base) or run free with proof-of-work. Each pack is one paste of context for your agent.</p>
-<div class="skill-grid">${cards}</div>
-<h2 style="margin-top:48px">Install once, use any pack</h2>
-<pre>claude mcp add agent402 -s user -- npx -y agent402-mcp@latest</pre>
-<p class="muted">Then ask Claude to run the pack's example prompt — it discovers the tools automatically via the hosted MCP connector.</p>`;
-  return shell(
+
+  const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
+<div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;">SKILL PACKS</div>
+<h1 style="font-family:var(--font-body);font-weight:800;font-size:42px;line-height:.96;letter-spacing:-.03em;margin-bottom:14px;">Curated workflows</h1>
+<p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;margin-bottom:8px;">Multi-tool workflows for specific jobs — pay per call (USDC on Base) or run free with proof-of-work. Each pack is one paste of context for your agent.</p>
+<div class="sk-grid">${cards}</div>
+<h2 style="font-weight:800;font-size:22px;margin-top:48px;letter-spacing:-.01em;">Install once, use any pack</h2>
+<pre style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);padding:18px 20px;font-size:13px;line-height:1.6;border:none;margin-top:12px;">claude mcp add agent402 -s user -- npx -y agent402-mcp@latest</pre>
+<p style="color:var(--muted);font-size:15px;margin-top:12px;">Then ask Claude to run the pack's example prompt — it discovers the tools automatically via the hosted MCP connector.</p>
+</div>
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({
+    title: "Skill packs: curated multi-tool workflows for AI agents -- Agent402",
+    description: "Pre-built workflows — security audit, email deliverability, financial research, macro economics, DNS health, crypto research, content extraction. Pay per call in USDC or run free with proof-of-work.",
+    canonical: `${baseUrl}/skills`,
     baseUrl,
-    "Skill packs: curated multi-tool workflows for AI agents",
-    "Pre-built workflows — security audit, email deliverability, financial research, macro economics, DNS health, crypto research, content extraction. Pay per call in USDC or run free with proof-of-work.",
-    "/skills",
-    body
-  );
+    activePath: "/skills",
+    extraCss: SKILLS_CSS,
+    body,
+  });
 }
 
 function renderToolList(pack, ix) {
+  const e = ledgerEsc;
   return pack.toolSlugs
     .map((slug) => {
       const t = ix.get(slug);
       if (!t) {
-        return `<li><span class="row"><span class="name">${esc(slug)}</span> <span class="missing">— tool not currently in catalog</span></span></li>`;
+        return `<li><span class="row"><span class="name">${e(slug)}</span> <span class="missing">-- tool not currently in catalog</span></span></li>`;
       }
       return `<li>
   <span class="row">
-    <span class="name"><a href="/tools/${esc(slug)}">${esc(t.name)}</a></span>
-    <span class="price">${esc(t.price)}</span>
-    <span class="route">${esc(t.route)}</span>
+    <span class="name"><a href="/tools/${e(slug)}">${e(t.name)}</a></span>
+    <span class="price">${e(t.price)}</span>
+    <span class="route">${e(t.route)}</span>
   </span>
-  <span class="desc">${esc(t.description)}</span>
+  <span class="desc">${e(t.description)}</span>
 </li>`;
     })
     .join("\n");
 }
 
 export function skillPackPage(baseUrl, slug, catalog) {
+  const e = ledgerEsc;
   const pack = SKILL_PACKS.find((p) => p.slug === slug);
   if (!pack) return null;
   const ix = indexCatalog(catalog);
   const tools = renderToolList(pack, ix);
-  const steps = pack.workflow.map((s) => `<li>${esc(s)}</li>`).join("\n");
+  const steps = pack.workflow.map((s) => `<li>${e(s)}</li>`).join("\n");
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -1780,32 +1764,38 @@ export function skillPackPage(baseUrl, slug, catalog) {
     })),
   };
 
-  const body = `<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
-<h1>${esc(pack.title)}</h1>
-<p class="muted">${esc(pack.tagline)}</p>
+  const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
+<h1 style="font-family:var(--font-body);font-weight:800;font-size:38px;line-height:1;letter-spacing:-.02em;margin-bottom:10px;">${e(pack.title)}</h1>
+<p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;">${e(pack.tagline)}</p>
 
-<h2>When to use this pack</h2>
-<p>${esc(pack.useCase)}</p>
+<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">When to use this pack</h2>
+<p style="color:var(--muted);font-size:15px;line-height:1.7;">${e(pack.useCase)}</p>
 
-<h2>Tools in this pack</h2>
-<ul class="tool-list">${tools}</ul>
+<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Tools in this pack</h2>
+<ul class="sk-tl">${tools}</ul>
 
-<h2>Workflow</h2>
-<ol class="workflow">${steps}</ol>
+<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Workflow</h2>
+<ol class="sk-wf">${steps}</ol>
 
-<h2>Run it in Claude</h2>
-<pre>claude mcp add agent402 -s user -- npx -y agent402-mcp@latest</pre>
-<p class="muted">Then paste this prompt into Claude:</p>
-<div class="prompt-box"><pre>${esc(pack.claudePrompt)}</pre></div>
+<h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Run it in Claude</h2>
+<pre style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);padding:18px 20px;font-size:13px;line-height:1.6;border:none;margin-top:12px;">claude mcp add agent402 -s user -- npx -y agent402-mcp@latest</pre>
+<p style="color:var(--muted);font-size:15px;margin-top:12px;">Then paste this prompt into Claude:</p>
+<div class="sk-prompt"><pre>${e(pack.claudePrompt)}</pre></div>
 
-<p class="muted" style="margin-top:36px"><a href="/skills">← All skill packs</a></p>`;
-  return shell(
+<p style="color:var(--faint);font-size:14px;margin-top:36px;"><a href="/skills" style="color:var(--accent);text-decoration:none;">\u2190 All skill packs</a></p>
+</div>
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({
+    title: `${pack.title} -- Agent402 skill pack`,
+    description: pack.tagline,
+    canonical: `${baseUrl}/skills/${pack.slug}`,
     baseUrl,
-    `${pack.title} — Agent402 skill pack`,
-    pack.tagline,
-    `/skills/${pack.slug}`,
-    body
-  );
+    activePath: "/skills",
+    jsonLd,
+    extraCss: SKILLS_CSS,
+    body,
+  });
 }
 
 export const skillSlugs = () => SKILL_PACKS.map((p) => p.slug);

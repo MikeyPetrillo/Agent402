@@ -1,12 +1,4 @@
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-
-function esc(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 export function contributePage(baseUrl) {
   const canonical = `${baseUrl}/contribute`;
@@ -14,75 +6,52 @@ export function contributePage(baseUrl) {
   const description =
     "A contributor guide for Agent402: how to add a tool kit, write a guide, or submit a skill pack.";
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}</title>
-<meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${esc(canonical)}">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
-<meta property="og:url" content="${esc(canonical)}">
-<meta property="og:type" content="website">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="${esc(title)}">
-<meta name="twitter:description" content="${esc(description)}">
-${CHROME_HEAD_LINKS}
-<style>
-${CHROME_CSS}
-:root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-*,*::before,*::after{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;line-height:1.6}
-.ct-wrap{max-width:860px;margin:0 auto;padding:2rem 1.25rem 4rem}
-.ct-breadcrumb{font-size:.85rem;color:var(--muted);margin-bottom:1.5rem}
-.ct-breadcrumb a{color:var(--accent);text-decoration:none}
-.ct-breadcrumb a:hover{text-decoration:underline}
-.ct-title{font-size:2rem;font-weight:700;margin:0 0 .5rem;line-height:1.2}
-.ct-subtitle{color:var(--muted);font-size:1.05rem;margin:0 0 2.5rem}
+  const extraCss = `
+.ct-wrap{max-width:860px;margin:0 auto;padding:56px 30px}
+.ct-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
+.ct-title{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 10px}
+.ct-subtitle{font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 40px}
 
-.ct-section{margin-bottom:3rem}
-.ct-section h2{font-size:1.35rem;font-weight:700;margin:0 0 .75rem;line-height:1.3}
-.ct-section h3{font-size:1.05rem;font-weight:600;margin:1.25rem 0 .5rem}
-.ct-section p{color:var(--text);margin:0 0 .75rem;font-size:.95rem}
-.ct-section ul,.ct-section ol{margin:0 0 1rem;padding:0 0 0 1.4rem;font-size:.95rem}
-.ct-section li{margin-bottom:.35rem}
-.ct-section li code{font-family:var(--mono);background:var(--card);padding:.15rem .45rem;border-radius:4px;font-size:.82rem}
+.ct-section{margin-bottom:48px}
+.ct-section h2{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 12px;color:var(--ink)}
+.ct-section h3{font-family:var(--font-body);font-weight:800;font-size:20px;margin:24px 0 8px;color:var(--ink)}
+.ct-section p{color:var(--muted);margin:0 0 12px;font-size:15px;line-height:1.55}
+.ct-section ul,.ct-section ol{margin:0 0 16px;padding:0 0 0 22px;font-size:15px;line-height:1.55;color:var(--muted)}
+.ct-section li{margin-bottom:6px}
+.ct-section li code{font-family:var(--font-mono);background:var(--ink);color:var(--cream);padding:2px 7px;font-size:13px;border:1.5px solid var(--ink)}
 
-.ct-code-wrap{position:relative;margin-bottom:1.5rem}
-.ct-code-wrap pre{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:1.25rem;overflow-x:auto;margin:0;font-family:var(--mono);font-size:.82rem;line-height:1.55;color:var(--text)}
-.ct-code-wrap .ct-copy{position:absolute;top:.6rem;right:.6rem;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:var(--muted);font-size:.72rem;padding:.3rem .6rem;border-radius:4px;cursor:pointer;font-family:inherit;transition:all .15s}
-.ct-code-wrap .ct-copy:hover{color:var(--text);background:rgba(255,255,255,.1)}
+.ct-code-wrap{position:relative;margin-bottom:24px}
+.ct-code-wrap pre{background:var(--ink);border:1.5px solid var(--ink);padding:20px;overflow-x:auto;margin:0;font-family:var(--font-mono);font-size:13px;line-height:1.55;color:var(--cream)}
+.ct-code-wrap .ct-copy{position:absolute;top:8px;right:8px;background:var(--ink);border:1.5px solid var(--cream);color:var(--cream);font-family:var(--font-mono);font-size:11px;padding:4px 10px;cursor:pointer;transition:all .15s}
+.ct-code-wrap .ct-copy:hover{background:var(--cream);color:var(--ink)}
 .ct-code-wrap .ct-copy.copied{color:var(--accent);border-color:var(--accent)}
 
-.ct-label{display:inline-block;font-size:.78rem;color:var(--muted);background:rgba(255,255,255,.04);padding:.2rem .6rem;border-radius:4px;margin-bottom:.6rem}
+.ct-label{display:inline-block;font-family:var(--font-mono);font-size:13px;color:var(--faint);margin-bottom:8px}
 
-.ct-note{background:rgba(74,222,128,.06);border:1px solid rgba(74,222,128,.15);border-radius:8px;padding:1rem 1.25rem;margin:1rem 0 1.5rem;font-size:.9rem;color:var(--text)}
-.ct-note strong{color:var(--accent)}
+.ct-note{background:var(--card);border:1.5px solid var(--ink);padding:18px 22px;margin:16px 0 24px;font-size:14px;line-height:1.55;color:var(--muted)}
+.ct-note strong{color:var(--accent);font-weight:700}
 
-.ct-divider{border:none;border-top:1px solid rgba(255,255,255,.06);margin:2.5rem 0}
+.ct-divider{border:none;border-top:1.5px solid var(--ink);margin:40px 0}
 
-.ct-bottom{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:2rem;text-align:center;margin-top:3rem}
-.ct-bottom h3{font-size:1.1rem;font-weight:600;margin:0 0 .75rem}
-.ct-bottom p{color:var(--muted);font-size:.92rem;margin:0 0 .5rem}
+.ct-bottom{background:var(--card);border:1.5px solid var(--ink);padding:32px;text-align:center;margin-top:48px}
+.ct-bottom h3{font-family:var(--font-body);font-weight:800;font-size:24px;margin:0 0 12px;color:var(--ink)}
+.ct-bottom p{color:var(--muted);font-size:15px;line-height:1.55;margin:0 0 6px}
 .ct-bottom a{color:var(--accent);text-decoration:none}
 .ct-bottom a:hover{text-decoration:underline}
 
 @media(max-width:600px){
-  .ct-title{font-size:1.5rem}
+  .ct-title{font-size:36px !important}
 }
-</style>
-</head>
-<body>
-${renderHeader("/contribute")}
+`;
+
+  const body = `
 <div class="ct-wrap">
 
-<div class="ct-breadcrumb"><a href="/">Home</a> &rsaquo; Contribute</div>
+<div class="ct-eyebrow">$ GET /contribute</div>
 <h1 class="ct-title">Contribute to Agent402</h1>
 <p class="ct-subtitle">Add a tool kit, write a guide, or submit a skill pack. Every contribution ships to 1,323+ tools that agents pay for per call.</p>
 
-<!-- ── Section 1: Add a tool kit ───────────────────────────── -->
+<!-- Section 1: Add a tool kit -->
 <div class="ct-section">
 <h2>Add a tool kit</h2>
 <p>A tool kit is a JavaScript file in <code>src/tools/</code> that exports an array of tool objects. Each tool is a self-contained, deterministic function &mdash; no LLM in the serving path.</p>
@@ -177,7 +146,7 @@ TARGET_URL=http://localhost:3000 node scripts/test-all.js</code></pre>
 
 <hr class="ct-divider">
 
-<!-- ── Section 2: Write a guide ────────────────────────────── -->
+<!-- Section 2: Write a guide -->
 <div class="ct-section">
 <h2>Write a guide</h2>
 <p>Guides are Markdown files that get rendered as pages on the site and synced to the GitHub wiki. They target humans searching for topics like "x402 payment example" or "AI agent tool payments."</p>
@@ -234,7 +203,7 @@ Use ## for top-level sections within the guide.
 
 <hr class="ct-divider">
 
-<!-- ── Section 3: Submit a skill pack ──────────────────────── -->
+<!-- Section 3: Submit a skill pack -->
 <div class="ct-section">
 <h2>Submit a skill pack</h2>
 <p>A skill pack is a curated, multi-tool workflow that solves a job no single tool covers. Instead of guessing which tools to call, the agent gets a ready-to-run plan with the right tools wired in the right order.</p>
@@ -303,7 +272,7 @@ TARGET_URL=http://localhost:3000 node scripts/test-mcp-all.js</code></pre>
 
 <hr class="ct-divider">
 
-<!-- ── Bottom: Questions? ──────────────────────────────────── -->
+<!-- Bottom: Questions? -->
 <div class="ct-bottom">
 <h3>Questions?</h3>
 <p>Open an issue on <a href="https://github.com/MikeyPetrillo/Agent402/issues">GitHub Issues</a> for bugs, feature requests, or contribution questions.</p>
@@ -311,7 +280,7 @@ TARGET_URL=http://localhost:3000 node scripts/test-mcp-all.js</code></pre>
 </div>
 
 </div>
-${renderFooter()}
+${ledgerFooterCompact()}
 
 <script>
 (function(){
@@ -327,7 +296,7 @@ ${renderFooter()}
     });
   });
 })();
-</script>
-</body>
-</html>`;
+</script>`;
+
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/contribute", extraCss, body });
 }

@@ -1,6 +1,4 @@
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-
-const esc = (s) => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const SHOWCASE_PROJECTS = [
   {
@@ -114,74 +112,51 @@ export function communityPage(baseUrl) {
         <p class="cm-card-desc">${esc(p.description)}</p>
       </div>`).join("\n");
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(pageTitle)}</title>
-<meta name="description" content="${esc(pageDesc)}">
-<link rel="canonical" href="${esc(canonical)}">
-<meta property="og:title" content="${esc(pageTitle)}">
-<meta property="og:description" content="${esc(pageDesc)}">
-<meta property="og:url" content="${esc(canonical)}">
-<meta property="og:type" content="website">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="${esc(pageTitle)}">
-<meta name="twitter:description" content="${esc(pageDesc)}">
-${CHROME_HEAD_LINKS}
-<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
-<style>
-${CHROME_CSS}
-:root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif}
-
-.breadcrumb{font-size:.85rem;color:var(--muted);margin-bottom:1.5rem}
-.breadcrumb a{color:var(--accent);text-decoration:none}
-.breadcrumb a:hover{text-decoration:underline}
+  const extraCss = `
+.cm-wrap{max-width:960px;margin:0 auto;padding:56px 30px}
+.cm-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
 
 /* hero */
-.cm-hero{text-align:center;padding:2.5rem 0 2rem}
-.cm-hero h1{font-size:2rem;margin:0 0 .75rem;color:var(--text);font-weight:700}
-.cm-hero p{color:var(--muted);font-size:1.05rem;line-height:1.7;max-width:620px;margin:0 auto}
+.cm-hero{text-align:center;padding:0 0 32px}
+.cm-hero h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;color:var(--ink)}
+.cm-hero p{font-size:15px;line-height:1.55;color:var(--muted);max-width:620px;margin:0 auto}
 
 /* section headings */
-.cm-section{margin:2.5rem 0 1.25rem}
-.cm-section h2{font-size:1.3rem;color:var(--text);font-weight:600;margin:0 0 .5rem}
-.cm-section p{color:var(--muted);font-size:.93rem;line-height:1.6;margin:0}
+.cm-section{margin:40px 0 18px}
+.cm-section h2{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 6px;color:var(--ink)}
+.cm-section p{color:var(--muted);font-size:15px;line-height:1.55;margin:0}
 
 /* stat cards */
-.cm-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:2rem}
-@media(max-width:640px){.cm-stats{grid-template-columns:repeat(2,1fr)}}
-.cm-stat{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:1.25rem 1.4rem;text-align:center}
-.cm-stat-value{font-size:1.5rem;font-weight:700;color:var(--accent);font-family:var(--mono);margin-bottom:.3rem}
-.cm-stat-label{font-size:.85rem;color:var(--muted)}
+.cm-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:32px}
+@media(max-width:640px){.cm-stats{grid-template-columns:repeat(2,1fr)}.cm-hero h1{font-size:36px !important}}
+.cm-stat{background:var(--card);border:1.5px solid var(--ink);padding:20px 22px;text-align:center}
+.cm-stat-value{font-size:24px;font-weight:700;color:var(--accent);font-family:var(--font-mono);margin-bottom:4px}
+.cm-stat-label{font-size:14px;color:var(--muted)}
 
 /* card grid */
-.cm-grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:1.25rem;margin-bottom:2rem}
+.cm-grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:32px}
 @media(max-width:800px){.cm-grid-3{grid-template-columns:1fr}}
-.cm-grid-4{display:grid;grid-template-columns:repeat(2,1fr);gap:1.25rem;margin-bottom:2rem}
+.cm-grid-4{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;margin-bottom:32px}
 @media(max-width:640px){.cm-grid-4{grid-template-columns:1fr}}
-.cm-card{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:1.4rem 1.5rem}
-.cm-card h3{margin:0 0 .6rem;font-size:1.05rem;color:var(--text);font-weight:600}
-.cm-card-desc{color:var(--muted);font-size:.9rem;line-height:1.6;margin:0 0 .75rem}
-.cm-card-link{color:var(--accent);text-decoration:none;font-size:.88rem;font-weight:500}
+.cm-card{background:var(--card);border:1.5px solid var(--ink);padding:22px 24px}
+.cm-card h3{margin:0 0 8px;font-family:var(--font-body);font-weight:800;font-size:18px;color:var(--ink)}
+.cm-card-desc{color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 12px}
+.cm-card-link{color:var(--accent);text-decoration:none;font-family:var(--font-mono);font-size:13px;font-weight:700}
 .cm-card-link:hover{text-decoration:underline}
 
 /* showcase badge */
 .cm-showcase{position:relative}
-.cm-badge{display:inline-block;background:rgba(74,222,128,.12);color:var(--accent);font-size:.72rem;font-weight:600;padding:3px 9px;border-radius:6px;margin-bottom:.6rem;letter-spacing:.02em;text-transform:uppercase}
+.cm-badge{display:inline-block;background:var(--ink);color:var(--cream);font-family:var(--font-mono);font-size:11px;font-weight:700;padding:3px 10px;margin-bottom:10px;letter-spacing:.04em;text-transform:uppercase}
 
 /* cta */
-.cm-cta{text-align:center;margin:2.5rem 0 3rem}
-.cm-cta a{display:inline-block;background:var(--accent);color:#0b0e14;font-weight:600;text-decoration:none;font-size:1rem;padding:12px 28px;border-radius:8px}
+.cm-cta{text-align:center;margin:40px 0 48px}
+.cm-cta a{display:inline-block;background:var(--accent);color:#fff;font-family:var(--font-mono);font-weight:700;text-decoration:none;font-size:14px;padding:14px 30px;border:1.5px solid var(--accent)}
 .cm-cta a:hover{opacity:.9}
-</style>
-</head>
-<body>
-${renderHeader("/community")}
-<main style="max-width:960px;margin:0 auto;padding:2rem 1.25rem">
-<p class="breadcrumb"><a href="/">Home</a> &rsaquo; Community</p>
+`;
+
+  const body = `
+<div class="cm-wrap">
+<div class="cm-eyebrow">$ GET /community</div>
 
 <div class="cm-hero">
   <h1>Built by the community</h1>
@@ -218,8 +193,8 @@ ${showcaseHtml}
 </div>
 
 <div class="cm-cta"><a href="/quickstart">Start building &rarr;</a></div>
-</main>
-${renderFooter()}
-</body>
-</html>`;
+</div>
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({ title: pageTitle, description: pageDesc, canonical, baseUrl, activePath: "/community", jsonLd, extraCss, body });
 }

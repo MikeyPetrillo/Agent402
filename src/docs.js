@@ -12,12 +12,10 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { marked } from "marked";
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WIKI_DIR = join(__dirname, "..", "wiki");
-
-const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 // One-shot load at module init — these files only change on deploy.
 // Tolerant of a missing wiki/ directory: in deployment artifacts that don't
@@ -139,16 +137,16 @@ const SIDEBAR_SECTIONS = parseSidebar(SIDEBAR_RAW);
 function renderSidebar(currentSlug) {
   const parts = [];
   for (const sec of SIDEBAR_SECTIONS) {
-    if (sec.title) parts.push(`<div class="docs-side-h">${esc(sec.title)}</div>`);
-    parts.push('<ul class="docs-side-ul">');
+    if (sec.title) parts.push(`<div class="ml-docs-side-h">${esc(sec.title)}</div>`);
+    parts.push('<ul class="ml-docs-side-ul">');
     for (const it of sec.items) {
       if (it.kind === "doc") {
         const active = it.slug === currentSlug ? " active" : "";
         // Home in the wiki sidebar links to /docs (the index), not /docs/Home.
         const href = it.slug === "Home" ? "/docs" : `/docs/${it.slug}`;
-        parts.push(`<li><a class="docs-side-a${active}" href="${href}">${esc(it.display)}</a></li>`);
+        parts.push(`<li><a class="ml-docs-side-a${active}" href="${href}">${esc(it.display)}</a></li>`);
       } else {
-        parts.push(`<li><a class="docs-side-a" href="${esc(it.href)}" rel="noopener">${esc(it.display)} ↗</a></li>`);
+        parts.push(`<li><a class="ml-docs-side-a" href="${esc(it.href)}" rel="noopener">${esc(it.display)} &#8599;</a></li>`);
       }
     }
     parts.push("</ul>");
@@ -157,77 +155,75 @@ function renderSidebar(currentSlug) {
   // "everything in one place" promise of a docs hub without us having to
   // re-render the openapi catalog inline.
   const apiActive = currentSlug === "__api__" ? " active" : "";
-  parts.push(`<div class="docs-side-h">Reference</div>
-<ul class="docs-side-ul">
-  <li><a class="docs-side-a${apiActive}" href="/docs/api">API Reference</a></li>
-  <li><a class="docs-side-a" href="/openapi.json">OpenAPI JSON</a></li>
-  <li><a class="docs-side-a" href="/llms.txt">llms.txt</a></li>
-  <li><a class="docs-side-a" href="/api/pricing">Pricing</a></li>
-  <li><a class="docs-side-a" href="/api/find">Find (/api/find)</a></li>
+  parts.push(`<div class="ml-docs-side-h">Reference</div>
+<ul class="ml-docs-side-ul">
+  <li><a class="ml-docs-side-a${apiActive}" href="/docs/api">API Reference</a></li>
+  <li><a class="ml-docs-side-a" href="/openapi.json">OpenAPI JSON</a></li>
+  <li><a class="ml-docs-side-a" href="/llms.txt">llms.txt</a></li>
+  <li><a class="ml-docs-side-a" href="/api/pricing">Pricing</a></li>
+  <li><a class="ml-docs-side-a" href="/api/find">Find (/api/find)</a></li>
 </ul>`);
   return parts.join("\n");
 }
 
 function shell(baseUrl, title, description, path, body, currentSlug) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title)} — Agent402 Docs</title>
-<meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${baseUrl}${path}">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
-<meta property="og:image" content="${baseUrl}/card.png">
-<meta name="twitter:card" content="summary_large_image">
-${CHROME_HEAD_LINKS}
-<style>
-  :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --line:#1e2638; --line2:#2a3550; --panel:#0f1420; }
-  body { background:var(--bg); color:var(--fg); font:16px/1.7 system-ui,-apple-system,sans-serif; margin:0; }
-  a { color:var(--accent); }
-  .docs-wrap { max-width:1200px; margin:0 auto; padding:32px 20px 24px; }
-  .docs-layout { display:block; }
-  .docs-side { display:none; }
-  .docs-main { min-width:0; }
-  .docs-main h1 { font-size:1.9rem; line-height:1.25; margin:0 0 18px; }
-  .docs-main h2 { font-size:1.2rem; margin-top:36px; color:var(--accent); }
-  .docs-main h3 { font-size:1.02rem; margin-top:26px; }
-  .docs-main p, .docs-main li { color:var(--fg); }
-  .docs-main .muted { color:var(--muted); }
-  .docs-main pre { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; overflow-x:auto; font-size:.85rem; line-height:1.55; }
-  .docs-main code { font-family:ui-monospace,Menlo,monospace; }
-  .docs-main p > code, .docs-main li > code, .docs-main td > code, .docs-main h3 > code { background:var(--panel); padding:1px 6px; border-radius:6px; font-size:.85em; }
-  .docs-main table { border-collapse:collapse; width:100%; margin:18px 0; font-size:.92rem; }
-  .docs-main th, .docs-main td { border:1px solid var(--line); padding:8px 12px; text-align:left; vertical-align:top; }
-  .docs-main th { background:var(--panel); color:var(--accent); font-weight:600; }
-  .docs-main blockquote { border-left:3px solid var(--accent); margin:16px 0; padding:4px 16px; color:var(--muted); background:rgba(74,222,128,.04); }
-  .docs-main hr { border:0; border-top:1px solid var(--line); margin:32px 0; }
-  .docs-crumbs { color:var(--muted); font-size:.85rem; margin-bottom:14px; }
-  .docs-crumbs a { color:var(--muted); text-decoration:none; }
-  .docs-crumbs a:hover { color:var(--accent); }
-  .docs-side-h { font-size:.7rem; letter-spacing:.18em; text-transform:uppercase; color:var(--muted); margin:18px 0 6px; }
-  .docs-side-ul { list-style:none; padding:0; margin:0 0 8px; }
-  .docs-side-ul li { margin:0; }
-  .docs-side-a { display:block; padding:5px 10px; margin:1px 0; border-radius:6px; color:var(--fg); text-decoration:none; font-size:.92rem; line-height:1.35; }
-  .docs-side-a:hover { background:var(--panel); }
-  .docs-side-a.active { background:var(--panel); color:var(--accent); border-left:2px solid var(--accent); padding-left:8px; }
-  .docs-api-cat { margin:28px 0 8px; padding-bottom:6px; border-bottom:1px solid var(--line); color:var(--accent); font-size:1.05rem; }
-  .docs-api-row { display:grid; grid-template-columns:1.2fr 2fr .5fr; gap:14px; padding:8px 0; border-bottom:1px solid var(--line); font-size:.9rem; }
-  .docs-api-row .slug { font-family:ui-monospace,Menlo,monospace; color:var(--fg); }
-  .docs-api-row .desc { color:var(--muted); }
-  .docs-api-row .price { color:var(--accent); text-align:right; font-family:ui-monospace,Menlo,monospace; font-size:.85rem; }
+  const extraCss = `
+  .ml-docs-layout { display:block; }
+  .ml-docs-side { display:none; }
+  .ml-docs-main { min-width:0; }
+  .ml-docs-main h1 { font-family:var(--font-body);font-weight:800;font-size:42px;line-height:1;letter-spacing:-.02em;margin:0 0 18px; }
+  .ml-docs-main h2 { font-size:1.2rem;margin-top:36px;color:var(--accent);font-weight:700; }
+  .ml-docs-main h3 { font-size:1.02rem;margin-top:26px;font-weight:700; }
+  .ml-docs-main p, .ml-docs-main li { color:var(--ink);line-height:1.7; }
+  .ml-docs-main .muted { color:var(--muted); }
+  .ml-docs-main pre { background:var(--ink);color:var(--cream);font-family:var(--font-mono);border:0;padding:14px 16px;overflow-x:auto;font-size:.85rem;line-height:1.55; }
+  .ml-docs-main code { font-family:var(--font-mono); }
+  .ml-docs-main p > code, .ml-docs-main li > code, .ml-docs-main td > code, .ml-docs-main h3 > code { background:var(--card);border:1px solid var(--hairline);padding:1px 6px;font-size:.85em; }
+  .ml-docs-main table { border-collapse:collapse;width:100%;margin:18px 0;font-size:.92rem; }
+  .ml-docs-main th, .ml-docs-main td { border:1px solid var(--hairline);padding:8px 12px;text-align:left;vertical-align:top; }
+  .ml-docs-main th { background:var(--card);color:var(--accent);font-weight:600; }
+  .ml-docs-main blockquote { border-left:3px solid var(--accent);margin:16px 0;padding:4px 16px;color:var(--muted);background:rgba(214,60,26,.04); }
+  .ml-docs-main hr { border:0;border-top:1px solid var(--hairline);margin:32px 0; }
+  .ml-docs-main a { color:var(--accent);text-decoration:none; }
+  .ml-docs-main a:hover { text-decoration:underline; }
+  .ml-docs-main img { max-width:100%; }
+  .ml-docs-crumbs { color:var(--faint);font-size:.85rem;margin-bottom:14px; }
+  .ml-docs-crumbs a { color:var(--faint);text-decoration:none; }
+  .ml-docs-crumbs a:hover { color:var(--accent); }
+  .ml-docs-side-h { font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:18px 0 6px; }
+  .ml-docs-side-ul { list-style:none;padding:0;margin:0 0 8px; }
+  .ml-docs-side-ul li { margin:0; }
+  .ml-docs-side-a { display:block;padding:5px 10px;margin:1px 0;color:var(--ink);text-decoration:none;font-size:.92rem;line-height:1.35; }
+  .ml-docs-side-a:hover { background:var(--card); }
+  .ml-docs-side-a.active { background:var(--card);color:var(--accent);border-left:2px solid var(--accent);padding-left:8px;font-weight:600; }
+  .ml-docs-api-cat { font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.02em;margin:28px 0 8px;padding-bottom:6px;border-bottom:1.5px solid var(--ink);color:var(--ink); }
+  .ml-docs-api-row { display:grid;grid-template-columns:1.2fr 2fr .5fr;gap:14px;padding:8px 0;border-bottom:1px solid var(--hairline);font-size:.9rem; }
+  .ml-docs-api-row .slug { font-family:var(--font-mono);color:var(--ink); }
+  .ml-docs-api-row .desc { color:var(--muted); }
+  .ml-docs-api-row .price { color:var(--accent);text-align:right;font-family:var(--font-mono);font-size:.85rem;font-weight:700; }
   @media (min-width:900px) {
-    .docs-layout { display:grid; grid-template-columns:260px 1fr; gap:36px; align-items:start; }
-    .docs-side { display:block; position:sticky; top:64px; max-height:calc(100vh - 80px); overflow-y:auto; padding-right:8px; }
-  }
-  ${CHROME_CSS}
-</style>
-</head>
-<body>${renderHeader("/docs")}<div class="docs-wrap"><div class="docs-layout">
-<aside class="docs-side">${renderSidebar(currentSlug)}</aside>
-<main class="docs-main">${body}</main>
-</div></div>${renderFooter()}</body></html>`;
+    .ml-docs-layout { display:grid;grid-template-columns:240px 1fr;gap:44px;align-items:start; }
+    .ml-docs-side { display:block;position:sticky;top:92px;max-height:calc(100vh - 100px);overflow-y:auto;padding-right:8px; }
+  }`;
+
+  const pageBody = `
+  <div style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;">
+    <div class="ml-docs-layout">
+      <aside class="ml-docs-side">${renderSidebar(currentSlug)}</aside>
+      <main class="ml-docs-main">${body}</main>
+    </div>
+  </div>
+  ${ledgerFooterCompact()}`;
+
+  return ledgerShell({
+    title: `${title} \u2014 Agent402 Docs`,
+    description,
+    canonical: `${baseUrl}${path}`,
+    baseUrl,
+    activePath: "/docs",
+    extraCss,
+    body: pageBody,
+  });
 }
 
 function renderMarkdown(md) {
@@ -262,7 +258,7 @@ export function docsPage(baseUrl, slug) {
   const title = slug.replace(/-/g, " ");
   const firstPara = (md.replace(/^#.*$/m, "").match(/\n\n([^\n#][^\n]+)/) || [])[1] || `Agent402 documentation: ${title}.`;
   const description = firstPara.replace(/\s+/g, " ").trim().slice(0, 200);
-  const crumbs = `<div class="docs-crumbs"><a href="/docs">Docs</a> · ${esc(title)}</div>`;
+  const crumbs = `<div class="ml-docs-crumbs"><a href="/docs">Docs</a> &rsaquo; ${esc(title)}</div>`;
   return shell(
     baseUrl,
     title,
@@ -289,13 +285,13 @@ export function docsApi(baseUrl, catalog) {
     const rows = tools.map((t) => {
       const slug = esc(t.slug || t.route || "");
       const desc = esc((t.description || "").replace(/\s+/g, " ").trim().slice(0, 220));
-      const price = t.price === 0 ? "free" : (typeof t.price === "number" ? `$${t.price.toFixed(4)}` : esc(String(t.price ?? "—")));
-      return `<div class="docs-api-row"><div class="slug">${slug}</div><div class="desc">${desc}</div><div class="price">${esc(price)}</div></div>`;
+      const price = t.price === 0 ? "free" : (typeof t.price === "number" ? `$${t.price.toFixed(4)}` : esc(String(t.price ?? "\u2014")));
+      return `<div class="ml-docs-api-row"><div class="slug">${slug}</div><div class="desc">${desc}</div><div class="price">${esc(price)}</div></div>`;
     }).join("");
-    return `<h2 class="docs-api-cat">${esc(cat)} <span class="muted" style="font-size:.75rem; font-weight:400">· ${tools.length}</span></h2>${rows}`;
+    return `<h2 class="ml-docs-api-cat">${esc(cat)} <span style="font-size:13px;font-weight:400;color:var(--faint);font-family:var(--font-mono);">&middot; ${tools.length}</span></h2>${rows}`;
   }).join("\n");
 
-  const body = `<div class="docs-crumbs"><a href="/docs">Docs</a> · API Reference</div>
+  const body = `<div class="ml-docs-crumbs"><a href="/docs">Docs</a> &rsaquo; API Reference</div>
 <h1>API Reference</h1>
 <p class="muted">Every tool the server exposes, grouped by category. The same list is available as machine-readable JSON at <a href="/openapi.json">/openapi.json</a> and <a href="/api/pricing">/api/pricing</a>, or as plain text at <a href="/llms.txt">/llms.txt</a>. Call any of them over HTTP, MCP, or the <a href="/docs/MCP-Connector">MCP connector</a>.</p>
 <p class="muted"><b>${catalog.length}</b> tools across <b>${cats.length}</b> categories.</p>

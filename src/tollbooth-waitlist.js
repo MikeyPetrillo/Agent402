@@ -14,7 +14,7 @@
 // GitHub issues/new URL with title + labels + body params and opens it in a
 // new tab. No PII ever touches our server. (If/when we run a Tally/Typeform or
 // an `/api/tollbooth/waitlist` route, the form action swaps in one place.)
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const REPO = "https://github.com/MikeyPetrillo/Agent402";
 
@@ -44,53 +44,45 @@ export function tollboothWaitlistPage(baseUrl, { plan = "team", kind = "waitlist
     : isEnterprise
       ? "Tollbooth Cloud enterprise inquiry"
       : `Tollbooth Cloud waitlist — ${p.label}`;
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${p.h} — Agent402 Tollbooth Cloud</title>
-<meta name="description" content="${p.lead} Hosted on top of open-source agent402-tollbooth. Non-custodial — your wallet collects USDC directly.">
-<link rel="canonical" href="${baseUrl}/tollbooth/waitlist?plan=${plan}">
-<meta name="robots" content="noindex">
-${CHROME_HEAD_LINKS}
-<style>
-  :root { --bg:#0a0d13; --fg:#e6e9f0; --muted:#8b93a7; --line:#1e2638; --card:#0e1320; --accent:#4ade80; --pop:#a78bfa; --warn:#fbbf24; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,sans-serif; }
-  .wrap { max-width:680px; margin:0 auto; padding:36px 22px 60px; }
-  .crumbs { color:var(--muted); font-size:.85rem; margin-bottom:14px; }
-  .crumbs a { color:var(--muted); text-decoration:none; }
+
+  const title = `${p.h} — Agent402 Tollbooth Cloud`;
+  const description = `${p.lead} Hosted on top of open-source agent402-tollbooth. Non-custodial — your wallet collects USDC directly.`;
+  const canonical = `${baseUrl}/tollbooth/waitlist?plan=${plan}`;
+
+  const extraCss = `
+  .tw-wrap { max-width:680px; margin:0 auto; padding:56px 30px 60px; }
+  .crumbs { color:var(--faint); font-family:var(--font-mono); font-size:.85rem; margin-bottom:14px; }
+  .crumbs a { color:var(--faint); text-decoration:none; }
   .crumbs a:hover { color:var(--accent); }
-  h1 { font-size:1.7rem; line-height:1.2; margin:0 0 8px; letter-spacing:-.01em; }
-  .lede { color:var(--muted); margin:0 0 24px; }
-  form { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:22px; display:grid; gap:16px; }
+  h1 { font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 8px; }
+  .lede { color:var(--muted); margin:0 0 24px; line-height:1.55; }
+  form { background:var(--card); border:1.5px solid var(--ink); padding:22px; display:grid; gap:16px; }
   label { display:grid; gap:6px; font-size:.92rem; }
-  label .k { color:var(--muted); font-size:.82rem; letter-spacing:.02em; text-transform:uppercase; }
+  label .k { color:var(--faint); font-family:var(--font-mono); font-size:.82rem; letter-spacing:.02em; text-transform:uppercase; }
   input, select, textarea {
-    background:#0a0d15; border:1px solid var(--line); border-radius:8px;
-    color:var(--fg); padding:10px 12px; font:inherit; outline:none;
+    background:var(--paper); border:1.5px solid var(--ink);
+    color:var(--ink); padding:10px 12px; font:inherit; font-family:var(--font-body); outline:none;
   }
   input:focus, select:focus, textarea:focus { border-color:var(--accent); }
   textarea { min-height:88px; resize:vertical; }
   .grid2 { display:grid; gap:12px; grid-template-columns:1fr 1fr; }
   @media (max-width:560px){ .grid2 { grid-template-columns:1fr; } }
-  .cta { background:var(--accent); color:#06120a; border:none; border-radius:8px; padding:12px 18px; font:inherit; font-weight:700; cursor:pointer; }
-  .cta:hover { filter:brightness(1.05); }
-  .alt { color:var(--muted); font-size:.85rem; text-align:center; margin-top:6px; }
+  .cta { background:var(--ink); color:var(--cream); border:none; padding:12px 18px; font:inherit; font-family:var(--font-mono); font-weight:700; cursor:pointer; }
+  .cta:hover { opacity:.9; }
+  .alt { color:var(--faint); font-size:.85rem; text-align:center; margin-top:6px; }
   .alt a { color:var(--accent); }
-  .note { color:var(--muted); font-size:.82rem; margin-top:14px; }
-  .badge { display:inline-block; background:#0f1320; border:1px solid var(--line); border-radius:999px; padding:2px 10px; color:var(--pop); font-size:.78rem; letter-spacing:.04em; text-transform:uppercase; margin-bottom:10px; }
+  .note { color:var(--faint); font-size:.82rem; margin-top:14px; }
+  .badge { display:inline-block; background:var(--card); border:1.5px solid var(--ink); padding:2px 10px; color:var(--accent); font-family:var(--font-mono); font-size:.78rem; letter-spacing:.04em; text-transform:uppercase; margin-bottom:10px; }
   a { color:var(--accent); text-decoration:none; }
   a:hover { text-decoration:underline; }
-  ${CHROME_CSS}
-</style>
-</head>
-<body>${renderHeader("/tollbooth")}<div class="wrap">
-<div class="crumbs"><a href="/tollbooth">Tollbooth</a> · <a href="/tollbooth/cloud">Cloud</a> · <span style="color:var(--fg);">${isPartner ? "Partner" : isEnterprise ? "Enterprise" : "Waitlist"}</span></div>
+  code { font-family:var(--font-mono); font-size:.86rem; }
+  `;
+
+  const body = `<div class="tw-wrap">
+<div class="crumbs"><a href="/tollbooth">Tollbooth</a> · <a href="/tollbooth/cloud">Cloud</a> · <span style="color:var(--ink);">${isPartner ? "Partner" : isEnterprise ? "Enterprise" : "Waitlist"}</span></div>
 <span class="badge">${isPartner ? "Partner program" : isEnterprise ? "Enterprise" : "Cloud · early access"}</span>
-<h1>${p.h}</h1>
-<p class="lede">${p.lead}</p>
+<h1>${esc(p.h)}</h1>
+<p class="lede">${esc(p.lead)}</p>
 
 <form id="wl" autocomplete="on">
   <div class="grid2">
@@ -114,10 +106,10 @@ ${CHROME_HEAD_LINKS}
   <!-- honeypot: real visitors leave this empty -->
   <label style="position:absolute; left:-10000px; top:auto; width:1px; height:1px; overflow:hidden;" aria-hidden="true"><input id="f_hp" name="website" type="text" tabindex="-1" autocomplete="off"></label>
   <button id="wl_submit" class="cta" type="submit">${isPartner ? "Apply as partner →" : isEnterprise ? "Request a call →" : "Join waitlist →"}</button>
-  <div id="wl_err" style="display:none; color:#fca5a5; font-size:.88rem;"></div>
+  <div id="wl_err" style="display:none; color:#c0392b; font-size:.88rem;"></div>
 </form>
 
-<div id="wl_done" style="display:none; background:#0f1320; border:1px solid #1e4d2d; border-radius:14px; padding:22px;">
+<div id="wl_done" style="display:none; background:var(--card); border:1.5px solid var(--ink); padding:22px;">
   <h2 style="margin:0 0 6px; color:var(--accent); font-size:1.2rem;">Got it — you're on the list.</h2>
   <p style="margin:0; color:var(--muted);">We'll be in touch within 1 business day. In the meantime, <a href="/tollbooth">install the OSS gate</a> in observe mode and you'll have a week of bot-traffic data ready when we onboard you.</p>
 </div>
@@ -202,6 +194,16 @@ ${CHROME_HEAD_LINKS}
   });
 })();
 </script>
-</div>${renderFooter()}</body>
-</html>`;
+</div>
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({
+    title,
+    description,
+    canonical,
+    baseUrl,
+    activePath: "__none__",
+    extraCss,
+    body,
+  });
 }
