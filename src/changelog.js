@@ -3,6 +3,16 @@ import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chr
 const ENTRIES = [
   {
     date: "2026-06-24",
+    title: "LLM vision, structured output, and content moderation",
+    items: [
+      "Vision: send up to 2 image URLs to any LLM tier — screenshot analysis, chart reading, image Q&A",
+      "Structured output: response_format with json_object or json_schema for guaranteed valid JSON",
+      "Content moderation: /api/moderate ($0.002) — check text for harmful content across 13 categories",
+      "All guardrails enforced server-side: image count limits, schema size caps, data: URI blocking",
+    ],
+  },
+  {
+    date: "2026-06-24",
     title: "Full AI suite — TTS, STT, embeddings via x402",
     items: [
       "Text-to-speech: /api/tts ($0.05) and /api/tts-hd ($0.10) — 10 voices, 6 audio formats",
