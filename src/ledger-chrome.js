@@ -252,12 +252,10 @@ ${LEDGER_HEAD}
 <style>${LEDGER_CSS}${extraCss}</style>
 ${jsonLdBlock}
 </head>
-<body>
-<div style="overflow-x:hidden;">
+<body style="overflow-x:hidden;">
 ${statusLine()}
 ${nav(activePath)}
 ${body}
-</div>
 </body>
 </html>`;
 }
