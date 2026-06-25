@@ -109,7 +109,7 @@ function nav(activePath) {
   <div class="ml-nav-in" style="max-width:1180px;margin:0 auto;padding:14px 30px;display:flex;align-items:center;gap:26px;">
     <a href="/" style="display:flex;align-items:center;gap:11px;text-decoration:none;color:var(--ink);">
       <span style="width:32px;height:32px;border:2px solid var(--ink);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;">402</span>
-      <span style="font-weight:800;font-size:18px;letter-spacing:-.02em;text-transform:uppercase;">Agent402</span>
+      <span style="font-weight:800;font-size:18px;letter-spacing:-.02em;text-transform:uppercase;">Agent402<span style="color:var(--accent);">.</span>Tools</span>
     </a>
     <div class="ml-nav-links" style="display:flex;align-items:center;gap:20px;margin-left:6px;font-family:var(--font-mono);font-size:13px;">
       ${links}
@@ -133,7 +133,7 @@ export function ledgerFooterFull() {
       <div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
           <span style="width:30px;height:30px;border:2px solid var(--ink);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;">402</span>
-          <span style="font-weight:800;font-size:16px;text-transform:uppercase;letter-spacing:-.02em;">Agent402</span>
+          <span style="font-weight:800;font-size:16px;text-transform:uppercase;letter-spacing:-.02em;">Agent402<span style="color:var(--accent);">.</span>Tools</span>
         </div>
         <p style="font-family:var(--font-mono);font-size:12px;line-height:1.6;color:#6b6757;margin:0;max-width:240px;">The open x402 index — discovery, routing, and on-chain ranking for the agent payments economy.</p>
       </div>
@@ -155,8 +155,8 @@ export function ledgerFooterFull() {
       </div>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:36px;padding-top:18px;border-top:1px solid #cdc3ad;font-family:var(--font-mono);font-size:12px;color:var(--faint);">
-      <span>open-source x402 + MCP server · built by Mikey Petrillo</span>
-      <span style="display:flex;gap:16px;"><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener" style="color:var(--muted);text-decoration:none;">github</a><a href="https://x.com/Agent402Tools" rel="noopener" style="color:var(--muted);text-decoration:none;">𝕏</a></span>
+      <span>open-source x402 + MCP server · built by <a href="https://github.com/MikeyPetrillo" rel="noopener" style="color:var(--muted);text-decoration:none;">Mike Petrillo</a> · <a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:none;">mike@agent402.tools</a></span>
+      <span style="display:flex;gap:16px;"><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="/contact" style="color:var(--muted);text-decoration:none;">contact</a><a href="/llms.txt" style="color:var(--muted);text-decoration:none;">llms.txt</a><a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener" style="color:var(--muted);text-decoration:none;">github</a><a href="https://x.com/Agent402Tools" rel="noopener" style="color:var(--muted);text-decoration:none;">𝕏</a></span>
     </div>
   </div>
 </footer>`;
@@ -168,9 +168,15 @@ export function ledgerFooterFull() {
 
 export function ledgerFooterCompact() {
   return `<footer style="border-top:1.5px solid var(--ink);background:var(--footer-bg);">
-  <div style="max-width:1180px;margin:0 auto;padding:26px 30px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;font-family:var(--font-mono);font-size:12px;color:var(--faint);">
-    <span style="display:flex;align-items:center;gap:10px;"><span style="width:24px;height:24px;border:2px solid var(--ink);color:var(--ink);font-weight:700;font-size:10px;display:flex;align-items:center;justify-content:center;">402</span>open x402 index · built by Mikey Petrillo</span>
-    <span style="display:flex;gap:16px;"><a href="/tools" style="color:var(--muted);text-decoration:none;">catalog</a><a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/leaderboard" style="color:var(--muted);text-decoration:none;">leaderboard</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a><a href="/integrations" style="color:var(--muted);text-decoration:none;">integrations</a><a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener" style="color:var(--muted);text-decoration:none;">github</a></span>
+  <div style="max-width:1180px;margin:0 auto;padding:26px 30px;font-family:var(--font-mono);font-size:12px;color:var(--faint);">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+      <span style="display:flex;align-items:center;gap:10px;"><span style="width:24px;height:24px;border:2px solid var(--ink);color:var(--ink);font-weight:700;font-size:10px;display:flex;align-items:center;justify-content:center;">402</span><span style="font-weight:700;">Agent402.Tools</span></span>
+      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/tools" style="color:var(--muted);text-decoration:none;">catalog</a><a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/leaderboard" style="color:var(--muted);text-decoration:none;">leaderboard</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a><a href="/integrations" style="color:var(--muted);text-decoration:none;">integrations</a></span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid #cdc3ad;">
+      <span>built by <a href="https://github.com/MikeyPetrillo" rel="noopener" style="color:var(--muted);text-decoration:none;">Mike Petrillo</a> · <a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:none;">mike@agent402.tools</a></span>
+      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="/contact" style="color:var(--muted);text-decoration:none;">contact</a><a href="/llms.txt" style="color:var(--muted);text-decoration:none;">llms.txt</a><a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener" style="color:var(--muted);text-decoration:none;">github</a><a href="https://x.com/Agent402Tools" rel="noopener" style="color:var(--muted);text-decoration:none;">𝕏</a></span>
+    </div>
   </div>
 </footer>`;
 }
@@ -237,7 +243,7 @@ export function ledgerShell({ title, description, canonical, baseUrl, activePath
 <link rel="canonical" href="${esc(canonical)}">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${esc(canonical)}">
-<meta property="og:site_name" content="Agent402">
+<meta property="og:site_name" content="Agent402.Tools">
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(description)}">
 <meta property="og:image" content="${esc(og)}">

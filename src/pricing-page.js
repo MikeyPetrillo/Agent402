@@ -58,7 +58,7 @@ export function pricingPage(baseUrl, catalog) {
 <link rel="canonical" href="${baseUrl}/pricing">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/pricing">
-<meta property="og:site_name" content="Agent402">
+<meta property="og:site_name" content="Agent402.Tools">
 <meta property="og:title" content="Pricing — Agent402">
 <meta property="og:description" content="Flat per-call pricing for ${totalTools} deterministic web tools. No tiers, no subscriptions.">
 <meta name="twitter:card" content="summary">

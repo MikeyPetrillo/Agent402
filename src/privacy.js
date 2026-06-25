@@ -73,9 +73,9 @@ process memory only. Memory-tool data persists until deleted by its owner or TTL
 non-personal counters (total calls served per tool) are kept for the public <a href="/api/stats">/api/stats</a> page.</p>
 
 <h2>Contact</h2>
-<p>Mikey Petrillo —
+<p>Mike Petrillo — <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>,
 <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">GitHub issues</a>,
-or <a href="https://github.com/MikeyPetrillo" rel="noopener">github.com/MikeyPetrillo</a>.</p>
+or <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools on X</a>.</p>
 </div>
 </div>
 ${ledgerFooterCompact()}`;

@@ -72,7 +72,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <link rel="canonical" href="${baseUrl}/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/">
-<meta property="og:site_name" content="Agent402">
+<meta property="og:site_name" content="Agent402.Tools">
 <meta property="og:title" content="Agent402 — the open x402 index: Find, Router &amp; Leaderboard (${count}+ tools)">
 <meta property="og:description" content="The open x402 index — discovery, routing, and on-chain ranking for the agent payments economy. Find a tool, route across every x402 seller, see who's most used on-chain. Plus ${count} pay-per-call agent tools. Free via proof-of-work or USDC on Base.">
 <meta property="og:image" content="${baseUrl}/card.png">
@@ -89,9 +89,9 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
     {
       "@type": "Organization",
       "@id": "${baseUrl}/#org",
-      "name": "Agent402",
+      "name": "Agent402.Tools",
       "url": "${baseUrl}",
-      "founder": { "@type": "Person", "name": "Mikey Petrillo", "url": "https://github.com/MikeyPetrillo" },
+      "founder": { "@type": "Person", "name": "Mike Petrillo", "url": "https://github.com/MikeyPetrillo" },
       "sameAs": ["https://github.com/MikeyPetrillo", "https://github.com/MikeyPetrillo/Agent402", "https://x.com/Agent402Tools", "https://www.npmjs.com/package/agent402-mcp", "https://www.npmjs.com/package/agent402-client", "https://www.npmjs.com/package/agent402-tollbooth", "https://www.npmjs.com/package/agent402-openai-tools", "https://www.npmjs.com/package/agent402-anthropic-tools", "https://www.npmjs.com/package/agent402-ai-sdk", "https://www.npmjs.com/package/agent402-langchain", "https://www.npmjs.com/package/agent402-llamaindex", "https://www.npmjs.com/package/agent402-google-adk", "https://www.npmjs.com/package/agent402-strands"],
       "description": "Machine-to-machine payments for AI agents: ${count} pay-per-call web tools settled in USDC via the x402 protocol, or free with proof-of-work."
     },
@@ -104,7 +104,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
     },
     {
       "@type": "WebAPI",
-      "name": "Agent402",
+      "name": "Agent402.Tools",
       "url": "${baseUrl}",
       "provider": { "@id": "${baseUrl}/#org" },
       "description": "${count} pay-per-call tools for AI agents via the x402 payment protocol (USDC on Base): live web search and web answers with citations, headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed memory & coordination, a non-custodial multi-chain x402 payment toolkit (quote/verify/balance/gas/transfer-authorization/ENS), image transforms, live financial data (stock quotes, history, earnings) and crypto market data (CoinGecko), macro time-series (FRED, Treasury, ECB FX, World Bank, yield curve), SEC EDGAR filings (10-K/10-Q, XBRL, insider, 13F, IPO calendar), live currency & product data, ${count - freeCount > 0 ? "data conversion, " : ""}unit conversions, validation, and more.",
