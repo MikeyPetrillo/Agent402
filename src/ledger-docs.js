@@ -32,7 +32,7 @@ export function ledgerDocsPage(baseUrl) {
 
   const body = `
   <!-- DOCS LAYOUT -->
-  <div class="ml-docs-grid" style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;display:grid;grid-template-columns:220px 1fr;gap:44px;align-items:start;">
+  <div class="ml-docs-grid" style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;display:grid;grid-template-columns:220px 1fr;gap:44px;">
 
     <!-- TOC -->
     <aside class="ml-docs-toc" style="position:sticky;top:92px;font-family:var(--font-mono);font-size:13px;">
