@@ -2,13 +2,13 @@
   "name": "agent402-mcp",
   "version": "0.9.4",
   "mcpName": "io.github.MikeyPetrillo/agent402",
-  "author": "Mikey Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
+  "author": "Mike Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
   "homepage": "https://agent402.tools",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/MikeyPetrillo/Agent402.git"
   },
-  "description": "Open-source MCP server exposing Agent402's 1,337 self-hostable tools + 42 multi-tool skill packs (security-audit, trend-analysis, structured-scrape, decode-blob, forecasting-bake-off) for AI agents — browser, web search & answers, PDFs, OCR, images, LLM inference, image generation, code execution, TTS, STT, embeddings, live financial/crypto/macro data, SEC EDGAR filings, deterministic stats & forecasting, compression, payments. Free via proof-of-work, or pay per call in USDC via the x402 protocol.",
+  "description": "Open-source MCP server exposing Agent402.Tools' 1,338 self-hostable tools + 42 multi-tool skill packs (security-audit, trend-analysis, structured-scrape, decode-blob, forecasting-bake-off) for AI agents — browser, web search & answers, PDFs, OCR, images, LLM inference, image generation, code execution, TTS, STT, embeddings, live financial/crypto/macro data, SEC EDGAR filings, deterministic stats & forecasting, compression, payments. Free via proof-of-work, or pay per call in USDC via the x402 protocol.",
   "type": "module",
   "bin": {
     "agent402-mcp": "index.js"

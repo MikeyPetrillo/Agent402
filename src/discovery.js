@@ -59,7 +59,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
   return {
     spec: "agent402-service-manifest/1",
     about: `${REPO}#agent402-in-the-x402-ecosystem`,
-    name: "Agent402",
+    name: "Agent402.Tools",
     summary:
       `The open-source, self-hostable x402 + MCP server: ${toolCount} pay-per-call tools for AI agents in one integration — browser, search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, ${SKILL_PACKS.length} curated multi-tool skill packs callable as MCP prompts, and wallet-keyed memory. Free via proof-of-work or pay per call in USDC via x402.`,
     homepage: baseUrl,
@@ -205,7 +205,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
 export function reliabilityReport({ baseUrl, network, wallet, stats }) {
   const explorer = network === "base-sepolia" ? "https://sepolia.basescan.org" : "https://basescan.org";
   return {
-    service: "Agent402",
+    service: "Agent402.Tools",
     // This report is served BY the app, so a 200 here means the node is up and
     // serving. Real-time external liveness is the heartbeat + /health below.
     status: "operational",

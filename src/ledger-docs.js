@@ -7,17 +7,17 @@ import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 export function ledgerDocsPage(baseUrl) {
   const canonical = baseUrl + "/docs";
   const title = "Docs — Agent402";
-  const description = "Add 1,337 deterministic tools to your agent in about a minute. No signup, no API key — start free with proof-of-work, settle USDC on Base when you scale.";
+  const description = "Add 1,338 deterministic tools to your agent in about a minute. No signup, no API key — start free with proof-of-work, settle USDC on Base when you scale.";
 
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "TechArticle",
-    name: "Agent402 Documentation",
+    name: "Agent402.Tools Documentation",
     url: canonical,
     description,
     publisher: {
       "@type": "Organization",
-      name: "Agent402",
+      name: "Agent402.Tools",
       url: baseUrl,
     },
   };
@@ -52,7 +52,7 @@ export function ledgerDocsPage(baseUrl) {
     <!-- CONTENT -->
     <main>
       <h1 style="font-family:var(--font-body);font-weight:800;font-size:52px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;">Quickstart.</h1>
-      <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 30px;">Add 1,337 deterministic tools to your agent in about a minute. No signup, no API key &mdash; start free with proof-of-work, settle USDC on Base when you scale.</p>
+      <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 30px;">Add 1,338 deterministic tools to your agent in about a minute. No signup, no API key &mdash; start free with proof-of-work, settle USDC on Base when you scale.</p>
 
       <div id="quickstart" style="border:1.5px solid var(--ink);background:var(--ink);margin-bottom:14px;">
         <div style="display:flex;align-items:center;gap:7px;padding:11px 15px;border-bottom:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;color:var(--dk-muted);">terminal</div>
@@ -99,7 +99,7 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
 
       <!-- FREE -->
       <h2 id="free" style="font-family:var(--font-body);font-weight:800;font-size:32px;letter-spacing:-.02em;margin:0 0 14px;">Free tier &mdash; proof-of-work.</h2>
-      <p style="font-size:15.5px;line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">1,158 of the 1,337 pure-CPU tools work with no wallet. Instead of paying USDC, your machine solves a short sha256 puzzle &mdash; a fraction of a second of CPU &mdash; and the call goes through. Nothing here consumes AI tokens.</p>
+      <p style="font-size:15.5px;line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">1,158 of the 1,338 pure-CPU tools work with no wallet. Instead of paying USDC, your machine solves a short sha256 puzzle &mdash; a fraction of a second of CPU &mdash; and the call goes through. Nothing here consumes AI tokens.</p>
       <div style="border:1.5px solid var(--ink);background:var(--card);padding:16px 20px;font-family:var(--font-mono);font-size:13px;margin-bottom:44px;"><span style="color:var(--green);font-weight:700;">GET</span> <span style="color:var(--ink);">/api/pow</span>  <span style="color:var(--faint);">&rarr; returns a challenge; solve and resubmit. Free, rate-limited.</span></div>
 
       <!-- ENDPOINTS -->

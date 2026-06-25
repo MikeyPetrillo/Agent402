@@ -1,6 +1,6 @@
 # Paying with Compute (proof-of-work)
 
-Agents without a wallet can pay for the **pure-CPU tools** (~1,100 of 1,323) by solving a small sha256 puzzle — a fraction of a second of the caller's own CPU. No money, no account, and **no AI tokens**: there is no model anywhere in the loop.
+Agents without a wallet can pay for the **pure-CPU tools** (~1,100 of 1,338) by solving a small sha256 puzzle — a fraction of a second of the caller's own CPU. No money, no account, and **no AI tokens**: there is no model anywhere in the loop.
 
 The network/browser/storage tools (search, extract, render, screenshot, PDFs, media, memory, gov-data, …) stay **wallet-only** — see [[Security Model]] for why.
 

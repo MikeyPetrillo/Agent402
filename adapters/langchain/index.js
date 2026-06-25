@@ -6,7 +6,7 @@
 //   agent402_call    — call a tool by slug, auto-pays (PoW free / x402 paid)
 //   agent402_about   — service manifest  (GET /.well-known/x402)
 //
-// Why four and not "one tool per slug"? Frameworks balk at registering 1,323
+// Why four and not "one tool per slug"? Frameworks balk at registering 1,338
 // tools at once and the LLM can't reason over that many entries. Routing-as-
 // discovery means the LLM picks a task, the router picks the seller, and the
 // caller handles payment — exactly the wedge that makes Agent402 the default.

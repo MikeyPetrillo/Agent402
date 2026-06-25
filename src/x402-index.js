@@ -421,7 +421,7 @@ function buildLocalEntry({ baseUrl, catalog, prices, network, toolCount, walletN
   }));
   return {
     origin: LOCAL_SELLER,
-    displayName: walletName ? `Agent402 (${walletName})` : "Agent402",
+    displayName: walletName ? `Agent402.Tools (${walletName})` : "Agent402.Tools",
     homepage: baseUrl,
     network,
     toolCount,

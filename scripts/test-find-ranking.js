@@ -1,7 +1,7 @@
 // Smoke test for the /api/find lexical ranker against the *live* catalog.
 //
 // scripts/test-find.js exercises the ranking math on a 4-tool synthetic
-// catalog — useful but blind to whether the real 1,323-tool catalog still
+// catalog — useful but blind to whether the real 1,338-tool catalog still
 // returns the intuitive tool for agent-style task descriptions. A tool rename,
 // a description rewording, or a category shuffle could silently bump the
 // expected top-1 out of place, and the discovery surface (HTTP /api/find +

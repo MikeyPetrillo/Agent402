@@ -97,7 +97,7 @@ tollbooth-gated endpoint paid by an AgentCore agent.
 
    > **Proposal: Add `integrations/agent402/` sample — x402 buy + sell side**
    >
-   > Agent402 is an open-source x402 + MCP server with 1,323 pay-per-call web
+   > Agent402 is an open-source x402 + MCP server with 1,338 pay-per-call web
    > tools, plus `agent402-tollbooth` for pay-per-crawl on the other side.
    > Both speak vanilla x402, so an AgentCore-hosted Strands agent works
    > end-to-end with no protocol bridging.
@@ -144,7 +144,7 @@ that takes a GitHub repo URL; no PR, no fork.
    - **Short description (one line, ~150 chars):**
 
      ```
-     1,323 pay-per-call web tools + 42 skill packs for AI agents over x402 (USDC on Base) — or free via proof-of-work. Browser, search, OCR, finance, EDGAR, durable memory.
+     1,338 pay-per-call web tools + 42 skill packs for AI agents over x402 (USDC on Base) — or free via proof-of-work. Browser, search, OCR, finance, EDGAR, durable memory.
      ```
 
    - **Long description / why (if asked):**
@@ -165,7 +165,7 @@ that takes a GitHub repo URL; no PR, no fork.
 
    - **Category / tags (pick what's offered):** `aggregator`, `payments`,
      `web-search`, `browser-automation`, `finance`, `developer-tools`
-   - **Author:** `Mikey Petrillo / MikeyPetrillo`
+   - **Author:** `Mike Petrillo / MikeyPetrillo`
    - **License:** MIT
    - **Logo URL:** `https://raw.githubusercontent.com/MikeyPetrillo/Agent402/main/docs/logo-400.png`
 

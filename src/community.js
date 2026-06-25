@@ -26,7 +26,7 @@ const SHOWCASE_PROJECTS = [
 export function communityPage(baseUrl) {
   const canonical = `${baseUrl}/community`;
   const pageTitle = "Community — Agent402 ecosystem";
-  const pageDesc = "Join the Agent402 community: contribute tool kits, write guides, and build autonomous agents with 1,323 deterministic web tools on the x402 protocol.";
+  const pageDesc = "Join the Agent402 community: contribute tool kits, write guides, and build autonomous agents with 1,338 deterministic web tools on the x402 protocol.";
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -37,7 +37,7 @@ export function communityPage(baseUrl) {
   };
 
   const statCards = [
-    { value: "1,323", label: "tools" },
+    { value: "1,338", label: "tools" },
     { value: "8", label: "framework adapters" },
     { value: "Open source", label: "MIT licensed" },
     { value: "x402", label: "protocol" },

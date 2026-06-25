@@ -49,7 +49,7 @@ export function contributePage(baseUrl) {
 
 <div class="ct-eyebrow">$ GET /contribute</div>
 <h1 class="ct-title">Contribute to Agent402</h1>
-<p class="ct-subtitle">Add a tool kit, write a guide, or submit a skill pack. Every contribution ships to 1,323+ tools that agents pay for per call.</p>
+<p class="ct-subtitle">Add a tool kit, write a guide, or submit a skill pack. Every contribution ships to 1,338+ tools that agents pay for per call.</p>
 
 <!-- Section 1: Add a tool kit -->
 <div class="ct-section">

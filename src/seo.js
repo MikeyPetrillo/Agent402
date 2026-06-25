@@ -176,7 +176,7 @@ export function llmsTxt(baseUrl, catalog) {
     .filter(Boolean)
     .join("\n\n");
 
-  return `# Agent402 — where agents pay agents (machine-to-machine payments)
+  return `# Agent402.Tools — where agents pay agents (machine-to-machine payments)
 
 > A live node in the machine-to-machine economy. Autonomous agents pay per call over HTTP — no human, no signup, no API key. Call an endpoint, receive an HTTP 402 with exact payment requirements, settle from your own wallet in USDC via the x402 protocol (v2, e.g. @x402/fetch + @x402/evm) — or, on ${tools.filter(isComputePayable).length} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. Retry with the proof and get the result. The payment IS the identity. Prices range $0.001–$0.02 per call.
 

@@ -73,7 +73,7 @@ export function quickstartPage(baseUrl) {
 <!-- Panel: Claude / MCP -->
 <div class="qs-panel active" id="panel-mcp" role="tabpanel">
 <h3>Add to Claude Code</h3>
-<p class="qs-oneliner">One command and you're done &mdash; 1,323 tools available instantly.</p>
+<p class="qs-oneliner">One command and you're done &mdash; 1,338 tools available instantly.</p>
 
 <span class="qs-label">Install</span>
 <div class="qs-code-wrap">
@@ -257,7 +257,7 @@ const res = await payFetch("https://agent402.tools/api/extract", {
 <!-- What to try next cards -->
 <div class="qs-cards">
   <a class="qs-card" href="/tools">
-    <h4>Browse 1,323 tools</h4>
+    <h4>Browse 1,338 tools</h4>
     <p>Search, filter, and preview every tool in the catalog.</p>
   </a>
   <a class="qs-card" href="/playground">

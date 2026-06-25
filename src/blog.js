@@ -14,7 +14,7 @@ export const BLOG_POSTS = [
 
 <p>An agent that calls a tool needs to know what it will get back. If a "summarize" endpoint silently calls an LLM, the output varies on every call. That makes testing impossible, caching meaningless, and debugging a nightmare.</p>
 
-<p>Every Agent402 tool is deterministic: same input, same output, every time. This means agents can cache results, retry safely, and CI can verify every tool automatically. Our test suite literally calls every tool with its example input and checks the response — 1,323 tools, zero LLM variance.</p>
+<p>Every Agent402 tool is deterministic: same input, same output, every time. This means agents can cache results, retry safely, and CI can verify every tool automatically. Our test suite literally calls every tool with its example input and checks the response — 1,338 tools, zero LLM variance.</p>
 
 <h2>Why x402 over API keys?</h2>
 
@@ -145,7 +145,7 @@ export const BLOG_POSTS = [
   }
 }</code></pre>
 
-<p>Once connected, Claude Code can search through all 1,323 tools, find the right one for a task, and call it — all through the standard MCP protocol. The <code>search_tools</code> and <code>find_tool</code> commands help the agent discover relevant tools without needing to know the full catalog.</p>
+<p>Once connected, Claude Code can search through all 1,338 tools, find the right one for a task, and call it — all through the standard MCP protocol. The <code>search_tools</code> and <code>find_tool</code> commands help the agent discover relevant tools without needing to know the full catalog.</p>
 
 <h2>npm package (local / stdio)</h2>
 
