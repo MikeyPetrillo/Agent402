@@ -27,7 +27,7 @@ export function ledgerDocsPage(baseUrl) {
   .ml-docs-toc a.active { color: var(--ink) !important; font-weight: 700; }
   @media (max-width: 900px) {
     .ml-docs-grid { grid-template-columns: 1fr !important; }
-    .ml-docs-toc  { position: static !important; }
+    .ml-docs-toc > div { position: static !important; }
   }`;
 
   const body = `
@@ -35,15 +35,17 @@ export function ledgerDocsPage(baseUrl) {
   <div class="ml-docs-grid" style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;display:grid;grid-template-columns:220px 1fr;gap:44px;">
 
     <!-- TOC -->
-    <aside class="ml-docs-toc" style="position:sticky;top:92px;font-family:var(--font-mono);font-size:13px;">
-      <div style="font-size:11px;color:var(--accent);letter-spacing:.1em;margin-bottom:14px;">$ GET /docs</div>
-      <div style="display:flex;flex-direction:column;gap:11px;border-left:1.5px solid var(--ink);padding-left:16px;">
-        <a href="#quickstart" style="color:var(--ink);text-decoration:none;font-weight:700;">quickstart</a>
-        <a href="#how" style="color:var(--muted);text-decoration:none;">how payment works</a>
-        <a href="#add" style="color:var(--muted);text-decoration:none;">three ways in</a>
-        <a href="#free" style="color:var(--muted);text-decoration:none;">free tier &middot; PoW</a>
-        <a href="#endpoints" style="color:var(--muted);text-decoration:none;">endpoints</a>
-        <a href="/docs/adapters" style="color:var(--muted);text-decoration:none;">framework adapters &rarr;</a>
+    <aside class="ml-docs-toc" style="font-family:var(--font-mono);font-size:13px;">
+      <div style="position:sticky;top:92px;">
+        <div style="font-size:11px;color:var(--accent);letter-spacing:.1em;margin-bottom:14px;">$ GET /docs</div>
+        <div style="display:flex;flex-direction:column;gap:11px;border-left:1.5px solid var(--ink);padding-left:16px;">
+          <a href="#quickstart" style="color:var(--ink);text-decoration:none;font-weight:700;">quickstart</a>
+          <a href="#how" style="color:var(--muted);text-decoration:none;">how payment works</a>
+          <a href="#add" style="color:var(--muted);text-decoration:none;">three ways in</a>
+          <a href="#free" style="color:var(--muted);text-decoration:none;">free tier &middot; PoW</a>
+          <a href="#endpoints" style="color:var(--muted);text-decoration:none;">endpoints</a>
+          <a href="/docs/adapters" style="color:var(--muted);text-decoration:none;">framework adapters &rarr;</a>
+        </div>
       </div>
     </aside>
 
