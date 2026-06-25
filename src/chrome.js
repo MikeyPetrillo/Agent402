@@ -117,7 +117,7 @@ export function renderFooter() {
       <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub</a><span class="sep">·</span>
       <a href="https://x.com/Agent402Tools" rel="noopener">𝕏 @Agent402Tools</a>
     </div>
-    <div class="ft-tag">Agent402 — open-source x402 + MCP server. Built by <a href="https://github.com/MikeyPetrillo" rel="noopener">Mikey Petrillo</a>.</div>
+    <div class="ft-tag">Agent402 — open-source x402 + MCP server. Built by <a href="https://github.com/MikeyPetrillo" rel="noopener">Mike Petrillo</a>.</div>
   </div>
 </footer>`;
 }

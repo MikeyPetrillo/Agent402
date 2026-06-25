@@ -25,6 +25,7 @@ import { analyticsPage } from "./analytics-page.js";
 import { operatorPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
 import { termsPage } from "./terms.js";
+import { contactPage } from "./contact.js";
 import { quickstartPage } from "./quickstart.js";
 import { robotsTxt, sitemapXml, llmsTxt, sitemapIndex, sitemapPages, sitemapTools, sitemapGuides, sitemapSkills } from "./seo.js";
 import { serviceManifest, reliabilityReport } from "./discovery.js";
@@ -668,6 +669,7 @@ app.get("/.well-known/glama.json", (_req, res) => {
 });
 app.get("/privacy", (_req, res) => htmlCache(res, 300, 900).send(privacyPage(BASE_URL)));
 app.get("/terms", (_req, res) => htmlCache(res, 300, 900).send(termsPage(BASE_URL)));
+app.get("/contact", (_req, res) => htmlCache(res, 300, 900).send(contactPage(BASE_URL)));
 app.get("/quickstart", (_req, res) => htmlCache(res, 300, 900).send(quickstartPage(BASE_URL)));
 app.get("/faq", (_req, res) => htmlCache(res, 300, 900).send(faqPage(BASE_URL)));
 app.get("/integrations", (_req, res) => htmlCache(res, 300, 900).send(ledgerIntegrationsPage(BASE_URL)));

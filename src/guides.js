@@ -412,8 +412,8 @@ export function guidePage(baseUrl, slug) {
     description: g.description,
     url: canonical,
     image: `${baseUrl}/card.png`,
-    author: { "@type": "Person", name: "Mikey Petrillo", url: "https://github.com/MikeyPetrillo" },
-    publisher: { "@type": "Organization", name: "Agent402", url: baseUrl },
+    author: { "@type": "Person", name: "Mike Petrillo", url: "https://github.com/MikeyPetrillo" },
+    publisher: { "@type": "Organization", name: "Agent402.Tools", url: baseUrl },
   };
 
   const body = `<div class="gp-wrap">

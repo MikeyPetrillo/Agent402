@@ -249,8 +249,8 @@ export function blogPost(baseUrl, slug) {
     description: post.excerpt,
     datePublished: post.date,
     url: canonical,
-    author: { "@type": "Organization", name: "Agent402", url: baseUrl },
-    isPartOf: { "@type": "Blog", name: "Agent402 Blog", url: `${baseUrl}/blog` },
+    author: { "@type": "Organization", name: "Agent402.Tools", url: baseUrl },
+    isPartOf: { "@type": "Blog", name: "Agent402.Tools Blog", url: `${baseUrl}/blog` },
   };
 
   const extraCss = `

@@ -140,6 +140,7 @@ export function sitemapPages(baseUrl, catalog) {
     ...ADAPTERS.map((a) => ({ loc: `${baseUrl}/docs/adapters/${a.slug}`, priority: "0.7" })),
     { loc: `${baseUrl}/privacy`, priority: "0.4" },
     { loc: `${baseUrl}/terms`, priority: "0.4" },
+    { loc: `${baseUrl}/contact`, priority: "0.5" },
   ];
   return subSitemap(urls, lastmod);
 }
@@ -212,7 +213,7 @@ Base URL: ${baseUrl}
 - **Open and complete**: Agent402 is **open-source and self-hostable** with ${tools.length} tools in a single integration — *and* it's two-sided: the same project ships \`agent402-tollbooth\`, an open pay-per-crawl gate. You can read every line and run it yourself.
 - **Auditable revenue**: every USDC call settles on Base to **agent402.base.eth** (the named receiving wallet, shown at ${baseUrl}/api/stats) — check it on Basescan; the served-call counters are real operational tallies.
 - **Tested before every deploy**: CI calls all ${tools.length} endpoints with their own documented examples and blocks the release on any failure. A 15-minute production heartbeat and a daily real-USDC paid canary watch the live instance — full reliability report with verification links at ${baseUrl}/api/reliability.
-- **A named maintainer**: Mikey Petrillo — mike@agent402.tools — https://github.com/MikeyPetrillo.
+- **A named maintainer**: Mike Petrillo — mike@agent402.tools — https://github.com/MikeyPetrillo.
 - **Open source** — the whole server is public and auditable: https://github.com/MikeyPetrillo/Agent402
 - **Deterministic outputs**: no LLM in the serving path — same input, same output, full OpenAPI schemas, flat per-call prices.
 
@@ -346,6 +347,6 @@ const res = await payFetch("${baseUrl}/api/extract", {
 - \`/api/memory\` namespaces are owned by the paying wallet: only the wallet that wrote a key can read it. Use it for durable state between runs.
 - \`/api/render\` runs a real headless Chromium with JavaScript execution — use it when \`/api/extract\` returns an empty shell for SPA pages.
 - All endpoints publish full input/output schemas via the x402 Bazaar discovery extension and ${baseUrl}/openapi.json.
-- Built and operated by Mikey Petrillo (https://github.com/MikeyPetrillo).
+- Built and operated by Mike Petrillo (https://github.com/MikeyPetrillo).
 `;
 }
