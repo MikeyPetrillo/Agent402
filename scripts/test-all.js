@@ -125,6 +125,8 @@ const NETWORK = new Set([
   "/api/transcribe", "/api/transcribe-pro",
   // Embeddings kit: every call hits OpenAI embeddings API upstream.
   "/api/embed", "/api/embed-large",
+  // Moderation kit: every call hits OpenAI moderation API upstream.
+  "/api/moderate",
 ]);
 const isMemory = (p) => p.startsWith("/api/memory");
 

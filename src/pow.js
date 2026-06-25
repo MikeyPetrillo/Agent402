@@ -150,6 +150,8 @@ export const WALLET_ONLY_SLUGS = new Set([
   "transcribe", "transcribe-pro",
   // Embeddings kit: every call burns OpenAI embedding credit.
   "embed", "embed-large",
+  // Moderation kit: OpenAI moderation API (free upstream, but wallet-only by policy).
+  "moderate",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */
