@@ -59,7 +59,7 @@ try {
   for (const k of ["service", "summary", "tools", "payment", "walletName", "onchainRevenueProof", "onchainNote", "toolCallsServed", "chargedButFailed", "topTools", "topPaidTools", "estimatedRevenueUsd", "recentCalls", "servingSince", "uptimeSeconds"]) {
     ok(k in body, `envelope key '${k}' present (got: ${Object.keys(body).join(",")})`);
   }
-  ok(body.service === "Agent402", `service='Agent402' (got ${body.service})`);
+  ok(body.service === "Agent402.Tools", `service='Agent402.Tools' (got ${body.service})`);
   ok(typeof body.summary === "string" && body.summary.length > 0, `summary is non-empty (got len ${body.summary?.length})`);
 
   // Catalog floor: must stay >= 1000 (we ship ~1199; a counter that fell
