@@ -39,7 +39,7 @@ const PAGES = [
   { path: "/shop",        titleSubstr: "shop" },
   { path: "/leaderboard", titleSubstr: "Leaderboard" },
   { path: "/index",       titleSubstr: "Index" },
-  { path: "/tools",       titleSubstr: "catalogue" },
+  { path: "/tools",       titleSubstr: "Catalog" },
   { path: "/skills",      titleSubstr: "skill" },
   { path: "/",            titleSubstr: "Agent402" },
 ];
