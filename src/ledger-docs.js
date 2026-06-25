@@ -23,6 +23,8 @@ export function ledgerDocsPage(baseUrl) {
   };
 
   const extraCss = `
+  .ml-docs-grid [id] { scroll-margin-top: 110px; }
+  .ml-docs-toc a.active { color: var(--ink) !important; font-weight: 700; }
   @media (max-width: 900px) {
     .ml-docs-grid { grid-template-columns: 1fr !important; }
     .ml-docs-toc  { position: static !important; }
@@ -41,7 +43,7 @@ export function ledgerDocsPage(baseUrl) {
         <a href="#add" style="color:var(--muted);text-decoration:none;">three ways in</a>
         <a href="#free" style="color:var(--muted);text-decoration:none;">free tier &middot; PoW</a>
         <a href="#endpoints" style="color:var(--muted);text-decoration:none;">endpoints</a>
-        <a href="/integrations" style="color:var(--muted);text-decoration:none;">framework adapters &rarr;</a>
+        <a href="/docs/adapters" style="color:var(--muted);text-decoration:none;">framework adapters &rarr;</a>
       </div>
     </aside>
 
@@ -110,7 +112,26 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
     </main>
   </div>
 
-  ${ledgerFooterCompact()}`;
+  ${ledgerFooterCompact()}
+<script>
+(function(){
+  var links=document.querySelectorAll('.ml-docs-toc a[href^="#"]');
+  var ids=[].map.call(links,function(a){return a.getAttribute('href').slice(1);});
+  var sections=ids.map(function(id){return document.getElementById(id);}).filter(Boolean);
+  function update(){
+    var top=window.scrollY+130;
+    var active='';
+    sections.forEach(function(s){if(s.offsetTop<=top)active=s.id;});
+    links.forEach(function(a){
+      var h=a.getAttribute('href');
+      if(h==='#'+active)a.classList.add('active');
+      else a.classList.remove('active');
+    });
+  }
+  window.addEventListener('scroll',update,{passive:true});
+  update();
+})();
+</script>`;
 
   return ledgerShell({
     title,
