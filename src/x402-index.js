@@ -22,7 +22,7 @@
 //   • Failed crawls log a stale marker; they never crash the process.
 //   • The router uses the same lexical scoring shape as /api/find so rankings
 //     are consistent whether a buyer searches local-only or cross-seller.
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { safeFetch } from "./tools/fetch-guard.js";
 import { toolList } from "./pages.js";
 import { fetchAllBazaarItems, isBazaarDiscoveryUrl } from "./bazaar-pager.js";
@@ -577,9 +577,6 @@ export function routeQuery({ query, top, include, baseUrl, catalog, prices, netw
   return { query: q, include: inc, count: results.length, sellers: sellersSeen.size, results };
 }
 
-const esc = (s) =>
-  String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-
 /**
  * Public HTML dashboard. Self-contained: no client-side polling required — a
  * page refresh re-renders from the latest snapshot. Embed snippet at the bottom
@@ -594,7 +591,7 @@ export function indexPage(snapshot, { baseUrl }) {
   const healthBadge = (s) => {
     if (s.local) return ' <span class="badge local">SELF</span>';
     if (s.error) return ' <span class="badge err" title="' + esc(s.error) + '">STALE</span>';
-    // Healthy seller: show rolling history as a tiny sparkline (●=ok, ○=fail)
+    // Healthy seller: show rolling history as a tiny sparkline
     const dots = (s.history || []).map((x) => (x ? "●" : "○")).join("");
     return dots ? ` <span class="badge ok" title="last ${s.history.length} crawls">${dots}</span>` : "";
   };
@@ -623,51 +620,42 @@ export function indexPage(snapshot, { baseUrl }) {
     })
     .join("");
 
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>x402 Index — Agent402</title>
-<meta name="description" content="Live map of the agent payments economy: every x402 seller, their tool count, network, and last-crawled time.">
-${CHROME_HEAD_LINKS}
-<style>
-  :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --line:#1e2638; --card:#0f1320; --warn:#f97316; }
-  body { background:var(--bg); color:var(--fg); font:14px/1.55 system-ui,-apple-system,sans-serif; margin:0; }
-  .wrap { max-width:980px; margin:0 auto; padding:36px 20px 28px; }
-  h1 { font-size:1.6rem; margin:0 0 6px; }
-  .sub { color:var(--muted); margin:0 0 22px; font-size:.95rem; max-width:680px; }
+  const title = "x402 Index — Agent402";
+  const description = "Live map of the agent payments economy: every x402 seller, their tool count, network, and last-crawled time.";
+  const canonical = `${baseUrl}/index`;
+
+  const extraCss = `
+  .ix-wrap { max-width:1180px; margin:0 auto; padding:56px 30px; }
+  .ix-wrap h1 { font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 8px; }
+  .sub { color:var(--muted); margin:0 0 22px; font-size:.95rem; max-width:680px; line-height:1.6; }
   .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); margin:0 0 22px; }
-  .stat { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
-  .stat .k { color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; }
-  .stat .v { font-family:ui-monospace,Menlo,monospace; font-size:1.65rem; color:var(--fg); margin-top:4px; }
-  .stat .s { color:var(--muted); font-size:.78rem; margin-top:3px; }
-  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; margin-bottom:18px; }
-  .ph { padding:14px 18px; border-bottom:1px solid var(--line); }
-  .ph h2 { margin:0; font-size:1rem; color:var(--accent); }
+  .stat { background:var(--card); border:1.5px solid var(--ink); padding:16px; }
+  .stat .k { color:var(--faint); font-family:var(--font-mono); font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; }
+  .stat .v { font-family:var(--font-mono); font-size:1.65rem; color:var(--ink); margin-top:4px; }
+  .stat .s { color:var(--faint); font-size:.78rem; margin-top:3px; }
+  .panel { background:var(--card); border:1.5px solid var(--ink); overflow:hidden; margin-bottom:18px; }
+  .ph { padding:14px 18px; border-bottom:1.5px solid var(--ink); }
+  .ph h2 { margin:0; font-family:var(--font-body);font-weight:800;font-size:20px;letter-spacing:-.01em;color:var(--accent); }
   .ph .pn { color:var(--muted); font-size:.82rem; margin-top:2px; }
   table { width:100%; border-collapse:collapse; font-size:.9rem; }
-  th { text-align:left; color:var(--muted); font-weight:500; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; padding:10px 18px; border-bottom:1px solid var(--line); }
+  th { text-align:left; color:var(--faint); font-weight:500; font-family:var(--font-mono); font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; padding:10px 18px; border-bottom:1.5px solid var(--ink); }
   th.num { text-align:right; }
-  td { padding:10px 18px; border-bottom:1px solid var(--line); }
-  td.num { font-family:ui-monospace,Menlo,monospace; text-align:right; }
-  td.muted { color:var(--muted); }
-  td a { color:var(--fg); text-decoration:none; border-bottom:1px solid transparent; }
-  td a:hover { border-color:var(--accent); }
-  .badge { display:inline-block; font-size:.62rem; font-weight:600; padding:1px 6px; border-radius:4px; margin-left:6px; letter-spacing:.04em; font-family:ui-monospace,Menlo,monospace; }
-  .badge.local { background:rgba(74,222,128,.1); color:var(--accent); border:1px solid rgba(74,222,128,.3); }
-  .badge.err { background:rgba(249,115,22,.12); color:var(--warn); border:1px solid rgba(249,115,22,.3); }
-  .badge.ok { background:rgba(74,222,128,.08); color:var(--accent); border:1px solid rgba(74,222,128,.2); letter-spacing:.1em; }
-  code { background:#1a2236; padding:1px 5px; border-radius:4px; font-family:ui-monospace,Menlo,monospace; font-size:.85em; }
-  pre { background:#0a0d15; border:1px solid var(--line); border-radius:8px; padding:14px 16px; overflow:auto; font-size:.84rem; }
-  .foot { color:var(--muted); font-size:.82rem; margin-top:24px; }
+  td { padding:10px 18px; border-bottom:1px solid var(--hairline); }
+  td.num { font-family:var(--font-mono); text-align:right; }
+  td.muted { color:var(--faint); }
+  td a { color:var(--ink); text-decoration:none; border-bottom:1px solid transparent; }
+  td a:hover { border-color:var(--accent); color:var(--accent); }
+  .badge { display:inline-block; font-family:var(--font-mono); font-size:.62rem; font-weight:600; padding:1px 6px; margin-left:6px; letter-spacing:.04em; }
+  .badge.local { background:rgba(214,60,26,.08); color:var(--accent); border:1px solid rgba(214,60,26,.3); }
+  .badge.err { background:rgba(249,115,22,.1); color:#f97316; border:1px solid rgba(249,115,22,.3); }
+  .badge.ok { background:rgba(214,60,26,.06); color:var(--accent); border:1px solid rgba(214,60,26,.2); letter-spacing:.1em; }
+  code { background:var(--ink); color:var(--cream); padding:1px 5px; font-family:var(--font-mono); font-size:.85em; }
+  pre { background:var(--ink); color:var(--cream); border:1.5px solid var(--dark-border); padding:14px 16px; overflow:auto; font-family:var(--font-mono); font-size:.84rem; }
+  .foot { color:var(--faint); font-size:.82rem; margin-top:24px; }
   .foot a { color:var(--accent); text-decoration:none; }
-  ${CHROME_CSS}
-</style>
-</head>
-<body>
-${renderHeader("/index")}
-<div class="wrap">
+  `;
+
+  const pageBody = `<div class="ix-wrap">
 
 <h1>x402 Index</h1>
 <p class="sub">Live map of the agent payments economy. Every seller below publishes an x402 service manifest at <code>/.well-known/x402</code>; this page crawls them every 5 minutes and shows what's online.</p>
@@ -710,8 +698,17 @@ ${renderHeader("/index")}
 <p class="foot">x402 Index is open-source — part of <a href="https://github.com/MikeyPetrillo/Agent402">Agent402</a>. To add your seller, publish a manifest at <code>/.well-known/x402</code> and open a PR adding your origin to the seed list (or run your own Index instance).</p>
 
 </div>
-${renderFooter()}
-</body></html>`;
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({
+    title,
+    description,
+    canonical,
+    baseUrl,
+    activePath: "__none__",
+    extraCss,
+    body: pageBody,
+  });
 }
 
 /** Internal helper for tests. */

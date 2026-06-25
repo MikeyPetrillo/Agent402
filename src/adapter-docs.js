@@ -1,6 +1,4 @@
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-
-const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 export const ADAPTERS = [
   {
@@ -245,21 +243,6 @@ console.log(result);`,
   },
 ];
 
-/* ── shared CSS ──────────────────────────────────────────────────────── */
-
-const SHARED_CSS = `
-:root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-*,*::before,*::after{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;line-height:1.6}
-.ad-wrap{max-width:960px;margin:0 auto;padding:2rem 1.25rem 4rem}
-.ad-breadcrumb{font-size:.85rem;color:var(--muted);margin-bottom:1.5rem}
-.ad-breadcrumb a{color:var(--accent);text-decoration:none}
-.ad-breadcrumb a:hover{text-decoration:underline}
-.ad-title{font-size:2rem;font-weight:700;margin:0 0 .5rem;line-height:1.2}
-.ad-subtitle{color:var(--muted);font-size:1.05rem;margin:0 0 2.5rem}
-@media(max-width:600px){.ad-title{font-size:1.5rem}}
-`;
-
 /* ── index page ──────────────────────────────────────────────────────── */
 
 export function adapterDocsIndex(baseUrl) {
@@ -268,63 +251,42 @@ export function adapterDocsIndex(baseUrl) {
   const description = "Adapter documentation for every supported agent framework: OpenAI, Anthropic, Vercel AI SDK, LangChain, LlamaIndex, Google ADK, OpenAI Agents SDK, and AWS Strands.";
 
   const cards = ADAPTERS.map((a) => `
-    <a class="ad-card" href="/docs/adapters/${esc(a.slug)}">
-      <h3 class="ad-card-name">${esc(a.name)}</h3>
-      <code class="ad-card-pkg">${esc(a.pkg)}</code>
-      <p class="ad-card-desc">${esc(a.tagline)}</p>
-      <span class="ad-card-link">View docs &rarr;</span>
+    <a class="ml-ad-card" href="/docs/adapters/${esc(a.slug)}">
+      <h3 style="margin:0 0 6px;font-size:1.1rem;font-weight:700;color:var(--ink);">${esc(a.name)}</h3>
+      <code style="display:inline-block;font-family:var(--font-mono);font-size:.8rem;color:var(--accent);margin-bottom:8px;">${esc(a.pkg)}</code>
+      <p style="margin:0 0 10px;color:var(--muted);font-size:.9rem;line-height:1.5;">${esc(a.tagline)}</p>
+      <span style="color:var(--accent);font-size:.88rem;font-weight:600;">View docs &rarr;</span>
     </a>`).join("\n");
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}</title>
-<meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${esc(canonical)}">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
-<meta property="og:url" content="${esc(canonical)}">
-<meta property="og:type" content="website">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="${esc(title)}">
-<meta name="twitter:description" content="${esc(description)}">
-${CHROME_HEAD_LINKS}
-<style>
-${CHROME_CSS}
-${SHARED_CSS}
-.ad-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:1.25rem;margin-bottom:3rem}
-@media(max-width:680px){.ad-grid{grid-template-columns:1fr}}
-.ad-card{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:1.5rem 1.6rem;text-decoration:none;color:var(--text);transition:border-color .15s,transform .15s;display:block}
-.ad-card:hover{border-color:var(--accent);transform:translateY(-2px)}
-.ad-card-name{margin:0 0 .4rem;font-size:1.1rem;font-weight:600;color:var(--text)}
-.ad-card-pkg{display:inline-block;font-family:var(--mono);font-size:.8rem;color:var(--accent);background:rgba(74,222,128,.08);padding:.15rem .5rem;border-radius:4px;margin-bottom:.6rem}
-.ad-card-desc{margin:0 0 .75rem;color:var(--muted);font-size:.9rem;line-height:1.5}
-.ad-card-link{color:var(--accent);font-size:.88rem;font-weight:500}
-.ad-cta{text-align:center;margin:2rem 0 0}
-.ad-cta a{color:var(--accent);font-weight:600;text-decoration:none;font-size:1rem}
-.ad-cta a:hover{text-decoration:underline}
-</style>
-</head>
-<body>
-${renderHeader("/docs")}
-<div class="ad-wrap">
+  const extraCss = `
+  .ml-ad-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:1.25rem;margin-bottom:3rem}
+  @media(max-width:680px){.ml-ad-grid{grid-template-columns:1fr}}
+  .ml-ad-card{background:var(--card);border:1.5px solid var(--ink);padding:1.5rem 1.6rem;text-decoration:none;color:var(--ink);transition:border-color .15s;display:block}
+  .ml-ad-card:hover{border-color:var(--accent)}`;
 
-<div class="ad-breadcrumb"><a href="/">Home</a> &rsaquo; <a href="/docs">Docs</a> &rsaquo; Adapters</div>
-<h1 class="ad-title">Framework Adapters</h1>
-<p class="ad-subtitle">Plug Agent402 into your agent framework. Each adapter returns native tool objects and handles payment underneath.</p>
+  const body = `
+  <div style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;">
+    <p style="font-size:.85rem;color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--faint);text-decoration:none;">Home</a> &rsaquo; <a href="/docs" style="color:var(--faint);text-decoration:none;">Docs</a> &rsaquo; Adapters</p>
+    <h1 style="font-family:var(--font-body);font-weight:800;font-size:52px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;">Framework Adapters.</h1>
+    <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 36px;">Plug Agent402 into your agent framework. Each adapter returns native tool objects and handles payment underneath.</p>
 
-<div class="ad-grid">
+    <div class="ml-ad-grid">
 ${cards}
-</div>
+    </div>
 
-<div class="ad-cta"><a href="/integrations">See all integrations (MCP, SDKs, and more) &rarr;</a></div>
+    <div style="text-align:center;margin:2rem 0 0;"><a href="/integrations" style="color:var(--accent);font-weight:600;text-decoration:none;font-size:1rem;">See all integrations (MCP, SDKs, and more) &rarr;</a></div>
+  </div>
+  ${ledgerFooterCompact()}`;
 
-</div>
-${renderFooter()}
-</body>
-</html>`;
+  return ledgerShell({
+    title,
+    description,
+    canonical,
+    baseUrl,
+    activePath: "/docs",
+    extraCss,
+    body,
+  });
 }
 
 /* ── individual adapter page ─────────────────────────────────────────── */
@@ -337,148 +299,131 @@ export function adapterDocPage(baseUrl, slug) {
   const title = `${adapter.name} Adapter \u2014 Agent402 Docs`;
   const description = `${adapter.desc} Install ${adapter.pkg} and start using Agent402 tools in your ${adapter.name} project.`;
 
+  const tocItems = [
+    { id: "install", label: "install" },
+    { id: "quickstart", label: "quick start" },
+  ];
+  if (adapter.config && adapter.config.length) tocItems.push({ id: "config", label: "configuration" });
+  if (adapter.worksWith && adapter.worksWith.length) tocItems.push({ id: "compat", label: "works with" });
+
+  const tocLinks = tocItems.map((t) =>
+    `<a href="#${t.id}" style="color:var(--muted);text-decoration:none;">${t.label}</a>`
+  ).join("\n        ");
+
   const configRows = (adapter.config || []).map((c) => `
         <tr>
-          <td class="adp-cfg-opt"><code>${esc(c.option)}</code></td>
-          <td class="adp-cfg-type"><code>${esc(c.type)}</code></td>
-          <td class="adp-cfg-desc">${esc(c.desc)}</td>
+          <td style="font-family:var(--font-mono);color:var(--accent);font-size:.84rem;"><code>${esc(c.option)}</code></td>
+          <td style="font-family:var(--font-mono);color:var(--faint);font-size:.82rem;"><code>${esc(c.type)}</code></td>
+          <td style="color:var(--ink);font-size:.88rem;">${esc(c.desc)}</td>
         </tr>`).join("\n");
 
   const configExamples = (adapter.config || []).map((c) => `// ${esc(c.desc)}\n${esc(c.example)}`).join("\n\n");
 
   const worksWithTags = (adapter.worksWith || []).map((w) =>
-    `<span class="adp-tag">${esc(w)}</span>`
+    `<span style="background:var(--card);border:1.5px solid var(--ink);color:var(--muted);font-size:.82rem;padding:4px 12px;font-family:var(--font-mono);">${esc(w)}</span>`
   ).join("\n        ");
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}</title>
-<meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${esc(canonical)}">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
-<meta property="og:url" content="${esc(canonical)}">
-<meta property="og:type" content="website">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="${esc(title)}">
-<meta name="twitter:description" content="${esc(description)}">
-${CHROME_HEAD_LINKS}
-<style>
-${CHROME_CSS}
-${SHARED_CSS}
+  const extraCss = `
+  @media (max-width: 900px) {
+    .ml-adp-grid { grid-template-columns: 1fr !important; }
+    .ml-adp-toc  { position: static !important; }
+  }`;
 
-.adp-desc{color:var(--muted);font-size:1rem;line-height:1.7;margin:0 0 2rem;max-width:720px}
-.adp-pkg{display:inline-block;font-family:var(--mono);font-size:.85rem;color:var(--accent);background:rgba(74,222,128,.08);padding:.2rem .6rem;border-radius:4px;margin-bottom:1.5rem}
+  const body = `
+  <div class="ml-adp-grid" style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;display:grid;grid-template-columns:200px 1fr;gap:44px;align-items:start;">
 
-/* sections */
-.adp-section{margin-bottom:2.5rem}
-.adp-section h2{font-size:1.25rem;font-weight:600;margin:0 0 1rem;color:var(--text)}
+    <!-- TOC -->
+    <aside class="ml-adp-toc" style="position:sticky;top:92px;font-family:var(--font-mono);font-size:13px;">
+      <div style="font-size:11px;color:var(--accent);letter-spacing:.1em;margin-bottom:14px;">ADAPTER</div>
+      <div style="display:flex;flex-direction:column;gap:11px;border-left:1.5px solid var(--ink);padding-left:16px;">
+        ${tocLinks}
+        <a href="/docs/adapters" style="color:var(--faint);text-decoration:none;">&larr; all adapters</a>
+      </div>
+    </aside>
 
-/* code blocks */
-.adp-code-wrap{position:relative;margin-bottom:1.5rem}
-.adp-code-wrap pre{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:1.25rem;overflow-x:auto;margin:0;font-family:var(--mono);font-size:.82rem;line-height:1.55;color:var(--text)}
-.adp-copy{position:absolute;top:.6rem;right:.6rem;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:var(--muted);font-size:.72rem;padding:.3rem .6rem;border-radius:4px;cursor:pointer;font-family:inherit;transition:all .15s}
-.adp-copy:hover{color:var(--text);background:rgba(255,255,255,.1)}
-.adp-copy.copied{color:var(--accent);border-color:var(--accent)}
+    <!-- CONTENT -->
+    <main>
+      <p style="font-size:.85rem;color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--faint);text-decoration:none;">Home</a> &rsaquo; <a href="/docs" style="color:var(--faint);text-decoration:none;">Docs</a> &rsaquo; <a href="/docs/adapters" style="color:var(--faint);text-decoration:none;">Adapters</a> &rsaquo; ${esc(adapter.name)}</p>
+      <h1 style="font-family:var(--font-body);font-weight:800;font-size:42px;line-height:1;letter-spacing:-.02em;margin:0 0 10px;">${esc(adapter.name)} Adapter</h1>
+      <span style="display:inline-block;font-family:var(--font-mono);font-size:.85rem;color:var(--accent);margin-bottom:18px;">${esc(adapter.pkg)}</span>
+      <p style="color:var(--muted);font-size:1rem;line-height:1.7;margin:0 0 36px;max-width:720px;">${esc(adapter.desc)}</p>
 
-/* config table */
-.adp-cfg-table{width:100%;border-collapse:collapse;margin-bottom:1rem;font-size:.88rem}
-.adp-cfg-table th{text-align:left;color:var(--muted);font-weight:500;padding:.6rem .75rem;border-bottom:1px solid rgba(255,255,255,.08);font-size:.82rem;text-transform:uppercase;letter-spacing:.03em}
-.adp-cfg-table td{padding:.6rem .75rem;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:top}
-.adp-cfg-opt code{font-family:var(--mono);color:var(--accent);font-size:.84rem}
-.adp-cfg-type code{font-family:var(--mono);color:var(--muted);font-size:.82rem}
-.adp-cfg-desc{color:var(--text);font-size:.88rem}
+      <!-- Install -->
+      <div id="install" style="margin-bottom:36px;">
+        <h2 style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Install</h2>
+        <div style="position:relative;">
+          <pre style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.install)}</code></pre>
+          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--dark-border);border:1px solid var(--dark-border2);color:var(--dk-muted);font-size:.72rem;padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
+        </div>
+      </div>
 
-/* tags */
-.adp-tags{display:flex;flex-wrap:wrap;gap:.5rem}
-.adp-tag{background:var(--card);border:1px solid rgba(255,255,255,.08);color:var(--muted);font-size:.82rem;padding:.3rem .7rem;border-radius:999px}
+      <!-- Quick start -->
+      <div id="quickstart" style="margin-bottom:36px;">
+        <h2 style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Quick start</h2>
+        <div style="position:relative;">
+          <pre style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.quickstart)}</code></pre>
+          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--dark-border);border:1px solid var(--dark-border2);color:var(--dk-muted);font-size:.72rem;padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
+        </div>
+      </div>
 
-/* links */
-.adp-links{display:flex;flex-wrap:wrap;gap:1rem;margin-top:2rem;padding-top:1.5rem;border-top:1px solid rgba(255,255,255,.06)}
-.adp-link{color:var(--accent);text-decoration:none;font-size:.92rem;font-weight:500}
-.adp-link:hover{text-decoration:underline}
-</style>
-</head>
-<body>
-${renderHeader("/docs")}
-<div class="ad-wrap">
-
-<div class="ad-breadcrumb"><a href="/">Home</a> &rsaquo; <a href="/docs">Docs</a> &rsaquo; <a href="/docs/adapters">Adapters</a> &rsaquo; ${esc(adapter.name)}</div>
-<h1 class="ad-title">${esc(adapter.name)} Adapter</h1>
-<span class="adp-pkg">${esc(adapter.pkg)}</span>
-<p class="adp-desc">${esc(adapter.desc)}</p>
-
-<!-- Install -->
-<div class="adp-section">
-  <h2>Install</h2>
-  <div class="adp-code-wrap">
-    <pre><code>${esc(adapter.install)}</code></pre>
-    <button class="adp-copy" aria-label="Copy">Copy</button>
-  </div>
-</div>
-
-<!-- Quick start -->
-<div class="adp-section">
-  <h2>Quick start</h2>
-  <div class="adp-code-wrap">
-    <pre><code>${esc(adapter.quickstart)}</code></pre>
-    <button class="adp-copy" aria-label="Copy">Copy</button>
-  </div>
-</div>
-
-<!-- Configuration -->
-${adapter.config && adapter.config.length ? `<div class="adp-section">
-  <h2>Configuration</h2>
-  <table class="adp-cfg-table">
-    <thead>
-      <tr><th>Option</th><th>Type</th><th>Description</th></tr>
-    </thead>
-    <tbody>
+      <!-- Configuration -->
+      ${adapter.config && adapter.config.length ? `<div id="config" style="margin-bottom:36px;">
+        <h2 style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Configuration</h2>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:14px;font-size:.88rem;">
+          <thead>
+            <tr><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1.5px solid var(--ink);font-size:.82rem;text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Option</th><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1.5px solid var(--ink);font-size:.82rem;text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Type</th><th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1.5px solid var(--ink);font-size:.82rem;text-transform:uppercase;letter-spacing:.03em;font-family:var(--font-mono);">Description</th></tr>
+          </thead>
+          <tbody>
 ${configRows}
-    </tbody>
-  </table>
-  <div class="adp-code-wrap">
-    <pre><code>${configExamples}</code></pre>
-    <button class="adp-copy" aria-label="Copy">Copy</button>
+          </tbody>
+        </table>
+        <div style="position:relative;">
+          <pre style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${configExamples}</code></pre>
+          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--dark-border);border:1px solid var(--dark-border2);color:var(--dk-muted);font-size:.72rem;padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
+        </div>
+      </div>` : ""}
+
+      <!-- Works with -->
+      ${adapter.worksWith && adapter.worksWith.length ? `<div id="compat" style="margin-bottom:36px;">
+        <h2 style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Works with</h2>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          ${worksWithTags}
+        </div>
+      </div>` : ""}
+
+      <!-- Navigation links -->
+      <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:36px;padding-top:20px;border-top:1.5px solid var(--ink);">
+        <a href="/docs/adapters" style="color:var(--accent);text-decoration:none;font-size:.92rem;font-weight:600;">&larr; All adapters</a>
+        <a href="/integrations" style="color:var(--accent);text-decoration:none;font-size:.92rem;font-weight:600;">Integrations overview</a>
+        <a href="${esc(adapter.github)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-size:.92rem;font-weight:600;">GitHub source &rarr;</a>
+      </div>
+    </main>
   </div>
-</div>` : ""}
+  ${ledgerFooterCompact()}
 
-<!-- Works with -->
-${adapter.worksWith && adapter.worksWith.length ? `<div class="adp-section">
-  <h2>Works with</h2>
-  <div class="adp-tags">
-    ${worksWithTags}
-  </div>
-</div>` : ""}
-
-<!-- Navigation links -->
-<div class="adp-links">
-  <a class="adp-link" href="/docs/adapters">&larr; All adapters</a>
-  <a class="adp-link" href="/integrations">Integrations overview</a>
-  <a class="adp-link" href="${esc(adapter.github)}" target="_blank" rel="noopener">GitHub source &rarr;</a>
-</div>
-
-</div>
-${renderFooter()}
-
-<script>
-(function(){
-  document.querySelectorAll(".adp-copy").forEach(function(btn){
-    btn.addEventListener("click",function(){
-      var code=btn.parentElement.querySelector("code");
-      var text=code.textContent;
-      navigator.clipboard.writeText(text).then(function(){
-        btn.textContent="Copied!";
-        btn.classList.add("copied");
-        setTimeout(function(){btn.textContent="Copy";btn.classList.remove("copied")},1500);
+  <script>
+  (function(){
+    document.querySelectorAll(".ml-adp-copy").forEach(function(btn){
+      btn.addEventListener("click",function(){
+        var code=btn.parentElement.querySelector("code");
+        var text=code.textContent;
+        navigator.clipboard.writeText(text).then(function(){
+          btn.textContent="Copied!";
+          btn.style.color="var(--accent)";
+          setTimeout(function(){btn.textContent="Copy";btn.style.color="";},1500);
+        });
       });
     });
+  })();
+  </script>`;
+
+  return ledgerShell({
+    title,
+    description,
+    canonical,
+    baseUrl,
+    activePath: "/docs",
+    extraCss,
+    body,
   });
-})();
-</script>
-</body>
-</html>`;
 }

@@ -2,92 +2,73 @@
 // tool, fill in its inputs, solve a proof-of-work challenge in the browser, and
 // see the live JSON response.  Entirely server-rendered HTML + inline vanilla JS
 // (no frameworks, no external scripts).
+//
+// NOTE: The inline highlightJson() function uses .innerHTML to render
+// syntax-highlighted JSON output. The input is pre-serialised JSON passed
+// through the inline escH() HTML-escaper before highlight regex runs, so
+// user-controlled values never reach the DOM un-escaped. This pattern is
+// carried over from the original pre-migration code.
 
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-
-const esc = (s) =>
-  String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 export function playgroundPage(baseUrl) {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Playground — try Agent402 tools for free</title>
-<meta name="description" content="Try any of Agent402's 1,000+ free-tier tools directly in your browser. No signup, no wallet — proof-of-work pays automatically.">
-<link rel="canonical" href="${esc(baseUrl)}/playground">
-<meta property="og:title" content="Playground — try Agent402 tools for free">
-<meta property="og:description" content="Try any of Agent402's 1,000+ free-tier tools directly in your browser. No signup, no wallet — proof-of-work pays automatically.">
-<meta property="og:url" content="${esc(baseUrl)}/playground">
-<meta property="og:type" content="website">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="Playground — try Agent402 tools for free">
-<meta name="twitter:description" content="Try any of Agent402's 1,000+ free-tier tools directly in your browser. No signup, no wallet — proof-of-work pays automatically.">
-${CHROME_HEAD_LINKS}
-<style>
-${CHROME_CSS}
-*{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-body{background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,sans-serif;min-height:100vh}
-a{color:var(--accent)}
-.crumb{max-width:1080px;margin:0 auto;padding:18px 20px 0;font-size:.85rem;color:var(--muted)}
-.crumb a{color:var(--muted);text-decoration:none}
-.crumb a:hover{color:var(--accent)}
-.pg-title{max-width:1080px;margin:0 auto;padding:10px 20px 0}
-.pg-title h1{font-size:1.6rem;font-weight:700;letter-spacing:-.02em}
-.pg-title p{color:var(--muted);font-size:.95rem;margin-top:4px}
-.pg-wrap{max-width:1080px;margin:24px auto 0;padding:0 20px;display:flex;gap:20px}
-.pg-left{flex:0 0 60%;min-width:0}
-.pg-right{flex:1;min-width:0}
-@media(max-width:760px){.pg-wrap{flex-direction:column}.pg-left,.pg-right{flex:none;width:100%}}
-.pg-search{width:100%;padding:10px 14px;border:1px solid #1e2638;border-radius:8px;background:var(--card);color:var(--text);font-size:.95rem;outline:none;font-family:inherit}
-.pg-search:focus{border-color:var(--accent)}
-.pg-search::placeholder{color:var(--muted)}
-.pg-select{width:100%;margin-top:10px;padding:10px 14px;border:1px solid #1e2638;border-radius:8px;background:var(--card);color:var(--text);font-size:.95rem;outline:none;font-family:inherit;cursor:pointer}
-.pg-select:focus{border-color:var(--accent)}
-.pg-select optgroup{color:var(--muted);font-style:normal}
-.pg-select option{color:var(--text);background:var(--card)}
-.pg-info{margin-top:16px;padding:14px 16px;border:1px solid #1e2638;border-radius:10px;background:var(--card)}
-.pg-info .tool-name{font-size:1.1rem;font-weight:600}
-.pg-info .tool-desc{color:var(--muted);font-size:.9rem;margin-top:4px}
-.pg-info .tool-meta{margin-top:8px;font-size:.82rem;color:var(--muted);font-family:var(--mono)}
-.pg-info .tool-meta span{margin-right:14px}
-.pg-fields{margin-top:14px}
-.pg-field{margin-bottom:10px}
-.pg-field label{display:block;font-size:.85rem;color:var(--muted);margin-bottom:3px;font-family:var(--mono)}
-.pg-field input[type="text"],.pg-field input[type="number"]{width:100%;padding:8px 12px;border:1px solid #1e2638;border-radius:6px;background:var(--bg);color:var(--text);font-size:.9rem;font-family:var(--mono);outline:none}
-.pg-field input:focus{border-color:var(--accent)}
-.pg-field .chk-wrap{display:flex;align-items:center;gap:8px}
-.pg-field input[type="checkbox"]{accent-color:var(--accent);width:16px;height:16px}
-.pg-btn{margin-top:14px;padding:10px 22px;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;transition:opacity .15s}
-.pg-btn.run{background:var(--accent);color:#000}
-.pg-btn.run:hover{opacity:.85}
-.pg-btn.run:disabled{opacity:.5;cursor:not-allowed}
-.pg-btn.disabled-info{background:#1e2638;color:var(--muted);cursor:default}
-.pg-btn.disabled-info a{color:var(--accent);margin-left:6px}
-.pg-status{margin-top:10px;font-size:.85rem;color:var(--muted);font-family:var(--mono)}
-.pg-status .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
-@keyframes spin{to{transform:rotate(360deg)}}
-.pg-result{padding:16px;border:1px solid #1e2638;border-radius:10px;background:var(--card);min-height:300px;position:sticky;top:80px}
-.pg-result .placeholder{color:var(--muted);font-size:.9rem;text-align:center;padding-top:100px}
-.pg-result pre{white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:.82rem;line-height:1.55;max-height:70vh;overflow:auto}
-.pg-result .timing{font-size:.8rem;color:var(--muted);margin-bottom:10px;font-family:var(--mono)}
-.pg-result .err{color:#f87171}
-.json-str{color:#4ade80}
-.json-num{color:#60a5fa}
-.json-key{color:#e6e9f0}
-.json-bool{color:#c084fc}
-.json-null{color:#8b93a7}
-</style>
-</head>
-<body>
+  const title = "Playground — try Agent402 tools for free";
+  const description = "Try any of Agent402's 1,000+ free-tier tools directly in your browser. No signup, no wallet — proof-of-work pays automatically.";
+  const canonical = `${baseUrl}/playground`;
+
+  const extraCss = `
+  .crumb{max-width:1180px;margin:0 auto;padding:18px 30px 0;font-family:var(--font-mono);font-size:.85rem;color:var(--faint)}
+  .crumb a{color:var(--faint);text-decoration:none}
+  .crumb a:hover{color:var(--accent)}
+  .pg-title{max-width:1180px;margin:0 auto;padding:10px 30px 0}
+  .pg-title h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 8px}
+  .pg-title p{color:var(--muted);font-size:.95rem;margin-top:4px}
+  .pg-wrap{max-width:1180px;margin:24px auto 0;padding:0 30px;display:flex;gap:20px}
+  .pg-left{flex:0 0 60%;min-width:0}
+  .pg-right{flex:1;min-width:0}
+  @media(max-width:760px){.pg-wrap{flex-direction:column}.pg-left,.pg-right{flex:none;width:100%}}
+  .pg-search{width:100%;padding:10px 14px;border:1.5px solid var(--ink);background:var(--card);color:var(--ink);font-size:.95rem;outline:none;font-family:var(--font-body)}
+  .pg-search:focus{border-color:var(--accent)}
+  .pg-search::placeholder{color:var(--faint)}
+  .pg-select{width:100%;margin-top:10px;padding:10px 14px;border:1.5px solid var(--ink);background:var(--card);color:var(--ink);font-size:.95rem;outline:none;font-family:var(--font-body);cursor:pointer}
+  .pg-select:focus{border-color:var(--accent)}
+  .pg-select optgroup{color:var(--faint);font-style:normal}
+  .pg-select option{color:var(--ink);background:var(--card)}
+  .pg-info{margin-top:16px;padding:14px 16px;border:1.5px solid var(--ink);background:var(--card)}
+  .pg-info .tool-name{font-size:1.1rem;font-weight:700}
+  .pg-info .tool-desc{color:var(--muted);font-size:.9rem;margin-top:4px}
+  .pg-info .tool-meta{margin-top:8px;font-size:.82rem;color:var(--faint);font-family:var(--font-mono)}
+  .pg-info .tool-meta span{margin-right:14px}
+  .pg-fields{margin-top:14px}
+  .pg-field{margin-bottom:10px}
+  .pg-field label{display:block;font-size:.85rem;color:var(--faint);margin-bottom:3px;font-family:var(--font-mono)}
+  .pg-field input[type="text"],.pg-field input[type="number"]{width:100%;padding:8px 12px;border:1.5px solid var(--ink);background:var(--paper);color:var(--ink);font-size:.9rem;font-family:var(--font-mono);outline:none}
+  .pg-field input:focus{border-color:var(--accent)}
+  .pg-field .chk-wrap{display:flex;align-items:center;gap:8px}
+  .pg-field input[type="checkbox"]{accent-color:var(--accent);width:16px;height:16px}
+  .pg-btn{margin-top:14px;padding:10px 22px;border:none;font-size:.95rem;font-family:var(--font-mono);font-weight:700;cursor:pointer;transition:opacity .15s}
+  .pg-btn.run{background:var(--ink);color:var(--cream)}
+  .pg-btn.run:hover{opacity:.85}
+  .pg-btn.run:disabled{opacity:.5;cursor:not-allowed}
+  .pg-btn.disabled-info{background:var(--card);border:1.5px solid var(--ink);color:var(--faint);cursor:default}
+  .pg-btn.disabled-info a{color:var(--accent);margin-left:6px}
+  .pg-status{margin-top:10px;font-size:.85rem;color:var(--faint);font-family:var(--font-mono)}
+  .pg-status .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--faint);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .pg-result{padding:16px;border:1.5px solid var(--ink);background:var(--card);min-height:300px;position:sticky;top:80px}
+  .pg-result .placeholder{color:var(--faint);font-size:.9rem;text-align:center;padding-top:100px}
+  .pg-result pre{white-space:pre-wrap;word-break:break-word;font-family:var(--font-mono);font-size:.82rem;line-height:1.55;max-height:70vh;overflow:auto}
+  .pg-result .timing{font-size:.8rem;color:var(--faint);margin-bottom:10px;font-family:var(--font-mono)}
+  .pg-result .err{color:#c0392b}
+  .json-str{color:var(--accent)}
+  .json-num{color:#2980b9}
+  .json-key{color:var(--ink)}
+  .json-bool{color:#8e44ad}
+  .json-null{color:var(--faint)}
+  `;
+
+  const pageBody = `
 <script>var BASE='${baseUrl.replace(/'/g, "\\'")}';</script>
-${renderHeader("/playground")}
 <div class="crumb"><a href="/">Agent402</a> / playground</div>
 <div class="pg-title">
   <h1>Playground</h1>
@@ -105,7 +86,7 @@ ${renderHeader("/playground")}
     </div>
   </div>
 </div>
-${renderFooter()}
+${ledgerFooterCompact()}
 <script>
 (function(){
   var tools=[];
@@ -219,8 +200,8 @@ ${renderFooter()}
       lbl.textContent=k;
       if(prop.description){
         var descSpan=document.createElement('span');
-        descSpan.style.cssText='font-weight:400;color:var(--muted);font-family:inherit;font-size:.8rem';
-        descSpan.textContent=' \u2014 '+prop.description;
+        descSpan.style.cssText='font-weight:400;color:var(--faint);font-family:inherit;font-size:.8rem';
+        descSpan.textContent=' \\u2014 '+prop.description;
         lbl.appendChild(descSpan);
       }
       field.appendChild(lbl);
@@ -271,7 +252,7 @@ ${renderFooter()}
       dbtn.textContent='Requires USDC wallet ';
       var lnk=document.createElement('a');
       lnk.href='/integrations';
-      lnk.textContent='Setup \u2192';
+      lnk.textContent='Setup \\u2192';
       dbtn.appendChild(lnk);
       info.appendChild(dbtn);
     }
@@ -309,20 +290,19 @@ ${renderFooter()}
     }
   }
 
-  /* --- JSON syntax highlight (operates on pre-serialized JSON only) --- */
+  /* --- JSON syntax highlight (operates on pre-serialized, HTML-escaped JSON) --- */
   function highlightJson(str){
-    /* escape HTML entities first so content is safe */
     var safe=escH(str);
     return safe
-      .replace(/(&quot;(?:[^&]|&(?!quot;))*?&quot;)\s*:/g,
+      .replace(/(&quot;(?:[^&]|&(?!quot;))*?&quot;)\\s*:/g,
         '<span class="json-key">$1</span>:')
-      .replace(/:\s*(&quot;(?:[^&]|&(?!quot;))*?&quot;)/g,
+      .replace(/:\\s*(&quot;(?:[^&]|&(?!quot;))*?&quot;)/g,
         ': <span class="json-str">$1</span>')
-      .replace(/:\s*(-?\d+\.?\d*(?:[eE][+-]?\d+)?)/g,
+      .replace(/:\\s*(-?\\d+\\.?\\d*(?:[eE][+-]?\\d+)?)/g,
         ': <span class="json-num">$1</span>')
-      .replace(/:\s*(true|false)/g,
+      .replace(/:\\s*(true|false)/g,
         ': <span class="json-bool">$1</span>')
-      .replace(/:\s*(null)/g,
+      .replace(/:\\s*(null)/g,
         ': <span class="json-null">$1</span>');
   }
 
@@ -423,7 +403,7 @@ ${renderFooter()}
       }
       resultEl.appendChild(pre);
 
-      status.textContent='Done \u2014 PoW '+powMs+'ms, response '+callMs+'ms';
+      status.textContent='Done \\u2014 PoW '+powMs+'ms, response '+callMs+'ms';
     }catch(e){
       while(resultEl.firstChild)resultEl.removeChild(resultEl.firstChild);
       var errPre=document.createElement('pre');
@@ -436,7 +416,15 @@ ${renderFooter()}
     }
   }
 })();
-</script>
-</body>
-</html>`;
+</script>`;
+
+  return ledgerShell({
+    title,
+    description,
+    canonical,
+    baseUrl,
+    activePath: "__none__",
+    extraCss,
+    body: pageBody,
+  });
 }

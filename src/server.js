@@ -108,6 +108,12 @@ import { uptimePage } from "./uptime.js";
 import { badgesPage, badgeSvg } from "./badges.js";
 import { adapterDocsIndex, adapterDocPage, ADAPTERS } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
+import { ledgerHomePage } from "./ledger-home.js";
+import { ledgerCatalogPage } from "./ledger-catalog.js";
+import { ledgerPricingPage } from "./ledger-pricing.js";
+import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
+import { ledgerDocsPage } from "./ledger-docs.js";
+import { ledgerIntegrationsPage } from "./ledger-integrations.js";
 
 const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...COLOR_TOOLS, ...CHAIN_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...ENCODING_TOOLS, ...MATH_TOOLS, ...CRYPTO_HASH_TOOLS, ...STRING_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS];
 import { buildSkillTools } from "./tools/skill-runner.js";
@@ -590,7 +596,7 @@ app.use((_req, res, next) => {
   res.setHeader("X-Permitted-Cross-Domain-Policies", "none");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' https:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; connect-src 'self' https:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
   );
   next();
 });
@@ -603,7 +609,7 @@ const htmlCache = (res, maxAge, swr) =>
   res.set("Cache-Control", `public, max-age=${maxAge}, stale-while-revalidate=${swr}`).type("html");
 app.get("/", (_req, res) =>
   htmlCache(res, 60, 300).send(
-    landingPage(BASE_URL, NETWORK, FREE_MODE, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }))
+    ledgerHomePage(BASE_URL, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), getLeaderboardSnapshot(), SKILL_PACKS)
   )
 );
 // Real health check — fails (503) when a load balancer or heartbeat should
@@ -664,8 +670,8 @@ app.get("/privacy", (_req, res) => htmlCache(res, 300, 900).send(privacyPage(BAS
 app.get("/terms", (_req, res) => htmlCache(res, 300, 900).send(termsPage(BASE_URL)));
 app.get("/quickstart", (_req, res) => htmlCache(res, 300, 900).send(quickstartPage(BASE_URL)));
 app.get("/faq", (_req, res) => htmlCache(res, 300, 900).send(faqPage(BASE_URL)));
-app.get("/integrations", (_req, res) => htmlCache(res, 300, 900).send(integrationsPage(BASE_URL)));
-app.get("/pricing", (_req, res) => htmlCache(res, 300, 900).send(pricingPage(BASE_URL, CATALOG)));
+app.get("/integrations", (_req, res) => htmlCache(res, 300, 900).send(ledgerIntegrationsPage(BASE_URL)));
+app.get("/pricing", (_req, res) => htmlCache(res, 300, 900).send(ledgerPricingPage(BASE_URL, CATALOG)));
 app.get("/changelog", (_req, res) => htmlCache(res, 300, 900).send(changelogPage(BASE_URL)));
 app.get("/use-cases", (_req, res) => htmlCache(res, 300, 900).send(useCasesPage(BASE_URL)));
 app.get("/playground", (_req, res) => htmlCache(res, 300, 900).send(playgroundPage(BASE_URL)));
@@ -844,7 +850,7 @@ app.get("/api/skill-packs/:slug/prompt", (req, res) => {
 // syncs to the GitHub wiki via CI). /docs/api is registered *before* the
 // parameterized /docs/:slug so the literal "api" path doesn't get captured
 // as a wiki slug lookup.
-app.get("/docs", (_req, res) => htmlCache(res, 300, 900).send(docsIndex(BASE_URL)));
+app.get("/docs", (_req, res) => htmlCache(res, 300, 900).send(ledgerDocsPage(BASE_URL)));
 app.get("/docs/api", (_req, res) => htmlCache(res, 300, 900).send(docsApi(BASE_URL, Object.values(CATALOG))));
 app.get("/docs/:slug", (req, res) => {
   const html = docsPage(BASE_URL, req.params.slug);
@@ -1149,7 +1155,7 @@ app.get("/api/leaderboard", (req, res) => {
 });
 // Human-readable companion to /api/leaderboard. Same cached snapshot, rendered
 // as a dashboard so visitors (and the site nav) have something to land on.
-app.get("/leaderboard", (req, res) => htmlCache(res, 60, 300).send(leaderboardPage(getLeaderboardSnapshot(), { baseUrl: BASE_URL, sort: req.query.sort })));
+app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(ledgerLeaderboardPage(BASE_URL, getLeaderboardSnapshot())));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(robotsTxt(BASE_URL)));
 app.get("/sitemap.xml", (_req, res) => res.type("application/xml").set("Cache-Control", "public, max-age=3600").send(sitemapXml(BASE_URL, CATALOG)));
 app.get("/llms.txt", (_req, res) => res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(llmsTxt(BASE_URL, CATALOG)));
@@ -1289,7 +1295,7 @@ app.get("/card-1280.png", async (_req, res) => {
   }
 });
 app.get("/openapi.json", (_req, res) => res.set("Cache-Control", "public, max-age=3600").json(openapiSpec(BASE_URL, CATALOG)));
-app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(toolsIndexPage(BASE_URL, CATALOG)));
+app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(ledgerCatalogPage(BASE_URL, CATALOG, SKILL_PACKS)));
 app.get("/shop", (_req, res) => htmlCache(res, 300, 900).send(shopPage(BASE_URL, CATALOG)));
 app.get("/economy", (req, res) => htmlCache(res, 300, 900).send(economyPage(BASE_URL, getLeaderboardSnapshot(), { sort: req.query.sort })));
 app.get("/tools/category/:cat", (req, res) => {

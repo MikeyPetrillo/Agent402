@@ -1,35 +1,37 @@
 // Terms of Service — a stable, public ToS URL is a submission requirement for
 // the Anthropic connector directory. Kept short and honest: a no-account,
 // open-source, pay-per-call tool service.
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 export function termsPage(baseUrl) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Terms of Service — Agent402</title>
-<meta name="description" content="Agent402 terms of service: open-source, pay-per-call web tools. As-is, no warranty, on-chain settlement.">
-<link rel="canonical" href="${baseUrl}/terms">
-<meta property="og:title" content="Terms of Service — Agent402">
-<meta property="og:description" content="Open-source, pay-per-call web tools. As-is, no warranty, on-chain settlement.">
-<meta property="og:image" content="${baseUrl}/card.png">
-<meta name="twitter:card" content="summary_large_image">
-${CHROME_HEAD_LINKS}
-<style>
-  :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; }
-  body { background:var(--bg); color:var(--fg); font:16px/1.65 system-ui,-apple-system,sans-serif; margin:0; }
-  .wrap { max-width:760px; margin:0 auto; padding:48px 20px 24px; }
-  h1 { font-size:1.6rem; } h2 { font-size:1.1rem; margin-top:30px; color:var(--accent); }
-  a { color:var(--accent); } .muted { color:var(--muted); } code { font-family:ui-monospace,Menlo,monospace; font-size:.9em; }
-  ${CHROME_CSS}
-</style>
-</head>
-<body>${renderHeader("/terms")}<div class="wrap">
-<h1>Terms of Service</h1>
-<p class="muted">Agent402 (agent402.tools) — last updated 2026-06-13.</p>
+  const title = "Terms of Service — Agent402";
+  const description = "Agent402 terms of service: open-source, pay-per-call web tools. As-is, no warranty, on-chain settlement.";
+  const canonical = `${baseUrl}/terms`;
 
+  const extraCss = `
+.tm-wrap{max-width:760px;margin:0 auto;padding:56px 30px}
+.tm-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
+.tm-h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
+.tm-updated{font-family:var(--font-mono);font-size:13px;color:var(--faint);margin:0 0 32px}
+.tm-body p,.tm-body li{font-size:15px;line-height:1.55;color:var(--muted)}
+.tm-body p{margin:0 0 14px}
+.tm-body ul{margin:0 0 18px;padding:0 0 0 22px}
+.tm-body li{margin-bottom:8px}
+.tm-body h2{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:36px 0 14px;color:var(--ink)}
+.tm-body a{color:var(--accent);text-decoration:none}
+.tm-body a:hover{text-decoration:underline}
+.tm-body b,.tm-body strong{color:var(--ink);font-weight:600}
+.tm-body code{font-family:var(--font-mono);font-size:13px;background:var(--ink);color:var(--cream);padding:2px 7px;border:1.5px solid var(--ink)}
+@media(max-width:600px){.tm-h1{font-size:36px !important}}
+`;
+
+  const body = `
+<div class="tm-wrap">
+<div class="tm-eyebrow">$ GET /terms</div>
+<h1 class="tm-h1">Terms of Service</h1>
+<p class="tm-updated">Agent402 (agent402.tools) — last updated 2026-06-13.</p>
+
+<div class="tm-body">
 <p>Agent402 provides a catalog of small, deterministic web tools that clients call over HTTP.
 By using the service you agree to these terms. The service is
 <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">open source</a>; these terms cover the hosted instance at agent402.tools.</p>
@@ -65,6 +67,9 @@ on-chain payments. Total liability for any claim will not exceed the amount you 
 <h2>Contact</h2>
 <p>Mikey Petrillo — <a href="https://github.com/MikeyPetrillo" rel="noopener">github.com/MikeyPetrillo</a>,
 or <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">GitHub issues</a>.</p>
-</div>${renderFooter()}</body>
-</html>`;
+</div>
+</div>
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/terms", extraCss, body });
 }

@@ -1,12 +1,4 @@
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-
-function esc(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 /* ------------------------------------------------------------------ */
 /*  Badge SVG generator                                                */
@@ -123,64 +115,41 @@ export function badgesPage(baseUrl) {
 </div>`;
   }).join("\n");
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}</title>
-<meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${esc(canonical)}">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
-<meta property="og:url" content="${esc(canonical)}">
-<meta property="og:type" content="website">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="${esc(title)}">
-<meta name="twitter:description" content="${esc(description)}">
-${CHROME_HEAD_LINKS}
-<style>
-${CHROME_CSS}
-:root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-*,*::before,*::after{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;line-height:1.6}
-.bdg-wrap{max-width:860px;margin:0 auto;padding:2rem 1.25rem 4rem}
-.bdg-breadcrumb{font-size:.85rem;color:var(--muted);margin-bottom:1.5rem}
-.bdg-breadcrumb a{color:var(--accent);text-decoration:none}
-.bdg-breadcrumb a:hover{text-decoration:underline}
-.bdg-title{font-size:2rem;font-weight:700;margin:0 0 .5rem;line-height:1.2}
-.bdg-subtitle{color:var(--muted);font-size:1.05rem;margin:0 0 2.5rem}
+  const extraCss = `
+.bdg-wrap{max-width:860px;margin:0 auto;padding:56px 30px}
+.bdg-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
+.bdg-title{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 10px}
+.bdg-subtitle{font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 40px}
 
-.bdg-section{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:1.5rem;margin-bottom:1.5rem}
-.bdg-section h3{font-size:1.1rem;margin:0 0 .25rem;font-weight:600}
-.bdg-desc{color:var(--muted);font-size:.9rem;margin:0 0 1rem}
+.bdg-section{background:var(--card);border:1.5px solid var(--ink);padding:24px;margin-bottom:20px}
+.bdg-section h3{font-family:var(--font-body);font-weight:800;font-size:20px;margin:0 0 4px;color:var(--ink)}
+.bdg-desc{color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 16px}
 
-.bdg-preview{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:6px;padding:1.25rem;text-align:center;margin-bottom:1.25rem}
+.bdg-preview{background:var(--paper);border:1.5px solid var(--ink);padding:20px;text-align:center;margin-bottom:20px}
 .bdg-preview img{display:inline-block;vertical-align:middle}
 
-.bdg-label{display:inline-block;font-size:.78rem;color:var(--muted);background:rgba(255,255,255,.04);padding:.2rem .6rem;border-radius:4px;margin-bottom:.5rem}
+.bdg-label{display:inline-block;font-family:var(--font-mono);font-size:13px;color:var(--faint);margin-bottom:8px}
 
-.bdg-code-wrap{position:relative;margin-bottom:1rem}
-.bdg-code-wrap pre{background:var(--bg);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:1rem 1rem 1rem 1rem;overflow-x:auto;margin:0;font-family:var(--mono);font-size:.82rem;line-height:1.55;color:var(--text);white-space:pre-wrap;word-break:break-all}
-.bdg-code-wrap .bdg-copy{position:absolute;top:.6rem;right:.6rem;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:var(--muted);font-size:.72rem;padding:.3rem .6rem;border-radius:4px;cursor:pointer;font-family:inherit;transition:all .15s}
-.bdg-code-wrap .bdg-copy:hover{color:var(--text);background:rgba(255,255,255,.1)}
+.bdg-code-wrap{position:relative;margin-bottom:16px}
+.bdg-code-wrap pre{background:var(--ink);border:1.5px solid var(--ink);padding:16px;overflow-x:auto;margin:0;font-family:var(--font-mono);font-size:13px;line-height:1.55;color:var(--cream);white-space:pre-wrap;word-break:break-all}
+.bdg-code-wrap .bdg-copy{position:absolute;top:8px;right:8px;background:var(--ink);border:1.5px solid var(--cream);color:var(--cream);font-family:var(--font-mono);font-size:11px;padding:4px 10px;cursor:pointer;transition:all .15s}
+.bdg-code-wrap .bdg-copy:hover{background:var(--cream);color:var(--ink)}
 .bdg-code-wrap .bdg-copy.copied{color:var(--accent);border-color:var(--accent)}
 
-.bdg-note{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:1.5rem;margin-top:2rem}
-.bdg-note h3{font-size:1rem;margin:0 0 .4rem;font-weight:600}
-.bdg-note p{color:var(--muted);font-size:.9rem;margin:0}
-.bdg-note code{font-family:var(--mono);background:rgba(255,255,255,.06);padding:.15rem .4rem;border-radius:4px;font-size:.82rem}
+.bdg-note{background:var(--card);border:1.5px solid var(--ink);padding:24px;margin-top:32px}
+.bdg-note h3{font-family:var(--font-body);font-weight:800;font-size:18px;margin:0 0 6px;color:var(--ink)}
+.bdg-note p{color:var(--muted);font-size:14px;line-height:1.55;margin:0}
+.bdg-note code{font-family:var(--font-mono);background:var(--ink);color:var(--cream);padding:2px 7px;font-size:13px;border:1.5px solid var(--ink)}
 
 @media(max-width:600px){
-  .bdg-title{font-size:1.5rem}
+  .bdg-title{font-size:36px !important}
 }
-</style>
-</head>
-<body>
-${renderHeader("/badges")}
+`;
+
+  const body = `
 <div class="bdg-wrap">
 
-<div class="bdg-breadcrumb"><a href="/">Home</a> &rsaquo; Badges</div>
+<div class="bdg-eyebrow">$ GET /badges</div>
 <h1 class="bdg-title">Badges & Embeds</h1>
 <p class="bdg-subtitle">Add an Agent402 badge to your README, docs, or website. Copy the snippet and paste.</p>
 
@@ -192,7 +161,7 @@ ${badgeSections}
 </div>
 
 </div>
-${renderFooter()}
+${ledgerFooterCompact()}
 
 <script>
 (function(){
@@ -208,7 +177,7 @@ ${renderFooter()}
     });
   });
 })();
-</script>
-</body>
-</html>`;
+</script>`;
+
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "/badges", extraCss, body });
 }

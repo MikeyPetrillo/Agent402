@@ -1,6 +1,4 @@
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-
-const esc = (s) => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 export function comparePage(baseUrl) {
   const canonical = `${baseUrl}/compare`;
@@ -15,58 +13,38 @@ export function comparePage(baseUrl) {
     url: canonical,
   };
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(pageTitle)}</title>
-<meta name="description" content="${esc(pageDesc)}">
-<link rel="canonical" href="${esc(canonical)}">
-<meta property="og:title" content="${esc(pageTitle)}">
-<meta property="og:description" content="${esc(pageDesc)}">
-<meta property="og:url" content="${esc(canonical)}">
-<meta property="og:type" content="website">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="${esc(pageTitle)}">
-<meta name="twitter:description" content="${esc(pageDesc)}">
-${CHROME_HEAD_LINKS}
-<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
-<style>
-${CHROME_CSS}
-:root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-.cmp-intro{max-width:760px;color:var(--muted);line-height:1.7;margin:0 0 2.5rem}
-.cmp-section{margin-bottom:3rem}
-.cmp-section h2{font-size:1.3rem;color:var(--text);font-weight:600;margin:0 0 1rem}
-.cmp-section p.cmp-desc{color:var(--muted);font-size:.93rem;line-height:1.65;margin:0 0 1.25rem;max-width:760px}
-.cmp-table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:10px;overflow:hidden;font-size:.93rem}
-.cmp-table th,.cmp-table td{padding:.85rem 1.1rem;text-align:left;border-bottom:1px solid rgba(255,255,255,.04)}
-.cmp-table thead th{background:rgba(255,255,255,.03);color:var(--text);font-weight:600;font-size:.88rem;text-transform:uppercase;letter-spacing:.03em}
-.cmp-table thead th:first-child{color:var(--muted);font-weight:500;text-transform:none;letter-spacing:normal}
+  const extraCss = `
+.cmp-wrap{max-width:960px;margin:0 auto;padding:56px 30px}
+.cmp-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
+.cmp-h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
+.cmp-intro{max-width:760px;font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 40px}
+.cmp-section{margin-bottom:48px}
+.cmp-section h2{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 10px;color:var(--ink)}
+.cmp-section p.cmp-desc{color:var(--muted);font-size:15px;line-height:1.55;margin:0 0 20px;max-width:760px}
+.cmp-table{width:100%;border-collapse:collapse;background:var(--card);border:1.5px solid var(--ink);overflow:hidden;font-size:14px}
+.cmp-table th,.cmp-table td{padding:14px 18px;text-align:left;border-bottom:1px solid var(--hairline)}
+.cmp-table thead th{background:var(--ink);color:var(--cream);font-family:var(--font-mono);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.04em}
+.cmp-table thead th:first-child{color:var(--dk-muted2);font-weight:500;text-transform:none;letter-spacing:normal}
 .cmp-table tbody td{color:var(--muted)}
-.cmp-table tbody td:first-child{color:var(--text);font-weight:500}
+.cmp-table tbody td:first-child{color:var(--ink);font-weight:600}
 .cmp-table tbody tr:last-child td{border-bottom:none}
 .cmp-table .col-a402{color:var(--accent)}
 .cmp-win{color:var(--accent);font-weight:500}
-.cmp-lose{color:var(--muted)}
+.cmp-lose{color:var(--faint)}
 .check{color:var(--accent);font-size:1.1rem}
-.cross{color:#f87171;font-size:1.1rem}
-@media(max-width:640px){.cmp-table{font-size:.82rem}.cmp-table th,.cmp-table td{padding:.65rem .7rem}}
-.cmp-cta{text-align:center;margin:2.5rem 0 3rem;padding:2rem 1.5rem;background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:10px}
-.cmp-cta h2{font-size:1.3rem;color:var(--text);font-weight:600;margin:0 0 .75rem}
-.cmp-cta p{color:var(--muted);font-size:.95rem;margin:0 0 1.25rem;line-height:1.6}
-.cmp-cta a.btn{display:inline-block;background:var(--accent);color:#0b0e14;padding:.7rem 1.8rem;border-radius:8px;font-weight:600;text-decoration:none;font-size:.95rem}
+.cross{color:#D63C1A;font-size:1.1rem}
+@media(max-width:640px){.cmp-table{font-size:13px}.cmp-table th,.cmp-table td{padding:10px 12px}.cmp-h1{font-size:36px !important}}
+.cmp-cta{text-align:center;margin:40px 0 48px;padding:36px 24px;background:var(--card);border:1.5px solid var(--ink)}
+.cmp-cta h2{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 12px;color:var(--ink)}
+.cmp-cta p{color:var(--muted);font-size:15px;margin:0 0 20px;line-height:1.55}
+.cmp-cta a.btn{display:inline-block;background:var(--accent);color:#fff;padding:12px 30px;font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;border:1.5px solid var(--accent)}
 .cmp-cta a.btn:hover{opacity:.9}
-.breadcrumb{font-size:.85rem;color:var(--muted);margin-bottom:1.5rem}
-.breadcrumb a{color:var(--accent);text-decoration:none}
-.breadcrumb a:hover{text-decoration:underline}
-</style>
-</head>
-<body>
-${renderHeader("/compare")}
-<main style="max-width:960px;margin:0 auto;padding:2rem 1.25rem">
-<p class="breadcrumb"><a href="/">Home</a> &rsaquo; Compare</p>
-<h1 style="font-size:1.8rem;margin:0 0 1rem;color:var(--text)">How Agent402 Compares</h1>
+`;
+
+  const body = `
+<div class="cmp-wrap">
+<div class="cmp-eyebrow">$ GET /compare</div>
+<h1 class="cmp-h1">How Agent402 Compares</h1>
 <p class="cmp-intro">Agent402 gives your AI agent 1,300+ deterministic tools behind a single protocol. Here is how it stacks up against the common alternatives.</p>
 
 <div class="cmp-section">
@@ -120,8 +98,8 @@ ${renderHeader("/compare")}
 <p>Connect your agent to 1,300+ tools in under five minutes. No API keys, no subscriptions, no lock-in.</p>
 <a class="btn" href="/quickstart">Start building &rarr;</a>
 </div>
-</main>
-${renderFooter()}
-</body>
-</html>`;
+</div>
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({ title: pageTitle, description: pageDesc, canonical, baseUrl, activePath: "/compare", jsonLd, extraCss, body });
 }

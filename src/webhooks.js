@@ -1,84 +1,63 @@
 // Webhook/callback documentation page — explains async patterns and
 // planned webhook support for long-running tool chains.
 
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-
-const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 export function webhooksPage(baseUrl) {
   const canonical = `${baseUrl}/docs/webhooks`;
-  const title = "Webhooks & Callbacks — async patterns for Agent402";
+  const title = "Webhooks & Callbacks \u2014 Agent402 Docs";
   const description = "How to handle async workflows with Agent402: polling, idempotent retries, and planned webhook support for long-running tool chains.";
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}</title>
-<meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${esc(canonical)}">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
-<meta property="og:url" content="${esc(canonical)}">
-<meta property="og:type" content="website">
-<meta name="twitter:card" content="summary">
-${CHROME_HEAD_LINKS}
-<style>
-${CHROME_CSS}
-:root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-*,*::before,*::after{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,sans-serif}
-.wh-wrap{max-width:800px;margin:0 auto;padding:2rem 1.25rem 4rem}
-.wh-crumb{font-size:.85rem;color:var(--muted);margin-bottom:1.5rem}
-.wh-crumb a{color:var(--accent);text-decoration:none}
-.wh-crumb a:hover{text-decoration:underline}
-h1{font-size:1.6rem;font-weight:700;margin:0 0 .75rem}
-.wh-sub{color:var(--muted);margin:0 0 2rem;font-size:.95rem;max-width:640px}
-h2{font-size:1.2rem;margin:2rem 0 .75rem;color:var(--text)}
-h3{font-size:1rem;margin:1.5rem 0 .5rem;color:var(--text)}
-p{color:var(--muted);line-height:1.7;margin:0 0 1rem}
-a{color:var(--accent)}
-code{font-family:var(--mono);background:rgba(255,255,255,.04);padding:.15rem .45rem;border-radius:4px;font-size:.85rem}
-pre{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:1rem 1.25rem;overflow-x:auto;margin:0 0 1.25rem;font-family:var(--mono);font-size:.82rem;line-height:1.55;color:var(--text)}
-.wh-card{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:1.25rem 1.5rem;margin-bottom:1rem}
-.wh-card h3{margin:.25rem 0 .5rem;font-size:1rem}
-.wh-card p{font-size:.9rem}
-.wh-badge{display:inline-block;background:#1a3a2a;color:var(--accent);font-size:.72rem;font-weight:600;padding:2px 8px;border-radius:4px;margin-left:8px;vertical-align:middle}
-.wh-badge.planned{background:#2a2a1a;color:#facc15}
-.wh-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;margin:1rem 0 2rem}
-</style>
-</head>
-<body>
-${renderHeader("/docs")}
-<div class="wh-wrap">
-<p class="wh-crumb"><a href="/">Home</a> &rsaquo; <a href="/docs">Docs</a> &rsaquo; Webhooks &amp; Callbacks</p>
+  const extraCss = `
+  @media (max-width: 900px) {
+    .ml-wh-grid { grid-template-columns: 1fr !important; }
+    .ml-wh-toc  { position: static !important; }
+  }
+  .ml-wh-cards { display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin:14px 0 32px; }`;
 
-<h1>Webhooks &amp; Callbacks</h1>
-<p class="wh-sub">How to handle async workflows, retries, and long-running tool chains with Agent402.</p>
+  const body = `
+  <div class="ml-wh-grid" style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;display:grid;grid-template-columns:200px 1fr;gap:44px;align-items:start;">
 
-<h2>Current async patterns</h2>
-<p>All Agent402 tools return results synchronously in the HTTP response. For workflows that chain multiple tools, here are the patterns available today:</p>
+    <!-- TOC -->
+    <aside class="ml-wh-toc" style="position:sticky;top:92px;font-family:var(--font-mono);font-size:13px;">
+      <div style="font-size:11px;color:var(--accent);letter-spacing:.1em;margin-bottom:14px;">WEBHOOKS</div>
+      <div style="display:flex;flex-direction:column;gap:11px;border-left:1.5px solid var(--ink);padding-left:16px;">
+        <a href="#patterns" style="color:var(--ink);text-decoration:none;font-weight:700;">async patterns</a>
+        <a href="#idempotent" style="color:var(--muted);text-decoration:none;">idempotent retries</a>
+        <a href="#chaining" style="color:var(--muted);text-decoration:none;">chaining</a>
+        <a href="#planned" style="color:var(--muted);text-decoration:none;">planned webhooks</a>
+        <a href="#related" style="color:var(--muted);text-decoration:none;">related</a>
+      </div>
+    </aside>
 
-<div class="wh-grid">
-  <div class="wh-card">
-    <h3>Idempotent retries <span class="wh-badge">Available</span></h3>
-    <p>Add an <code>Idempotency-Key</code> header to any request. If a network error occurs mid-flight, retry safely — the server returns the cached result without re-charging.</p>
-  </div>
-  <div class="wh-card">
-    <h3>Sequential chaining <span class="wh-badge">Available</span></h3>
-    <p>Chain tools by calling them in sequence: <code>render</code> &rarr; <code>extract</code> &rarr; <code>memory-write</code>. Each call is independent and stateless. Use <a href="/workflows">workflow examples</a> for patterns.</p>
-  </div>
-  <div class="wh-card">
-    <h3>Wallet-keyed state <span class="wh-badge">Available</span></h3>
-    <p>Use the memory tools (<code>memory-write</code>, <code>memory-read</code>) to persist intermediate results across tool calls. Your wallet address is your identity — no accounts needed.</p>
-  </div>
-</div>
+    <!-- CONTENT -->
+    <main>
+      <p style="font-size:.85rem;color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--faint);text-decoration:none;">Home</a> &rsaquo; <a href="/docs" style="color:var(--faint);text-decoration:none;">Docs</a> &rsaquo; Webhooks &amp; Callbacks</p>
+      <h1 style="font-family:var(--font-body);font-weight:800;font-size:42px;line-height:1;letter-spacing:-.02em;margin:0 0 14px;">Webhooks &amp; Callbacks</h1>
+      <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 36px;">How to handle async workflows, retries, and long-running tool chains with Agent402.</p>
 
-<h2>Idempotent retries in practice</h2>
-<p>Pass an <code>Idempotency-Key</code> header with any unique string. The server caches the result keyed to your request + credential combination:</p>
+      <h2 id="patterns" style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Current async patterns</h2>
+      <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">All Agent402 tools return results synchronously in the HTTP response. For workflows that chain multiple tools, here are the patterns available today:</p>
 
-<pre>curl -X POST https://agent402.tools/api/hash \\
+      <div class="ml-wh-cards">
+        <div style="background:var(--card);border:1.5px solid var(--ink);padding:20px 22px;">
+          <h3 style="font-weight:700;font-size:1rem;margin:0 0 8px;">Idempotent retries <span style="display:inline-block;background:var(--ink);color:var(--green);font-size:.72rem;font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
+          <p style="color:var(--muted);font-size:.9rem;line-height:1.6;margin:0;">Add an <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">Idempotency-Key</code> header to any request. If a network error occurs mid-flight, retry safely &mdash; the server returns the cached result without re-charging.</p>
+        </div>
+        <div style="background:var(--card);border:1.5px solid var(--ink);padding:20px 22px;">
+          <h3 style="font-weight:700;font-size:1rem;margin:0 0 8px;">Sequential chaining <span style="display:inline-block;background:var(--ink);color:var(--green);font-size:.72rem;font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
+          <p style="color:var(--muted);font-size:.9rem;line-height:1.6;margin:0;">Chain tools by calling them in sequence: <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">render</code> &rarr; <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">extract</code> &rarr; <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">memory-write</code>. Each call is independent and stateless. Use <a href="/workflows" style="color:var(--accent);">workflow examples</a> for patterns.</p>
+        </div>
+        <div style="background:var(--card);border:1.5px solid var(--ink);padding:20px 22px;">
+          <h3 style="font-weight:700;font-size:1rem;margin:0 0 8px;">Wallet-keyed state <span style="display:inline-block;background:var(--ink);color:var(--green);font-size:.72rem;font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Available</span></h3>
+          <p style="color:var(--muted);font-size:.9rem;line-height:1.6;margin:0;">Use the memory tools (<code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">memory-write</code>, <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">memory-read</code>) to persist intermediate results across tool calls. Your wallet address is your identity &mdash; no accounts needed.</p>
+        </div>
+      </div>
+
+      <h2 id="idempotent" style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Idempotent retries in practice</h2>
+      <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">Pass an <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:.85em;">Idempotency-Key</code> header with any unique string. The server caches the result keyed to your request + credential combination:</p>
+
+      <pre style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0 0 14px;overflow-x:auto;">curl -X POST https://agent402.tools/api/hash \\
   -H "Content-Type: application/json" \\
   -H "Idempotency-Key: my-unique-key-123" \\
   -d '{"text":"hello","algo":"sha256"}'
@@ -89,10 +68,10 @@ curl -X POST https://agent402.tools/api/hash \\
   -H "Idempotency-Key: my-unique-key-123" \\
   -d '{"text":"hello","algo":"sha256"}'</pre>
 
-<p>The cache key is <code>sha256(METHOD /path + key + credential)</code>, so different callers with the same idempotency key don't collide.</p>
+      <p style="color:var(--muted);line-height:1.7;margin:0 0 36px;">The cache key is <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:.85em;">sha256(METHOD /path + key + credential)</code>, so different callers with the same idempotency key don't collide.</p>
 
-<h2>Chaining with agent402-client</h2>
-<pre>import { Agent402 } from "agent402-client";
+      <h2 id="chaining" style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Chaining with agent402-client</h2>
+      <pre style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0 0 36px;overflow-x:auto;">import { Agent402 } from "agent402-client";
 
 const a = new Agent402();
 
@@ -108,28 +87,36 @@ await a.call("memory-write", {
   value: data.text
 });</pre>
 
-<h2>Planned: webhook callbacks <span class="wh-badge planned">Planned</span></h2>
-<p>We're designing a webhook system for long-running chains. The planned flow:</p>
+      <h2 id="planned" style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Planned: webhook callbacks <span style="display:inline-block;background:var(--card);border:1.5px solid var(--ink);color:var(--accent);font-size:.72rem;font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Planned</span></h2>
+      <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">We're designing a webhook system for long-running chains. The planned flow:</p>
 
-<div class="wh-card">
-  <h3>How it will work</h3>
-  <p>1. Submit a tool call with a <code>X-Callback-URL</code> header pointing to your endpoint.<br>
-  2. Agent402 returns <code>202 Accepted</code> with a job ID immediately.<br>
-  3. When the tool completes, Agent402 POSTs the result to your callback URL with an HMAC signature for verification.<br>
-  4. Poll <code>/api/jobs/:id</code> as a fallback if the callback fails.</p>
-</div>
+      <div style="background:var(--card);border:1.5px solid var(--ink);padding:20px 22px;margin-bottom:14px;">
+        <h3 style="font-weight:700;font-size:1rem;margin:0 0 8px;">How it will work</h3>
+        <p style="color:var(--muted);font-size:.9rem;line-height:1.7;margin:0;">1. Submit a tool call with a <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">X-Callback-URL</code> header pointing to your endpoint.<br>
+        2. Agent402 returns <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">202 Accepted</code> with a job ID immediately.<br>
+        3. When the tool completes, Agent402 POSTs the result to your callback URL with an HMAC signature for verification.<br>
+        4. Poll <code style="font-family:var(--font-mono);background:var(--paper);padding:1px 5px;font-size:.85em;">/api/jobs/:id</code> as a fallback if the callback fails.</p>
+      </div>
 
-<p>Want to be notified when webhooks launch? Follow <a href="https://x.com/Agent402Tools" rel="noopener">@Agent402Tools</a> or watch the <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub repo</a>.</p>
+      <p style="color:var(--muted);line-height:1.7;margin:0 0 36px;">Want to be notified when webhooks launch? Follow <a href="https://x.com/Agent402Tools" rel="noopener" style="color:var(--accent);">@Agent402Tools</a> or watch the <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener" style="color:var(--accent);">GitHub repo</a>.</p>
 
-<h2>Related</h2>
-<p>
-  <a href="/workflows">Workflow examples</a> &mdash; see how tools chain together<br>
-  <a href="/quickstart">Quickstart</a> &mdash; get your first call working in 60 seconds<br>
-  <a href="/docs">Documentation</a> &mdash; full API reference
-</p>
+      <h2 id="related" style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Related</h2>
+      <p style="color:var(--muted);line-height:1.7;margin:0;">
+        <a href="/workflows" style="color:var(--accent);text-decoration:none;">Workflow examples</a> &mdash; see how tools chain together<br>
+        <a href="/quickstart" style="color:var(--accent);text-decoration:none;">Quickstart</a> &mdash; get your first call working in 60 seconds<br>
+        <a href="/docs" style="color:var(--accent);text-decoration:none;">Documentation</a> &mdash; full API reference
+      </p>
+    </main>
+  </div>
+  ${ledgerFooterCompact()}`;
 
-</div>
-${renderFooter()}
-</body>
-</html>`;
+  return ledgerShell({
+    title,
+    description,
+    canonical,
+    baseUrl,
+    activePath: "/docs",
+    extraCss,
+    body,
+  });
 }

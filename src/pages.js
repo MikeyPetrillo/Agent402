@@ -2,6 +2,7 @@
 // the tool catalog so they never drift from what the API actually serves.
 import { isComputePayable } from "./pow.js";
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chrome.js";
 import { SKILL_PACKS } from "./skills.js";
 
 export const CATEGORIES = {
@@ -160,9 +161,9 @@ function convertContent(baseUrl, tool) {
   const fromL = from.replace(/-/g, " ");
   const toL = to.replace(/-/g, " ");
   return `
-  <p class="sub"><b>1 ${esc(fromL)} = ${esc(String(perUnit))} ${esc(toL)}.</b> To convert, multiply the number of ${esc(fromL)} by ${esc(String(perUnit))}. The reverse direction is <a href="/tools/${inverse}">${esc(toL)} → ${esc(fromL)}</a>.</p>
-  <h2>Common ${esc(fromL)} to ${esc(toL)} values</h2>
-  <table><tr><th>${esc(fromL)}</th><th>${esc(toL)}</th></tr>${rows}</table>`;
+  <p class="tp-sub"><b>1 ${esc(fromL)} = ${esc(String(perUnit))} ${esc(toL)}.</b> To convert, multiply the number of ${esc(fromL)} by ${esc(String(perUnit))}. The reverse direction is <a href="/tools/${inverse}" style="color:var(--accent);">${esc(toL)} \u2192 ${esc(fromL)}</a>.</p>
+  <h2 class="tp-h2">Common ${esc(fromL)} to ${esc(toL)} values</h2>
+  <table class="tp-table"><tr><th>${esc(fromL)}</th><th>${esc(toL)}</th></tr>${rows}</table>`;
 }
 
 // Format a cache TTL (in seconds) as the smallest unit that reads cleanly.
@@ -177,6 +178,7 @@ function fmtTtl(seconds) {
 }
 
 export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0, cacheTtl = null } = {}) {
+  const e = ledgerEsc;
   const title = `${tool.name} API for AI agents — ${tool.price} per call | Agent402`;
   const canonical = `${baseUrl}/tools/${tool.slug}`;
   const catLabel = CATEGORIES[tool.category]?.label ?? tool.category;
@@ -210,53 +212,73 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const schemaRows = Object.entries(tool.discovery?.inputSchema?.properties ?? {})
     .map(([k, v]) => {
       const required = (tool.discovery?.inputSchema?.required ?? []).includes(k);
-      return `<tr><td><code>${esc(k)}</code>${required ? " <b>*</b>" : ""}</td><td>${esc(v.type ?? "any")}</td><td>${esc(v.description ?? "")}</td></tr>`;
+      return `<tr><td><code>${e(k)}</code>${required ? " <b>*</b>" : ""}</td><td>${e(v.type ?? "any")}</td><td>${e(v.description ?? "")}</td></tr>`;
     })
     .join("\n");
-  const relatedCards = related.map(card).join("\n");
-  // Surface which curated multi-tool workflows include this tool. Helps an agent
-  // landing on a single-tool page see the broader task it slots into (e.g.
-  // spf-check → security-audit + email-deliverability), and exposes the MCP
-  // prompt slug they can fetch to get the full Claude-ready workflow template.
+
+  const relatedCards = related.map((t) => {
+    const desc = t.description.length > 120 ? t.description.slice(0, 120) + "\u2026" : t.description;
+    return `<div style="background:var(--card);border:1.5px solid var(--ink);padding:18px 20px;">
+  <h3 style="font-size:15px;margin:0 0 4px;"><a href="/tools/${e(t.slug)}" style="text-decoration:none;color:var(--ink);">${e(t.name)}</a></h3>
+  <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">${ledgerPriceLine(t)} · <code style="background:transparent;color:var(--faint);font-size:12px;">${t.method} ${e(t.path)}</code></div>
+  <p style="color:var(--muted);font-size:13px;margin-top:6px;line-height:1.5;">${e(desc)}</p>
+</div>`;
+  }).join("\n");
+
+  // Surface which curated multi-tool workflows include this tool.
   const inPacks = SKILL_PACKS.filter((p) => (p.toolSlugs || []).includes(tool.slug));
   const packsHtml = inPacks.length
-    ? `<h2>Part of these workflows</h2>
-  <p class="sub">This tool is one step in ${inPacks.length === 1 ? "a curated multi-tool workflow" : `${inPacks.length} curated multi-tool workflows`} — agents can fetch the whole sequence as an MCP prompt or call <code>${esc(baseUrl)}/api/skill-packs/{slug}/prompt</code>.</p>
-  <ul>${inPacks.map((p) => `<li><a href="/skills/${esc(p.slug)}"><b>${esc(p.title)}</b></a> — ${esc(p.tagline)}</li>`).join("")}</ul>`
+    ? `<h2 style="font-weight:800;font-size:22px;margin:40px 0 10px;">Part of these workflows</h2>
+  <p style="color:var(--muted);font-size:15px;margin-bottom:12px;">This tool is one step in ${inPacks.length === 1 ? "a curated multi-tool workflow" : `${inPacks.length} curated multi-tool workflows`} — agents can fetch the whole sequence as an MCP prompt or call <code style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);padding:2px 6px;font-size:13px;">${e(baseUrl)}/api/skill-packs/{slug}/prompt</code>.</p>
+  <ul style="padding-left:20px;">${inPacks.map((p) => `<li style="margin-bottom:6px;"><a href="/skills/${e(p.slug)}" style="color:var(--accent);font-weight:700;">${e(p.title)}</a> — <span style="color:var(--muted);">${e(p.tagline)}</span></li>`).join("")}</ul>`
     : "";
 
-  return `<!doctype html>
-<html lang="en">
-<head>
-${head({ title, description: `${tool.description} ${tool.price} per call via x402 — no API key, no signup.`, canonical, jsonLd, image: `${baseUrl}/tools/${tool.slug}/card.png` })}
-</head>
-<body>
-${renderHeader("/tools")}
-<div class="wrap">
-  <div class="crumb"><a href="/">Agent402</a> / <a href="/tools">tools</a> / ${esc(tool.slug)}</div>
-  <h1>${esc(tool.name)}</h1>
-  <div class="price-badge">${
+  const methodColor = tool.method === "GET" ? "var(--green)" : "var(--accent)";
+
+  const TOOL_PAGE_CSS = `
+  .tp-wrap { max-width:1180px; margin:0 auto; padding:56px 30px; }
+  .tp-crumb { font-family:var(--font-mono); font-size:13px; color:var(--faint); margin-bottom:18px; }
+  .tp-crumb a { color:var(--accent); text-decoration:none; }
+  .tp-h1 { font-family:var(--font-body); font-weight:800; font-size:38px; line-height:1; letter-spacing:-.02em; margin-bottom:10px; }
+  .tp-badge { display:inline-block; background:var(--ink); color:var(--cream); font-family:var(--font-mono); font-size:13px; padding:8px 16px; margin:8px 0 6px; }
+  .tp-sub { color:var(--muted); font-size:16px; line-height:1.6; max-width:720px; }
+  .tp-h2 { font-weight:800; font-size:22px; margin:40px 0 10px; letter-spacing:-.01em; }
+  .tp-table { border-collapse:collapse; width:100%; font-size:14px; }
+  .tp-table td, .tp-table th { border:1px solid var(--hairline); padding:10px 12px; text-align:left; vertical-align:top; }
+  .tp-table th { background:var(--card); font-weight:700; }
+  .tp-pre { background:var(--ink); color:var(--cream); font-family:var(--font-mono); font-size:13px; line-height:1.6; padding:18px 20px; overflow-x:auto; border:none; }
+  .tp-grid { display:grid; gap:14px; margin:20px 0; }
+  @media (min-width:640px){ .tp-grid { grid-template-columns:repeat(3,1fr); } }
+  .tp-free { display:inline-block; background:var(--green); color:#08130b; font-weight:700; font-size:11px; letter-spacing:.02em; padding:2px 8px; font-family:var(--font-mono); vertical-align:middle; }
+  .tp-callout { background:var(--card); border:1.5px solid var(--ink); padding:16px 20px; margin:18px 0; font-size:15px; }
+  .tp-callout b { color:var(--accent); }
+  `;
+
+  const body = `<div class="tp-wrap">
+  <div class="tp-crumb"><a href="/">Agent402</a> / <a href="/tools">tools</a> / ${e(tool.slug)}</div>
+  <h1 class="tp-h1">${e(tool.name)}</h1>
+  <div class="tp-badge">${
     computePayable
-      ? `<span class="free">FREE</span> with proof-of-work · or ${tool.price} in USDC`
-      : `${tool.price} per call · USDC via x402`
-  } · <code>${tool.method} ${esc(tool.path)}</code>${
-    cacheTtl ? ` · <span title="Server caches identical responses for ${esc(fmtTtl(cacheTtl))}. Repeated calls return X-Cache: hit and don't re-hit the upstream.">Cached ${esc(fmtTtl(cacheTtl))}</span>` : ""
+      ? `<span class="tp-free">FREE</span> <span style="color:var(--dk-muted);">with proof-of-work</span> · <span style="color:var(--dk-muted2);">or ${tool.price} in USDC</span>`
+      : `<span style="color:var(--cream);">${tool.price} per call</span> · <span style="color:var(--dk-muted);">USDC via x402</span>`
+  } · <code style="color:${methodColor};background:transparent;font-size:13px;">${tool.method}</code> <code style="color:var(--dk-muted2);background:transparent;font-size:13px;">${e(tool.path)}</code>${
+    cacheTtl ? ` · <span style="color:var(--dk-muted);" title="Server caches identical responses for ${e(fmtTtl(cacheTtl))}. Repeated calls return X-Cache: hit and don't re-hit the upstream.">Cached ${e(fmtTtl(cacheTtl))}</span>` : ""
   }</div>
-  <p class="sub">${esc(tool.description)}</p>
+  <p class="tp-sub">${e(tool.description)}</p>
   ${tool.category === "convert" ? convertContent(baseUrl, tool) : ""}
 
-  <h2>Input</h2>
-  ${schemaRows ? `<table><tr><th>Field</th><th>Type</th><th>Description</th></tr>${schemaRows}</table>` : `<p class="sub">No parameters.</p>`}
+  <h2 class="tp-h2">Input</h2>
+  ${schemaRows ? `<table class="tp-table"><tr><th>Field</th><th>Type</th><th>Description</th></tr>${schemaRows}</table>` : `<p class="tp-sub">No parameters.</p>`}
 
-  <h2>Example output</h2>
-  <pre>${esc(JSON.stringify(tool.discovery?.output?.example ?? {}, null, 2))}</pre>
+  <h2 class="tp-h2">Example output</h2>
+  <pre class="tp-pre">${e(JSON.stringify(tool.discovery?.output?.example ?? {}, null, 2))}</pre>
 
-  <h2>Try it — see the 402 challenge (free)</h2>
-  <pre>${esc(exampleCall(baseUrl, tool))}</pre>
-  <p class="sub">The response is <code>HTTP 402 Payment Required</code> with exact payment requirements. Any x402 v2 client pays automatically and retries:</p>
+  <h2 class="tp-h2">Try it — see the 402 challenge (free)</h2>
+  <pre class="tp-pre">${e(exampleCall(baseUrl, tool))}</pre>
+  <p class="tp-sub">The response is <code style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);padding:2px 6px;font-size:13px;">HTTP 402 Payment Required</code> with exact payment requirements. Any x402 v2 client pays automatically and retries:</p>
 
-  <h2>Paid call (JavaScript agent)</h2>
-  <pre>import { wrapFetchWithPayment } from "@x402/fetch";
+  <h2 class="tp-h2">Paid call (JavaScript agent)</h2>
+  <pre class="tp-pre">import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
@@ -265,29 +287,46 @@ const client = new x402Client();
 registerExactEvmScheme(client, { signer: privateKeyToAccount(KEY) });
 const payFetch = wrapFetchWithPayment(fetch, client);
 
-${esc(payExample(baseUrl, tool))}</pre>
+${e(payExample(baseUrl, tool))}</pre>
 
   ${
     computePayable
-      ? `<h2>No wallet? Pay with compute</h2>
-  <p class="sub">This is a pure-CPU tool, so an agent without a wallet can pay with <a href="/api/pow">proof-of-work</a> instead of USDC: fetch a challenge, solve the sha256 puzzle (${powDifficulty} leading zero bits — a fraction of a second of CPU, no money, no AI tokens), and resend with the <code>X-Pow-Solution</code> header.</p>
-  <pre>import { createHash } from "node:crypto";
+      ? `<h2 class="tp-h2">No wallet? Pay with compute</h2>
+  <p class="tp-sub">This is a pure-CPU tool, so an agent without a wallet can pay with <a href="/api/pow" style="color:var(--accent);">proof-of-work</a> instead of USDC: fetch a challenge, solve the sha256 puzzle (${powDifficulty} leading zero bits — a fraction of a second of CPU, no money, no AI tokens), and resend with the <code style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);padding:2px 6px;font-size:13px;">X-Pow-Solution</code> header.</p>
+  <pre class="tp-pre">import { createHash } from "node:crypto";
 const lz = (b) =&gt; { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
-const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${esc(tool.slug)}")).json();
+const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${e(tool.slug)}")).json();
 let n = 0;
 while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) &lt; c.difficulty) n++;
 await fetch("${baseUrl}${tool.path}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(tool.discovery?.input ?? {})})` : ""} });</pre>`
-      : `<p class="sub" style="margin-top:24px"><b>Wallet-only.</b> This tool reaches the network/browser/storage, so it is paid in USDC via x402 (no proof-of-work tier).</p>`
+      : `<div class="tp-callout" style="margin-top:24px"><b>Wallet-only.</b> This tool reaches the network/browser/storage, so it is paid in USDC via x402 (no proof-of-work tier).</div>`
   }
 
   ${packsHtml}
 
-  <h2>Related tools</h2>
-  <div class="grid">${relatedCards}</div>
+  <h2 class="tp-h2">Related tools</h2>
+  <div class="tp-grid">${relatedCards}</div>
 </div>
-${renderFooter()}
-</body>
-</html>`;
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({
+    title,
+    description: `${tool.description} ${tool.price} per call via x402 — no API key, no signup.`,
+    canonical,
+    baseUrl,
+    activePath: "/tools",
+    ogImage: `${baseUrl}/tools/${tool.slug}/card.png`,
+    jsonLd,
+    extraCss: TOOL_PAGE_CSS,
+    body,
+  });
+}
+
+// Price line for the new ledger card style
+function ledgerPriceLine(tool) {
+  return isComputePayable(tool)
+    ? `<span style="background:var(--green);color:#08130b;font-weight:700;font-size:11px;padding:1px 6px;font-family:var(--font-mono);">FREE</span> w/ compute · or ${tool.price}`
+    : `${tool.price}`;
 }
 
 export function toolsIndexPage(baseUrl, catalog) {
@@ -360,6 +399,7 @@ ${renderFooter()}
 
 /** Category landing page — /tools/:category shows all tools in one category. */
 export function categoryPage(baseUrl, catalog, catKey) {
+  const e = ledgerEsc;
   const cat = CATEGORIES[catKey];
   if (!cat) return null;
   const tools = toolList(catalog).filter((t) => t.category === catKey);
@@ -377,24 +417,39 @@ export function categoryPage(baseUrl, catalog, catKey) {
     numberOfItems: tools.length,
     itemListElement: tools.map((t, i) => ({ "@type": "ListItem", position: i + 1, name: t.name, url: `${baseUrl}/tools/${t.slug}` })),
   };
-  const cards = tools.map(card).join("\n");
-  return `<!doctype html>
-<html lang="en">
-<head>
-${head({ title, description, canonical, jsonLd, image: `${baseUrl}/card.png` })}
-</head>
-<body>
-${renderHeader("/tools")}
-<div class="wrap">
-  <div class="crumb"><a href="/">Agent402</a> / <a href="/tools">tools</a> / ${esc(cat.label)}</div>
-  <h1>${esc(cat.label)}</h1>
-  <p class="sub">${esc(cat.blurb)}</p>
-  <div class="callout"><b>${tools.length} tools</b> in this category${freeCount ? ` — <b>${freeCount} free</b> via proof-of-work` : ""}. <a href="/tools">← All tools</a></div>
-  <div class="grid">${cards}</div>
+  const cards = tools.map((t) => {
+    const desc = t.description.length > 120 ? t.description.slice(0, 120) + "\u2026" : t.description;
+    return `<div style="background:var(--card);border:1.5px solid var(--ink);padding:18px 20px;">
+  <h3 style="font-size:15px;margin:0 0 4px;"><a href="/tools/${e(t.slug)}" style="text-decoration:none;color:var(--ink);">${e(t.name)}</a></h3>
+  <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">${ledgerPriceLine(t)} · <code style="background:transparent;color:var(--faint);font-size:12px;">${t.method} ${e(t.path)}</code></div>
+  <p style="color:var(--muted);font-size:13px;margin-top:6px;line-height:1.5;">${e(desc)}</p>
+</div>`;
+  }).join("\n");
+
+  const CAT_CSS = `
+  .cp-grid { display:grid; gap:14px; margin:20px 0; }
+  @media (min-width:640px){ .cp-grid { grid-template-columns:repeat(3,1fr); } }
+  `;
+
+  const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
+  <div style="font-family:var(--font-mono);font-size:13px;color:var(--faint);margin-bottom:18px;"><a href="/" style="color:var(--accent);text-decoration:none;">Agent402</a> / <a href="/tools" style="color:var(--accent);text-decoration:none;">tools</a> / ${e(cat.label)}</div>
+  <h1 style="font-family:var(--font-body);font-weight:800;font-size:38px;line-height:1;letter-spacing:-.02em;margin-bottom:10px;">${e(cat.label)}</h1>
+  <p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;">${e(cat.blurb)}</p>
+  <div style="background:var(--card);border:1.5px solid var(--ink);padding:16px 20px;margin:18px 0;font-size:15px;"><b style="color:var(--accent);">${tools.length} tools</b> in this category${freeCount ? ` — <b style="color:var(--accent);">${freeCount} free</b> via proof-of-work` : ""}. <a href="/tools" style="color:var(--accent);">\u2190 All tools</a></div>
+  <div class="cp-grid">${cards}</div>
 </div>
-${renderFooter()}
-</body>
-</html>`;
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({
+    title,
+    description,
+    canonical,
+    baseUrl,
+    activePath: "/tools",
+    jsonLd,
+    extraCss: CAT_CSS,
+    body,
+  });
 }
 
 // On-site FAQ — surfaces the wiki FAQ for Google (FAQPage rich results) and for
@@ -419,6 +474,7 @@ const FAQ_ITEMS = [
 ];
 
 export function faqPage(baseUrl) {
+  const e = ledgerEsc;
   const canonical = `${baseUrl}/faq`;
   const title = "Agent402 FAQ — x402 + MCP server for AI agents";
   const description =
@@ -432,25 +488,38 @@ export function faqPage(baseUrl) {
       acceptedAnswer: { "@type": "Answer", text: it.a },
     })),
   };
+
+  const FAQ_CSS = `
+  .fq-item { border-bottom:1px solid var(--hairline); padding:24px 0; }
+  .fq-item:last-child { border-bottom:none; }
+  .fq-item h2 { font-family:var(--font-body); font-weight:800; font-size:18px; line-height:1.3; margin:0 0 8px; }
+  .fq-item p { color:var(--muted); font-size:15px; line-height:1.7; margin:0; }
+  .fq-item a { color:var(--accent); }
+  .fq-item code { background:var(--ink); color:var(--cream); font-family:var(--font-mono); padding:2px 6px; font-size:13px; }
+  `;
+
   const items = FAQ_ITEMS.map(
-    (it) => `<section class="faq-item"><h2>${esc(it.q)}</h2><p>${it.a}</p></section>`
+    (it) => `<section class="fq-item"><h2>${e(it.q)}</h2><p>${it.a}</p></section>`
   ).join("\n");
-  return `<!doctype html>
-<html lang="en">
-<head>
-${head({ title, description, canonical, jsonLd, image: `${baseUrl}/card.png` })}
-</head>
-<body>
-${renderHeader("/faq")}
-<div class="wrap">
-  <div class="crumb"><a href="/">Agent402</a> / faq</div>
-  <h1>Frequently asked questions</h1>
-  <p class="sub">Agent402 is the open-source, self-hostable x402 + MCP server: pay-per-call web tools for AI agents, free via proof-of-work or paid in USDC on Base.</p>
+
+  const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
+  <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;">FAQ</div>
+  <h1 style="font-family:var(--font-body);font-weight:800;font-size:42px;line-height:.96;letter-spacing:-.03em;margin-bottom:14px;">Frequently asked questions</h1>
+  <p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;margin-bottom:32px;">Agent402 is the open-source, self-hostable x402 + MCP server: pay-per-call web tools for AI agents, free via proof-of-work or paid in USDC on Base.</p>
   ${items}
 </div>
-${renderFooter()}
-</body>
-</html>`;
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({
+    title,
+    description,
+    canonical,
+    baseUrl,
+    activePath: "/faq",
+    jsonLd,
+    extraCss: FAQ_CSS,
+    body,
+  });
 }
 
 export function openapiSpec(baseUrl, catalog) {

@@ -1,6 +1,4 @@
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-
-const esc = (s) => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const WORKFLOWS = [
   {
@@ -95,67 +93,47 @@ export function workflowsPage(baseUrl) {
       </div>`;
   }).join("\n");
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(pageTitle)}</title>
-<meta name="description" content="${esc(pageDesc)}">
-<link rel="canonical" href="${esc(canonical)}">
-<meta property="og:title" content="${esc(pageTitle)}">
-<meta property="og:description" content="${esc(pageDesc)}">
-<meta property="og:url" content="${esc(canonical)}">
-<meta property="og:type" content="website">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="${esc(pageTitle)}">
-<meta name="twitter:description" content="${esc(pageDesc)}">
-${CHROME_HEAD_LINKS}
-<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
-<style>
-${CHROME_CSS}
-:root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;margin:0}
-.breadcrumb{font-size:.85rem;color:var(--muted);margin-bottom:1.5rem}
-.breadcrumb a{color:var(--accent);text-decoration:none}
-.breadcrumb a:hover{text-decoration:underline}
-.wf-intro{max-width:760px;color:var(--muted);line-height:1.7;margin:0 0 2.5rem}
-.wf-grid{display:flex;flex-direction:column;gap:1.5rem;margin-bottom:3rem}
-.wf-card{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:1.5rem 1.6rem}
-.wf-card h3{margin:0 0 .6rem;font-size:1.15rem;color:var(--text);font-weight:600}
-.wf-desc{color:var(--muted);font-size:.93rem;line-height:1.65;margin:0 0 1.2rem}
-.wf-flow{display:flex;align-items:stretch;gap:0;flex-wrap:nowrap;overflow-x:auto;padding:.25rem 0}
-.wf-step{display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.7rem 1rem;min-width:120px;max-width:170px;text-decoration:none;transition:border-color .15s,background .15s;flex-shrink:0}
-.wf-step:hover{border-color:var(--accent);background:rgba(74,222,128,.06)}
-.wf-step-name{color:var(--accent);font-family:var(--mono);font-size:.82rem;font-weight:600;margin-bottom:.3rem}
-.wf-step-desc{color:var(--muted);font-size:.75rem;line-height:1.35;text-align:center}
-.wf-arrow{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:1.1rem;padding:0 .5rem;flex-shrink:0}
-.wf-cost{font-size:.88rem;margin:.9rem 0 0;color:var(--muted)}
-.wf-label{color:var(--text);font-weight:500}
-.wf-price{color:var(--accent);font-family:var(--mono);font-weight:500}
-.wf-cta{text-align:center;margin:2rem 0 3rem}
-.wf-cta a{display:inline-block;color:#0b0e14;background:var(--accent);font-weight:600;text-decoration:none;font-size:1.05rem;padding:.7rem 2rem;border-radius:8px;transition:opacity .15s}
+  const extraCss = `
+.wf-wrap{max-width:960px;margin:0 auto;padding:56px 30px}
+.wf-eyebrow{font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:18px}
+.wf-h1{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px}
+.wf-intro{max-width:760px;font-size:15px;line-height:1.55;color:var(--muted);margin:0 0 40px}
+.wf-grid{display:flex;flex-direction:column;gap:20px;margin-bottom:48px}
+.wf-card{background:var(--card);border:1.5px solid var(--ink);padding:24px 26px}
+.wf-card h3{margin:0 0 8px;font-family:var(--font-body);font-weight:800;font-size:22px;color:var(--ink)}
+.wf-desc{color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 20px}
+.wf-flow{display:flex;align-items:stretch;gap:0;flex-wrap:nowrap;overflow-x:auto;padding:4px 0}
+.wf-step{display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--card);border:1.5px solid var(--ink);padding:12px 16px;min-width:120px;max-width:170px;text-decoration:none;transition:border-color .15s;flex-shrink:0}
+.wf-step:hover{border-color:var(--accent)}
+.wf-step-name{color:var(--accent);font-family:var(--font-mono);font-size:13px;font-weight:700;margin-bottom:4px}
+.wf-step-desc{color:var(--muted);font-size:12px;line-height:1.35;text-align:center}
+.wf-arrow{display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:18px;padding:0 8px;flex-shrink:0}
+.wf-cost{font-size:14px;margin:14px 0 0;color:var(--muted)}
+.wf-label{color:var(--ink);font-weight:600}
+.wf-price{color:var(--accent);font-family:var(--font-mono);font-weight:700}
+.wf-cta{text-align:center;margin:32px 0 48px}
+.wf-cta a{display:inline-block;background:var(--accent);color:#fff;font-family:var(--font-mono);font-weight:700;text-decoration:none;font-size:14px;padding:14px 30px;border:1.5px solid var(--accent)}
 .wf-cta a:hover{opacity:.88}
 @media(max-width:740px){
+  .wf-h1{font-size:36px !important}
   .wf-flow{flex-direction:column;align-items:stretch}
-  .wf-step{max-width:none;flex-direction:row;gap:.7rem;justify-content:flex-start}
+  .wf-step{max-width:none;flex-direction:row;gap:12px;justify-content:flex-start}
   .wf-step-desc{text-align:left}
-  .wf-arrow{transform:rotate(90deg);padding:.25rem 0}
+  .wf-arrow{transform:rotate(90deg);padding:4px 0}
 }
-</style>
-</head>
-<body>
-${renderHeader("/workflows")}
-<main style="max-width:960px;margin:0 auto;padding:2rem 1.25rem">
-<p class="breadcrumb"><a href="/">Home</a> &rsaquo; Workflows</p>
-<h1 style="font-size:1.8rem;margin:0 0 1rem;color:var(--text)">Workflows</h1>
+`;
+
+  const body = `
+<div class="wf-wrap">
+<div class="wf-eyebrow">$ GET /workflows</div>
+<h1 class="wf-h1">Workflows</h1>
 <p class="wf-intro">Agent402 tools are designed to chain together. Each workflow below shows a multi-step pipeline an agent can run end-to-end, with estimated per-run cost at pay-per-call pricing.</p>
 <div class="wf-grid">
 ${cards}
 </div>
 <div class="wf-cta"><a href="/playground">Try it yourself &rarr;</a></div>
-</main>
-${renderFooter()}
-</body>
-</html>`;
+</div>
+${ledgerFooterCompact()}`;
+
+  return ledgerShell({ title: pageTitle, description: pageDesc, canonical, baseUrl, activePath: "/workflows", jsonLd, extraCss, body });
 }

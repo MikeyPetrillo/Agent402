@@ -6,9 +6,7 @@
 // playground (like CodePen/JSFiddle). Code runs entirely in the user's browser
 // and never reaches the server. The callTool wrapper authenticates via PoW.
 
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-
-const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const EXAMPLES = [
   {
@@ -61,60 +59,41 @@ export function sdkPlaygroundPage(baseUrl) {
     `<button class="sp-example${i === 0 ? " active" : ""}" data-idx="${i}">${esc(ex.label)}</button>`
   ).join("\n      ");
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}</title>
-<meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${esc(canonical)}">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
-<meta property="og:url" content="${esc(canonical)}">
-<meta property="og:type" content="website">
-<meta name="twitter:card" content="summary">
-${CHROME_HEAD_LINKS}
-<style>
-${CHROME_CSS}
-:root{--bg:#0b0e14;--card:#131826;--text:#e6e9f0;--muted:#8b93a7;--accent:#4ade80;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-*,*::before,*::after{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,sans-serif}
-.sp-wrap{max-width:1080px;margin:0 auto;padding:1.5rem 1.25rem 4rem}
-.sp-crumb{font-size:.85rem;color:var(--muted);margin-bottom:1rem}
-.sp-crumb a{color:var(--accent);text-decoration:none}
-.sp-title{font-size:1.6rem;font-weight:700;margin:0 0 .5rem}
-.sp-sub{color:var(--muted);margin:0 0 1.5rem;font-size:.95rem}
-.sp-sub a{color:var(--accent)}
-.sp-examples{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem}
-.sp-example{background:transparent;border:1px solid #1e2638;color:var(--muted);padding:.4rem .85rem;border-radius:999px;font-size:.82rem;cursor:pointer;font-family:inherit;transition:.15s}
-.sp-example:hover{border-color:var(--accent);color:var(--text)}
-.sp-example.active{background:var(--accent);color:#0b0e14;border-color:var(--accent);font-weight:600}
-.sp-editor-wrap{display:flex;gap:1rem;margin-bottom:1rem}
-@media(max-width:760px){.sp-editor-wrap{flex-direction:column}}
-.sp-editor{flex:1;min-width:0}
-.sp-output{flex:1;min-width:0}
-.sp-label{font-size:.82rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:.4rem}
-textarea.sp-code{width:100%;min-height:240px;background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:1rem;color:var(--text);font-family:var(--mono);font-size:.82rem;line-height:1.55;resize:vertical;outline:none}
-textarea.sp-code:focus{border-color:var(--accent)}
-.sp-result{width:100%;min-height:240px;background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:1rem;font-family:var(--mono);font-size:.82rem;line-height:1.55;white-space:pre-wrap;word-break:break-word;overflow:auto;color:var(--muted)}
-.sp-result .log{color:var(--text)}
-.sp-result .err{color:#f87171}
-.sp-actions{display:flex;gap:.75rem;align-items:center;margin-bottom:1.5rem}
-.sp-run{padding:.5rem 1.5rem;background:var(--accent);color:#000;font-weight:600;font-size:.9rem;border:none;border-radius:8px;cursor:pointer;font-family:inherit}
-.sp-run:hover{opacity:.85}
-.sp-run:disabled{opacity:.5;cursor:not-allowed}
-.sp-status{color:var(--muted);font-size:.85rem;font-family:var(--mono)}
-.sp-status .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
-@keyframes spin{to{transform:rotate(360deg)}}
-.sp-note{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:1rem 1.25rem;color:var(--muted);font-size:.88rem;margin-top:1.5rem}
-.sp-note a{color:var(--accent)}
-.sp-note code{font-family:var(--mono);background:rgba(255,255,255,.04);padding:.15rem .4rem;border-radius:3px;font-size:.82rem}
-</style>
-</head>
-<body>
+  const extraCss = `
+  .sp-wrap{max-width:1180px;margin:0 auto;padding:56px 30px 60px}
+  .sp-crumb{font-family:var(--font-mono);font-size:.85rem;color:var(--faint);margin-bottom:1rem}
+  .sp-crumb a{color:var(--accent);text-decoration:none}
+  .sp-title{font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 .5rem}
+  .sp-sub{color:var(--muted);margin:0 0 1.5rem;font-size:.95rem}
+  .sp-sub a{color:var(--accent)}
+  .sp-examples{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem}
+  .sp-example{background:transparent;border:1.5px solid var(--ink);color:var(--faint);padding:.4rem .85rem;font-family:var(--font-mono);font-size:.82rem;cursor:pointer;transition:.15s}
+  .sp-example:hover{border-color:var(--accent);color:var(--ink)}
+  .sp-example.active{background:var(--ink);color:var(--cream);border-color:var(--ink);font-weight:700}
+  .sp-editor-wrap{display:flex;gap:1rem;margin-bottom:1rem}
+  @media(max-width:760px){.sp-editor-wrap{flex-direction:column}}
+  .sp-editor{flex:1;min-width:0}
+  .sp-output{flex:1;min-width:0}
+  .sp-label{font-family:var(--font-mono);font-size:.82rem;color:var(--faint);text-transform:uppercase;letter-spacing:.04em;margin-bottom:.4rem}
+  textarea.sp-code{width:100%;min-height:240px;background:var(--ink);border:1.5px solid var(--dark-border);padding:1rem;color:var(--cream);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;resize:vertical;outline:none}
+  textarea.sp-code:focus{border-color:var(--accent)}
+  .sp-result{width:100%;min-height:240px;background:var(--ink);border:1.5px solid var(--dark-border);padding:1rem;font-family:var(--font-mono);font-size:.82rem;line-height:1.55;white-space:pre-wrap;word-break:break-word;overflow:auto;color:var(--dk-muted)}
+  .sp-result .log{color:var(--cream)}
+  .sp-result .err{color:#c0392b}
+  .sp-actions{display:flex;gap:.75rem;align-items:center;margin-bottom:1.5rem}
+  .sp-run{padding:.5rem 1.5rem;background:var(--ink);color:var(--cream);font-weight:700;font-size:.9rem;border:none;font-family:var(--font-mono);cursor:pointer}
+  .sp-run:hover{opacity:.85}
+  .sp-run:disabled{opacity:.5;cursor:not-allowed}
+  .sp-status{color:var(--faint);font-size:.85rem;font-family:var(--font-mono)}
+  .sp-status .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--faint);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .sp-note{background:var(--card);border:1.5px solid var(--ink);padding:1rem 1.25rem;color:var(--muted);font-size:.88rem;margin-top:1.5rem}
+  .sp-note a{color:var(--accent)}
+  .sp-note code{font-family:var(--font-mono);background:var(--ink);color:var(--cream);padding:.15rem .4rem;font-size:.82rem}
+  `;
+
+  const pageBody = `
 <script>var BASE='${baseUrl.replace(/'/g, "\\'")}';</script>
-${renderHeader("/playground")}
 <div class="sp-wrap">
 <p class="sp-crumb"><a href="/">Home</a> &rsaquo; <a href="/playground">Playground</a> &rsaquo; SDK</p>
 <h1 class="sp-title">SDK Playground</h1>
@@ -144,7 +123,7 @@ ${renderHeader("/playground")}
   <strong>How it works:</strong> The playground uses <code>callTool(slug, params)</code> which fetches a PoW challenge, solves it in your browser, then calls the tool. This mirrors what <code>agent402-client</code> does in Node.js. For production use, install the SDK: <code>npm install agent402-client</code>. <a href="/quickstart">Quickstart guide &rarr;</a>
 </div>
 </div>
-${renderFooter()}
+${ledgerFooterCompact()}
 <script>
 (function(){
   var EXAMPLES=${JSON.stringify(EXAMPLES.map(function(e){ return {label:e.label,code:e.code}; }))};
@@ -257,7 +236,15 @@ ${renderFooter()}
     }
   });
 })();
-</script>
-</body>
-</html>`;
+</script>`;
+
+  return ledgerShell({
+    title,
+    description,
+    canonical,
+    baseUrl,
+    activePath: "__none__",
+    extraCss,
+    body: pageBody,
+  });
 }

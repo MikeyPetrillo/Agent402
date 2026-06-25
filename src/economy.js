@@ -11,11 +11,8 @@
 // We deliberately do not name competing sellers anywhere in user-facing
 // copy. Rank is enough.
 
-import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { rankBy } from "./leaderboard.js";
-
-const esc = (s) =>
-  String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 const fmtUsd = (n) => {
   const v = Number(n) || 0;
@@ -82,28 +79,38 @@ function summarize(rows, sortMode = "usd") {
 }
 
 const ECON_CSS = `
+  .ec-wrap { max-width:1180px; margin:0 auto; padding:56px 30px; }
+  .ec-wrap h1 { font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 8px; }
+  .ec-wrap h2 { font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em; }
+  .crumb { font-family:var(--font-mono); font-size:.85rem; color:var(--faint); margin-bottom:18px; }
+  .crumb a { color:var(--faint); text-decoration:none; }
+  .crumb a:hover { color:var(--accent); }
+  .sub { color:var(--muted); max-width:680px; line-height:1.6; }
+  .sub a { color:var(--accent); }
+  code { font-family:var(--font-mono); font-size:.85em; }
   .stat-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; margin:24px 0; }
   @media (min-width:680px) { .stat-grid { grid-template-columns:repeat(4,1fr); } }
-  .stat { background:var(--card); border:1px solid #1e2638; border-radius:12px; padding:16px; }
-  .stat .label { color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; }
-  .stat .val { font-size:1.6rem; font-family:var(--mono); color:var(--text); margin-top:4px; }
-  .stat .sub { color:var(--muted); font-size:.78rem; margin-top:4px; }
-  .panel { background:var(--card); border:1px solid #1e2638; border-radius:12px; padding:18px 20px; margin:18px 0; }
+  .stat { background:var(--card); border:1.5px solid var(--ink); padding:16px; }
+  .stat .label { color:var(--faint); font-family:var(--font-mono); font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; }
+  .stat .val { font-size:1.6rem; font-family:var(--font-mono); color:var(--ink); margin-top:4px; }
+  .stat .sub-text { color:var(--faint); font-size:.78rem; margin-top:4px; }
+  .panel { background:var(--card); border:1.5px solid var(--ink); padding:18px 20px; margin:18px 0; }
   .panel h2 { font-size:1.1rem; margin:0 0 12px; }
-  .row { display:flex; justify-content:space-between; gap:12px; padding:8px 0; border-bottom:1px dashed #1e2638; font-size:.92rem; }
+  .row { display:flex; justify-content:space-between; gap:12px; padding:8px 0; border-bottom:1px solid var(--hairline); font-size:.92rem; }
   .row:last-child { border-bottom:none; }
-  .row .rk { color:var(--muted); font-family:var(--mono); margin-right:8px; min-width:26px; display:inline-block; }
-  .row .nm { color:var(--text); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .row .val { color:var(--accent); font-family:var(--mono); }
-  .bar { background:#10162a; border-radius:6px; height:8px; overflow:hidden; margin-top:4px; }
+  .row .rk { color:var(--faint); font-family:var(--font-mono); margin-right:8px; min-width:26px; display:inline-block; }
+  .row .nm { color:var(--ink); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .val { color:var(--accent); font-family:var(--font-mono); }
+  .bar { background:var(--ink); border-radius:0; height:8px; overflow:hidden; margin-top:4px; }
   .bar > div { background:var(--accent); height:100%; }
-  .our-share { background:#10210f; border:1px solid #1f4a1d; }
-  .meta { color:var(--muted); font-size:.82rem; margin-top:24px; }
-  .warming { background:#2a1d10; border:1px solid #4a371d; color:#e0b27a; padding:12px 16px; border-radius:10px; }
-  .sort-toggle { display:inline-flex; gap:0; border:1px solid #1e2638; border-radius:8px; padding:3px; margin:0 0 18px; background:var(--card); }
-  .sort-toggle a { padding:6px 14px; color:var(--muted); text-decoration:none; border-radius:6px; font-size:.85rem; transition:color .12s, background .12s; }
-  .sort-toggle a:hover { color:var(--text); }
-  .sort-toggle a.active { background:#1a2236; color:var(--accent); }
+  .our-share { background:var(--card); border:1.5px solid var(--accent); }
+  .meta { color:var(--faint); font-size:.82rem; margin-top:24px; }
+  .meta a { color:var(--accent); }
+  .warming { background:var(--card); border:1.5px solid var(--accent); color:var(--muted); padding:12px 16px; }
+  .sort-toggle { display:inline-flex; gap:0; border:1.5px solid var(--ink); padding:3px; margin:0 0 18px; background:var(--card); }
+  .sort-toggle a { padding:6px 14px; color:var(--faint); text-decoration:none; font-family:var(--font-mono); font-size:.85rem; transition:color .12s, background .12s; }
+  .sort-toggle a:hover { color:var(--ink); }
+  .sort-toggle a.active { background:var(--ink); color:var(--cream); }
 `;
 
 export function economyPage(baseUrl, snapshot, { sort } = {}) {
@@ -116,16 +123,14 @@ export function economyPage(baseUrl, snapshot, { sort } = {}) {
     "Daily report on the x402 pay-per-call API economy: total USDC volume settled across every public seller, call counts, top-5 and top-10 concentration, and per-chain breakdown. Computed hourly from on-chain Base USDC transfers and the Bazaar discovery index.";
 
   if (snapshot?.warming || !snapshot?.leaderboard?.length) {
-    return baseHtml({
-      title,
-      description,
-      canonical,
-      body: `<div class="wrap">
+    const warmBody = `<div class="ec-wrap">
         <div class="crumb"><a href="/">Agent402</a> / economy</div>
         <h1>x402 economy</h1>
         <div class="warming">Snapshot warming up. The leaderboard pipeline runs hourly and pre-warms on boot — refresh in a moment.</div>
-      </div>`,
-    });
+      </div>
+${ledgerFooterCompact()}`;
+
+    return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", extraCss: ECON_CSS, body: warmBody });
   }
 
   const ranked = rankBy(snapshot.leaderboard, sortMode);
@@ -174,7 +179,7 @@ export function economyPage(baseUrl, snapshot, { sort } = {}) {
       </div>`
     : "";
 
-  const body = `<div class="wrap">
+  const mainBody = `<div class="ec-wrap">
     <div class="crumb"><a href="/">Agent402</a> / economy</div>
     <h1>The x402 economy, last ${esc(windowLabel)}</h1>
     <p class="sub">Total per-call USDC settled across every public x402 seller our crawler can see, aggregated from on-chain transfers on Base. Sellers are discovered via the public Bazaar index; per-call settlements are filtered to a $0.50 ceiling so funding moves and swaps don't pollute the ranking. Refreshes hourly. Machine-readable: <a href="/api/leaderboard">/api/leaderboard</a>.</p>
@@ -185,22 +190,22 @@ export function economyPage(baseUrl, snapshot, { sort } = {}) {
       <div class="stat">
         <div class="label">Total volume</div>
         <div class="val">${fmtUsd(s.total)}</div>
-        <div class="sub">across ${fmtInt(s.activeSellers)} active sellers</div>
+        <div class="sub-text">across ${fmtInt(s.activeSellers)} active sellers</div>
       </div>
       <div class="stat">
         <div class="label">Total calls</div>
         <div class="val">${fmtInt(s.totalCalls)}</div>
-        <div class="sub">avg ${fmtUsd(s.avgCallUsd)} per call</div>
+        <div class="sub-text">avg ${fmtUsd(s.avgCallUsd)} per call</div>
       </div>
       <div class="stat">
         <div class="label">Top-5 share</div>
         <div class="val">${fmtPct(s.top5Share)}</div>
-        <div class="sub">top-1 ${fmtPct(s.top1Share)} · top-10 ${fmtPct(s.top10Share)}</div>
+        <div class="sub-text">top-1 ${fmtPct(s.top1Share)} · top-10 ${fmtPct(s.top10Share)}</div>
       </div>
       <div class="stat">
         <div class="label">Networks</div>
         <div class="val">${s.networks.length}</div>
-        <div class="sub">chains with volume</div>
+        <div class="sub-text">chains with volume</div>
       </div>
     </div>
 
@@ -218,46 +223,8 @@ export function economyPage(baseUrl, snapshot, { sort } = {}) {
     </div>
 
     <div class="meta">As of ${esc(asOf)} · window ${esc(windowLabel)} · ${fmtInt(snapshot.scannedBlocks || 0)} blocks scanned</div>
-  </div>`;
+  </div>
+${ledgerFooterCompact()}`;
 
-  return baseHtml({ title, description, canonical, body });
-}
-
-function baseHtml({ title, description, canonical, body }) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-${CHROME_HEAD_LINKS}
-<title>${esc(title)}</title>
-<meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${canonical}">
-<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1">
-<meta property="og:type" content="website">
-<meta property="og:url" content="${canonical}">
-<meta property="og:site_name" content="Agent402">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
-<meta name="twitter:card" content="summary">
-<style>
-  :root { --bg:#0b0e14; --card:#131826; --text:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --mono:ui-monospace,SFMono-Regular,Menlo,monospace; }
-  * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--text); font:16px/1.6 system-ui,-apple-system,sans-serif; }
-  .wrap { max-width:920px; margin:0 auto; padding:40px 20px 80px; }
-  a { color:var(--accent); }
-  h1 { font-size:1.9rem; line-height:1.2; margin-bottom:8px; }
-  .crumb { font-size:.85rem; color:var(--muted); margin-bottom:18px; }
-  .sub { color:var(--muted); max-width:680px; }
-  code { font-family:var(--mono); font-size:.85em; color:#a5b4d4; }
-  ${ECON_CSS}
-  ${CHROME_CSS}
-</style>
-</head>
-<body>
-${renderHeader("/economy")}
-${body}
-${renderFooter()}
-</body>
-</html>`;
+  return ledgerShell({ title, description, canonical, baseUrl, activePath: "__none__", extraCss: ECON_CSS, body: mainBody });
 }
