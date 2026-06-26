@@ -19,6 +19,7 @@ const EVM_NETWORKS = {
   base: "eip155:8453",
   polygon: "eip155:137",
   arbitrum: "eip155:42161",
+  avalanche: "eip155:43114",
   "base-sepolia": "eip155:84532",
 };
 const SVM_NETWORKS = {
@@ -61,11 +62,14 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const evmCaip2 = caip2List.filter((c) => c.startsWith("eip155:"));
   const svmCaip2 = caip2List.filter((c) => c.startsWith("solana:"));
 
-  // Build facilitator client list: CDP for EVM, PayAI for Solana.
+  // Build facilitator client list: CDP (Base + Solana, fee-free) as primary,
+  // PayAI (Polygon, Arbitrum, Avalanche, Solana, + more) as fallback for
+  // chains CDP doesn't cover. The resource server tries each in order.
   const facilitatorClients = [];
   const cdpConfig = await resolveFacilitatorConfig(network);
   if (cdpConfig) facilitatorClients.push(new HTTPFacilitatorClient(cdpConfig));
-  if (svmCaip2.length) {
+  const needsPayAI = svmCaip2.length || caip2List.some((c) => !["eip155:8453", "eip155:84532"].includes(c));
+  if (needsPayAI) {
     const payaiConfig = await resolvePayAIFacilitatorConfig();
     if (payaiConfig) facilitatorClients.push(new HTTPFacilitatorClient(payaiConfig));
   }
