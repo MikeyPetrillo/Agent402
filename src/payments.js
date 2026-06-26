@@ -15,11 +15,12 @@ import {
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
 // it in `accepts`. Only chains a facilitator can settle are safe to add.
+// Only chains whose USDC address is in @x402/evm's built-in asset registry.
+// Avalanche is excluded — getDefaultAsset throws for eip155:43114.
 const EVM_NETWORKS = {
   base: "eip155:8453",
   polygon: "eip155:137",
   arbitrum: "eip155:42161",
-  avalanche: "eip155:43114",
   "base-sepolia": "eip155:84532",
 };
 const SVM_NETWORKS = {
@@ -62,11 +63,18 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const evmCaip2 = caip2List.filter((c) => c.startsWith("eip155:"));
   const svmCaip2 = caip2List.filter((c) => c.startsWith("solana:"));
 
-  // Facilitator: CDP for Base (fee-free, Bazaar discovery). Multi-chain
-  // (Solana, Polygon, Arbitrum, Avalanche via PayAI) is supported in the
-  // NETWORKS map but requires the PAYMENT_NETWORKS env var to activate.
-  // When multi-chain is active, PayAI is added as a second facilitator.
-  const facilitatorClient = new HTTPFacilitatorClient(await resolveFacilitatorConfig(network));
+  // Facilitator: CDP settles on Base and indexes endpoints in the Bazaar
+  // (agentic.market). When additional chains are enabled (Solana, Polygon,
+  // Arbitrum), PayAI handles settlement across all chains in one client.
+  // CDP is used when ONLY the primary Base chain is active (preserves the
+  // existing Bazaar integration + fee-free settlement). PayAI free tier
+  // covers 10k settlements/month across all chains.
+  const isMultiChain = networks.length > 1;
+  const facilitatorConfig = isMultiChain
+    ? await resolvePayAIFacilitatorConfig()
+    : await resolveFacilitatorConfig(network);
+  const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
+  if (isMultiChain) console.log("Multi-chain mode: PayAI facilitator for all networks");
   let server = new x402ResourceServer(facilitatorClient)
     .registerExtension(bazaarResourceServerExtension)
     .registerExtension(builderCodeResourceServerExtension);
