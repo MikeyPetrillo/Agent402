@@ -11,7 +11,7 @@
   "keywords": [
     "langchain", "langchainjs", "x402", "ai-agents", "agent-tools", "llm-tools",
     "usdc", "base", "proof-of-work", "http-402", "micropayments", "mcp",
-    "tool-discovery", "smart-order-router"
+    "tool-discovery", "smart-order-router", "agent402"
   ],
   "author": "Mike Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
   "license": "MIT",

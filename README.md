@@ -27,6 +27,8 @@
 [![npm](https://img.shields.io/npm/v/agent402-langchain?label=langchain)](https://www.npmjs.com/package/agent402-langchain)
 [![npm](https://img.shields.io/npm/v/agent402-llamaindex?label=llamaindex)](https://www.npmjs.com/package/agent402-llamaindex)
 [![npm](https://img.shields.io/npm/v/agent402-strands?label=strands)](https://www.npmjs.com/package/agent402-strands)
+[![npm](https://img.shields.io/npm/v/agent402-google-adk?label=google-adk)](https://www.npmjs.com/package/agent402-google-adk)
+[![npm](https://img.shields.io/npm/v/agent402-openai-agents?label=openai-agents)](https://www.npmjs.com/package/agent402-openai-agents)
 
 **Give your AI agent 1,338 ready-to-use web tools — plus 42 multi-tool skill packs — from one server. Browser
 rendering, web search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, deterministic stats and forecasting, compression, and ~1,000 pure-CPU utilities.** Run it yourself for free in 30 seconds (MCP **or**
@@ -196,6 +198,8 @@ If you're already on OpenAI / Anthropic / Vercel AI SDK / LangChain / LlamaIndex
 | LangChain JS / LangGraph | [`agent402-langchain`](https://www.npmjs.com/package/agent402-langchain) | `DynamicStructuredTool[]` |
 | LlamaIndex TS | [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) | `FunctionTool[]` |
 | Strands Agents (AWS Bedrock AgentCore) | [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) | `StrandsTool[]` for `new Agent({ tools })` |
+| Google ADK (Agent Development Kit) | [`agent402-google-adk`](https://www.npmjs.com/package/agent402-google-adk) | `FunctionTool[]` for ADK agents |
+| OpenAI Agents SDK | [`agent402-openai-agents`](https://www.npmjs.com/package/agent402-openai-agents) | `Agent tools` for `@openai/agents` |
 
 ```js
 // e.g. OpenAI — every adapter has the same surface.

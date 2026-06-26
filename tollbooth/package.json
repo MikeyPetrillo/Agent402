@@ -56,7 +56,10 @@
     "edge",
     "self-hosted",
     "mcp",
-    "ai-agents"
+    "ai-agents",
+    "agent402",
+    "tollbooth",
+    "base"
   ],
   "author": "Mike Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
   "license": "MIT",
