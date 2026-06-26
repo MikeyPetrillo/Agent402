@@ -27,7 +27,7 @@ const m = serviceManifest({
 });
 
 ok(m.spec === "agent402-service-manifest/1", "manifest spec tag");
-ok(m.name === "Agent402", "manifest name");
+ok(m.name === "Agent402.Tools", "manifest name");
 ok(m.openSource === true && m.selfHostable === true && m.license === "MIT", "wedge flags");
 ok(Array.isArray(m.differentiators) && m.differentiators.length >= 3, "differentiators present");
 ok(m.twoSided?.tollbooth?.npm === "agent402-tollbooth", "tollbooth advertised");
@@ -68,7 +68,7 @@ const stats = {
   toolCallsServed: { total: 100, viaUSDC: 60, viaProofOfWork: 40 },
 };
 const r = reliabilityReport({ baseUrl: BASE, network: "base", wallet: WALLET, stats });
-ok(r.service === "Agent402" && r.status === "operational", "reliability identity/status");
+ok(r.service === "Agent402.Tools" && r.status === "operational", "reliability identity/status");
 ok(r.uptimeSeconds === 12345 && r.toolCallsServed.total === 100, "reliability pulls live stats");
 ok(r.onchain.revenueProof.includes(WALLET), "reliability onchain proof");
 ok(Array.isArray(r.guarantees) && r.guarantees.length >= 5, "guarantees listed");

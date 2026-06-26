@@ -55,7 +55,7 @@ try {
   for (const k of ["name", "description", "payment", "altPayment", "baseUrl", "openapi", "categories", "endpoints"]) {
     ok(k in body, `envelope key '${k}' present (got: ${Object.keys(body).join(",")})`);
   }
-  ok(body.name === "Agent402", `name='Agent402' (got ${body.name})`);
+  ok(body.name === "Agent402.Tools", `name='Agent402.Tools' (got ${body.name})`);
   ok(typeof body.description === "string" && body.description.length > 0, `description is non-empty`);
   ok(body.baseUrl === BASE, `baseUrl matches BASE (got ${body.baseUrl}, expected ${BASE}) — proxy guard`);
   ok(typeof body.openapi === "string" && body.openapi.endsWith("/openapi.json"), `openapi URL ends with /openapi.json (got ${body.openapi})`);

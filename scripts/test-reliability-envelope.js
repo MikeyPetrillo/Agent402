@@ -10,7 +10,7 @@
 //   1. GET /api/reliability → 200 application/json.
 //   2. Envelope: { service, status, asOf, servingSince, uptimeSeconds,
 //      toolCallsServed, onchain{}, guarantees[], endpoints{}, incidents }.
-//   3. service === 'Agent402', status === 'operational' (a 200 by definition
+//   3. service === 'Agent402.Tools', status === 'operational' (a 200 by definition
 //      means the node is serving — the field documents that contract).
 //   4. asOf parses as ISO; uptimeSeconds and toolCallsServed are numbers.
 //   5. onchain has revenueProof URL (or null in FREE_MODE) + a note.
@@ -51,7 +51,7 @@ try {
   for (const k of ["service", "status", "asOf", "servingSince", "uptimeSeconds", "toolCallsServed", "onchain", "guarantees", "endpoints", "incidents"]) {
     ok(k in body, `envelope key '${k}' present (got: ${Object.keys(body).join(",")})`);
   }
-  ok(body.service === "Agent402", `service='Agent402' (got ${body.service})`);
+  ok(body.service === "Agent402.Tools", `service='Agent402.Tools' (got ${body.service})`);
   // status field documents the contract — a 200 from this URL means the
   // node is up; the field is the machine-readable version of that fact.
   ok(body.status === "operational", `status='operational' (got ${body.status}) — a 200 here documents node liveness`);
