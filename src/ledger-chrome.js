@@ -254,6 +254,7 @@ export function ledgerShell({ title, description, canonical, baseUrl, activePath
 <meta name="twitter:title" content="${esc(title)}">
 <meta name="twitter:description" content="${esc(description)}">
 <meta name="twitter:image" content="${esc(og)}">
+<meta name="base:app_id" content="6a3dd86ca341d86b910769fb" />
 ${LEDGER_HEAD}
 <style>${LEDGER_CSS}${extraCss}</style>
 ${jsonLdBlock}
