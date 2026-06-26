@@ -67,7 +67,9 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="icon" type="image/png" sizes="512x512" href="/logo.png">
 <link rel="shortcut icon" href="/favicon.ico">
-<link rel="apple-touch-icon" href="/logo.png"><title>Agent402 — the open x402 index: Find, Router &amp; Leaderboard for the agent payments economy (${count}+ tools)</title>
+<link rel="apple-touch-icon" href="/logo.png">
+<meta name="base:app_id" content="6a3dd86ca341d86b910769fb">
+<title>Agent402 — the open x402 index: Find, Router &amp; Leaderboard for the agent payments economy (${count}+ tools)</title>
 <meta name="description" content="The open x402 index — discovery, routing, and on-chain ranking for the agent payments economy. /api/find resolves tasks to tools, /api/route is the neutral Smart Order Router across every x402 seller, /api/leaderboard ranks them by Base USDC settled volume. Plus ${count} pay-per-call agent tools and agent402-tollbooth (open pay-per-crawl gate). Free via proof-of-work or USDC on Base. No signup, no API key.">
 <link rel="canonical" href="${baseUrl}/">
 <meta property="og:type" content="website">

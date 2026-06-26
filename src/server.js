@@ -647,6 +647,7 @@ app.get("/health", (_req, res) => {
     // /data is missing, but this flag lets an operator verify externally
     // before pointing buyers at /api/memory*.
     memoryPersistent,
+    builderCode: Boolean((process.env.BASE_BUILDER_CODE || "").trim()),
   };
   const ok = checks.db && checks.wallet;
   const meta = {

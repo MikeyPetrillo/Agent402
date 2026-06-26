@@ -5,6 +5,11 @@ import {
   bazaarResourceServerExtension,
   declareDiscoveryExtension,
 } from "@x402/extensions/bazaar";
+import {
+  BUILDER_CODE,
+  builderCodeResourceServerExtension,
+  declareBuilderCodeExtension,
+} from "@x402/extensions/builder-code";
 
 // USDC is auto-resolved per network by @x402/evm's built-in asset registry, so
 // adding a chain just means registering the scheme + offering it in `accepts`.
@@ -49,7 +54,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const caip2List = networks.map((n) => NETWORKS[n]);
 
   const facilitatorClient = new HTTPFacilitatorClient(await resolveFacilitatorConfig(network));
-  let server = new x402ResourceServer(facilitatorClient).registerExtension(bazaarResourceServerExtension);
+  let server = new x402ResourceServer(facilitatorClient)
+    .registerExtension(bazaarResourceServerExtension)
+    .registerExtension(builderCodeResourceServerExtension);
   for (const caip2 of caip2List) server = server.register(caip2, new ExactEvmScheme());
   console.log(`Accepting USDC on: ${networks.join(", ")} (${caip2List.join(", ")})`);
 
@@ -69,22 +76,27 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     return slim;
   };
 
+  const builderCode = process.env.BASE_BUILDER_CODE || null;
+  if (builderCode) console.log(`Builder Code: ${builderCode} (Base onchain attribution enabled)`);
+
   const routes = Object.fromEntries(
-    Object.entries(catalog).map(([route, item]) => [
-      route,
-      {
-        accepts: acceptsFor(item),
-        description: capDesc(item.description),
-        // The brand string the Coinbase CDP Bazaar surfaces for every listing
-        // we publish — also what appears on /api/leaderboard. We use the
-        // domain so the row on every public x402 surface back-links the site.
-        serviceName: "Agent402.tools",
-        tags: ["web", "tools", "agents", ...(item.tags ?? [])],
-        mimeType: "application/json",
-        resource: `${baseUrl}${route.split(" ")[1]}`,
-        extensions: declareDiscoveryExtension(slimDiscovery(item.discovery)),
-      },
-    ])
+    Object.entries(catalog).map(([route, item]) => {
+      const ext = {};
+      if (item.bazaar !== false) Object.assign(ext, declareDiscoveryExtension(slimDiscovery(item.discovery)));
+      if (builderCode) Object.assign(ext, { [BUILDER_CODE]: declareBuilderCodeExtension(builderCode) });
+      return [
+        route,
+        {
+          accepts: acceptsFor(item),
+          description: capDesc(item.description),
+          serviceName: "Agent402.tools",
+          tags: ["web", "tools", "agents", ...(item.tags ?? [])],
+          mimeType: "application/json",
+          resource: `${baseUrl}${route.split(" ")[1]}`,
+          extensions: Object.keys(ext).length ? ext : undefined,
+        },
+      ];
+    })
   );
 
   // X402_SYNC_ON_START=false skips the facilitator handshake at boot —
