@@ -1,7 +1,7 @@
 {
   "name": "agent402-client",
   "version": "0.3.0",
-  "description": "Tiny buyer-side client for Agent402.Tools (x402): resolve a task to a tool and call it with payment handled for you — free tools settle via built-in proof-of-work (no wallet), wallet-only tools via your x402 fetch. Caching + idempotent retries.",
+  "description": "Buyer-side SDK for Agent402.Tools (x402): resolve a task to a tool across 1,338 pay-per-call endpoints and call it with payment handled for you — free tools settle via built-in proof-of-work (no wallet), wallet-only tools via your x402 fetch. Caching, idempotent retries, cross-seller Smart Order Router.",
   "type": "module",
   "main": "index.js",
   "exports": { ".": "./index.js" },
@@ -10,7 +10,8 @@
   "scripts": { "test": "node test.js" },
   "keywords": [
     "x402", "ai-agents", "agent-tools", "llm-tools", "usdc", "base",
-    "proof-of-work", "http-402", "micropayments", "mcp", "client", "sdk"
+    "proof-of-work", "http-402", "micropayments", "mcp", "client", "sdk",
+    "agent402", "tool-discovery", "smart-order-router"
   ],
   "author": "Mike Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
   "license": "MIT",

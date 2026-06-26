@@ -30,17 +30,22 @@
     "llm-tools",
     "ai-tools",
     "claude",
+    "openai",
     "self-hosted",
     "agents",
     "ai",
     "payments",
     "usdc",
+    "base",
     "http-402",
     "tools",
     "skill-packs",
     "mcp-prompts",
     "workflows",
-    "proof-of-work"
+    "proof-of-work",
+    "agent402",
+    "micropayments",
+    "tool-discovery"
   ],
   "license": "MIT",
   "dependencies": {

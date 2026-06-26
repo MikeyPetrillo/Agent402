@@ -1,7 +1,7 @@
 {
   "name": "agent402-anthropic-tools",
   "version": "0.1.1",
-  "description": "Drop-in Anthropic tool-use tools for Agent402.Tools: turn 1,000+ pay-per-call web tools into Claude tool definitions, with auto-payment (proof-of-work free, USDC via x402 paid). Works with the messages API. Zero deps.",
+  "description": "Drop-in Anthropic tool-use tools for Agent402.Tools: turn 1,338 pay-per-call x402 tools (browser, web search, OCR, PDFs, finance, memory) into Claude tool definitions via four meta-tools (find/route/call/about), plus the cross-seller x402 Smart Order Router. Free via proof-of-work or pay per call in USDC on Base.",
   "type": "module",
   "main": "index.js",
   "exports": { ".": "./index.js" },
@@ -11,7 +11,8 @@
   "keywords": [
     "anthropic", "claude", "tool-use", "tools",
     "x402", "ai-agents", "agent-tools", "llm-tools",
-    "usdc", "base", "proof-of-work", "http-402", "micropayments", "agent402"
+    "usdc", "base", "proof-of-work", "http-402", "micropayments", "agent402",
+    "tool-discovery", "smart-order-router", "mcp"
   ],
   "author": "Mike Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
   "license": "MIT",
