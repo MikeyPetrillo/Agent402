@@ -6,6 +6,8 @@
 //   transcribe      $0.03  — gpt-4o-mini-transcribe  (5 min max)
 //   transcribe-pro  $0.10  — gpt-4o-transcribe        (10 min max)
 
+import { safeFetch } from "./fetch-guard.js";
+
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
 function bad(message, statusCode = 400) {
@@ -49,21 +51,10 @@ function guessFilename(url, contentType) {
 }
 
 async function fetchAudio(url) {
-  let res;
-  try {
-    res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-  } catch (e) {
-    throw bad(`Failed to fetch audio: ${e.message}`, 422);
-  }
-  if (!res.ok) throw bad(`Audio URL returned HTTP ${res.status}`, 422);
-
-  const buf = Buffer.from(await res.arrayBuffer());
+  const { buffer: buf, contentType } = await safeFetch(url, { binary: true, maxBytes: MAX_AUDIO_BYTES });
   if (buf.length === 0) throw bad("Audio URL returned empty response", 422);
-  if (buf.length > MAX_AUDIO_BYTES) {
-    throw bad(`Audio file too large (${(buf.length / 1024 / 1024).toFixed(1)} MB). Maximum is 25 MB`);
-  }
 
-  const filename = guessFilename(url, res.headers.get("content-type"));
+  const filename = guessFilename(url, contentType);
   return { buf, filename };
 }
 
