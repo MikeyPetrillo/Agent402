@@ -163,7 +163,7 @@ export function shopPage(baseUrl, catalog) {
   const canonical = `${baseUrl}/shop`;
   const title = "Agent402 shop — pay-per-call APIs indexed by what an agent wants to do";
   const description =
-    "Task-indexed catalogue of Agent402's machine-payable APIs: research a company, get macro data, read the web, track markets, persist state. Pay per call in USDC on Base, or free with proof-of-work.";
+    "Task-indexed catalogue of Agent402's machine-payable APIs: research a company, get macro data, read the web, track markets, persist state. Pay per call in USDC on Base + 3 more chains, or free with proof-of-work.";
 
   const missingSlugs = TASKS.flatMap((t) =>
     t.slugs.filter((s) => !Object.values(catalog).find((c) => c.slug === s))

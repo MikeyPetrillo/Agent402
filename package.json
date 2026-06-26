@@ -2,7 +2,7 @@
   "name": "agent402",
   "version": "1.0.0",
   "private": true,
-  "description": "Agent402.Tools — the open-source, self-hostable x402 + MCP server: 1,338 tools + 42 skill packs for AI agents, plus a pay-per-crawl tollbooth. Run free, or charge per call over x402 (USDC on Base).",
+  "description": "Agent402.Tools — the open-source, self-hostable x402 + MCP server: 1,338 tools + 42 skill packs for AI agents, plus a pay-per-crawl tollbooth. Run free, or charge per call over x402 (USDC on Base, Solana, Polygon & Arbitrum).",
   "main": "src/server.js",
   "engines": {
     "node": ">=20"

@@ -3,8 +3,8 @@
 Drop-in [Strands Agents](https://strandsagents.com) (TypeScript) tools for
 [Agent402](https://agent402.tools) — turn 1,338 pay-per-call web tools into
 Strands `tool({...})` instances your agent can invoke. Payment is handled
-underneath: proof-of-work for the free tier (no wallet), x402 + USDC on Base
-for wallet-only tools.
+underneath: proof-of-work for the free tier (no wallet), x402 + USDC on Base,
+Solana, Polygon, or Arbitrum for wallet-only tools.
 
 Built for **AWS Bedrock AgentCore Payments**. AgentCore orchestrates payments
 over the [x402 protocol](https://x402.org); Agent402 is an x402-native server.

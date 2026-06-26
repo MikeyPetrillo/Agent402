@@ -214,7 +214,7 @@ await execute(name, args);</code></pre>
 
 <!-- Panel: Pay with USDC -->
 <div class="qs-panel" id="panel-usdc" role="tabpanel">
-<h3>Pay directly with USDC on Base</h3>
+<h3>Pay directly with USDC on Base, Solana, Polygon &amp; Arbitrum</h3>
 <p class="qs-oneliner">Use the x402 protocol for on-chain payment &mdash; no API keys, no accounts.</p>
 
 <span class="qs-label">Install</span>

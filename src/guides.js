@@ -9,7 +9,7 @@ const GUIDES = [
     slug: "x402-in-5-minutes",
     title: "Make your AI agent pay for what it needs: x402 in 5 minutes",
     description:
-      "A working example of the x402 payment protocol: your agent calls an API, gets an HTTP 402 quote, pays USDC on Base from its own wallet, and gets the result — no signup, no API key.",
+      "A working example of the x402 payment protocol: your agent calls an API, gets an HTTP 402 quote, pays USDC on Base (or Solana, Polygon, Arbitrum) from its own wallet, and gets the result — no signup, no API key.",
     md: `
 The useful web hides behind signups, captchas, and API keys — none of which an
 autonomous agent can obtain mid-task. [x402](https://x402.org) fixes this with
@@ -36,7 +36,7 @@ curl -i -X POST https://agent402.tools/api/extract \\
 
 ## Pay it (JavaScript)
 
-Fund a wallet with a little USDC on Base (the payer needs no ETH), then:
+Fund a wallet with a little USDC on Base (or Solana, Polygon, Arbitrum — the payer needs no ETH on EVM chains), then:
 
 \`\`\`js
 import { wrapFetchWithPayment } from "@x402/fetch";

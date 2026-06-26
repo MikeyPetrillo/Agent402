@@ -35,7 +35,7 @@ It exposes four read-only tools (each carries safety annotations):
 } } }
 ```
 
-- **With `AGENT_KEY`** (a wallet holding USDC on Base): every tool works; each call settles via x402 invisibly under the MCP call. Spend controls (`AGENT402_BUDGET`, `AGENT402_MAX_PER_CALL`) are enforced *before any payment is signed*.
+- **With `AGENT_KEY`** (a wallet holding USDC on Base, Solana, Polygon, or Arbitrum): every tool works; each call settles via x402 invisibly under the MCP call. Spend controls (`AGENT402_BUDGET`, `AGENT402_MAX_PER_CALL`) are enforced *before any payment is signed*.
 - **Without a key:** the pure-CPU tools work free via proof-of-work; wallet-only tools explain what they'd cost and how to enable them.
 
 High-value tools (`search`, `extract`, `render`, `screenshot`, `pdf`, `meta`, `dns`, the `memory-*` family, …) are first-class MCP tools; the long tail is reachable via `search_tools` + `call_tool` to keep your context window small.

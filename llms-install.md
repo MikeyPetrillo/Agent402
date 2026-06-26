@@ -102,7 +102,7 @@ Four MCP tools that cover all 1,338 underlying Agent402 tools:
 Pure-CPU tools (~1,040 of them — hashing, encoding, parsing, regex, date
 math, validators, converters, geo math) are free via proof-of-work and
 need no wallet. Paid tools (browser rendering, web search, PDF tooling,
-live data, crypto reads) cost $0.001–$0.02 in USDC on Base; see
+live data, crypto reads) cost $0.001–$0.02 in USDC on Base (or Solana/Polygon/Arbitrum); see
 `https://agent402.tools/api/pricing`.
 
 ## Verifying it works

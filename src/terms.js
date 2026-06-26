@@ -51,7 +51,7 @@ By using the service you agree to these terms. The service is
 </ul>
 
 <h2>Payments</h2>
-<p>Paid calls settle on the public Base blockchain in USDC via x402. Micropayments are per-call and,
+<p>Paid calls settle on the public Base blockchain (or Solana, Polygon, Arbitrum) in USDC via x402. Micropayments are per-call and,
 once settled on-chain, are final and non-refundable except where required by law. You are responsible
 for your own wallet and keys; we never receive or hold your private key.</p>
 

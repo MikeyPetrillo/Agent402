@@ -7,7 +7,7 @@ import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 export function ledgerDocsPage(baseUrl) {
   const canonical = baseUrl + "/docs";
   const title = "Docs — Agent402";
-  const description = "Add 1,338 deterministic tools to your agent in about a minute. No signup, no API key — start free with proof-of-work, settle USDC on Base when you scale.";
+  const description = "Add 1,338 deterministic tools to your agent in about a minute. No signup, no API key — start free with proof-of-work, settle USDC on Base (or Solana/Polygon/Arbitrum) when you scale.";
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -52,7 +52,7 @@ export function ledgerDocsPage(baseUrl) {
     <!-- CONTENT -->
     <main>
       <h1 style="font-family:var(--font-body);font-weight:800;font-size:52px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;">Quickstart.</h1>
-      <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 30px;">Add 1,338 deterministic tools to your agent in about a minute. No signup, no API key &mdash; start free with proof-of-work, settle USDC on Base when you scale.</p>
+      <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:620px;margin:0 0 30px;">Add 1,338 deterministic tools to your agent in about a minute. No signup, no API key &mdash; start free with proof-of-work, settle USDC on Base (or Solana/Polygon/Arbitrum) when you scale.</p>
 
       <div id="quickstart" style="border:1.5px solid var(--ink);background:var(--ink);margin-bottom:14px;">
         <div style="display:flex;align-items:center;gap:7px;padding:11px 15px;border-bottom:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;color:var(--dk-muted);">terminal</div>
@@ -60,7 +60,7 @@ export function ledgerDocsPage(baseUrl) {
 </span>curl -s https://agent402.tools/demo.js -o demo.js
 node demo.js
 
-<span style="color:var(--dk-muted3);"># or settle real USDC on Base with a funded key
+<span style="color:var(--dk-muted3);"># or settle real USDC on Base (or Solana/Polygon/Arbitrum) with a funded key
 </span>npm i @x402/core @x402/evm @x402/fetch viem
 AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
       </div>

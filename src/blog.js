@@ -24,7 +24,7 @@ export const BLOG_POSTS = [
   <li><strong>No signup.</strong> The agent sends a payment header with its request. Done.</li>
   <li><strong>No rate limits.</strong> You pay per call. Want to make 10,000 calls? Pay for 10,000 calls.</li>
   <li><strong>No vendor lock-in.</strong> x402 is an open protocol. Any server can accept it, any client can send it.</li>
-  <li><strong>Micropayments that actually work.</strong> USDC on Base settles in seconds for fractions of a cent in gas.</li>
+  <li><strong>Micropayments that actually work.</strong> USDC on Base (and Solana, Polygon, Arbitrum) settles in seconds for fractions of a cent in gas.</li>
 </ul>
 
 <p>The result: an agent with a funded wallet can discover Agent402 tools via MCP, call them, and pay — all without a human ever creating an account.</p>

@@ -1,6 +1,6 @@
 ---
 title: "Agent402 Plugin"
-description: "Discover and call 1,338 pay-per-call web tools via x402 USDC payments on Base through Agent402.tools"
+description: "Discover and call 1,338 pay-per-call web tools via x402 USDC payments on Base, Solana, Polygon & Arbitrum through Agent402.tools"
 tags: [x402, tools, api, payments, agents]
 name: agent402
 version: 0.1.0
@@ -23,7 +23,7 @@ risk: []
 
 Agent402 is an open-source x402 tool server hosting 1,338 deterministic, pay-per-call web tools for AI agents at `https://agent402.tools`. Tools span browser rendering, web search, PDFs, OCR, image processing, financial data, crypto analytics, SEC EDGAR filings, unit conversions, encoding, hashing, and wallet-keyed memory. Every tool is called over HTTP: the agent receives an HTTP 402 response with exact USDC payment terms, pays via x402, and gets the result. Prices range $0.001--$0.02 per call. No signup, no API key -- the payment is the only credential.
 
-Agent402 exposes free discovery endpoints (no payment required) that resolve tasks to the right tool, plus paid tool endpoints that settle via x402 USDC on Base. This plugin teaches agents to discover tools, understand pricing, and call any tool using Base MCP's `initiate_x402_request` / `complete_x402_request` flow.
+Agent402 exposes free discovery endpoints (no payment required) that resolve tasks to the right tool, plus paid tool endpoints that settle via x402 USDC on Base, Solana, Polygon, or Arbitrum. This plugin teaches agents to discover tools, understand pricing, and call any tool using Base MCP's `initiate_x402_request` / `complete_x402_request` flow.
 
 ## Surface Routing
 

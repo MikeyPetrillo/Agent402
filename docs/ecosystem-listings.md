@@ -17,7 +17,7 @@ alphabetical by repo name; legend: 📇 = TypeScript/JavaScript, ☁️ = cloud/
 2. In the Aggregators section, insert alphabetically:
 
 ```markdown
-- [MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402) 📇 ☁️ 🏠 - The headless browser, live web search, OCR, and durable wallet-keyed memory an agent's sandbox doesn't have — plus 1,000+ deterministic utilities — rented per call via x402 (USDC on Base) or free with proof-of-work. Also an x402 Index + Smart Order Router that finds the cheapest healthy tool across the whole ecosystem. Hosted remote connector at agent402.tools/mcp.
+- [MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402) 📇 ☁️ 🏠 - The headless browser, live web search, OCR, and durable wallet-keyed memory an agent's sandbox doesn't have — plus 1,000+ deterministic utilities — rented per call via x402 (USDC on Base + 3 more chains) or free with proof-of-work. Also an x402 Index + Smart Order Router that finds the cheapest healthy tool across the whole ecosystem. Hosted remote connector at agent402.tools/mcp.
 ```
 
 3. PR title: `Add Agent402 (aggregator: 1,000+ pay-per-call web tools over x402)`
@@ -39,7 +39,7 @@ Coinbase reviews within ~5 business days. Category: **Services/Endpoints**.
 ```json
 {
   "name": "Agent402",
-  "description": "Headless browser, live web search, OCR, and durable wallet-keyed memory an AI agent's sandbox doesn't have — rented per call via x402 (USDC on Base) — plus 1,000+ deterministic utilities. Also an x402 Index + Smart Order Router that ranks the cheapest healthy tool across the whole ecosystem (auto-discovered from the CDP Bazaar). $0.001–$0.02/call, or free with proof-of-work. Open source, MCP server included.",
+  "description": "Headless browser, live web search, OCR, and durable wallet-keyed memory an AI agent's sandbox doesn't have — rented per call via x402 (USDC on Base + 3 more chains) — plus 1,000+ deterministic utilities. Also an x402 Index + Smart Order Router that ranks the cheapest healthy tool across the whole ecosystem (auto-discovered from the CDP Bazaar). $0.001–$0.02/call, or free with proof-of-work. Open source, MCP server included.",
   "logoUrl": "/logos/agent402.png",
   "websiteUrl": "https://agent402.tools",
   "category": "Services/Endpoints"
@@ -144,7 +144,7 @@ that takes a GitHub repo URL; no PR, no fork.
    - **Short description (one line, ~150 chars):**
 
      ```
-     1,338 pay-per-call web tools + 42 skill packs for AI agents over x402 (USDC on Base) — or free via proof-of-work. Browser, search, OCR, finance, EDGAR, durable memory.
+     1,338 pay-per-call web tools + 42 skill packs for AI agents over x402 (USDC on Base + 3 more chains) — or free via proof-of-work. Browser, search, OCR, finance, EDGAR, durable memory.
      ```
 
    - **Long description / why (if asked):**
@@ -155,7 +155,7 @@ that takes a GitHub repo URL; no PR, no fork.
      (Yahoo, CoinGecko, FRED, ECB, World Bank), SEC EDGAR filings, DNS/TLS/WHOIS,
      wallet-keyed shared memory, and ~1,000 deterministic utilities (hash, JWT,
      regex, compression, forecasting, statistics, finance math, etc.) — paid per
-     call in USDC on Base via the x402 protocol, or free via built-in
+     call in USDC on Base (or Solana, Polygon, Arbitrum) via the x402 protocol, or free via built-in
      proof-of-work for the pure-CPU tools.
 
      One config block, no per-tool signups, no API keys. Self-hostable

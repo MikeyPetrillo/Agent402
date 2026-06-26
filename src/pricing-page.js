@@ -54,7 +54,7 @@ export function pricingPage(baseUrl, catalog) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pricing - Agent402</title>
-<meta name="description" content="Flat per-call pricing for ${totalTools} deterministic web tools. Pay in USDC on Base via x402, or use proof-of-work for free.">
+<meta name="description" content="Flat per-call pricing for ${totalTools} deterministic web tools. Pay in USDC on Base, Solana, Polygon & Arbitrum via x402, or use proof-of-work for free.">
 <link rel="canonical" href="${baseUrl}/pricing">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/pricing">
@@ -141,7 +141,7 @@ ${renderHeader("/pricing")}
 
 <div class="hero">
   <h1>Flat per-call pricing, no tiers, no subscriptions</h1>
-  <p>Every tool has a flat price. Pay per call in USDC on Base via the x402 protocol. No accounts, no API keys, no monthly bills.</p>
+  <p>Every tool has a flat price. Pay per call in USDC on Base, Solana, Polygon, or Arbitrum via the x402 protocol. No accounts, no API keys, no monthly bills.</p>
 </div>
 
 <div class="tiers">

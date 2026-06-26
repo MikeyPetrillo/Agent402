@@ -1,6 +1,6 @@
 # Image Generation Gateway
 
-Three tiers of text-to-image generation, paywalled via x402. An agent sends a prompt and pays per call with USDC on Base -- no OpenAI API key needed on the caller's side, no signup, no account. The operator's own `OPENAI_API_KEY` handles upstream auth; per-tier prompt caps and locked quality/size settings keep worst-case upstream cost well below the x402 price.
+Three tiers of text-to-image generation, paywalled via x402. An agent sends a prompt and pays per call with USDC on Base, Solana, Polygon, or Arbitrum -- no OpenAI API key needed on the caller's side, no signup, no account. The operator's own `OPENAI_API_KEY` handles upstream auth; per-tier prompt caps and locked quality/size settings keep worst-case upstream cost well below the x402 price.
 
 ## Tiers
 

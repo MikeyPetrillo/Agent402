@@ -38,7 +38,7 @@ client, and add your own tools in a few lines. Every tool is deterministic —
 every release.
 
 > Optionally, the same server can charge per call over the [x402
-> protocol](https://x402.org) (USDC on Base) — so the instance you self-host for
+> protocol](https://x402.org) (USDC on Base, Solana, Polygon & Arbitrum) — so the instance you self-host for
 > free can also be a hosted, monetized one. That part is opt-in; **by default
 > everything runs free.**
 
@@ -250,7 +250,7 @@ wallet-only. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full walkthrough.
 The same server can require payment per call — useful if you host a public
 instance. It's off by default (`FREE_MODE=true`); to enable, set `WALLET_ADDRESS`
 + CDP facilitator keys (free at [portal.cdp.coinbase.com](https://portal.cdp.coinbase.com))
-and agents pay in USDC on Base via standard x402 clients:
+and agents pay in USDC on Base (or Solana, Polygon, Arbitrum) via standard x402 clients:
 
 ```js
 import { wrapFetchWithPayment } from "@x402/fetch";
@@ -331,7 +331,7 @@ Worker, a reverse proxy, or a WordPress plugin (beta). Drop-in templates in
 | `src/tools/` | The tool kits (web, PDF, media, images, live data, crypto/x402, ~1,040 pure-CPU utilities) — **add tools here** |
 | `src/mcp-http.js` | Hosted MCP connector (streamable HTTP, authless free tier) |
 | `src/pow.js` | Proof-of-work tier (signed, single-use, slug-scoped challenges) |
-| `src/payments.js` | Optional x402 v2 wiring: USDC on Base, CDP facilitator, Bazaar discovery |
+| `src/payments.js` | Optional x402 v2 wiring: USDC on Base/Solana/Polygon/Arbitrum, CDP facilitator, Bazaar discovery |
 | `src/x402-index.js` | x402 Index + Smart Order Router: cross-seller crawl, auto-discovery, health-aware routing |
 | `mcp/` | The `agent402-mcp` npm package (stdio MCP server) |
 | `client/` | The `agent402-client` buyer SDK (`find()` + `call()` with auto-payment) |

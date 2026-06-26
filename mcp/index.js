@@ -12,7 +12,7 @@
 //
 // Config (env):
 //   AGENT402_URL          target service (default https://agent402.tools)
-//   AGENT_KEY             hex private key of a funded wallet (USDC on Base) — optional
+//   AGENT_KEY             hex private key of a funded wallet (USDC on Base/Solana/Polygon/Arbitrum) — optional
 //   AGENT402_TOOLS        comma-separated slugs to expose first-class (overrides default)
 //   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (e.g. 0.01)
 //   AGENT402_BUDGET       hard cap on total USDC spent this session (e.g. 1.00)
@@ -134,7 +134,7 @@ function walletRequiredText(tool) {
   return [
     `"${tool.slug}" costs ${tool.price}/call and requires a USDC wallet (it is not eligible for the proof-of-work tier).`,
     `To enable it: set the AGENT_KEY environment variable on this MCP server to the hex private key of a wallet`,
-    `funded with USDC on Base. Payment is per call via the x402 protocol — no signup or API key.`,
+    `funded with USDC on Base (or Solana/Polygon/Arbitrum). Payment is per call via the x402 protocol — no signup or API key.`,
     `Pricing and details: ${BASE}/tools/${tool.slug}`,
   ].join(" ");
 }
@@ -403,7 +403,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             note: AGENT_KEY
               ? "Every tool is available; each call is paid in USDC via x402 from the configured wallet, within the spend controls above."
               : `No AGENT_KEY configured: ${computePayable} pure-CPU tools are free via proof-of-work; the ${catalog.size - computePayable} network/browser/memory tools need a funded wallet (set AGENT_KEY).`,
-            ecosystem: "Call top_x402_sellers to see which x402 sellers (any wallet, not just this host) are settling the most USDC on Base in the last 24h — discovers the live economy beyond this catalog.",
+            ecosystem: "Call top_x402_sellers to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h — discovers the live economy beyond this catalog.",
           }, null, 2),
         }],
       };

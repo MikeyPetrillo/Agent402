@@ -11,7 +11,7 @@ This is the safe rollout. Each phase is reversible by changing one flag and rede
 ## Prereqs
 
 - A Node 18+ runtime in front of your site (Express, or a Cloudflare Worker, or a Next.js middleware — all supported).
-- An EVM wallet address to receive USDC on Base. (Or skip it entirely and accept proof-of-work only — no wallet needed.)
+- An EVM wallet address to receive USDC on Base (or Solana, Polygon, Arbitrum). (Or skip it entirely and accept proof-of-work only — no wallet needed.)
 - ~30 minutes.
 
 ## Phase 1: Observe (10 minutes)

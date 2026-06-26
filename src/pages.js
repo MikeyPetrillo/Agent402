@@ -195,7 +195,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
         "@type": "Offer",
         price: tool.price.replace("$", ""),
         priceCurrency: "USD",
-        description: `${tool.price} per call, paid in USDC on Base via the x402 protocol. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
+        description: `${tool.price} per call, paid in USDC on Base, Solana, Polygon, or Arbitrum via the x402 protocol. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
       },
     },
     {
@@ -386,7 +386,7 @@ ${renderHeader("/tools")}
 <div class="wrap">
   <div class="crumb"><a href="/">Agent402</a> / tools</div>
   <h1>${tools.length} tools, one base URL, zero API keys</h1>
-  <p class="sub">Call any endpoint, get an <code>HTTP 402</code> quote, and either pay a fraction of a cent in USDC on Base via <a href="https://x402.org" rel="noopener">x402</a> — or, on the <span class="free">FREE</span> tools, skip the wallet entirely. Machine-readable: <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>.</p>
+  <p class="sub">Call any endpoint, get an <code>HTTP 402</code> quote, and either pay a fraction of a cent in USDC on Base (or Solana, Polygon, Arbitrum) via <a href="https://x402.org" rel="noopener">x402</a> — or, on the <span class="free">FREE</span> tools, skip the wallet entirely. Machine-readable: <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>.</p>
   <div style="margin:18px 0"><input id="tool-search" type="text" placeholder="Search ${tools.length} tools\u2026" style="width:100%;max-width:480px;padding:10px 16px;background:#0d1220;border:1px solid #1e2638;border-radius:10px;color:#e6e9f0;font-size:.95rem;outline:none;" onfocus="this.style.borderColor='#4ade80'" onblur="this.style.borderColor='#1e2638'"><span id="tool-search-count" style="margin-left:12px;color:#8b93a7;font-size:.85rem"></span></div>
   <div class="callout"><b>${freeCount} of ${tools.length} tools are free</b> — no wallet needed. Pay with a few seconds of <a href="/api/pow">proof-of-work</a> (CPU) instead of USDC. The other ${tools.length - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run. Look for the <span class="free">FREE</span> badge below.</div>
   ${sections}
@@ -461,7 +461,7 @@ const FAQ_ITEMS = [
   { q: "What does it cost?", a: 'Flat per-call prices, $0.001–$0.02, published in <a href="/api/pricing">/api/pricing</a> and quoted exactly in every HTTP 402 response. No subscriptions or tiers.' },
   { q: "Can I use it without any money or a wallet?", a: "Yes. Most pure-CPU tools accept proof-of-work — a sub-second sha256 puzzle solved by your own CPU — and the hosted MCP connector runs that same set for free (rate-limited)." },
   { q: "What is x402?", a: "An open HTTP payment standard built on the 402 Payment Required status code, for machine-to-machine pay-per-call payments in stablecoins, with settlement infrastructure from Coinbase." },
-  { q: "Which blockchain and asset does it use?", a: "USDC on Base mainnet (eip155:8453). The buyer needs only USDC — gas is sponsored by the facilitator." },
+  { q: "Which blockchain and asset does it use?", a: "USDC on Base (primary), Solana, Polygon, or Arbitrum. The buyer needs only USDC — gas is sponsored by the facilitator on EVM chains." },
   { q: "Does using this spend my AI tokens?", a: "No. There is no LLM anywhere in the serving path — every tool is deterministic code. Proof-of-work spends your CPU; x402 spends USDC." },
   { q: "Is my data stored?", a: 'Tool inputs are processed in memory and not persisted — except the memory tools, whose purpose is storage (wallet-keyed, owner-deletable, with optional TTL). Full policy: <a href="/privacy">/privacy</a>.' },
   { q: "How do I know the service is honest?", a: "It is fully open source; CI re-tests every endpoint against its own documented example before each deploy; and revenue settles on-chain to agent402.base.eth (the named public receiving wallet), auditable by anyone on Basescan." },
@@ -478,7 +478,7 @@ export function faqPage(baseUrl) {
   const canonical = `${baseUrl}/faq`;
   const title = "Agent402 FAQ — x402 + MCP server for AI agents";
   const description =
-    "Frequently asked questions about Agent402: pricing, proof-of-work, x402 and USDC on Base, MCP, data handling, and self-hosting the open-source server.";
+    "Frequently asked questions about Agent402: pricing, proof-of-work, x402 and USDC on Base + 3 more chains, MCP, data handling, and self-hosting the open-source server.";
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "FAQPage",
@@ -505,7 +505,7 @@ export function faqPage(baseUrl) {
   const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
   <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;">FAQ</div>
   <h1 style="font-family:var(--font-body);font-weight:800;font-size:42px;line-height:.96;letter-spacing:-.03em;margin-bottom:14px;">Frequently asked questions</h1>
-  <p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;margin-bottom:32px;">Agent402 is the open-source, self-hostable x402 + MCP server: pay-per-call web tools for AI agents, free via proof-of-work or paid in USDC on Base.</p>
+  <p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;margin-bottom:32px;">Agent402 is the open-source, self-hostable x402 + MCP server: pay-per-call web tools for AI agents, free via proof-of-work or paid in USDC on Base, Solana, Polygon & Arbitrum.</p>
   ${items}
 </div>
 ${ledgerFooterCompact()}`;
@@ -623,7 +623,7 @@ export function openapiSpec(baseUrl, catalog) {
       title: "Agent402 — the open-source, self-hostable x402 server for AI agents",
       version: "2.0.0",
       description:
-        "The open-source, self-hostable x402 server: hundreds of machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) — the whole catalog is open and runnable yourself. Every endpoint is paid per call in USDC on Base via x402 (no signup, no API keys — the first request returns HTTP 402, an x402 client pays and retries) or free with proof-of-work. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.",
+        "The open-source, self-hostable x402 server: hundreds of machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) — the whole catalog is open and runnable yourself. Every endpoint is paid per call in USDC on Base, Solana, Polygon, or Arbitrum via x402 (no signup, no API keys — the first request returns HTTP 402, an x402 client pays and retries) or free with proof-of-work. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.",
       contact: { url: baseUrl },
     },
     servers: [{ url: baseUrl }],

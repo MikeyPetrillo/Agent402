@@ -23,7 +23,7 @@ One Node 22 / Express process serving everything; deliberately boring where poss
 ## Key pieces
 
 - **Catalog as data.** Every tool is an entry `{ route, slug, price, description, discovery: { inputSchema, example }, handler }`. The paywall, docs pages, OpenAPI spec, llms.txt, sitemap, MCP servers, and CI tests are all *generated from the same catalog* — one source of truth, so a new tool is automatically priced, documented, discoverable, and tested.
-- **Payments** (`src/payments.js`): `@x402/express` middleware quoting USDC on Base (`eip155:8453`), settled through the **Coinbase CDP facilitator** (`CDP_API_KEY_ID/SECRET`; `FACILITATOR_URL` overrides). Multi-chain USDC schemes are registered in code.
+- **Payments** (`src/payments.js`): `@x402/express` middleware quoting USDC on Base, Solana, Polygon & Arbitrum, settled through the **Coinbase CDP facilitator** (`CDP_API_KEY_ID/SECRET`; `FACILITATOR_URL` overrides). Multi-chain USDC schemes are registered in code.
 - **Proof-of-work** (`src/pow.js`): HMAC-signed challenges, difficulty 16 bits, single-use (replay table in SQLite), strictly slug-scoped. A `WALLET_ONLY_SLUGS` set keeps anything that costs real money out of the free tier.
 - **Browser tools** (`src/tools/render.js`): a shared headless Chromium with max 3 concurrent contexts, self-healing relaunch on crash, and per-request SSRF re-validation of *every* subresource the page loads (see [[Security Model]]).
 - **Media tools**: ffmpeg via `execFile` (no shell), 30 MB cap, 90 s timeout, max 2 concurrent with `429 + Retry-After`.

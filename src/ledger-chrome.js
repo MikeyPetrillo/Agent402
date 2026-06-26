@@ -81,7 +81,7 @@ function statusLine() {
   return `<div style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);font-size:12px;letter-spacing:.02em;">
   <div style="max-width:1180px;margin:0 auto;padding:8px 30px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
     <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">HTTP/1.1 <span style="color:var(--accent);font-weight:700;">402</span> PAYMENT REQUIRED</span>
-    <span style="color:var(--dk-muted);white-space:nowrap;">agent402.base.eth · BASE · USDC</span>
+    <span style="color:var(--dk-muted);white-space:nowrap;">agent402.base.eth · BASE · SOLANA · POLYGON · ARBITRUM · USDC</span>
   </div>
 </div>`;
 }
@@ -237,8 +237,8 @@ export function ledgerShell({ title, description, canonical, baseUrl, activePath
     "@id": `${baseUrl}/#base-app`,
     name: "Agent402 on Base",
     applicationCategory: "BlockchainApplication",
-    operatingSystem: "Base (EVM, chain ID 8453)",
-    description: "x402 pay-per-call agent tools settling in USDC on Base. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored — callers need only USDC.",
+    operatingSystem: "Base (EVM, chain ID 8453), Solana, Polygon (EVM, chain ID 137), Arbitrum (EVM, chain ID 42161)",
+    description: "x402 pay-per-call agent tools settling in USDC on Base, Solana, Polygon & Arbitrum. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored on EVM chains — callers need only USDC.",
     url: baseUrl,
   };
   const allLd = [baseEcosystemLd, ...(jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [])];

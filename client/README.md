@@ -67,7 +67,7 @@ const { messages } = await a.getWorkflowPrompt("security-audit", { domain: "stri
 
 Want to see who's actually getting paid on x402 right now — not just what tools
 this service exposes? `topSellers()` returns the live leaderboard of sellers
-settling USDC on Base in the last ~24h, derived from on-chain transfers. Free
+settling USDC (primarily on Base) in the last ~24h, derived from on-chain transfers. Free
 to call (no payment, no proof-of-work):
 
 ```js
@@ -86,7 +86,7 @@ await a.topSellers({ sort: "calls", include: "all" });
 | `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools (route, price, schema, example) |
 | `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |
 | `await a.getWorkflowPrompt(slug, args)` | Fetch the rendered prompt messages for a skill pack with arguments substituted in |
-| `await a.topSellers({ limit?, sort?, include? })` | Live x402 leaderboard: which sellers are settling the most USDC on Base in the last ~24h (free, no payment) |
+| `await a.topSellers({ limit?, sort?, include? })` | Live x402 leaderboard: which sellers are settling the most USDC (primarily on Base) in the last ~24h (free, no payment) |
 | `await a.call(slug, params, { idempotencyKey?, cache? })` | Call a tool; auto-pays (PoW for free tools, x402 for wallet-only); returns the JSON result |
 | `Agent402.solvePow(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value |
 | `a.clearCache()` | Drop the in-memory result cache |
