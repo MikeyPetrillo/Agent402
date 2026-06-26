@@ -58,21 +58,27 @@ async function jsonGet(url, host, extraHeaders = {}) {
     "Accept-Language": "en-US,en;q=0.9",
     ...extraHeaders,
   };
+  const attempt = (timeout) => fetch(safeUrl, { headers, signal: AbortSignal.timeout(timeout) });
   let res;
   try {
-    res = await fetch(safeUrl, { headers, signal: AbortSignal.timeout(10_000) });
+    res = await attempt(10_000);
   } catch (firstErr) {
     // Single retry on network/timeout failure — handles transient upstream
     // slowness (Nasdaq CloudFront, Yahoo edge) without raising the base timeout.
     try {
-      res = await fetch(safeUrl, { headers, signal: AbortSignal.timeout(12_000) });
+      res = await attempt(12_000);
     } catch (e) {
-      // e.cause?.code names the underlying network failure (UND_ERR_CONNECT_TIMEOUT,
-      // ECONNRESET, ENETUNREACH, EAI_AGAIN, etc.) — invaluable for distinguishing
-      // WAF/IP blocks from DNS or timeout. Bare e.message is just "fetch failed".
       const cause = e.cause?.code ? ` (${e.cause.code})` : "";
       throw bad(`${host} request failed: ${e.message}${cause}`, 504);
     }
+  }
+  // Retry once on 5xx — Nasdaq and data.gov intermittently return 520/502/404
+  // on first attempt then succeed immediately after. Without this, the Bazaar
+  // registration sweep fails on the same 2-3 tools every run.
+  if (res.status >= 500) {
+    try {
+      res = await attempt(12_000);
+    } catch { /* fall through to the error handler below with the original 5xx */ }
   }
   const text = await res.text();
   if (!res.ok) {

@@ -12,13 +12,18 @@ function bad(message, statusCode = 400) {
 
 async function getJson(url) {
   let html;
-  try {
-    ({ html } = await safeFetch(url, { maxBytes: 5 * 1024 * 1024 }));
-  } catch (e) {
-    // safeFetch maps upstream 4xx → 422 ("check the URL"), designed for user URLs.
-    // Gov-kit endpoints are hardcoded — upstream 4xx is a gov-side issue, not caller error.
-    if (e.statusCode === 422) throw bad(e.message, 502);
-    throw e;
+  // Retry once — data.gov and weather.gov intermittently 404/502 on first
+  // attempt then succeed immediately. Without this, Bazaar registration and
+  // paid-canary fail on the same tools every run.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      ({ html } = await safeFetch(url, { maxBytes: 5 * 1024 * 1024 }));
+      break;
+    } catch (e) {
+      if (attempt === 0 && (e.statusCode === 422 || e.statusCode === 502)) continue;
+      if (e.statusCode === 422) throw bad(e.message, 502);
+      throw e;
+    }
   }
   try {
     return JSON.parse(html);
