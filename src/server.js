@@ -661,6 +661,7 @@ app.get("/health", (_req, res) => {
     // before pointing buyers at /api/memory*.
     memoryPersistent,
     builderCode: Boolean((process.env.BASE_BUILDER_CODE || "").trim()),
+    solana: Boolean((process.env.SOLANA_WALLET_ADDRESS || "").trim()),
     baseNotifications: baseNotificationsEnabled(),
   };
   const ok = checks.db && checks.wallet;
