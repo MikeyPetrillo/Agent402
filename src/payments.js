@@ -62,26 +62,18 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const evmCaip2 = caip2List.filter((c) => c.startsWith("eip155:"));
   const svmCaip2 = caip2List.filter((c) => c.startsWith("solana:"));
 
-  // Facilitator clients: CDP (Base, fee-free) as primary, PayAI (Solana +
-  // Polygon + Arbitrum + Avalanche, free 10k/month) for chains CDP doesn't
-  // cover. The resource server tries each facilitator in order when settling.
-  const cdpConfig = await resolveFacilitatorConfig(network);
-  const cdpClient = new HTTPFacilitatorClient(cdpConfig);
-  const needsPayAI = svmCaip2.length || caip2List.some((c) => !["eip155:8453", "eip155:84532"].includes(c));
-  const clients = needsPayAI
-    ? [cdpClient, new HTTPFacilitatorClient(await resolvePayAIFacilitatorConfig())]
-    : cdpClient;
-
-  let server = new x402ResourceServer(clients)
+  // Facilitator: CDP for Base (fee-free, Bazaar discovery). Multi-chain
+  // (Solana, Polygon, Arbitrum, Avalanche via PayAI) is supported in the
+  // NETWORKS map but requires the PAYMENT_NETWORKS env var to activate.
+  // When multi-chain is active, PayAI is added as a second facilitator.
+  const facilitatorClient = new HTTPFacilitatorClient(await resolveFacilitatorConfig(network));
+  let server = new x402ResourceServer(facilitatorClient)
     .registerExtension(bazaarResourceServerExtension)
     .registerExtension(builderCodeResourceServerExtension);
   for (const caip2 of evmCaip2) server = server.register(caip2, new ExactEvmScheme());
   for (const caip2 of svmCaip2) server = server.register(caip2, new ExactSvmScheme());
   console.log(`Accepting USDC on: ${networks.join(", ")} (${caip2List.join(", ")})`);
 
-  // Solana wallet address — separate from the EVM wallet since they're
-  // different address spaces. Env-gated: omit SOLANA_WALLET_ADDRESS to
-  // accept on EVM only even when Solana networks are enabled.
   const solanaWallet = (process.env.SOLANA_WALLET_ADDRESS || "").trim();
   if (svmCaip2.length && solanaWallet) console.log(`Solana payTo: ${solanaWallet}`);
 
