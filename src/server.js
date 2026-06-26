@@ -587,6 +587,18 @@ app.use((req, res, next) => {
 // landing/operator/leaderboard pages — they use inline styles + one inline
 // script, no remote scripts, no eval. Anything stricter would break existing
 // pages without changing risk meaningfully.
+// Redirect the Railway-generated hostname to the canonical custom domain.
+// The old hostname created a duplicate listing on agentic.market / Bazaar.
+if (BASE_URL.includes("agent402.tools")) {
+  app.use((req, res, next) => {
+    const host = req.hostname || req.headers.host?.split(":")[0] || "";
+    if (host.endsWith(".up.railway.app")) {
+      return res.redirect(301, `${BASE_URL}${req.originalUrl}`);
+    }
+    next();
+  });
+}
+
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
