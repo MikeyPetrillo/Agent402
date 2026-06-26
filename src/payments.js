@@ -62,20 +62,17 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const evmCaip2 = caip2List.filter((c) => c.startsWith("eip155:"));
   const svmCaip2 = caip2List.filter((c) => c.startsWith("solana:"));
 
-  // Build facilitator client list: CDP (Base + Solana, fee-free) as primary,
-  // PayAI (Polygon, Arbitrum, Avalanche, Solana, + more) as fallback for
-  // chains CDP doesn't cover. The resource server tries each in order.
-  const facilitatorClients = [];
+  // Facilitator clients: CDP (Base, fee-free) as primary, PayAI (Solana +
+  // Polygon + Arbitrum + Avalanche, free 10k/month) for chains CDP doesn't
+  // cover. The resource server tries each facilitator in order when settling.
   const cdpConfig = await resolveFacilitatorConfig(network);
-  if (cdpConfig) facilitatorClients.push(new HTTPFacilitatorClient(cdpConfig));
+  const cdpClient = new HTTPFacilitatorClient(cdpConfig);
   const needsPayAI = svmCaip2.length || caip2List.some((c) => !["eip155:8453", "eip155:84532"].includes(c));
-  if (needsPayAI) {
-    const payaiConfig = await resolvePayAIFacilitatorConfig();
-    if (payaiConfig) facilitatorClients.push(new HTTPFacilitatorClient(payaiConfig));
-  }
-  if (!facilitatorClients.length) facilitatorClients.push(new HTTPFacilitatorClient());
+  const clients = needsPayAI
+    ? [cdpClient, new HTTPFacilitatorClient(await resolvePayAIFacilitatorConfig())]
+    : cdpClient;
 
-  let server = new x402ResourceServer(facilitatorClients)
+  let server = new x402ResourceServer(clients)
     .registerExtension(bazaarResourceServerExtension)
     .registerExtension(builderCodeResourceServerExtension);
   for (const caip2 of evmCaip2) server = server.register(caip2, new ExactEvmScheme());
