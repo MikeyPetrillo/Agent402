@@ -303,6 +303,8 @@ or proof-of-work without):
 High-value tools (extract/render/screenshot/pdf/memory/…) are first-class MCP
 tools; the remaining ${tools.length - 14} are reachable via its \`search_tools\` + \`call_tool\`.
 
+Agent402 is also available as a Base MCP plugin (app ID \`6a3dd86ca341d86b910769fb\`). All x402 payments settle in USDC on Base (chain ID 8453) via EIP-3009 \`transferWithAuthorization\` — gas is sponsored by the facilitator, so callers need only hold USDC.
+
 ## Drop into your agent framework (zero-dep adapters)
 
 For non-MCP integrations, there's a ready-made adapter on npm for each major

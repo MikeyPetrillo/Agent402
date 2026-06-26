@@ -110,6 +110,26 @@ export class Agent402 {
     };
   }
 
+  /**
+   * Register a wallet address for Base builder code attribution. Idempotent:
+   * the same wallet always returns the same code. No authentication required.
+   *
+   * @param {string} walletAddress  the caller's wallet address (e.g. "0x…")
+   * @param {object} [opts]
+   * @param {typeof fetch} [opts.fetchImpl]  plain fetch (defaults to global fetch)
+   * @returns {Promise<{builderCode:string, walletAddress:string}>}
+   */
+  static async registerBuilderCode(walletAddress, { fetchImpl = globalThis.fetch } = {}) {
+    if (!walletAddress || typeof walletAddress !== "string") throw new Error("walletAddress is required");
+    const r = await fetchImpl("https://api.base.dev/v1/agents/builder-codes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ walletAddress }),
+    });
+    if (!r.ok) throw new Error(`builder code registration failed: HTTP ${r.status}`);
+    return r.json();
+  }
+
   /** Solve a proof-of-work challenge object (from a 402 body) into an X-Pow-Solution value. */
   static solvePow(pow) {
     let n = 0;

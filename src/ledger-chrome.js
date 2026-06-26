@@ -228,11 +228,23 @@ export function ledgerTape(recentCalls) {
  */
 export function ledgerShell({ title, description, canonical, baseUrl, activePath = "", ogImage, jsonLd, extraCss = "", body }) {
   const og = ogImage || (baseUrl + "/card.png");
-  const jsonLdBlock = jsonLd
-    ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd])
-        .map((j) => `<script type="application/ld+json">${JSON.stringify(j)}</script>`)
-        .join("\n")
-    : "";
+  // Base ecosystem JSON-LD — every page rendered through the ledger shell
+  // carries this so crawlers and discovery agents see Base chain support
+  // regardless of which page they land on.
+  const baseEcosystemLd = {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "@id": `${baseUrl}/#base-app`,
+    name: "Agent402 on Base",
+    applicationCategory: "BlockchainApplication",
+    operatingSystem: "Base (EVM, chain ID 8453)",
+    description: "x402 pay-per-call agent tools settling in USDC on Base. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored — callers need only USDC.",
+    url: baseUrl,
+  };
+  const allLd = [baseEcosystemLd, ...(jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [])];
+  const jsonLdBlock = allLd
+    .map((j) => `<script type="application/ld+json">${JSON.stringify(j)}</script>`)
+    .join("\n");
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -254,6 +266,7 @@ export function ledgerShell({ title, description, canonical, baseUrl, activePath
 <meta name="twitter:title" content="${esc(title)}">
 <meta name="twitter:description" content="${esc(description)}">
 <meta name="twitter:image" content="${esc(og)}">
+<meta name="base:app_id" content="6a3dd86ca341d86b910769fb" />
 ${LEDGER_HEAD}
 <style>${LEDGER_CSS}${extraCss}</style>
 ${jsonLdBlock}
