@@ -124,6 +124,17 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
         { "@type": "Question", "name": "Can I use Agent402 from OpenAI / Anthropic / LangChain / LlamaIndex / Vercel AI SDK?", "acceptedAnswer": { "@type": "Answer", "text": "Yes — there is a zero-dependency adapter package on npm for each of the major agent stacks: agent402-openai-tools (OpenAI function-calling), agent402-anthropic-tools (Anthropic Messages API), agent402-ai-sdk (Vercel AI SDK), agent402-langchain (LangChain JS / LangGraph), and agent402-llamaindex (LlamaIndex TS). Each one returns ready-to-pass tool objects in the framework's native shape, with payment handled underneath (proof-of-work for free tools, USDC via x402 for wallet-only). MCP-based clients like Claude can use the hosted https://agent402.tools/mcp connector directly." } },
         { "@type": "Question", "name": "How do I see which x402 sellers are most used?", "acceptedAnswer": { "@type": "Answer", "text": "GET /api/leaderboard returns the live on-chain ranking of every x402 seller by Base USDC settled volume — callsSettled, totalUsd, and uniqueBuyers per seller. The pipeline walks every page of the Coinbase CDP Bazaar discovery endpoint, queries eth_getLogs on Base USDC for each seller's payTo wallet, filters to per-call settlements within a $0.50 ceiling (larger inbound is funding, not buys), and aggregates. The snapshot refreshes hourly server-side. Free, like /api/find and /api/route. Sort by ?sort=usd|calls and use include=external to exclude Agent402 itself and rank only the rest of the ecosystem. The same primitive is also reachable as MCP tool top_x402_sellers (on the hosted /mcp connector and the agent402-mcp npm package) and as agent402-client SDK method topSellers() — one source of truth, three surfaces." } }
       ]
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "${baseUrl}/#base-app",
+      "name": "Agent402 on Base",
+      "applicationCategory": "BlockchainApplication",
+      "operatingSystem": "Base (EVM, chain ID 8453)",
+      "description": "x402 pay-per-call agent tools settling in USDC on Base. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored — callers need only USDC.",
+      "url": "${baseUrl}",
+      "provider": { "@id": "${baseUrl}/#org" },
+      "offers": { "@type": "AggregateOffer", "priceCurrency": "USD", "lowPrice": "0.001", "highPrice": "0.02" }
     }
   ]
 }

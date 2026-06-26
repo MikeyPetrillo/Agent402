@@ -68,6 +68,18 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     selfHostable: true,
     license: "MIT",
     maintainer: MAINTAINER,
+    // Base ecosystem metadata — the builder code links on-chain settlements to
+    // this app in the Base builder program; the app ID is our registered Base
+    // MCP plugin identifier. Both are optional (env-gated / static).
+    ...(process.env.BASE_BUILDER_CODE ? { builderCode: process.env.BASE_BUILDER_CODE } : {}),
+    baseApp: "6a3dd86ca341d86b910769fb",
+    ecosystem: {
+      chain: "Base",
+      chainId: 8453,
+      currency: "USDC",
+      protocol: "x402",
+      note: "All x402 settlements use USDC on Base (EIP-3009 transferWithAuthorization). Gas is sponsored by the facilitator — callers need only USDC.",
+    },
     // Positive, machine-readable summary of what Agent402 offers: open and
     // self-hostable, the whole catalog in one integration, and it owns the
     // other side of the protocol too (pay-per-crawl).
@@ -97,6 +109,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
         payTo: wallet || null,
         payToName: walletName || null,
         nonCustodial: true,
+        ...(process.env.BASE_BUILDER_CODE ? { builderCode: process.env.BASE_BUILDER_CODE } : {}),
       },
       proofOfWork: {
         summary: "No wallet? Solve a single-use sha256 puzzle (a fraction of a second of CPU) — no money, no AI tokens, no model involved.",
