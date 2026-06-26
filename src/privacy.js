@@ -45,7 +45,7 @@ so every claim below is verifiable in code.</p>
   <li><b>IP addresses.</b> Used for free-tier rate limiting (kept in process memory for up to one hour)
   and in standard, short-lived operational logs (request path, status code) for abuse prevention and debugging.</li>
   <li><b>Payments.</b> We never see card numbers, names, or emails — there are none. Payments settle in USDC on
-  the public Base blockchain via the x402 protocol; wallet addresses, amounts, and timestamps are public
+  the public Base blockchain (or Solana, Polygon, Arbitrum) via the x402 protocol; wallet addresses, amounts, and timestamps are public
   on-chain by the protocol's design, not collected by us. Payment verification is performed by the
   payment facilitator (Coinbase CDP).</li>
   <li><b>Memory tools.</b> Data written via <code>/api/memory</code> is stored on our server keyed to the

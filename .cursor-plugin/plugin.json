@@ -3,7 +3,7 @@
   "name": "agent402",
   "displayName": "Agent402",
   "version": "0.4.0",
-  "description": "Open-source MCP server with 1,338 deterministic tools + 42 skill packs — web search, headless Chromium, PDFs, OCR, images, live data, x402 payments helpers, and ~1,100 pure-CPU utilities. Free to self-host or pay per call in USDC on Base.",
+  "description": "Open-source MCP server with 1,338 deterministic tools + 42 skill packs — web search, headless Chromium, PDFs, OCR, images, live data, x402 payments helpers, and ~1,100 pure-CPU utilities. Free to self-host or pay per call in USDC on Base + 3 more chains.",
   "author": { "name": "MikeyPetrillo" },
   "homepage": "https://agent402.tools",
   "repository": "https://github.com/MikeyPetrillo/Agent402",

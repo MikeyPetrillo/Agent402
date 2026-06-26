@@ -1,7 +1,7 @@
 {
   "name": "agent402-strands",
   "version": "0.1.0",
-  "description": "Drop-in Strands Agents tools for Agent402.Tools: turn 1,338 pay-per-call x402 tools (browser, web search, OCR, PDFs, finance, memory) into Strands tool() instances via four meta-tools (find/route/call/about), plus the cross-seller x402 Smart Order Router. Snaps into AWS Bedrock AgentCore Payments. Free via proof-of-work or pay per call in USDC on Base.",
+  "description": "Drop-in Strands Agents tools for Agent402.Tools: turn 1,338 pay-per-call x402 tools (browser, web search, OCR, PDFs, finance, memory) into Strands tool() instances via four meta-tools (find/route/call/about), plus the cross-seller x402 Smart Order Router. Snaps into AWS Bedrock AgentCore Payments. Free via proof-of-work or pay per call in USDC on Base + 3 more chains.",
   "type": "module",
   "main": "index.js",
   "exports": { ".": "./index.js" },

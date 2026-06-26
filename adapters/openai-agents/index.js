@@ -100,7 +100,7 @@ export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fet
     {
       name: "agent402_call",
       description:
-        "Call an Agent402 tool by slug. Pays automatically: pure-CPU tools settle via built-in proof-of-work (no wallet), wallet-only tools settle via the x402 fetch you configured (USDC on Base). Returns the parsed JSON result.",
+        "Call an Agent402 tool by slug. Pays automatically: pure-CPU tools settle via built-in proof-of-work (no wallet), wallet-only tools settle via the x402 fetch you configured (USDC on Base, Solana, Polygon, or Arbitrum). Returns the parsed JSON result.",
       parametersJsonSchema: {
         type: "object",
         properties: {

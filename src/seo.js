@@ -286,8 +286,8 @@ streamable-http), ChatGPT Pro+ (Settings → Connectors), and VS Code with GitHu
 Copilot MCP. The pure-CPU tools run free there (rate-limited) via
 \`search_tools\` + \`call_tool\`; wallet-only tools return instructions for paid
 access. The connector also exposes \`top_x402_sellers\` (free) so agents can
-discover the live x402 economy — which sellers are settling the most USDC
-on Base in the last ~24h, on-chain — without leaving the MCP transport.
+discover the live x402 economy — which sellers are settling the most USDC on Base
+(and other chains) in the last ~24h, on-chain — without leaving the MCP transport.
 
 For the full catalog with payment underneath, the \`agent402-mcp\` package exposes
 everything as MCP tools and settles per call (USDC via x402 with a wallet key,
@@ -303,7 +303,7 @@ or proof-of-work without):
 High-value tools (extract/render/screenshot/pdf/memory/…) are first-class MCP
 tools; the remaining ${tools.length - 14} are reachable via its \`search_tools\` + \`call_tool\`.
 
-Agent402 is also available as a Base MCP plugin (app ID \`6a3dd86ca341d86b910769fb\`). All x402 payments settle in USDC on Base (chain ID 8453) via EIP-3009 \`transferWithAuthorization\` — gas is sponsored by the facilitator, so callers need only hold USDC.
+Agent402 is also available as a Base MCP plugin (app ID \`6a3dd86ca341d86b910769fb\`). x402 payments settle in USDC on Base, Solana, Polygon, or Arbitrum — gas is sponsored by the facilitator on EVM chains, so callers need only hold USDC.
 
 ## Drop into your agent framework (zero-dep adapters)
 
@@ -344,7 +344,7 @@ const res = await payFetch("${baseUrl}/api/extract", {
 
 ## Notes for agents
 
-- Payments settle in seconds on Base (eip155:8453); the payer needs USDC only (gas is sponsored).
+- Payments settle in seconds on Base (eip155:8453), Solana, Polygon, or Arbitrum; the payer needs USDC only (gas is sponsored on EVM chains).
 - **Safe retries:** send an \`Idempotency-Key\` header with a paid (or proof-of-work) call. If you don't receive the response and retry with the SAME key and the SAME payment/PoW credential, you get the original result back (header \`X-Idempotent-Replay: true\`) without paying again. Without the header, nothing changes.
 - \`/api/memory\` namespaces are owned by the paying wallet: only the wallet that wrote a key can read it. Use it for durable state between runs.
 - \`/api/render\` runs a real headless Chromium with JavaScript execution — use it when \`/api/extract\` returns an empty shell for SPA pages.

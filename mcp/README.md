@@ -11,7 +11,7 @@ MCP server — e.g. claude.ai → Settings → Connectors → Add custom connect
 pure-CPU tools run free there (rate-limited); for the full catalog and no rate
 limit, run this package locally with a wallet:
 
-With a funded wallet (USDC on Base) — every tool available:
+With a funded wallet (USDC on Base, Solana, Polygon, or Arbitrum) — every tool available:
 
 ```json
 {
@@ -44,7 +44,7 @@ Claude Code: `claude mcp add agent402 -- npx -y agent402-mcp`
 - The other ~1,185 tools are reachable via `search_tools` (find by description) + `call_tool` (call by slug) — keeping your context window small.
 - When a call hits HTTP 402: with `AGENT_KEY` set, the server signs an x402 USDC payment and retries; without a key it solves the tool's proof-of-work challenge (~0.2 s of CPU) on the eligible tools.
 - `payment_info` tells the model which mode it's in and what a wallet would unlock.
-- `top_x402_sellers` returns the live x402 leaderboard — which sellers are settling the most USDC on Base in the last ~24h, derived from on-chain transfers. Free to call (no payment, no proof-of-work). Useful for agents discovering the wider x402 economy beyond this single service's catalog.
+- `top_x402_sellers` returns the live x402 leaderboard — which sellers are settling the most USDC (primarily on Base) in the last ~24h, derived from on-chain transfers. Free to call (no payment, no proof-of-work). Useful for agents discovering the wider x402 economy beyond this single service's catalog.
 
 ## Workflows (skill packs)
 
@@ -64,7 +64,7 @@ automatically:
 
 | env | default | meaning |
 | --- | --- | --- |
-| `AGENT_KEY` | _(unset)_ | Hex private key of a wallet funded with USDC on Base. Unset = proof-of-work mode. |
+| `AGENT_KEY` | _(unset)_ | Hex private key of a wallet funded with USDC on Base (or Solana/Polygon/Arbitrum). Unset = proof-of-work mode. |
 | `AGENT402_URL` | `https://agent402.tools` | Target service (point at your own deployment). |
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
 | `AGENT402_MAX_PER_CALL` | unlimited | Refuse any single call priced above this many USD (e.g. `0.01`). |

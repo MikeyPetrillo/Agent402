@@ -18,7 +18,7 @@ const ENTRIES = [
       "Text-to-speech: /api/tts ($0.05) and /api/tts-hd ($0.10) — 10 voices, 6 audio formats",
       "Speech-to-text: /api/transcribe ($0.03) and /api/transcribe-pro ($0.10) — URL-based audio input",
       "Embeddings: /api/embed ($0.005) and /api/embed-large ($0.01) — 1536 or 3072 dimensions for RAG and search",
-      "No API key needed — pay per call with USDC on Base",
+      "No API key needed — pay per call with USDC on Base, Solana, Polygon & Arbitrum",
       "Self-hosters: bring your own upstream key to run these for free",
     ],
   },

@@ -70,20 +70,20 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <link rel="apple-touch-icon" href="/logo.png">
 <meta name="base:app_id" content="6a3dd86ca341d86b910769fb" />
 <title>Agent402 — the open x402 index: Find, Router &amp; Leaderboard for the agent payments economy (${count}+ tools)</title>
-<meta name="description" content="The open x402 index — discovery, routing, and on-chain ranking for the agent payments economy. /api/find resolves tasks to tools, /api/route is the neutral Smart Order Router across every x402 seller, /api/leaderboard ranks them by Base USDC settled volume. Plus ${count} pay-per-call agent tools and agent402-tollbooth (open pay-per-crawl gate). Free via proof-of-work or USDC on Base. No signup, no API key.">
+<meta name="description" content="The open x402 index — discovery, routing, and on-chain ranking for the agent payments economy. /api/find resolves tasks to tools, /api/route is the neutral Smart Order Router across every x402 seller, /api/leaderboard ranks them by Base USDC settled volume. Plus ${count} pay-per-call agent tools and agent402-tollbooth (open pay-per-crawl gate). Free via proof-of-work or USDC on Base + 3 more chains. No signup, no API key.">
 <link rel="canonical" href="${baseUrl}/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/">
 <meta property="og:site_name" content="Agent402.Tools">
 <meta property="og:title" content="Agent402 — the open x402 index: Find, Router &amp; Leaderboard (${count}+ tools)">
-<meta property="og:description" content="The open x402 index — discovery, routing, and on-chain ranking for the agent payments economy. Find a tool, route across every x402 seller, see who's most used on-chain. Plus ${count} pay-per-call agent tools. Free via proof-of-work or USDC on Base.">
+<meta property="og:description" content="The open x402 index — discovery, routing, and on-chain ranking for the agent payments economy. Find a tool, route across every x402 seller, see who's most used on-chain. Plus ${count} pay-per-call agent tools. Free via proof-of-work or USDC on Base + 3 more chains.">
 <meta property="og:image" content="${baseUrl}/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="${baseUrl}/card.png">
 <meta name="twitter:title" content="Agent402 — the open x402 index: Find, Router &amp; Leaderboard">
-<meta name="twitter:description" content="Discovery, routing, and on-chain ranking for the agent payments economy. ${count} pay-per-call agent tools. Free via proof-of-work or USDC on Base.">
+<meta name="twitter:description" content="Discovery, routing, and on-chain ranking for the agent payments economy. ${count} pay-per-call agent tools. Free via proof-of-work or USDC on Base + 3 more chains.">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -95,7 +95,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "url": "${baseUrl}",
       "founder": { "@type": "Person", "name": "Mike Petrillo", "url": "https://github.com/MikeyPetrillo" },
       "sameAs": ["https://github.com/MikeyPetrillo", "https://github.com/MikeyPetrillo/Agent402", "https://x.com/Agent402Tools", "https://www.npmjs.com/package/agent402-mcp", "https://www.npmjs.com/package/agent402-client", "https://www.npmjs.com/package/agent402-tollbooth", "https://www.npmjs.com/package/agent402-openai-tools", "https://www.npmjs.com/package/agent402-anthropic-tools", "https://www.npmjs.com/package/agent402-ai-sdk", "https://www.npmjs.com/package/agent402-langchain", "https://www.npmjs.com/package/agent402-llamaindex", "https://www.npmjs.com/package/agent402-google-adk", "https://www.npmjs.com/package/agent402-strands"],
-      "description": "Machine-to-machine payments for AI agents: ${count} pay-per-call web tools settled in USDC via the x402 protocol, or free with proof-of-work."
+      "description": "Machine-to-machine payments for AI agents: ${count} pay-per-call web tools settled in USDC on Base, Solana, Polygon & Arbitrum via the x402 protocol, or free with proof-of-work."
     },
     {
       "@type": "WebSite",
@@ -109,7 +109,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "name": "Agent402.Tools",
       "url": "${baseUrl}",
       "provider": { "@id": "${baseUrl}/#org" },
-      "description": "${count} pay-per-call tools for AI agents via the x402 payment protocol (USDC on Base): live web search and web answers with citations, headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed memory & coordination, a non-custodial multi-chain x402 payment toolkit (quote/verify/balance/gas/transfer-authorization/ENS), image transforms, live financial data (stock quotes, history, earnings) and crypto market data (CoinGecko), macro time-series (FRED, Treasury, ECB FX, World Bank, yield curve), SEC EDGAR filings (10-K/10-Q, XBRL, insider, 13F, IPO calendar), live currency & product data, ${count - freeCount > 0 ? "data conversion, " : ""}unit conversions, validation, and more.",
+      "description": "${count} pay-per-call tools for AI agents via the x402 payment protocol (USDC on Base, Solana, Polygon & Arbitrum): live web search and web answers with citations, headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed memory & coordination, a non-custodial multi-chain x402 payment toolkit (quote/verify/balance/gas/transfer-authorization/ENS), image transforms, live financial data (stock quotes, history, earnings) and crypto market data (CoinGecko), macro time-series (FRED, Treasury, ECB FX, World Bank, yield curve), SEC EDGAR filings (10-K/10-Q, XBRL, insider, 13F, IPO calendar), live currency & product data, ${count - freeCount > 0 ? "data conversion, " : ""}unit conversions, validation, and more.",
       "documentation": "${baseUrl}/llms.txt",
       "offers": { "@type": "AggregateOffer", "offerCount": "${count}", "lowPrice": "0.001", "highPrice": "0.02", "priceCurrency": "USD", "description": "Per-call micropayments in USDC via x402, or free with proof-of-work" }
     },
@@ -117,7 +117,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "@type": "FAQPage",
       "mainEntity": [
         { "@type": "Question", "name": "What is Agent402?", "acceptedAnswer": { "@type": "Answer", "text": "Agent402 is a live node in the machine-to-machine economy: ${count} web tools an autonomous AI agent can call and pay for per request in USDC via the x402 protocol — or with proof-of-work, no wallet. No human, no signup, no API key." } },
-        { "@type": "Question", "name": "How does an AI agent pay for a tool?", "acceptedAnswer": { "@type": "Answer", "text": "The agent calls an endpoint and receives an HTTP 402 Payment Required quote. An x402 client signs a USDC payment from the agent's own wallet on Base and retries; the call settles on-chain in seconds. The wallet is the identity — no account needed. x402 is an open standard with settlement infrastructure from Coinbase and Stripe." } },
+        { "@type": "Question", "name": "How does an AI agent pay for a tool?", "acceptedAnswer": { "@type": "Answer", "text": "The agent calls an endpoint and receives an HTTP 402 Payment Required quote. An x402 client signs a USDC payment from the agent's own wallet on Base (or Solana, Polygon, Arbitrum) and retries; the call settles on-chain in seconds. The wallet is the identity — no account needed. x402 is an open standard with settlement infrastructure from Coinbase and Stripe." } },
         { "@type": "Question", "name": "Are any tools free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes — ${freeCount} of the ${count} pure-CPU tools can be used with no wallet at all by solving a short proof-of-work puzzle (a few seconds of the caller's CPU) instead of paying USDC." } },
         { "@type": "Question", "name": "Why would an agent use this instead of building the tools itself?", "acceptedAnswer": { "@type": "Answer", "text": "Many agents can write code but can't run a headless browser, reach the network from a locked sandbox, or keep durable state across sessions. Agent402 provides a real browser, network access, and wallet-keyed memory and coordination that a single ephemeral agent cannot give itself." } },
         { "@type": "Question", "name": "Does Agent402 use AI or spend my model tokens?", "acceptedAnswer": { "@type": "Answer", "text": "No. Every tool is deterministic code — parsers, hashes, math, a real browser — with no LLM anywhere in the serving path, and the free tier's proof-of-work is a sha256 puzzle your machine solves in a fraction of a second. Nothing consumes AI tokens. Tools like /api/extract exist to SAVE your tokens: they return clean markdown instead of 100k tokens of raw HTML." } },
@@ -130,8 +130,8 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "@id": "${baseUrl}/#base-app",
       "name": "Agent402 on Base",
       "applicationCategory": "BlockchainApplication",
-      "operatingSystem": "Base (EVM, chain ID 8453)",
-      "description": "x402 pay-per-call agent tools settling in USDC on Base. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored — callers need only USDC.",
+      "operatingSystem": "Base (EVM, chain ID 8453), Solana, Polygon (EVM, chain ID 137), Arbitrum (EVM, chain ID 42161)",
+      "description": "x402 pay-per-call agent tools settling in USDC on Base, Solana, Polygon & Arbitrum. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored on EVM chains — callers need only USDC.",
       "url": "${baseUrl}",
       "provider": { "@id": "${baseUrl}/#org" },
       "offers": { "@type": "AggregateOffer", "priceCurrency": "USD", "lowPrice": "0.001", "highPrice": "0.02" }
@@ -275,7 +275,7 @@ ${renderHeader("/", [{ href: "#connect", label: "Connect" }])}
     <div>
       <span class="badge"><span class="dot"></span> open source · <b>x402</b> · ${count} tools · free tier · no API keys</span>
       <h1>Where agents pay agents<span class="x">.</span></h1>
-      <p class="sub"><b>Machine-to-machine payments for AI agents — over <a href="https://x402.org" rel="noopener">x402</a>.</b> ${count} deterministic, pay-per-call tools your agent can use mid-task: extract PDFs, search the web, geocode, fetch SEC filings, render JavaScript pages, pull stock quotes &amp; macro data. <b>Free to try</b> via in-process proof-of-work; <b>USDC on Base</b> from $0.001/call when you scale. No signup, no API keys — <b>the wallet is the identity</b>.</p>
+      <p class="sub"><b>Machine-to-machine payments for AI agents — over <a href="https://x402.org" rel="noopener">x402</a>.</b> ${count} deterministic, pay-per-call tools your agent can use mid-task: extract PDFs, search the web, geocode, fetch SEC filings, render JavaScript pages, pull stock quotes &amp; macro data. <b>Free to try</b> via in-process proof-of-work; <b>USDC on Base, Solana, Polygon &amp; Arbitrum</b> from $0.001/call when you scale. No signup, no API keys — <b>the wallet is the identity</b>.</p>
       <div class="ctas">
         <a class="cta primary" href="#connect">Add to Claude in 60 seconds →</a>
         <a class="cta ghost" href="/tools">Browse all ${count} tools</a>
@@ -299,9 +299,9 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@latest
 
 <span class="c"># Then ask Claude: "extract the tables from this PDF",
 # "geocode these 50 addresses", "fetch Apple's latest 10-K".
-# Free tier auto-pays in compute. USDC on Base when you scale.</span></pre>
+# Free tier auto-pays in compute. USDC on Base + 3 more chains when you scale.</span></pre>
       <div class="snippet-foot">
-        <span class="dot"></span> ${freeCount.toLocaleString()} tools free via proof-of-work · USDC on Base for the rest · <a href="/llms.txt">llms.txt</a>
+        <span class="dot"></span> ${freeCount.toLocaleString()} tools free via proof-of-work · USDC on Base + 3 more chains for the rest · <a href="/llms.txt">llms.txt</a>
       </div>
     </div>
     <script>
@@ -333,7 +333,7 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@latest
     <pre># one file, zero dependencies — pays with COMPUTE (no wallet, no funds)
 curl -s ${baseUrl}/demo.js -o demo.js && node demo.js
 
-# or settle in real USDC on Base with a funded key
+# or settle in real USDC on Base (or Solana/Polygon/Arbitrum) with a funded key
 npm i @x402/core @x402/evm @x402/fetch viem
 AGENT_KEY=0xYOUR_FUNDED_KEY node demo.js</pre>
     <p class="sub">Revenue is trustless and public — every settled call lands on-chain. See live counts and the receiving wallet at <a href="/api/stats">/api/stats</a>.</p>
@@ -483,7 +483,7 @@ curl -i -X POST ${baseUrl}/api/extract \\
     <h2>FAQ</h2>
     <div class="faq">
       <p><b>What is Agent402?</b><br><span>A live node in the machine-to-machine economy: ${count} web tools an autonomous AI agent can call and pay for per request in USDC via the <a href="https://x402.org" rel="noopener">x402 protocol</a> — or with proof-of-work, no wallet. No human, no signup, no API key.</span></p>
-      <p><b>How does an AI agent pay for a tool?</b><br><span>It calls an endpoint and gets an <code>HTTP 402 Payment Required</code> quote. An x402 client signs a USDC payment from the agent's own wallet on Base and retries; the call settles on-chain in seconds. The wallet is the identity. <a href="https://x402.org" rel="noopener">x402</a> is an open standard with settlement infrastructure from Coinbase and Stripe.</span></p>
+      <p><b>How does an AI agent pay for a tool?</b><br><span>It calls an endpoint and gets an <code>HTTP 402 Payment Required</code> quote. An x402 client signs a USDC payment from the agent's own wallet on Base (or Solana, Polygon, Arbitrum) and retries; the call settles on-chain in seconds. The wallet is the identity. <a href="https://x402.org" rel="noopener">x402</a> is an open standard with settlement infrastructure from Coinbase and Stripe.</span></p>
       <p><b>Are any tools free?</b><br><span>Yes — ${freeCount} of the ${count} pure-CPU tools work with no wallet at all: solve a short <a href="/api/pow">proof-of-work</a> puzzle (a few seconds of CPU) instead of paying USDC.</span></p>
       <p><b>Does Agent402 use AI or spend my model tokens?</b><br><span>No. Every tool is deterministic code — parsers, hashes, math, a real browser — with no LLM anywhere in the serving path, and the free tier's proof-of-work is a sha256 puzzle your machine solves in a fraction of a second. Nothing here consumes AI tokens. Tools like <code>/api/extract</code> exist to <em>save</em> your tokens: clean markdown out instead of 100k tokens of raw HTML in.</span></p>
       <p><b>Can I use Agent402 from OpenAI / Anthropic / LangChain / LlamaIndex / Vercel AI SDK?</b><br><span>Yes — there's a zero-dependency adapter on npm for each: <code><a href="https://www.npmjs.com/package/agent402-openai-tools" rel="noopener">agent402-openai-tools</a></code>, <code><a href="https://www.npmjs.com/package/agent402-anthropic-tools" rel="noopener">agent402-anthropic-tools</a></code>, <code><a href="https://www.npmjs.com/package/agent402-ai-sdk" rel="noopener">agent402-ai-sdk</a></code>, <code><a href="https://www.npmjs.com/package/agent402-langchain" rel="noopener">agent402-langchain</a></code>, and <code><a href="https://www.npmjs.com/package/agent402-llamaindex" rel="noopener">agent402-llamaindex</a></code>. Each returns ready-to-pass tool objects in the framework's native shape — payment handled underneath (proof-of-work for free tools, USDC via x402 for wallet-only). MCP-based clients (Claude) can still use the hosted <code>/mcp</code> connector directly.</span></p>

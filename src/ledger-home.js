@@ -42,7 +42,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
 
   const canonical = baseUrl + "/";
   const title = `Agent402 — the open x402 index (${fmtNum(count)} tools)`;
-  const description = `${fmtNum(count)} deterministic, pay-per-call tools your agent can use mid-task. Free via proof-of-work; USDC on Base from $0.001/call. No signup, no API key — the wallet is the identity.`;
+  const description = `${fmtNum(count)} deterministic, pay-per-call tools your agent can use mid-task. Free via proof-of-work; USDC on Base + 3 more chains from $0.001/call. No signup, no API key — the wallet is the identity.`;
 
   const jsonLd = [
     {
@@ -60,7 +60,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
       url: baseUrl,
       applicationCategory: "DeveloperApplication",
       operatingSystem: "Any",
-      offers: { "@type": "Offer", price: "0.001", priceCurrency: "USD", description: "Pay-per-call USDC on Base" },
+      offers: { "@type": "Offer", price: "0.001", priceCurrency: "USD", description: "Pay-per-call USDC on Base, Solana, Polygon & Arbitrum" },
     },
   ];
 
@@ -74,7 +74,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
           <div style="font-family:var(--font-mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:22px;">▸ open source · x402 · ${fmtNum(count)} tools · free tier</div>
           <h1 class="ml-hero-h1" style="font-family:var(--font-body);font-weight:800;font-size:66px;line-height:.96;letter-spacing:-.03em;margin:0 0 8px;color:var(--ink);">Where agents<br><span style="color:var(--accent);">pay</span> agents.</h1>
           <div style="display:inline-block;transform:rotate(-7deg);border:2.5px solid var(--accent);color:var(--accent);padding:5px 11px 4px;margin:14px 0 22px;font-family:var(--font-mono);font-weight:700;font-size:11px;letter-spacing:.12em;line-height:1.3;text-align:center;">PAYMENT REQUIRED<br><span style="font-size:9px;letter-spacing:.18em;opacity:.8;">· 402 · agent402.tools ·</span></div>
-          <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:500px;margin:0 0 30px;">${fmtNum(count)} deterministic, pay-per-call tools your agent can use mid-task — extract PDFs, render pages, geocode, fetch SEC filings. Free via proof-of-work; USDC on Base from <strong style="color:var(--ink);font-weight:700;">$0.001/call</strong> when you scale. No signup, no API keys — <strong style="color:var(--ink);font-weight:700;">the wallet is the identity</strong>.</p>
+          <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:500px;margin:0 0 30px;">${fmtNum(count)} deterministic, pay-per-call tools your agent can use mid-task — extract PDFs, render pages, geocode, fetch SEC filings. Free via proof-of-work; USDC on Base + 3 more chains from <strong style="color:var(--ink);font-weight:700;">$0.001/call</strong> when you scale. No signup, no API keys — <strong style="color:var(--ink);font-weight:700;">the wallet is the identity</strong>.</p>
           <div style="display:flex;flex-wrap:wrap;align-items:center;gap:11px;">
             <a href="/docs" style="background:var(--accent);color:#fff;font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 20px;">ADD TO CLAUDE →</a>
             <a href="/tools" style="background:transparent;border:1.5px solid var(--ink);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:12px 20px;">BROWSE ${fmtNum(count)} TOOLS</a>
@@ -90,7 +90,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
 </span><span style="color:var(--dk-muted3);"># then ask Claude:
 # "extract the tables from this PDF"
 # free tier pays in compute.
-# USDC on Base when you scale.</span></pre>
+# USDC on Base + 3 more chains when you scale.</span></pre>
         </div>
       </div>
 
@@ -224,7 +224,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
     <h2 style="font-family:var(--font-body);font-weight:800;font-size:40px;line-height:1;letter-spacing:-.02em;margin:0 0 28px;color:var(--ink);">Questions.</h2>
     <div style="display:flex;flex-direction:column;">
       <div style="padding:20px 0;border-top:1.5px solid var(--ink);"><h3 style="font-size:16px;font-weight:700;margin:0 0 7px;">What is Agent402?</h3><p style="font-size:15px;line-height:1.55;color:var(--muted);margin:0;">A live node in the machine-to-machine economy: ${fmtNum(count)} web tools an autonomous agent can call and pay for per request in USDC via x402 — or with proof-of-work, no wallet. No human, no signup, no API key.</p></div>
-      <div style="padding:20px 0;border-top:1px solid var(--hairline);"><h3 style="font-size:16px;font-weight:700;margin:0 0 7px;">How does an agent pay for a tool?</h3><p style="font-size:15px;line-height:1.55;color:var(--muted);margin:0;">It calls an endpoint and gets an HTTP 402 quote. An x402 client signs a USDC payment from the agent's own wallet on Base and retries; the call settles on-chain in seconds. The wallet is the identity.</p></div>
+      <div style="padding:20px 0;border-top:1px solid var(--hairline);"><h3 style="font-size:16px;font-weight:700;margin:0 0 7px;">How does an agent pay for a tool?</h3><p style="font-size:15px;line-height:1.55;color:var(--muted);margin:0;">It calls an endpoint and gets an HTTP 402 quote. An x402 client signs a USDC payment from the agent's own wallet on Base (or Solana, Polygon, Arbitrum) and retries; the call settles on-chain in seconds. The wallet is the identity.</p></div>
       <div style="padding:20px 0;border-top:1px solid var(--hairline);"><h3 style="font-size:16px;font-weight:700;margin:0 0 7px;">Are any tools free?</h3><p style="font-size:15px;line-height:1.55;color:var(--muted);margin:0;">Yes — ${fmtNum(freeCount)} of the ${fmtNum(count)} pure-CPU tools work with no wallet: solve a short proof-of-work puzzle (a few seconds of CPU) instead of paying USDC.</p></div>
       <div style="padding:20px 0;border-top:1px solid var(--hairline);"><h3 style="font-size:16px;font-weight:700;margin:0 0 7px;">Does it spend my model tokens?</h3><p style="font-size:15px;line-height:1.55;color:var(--muted);margin:0;">No. Every tool is deterministic code — parsers, hashes, math, a real browser — with no LLM in the path. Tools like /api/extract exist to save your tokens: clean markdown out instead of 100k tokens of raw HTML in.</p></div>
       <div style="padding:20px 0;border-top:1px solid var(--hairline);border-bottom:1.5px solid var(--ink);"><h3 style="font-size:16px;font-weight:700;margin:0 0 7px;">Which frameworks are supported?</h3><p style="font-size:15px;line-height:1.55;color:var(--muted);margin:0;">Zero-dependency adapters on npm for OpenAI, Anthropic, LangChain, LlamaIndex, Vercel AI SDK, Google ADK and AWS Strands — each returning native tool objects with payment handled underneath.</p></div>

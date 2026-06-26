@@ -1704,7 +1704,7 @@ export function skillsIndex(baseUrl) {
   const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
 <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;">SKILL PACKS</div>
 <h1 style="font-family:var(--font-body);font-weight:800;font-size:42px;line-height:.96;letter-spacing:-.03em;margin-bottom:14px;">Curated workflows</h1>
-<p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;margin-bottom:8px;">Multi-tool workflows for specific jobs — pay per call (USDC on Base) or run free with proof-of-work. Each pack is one paste of context for your agent.</p>
+<p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;margin-bottom:8px;">Multi-tool workflows for specific jobs — pay per call (USDC on Base + 3 more chains) or run free with proof-of-work. Each pack is one paste of context for your agent.</p>
 <div class="sk-grid">${cards}</div>
 <h2 style="font-weight:800;font-size:22px;margin-top:48px;letter-spacing:-.01em;">Install once, use any pack</h2>
 <pre style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);padding:18px 20px;font-size:13px;line-height:1.6;border:none;margin-top:12px;">claude mcp add agent402 -s user -- npx -y agent402-mcp@latest</pre>

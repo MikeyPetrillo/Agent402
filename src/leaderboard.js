@@ -3,7 +3,7 @@
 // There's no central registry of "who's most used in x402". The protocol is too
 // young. But every seller registered on the Coinbase CDP Bazaar publishes a
 // `payTo` wallet alongside their resource listing, and every settled call moves
-// USDC on Base. That's the trustless signal: rank sellers by their actual
+// USDC on Base (and other chains). That's the trustless signal: rank sellers by their actual
 // on-chain settlement volume.
 //
 // Pipeline (see runLeaderboard below):
