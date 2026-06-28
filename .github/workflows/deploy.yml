@@ -1573,6 +1573,12 @@ jobs:
       - name: Verify deployment
         run: |
           URL='${{ steps.domain.outputs.domain }}'
+          # The Railway hostname now 301-redirects to the canonical domain
+          # (see "Redirect Railway hostname to canonical domain"), so probing it
+          # returns 301, never 200, and the gate below would false-fail every
+          # deploy. Verify against the canonical domain — the real public surface
+          # that doesn't redirect — when configured; fall back to the Railway URL.
+          [ -n "$CUSTOM_DOMAIN" ] && URL="$CUSTOM_DOMAIN"
           echo "Waiting for https://$URL/health …"
           code=000
           for i in $(seq 1 60); do
