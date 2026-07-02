@@ -1,5 +1,6 @@
 import express from "express";
 import { readFileSync } from "node:fs";
+import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { extractArticle, fetchPageMeta } from "./tools/extract.js";
 import { dnsLookup } from "./tools/dns.js";
 import { pdfToText } from "./tools/pdf.js";
