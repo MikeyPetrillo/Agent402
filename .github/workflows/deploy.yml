@@ -134,6 +134,38 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm ci && npm install --no-save --ignore-scripts @x402/fetch viem
+      # Regression guard for the 2026-07-02 outage: a network listed in
+      # PAYMENT_NETWORKS but backed by NO facilitator (robinhood without
+      # ROBINHOOD_FACILITATOR_URL) must be DROPPED from the 402 offer, not
+      # poison it. Before the fix this threw while building the challenge and
+      # surfaced as HTTP 500 on EVERY paid endpoint. Boot paid mode with
+      # base(+CDP)+robinhood and NO robinhood facilitator, then assert a paid
+      # route still returns a 402 whose accepts EXCLUDE robinhood (eip155:4663).
+      # Gating — this locks the incident so it can never silently recur.
+      - name: Regression — facilitator-less network must not 500 the paywall
+        env:
+          WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
+          CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
+          CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
+        run: |
+          # robinhood in PAYMENT_NETWORKS; ROBINHOOD_FACILITATOR_URL deliberately UNSET.
+          PAYMENT_NETWORKS=base,robinhood NETWORK=base PORT=3795 \
+            node src/server.js > /tmp/reg-srv.log 2>&1 &
+          SRV=$!
+          for i in $(seq 1 40); do curl -sf http://localhost:3795/health >/dev/null 2>&1 && break; sleep 1; done
+          grep -iE 'dropping Robinhood|Accepting USDC|facilitator routing' /tmp/reg-srv.log | head -5 || true
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3795/api/hash \
+            -H 'Content-Type: application/json' -d '{"text":"x"}')
+          HDR=$(curl -s -D - -o /dev/null -X POST http://localhost:3795/api/hash \
+            -H 'Content-Type: application/json' -d '{"text":"x"}' \
+            | tr -d '\r' | awk -F': ' 'tolower($1)=="payment-required"{print $2}' | head -1)
+          NETS=$(node -e 'const h=process.argv[1]||""; if(!h){console.log("[]");process.exit(0)} const d=JSON.parse(Buffer.from(h,"base64").toString("utf8")); console.log(JSON.stringify((d.accepts||[]).map(a=>a.network)))' "$HDR")
+          kill $SRV 2>/dev/null || true
+          echo "unpaid /api/hash -> HTTP $code (expect 402) | offered networks: $NETS"
+          fail=0
+          [ "$code" = "402" ] || { echo "FAIL: expected 402, got $code — facilitator-less network poisoned the paywall"; fail=1; }
+          case "$NETS" in *eip155:4663*) echo "FAIL: robinhood (eip155:4663) still offered with no facilitator"; fail=1;; esac
+          [ "$fail" = "0" ] && echo "PASS: robinhood dropped, base 402 intact" || exit 1
       - name: Load burner key
         env:
           # Provide a throwaway, low-value test wallet key as the BURNER_KEY
