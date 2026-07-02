@@ -80,7 +80,10 @@ try {
   const verbSet = new Set(["GET", "POST", "PUT", "DELETE", "PATCH"]);
   for (const ep of body.endpoints) {
     if (!verbSet.has(ep.method)) { fail(`endpoint method not a known verb (got '${ep.method}' for slug=${ep.slug})`); break; }
-    if (typeof ep.path !== "string" || !ep.path.startsWith("/api/")) { fail(`endpoint path doesn't start with /api/ (got '${ep.path}' for slug=${ep.slug})`); break; }
+    // /api/* is the catalog namespace; /v1/* is the OpenAI-compatible LLM
+    // gateway (deliberately at the OpenAI wire path so SDKs adopt it by
+    // changing base_url alone).
+    if (typeof ep.path !== "string" || !(ep.path.startsWith("/api/") || ep.path.startsWith("/v1/"))) { fail(`endpoint path doesn't start with /api/ or /v1/ (got '${ep.path}' for slug=${ep.slug})`); break; }
     if (typeof ep.price !== "string" || !ep.price.startsWith("$")) { fail(`endpoint price isn't a $-prefixed string (got '${ep.price}' for slug=${ep.slug})`); break; }
     if (typeof ep.slug !== "string" || !ep.slug.length) { fail(`endpoint slug missing or empty (got '${ep.slug}')`); break; }
     if (typeof ep.category !== "string" || !ep.category.length) { fail(`endpoint category missing (slug=${ep.slug})`); break; }

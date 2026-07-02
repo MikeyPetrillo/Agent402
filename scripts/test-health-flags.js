@@ -61,6 +61,7 @@ try {
     "yahooRelay",
     "statsPersistent",
     "memoryPersistent",
+    "llmGateway",
   ];
   for (const key of REQUIRED_FLAGS) {
     ok(key in body.flags, `body.flags.${key} is present`);
