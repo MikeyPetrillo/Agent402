@@ -79,6 +79,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   //     Arbitrum — free tier 10k settlements/month).
   const isMultiChain = networks.length > 1;
   const facilitatorClients = [];
+  let payAiClient = null;
   if (isMultiChain) {
     const cdpConfig = await resolveCdpFacilitatorConfig();
     if (cdpConfig) {
@@ -90,7 +91,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           "CDP_API_KEY_ID + CDP_API_KEY_SECRET to keep Base on CDP (Bazaar discovery + fee-free)."
       );
     }
-    facilitatorClients.push(new HTTPFacilitatorClient(await resolvePayAIFacilitatorConfig()));
+    payAiClient = new HTTPFacilitatorClient(await resolvePayAIFacilitatorConfig());
+    facilitatorClients.push(payAiClient);
     console.log(
       `Multi-chain facilitator routing: ${cdpConfig ? "CDP (Base + Bazaar) → PayAI (remaining chains)" : "PayAI (all chains)"}`
     );
@@ -102,6 +104,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     .registerExtension(builderCodeResourceServerExtension);
   for (const caip2 of evmCaip2) server = server.register(caip2, new ExactEvmScheme());
   for (const caip2 of svmCaip2) server = server.register(caip2, new ExactSvmScheme());
+  registerFacilitatorFailureHooks(server, payAiClient);
   console.log(`Accepting USDC on: ${networks.join(", ")} (${caip2List.join(", ")})`);
 
   const solanaWallet = (process.env.SOLANA_WALLET_ADDRESS || "").trim();
@@ -167,6 +170,97 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // only for local testing where the facilitator is unreachable.
   const syncOnStart = process.env.X402_SYNC_ON_START !== "false";
   return paymentMiddleware(routes, server, undefined, undefined, syncOnStart);
+}
+
+/**
+ * Make facilitator verify/settle failures LOUD — and optionally auto-recover a
+ * failed settlement via PayAI.
+ *
+ * Why this exists: the @x402 middleware turns a facilitator verify/settle
+ * failure into a bare `402` with an EMPTY body and logs NOTHING. So when CDP
+ * started returning `402 payment-method-required` on settle (its account-level
+ * billing gate — a valid payment method must be on the CDP account once the
+ * free settlement tier is used), buyers saw ordinary-looking empty 402s, the
+ * server printed nothing, and Base revenue silently went to zero with no error
+ * anywhere. verify() is free and kept returning isValid:true, so every check
+ * that looked at verification looked healthy. These hooks surface the network +
+ * the facilitator's actual reason (and correlationId/errorLink) in the server
+ * log, turning that class of outage into a seconds-long diagnosis.
+ *
+ * PAYMENT_SETTLE_FALLBACK=true (default OFF) additionally re-settles through
+ * PayAI when the primary facilitator rejects settlement BEFORE broadcasting
+ * (an HTTP 402 billing gate) — never on a timeout/5xx, where the primary may
+ * already have broadcast, so it cannot double-charge the buyer. Left off by
+ * default so Base stays purely on CDP (Bazaar discovery + fee-free settlement)
+ * unless the operator opts into never-miss-a-sale behavior.
+ */
+function registerFacilitatorFailureHooks(server, payAiClient) {
+  server.onVerifyFailure((ctx) => {
+    console.warn(
+      `[payments] facilitator VERIFY failed on ${ctx?.requirements?.network} ` +
+        `${ctx?.requirements?.scheme}: ${summarizeFacilitatorError(ctx?.error)}`
+    );
+  });
+
+  const fallbackEnabled = /^(1|true|yes|on)$/i.test((process.env.PAYMENT_SETTLE_FALLBACK || "").trim());
+  server.onSettleFailure(async (ctx) => {
+    console.warn(
+      `[payments] facilitator SETTLE failed on ${ctx?.requirements?.network} ` +
+        `${ctx?.requirements?.scheme}: ${summarizeFacilitatorError(ctx?.error)}`
+    );
+    if (!fallbackEnabled || !payAiClient) return;
+    if (!isPreBroadcastSettleRejection(ctx?.error)) return;
+    try {
+      const result = await payAiClient.settle(ctx.paymentPayload, ctx.requirements);
+      console.warn(
+        `[payments] recovered ${ctx?.requirements?.network} settlement via PayAI fallback ` +
+          "(PAYMENT_SETTLE_FALLBACK=true; primary rejected pre-broadcast)"
+      );
+      return { recovered: true, result };
+    } catch (err) {
+      console.warn(
+        `[payments] PayAI settle fallback ALSO failed on ${ctx?.requirements?.network}: ` +
+          summarizeFacilitatorError(err)
+      );
+    }
+  });
+}
+
+/**
+ * True only for facilitator settle failures guaranteed NOT to have broadcast
+ * on-chain (safe to re-settle elsewhere): an HTTP 402 from the facilitator
+ * /settle endpoint (e.g. CDP's `payment-method-required` billing gate). Network
+ * errors, timeouts, and 5xx are excluded — there the primary may already have
+ * broadcast, so re-settling could double-charge the buyer.
+ */
+function isPreBroadcastSettleRejection(err) {
+  if (!err) return false;
+  if (err.status === 402) return true;
+  const msg = String(err.message || "");
+  return /settle failed \(402\)/i.test(msg) || /payment-method-required/i.test(msg);
+}
+
+/** Pull the human-meaningful bits out of a facilitator error (its message
+ *  embeds the facilitator's JSON body — errorMessage, errorLink, correlationId)
+ *  so the server log names the cause instead of a bare stack. */
+function summarizeFacilitatorError(err) {
+  if (!err) return "unknown error";
+  const msg = String(err.message || err);
+  const brace = msg.indexOf("{");
+  if (brace >= 0) {
+    try {
+      const body = JSON.parse(msg.slice(brace));
+      const bits = [];
+      if (body.errorMessage) bits.push(body.errorMessage);
+      if (body.errorType) bits.push(`type=${body.errorType}`);
+      if (body.errorLink) bits.push(body.errorLink);
+      if (body.correlationId) bits.push(`correlationId=${body.correlationId}`);
+      if (bits.length) return `${msg.slice(0, brace).trim()} ${bits.join(" | ")}`;
+    } catch {
+      /* truncated/partial JSON body — fall through to the raw message */
+    }
+  }
+  return msg.slice(0, 240);
 }
 
 // On Solana, a USDC transfer to a wallet with no USDC token account fails
