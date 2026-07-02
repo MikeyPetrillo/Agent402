@@ -105,7 +105,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   console.log(`Accepting USDC on: ${networks.join(", ")} (${caip2List.join(", ")})`);
 
   const solanaWallet = (process.env.SOLANA_WALLET_ADDRESS || "").trim();
-  if (svmCaip2.length && solanaWallet) console.log(`Solana payTo: ${solanaWallet}`);
+  if (svmCaip2.length && solanaWallet) {
+    console.log(`Solana payTo: ${solanaWallet}`);
+    warnIfSolanaTokenAccountMissing(solanaWallet);
+  }
   // Loud, because the failure is silent everywhere else: acceptsFor() below
   // simply omits the Solana option, so every 402 offers EVM chains only and
   // buyers never learn Solana was intended. Zero Solana revenue with no error
@@ -164,6 +167,37 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // only for local testing where the facilitator is unreachable.
   const syncOnStart = process.env.X402_SYNC_ON_START !== "false";
   return paymentMiddleware(routes, server, undefined, undefined, syncOnStart);
+}
+
+// On Solana, a USDC transfer to a wallet with no USDC token account fails
+// on-chain SIMULATION (InstructionError: InvalidAccountData) — so every
+// buyer's payment bounces while the 402 looks perfectly healthy, and nothing
+// on the seller's side ever errors. The fix is one-time and trivial (send the
+// wallet any amount of USDC to create its token account), but invisible until
+// someone decodes a facilitator rejection — this exact trap ate the first day
+// of Solana support. Best-effort, fire-and-forget: RPC flake must not affect
+// boot, and Railway egress may not reach public Solana RPCs at all.
+const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+function warnIfSolanaTokenAccountMissing(owner) {
+  (async () => {
+    const res = await fetch("https://api.mainnet-beta.solana.com", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "getTokenAccountsByOwner",
+        params: [owner, { mint: SOLANA_USDC_MINT }, { encoding: "jsonParsed" }],
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const j = await res.json();
+    if (Array.isArray(j?.result?.value) && j.result.value.length === 0) {
+      console.warn(
+        `WARNING: Solana payTo ${owner} has NO USDC token account — every buyer's Solana ` +
+          "payment will fail on-chain simulation (InvalidAccountData) until one exists. " +
+          "One-time fix: send this address any amount of USDC on Solana to create it."
+      );
+    }
+  })().catch(() => { /* best-effort — never affects boot */ });
 }
 
 async function resolvePayAIFacilitatorConfig() {
