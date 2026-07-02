@@ -2,6 +2,7 @@ import { paymentMiddleware } from "@x402/express";
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
+import { convertToTokenAmount, numberToDecimalString } from "@x402/core/utils";
 import {
   bazaarResourceServerExtension,
   declareDiscoveryExtension,
@@ -22,12 +23,51 @@ const EVM_NETWORKS = {
   polygon: "eip155:137",
   arbitrum: "eip155:42161",
   "base-sepolia": "eip155:84532",
+  // Robinhood Chain (Arbitrum Orbit L2, EVM-equivalent, AI-native RWA chain).
+  // NOT in @x402/evm's built-in USDC registry, and settles a non-Circle
+  // stablecoin (USDG / Global Dollar) via the r402 (MPP) facilitator, so it uses
+  // the custom money parser + facilitator wired below. OPT-IN only: it settles
+  // nothing unless `robinhood` is listed in PAYMENT_NETWORKS, so the working
+  // USDC path is untouched by default.
+  robinhood: "eip155:4663",
 };
 const SVM_NETWORKS = {
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
   "solana-devnet": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
 };
 const NETWORKS = { ...EVM_NETWORKS, ...SVM_NETWORKS };
+
+// Robinhood Chain settles USDG (Global Dollar), not Circle USDC, and @x402/evm
+// has no default asset for chain 4663 — so we resolve the asset ourselves and
+// route settlement to the r402 (Machine Payments Protocol) facilitator that
+// advertises exact/eip155:4663/USDG at /supported. Everything is env-overridable
+// so the operator can point at a different facilitator or correct USDG's EIP-712
+// domain (name/version) once it's verified on-chain via scripts/rh-chain-probe.js.
+const ROBINHOOD_CAIP2 = "eip155:4663";
+const R402_FACILITATOR_URL = (process.env.R402_FACILITATOR_URL || "https://mpp.hyreagent.fun/r402").trim();
+const USDG = {
+  asset: (process.env.ROBINHOOD_USDG_ADDRESS || "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168").trim(),
+  decimals: 6,
+  // EIP-712 domain used to sign the transferWithAuthorization. Defaults are
+  // best-effort; verify against USDG.eip712Domain() on chain 4663 and override
+  // ROBINHOOD_USDG_EIP712_NAME / ROBINHOOD_USDG_EIP712_VERSION if they differ.
+  name: (process.env.ROBINHOOD_USDG_EIP712_NAME || "Global Dollar").trim(),
+  version: (process.env.ROBINHOOD_USDG_EIP712_VERSION || "1").trim(),
+};
+
+// An ExactEvmScheme that settles USDG on Robinhood Chain: the money parser turns
+// a dollar price into a USDG AssetAmount, bypassing @x402/evm's USDC-only
+// default-asset lookup (which throws for chain 4663).
+function makeUsdgScheme() {
+  return new ExactEvmScheme().registerMoneyParser((amount, network) => {
+    if (String(network) !== ROBINHOOD_CAIP2) return null;
+    return {
+      amount: convertToTokenAmount(numberToDecimalString(amount), USDG.decimals),
+      asset: USDG.asset,
+      extra: { name: USDG.name, version: USDG.version },
+    };
+  });
+}
 
 /** Which networks to accept. PAYMENT_NETWORKS="base,polygon,arbitrum" opts in;
  *  default is the single primary network (current behavior, zero change). The
@@ -99,13 +139,27 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   } else {
     facilitatorClients.push(new HTTPFacilitatorClient(await resolveFacilitatorConfig(network)));
   }
+  // Robinhood Chain / USDG settles through the r402 (MPP) facilitator. Added
+  // only when the chain is actually enabled, so the default USDC path is
+  // untouched. r402 advertises only eip155:4663, so it wins that one route
+  // without disturbing CDP (Base) or PayAI (the rest).
+  const robinhoodEnabled = evmCaip2.includes(ROBINHOOD_CAIP2);
+  if (robinhoodEnabled) {
+    facilitatorClients.push(new HTTPFacilitatorClient({ url: R402_FACILITATOR_URL }));
+    console.log(`Robinhood Chain: settling USDG (${USDG.asset}) via r402 facilitator ${R402_FACILITATOR_URL}`);
+  }
   let server = new x402ResourceServer(facilitatorClients)
     .registerExtension(bazaarResourceServerExtension)
     .registerExtension(builderCodeResourceServerExtension);
-  for (const caip2 of evmCaip2) server = server.register(caip2, new ExactEvmScheme());
+  for (const caip2 of evmCaip2) {
+    server = server.register(caip2, caip2 === ROBINHOOD_CAIP2 ? makeUsdgScheme() : new ExactEvmScheme());
+  }
   for (const caip2 of svmCaip2) server = server.register(caip2, new ExactSvmScheme());
   registerFacilitatorFailureHooks(server, payAiClient);
-  console.log(`Accepting USDC on: ${networks.join(", ")} (${caip2List.join(", ")})`);
+  console.log(
+    `Accepting USDC on: ${networks.join(", ")} (${caip2List.join(", ")})` +
+      (robinhoodEnabled ? " — note: robinhood settles USDG, not USDC" : "")
+  );
 
   const solanaWallet = (process.env.SOLANA_WALLET_ADDRESS || "").trim();
   if (svmCaip2.length && solanaWallet) {
