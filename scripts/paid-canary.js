@@ -192,13 +192,14 @@ async function main() {
   }
 
   // Optional Solana leg — gated on SOLANA_BURNER_KEY (base58 64-byte secret
-  // or JSON byte array; fund it with USDC on Solana + a little SOL for rent).
-  // Buys the deterministic $0.001 hash tool with an SVM-ONLY client, so the
-  // payment can only settle on a Solana accept — a true Solana-path proof
-  // with no silent EVM fallback. Informational: failures WARN, never page
-  // (the EVM verdict above decides paging), so an unset or unfunded burner
-  // cannot open an issue. Success is the only daily end-to-end evidence that
-  // Solana buying works in production.
+  // or JSON byte array; fund it with USDC on Solana). Buys the $0.05
+  // skill-decode-blob pack (seven pure-CPU tools, deterministic, no upstream
+  // cost) with an SVM-ONLY client, so the payment can only settle on a Solana
+  // accept — a true Solana-path proof with no silent EVM fallback. $0.05
+  // instead of the $0.001 hash so the transfer clears explorer dust filters;
+  // the printed tx signature is still the authoritative proof either way.
+  // Informational: failures WARN, never page (the EVM verdict above decides
+  // paging), so an unset or unfunded burner cannot open an issue.
   await (async () => {
     const raw = (process.env.SOLANA_BURNER_KEY || "").trim();
     if (!raw) { console.log("\nsolana leg: skipped (no SOLANA_BURNER_KEY)"); return; }
@@ -209,12 +210,13 @@ async function main() {
       const bytes = raw.startsWith("[") ? Uint8Array.from(JSON.parse(raw)) : new Uint8Array(kit.getBase58Encoder().encode(raw));
       const signer = await kit.createKeyPairSignerFromBytes(bytes);
       const svmPay = wrapSvm(fetch, registerExactSvmScheme(new SvmClient(), { signer }));
-      const res = await svmPay(`${TARGET}/api/hash`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "solana canary" }),
+      const res = await svmPay(`${TARGET}/api/skill/decode-blob`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        // The pack's own documented example blob (a JWT) — deterministic steps.
+        body: JSON.stringify({ blob: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ" }),
       });
       const body = await res.json().catch(() => ({}));
-      const expected = createHash("sha256").update("solana canary").digest("hex");
-      if (res.status === 200 && body.hex === expected) {
+      if (res.status === 200 && body.pack === "decode-blob" && Array.isArray(body.steps) && body.steps.length >= 5) {
         // Print the on-chain proof, not just the claim: the settle receipt
         // (PAYMENT-RESPONSE header, v2; X-PAYMENT-RESPONSE, v1) carries the
         // transaction signature — a clickable solscan link beats "trust the
@@ -225,7 +227,7 @@ async function main() {
         if (receiptHdr) {
           try { tx = JSON.parse(Buffer.from(receiptHdr, "base64").toString("utf8"))?.transaction || null; } catch { /* best-effort */ }
         }
-        console.log(`\nOK    solana     /api/hash  → settled $0.001 USDC on Solana (payer ${signer.address})${tx ? `\n      tx: https://solscan.io/tx/${tx}` : "\n      (no settle receipt header found — settlement claimed by 200 only)"}`);
+        console.log(`\nOK    solana     /api/skill/decode-blob  → settled $0.05 USDC on Solana (payer ${signer.address})${tx ? `\n      tx: https://solscan.io/tx/${tx}` : "\n      (no settle receipt header found — settlement claimed by 200 only)"}`);
       } else if (res.status === 402) {
         console.warn(`\nWARN  solana leg did NOT settle (HTTP 402, payer ${signer.address}) — decoding diagnostics:`);
         // The rejection reason lives in the PAYMENT-REQUIRED header of the
@@ -242,7 +244,7 @@ async function main() {
         console.warn(`      post-payment challenge: error=${JSON.stringify(failReq?.error ?? null)} x402Version=${failReq?.x402Version ?? "?"}`);
         try {
           // Fresh unpaid request → what a Solana buyer is actually offered.
-          const bare = await fetch(`${TARGET}/api/hash`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "solana canary" }) });
+          const bare = await fetch(`${TARGET}/api/skill/decode-blob`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blob: "canary" }) });
           const req = decode402(bare) ?? (await bare.json().catch(() => null));
           const sol = (req?.accepts || []).filter((a) => String(a.network || "").startsWith("solana:"));
           console.warn(`      solana accepts offered: ${sol.length ? JSON.stringify(sol).slice(0, 600) : "NONE — Solana missing from the live 402"}`);
