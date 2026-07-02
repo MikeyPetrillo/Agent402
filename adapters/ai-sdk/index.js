@@ -86,7 +86,7 @@ export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fet
     {
       name: "agent402_route",
       description:
-        "Cross-seller x402 router: rank matching tools across every x402 seller (Agent402's catalog + competitors auto-discovered from the Coinbase CDP Bazaar). Filters out unhealthy sellers, tiebreaks on health then price. include='external' excludes Agent402 itself — use as a neutral discovery API over the rest of the ecosystem.",
+        "Cross-seller x402 router: rank matching tools across every x402 seller (Agent402's catalog + other sellers auto-discovered from the Coinbase CDP Bazaar). Filters out unhealthy sellers, tiebreaks on health then price. include='external' excludes Agent402 itself — use as a neutral discovery API over the rest of the ecosystem.",
       parametersJsonSchema: {
         type: "object",
         properties: {

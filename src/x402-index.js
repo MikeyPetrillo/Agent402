@@ -482,7 +482,7 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
 
 // `include` controls which seller set the router considers. Defaults to "all"
 // (local catalog + healthy crawled sellers). `external` excludes the local
-// catalog — the explicit "find me a competitor's tool" path that makes Agent402
+// catalog — the explicit "find me another seller's tool" path that makes Agent402
 // useful as a neutral discovery layer even when the caller isn't using us.
 // `local` is the explicit local-only escape hatch.
 const VALID_INCLUDE = new Set(["all", "external", "local"]);

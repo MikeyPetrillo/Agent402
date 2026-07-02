@@ -1,11 +1,11 @@
 // Live Robinhood Chain / USDG settlement test. Points the x402 buyer SDK at a
 // Robinhood-ONLY server, so the only payment option is USDG on chain 4663 via
-// the r402 (MPP) facilitator, then buys one cheap tool with the burner key — a
-// real on-chain USDG settlement. Confirms the burner holds USDG first and prints
-// the settlement transaction (and the facilitator's reason on failure, so a
-// wrong EIP-712 version is obvious).
+// the configured external facilitator, then buys one cheap tool with the burner
+// key — a real on-chain USDG settlement. Confirms the burner holds USDG first
+// and prints the settlement transaction (and the facilitator's reason on
+// failure, so a wrong EIP-712 version is obvious).
 //
-//   FACILITATOR_URL=https://mpp.hyreagent.fun/r402 NETWORK=robinhood \
+//   ROBINHOOD_FACILITATOR_URL=<facilitator-url> NETWORK=robinhood \
 //   PAYMENT_NETWORKS=robinhood WALLET_ADDRESS=<revenue-evm> PORT=3790 node src/server.js &
 //   TARGET_URL=http://localhost:3790 KEY_FILE=/tmp/burner-key node scripts/rh-settle-test.js
 import { readFileSync } from "node:fs";
@@ -43,7 +43,7 @@ if (bal === 0n) {
 }
 
 // 1. Buy one cheap tool. The server offers only Robinhood/USDG, so the buyer must
-//    sign a USDG transferWithAuthorization on chain 4663; r402 verifies + settles.
+//    sign a USDG transferWithAuthorization on chain 4663; the facilitator verifies + settles.
 const client = new x402Client();
 registerExactEvmScheme(client, { signer: account });
 const payFetch = wrapFetchWithPayment(fetch, client);

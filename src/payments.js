@@ -25,10 +25,10 @@ const EVM_NETWORKS = {
   "base-sepolia": "eip155:84532",
   // Robinhood Chain (Arbitrum Orbit L2, EVM-equivalent, AI-native RWA chain).
   // NOT in @x402/evm's built-in USDC registry, and settles a non-Circle
-  // stablecoin (USDG / Global Dollar) via the r402 (MPP) facilitator, so it uses
-  // the custom money parser + facilitator wired below. OPT-IN only: it settles
-  // nothing unless `robinhood` is listed in PAYMENT_NETWORKS, so the working
-  // USDC path is untouched by default.
+  // stablecoin (USDG / Global Dollar) via a configured external settlement
+  // facilitator, so it uses the custom money parser + facilitator wired below.
+  // OPT-IN only: it settles nothing unless `robinhood` is listed in
+  // PAYMENT_NETWORKS, so the working USDC path is untouched by default.
   robinhood: "eip155:4663",
 };
 const SVM_NETWORKS = {
@@ -39,12 +39,13 @@ const NETWORKS = { ...EVM_NETWORKS, ...SVM_NETWORKS };
 
 // Robinhood Chain settles USDG (Global Dollar), not Circle USDC, and @x402/evm
 // has no default asset for chain 4663 — so we resolve the asset ourselves and
-// route settlement to the r402 (Machine Payments Protocol) facilitator that
-// advertises exact/eip155:4663/USDG at /supported. Everything is env-overridable
-// so the operator can point at a different facilitator or correct USDG's EIP-712
-// domain (name/version) once it's verified on-chain via scripts/rh-chain-probe.js.
+// route settlement to an external facilitator that advertises
+// exact/eip155:4663/USDG at its /supported endpoint. The facilitator URL is
+// operator-supplied via ROBINHOOD_FACILITATOR_URL (no default is baked in);
+// the USDG EIP-712 domain (name/version) is likewise env-overridable and can be
+// verified on-chain via scripts/rh-chain-probe.js before enabling.
 const ROBINHOOD_CAIP2 = "eip155:4663";
-const R402_FACILITATOR_URL = (process.env.R402_FACILITATOR_URL || "https://mpp.hyreagent.fun/r402").trim();
+const ROBINHOOD_FACILITATOR_URL = (process.env.ROBINHOOD_FACILITATOR_URL || "").trim();
 const USDG = {
   asset: (process.env.ROBINHOOD_USDG_ADDRESS || "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168").trim(),
   decimals: 6,
@@ -154,14 +155,23 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   } else {
     facilitatorClients.push(new HTTPFacilitatorClient(await resolveFacilitatorConfig(network)));
   }
-  // Robinhood Chain / USDG settles through the r402 (MPP) facilitator. Added
-  // only when the chain is actually enabled, so the default USDC path is
-  // untouched. r402 advertises only eip155:4663, so it wins that one route
-  // without disturbing CDP (Base) or PayAI (the rest).
-  const robinhoodEnabled = evmCaip2.includes(ROBINHOOD_CAIP2);
+  // Robinhood Chain / USDG settles through the operator-configured external
+  // facilitator (ROBINHOOD_FACILITATOR_URL). Added only when the chain is
+  // actually enabled, so the default USDC path is untouched. That facilitator
+  // advertises only eip155:4663, so it wins that one route without disturbing
+  // CDP (Base) or PayAI (the rest). If the chain is enabled but no facilitator
+  // URL is set, we skip the client (rather than crash) — the route simply
+  // won't settle until ROBINHOOD_FACILITATOR_URL is provided.
+  const robinhoodEnabled = evmCaip2.includes(ROBINHOOD_CAIP2) && !!ROBINHOOD_FACILITATOR_URL;
+  if (evmCaip2.includes(ROBINHOOD_CAIP2) && !ROBINHOOD_FACILITATOR_URL) {
+    console.warn(
+      "WARNING: PAYMENT_NETWORKS enables `robinhood` but ROBINHOOD_FACILITATOR_URL is unset — " +
+        "the Robinhood Chain/USDG option cannot settle and will be omitted. Set ROBINHOOD_FACILITATOR_URL."
+    );
+  }
   if (robinhoodEnabled) {
-    facilitatorClients.push(new HTTPFacilitatorClient({ url: R402_FACILITATOR_URL }));
-    console.log(`Robinhood Chain: settling USDG (${USDG.asset}) via r402 facilitator ${R402_FACILITATOR_URL}`);
+    facilitatorClients.push(new HTTPFacilitatorClient({ url: ROBINHOOD_FACILITATOR_URL }));
+    console.log(`Robinhood Chain: settling USDG (${USDG.asset}) via facilitator ${ROBINHOOD_FACILITATOR_URL}`);
   }
   let server = new x402ResourceServer(facilitatorClients)
     .registerExtension(bazaarResourceServerExtension)

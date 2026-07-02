@@ -164,23 +164,28 @@ jobs:
         if: always()
         run: node scripts/rh-chain-probe.js || true
       # LIVE Robinhood Chain / USDG settlement. Boots a Robinhood-ONLY server (so
-      # the buyer's only option is USDG on chain 4663 via the r402 facilitator),
-      # confirms the burner holds USDG, then buys one cheap tool — a real on-chain
-      # USDG transfer. Retries with EIP-712 version=2 if 1's signature is rejected.
-      # Non-gating: it reports the settlement tx (or the facilitator's reason).
-      # Requires the burner (its address is published as the funding artifact) to
-      # hold USDG on Robinhood Chain; otherwise it self-reports "0 USDG" and skips.
+      # the buyer's only option is USDG on chain 4663 via the configured external
+      # facilitator), confirms the burner holds USDG, then buys one cheap tool — a
+      # real on-chain USDG transfer. Retries with EIP-712 version=2 if 1's
+      # signature is rejected. Non-gating: it reports the settlement tx (or the
+      # facilitator's reason). Requires the burner (its address is published as
+      # the funding artifact) to hold USDG on Robinhood Chain, and the
+      # ROBINHOOD_FACILITATOR_URL secret to be set; otherwise it self-reports and skips.
       - name: Live Robinhood Chain USDG settlement (burner-funded, real on-chain settle)
         if: always()
         env:
           WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          ROBINHOOD_FACILITATOR_URL: ${{ secrets.ROBINHOOD_FACILITATOR_URL }}
         run: |
+          if [ -z "$ROBINHOOD_FACILITATOR_URL" ]; then
+            echo "ROBINHOOD_FACILITATOR_URL secret unset — skipping live Robinhood settlement."; exit 0
+          fi
           printf '%s' "$BURNER_KEY" > /tmp/burner-key
           settled=0
           for V in 1 2; do
             echo "=================== USDG EIP-712 version=$V ==================="
-            ROBINHOOD_USDG_EIP712_VERSION=$V FACILITATOR_URL=https://mpp.hyreagent.fun/r402 \
+            ROBINHOOD_USDG_EIP712_VERSION=$V \
               NETWORK=robinhood PAYMENT_NETWORKS=robinhood \
               PORT=3790 node src/server.js > /tmp/rh-settle-srv.log 2>&1 &
             SRV=$!

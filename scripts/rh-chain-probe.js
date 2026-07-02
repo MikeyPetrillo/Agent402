@@ -6,15 +6,19 @@
 // anyone enables `robinhood` in PAYMENT_NETWORKS.
 //
 // It does NOT settle an x402 payment — that needs a USDG-funded buyer on chain
-// 4663 through the r402 (MPP) facilitator. This validates everything up to the
-// point of an actual transfer, so enabling Robinhood Chain payments is a
+// 4663 through the configured external facilitator. This validates everything up
+// to the point of an actual transfer, so enabling Robinhood Chain payments is a
 // verified config flip, not a guess.
 //
-//   node scripts/rh-chain-probe.js
+// Set ROBINHOOD_FACILITATOR_URL to also probe the facilitator's /supported
+// endpoint (confirms it advertises exact/eip155:4663/USDG); omit to skip that.
+//
+//   ROBINHOOD_FACILITATOR_URL=<facilitator-url> node scripts/rh-chain-probe.js
 const MAIN = { url: "https://rpc.mainnet.chain.robinhood.com", chainId: 4663 };
 const TEST = { url: "https://rpc.testnet.chain.robinhood.com", chainId: 46646 };
 const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
-const R402_SUPPORTED = "https://mpp.hyreagent.fun/r402/supported";
+const FACILITATOR_URL = (process.env.ROBINHOOD_FACILITATOR_URL || "").trim().replace(/\/$/, "");
+const FACILITATOR_SUPPORTED = FACILITATOR_URL ? `${FACILITATOR_URL}/supported` : "";
 
 // ERC-20 / EIP-712 selectors
 const SEL = {
@@ -98,29 +102,33 @@ try {
   console.log(`  >>> EIP-712 domain to configure in payments.js:`);
   console.log(`        ROBINHOOD_USDG_EIP712_NAME    = ${JSON.stringify(eip712Name)}   (payments.js default "Global Dollar")`);
   console.log(`        ROBINHOOD_USDG_EIP712_VERSION = ${JSON.stringify(eip712Version)}   (payments.js default "1")`);
-  if (!ds) console.log(`  >>> WARNING: no DOMAIN_SEPARATOR() — USDG may not use standard EIP-712/EIP-3009; confirm the r402 facilitator's expected signing scheme before enabling.`);
+  if (!ds) console.log(`  >>> WARNING: no DOMAIN_SEPARATOR() — USDG may not use standard EIP-712/EIP-3009; confirm the facilitator's expected signing scheme before enabling.`);
 } catch (e) {
   console.log(`  USDG read failed: ${e?.message || e}`);
 }
 
-console.log(`\n=== r402 (MPP) facilitator /supported (${R402_SUPPORTED}) ===`);
-try {
-  const r = await fetch(R402_SUPPORTED, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(15000) });
-  const body = await r.text();
-  console.log(`  HTTP ${r.status}`);
-  if (r.ok) {
-    try {
-      const j = JSON.parse(body);
-      const kinds = (j.kinds || []).map((k) => `v${k.x402Version} ${k.scheme} ${k.network} ${k.extra?.symbol || ""}`);
-      console.log(`  kinds: ${JSON.stringify(kinds)}`);
-      const has4663 = (j.kinds || []).some((k) => String(k.network) === "eip155:4663");
-      console.log(`  >>> settles Robinhood Chain (eip155:4663): ${has4663}`);
-    } catch { console.log(`  body: ${body.slice(0, 300)}`); }
-  } else {
-    console.log(`  (non-200 — likely bot protection from a CI runner; fetch it from a browser to confirm)`);
+if (FACILITATOR_SUPPORTED) {
+  console.log(`\n=== facilitator /supported (${FACILITATOR_SUPPORTED}) ===`);
+  try {
+    const r = await fetch(FACILITATOR_SUPPORTED, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(15000) });
+    const body = await r.text();
+    console.log(`  HTTP ${r.status}`);
+    if (r.ok) {
+      try {
+        const j = JSON.parse(body);
+        const kinds = (j.kinds || []).map((k) => `v${k.x402Version} ${k.scheme} ${k.network} ${k.extra?.symbol || ""}`);
+        console.log(`  kinds: ${JSON.stringify(kinds)}`);
+        const has4663 = (j.kinds || []).some((k) => String(k.network) === "eip155:4663");
+        console.log(`  >>> settles Robinhood Chain (eip155:4663): ${has4663}`);
+      } catch { console.log(`  body: ${body.slice(0, 300)}`); }
+    } else {
+      console.log(`  (non-200 — likely bot protection from a CI runner; fetch it from a browser to confirm)`);
+    }
+  } catch (e) {
+    console.log(`  fetch failed: ${e?.message || e} (the facilitator may block automated fetches; this is informational only)`);
   }
-} catch (e) {
-  console.log(`  fetch failed: ${e?.message || e} (r402 may block automated fetches; this is informational only)`);
+} else {
+  console.log(`\n=== facilitator /supported — skipped (set ROBINHOOD_FACILITATOR_URL to probe) ===`);
 }
 
 console.log(`\n${ok ? "PASS" : "FAIL"}: Robinhood Chain mainnet read path`);
