@@ -191,6 +191,41 @@ async function main() {
     }
   }
 
+  // Optional Solana leg — gated on SOLANA_BURNER_KEY (base58 64-byte secret
+  // or JSON byte array; fund it with USDC on Solana + a little SOL for rent).
+  // Buys the deterministic $0.001 hash tool with an SVM-ONLY client, so the
+  // payment can only settle on a Solana accept — a true Solana-path proof
+  // with no silent EVM fallback. Informational: failures WARN, never page
+  // (the EVM verdict above decides paging), so an unset or unfunded burner
+  // cannot open an issue. Success is the only daily end-to-end evidence that
+  // Solana buying works in production.
+  await (async () => {
+    const raw = (process.env.SOLANA_BURNER_KEY || "").trim();
+    if (!raw) { console.log("\nsolana leg: skipped (no SOLANA_BURNER_KEY)"); return; }
+    try {
+      const [{ x402Client: SvmClient }, { registerExactSvmScheme }, { wrapFetchWithPayment: wrapSvm }, kit, { createHash }] = await Promise.all([
+        import("@x402/core/client"), import("@x402/svm/exact/client"), import("@x402/fetch"), import("@solana/kit"), import("node:crypto"),
+      ]);
+      const bytes = raw.startsWith("[") ? Uint8Array.from(JSON.parse(raw)) : new Uint8Array(kit.getBase58Encoder().encode(raw));
+      const signer = await kit.createKeyPairSignerFromBytes(bytes);
+      const svmPay = wrapSvm(fetch, registerExactSvmScheme(new SvmClient(), { signer }));
+      const res = await svmPay(`${TARGET}/api/hash`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "solana canary" }),
+      });
+      const body = await res.json().catch(() => ({}));
+      const expected = createHash("sha256").update("solana canary").digest("hex");
+      if (res.status === 200 && body.hex === expected) {
+        console.log(`\nOK    solana     /api/hash  → settled $0.001 USDC on Solana (payer ${signer.address})`);
+      } else if (res.status === 402) {
+        console.warn(`\nWARN  solana leg did NOT settle (HTTP 402) — Solana accept missing from the 402, or the burner ${signer.address} is unfunded`);
+      } else {
+        console.warn(`\nWARN  solana leg: HTTP ${res.status} ${JSON.stringify(body).slice(0, 120)}`);
+      }
+    } catch (e) {
+      console.warn(`\nWARN  solana leg errored: ${(e?.message || String(e)).slice(0, 160)}`);
+    }
+  })();
+
   const decision = decideCanary(results);
   const spentUsd = decision.rows.filter((r) => r.cls === "settled").reduce((s, r) => s + (r.priceUsd || 0), 0);
   console.log(`\npayer ${account.address}`);
