@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Robinhood Chain support** (chain-read tools): added Robinhood Chain (Arbitrum Orbit / Nitro L2, EVM-equivalent, chain id 4663, AI-native RWA chain, mainnet live 2026-07-01) to the keyless multi-chain tooling. `tx-status` and `gas-estimate` now accept `network=robinhood` against the public RPC. Its canonical stablecoin is USDG (Global Dollar), not Circle USDC, so the USDC-specific tools (`usdc-balance`, `x402-verify`, `transfer-authorization`) return a clear message on that network rather than a malformed call; accepting x402 payments on Robinhood Chain awaits facilitator + USDG support.
 - **x402 Index + Smart Order Router** (`/index`, `GET /api/index`, `POST /api/route`): free, cross-seller routing layer. Crawls the local catalog plus operator seeds plus an auto-discovered set from public x402 registries (Coinbase CDP Bazaar, refreshed hourly). Picks the cheapest healthy seller for a task.
 - **Health-aware routing**: each seller carries a rolling 5-entry crawl history. Sellers whose recent crawls errored are excluded from `/api/route`; healthier sellers tiebreak ahead of cheaper-but-flaky ones at equal match score.
 - **Three-rail attribution** on `/api/stats` and `/__operator`: USDC / proof-of-work / heartbeat counts are tracked separately so the maintainer can see real external demand vs. internal probe noise. The heartbeat rail is now gated on a `POW_SECRET`-signed `X-Heartbeat-Token` (HMAC of UTC minute with ±5 min skew) — not a spoofable User-Agent — closing the audit finding from `scripts/audit-deep.mjs`.

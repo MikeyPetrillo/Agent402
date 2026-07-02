@@ -61,6 +61,16 @@ const NETWORKS = {
     chainId: 1, usdc: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
     rpcs: ["https://ethereum-rpc.publicnode.com", "https://eth.llamarpc.com", "https://eth.drpc.org", "https://cloudflare-eth.com"],
   },
+  // Robinhood Chain — Arbitrum Orbit / Nitro L2, EVM-equivalent, AI-native RWA
+  // chain (tokenized US stocks/ETFs, 24/7 markets), mainnet live 2026-07-01.
+  // Gas token is ETH; the chain's canonical stablecoin is USDG (Global Dollar),
+  // NOT Circle USDC — so `usdc` is intentionally omitted and the USDC-specific
+  // tools skip it via requireUsdc(). The chain-read tools (tx-status,
+  // gas-estimate) work here today; USDC payments await facilitator + USDG support.
+  robinhood: {
+    chainId: 4663,
+    rpcs: ["https://rpc.mainnet.chain.robinhood.com"],
+  },
 };
 const NETWORK_NAMES = Object.keys(NETWORKS);
 const USDC_DECIMALS = 6;
@@ -71,6 +81,20 @@ function resolveNetwork(name) {
   const net = NETWORKS[key];
   if (!net) throw bad(`unknown network "${name}". Supported: ${NETWORK_NAMES.join(", ")}`);
   return { key, ...net };
+}
+
+// Some chains (e.g. Robinhood Chain) settle in a non-Circle stablecoin (USDG),
+// so they carry no canonical Circle USDC address. The USDC-specific tools call
+// this to fail with a clear, actionable message instead of building a call to
+// `undefined`. Chain-read tools (tx-status, gas-estimate) don't need it.
+function requireUsdc(net) {
+  if (!net.usdc) {
+    throw bad(
+      `USDC tools aren't available on ${net.key} — its canonical stablecoin is USDG (Global Dollar), not Circle USDC. ` +
+        `The chain-read tools (tx-status, gas-estimate) do work on ${net.key}.`
+    );
+  }
+  return net.usdc;
 }
 
 const isAddress = (a) => typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a);
@@ -187,6 +211,7 @@ export const X402_TOOLS = [
     handler: async (i) => {
       if (!isAddress(i.address)) throw bad("address must be a 0x EVM address");
       const net = resolveNetwork(i.network);
+      requireUsdc(net);
       const data = "0x70a08231" + pad32(i.address.slice(2));
       const hex = await rpc(net, "eth_call", [{ to: net.usdc, data }, "latest"]);
       const raw = BigInt(hex && hex !== "0x" ? hex : "0x0");
@@ -196,7 +221,7 @@ export const X402_TOOLS = [
   {
     route: "GET /api/tx-status", name: "Transaction status", slug: "tx-status", category: "payments", price: "$0.003",
     description:
-      "Check the confirmation status of a transaction by hash on Base/Polygon/Arbitrum/Optimism/Ethereum: success / failed / pending / not found, with block, from, to, gas used. Read-only. ?hash=0x…&network=base",
+      "Check the confirmation status of a transaction by hash on Base/Polygon/Arbitrum/Optimism/Ethereum/Robinhood Chain: success / failed / pending / not found, with block, from, to, gas used. Read-only. ?hash=0x…&network=base",
     tags: ["transaction", "status", "receipt", "confirmation", "multichain"],
     discovery: {
       input: { hash: "0x0000000000000000000000000000000000000000000000000000000000000000", network: "base" },
@@ -222,7 +247,7 @@ export const X402_TOOLS = [
   {
     route: "GET /api/gas-estimate", name: "Gas price", slug: "gas-estimate", category: "payments", price: "$0.002",
     description:
-      "Current gas price (gwei and wei) on Base, Polygon, Arbitrum, Optimism, or Ethereum — for an agent budgeting a transaction. Read-only. ?network=base",
+      "Current gas price (gwei and wei) on Base, Polygon, Arbitrum, Optimism, Ethereum, or Robinhood Chain — for an agent budgeting a transaction. Read-only. ?network=base",
     tags: ["gas", "gas-price", "fees", "gwei", "multichain"],
     discovery: {
       input: { network: "base" },
@@ -257,6 +282,7 @@ export const X402_TOOLS = [
     handler: async (i) => {
       if (!isTxHash(i.hash)) throw bad("hash must be a 0x transaction hash (32 bytes)");
       const net = resolveNetwork(i.network);
+      requireUsdc(net);
       const receipt = await rpc(net, "eth_getTransactionReceipt", [i.hash]);
       if (!receipt) return { hash: i.hash, network: net.key, settled: false, status: "pending_or_not_found", transfers: [] };
       const status = BigInt(receipt.status) === 1n ? "success" : "failed";
@@ -298,6 +324,7 @@ export const X402_TOOLS = [
       const amount = Number(i.amount);
       if (!Number.isFinite(amount) || amount <= 0) throw bad('"amount" must be a positive number (USDC)');
       const net = resolveNetwork(i.network);
+      requireUsdc(net);
       const value = BigInt(Math.round(amount * 10 ** USDC_DECIMALS)).toString();
       const now = Math.floor(Date.now() / 1000);
       const validForSeconds = Math.min(Math.max(parseInt(i.validForSeconds, 10) || 3600, 60), 86400);
