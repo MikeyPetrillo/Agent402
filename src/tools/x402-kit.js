@@ -151,11 +151,26 @@ export const X402_TOOLS = [
       const paymentRequired = res.status === 402;
       let body = null;
       try { body = await res.json(); } catch { /* may be empty/non-JSON */ }
-      const accepts = Array.isArray(body?.accepts) ? body.accepts : undefined;
+      // x402 v1 put the payment requirements in the 402 body; v2 moved them to
+      // the base64-encoded PAYMENT-REQUIRED header (the body is `{}`). Decode
+      // whichever the seller speaks — without the header path this tool returns
+      // an empty quote for every v2 seller, including this server itself.
+      let accepts = Array.isArray(body?.accepts) && body.accepts.length ? body.accepts : undefined;
+      let x402Version = body?.x402Version ?? undefined;
+      if (!accepts) {
+        const header = res.headers.get("payment-required");
+        if (header) {
+          try {
+            const decoded = JSON.parse(Buffer.from(header, "base64").toString("utf8"));
+            if (Array.isArray(decoded?.accepts)) accepts = decoded.accepts;
+            x402Version = decoded?.x402Version ?? x402Version;
+          } catch { /* undecodable header → fall through to the note below */ }
+        }
+      }
       return {
         url: url.href, status: res.status, paymentRequired,
-        x402Version: body?.x402Version, accepts,
-        ...(paymentRequired && !accepts ? { note: "402 returned but no x402 'accepts' array found; check the response body/headers", raw: body } : {}),
+        x402Version, accepts,
+        ...(paymentRequired && !accepts ? { note: "402 returned but no x402 'accepts' found in the body (v1) or PAYMENT-REQUIRED header (v2)", raw: body } : {}),
       };
     },
   },

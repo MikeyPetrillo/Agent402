@@ -3,8 +3,9 @@
 // web tools) to any MCP client (Claude, ChatGPT, custom agents) and settles
 // payment underneath, so the model never sees the 402 dance:
 //
-//   • AGENT_KEY=0x…   pay per call in USDC via x402 (any tool)
-//   • no key          pay with compute (proof-of-work) on the eligible tools
+//   • AGENT_KEY=0x…          pay in USDC via x402 on the EVM chains (Base/Polygon/Arbitrum)
+//   • SOLANA_AGENT_KEY=base58 pay in USDC via x402 on Solana
+//   • no key                  pay with compute (proof-of-work) on the eligible tools
 //
 // The full catalog is too large to register as individual MCP tools, so the
 // high-value tools are first-class and everything else is reachable through
@@ -12,7 +13,8 @@
 //
 // Config (env):
 //   AGENT402_URL          target service (default https://agent402.tools)
-//   AGENT_KEY             hex private key of a funded wallet (USDC on Base/Solana/Polygon/Arbitrum) — optional
+//   AGENT_KEY             hex private key of a funded EVM wallet (USDC on Base/Polygon/Arbitrum) — optional
+//   SOLANA_AGENT_KEY      base58 (or JSON byte-array) secret key of a funded Solana wallet (USDC on Solana) — optional
 //   AGENT402_TOOLS        comma-separated slugs to expose first-class (overrides default)
 //   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (e.g. 0.01)
 //   AGENT402_BUDGET       hard cap on total USDC spent this session (e.g. 1.00)
@@ -28,7 +30,12 @@ import {
 
 const BASE = (process.env.AGENT402_URL || "https://agent402.tools").replace(/\/$/, "");
 const AGENT_KEY = process.env.AGENT_KEY || "";
-const VERSION = "0.8.0";
+// Solana secret key: base58 string (Phantom/solana-keygen export) or a JSON
+// byte array. Either key alone enables paid calls; with both, the buyer can
+// settle on whichever chain the seller offers (EVM accepts are tried first).
+const SOLANA_AGENT_KEY = process.env.SOLANA_AGENT_KEY || "";
+const HAS_WALLET = Boolean(AGENT_KEY || SOLANA_AGENT_KEY);
+const VERSION = "0.10.0";
 
 // Spend controls — enforced BEFORE a payment is ever signed, so a confused or
 // runaway model cannot drain the wallet. Unset = unlimited (back-compat).
@@ -105,14 +112,35 @@ let payFetchPromise;
 function getPayFetch() {
   payFetchPromise ??= (async () => {
     const { x402Client } = await import("@x402/core/client");
-    const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
     const { wrapFetchWithPayment } = await import("@x402/fetch");
-    const { privateKeyToAccount } = await import("viem/accounts");
     const client = new x402Client();
-    registerExactEvmScheme(client, { signer: privateKeyToAccount(AGENT_KEY) });
+    if (AGENT_KEY) {
+      const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+      const { privateKeyToAccount } = await import("viem/accounts");
+      registerExactEvmScheme(client, { signer: privateKeyToAccount(AGENT_KEY) });
+    }
+    if (SOLANA_AGENT_KEY) {
+      const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
+      registerExactSvmScheme(client, { signer: await solanaSigner() });
+    }
     return wrapFetchWithPayment(fetch, client);
   })();
   return payFetchPromise;
+}
+
+// @solana/kit KeyPairSigner from SOLANA_AGENT_KEY — base58 64-byte secret key
+// (Phantom / solana-keygen export) or a JSON byte array ([12,34,…]).
+let solanaSignerPromise;
+function solanaSigner() {
+  solanaSignerPromise ??= (async () => {
+    const { createKeyPairSignerFromBytes, getBase58Encoder } = await import("@solana/kit");
+    const raw = SOLANA_AGENT_KEY.trim();
+    const bytes = raw.startsWith("[")
+      ? Uint8Array.from(JSON.parse(raw))
+      : new Uint8Array(getBase58Encoder().encode(raw));
+    return createKeyPairSignerFromBytes(bytes);
+  })();
+  return solanaSignerPromise;
 }
 
 function solvePow(challenge) {
@@ -133,8 +161,9 @@ function solvePow(challenge) {
 function walletRequiredText(tool) {
   return [
     `"${tool.slug}" costs ${tool.price}/call and requires a USDC wallet (it is not eligible for the proof-of-work tier).`,
-    `To enable it: set the AGENT_KEY environment variable on this MCP server to the hex private key of a wallet`,
-    `funded with USDC on Base (or Solana/Polygon/Arbitrum). Payment is per call via the x402 protocol — no signup or API key.`,
+    `To enable it: set AGENT_KEY on this MCP server to the hex private key of an EVM wallet funded with USDC`,
+    `on Base (or Polygon/Arbitrum), and/or SOLANA_AGENT_KEY to the base58 secret key of a Solana wallet funded`,
+    `with USDC on Solana. Payment is per call via the x402 protocol — no signup or API key.`,
     `Pricing and details: ${BASE}/tools/${tool.slug}`,
   ].join(" ");
 }
@@ -153,7 +182,7 @@ async function callEndpoint(tool, args = {}) {
   }
 
   let res;
-  if (AGENT_KEY) {
+  if (HAS_WALLET) {
     const price = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;
     if (price > MAX_PER_CALL) {
       return {
@@ -171,7 +200,7 @@ async function callEndpoint(tool, args = {}) {
     res = await payFetch(url, init);
     // Count spend when the server confirms settlement (payment receipt header),
     // falling back to any 2xx — conservative in the buyer's favor.
-    if (res.headers.get("x-payment-response") || res.ok) spentUsd += price;
+    if (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok) spentUsd += price;
   } else if (tool.computePayable) {
     // No wallet: pay with compute up front — solving before the call skips the
     // 402 round-trip entirely (challenges are single-use and tool-scoped).
@@ -379,20 +408,26 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const { privateKeyToAccount } = await import("viem/accounts");
         address = privateKeyToAccount(AGENT_KEY).address;
       }
+      let solanaAddress = null;
+      if (SOLANA_AGENT_KEY) {
+        try { solanaAddress = (await solanaSigner()).address; } catch { solanaAddress = "invalid SOLANA_AGENT_KEY"; }
+      }
       const computePayable = [...catalog.values()].filter((t) => t.computePayable).length;
       return {
         content: [{
           type: "text",
           text: JSON.stringify({
             service: BASE,
-            mode: AGENT_KEY ? "usdc" : "proof-of-work",
+            mode: HAS_WALLET ? "usdc" : "proof-of-work",
             wallet: address,
+            solanaWallet: solanaAddress,
             network: pricingInfo?.payment?.network ?? "base",
+            networks: pricingInfo?.payment?.networks ?? undefined,
             tools: catalog.size,
             payableWithCompute: computePayable,
             walletOnly: catalog.size - computePayable,
             workflows: skillPacks.length,
-            spendControls: AGENT_KEY
+            spendControls: HAS_WALLET
               ? {
                   maxPerCallUsd: MAX_PER_CALL === Infinity ? "unlimited" : MAX_PER_CALL,
                   sessionBudgetUsd: BUDGET === Infinity ? "unlimited" : BUDGET,
@@ -400,9 +435,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
                   remainingUsd: BUDGET === Infinity ? "unlimited" : Number(Math.max(0, BUDGET - spentUsd).toFixed(6)),
                 }
               : "n/a (proof-of-work mode spends CPU, not money)",
-            note: AGENT_KEY
-              ? "Every tool is available; each call is paid in USDC via x402 from the configured wallet, within the spend controls above."
-              : `No AGENT_KEY configured: ${computePayable} pure-CPU tools are free via proof-of-work; the ${catalog.size - computePayable} network/browser/memory tools need a funded wallet (set AGENT_KEY).`,
+            note: HAS_WALLET
+              ? "Every tool is available; each call is paid in USDC via x402 from the configured wallet(s) — EVM chains via AGENT_KEY, Solana via SOLANA_AGENT_KEY — within the spend controls above."
+              : `No wallet configured: ${computePayable} pure-CPU tools are free via proof-of-work; the ${catalog.size - computePayable} network/browser/memory tools need a funded wallet (set AGENT_KEY for Base/Polygon/Arbitrum and/or SOLANA_AGENT_KEY for Solana).`,
             ecosystem: "Call top_x402_sellers to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h — discovers the live economy beyond this catalog.",
           }, null, 2),
         }],
@@ -479,9 +514,9 @@ const requested = (process.env.AGENT402_TOOLS || DEFAULT_CURATED.join(","))
 curated = requested.map((slug) => catalog.get(slug)).filter(Boolean);
 log(`catalog: ${catalog.size} tools from ${BASE}; ${curated.length} first-class, rest via search_tools/call_tool`);
 log(
-  AGENT_KEY
-    ? `payment: USDC via x402 (wallet configured; max/call ${MAX_PER_CALL === Infinity ? "unlimited" : `$${MAX_PER_CALL}`}, budget ${BUDGET === Infinity ? "unlimited" : `$${BUDGET}`})`
-    : "payment: proof-of-work on eligible tools (no AGENT_KEY)"
+  HAS_WALLET
+    ? `payment: USDC via x402 (${[AGENT_KEY && "EVM", SOLANA_AGENT_KEY && "Solana"].filter(Boolean).join(" + ")} wallet configured; max/call ${MAX_PER_CALL === Infinity ? "unlimited" : `$${MAX_PER_CALL}`}, budget ${BUDGET === Infinity ? "unlimited" : `$${BUDGET}`})`
+    : "payment: proof-of-work on eligible tools (no AGENT_KEY / SOLANA_AGENT_KEY)"
 );
 
 await server.connect(new StdioServerTransport());

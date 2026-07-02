@@ -1,5 +1,7 @@
-// Scan recent USDC transfers into the revenue wallet on Base and identify
-// genuine external x402 payments for tools.
+// Scan recent USDC transfers into the revenue wallet on an EVM chain (Base by
+// default; SCAN_NETWORK=polygon|arbitrum for the other accepted chains) and
+// identify genuine external x402 payments for tools. Solana has its own
+// scanner (revenue-scan-solana.js — different tx model).
 //
 // Payer = the Transfer event's `from` (topics[1]) — the on-chain truth of whose
 // USDC actually moved. For x402 (EIP-3009 transferWithAuthorization) that is the
@@ -27,19 +29,44 @@ const OUR_WALLETS = new Set(
 // A genuine per-call settlement can't exceed the max tool price ($0.02); the
 // ceiling is generous headroom. Anything bigger is funding/tests/swaps, not a buy.
 const MAX_CALL_USD = parseFloat(process.env.MAX_CALL_USD || "0.5");
-const SPAN = parseInt(process.env.SPAN_BLOCKS || "12000", 10); // ~6.5h of Base blocks
 
-const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+// Which EVM chain to scan. Default base — the heartbeat's existing behavior.
+// SCAN_NETWORK=polygon|arbitrum reuses the same scan against the other chains
+// x402 accepts (same 0x payTo, different native-USDC contract) — without this
+// their settlements are as invisible as Solana's were. Native Circle USDC
+// addresses + RPC lists mirror src/tools/x402-kit.js.
+const EVM_NETWORKS = {
+  base: {
+    usdc: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    rpcs: ["https://mainnet.base.org", "https://base-rpc.publicnode.com", "https://base.llamarpc.com", "https://base.drpc.org"],
+    spanBlocks: 12000, // ~6.5h at 2s blocks
+  },
+  polygon: {
+    usdc: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+    rpcs: ["https://polygon-rpc.com", "https://polygon-bor-rpc.publicnode.com", "https://polygon.llamarpc.com", "https://polygon.drpc.org"],
+    spanBlocks: 9500, // ~5.5h at 2.1s blocks — free-tier RPCs cap getLogs ranges at 10k blocks
+  },
+  arbitrum: {
+    usdc: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+    rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com", "https://arbitrum.llamarpc.com", "https://arbitrum.drpc.org"],
+    spanBlocks: 90000, // ~6h at 0.25s blocks (address-filtered getLogs stays cheap)
+  },
+};
+const SCAN_NETWORK = (process.env.SCAN_NETWORK || "base").toLowerCase();
+const NET = EVM_NETWORKS[SCAN_NETWORK];
+if (!NET) {
+  console.error(`revenue-scan: unknown SCAN_NETWORK "${SCAN_NETWORK}" (known: ${Object.keys(EVM_NETWORKS).join(", ")})`);
+  process.exit(2);
+}
+const SPAN = parseInt(process.env.SPAN_BLOCKS || String(NET.spanBlocks), 10);
+
+const USDC = NET.usdc;
 const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const pad = (a) => "0x" + "0".repeat(24) + a.replace(/^0x/, "");
-// Public Base RPCs that support eth_getLogs (some free endpoints don't, or
-// restrict it — those are excluded).
-const RPCS = (process.env.BASE_RPCS || [
-  "https://mainnet.base.org",
-  "https://base-rpc.publicnode.com",
-  "https://base.llamarpc.com",
-  "https://base.drpc.org",
-].join(",")).split(",").map((s) => s.trim()).filter(Boolean);
+// Public RPCs that support eth_getLogs (some free endpoints don't, or
+// restrict it — those are excluded). BASE_RPCS overrides for any network
+// (name kept for heartbeat back-compat).
+const RPCS = (process.env.BASE_RPCS || NET.rpcs.join(",")).split(",").map((s) => s.trim()).filter(Boolean);
 const log = (...a) => console.error(...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -95,11 +122,23 @@ async function rpc(method, params, { passes = 2 } = {}) {
 
 async function main() {
   // Best-effort: any RPC/transport failure → empty result, exit 0 (no false page).
-  const bailSoft = (reason) => {
+  const bailSoft = (reason, partial = {}) => {
     log(`revenue scan skipped (transient): ${reason}`);
-    console.log(JSON.stringify({ payments: 0, totalUsd: 0, scannedBlocks: SPAN, external: [], scanSkipped: true, reason }, null, 2));
+    console.log(JSON.stringify({ network: SCAN_NETWORK, balanceUsd: null, payments: 0, totalUsd: 0, scannedBlocks: SPAN, external: [], ...partial, scanSkipped: true, reason }, null, 2));
     process.exit(0);
   };
+
+  // Current USDC balance — the headline "has this wallet ever received money
+  // on this chain" answer even when the recent-blocks window misses transfers
+  // (nothing spends from the revenue wallet). Best-effort: null on RPC flake.
+  let balanceUsd = null;
+  try {
+    const hex = await rpc("eth_call", [{ to: USDC, data: "0x70a08231" + pad(WALLET).slice(2) }, "latest"]);
+    balanceUsd = Number(BigInt(hex && hex !== "0x" ? hex : "0x0")) / 1e6;
+    log(`USDC balance of ${WALLET} on ${SCAN_NETWORK}: $${balanceUsd.toFixed(4)}`);
+  } catch (e) {
+    log(`balance read failed (continuing): ${e.message}`);
+  }
 
   let latest, logs;
   try {
@@ -111,7 +150,7 @@ async function main() {
       topics: [TRANSFER, null, pad(WALLET)],
     }]);
   } catch (e) {
-    bailSoft(e.message);
+    bailSoft(e.message, { balanceUsd });
   }
 
   try {
@@ -146,6 +185,8 @@ async function main() {
 
     const external = rows.filter((r) => isExternalPayment(r, { ourWallets: OUR_WALLETS, maxUsd: MAX_CALL_USD }));
     console.log(JSON.stringify({
+      network: SCAN_NETWORK,
+      balanceUsd,
       payments: rows.length,
       totalUsd: Number((Number(total) / 1e6).toFixed(6)),
       scannedBlocks: SPAN,
@@ -154,7 +195,7 @@ async function main() {
     }, null, 2));
   } catch (e) {
     // Partial failure mid-decode is still best-effort — don't fail the heartbeat.
-    bailSoft(e.message);
+    bailSoft(e.message, { balanceUsd });
   }
 }
 

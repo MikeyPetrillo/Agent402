@@ -100,7 +100,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     return [
       `"${def.slug}" (${def.price}/call) needs per-call USDC payment and is not part of this hosted free tier.`,
       `To use it from Claude/any MCP client: run the npm server with a funded Base wallet —`,
-      `npx agent402-mcp with env AGENT_KEY=0x<private key> (spend caps: AGENT402_MAX_PER_CALL, AGENT402_BUDGET).`,
+      `npx agent402-mcp with env AGENT_KEY=0x<private key> (USDC on Base/Polygon/Arbitrum) and/or SOLANA_AGENT_KEY=<base58 secret> (USDC on Solana); spend caps: AGENT402_MAX_PER_CALL, AGENT402_BUDGET.`,
       `Or call it over HTTP with any x402 client. Docs: ${baseUrl}/tools/${def.slug}`,
     ].join(" ");
   }
@@ -309,7 +309,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
                   })),
                 },
                 clientsSeenSinceBoot: Object.fromEntries([...mcpClients].sort((a, b) => b[1] - a[1]).slice(0, 20)),
-                paidAccess: "Every tool, no rate limit: pay per call in USDC on Base (or Solana, Polygon, Arbitrum) via the x402 protocol — npx agent402-mcp with AGENT_KEY, or any x402 HTTP client. No signup, no API key; prices $0.001–$0.02/call.",
+                paidAccess: "Every tool, no rate limit: pay per call in USDC on Base (or Solana, Polygon, Arbitrum) via the x402 protocol — npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or any x402 HTTP client. No signup, no API key; prices $0.001–$0.02/call.",
                 ...(getLeaderboard ? { ecosystem: "Call top_x402_sellers to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h — discovers the live economy beyond this catalog." } : {}),
                 docs: `${baseUrl}/llms.txt`,
               }, null, 2),
