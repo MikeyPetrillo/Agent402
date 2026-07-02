@@ -182,17 +182,46 @@ async function main() {
         topics: [TRANSFER, null, pad(WALLET)],
       }]));
     }
-    const hashes = [...new Set(logs.map((l) => l.transactionHash))].slice(-MAX_TXS);
+    // Keep the FIRST occurrence of each tx (logs are collected newest-chunk
+    // first, oldest within a chunk first) and remember its block for the
+    // timestamp — "when did attribution START landing" is the question that
+    // separates indexer lag from a schema/registration mismatch.
+    const byHash = new Map();
+    for (const l of logs) if (!byHash.has(l.transactionHash)) byHash.set(l.transactionHash, l.blockNumber);
+    // Sample evenly across the whole window (not newest-first): the oldest
+    // days must be represented or "when did attribution start" is unanswerable.
+    const all = [...byHash.keys()];
+    const step = Math.max(1, Math.ceil(all.length / MAX_TXS));
+    const hashes = all.filter((_, i) => i % step === 0).slice(0, MAX_TXS);
+    const tsCache = {};
+    const blockTs = async (blk) => {
+      if (!tsCache[blk]) tsCache[blk] = parseInt((await rpc("eth_getBlockByNumber", [blk, false])).timestamp, 16);
+      return tsCache[blk];
+    };
     console.error(`\n${logs.length} USDC transfer(s) into ${WALLET} over last ${SPAN} blocks; inspecting ${hashes.length} tx(s):`);
     for (const hash of hashes) {
       const tx = await rpc("eth_getTransactionByHash", [hash]);
       const input = (tx?.input || "").toLowerCase();
       const hasMarker = input.includes(ERC_8021_MARKER);
       const decoded = hasMarker ? parseBuilderSuffix(input) : undefined;
-      txReport.push({ tx: hash, marker: hasMarker, codes: decoded ?? null });
-      console.error(`  ${hash} ${decoded ? `ATTRIBUTED ${JSON.stringify(decoded)}`
+      const when = new Date((await blockTs(byHash.get(hash))) * 1000).toISOString();
+      txReport.push({ tx: hash, when, marker: hasMarker, codes: decoded ?? null });
+      console.error(`  ${when} ${hash} ${decoded ? `ATTRIBUTED ${JSON.stringify(decoded)}`
         : hasMarker ? "marker present but suffix malformed/not-at-end" : "no builder-code suffix"}`);
     }
+    // Per-day rollup: the shape of this table IS the diagnosis. Attribution
+    // starting only recently → dashboard zero before that was correct, wait
+    // for the indexer. Attributed txs across many days with a still-zero
+    // dashboard → Base-side indexing gap, report with tx hashes.
+    const days = {};
+    for (const t of txReport) {
+      const d = t.when.slice(0, 10);
+      days[d] ??= { inspected: 0, attributed: 0 };
+      days[d].inspected++;
+      if (t.codes) days[d].attributed++;
+    }
+    console.error("\nper-day (UTC): " + Object.entries(days).sort()
+      .map(([d, c]) => `${d}: ${c.attributed}/${c.inspected} attributed`).join("  ·  "));
   } catch (e) {
     scanError = e.message;
     console.error(`chain scan failed (best-effort): ${e.message}`);

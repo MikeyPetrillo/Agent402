@@ -1479,8 +1479,12 @@ jobs:
       # dashboard indexes? Dependency-free script — no npm ci in this job.
       # LAST step on purpose: the logs API serves a bounded tail of the job
       # log, so the verdict must sit at the end to stay retrievable.
+      # ~8 days of history (43,200 blocks/day), evenly sampled: the per-day
+      # attribution table separates "indexer hasn't caught up with a recent
+      # rollout" from "suffixes have landed for a week and the dashboard
+      # still counts zero" (a Base-side bug report with tx-hash evidence).
       - name: Builder Code attribution check (live 402 declaration + on-chain suffix scan)
-        run: node scripts/check-builder-attribution.js || true
+        run: SPAN_BLOCKS=350000 MAX_TXS=80 node scripts/check-builder-attribution.js || true
 
   deploy:
     needs: [markers, test]
