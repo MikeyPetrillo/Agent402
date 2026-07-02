@@ -1242,6 +1242,26 @@ jobs:
             echo "!! Solana accept is silently omitted in that case — src/payments.js). No Solana"
             echo "!! revenue is possible until a buyer can see a Solana payment option."
           fi
+          echo
+          # Every accepted EVM chain pays the same 0x wallet but on a different
+          # native-USDC contract — scan each so Polygon/Arbitrum revenue is as
+          # visible as Base's (balance + recent external per-call payments).
+          EVM_PAYTO=$(echo "$CH" | jq -r '[.accepts // [] | .[] | select((.network // "") | startswith("eip155:"))][0].payTo // empty' 2>/dev/null || true)
+          if [ -n "$EVM_PAYTO" ]; then
+            for NET_NAME in polygon arbitrum; do
+              case "$NET_NAME" in
+                polygon)  CAIP2="eip155:137" ;;
+                arbitrum) CAIP2="eip155:42161" ;;
+              esac
+              if echo "$CH" | jq -e --arg c "$CAIP2" '[.accepts // [] | .[] | select(.network == $c)] | length > 0' >/dev/null 2>&1; then
+                echo "=== $NET_NAME revenue scan — USDC received by $EVM_PAYTO ==="
+                SCAN_NETWORK="$NET_NAME" REVENUE_WALLET="$EVM_PAYTO" node scripts/revenue-scan.js || true
+                echo
+              else
+                echo "$NET_NAME: not among the live 402 payment options — skipped"
+              fi
+            done
+          fi
 
       - name: Railway deployment history (which image is live, what failed)
         run: |
