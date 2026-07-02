@@ -15,6 +15,7 @@ on:
       - ".github/trigger-drain"
       - ".github/trigger-bazaar-refresh"
       - ".github/trigger-bazaar-register"
+      - ".github/trigger-bazaar-solana"
   workflow_dispatch:
     inputs:
       mode:
@@ -54,6 +55,7 @@ jobs:
       marketplace: ${{ steps.parse.outputs.marketplace }}
       bazaar_refresh: ${{ steps.parse.outputs.bazaar_refresh }}
       bazaar_register: ${{ steps.parse.outputs.bazaar_register }}
+      bazaar_solana: ${{ steps.parse.outputs.bazaar_solana }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -66,7 +68,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          MARKERS="test deploy publish probe drain demand paytest purl marketplace bazaar-refresh bazaar-register"
+          MARKERS="test deploy publish probe drain demand paytest purl marketplace bazaar-refresh bazaar-register bazaar-solana"
           if [ "$EVENT_NAME" != "push" ]; then
             echo "Event is $EVENT_NAME (not push) — emitting all markers as false."
             for m in $MARKERS; do
@@ -163,6 +165,38 @@ jobs:
           if [ -f "$RUNNER_TEMP/agent-key" ]; then
             shred -u "$RUNNER_TEMP/agent-key" 2>/dev/null || rm -f "$RUNNER_TEMP/agent-key"
           fi
+
+  bazaar-solana:
+    # One-shot sweep: pays every catalog route priced <= $0.05 once VIA SOLANA
+    # (SVM client -> PayAI facilitator), so settlement-driven indexes register
+    # each tool for Solana — PayAI's merchant listing, x402scan's facilitator
+    # view — and every harvester re-observes the live 402 with the full
+    # multi-chain accepts. Skips the LLM/image/audio/code proxies (real
+    # upstream credit per call). Payments recycle burner -> revenue wallet.
+    needs: markers
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-solana' || needs.markers.outputs.bazaar_solana == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      TARGET_URL: https://agent402.tools
+      MODE: sweep
+      PAY_NETWORK: solana
+      MAX_PRICE_USD: "0.05"
+      MAX_SPEND_USD: "8"
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 @x402/core@2.16.0 @x402/evm@2.16.0 @x402/svm@2.16.0 @solana/kit viem
+      - name: Sweep the catalog via Solana settlement
+        env:
+          SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
+        run: |
+          [ -n "$SOLANA_BURNER_KEY" ] || { echo "No SOLANA_BURNER_KEY — cannot pay the Solana sweep"; exit 1; }
+          echo "::add-mask::$SOLANA_BURNER_KEY"
+          node scripts/refresh-bazaar.js
 
   bazaar-refresh:
     # One-shot job: makes a tiny paid request against every Agent402 Bazaar
