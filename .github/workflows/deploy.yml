@@ -199,6 +199,42 @@ jobs:
           kill $SRV 2>/dev/null || true
           shred -u /tmp/burner-key 2>/dev/null || rm -f /tmp/burner-key
 
+      # GROUND TRUTH #2: drive a real buy through a CDP-configured server whose
+      # @x402 resource-server + facilitator-client methods are instrumented on
+      # their prototypes. Prints the exact gate that rejects each paid request
+      # (challenge size / requirement match / extension echo / verify / settle),
+      # and the verifyPayment call-count discriminates a client-side negotiation
+      # failure (count 0 → buyer never sent a payment) from a server-side reject.
+      - name: CDP buy TRACE — which gate rejects the paid request
+        if: always()
+        env:
+          CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID || 'ff16e708-0590-4a24-8a17-b0e978143f68' }}
+          CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
+          WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
+          SOLANA_WALLET_ADDRESS: J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg
+          PAYMENT_NETWORKS: base,solana,polygon,arbitrum
+          NETWORK: base
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+        run: |
+          printf '%s' "$BURNER_KEY" > /tmp/burner-key
+          PORT=3780 node scripts/cdp-trace-server.js > /tmp/server-trace.log 2>&1 &
+          SRV=$!
+          for i in $(seq 1 60); do curl -sf http://localhost:3780/health >/dev/null 2>&1 && break; sleep 1; done
+          echo "--- driving a buy through the traced CDP server ---"
+          TARGET_URL=http://localhost:3780 KEY_FILE=/tmp/burner-key MODE=run node scripts/agent-e2e.js > /tmp/buy-trace.log 2>&1 || true
+          kill $SRV 2>/dev/null || true
+          sleep 1
+          echo "=================== BUY OUTPUT (first 8) ==================="
+          grep -iE 'FAILED|PAID|verified|reason|RESULT|bought' /tmp/buy-trace.log | head -8 || true
+          echo "=================== TRACE challenge sizes ================="
+          grep -F '[TRACE challenge]' /tmp/server-trace.log | head -3 || true
+          echo "=================== TRACE gates (first paid reqs) ========="
+          grep -F '[TRACE ' /tmp/server-trace.log | grep -vF '[TRACE challenge]' | head -30 || true
+          echo "=================== TRACE call counts ====================="
+          echo "verifyPayment CALLED: $(grep -cF '[TRACE verify] CALLED' /tmp/server-trace.log)"
+          echo "settlePayment CALLED: $(grep -cF '[TRACE settle] CALLED' /tmp/server-trace.log)"
+          shred -u /tmp/burner-key 2>/dev/null || rm -f /tmp/burner-key
+
       - name: Capture CDP verify reason (CDP vs PayAI control)
         if: always()
         env:
