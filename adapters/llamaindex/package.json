@@ -1,22 +1,52 @@
 {
   "name": "agent402-llamaindex",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Drop-in LlamaIndex TS tools for Agent402.Tools: turn 1,338 pay-per-call x402 tools (browser, web search, OCR, PDFs, finance, memory) into FunctionTool instances via four meta-tools (find/route/call/about), plus the cross-seller x402 Smart Order Router. Free via proof-of-work or pay per call in USDC on Base + 3 more chains (USDG on Robinhood Chain supported).",
   "type": "module",
   "main": "index.js",
-  "exports": { ".": "./index.js" },
-  "files": ["index.js", "README.md"],
-  "engines": { "node": ">=18" },
-  "scripts": { "test": "node test.js" },
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node test.js"
+  },
   "keywords": [
-    "llamaindex", "function-tool", "tools", "agents", "openai-agent", "react-agent",
-    "x402", "ai-agents", "agent-tools", "llm-tools",
-    "usdc", "base", "proof-of-work", "http-402", "micropayments", "agent402",
-    "tool-discovery", "smart-order-router", "mcp"
+    "llamaindex",
+    "function-tool",
+    "tools",
+    "agents",
+    "openai-agent",
+    "react-agent",
+    "x402",
+    "ai-agents",
+    "agent-tools",
+    "llm-tools",
+    "usdc",
+    "base",
+    "proof-of-work",
+    "http-402",
+    "micropayments",
+    "agent402",
+    "tool-discovery",
+    "smart-order-router",
+    "mcp"
   ],
   "author": "Mike Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/MikeyPetrillo/Agent402.git", "directory": "adapters/llamaindex" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MikeyPetrillo/Agent402.git",
+    "directory": "adapters/llamaindex"
+  },
   "homepage": "https://agent402.tools",
-  "dependencies": { "agent402-client": "^0.1.0" }
+  "dependencies": {
+    "agent402-client": "^0.1.0"
+  }
 }

@@ -1,29 +1,60 @@
 {
   "name": "agent402-ai-sdk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Vercel AI SDK tools for Agent402.Tools: turn 1,338 pay-per-call x402 tools (browser, web search, OCR, PDFs, memory) into AI SDK tools via four meta-tools (find/route/call/about), plus the cross-seller x402 Smart Order Router. Free via proof-of-work or pay per call in USDC on Base + 3 more chains (USDG on Robinhood Chain supported).",
   "type": "module",
   "main": "index.js",
-  "exports": { ".": "./index.js" },
-  "files": ["index.js", "README.md"],
-  "engines": { "node": ">=18" },
-  "scripts": { "test": "node test.js" },
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node test.js"
+  },
   "keywords": [
-    "ai-sdk", "vercel", "ai", "tools", "streamText", "generateText",
-    "x402", "ai-agents", "agent-tools", "llm-tools",
-    "usdc", "base", "proof-of-work", "http-402", "micropayments", "agent402",
-    "tool-discovery", "smart-order-router"
+    "ai-sdk",
+    "vercel",
+    "ai",
+    "tools",
+    "streamText",
+    "generateText",
+    "x402",
+    "ai-agents",
+    "agent-tools",
+    "llm-tools",
+    "usdc",
+    "base",
+    "proof-of-work",
+    "http-402",
+    "micropayments",
+    "agent402",
+    "tool-discovery",
+    "smart-order-router"
   ],
   "author": "Mike Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/MikeyPetrillo/Agent402.git", "directory": "adapters/ai-sdk" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MikeyPetrillo/Agent402.git",
+    "directory": "adapters/ai-sdk"
+  },
   "homepage": "https://agent402.tools",
   "peerDependencies": {
     "ai": ">=3 <7",
     "zod": ">=3 <5"
   },
   "peerDependenciesMeta": {
-    "ai": { "optional": true },
-    "zod": { "optional": true }
+    "ai": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
   }
 }

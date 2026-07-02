@@ -1,28 +1,58 @@
 {
   "name": "agent402-openai-agents",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenAI Agents SDK tools for Agent402.Tools: turn 1,338 pay-per-call x402 tools (browser, web search, OCR, PDFs, memory) into Agent tools via four meta-tools (find/route/call/about), plus the cross-seller x402 Smart Order Router. Free via proof-of-work or pay per call in USDC on Base + 3 more chains (USDG on Robinhood Chain supported).",
   "type": "module",
   "main": "index.js",
-  "exports": { ".": "./index.js" },
-  "files": ["index.js", "README.md"],
-  "engines": { "node": ">=18" },
-  "scripts": { "test": "node test.js" },
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node test.js"
+  },
   "keywords": [
-    "openai", "openai-agents", "agents-sdk", "x402", "ai-agents", "agent-tools",
-    "llm-tools", "usdc", "base", "proof-of-work", "http-402", "micropayments",
-    "mcp", "tool-discovery", "smart-order-router", "agent402"
+    "openai",
+    "openai-agents",
+    "agents-sdk",
+    "x402",
+    "ai-agents",
+    "agent-tools",
+    "llm-tools",
+    "usdc",
+    "base",
+    "proof-of-work",
+    "http-402",
+    "micropayments",
+    "mcp",
+    "tool-discovery",
+    "smart-order-router",
+    "agent402"
   ],
   "author": "Mike Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/MikeyPetrillo/Agent402.git", "directory": "adapters/openai-agents" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MikeyPetrillo/Agent402.git",
+    "directory": "adapters/openai-agents"
+  },
   "homepage": "https://agent402.tools",
   "peerDependencies": {
     "@openai/agents": ">=0.0.1 <1",
     "zod": ">=3 <5"
   },
   "peerDependenciesMeta": {
-    "@openai/agents": { "optional": true },
-    "zod": { "optional": true }
+    "@openai/agents": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
   }
 }
