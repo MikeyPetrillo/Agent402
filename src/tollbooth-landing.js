@@ -14,7 +14,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 export function tollboothLandingPage(baseUrl) {
   const title = "Tollbooth — charge AI bots that crawl your site (30-second install)";
-  const description = "agent402-tollbooth is an open-source, self-hostable pay-per-crawl gate. Drop it in front of any Node site (Express, Next.js, Cloudflare Worker, Docker) and AI crawlers pay USDC on Base (or Solana, Polygon, Arbitrum) — or burn CPU — to read your content. Humans browse free.";
+  const description = "agent402-tollbooth is the open-source monetization gateway: a self-hostable pay-per-crawl gate for any origin — no platform, no waitlist. Drop it in front of any Node site (Express, Next.js, Cloudflare Worker, Docker) and AI crawlers pay USDC on Base (or Solana, Polygon, Arbitrum) — or burn CPU — to read your content. Humans browse free.";
   const canonical = `${baseUrl}/tollbooth`;
 
   const extraCss = `
@@ -67,7 +67,7 @@ export function tollboothLandingPage(baseUrl) {
   const body = `<div class="tb-wrap">
 
 <h1>Charge AI bots that crawl your site</h1>
-<p class="lede"><b>agent402-tollbooth</b> is an open-source, self-hostable pay-per-crawl gate. Drop it in front of any Node site and AI crawlers pay USDC on Base (or Solana, Polygon, Arbitrum) — or burn CPU — to read your content. Humans browse free. <a href="https://github.com/MikeyPetrillo/Agent402/wiki/Pay-per-crawl-Walkthrough" rel="noopener">30-min walkthrough →</a></p>
+<p class="lede"><b>agent402-tollbooth</b> is the open-source monetization gateway — a self-hostable pay-per-crawl gate that is live today, no waitlist, and works in front of <em>any</em> origin, not just sites behind a platform proxy. Drop it in front of any Node site and AI crawlers pay USDC on Base (or Solana, Polygon, Arbitrum) — or burn CPU — to read your content. Humans browse free, funds settle straight to your wallet with a 0% take. <a href="https://github.com/MikeyPetrillo/Agent402/wiki/Pay-per-crawl-Walkthrough" rel="noopener">30-min walkthrough →</a> <a href="/compare" rel="noopener">vs. platform gateways →</a></p>
 
 <div class="cloud-cta">
   <span>Managing multiple sites or running an SEO agency? Multi-site rollup, alerts, white-label dashboard, 20% partner program.</span>
