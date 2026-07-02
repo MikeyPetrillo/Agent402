@@ -163,37 +163,39 @@ jobs:
       - name: Robinhood Chain read probe (chain 4663 RPC live + params correct)
         if: always()
         run: node scripts/rh-chain-probe.js || true
-      # Reproduce the prod deploy failure the operator hit when adding `robinhood`
-      # to PAYMENT_NETWORKS: boot with the exact prod payment config + real
-      # facilitator sync (CDP + PayAI + r402, all reachable from CI) and capture
-      # whether /health comes up + any boot error, and whether a paid 402 offers
-      # eip155:4663. Non-gating; settles nothing.
-      - name: Boot with Robinhood enabled — reproduce deploy crash (sync ON)
+      # LIVE Robinhood Chain / USDG settlement. Boots a Robinhood-ONLY server (so
+      # the buyer's only option is USDG on chain 4663 via the r402 facilitator),
+      # confirms the burner holds USDG, then buys one cheap tool — a real on-chain
+      # USDG transfer. Retries with EIP-712 version=2 if 1's signature is rejected.
+      # Non-gating: it reports the settlement tx (or the facilitator's reason).
+      # Requires the burner (its address is published as the funding artifact) to
+      # hold USDG on Robinhood Chain; otherwise it self-reports "0 USDG" and skips.
+      - name: Live Robinhood Chain USDG settlement (burner-funded, real on-chain settle)
         if: always()
         env:
-          CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
-          CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
           WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
-          SOLANA_WALLET_ADDRESS: J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg
-          PAYMENT_NETWORKS: base,solana,polygon,arbitrum,robinhood
-          NETWORK: base
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
         run: |
-          PORT=3782 node src/server.js > /tmp/rh-enabled-boot.log 2>&1 &
-          SRV=$!
-          booted=0
-          for i in $(seq 1 40); do curl -sf http://localhost:3782/health >/dev/null 2>&1 && { booted=1; break; }; sleep 1; done
-          echo "=== boot log (facilitator / robinhood / errors) ==="
-          grep -iE 'facilitator|robinhood|r402|USDG|accepting usdc|error|throw|reject|unhandled|uncaught|listen|EADDR' /tmp/rh-enabled-boot.log | head -40 || true
-          echo "=== last 30 lines ==="; tail -30 /tmp/rh-enabled-boot.log
-          if [ "$booted" = "1" ]; then
-            echo ">>> /health OK — server BOOTED with robinhood enabled"
-            curl -s -D /tmp/rh402.h -o /dev/null -X POST http://localhost:3782/api/hash -H 'Content-Type: application/json' -d '{"text":"x"}' || true
-            HDR=$(tr -d '\r' < /tmp/rh402.h | awk -F': ' 'tolower($1)=="payment-required"{print $2}' | head -1)
-            [ -n "$HDR" ] && echo "$HDR" | base64 -d 2>/dev/null | python3 -c "import sys,json;d=json.load(sys.stdin);print('402 accepts networks:',[a.get('network') for a in d.get('accepts',[])])" || echo "(no 402 accepts decoded)"
-          else
-            echo ">>> BOOT FAILED with robinhood enabled — THIS is the deploy crash (see log above)"
-          fi
-          kill $SRV 2>/dev/null || true
+          printf '%s' "$BURNER_KEY" > /tmp/burner-key
+          settled=0
+          for V in 1 2; do
+            echo "=================== USDG EIP-712 version=$V ==================="
+            ROBINHOOD_USDG_EIP712_VERSION=$V FACILITATOR_URL=https://mpp.hyreagent.fun/r402 \
+              NETWORK=robinhood PAYMENT_NETWORKS=robinhood \
+              PORT=3790 node src/server.js > /tmp/rh-settle-srv.log 2>&1 &
+            SRV=$!
+            for i in $(seq 1 40); do curl -sf http://localhost:3790/health >/dev/null 2>&1 && break; sleep 1; done
+            grep -iE 'facilitator|robinhood|accepting usdc|USDG' /tmp/rh-settle-srv.log | head -4 || true
+            if TARGET_URL=http://localhost:3790 KEY_FILE=/tmp/burner-key node scripts/rh-settle-test.js; then
+              echo ">>> SETTLED with USDG EIP-712 version=$V"; settled=1; kill $SRV 2>/dev/null || true; break
+            fi
+            echo "--- server-side facilitator/settle log (version=$V) ---"
+            grep -viE '\[tool-error\]' /tmp/rh-settle-srv.log | grep -iE 'facilitator|verify|settle|invalid|reject|error|USDG|payment' | tail -12 || true
+            kill $SRV 2>/dev/null || true
+            sleep 2
+          done
+          shred -u /tmp/burner-key 2>/dev/null || rm -f /tmp/burner-key
+          if [ "$settled" = "1" ]; then echo "RESULT: ✅ real USDG settlement on Robinhood Chain succeeded"; else echo "RESULT: settlement did not succeed (see reasons above)"; fi
       - name: Shred burner key
         if: always()
         run: |
