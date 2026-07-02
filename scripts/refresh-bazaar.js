@@ -32,7 +32,13 @@
 // Run: BURNER_KEY=0x... node scripts/refresh-bazaar.js
 //   or KEY_FILE=/tmp/agent-key node scripts/refresh-bazaar.js
 // Optional env:
-//   MODE              "stale" (default) or "missing"
+//   MODE              "stale" (default), "missing", or "sweep" (pay EVERY route
+//                     priced <= MAX_PRICE_USD once — for settlement-driven
+//                     registration on PAY_NETWORK, e.g. PayAI's Solana index)
+//   PAY_NETWORK       "base" (default, BURNER_KEY via CDP) or "solana"
+//                     (SOLANA_BURNER_KEY via PayAI)
+//   MAX_PRICE_USD     sweep-mode per-tool ceiling (default 0.05 — skips the
+//                     LLM/image/audio proxies that bill real upstream credit)
 //   SLUGS             comma-separated slug filter for missing-mode (register only these)
 //   TARGET_URL        (default https://agent402.tools)
 //   EXPECT_NAME       (default "Agent402.tools")
@@ -50,6 +56,17 @@ const KEY_FILE = process.env.KEY_FILE || "/tmp/agent-key";
 const DRY_RUN = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
 const MODE = (process.env.MODE || "stale").toLowerCase();
 const MAX_SPEND_USD = Number(process.env.MAX_SPEND_USD || "5");
+// Which chain the paid requests settle on. "base" (default) pays via the EVM
+// BURNER_KEY through CDP — what the Bazaar harvester observes. "solana" pays
+// via SOLANA_BURNER_KEY through PayAI — what SETTLEMENT-DRIVEN Solana indexes
+// (PayAI's merchant listing, x402scan's facilitator view) observe, and every
+// payment also makes harvesters re-observe the live 402 with the full
+// multi-chain accepts.
+const PAY_NETWORK = (process.env.PAY_NETWORK || "base").toLowerCase();
+// Sweep-mode price ceiling per tool: skip anything above it. The LLM / image /
+// audio / code-run proxies bill real upstream credit per call — registering
+// them isn't worth actual money burn; they stay findable via the live 402.
+const MAX_PRICE_USD = Number(process.env.MAX_PRICE_USD || (MODE === "sweep" ? "0.05" : "Infinity"));
 const SLUGS_FILTER = process.env.SLUGS ? new Set(process.env.SLUGS.split(",").map(s => s.trim())) : null;
 const BAZAAR_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
 const PAGE_SIZE = 1000;
@@ -158,24 +175,34 @@ async function loadOpenapiExamples() {
   return out;
 }
 
-async function runMissingMode() {
+async function runMissingMode({ sweep = false } = {}) {
   const [catalog, registered, examples] = await Promise.all([
     loadCatalog(),
-    loadRegisteredPaths(),
+    sweep ? Promise.resolve(new Set()) : loadRegisteredPaths(),
     loadOpenapiExamples(),
   ]);
+  // sweep = pay EVERY affordable route once (settlement-driven registration on
+  // the PAY_NETWORK chain + re-observe of the multi-chain accepts), cheapest
+  // first so a timeout loses the least coverage. missing = only routes the
+  // Bazaar has never seen, expensive first so skill packs register before a
+  // timeout.
   const missing = catalog
-    .filter((t) => !registered.has(t.path))
+    .filter((t) => sweep || !registered.has(t.path))
     .filter((t) => !SLUGS_FILTER || SLUGS_FILTER.has(t.slug))
-    .sort((a, b) => b.priceUsd - a.priceUsd); // expensive first — skill packs register before timeout
-  console.log(`Catalog: ${catalog.length} · already on Bazaar: ${registered.size} · missing: ${missing.length}`);
+    .filter((t) => t.priceUsd <= MAX_PRICE_USD)
+    .sort((a, b) => (sweep ? a.priceUsd - b.priceUsd : b.priceUsd - a.priceUsd));
+  console.log(
+    sweep
+      ? `Catalog: ${catalog.length} · sweeping ${missing.length} routes priced ≤ $${MAX_PRICE_USD} via ${PAY_NETWORK}`
+      : `Catalog: ${catalog.length} · already on Bazaar: ${registered.size} · missing: ${missing.length}`
+  );
   if (!missing.length) {
     console.log("Nothing to register.");
     return 0;
   }
 
   const estCost = missing.reduce((s, t) => s + t.priceUsd, 0);
-  console.log(`Estimated total cost to register all missing routes: $${estCost.toFixed(3)}`);
+  console.log(`Estimated total cost to ${sweep ? "sweep" : "register"} all routes: $${estCost.toFixed(3)}`);
   if (estCost > MAX_SPEND_USD) {
     console.error(`Estimate exceeds MAX_SPEND_USD=$${MAX_SPEND_USD}. Refusing to run. Raise MAX_SPEND_USD or filter the set.`);
     return 2;
@@ -188,15 +215,8 @@ async function runMissingMode() {
     return 0;
   }
 
-  const { privateKeyToAccount } = await import("viem/accounts");
-  const { x402Client } = await import("@x402/core/client");
-  const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
-  const { wrapFetchWithPayment } = await import("@x402/fetch");
-  const account = privateKeyToAccount(loadKey());
-  const client = new x402Client();
-  registerExactEvmScheme(client, { signer: account });
-  const payFetch = wrapFetchWithPayment(fetch, client);
-  console.log(`Paying from ${account.address} · spending up to $${estCost.toFixed(3)} …`);
+  const payFetch = await buildPayFetch();
+  console.log(`Spending up to $${estCost.toFixed(3)} …`);
 
   const results = { ok: 0, fail: 0, errors: [] };
   for (let i = 0; i < missing.length; i++) {
@@ -247,7 +267,13 @@ async function runMissingMode() {
       }
     }
   }
-  console.log(`\nRegistration pass complete: ${results.ok} ok, ${results.fail} failed.`);
+  console.log(`\n${sweep ? "Sweep" : "Registration"} pass complete: ${results.ok} ok, ${results.fail} failed.`);
+
+  if (sweep) {
+    // Settlement-driven indexes (PayAI, x402scan) have no public recount
+    // endpoint — success = the settlements happened. Fail only on a wipeout.
+    return results.ok > 0 || results.fail === 0 ? 0 : 1;
+  }
 
   // Bazaar harvester is not instant. Give it ~60s then re-verify.
   console.log("Waiting 60s for the Bazaar harvester to catch up …");
@@ -256,6 +282,33 @@ async function runMissingMode() {
   const stillMissing = catalog.filter((t) => !afterReg.has(t.path));
   console.log(`After: ${afterReg.size} registered, ${stillMissing.length} still missing (harvester may continue to catch up).`);
   return stillMissing.length === 0 ? 0 : 1;
+}
+
+// One pay-capable fetch for whichever chain PAY_NETWORK selects.
+async function buildPayFetch() {
+  const { x402Client } = await import("@x402/core/client");
+  const { wrapFetchWithPayment } = await import("@x402/fetch");
+  const client = new x402Client();
+  if (PAY_NETWORK === "solana") {
+    const raw = (process.env.SOLANA_BURNER_KEY || "").trim();
+    if (!raw) {
+      console.error("refresh-bazaar: PAY_NETWORK=solana requires SOLANA_BURNER_KEY (base58 64-byte secret or JSON byte array)");
+      process.exit(2);
+    }
+    const kit = await import("@solana/kit");
+    const bytes = raw.startsWith("[") ? Uint8Array.from(JSON.parse(raw)) : new Uint8Array(kit.getBase58Encoder().encode(raw));
+    const signer = await kit.createKeyPairSignerFromBytes(bytes);
+    const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
+    registerExactSvmScheme(client, { signer });
+    console.log(`Paying via Solana from ${signer.address} …`);
+  } else {
+    const { privateKeyToAccount } = await import("viem/accounts");
+    const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+    const account = privateKeyToAccount(loadKey());
+    registerExactEvmScheme(client, { signer: account });
+    console.log(`Paying via Base from ${account.address} …`);
+  }
+  return wrapFetchWithPayment(fetch, client);
 }
 
 function loadKey() {
@@ -271,8 +324,11 @@ async function main() {
   if (MODE === "missing") {
     process.exit(await runMissingMode());
   }
+  if (MODE === "sweep") {
+    process.exit(await runMissingMode({ sweep: true }));
+  }
   if (MODE !== "stale") {
-    console.error(`Unknown MODE="${MODE}". Use "stale" or "missing".`);
+    console.error(`Unknown MODE="${MODE}". Use "stale", "missing", or "sweep".`);
     process.exit(2);
   }
   const stale = await loadStaleRoutes();
