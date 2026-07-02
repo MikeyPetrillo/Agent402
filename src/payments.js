@@ -84,6 +84,17 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
 
   const solanaWallet = (process.env.SOLANA_WALLET_ADDRESS || "").trim();
   if (svmCaip2.length && solanaWallet) console.log(`Solana payTo: ${solanaWallet}`);
+  // Loud, because the failure is silent everywhere else: acceptsFor() below
+  // simply omits the Solana option, so every 402 offers EVM chains only and
+  // buyers never learn Solana was intended. Zero Solana revenue with no error
+  // anywhere is exactly what that misconfiguration looks like.
+  if (svmCaip2.length && !solanaWallet) {
+    console.warn(
+      "WARNING: PAYMENT_NETWORKS enables a Solana network but SOLANA_WALLET_ADDRESS is unset — " +
+        "the Solana payment option will be OMITTED from every 402. Set SOLANA_WALLET_ADDRESS " +
+        "(base58 Solana address) to actually accept USDC on Solana."
+    );
+  }
 
   // One payment option per enabled chain — agents pick the chain they hold funds on.
   const acceptsFor = (item) => [

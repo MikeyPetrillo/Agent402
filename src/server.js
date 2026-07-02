@@ -125,7 +125,7 @@ import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL } 
 // Shared with the MCP free tier (src/mcp-http.js) — same policy, separate
 // per-IP bucket. PoW redemption on the direct HTTP path goes through here.
 const powHttpLimiter = createRateLimiter("pow-http");
-import { recordServedCall, recordChargedFailure, getStats, getOperatorBreakdown, dbHealthy, statsPersistent } from "./stats.js";
+import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, getStats, getOperatorBreakdown, dbHealthy, statsPersistent } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID } from "node:crypto";
 import { marketplaceSlugToken } from "./marketplace-token.js";
 
@@ -1678,7 +1678,11 @@ app.use((req, res, next) => {
       if (res.statusCode === 200) {
         const powAccepted = res.getHeader("X-Pow-Accepted") === "true";
         const isHeartbeat = powAccepted && verifyHeartbeatToken(req.header("x-heartbeat-token"));
-        recordServedCall(def.slug, isHeartbeat ? "heartbeat" : powAccepted ? "pow" : "usdc");
+        const method = isHeartbeat ? "heartbeat" : powAccepted ? "pow" : "usdc";
+        // For USDC, also attribute the settlement chain from the settle receipt
+        // (multi-chain x402: Base vs Solana vs Polygon…) so /api/stats can
+        // answer "did anyone pay on <chain>" without per-chain explorer scans.
+        recordServedCall(def.slug, method, method === "usdc" ? networkFromPaymentResponse(res.getHeader("X-PAYMENT-RESPONSE")) : null);
       } else if (res.getHeader("X-PAYMENT-RESPONSE")) {
         // x402 middleware sets X-PAYMENT-RESPONSE only after USDC settlement
         // succeeded. A non-200 with this header set means we charged the buyer

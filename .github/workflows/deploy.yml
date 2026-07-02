@@ -399,6 +399,12 @@ jobs:
       - name: Revenue detector classification (real x402 buys vs funding/tests)
         run: node scripts/test-revenue-scan.js
 
+      - name: Solana revenue scanner (token-balance decode + classification)
+        run: node scripts/test-revenue-scan-solana.js
+
+      - name: USDC settle-receipt network attribution (viaUSDCByNetwork)
+        run: node scripts/test-stats-network.js
+
       - name: Paid-canary verdict (pages on real buying breaks, warns on upstream)
         run: node scripts/test-paid-canary.js
 
@@ -1191,6 +1197,37 @@ jobs:
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      # Multi-chain ground truth. /health flags show which env-gated features are
+      # live; the 402 challenge shows the payment options a buyer is ACTUALLY
+      # offered (payments.js silently omits the Solana accept when
+      # SOLANA_WALLET_ADDRESS is unset, so config intent and buyer-visible truth
+      # can differ). If Solana is offered, scan its payTo for USDC received —
+      # the Base-only revenue check below can't see Solana settlements.
+      - name: Multi-chain payment surface (health flags, live 402 accepts, Solana revenue)
+        run: |
+          PROD=https://agent402.tools
+          echo "=== production /health — env-gated feature flags live right now ==="
+          curl -s --max-time 15 "$PROD/health" | jq '{ok, checks, flags}' || true
+          echo
+          echo "=== live 402 on a wallet-only route — network + payTo per payment option ==="
+          CH=$(curl -s --max-time 15 "$PROD/api/search?q=probe" -H "Accept: application/json" || true)
+          echo "$CH" | jq -r '.accepts // [] | .[] | "\(.network)  payTo=\(.payTo)  amount=\(.maxAmountRequired // .price // "?")"' \
+            || { echo "could not parse 402 body:"; echo "$CH" | head -c 400; }
+          SOLANA_PAYTO=$(echo "$CH" | jq -r '[.accepts // [] | .[] | select((.network // "") | startswith("solana:"))][0].payTo // empty' 2>/dev/null || true)
+          echo
+          if [ -n "$SOLANA_PAYTO" ]; then
+            echo "Solana IS offered to buyers (payTo=$SOLANA_PAYTO)."
+            echo "=== Solana revenue scan — USDC received by $SOLANA_PAYTO ==="
+            SOLANA_REVENUE_WALLET="$SOLANA_PAYTO" node scripts/revenue-scan-solana.js || true
+          else
+            echo "!! Solana is NOT among the live 402 payment options. Either PAYMENT_NETWORKS on"
+            echo "!! Railway does not include 'solana', or SOLANA_WALLET_ADDRESS is unset (the"
+            echo "!! Solana accept is silently omitted in that case — src/payments.js). No Solana"
+            echo "!! revenue is possible until a buyer can see a Solana payment option."
+          fi
+
       - name: Railway deployment history (which image is live, what failed)
         run: |
           gql() {
