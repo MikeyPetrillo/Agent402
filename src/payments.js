@@ -116,7 +116,7 @@ export function enabledNetworks(network) {
 export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, catalog }) {
   const networks = enabledNetworks(network);
   const caip2List = networks.map((n) => NETWORKS[n]);
-  const evmCaip2 = caip2List.filter((c) => c.startsWith("eip155:"));
+  let evmCaip2 = caip2List.filter((c) => c.startsWith("eip155:"));
   const svmCaip2 = caip2List.filter((c) => c.startsWith("solana:"));
 
   // Facilitator routing. x402ResourceServer accepts a LIST of facilitator
@@ -156,18 +156,26 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     facilitatorClients.push(new HTTPFacilitatorClient(await resolveFacilitatorConfig(network)));
   }
   // Robinhood Chain / USDG settles through the operator-configured external
-  // facilitator (ROBINHOOD_FACILITATOR_URL). Added only when the chain is
+  // facilitator (ROBINHOOD_FACILITATOR_URL), added only when the chain is
   // actually enabled, so the default USDC path is untouched. That facilitator
   // advertises only eip155:4663, so it wins that one route without disturbing
-  // CDP (Base) or PayAI (the rest). If the chain is enabled but no facilitator
-  // URL is set, we skip the client (rather than crash) — the route simply
-  // won't settle until ROBINHOOD_FACILITATOR_URL is provided.
+  // CDP (Base) or PayAI (the rest).
+  //
+  // CRITICAL: if `robinhood` is listed in PAYMENT_NETWORKS but no facilitator
+  // URL is set, DROP it from the offered networks entirely (below) — NOT just
+  // its facilitator client. Registering a scheme / advertising an `accepts`
+  // entry for a network that no facilitator can settle makes EVERY 402
+  // challenge throw, which surfaces as a 500 on ALL paid endpoints (buyers
+  // can't pay anything). Degrading robinhood to "not offered" keeps the rest
+  // of the gateway serving; it returns the moment ROBINHOOD_FACILITATOR_URL is set.
   const robinhoodEnabled = evmCaip2.includes(ROBINHOOD_CAIP2) && !!ROBINHOOD_FACILITATOR_URL;
   if (evmCaip2.includes(ROBINHOOD_CAIP2) && !ROBINHOOD_FACILITATOR_URL) {
     console.warn(
       "WARNING: PAYMENT_NETWORKS enables `robinhood` but ROBINHOOD_FACILITATOR_URL is unset — " +
-        "the Robinhood Chain/USDG option cannot settle and will be omitted. Set ROBINHOOD_FACILITATOR_URL."
+        "dropping Robinhood Chain/USDG from the offered networks (other chains unaffected). " +
+        "Set ROBINHOOD_FACILITATOR_URL to enable it."
     );
+    evmCaip2 = evmCaip2.filter((c) => c !== ROBINHOOD_CAIP2);
   }
   if (robinhoodEnabled) {
     facilitatorClients.push(new HTTPFacilitatorClient({ url: ROBINHOOD_FACILITATOR_URL }));
