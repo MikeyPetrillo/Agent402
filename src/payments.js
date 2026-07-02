@@ -152,6 +152,13 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     console.log(
       `Multi-chain facilitator routing: ${cdpConfig ? "CDP (Base + Bazaar) → PayAI (remaining chains)" : "PayAI (all chains)"}`
     );
+  } else if (network === "robinhood" && ROBINHOOD_FACILITATOR_URL) {
+    // Robinhood-ONLY server: the dedicated USDG facilitator client (pushed
+    // below via robinhoodEnabled) is the only one needed. The generic resolver
+    // would demand CDP keys or FACILITATOR_URL — neither settles chain 4663 —
+    // and crash boot. (A robinhood-only server with a generic FACILITATOR_URL
+    // and no ROBINHOOD_FACILITATOR_URL still takes the resolver path below,
+    // preserving the pre-rename behavior.)
   } else {
     facilitatorClients.push(new HTTPFacilitatorClient(await resolveFacilitatorConfig(network)));
   }
@@ -414,7 +421,8 @@ async function resolveFacilitatorConfig(network) {
     throw new Error(
       `Network is "${network}" but no facilitator is configured. ` +
         "Set CDP_API_KEY_ID + CDP_API_KEY_SECRET (free at portal.cdp.coinbase.com) " +
-        "or FACILITATOR_URL. The default x402.org facilitator only supports base-sepolia testnet."
+        "or FACILITATOR_URL. The default x402.org facilitator only supports base-sepolia testnet." +
+        (network === "robinhood" ? " For Robinhood Chain/USDG, set ROBINHOOD_FACILITATOR_URL." : "")
     );
   }
   console.log("Facilitator: default (x402.org, testnet)");

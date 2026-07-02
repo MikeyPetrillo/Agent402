@@ -147,6 +147,7 @@ jobs:
           WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
           CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
           CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
+          ROBINHOOD_FACILITATOR_URL_SECRET: ${{ secrets.ROBINHOOD_FACILITATOR_URL }}
         run: |
           # robinhood in PAYMENT_NETWORKS; ROBINHOOD_FACILITATOR_URL deliberately UNSET.
           PAYMENT_NETWORKS=base,robinhood NETWORK=base PORT=3795 \
@@ -166,6 +167,34 @@ jobs:
           [ "$code" = "402" ] || { echo "FAIL: expected 402, got $code — facilitator-less network poisoned the paywall"; fail=1; }
           case "$NETS" in *eip155:4663*) echo "FAIL: robinhood (eip155:4663) still offered with no facilitator"; fail=1;; esac
           [ "$fail" = "0" ] && echo "PASS: robinhood dropped, base 402 intact" || exit 1
+          # Second regression (2026-07-02, part two): a robinhood-ONLY server
+          # (NETWORK=robinhood, the live-settle test's config) must BOOT with
+          # only ROBINHOOD_FACILITATOR_URL — the generic resolver used to
+          # demand CDP keys / FACILITATOR_URL and crash. Runs only when the
+          # secret is available; asserts boot + a 402 offering eip155:4663.
+          if [ -n "$ROBINHOOD_FACILITATOR_URL_SECRET" ]; then
+            ROBINHOOD_FACILITATOR_URL="$ROBINHOOD_FACILITATOR_URL_SECRET" \
+              NETWORK=robinhood PAYMENT_NETWORKS=robinhood PORT=3796 \
+              node src/server.js > /tmp/reg-rh.log 2>&1 &
+            SRV2=$!
+            for i in $(seq 1 40); do curl -sf http://localhost:3796/health >/dev/null 2>&1 && break; sleep 1; done
+            code2=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3796/api/hash \
+              -H 'Content-Type: application/json' -d '{"text":"x"}')
+            HDR2=$(curl -s -D - -o /dev/null -X POST http://localhost:3796/api/hash \
+              -H 'Content-Type: application/json' -d '{"text":"x"}' \
+              | tr -d '\r' | awk -F': ' 'tolower($1)=="payment-required"{print $2}' | head -1)
+            NETS2=$(node -e 'const h=process.argv[1]||""; if(!h){console.log("[]");process.exit(0)} const d=JSON.parse(Buffer.from(h,"base64").toString("utf8")); console.log(JSON.stringify((d.accepts||[]).map(a=>a.network)))' "$HDR2")
+            kill $SRV2 2>/dev/null || true
+            echo "robinhood-only /api/hash -> HTTP $code2 | offered: $NETS2"
+            if [ "$code2" != "402" ]; then
+              echo "FAIL: robinhood-only server did not serve a 402 (boot log tail):"
+              tail -8 /tmp/reg-rh.log; exit 1
+            fi
+            case "$NETS2" in *eip155:4663*) echo "PASS: robinhood-only server boots and offers USDG on 4663";;
+              *) echo "FAIL: robinhood-only 402 does not offer eip155:4663"; exit 1;; esac
+          else
+            echo "(ROBINHOOD_FACILITATOR_URL secret unset — robinhood-only boot check skipped)"
+          fi
       - name: Load burner key
         env:
           # Provide a throwaway, low-value test wallet key as the BURNER_KEY

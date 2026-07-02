@@ -15,7 +15,7 @@
 //
 //   ROBINHOOD_FACILITATOR_URL=<facilitator-url> node scripts/rh-chain-probe.js
 const MAIN = { url: "https://rpc.mainnet.chain.robinhood.com", chainId: 4663 };
-const TEST = { url: "https://rpc.testnet.chain.robinhood.com", chainId: 46646 };
+const TEST = { url: "https://rpc.testnet.chain.robinhood.com", chainId: 46630 };
 const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
 const FACILITATOR_URL = (process.env.ROBINHOOD_FACILITATOR_URL || "").trim().replace(/\/$/, "");
 const FACILITATOR_SUPPORTED = FACILITATOR_URL ? `${FACILITATOR_URL}/supported` : "";
