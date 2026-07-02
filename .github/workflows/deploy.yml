@@ -1548,6 +1548,11 @@ jobs:
       - name: Builder Code attribution check (live 402 declaration + on-chain suffix scan)
         run: SPAN_BLOCKS=350000 MAX_TXS=80 node scripts/check-builder-attribution.js || true
 
+      # ONE-OFF forensics (remove after): who made the 16:20 UTC settlement
+      # the operator saw on the explorer while our counter stayed frozen?
+      - name: Decode the operator-reported settlement tx
+        run: TX=0xefca005e4024f90e898043dd54f9ac9ab22021732539af65a20186858bfdcb29 node scripts/check-builder-attribution.js || true
+
   deploy:
     needs: [markers, test]
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' || needs.markers.outputs.deploy == 'true'
