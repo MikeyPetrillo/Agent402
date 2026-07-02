@@ -439,6 +439,9 @@ jobs:
       - name: USDC settle-receipt network attribution (viaUSDCByNetwork)
         run: node scripts/test-stats-network.js
 
+      - name: Builder Code suffix parser (ERC-8021 round-trip vs @x402/extensions encoder)
+        run: node scripts/test-builder-attribution.js
+
       - name: LLM gateway validation (OpenAI-compat tiers, caps, env-gated 503)
         run: node scripts/test-llm-gateway.js
 
@@ -1299,6 +1302,13 @@ jobs:
               fi
             done
           fi
+
+      # Base Builder Code (ERC-8021) attribution, end-to-end: is the extension
+      # declared on live 402s (BASE_BUILDER_CODE on Railway), and do recent
+      # on-chain settlements actually carry the calldata suffix the Base
+      # dashboard indexes? Dependency-free script — no npm ci in this job.
+      - name: Builder Code attribution check (live 402 declaration + on-chain suffix scan)
+        run: node scripts/check-builder-attribution.js || true
 
       - name: Railway deployment history (which image is live, what failed)
         run: |
