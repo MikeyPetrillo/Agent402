@@ -156,6 +156,43 @@ jobs:
           path: agent-address.txt
       - name: Wait for funding, then buy from the live API
         run: MODE=run KEY_FILE=$RUNNER_TEMP/agent-key node scripts/agent-e2e.js
+      # Bisect the Base settlement outage with zero prod involvement: boot the
+      # same server code locally with the real CDP keys and buy on Base against
+      # localhost — first HEAD, then the last-known-good server code (cfcf5e3a,
+      # the 12:00 UTC image that settled the 13:54 canary). HEAD failing while
+      # known-good settles pins the regression to the commits in between; both
+      # failing points at CDP/account; both passing points at Railway egress.
+      - name: Bisect locally — HEAD vs last-known-good server code (real CDP verify)
+        if: always()
+        env:
+          CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
+          CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
+          WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
+          SOLANA_WALLET_ADDRESS: J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg
+          PAYMENT_NETWORKS: base,solana,polygon,arbitrum
+          NETWORK: base
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+        run: |
+          printf '%s' "$BURNER_KEY" > /tmp/bisect-key
+          buy_once () {
+            local label="$1"
+            PORT=3777 node src/server.js > "/tmp/server-$label.log" 2>&1 &
+            local SRV=$!
+            for i in $(seq 1 60); do curl -sf http://localhost:3777/health >/dev/null 2>&1 && break; sleep 1; done
+            echo "=== [$label] buying on Base via localhost ==="
+            TARGET_URL=http://localhost:3777 KEY_FILE=/tmp/bisect-key MODE=run node scripts/agent-e2e.js 2>&1 | tail -8 || true
+            kill $SRV 2>/dev/null || true
+            sleep 2
+            echo "=== [$label] server log (payment lines) ==="
+            grep -viE '\[tool-error\]' "/tmp/server-$label.log" | grep -iE 'facilitator|x402|error|fail|verify|settle|warn' | tail -30 || true
+            echo
+          }
+          buy_once head
+          echo "──────────────────────────────────────────"
+          git checkout cfcf5e3a -- src/
+          buy_once known-good
+          git checkout HEAD -- src/
+          shred -u /tmp/bisect-key 2>/dev/null || rm -f /tmp/bisect-key
       - name: Shred burner key
         if: always()
         run: |
