@@ -156,14 +156,18 @@ jobs:
           path: agent-address.txt
       - name: Wait for funding, then buy from the live API
         run: MODE=run KEY_FILE=$RUNNER_TEMP/agent-key node scripts/agent-e2e.js
-      # Isolate the Base settlement outage: boot the server locally and buy
-      # on Base against localhost through the CDP facilitator (same key-id
-      # fallback the deploy job uses). A prior run proved code + payloads +
-      # clients are fine — 55/60 settled when the local boot fell back to
-      # PayAI for Base. If the CDP path fails from a GitHub runner too, CDP
-      # is rejecting our credentials/account — not Railway, not our code.
-      # If it settles, prod's Railway CDP env is the problem.
-      - name: Local CDP-path buy (isolates CDP-account vs Railway-env)
+      # Fresh-buyer CDP test: every CDP verification failure today came from
+      # ONE buyer wallet (the long-lived test burner), which fired hundreds of
+      # rapid identical purchases before the failures began — the leading
+      # theory is CDP risk-flagged that BUYER, not the seller. Test with a
+      # wallet that has zero history: generate it inside this runner (the key
+      # never leaves the job), fund it gaslessly from the old burner through
+      # our own paywall (old burner buys from a local server whose payTo IS
+      # the fresh wallet — PayAI settles), then the fresh wallet buys through
+      # a CDP-configured server. Settles → CDP flagged the old burner: rotate
+      # BURNER_KEY and restore CDP on Railway. Fails → buyer conclusively
+      # excluded.
+      - name: Fresh-buyer CDP test (was the old burner risk-flagged?)
         if: always()
         env:
           CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID || 'ff16e708-0590-4a24-8a17-b0e978143f68' }}
@@ -174,38 +178,41 @@ jobs:
           NETWORK: base
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
         run: |
-          printf '%s' "$BURNER_KEY" > /tmp/bisect-key
-          PORT=3777 node src/server.js > /tmp/server-cdp.log 2>&1 &
+          printf '%s' "$BURNER_KEY" > /tmp/old-key
+          node --input-type=module -e '
+            import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+            import { writeFileSync } from "node:fs";
+            const k = generatePrivateKey();
+            writeFileSync("/tmp/fresh-key", k, { mode: 0o600 });
+            writeFileSync("/tmp/fresh-address", privateKeyToAccount(k).address);
+          '
+          FRESH=$(cat /tmp/fresh-address)
+          echo "fresh buyer (zero history): $FRESH"
+
+          # Phase 1 — fund the fresh wallet gaslessly: the OLD burner buys the
+          # verification catalog from a local server whose payTo is the FRESH
+          # wallet, settled by PayAI (proven working). ~$0.10 lands on it.
+          echo "=== phase 1: fund $FRESH from the old burner via PayAI ==="
+          WALLET_ADDRESS="$FRESH" CDP_API_KEY_ID= CDP_API_KEY_SECRET= PORT=3777 node src/server.js > /tmp/server-fund.log 2>&1 &
           SRV=$!
           for i in $(seq 1 60); do curl -sf http://localhost:3777/health >/dev/null 2>&1 && break; sleep 1; done
-          echo "=== boot facilitator lines (must say CDP first) ==="
-          grep -iE 'facilitator|multi-chain|accepting usdc' /tmp/server-cdp.log || true
-          echo
-          echo "=== buying on Base via localhost through CDP (@x402 2.16, lockfile) ==="
-          TARGET_URL=http://localhost:3777 KEY_FILE=/tmp/bisect-key MODE=run node scripts/agent-e2e.js 2>&1 | tail -8 || true
+          TARGET_URL=http://localhost:3777 KEY_FILE=/tmp/old-key MODE=run node scripts/agent-e2e.js 2>&1 | tail -4 || true
           kill $SRV 2>/dev/null || true
           sleep 2
-          echo "=== server log 2.16 (payment lines) ==="
-          grep -viE '\[tool-error\]' /tmp/server-cdp.log | grep -iE 'facilitator|x402|error|fail|verify|settle|warn' | grep -vi 'extension responses' | tail -20 || true
-          echo
-          # CDP rejected every 2.16-server buy from two networks while PayAI
-          # settles the same payloads — test whether CDP now requires the
-          # 2.17-era server behavior (published June 26; our lockfile pins
-          # 2.16.0 from June 19).
-          echo "=== upgrading server SDK to @x402 2.17 and retrying ==="
-          npm install --no-save @x402/express@2.17.0 @x402/evm@2.17.0 @x402/svm@2.17.0 @x402/core@2.17.0 @x402/extensions@2.17.0 >/dev/null 2>&1 \
-            || npm install --no-save @x402/express@2.17.0 @x402/evm@2.17.0 @x402/svm@2.17.0 >/dev/null
-          PORT=3778 node src/server.js > /tmp/server-cdp217.log 2>&1 &
+
+          # Phase 2 — the fresh wallet buys through a CDP-configured server
+          # (payTo = the real revenue wallet, CDP first for Base).
+          echo "=== phase 2: fresh wallet buys through CDP ==="
+          PORT=3778 node src/server.js > /tmp/server-cdp.log 2>&1 &
           SRV2=$!
           for i in $(seq 1 60); do curl -sf http://localhost:3778/health >/dev/null 2>&1 && break; sleep 1; done
-          grep -iE 'facilitator|multi-chain' /tmp/server-cdp217.log || true
-          echo "=== buying on Base via localhost through CDP (@x402 2.17) ==="
-          TARGET_URL=http://localhost:3778 KEY_FILE=/tmp/bisect-key MODE=run node scripts/agent-e2e.js 2>&1 | tail -8 || true
+          grep -iE 'facilitator|multi-chain' /tmp/server-cdp.log || true
+          TARGET_URL=http://localhost:3778 KEY_FILE=/tmp/fresh-key MODE=run node scripts/agent-e2e.js 2>&1 | tail -8 || true
           kill $SRV2 2>/dev/null || true
           sleep 2
-          echo "=== server log 2.17 (payment lines) ==="
-          grep -viE '\[tool-error\]' /tmp/server-cdp217.log | grep -iE 'facilitator|x402|error|fail|verify|settle|warn' | grep -vi 'extension responses' | tail -20 || true
-          shred -u /tmp/bisect-key 2>/dev/null || rm -f /tmp/bisect-key
+          echo "=== CDP server log (payment lines) ==="
+          grep -viE '\[tool-error\]' /tmp/server-cdp.log | grep -iE 'facilitator|x402|error|fail|verify|settle|warn' | grep -vi 'extension responses' | tail -20 || true
+          shred -u /tmp/fresh-key /tmp/old-key 2>/dev/null || rm -f /tmp/fresh-key /tmp/old-key
       - name: Shred burner key
         if: always()
         run: |
