@@ -1331,11 +1331,19 @@ jobs:
           # Runtime logs unconditionally: settlement failures (facilitator
           # verify/settle errors, sync warnings) only surface here — a
           # SUCCESS deployment can still be failing every USDC purchase.
+          # Two views: a raw tail, and a payment/boot-line filter that
+          # survives tool-error floods (a sweep's 400s drown a plain tail).
           if [ -n "$LATEST_ID" ]; then
-            echo "=== runtime logs (tail, latest deployment) ==="
-            jq -n --arg d "$LATEST_ID" '{query:"query($d:String!) { deploymentLogs(deploymentId: $d, limit: 200) { timestamp message } }", variables:{d:$d}}' | gql \
-              | jq -r '.data.deploymentLogs[]? | "\(.timestamp)  \(.message)"' | tail -200 || true
+            jq -n --arg d "$LATEST_ID" '{query:"query($d:String!) { deploymentLogs(deploymentId: $d, limit: 5000) { timestamp message } }", variables:{d:$d}}' | gql \
+              | jq -r '.data.deploymentLogs[]? | "\(.timestamp)  \(.message)"' > /tmp/runtime.log || true
+            echo "=== runtime logs (raw tail, latest deployment) ==="
+            tail -40 /tmp/runtime.log || true
+            echo "=== runtime logs — payment/facilitator/boot lines ==="
+            grep -viE '\[tool-error\]' /tmp/runtime.log \
+              | grep -iE 'facilitator|x402 payments|multi-chain|accepting usdc|builder code|solana payto|warn|error|fail|settle|verify|listening' \
+              | tail -80 || echo "(no matching lines)"
           fi
+
 
       - name: Read the agent402.app marketplace API docs (read-only)
         env:
