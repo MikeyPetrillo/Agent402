@@ -72,7 +72,27 @@ try {
     ok(title.toLowerCase().includes(titleSubstr.toLowerCase()), `${path} title contains '${titleSubstr}' (got '${title}')`);
   }
 
-  console.log(`\n${pass} passed (${PAGES.length} pages)`);
+  // The global error handler's HTML branch must itself be renderable. It
+  // once referenced chrome.js exports that server.js never imported, so any
+  // thrown error on an HTML route made the handler throw ReferenceError and
+  // fall through to Express's default handler — which dumps `err.stack`
+  // (absolute paths, module layout) unless NODE_ENV=production. Force the
+  // path deterministically: an oversized JSON body on an HTML-accepting,
+  // non-/api route makes express.json throw entity.too.large (413).
+  {
+    const res = await fetch(`${BASE}/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/html" },
+      body: `{"pad":"${"x".repeat(200 * 1024)}"}`,
+    });
+    ok(res.status === 413, `error handler HTML branch → 413 (got ${res.status})`);
+    const body = await res.text();
+    ok((res.headers.get("content-type") || "").includes("text/html"), "error page is text/html");
+    ok(body.includes("<title>") && body.includes("413"), "error page renders the status template");
+    ok(!/at .*\/src\/server\.js|ReferenceError|node_modules/.test(body), "error page leaks no stack frames or paths");
+  }
+
+  console.log(`\n${pass} passed (${PAGES.length} pages + error template)`);
   proc.kill("SIGKILL");
   process.exit(0);
 } catch (e) {
