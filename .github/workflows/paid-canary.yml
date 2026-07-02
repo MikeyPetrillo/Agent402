@@ -43,9 +43,10 @@ jobs:
             echo "result=noconfig" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "::add-mask::$BURNER_KEY"
-          # Optional Solana leg — buys one $0.001 tool paying USDC on Solana.
-          # Informational (warns, never pages); silently skipped when the
-          # SOLANA_BURNER_KEY secret is unset.
+          # Optional Solana leg — buys the $0.05 decode-blob skill pack paying
+          # USDC on Solana (sized to clear explorer dust filters; deterministic,
+          # pure-CPU, no upstream cost). Informational (warns, never pages);
+          # silently skipped when the SOLANA_BURNER_KEY secret is unset.
           [ -n "$SOLANA_BURNER_KEY" ] && echo "::add-mask::$SOLANA_BURNER_KEY"
           if node scripts/paid-canary.js; then echo "result=ok" >> "$GITHUB_OUTPUT"; else echo "result=fail" >> "$GITHUB_OUTPUT"; fi
       - name: Alert on failure / clear on recovery
