@@ -78,11 +78,26 @@ export function enabledNetworks(network) {
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
+  // The primary network must be known — it carries the Bazaar resource and is
+  // what the facilitator must settle — so a bad NETWORK is a hard error.
+  if (!NETWORKS[network]) {
+    throw new Error(`Unsupported primary network "${network}". Known: ${Object.keys(NETWORKS).join(", ")}`);
+  }
   const names = [network, ...requested.filter((n) => n !== network)];
   const seen = new Set();
   const out = [];
   for (const n of names) {
-    if (!NETWORKS[n]) throw new Error(`Unsupported network "${n}". Known: ${Object.keys(NETWORKS).join(", ")}`);
+    // An UNKNOWN extra network in PAYMENT_NETWORKS is skipped with a warning
+    // rather than thrown — otherwise a typo, or adding a chain to the env var
+    // before the code that knows it is the running build (e.g. `robinhood`
+    // before chain 4663 shipped), would crash boot and take down ALL payments.
+    // Degrade to the known networks instead; the missing one just isn't offered.
+    if (!NETWORKS[n]) {
+      console.warn(
+        `Ignoring unknown PAYMENT_NETWORKS entry "${n}" — not offered. Known: ${Object.keys(NETWORKS).join(", ")}`
+      );
+      continue;
+    }
     if (!seen.has(n)) {
       seen.add(n);
       out.push(n);
