@@ -30,8 +30,14 @@ try {
   const supported = await client.getSupported();
   console.log(`  getSupported OK in ${Date.now() - t0}ms`);
   const kinds = supported?.kinds || [];
-  console.log(`  kinds: ${kinds.length}; base supported: ${kinds.some((k) => String(k.network).includes("8453"))}`);
-  console.log(`  ${JSON.stringify(kinds.slice(0, 6))}`);
+  console.log(`  total kinds: ${kinds.length}`);
+  // Print EVERY kind so we can see exactly which (version, scheme, network)
+  // combos CDP will verify.
+  for (const k of kinds) console.log(`    v${k.x402Version} ${k.scheme} ${k.network}`);
+  const has = (v, net) => kinds.some((k) => k.x402Version === v && k.scheme === "exact" && String(k.network) === net);
+  console.log(`  >>> CDP verifies (v2 exact eip155:8453 / Base MAINNET): ${has(2, "eip155:8453")}`);
+  console.log(`  >>> CDP verifies (v1 exact base / Base MAINNET v1):     ${has(1, "base")}`);
+  console.log(`  >>> CDP verifies (v2 exact eip155:84532 / Base SEPOLIA): ${has(2, "eip155:84532")}`);
 } catch (e) {
   console.log("  getSupported THREW:");
   dump("error", e);
