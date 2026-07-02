@@ -200,17 +200,33 @@ Solana payTo, so a re-crawl also refreshes any stale pre-Solana listing.
 
 ---
 
-## 7. awesome-x402 (xpaysh/awesome-x402) — STALE ENTRY, needs Solana
+## 7. awesome-x402 (xpaysh/awesome-x402) — STALE ENTRY, needs Solana + Robinhood
 
 We are already listed, but the entry predates Solana support ("USDC on
-Base/Polygon/Arbitrum"). PR a one-word-class fix:
+Base/Polygon/Arbitrum") and the USDG rail. PR a one-word-class fix:
 
 **Steps**
 1. Fork https://github.com/xpaysh/awesome-x402, find the Agent402 entry.
-2. Update the chain list to "USDC on Base, Solana, Polygon, Arbitrum" and,
-   if the entry lists capabilities, append "SOLANA_AGENT_KEY buyer support in
-   agent402-mcp 0.10.0".
-3. PR title: `Update Agent402 entry — Solana settlement + SVM buyer support`
+2. Update the chain list to "USDC on Base, Solana, Polygon, Arbitrum — plus
+   USDG on Robinhood Chain" and, if the entry lists capabilities, append
+   "SOLANA_AGENT_KEY buyer support in agent402-mcp".
+3. PR title: `Update Agent402 entry — Solana + Robinhood Chain (USDG) settlement`
+
+---
+
+## 7b. Robinhood Chain visibility (no directory yet — mainnet is days old)
+
+There is no public Robinhood Chain ecosystem directory to submit to yet.
+Until one exists, the discoverable surfaces are:
+
+1. **On-chain identity**: Blockscout (robinhoodchain.blockscout.com) accepts
+   public name tags for addresses — request a tag for the revenue wallet so
+   settlements attribute to "Agent402.Tools".
+2. **The 402 itself**: every paid route already advertises eip155:4663 in its
+   `accepts`, so any Robinhood-side indexer that crawls x402 sellers will find
+   us with zero extra work.
+3. **First-mover proof**: keep a link to a real USDG settlement tx handy for
+   any ecosystem-page submission the moment Robinhood opens one.
 
 ---
 
