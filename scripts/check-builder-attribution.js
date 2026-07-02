@@ -130,7 +130,39 @@ async function rpc(method, params) {
   throw new Error(`All RPCs failed for ${method}: ${lastErr?.message}`);
 }
 
+/** TX=<hash> mode: decode ONE Base transaction — who sent it, what it called,
+ *  whether it's an x402 settlement (transferWithAuthorization) and for whom,
+ *  and what builder codes ride the calldata suffix. Forensics for "this hash
+ *  settled — through WHAT path?" questions. */
+async function decodeOneTx(hash) {
+  const tx = await rpc("eth_getTransactionByHash", [hash]);
+  if (!tx) { console.log(JSON.stringify({ hash, found: false })); return; }
+  const receipt = await rpc("eth_getTransactionReceipt", [hash]);
+  const block = await rpc("eth_getBlockByNumber", [tx.blockNumber, false]);
+  const input = (tx.input || "").toLowerCase();
+  const transfers = (receipt?.logs || [])
+    .filter((l) => l.address?.toLowerCase() === USDC && l.topics?.[0] === TRANSFER)
+    .map((l) => ({
+      from: "0x" + l.topics[1].slice(26),
+      to: "0x" + l.topics[2].slice(26),
+      usd: parseInt(l.data, 16) / 1e6,
+    }));
+  console.log(JSON.stringify({
+    hash,
+    when: new Date(parseInt(block.timestamp, 16) * 1000).toISOString(),
+    status: receipt?.status === "0x1" ? "success" : "failed",
+    txFrom: tx.from,
+    txTo: tx.to,
+    selector: input.slice(0, 10),
+    isUsdcContractCall: tx.to?.toLowerCase() === USDC,
+    builderCodes: parseBuilderSuffix(input) ?? null,
+    usdcTransfers: transfers,
+    paysRevenueWallet: transfers.some((t) => t.to.toLowerCase() === WALLET),
+  }, null, 2));
+}
+
 async function main() {
+  if (process.env.TX) { await decodeOneTx(process.env.TX.toLowerCase()); return; }
   // ---- 1. CONFIG: health flag + live 402 declaration -------------------------
   let healthFlag = null;
   try {
