@@ -44,7 +44,7 @@ const EVM_NETWORKS = {
   polygon: {
     usdc: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
     rpcs: ["https://polygon-rpc.com", "https://polygon-bor-rpc.publicnode.com", "https://polygon.llamarpc.com", "https://polygon.drpc.org"],
-    spanBlocks: 12000, // ~7h at 2.1s blocks
+    spanBlocks: 9500, // ~5.5h at 2.1s blocks — free-tier RPCs cap getLogs ranges at 10k blocks
   },
   arbitrum: {
     usdc: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",

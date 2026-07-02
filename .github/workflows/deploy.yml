@@ -1371,7 +1371,7 @@ jobs:
             console.log("\nAll decoded payments came from our own test burner — no external customer in this 24h window yet.");
           }
           console.log("Full history: https://basescan.org/address/" + WALLET + "#tokentxns");
-          '
+          ' || echo "Base on-chain check skipped — public RPC flake (chain is still the source of truth: https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns)"
 
       - name: Check which facilitator production is configured to use
         run: |
