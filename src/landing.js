@@ -95,7 +95,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "url": "${baseUrl}",
       "founder": { "@type": "Person", "name": "Mike Petrillo", "url": "https://github.com/MikeyPetrillo" },
       "sameAs": ["https://github.com/MikeyPetrillo", "https://github.com/MikeyPetrillo/Agent402", "https://x.com/Agent402Tools", "https://www.npmjs.com/package/agent402-mcp", "https://www.npmjs.com/package/agent402-client", "https://www.npmjs.com/package/agent402-tollbooth", "https://www.npmjs.com/package/agent402-openai-tools", "https://www.npmjs.com/package/agent402-anthropic-tools", "https://www.npmjs.com/package/agent402-ai-sdk", "https://www.npmjs.com/package/agent402-langchain", "https://www.npmjs.com/package/agent402-llamaindex", "https://www.npmjs.com/package/agent402-google-adk", "https://www.npmjs.com/package/agent402-strands"],
-      "description": "Machine-to-machine payments for AI agents: ${count} pay-per-call web tools settled in USDC on Base, Solana, Polygon & Arbitrum via the x402 protocol, or free with proof-of-work."
+      "description": "Machine-to-machine payments for AI agents: ${count} pay-per-call web tools settled in USDC on Base, Solana, Polygon & Arbitrum — plus USDG on Robinhood Chain — via the x402 protocol, or free with proof-of-work."
     },
     {
       "@type": "WebSite",
@@ -109,7 +109,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "name": "Agent402.Tools",
       "url": "${baseUrl}",
       "provider": { "@id": "${baseUrl}/#org" },
-      "description": "${count} pay-per-call tools for AI agents via the x402 payment protocol (USDC on Base, Solana, Polygon & Arbitrum): live web search and web answers with citations, headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed memory & coordination, a non-custodial multi-chain x402 payment toolkit (quote/verify/balance/gas/transfer-authorization/ENS), image transforms, live financial data (stock quotes, history, earnings) and crypto market data (CoinGecko), macro time-series (FRED, Treasury, ECB FX, World Bank, yield curve), SEC EDGAR filings (10-K/10-Q, XBRL, insider, 13F, IPO calendar), live currency & product data, ${count - freeCount > 0 ? "data conversion, " : ""}unit conversions, validation, and more.",
+      "description": "${count} pay-per-call tools for AI agents via the x402 payment protocol (USDC on Base, Solana, Polygon & Arbitrum; USDG on Robinhood Chain): live web search and web answers with citations, headless-browser rendering, screenshots, PDF text extraction, URL-to-markdown, wallet-keyed memory & coordination, a non-custodial multi-chain x402 payment toolkit (quote/verify/balance/gas/transfer-authorization/ENS), image transforms, live financial data (stock quotes, history, earnings) and crypto market data (CoinGecko), macro time-series (FRED, Treasury, ECB FX, World Bank, yield curve), SEC EDGAR filings (10-K/10-Q, XBRL, insider, 13F, IPO calendar), live currency & product data, ${count - freeCount > 0 ? "data conversion, " : ""}unit conversions, validation, and more.",
       "documentation": "${baseUrl}/llms.txt",
       "offers": { "@type": "AggregateOffer", "offerCount": "${count}", "lowPrice": "0.001", "highPrice": "0.02", "priceCurrency": "USD", "description": "Per-call micropayments in USDC via x402, or free with proof-of-work" }
     },
@@ -131,7 +131,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "name": "Agent402 on Base",
       "applicationCategory": "BlockchainApplication",
       "operatingSystem": "Base (EVM, chain ID 8453), Solana, Polygon (EVM, chain ID 137), Arbitrum (EVM, chain ID 42161)",
-      "description": "x402 pay-per-call agent tools settling in USDC on Base, Solana, Polygon & Arbitrum. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored on EVM chains — callers need only USDC.",
+      "description": "x402 pay-per-call agent tools settling in USDC on Base, Solana, Polygon & Arbitrum — plus USDG on Robinhood Chain. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored on EVM chains — callers need only USDC.",
       "url": "${baseUrl}",
       "provider": { "@id": "${baseUrl}/#org" },
       "offers": { "@type": "AggregateOffer", "priceCurrency": "USD", "lowPrice": "0.001", "highPrice": "0.02" }
@@ -275,7 +275,7 @@ ${renderHeader("/", [{ href: "#connect", label: "Connect" }])}
     <div>
       <span class="badge"><span class="dot"></span> open source · <b>x402</b> · ${count} tools · free tier · no API keys</span>
       <h1>Where agents pay agents<span class="x">.</span></h1>
-      <p class="sub"><b>Machine-to-machine payments for AI agents — over <a href="https://x402.org" rel="noopener">x402</a>.</b> ${count} deterministic, pay-per-call tools your agent can use mid-task: extract PDFs, search the web, geocode, fetch SEC filings, render JavaScript pages, pull stock quotes &amp; macro data. <b>Free to try</b> via in-process proof-of-work; <b>USDC on Base, Solana, Polygon &amp; Arbitrum</b> from $0.001/call when you scale. No signup, no API keys — <b>the wallet is the identity</b>.</p>
+      <p class="sub"><b>Machine-to-machine payments for AI agents — over <a href="https://x402.org" rel="noopener">x402</a>.</b> ${count} deterministic, pay-per-call tools your agent can use mid-task: extract PDFs, search the web, geocode, fetch SEC filings, render JavaScript pages, pull stock quotes &amp; macro data. <b>Free to try</b> via in-process proof-of-work; <b>USDC on Base, Solana, Polygon &amp; Arbitrum</b> (+ USDG on Robinhood Chain) from $0.001/call when you scale. No signup, no API keys — <b>the wallet is the identity</b>.</p>
       <div class="ctas">
         <a class="cta primary" href="#connect">Add to Claude in 60 seconds →</a>
         <a class="cta ghost" href="/tools">Browse all ${count} tools</a>

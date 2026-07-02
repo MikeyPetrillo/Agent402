@@ -9,7 +9,7 @@
 3. Client signs a USDC `transferWithAuthorization` from its own wallet (no gas needed — the facilitator sponsors it) and retries with the payment header.
 4. Facilitator verifies + settles on-chain; the server serves the result. End-to-end this is seconds.
 
-The payer needs **only USDC on Base, Solana, Polygon, or Arbitrum** — no ETH, no account, no API key.
+The payer needs **only USDC on Base, Solana, Polygon, or Arbitrum** — no ETH, no account, no API key. (Sellers can also settle **USDG on Robinhood Chain** when the operator enables it.)
 
 ## JavaScript (x402 v2 SDKs)
 

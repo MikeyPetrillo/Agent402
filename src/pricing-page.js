@@ -141,7 +141,7 @@ ${renderHeader("/pricing")}
 
 <div class="hero">
   <h1>Flat per-call pricing, no tiers, no subscriptions</h1>
-  <p>Every tool has a flat price. Pay per call in USDC on Base, Solana, Polygon, or Arbitrum via the x402 protocol. No accounts, no API keys, no monthly bills.</p>
+  <p>Every tool has a flat price. Pay per call in USDC on Base, Solana, Polygon, or Arbitrum — plus USDG on Robinhood Chain — via the x402 protocol. No accounts, no API keys, no monthly bills.</p>
 </div>
 
 <div class="tiers">

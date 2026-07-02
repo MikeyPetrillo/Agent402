@@ -238,7 +238,7 @@ export function ledgerShell({ title, description, canonical, baseUrl, activePath
     name: "Agent402 on Base",
     applicationCategory: "BlockchainApplication",
     operatingSystem: "Base (EVM, chain ID 8453), Solana, Polygon (EVM, chain ID 137), Arbitrum (EVM, chain ID 42161)",
-    description: "x402 pay-per-call agent tools settling in USDC on Base, Solana, Polygon & Arbitrum. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored on EVM chains — callers need only USDC.",
+    description: "x402 pay-per-call agent tools settling in USDC on Base, Solana, Polygon & Arbitrum — plus USDG on Robinhood Chain. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored on EVM chains — callers need only USDC.",
     url: baseUrl,
   };
   const allLd = [baseEcosystemLd, ...(jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [])];

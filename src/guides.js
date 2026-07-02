@@ -178,7 +178,7 @@ for the full API.
     slug: "sell-your-api-over-x402",
     title: "Sell your API to AI agents over x402 — no billing system required",
     description:
-      "Put a per-call USDC paywall in front of any HTTP endpoint with the x402 protocol: quote over HTTP 402, settle on Base through a facilitator, and get discovered by agents — no accounts, invoices, or payment forms.",
+      "Put a per-call USDC paywall in front of any HTTP endpoint with the x402 protocol: quote over HTTP 402, settle on Base (or Solana, Polygon, Arbitrum — even USDG on Robinhood Chain) through a facilitator, and get discovered by agents — no accounts, invoices, or payment forms.",
     md: `
 If you run an API, the next wave of customers can't sign up for it. Autonomous
 agents don't have credit cards, can't pass captchas, and won't wait for a sales
@@ -244,14 +244,14 @@ on-chain customer detector — is in
     slug: "x402-payments-toolkit",
     title: "Let your agent pay anyone: the non-custodial x402 payments toolkit",
     description:
-      "Discover a 402 quote, resolve an ENS recipient, check USDC balance and gas, build the EIP-3009 authorization your agent signs with its own key, and verify the settlement on-chain — across Base, Polygon, Arbitrum, Optimism, and Ethereum. Agent402 never touches funds.",
+      "Discover a 402 quote, resolve an ENS recipient, check USDC balance and gas, build the EIP-3009 authorization your agent signs with its own key, and verify the settlement on-chain — across Base, Polygon, Arbitrum, Optimism, Ethereum, and Robinhood Chain. Agent402 never touches funds.",
     md: `
 An autonomous agent that can *pay* is far more useful than one that can't — but
 you don't want a middleman holding your money. Agent402's payments tools are
 **non-custodial**: they help an agent move its *own* USDC with its *own* key.
 Agent402 never holds, signs, or sends funds — it decodes quotes, reads public
 chain state, and builds the authorization *you* sign. Everything below works on
-**Base, Polygon, Arbitrum, Optimism, and Ethereum** (\`network\` param, default
+**Base, Polygon, Arbitrum, Optimism, Ethereum, and Robinhood Chain** (\`network\` param, default
 base), and needs no API key.
 
 ## 1. What does this endpoint cost? — \`/api/x402-quote\`

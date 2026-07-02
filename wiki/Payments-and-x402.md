@@ -4,7 +4,7 @@ Agent402's payments toolkit is **non-custodial**: it helps an agent move its
 *own* USDC with its *own* key. Agent402 never holds, receives, signs, or sends
 funds — it decodes quotes, reads public chain state, and builds the
 authorization you sign. All tools are keyless (public RPC) and work across
-**Base, Polygon, Arbitrum, Optimism, and Ethereum** (`network` param, default
+**Base, Polygon, Arbitrum, Optimism, Ethereum, and Robinhood Chain** (`network` param, default
 `base`).
 
 Walkthrough with runnable examples: [the x402 payments guide](https://agent402.tools/guides/x402-payments-toolkit).

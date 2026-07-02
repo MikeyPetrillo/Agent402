@@ -10,7 +10,7 @@ export const CATEGORIES = {
   memory: { label: "Agent memory & coordination", blurb: "The stateful layer a stateless agent can't build for itself: durable wallet-keyed KV with TTL, atomic counters/locks, shared namespaces other agents can reach (grants), a tamper-evident audit log, and similarity recall. The payment is the identity — no signup." },
   network: { label: "Network & domains", blurb: "DNS, TLS certificates, WHOIS/RDAP, uptime checks, robots.txt and sitemaps." },
   data: { label: "Live public data", blurb: "Keyless real-time government and market data: dataset search across data.gov, NWS weather alerts, USGS earthquakes, currency rates, barcode product lookup." },
-  payments: { label: "Payments & x402", blurb: "Non-custodial x402 tooling: decode HTTP 402 quotes, verify on-chain USDC settlements, read balances, tx status and gas on Base, and build EIP-3009 transfer authorizations. The agent signs with its own key — Agent402 never touches funds." },
+  payments: { label: "Payments & x402", blurb: "Non-custodial x402 tooling: decode HTTP 402 quotes, verify on-chain USDC settlements, read balances, tx status and gas across Base, Polygon, Arbitrum, Optimism, Ethereum, and Robinhood Chain, and build EIP-3009 transfer authorizations. The agent signs with its own key — Agent402 never touches funds." },
   conversion: { label: "Data conversion", blurb: "JSON ⇄ CSV/YAML/XML, markdown ⇄ HTML, diffs and queries — formats agents juggle constantly." },
   text: { label: "Text processing", blurb: "Slugs, case conversion, diffs, regex, keywords, token estimates, edit distance, readability, PII redaction." },
   math: { label: "Math & finance", blurb: "Safe expression calculator, statistics, unit/percentage/number formatting, CIDR subnets, compound interest and loan math." },
@@ -195,7 +195,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
         "@type": "Offer",
         price: tool.price.replace("$", ""),
         priceCurrency: "USD",
-        description: `${tool.price} per call, paid in USDC on Base, Solana, Polygon, or Arbitrum via the x402 protocol. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
+        description: `${tool.price} per call, paid in USDC on Base, Solana, Polygon, or Arbitrum (or USDG on Robinhood Chain) via the x402 protocol. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
       },
     },
     {
@@ -505,7 +505,7 @@ export function faqPage(baseUrl) {
   const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
   <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;">FAQ</div>
   <h1 style="font-family:var(--font-body);font-weight:800;font-size:42px;line-height:.96;letter-spacing:-.03em;margin-bottom:14px;">Frequently asked questions</h1>
-  <p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;margin-bottom:32px;">Agent402 is the open-source, self-hostable x402 + MCP server: pay-per-call web tools for AI agents, free via proof-of-work or paid in USDC on Base, Solana, Polygon & Arbitrum.</p>
+  <p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;margin-bottom:32px;">Agent402 is the open-source, self-hostable x402 + MCP server: pay-per-call web tools for AI agents, free via proof-of-work or paid in USDC on Base, Solana, Polygon & Arbitrum — plus USDG on Robinhood Chain.</p>
   ${items}
 </div>
 ${ledgerFooterCompact()}`;
@@ -529,7 +529,7 @@ export function openapiSpec(baseUrl, catalog) {
     const op = {
       operationId: `${tool.slug}${method === "GET" ? "Get" : ""}`,
       summary: `${tool.name} (${tool.price}/call via x402)`,
-      description: `${tool.description}\n\nPrice: ${tool.price} per call, paid in USDC on Base, Solana, Polygon, or Arbitrum via the x402 protocol. Unpaid requests receive HTTP 402 with payment requirements; any x402 v2 client can pay and retry automatically. Docs: ${baseUrl}/tools/${tool.slug}`,
+      description: `${tool.description}\n\nPrice: ${tool.price} per call, paid in USDC on Base, Solana, Polygon, or Arbitrum (or USDG on Robinhood Chain) via the x402 protocol. Unpaid requests receive HTTP 402 with payment requirements; any x402 v2 client can pay and retry automatically. Docs: ${baseUrl}/tools/${tool.slug}`,
       tags: [tool.category],
       responses: {
         200: {
@@ -623,7 +623,7 @@ export function openapiSpec(baseUrl, catalog) {
       title: "Agent402 — the open-source, self-hostable x402 server for AI agents",
       version: "2.0.0",
       description:
-        "The open-source, self-hostable x402 server: hundreds of machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) — the whole catalog is open and runnable yourself. Every endpoint is paid per call in USDC on Base, Solana, Polygon, or Arbitrum via x402 (no signup, no API keys — the first request returns HTTP 402, an x402 client pays and retries) or free with proof-of-work. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.",
+        "The open-source, self-hostable x402 server: hundreds of machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) — the whole catalog is open and runnable yourself. Every endpoint is paid per call in USDC on Base, Solana, Polygon, or Arbitrum — or USDG on Robinhood Chain — via x402 (no signup, no API keys — the first request returns HTTP 402, an x402 client pays and retries) or free with proof-of-work. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.",
       contact: { url: baseUrl },
     },
     servers: [{ url: baseUrl }],

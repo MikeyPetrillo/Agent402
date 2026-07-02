@@ -74,12 +74,12 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     ...(process.env.BASE_BUILDER_CODE ? { builderCode: process.env.BASE_BUILDER_CODE } : {}),
     baseApp: "6a3dd86ca341d86b910769fb",
     ecosystem: {
-      chains: ["Base", "Solana", "Polygon", "Arbitrum"],
+      chains: ["Base", "Solana", "Polygon", "Arbitrum", "Robinhood Chain"],
       primaryChain: "Base",
       primaryChainId: 8453,
       currency: "USDC",
       protocol: "x402",
-      note: "x402 settlements use USDC on Base, Solana, Polygon, or Arbitrum. Gas is sponsored by the facilitator on EVM chains — callers need only USDC.",
+      note: "x402 settlements use USDC on Base, Solana, Polygon, or Arbitrum — plus USDG (Global Dollar) on Robinhood Chain. Gas is sponsored by the facilitator on EVM chains — callers need only the stablecoin.",
     },
     // Positive, machine-readable summary of what Agent402 offers: open and
     // self-hostable, the whole catalog in one integration, and it owns the
