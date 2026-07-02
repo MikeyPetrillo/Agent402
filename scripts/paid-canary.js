@@ -215,7 +215,17 @@ async function main() {
       const body = await res.json().catch(() => ({}));
       const expected = createHash("sha256").update("solana canary").digest("hex");
       if (res.status === 200 && body.hex === expected) {
-        console.log(`\nOK    solana     /api/hash  → settled $0.001 USDC on Solana (payer ${signer.address})`);
+        // Print the on-chain proof, not just the claim: the settle receipt
+        // (PAYMENT-RESPONSE header, v2; X-PAYMENT-RESPONSE, v1) carries the
+        // transaction signature — a clickable solscan link beats "trust the
+        // facilitator" (and dust-sized transfers are hidden by default in
+        // explorer transfer views, so the signature is the reliable check).
+        let tx = null;
+        const receiptHdr = res.headers.get("payment-response") || res.headers.get("x-payment-response");
+        if (receiptHdr) {
+          try { tx = JSON.parse(Buffer.from(receiptHdr, "base64").toString("utf8"))?.transaction || null; } catch { /* best-effort */ }
+        }
+        console.log(`\nOK    solana     /api/hash  → settled $0.001 USDC on Solana (payer ${signer.address})${tx ? `\n      tx: https://solscan.io/tx/${tx}` : "\n      (no settle receipt header found — settlement claimed by 200 only)"}`);
       } else if (res.status === 402) {
         console.warn(`\nWARN  solana leg did NOT settle (HTTP 402, payer ${signer.address}) — decoding diagnostics:`);
         // The rejection reason lives in the PAYMENT-REQUIRED header of the
