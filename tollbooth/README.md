@@ -5,10 +5,15 @@ API: humans browse free, AI crawlers and agents pay per request** — either in
 USDC over the [x402 protocol](https://x402.org), or for free by solving a
 proof-of-work. No Cloudflare, no Stripe, no Merchant-of-Record, no signup.
 
-The big platforms ([Cloudflare](https://stackoverflow.blog/2026/02/26/how-pay-per-crawl-is-reshaping-data-monetization/),
-Stack Overflow) shipped pay-per-crawl as a closed, fiat, you-must-be-on-our-CDN
-feature. This is the open, crypto-native, run-it-yourself version — built on the
-same hardened 402 + proof-of-work machinery as [Agent402](https://github.com/MikeyPetrillo/Agent402).
+The big platforms are converging on the same model: Cloudflare's
+[pay-per-crawl](https://stackoverflow.blog/2026/02/26/how-pay-per-crawl-is-reshaping-data-monetization/)
+and now its [Monetization Gateway](https://blog.cloudflare.com/monetization-gateway/)
+(July 2026 — x402 charging for anything behind Cloudflare, waitlist) confirm that
+pay-per-request is the business model of the agentic web. Tollbooth is the
+**open-source monetization gateway**: the same idea, live today, MIT-licensed,
+running in front of *any* origin (even a Cloudflare Worker), with a proof-of-work
+free tier no platform offers — built on the same hardened 402 + proof-of-work
+machinery as [Agent402](https://github.com/MikeyPetrillo/Agent402).
 
 ## See it work (one command)
 
