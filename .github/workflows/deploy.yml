@@ -1376,39 +1376,6 @@ jobs:
               | tail -80 || echo "(no matching lines)"
           fi
 
-      # ONE-OFF remediation, user-approved (remove after this run): Base
-      # buying has failed every purchase since the 15:10 UTC reboot while
-      # Solana settles fine. The x402 resource server syncs facilitator
-      # capabilities once at boot and a partial sync is sticky — restart to
-      # force a clean re-sync.
-      - name: Restart production service (one-off — clean facilitator re-sync)
-        run: |
-          gql() {
-            curl -s -X POST https://backboard.railway.app/graphql/v2 \
-              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
-              --data @-
-          }
-          PROJECT_ID=$(jq -n '{query:"query { projects { edges { node { id name } } } }"}' | gql \
-            | jq -r '.data.projects.edges[] | select(.node.name=="agent402") | .node.id' | head -1)
-          ENV_ID=$(jq -n --arg id "$PROJECT_ID" '{query:"query($id:String!) { project(id: $id) { environments { edges { node { id name } } } } }", variables:{id:$id}}' | gql \
-            | jq -r '.data.project.environments.edges[] | select(.node.name=="production") | .node.id' | head -1)
-          SERVICE_ID=$(jq -n --arg id "$PROJECT_ID" '{query:"query($id:String!) { project(id: $id) { services { edges { node { id name } } } } }", variables:{id:$id}}' | gql \
-            | jq -r '.data.project.services.edges[] | select(.node.name=="agent402") | .node.id' | head -1)
-          LATEST_ID=$(jq -n --arg p "$PROJECT_ID" --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
-            '{query:"query($p:String!, $e:String!, $s:String!) { deployments(first: 1, input: { projectId: $p, environmentId: $e, serviceId: $s }) { edges { node { id status } } } }", variables:{p:$p,e:$e,s:$s}}' | gql \
-            | jq -r '.data.deployments.edges[0].node.id // empty')
-          echo "restarting deployment $LATEST_ID"
-          jq -n --arg d "$LATEST_ID" '{query:"mutation($d:String!) { deploymentRestart(id: $d) }", variables:{d:$d}}' | gql
-          echo
-          # Give the container ~40s to boot, then confirm the service is back.
-          sleep 40
-          for i in 1 2 3 4 5 6; do
-            if curl -sf --max-time 10 https://agent402.tools/health >/dev/null; then break; fi
-            sleep 10
-          done
-          echo "=== post-restart /health ==="
-          curl -s --max-time 15 https://agent402.tools/health | jq '{ok, flags: {solana: .flags.solana, llmGateway: .flags.llmGateway}}' || true
-
       - name: Read the agent402.app marketplace API docs (read-only)
         env:
           A402APP_KEY: ${{ secrets.AGENT402_APP_API_KEY }}
