@@ -1327,9 +1327,14 @@ jobs:
             echo "=== build logs (tail) for latest deployment ==="
             jq -n --arg d "$LATEST_ID" '{query:"query($d:String!) { buildLogs(deploymentId: $d, limit: 60) { timestamp message } }", variables:{d:$d}}' | gql \
               | jq -r '.data.buildLogs[]? | "\(.timestamp)  \(.message)"' | tail -60 || true
-            echo "=== deploy logs (tail) ==="
-            jq -n --arg d "$LATEST_ID" '{query:"query($d:String!) { deploymentLogs(deploymentId: $d, limit: 40) { timestamp message } }", variables:{d:$d}}' | gql \
-              | jq -r '.data.deploymentLogs[]? | "\(.timestamp)  \(.message)"' | tail -40 || true
+          fi
+          # Runtime logs unconditionally: settlement failures (facilitator
+          # verify/settle errors, sync warnings) only surface here — a
+          # SUCCESS deployment can still be failing every USDC purchase.
+          if [ -n "$LATEST_ID" ]; then
+            echo "=== runtime logs (tail, latest deployment) ==="
+            jq -n --arg d "$LATEST_ID" '{query:"query($d:String!) { deploymentLogs(deploymentId: $d, limit: 200) { timestamp message } }", variables:{d:$d}}' | gql \
+              | jq -r '.data.deploymentLogs[]? | "\(.timestamp)  \(.message)"' | tail -200 || true
           fi
 
       - name: Read the agent402.app marketplace API docs (read-only)
