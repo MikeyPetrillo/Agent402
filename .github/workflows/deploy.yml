@@ -181,12 +181,30 @@ jobs:
           echo "=== boot facilitator lines (must say CDP first) ==="
           grep -iE 'facilitator|multi-chain|accepting usdc' /tmp/server-cdp.log || true
           echo
-          echo "=== buying on Base via localhost through CDP ==="
+          echo "=== buying on Base via localhost through CDP (@x402 2.16, lockfile) ==="
           TARGET_URL=http://localhost:3777 KEY_FILE=/tmp/bisect-key MODE=run node scripts/agent-e2e.js 2>&1 | tail -8 || true
           kill $SRV 2>/dev/null || true
           sleep 2
-          echo "=== server log (payment lines) ==="
-          grep -viE '\[tool-error\]' /tmp/server-cdp.log | grep -iE 'facilitator|x402|error|fail|verify|settle|warn' | tail -40 || true
+          echo "=== server log 2.16 (payment lines) ==="
+          grep -viE '\[tool-error\]' /tmp/server-cdp.log | grep -iE 'facilitator|x402|error|fail|verify|settle|warn' | grep -vi 'extension responses' | tail -20 || true
+          echo
+          # CDP rejected every 2.16-server buy from two networks while PayAI
+          # settles the same payloads — test whether CDP now requires the
+          # 2.17-era server behavior (published June 26; our lockfile pins
+          # 2.16.0 from June 19).
+          echo "=== upgrading server SDK to @x402 2.17 and retrying ==="
+          npm install --no-save @x402/express@2.17.0 @x402/evm@2.17.0 @x402/svm@2.17.0 @x402/core@2.17.0 @x402/extensions@2.17.0 >/dev/null 2>&1 \
+            || npm install --no-save @x402/express@2.17.0 @x402/evm@2.17.0 @x402/svm@2.17.0 >/dev/null
+          PORT=3778 node src/server.js > /tmp/server-cdp217.log 2>&1 &
+          SRV2=$!
+          for i in $(seq 1 60); do curl -sf http://localhost:3778/health >/dev/null 2>&1 && break; sleep 1; done
+          grep -iE 'facilitator|multi-chain' /tmp/server-cdp217.log || true
+          echo "=== buying on Base via localhost through CDP (@x402 2.17) ==="
+          TARGET_URL=http://localhost:3778 KEY_FILE=/tmp/bisect-key MODE=run node scripts/agent-e2e.js 2>&1 | tail -8 || true
+          kill $SRV2 2>/dev/null || true
+          sleep 2
+          echo "=== server log 2.17 (payment lines) ==="
+          grep -viE '\[tool-error\]' /tmp/server-cdp217.log | grep -iE 'facilitator|x402|error|fail|verify|settle|warn' | grep -vi 'extension responses' | tail -20 || true
           shred -u /tmp/bisect-key 2>/dev/null || rm -f /tmp/bisect-key
       - name: Shred burner key
         if: always()
