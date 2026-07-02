@@ -1303,13 +1303,6 @@ jobs:
             done
           fi
 
-      # Base Builder Code (ERC-8021) attribution, end-to-end: is the extension
-      # declared on live 402s (BASE_BUILDER_CODE on Railway), and do recent
-      # on-chain settlements actually carry the calldata suffix the Base
-      # dashboard indexes? Dependency-free script — no npm ci in this job.
-      - name: Builder Code attribution check (live 402 declaration + on-chain suffix scan)
-        run: node scripts/check-builder-attribution.js || true
-
       - name: Railway deployment history (which image is live, what failed)
         run: |
           gql() {
@@ -1458,21 +1451,36 @@ jobs:
                 '.items[] | select(((.resource // "") | ascii_downcase | contains("agent402")) or (any(.accepts[]?; (.payTo // "" | ascii_downcase) == $w)))' \
                 2>/dev/null || true)
               if [ -n "$HITS" ]; then
-                found=1
-                echo ">>> FOUND at offset $offset:"
-                echo "$HITS" | jq '{resource, type, lastUpdated, payTo: [.accepts[]?.payTo]}'
+                # Count matches; print only the first page of hits. Dumping
+                # every listed resource (~1,300 rows) floods the job log so
+                # badly the logs API's tail window can't reach the output of
+                # any earlier step.
+                if [ "$found" = "0" ]; then
+                  echo ">>> FOUND (first hits at offset $offset; sample):"
+                  echo "$HITS" | head -3 | jq '{resource, type, lastUpdated, payTo: [.accepts[]?.payTo]}'
+                fi
+                found=$((found + $(echo "$HITS" | wc -l)))
               fi
               if [ "$N" -lt 100 ]; then break; fi
               offset=$((offset+100))
               if [ "$offset" -ge 20000 ]; then echo "(stopping after 20000 items)"; break; fi
             done
-            if [ "$found" = "1" ]; then
-              echo ">>> RESULT: agent402 IS LISTED in this index (scanned $total items)"
+            if [ "$found" -gt 0 ]; then
+              echo ">>> RESULT: agent402 IS LISTED in this index ($found resources across $total scanned items)"
             else
               echo ">>> RESULT: agent402 NOT FOUND (scanned $total items)"
             fi
             echo
           done
+
+      # Base Builder Code (ERC-8021) attribution, end-to-end: is the extension
+      # declared on live 402s (BASE_BUILDER_CODE on Railway), and do recent
+      # on-chain settlements actually carry the calldata suffix the Base
+      # dashboard indexes? Dependency-free script — no npm ci in this job.
+      # LAST step on purpose: the logs API serves a bounded tail of the job
+      # log, so the verdict must sit at the end to stay retrievable.
+      - name: Builder Code attribution check (live 402 declaration + on-chain suffix scan)
+        run: node scripts/check-builder-attribution.js || true
 
   deploy:
     needs: [markers, test]
