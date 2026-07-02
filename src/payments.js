@@ -63,19 +63,41 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const evmCaip2 = caip2List.filter((c) => c.startsWith("eip155:"));
   const svmCaip2 = caip2List.filter((c) => c.startsWith("solana:"));
 
-  // Facilitator: CDP settles on Base and indexes endpoints in the Bazaar
-  // (agentic.market). When additional chains are enabled (Solana, Polygon,
-  // Arbitrum), PayAI handles settlement across all chains in one client.
-  // CDP is used when ONLY the primary Base chain is active (preserves the
-  // existing Bazaar integration + fee-free settlement). PayAI free tier
-  // covers 10k settlements/month across all chains.
+  // Facilitator routing. x402ResourceServer accepts a LIST of facilitator
+  // clients: at sync it asks each for its /supported kinds and routes every
+  // verify/settle by the payment's (network, scheme), earlier clients winning
+  // ties. A facilitator that is down at sync only logs a warning — the others
+  // keep their networks serving.
+  //
+  //   - Single network (default): unchanged — CDP (Bazaar discovery +
+  //     fee-free Base settlement) or FACILITATOR_URL.
+  //   - Multi-chain: CDP FIRST, PayAI second. Base settlement must stay on
+  //     CDP: the Bazaar harvester only indexes/refreshes a listing when it
+  //     observes a payment settle through CDP, so moving Base to PayAI would
+  //     silently degrade marketplace discovery for the chain that actually
+  //     earns. PayAI covers the chains CDP doesn't settle (Solana, Polygon,
+  //     Arbitrum — free tier 10k settlements/month).
   const isMultiChain = networks.length > 1;
-  const facilitatorConfig = isMultiChain
-    ? await resolvePayAIFacilitatorConfig()
-    : await resolveFacilitatorConfig(network);
-  const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
-  if (isMultiChain) console.log("Multi-chain mode: PayAI facilitator for all networks");
-  let server = new x402ResourceServer(facilitatorClient)
+  const facilitatorClients = [];
+  if (isMultiChain) {
+    const cdpConfig = await resolveCdpFacilitatorConfig();
+    if (cdpConfig) {
+      facilitatorClients.push(new HTTPFacilitatorClient(cdpConfig));
+    } else {
+      console.warn(
+        "WARNING: multi-chain mode without CDP keys — Base will settle via PayAI and the " +
+          "x402 Bazaar will stop indexing/refreshing this seller's listings. Set " +
+          "CDP_API_KEY_ID + CDP_API_KEY_SECRET to keep Base on CDP (Bazaar discovery + fee-free)."
+      );
+    }
+    facilitatorClients.push(new HTTPFacilitatorClient(await resolvePayAIFacilitatorConfig()));
+    console.log(
+      `Multi-chain facilitator routing: ${cdpConfig ? "CDP (Base + Bazaar) → PayAI (remaining chains)" : "PayAI (all chains)"}`
+    );
+  } else {
+    facilitatorClients.push(new HTTPFacilitatorClient(await resolveFacilitatorConfig(network)));
+  }
+  let server = new x402ResourceServer(facilitatorClients)
     .registerExtension(bazaarResourceServerExtension)
     .registerExtension(builderCodeResourceServerExtension);
   for (const caip2 of evmCaip2) server = server.register(caip2, new ExactEvmScheme());
@@ -156,14 +178,19 @@ async function resolvePayAIFacilitatorConfig() {
   return facilitator;
 }
 
+/** Coinbase CDP facilitator config, or null when the keys aren't set. CDP
+ *  settles on Base (fee-free) and indexes discoverable endpoints in the
+ *  x402 Bazaar — it's the facilitator Base settlement should always prefer. */
+async function resolveCdpFacilitatorConfig() {
+  if (!(process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET)) return null;
+  const { createFacilitatorConfig } = await import("@coinbase/x402");
+  console.log("Facilitator: Coinbase CDP (Bazaar discovery enabled)");
+  return createFacilitatorConfig(process.env.CDP_API_KEY_ID, process.env.CDP_API_KEY_SECRET);
+}
+
 async function resolveFacilitatorConfig(network) {
-  if (process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET) {
-    // Coinbase facilitator: settles on Base mainnet and indexes discoverable
-    // endpoints in the x402 Bazaar.
-    const { createFacilitatorConfig } = await import("@coinbase/x402");
-    console.log("Facilitator: Coinbase CDP (Bazaar discovery enabled)");
-    return createFacilitatorConfig(process.env.CDP_API_KEY_ID, process.env.CDP_API_KEY_SECRET);
-  }
+  const cdp = await resolveCdpFacilitatorConfig();
+  if (cdp) return cdp;
   if (process.env.FACILITATOR_URL) {
     console.log(`Facilitator: ${process.env.FACILITATOR_URL}`);
     return { url: process.env.FACILITATOR_URL };
