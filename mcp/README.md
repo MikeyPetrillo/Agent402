@@ -42,7 +42,7 @@ Claude Code: `claude mcp add agent402 -- npx -y agent402-mcp`
 - On startup the server reads the live catalog from `https://agent402.tools/api/pricing` + `/openapi.json`.
 - The high-value tools (`extract`, `render`, `screenshot`, `pdf`, `meta`, `dns`, `http-check`, `tls-cert`, `whois`, the `memory-*` coordination tools, `hash`) are exposed as first-class MCP tools.
 - The other ~1,185 tools are reachable via `search_tools` (find by description) + `call_tool` (call by slug) — keeping your context window small.
-- When a call hits HTTP 402: with `AGENT_KEY` set, the server signs an x402 USDC payment and retries; without a key it solves the tool's proof-of-work challenge (~0.2 s of CPU) on the eligible tools.
+- When a call hits HTTP 402: with a wallet key set (`AGENT_KEY` for Base/Polygon/Arbitrum, `SOLANA_AGENT_KEY` for Solana), the server signs an x402 USDC payment on a chain the seller accepts and retries; without a key it solves the tool's proof-of-work challenge (~0.2 s of CPU) on the eligible tools.
 - `payment_info` tells the model which mode it's in and what a wallet would unlock.
 - `top_x402_sellers` returns the live x402 leaderboard — which sellers are settling the most USDC (primarily on Base) in the last ~24h, derived from on-chain transfers. Free to call (no payment, no proof-of-work). Useful for agents discovering the wider x402 economy beyond this single service's catalog.
 
@@ -64,7 +64,8 @@ automatically:
 
 | env | default | meaning |
 | --- | --- | --- |
-| `AGENT_KEY` | _(unset)_ | Hex private key of a wallet funded with USDC on Base (or Solana/Polygon/Arbitrum). Unset = proof-of-work mode. |
+| `AGENT_KEY` | _(unset)_ | Hex private key of an EVM wallet funded with USDC on Base (or Polygon/Arbitrum). |
+| `SOLANA_AGENT_KEY` | _(unset)_ | Base58 secret key (or JSON byte array) of a Solana wallet funded with USDC on Solana. |
 | `AGENT402_URL` | `https://agent402.tools` | Target service (point at your own deployment). |
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
 | `AGENT402_MAX_PER_CALL` | unlimited | Refuse any single call priced above this many USD (e.g. `0.01`). |
@@ -72,8 +73,10 @@ automatically:
 
 Spend controls are enforced **before a payment is signed** — a runaway model is
 refused, not billed. `payment_info` reports the caps, what's been spent, and
-what remains. Use a dedicated low-value wallet for `AGENT_KEY`, funded only
-with what you intend to spend — calls cost $0.001–$0.02 each.
+what remains. With neither key set, the server runs in proof-of-work mode
+(pure-CPU tools stay free). Use dedicated low-value wallets for `AGENT_KEY` /
+`SOLANA_AGENT_KEY`, funded only with what you intend to spend — calls cost
+$0.001–$0.02 each.
 
 ## Test
 

@@ -21,6 +21,9 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       BURNER_KEY: ${{ secrets.BURNER_KEY }}
+      # Optional: base58 secret key of a Solana wallet funded with USDC (+ a
+      # little SOL). Enables the daily Solana-path purchase; unset = skipped.
+      SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
       TARGET_URL: https://agent402.tools
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -28,7 +31,7 @@ jobs:
         with:
           node-version: 22
       - name: Install x402 client
-        run: npm ci && npm install --no-save --ignore-scripts @x402/fetch @x402/core @x402/evm viem
+        run: npm ci && npm install --no-save --ignore-scripts @x402/fetch @x402/core @x402/evm @x402/svm @solana/kit viem
       - name: Buy one tool from production (real USDC)
         id: canary
         run: |
@@ -37,6 +40,10 @@ jobs:
             echo "result=noconfig" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "::add-mask::$BURNER_KEY"
+          # Optional Solana leg — buys one $0.001 tool paying USDC on Solana.
+          # Informational (warns, never pages); silently skipped when the
+          # SOLANA_BURNER_KEY secret is unset.
+          [ -n "$SOLANA_BURNER_KEY" ] && echo "::add-mask::$SOLANA_BURNER_KEY"
           if node scripts/paid-canary.js; then echo "result=ok" >> "$GITHUB_OUTPUT"; else echo "result=fail" >> "$GITHUB_OUTPUT"; fi
       - name: Alert on failure / clear on recovery
         run: |

@@ -51,6 +51,7 @@ const insertRecent = db.prepare("INSERT INTO recent_calls (slug, method, ts) VAL
 const pruneRecent = db.prepare("DELETE FROM recent_calls WHERE id <= (SELECT MAX(id) FROM recent_calls) - ?");
 const getRecent = db.prepare("SELECT slug, method, ts FROM recent_calls ORDER BY id DESC LIMIT ?");
 const bumpPaidTool = db.prepare("INSERT INTO paid_tool_counts (slug, n) VALUES (?, 1) ON CONFLICT(slug) DO UPDATE SET n = n + 1");
+const usdcNetCounters = db.prepare("SELECT k, n FROM counters WHERE k LIKE 'usdcNet:%'");
 const topPaid = db.prepare("SELECT slug, n FROM paid_tool_counts ORDER BY n DESC LIMIT 10");
 const allPaid = db.prepare("SELECT slug, n FROM paid_tool_counts");
 // Per-tool count of internal heartbeat probes (PoW path, agent402-heartbeat UA).
@@ -71,7 +72,7 @@ const getChargedFailures = db.prepare("SELECT slug, status, ts FROM charged_fail
 setMetaIfAbsent.run("firstServed", String(Date.now()));
 const bootedAt = Date.now();
 
-const recordCall = db.transaction((slug, method) => {
+const recordCall = db.transaction((slug, method, network) => {
   bumpCounter.run("total");
   // Three rails: USDC (real revenue), external PoW (real free-tier adoption),
   // heartbeat (our own probe — pays via PoW but we track it separately so the
@@ -80,6 +81,11 @@ const recordCall = db.transaction((slug, method) => {
   bumpCounter.run(counterKey);
   bumpTool.run(slug);
   if (method === "usdc") bumpPaidTool.run(slug); // USDC purchases — what people actually BUY
+  // Which chain settled it. Multi-chain x402 means "viaUSDC" alone can't answer
+  // "did anyone ever pay on Solana" — the settle receipt's network is the only
+  // place that fact exists at serve time. "unknown" = settled before this
+  // counter existed or the receipt header didn't decode.
+  if (method === "usdc") bumpCounter.run(`usdcNet:${network || "unknown"}`);
   if (method === "heartbeat") bumpHeartbeatTool.run(slug); // internal probe traffic
   // Privacy-safe activity feed: tool + settlement method + time only — never a
   // payload, wallet, or IP. Only successful (200) served calls reach here.
@@ -88,12 +94,42 @@ const recordCall = db.transaction((slug, method) => {
   setMetaIfAbsent.run("firstServed", String(Date.now()));
 });
 
-/** Count one successfully served paid-tool call. method: "usdc" | "pow" | "heartbeat". */
-export function recordServedCall(slug, method) {
+/** Count one successfully served paid-tool call. method: "usdc" | "pow" | "heartbeat".
+ *  network (usdc only): short chain name from the settle receipt, e.g. "base" | "solana". */
+export function recordServedCall(slug, method, network = null) {
   try {
-    recordCall(slug, method);
+    recordCall(slug, method, network);
   } catch {
     /* counters are best-effort; never break a response */
+  }
+}
+
+// CAIP-2 → the short names used across /api/pricing and PAYMENT_NETWORKS.
+const CAIP2_NAMES = {
+  "eip155:8453": "base",
+  "eip155:137": "polygon",
+  "eip155:42161": "arbitrum",
+  "eip155:84532": "base-sepolia",
+  "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": "solana",
+  "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1": "solana-devnet",
+};
+
+/**
+ * Which chain a settled x402 call was paid on, from the settle-receipt header
+ * the middleware sets after settlement (PAYMENT-RESPONSE in x402 v2,
+ * X-PAYMENT-RESPONSE in v1): base64-encoded JSON with a `network` field —
+ * CAIP-2 in v2, short name in v1. Pure and defensive: any shape surprise →
+ * null, never a throw.
+ */
+export function networkFromPaymentResponse(headerValue) {
+  if (typeof headerValue !== "string" || !headerValue) return null;
+  try {
+    const receipt = JSON.parse(Buffer.from(headerValue, "base64").toString("utf8"));
+    const net = receipt?.network;
+    if (typeof net !== "string" || !net) return null;
+    return CAIP2_NAMES[net] || net;
+  } catch {
+    return null;
   }
 }
 
@@ -150,6 +186,10 @@ export function getStats({ wallet, walletName, network, toolCount, baseUrl, pric
     toolCallsServed: {
       total: num("total"),
       viaUSDC: num("viaUSDC"),
+      // USDC split by settlement chain (from the x402 settle receipt). "unknown"
+      // = counted before this split existed. Answers "has anyone ever paid on
+      // Solana/Polygon/…" without an explorer scan per chain.
+      viaUSDCByNetwork: Object.fromEntries(usdcNetCounters.all().map((r) => [r.k.slice("usdcNet:".length), r.n])),
       viaProofOfWork: num("viaProofOfWork"),
       viaHeartbeat: num("viaHeartbeat"), // internal probe traffic (PoW path, agent402-heartbeat UA)
     },
@@ -203,6 +243,7 @@ export function getOperatorBreakdown({ prices, walletOnlySet, limit = RECENT_KEE
     totals: {
       total: getCounter.get("total")?.n ?? 0,
       viaUSDC: getCounter.get("viaUSDC")?.n ?? 0,
+      viaUSDCByNetwork: Object.fromEntries(usdcNetCounters.all().map((r) => [r.k.slice("usdcNet:".length), r.n])),
       viaProofOfWork: getCounter.get("viaProofOfWork")?.n ?? 0,
       viaHeartbeat: getCounter.get("viaHeartbeat")?.n ?? 0,
       estimatedRevenueUsd: +tools.reduce((s, t) => s + t.revenueUsd, 0).toFixed(4),
