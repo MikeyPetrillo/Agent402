@@ -217,7 +217,28 @@ async function main() {
       if (res.status === 200 && body.hex === expected) {
         console.log(`\nOK    solana     /api/hash  → settled $0.001 USDC on Solana (payer ${signer.address})`);
       } else if (res.status === 402) {
-        console.warn(`\nWARN  solana leg did NOT settle (HTTP 402) — Solana accept missing from the 402, or the burner ${signer.address} is unfunded`);
+        console.warn(`\nWARN  solana leg did NOT settle (HTTP 402, payer ${signer.address}) — decoding diagnostics:`);
+        // The rejection reason lives in the PAYMENT-REQUIRED header of the
+        // response that came back AFTER the client attached payment — decode
+        // it verbatim so the log names the actual verify/settle failure
+        // (wrong mint, missing feePayer, insufficient funds, version skew)
+        // instead of guessing.
+        const decode402 = (r) => {
+          const h = r.headers.get("payment-required");
+          if (!h) return null;
+          try { return JSON.parse(Buffer.from(h, "base64").toString("utf8")); } catch { return null; }
+        };
+        const failReq = decode402(res);
+        console.warn(`      post-payment challenge: error=${JSON.stringify(failReq?.error ?? null)} x402Version=${failReq?.x402Version ?? "?"}`);
+        try {
+          // Fresh unpaid request → what a Solana buyer is actually offered.
+          const bare = await fetch(`${TARGET}/api/hash`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "solana canary" }) });
+          const req = decode402(bare) ?? (await bare.json().catch(() => null));
+          const sol = (req?.accepts || []).filter((a) => String(a.network || "").startsWith("solana:"));
+          console.warn(`      solana accepts offered: ${sol.length ? JSON.stringify(sol).slice(0, 600) : "NONE — Solana missing from the live 402"}`);
+        } catch (e2) {
+          console.warn(`      (could not re-fetch challenge for diagnostics: ${(e2?.message || String(e2)).slice(0, 100)})`);
+        }
       } else {
         console.warn(`\nWARN  solana leg: HTTP ${res.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
