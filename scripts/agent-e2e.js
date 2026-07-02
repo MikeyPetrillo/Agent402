@@ -155,7 +155,18 @@ for (const c of CASES) {
     const body = c.binary ? await res.arrayBuffer() : await res.json().catch(() => ({}));
     if (res.status !== 200) {
       failed.push(c.slug);
-      console.log(`[${label}] HTTP ${res.status} FAILED: ${JSON.stringify(body).slice(0, 150)}`);
+      // On a payment rejection the facilitator's literal reason rides the
+      // retry-402's PAYMENT-REQUIRED header `error` field, NOT the body ({}).
+      // Decode it — this is the facilitator's (e.g. CDP's) invalidReason.
+      let reason = "";
+      try {
+        const h = res.headers.get("payment-required") || res.headers.get("x-payment-required");
+        if (h) {
+          const decoded = JSON.parse(Buffer.from(h, "base64").toString("utf8"));
+          if (decoded && decoded.error) reason = ` facilitator-reason="${decoded.error}"`;
+        }
+      } catch {}
+      console.log(`[${label}] HTTP ${res.status} FAILED:${reason} ${JSON.stringify(body).slice(0, 120)}`);
       continue;
     }
     let ok = true;
