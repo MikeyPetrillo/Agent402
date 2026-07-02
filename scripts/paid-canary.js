@@ -100,6 +100,14 @@ export const TOOLS = [
     priceUsd: 0.03,
     check: (r) => (typeof r.answer === "string" && r.answer.length > 0 && r.citationCount > 0) || `expected non-empty answer + citationCount>0, got ${JSON.stringify(r).slice(0, 80)}`,
   },
+  {
+    kit: "llm-gateway",
+    path: "/v1/chat/completions",
+    method: "POST",
+    body: { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 },
+    priceUsd: 0.02,
+    check: (r) => (typeof r.choices?.[0]?.message?.content === "string" && r.choices[0].message.content.length > 0) || `expected choices[0].message.content, got ${JSON.stringify(r).slice(0, 100)}`,
+  },
 ];
 
 // Classify one tool result. Pure — unit-tested in scripts/test-paid-canary.js.

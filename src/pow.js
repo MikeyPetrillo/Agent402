@@ -140,6 +140,8 @@ export const WALLET_ONLY_SLUGS = new Set([
   // LLM proxy kit: every call burns real upstream inference credit (OpenAI).
   // PoW would let one client farm our API keys for free.
   "llm", "llm-pro", "llm-premium",
+  // OpenAI-compatible gateway (OpenRouter upstream) — same reasoning.
+  "v1-chat", "v1-chat-pro", "v1-chat-premium",
   // Image generation kit: every call burns real upstream inference credit
   // (OpenAI GPT Image API). Same rationale as LLM proxy.
   "image-gen", "image-gen-hd", "image-gen-premium",

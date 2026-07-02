@@ -439,6 +439,9 @@ jobs:
       - name: USDC settle-receipt network attribution (viaUSDCByNetwork)
         run: node scripts/test-stats-network.js
 
+      - name: LLM gateway validation (OpenAI-compat tiers, caps, env-gated 503)
+        run: node scripts/test-llm-gateway.js
+
       - name: Paid-canary verdict (pages on real buying breaks, warns on upstream)
         run: node scripts/test-paid-canary.js
 

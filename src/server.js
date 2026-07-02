@@ -81,6 +81,7 @@ import { CRYPTO_HASH_TOOLS } from "./tools/crypto-hash-kit.js";
 import { STRING_TOOLS } from "./tools/string-kit.js";
 import { CALENDAR_TOOLS } from "./tools/calendar-kit.js";
 import { LLM_TOOLS } from "./tools/llm-kit.js";
+import { LLM_GATEWAY_TOOLS, modelsList } from "./tools/llm-gateway-kit.js";
 import { IMAGE_GEN_TOOLS } from "./tools/image-gen-kit.js";
 import { CODE_RUN_TOOLS } from "./tools/code-run-kit.js";
 import { TTS_TOOLS } from "./tools/tts-kit.js";
@@ -117,7 +118,7 @@ import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...COLOR_TOOLS, ...CHAIN_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...ENCODING_TOOLS, ...MATH_TOOLS, ...CRYPTO_HASH_TOOLS, ...STRING_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...CONVERSIONS, ...SEARCH_TOOLS, ...PDF_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...COLOR_TOOLS, ...CHAIN_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...ENCODING_TOOLS, ...MATH_TOOLS, ...CRYPTO_HASH_TOOLS, ...STRING_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...LLM_GATEWAY_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS];
 import { buildSkillTools } from "./tools/skill-runner.js";
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
@@ -662,6 +663,9 @@ app.get("/health", (_req, res) => {
     memoryPersistent,
     builderCode: Boolean((process.env.BASE_BUILDER_CODE || "").trim()),
     solana: Boolean((process.env.SOLANA_WALLET_ADDRESS || "").trim()),
+    // OpenAI-compatible LLM gateway upstream (OpenRouter). False = the three
+    // /v1/*chat/completions routes 503 at call time.
+    llmGateway: Boolean((process.env.OPENROUTER_API_KEY || "").trim()),
     baseNotifications: baseNotificationsEnabled(),
   };
   const ok = checks.db && checks.wallet;
@@ -676,6 +680,12 @@ app.get("/health", (_req, res) => {
 // glama.ai/mcp/connectors/io.github.MikeyPetrillo/agent402. The maintainer email
 // must match the Glama account. Defaults to the project's domain-scoped
 // maintainer address; GLAMA_MAINTAINER_EMAIL env override exists for forks.
+// OpenAI-compatible model discovery for the x402 LLM gateway — free, like
+// every other machine-readable surface: an SDK pointed at base_url /v1 lists
+// models before it ever pays.
+app.get("/v1/models", (_req, res) => {
+  res.set("Cache-Control", "public, max-age=300").json(modelsList());
+});
 app.get("/.well-known/glama.json", (_req, res) => {
   const email = process.env.GLAMA_MAINTAINER_EMAIL || "mike@agent402.tools";
   res.set("Cache-Control", "public, max-age=86400").json({
