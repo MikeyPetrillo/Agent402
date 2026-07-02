@@ -175,6 +175,30 @@ jobs:
           CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
         run: node scripts/cdp-probe.js || true
 
+      # THE definitive test: sign a real Base-mainnet payment against a local
+      # CDP-configured server, then call CDP /verify directly with it and print
+      # CDP's literal verdict (isValid + invalidReason, or the raw error). CDP
+      # is proven healthy + supports the kind; PayAI settles the same payload —
+      # so CDP's own words on our exact payload name the fix.
+      - name: Direct CDP /verify on a real signed payload (literal verdict)
+        if: always()
+        env:
+          CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID || 'ff16e708-0590-4a24-8a17-b0e978143f68' }}
+          CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
+          WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
+          SOLANA_WALLET_ADDRESS: J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg
+          PAYMENT_NETWORKS: base,solana,polygon,arbitrum
+          NETWORK: base
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+        run: |
+          printf '%s' "$BURNER_KEY" > /tmp/burner-key
+          PORT=3779 node src/server.js > /tmp/server-dv.log 2>&1 &
+          SRV=$!
+          for i in $(seq 1 60); do curl -sf http://localhost:3779/health >/dev/null 2>&1 && break; sleep 1; done
+          TARGET_URL=http://localhost:3779 KEY_FILE=/tmp/burner-key node scripts/cdp-verify-direct.js || true
+          kill $SRV 2>/dev/null || true
+          shred -u /tmp/burner-key 2>/dev/null || rm -f /tmp/burner-key
+
       - name: Capture CDP verify reason (CDP vs PayAI control)
         if: always()
         env:
