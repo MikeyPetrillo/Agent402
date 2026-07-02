@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { SKILL_PACKS, buildPromptMessages } from "../src/skills.js";
+import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 3098;
@@ -97,6 +98,21 @@ try {
     for (const a of required) {
       const v = examples[a.name] || "test";
       ok(text.includes(v), `${pack.slug}: rendered text includes ${a.name}=${v}`);
+    }
+  }
+
+  // Revenue-leak invariant: the skill runner calls member handlers in-process,
+  // BYPASSING each tool's own paywall — so any pack that composes a wallet-only
+  // tool must itself be wallet-only, or a single PoW puzzle hands out N paid
+  // upstream calls for free (this exact leak shipped with skill-price-monitor
+  // and skill-weather-brief).
+  for (const pack of SKILL_PACKS) {
+    const walletMembers = (pack.toolSlugs || []).filter((s2) => WALLET_ONLY_SLUGS.has(s2));
+    if (walletMembers.length) {
+      ok(
+        WALLET_ONLY_SLUGS.has(`skill-${pack.slug}`),
+        `skill-${pack.slug} is wallet-only (composes wallet-only: ${walletMembers.join(", ")})`
+      );
     }
   }
 

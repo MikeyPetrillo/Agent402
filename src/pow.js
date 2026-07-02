@@ -135,6 +135,8 @@ export const WALLET_ONLY_SLUGS = new Set([
   // Light-tier packs that call wallet-only tools in-process:
   "skill-trip-planner",       // calls weather-forecast (wallet-only)
   "skill-user-onboarding",   // calls email-validate (wallet-only)
+  "skill-weather-brief",     // calls weather-current/daily/air-quality (all wallet-only)
+  "skill-price-monitor",     // calls stock-quote/history + crypto-price/history (all wallet-only — the exact tools buyers pay for)
   // LLM proxy kit: every call burns real upstream inference credit (OpenAI).
   // PoW would let one client farm our API keys for free.
   "llm", "llm-pro", "llm-premium",
