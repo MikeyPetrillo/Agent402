@@ -163,6 +163,37 @@ jobs:
       - name: Robinhood Chain read probe (chain 4663 RPC live + params correct)
         if: always()
         run: node scripts/rh-chain-probe.js || true
+      # Reproduce the prod deploy failure the operator hit when adding `robinhood`
+      # to PAYMENT_NETWORKS: boot with the exact prod payment config + real
+      # facilitator sync (CDP + PayAI + r402, all reachable from CI) and capture
+      # whether /health comes up + any boot error, and whether a paid 402 offers
+      # eip155:4663. Non-gating; settles nothing.
+      - name: Boot with Robinhood enabled — reproduce deploy crash (sync ON)
+        if: always()
+        env:
+          CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
+          CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
+          WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
+          SOLANA_WALLET_ADDRESS: J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg
+          PAYMENT_NETWORKS: base,solana,polygon,arbitrum,robinhood
+          NETWORK: base
+        run: |
+          PORT=3782 node src/server.js > /tmp/rh-enabled-boot.log 2>&1 &
+          SRV=$!
+          booted=0
+          for i in $(seq 1 40); do curl -sf http://localhost:3782/health >/dev/null 2>&1 && { booted=1; break; }; sleep 1; done
+          echo "=== boot log (facilitator / robinhood / errors) ==="
+          grep -iE 'facilitator|robinhood|r402|USDG|accepting usdc|error|throw|reject|unhandled|uncaught|listen|EADDR' /tmp/rh-enabled-boot.log | head -40 || true
+          echo "=== last 30 lines ==="; tail -30 /tmp/rh-enabled-boot.log
+          if [ "$booted" = "1" ]; then
+            echo ">>> /health OK — server BOOTED with robinhood enabled"
+            curl -s -D /tmp/rh402.h -o /dev/null -X POST http://localhost:3782/api/hash -H 'Content-Type: application/json' -d '{"text":"x"}' || true
+            HDR=$(tr -d '\r' < /tmp/rh402.h | awk -F': ' 'tolower($1)=="payment-required"{print $2}' | head -1)
+            [ -n "$HDR" ] && echo "$HDR" | base64 -d 2>/dev/null | python3 -c "import sys,json;d=json.load(sys.stdin);print('402 accepts networks:',[a.get('network') for a in d.get('accepts',[])])" || echo "(no 402 accepts decoded)"
+          else
+            echo ">>> BOOT FAILED with robinhood enabled — THIS is the deploy crash (see log above)"
+          fi
+          kill $SRV 2>/dev/null || true
       - name: Shred burner key
         if: always()
         run: |
