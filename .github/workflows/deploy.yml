@@ -164,6 +164,17 @@ jobs:
       # the funded burner and read exactly why CDP says no. Then, as a control,
       # buy from a PayAI-only server (must settle) to prove the payload is
       # valid and isolate the difference to CDP.
+      # DEFINITIVE: hit the CDP facilitator /supported directly with our real
+      # keys — no handshake, no payment. Tells us in one shot whether CDP is
+      # reachable + our auth works, or whether it's a network/auth/rate-limit
+      # failure. This is the ground-truth discriminator.
+      - name: Direct CDP facilitator probe (reachable? authed? rate-limited?)
+        if: always()
+        env:
+          CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID || 'ff16e708-0590-4a24-8a17-b0e978143f68' }}
+          CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
+        run: node scripts/cdp-probe.js || true
+
       - name: Capture CDP verify reason (CDP vs PayAI control)
         if: always()
         env:
