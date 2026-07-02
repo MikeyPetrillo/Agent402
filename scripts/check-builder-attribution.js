@@ -169,12 +169,19 @@ async function main() {
   let scanError = null;
   try {
     const latest = parseInt(await rpc("eth_blockNumber", []), 16);
-    const logs = await rpc("eth_getLogs", [{
-      fromBlock: "0x" + (latest - SPAN).toString(16),
-      toBlock: "latest",
-      address: USDC,
-      topics: [TRANSFER, null, pad(WALLET)],
-    }]);
+    // Free-tier public RPCs cap eth_getLogs at 10k-block ranges (same cap the
+    // Polygon revenue scan hit) — walk the window in chunks instead of one call.
+    const CHUNK = 8000;
+    const logs = [];
+    for (let to = latest; to > latest - SPAN; to -= CHUNK) {
+      const from = Math.max(to - CHUNK + 1, latest - SPAN);
+      logs.push(...await rpc("eth_getLogs", [{
+        fromBlock: "0x" + from.toString(16),
+        toBlock: "0x" + to.toString(16),
+        address: USDC,
+        topics: [TRANSFER, null, pad(WALLET)],
+      }]));
+    }
     const hashes = [...new Set(logs.map((l) => l.transactionHash))].slice(-MAX_TXS);
     console.error(`\n${logs.length} USDC transfer(s) into ${WALLET} over last ${SPAN} blocks; inspecting ${hashes.length} tx(s):`);
     for (const hash of hashes) {
