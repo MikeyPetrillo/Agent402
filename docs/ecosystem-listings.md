@@ -173,6 +173,81 @@ that takes a GitHub repo URL; no PR, no fork.
 
 ---
 
+## 6. x402scan (x402scan.com) — the explorer featured on solana.com/x402
+
+Merit Systems' x402 ecosystem explorer; solana.com/x402 points buyers here.
+Registration is self-serve and automatic: submit a URL, and if it returns a
+valid x402 payment-required response it is indexed. Our 402s are v2
+(base64 PAYMENT-REQUIRED header) and advertise all four chains including the
+Solana payTo, so a re-crawl also refreshes any stale pre-Solana listing.
+
+**Steps**
+1. Visit https://www.x402scan.com/resources/register
+2. Submit flagship paid-route URLs (one per line/form entry):
+
+   ```
+   https://agent402.tools/api/search
+   https://agent402.tools/api/answer
+   https://agent402.tools/api/stock-quote
+   https://agent402.tools/api/extract
+   https://agent402.tools/api/hash
+   ```
+
+3. Verify the listing shows all four networks (Base, Solana, Polygon,
+   Arbitrum) in the accepts. Also check
+   https://www.x402scan.com/facilitator/payAI once the first Solana
+   settlement lands — PayAI-settled traffic appears under that view.
+
+---
+
+## 7. awesome-x402 (xpaysh/awesome-x402) — STALE ENTRY, needs Solana
+
+We are already listed, but the entry predates Solana support ("USDC on
+Base/Polygon/Arbitrum"). PR a one-word-class fix:
+
+**Steps**
+1. Fork https://github.com/xpaysh/awesome-x402, find the Agent402 entry.
+2. Update the chain list to "USDC on Base, Solana, Polygon, Arbitrum" and,
+   if the entry lists capabilities, append "SOLANA_AGENT_KEY buyer support in
+   agent402-mcp 0.10.0".
+3. PR title: `Update Agent402 entry — Solana settlement + SVM buyer support`
+
+---
+
+## 8. Solana ecosystem directory (solana.com/ecosystem)
+
+The directory solana.com/x402 cross-links. Form submission, no PR.
+
+**Steps**
+1. Visit https://solana.com/ecosystem/submit-project
+2. Fill:
+   - **Name:** Agent402.Tools
+   - **Category:** AI / Payments / Developer Tools (pick what's offered)
+   - **One-liner:**
+
+     ```
+     1,338 pay-per-call web tools + 42 skill packs for AI agents over x402 — USDC on Solana (and Base/Polygon/Arbitrum) or free via proof-of-work. Open-source, self-hostable, MCP-native.
+     ```
+
+   - **Description:** reuse the mcpservers.org long description above; lead
+     with the Solana angle (PayAI facilitator settlement, SVM signing in the
+     agent402-mcp buyer, Solana payTo in every 402).
+   - **Website:** https://agent402.tools · **Repo:** github.com/MikeyPetrillo/Agent402
+3. Getting *featured* on solana.com/x402 itself (like PayAI/x402scan/T54) is
+   curated — after the directory listing exists, ping the Solana Foundation
+   devrel with the on-chain proof (Solana settlements via PayAI + the open
+   tollbooth story). The x402scan listing showing live Solana volume is the
+   strongest supporting evidence.
+
+---
+
+Solana-surface status: PayAI facilitator auto-lists merchants in the x402
+Bazaar (active since the multi-chain routing deploy — first Solana settlement
+will populate it; fund SOLANA_BURNER_KEY so the daily canary provides that
+settlement). x402scan indexes our 402s (re-register after chain changes).
+
+---
+
 Already listed (no action): official MCP Registry (with the hosted remote),
 npm, Coinbase CDP Bazaar discovery (verified 2026-06-16: 64 Agent402 endpoints
 in the public Bazaar index), agent402.app marketplace, Glama, mcp.so
