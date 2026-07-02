@@ -802,18 +802,29 @@ jobs:
           # /api/pricing. The live 402 from an external facilitator is captured for
           # diagnostics but does not fail the build (it depends on the facilitator
           # settling each chain, which is verified out-of-band before enabling).
+          # SOLANA_WALLET_ADDRESS is the system program id — a syntactically valid
+          # base58 pubkey used only as a dummy payTo so the Solana accept is built
+          # (without it payments.js omits the Solana option from every 402, which
+          # is exactly the silent misconfig this gate must not reproduce).
           WALLET_ADDRESS=0x000000000000000000000000000000000000dEaD NETWORK=base \
-          PAYMENT_NETWORKS=base,polygon,arbitrum FACILITATOR_URL=https://facilitator.payai.network \
+          SOLANA_WALLET_ADDRESS=11111111111111111111111111111111 \
+          PAYMENT_NETWORKS=base,solana,polygon,arbitrum FACILITATOR_URL=https://facilitator.payai.network \
           PORT=3002 node src/server.js >/tmp/mc.log 2>&1 &
           for i in $(seq 1 30); do curl -s localhost:3002/health >/dev/null && break; sleep 1; done
           grep -i "Accepting USDC" /tmp/mc.log
           NETS=$(curl -s localhost:3002/api/pricing | jq -c '.payment.networks')
           echo "pricing.payment.networks = $NETS"
-          [ "$NETS" = '["base","polygon","arbitrum"]' ] || { echo "code did not register all chains"; exit 1; }
-          echo "--- live 402 against PayAI (informational) ---"
-          curl -s -o /tmp/402.json -w "status %{http_code}\n" -X POST localhost:3002/api/hash \
+          [ "$NETS" = '["base","solana","polygon","arbitrum"]' ] || { echo "code did not register all chains"; exit 1; }
+          echo "--- live 402 against PayAI (informational status; hard gate on the accepts below) ---"
+          curl -s -D /tmp/402.h -o /tmp/402.body -w "status %{http_code}\n" -X POST localhost:3002/api/hash \
             -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{"text":"x"}' || true
-          echo "402 body:"; cat /tmp/402.json | jq -c '{x402Version, error, accepts: ([.accepts[]?.network])}' 2>/dev/null || head -c 400 /tmp/402.json || true
+          # x402 v2 puts the requirements in the base64 PAYMENT-REQUIRED header
+          # (the body is {}); v1 kept them in the body. Decode whichever exists.
+          HDR=$(tr -d '\r' < /tmp/402.h | awk -F': ' 'tolower($1)=="payment-required"{print $2}' | head -1)
+          if [ -n "$HDR" ]; then echo "$HDR" | base64 -d > /tmp/402req.json 2>/dev/null || cp /tmp/402.body /tmp/402req.json; else cp /tmp/402.body /tmp/402req.json; fi
+          echo "402 requirements:"; jq -c '{x402Version, accepts: ([.accepts[]?.network])}' /tmp/402req.json 2>/dev/null || head -c 400 /tmp/402req.json || true
+          SOLANA_402=$(jq -r '[.accepts[]? | select((.network // "") | startswith("solana:"))] | length' /tmp/402req.json 2>/dev/null || echo 0)
+          [ "$SOLANA_402" -ge 1 ] || { echo "402 accepts is missing the Solana option despite SOLANA_WALLET_ADDRESS being set"; exit 1; }
 
       - name: Check production is serving the new catalog
         # Non-blocking: this is a smoke test against live prod, not a pre-deploy
@@ -1212,9 +1223,13 @@ jobs:
           curl -s --max-time 15 "$PROD/health" | jq '{ok, checks, flags}' || true
           echo
           echo "=== live 402 on a wallet-only route — network + payTo per payment option ==="
-          CH=$(curl -s --max-time 15 "$PROD/api/search?q=probe" -H "Accept: application/json" || true)
+          # x402 v2 carries the requirements in the base64 PAYMENT-REQUIRED
+          # header (the 402 body is {}); v1 kept them in the body. Read both.
+          curl -s --max-time 15 -D /tmp/402.h -o /tmp/402.body "$PROD/api/search?q=probe" -H "Accept: application/json" || true
+          HDR=$(tr -d '\r' < /tmp/402.h | awk -F': ' 'tolower($1)=="payment-required"{print $2}' | head -1)
+          if [ -n "$HDR" ]; then CH=$(echo "$HDR" | base64 -d 2>/dev/null || true); else CH=$(cat /tmp/402.body); fi
           echo "$CH" | jq -r '.accepts // [] | .[] | "\(.network)  payTo=\(.payTo)  amount=\(.maxAmountRequired // .price // "?")"' \
-            || { echo "could not parse 402 body:"; echo "$CH" | head -c 400; }
+            || { echo "could not parse 402 requirements:"; echo "$CH" | head -c 400; }
           SOLANA_PAYTO=$(echo "$CH" | jq -r '[.accepts // [] | .[] | select((.network // "") | startswith("solana:"))][0].payTo // empty' 2>/dev/null || true)
           echo
           if [ -n "$SOLANA_PAYTO" ]; then

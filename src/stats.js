@@ -115,10 +115,11 @@ const CAIP2_NAMES = {
 };
 
 /**
- * Which chain a settled x402 call was paid on, from the X-PAYMENT-RESPONSE
- * header the middleware sets after settlement (base64-encoded JSON receipt
- * with a `network` field — CAIP-2 in x402 v2, short name in v1). Pure and
- * defensive: any shape surprise → null, never a throw.
+ * Which chain a settled x402 call was paid on, from the settle-receipt header
+ * the middleware sets after settlement (PAYMENT-RESPONSE in x402 v2,
+ * X-PAYMENT-RESPONSE in v1): base64-encoded JSON with a `network` field —
+ * CAIP-2 in v2, short name in v1. Pure and defensive: any shape surprise →
+ * null, never a throw.
  */
 export function networkFromPaymentResponse(headerValue) {
   if (typeof headerValue !== "string" || !headerValue) return null;
