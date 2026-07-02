@@ -64,6 +64,14 @@ export function posthogEnabled() {
 // payload feeds both backends. Never blocks, never throws.
 export function capturePostHogToolError({ slug, status, message, shape, synthetic, probe }) {
   if (!enabled || !client) return;
+  // Probe calls (a 4xx where the caller sent zero meaningful input keys) are
+  // scanners/agents poking endpoints without arguments — discovery behavior,
+  // not real errors. We deliberately keep them OFF the tool_error stream so
+  // they never pollute error-tracking views/insights. The volume signal isn't
+  // lost: capturePostHogToolCall still records every probe as a tool_call with
+  // errored=true + probe=true, so "how much scanning is happening" stays
+  // queryable without inflating the error rate.
+  if (probe) return;
   try {
     client.capture({
       distinctId: DISTINCT_ID,

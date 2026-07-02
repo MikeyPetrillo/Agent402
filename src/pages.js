@@ -529,7 +529,7 @@ export function openapiSpec(baseUrl, catalog) {
     const op = {
       operationId: `${tool.slug}${method === "GET" ? "Get" : ""}`,
       summary: `${tool.name} (${tool.price}/call via x402)`,
-      description: `${tool.description}\n\nPrice: ${tool.price} per call, paid in USDC on Base via the x402 protocol. Unpaid requests receive HTTP 402 with payment requirements; any x402 v2 client can pay and retry automatically. Docs: ${baseUrl}/tools/${tool.slug}`,
+      description: `${tool.description}\n\nPrice: ${tool.price} per call, paid in USDC on Base, Solana, Polygon, or Arbitrum via the x402 protocol. Unpaid requests receive HTTP 402 with payment requirements; any x402 v2 client can pay and retry automatically. Docs: ${baseUrl}/tools/${tool.slug}`,
       tags: [tool.category],
       responses: {
         200: {

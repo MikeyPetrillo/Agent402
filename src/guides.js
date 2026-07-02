@@ -213,7 +213,7 @@ settling real money on mainnet. Test the buyer side yourself with Stripe's
 
 ## What we learned operating one (the honest part)
 
-[agent402.tools](https://agent402.tools) runs ~1,083 paid endpoints this way —
+[agent402.tools](https://agent402.tools) runs ~1,338 paid endpoints this way —
 [fully open source](https://github.com/MikeyPetrillo/Agent402). The lessons:
 
 1. **x402 settles before your handler runs.** If your tool then fails, you took
