@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Cache hygiene on paid responses** (security hardening, M5): every gated catalog
+  response now sets `Cache-Control: no-store, private`, so a shared cache or CDN can never
+  serve a paid result to a later unpaid caller of the same URL. This closes the cache-leakage
+  failure mode (Attack III) from the "Five Attacks on x402 Agentic Payment Protocol" analysis,
+  which validated the leak at 100% on nginx `proxy_cache`. Free discovery/static surfaces
+  (`/llms.txt`, landing, `/api/find`, `/api/pricing`…) are unaffected and keep their public
+  caching. CI-locked (`scripts/test-cache-hygiene.js`).
+
 - **Skill packs are now the front door**: the home page hero, page titles, meta/OG
   descriptions, and top nav all lead with "46 skill packs — a whole agent job, one x402
   payment" (the tool catalog reframed as the supporting long tail), with a six-pack

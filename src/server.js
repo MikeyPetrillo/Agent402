@@ -1782,6 +1782,16 @@ if (FREE_MODE) {
 app.use((req, res, next) => {
   const def = CATALOG[`${req.method} ${req.path}`];
   if (def) {
+    // Cache hygiene (M5, defends "Five Attacks on x402" Attack III — cache
+    // leakage): a paid/gated response must never be storable by a shared
+    // cache or CDN, or a later UNPAID caller of the same URL could be served
+    // the paid result for free (validated at 100% on nginx proxy_cache in the
+    // paper). Set the strongest directive on EVERY catalog route, before the
+    // handler runs so it can't be forgotten per-tool. Free discovery/static
+    // routes (llms.txt, landing, /api/find…) are NOT in CATALOG and keep
+    // their public caching. `no-store` blocks all caches; `private` is
+    // belt-and-suspenders against shared caches specifically.
+    res.setHeader("Cache-Control", "no-store, private");
     res.on("finish", () => {
       // Attribute by what the gate actually ACCEPTED, not by header presence —
       // an invalid PoW header on a USDC-settled call must count as usdc.
