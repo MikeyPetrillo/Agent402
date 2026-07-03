@@ -1808,6 +1808,7 @@ jobs:
           echo "$RESP" | jq -e '.data.variableCollectionUpsert' >/dev/null || { echo "Variable upsert failed"; exit 1; }
 
       - name: Trigger deploy of latest commit
+        id: trigger
         run: |
           gql() {
             curl -s -X POST https://backboard.railway.app/graphql/v2 \
@@ -1817,7 +1818,49 @@ jobs:
           RESP=$(jq -n --arg e '${{ steps.project.outputs.env_id }}' --arg s '${{ steps.service.outputs.service_id }}' --arg c "$GITHUB_SHA" \
             '{query:"mutation($e:String!, $s:String!, $c:String) { serviceInstanceDeployV2(environmentId: $e, serviceId: $s, commitSha: $c) }", variables:{e:$e,s:$s,c:$c}}' | gql)
           echo "$RESP"
-          echo "$RESP" | jq -e '.errors' >/dev/null && echo "(deploy trigger reported an error — the repo-connect deploy may already be running, continuing)" || true
+          # A swallowed trigger error is a FALSE-GREEN DEPLOY: the job passes,
+          # prod keeps serving the old build, and nobody notices until a human
+          # looks at the site (2026-07-03 incident). Fail loudly instead.
+          if echo "$RESP" | jq -e '.errors' >/dev/null; then
+            echo "::error::Railway rejected the deploy trigger — prod was NOT updated. With repo auto-deploy disabled, this job is the only deploy path, so this is a hard failure."
+            exit 1
+          fi
+          DEPLOY_ID=$(echo "$RESP" | jq -r '.data.serviceInstanceDeployV2 // empty')
+          echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
+          echo "triggered deployment: ${DEPLOY_ID:-'(no id returned — status poll will use the latest deployment)'}"
+
+      - name: Wait for the NEW deployment to reach SUCCESS
+        run: |
+          gql() {
+            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+              --data @-
+          }
+          DEPLOY_ID='${{ steps.trigger.outputs.deploy_id }}'
+          # Fall back to the newest deployment for this service+env when the
+          # mutation returned no id (API shape drift) — it is the one we just
+          # triggered.
+          if [ -z "$DEPLOY_ID" ]; then
+            DEPLOY_ID=$(jq -n --arg e '${{ steps.project.outputs.env_id }}' --arg s '${{ steps.service.outputs.service_id }}' \
+              '{query:"query($e:String!,$s:String!){ deployments(input:{environmentId:$e, serviceId:$s}, first:1){ edges { node { id status } } } }", variables:{e:$e,s:$s}}' \
+              | gql | jq -r '.data.deployments.edges[0].node.id // empty')
+            echo "using latest deployment: $DEPLOY_ID"
+            [ -n "$DEPLOY_ID" ] || { echo "::error::could not resolve a deployment id to watch"; exit 1; }
+          fi
+          # Poll until the build+deploy actually completes. The old 'Verify'
+          # step probed /health seconds after the trigger — the OLD build
+          # answers 200 and the job goes green without prod ever changing.
+          for i in $(seq 1 90); do
+            STATUS=$(jq -n --arg id "$DEPLOY_ID" '{query:"query($id:String!){ deployment(id:$id){ status } }", variables:{id:$id}}' \
+              | gql | jq -r '.data.deployment.status // "UNKNOWN"')
+            echo "[$i] deployment $DEPLOY_ID -> $STATUS"
+            case "$STATUS" in
+              SUCCESS) echo "new build is LIVE"; exit 0 ;;
+              FAILED|CRASHED|REMOVED|SKIPPED) echo "::error::deployment ended $STATUS — prod is still on the previous build (check Railway build logs)"; exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "::error::deployment did not reach SUCCESS within 15 minutes"; exit 1
 
       - name: Verify deployment
         run: |
