@@ -421,6 +421,104 @@ Agent402's keyless chain tools speak Robinhood Chain too — \`tx-status\` and
 agent can verify its own settlement for $0.001 without an RPC key.
 `,
   },
+  {
+    slug: "create-agent-wallet",
+    title: "Give your agent a wallet — non-custodial, from zero to first x402 payment",
+    description:
+      "The secure way to create and fund a wallet for an AI agent: generate the key locally (it never touches any server, including ours), rehearse the full x402 payment loop with faucet USDC on Base Sepolia, then fund it for real with a card via a single-use Coinbase Onramp link.",
+    md: `
+Agents need wallets, and the single most important property of an agent
+wallet is that **nobody else ever sees the private key** — not a SaaS,
+not a marketplace, and not Agent402. This guide is the flow we test in CI
+end to end: a keypair born inside the test runner completes a real x402
+purchase, and the run fails if the key ever appears in any log.
+
+## The trust model, stated plainly
+
+- **Your key is generated on YOUR machine** and never transmitted. Every
+  Agent402 tool below takes only your **address** — public information.
+- **Payments are gasless.** The x402 "exact" scheme uses EIP-3009
+  \`transferWithAuthorization\`: your agent signs an off-chain
+  authorization and the facilitator pays the gas. A fresh wallet needs
+  only USDC — no ETH, ever.
+- **Rehearse before you risk.** The full payment loop runs on Base
+  Sepolia with free faucet USDC first; the mainnet flow is byte-for-byte
+  identical.
+
+## 1. Create the wallet (locally — one line)
+
+\`\`\`js
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+
+const pk = generatePrivateKey();          // stays on YOUR machine
+const account = privateKeyToAccount(pk);
+console.log("agent address:", account.address);  // the ONLY thing you share
+\`\`\`
+
+Store \`pk\` in your secret manager (env var, keychain, KMS) — never in
+code, never in git. If you prefer managed custody, Coinbase's
+[Embedded Wallets](https://docs.cdp.coinbase.com/) give end users
+email-login wallets where you never handle keys at all; everything below
+works the same since only addresses are exchanged.
+
+## 2. Rehearse on testnet (free money)
+
+Fund the new address with testnet USDC via the paid
+[\`testnet-fund\`](/tools/testnet-fund) tool — a tenth of a cent buys a
+full testnet dollar from the Coinbase faucet:
+
+\`\`\`bash
+curl -X POST https://agent402.tools/api/testnet-fund \\
+  -H "Content-Type: application/json" \\
+  -d '{"address":"<your agent address>","token":"usdc"}'
+\`\`\`
+
+Then point your x402 client at any base-sepolia seller (or run the
+open-source Agent402 server locally with \`NETWORK=base-sepolia\`) and
+make a paid call:
+
+\`\`\`js
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { wrapFetchWithPayment } from "@x402/fetch";
+
+const client = new x402Client();
+registerExactEvmScheme(client, { signer: account });
+const payFetch = wrapFetchWithPayment(fetch, client);
+const res = await payFetch("http://localhost:3000/api/hash", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ text: "first paid call" }),
+});
+// The PAYMENT-RESPONSE header carries the on-chain settlement tx.
+\`\`\`
+
+## 3. Fund it for real
+
+When the rehearsal settles, fund the same address with real USDC on Base.
+Two ways:
+
+- **Card / Apple Pay** — [\`onramp-link\`](/tools/onramp-link) mints a
+  single-use Coinbase Onramp URL for your agent's address with a
+  fee-inclusive quote. Open it, pay, done.
+- **Transfer** — send USDC on Base from any exchange or wallet to the
+  agent's address.
+
+Verify with [\`wallet-balances\`](/tools/wallet-balances), then the same
+buyer code works against every seller in [the index](/index) — and every
+tool here. Budget guardrails: the
+[agent402-mcp](https://www.npmjs.com/package/agent402-mcp) server adds
+pre-signature spend controls (per-call and per-session caps) on top.
+
+## How we hold ourselves to this
+
+The exact flow above runs in our CI as a gated test: a **fresh keypair is
+generated inside the runner**, faucet-funded, and completes a real x402
+settlement against a paid-mode server — then the test scans every byte of
+its own output and the server's full log for the key material (all
+prefix/case forms) and **fails on any hit**. Keys in, addresses out,
+provably.
+`,
+  },
 ];
 
 const GUIDE_INDEX_CSS = `

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Wallet birth-to-first-purchase E2E + non-custodial wallet guide**: a CI test generates a
+  fresh keypair inside the runner (only the address is ever printed), funds it with testnet
+  USDC via the CDP faucet, completes a REAL gasless x402 purchase against a paid-mode
+  base-sepolia server, then scans every byte of its own output and the server's full log for
+  key material in any prefix/case form — failing on any hit. The offline leg (keygen + leak
+  audit) gates every test run. A new guide, `/guides/create-agent-wallet`, documents the same
+  flow for users: keys generated locally and never transmitted, gasless payments (USDC only,
+  no ETH), testnet rehearsal via `testnet-fund`, real funding via `onramp-link`.
+
 - **CDP onboarding kit** (`wallet-balances`, `testnet-fund`, `onramp-link`): agent-wallet
   onboarding tools built on the Coinbase Developer Platform, reusing the same CDP keys that
   already drive x402 settlement (no new secrets; 503 when unset). `wallet-balances` returns
