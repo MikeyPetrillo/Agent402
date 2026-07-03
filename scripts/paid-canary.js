@@ -18,6 +18,7 @@
 // Exit codes: 0 = buying works (warnings allowed) · 1 = buying broken · 2 = misconfig
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createHmac } from "node:crypto";
 // The x402 client + viem are imported dynamically inside main() so this module
 // can be imported for unit tests (of the pure decision logic) without those
 // packages installed — CI installs them just before the canary runs.
@@ -155,7 +156,23 @@ async function main() {
   const account = privateKeyToAccount(pk);
   const client = new x402Client();
   registerExactEvmScheme(client, { signer: account });
-  const payFetch = wrapFetchWithPayment(fetch, client);
+
+  // Mark every canary request as internal traffic: X-Heartbeat-Token =
+  // HMAC(POW_SECRET, UTC minute) — the same unspoofable marker the heartbeat
+  // probe sends (verified in src/pow.js; rail attribution is unaffected, the
+  // buy still settles as usdc). Without it the canary's daily REAL purchases
+  // are indistinguishable from external demand in the sales ledger and the
+  // PostHog settlement stream. Minted per request (minute-scoped token).
+  const secret = (process.env.POW_SECRET || "").trim();
+  if (!secret) console.warn("WARN  POW_SECRET not set — canary buys will record as EXTERNAL demand in the sales ledger");
+  const synthFetch = !secret ? fetch : (url, init = {}) => {
+    const minute = Math.floor(Date.now() / 60_000);
+    const token = createHmac("sha256", secret).update(`heartbeat:${minute}`).digest("base64url").slice(0, 32);
+    const headers = new Headers(init.headers || {});
+    headers.set("X-Heartbeat-Token", token);
+    return fetch(url, { ...init, headers });
+  };
+  const payFetch = wrapFetchWithPayment(synthFetch, client);
 
   // One-shot retry on 5xx — absorbs a true one-off upstream throttle before we
   // even classify. A persistent upstream issue fails the retry too and is then
@@ -217,7 +234,7 @@ async function main() {
       ]);
       const bytes = raw.startsWith("[") ? Uint8Array.from(JSON.parse(raw)) : new Uint8Array(kit.getBase58Encoder().encode(raw));
       const signer = await kit.createKeyPairSignerFromBytes(bytes);
-      const svmPay = wrapSvm(fetch, registerExactSvmScheme(new SvmClient(), { signer }));
+      const svmPay = wrapSvm(synthFetch, registerExactSvmScheme(new SvmClient(), { signer }));
       const res = await svmPay(`${TARGET}/api/skill/decode-blob`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         // The pack's own documented example blob (a JWT) — deterministic steps.
@@ -283,7 +300,7 @@ async function main() {
       const { x402HTTPClient } = await import("@x402/core/client");
       const http = new x402HTTPClient(client);
       const reqInit = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "usdg-canary" }) };
-      const bare = await fetch(`${TARGET}/api/hash`, reqInit);
+      const bare = await synthFetch(`${TARGET}/api/hash`, reqInit);
       if (bare.status !== 402) {
         console.warn(`\nWARN  robinhood leg: expected a 402 challenge from /api/hash, got HTTP ${bare.status}`);
         return;
@@ -303,7 +320,7 @@ async function main() {
       }
       const payload = await client.createPaymentPayload({ ...paymentRequired, accepts: rh });
       const payHeaders = http.encodePaymentSignatureHeader(payload);
-      const paid = await fetch(`${TARGET}/api/hash`, {
+      const paid = await synthFetch(`${TARGET}/api/hash`, {
         ...reqInit,
         headers: { ...reqInit.headers, ...payHeaders, "Access-Control-Expose-Headers": "PAYMENT-RESPONSE,X-PAYMENT-RESPONSE" },
       });

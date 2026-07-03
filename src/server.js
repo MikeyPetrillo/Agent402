@@ -121,6 +121,7 @@ import { robinhoodPage } from "./robinhood-page.js";
 import { revenueSnapshot, revenuePage } from "./revenue-live.js";
 import { startRevenueLedger, ledgerSummary } from "./revenue-ledger.js";
 import { x402EconomySnapshot, x402EconomyPage } from "./x402-economy.js";
+import { recordSale, salesSummary, txFromPaymentResponse } from "./sales-ledger.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
@@ -739,7 +740,7 @@ const revenueWallets = () => ({ walletAddress: WALLET_ADDRESS, solanaWallet: (pr
 app.get("/api/revenue", async (_req, res) => {
   try {
     const snap = await revenueSnapshot(revenueWallets());
-    res.set("Cache-Control", "public, max-age=30").json({ ...snap, allTime: ledgerSummary(revenueWallets()) });
+    res.set("Cache-Control", "public, max-age=30").json({ ...snap, allTime: ledgerSummary(revenueWallets()), sales: salesSummary() });
   } catch (e) {
     res.status(500).json({ error: "revenue snapshot failed", detail: String(e?.message || e).slice(0, 120) });
   }
@@ -747,11 +748,22 @@ app.get("/api/revenue", async (_req, res) => {
 app.get("/revenue", async (_req, res) => {
   try {
     const snap = await revenueSnapshot(revenueWallets());
-    res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, { ...snap, allTime: ledgerSummary(revenueWallets()) }));
+    res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, { ...snap, allTime: ledgerSummary(revenueWallets()), sales: salesSummary() }));
   } catch (e) {
     res.status(500).type("html").send('<p>Revenue view temporarily unavailable. <a href="/">Home</a></p>');
   }
 });
+// Sales ledger — what external wallets actually buy, by name. Free and
+// public like /api/stats: payer wallets are already public in the settle
+// txs; slugs and counts are the merchant transparency this catalog sells on.
+app.get("/api/sales", (_req, res) => {
+  try {
+    res.set("Cache-Control", "public, max-age=60").json(salesSummary());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // x402 Economy Observatory — chain-wide settlement analytics (30-min cache
 // inside the snapshot; per-query error resilience; env-gated on CDP keys).
 app.get("/api/x402-economy", async (_req, res) => {
@@ -1795,12 +1807,19 @@ app.use((req, res, next) => {
         // cares which surface converted. Skipped in FREE_MODE — nothing was
         // paid, so a "settlement" event would be a lie.
         if (!FREE_MODE) {
-          capturePostHogSettlement({
-            slug: def.slug,
-            rail: res.getHeader("X-Settled-Via") === "marketplace" ? "marketplace" : method,
-            network: method === "usdc" ? networkFromPaymentResponse(settleReceipt) : null,
-            priceUsd: Number(String(def.price ?? "").replace(/[^0-9.]/g, "")) || 0,
-            synthetic: method === "heartbeat" || isSyntheticRequest(req),
+          const rail = res.getHeader("X-Settled-Via") === "marketplace" ? "marketplace" : method;
+          const network = method === "usdc" ? networkFromPaymentResponse(settleReceipt) : null;
+          const priceUsd = Number(String(def.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+          const synthetic = method === "heartbeat" || isSyntheticRequest(req);
+          capturePostHogSettlement({ slug: def.slug, rail, network, priceUsd, synthetic });
+          // Sales ledger — the same sale, BY NAME, persisted on /data with the
+          // verified payer + settle tx so "what do external wallets actually
+          // buy" is answerable forever (the question the odometer can't).
+          recordSale({
+            slug: def.slug, priceUsd, rail, network,
+            payer: payerFromRequest(req),
+            tx: txFromPaymentResponse(settleReceipt),
+            synthetic,
           });
         }
       } else if (settleReceipt) {

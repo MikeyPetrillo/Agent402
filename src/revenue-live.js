@@ -224,6 +224,47 @@ export async function revenueSnapshot({ walletAddress, solanaWallet }) {
 const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "—");
 
+// "What's selling" — the sales ledger's merchant view (src/sales-ledger.js):
+// external paid calls BY NAME. The on-chain cards above prove the money;
+// this section names the products. Renders nothing until the first
+// externally-paid call lands (recording started 2026-07-04).
+const SALE_TX_URL = {
+  base: (h) => `https://basescan.org/tx/${h}`,
+  polygon: (h) => `https://polygonscan.com/tx/${h}`,
+  arbitrum: (h) => `https://arbiscan.io/tx/${h}`,
+  "robinhood (USDG)": (h) => `https://robinhoodchain.blockscout.com/tx/${h}`,
+  solana: (h) => `https://solscan.io/tx/${h}`,
+};
+function salesSection(sales) {
+  if (!sales) return "";
+  const rows = sales.topExternal || [];
+  const recent = sales.recentExternal || [];
+  const since = sales.recordingSince ? new Date(sales.recordingSince).toISOString().slice(0, 10) : null;
+  const empty = !rows.length && !recent.length;
+  return `
+    <h2 style="font-family:var(--font-body);font-weight:800;font-size:26px;margin:44px 0 6px;">What's selling</h2>
+    <p style="font-size:14px;color:var(--muted);margin:0 0 16px;">Every externally-paid call recorded by name at settle time${since ? ` (recording since ${esc(since)})` : ""} — canary, burner and heartbeat traffic excluded. Machine-readable: <a href="/api/sales">/api/sales</a>.</p>
+    ${empty
+      ? `<p style="font-family:var(--font-mono);font-size:13px;color:var(--muted);">no external paid calls recorded yet — the ledger names each one as it lands</p>`
+      : `<div class="ml-2col" style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;">
+      <div style="border:1.5px solid var(--ink);background:var(--card);padding:18px 20px;">
+        <div style="font-weight:800;font-size:15px;border-bottom:1px dashed #b3a98f;padding-bottom:8px;margin-bottom:10px;">top bought (30d) — $${(sales.totals?.external?.revenueUsd ?? 0).toFixed(4)} external</div>
+        <div style="font-family:var(--font-mono);font-size:12.5px;display:grid;gap:6px;">
+          ${rows.map((r) => `<div><a href="/tools/${esc(r.slug)}">${esc(r.slug)}</a> × ${r.sales} · $${r.revenueUsd.toFixed(4)}</div>`).join("") || '<div style="color:var(--muted);">—</div>'}
+        </div>
+      </div>
+      <div style="border:1.5px solid var(--ink);background:var(--card);padding:18px 20px;">
+        <div style="font-weight:800;font-size:15px;border-bottom:1px dashed #b3a98f;padding-bottom:8px;margin-bottom:10px;">recent external sales</div>
+        <div style="font-family:var(--font-mono);font-size:12.5px;display:grid;gap:6px;">
+          ${recent.slice(0, 10).map((s) => {
+            const link = s.tx && SALE_TX_URL[s.network] ? ` · <a href="${esc(SALE_TX_URL[s.network](s.tx))}" rel="noopener">tx</a>` : "";
+            return `<div><a href="/tools/${esc(s.slug)}">${esc(s.slug)}</a> $${s.priceUsd} · ${esc((s.network || s.rail))}${s.payer ? ` · <code>${esc(short(s.payer))}</code>` : ""}${link} · ${esc(s.at.slice(0, 16))}Z</div>`;
+          }).join("") || '<div style="color:var(--muted);">—</div>'}
+        </div>
+      </div>
+    </div>`}`;
+}
+
 export function revenuePage(baseUrl, snap) {
   const canonical = baseUrl + "/revenue";
   const title = "Live revenue — Agent402";
@@ -272,6 +313,7 @@ export function revenuePage(baseUrl, snap) {
       ${snap.rails.map(railCard).join("\n")}
     </div>
     <p style="font-size:13.5px;color:var(--muted);margin-top:26px;">Recent-window transfers are the last few hours of inbound stablecoin on each rail, classified with the same rule as the daily revenue digest: a payment is <strong>external</strong> only if it comes from a wallet that isn't ours (canary/test burners are excluded) and is per-call-sized (≤ $${MAX_CALL_USD}); bigger inbound is funding or tests, not a buy. Rails read best-effort: a flaky public RPC marks that rail unavailable without hiding the others.</p>
+    ${salesSection(snap.sales)}
   </main>
   ${ledgerFooterCompact(baseUrl)}`;
   return ledgerShell({

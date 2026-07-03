@@ -102,6 +102,12 @@ export const PACK_PRICES = {
   "dns-network-ops":       0.08,
   "status-snapshot":       0.07,
   "schema-evolution":      0.06,
+  // Strategy additions (2026-07): premium agent jobs on the newest kits —
+  // priced by the same sum-of-tools × tier rule as the rest of the registry.
+  "onchain-analyst":       0.20, // onchain-sql is $0.02 upstream-billed CDP SQL
+  "seo-audit":             0.07, // six network reads (~$0.014 × 5)
+  "wallet-readiness":      0.05, // CDP-indexed balance reads + onramp session
+  "cheapest-rail":         0.05, // four live chain reads
   // Light ($0.05 floor — pure-CPU bundles, PoW-eligible)
   "text-hygiene":          0.05,
   "decode-blob":           0.05,
@@ -1231,8 +1237,77 @@ export const PACK_STEPS = {
     ],
   },
 
+  // Agent-wallet preflight: balances on both major rails (the second
+  // wallet-balances step is the Solana read — a missing solanaAddress arg
+  // fails just that step with a 400, partial-success by design), gas
+  // context, and a funding link a human can open. All independent → fanout.
+  "wallet-readiness": {
+    mode: "fanout",
+    steps: [
+      { slug: "wallet-balances", mapInput: (a) => ({ address: a.address, network: "base" }) },
+      { slug: "wallet-balances", mapInput: (a) => ({ address: a.solanaAddress, network: "solana" }) },
+      { slug: "gas-snapshot",    mapInput: () => ({ network: "base" }) },
+      { slug: "onramp-link",     mapInput: (a) => ({ address: a.address, network: "base", amount: "10" }) },
+    ],
+  },
+
+  // SQL over Base with the schema in the same envelope — the follow-up
+  // query can be authored without a second discovery call. Chained so the
+  // final step can profile the result set: stats-summary runs over the
+  // first numeric column of the query rows (a distribution picture for
+  // time series; for a single-row aggregate it degenerates harmlessly).
+  "onchain-analyst": {
+    mode: "chain",
+    steps: [
+      { slug: "onchain-sql-schema", mapInput: () => ({}) },
+      { slug: "onchain-sql",        mapInput: (a) => ({ sql: a.sql, cacheSeconds: 300 }) },
+      { slug: "stats-summary",      mapInput: (_a, p) => {
+          const rows = p["onchain-sql"]?.rows ?? [];
+          const numericKey = Object.keys(rows[0] ?? {}).find((k) => Number.isFinite(Number(rows[0][k])));
+          const values = numericKey ? rows.map((r) => Number(r[numericKey])).filter(Number.isFinite) : [];
+          if (!values.length) {
+            throw Object.assign(new Error("query returned no numeric column to profile"), { statusCode: 422 });
+          }
+          return { values: values.slice(0, 10000) };
+      } },
+    ],
+  },
+
+  // Technical indexability: all six checks key off the one page URL.
+  // robots-check runs as Googlebot (the workflow tells agents to re-run
+  // with GPTBot/ClaudeBot for answer-engine policy); sitemap probes the
+  // conventional /sitemap.xml at the page's origin.
+  "seo-audit": {
+    mode: "fanout",
+    steps: [
+      { slug: "http-check",   mapInput: (a) => ({ url: a.url }) },
+      { slug: "tls-cert",     mapInput: (a) => ({ host: new URL(a.url).hostname }) },
+      { slug: "robots-check", mapInput: (a) => ({ url: a.url, userAgent: "Googlebot" }) },
+      { slug: "sitemap",      mapInput: (a) => ({ url: `${new URL(a.url).origin}/sitemap.xml` }) },
+      { slug: "meta",         mapInput: (a) => ({ url: a.url }) },
+      { slug: "http-headers", mapInput: (a) => ({ url: a.url }) },
+    ],
+  },
+
+  // Cross-chain gas shopping for real onchain actions (x402 buys are
+  // gasless — this is for everything else). ETH spot converts gwei to
+  // dollars. All reads are independent → fanout; gas-snapshot reads Base
+  // (the default settlement home) regardless of the comparison winner —
+  // the agent re-calls it for a different chain if the comparison says so.
+  "cheapest-rail": {
+    mode: "fanout",
+    steps: [
+      { slug: "l2-gas-comparison", mapInput: (a) => ({
+          networks: String(a.networks || "ethereum,base,arbitrum,optimism,polygon").split(/[\s,]+/).filter(Boolean),
+      }) },
+      { slug: "gas-snapshot",  mapInput: () => ({ network: "base" }) },
+      { slug: "gas-estimate",  mapInput: () => ({ network: "base" }) },
+      { slug: "crypto-price",  mapInput: () => ({ coins: "ETH", currency: "usd" }) },
+    ],
+  },
+
   // ──────────────────────────────────────────────────────────────────────
-  // End of PACK_STEPS. All 39 packs above; getStepConfig auto-stubs any
+  // End of PACK_STEPS. All 46 packs above; getStepConfig auto-stubs any
   // SKILL_PACKS entry that lands here without a matching PACK_STEPS row.
   // ──────────────────────────────────────────────────────────────────────
 };

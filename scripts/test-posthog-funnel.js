@@ -123,6 +123,7 @@ const proc = spawn("node", ["src/server.js"], {
     FREE_MODE: "",
     POSTHOG_TEST_CAPTURE: "1",
     POSTHOG_PAYWALL_FLUSH_MS: "1000", // flush fast so the test can observe it
+    SALES_LEDGER_DB: `/tmp/a402-funnel-sales-${process.pid}.db`, // isolated ledger for the /api/sales assertion
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -179,6 +180,12 @@ try {
     `exactly one settlement, slug=hash rail=pow (got ${settled.length}: ${JSON.stringify(settled.map((e) => e.properties))})`);
   ok(!captured.some((e) => JSON.stringify(e).match(/userAgent|"ip"|remoteAddr|x-forwarded/i)),
     "no caller identity in any captured event");
+
+  // Sales ledger rides the same settle hook: the PoW purchase above must be
+  // one named row, served by the free /api/sales endpoint.
+  const sales = await (await fetch(`${B}/api/sales`)).json();
+  ok(sales.totals?.byRail?.["external:pow"] === 1, `sales ledger recorded the PoW sale by name (byRail: ${JSON.stringify(sales.totals?.byRail)})`);
+  ok(sales.totals?.external?.revenueUsd === 0, "free-tier sale adds usage, not revenue");
 } catch (e) {
   ok(false, `integration leg threw: ${e.message}`);
 } finally {

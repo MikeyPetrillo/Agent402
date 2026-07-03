@@ -1650,6 +1650,141 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "wallet-readiness",
+    title: "Agent wallet readiness check",
+    tagline:
+      "One call answers 'can this wallet pay right now?' — USDC balances on Base AND Solana, live Base gas, and a ready-to-share Coinbase Onramp funding link if it's running dry.",
+    useCase:
+      "An agent (or the human operating it) is about to start a paid work session and needs to know the wallet is actually ready: does it hold USDC on the chains it pays on, what's gas doing, and — if the balance is low — where does a human top it up with a card? Checking each of those separately means three tools and a docs page; this pack returns the whole preflight in one envelope. Run it at session start, before a batch job, or on a schedule as a balance monitor.",
+    toolSlugs: [
+      "wallet-balances",
+      "gas-snapshot",
+      "onramp-link",
+    ],
+    workflow: [
+      "Call wallet-balances with {address, network: \"base\"} — returns every indexed ERC-20 + native balance. Find the USDC row (contract 0x833589fcd6edb6e08f4c7c32d4f71b54bda02913) and read its amount: this is the wallet's x402 spending power on Base.",
+      "If the agent also pays on Solana, call wallet-balances again with {address: <the Solana address>, network: \"solana\"} — same envelope, SPL balances, USDC mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v. (x402 settlement is gasless via EIP-3009 / sponsored transactions, so USDC is the only balance that matters — no ETH or SOL required.)",
+      "Call gas-snapshot with {network: \"base\"} for slow/standard/fast gas. The agent never pays gas on x402 buys, but gas context tells you whether any NON-x402 onchain action you're planning (a manual transfer, a contract call) is cheap right now.",
+      "If the USDC balance is below your working budget, call onramp-link with {address, network: \"base\", amount: \"<usd>\"} — it mints a single-use Coinbase Onramp URL a human can open to fund the wallet with a card or Apple Pay. Include the URL in your report; it expires unvisited, so minting it costs nothing but the call.",
+      "Assemble the verdict: { ready: usdcBase >= budget, balances: { base, solana }, gas, fundingLink } — 'ready' should be computed against the session budget the caller stated, not a fixed threshold.",
+    ],
+    claudePrompt:
+      "Run a wallet readiness preflight for 0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0 (Solana: J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg) using Agent402. (1) wallet-balances {address, network: \"base\"} — find the USDC row and note the amount. (2) wallet-balances {address: <the Solana address>, network: \"solana\"} — the SPL USDC amount. (3) gas-snapshot {network: \"base\"} — note standard gas. (4) If USDC < $5, onramp-link {address, network: \"base\", amount: \"10\"} and include the funding URL. Return {ready, usdcBase, usdcSolana, gas, fundingLink?} with ready = (usdcBase + usdcSolana) >= 5.",
+    promptArgs: [
+      {
+        name: "address",
+        description: "The EVM wallet address to check (0x…)",
+        required: true,
+        substitute: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0",
+      },
+      {
+        name: "solanaAddress",
+        description: "Optional Solana address to check SPL USDC as well",
+        required: false,
+        substitute: "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg",
+      },
+    ],
+  },
+
+  {
+    slug: "onchain-analyst",
+    title: "Onchain analyst (SQL over Base)",
+    tagline:
+      "Ask Base anything in one paid call: your SQL runs against Coinbase's indexed, DECODED chain data (events with parsed parameters, transactions, blocks, user-ops) with the live schema alongside — no indexer, no RPC archaeology.",
+    useCase:
+      "You need an answer that lives on-chain — 'how many wallets touched this contract this week', 'what did this address settle today', 'top USDC recipients yesterday' — and writing an indexer or paging through explorer HTML is absurd for one question. This pack runs your read-only ClickHouse-dialect SQL against base.events / base.transactions / base.blocks and returns the schema document in the same envelope, so a follow-up query can be written without a second discovery call. This is the same data path that powers the public x402 Economy Observatory at /x402-economy.",
+    toolSlugs: [
+      "onchain-sql-schema",
+      "onchain-sql",
+      "stats-summary",
+    ],
+    workflow: [
+      "Read the schema step first (onchain-sql-schema, no input): base.events is the workhorse — decoded logs with event_name, address, transaction_hash, block_timestamp, and a parameters map you can address as parameters['from']. Cast Variant values with toString()/toUInt256OrZero() before comparing or summing.",
+      "Write SELECT-only SQL (WITH … SELECT is fine) against the tables you found. ALWAYS bound by block_timestamp (e.g. >= now() - INTERVAL 7 DAY) — the caps are 50k rows / 30s / 100GB read, and an unbounded scan of base.events will hit them. Joins are limited to 12; prefer transaction_hash IN (subquery) shapes over raw JOINs.",
+      "Run it through the onchain-sql step. If the result is empty, suspect the WHERE before the data: addresses in base.events are FixedString(42) lowercase — compare against lower('0x…'). If it errors with a budget/timeout message, narrow the time window first, then the column list.",
+      "Iterate: the pack is cheap enough to run several times while you refine. For repeated dashboards pass cacheSeconds (up to 900) so identical queries within the window are served from cache without re-scanning.",
+      "The pack's final step runs stats-summary over the first numeric column of your result set — count, sum, mean, median, stddev, quartiles in one shot. For a time series (daily counts, per-block values) that's the distribution picture without a second query; for a single-row aggregate it's a no-op you can ignore.",
+    ],
+    claudePrompt:
+      "Answer a question with SQL over Base using Agent402's onchain-analyst pack. Warm-up: run SELECT COUNT(*) AS blocks FROM base.blocks WHERE block_number > 32000000 to prove the pipe. Then the real question — 'How many USDC transfers settled on Base in the last 24 hours?': (1) read the schema from the pack's schema step, (2) write SELECT COUNT(*) AS transfers FROM base.events WHERE address = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913' AND event_name = 'Transfer' AND block_timestamp >= now() - INTERVAL 1 DAY, (3) run it via the sql step and report the count. Keep every query SELECT-only and time-bounded.",
+    promptArgs: [
+      {
+        name: "sql",
+        description: "Read-only ClickHouse-dialect SQL to run (SELECT/WITH only, time-bounded)",
+        required: true,
+        substitute: "SELECT COUNT(*) AS blocks FROM base.blocks WHERE block_number > 32000000",
+      },
+    ],
+  },
+
+  {
+    slug: "seo-audit",
+    title: "Technical SEO audit",
+    tagline:
+      "Can search engines and AI crawlers actually index this page? One pass over reachability, TLS, robots policy, sitemap health, meta/OpenGraph tags, and the on-page link graph.",
+    useCase:
+      "You shipped a page (or inherited a site) and want the technical indexability picture without opening six tools: is it up and fast, is TLS valid, does robots.txt allow the crawlers that matter (including LLM bots), does the sitemap parse, are title/description/OG tags present and sized right, and where do its links point? Distinct from a security audit (headers/SPF/CT) and an uptime snapshot — this is the 'will Google and ChatGPT see what I meant' check. Run it pre-launch, post-migration, or on a competitor.",
+    toolSlugs: [
+      "http-check",
+      "tls-cert",
+      "robots-check",
+      "sitemap",
+      "meta",
+      "http-headers",
+    ],
+    workflow: [
+      "http-check with the page URL — status, latency, redirect chain. A 200 under ~800ms is healthy; a 3xx chain longer than one hop wastes crawl budget and should be flattened.",
+      "tls-cert with the host — issuer, expiry, chain trust. daysRemaining < 21 is a renewal warning; an untrusted chain is an indexing risk (and a browser warning for humans).",
+      "robots-check with the page URL — is it fetchable by crawlers? Re-run with userAgent values you care about (Googlebot, GPTBot, ClaudeBot, PerplexityBot) — LLM crawler policy is part of modern SEO, and an accidental Disallow: / for AI bots silently removes you from answer engines.",
+      "sitemap with the site's sitemap.xml URL — type, URL count, parse errors. A sitemap that 404s or is empty means discovery depends entirely on the link graph.",
+      "meta with the page URL — title, description, canonical, OpenGraph/Twitter cards. Flag: missing description, title > 60 chars, missing og:image (kills social/link-preview CTR), missing canonical on parameterized URLs.",
+      "http-headers with the page URL — the response headers search engines act on. Flag: an X-Robots-Tag: noindex (silently removes the page from every index regardless of robots.txt), a missing/short Cache-Control on static assets, and a Content-Type without charset. Summarize as a pass/warn/fail card per check with the two highest-impact fixes on top.",
+    ],
+    claudePrompt:
+      "Run a technical SEO audit of https://example.com with Agent402: (1) http-check {url} — status + latency + redirects. (2) tls-cert {host: \"example.com\"} — expiry + trust. (3) robots-check {url, userAgent: \"Googlebot\"} and again with \"GPTBot\" — crawlability for search AND answer engines. (4) sitemap {url: \"https://example.com/sitemap.xml\"} — parses, URL count. (5) meta {url} — title/description/OG completeness, title ≤ 60 chars. (6) http-headers {url} — flag X-Robots-Tag: noindex and cache policy. Return a card: {reachability, tls, robots: {googlebot, gptbot}, sitemap, meta, headers, topFixes: [two highest-impact items]}.",
+    promptArgs: [
+      {
+        name: "url",
+        description: "The page URL to audit (https://…)",
+        required: true,
+        substitute: "https://example.com",
+      },
+    ],
+  },
+
+  {
+    slug: "cheapest-rail",
+    title: "Cheapest rail right now",
+    tagline:
+      "Where should an agent transact this minute? Live gas on Ethereum + every major L2 side by side, Base gas tiers, a fee estimate for your transaction type, and ETH spot to price it all in dollars.",
+    useCase:
+      "An agent about to do REAL onchain work — deploy a contract, move funds, batch-settle, mint — wants to pick the chain and the moment. Gas varies 10-100x between Ethereum and its L2s and swings hour to hour; eyeballing four gas trackers is human work. One call returns the cross-chain comparison, the chosen chain's slow/standard/fast tiers, a per-transaction-type estimate, and the ETH price to convert gwei into dollars. (x402 tool payments themselves are gasless — this pack is for everything else an agent does on-chain.)",
+    toolSlugs: [
+      "l2-gas-comparison",
+      "gas-snapshot",
+      "gas-estimate",
+      "crypto-price",
+    ],
+    workflow: [
+      "l2-gas-comparison with {networks: [\"ethereum\", \"base\", \"arbitrum\", \"optimism\", \"polygon\"]} — one row per chain with current gas. This is the headline: sort ascending and you have the cheapest venue.",
+      "gas-snapshot with {network: <the winner>} — slow/standard/fast tiers on the chosen chain. If your action is deferrable, the slow tier is often half the fast tier; note the spread.",
+      "gas-estimate for your transaction type on that chain — a simple transfer, an ERC-20 transfer, and a contract deploy differ by an order of magnitude in gas units; this converts 'gwei is low' into 'this action costs N'.",
+      "crypto-price with {coins: \"ETH\", currency: \"usd\"} — multiply units × price × ETH spot to state the cost in dollars, which is the number a budget check actually wants.",
+      "Report: { cheapest: <chain>, comparison: [...], tiers: {...}, estimatedCostUsd, decision: 'act now on <chain>' | 'defer — spread suggests off-peak in a few hours' }.",
+    ],
+    claudePrompt:
+      "Find the cheapest chain for an ERC-20 transfer right now using Agent402 (networks: ethereum,base,arbitrum,optimism,polygon): (1) l2-gas-comparison with that network list — sort by gas ascending. (2) gas-snapshot {network: <cheapest>} — read the standard tier. (3) gas-estimate on that network for an ERC-20 transfer. (4) crypto-price {coins: \"ETH\", currency: \"usd\"} — express the final cost in USD. Return {cheapest, gasStandard, estimatedCostUsd, comparison}.",
+    promptArgs: [
+      {
+        name: "networks",
+        description: "Comma-separated chains to compare (default: ethereum,base,arbitrum,optimism,polygon)",
+        required: false,
+        substitute: "ethereum,base,arbitrum,optimism,polygon",
+      },
+    ],
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.

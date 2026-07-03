@@ -615,6 +615,9 @@ jobs:
       - name: PostHog funnel (discovery→402→settlement capture; paid-mode boot vs mock facilitator — offline)
         run: node scripts/test-posthog-funnel.js
 
+      - name: Sales ledger unit tests (named sales, internal/external classification, revenue math — offline)
+        run: node scripts/test-sales-ledger.js
+
       - name: CDP kit live check (real balances + onramp session — skips without secrets)
         env:
           CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}

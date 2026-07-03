@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Sales ledger** (`/api/sales` + a "What's selling" section on `/revenue`): every served
+  paid/proven call recorded BY NAME at settle time — slug, price, rail, settlement chain,
+  verified EIP-3009 payer, settle tx — on the persistent `/data` volume, classified
+  internal/external (heartbeat-token traffic and burner-wallet payers never count as
+  demand). Answers the merchant question the odometer can't: which tools do external
+  wallets actually buy, and who comes back. The paid canary now sends the POW_SECRET-signed
+  heartbeat token on every request so its daily real-money buys are excluded from demand
+  metrics on all rails (including Solana, where the payer isn't server-visible).
+
+- **Four new skill packs** (catalog: 1,346 → **1,350** tools, 42 → **46** packs), aimed at
+  real agent jobs on the newest kits: `wallet-readiness` ($0.05 — USDC balances on Base +
+  Solana, gas, and a Coinbase Onramp funding link in one preflight), `onchain-analyst`
+  ($0.20 — your SQL over Coinbase's decoded Base data with the schema + a stats profile of
+  the result in the same envelope), `seo-audit` ($0.07 — reachability, TLS, robots policy
+  incl. LLM crawlers, sitemap, meta/OG, and X-Robots-Tag headers for one URL), and
+  `cheapest-rail` ($0.05 — live cross-chain gas comparison priced in dollars). All four are
+  wallet-only (every underlying tool hits the network). agent402-mcp 0.11.2 and
+  agent402-client 0.4.2 republished for the corrected catalog metadata.
+
 - **PostHog conversion funnel** (discovery → 402 → settlement): the env-gated PostHog stream
   gains three funnel events — `discovery` (machine-readable surface fetches: llms.txt,
   openapi.json, the x402 manifest, pricing, `/api/find`, index, route, and the MCP connector's

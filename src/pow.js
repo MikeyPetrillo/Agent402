@@ -132,6 +132,10 @@ export const WALLET_ONLY_SLUGS = new Set([
   "skill-link-preview", "skill-api-investigation", "skill-email-deliverability",
   "skill-location-intel", "skill-dns-network-ops", "skill-status-snapshot",
   "skill-schema-evolution",
+  // Strategy additions (2026-07): every underlying tool hits the network
+  // (CDP-indexed balances/SQL, live gas RPCs, page fetches) — wallet-only.
+  "skill-wallet-readiness", "skill-onchain-analyst", "skill-seo-audit",
+  "skill-cheapest-rail",
   // Light-tier packs that call wallet-only tools in-process:
   "skill-trip-planner",       // calls weather-forecast (wallet-only)
   "skill-user-onboarding",   // calls email-validate (wallet-only)
