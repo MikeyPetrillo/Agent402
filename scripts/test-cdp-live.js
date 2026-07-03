@@ -72,10 +72,19 @@ try {
 try {
   const res = await tool("onchain-sql-schema").handler({});
   ok(Boolean(res.schema), "onchain-sql-schema returned a schema document");
-  // Print the base.events layout — ground truth for the x402 Economy
-  // Observatory queries (this log line IS the discovery deliverable).
-  const s = JSON.stringify(res.schema);
-  console.log(`SCHEMA (first 3000 chars): ${s.slice(0, 3000)}`);
+  // Print every table's column names + the full column detail for
+  // base.events — ground truth for the x402 Economy Observatory queries
+  // (these log lines ARE the discovery deliverable).
+  const tables = res.schema?.tables || res.schema?.schema?.tables || [];
+  for (const t of tables) {
+    const tname = t.name || t.table || "?";
+    const cols = (t.columns || []).map((c) => c.name).join(",");
+    console.log(`TABLE ${tname}: ${cols}`);
+    if (/events$/.test(String(tname)) && !/encoded/.test(String(tname))) {
+      console.log(`EVENTS DETAIL: ${JSON.stringify(t.columns).slice(0, 2500)}`);
+    }
+  }
+  if (!tables.length) console.log(`SCHEMA RAW (first 2000): ${JSON.stringify(res.schema).slice(0, 2000)}`);
 } catch (e) {
   ok(false, `onchain-sql-schema live call failed: ${e.statusCode || "?"} ${String(e.message).slice(0, 160)}`);
 }
