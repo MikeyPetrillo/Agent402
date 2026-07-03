@@ -15,8 +15,58 @@
 // lean on CDP's own 15-min query cache), so the page costs at most a few
 // queries per half hour regardless of traffic. Env-gated: without CDP keys
 // the page renders a "warming up" state instead of erroring.
+import Database from "better-sqlite3";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
+
+// Persistent daily history — the live query only reaches back 30 days, so
+// every snapshot upserts its daily rows into SQLite (same /data-volume
+// pattern as stats/revenue-ledger). History compounds forever; the weekly
+// report reads trailing complete weeks from here, not from the query window.
+const HISTORY_DB = process.env.X402_ECONOMY_DB || join(existsSync("/data") ? "/data" : "/tmp", "agent402-economy.db");
+const hdb = new Database(HISTORY_DB);
+hdb.pragma("journal_mode = WAL");
+hdb.exec(`CREATE TABLE IF NOT EXISTS daily (
+  day TEXT PRIMARY KEY,
+  settlements INTEGER NOT NULL,
+  payers INTEGER NOT NULL,
+  updated_ts INTEGER
+)`);
+const upsertDay = hdb.prepare(`INSERT INTO daily (day, settlements, payers, updated_ts)
+  VALUES (@day, @settlements, @payers, @updated_ts)
+  ON CONFLICT (day) DO UPDATE SET settlements = excluded.settlements, payers = excluded.payers, updated_ts = excluded.updated_ts`);
+
+/** Upsert a snapshot's daily rows into the persistent history. Exported for tests. */
+export function recordDailyHistory(daily) {
+  const now = Math.floor(Date.now() / 1000);
+  const tx = hdb.transaction((rows) => {
+    for (const d of rows) {
+      if (d?.day && Number.isFinite(d.settlements)) {
+        upsertDay.run({ day: String(d.day), settlements: d.settlements, payers: d.payers ?? 0, updated_ts: now });
+      }
+    }
+  });
+  tx(daily || []);
+}
+
+/** Week-over-week from stored history: the trailing 7 COMPLETE days (today
+ *  excluded — it's partial) vs the 7 before them. Exported for tests. */
+export function weeklyFromHistory(todayIso = new Date().toISOString().slice(0, 10)) {
+  const rows = hdb.prepare("SELECT day, settlements, payers FROM daily WHERE day < ? ORDER BY day DESC LIMIT 14").all(todayIso);
+  const sum = (slice) => ({
+    settlements: slice.reduce((s, r) => s + r.settlements, 0),
+    payersPeak: slice.reduce((m, r) => Math.max(m, r.payers), 0),
+    days: slice.length,
+  });
+  const thisWeek = sum(rows.slice(0, 7));
+  const lastWeek = sum(rows.slice(7, 14));
+  const growthPct = lastWeek.settlements > 0
+    ? Number((((thisWeek.settlements - lastWeek.settlements) / lastWeek.settlements) * 100).toFixed(1))
+    : null;
+  return { thisWeek, lastWeek, growthPct, historyDays: hdb.prepare("SELECT COUNT(*) AS n FROM daily").get().n };
+}
 
 const USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -126,9 +176,11 @@ export async function x402EconomySnapshot() {
       payers: Number(r.payers),
     }));
     out.totals.last30d = { settlements: out.daily.reduce((s, d) => s + d.settlements, 0) };
+    try { recordDailyHistory(out.daily); } catch (e) { out.errors.push(`history: ${String(e?.message || e).slice(0, 80)}`); }
   } else {
     out.errors.push(`daily: ${String(dailyRes.reason?.message || dailyRes.reason).slice(0, 200)}`);
   }
+  try { out.weekly = weeklyFromHistory(); } catch (e) { out.errors.push(`weekly: ${String(e?.message || e).slice(0, 80)}`); }
   if (volRes.status === "fulfilled") {
     const r = volRes.value.rows?.[0] || {};
     out.totals.last7d = {
@@ -192,6 +244,9 @@ export function x402EconomyPage(baseUrl, snap) {
       ${stat("UNIQUE PAYERS · 7D", fmt(t7.payers))}
       ${stat("SETTLEMENTS · 30D", fmt(t30.settlements))}
     </div>
+    ${snap.weekly?.growthPct != null && snap.weekly.lastWeek.days === 7
+      ? `<p style="font-family:var(--font-mono);font-size:14px;margin:-16px 0 30px;color:var(--muted);">week over week: <strong style="color:${snap.weekly.growthPct >= 0 ? "var(--accent)" : "var(--ink)"};">${snap.weekly.growthPct >= 0 ? "+" : ""}${snap.weekly.growthPct}%</strong> settlements (${fmt(snap.weekly.thisWeek.settlements)} vs ${fmt(snap.weekly.lastWeek.settlements)} the week before — complete days only)</p>`
+      : `<p style="font-family:var(--font-mono);font-size:12.5px;margin:-16px 0 30px;color:var(--muted);">week-over-week trend unlocks once two full weeks of history accumulate (${snap.weekly?.historyDays ?? 0} days recorded so far)</p>`}
     <h2 style="font-size:24px;font-weight:800;margin:0 0 12px;">Daily settlements (30 days)</h2>
     <div style="border:1.5px solid var(--ink);background:var(--card);padding:18px 20px;margin:0 0 30px;font-family:var(--font-mono);font-size:12.5px;">
       ${snap.daily.map((d) => `

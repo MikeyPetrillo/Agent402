@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Weekly x402 Economy report**: every observatory refresh now persists its daily settlement
+  rows into SQLite on the `/data` volume, so history compounds past the 30-day query window.
+  `/x402-economy` gains a week-over-week trend line (trailing 7 complete days vs the prior 7)
+  and `/api/x402-economy` exposes `weekly`; the daily digest workflow warms the snapshot so a
+  history row lands every day even with zero page traffic.
+
 - **Claims audit** (site + GitHub + packages): every public factual claim re-verified against
   the live system. Tool counts corrected 1,338 → **1,346** across 27 files (README, wiki, npm
   package descriptions, site pages, badges); free-tier count corrected to **1,156**

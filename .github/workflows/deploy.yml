@@ -605,6 +605,9 @@ jobs:
       - name: CDP kit unit tests (JWT signing both key formats, validation, faucet gate — offline)
         run: node scripts/test-cdp-kit.js
 
+      - name: Economy history unit tests (daily upsert idempotency + week-over-week math — offline)
+        run: node scripts/test-x402-economy.js
+
       - name: CDP kit live check (real balances + onramp session — skips without secrets)
         env:
           CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}

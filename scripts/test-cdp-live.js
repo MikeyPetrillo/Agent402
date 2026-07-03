@@ -97,6 +97,7 @@ try {
   ok(Array.isArray(snap.daily) && snap.daily.length > 0, `daily settlement series populated (${snap.daily.length} days, latest: ${JSON.stringify(snap.daily[0] ?? {})})`);
   ok(Array.isArray(snap.topMerchants) && snap.topMerchants.length > 0, `top merchants populated (top: ${JSON.stringify(snap.topMerchants[0] ?? {})})`);
   ok(snap.totals?.last7d?.settlements >= 0, `7d totals computed (${JSON.stringify(snap.totals?.last7d)})`);
+  ok(snap.weekly && typeof snap.weekly.historyDays === "number" && snap.weekly.historyDays >= 1, `daily history persisted (${snap.weekly?.historyDays} days, WoW: ${snap.weekly?.growthPct ?? "collecting"})`);
 } catch (e) {
   ok(false, `observatory snapshot failed: ${e.statusCode || "?"} ${String(e.message).slice(0, 200)}`);
 }

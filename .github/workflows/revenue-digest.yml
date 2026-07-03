@@ -31,6 +31,9 @@ jobs:
         with:
           node-version: 22
 
+      - name: Warm the x402 Economy snapshot (persists a daily-history row on prod)
+        run: curl -s --max-time 90 "$PROD/api/x402-economy" -o /dev/null -w "economy snapshot: HTTP %{http_code}\n" || true
+
       - name: Scan every offered rail
         run: |
           mkdir -p /tmp/digest
