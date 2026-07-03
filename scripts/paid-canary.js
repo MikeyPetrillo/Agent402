@@ -267,6 +267,71 @@ async function main() {
     }
   })();
 
+  // Optional Robinhood Chain leg — same burner key as the EVM canary above
+  // (one 0x address, funded with USDG on chain 4663). wrapFetchWithPayment
+  // lets the client pick ANY eip155 accept (it would settle on Base), so this
+  // leg negotiates manually: take the live 402, filter the accepts down to
+  // eip155:4663, and pay THAT — settlement can only happen in USDG on
+  // Robinhood Chain, a true rail proof with no silent Base fallback. The
+  // accept carries the USDG asset + EIP-712 domain (extra.name/version), so
+  // the standard EVM scheme signs it as-is. $0.001/call; a funded burner
+  // covers years of daily proof. Informational: failures WARN, never page
+  // (the EVM verdict above decides paging) — but a WARN here that robinhood
+  // is missing from the accepts is the early signal the rail was dropped.
+  await (async () => {
+    try {
+      const { x402HTTPClient } = await import("@x402/core/client");
+      const http = new x402HTTPClient(client);
+      const reqInit = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "usdg-canary" }) };
+      const bare = await fetch(`${TARGET}/api/hash`, reqInit);
+      if (bare.status !== 402) {
+        console.warn(`\nWARN  robinhood leg: expected a 402 challenge from /api/hash, got HTTP ${bare.status}`);
+        return;
+      }
+      let paymentRequired;
+      try {
+        const bareBody = await bare.json().catch(() => undefined);
+        paymentRequired = http.getPaymentRequiredResponse((n) => bare.headers.get(n), bareBody);
+      } catch (e) {
+        console.warn(`\nWARN  robinhood leg: could not parse the 402 challenge: ${(e?.message || String(e)).slice(0, 120)}`);
+        return;
+      }
+      const rh = (paymentRequired.accepts || []).filter((a) => String(a.network || "") === "eip155:4663");
+      if (!rh.length) {
+        console.warn(`\nWARN  robinhood leg: eip155:4663 NOT among the live 402 accepts — the Robinhood/USDG rail has dropped out of the offer (PAYMENT_NETWORKS or ROBINHOOD_FACILITATOR_URL changed on prod?)`);
+        return;
+      }
+      const payload = await client.createPaymentPayload({ ...paymentRequired, accepts: rh });
+      const payHeaders = http.encodePaymentSignatureHeader(payload);
+      const paid = await fetch(`${TARGET}/api/hash`, {
+        ...reqInit,
+        headers: { ...reqInit.headers, ...payHeaders, "Access-Control-Expose-Headers": "PAYMENT-RESPONSE,X-PAYMENT-RESPONSE" },
+      });
+      const body = await paid.json().catch(() => ({}));
+      if (paid.status === 200 && typeof body.hex === "string") {
+        let tx = null, net = null;
+        const receiptHdr = paid.headers.get("payment-response") || paid.headers.get("x-payment-response");
+        if (receiptHdr) {
+          try {
+            const receipt = JSON.parse(Buffer.from(receiptHdr, "base64").toString("utf8"));
+            tx = receipt?.transaction || null;
+            net = receipt?.network || null;
+          } catch { /* best-effort */ }
+        }
+        console.log(`\nOK    robinhood  /api/hash  → settled $0.001 USDG on Robinhood Chain (payer ${account.address}${net ? `, network ${net}` : ""})${tx ? `\n      tx: https://robinhoodchain.blockscout.com/tx/${tx}` : "\n      (no settle receipt header found — settlement claimed by 200 only)"}`);
+      } else if (paid.status === 402) {
+        const h = paid.headers.get("payment-required");
+        let reason = null;
+        if (h) { try { reason = JSON.parse(Buffer.from(h, "base64").toString("utf8"))?.error ?? null; } catch { /* ignore */ } }
+        console.warn(`\nWARN  robinhood leg did NOT settle (HTTP 402, payer ${account.address}) — facilitator reason: ${JSON.stringify(reason)} (unfunded USDG burner, facilitator outage, or EIP-712 domain drift)`);
+      } else {
+        console.warn(`\nWARN  robinhood leg: HTTP ${paid.status} ${JSON.stringify(body).slice(0, 120)}`);
+      }
+    } catch (e) {
+      console.warn(`\nWARN  robinhood leg errored: ${(e?.message || String(e)).slice(0, 160)}`);
+    }
+  })();
+
   const decision = decideCanary(results);
   const spentUsd = decision.rows.filter((r) => r.cls === "settled").reduce((s, r) => s + (r.priceUsd || 0), 0);
   console.log(`\npayer ${account.address}`);

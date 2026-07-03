@@ -44,6 +44,11 @@ jobs:
           # on the operator dashboard. Without it the probe still works but its
           # successful PoW call is counted as real external demand.
           POW_SECRET: ${{ secrets.POW_SECRET }}
+          # Presence of this secret is the "operator intends the Robinhood/USDG
+          # rail" signal — the rails check below only requires eip155:4663 in
+          # the live 402 accepts when it is set, so intentionally disabling the
+          # rail (removing the secret) never pages.
+          ROBINHOOD_FACILITATOR_URL: ${{ secrets.ROBINHOOD_FACILITATOR_URL }}
         run: |
           probe() {
             FAILS=""
@@ -57,8 +62,22 @@ jobs:
             # Paywall must be ENGAGED: a wallet-only tool returns 402 when unpaid.
             # Catches an accidental FREE_MODE / gate regression that would give
             # paid tools away for free (a silent revenue-loss incident).
-            PW=$(curl -s --max-time 15 -o /dev/null -w "%{http_code}" -X POST "$PROD/api/extract" -H 'Content-Type: application/json' -d '{"url":"https://example.com"}')
+            PW=$(curl -s --max-time 15 -D /tmp/hb-402.h -o /dev/null -w "%{http_code}" -X POST "$PROD/api/extract" -H 'Content-Type: application/json' -d '{"url":"https://example.com"}')
             [ "$PW" = "402" ] || FAILS="$FAILS paywall($PW)"
+            # Payment RAILS must stay in the offer. A rail silently dropping
+            # out of the 402 accepts loses that chain's revenue with no error
+            # anywhere (the 2026-07-02 incident class: buyers simply never see
+            # the option). Base is always required; Robinhood/USDG is required
+            # iff the ROBINHOOD_FACILITATOR_URL secret says the operator
+            # intends the rail.
+            if [ "$PW" = "402" ]; then
+              NETS=$(tr -d '\r' < /tmp/hb-402.h | awk -F': ' 'tolower($1)=="payment-required"{print $2}' | head -1 \
+                | base64 -d 2>/dev/null | jq -r '[.accepts[]?.network] | join(",")' 2>/dev/null || echo "")
+              case "$NETS" in *eip155:8453*) : ;; *) FAILS="$FAILS rails(base-missing:${NETS:-unparsed})";; esac
+              if [ -n "$ROBINHOOD_FACILITATOR_URL" ]; then
+                case "$NETS" in *eip155:4663*) : ;; *) FAILS="$FAILS rails(robinhood-missing:${NETS:-unparsed})";; esac
+              fi
+            fi
             node --input-type=module -e '
               const B = process.env.PROD;
               const { createHash, createHmac } = await import("node:crypto");

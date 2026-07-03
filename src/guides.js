@@ -326,6 +326,101 @@ agent payments, and it's the one Agent402 ships. The whole kit is
 USDC (or proof-of-work on the free tools).
 `,
   },
+  {
+    slug: "usdg-payments-robinhood-chain",
+    title: "Accept USDG payments on Robinhood Chain over x402",
+    description:
+      "How AI agents pay in USDG (Global Dollar) on Robinhood Chain via the x402 protocol — and how to accept it as a seller: chain parameters, gasless EIP-3009 settlement, buyer code, and how to verify a settlement on-chain.",
+    md: `
+Robinhood Chain (an Arbitrum Orbit L2, chain id **4663**) reached mainnet on
+2026-07-01, and its canonical stablecoin is **USDG (Global Dollar)** — not
+Circle USDC. Agent402 settled a real x402 payment in USDG on the chain's
+second day of mainnet, and this guide documents everything that took: the
+chain parameters, the buyer flow, the seller config, and how to recognize an
+x402 settlement on a block explorer.
+
+## Chain parameters
+
+| | |
+|---|---|
+| Chain id | 4663 (CAIP-2: \`eip155:4663\`) |
+| RPC | \`https://rpc.mainnet.chain.robinhood.com\` |
+| Explorer | \`https://robinhoodchain.blockscout.com\` |
+| Stablecoin | USDG (Global Dollar) — \`0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168\`, 6 decimals |
+| EIP-712 domain | name \`"Global Dollar"\`, version \`"1"\` |
+
+## How a payment works (same x402, different stablecoin)
+
+Nothing about the protocol changes: the buyer hits a paid endpoint, gets an
+HTTP **402** whose \`accepts\` includes an \`eip155:4663\` option carrying the
+USDG contract address and its EIP-712 domain, signs an **EIP-3009
+\`transferWithAuthorization\`** with its own key, and retries. A facilitator
+submits the transfer on-chain and pays the gas — the buyer needs only USDG,
+no ETH, no bridge, no account.
+
+## Buy something on Robinhood Chain (JavaScript)
+
+The standard x402 EVM client signs USDG as-is (asset + domain come from the
+402's \`accepts\` entry). One subtlety: a multi-chain seller offers several
+networks, and the default client may pick another chain — filter the accepts
+to \`eip155:4663\` to force USDG settlement:
+
+\`\`\`js
+import { x402Client, x402HTTPClient } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const client = new x402Client();
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
+const http = new x402HTTPClient(client);
+
+const url = "https://agent402.tools/api/hash";
+const init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "hello" }) };
+const challenge = await fetch(url, init);                       // → 402
+const required = http.getPaymentRequiredResponse((n) => challenge.headers.get(n), await challenge.json().catch(() => undefined));
+const robinhood = required.accepts.filter((a) => a.network === "eip155:4663");
+const payload = await client.createPaymentPayload({ ...required, accepts: robinhood });
+const res = await fetch(url, { ...init, headers: { ...init.headers, ...http.encodePaymentSignatureHeader(payload) } });
+// 200 — and the PAYMENT-RESPONSE header carries the on-chain tx hash
+\`\`\`
+
+## Accept USDG as a seller (self-hosted Agent402)
+
+The open-source server ships the rail; enabling it is config:
+
+\`\`\`bash
+PAYMENT_NETWORKS=base,solana,polygon,arbitrum,robinhood \\
+ROBINHOOD_FACILITATOR_URL=<an x402 facilitator that settles eip155:4663> \\
+WALLET_ADDRESS=0xYourRevenueWallet npm start
+\`\`\`
+
+Every paid route's 402 now offers USDG on Robinhood Chain alongside USDC on
+the other chains. If the facilitator URL is unset, the server degrades
+gracefully — the robinhood option is simply omitted; every other rail keeps
+serving.
+
+## How to recognize an x402 settlement on Blockscout
+
+On-chain there is no "402" label — the tell is the shape of the transaction:
+
+1. **Method is \`transferWithAuthorization\`** (EIP-3009, selector
+   \`0xe3ee160e\`) on the USDG contract — not a plain \`transfer\`.
+2. **The tx sender is the facilitator's relayer**, not the buyer — the buyer
+   only signed; it paid no gas. "Sender ≠ the address whose USDG moved" is
+   the gasless-settlement signature.
+3. **The decoded transfer** shows \`from\` = the buyer's wallet, \`to\` = the
+   seller's revenue wallet, value = the quoted price.
+
+A real example — the settlement that verified this guide:
+[\`0xae8e3e40…f826\`](https://robinhoodchain.blockscout.com/tx/0xae8e3e4048a28a1db30ad17ac83d998885623c764d0e3d27abf8e817f578f826).
+
+## Reads, not just payments
+
+Agent402's keyless chain tools speak Robinhood Chain too — \`tx-status\` and
+\`gas-estimate\` accept \`network=robinhood\` against the public RPC, so an
+agent can verify its own settlement for $0.001 without an RPC key.
+`,
+  },
 ];
 
 const GUIDE_INDEX_CSS = `
