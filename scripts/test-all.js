@@ -36,6 +36,10 @@ const NETWORK = new Set([
   // must not hard-block the deploy gate).
   "/api/weather-current", "/api/weather-daily", "/api/weather-hourly",
   "/api/weather-history", "/api/weather-air-quality",
+  // CDP kit: live Coinbase Developer Platform calls, env-gated on CDP keys
+  // (503 without them — the CI test env has none; scripts/test-cdp-live.js
+  // covers the real calls where the secrets exist).
+  "/api/wallet-balances", "/api/testnet-fund", "/api/onramp-link",
   "/api/x402-quote", "/api/usdc-balance", "/api/tx-status", "/api/gas-estimate", "/api/x402-verify", "/api/ens-resolve",
   // Macro-kit: all routes hit live upstreams (FRED, Treasury Fiscal Data, ECB,
   // World Bank). FRED-keyed routes return 503 without FRED_API_KEY — the

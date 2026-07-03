@@ -1,0 +1,281 @@
+// CDP kit — agent-wallet onboarding tools powered by the Coinbase Developer
+// Platform, reusing the same CDP_API_KEY_ID / CDP_API_KEY_SECRET that already
+// drive x402 settlement (no new secrets). Env-gated like llm-kit: missing
+// keys → 503 at call time, never a boot failure.
+//
+//   wallet-balances  $0.002  indexed ERC-20 + native balances for any address
+//                            (base / ethereum / base-sepolia) — one call, no
+//                            per-token contract wrangling
+//   testnet-fund     $0.001* base-sepolia faucet (USDC/ETH) so a new agent can
+//                            run the FULL x402 payment loop with zero real
+//                            funds (*PoW free tier applies — solve a hash
+//                            challenge instead of paying)
+//   onramp-link      $0.001  single-use Coinbase Onramp URL that lets a human
+//                            fund an agent's wallet with a card / Apple Pay
+//
+// Auth: CDP REST uses a short-lived JWT (ES256 for PEM EC keys, EdDSA for
+// base64 Ed25519 keys) with a per-request `uris` claim. Implemented on
+// node:crypto — the @coinbase/cdp-sdk dependency tree (axios/viem/solana-kit)
+// is far heavier than the three REST calls we make. Claim structure mirrors
+// the SDK's auth/utils/jwt.ts exactly.
+import { createPrivateKey, createSign, randomBytes, sign as edSign } from "node:crypto";
+
+const CDP_HOST = "api.cdp.coinbase.com";
+
+const keyId = () => (process.env.CDP_API_KEY_ID || "").trim();
+const keySecret = () => (process.env.CDP_API_KEY_SECRET || "").trim();
+
+function bad(message, statusCode = 400) {
+  return Object.assign(new Error(message), { statusCode });
+}
+
+const b64url = (buf) => Buffer.from(buf).toString("base64url");
+
+/** Mint a CDP REST JWT for one request. Exported for the offline unit test. */
+export async function mintCdpJwt({ method, path, apiKeyId = keyId(), apiKeySecret = keySecret(), host = CDP_HOST }) {
+  const now = Math.floor(Date.now() / 1000);
+  const claims = {
+    sub: apiKeyId,
+    iss: "cdp",
+    uris: [`${method} ${host}${path}`],
+    iat: now,
+    nbf: now,
+    exp: now + 120,
+  };
+  let alg, key;
+  if (apiKeySecret.includes("-----BEGIN")) {
+    alg = "ES256";
+    key = { key: createPrivateKey(apiKeySecret), dsaEncoding: "ieee-p1363" };
+  } else {
+    const decoded = Buffer.from(apiKeySecret, "base64");
+    if (decoded.length !== 64) throw bad("CDP key secret is neither a PEM EC key nor a base64 Ed25519 key", 503);
+    alg = "EdDSA";
+    key = createPrivateKey({
+      key: { kty: "OKP", crv: "Ed25519", d: decoded.subarray(0, 32).toString("base64url"), x: decoded.subarray(32).toString("base64url") },
+      format: "jwk",
+    });
+  }
+  const header = { alg, kid: apiKeyId, typ: "JWT", nonce: randomBytes(16).toString("hex") };
+  const signingInput = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(claims))}`;
+  const signature = alg === "ES256"
+    ? createSign("SHA256").update(signingInput).sign(key)
+    : edSign(null, Buffer.from(signingInput), key);
+  return `${signingInput}.${b64url(signature)}`;
+}
+
+/** One authenticated CDP REST call with repo-standard error attribution. */
+async function cdpFetch(method, path, body) {
+  if (!keyId() || !keySecret()) {
+    throw bad("This tool is temporarily unavailable: the operator has not configured Coinbase Developer Platform credentials (CDP_API_KEY_ID / CDP_API_KEY_SECRET).", 503);
+  }
+  const jwt = await mintCdpJwt({ method, path });
+  let res;
+  try {
+    res = await fetch(`https://${CDP_HOST}${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (e) {
+    throw bad(`Coinbase Developer Platform did not respond: ${String(e?.message || e).slice(0, 80)}`, 504);
+  }
+  const json = await res.json().catch(() => ({}));
+  if (res.ok) return json;
+  const detail = String(json?.errorMessage || json?.message || json?.errorType || res.statusText).slice(0, 200);
+  if (res.status === 429) throw bad(`CDP rate limit: ${detail}`, 429);
+  if (res.status === 400 || res.status === 404 || res.status === 422) throw bad(`CDP rejected the request: ${detail}`, 422);
+  throw bad(`CDP upstream error (HTTP ${res.status}): ${detail}`, 502);
+}
+
+const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
+const BALANCE_NETWORKS = new Set(["base", "ethereum", "base-sepolia"]);
+const FAUCET_TOKENS = new Set(["usdc", "eth"]);
+const ONRAMP_NETWORKS = new Set(["base", "ethereum", "polygon", "arbitrum", "optimism", "solana"]);
+
+// Local faucet gate on top of CDP's own rolling-24h caps (1 USDC/request,
+// 10 USDC/day per address AND per CDP account — the account cap is shared by
+// everyone using this endpoint, so we spread it: 2 requests/address/day, 8
+// total/day). In-memory on purpose: worst case a restart resets the local
+// count and CDP's server-side caps still hold the line.
+const faucetLog = { byAddress: new Map(), all: [] };
+const DAY_MS = 24 * 60 * 60 * 1000;
+export function faucetGate(address, now = Date.now()) {
+  const prune = (arr) => arr.filter((t) => now - t < DAY_MS);
+  faucetLog.all = prune(faucetLog.all);
+  const forAddr = prune(faucetLog.byAddress.get(address) || []);
+  faucetLog.byAddress.set(address, forAddr);
+  if (forAddr.length >= 2) return { ok: false, reason: "This address already received 2 faucet drips in the last 24h. CDP also enforces its own per-address caps — try again tomorrow." };
+  if (faucetLog.all.length >= 8) return { ok: false, reason: "The shared faucet budget for this service is exhausted for the next 24h (CDP caps faucet volume per account). Try again later." };
+  forAddr.push(now);
+  faucetLog.all.push(now);
+  return { ok: true };
+}
+
+const SHARED_TAGS = ["cdp", "coinbase", "wallet", "onboarding", "x402", "agent-wallet"];
+
+export const CDP_TOOLS = [
+  {
+    route: "GET /api/wallet-balances",
+    name: "Wallet token balances (indexed)",
+    slug: "wallet-balances",
+    category: "wallet",
+    price: "$0.002",
+    description:
+      "All ERC-20 + native token balances for any EVM address in one call, from Coinbase's indexed data API — no per-token contract calls, no RPC wrangling. Networks: base, ethereum, base-sepolia. Symbols/decimals populated for whitelisted tokens (USDC always included).",
+    tags: [...SHARED_TAGS, "balances", "erc-20", "base", "ethereum", "portfolio"],
+    discovery: {
+      input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base" },
+      inputSchema: {
+        properties: {
+          address: { type: "string", description: "EVM address (0x + 40 hex)" },
+          network: { type: "string", description: "base (default) | ethereum | base-sepolia" },
+        },
+        required: ["address"],
+      },
+      output: {
+        example: {
+          address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0",
+          network: "base",
+          balances: [{ symbol: "USDC", name: "USD Coin", contract: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", amount: "8.655", raw: "8655000", decimals: 6 }],
+          count: 1,
+        },
+      },
+    },
+    handler: async (input) => {
+      const address = String(input?.address || "").trim();
+      if (!EVM_ADDR_RE.test(address)) throw bad('"address" must be an EVM address (0x + 40 hex chars)');
+      const network = String(input?.network || "base").trim().toLowerCase();
+      if (!BALANCE_NETWORKS.has(network)) throw bad(`"network" must be one of: ${[...BALANCE_NETWORKS].join(", ")}`);
+      const res = await cdpFetch("GET", `/platform/v2/evm/token-balances/${network}/${address}?pageSize=100`);
+      const balances = (res?.balances || []).map((b) => {
+        const decimals = b?.amount?.decimals;
+        const raw = String(b?.amount?.amount ?? "0");
+        const amount = Number.isFinite(decimals) ? (Number(raw) / 10 ** decimals).toString() : null;
+        return {
+          symbol: b?.token?.symbol ?? null,
+          name: b?.token?.name ?? null,
+          contract: b?.token?.contractAddress ?? null,
+          amount, raw, decimals: decimals ?? null,
+        };
+      });
+      return { address, network, balances, count: balances.length, ...(res?.nextPageToken ? { truncated: true } : {}) };
+    },
+  },
+  {
+    route: "POST /api/testnet-fund",
+    name: "Testnet faucet (try x402 free)",
+    slug: "testnet-fund",
+    category: "wallet",
+    price: "$0.001",
+    description:
+      "Fund any address with testnet USDC (1 USDC) or ETH (0.0001) on Base Sepolia via the Coinbase faucet — everything a new agent needs to run the complete x402 payment loop before spending real money. Free via the proof-of-work tier. Limits: 2 drips per address per day; CDP enforces its own rolling caps on top.",
+    tags: [...SHARED_TAGS, "faucet", "testnet", "base-sepolia", "free-money", "getting-started"],
+    discovery: {
+      bodyType: "json",
+      input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", token: "usdc" },
+      inputSchema: {
+        properties: {
+          address: { type: "string", description: "EVM address to fund (0x + 40 hex)" },
+          token: { type: "string", description: "usdc (default, 1 USDC) | eth (0.0001 ETH for gas)" },
+        },
+        required: ["address"],
+      },
+      output: {
+        example: { funded: true, network: "base-sepolia", token: "usdc", transactionHash: "0xabc123…", explorer: "https://sepolia.basescan.org/tx/0xabc123…" },
+      },
+    },
+    handler: async (input) => {
+      const address = String(input?.address || "").trim();
+      if (!EVM_ADDR_RE.test(address)) throw bad('"address" must be an EVM address (0x + 40 hex chars)');
+      const token = String(input?.token || "usdc").trim().toLowerCase();
+      if (!FAUCET_TOKENS.has(token)) throw bad('"token" must be usdc or eth');
+      const gate = faucetGate(address.toLowerCase());
+      if (!gate.ok) throw bad(gate.reason, 429);
+      const res = await cdpFetch("POST", "/platform/v2/evm/faucet", { address, network: "base-sepolia", token });
+      const tx = res?.transactionHash || null;
+      return {
+        funded: Boolean(tx),
+        network: "base-sepolia",
+        token,
+        transactionHash: tx,
+        explorer: tx ? `https://sepolia.basescan.org/tx/${tx}` : null,
+        note: "Testnet funds on Base Sepolia. Point your x402 client at a base-sepolia seller (or run the open-source Agent402 server locally with NETWORK=base-sepolia) to rehearse the full payment loop.",
+      };
+    },
+  },
+  {
+    route: "POST /api/onramp-link",
+    name: "Onramp link (fund a wallet with a card)",
+    slug: "onramp-link",
+    category: "wallet",
+    price: "$0.001",
+    description:
+      "Generate a single-use Coinbase Onramp URL that lets a human fund any wallet with a card or Apple Pay — the fastest way to put real USDC into an agent's wallet. Returns the ready-to-open URL plus a fee-inclusive quote. Networks: base, ethereum, polygon, arbitrum, optimism, solana.",
+    tags: [...SHARED_TAGS, "onramp", "fiat", "usdc", "fund-wallet", "apple-pay"],
+    discovery: {
+      bodyType: "json",
+      input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base", amount: "10" },
+      inputSchema: {
+        properties: {
+          address: { type: "string", description: "Destination wallet address (EVM 0x… or Solana base58, matching the network)" },
+          network: { type: "string", description: "base (default) | ethereum | polygon | arbitrum | optimism | solana" },
+          asset: { type: "string", description: "Ticker to purchase (default USDC)" },
+          amount: { type: "string", description: "Crypto amount the wallet should receive (default 10)" },
+          country: { type: "string", description: "Buyer's ISO 3166-1 country code (default US)" },
+          subdivision: { type: "string", description: "US state code (e.g. NY) — required for US buyers by some payment methods" },
+          redirectUrl: { type: "string", description: "Optional URL to send the buyer to after checkout" },
+        },
+        required: ["address"],
+      },
+      output: {
+        example: {
+          onrampUrl: "https://pay.coinbase.com/…single-use…",
+          singleUse: true,
+          quote: { paymentTotal: "10.42", paymentCurrency: "USD", purchaseAmount: "10", purchaseCurrency: "USDC", destinationNetwork: "base" },
+        },
+      },
+    },
+    handler: async (input) => {
+      const address = String(input?.address || "").trim();
+      if (!address || address.length < 26 || address.length > 64) throw bad('"address" must be a wallet address on the chosen network');
+      const network = String(input?.network || "base").trim().toLowerCase();
+      if (!ONRAMP_NETWORKS.has(network)) throw bad(`"network" must be one of: ${[...ONRAMP_NETWORKS].join(", ")}`);
+      if (network !== "solana" && !EVM_ADDR_RE.test(address)) throw bad(`"address" must be an EVM address (0x + 40 hex) for network ${network}`);
+      const asset = String(input?.asset || "USDC").trim().toUpperCase().slice(0, 12);
+      const amount = String(input?.amount || "10").trim();
+      if (!/^\d{1,7}(\.\d{1,6})?$/.test(amount)) throw bad('"amount" must be a positive decimal string (e.g. "10")');
+      const country = String(input?.country || "US").trim().toUpperCase().slice(0, 2);
+      const body = {
+        purchaseCurrency: asset,
+        destinationNetwork: network,
+        destinationAddress: address,
+        purchaseAmount: amount,
+        country,
+      };
+      if (input?.subdivision) body.subdivision = String(input.subdivision).trim().toUpperCase().slice(0, 2);
+      if (input?.redirectUrl) {
+        const r = String(input.redirectUrl).trim();
+        if (!/^https:\/\/[^\s]{1,300}$/.test(r)) throw bad('"redirectUrl" must be an https URL');
+        body.redirectUrl = r;
+      }
+      const res = await cdpFetch("POST", "/platform/v2/onramp/sessions", body);
+      const url = res?.session?.onrampUrl || null;
+      if (!url) throw bad("CDP did not return an onramp URL", 502);
+      return {
+        onrampUrl: url,
+        singleUse: true,
+        ...(res?.quote ? { quote: {
+          paymentTotal: res.quote.paymentTotal,
+          paymentSubtotal: res.quote.paymentSubtotal,
+          paymentCurrency: res.quote.paymentCurrency,
+          purchaseAmount: res.quote.purchaseAmount,
+          purchaseCurrency: res.quote.purchaseCurrency,
+          destinationNetwork: res.quote.destinationNetwork,
+          exchangeRate: res.quote.exchangeRate,
+        } } : {}),
+        note: "Open the URL in a browser to complete the purchase — it is single-use and expires after first visit.",
+      };
+    },
+  },
+];

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **CDP onboarding kit** (`wallet-balances`, `testnet-fund`, `onramp-link`): agent-wallet
+  onboarding tools built on the Coinbase Developer Platform, reusing the same CDP keys that
+  already drive x402 settlement (no new secrets; 503 when unset). `wallet-balances` returns
+  indexed ERC-20 + native balances for any address in one call; `testnet-fund` drips Base
+  Sepolia USDC/ETH via the CDP faucet so a brand-new agent can rehearse the full x402 payment
+  loop with zero real funds (PoW free tier + local and CDP-side rate caps); `onramp-link`
+  mints a single-use Coinbase Onramp URL so a human can fund an agent's wallet with a card or
+  Apple Pay. Auth is a zero-dependency `node:crypto` JWT signer (ES256 PEM + Ed25519 base64,
+  mirroring the official SDK's claims), unit-tested offline with real signature verification
+  plus a live CI check where the secrets exist.
+
 - **USDG buyer support in the packages**: `agent402-mcp` 0.11.0 adds `AGENT402_NETWORKS` (restrict + order the chains the buyer pays on — `robinhood` settles USDG on chain 4663; raw CAIP-2 accepted); `agent402-client` 0.4.0 exports a zero-dep `withNetworkPreference(client, networks)`. Both throw before paying if the preference matches none of a seller's options.
 - **Tollbooth 0.4.0**: `TOLLBOOTH_ASSET` (with the existing `TOLLBOOTH_NETWORK`) lets operators charge crawlers in USDG on Robinhood Chain; defaults (USDC on Base) unchanged and regression-guarded.
 - **Network-aware Smart Order Router**: crawled sellers record every chain their 402 advertises; `/api/route?network=<name|caip2>` filters to sellers that settle there (positive-signal semantics); `/index` rows carry `networks`.

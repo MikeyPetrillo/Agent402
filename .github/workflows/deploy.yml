@@ -590,6 +590,15 @@ jobs:
       - name: Revenue ledger unit tests (all-time external accounting, idempotent rescans, CI self-gate)
         run: node scripts/test-revenue-ledger.js
 
+      - name: CDP kit unit tests (JWT signing both key formats, validation, faucet gate — offline)
+        run: node scripts/test-cdp-kit.js
+
+      - name: CDP kit live check (real balances + onramp session — skips without secrets)
+        env:
+          CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
+          CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
+        run: node scripts/test-cdp-live.js
+
       - name: /api/skill-packs.json shape (what stdio agent402-mcp consumes at startup)
         run: node scripts/test-skill-packs-json.js
 
