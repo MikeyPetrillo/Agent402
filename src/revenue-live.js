@@ -20,21 +20,21 @@ const EVM = {
   base: {
     label: "Base", asset: "USDC", span: 12000,
     token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-    rpcs: ["https://mainnet.base.org", "https://base-rpc.publicnode.com"],
+    rpcs: ["https://mainnet.base.org", "https://base.llamarpc.com", "https://base.drpc.org"],
     explorer: (a) => `https://basescan.org/address/${a}#tokentxns`,
     tx: (h) => `https://basescan.org/tx/${h}`,
   },
   polygon: {
     label: "Polygon", asset: "USDC", span: 9500,
     token: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
-    rpcs: ["https://polygon-rpc.com", "https://polygon-bor-rpc.publicnode.com"],
+    rpcs: ["https://polygon-rpc.com", "https://polygon.llamarpc.com", "https://polygon.drpc.org"],
     explorer: (a) => `https://polygonscan.com/address/${a}#tokentxns`,
     tx: (h) => `https://polygonscan.com/tx/${h}`,
   },
   arbitrum: {
     label: "Arbitrum", asset: "USDC", span: 90000,
     token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
-    rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com"],
+    rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum.llamarpc.com", "https://arbitrum.drpc.org"],
     explorer: (a) => `https://arbiscan.io/address/${a}#tokentxns`,
     tx: (h) => `https://arbiscan.io/tx/${h}`,
   },
@@ -70,30 +70,58 @@ async function rpcCall(urls, method, params, timeoutMs = 5000) {
   throw lastErr || new Error("all RPCs failed");
 }
 
+// One eth_getLogs over the whole span trips free-RPC range/"archive" caps
+// (that's an RPC-provider upsell, not a real constraint), so the transfer
+// scan walks BACKWARD from the head in span/4 chunks — newest first, early
+// stop once 8 transfers are in hand, hard 12s budget. A failed chunk is a
+// partial window, never an error: the balance (a cheap head read) stays up
+// and the card says the scan was partial instead of parroting vendor text.
+const LOG_CHUNKS = 4;
+async function recentInbound(c, wallet, latest) {
+  const chunk = Math.ceil(c.span / LOG_CHUNKS);
+  const deadline = Date.now() + 12_000;
+  const logs = [];
+  let missed = 0;
+  for (let i = 0; i < LOG_CHUNKS && logs.length < 8 && Date.now() < deadline; i++) {
+    const to = latest - i * chunk;
+    if (to <= 0) break;
+    const from = Math.max(0, to - chunk + 1);
+    try {
+      const part = await rpcCall(c.rpcs, "eth_getLogs", [{
+        address: c.token,
+        topics: [TRANSFER_TOPIC, null, pad(wallet)],
+        fromBlock: "0x" + from.toString(16),
+        toBlock: "0x" + to.toString(16),
+      }], 4000);
+      if (Array.isArray(part)) logs.push(...part);
+    } catch {
+      missed++;
+    }
+  }
+  const recent = logs
+    .map((l) => ({
+      usd: Number(BigInt(l.data && l.data !== "0x" ? l.data : "0x0")) / 1e6,
+      from: l.topics?.[1] ? "0x" + l.topics[1].slice(-40) : null,
+      tx: c.tx(l.transactionHash),
+      block: parseInt(l.blockNumber, 16),
+    }))
+    .sort((a, b) => b.block - a.block)
+    .slice(0, 8);
+  return { recent, missed };
+}
+
 async function evmRail(name, wallet) {
   const c = EVM[name];
-  const out = { rail: c.label, asset: c.asset, wallet: wallet || null, explorer: wallet ? c.explorer(wallet) : null, balance: null, recent: [], error: null };
+  const out = { rail: c.label, asset: c.asset, wallet: wallet || null, explorer: wallet ? c.explorer(wallet) : null, balance: null, recent: [], error: null, scanNote: null };
   if (!wallet) { out.error = "WALLET_ADDRESS unset"; return out; }
   try {
     const balHex = await rpcCall(c.rpcs, "eth_call", [{ to: c.token, data: "0x70a08231" + pad(wallet).slice(2) }, "latest"]);
     out.balance = Number(BigInt(balHex && balHex !== "0x" ? balHex : "0x0")) / 1e6;
-    const latestHex = await rpcCall(c.rpcs, "eth_blockNumber", []);
-    const latest = parseInt(latestHex, 16);
-    const logs = await rpcCall(c.rpcs, "eth_getLogs", [{
-      address: c.token,
-      topics: [TRANSFER_TOPIC, null, pad(wallet)],
-      fromBlock: "0x" + Math.max(0, latest - c.span).toString(16),
-      toBlock: "latest",
-    }]);
-    out.recent = (Array.isArray(logs) ? logs : [])
-      .slice(-8).reverse()
-      .map((l) => ({
-        usd: Number(BigInt(l.data && l.data !== "0x" ? l.data : "0x0")) / 1e6,
-        from: l.topics?.[1] ? "0x" + l.topics[1].slice(-40) : null,
-        tx: c.tx(l.transactionHash),
-        block: parseInt(l.blockNumber, 16),
-      }));
+    const latest = parseInt(await rpcCall(c.rpcs, "eth_blockNumber", []), 16);
+    const { recent, missed } = await recentInbound(c, wallet, latest);
+    out.recent = recent;
     out.windowBlocks = c.span;
+    if (missed) out.scanNote = `transfer scan partial: ${missed}/${LOG_CHUNKS} windows unavailable from public RPCs (balance is live)`;
   } catch (e) {
     out.error = String(e?.message || e).slice(0, 120);
   }
@@ -163,7 +191,7 @@ export function revenuePage(baseUrl, snap) {
         <span style="font-family:var(--font-mono);font-size:20px;font-weight:700;">${r.balance == null ? "—" : "$" + r.balance.toFixed(4)}</span>
       </div>
       ${r.error
-        ? `<div style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">rail read unavailable: ${esc(r.error)}</div>`
+        ? `<div style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">rail read unavailable — public RPC error (detail in <a href="/api/revenue">/api/revenue</a>)</div>`
         : r.recent.length
           ? `<div style="font-family:var(--font-mono);font-size:12.5px;display:grid;gap:6px;">${r.recent
               .map((t) => t.usd !== undefined
@@ -171,6 +199,7 @@ export function revenuePage(baseUrl, snap) {
                 : `<div><a href="${esc(t.tx)}" rel="noopener">tx</a>${t.when ? ` · ${esc(t.when.slice(0, 16))}Z` : ""}${t.err ? " · failed" : ""}</div>`)
               .join("")}</div>`
           : `<div style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">no inbound transfers in the recent window</div>`}
+      ${r.scanNote ? `<div style="margin-top:8px;font-family:var(--font-mono);font-size:11.5px;color:var(--muted);">${esc(r.scanNote)}</div>` : ""}
       ${r.explorer ? `<div style="margin-top:12px;font-family:var(--font-mono);font-size:12px;"><a href="${esc(r.explorer)}" rel="noopener">open in explorer →</a></div>` : ""}
     </div>`;
   const body = `
