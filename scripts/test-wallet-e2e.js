@@ -132,6 +132,7 @@ try {
   });
   const body = await res.json().catch(() => ({}));
   ok(res.status === 200 && typeof body.hex === "string" && body.hex.length === 64, `paid call succeeded (HTTP ${res.status}, sha256 returned)`);
+  if (res.status !== 200) console.error(`   response body: ${JSON.stringify(body).slice(0, 400)}`);
   const receiptHdr = res.headers.get("payment-response") || res.headers.get("x-payment-response");
   let receipt = null;
   try { receipt = JSON.parse(Buffer.from(receiptHdr, "base64").toString("utf8")); } catch { /* asserted below */ }
@@ -146,9 +147,16 @@ proc.kill("SIGKILL");
 closeSync(logFd);
 await sleep(300);
 const serverLog = readFileSync(logPath, "utf8");
+const auditFailedBefore = failed;
 leakAudit(serverLog, "the server's full log");
 leakAudit(emitted, "this run's output");
 ok(!serverLog.includes(buyerPk.slice(2, 34)), "not even a key fragment reached the server log");
+// On a functional failure, show the server log tail for diagnosis — but only
+// when the leak audit passed, so a hypothetical leak is never re-printed.
+if (failed > 0 && failed === auditFailedBefore) {
+  console.error("--- server log tail (leak-audited) ---");
+  console.error(serverLog.split("\n").slice(-30).join("\n"));
+}
 rmSync(logDir, { recursive: true, force: true });
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
