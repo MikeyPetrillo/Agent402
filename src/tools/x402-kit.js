@@ -222,7 +222,7 @@ export const X402_TOOLS = [
     route: "GET /api/tx-status", name: "Transaction status", slug: "tx-status", category: "payments", price: "$0.003",
     description:
       "Check the confirmation status of a transaction by hash on Base/Polygon/Arbitrum/Optimism/Ethereum/Robinhood Chain: success / failed / pending / not found, with block, from, to, gas used. Read-only. ?hash=0x…&network=base",
-    tags: ["transaction", "status", "receipt", "confirmation", "multichain"],
+    tags: ["transaction", "status", "receipt", "confirmation", "multichain", "robinhood", "usdg"],
     discovery: {
       input: { hash: "0x0000000000000000000000000000000000000000000000000000000000000000", network: "base" },
       inputSchema: { properties: { hash: { type: "string", description: "0x transaction hash" }, network: NETWORK_PARAM }, required: ["hash"] },
@@ -248,7 +248,7 @@ export const X402_TOOLS = [
     route: "GET /api/gas-estimate", name: "Gas price", slug: "gas-estimate", category: "payments", price: "$0.002",
     description:
       "Current gas price (gwei and wei) on Base, Polygon, Arbitrum, Optimism, Ethereum, or Robinhood Chain — for an agent budgeting a transaction. Read-only. ?network=base",
-    tags: ["gas", "gas-price", "fees", "gwei", "multichain"],
+    tags: ["gas", "gas-price", "fees", "gwei", "multichain", "robinhood", "usdg"],
     discovery: {
       input: { network: "base" },
       inputSchema: { properties: { network: NETWORK_PARAM } },
