@@ -36,6 +36,17 @@ try {
   ok(false, `wallet-balances live call failed: ${e.statusCode || "?"} ${String(e.message).slice(0, 140)}`);
 }
 
+// --- wallet-balances on Solana (read-only) --------------------------------------
+try {
+  const sol = process.env.SOLANA_REVENUE_WALLET || "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg";
+  const res = await tool("wallet-balances").handler({ address: sol, network: "solana" });
+  ok(Array.isArray(res.balances), `solana balances envelope (${res.count} tokens)`);
+  const usdc = res.balances.find((b) => (b.symbol || "").toUpperCase() === "USDC" || b.contract === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+  ok(Boolean(usdc), "solana revenue wallet shows a USDC (SPL) balance row");
+} catch (e) {
+  ok(false, `wallet-balances solana live call failed: ${e.statusCode || "?"} ${String(e.message).slice(0, 140)}`);
+}
+
 // --- onramp-link (creates a single-use URL; harmless if never visited) ----------
 try {
   const res = await tool("onramp-link").handler({ address: REVENUE_WALLET, network: "base", amount: "10" });

@@ -91,8 +91,10 @@ async function cdpFetch(method, path, body) {
 }
 
 const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
-const BALANCE_NETWORKS = new Set(["base", "ethereum", "base-sepolia"]);
-const FAUCET_TOKENS = new Set(["usdc", "eth"]);
+const SOL_ADDR_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const BALANCE_NETWORKS = new Set(["base", "ethereum", "base-sepolia", "solana", "solana-devnet"]);
+const FAUCET_NETWORKS = new Set(["base-sepolia", "solana-devnet"]);
+const FAUCET_TOKENS = { "base-sepolia": new Set(["usdc", "eth"]), "solana-devnet": new Set(["usdc", "sol"]) };
 const ONRAMP_NETWORKS = new Set(["base", "ethereum", "polygon", "arbitrum", "optimism", "solana"]);
 
 // Local faucet gate on top of CDP's own rolling-24h caps (1 USDC/request,
@@ -124,14 +126,14 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.002",
     description:
-      "All ERC-20 + native token balances for any EVM address in one call, from Coinbase's indexed data API — no per-token contract calls, no RPC wrangling. Networks: base, ethereum, base-sepolia. Symbols/decimals populated for whitelisted tokens (USDC always included).",
-    tags: [...SHARED_TAGS, "balances", "erc-20", "base", "ethereum", "portfolio"],
+      "All token balances for any address in one call, from Coinbase's indexed data API — ERC-20 + native on EVM, SPL on Solana; no per-token contract calls, no RPC wrangling. Networks: base, ethereum, base-sepolia, solana, solana-devnet. Symbols/decimals populated for whitelisted tokens (USDC always included).",
+    tags: [...SHARED_TAGS, "balances", "erc-20", "spl", "base", "ethereum", "solana", "portfolio"],
     discovery: {
       input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base" },
       inputSchema: {
         properties: {
-          address: { type: "string", description: "EVM address (0x + 40 hex)" },
-          network: { type: "string", description: "base (default) | ethereum | base-sepolia" },
+          address: { type: "string", description: "Wallet address — EVM 0x… or Solana base58, matching the network" },
+          network: { type: "string", description: "base (default) | ethereum | base-sepolia | solana | solana-devnet" },
         },
         required: ["address"],
       },
@@ -146,10 +148,13 @@ export const CDP_TOOLS = [
     },
     handler: async (input) => {
       const address = String(input?.address || "").trim();
-      if (!EVM_ADDR_RE.test(address)) throw bad('"address" must be an EVM address (0x + 40 hex chars)');
       const network = String(input?.network || "base").trim().toLowerCase();
       if (!BALANCE_NETWORKS.has(network)) throw bad(`"network" must be one of: ${[...BALANCE_NETWORKS].join(", ")}`);
-      const res = await cdpFetch("GET", `/platform/v2/evm/token-balances/${network}/${address}?pageSize=100`);
+      const isSolana = network.startsWith("solana");
+      if (isSolana ? !SOL_ADDR_RE.test(address) : !EVM_ADDR_RE.test(address)) {
+        throw bad(isSolana ? '"address" must be a Solana address (base58)' : '"address" must be an EVM address (0x + 40 hex chars)');
+      }
+      const res = await cdpFetch("GET", `/platform/v2/${isSolana ? "solana" : "evm"}/token-balances/${network}/${address}?pageSize=100`);
       const balances = (res?.balances || []).map((b) => {
         const decimals = b?.amount?.decimals;
         const raw = String(b?.amount?.amount ?? "0");
@@ -157,7 +162,7 @@ export const CDP_TOOLS = [
         return {
           symbol: b?.token?.symbol ?? null,
           name: b?.token?.name ?? null,
-          contract: b?.token?.contractAddress ?? null,
+          contract: b?.token?.contractAddress ?? b?.token?.mintAddress ?? null,
           amount, raw, decimals: decimals ?? null,
         };
       });
@@ -171,15 +176,16 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.001",
     description:
-      "Fund any address with testnet USDC (1 USDC) or ETH (0.0001) on Base Sepolia via the Coinbase faucet — everything an agent needs to rehearse the complete x402 payment loop safely before moving real money. A tenth of a cent buys a full testnet dollar. Limits: 2 drips per address per day; CDP enforces its own rolling caps on top.",
-    tags: [...SHARED_TAGS, "faucet", "testnet", "base-sepolia", "getting-started"],
+      "Fund any address with testnet money via the Coinbase faucet — USDC (1) or ETH (0.0001) on Base Sepolia, USDC (1) or SOL on Solana devnet — everything an agent needs to rehearse the complete x402 payment loop safely before moving real money. A tenth of a cent buys a full testnet dollar. Limits: 2 drips per address per day; CDP enforces its own rolling caps on top.",
+    tags: [...SHARED_TAGS, "faucet", "testnet", "base-sepolia", "solana-devnet", "getting-started"],
     discovery: {
       bodyType: "json",
       input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", token: "usdc" },
       inputSchema: {
         properties: {
-          address: { type: "string", description: "EVM address to fund (0x + 40 hex)" },
-          token: { type: "string", description: "usdc (default, 1 USDC) | eth (0.0001 ETH for gas)" },
+          address: { type: "string", description: "Address to fund — EVM 0x… or Solana base58, matching the network" },
+          network: { type: "string", description: "base-sepolia (default) | solana-devnet" },
+          token: { type: "string", description: "usdc (default, 1 USDC) | eth (0.0001, base-sepolia) | sol (solana-devnet)" },
         },
         required: ["address"],
       },
@@ -188,21 +194,30 @@ export const CDP_TOOLS = [
       },
     },
     handler: async (input) => {
+      const network = String(input?.network || "base-sepolia").trim().toLowerCase();
+      if (!FAUCET_NETWORKS.has(network)) throw bad(`"network" must be one of: ${[...FAUCET_NETWORKS].join(", ")}`);
+      const isSolana = network === "solana-devnet";
       const address = String(input?.address || "").trim();
-      if (!EVM_ADDR_RE.test(address)) throw bad('"address" must be an EVM address (0x + 40 hex chars)');
+      if (isSolana ? !SOL_ADDR_RE.test(address) : !EVM_ADDR_RE.test(address)) {
+        throw bad(isSolana ? '"address" must be a Solana address (base58)' : '"address" must be an EVM address (0x + 40 hex chars)');
+      }
       const token = String(input?.token || "usdc").trim().toLowerCase();
-      if (!FAUCET_TOKENS.has(token)) throw bad('"token" must be usdc or eth');
-      const gate = faucetGate(address.toLowerCase());
+      if (!FAUCET_TOKENS[network].has(token)) throw bad(`"token" must be one of: ${[...FAUCET_TOKENS[network]].join(", ")} on ${network}`);
+      const gate = faucetGate(isSolana ? address : address.toLowerCase());
       if (!gate.ok) throw bad(gate.reason, 429);
-      const res = await cdpFetch("POST", "/platform/v2/evm/faucet", { address, network: "base-sepolia", token });
-      const tx = res?.transactionHash || null;
+      const res = isSolana
+        ? await cdpFetch("POST", "/platform/v2/solana/faucet", { address, token })
+        : await cdpFetch("POST", "/platform/v2/evm/faucet", { address, network, token });
+      const tx = res?.transactionHash || res?.transactionSignature || null;
       return {
         funded: Boolean(tx),
-        network: "base-sepolia",
+        network,
         token,
         transactionHash: tx,
-        explorer: tx ? `https://sepolia.basescan.org/tx/${tx}` : null,
-        note: "Testnet funds on Base Sepolia. Point your x402 client at a base-sepolia seller (or run the open-source Agent402 server locally with NETWORK=base-sepolia) to rehearse the full payment loop.",
+        explorer: tx ? (isSolana ? `https://solscan.io/tx/${tx}?cluster=devnet` : `https://sepolia.basescan.org/tx/${tx}`) : null,
+        note: isSolana
+          ? "Devnet funds on Solana. Point your x402 SVM client at a solana-devnet seller (or run the open-source Agent402 server locally with a devnet config) to rehearse the payment loop."
+          : "Testnet funds on Base Sepolia. Point your x402 client at a base-sepolia seller (or run the open-source Agent402 server locally with NETWORK=base-sepolia) to rehearse the full payment loop.",
       };
     },
   },

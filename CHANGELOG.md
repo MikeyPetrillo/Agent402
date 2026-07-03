@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Solana onboarding parity**: `testnet-fund` now also drips on **Solana devnet** (USDC or
+  SOL via the CDP faucet, base58 validation, solscan devnet links) and `wallet-balances`
+  reads **Solana + Solana devnet** SPL balances (mint address in the `contract` field) —
+  the create → rehearse → fund → verify loop now covers both major rails end to end.
+
 - **Wallet birth-to-first-purchase E2E + non-custodial wallet guide**: a CI test generates a
   fresh keypair inside the runner (only the address is ever printed), funds it with testnet
   USDC via the CDP faucet, completes a REAL gasless x402 purchase against a paid-mode
