@@ -13,7 +13,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 export function playgroundPage(baseUrl) {
   const title = "Playground — try Agent402 tools for free";
-  const description = "Try any of Agent402's 1,000+ free-tier tools directly in your browser. No signup, no wallet — proof-of-work pays automatically.";
+  const description = "Try any of Agent402's 1,150+ free-tier tools directly in your browser. No signup, no wallet — proof-of-work pays automatically.";
   const canonical = `${baseUrl}/playground`;
 
   const extraCss = `
@@ -72,7 +72,7 @@ export function playgroundPage(baseUrl) {
 <div class="crumb"><a href="/">Agent402</a> / playground</div>
 <div class="pg-title">
   <h1>Playground</h1>
-  <p>Try any of Agent402's 1,000+ free-tier tools directly in your browser. No signup, no wallet — proof-of-work pays automatically.</p>
+  <p>Try any of Agent402's 1,150+ free-tier tools directly in your browser. No signup, no wallet — proof-of-work pays automatically.</p>
 </div>
 <div class="pg-wrap">
   <div class="pg-left">

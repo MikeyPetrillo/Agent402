@@ -1,7 +1,7 @@
 {
   "name": "agent402-client",
-  "version": "0.4.0",
-  "description": "Buyer-side SDK for Agent402.Tools (x402): resolve a task to a tool across 1,338 pay-per-call endpoints and call it with payment handled for you — free tools settle via built-in proof-of-work (no wallet), wallet-only tools via your x402 fetch — with a withNetworkPreference helper to pick the settlement chain (USDC on Base/Solana/Polygon/Arbitrum or USDG on Robinhood Chain). Caching, idempotent retries, cross-seller Smart Order Router.",
+  "version": "0.4.1",
+  "description": "Buyer-side SDK for Agent402.Tools (x402): resolve a task to a tool across 1,346 pay-per-call endpoints and call it with payment handled for you — free tools settle via built-in proof-of-work (no wallet), wallet-only tools via your x402 fetch — with a withNetworkPreference helper to pick the settlement chain (USDC on Base/Solana/Polygon/Arbitrum or USDG on Robinhood Chain). Caching, idempotent retries, cross-seller Smart Order Router.",
   "type": "module",
   "main": "index.js",
   "exports": {

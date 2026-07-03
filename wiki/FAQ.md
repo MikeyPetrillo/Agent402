@@ -10,7 +10,7 @@ Flat per-call prices, $0.001–$0.02, published in [`/api/pricing`](https://agen
 Yes — ~1,105 pure-CPU tools accept proof-of-work (sub-second of your CPU), and the hosted MCP connector runs the same set free (rate-limited). See [[Paying with Compute]].
 
 **What is x402?**
-An open HTTP payment standard built on the `402 Payment Required` status code, with settlement infrastructure from Coinbase and Stripe. See [[Paying with x402]].
+An open HTTP payment standard built on the `402 Payment Required` status code, with settlement infrastructure from Coinbase and open client tooling from Stripe. See [[Paying with x402]].
 
 **Which chain/asset?**
 USDC on Base (primary), Solana, Polygon, or Arbitrum — plus USDG (Global Dollar) on Robinhood Chain. The buyer needs only the stablecoin — gas is sponsored by the facilitator on EVM chains.

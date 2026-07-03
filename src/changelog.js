@@ -6,7 +6,7 @@ const ENTRIES = [
     title: "LLM vision, structured output, and content moderation",
     items: [
       "Vision: send up to 2 image URLs to any LLM tier — screenshot analysis, chart reading, image Q&A",
-      "Structured output: response_format with json_object or json_schema for guaranteed valid JSON",
+      "Structured output: response_format with json_object or json_schema for schema-enforced JSON",
       "Content moderation: /api/moderate ($0.002) — check text for harmful content across 13 categories",
       "All guardrails enforced server-side: image count limits, schema size caps, data: URI blocking",
     ],

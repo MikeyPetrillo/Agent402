@@ -126,7 +126,7 @@ Cache key formula: `sha256(METHOD + path + Idempotency-Key + gate-credential)`. 
 
 | Surface | Limit | Notes |
 |---|---|---|
-| PoW tier | Natural (CPU cost per challenge) | ~1,100 pure-CPU tools only; difficulty 16 = ~65k hashes |
+| PoW tier | Natural (CPU cost per challenge) | ~1,156 pure-CPU tools only; difficulty 16 = ~65k hashes |
 | MCP connector (`/mcp`) | 20/min, 120/hr per IP | Pure-CPU set only; override with `AGENT402_MCP_MAX_PER_MIN/HOUR` |
 | Marketplace bridge (`/mkt/`) | Global rate cap + per-slug token auth | Leaked URL exposes only its one tool |
 
@@ -155,7 +155,7 @@ Handlers throw errors with `.statusCode` set; the server maps these to the appro
 
 ## See also
 
-- [[Tool Catalog]] -- what the 1,338 tools are and how agents discover them
+- [[Tool Catalog]] -- what the 1,346 tools are and how agents discover them
 - [[Paying with x402]] -- USDC payment flow with code examples
 - [[Paying with Compute]] -- proof-of-work protocol and reference solver
 - [[MCP Connector]] -- hosted connector and the `agent402-mcp` npm server

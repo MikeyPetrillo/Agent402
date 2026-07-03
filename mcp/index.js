@@ -38,7 +38,7 @@ const AGENT_KEY = process.env.AGENT_KEY || "";
 // settle on whichever chain the seller offers (EVM accepts are tried first).
 const SOLANA_AGENT_KEY = process.env.SOLANA_AGENT_KEY || "";
 const HAS_WALLET = Boolean(AGENT_KEY || SOLANA_AGENT_KEY);
-const VERSION = "0.11.0";
+const VERSION = "0.11.1";
 
 // Spend controls — enforced BEFORE a payment is ever signed, so a confused or
 // runaway model cannot drain the wallet. Unset = unlimited (back-compat).

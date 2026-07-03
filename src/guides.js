@@ -14,7 +14,7 @@ const GUIDES = [
 The useful web hides behind signups, captchas, and API keys — none of which an
 autonomous agent can obtain mid-task. [x402](https://x402.org) fixes this with
 the HTTP status code that sat unused for thirty years: **402 Payment Required**.
-Settlement infrastructure exists from Coinbase and Stripe; this guide uses a
+Settlement infrastructure exists from Coinbase, with open client tooling from Stripe; this guide uses a
 live service ([agent402.tools](https://agent402.tools)) you can pay right now.
 
 ## The protocol in one paragraph
@@ -73,7 +73,7 @@ purl "https://agent402.tools/api/convert/kilometers-to-miles?value=42"
 
 ## No wallet? Pay with CPU
 
-About 1,040 of the tools also accept **proof-of-work** — a sub-second sha256
+About 1,156 of the tools also accept **proof-of-work** — a sub-second sha256
 puzzle solved by the caller, no money involved:
 
 \`\`\`js
@@ -213,7 +213,7 @@ settling real money on mainnet. Test the buyer side yourself with Stripe's
 
 ## What we learned operating one (the honest part)
 
-[agent402.tools](https://agent402.tools) runs ~1,338 paid endpoints this way —
+[agent402.tools](https://agent402.tools) runs ~1,346 paid endpoints this way —
 [fully open source](https://github.com/MikeyPetrillo/Agent402). The lessons:
 
 1. **x402 settles before your handler runs.** If your tool then fails, you took

@@ -47,7 +47,7 @@ privacy policy, public docs, and a no-auth streamable-HTTP endpoint.
    schemas. Read-only.
 2. **call_tool** — "Run an Agent402 tool". Executes a catalog tool by slug.
    On this hosted connector only the pure-CPU, deterministic tools execute
-   (~1,040 of them); network/browser/storage tools return guidance instead of
+   (~1,156 of them); network/browser/storage tools return guidance instead of
    running. Read-only, idempotent, no external side effects.
 3. **about_agent402** — "About this connector". Static service description.
 

@@ -116,7 +116,7 @@ function nav(activePath) {
       ${links}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:14px;">
-      <a class="ml-nav-gh" href="https://github.com/MikeyPetrillo/Agent402" rel="noopener" style="font-family:var(--font-mono);font-size:13px;color:var(--muted);text-decoration:none;">github ★1.3k</a>
+      <a class="ml-nav-gh" href="https://github.com/MikeyPetrillo/Agent402" rel="noopener" style="font-family:var(--font-mono);font-size:13px;color:var(--muted);text-decoration:none;">github</a>
       <a href="/docs" style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);font-weight:700;font-size:13px;text-decoration:none;padding:9px 15px;">ADD TO CLAUDE →</a>
     </div>
   </div>

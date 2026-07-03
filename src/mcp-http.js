@@ -101,7 +101,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     return [
       `"${def.slug}" (${def.price}/call) needs per-call USDC payment and is not part of this hosted free tier.`,
       `To use it from Claude/any MCP client: run the npm server with a funded Base wallet —`,
-      `npx agent402-mcp with env AGENT_KEY=0x<private key> (USDC on Base/Polygon/Arbitrum) and/or SOLANA_AGENT_KEY=<base58 secret> (USDC on Solana); spend caps: AGENT402_MAX_PER_CALL, AGENT402_BUDGET.`,
+      `npx agent402-mcp with env AGENT_KEY=0x<private key> (USDC on Base/Polygon/Arbitrum, or USDG on Robinhood Chain via AGENT402_NETWORKS=robinhood) and/or SOLANA_AGENT_KEY=<base58 secret> (USDC on Solana); spend caps: AGENT402_MAX_PER_CALL, AGENT402_BUDGET.`,
       `Or call it over HTTP with any x402 client. Docs: ${baseUrl}/tools/${def.slug}`,
     ].join(" ");
   }
@@ -190,7 +190,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           name: "about_agent402",
           title: "About this connector",
           annotations: { title: "About this connector", ...SAFE },
-          description: "What this connector is: the free tier of agent402.tools, what's free vs wallet-only, the curated multi-tool workflows (skill packs) available as prompts, and how paid access works (x402, USDC on Base/Solana/Polygon/Arbitrum, proof-of-work).",
+          description: "What this connector is: the free tier of agent402.tools, what's free vs wallet-only, the curated multi-tool workflows (skill packs) available as prompts, and how paid access works (x402 — USDC on Base/Solana/Polygon/Arbitrum, USDG on Robinhood Chain — plus proof-of-work).",
           inputSchema: { type: "object", properties: {} },
         },
         // Hosted leaderboard of x402 sellers settled in the recent window

@@ -45,7 +45,7 @@ export function comparePage(baseUrl) {
 <div class="cmp-wrap">
 <div class="cmp-eyebrow">$ GET /compare</div>
 <h1 class="cmp-h1">How Agent402 Compares</h1>
-<p class="cmp-intro">Agent402 gives your AI agent 1,300+ deterministic tools behind a single protocol. Here is how it stacks up against the common alternatives.</p>
+<p class="cmp-intro">Agent402 gives your AI agent 1,340+ deterministic tools behind a single protocol. Here is how it stacks up against the common alternatives.</p>
 
 <div class="cmp-section">
 <h2>Agent402 vs. building your own tool server</h2>
@@ -54,8 +54,8 @@ export function comparePage(baseUrl) {
 <thead><tr><th>Dimension</th><th class="col-a402">Agent402</th><th>Build your own</th></tr></thead>
 <tbody>
 <tr><td>Setup time</td><td class="cmp-win"><span class="check">&#10003;</span> One npm install or HTTP call</td><td class="cmp-lose">Weeks of engineering</td></tr>
-<tr><td>Maintenance</td><td class="cmp-win"><span class="check">&#10003;</span> Managed and monitored 24/7</td><td class="cmp-lose">You own every outage</td></tr>
-<tr><td>Tool count</td><td class="cmp-win"><span class="check">&#10003;</span> 1,300+ tools and growing</td><td class="cmp-lose">Only what you build</td></tr>
+<tr><td>Maintenance</td><td class="cmp-win"><span class="check">&#10003;</span> Managed; monitored by a 15-minute heartbeat + daily paid canary</td><td class="cmp-lose">You own every outage</td></tr>
+<tr><td>Tool count</td><td class="cmp-win"><span class="check">&#10003;</span> 1,340+ tools and growing</td><td class="cmp-lose">Only what you build</td></tr>
 <tr><td>Payment handling</td><td class="cmp-win"><span class="check">&#10003;</span> x402 protocol, built in</td><td class="cmp-lose">Build from scratch</td></tr>
 <tr><td>MCP support</td><td class="cmp-win"><span class="check">&#10003;</span> Native MCP endpoint</td><td class="cmp-lose">Implement yourself</td></tr>
 <tr><td>Cost</td><td class="cmp-win"><span class="check">&#10003;</span> Pay per call, free tier via PoW</td><td class="cmp-lose">Server + engineer time</td></tr>
@@ -95,7 +95,7 @@ export function comparePage(baseUrl) {
 
 <div class="cmp-section">
 <h2>agent402-tollbooth vs. platform monetization gateways</h2>
-<p class="cmp-desc">The other side of the protocol: charging AI crawlers and agents for <em>your</em> content. Cloudflare's Monetization Gateway (announced July 2026, waitlist) brings x402 charging to sites behind Cloudflare &mdash; strong validation that pay-per-request is the business model of the agentic web. <a href="/tollbooth">agent402-tollbooth</a> is the open-source version of the same idea, shipping since before the announcement.</p>
+<p class="cmp-desc">The other side of the protocol: charging AI crawlers and agents for <em>your</em> content. Cloudflare's announced Monetization Gateway (waitlist at the time of writing) brings x402 charging to sites behind Cloudflare &mdash; strong validation that pay-per-request is the business model of the agentic web. <a href="/tollbooth">agent402-tollbooth</a> is the open-source take on the same idea: self-hostable, in front of any origin.</p>
 <table class="cmp-table">
 <thead><tr><th>Dimension</th><th class="col-a402">agent402-tollbooth</th><th>Platform gateways (e.g. Cloudflare)</th></tr></thead>
 <tbody>
@@ -112,7 +112,7 @@ export function comparePage(baseUrl) {
 
 <div class="cmp-cta">
 <h2>Ready to get started?</h2>
-<p>Connect your agent to 1,300+ tools in under five minutes. No API keys, no subscriptions, no lock-in.</p>
+<p>Connect your agent to 1,340+ tools in under five minutes. No API keys, no subscriptions, no lock-in.</p>
 <a class="btn" href="/quickstart">Start building &rarr;</a>
 </div>
 </div>
