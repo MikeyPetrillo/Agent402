@@ -1,5 +1,6 @@
-// Scan recent USDC transfers into the revenue wallet on an EVM chain (Base by
-// default; SCAN_NETWORK=polygon|arbitrum for the other accepted chains) and
+// Scan recent stablecoin transfers into the revenue wallet on an EVM chain
+// (Base USDC by default; SCAN_NETWORK=polygon|arbitrum for the other USDC
+// chains, SCAN_NETWORK=robinhood for USDG on Robinhood Chain) and
 // identify genuine external x402 payments for tools. Solana has its own
 // scanner (revenue-scan-solana.js — different tx model).
 //
@@ -51,6 +52,15 @@ const EVM_NETWORKS = {
     rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com", "https://arbitrum.llamarpc.com", "https://arbitrum.drpc.org"],
     spanBlocks: 90000, // ~6h at 0.25s blocks (address-filtered getLogs stays cheap)
   },
+  // Robinhood Chain settles USDG (Global Dollar), not USDC — same 6 decimals,
+  // same ERC-20 Transfer scan, so the field keeps the `usdc` name (it is
+  // "the stablecoin contract to scan"); `token` fixes the log labels.
+  robinhood: {
+    usdc: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+    token: "USDG",
+    rpcs: ["https://rpc.mainnet.chain.robinhood.com"],
+    spanBlocks: 12000, // ~6.5h at 2s blocks (Arbitrum Orbit defaults)
+  },
 };
 const SCAN_NETWORK = (process.env.SCAN_NETWORK || "base").toLowerCase();
 const NET = EVM_NETWORKS[SCAN_NETWORK];
@@ -61,6 +71,7 @@ if (!NET) {
 const SPAN = parseInt(process.env.SPAN_BLOCKS || String(NET.spanBlocks), 10);
 
 const USDC = NET.usdc;
+const TOKEN = NET.token || "USDC";
 const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const pad = (a) => "0x" + "0".repeat(24) + a.replace(/^0x/, "");
 // Public RPCs that support eth_getLogs (some free endpoints don't, or
@@ -135,7 +146,7 @@ async function main() {
   try {
     const hex = await rpc("eth_call", [{ to: USDC, data: "0x70a08231" + pad(WALLET).slice(2) }, "latest"]);
     balanceUsd = Number(BigInt(hex && hex !== "0x" ? hex : "0x0")) / 1e6;
-    log(`USDC balance of ${WALLET} on ${SCAN_NETWORK}: $${balanceUsd.toFixed(4)}`);
+    log(`${TOKEN} balance of ${WALLET} on ${SCAN_NETWORK}: ${balanceUsd.toFixed(4)}`);
   } catch (e) {
     log(`balance read failed (continuing): ${e.message}`);
   }
@@ -174,7 +185,7 @@ async function main() {
     }
     rows.sort((a, b) => a.when.localeCompare(b.when));
 
-    log(`USDC into ${WALLET} over last ${SPAN} blocks: ${rows.length} transfer(s), $${(Number(total) / 1e6).toFixed(4)}`);
+    log(`${TOKEN} into ${WALLET} over last ${SPAN} blocks: ${rows.length} transfer(s), ${(Number(total) / 1e6).toFixed(4)}`);
     for (const r of rows) {
       const ext = isExternalPayment(r, { ourWallets: OUR_WALLETS, maxUsd: MAX_CALL_USD });
       const tag = OUR_WALLETS.has((r.payer || "").toLowerCase()) ? "(our wallet)"
