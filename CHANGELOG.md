@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **x402 Economy Observatory** (`/x402-economy` + `GET /api/x402-economy`): live, chain-wide
+  analytics on the x402 economy — daily gasless EIP-3009 USDC settlements on Base, unique
+  payers, volume, and the top-earning seller wallets, measured directly from decoded on-chain
+  events (Transfer + AuthorizationUsed pairs on the USDC contract) across EVERY seller, not
+  just Agent402. The only public dashboard of its kind; data flows through the same paid
+  `onchain-sql` tool agents can buy. 30-minute cache, per-query error resilience, graceful
+  "warming up" state without CDP keys.
+
 - **Onchain SQL** (`onchain-sql` $0.02 + `onchain-sql-schema` $0.002): run read-only
   ClickHouse-dialect SQL against Coinbase's indexed, DECODED chain data — `base.events`
   (decoded logs with parameters), `base.transactions`, `base.blocks`,

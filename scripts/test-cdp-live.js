@@ -89,6 +89,18 @@ try {
   ok(false, `onchain-sql-schema live call failed: ${e.statusCode || "?"} ${String(e.message).slice(0, 160)}`);
 }
 
+// --- x402 Economy Observatory (runs its curated settlement queries live) --------
+try {
+  const { x402EconomySnapshot } = await import("../src/x402-economy.js");
+  const snap = await x402EconomySnapshot();
+  ok(snap.errors.length === 0, `observatory queries ran clean${snap.errors.length ? ` — errors: ${JSON.stringify(snap.errors)}` : ""}`);
+  ok(Array.isArray(snap.daily) && snap.daily.length > 0, `daily settlement series populated (${snap.daily.length} days, latest: ${JSON.stringify(snap.daily[0] ?? {})})`);
+  ok(Array.isArray(snap.topMerchants) && snap.topMerchants.length > 0, `top merchants populated (top: ${JSON.stringify(snap.topMerchants[0] ?? {})})`);
+  ok(snap.totals?.last7d?.settlements >= 0, `7d totals computed (${JSON.stringify(snap.totals?.last7d)})`);
+} catch (e) {
+  ok(false, `observatory snapshot failed: ${e.statusCode || "?"} ${String(e.message).slice(0, 200)}`);
+}
+
 // --- testnet-fund (opt-in only — burns the shared faucet budget) ----------------
 if (process.env.CDP_FAUCET_LIVE_TEST === "1") {
   try {

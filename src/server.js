@@ -120,6 +120,7 @@ import { ledgerPricingPage } from "./ledger-pricing.js";
 import { robinhoodPage } from "./robinhood-page.js";
 import { revenueSnapshot, revenuePage } from "./revenue-live.js";
 import { startRevenueLedger, ledgerSummary } from "./revenue-ledger.js";
+import { x402EconomySnapshot, x402EconomyPage } from "./x402-economy.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
@@ -725,6 +726,22 @@ app.get("/revenue", async (_req, res) => {
     res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, { ...snap, allTime: ledgerSummary(revenueWallets()) }));
   } catch (e) {
     res.status(500).type("html").send('<p>Revenue view temporarily unavailable. <a href="/">Home</a></p>');
+  }
+});
+// x402 Economy Observatory — chain-wide settlement analytics (30-min cache
+// inside the snapshot; per-query error resilience; env-gated on CDP keys).
+app.get("/api/x402-economy", async (_req, res) => {
+  try {
+    res.set("Cache-Control", "public, max-age=300").json(await x402EconomySnapshot());
+  } catch (e) {
+    res.status(500).json({ error: "economy snapshot failed", detail: String(e?.message || e).slice(0, 120) });
+  }
+});
+app.get("/x402-economy", async (_req, res) => {
+  try {
+    res.set("Cache-Control", "public, max-age=300").type("html").send(x402EconomyPage(BASE_URL, await x402EconomySnapshot()));
+  } catch (e) {
+    res.status(500).type("html").send('<p>Observatory temporarily unavailable. <a href="/">Home</a></p>');
   }
 });
 app.get("/changelog", (_req, res) => htmlCache(res, 300, 900).send(changelogPage(BASE_URL)));

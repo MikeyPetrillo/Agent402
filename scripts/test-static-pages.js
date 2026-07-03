@@ -43,6 +43,7 @@ const PAGES = [
   { path: "/skills",      titleSubstr: "skill" },
   { path: "/robinhood",   titleSubstr: "Robinhood" },
   { path: "/revenue",     titleSubstr: "revenue" },
+  { path: "/x402-economy", titleSubstr: "Observatory" },
   { path: "/",            titleSubstr: "Agent402" },
 ];
 
