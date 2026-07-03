@@ -2,7 +2,14 @@ import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 import { CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { SKILL_PACKS } from "./skills.js";
+import { PACK_PRICES } from "./tools/skill-runner.js";
 import { RAILS_OS } from "./rails.js";
+
+// The six packs merchandised in the landing showcase — a deliberate mix: two
+// premium research jobs, two of the newest agent-ops jobs, one security
+// classic, one free-over-PoW on-ramp. Revisit when the sales ledger
+// (/api/sales) says buyers want something else up front.
+const FLAGSHIP_PACKS = ["financial-research", "search-and-cite", "onchain-analyst", "seo-audit", "wallet-readiness", "decode-blob"];
 
 export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   const tools = toolList(catalog);
@@ -70,21 +77,21 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <link rel="shortcut icon" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/logo.png">
 <meta name="base:app_id" content="6a3dd86ca341d86b910769fb" />
-<title>Agent402 — the open x402 index: Find, Router &amp; Leaderboard for the agent payments economy (${count}+ tools)</title>
-<meta name="description" content="The open x402 index — discovery, routing, and on-chain ranking for the agent payments economy. /api/find resolves tasks to tools, /api/route is the neutral Smart Order Router across the x402 sellers our crawler indexes, /api/leaderboard ranks them by Base USDC settled volume. Plus ${count} pay-per-call agent tools and agent402-tollbooth (open pay-per-crawl gate). Free via proof-of-work, USDC on Base + 3 more chains, or USDG on Robinhood Chain. No signup, no API key.">
+<title>Agent402 — ${SKILL_PACKS.length} agent skill packs, one x402 payment each · the open x402 index: Find, Router &amp; Leaderboard (${count} tools)</title>
+<meta name="description" content="${SKILL_PACKS.length} skill packs that do a whole agent job in one x402 payment — research a stock, audit a domain's SEO, run SQL over Base, check a wallet's readiness to pay — built on ${count} deterministic pay-per-call tools. Plus the open x402 index: /api/find resolves tasks to tools, /api/route is the neutral Smart Order Router, /api/leaderboard ranks sellers by on-chain USDC volume. Free via proof-of-work, USDC on Base + 3 more chains, or USDG on Robinhood Chain. No signup, no API key.">
 <link rel="canonical" href="${baseUrl}/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/">
 <meta property="og:site_name" content="Agent402.Tools">
 <meta property="og:title" content="Agent402 — the open x402 index: Find, Router &amp; Leaderboard (${count}+ tools)">
-<meta property="og:description" content="The open x402 index — discovery, routing, and on-chain ranking for the agent payments economy. Find a tool, route across indexed x402 sellers, see who's most used on-chain. Plus ${count} pay-per-call agent tools. Free via proof-of-work, USDC on Base + 3 more chains, or USDG on Robinhood Chain.">
+<meta property="og:description" content="${SKILL_PACKS.length} skill packs that do a whole agent job in one x402 payment — built on ${count} pay-per-call tools, plus the open x402 index (Find, Router, Leaderboard). Free via proof-of-work, USDC on Base + 3 more chains, or USDG on Robinhood Chain.">
 <meta property="og:image" content="${baseUrl}/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="${baseUrl}/card.png">
 <meta name="twitter:title" content="Agent402 — the open x402 index: Find, Router &amp; Leaderboard">
-<meta name="twitter:description" content="Discovery, routing, and on-chain ranking for the agent payments economy. ${count} pay-per-call agent tools. Free via proof-of-work, USDC on Base + 3 more chains, or USDG on Robinhood Chain.">
+<meta name="twitter:description" content="${SKILL_PACKS.length} agent skill packs, one x402 payment each — built on ${count} pay-per-call tools + the open x402 index. Free via proof-of-work, USDC on Base + 3 more chains, or USDG on Robinhood Chain.">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -274,18 +281,18 @@ ${renderHeader("/", [{ href: "#connect", label: "Connect" }])}
 <div class="wrap">
   <header class="hero">
     <div>
-      <span class="badge"><span class="dot"></span> open source · <b>x402</b> · ${count} tools · free tier · no API keys</span>
-      <h1>Where agents pay agents<span class="x">.</span></h1>
-      <p class="sub"><b>Machine-to-machine payments for AI agents — over <a href="https://x402.org" rel="noopener">x402</a>.</b> ${count} deterministic, pay-per-call tools your agent can use mid-task: extract PDFs, search the web, geocode, fetch SEC filings, render JavaScript pages, pull stock quotes &amp; macro data. <b>Free to try</b> via in-process proof-of-work; <b>USDC on Base, Solana, Polygon &amp; Arbitrum</b> (+ USDG on Robinhood Chain) from $0.001/call when you scale. No signup, no API keys — <b>the wallet is the identity</b>.</p>
+      <span class="badge"><span class="dot"></span> open source · <b>x402</b> · ${SKILL_PACKS.length} skill packs · ${count} tools · free tier · no API keys</span>
+      <h1>Whole agent jobs, one payment each<span class="x">.</span></h1>
+      <p class="sub"><b>${SKILL_PACKS.length} skill packs — curated multi-tool workflows over <a href="https://x402.org" rel="noopener">x402</a>.</b> Research a stock end to end, audit a domain's SEO, run SQL over Base, decode an opaque blob, check a wallet's readiness to pay — each pack orchestrates the right tools and settles as <em>one</em> x402 payment. Built on <b>${count} deterministic pay-per-call tools</b> (<a href="/tools">browse them</a>), <b>${freeCount.toLocaleString()} free</b> via in-process proof-of-work; <b>USDC on Base, Solana, Polygon &amp; Arbitrum</b> (+ USDG on Robinhood Chain) from $0.001/call. No signup, no API keys — <b>the wallet is the identity</b>.</p>
       <div class="ctas">
         <a class="cta primary" href="#connect">Add to Claude in 60 seconds →</a>
-        <a class="cta ghost" href="/tools">Browse all ${count} tools</a>
+        <a class="cta ghost" href="/skills">Browse ${SKILL_PACKS.length} skill packs</a>
         <a class="cta ghost" href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">Self-host free →</a>
       </div>
       <div class="stats">
-        <div class="stat"><div class="n">${count.toLocaleString()}</div><div class="l">x402 tools</div></div>
+        <div class="stat"><div class="n">${SKILL_PACKS.length}</div><div class="l">agent jobs · one payment</div></div>
+        <div class="stat"><div class="n">${count.toLocaleString()}</div><div class="l">x402 tools underneath</div></div>
         <div class="stat"><div class="n">${freeCount.toLocaleString()}</div><div class="l">free tier · no wallet</div></div>
-        <div class="stat"><div class="n">$0.001</div><div class="l">starting price / call</div></div>
         <div class="stat"><div class="n">${served ? served.total.toLocaleString() : "live"}</div><div class="l">${served ? "calls served" : "settling on-chain"}</div></div>
       </div>
     </div>
@@ -298,8 +305,8 @@ ${renderHeader("/", [{ href: "#connect", label: "Connect" }])}
 <pre id="hero-snippet"><span class="c"># Add ${count.toLocaleString()} x402 tools to Claude Code. No signup, no API key.</span>
 claude mcp add agent402 -s user -- npx -y agent402-mcp@latest
 
-<span class="c"># Then ask Claude: "extract the tables from this PDF",
-# "geocode these 50 addresses", "fetch Apple's latest 10-K".
+<span class="c"># Then ask Claude: "run the financial-research pack on AAPL",
+# "seo-audit example.com", "decode this blob" — or any single tool.
 # Free tier auto-pays in compute. USDC on 4 chains (or USDG on Robinhood) when you scale.</span></pre>
       <div class="snippet-foot">
         <span class="dot"></span> ${freeCount.toLocaleString()} tools free via proof-of-work · USDC on Base + 3 more chains, or USDG on <a href="/guides/usdg-payments-robinhood-chain">Robinhood Chain</a>, for the rest · <a href="/llms.txt">llms.txt</a>
@@ -322,8 +329,25 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@latest
     </script>
   </header>
 
+  <section>
+    <div class="eyebrow">The product</div>
+    <h2>Skill packs: a whole job, one x402 payment</h2>
+    <p class="sub">No single tool researches a stock or audits a site. A pack orchestrates the right tools in the right order server-side and returns one envelope — callable over plain HTTP (<code>POST /api/skill/&lt;slug&gt;</code>), as an MCP prompt, or by just asking Claude. Partial-success per step: you keep everything that worked.</p>
+    <div class="why">
+      ${FLAGSHIP_PACKS.map((slug) => {
+        const p = SKILL_PACKS.find((x) => x.slug === slug);
+        if (!p) return "";
+        const price = PACK_PRICES[slug] ?? 0.05;
+        return `<div class="card">
+        <h3><a href="/skills/${p.slug}">${p.title}</a> <span style="float:right;color:var(--accent);font-family:var(--mono,monospace);font-size:.9em;">$${price.toFixed(2)}</span></h3>
+        <p>${p.tagline.length > 180 ? p.tagline.slice(0, 177) + "…" : p.tagline}</p>
+      </div>`;
+      }).join("\n      ")}
+    </div>
+    <p class="sub" style="margin-top:14px;"><a href="/skills"><b>Browse all ${SKILL_PACKS.length} packs →</b></a> · every pack is also a Claude-ready prompt template (<code>prompts/list</code> → <code>prompts/get</code> on the MCP connector)</p>
+  </section>
+
   <div class="callout">🏆 <b>The neutral x402 layer.</b> <a href="/index">Index</a> + <a href="/api/route">Smart Order Router</a> + <a href="/leaderboard">Leaderboard</a> — auto-crawled from the <a href="https://docs.cdp.coinbase.com/x402/docs/bazaar" rel="noopener">CDP Bazaar</a>, ranked by real on-chain USDC volume. Use <code>?include=external</code> to exclude Agent402 itself.</div>
-  <div class="callout">🧩 <b>${SKILL_PACKS.length} multi-tool skill packs.</b> Curated workflows for jobs no single tool covers — <a href="/skills/security-audit">audit a domain</a>, <a href="/skills/trend-analysis">work up a time-series</a>, <a href="/skills/decode-blob">peel an opaque blob</a>, <a href="/skills/structured-scrape">deterministically scrape a page</a>. Each pack is a Claude-ready prompt template callable as an MCP prompt (<code>prompts/list</code> → <code>prompts/get</code>) or plain HTTP. <a href="/skills"><b>Browse all packs →</b></a></div>
   <div class="callout">🚧 <b>The other side: charge AI bots crawling <em>your</em> site.</b> <a href="/tollbooth"><b>agent402-tollbooth</b></a> is an open-source <b>pay-per-crawl</b> gate — humans browse free, crawlers pay per request. Deploy on <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/docker" rel="noopener">Docker</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare" rel="noopener">Cloudflare</a>, <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs" rel="noopener">Next.js</a>, or <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/wordpress" rel="noopener">WordPress</a>. <a href="/tollbooth/cloud">Tollbooth Cloud →</a></div>
   ${freeMode ? '<div class="warn">⚠ Demo mode — payments are currently disabled on this instance.</div>' : ""}
 

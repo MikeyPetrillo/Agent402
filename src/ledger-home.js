@@ -6,6 +6,13 @@ import { ledgerShell, ledgerFooterFull, ledgerTape, esc } from "./ledger-chrome.
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 import { RAILS_AMP, RAILS_SHORT } from "./rails.js";
+import { PACK_PRICES } from "./tools/skill-runner.js";
+
+// The six packs merchandised on the home page — a deliberate mix: two premium
+// research jobs, two of the newest agent-ops jobs, one security classic, one
+// free-over-PoW on-ramp. Revisit when the sales ledger (/api/sales) says
+// buyers want something else up front.
+const FLAGSHIP_PACKS = ["financial-research", "search-and-cite", "onchain-analyst", "seo-audit", "wallet-readiness", "decode-blob"];
 
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 
@@ -42,8 +49,8 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
   };
 
   const canonical = baseUrl + "/";
-  const title = `Agent402 — the open x402 index (${fmtNum(count)} tools)`;
-  const description = `${fmtNum(count)} deterministic, pay-per-call tools your agent can use mid-task. Free via proof-of-work; ${RAILS_SHORT} — from $0.001/call. No signup, no API key — the wallet is the identity.`;
+  const title = `Agent402 — ${packCount} agent skill packs, one x402 payment each (${fmtNum(count)} tools)`;
+  const description = `${packCount} skill packs that do a whole agent job in one x402 payment — research a stock, audit a domain's SEO, run SQL over Base — built on ${fmtNum(count)} deterministic pay-per-call tools. Free via proof-of-work; ${RAILS_SHORT} — from $0.001/call. No signup, no API key — the wallet is the identity.`;
 
   const jsonLd = [
     {
@@ -72,13 +79,13 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
     <div style="max-width:1180px;margin:0 auto;padding:70px 30px 0;position:relative;">
       <div class="ml-hero-grid" style="display:grid;grid-template-columns:1.08fr .92fr;gap:50px;align-items:start;">
         <div>
-          <div style="font-family:var(--font-mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:22px;">▸ open source · x402 · ${fmtNum(count)} tools · free tier</div>
+          <div style="font-family:var(--font-mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:22px;">▸ open source · x402 · ${packCount} skill packs · ${fmtNum(count)} tools · free tier</div>
           <h1 class="ml-hero-h1" style="font-family:var(--font-body);font-weight:800;font-size:66px;line-height:.96;letter-spacing:-.03em;margin:0 0 8px;color:var(--ink);">Where agents<br><span style="color:var(--accent);">pay</span> agents.</h1>
           <div style="display:inline-block;transform:rotate(-7deg);border:2.5px solid var(--accent);color:var(--accent);padding:5px 11px 4px;margin:14px 0 22px;font-family:var(--font-mono);font-weight:700;font-size:11px;letter-spacing:.12em;line-height:1.3;text-align:center;">PAYMENT REQUIRED<br><span style="font-size:9px;letter-spacing:.18em;opacity:.8;">· 402 · agent402.tools ·</span></div>
-          <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:500px;margin:0 0 30px;">${fmtNum(count)} deterministic, pay-per-call tools your agent can use mid-task — extract PDFs, render pages, geocode, fetch SEC filings. Free via proof-of-work; USDC on Base + 3 more chains — or <a href="/guides/usdg-payments-robinhood-chain" style="color:var(--ink);font-weight:700;">USDG on Robinhood Chain</a> — from <strong style="color:var(--ink);font-weight:700;">$0.001/call</strong> when you scale. No signup, no API keys — <strong style="color:var(--ink);font-weight:700;">the wallet is the identity</strong>.</p>
+          <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:500px;margin:0 0 30px;"><strong style="color:var(--ink);font-weight:700;">${packCount} skill packs — a whole agent job, one x402 payment.</strong> Research a stock end to end, audit a domain's SEO, run SQL over Base, check a wallet's readiness to pay. Built on ${fmtNum(count)} deterministic pay-per-call tools; free via proof-of-work; USDC on Base + 3 more chains — or <a href="/guides/usdg-payments-robinhood-chain" style="color:var(--ink);font-weight:700;">USDG on Robinhood Chain</a> — from <strong style="color:var(--ink);font-weight:700;">$0.001/call</strong>. No signup, no API keys — <strong style="color:var(--ink);font-weight:700;">the wallet is the identity</strong>.</p>
           <div style="display:flex;flex-wrap:wrap;align-items:center;gap:11px;">
             <a href="/docs" style="background:var(--accent);color:#fff;font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 20px;">ADD TO CLAUDE →</a>
-            <a href="/tools" style="background:transparent;border:1.5px solid var(--ink);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:12px 20px;">BROWSE ${fmtNum(count)} TOOLS</a>
+            <a href="/skills" style="background:transparent;border:1.5px solid var(--ink);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:12px 20px;">BROWSE ${packCount} SKILL PACKS</a>
           </div>
         </div>
         <div style="background:var(--ink);border:1.5px solid var(--ink);box-shadow:8px 8px 0 #16150f1f;">
@@ -89,7 +96,8 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
     -- npx -y agent402-mcp@latest
 
 </span><span style="color:var(--dk-muted3);"># then ask Claude:
-# "extract the tables from this PDF"
+# "run financial-research on AAPL"
+# "seo-audit example.com"
 # free tier pays in compute.
 # ${RAILS_SHORT} when you scale.</span></pre>
         </div>
@@ -100,6 +108,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
         <div style="border:1.5px solid var(--ink);background:var(--card);padding:18px 20px;">
           <div style="display:flex;align-items:center;justify-content:space-between;font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--muted);border-bottom:1px dashed #b3a98f;padding-bottom:10px;margin-bottom:12px;"><span>·· RECEIPT ··</span><span>since ${stats?.servingSince ? String(stats.servingSince).slice(0, 10) : "2026-06-12"}</span></div>
           <div style="display:flex;flex-direction:column;gap:9px;font-family:var(--font-mono);font-size:14px;">
+            <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">skill packs · one payment</span><span style="flex:1;border-bottom:1.5px dotted #b3a98f;transform:translateY(-4px);"></span><span style="font-weight:700;">${packCount}</span></div>
             <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">x402 tools</span><span style="flex:1;border-bottom:1.5px dotted #b3a98f;transform:translateY(-4px);"></span><span style="font-weight:700;">${fmtNum(count)}</span></div>
             <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">free · no wallet</span><span style="flex:1;border-bottom:1.5px dotted #b3a98f;transform:translateY(-4px);"></span><span style="font-weight:700;">${fmtNum(freeCount)}</span></div>
             <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">starting / call</span><span style="flex:1;border-bottom:1.5px dotted #b3a98f;transform:translateY(-4px);"></span><span style="font-weight:700;color:var(--accent);">$0.001</span></div>
@@ -121,6 +130,30 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
       </div>
     </div>
   </header>
+
+  <!-- THE PRODUCT — SKILL PACKS -->
+  <section style="max-width:1180px;margin:0 auto;padding:78px 30px 0;">
+    <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">$ POST /api/skill/{slug}</div>
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:12px;">
+      <h2 style="font-family:var(--font-body);font-weight:800;font-size:44px;line-height:1;letter-spacing:-.02em;margin:0;color:var(--ink);">A whole job, one payment.</h2>
+      <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">${packCount} packs · $0.05–$1.50 · partial-success per step</span>
+    </div>
+    <p style="font-size:16px;color:var(--muted);max-width:620px;margin:0 0 30px;">No single tool researches a stock or audits a site. A skill pack orchestrates the right tools in the right order server-side and returns one envelope — every step's result, one x402 payment. Also callable as MCP prompts, so Claude can drive the same workflow itself.</p>
+    <div class="ml-2col" style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
+      ${FLAGSHIP_PACKS.map((slug) => {
+        const p = (skillPacks || []).find((x) => x.slug === slug);
+        if (!p) return "";
+        const price = PACK_PRICES[slug] ?? 0.05;
+        const tag = p.tagline.length > 150 ? p.tagline.slice(0, 147) + "…" : p.tagline;
+        return `<a href="/skills/${p.slug}" style="border:1.5px solid var(--ink);background:var(--card);padding:18px 20px;text-decoration:none;color:var(--ink);display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;"><span style="font-weight:800;font-size:16px;">${esc(p.title)}</span><span style="font-family:var(--font-mono);font-weight:700;font-size:13px;color:var(--accent);white-space:nowrap;">$${price.toFixed(2)}</span></div>
+        <span style="font-size:13.5px;line-height:1.5;color:var(--muted);flex:1;">${esc(tag)}</span>
+        <span style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);">${p.toolSlugs.length} tools · POST /api/skill/${p.slug} →</span>
+      </a>`;
+      }).join("\n      ")}
+    </div>
+    <div style="margin-top:16px;font-family:var(--font-mono);font-size:13px;"><a href="/skills" style="color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">browse all ${packCount} skill packs →</a></div>
+  </section>
 
   <!-- THREE WAYS IN -->
   <section style="max-width:1180px;margin:0 auto;padding:78px 30px 20px;">

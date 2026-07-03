@@ -191,6 +191,8 @@ Base URL: ${baseUrl}
 
 > One-fetch service manifest (identity, payment options, capability map, MCP, trust signals) for agents deciding whether to use this seller: ${baseUrl}/.well-known/x402 . Machine-readable reliability/SLA report with each claim's verification URL: ${baseUrl}/api/reliability .
 
+> Task spans several tools? **Skill packs run a whole job as ONE x402 payment**: \`POST ${baseUrl}/api/skill/{slug}\` executes the pack's tool sequence server-side and returns every step's result in one envelope (partial-success per step). ${SKILL_PACKS.length} packs, $0.05–$1.50 each — research a stock, audit a domain's SEO, run SQL over Base, check a wallet's readiness. Full list in the "Skill packs" section below.
+
 > Don't burn tokens exploring to find a tool: \`GET ${baseUrl}/api/find?q=<your task>\` returns the best-matching tools with route, price, input schema, and a ready example — call the result directly. (Also accepts POST {"task": "..."}.)
 
 > Neutral cross-seller discovery for the whole x402 ecosystem: POST \`${baseUrl}/api/route\` with \`{"query":"<task>", "top":N, "include":"all|external|local"}\` — the Smart Order Router ranks tools across every x402 seller we've crawled (auto-discovered from the Coinbase CDP Bazaar, refreshed hourly), filters out unhealthy sellers, and tiebreaks on health then price. Use \`include:"external"\` to *exclude* Agent402 itself from the results — same neutral router the ecosystem uses for cross-seller discovery. Full seller index at \`${baseUrl}/api/index\` (JSON) and \`${baseUrl}/index\` (HTML).
@@ -226,7 +228,7 @@ Base URL: ${baseUrl}
 
 ## Skill packs (multi-tool workflows)
 
-If your task spans several tools — "audit a domain", "diagnose deliverability", "run macro research" — start from a skill pack. Each pack is a curated, ordered sequence of Agent402 tool calls with a Claude-ready prompt template, callable as an MCP prompt (\`prompts/list\` → \`prompts/get { name: "<slug>", arguments: {…} }\`) or as plain HTTP at \`${baseUrl}/api/skill-packs/{slug}/prompt\`.
+If your task spans several tools — "audit a domain", "diagnose deliverability", "run macro research" — start from a skill pack. Two ways to use one: (a) **bundled execution** — \`POST ${baseUrl}/api/skill/{slug}\` runs the whole sequence server-side for one x402 payment and returns every step's result (partial-success per step; you keep what worked); (b) **guided** — each pack is also a Claude-ready prompt template, callable as an MCP prompt (\`prompts/list\` → \`prompts/get { name: "<slug>", arguments: {…} }\`) or plain HTTP at \`${baseUrl}/api/skill-packs/{slug}/prompt\`, where your agent drives the tools itself (free-tier tools cost nothing this way).
 
 ${SKILL_PACKS.map((p) => `- **${p.title}** (\`${p.slug}\`, ${p.toolSlugs.length} tools) — ${p.tagline} ${baseUrl}/skills/${p.slug}`).join("\n")}
 

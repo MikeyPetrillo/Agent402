@@ -36,7 +36,10 @@ export const CHROME_CSS = `
 @media(max-width:600px){ .site-footer .ft-grid{grid-template-columns:repeat(2,1fr);} .site-footer .ft-bottom{flex-direction:column;align-items:flex-start;} }
 `;
 
+// Skill packs lead — they're the product (a whole agent job, one payment);
+// the tool catalog is the supporting long tail.
 const NAV_LINKS = [
+  { href: "/skills", label: "Skill packs" },
   { href: "/tools", label: "Tools" },
   { href: "/docs", label: "Docs" },
   { href: "/pricing", label: "Pricing" },

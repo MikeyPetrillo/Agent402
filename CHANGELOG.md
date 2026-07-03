@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Skill packs are now the front door**: the home page hero, page titles, meta/OG
+  descriptions, and top nav all lead with "46 skill packs — a whole agent job, one x402
+  payment" (the tool catalog reframed as the supporting long tail), with a six-pack
+  flagship showcase (financial-research, search-and-cite, onchain-analyst, seo-audit,
+  wallet-readiness, decode-blob) linking straight to `POST /api/skill/{slug}`. llms.txt
+  now tells agents up front that packs are buyable as ONE bundled x402 call — previously
+  it only advertised the free prompt-template route. Every count stays exact.
+
 - **Sales ledger** (`/api/sales` + a "What's selling" section on `/revenue`): every served
   paid/proven call recorded BY NAME at settle time — slug, price, rail, settlement chain,
   verified EIP-3009 payer, settle tx — on the persistent `/data` volume, classified

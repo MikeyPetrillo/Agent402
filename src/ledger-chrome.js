@@ -91,7 +91,10 @@ function statusLine() {
 // Nav (sticky, every page)
 // ---------------------------------------------------------------------------
 
+// Skill packs lead — they're the product (a whole agent job, one payment);
+// the tool catalog is the supporting long tail.
 const NAV_ITEMS = [
+  { href: "/skills", label: "skill packs" },
   { href: "/tools", label: "catalog" },
   { href: "/pricing", label: "pricing" },
   { href: "/leaderboard", label: "leaderboard" },
