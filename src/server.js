@@ -23,7 +23,7 @@ import { cacheEnabled, cacheGet, cacheSet, cacheKeyFor, CACHEABLE_ROUTES, noteCa
 import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled } from "./analytics-db.js";
 import { baseNotificationsEnabled } from "./base-notifications.js";
 import { initSentry, captureToolError, sentryEnabled } from "./sentry.js";
-import { initPostHog, capturePostHogToolError, capturePostHogToolCall, posthogEnabled } from "./posthog.js";
+import { initPostHog, capturePostHogToolError, capturePostHogToolCall, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogSettlement, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
@@ -577,6 +577,30 @@ const app = express();
 // so spoofing it must not mint a fresh bucket. Tune for other topologies.
 app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
 app.use(express.json({ limit: "100kb" }));
+
+// Funnel stage 1 — discovery. An agent fetching any of these machine-readable
+// surfaces is the top of the buyer journey (it learned the catalog exists and
+// how to pay). Captured on response finish so only successfully served
+// discovery counts; env-gated no-op like all PostHog capture. The MCP
+// connector's search_tools/find_tool land here too (wired in mcp-http.js).
+const DISCOVERY_SURFACES = new Map([
+  ["/llms.txt", "llms.txt"],
+  ["/openapi.json", "openapi.json"],
+  ["/.well-known/x402", "x402-manifest"],
+  ["/api/pricing", "pricing"],
+  ["/api/find", "find"],
+  ["/api/index", "index"],
+  ["/api/route", "route"],
+]);
+app.use((req, res, next) => {
+  const surface = DISCOVERY_SURFACES.get(req.path);
+  if (surface) {
+    res.on("finish", () => {
+      if (res.statusCode < 400) capturePostHogDiscovery({ surface, synthetic: isSyntheticRequest(req) });
+    });
+  }
+  next();
+});
 
 // Per-request id — useful for grepping logs when a buyer or operator forwards
 // a failing response. Honored from upstream (load balancer) if present and
@@ -1680,6 +1704,27 @@ if (FREE_MODE) {
     baseUrl: BASE_URL,
     catalog: CATALOG,
   });
+  // Funnel stage 2 — a 402 challenge issued for a catalog route. Mounted
+  // BEFORE the paywall because the paywall ends 402 responses without
+  // calling next(), so the post-paywall tally middleware never sees them.
+  // Rolled up in-memory (src/posthog.js) — registry crawlers sweep every
+  // endpoint, so per-request events would swamp the budget.
+  app.use((req, res, next) => {
+    const def = CATALOG[`${req.method} ${req.path}`];
+    if (def) {
+      res.on("finish", () => {
+        if (res.statusCode === 402) {
+          capturePostHogPaywall({
+            slug: def.slug,
+            priceUsd: Number(String(def.price ?? "").replace(/[^0-9.]/g, "")) || 0,
+            powEligible: POW_SLUGS.has(def.slug),
+            synthetic: isSyntheticRequest(req),
+          });
+        }
+      });
+    }
+    next();
+  });
   // Gate: for a compute-payable route, a valid proof-of-work bypasses the x402
   // paywall; otherwise the normal USDC paywall applies (and we advertise the
   // PoW alternative via a response header on its 402). PoW redemption is
@@ -1744,6 +1789,20 @@ app.use((req, res, next) => {
         // (multi-chain x402: Base vs Solana vs Polygon…) so /api/stats can
         // answer "did anyone pay on <chain>" without per-chain explorer scans.
         recordServedCall(def.slug, method, method === "usdc" ? networkFromPaymentResponse(settleReceipt) : null);
+        // Funnel stage 3 — the gate accepted payment and the tool answered.
+        // Mirrors the stats attribution above; the marketplace bridge is its
+        // own rail here (stats folds it into usdc) because funnel analysis
+        // cares which surface converted. Skipped in FREE_MODE — nothing was
+        // paid, so a "settlement" event would be a lie.
+        if (!FREE_MODE) {
+          capturePostHogSettlement({
+            slug: def.slug,
+            rail: res.getHeader("X-Settled-Via") === "marketplace" ? "marketplace" : method,
+            network: method === "usdc" ? networkFromPaymentResponse(settleReceipt) : null,
+            priceUsd: Number(String(def.price ?? "").replace(/[^0-9.]/g, "")) || 0,
+            synthetic: method === "heartbeat" || isSyntheticRequest(req),
+          });
+        }
       } else if (settleReceipt) {
         // The middleware sets the settle receipt only after USDC settlement
         // succeeded. A non-200 with this header set means we charged the buyer
@@ -2072,6 +2131,10 @@ function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`${signal} received — draining in-flight requests`);
+  // Drain the PostHog paywall_402 rollup + client queue so a redeploy doesn't
+  // drop up to a flush window of funnel counts. Fire-and-forget (no-op when
+  // PostHog is disabled); the drain deadline below still governs exit.
+  shutdownPostHog().catch(() => {});
   httpServer.close(() => process.exit(0));
   // Hard deadline so a stuck request can't block the redeploy.
   setTimeout(() => process.exit(0), 25_000).unref();

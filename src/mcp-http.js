@@ -20,6 +20,7 @@ import {
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { findTools } from "./find.js";
+import { capturePostHogDiscovery } from "./posthog.js";
 import { rankBy as rankLeaderboard } from "./leaderboard.js";
 import { SKILL_PACKS, buildPromptMessages, rankSkillPacks } from "./skills.js";
 import {
@@ -234,6 +235,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const { name, arguments: args = {} } = req.params;
       try {
         if (name === "search_tools") {
+          // Funnel stage 1 (discovery) — same event the HTTP discovery
+          // surfaces emit in server.js; env-gated no-op without PostHog.
+          capturePostHogDiscovery({ surface: "mcp:search_tools" });
           const q = args.query ?? "";
           const results = searchTools(q, args.limit);
           // Multi-tool workflows that match the same query — surface them so an
@@ -254,6 +258,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           };
         }
         if (name === "find_tool") {
+          capturePostHogDiscovery({ surface: "mcp:find_tool" });
           const r = findTools(catalog, args.task ?? args.query ?? "", { k: args.limit, baseUrl, powSlugs: freeSlugs });
           const results = r.results.map((t) => ({
             slug: t.slug,
@@ -284,6 +289,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           };
         }
         if (name === "about_agent402") {
+          capturePostHogDiscovery({ surface: "mcp:about" });
           return {
             content: [{
               type: "text",

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **PostHog conversion funnel** (discovery → 402 → settlement): the env-gated PostHog stream
+  gains three funnel events — `discovery` (machine-readable surface fetches: llms.txt,
+  openapi.json, the x402 manifest, pricing, `/api/find`, index, route, and the MCP connector's
+  search/find/about tools), `paywall_402` (quotes issued; rolled up in memory per slug/window
+  so registry-crawler sweeps can't blow the event budget — `sum(count)` is the exact total),
+  and `payment_settled` (rail-attributed: usdc with the settlement chain from the x402
+  receipt, pow, heartbeat, marketplace). Privacy posture unchanged: no caller IP/UA/wallet
+  — aggregate stage counters only, conversion computed as a ratio of stage totals. A CI test
+  boots a paid-mode server against a mock facilitator (real offline 402s) and asserts the
+  exact events; an operator dashboard with stage trends, the 402→paid conversion ratio, and
+  settled-$ tracking ships alongside.
+
 - **Weekly x402 Economy report**: every observatory refresh now persists its daily settlement
   rows into SQLite on the `/data` volume, so history compounds past the 30-day query window.
   `/x402-economy` gains a week-over-week trend line (trailing 7 complete days vs the prior 7)

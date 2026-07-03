@@ -608,6 +608,9 @@ jobs:
       - name: Economy history unit tests (daily upsert idempotency + week-over-week math — offline)
         run: node scripts/test-x402-economy.js
 
+      - name: PostHog funnel (discovery→402→settlement capture; paid-mode boot vs mock facilitator — offline)
+        run: node scripts/test-posthog-funnel.js
+
       - name: CDP kit live check (real balances + onramp session — skips without secrets)
         env:
           CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
