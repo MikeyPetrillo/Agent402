@@ -618,7 +618,7 @@ jobs:
       - name: Sales ledger unit tests (named sales, internal/external classification, revenue math — offline)
         run: node scripts/test-sales-ledger.js
 
-      - name: Cache hygiene (M5 — Attack III: paid responses no-store, free discovery stays cacheable)
+      - name: "Cache hygiene (M5 — Attack III: paid responses no-store, free discovery stays cacheable)"
         run: node scripts/test-cache-hygiene.js
 
       - name: CDP kit live check (real balances + onramp session — skips without secrets)
