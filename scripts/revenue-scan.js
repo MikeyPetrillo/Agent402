@@ -39,17 +39,17 @@ const MAX_CALL_USD = parseFloat(process.env.MAX_CALL_USD || "0.5");
 const EVM_NETWORKS = {
   base: {
     usdc: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-    rpcs: ["https://mainnet.base.org", "https://base-rpc.publicnode.com", "https://base.llamarpc.com", "https://base.drpc.org"],
+    rpcs: ["https://mainnet.base.org", "https://base.llamarpc.com", "https://base.drpc.org"],
     spanBlocks: 12000, // ~6.5h at 2s blocks
   },
   polygon: {
     usdc: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
-    rpcs: ["https://polygon-rpc.com", "https://polygon-bor-rpc.publicnode.com", "https://polygon.llamarpc.com", "https://polygon.drpc.org"],
+    rpcs: ["https://polygon-rpc.com", "https://polygon.llamarpc.com", "https://polygon.drpc.org"],
     spanBlocks: 9500, // ~5.5h at 2.1s blocks — free-tier RPCs cap getLogs ranges at 10k blocks
   },
   arbitrum: {
     usdc: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
-    rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com", "https://arbitrum.llamarpc.com", "https://arbitrum.drpc.org"],
+    rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum.llamarpc.com", "https://arbitrum.drpc.org"],
     spanBlocks: 90000, // ~6h at 0.25s blocks (address-filtered getLogs stays cheap)
   },
   // Robinhood Chain settles USDG (Global Dollar), not USDC — same 6 decimals,
@@ -151,18 +151,37 @@ async function main() {
     log(`balance read failed (continuing): ${e.message}`);
   }
 
-  let latest, logs;
+  let latest;
+  let logs = [];
+  let missedChunks = 0;
+  // Chunked scan: one whole-span eth_getLogs trips free-RPC range caps and
+  // "archive" upsells (the 2026-07-03 digest skipped Base/Polygon this way).
+  // SPAN/4 windows stay inside every free tier; a failed chunk degrades to a
+  // partial scan instead of skipping the rail.
+  const LOG_CHUNKS = 4;
   try {
     latest = parseInt(await rpc("eth_blockNumber", []), 16);
-    logs = await rpc("eth_getLogs", [{
-      fromBlock: "0x" + (latest - SPAN).toString(16),
-      toBlock: "latest",
-      address: USDC,
-      topics: [TRANSFER, null, pad(WALLET)],
-    }]);
   } catch (e) {
     bailSoft(e.message, { balanceUsd });
   }
+  const chunkSize = Math.ceil(SPAN / LOG_CHUNKS);
+  for (let i = 0; i < LOG_CHUNKS; i++) {
+    const from = Math.max(0, latest - SPAN + i * chunkSize);
+    const to = Math.min(latest, from + chunkSize - 1);
+    try {
+      const part = await rpc("eth_getLogs", [{
+        fromBlock: "0x" + from.toString(16),
+        toBlock: "0x" + to.toString(16),
+        address: USDC,
+        topics: [TRANSFER, null, pad(WALLET)],
+      }]);
+      if (Array.isArray(part)) logs.push(...part);
+    } catch (e) {
+      missedChunks++;
+      log(`getLogs chunk ${i + 1}/${LOG_CHUNKS} failed (continuing): ${e.message}`);
+    }
+  }
+  if (missedChunks === LOG_CHUNKS) bailSoft("all getLogs chunks failed", { balanceUsd });
 
   try {
     const tsCache = {};
@@ -201,6 +220,7 @@ async function main() {
       payments: rows.length,
       totalUsd: Number((Number(total) / 1e6).toFixed(6)),
       scannedBlocks: SPAN,
+      ...(missedChunks ? { partialChunks: missedChunks } : {}),
       maxCallUsd: MAX_CALL_USD,
       external,
     }, null, 2));
