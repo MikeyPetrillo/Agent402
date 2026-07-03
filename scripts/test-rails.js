@@ -15,6 +15,7 @@
 //   TARGET_URL=http://localhost:3000 node scripts/test-rails.js
 import { RAILS, RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT, RAIL_CHAIN_NAMES, RAILS_OS, RAILS_NOTE, RAILS_TICKER } from "../src/rails.js";
 import { NETWORKS } from "../src/payments.js";
+import { railsCoveredByLiveView } from "../src/revenue-live.js";
 
 let passed = 0, failed = 0;
 const ok = (cond, msg) => {
@@ -46,6 +47,7 @@ for (const r of RAILS) ok(RAILS_OS.includes(r.name), `RAILS_OS names ${r.name}`)
 for (const r of RAILS.filter((x) => x.asset !== "USDC")) ok(RAILS_OS.includes(r.asset), `RAILS_OS marks ${r.name} as ${r.asset}`);
 ok(RAILS_SHORT.includes("USDG") && RAILS_SHORT.includes("Robinhood"), "RAILS_SHORT carries the non-USDC rail");
 ok(RAIL_CHAIN_NAMES.length === RAILS.length, "RAIL_CHAIN_NAMES covers every rail");
+ok(railsCoveredByLiveView(), "/revenue live view has a read-config for every rail — new rails can't be invisible there");
 
 // --- 2. live pages render the rails (opt-in via TARGET_URL) ---------------
 const TARGET = process.env.TARGET_URL;

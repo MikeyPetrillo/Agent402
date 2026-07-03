@@ -1,0 +1,202 @@
+// Live consolidated revenue view — one page instead of three explorer tabs.
+//
+// /api/revenue (JSON) + /revenue (HTML) read, server-side and best-effort,
+// every rail's wallet balance and the recent inbound stablecoin transfers:
+// Base / Polygon / Arbitrum / Robinhood Chain via public-RPC eth_getLogs
+// (same approach as scripts/revenue-scan.js), Solana via
+// getTokenAccountsByOwner. Results are cached for 60s so a page refresh is
+// instant and public RPCs see at most one scan a minute; a flaky chain shows
+// "unavailable" for that rail instead of breaking the page. Balances and
+// transfers are public on-chain data — this page just saves the tab-cycling.
+import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
+import { RAILS } from "./rails.js";
+
+const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+const USDC_SOL_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+// Chain read-config. Stablecoin contracts mirror scripts/revenue-scan.js;
+// span ≈ a few hours of blocks so "recent inbound" stays a cheap filtered read.
+const EVM = {
+  base: {
+    label: "Base", asset: "USDC", span: 12000,
+    token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    rpcs: ["https://mainnet.base.org", "https://base-rpc.publicnode.com"],
+    explorer: (a) => `https://basescan.org/address/${a}#tokentxns`,
+    tx: (h) => `https://basescan.org/tx/${h}`,
+  },
+  polygon: {
+    label: "Polygon", asset: "USDC", span: 9500,
+    token: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+    rpcs: ["https://polygon-rpc.com", "https://polygon-bor-rpc.publicnode.com"],
+    explorer: (a) => `https://polygonscan.com/address/${a}#tokentxns`,
+    tx: (h) => `https://polygonscan.com/tx/${h}`,
+  },
+  arbitrum: {
+    label: "Arbitrum", asset: "USDC", span: 90000,
+    token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+    rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com"],
+    explorer: (a) => `https://arbiscan.io/address/${a}#tokentxns`,
+    tx: (h) => `https://arbiscan.io/tx/${h}`,
+  },
+  robinhood: {
+    label: "Robinhood Chain", asset: "USDG", span: 12000,
+    token: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+    rpcs: ["https://rpc.mainnet.chain.robinhood.com"],
+    explorer: (a) => `https://robinhoodchain.blockscout.com/address/${a}`,
+    tx: (h) => `https://robinhoodchain.blockscout.com/tx/${h}`,
+  },
+};
+const SOLANA_RPCS = ["https://api.mainnet-beta.solana.com"];
+
+const pad = (a) => "0x" + "0".repeat(24) + a.toLowerCase().replace(/^0x/, "");
+
+async function rpcCall(urls, method, params, timeoutMs = 5000) {
+  let lastErr;
+  for (const url of urls) {
+    try {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const j = await r.json();
+      if (j.result !== undefined) return j.result;
+      lastErr = new Error(JSON.stringify(j.error ?? j).slice(0, 120));
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("all RPCs failed");
+}
+
+async function evmRail(name, wallet) {
+  const c = EVM[name];
+  const out = { rail: c.label, asset: c.asset, wallet: wallet || null, explorer: wallet ? c.explorer(wallet) : null, balance: null, recent: [], error: null };
+  if (!wallet) { out.error = "WALLET_ADDRESS unset"; return out; }
+  try {
+    const balHex = await rpcCall(c.rpcs, "eth_call", [{ to: c.token, data: "0x70a08231" + pad(wallet).slice(2) }, "latest"]);
+    out.balance = Number(BigInt(balHex && balHex !== "0x" ? balHex : "0x0")) / 1e6;
+    const latestHex = await rpcCall(c.rpcs, "eth_blockNumber", []);
+    const latest = parseInt(latestHex, 16);
+    const logs = await rpcCall(c.rpcs, "eth_getLogs", [{
+      address: c.token,
+      topics: [TRANSFER_TOPIC, null, pad(wallet)],
+      fromBlock: "0x" + Math.max(0, latest - c.span).toString(16),
+      toBlock: "latest",
+    }]);
+    out.recent = (Array.isArray(logs) ? logs : [])
+      .slice(-8).reverse()
+      .map((l) => ({
+        usd: Number(BigInt(l.data && l.data !== "0x" ? l.data : "0x0")) / 1e6,
+        from: l.topics?.[1] ? "0x" + l.topics[1].slice(-40) : null,
+        tx: c.tx(l.transactionHash),
+        block: parseInt(l.blockNumber, 16),
+      }));
+    out.windowBlocks = c.span;
+  } catch (e) {
+    out.error = String(e?.message || e).slice(0, 120);
+  }
+  return out;
+}
+
+async function solanaRail(wallet) {
+  const out = { rail: "Solana", asset: "USDC", wallet: wallet || null, explorer: wallet ? `https://solscan.io/account/${wallet}` : null, balance: null, recent: [], error: null };
+  if (!wallet) { out.error = "SOLANA_WALLET_ADDRESS unset"; return out; }
+  try {
+    const res = await rpcCall(SOLANA_RPCS, "getTokenAccountsByOwner", [wallet, { mint: USDC_SOL_MINT }, { encoding: "jsonParsed" }], 6000);
+    out.balance = (res?.value || []).reduce((s, a) => s + (a?.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0), 0);
+    // Recent activity: signatures touching the owner account (token-level
+    // decoding lives in scripts/revenue-scan-solana.js — the digest's job;
+    // here a link-out per signature keeps the page one cheap call).
+    const sigs = await rpcCall(SOLANA_RPCS, "getSignaturesForAddress", [wallet, { limit: 6 }], 6000);
+    out.recent = (Array.isArray(sigs) ? sigs : []).map((s) => ({
+      tx: `https://solscan.io/tx/${s.signature}`,
+      when: s.blockTime ? new Date(s.blockTime * 1000).toISOString() : null,
+      err: s.err ? true : false,
+    }));
+  } catch (e) {
+    out.error = String(e?.message || e).slice(0, 120);
+  }
+  return out;
+}
+
+// 60s snapshot cache — refresh costs at most one scan per minute regardless
+// of page traffic, and a burst of refreshes can't hammer public RPCs.
+let cached = null;
+let cachedAt = 0;
+export async function revenueSnapshot({ walletAddress, solanaWallet }) {
+  if (cached && Date.now() - cachedAt < 60_000) return cached;
+  const [base, polygon, arbitrum, robinhood, solana] = await Promise.all([
+    evmRail("base", walletAddress),
+    evmRail("polygon", walletAddress),
+    evmRail("arbitrum", walletAddress),
+    evmRail("robinhood", walletAddress),
+    solanaRail(solanaWallet),
+  ]);
+  const rails = [base, solana, polygon, arbitrum, robinhood];
+  const totalUsd = rails.reduce((s, r) => s + (Number.isFinite(r.balance) ? r.balance : 0), 0);
+  cached = {
+    spec: "agent402-revenue/1",
+    asOf: new Date().toISOString(),
+    cacheSeconds: 60,
+    totalUsd: Number(totalUsd.toFixed(6)),
+    rails,
+    note: "Balances + recent inbound transfers, read live from public RPCs (best-effort per rail). All figures are independently verifiable at the explorer links.",
+  };
+  cachedAt = Date.now();
+  return cached;
+}
+
+const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "—");
+
+export function revenuePage(baseUrl, snap) {
+  const canonical = baseUrl + "/revenue";
+  const title = "Live revenue — Agent402";
+  const description =
+    "Consolidated live view of the Agent402 revenue wallets across every payment rail — USDC on Base, Solana, Polygon & Arbitrum, plus USDG on Robinhood Chain. One page instead of three explorer tabs; every figure links to its on-chain proof.";
+  const railCard = (r) => `
+    <div style="border:1.5px solid var(--ink);background:var(--card);padding:18px 20px;">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;border-bottom:1px dashed #b3a98f;padding-bottom:10px;margin-bottom:12px;">
+        <span style="font-weight:800;font-size:17px;">${esc(r.rail)} <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">· ${esc(r.asset)}</span></span>
+        <span style="font-family:var(--font-mono);font-size:20px;font-weight:700;">${r.balance == null ? "—" : "$" + r.balance.toFixed(4)}</span>
+      </div>
+      ${r.error
+        ? `<div style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">rail read unavailable: ${esc(r.error)}</div>`
+        : r.recent.length
+          ? `<div style="font-family:var(--font-mono);font-size:12.5px;display:grid;gap:6px;">${r.recent
+              .map((t) => t.usd !== undefined
+                ? `<div>+$${t.usd} from <code>${esc(short(t.from))}</code> · <a href="${esc(t.tx)}" rel="noopener">tx</a></div>`
+                : `<div><a href="${esc(t.tx)}" rel="noopener">tx</a>${t.when ? ` · ${esc(t.when.slice(0, 16))}Z` : ""}${t.err ? " · failed" : ""}</div>`)
+              .join("")}</div>`
+          : `<div style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">no inbound transfers in the recent window</div>`}
+      ${r.explorer ? `<div style="margin-top:12px;font-family:var(--font-mono);font-size:12px;"><a href="${esc(r.explorer)}" rel="noopener">open in explorer →</a></div>` : ""}
+    </div>`;
+  const body = `
+  <main style="max-width:1100px;margin:0 auto;padding:56px 30px;">
+    <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">$ GET /api/revenue</div>
+    <h1 style="font-family:var(--font-body);font-weight:800;font-size:44px;line-height:1.05;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink);">Live revenue.</h1>
+    <p style="font-size:16px;line-height:1.6;color:var(--muted);max-width:640px;margin:0 0 8px;">
+      Every rail's wallet, one page — refreshed from public RPCs (60s cache), every figure verifiable at its explorer link.
+      Machine-readable: <a href="/api/revenue">/api/revenue</a>.
+    </p>
+    <p style="font-family:var(--font-mono);font-size:13px;color:var(--muted);margin:0 0 30px;">as of ${esc(snap.asOf)} · combined balance <strong style="color:var(--ink);">$${snap.totalUsd.toFixed(4)}</strong></p>
+    <div class="ml-2col" style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;">
+      ${snap.rails.map(railCard).join("\n")}
+    </div>
+    <p style="font-size:13.5px;color:var(--muted);margin-top:26px;">Recent-window transfers are the last few hours of inbound stablecoin on each EVM rail (Solana shows the latest account activity — full token decoding lives in the daily revenue digest). Rails read best-effort: a flaky public RPC marks that rail unavailable without hiding the others.</p>
+  </main>
+  ${ledgerFooterCompact(baseUrl)}`;
+  return ledgerShell({
+    title, description, canonical, baseUrl, activePath: "/revenue",
+    jsonLd: { "@context": "https://schema.org", "@type": "WebPage", name: title, url: canonical, description },
+    body,
+  });
+}
+// RAILS import keeps this module honest if the rail set changes: a rail in
+// rails.js with no read-config here is a wiring bug the test below catches.
+export function railsCoveredByLiveView() {
+  const covered = new Set([...Object.values(EVM).map((c) => c.label), "Solana"]);
+  return RAILS.every((r) => covered.has(r.name));
+}

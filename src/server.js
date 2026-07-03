@@ -117,6 +117,7 @@ import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
 import { robinhoodPage } from "./robinhood-page.js";
+import { revenueSnapshot, revenuePage } from "./revenue-live.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
@@ -704,6 +705,25 @@ app.get("/faq", (_req, res) => htmlCache(res, 300, 900).send(faqPage(BASE_URL)))
 app.get("/integrations", (_req, res) => htmlCache(res, 300, 900).send(ledgerIntegrationsPage(BASE_URL)));
 app.get("/pricing", (_req, res) => htmlCache(res, 300, 900).send(ledgerPricingPage(BASE_URL, CATALOG)));
 app.get("/robinhood", (_req, res) => htmlCache(res, 300, 900).send(robinhoodPage(BASE_URL)));
+// Live consolidated revenue view — every rail's wallet on one page instead
+// of one explorer tab per chain. Server-side reads with a 60s module cache;
+// individual rail failures degrade to "unavailable" without a 500.
+app.get("/api/revenue", async (_req, res) => {
+  try {
+    const snap = await revenueSnapshot({ walletAddress: WALLET_ADDRESS, solanaWallet: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null });
+    res.set("Cache-Control", "public, max-age=30").json(snap);
+  } catch (e) {
+    res.status(500).json({ error: "revenue snapshot failed", detail: String(e?.message || e).slice(0, 120) });
+  }
+});
+app.get("/revenue", async (_req, res) => {
+  try {
+    const snap = await revenueSnapshot({ walletAddress: WALLET_ADDRESS, solanaWallet: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null });
+    res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, snap));
+  } catch (e) {
+    res.status(500).type("html").send('<p>Revenue view temporarily unavailable. <a href="/">Home</a></p>');
+  }
+});
 app.get("/changelog", (_req, res) => htmlCache(res, 300, 900).send(changelogPage(BASE_URL)));
 app.get("/use-cases", (_req, res) => htmlCache(res, 300, 900).send(useCasesPage(BASE_URL)));
 app.get("/playground", (_req, res) => htmlCache(res, 300, 900).send(playgroundPage(BASE_URL)));
