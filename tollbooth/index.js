@@ -36,8 +36,8 @@ const STRIP_INBOUND = new Set([
  * @param {object} [config]
  * @param {string} [config.price="$0.001"]     advertised price per request
  * @param {string|null} [config.payTo]         wallet for the x402 quote (enables USDC rail)
- * @param {string} [config.network="base"]     x402 network
- * @param {string} [config.asset="USDC"]
+ * @param {string} [config.network="base"]     x402 network (e.g. base, or robinhood / eip155:4663 for USDG)
+ * @param {string} [config.asset="USDC"]        stablecoin symbol in the quote (USDG on Robinhood Chain)
  * @param {boolean} [config.pow=true]          enable the free proof-of-work rail
  * @param {number} [config.powDifficulty]      PoW difficulty in leading zero bits
  * @param {string[]} [config.botUserAgents]    user-agents to charge (default: AI_BOTS)
@@ -54,7 +54,10 @@ export function createTollbooth(config = {}) {
     price = process.env.TOLLBOOTH_PRICE || "$0.001",
     payTo = process.env.TOLLBOOTH_PAYTO || null,
     network = process.env.TOLLBOOTH_NETWORK || "base",
-    asset = "USDC",
+    // Any stablecoin the operator's facilitator settles. USDC on the default
+    // chains; set TOLLBOOTH_NETWORK=robinhood (or eip155:4663) with
+    // TOLLBOOTH_ASSET=USDG to charge crawlers in USDG on Robinhood Chain.
+    asset = process.env.TOLLBOOTH_ASSET || "USDC",
     pow = true,
     powDifficulty,
     powSecret,
@@ -314,7 +317,7 @@ async function startCli() {
     app.use((_req, res) => res.json({ ok: true, note: "Bare tollbooth gate (no TOLLBOOTH_UPSTREAM set). Clients that reach here paid or solved a proof-of-work." }));
   }
   app.listen(port, () => {
-    const rails = `${gate.pow ? "proof-of-work" : ""}${process.env.TOLLBOOTH_PAYTO ? (gate.pow ? " + x402(USDC)" : "x402(USDC)") : ""}`;
+    const rails = `${gate.pow ? "proof-of-work" : ""}${process.env.TOLLBOOTH_PAYTO ? (gate.pow ? ` + x402(${process.env.TOLLBOOTH_ASSET || "USDC"})` : `x402(${process.env.TOLLBOOTH_ASSET || "USDC"})`) : ""}`;
     console.log(`agent402-tollbooth listening on :${port} — charging AI bots via ${rails || "proof-of-work"}`);
     if (upstream) console.log(`  proxying → ${upstream}`);
   });

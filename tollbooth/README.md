@@ -320,3 +320,20 @@ as drop-in copyable snippets.
   the exact resource (path + query, dots and all) — a solution for one URL can't
   be replayed or reused on another.
 - MIT licensed. Part of [Agent402](https://github.com/MikeyPetrillo/Agent402).
+
+## Charge in USDG on Robinhood Chain
+
+The quote's network and asset are operator-configured, so the gate can charge
+crawlers in **USDG (Global Dollar) on Robinhood Chain** (chain id 4663)
+instead of USDC:
+
+```bash
+TOLLBOOTH_PAYTO=0xYourWallet \
+TOLLBOOTH_NETWORK=eip155:4663 \
+TOLLBOOTH_ASSET=USDG \
+npx agent402-tollbooth
+```
+
+or in code: `createTollbooth({ payTo, network: "eip155:4663", asset: "USDG", verifyX402 })`.
+Wire `verifyX402` to an x402 facilitator that settles chain 4663. Defaults
+are unchanged (USDC on Base).

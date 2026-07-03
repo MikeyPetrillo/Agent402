@@ -58,6 +58,7 @@ export default {
       price: env.TOLLBOOTH_PRICE || "$0.001",
       payTo: env.TOLLBOOTH_PAYTO || null,
       network: env.TOLLBOOTH_NETWORK || "base",
+      asset: env.TOLLBOOTH_ASSET || "USDC",
       powDifficulty: env.TOLLBOOTH_POW_BITS ? Number(env.TOLLBOOTH_POW_BITS) : undefined,
       store: env.TOLLBOOTH_KV ? kvStore(env.TOLLBOOTH_KV) : undefined,
       observe: env.TOLLBOOTH_OBSERVE === "true",

@@ -190,4 +190,27 @@ ok(/GPTBot/.test(html) && /Mozilla\/5\.0/.test(html), "probes include both a bot
 ok(html.includes("&lt;origin&gt;"), "probes carry an <origin> placeholder for client-side host substitution");
 ok(html.includes("initProbes") && html.includes("navigator.clipboard"), "probes wire a copy-to-clipboard handler (with execCommand fallback)");
 
+// --- USDG on Robinhood Chain: the quote carries the operator's network/asset ---
+{
+  const usdg = createTollbooth({ payTo: "0x000000000000000000000000000000000000dEaD", network: "eip155:4663", asset: "USDG", powDifficulty: 12 });
+  const r = run(usdg, mockReq({ "user-agent": botUA }));
+  ok(r.status === 402, "USDG gate: bot gets a 402");
+  const acc = r.body?.accepts?.[0];
+  ok(acc && acc.network === "eip155:4663", "USDG gate: accept names Robinhood Chain (eip155:4663)");
+  ok(acc && acc.asset === "USDG", "USDG gate: accept names USDG as the asset");
+  ok(acc && acc.payTo === "0x000000000000000000000000000000000000dEaD", "USDG gate: payTo flows through");
+  // env-driven default path (what a Docker operator sets)
+  process.env.TOLLBOOTH_ASSET = "USDG";
+  process.env.TOLLBOOTH_NETWORK = "eip155:4663";
+  const envGate = createTollbooth({ payTo: "0x000000000000000000000000000000000000dEaD", powDifficulty: 12 });
+  const r2 = run(envGate, mockReq({ "user-agent": botUA }));
+  ok(r2.body?.accepts?.[0]?.asset === "USDG" && r2.body?.accepts?.[0]?.network === "eip155:4663", "TOLLBOOTH_ASSET/NETWORK env vars drive the quote");
+  delete process.env.TOLLBOOTH_ASSET;
+  delete process.env.TOLLBOOTH_NETWORK;
+  // defaults unchanged (regression guard)
+  const def = createTollbooth({ payTo: "0x000000000000000000000000000000000000dEaD", powDifficulty: 12 });
+  const r3 = run(def, mockReq({ "user-agent": botUA }));
+  ok(r3.body?.accepts?.[0]?.asset === "USDC" && r3.body?.accepts?.[0]?.network === "base", "defaults still USDC on base");
+}
+
 console.log(`\n${pass} passed`);
