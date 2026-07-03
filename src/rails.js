@@ -47,6 +47,12 @@ export const RAILS_OS = RAILS.map((r) =>
   r.chainId ? `${r.name} (EVM, chain ID ${r.chainId}${r.asset !== "USDC" ? `, ${r.asset}` : ""})` : r.name
 ).join(", ");
 
+/** Topbar ticker strip: "BASE · SOLANA · POLYGON · ARBITRUM · ROBINHOOD · USDC · USDG".
+ *  Chain names shortened (" Chain" dropped) and uppercased for the site chrome. */
+export const RAILS_TICKER = [...RAILS.map((r) => r.name.replace(/ Chain$/, "")), ...new Set(RAILS.map((r) => r.asset))]
+  .join(" · ")
+  .toUpperCase();
+
 /** Manifest note — settlement summary for discovery agents. */
 export const RAILS_NOTE =
   `x402 settlements use USDC on ${usdcOr}` +

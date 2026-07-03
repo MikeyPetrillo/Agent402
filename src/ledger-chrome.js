@@ -1,4 +1,4 @@
-import { RAILS_AMP, RAILS_OS } from "./rails.js";
+import { RAILS_AMP, RAILS_OS, RAILS_TICKER } from "./rails.js";
 // Machine Ledger design system — shared chrome for the Agent402 marketing site.
 // Exports the status line, nav, footers (full + compact), settlement tape,
 // design-token CSS, and a ledgerShell() wrapper that composes a full HTML page.
@@ -82,7 +82,7 @@ function statusLine() {
   return `<div style="background:var(--ink);color:var(--cream);font-family:var(--font-mono);font-size:12px;letter-spacing:.02em;">
   <div style="max-width:1180px;margin:0 auto;padding:8px 30px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
     <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">HTTP/1.1 <span style="color:var(--accent);font-weight:700;">402</span> PAYMENT REQUIRED</span>
-    <span style="color:var(--dk-muted);white-space:nowrap;">agent402.base.eth · BASE · SOLANA · POLYGON · ARBITRUM · USDC</span>
+    <span style="color:var(--dk-muted);white-space:nowrap;">agent402.base.eth · ${RAILS_TICKER}</span>
   </div>
 </div>`;
 }

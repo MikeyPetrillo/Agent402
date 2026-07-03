@@ -13,7 +13,7 @@
 //
 //   node scripts/test-rails.js                       # offline only
 //   TARGET_URL=http://localhost:3000 node scripts/test-rails.js
-import { RAILS, RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT, RAIL_CHAIN_NAMES, RAILS_OS, RAILS_NOTE } from "../src/rails.js";
+import { RAILS, RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT, RAIL_CHAIN_NAMES, RAILS_OS, RAILS_NOTE, RAILS_TICKER } from "../src/rails.js";
 import { NETWORKS } from "../src/payments.js";
 
 let passed = 0, failed = 0;
@@ -57,6 +57,7 @@ if (TARGET) {
     ok(res.status === 200, `${p} responds 200`);
     for (const r of RAILS) ok(html.includes(r.name), `${p} mentions ${r.name}`);
     for (const a of assets) ok(html.includes(a), `${p} mentions ${a}`);
+    ok(html.includes(RAILS_TICKER), `${p} topbar strip carries the full rail ticker`);
   }
   const manifest = await (await fetch(`${TARGET}/.well-known/x402`)).json();
   for (const r of RAILS) ok((manifest.ecosystem?.chains || []).includes(r.name), `manifest chains include ${r.name}`);
