@@ -156,6 +156,10 @@ export const WALLET_ONLY_SLUGS = new Set([
   "embed", "embed-large",
   // Moderation kit: OpenAI moderation API (free upstream, but wallet-only by policy).
   "moderate",
+  // CDP kit: every call hits the Coinbase Developer Platform on our API keys.
+  // testnet-fund additionally spends a shared per-account faucet budget —
+  // PoW would let one client drain it for free.
+  "wallet-balances", "testnet-fund", "onramp-link",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */

@@ -6,10 +6,10 @@
 //   wallet-balances  $0.002  indexed ERC-20 + native balances for any address
 //                            (base / ethereum / base-sepolia) — one call, no
 //                            per-token contract wrangling
-//   testnet-fund     $0.001* base-sepolia faucet (USDC/ETH) so a new agent can
-//                            run the FULL x402 payment loop with zero real
-//                            funds (*PoW free tier applies — solve a hash
-//                            challenge instead of paying)
+//   testnet-fund     $0.001  base-sepolia faucet (USDC/ETH) — one tenth of a
+//                            cent buys 1 full testnet USDC to rehearse the
+//                            x402 loop safely (wallet-only: the faucet spends
+//                            a shared per-account CDP budget)
 //   onramp-link      $0.001  single-use Coinbase Onramp URL that lets a human
 //                            fund an agent's wallet with a card / Apple Pay
 //
@@ -171,8 +171,8 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.001",
     description:
-      "Fund any address with testnet USDC (1 USDC) or ETH (0.0001) on Base Sepolia via the Coinbase faucet — everything a new agent needs to run the complete x402 payment loop before spending real money. Free via the proof-of-work tier. Limits: 2 drips per address per day; CDP enforces its own rolling caps on top.",
-    tags: [...SHARED_TAGS, "faucet", "testnet", "base-sepolia", "free-money", "getting-started"],
+      "Fund any address with testnet USDC (1 USDC) or ETH (0.0001) on Base Sepolia via the Coinbase faucet — everything an agent needs to rehearse the complete x402 payment loop safely before moving real money. A tenth of a cent buys a full testnet dollar. Limits: 2 drips per address per day; CDP enforces its own rolling caps on top.",
+    tags: [...SHARED_TAGS, "faucet", "testnet", "base-sepolia", "getting-started"],
     discovery: {
       bodyType: "json",
       input: { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", token: "usdc" },

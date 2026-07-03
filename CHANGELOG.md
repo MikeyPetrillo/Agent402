@@ -6,8 +6,8 @@
   onboarding tools built on the Coinbase Developer Platform, reusing the same CDP keys that
   already drive x402 settlement (no new secrets; 503 when unset). `wallet-balances` returns
   indexed ERC-20 + native balances for any address in one call; `testnet-fund` drips Base
-  Sepolia USDC/ETH via the CDP faucet so a brand-new agent can rehearse the full x402 payment
-  loop with zero real funds (PoW free tier + local and CDP-side rate caps); `onramp-link`
+  Sepolia USDC/ETH via the CDP faucet so an agent can rehearse the full x402 payment loop
+  safely — a tenth of a cent buys a full testnet dollar (local + CDP-side rate caps); `onramp-link`
   mints a single-use Coinbase Onramp URL so a human can fund an agent's wallet with a card or
   Apple Pay. Auth is a zero-dependency `node:crypto` JWT signer (ES256 PEM + Ed25519 base64,
   mirroring the official SDK's claims), unit-tested offline with real signature verification
