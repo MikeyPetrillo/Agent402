@@ -301,7 +301,7 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@latest
 # "geocode these 50 addresses", "fetch Apple's latest 10-K".
 # Free tier auto-pays in compute. USDC on Base + 3 more chains when you scale.</span></pre>
       <div class="snippet-foot">
-        <span class="dot"></span> ${freeCount.toLocaleString()} tools free via proof-of-work · USDC on Base + 3 more chains for the rest · <a href="/llms.txt">llms.txt</a>
+        <span class="dot"></span> ${freeCount.toLocaleString()} tools free via proof-of-work · USDC on Base + 3 more chains, or USDG on <a href="/guides/usdg-payments-robinhood-chain">Robinhood Chain</a>, for the rest · <a href="/llms.txt">llms.txt</a>
       </div>
     </div>
     <script>
