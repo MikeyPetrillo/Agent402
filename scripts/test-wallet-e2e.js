@@ -101,7 +101,10 @@ const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,
   env: {
     ...process.env,
-    // Explicitly NOT forwarding: FREE_MODE. Paid mode, testnet chain, fresh payTo.
+    // Paid mode, testnet chain, fresh payTo. CDP keys forwarded: the CDP
+    // facilitator settles base-sepolia and is what production runs — the
+    // zero-config x402.org default advertises no v2 kinds and 500s every
+    // paid route (observable since the unhandled-5xx logging landed).
     NETWORK: "base-sepolia",
     WALLET_ADDRESS: seller.address,
     PORT: String(PORT),
@@ -109,14 +112,12 @@ const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
     STATS_ALLOW_EPHEMERAL: "true",
     FREE_MODE: "",
     PAYMENT_NETWORKS: "",
-    CDP_API_KEY_ID: "",       // force the default x402.org testnet facilitator
-    CDP_API_KEY_SECRET: "",
   },
   stdio: ["ignore", logFd, logFd],
 });
 let booted = false;
 for (let i = 0; i < 60; i++) { try { if ((await fetch(`${BASE}/health`)).ok) { booted = true; break; } } catch {} await sleep(500); }
-ok(booted, "paid-mode base-sepolia seller booted (x402.org facilitator)");
+ok(booted, "paid-mode base-sepolia seller booted (CDP facilitator)");
 
 // --- 4. the newborn wallet's first purchase ------------------------------------
 try {

@@ -1972,6 +1972,14 @@ app.use((err, req, res, _next) => {
               : err && err.type === "entity.too.large" ? 413
               : err && err.type === "entity.parse.failed" ? 400
               : 500;
+  // Server-side visibility for real faults: a 5xx that reaches this handler
+  // was thrown outside any tool handler and would otherwise vanish (the
+  // client just sees {"error":"internal"}). Log message + stack to the
+  // console only — never to the network.
+  if (status >= 500) {
+    console.error(`[unhandled-5xx] ${req.method} ${req.path} → ${status}: ${err?.message || err}`);
+    if (err?.stack) console.error(String(err.stack).split("\n").slice(0, 6).join("\n"));
+  }
   const wantsJson = req.path.startsWith("/api") || req.path.startsWith("/__operator") || req.accepts(["html", "json"]) === "json";
   if (wantsJson) {
     res.status(status).json({ ok: false, error: status === 400 ? "bad-request" : status === 413 ? "payload-too-large" : status === 429 ? "rate-limited" : "internal" });
