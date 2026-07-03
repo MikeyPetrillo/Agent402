@@ -4,6 +4,7 @@ import { guideSlugs } from "./guides.js";
 import { skillSlugs, SKILL_PACKS } from "./skills.js";
 import { BLOG_POSTS } from "./blog.js";
 import { ADAPTERS } from "./adapter-docs.js";
+import { RAILS_OR } from "./rails.js";
 
 export function robotsTxt(baseUrl) {
   // Explicitly welcome AI/agent crawlers and search engines; point them at the
@@ -303,7 +304,7 @@ or proof-of-work without):
 High-value tools (extract/render/screenshot/pdf/memory/…) are first-class MCP
 tools; the remaining ${tools.length - 14} are reachable via its \`search_tools\` + \`call_tool\`.
 
-Agent402 is also available as a Base MCP plugin (app ID \`6a3dd86ca341d86b910769fb\`). x402 payments settle in USDC on Base, Solana, Polygon, or Arbitrum — plus USDG (Global Dollar) on Robinhood Chain. Gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin.
+Agent402 is also available as a Base MCP plugin (app ID \`6a3dd86ca341d86b910769fb\`). x402 payments settle in ${RAILS_OR}. Gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin.
 
 ## Drop into your agent framework (zero-dep adapters)
 
@@ -344,7 +345,7 @@ const res = await payFetch("${baseUrl}/api/extract", {
 
 ## Notes for agents
 
-- Payments settle in seconds on Base (eip155:8453), Solana, Polygon, or Arbitrum — or in USDG on Robinhood Chain (eip155:4663); the payer needs only the stablecoin (gas is sponsored on EVM chains).
+- Payments settle in seconds — ${RAILS_OR} (Base eip155:8453, Robinhood eip155:4663); the payer needs only the stablecoin (gas is sponsored on EVM chains).
 - **Safe retries:** send an \`Idempotency-Key\` header with a paid (or proof-of-work) call. If you don't receive the response and retry with the SAME key and the SAME payment/PoW credential, you get the original result back (header \`X-Idempotent-Replay: true\`) without paying again. Without the header, nothing changes.
 - \`/api/memory\` namespaces are owned by the paying wallet: only the wallet that wrote a key can read it. Use it for durable state between runs.
 - \`/api/render\` runs a real headless Chromium with JavaScript execution — use it when \`/api/extract\` returns an empty shell for SPA pages.

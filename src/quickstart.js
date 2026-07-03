@@ -1,4 +1,5 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { RAILS_AMP } from "./rails.js";
 
 export function quickstartPage(baseUrl) {
   const canonical = `${baseUrl}/quickstart`;
@@ -214,7 +215,7 @@ await execute(name, args);</code></pre>
 
 <!-- Panel: Pay with USDC -->
 <div class="qs-panel" id="panel-usdc" role="tabpanel">
-<h3>Pay directly with USDC on Base, Solana, Polygon &amp; Arbitrum — or USDG on Robinhood Chain</h3>
+<h3>Pay directly with ${RAILS_AMP.replace("&", "&amp;")}</h3>
 <p class="qs-oneliner">Use the x402 protocol for on-chain payment &mdash; no API keys, no accounts.</p>
 
 <span class="qs-label">Install</span>

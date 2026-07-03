@@ -4,6 +4,7 @@ import { isComputePayable } from "./pow.js";
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chrome.js";
 import { SKILL_PACKS } from "./skills.js";
+import { RAILS_AMP, RAILS_OR, RAILS_PAREN } from "./rails.js";
 
 export const CATEGORIES = {
   web: { label: "Web & documents", blurb: "Read the live web: browser rendering, screenshots, article extraction, PDFs, metadata." },
@@ -195,7 +196,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
         "@type": "Offer",
         price: tool.price.replace("$", ""),
         priceCurrency: "USD",
-        description: `${tool.price} per call, paid in USDC on Base, Solana, Polygon, or Arbitrum (or USDG on Robinhood Chain) via the x402 protocol. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
+        description: `${tool.price} per call, paid in ${RAILS_OR} via the x402 protocol. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
       },
     },
     {
@@ -386,7 +387,7 @@ ${renderHeader("/tools")}
 <div class="wrap">
   <div class="crumb"><a href="/">Agent402</a> / tools</div>
   <h1>${tools.length} tools, one base URL, zero API keys</h1>
-  <p class="sub">Call any endpoint, get an <code>HTTP 402</code> quote, and either pay a fraction of a cent in USDC on Base (or Solana, Polygon, Arbitrum — or USDG on Robinhood Chain) via <a href="https://x402.org" rel="noopener">x402</a> — or, on the <span class="free">FREE</span> tools, skip the wallet entirely. Machine-readable: <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>.</p>
+  <p class="sub">Call any endpoint, get an <code>HTTP 402</code> quote, and either pay a fraction of a cent in ${RAILS_PAREN} via <a href="https://x402.org" rel="noopener">x402</a> — or, on the <span class="free">FREE</span> tools, skip the wallet entirely. Machine-readable: <a href="/api/pricing">/api/pricing</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>.</p>
   <div style="margin:18px 0"><input id="tool-search" type="text" placeholder="Search ${tools.length} tools\u2026" style="width:100%;max-width:480px;padding:10px 16px;background:#0d1220;border:1px solid #1e2638;border-radius:10px;color:#e6e9f0;font-size:.95rem;outline:none;" onfocus="this.style.borderColor='#4ade80'" onblur="this.style.borderColor='#1e2638'"><span id="tool-search-count" style="margin-left:12px;color:#8b93a7;font-size:.85rem"></span></div>
   <div class="callout"><b>${freeCount} of ${tools.length} tools are free</b> — no wallet needed. Pay with a few seconds of <a href="/api/pow">proof-of-work</a> (CPU) instead of USDC. The other ${tools.length - freeCount} (browser, network, memory) settle in USDC because they cost real infrastructure to run. Look for the <span class="free">FREE</span> badge below.</div>
   ${sections}
@@ -505,7 +506,7 @@ export function faqPage(baseUrl) {
   const body = `<div style="max-width:1180px;margin:0 auto;padding:56px 30px;">
   <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:10px;">FAQ</div>
   <h1 style="font-family:var(--font-body);font-weight:800;font-size:42px;line-height:.96;letter-spacing:-.03em;margin-bottom:14px;">Frequently asked questions</h1>
-  <p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;margin-bottom:32px;">Agent402 is the open-source, self-hostable x402 + MCP server: pay-per-call web tools for AI agents, free via proof-of-work or paid in USDC on Base, Solana, Polygon & Arbitrum — plus USDG on Robinhood Chain.</p>
+  <p style="color:var(--muted);font-size:16px;line-height:1.6;max-width:720px;margin-bottom:32px;">Agent402 is the open-source, self-hostable x402 + MCP server: pay-per-call web tools for AI agents, free via proof-of-work or paid in ${RAILS_AMP}.</p>
   ${items}
 </div>
 ${ledgerFooterCompact()}`;
@@ -529,7 +530,7 @@ export function openapiSpec(baseUrl, catalog) {
     const op = {
       operationId: `${tool.slug}${method === "GET" ? "Get" : ""}`,
       summary: `${tool.name} (${tool.price}/call via x402)`,
-      description: `${tool.description}\n\nPrice: ${tool.price} per call, paid in USDC on Base, Solana, Polygon, or Arbitrum (or USDG on Robinhood Chain) via the x402 protocol. Unpaid requests receive HTTP 402 with payment requirements; any x402 v2 client can pay and retry automatically. Docs: ${baseUrl}/tools/${tool.slug}`,
+      description: `${tool.description}\n\nPrice: ${tool.price} per call, paid in ${RAILS_OR} via the x402 protocol. Unpaid requests receive HTTP 402 with payment requirements; any x402 v2 client can pay and retry automatically. Docs: ${baseUrl}/tools/${tool.slug}`,
       tags: [tool.category],
       responses: {
         200: {
@@ -623,7 +624,7 @@ export function openapiSpec(baseUrl, catalog) {
       title: "Agent402 — the open-source, self-hostable x402 server for AI agents",
       version: "2.0.0",
       description:
-        "The open-source, self-hostable x402 server: hundreds of machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) — the whole catalog is open and runnable yourself. Every endpoint is paid per call in USDC on Base, Solana, Polygon, or Arbitrum — or USDG on Robinhood Chain — via x402 (no signup, no API keys — the first request returns HTTP 402, an x402 client pays and retries) or free with proof-of-work. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.",
+        "The open-source, self-hostable x402 server: hundreds of machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) — the whole catalog is open and runnable yourself. Every endpoint is paid per call in ${RAILS_OR} — via x402 (no signup, no API keys — the first request returns HTTP 402, an x402 client pays and retries) or free with proof-of-work. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.",
       contact: { url: baseUrl },
     },
     servers: [{ url: baseUrl }],

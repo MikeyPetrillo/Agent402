@@ -5,6 +5,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable } from "./pow.js";
+import { RAILS_OR, RAILS_SHORT } from "./rails.js";
 
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 
@@ -15,7 +16,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
 
   const canonical = baseUrl + "/pricing";
   const title = `Pricing — Agent402 (${fmtNum(totalCount)} tools)`;
-  const description = `Two ways to pay: free via proof-of-work or USDC on Base + 3 more chains (or USDG on Robinhood Chain) from $0.001/call. No subscription, no signup, no minimum. ${fmtNum(freeCount)} tools free, all ${fmtNum(totalCount)} tools from $0.001.`;
+  const description = `Two ways to pay: free via proof-of-work, or ${RAILS_SHORT} from $0.001/call. No subscription, no signup, no minimum. ${fmtNum(freeCount)} tools free, all ${fmtNum(totalCount)} tools from $0.001.`;
 
   // -- feature-list helpers --------------------------------------------------
   const check = (text) =>
@@ -58,7 +59,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 30px;">
     <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:14px;">$ GET /pricing</div>
     <h1 style="font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;">Two ways to pay.<br>No subscription, ever.</h1>
-    <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:600px;margin:0;">Pay in compute with a proof-of-work puzzle, or settle micro-amounts of USDC on Base, Solana, Polygon, or Arbitrum — or USDG on Robinhood Chain — per call. No card, no signup, no minimum, no monthly fee. The wallet is the identity.</p>
+    <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:600px;margin:0;">Pay in compute with a proof-of-work puzzle, or settle micro-amounts per call — ${RAILS_OR}. No card, no signup, no minimum, no monthly fee. The wallet is the identity.</p>
   </section>
 
   <!-- TWO PLANS -->

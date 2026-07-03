@@ -5,6 +5,7 @@
 import { ledgerShell, ledgerFooterFull, ledgerTape, esc } from "./ledger-chrome.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable } from "./pow.js";
+import { RAILS_AMP, RAILS_SHORT } from "./rails.js";
 
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 
@@ -42,7 +43,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
 
   const canonical = baseUrl + "/";
   const title = `Agent402 — the open x402 index (${fmtNum(count)} tools)`;
-  const description = `${fmtNum(count)} deterministic, pay-per-call tools your agent can use mid-task. Free via proof-of-work; USDC on Base + 3 more chains — or USDG on Robinhood Chain — from $0.001/call. No signup, no API key — the wallet is the identity.`;
+  const description = `${fmtNum(count)} deterministic, pay-per-call tools your agent can use mid-task. Free via proof-of-work; ${RAILS_SHORT} — from $0.001/call. No signup, no API key — the wallet is the identity.`;
 
   const jsonLd = [
     {
@@ -60,7 +61,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
       url: baseUrl,
       applicationCategory: "DeveloperApplication",
       operatingSystem: "Any",
-      offers: { "@type": "Offer", price: "0.001", priceCurrency: "USD", description: "Pay-per-call USDC on Base, Solana, Polygon & Arbitrum — or USDG on Robinhood Chain" },
+      offers: { "@type": "Offer", price: "0.001", priceCurrency: "USD", description: `Pay-per-call ${RAILS_AMP}` },
     },
   ];
 
@@ -90,7 +91,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
 </span><span style="color:var(--dk-muted3);"># then ask Claude:
 # "extract the tables from this PDF"
 # free tier pays in compute.
-# USDC on Base + 3 chains — or USDG on Robinhood Chain — when you scale.</span></pre>
+# ${RAILS_SHORT} when you scale.</span></pre>
         </div>
       </div>
 

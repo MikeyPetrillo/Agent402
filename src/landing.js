@@ -2,6 +2,7 @@ import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 import { CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { SKILL_PACKS } from "./skills.js";
+import { RAILS_OS } from "./rails.js";
 
 export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
   const tools = toolList(catalog);
@@ -130,7 +131,7 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
       "@id": "${baseUrl}/#base-app",
       "name": "Agent402 on Base",
       "applicationCategory": "BlockchainApplication",
-      "operatingSystem": "Base (EVM, chain ID 8453), Solana, Polygon (EVM, chain ID 137), Arbitrum (EVM, chain ID 42161), Robinhood Chain (EVM, chain ID 4663, USDG)",
+      "operatingSystem": "${RAILS_OS}",
       "description": "x402 pay-per-call agent tools settling in USDC on Base, Solana, Polygon & Arbitrum — plus USDG on Robinhood Chain. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored on EVM chains — callers need only USDC.",
       "url": "${baseUrl}",
       "provider": { "@id": "${baseUrl}/#org" },

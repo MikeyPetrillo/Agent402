@@ -35,7 +35,9 @@ const SVM_NETWORKS = {
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
   "solana-devnet": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
 };
-const NETWORKS = { ...EVM_NETWORKS, ...SVM_NETWORKS };
+// Exported for scripts/test-rails.js: the copy layer (src/rails.js) must
+// advertise every mainnet rail this file can settle — the test cross-checks.
+export const NETWORKS = { ...EVM_NETWORKS, ...SVM_NETWORKS };
 
 // Robinhood Chain settles USDG (Global Dollar), not Circle USDC, and @x402/evm
 // has no default asset for chain 4663 — so we resolve the asset ourselves and

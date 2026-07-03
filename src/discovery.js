@@ -17,6 +17,7 @@
 
 import { toolList, CATEGORIES } from "./pages.js";
 import { SKILL_PACKS } from "./skills.js";
+import { RAIL_CHAIN_NAMES, RAILS_NOTE } from "./rails.js";
 
 const REPO = "https://github.com/MikeyPetrillo/Agent402";
 const MAINTAINER = { name: "Mike Petrillo", email: "mike@agent402.tools", url: "https://github.com/MikeyPetrillo" };
@@ -74,12 +75,12 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     ...(process.env.BASE_BUILDER_CODE ? { builderCode: process.env.BASE_BUILDER_CODE } : {}),
     baseApp: "6a3dd86ca341d86b910769fb",
     ecosystem: {
-      chains: ["Base", "Solana", "Polygon", "Arbitrum", "Robinhood Chain"],
+      chains: RAIL_CHAIN_NAMES,
       primaryChain: "Base",
       primaryChainId: 8453,
       currency: "USDC",
       protocol: "x402",
-      note: "x402 settlements use USDC on Base, Solana, Polygon, or Arbitrum — plus USDG (Global Dollar) on Robinhood Chain. Gas is sponsored by the facilitator on EVM chains — callers need only the stablecoin.",
+      note: RAILS_NOTE,
     },
     // Positive, machine-readable summary of what Agent402 offers: open and
     // self-hostable, the whole catalog in one integration, and it owns the

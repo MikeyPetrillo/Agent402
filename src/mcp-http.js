@@ -1,3 +1,4 @@
+import { RAILS_PAREN } from "./rails.js";
 // Remote MCP endpoint (Streamable HTTP) — makes Agent402 an installable
 // connector: paste https://agent402.tools/mcp into Claude (Settings >
 // Connectors), ChatGPT, or any MCP client that speaks streamable HTTP.
@@ -309,7 +310,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
                   })),
                 },
                 clientsSeenSinceBoot: Object.fromEntries([...mcpClients].sort((a, b) => b[1] - a[1]).slice(0, 20)),
-                paidAccess: "Every tool, no rate limit: pay per call in USDC on Base (or Solana, Polygon, Arbitrum) — or USDG on Robinhood Chain — via the x402 protocol — npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or any x402 HTTP client. No signup, no API key; prices $0.001–$0.02/call.",
+                paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol — npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or any x402 HTTP client. No signup, no API key; prices $0.001–$0.02/call.`,
                 ...(getLeaderboard ? { ecosystem: "Call top_x402_sellers to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h — discovers the live economy beyond this catalog." } : {}),
                 docs: `${baseUrl}/llms.txt`,
               }, null, 2),

@@ -1,3 +1,4 @@
+import { RAILS_AMP, RAILS_OS } from "./rails.js";
 // Machine Ledger design system — shared chrome for the Agent402 marketing site.
 // Exports the status line, nav, footers (full + compact), settlement tape,
 // design-token CSS, and a ledgerShell() wrapper that composes a full HTML page.
@@ -237,8 +238,8 @@ export function ledgerShell({ title, description, canonical, baseUrl, activePath
     "@id": `${baseUrl}/#base-app`,
     name: "Agent402 on Base",
     applicationCategory: "BlockchainApplication",
-    operatingSystem: "Base (EVM, chain ID 8453), Solana, Polygon (EVM, chain ID 137), Arbitrum (EVM, chain ID 42161), Robinhood Chain (EVM, chain ID 4663, USDG)",
-    description: "x402 pay-per-call agent tools settling in USDC on Base, Solana, Polygon & Arbitrum — plus USDG on Robinhood Chain. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored on EVM chains — callers need only USDC.",
+    operatingSystem: RAILS_OS,
+    description: `x402 pay-per-call agent tools settling in ${RAILS_AMP}. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored on EVM chains — callers need only the stablecoin.`,
     url: baseUrl,
   };
   const allLd = [baseEcosystemLd, ...(jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [])];
