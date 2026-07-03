@@ -10,9 +10,24 @@
 // transfers are public on-chain data — this page just saves the tab-cycling.
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 import { RAILS } from "./rails.js";
+// Pure, main-guarded helpers shared with the daily scanners — one
+// classification rule everywhere: a transfer is external revenue only if the
+// payer isn't one of OUR wallets (canary/test burners) AND the amount is a
+// plausible per-call price. Internal test money is shown but never counted.
+import { usdcDeltaForOwner, payerFromMeta, isExternalPayment } from "../scripts/revenue-scan-solana.js";
 
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const USDC_SOL_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+// Same envs (and defaults) as scripts/revenue-scan{,-solana}.js.
+const MAX_CALL_USD = parseFloat(process.env.MAX_CALL_USD || "0.5");
+const OUR_EVM_WALLETS = new Set(
+  (process.env.OUR_WALLETS || "0xfeda7403aabe9a492ed70e810b396d8548a4a022")
+    .toLowerCase().split(",").map((s) => s.trim()).filter(Boolean)
+);
+const OUR_SOLANA_WALLETS = new Set(
+  (process.env.OUR_SOLANA_WALLETS || "").split(",").map((s) => s.trim()).filter(Boolean)
+);
 
 // Chain read-config. Stablecoin contracts mirror scripts/revenue-scan.js;
 // span ≈ a few hours of blocks so "recent inbound" stays a cheap filtered read.
@@ -99,12 +114,17 @@ async function recentInbound(c, wallet, latest) {
     }
   }
   const recent = logs
-    .map((l) => ({
-      usd: Number(BigInt(l.data && l.data !== "0x" ? l.data : "0x0")) / 1e6,
-      from: l.topics?.[1] ? "0x" + l.topics[1].slice(-40) : null,
-      tx: c.tx(l.transactionHash),
-      block: parseInt(l.blockNumber, 16),
-    }))
+    .map((l) => {
+      const usd = Number(BigInt(l.data && l.data !== "0x" ? l.data : "0x0")) / 1e6;
+      const from = l.topics?.[1] ? ("0x" + l.topics[1].slice(-40)).toLowerCase() : null;
+      return {
+        usd, from,
+        tx: c.tx(l.transactionHash),
+        block: parseInt(l.blockNumber, 16),
+        external: isExternalPayment({ payer: from, usd }, { ourWallets: OUR_EVM_WALLETS, maxUsd: MAX_CALL_USD }),
+        internal: from != null && OUR_EVM_WALLETS.has(from),
+      };
+    })
     .sort((a, b) => b.block - a.block)
     .slice(0, 8);
   return { recent, missed };
@@ -120,6 +140,7 @@ async function evmRail(name, wallet) {
     const latest = parseInt(await rpcCall(c.rpcs, "eth_blockNumber", []), 16);
     const { recent, missed } = await recentInbound(c, wallet, latest);
     out.recent = recent;
+    out.externalUsd = Number(recent.filter((t) => t.external).reduce((s, t) => s + t.usd, 0).toFixed(6));
     out.windowBlocks = c.span;
     if (missed) out.scanNote = `transfer scan partial: ${missed}/${LOG_CHUNKS} windows unavailable from public RPCs (balance is live)`;
   } catch (e) {
@@ -134,15 +155,33 @@ async function solanaRail(wallet) {
   try {
     const res = await rpcCall(SOLANA_RPCS, "getTokenAccountsByOwner", [wallet, { mint: USDC_SOL_MINT }, { encoding: "jsonParsed" }], 6000);
     out.balance = (res?.value || []).reduce((s, a) => s + (a?.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0), 0);
-    // Recent activity: signatures touching the owner account (token-level
-    // decoding lives in scripts/revenue-scan-solana.js — the digest's job;
-    // here a link-out per signature keeps the page one cheap call).
     const sigs = await rpcCall(SOLANA_RPCS, "getSignaturesForAddress", [wallet, { limit: 6 }], 6000);
-    out.recent = (Array.isArray(sigs) ? sigs : []).map((s) => ({
-      tx: `https://solscan.io/tx/${s.signature}`,
-      when: s.blockTime ? new Date(s.blockTime * 1000).toISOString() : null,
-      err: s.err ? true : false,
-    }));
+    // Decode each recent tx's USDC delta + payer (same helpers as the daily
+    // scanner) so internal test money classifies here too. Best-effort under
+    // a budget — an undecodable tx stays a bare signature link.
+    const deadline = Date.now() + 12_000;
+    out.recent = [];
+    for (const s of Array.isArray(sigs) ? sigs : []) {
+      const item = {
+        tx: `https://solscan.io/tx/${s.signature}`,
+        when: s.blockTime ? new Date(s.blockTime * 1000).toISOString() : null,
+        err: s.err ? true : false,
+      };
+      if (!s.err && Date.now() < deadline) {
+        try {
+          const txn = await rpcCall(SOLANA_RPCS, "getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], 5000);
+          const usd = Number(usdcDeltaForOwner(txn?.meta, wallet).toFixed(6));
+          if (usd > 0) {
+            item.usd = usd;
+            item.from = payerFromMeta(txn?.meta, wallet);
+            item.external = isExternalPayment({ payer: item.from, usd }, { ourWallets: OUR_SOLANA_WALLETS, maxUsd: MAX_CALL_USD });
+            item.internal = item.from != null && OUR_SOLANA_WALLETS.has(item.from);
+          }
+        } catch { /* leave as a bare signature link */ }
+      }
+      out.recent.push(item);
+    }
+    out.externalUsd = Number(out.recent.filter((t) => t.external).reduce((s, t) => s + t.usd, 0).toFixed(6));
   } catch (e) {
     out.error = String(e?.message || e).slice(0, 120);
   }
@@ -164,13 +203,16 @@ export async function revenueSnapshot({ walletAddress, solanaWallet }) {
   ]);
   const rails = [base, solana, polygon, arbitrum, robinhood];
   const totalUsd = rails.reduce((s, r) => s + (Number.isFinite(r.balance) ? r.balance : 0), 0);
+  const windowExternalUsd = rails.reduce((s, r) => s + (Number.isFinite(r.externalUsd) ? r.externalUsd : 0), 0);
   cached = {
     spec: "agent402-revenue/1",
     asOf: new Date().toISOString(),
     cacheSeconds: 60,
     totalUsd: Number(totalUsd.toFixed(6)),
+    windowExternalUsd: Number(windowExternalUsd.toFixed(6)),
+    maxCallUsd: MAX_CALL_USD,
     rails,
-    note: "Balances + recent inbound transfers, read live from public RPCs (best-effort per rail). All figures are independently verifiable at the explorer links.",
+    note: "Balances + recent inbound transfers, read live from public RPCs (best-effort per rail). totalUsd is the combined wallet balance (includes our own canary/test money); windowExternalUsd counts only classified external per-call payments in the recent scan windows. All figures are independently verifiable at the explorer links.",
   };
   cachedAt = Date.now();
   return cached;
@@ -188,15 +230,22 @@ export function revenuePage(baseUrl, snap) {
     <div style="border:1.5px solid var(--ink);background:var(--card);padding:18px 20px;">
       <div style="display:flex;align-items:baseline;justify-content:space-between;border-bottom:1px dashed #b3a98f;padding-bottom:10px;margin-bottom:12px;">
         <span style="font-weight:800;font-size:17px;">${esc(r.rail)} <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">· ${esc(r.asset)}</span></span>
-        <span style="font-family:var(--font-mono);font-size:20px;font-weight:700;">${r.balance == null ? "—" : "$" + r.balance.toFixed(4)}</span>
+        <span style="font-family:var(--font-mono);text-align:right;"><span style="font-size:20px;font-weight:700;">${r.balance == null ? "—" : "$" + r.balance.toFixed(4)}</span><span style="display:block;font-size:11px;color:var(--muted);">balance${Number.isFinite(r.externalUsd) ? ` · external in window $${r.externalUsd}` : ""}</span></span>
       </div>
       ${r.error
         ? `<div style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">rail read unavailable — public RPC error (detail in <a href="/api/revenue">/api/revenue</a>)</div>`
         : r.recent.length
           ? `<div style="font-family:var(--font-mono);font-size:12.5px;display:grid;gap:6px;">${r.recent
-              .map((t) => t.usd !== undefined
-                ? `<div>+$${t.usd} from <code>${esc(short(t.from))}</code> · <a href="${esc(t.tx)}" rel="noopener">tx</a></div>`
-                : `<div><a href="${esc(t.tx)}" rel="noopener">tx</a>${t.when ? ` · ${esc(t.when.slice(0, 16))}Z` : ""}${t.err ? " · failed" : ""}</div>`)
+              .map((t) => {
+                const tag = t.usd === undefined ? ""
+                  : t.external ? ` · <strong style="color:var(--accent);">external</strong>`
+                  : t.internal ? ` · <span style="color:var(--muted);">internal canary/test</span>`
+                  : ` · <span style="color:var(--muted);">not a per-call buy</span>`;
+                const dim = t.usd !== undefined && !t.external ? "opacity:.62;" : "";
+                return t.usd !== undefined
+                  ? `<div style="${dim}">+$${t.usd} from <code>${esc(short(t.from))}</code> · <a href="${esc(t.tx)}" rel="noopener">tx</a>${tag}</div>`
+                  : `<div><a href="${esc(t.tx)}" rel="noopener">tx</a>${t.when ? ` · ${esc(t.when.slice(0, 16))}Z` : ""}${t.err ? " · failed" : ""}</div>`;
+              })
               .join("")}</div>`
           : `<div style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">no inbound transfers in the recent window</div>`}
       ${r.scanNote ? `<div style="margin-top:8px;font-family:var(--font-mono);font-size:11.5px;color:var(--muted);">${esc(r.scanNote)}</div>` : ""}
@@ -210,11 +259,11 @@ export function revenuePage(baseUrl, snap) {
       Every rail's wallet, one page — refreshed from public RPCs (60s cache), every figure verifiable at its explorer link.
       Machine-readable: <a href="/api/revenue">/api/revenue</a>.
     </p>
-    <p style="font-family:var(--font-mono);font-size:13px;color:var(--muted);margin:0 0 30px;">as of ${esc(snap.asOf)} · combined balance <strong style="color:var(--ink);">$${snap.totalUsd.toFixed(4)}</strong></p>
+    <p style="font-family:var(--font-mono);font-size:13px;color:var(--muted);margin:0 0 30px;">as of ${esc(snap.asOf)} · combined balance <strong style="color:var(--ink);">$${snap.totalUsd.toFixed(4)}</strong> · external revenue in scan window <strong style="color:var(--accent);">$${(snap.windowExternalUsd ?? 0).toFixed(4)}</strong><br>balances include our own canary/test money — only transfers tagged <strong style="color:var(--accent);">external</strong> count as revenue</p>
     <div class="ml-2col" style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;">
       ${snap.rails.map(railCard).join("\n")}
     </div>
-    <p style="font-size:13.5px;color:var(--muted);margin-top:26px;">Recent-window transfers are the last few hours of inbound stablecoin on each EVM rail (Solana shows the latest account activity — full token decoding lives in the daily revenue digest). Rails read best-effort: a flaky public RPC marks that rail unavailable without hiding the others.</p>
+    <p style="font-size:13.5px;color:var(--muted);margin-top:26px;">Recent-window transfers are the last few hours of inbound stablecoin on each rail, classified with the same rule as the daily revenue digest: a payment is <strong>external</strong> only if it comes from a wallet that isn't ours (canary/test burners are excluded) and is per-call-sized (≤ $${MAX_CALL_USD}); bigger inbound is funding or tests, not a buy. Rails read best-effort: a flaky public RPC marks that rail unavailable without hiding the others.</p>
   </main>
   ${ledgerFooterCompact(baseUrl)}`;
   return ledgerShell({
