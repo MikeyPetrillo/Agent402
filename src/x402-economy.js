@@ -150,7 +150,7 @@ export function x402EconomyPage(baseUrl, snap) {
   const canonical = baseUrl + "/x402-economy";
   const title = "x402 Economy Observatory — live on-chain settlement analytics";
   const description =
-    "Live, chain-wide analytics on the x402 economy: gasless EIP-3009 USDC settlements on Base — daily volume, unique payers, and the top-earning seller wallets — measured directly from decoded on-chain events. The only public dashboard of its kind.";
+    "Live, chain-wide analytics on the x402 economy: gasless EIP-3009 USDC settlements on Base — daily volume, unique payers, and the top-earning seller wallets — measured at the raw settlement primitive across every seller (registered anywhere or not), with the one-sentence methodology stated and the underlying query buyable as an x402 tool.";
   const t7 = snap.totals?.last7d || { settlements: 0, volumeUsd: 0, payers: 0 };
   const t30 = snap.totals?.last30d || { settlements: 0 };
   const stat = (label, value) => `

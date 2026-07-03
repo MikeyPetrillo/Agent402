@@ -6,7 +6,7 @@
   analytics on the x402 economy — daily gasless EIP-3009 USDC settlements on Base, unique
   payers, volume, and the top-earning seller wallets, measured directly from decoded on-chain
   events (Transfer + AuthorizationUsed pairs on the USDC contract) across EVERY seller, not
-  just Agent402. The only public dashboard of its kind; data flows through the same paid
+  just Agent402 — including sellers no directory has indexed. Data flows through the same paid
   `onchain-sql` tool agents can buy. 30-minute cache, per-query error resilience, graceful
   "warming up" state without CDP keys.
 
