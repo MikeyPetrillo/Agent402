@@ -103,7 +103,7 @@ export function comparePage(baseUrl) {
 <tr><td>Where it runs</td><td class="cmp-win"><span class="check">&#10003;</span> Any origin &mdash; Express, Next.js, Docker, even a Cloudflare Worker</td><td class="cmp-lose">Only sites behind the platform's proxy</td></tr>
 <tr><td>Open source</td><td class="cmp-win"><span class="check">&#10003;</span> MIT &mdash; read every line, fork it</td><td class="cmp-lose"><span class="cross">&#10007;</span> Proprietary edge service</td></tr>
 <tr><td>Free tier for bots</td><td class="cmp-win"><span class="check">&#10003;</span> Proof-of-work &mdash; crawlers can pay with CPU instead of money</td><td class="cmp-lose"><span class="cross">&#10007;</span> Pay or blocked</td></tr>
-<tr><td>Settlement</td><td class="cmp-win"><span class="check">&#10003;</span> x402 USDC on Base, Solana, Polygon, Arbitrum &mdash; direct to your wallet, 0% take</td><td class="cmp-lose">Stablecoins over x402; fee structure not yet public</td></tr>
+<tr><td>Settlement</td><td class="cmp-win"><span class="check">&#10003;</span> x402 USDC on Base, Solana, Polygon, Arbitrum + USDG on Robinhood Chain &mdash; direct to your wallet, 0% take</td><td class="cmp-lose">Stablecoins over x402; fee structure not yet public</td></tr>
 <tr><td>Charge rules</td><td class="cmp-win"><span class="check">&#10003;</span> Your code &mdash; modes (bots/all/strict), adaptive PoW, per-path pricing</td><td class="cmp-lose">Platform rules API</td></tr>
 <tr><td>Analytics</td><td class="cmp-win"><span class="check">&#10003;</span> Built-in dashboard + stats endpoint, self-hosted</td><td class="cmp-lose">Platform dashboard</td></tr>
 </tbody>
