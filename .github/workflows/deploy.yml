@@ -587,6 +587,9 @@ jobs:
       - name: Rails-copy lock (rails.js ↔ payments.js + every key page renders every rail)
         run: TARGET_URL=http://localhost:3000 node scripts/test-rails.js
 
+      - name: Revenue ledger unit tests (all-time external accounting, idempotent rescans, CI self-gate)
+        run: node scripts/test-revenue-ledger.js
+
       - name: /api/skill-packs.json shape (what stdio agent402-mcp consumes at startup)
         run: node scripts/test-skill-packs-json.js
 

@@ -16,25 +16,25 @@ import { RAILS } from "./rails.js";
 // plausible per-call price. Internal test money is shown but never counted.
 import { usdcDeltaForOwner, payerFromMeta, isExternalPayment } from "../scripts/revenue-scan-solana.js";
 
-const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-const USDC_SOL_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+export const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+export const USDC_SOL_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 // Same envs (and defaults) as scripts/revenue-scan{,-solana}.js.
-const MAX_CALL_USD = parseFloat(process.env.MAX_CALL_USD || "0.5");
-const OUR_EVM_WALLETS = new Set(
+export const MAX_CALL_USD = parseFloat(process.env.MAX_CALL_USD || "0.5");
+export const OUR_EVM_WALLETS = new Set(
   (process.env.OUR_WALLETS || "0xfeda7403aabe9a492ed70e810b396d8548a4a022")
     .toLowerCase().split(",").map((s) => s.trim()).filter(Boolean)
 );
 // Default = the canary's Solana burner (public address; the key lives only
 // in CI secrets) — its daily $0.05 self-buys are internal, not revenue.
-const OUR_SOLANA_WALLETS = new Set(
+export const OUR_SOLANA_WALLETS = new Set(
   (process.env.OUR_SOLANA_WALLETS || "9EMAayAfBR32J5d3ApEAG3NdKArRBtAqN7LA8c2WRM5o")
     .split(",").map((s) => s.trim()).filter(Boolean)
 );
 
 // Chain read-config. Stablecoin contracts mirror scripts/revenue-scan.js;
 // span ≈ a few hours of blocks so "recent inbound" stays a cheap filtered read.
-const EVM = {
+export const EVM = {
   base: {
     label: "Base", asset: "USDC", span: 12000,
     token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
@@ -64,11 +64,11 @@ const EVM = {
     tx: (h) => `https://robinhoodchain.blockscout.com/tx/${h}`,
   },
 };
-const SOLANA_RPCS = ["https://api.mainnet-beta.solana.com"];
+export const SOLANA_RPCS = ["https://api.mainnet-beta.solana.com"];
 
-const pad = (a) => "0x" + "0".repeat(24) + a.toLowerCase().replace(/^0x/, "");
+export const pad = (a) => "0x" + "0".repeat(24) + a.toLowerCase().replace(/^0x/, "");
 
-async function rpcCall(urls, method, params, timeoutMs = 5000) {
+export async function rpcCall(urls, method, params, timeoutMs = 5000) {
   let lastErr;
   for (const url of urls) {
     try {
@@ -229,11 +229,14 @@ export function revenuePage(baseUrl, snap) {
   const title = "Live revenue — Agent402";
   const description =
     "Consolidated live view of the Agent402 revenue wallets across every payment rail — USDC on Base, Solana, Polygon & Arbitrum, plus USDG on Robinhood Chain. One page instead of three explorer tabs; every figure links to its on-chain proof.";
-  const railCard = (r) => `
+  const chainKeyByLabel = { ...Object.fromEntries(Object.entries(EVM).map(([k, c]) => [c.label, k])), Solana: "solana" };
+  const railCard = (r) => {
+    const at = snap.allTime?.perChain?.[chainKeyByLabel[r.rail]];
+    return `
     <div style="border:1.5px solid var(--ink);background:var(--card);padding:18px 20px;">
       <div style="display:flex;align-items:baseline;justify-content:space-between;border-bottom:1px dashed #b3a98f;padding-bottom:10px;margin-bottom:12px;">
         <span style="font-weight:800;font-size:17px;">${esc(r.rail)} <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">· ${esc(r.asset)}</span></span>
-        <span style="font-family:var(--font-mono);text-align:right;"><span style="font-size:20px;font-weight:700;">${r.balance == null ? "—" : "$" + r.balance.toFixed(4)}</span><span style="display:block;font-size:11px;color:var(--muted);">balance${Number.isFinite(r.externalUsd) ? ` · external in window $${r.externalUsd}` : ""}</span></span>
+        <span style="font-family:var(--font-mono);text-align:right;"><span style="font-size:20px;font-weight:700;">${r.balance == null ? "—" : "$" + r.balance.toFixed(4)}</span><span style="display:block;font-size:11px;color:var(--muted);">balance${Number.isFinite(r.externalUsd) ? ` · external in window $${r.externalUsd}` : ""}${at ? ` · all-time $${at.externalUsd}${at.caughtUp ? "" : "↺"}` : ""}</span></span>
       </div>
       ${r.error
         ? `<div style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">rail read unavailable — public RPC error (detail in <a href="/api/revenue">/api/revenue</a>)</div>`
@@ -254,6 +257,7 @@ export function revenuePage(baseUrl, snap) {
       ${r.scanNote ? `<div style="margin-top:8px;font-family:var(--font-mono);font-size:11.5px;color:var(--muted);">${esc(r.scanNote)}</div>` : ""}
       ${r.explorer ? `<div style="margin-top:12px;font-family:var(--font-mono);font-size:12px;"><a href="${esc(r.explorer)}" rel="noopener">open in explorer →</a></div>` : ""}
     </div>`;
+  };
   const body = `
   <main style="max-width:1100px;margin:0 auto;padding:56px 30px;">
     <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">$ GET /api/revenue</div>
@@ -262,7 +266,8 @@ export function revenuePage(baseUrl, snap) {
       Every rail's wallet, one page — refreshed from public RPCs (60s cache), every figure verifiable at its explorer link.
       Machine-readable: <a href="/api/revenue">/api/revenue</a>.
     </p>
-    <p style="font-family:var(--font-mono);font-size:13px;color:var(--muted);margin:0 0 30px;">as of ${esc(snap.asOf)} · combined balance <strong style="color:var(--ink);">$${snap.totalUsd.toFixed(4)}</strong> · external revenue in scan window <strong style="color:var(--accent);">$${(snap.windowExternalUsd ?? 0).toFixed(4)}</strong><br>balances include our own canary/test money — only transfers tagged <strong style="color:var(--accent);">external</strong> count as revenue</p>
+    ${snap.allTime ? `<p style="font-family:var(--font-mono);font-size:15px;margin:0 0 6px;">external revenue, all-time: <strong style="color:var(--accent);font-size:22px;">$${snap.allTime.allTimeExternalUsd.toFixed(4)}</strong> <span style="color:var(--muted);">across ${snap.allTime.allTimeExternalCount} payment${snap.allTime.allTimeExternalCount === 1 ? "" : "s"}${snap.allTime.syncing ? " · ledger backfilling — total still rising" : ""}</span></p>` : ""}
+    <p style="font-family:var(--font-mono);font-size:13px;color:var(--muted);margin:0 0 30px;">as of ${esc(snap.asOf)} · combined balance <strong style="color:var(--ink);">$${snap.totalUsd.toFixed(4)}</strong> · external in recent window <strong style="color:var(--accent);">$${(snap.windowExternalUsd ?? 0).toFixed(4)}</strong><br>balances include our own canary/test money — only transfers classified <strong style="color:var(--accent);">external</strong> count as revenue</p>
     <div class="ml-2col" style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;">
       ${snap.rails.map(railCard).join("\n")}
     </div>

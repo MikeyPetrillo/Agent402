@@ -118,6 +118,7 @@ import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
 import { robinhoodPage } from "./robinhood-page.js";
 import { revenueSnapshot, revenuePage } from "./revenue-live.js";
+import { startRevenueLedger, ledgerSummary } from "./revenue-ledger.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
@@ -708,18 +709,19 @@ app.get("/robinhood", (_req, res) => htmlCache(res, 300, 900).send(robinhoodPage
 // Live consolidated revenue view — every rail's wallet on one page instead
 // of one explorer tab per chain. Server-side reads with a 60s module cache;
 // individual rail failures degrade to "unavailable" without a 500.
+const revenueWallets = () => ({ walletAddress: WALLET_ADDRESS, solanaWallet: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null });
 app.get("/api/revenue", async (_req, res) => {
   try {
-    const snap = await revenueSnapshot({ walletAddress: WALLET_ADDRESS, solanaWallet: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null });
-    res.set("Cache-Control", "public, max-age=30").json(snap);
+    const snap = await revenueSnapshot(revenueWallets());
+    res.set("Cache-Control", "public, max-age=30").json({ ...snap, allTime: ledgerSummary(revenueWallets()) });
   } catch (e) {
     res.status(500).json({ error: "revenue snapshot failed", detail: String(e?.message || e).slice(0, 120) });
   }
 });
 app.get("/revenue", async (_req, res) => {
   try {
-    const snap = await revenueSnapshot({ walletAddress: WALLET_ADDRESS, solanaWallet: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null });
-    res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, snap));
+    const snap = await revenueSnapshot(revenueWallets());
+    res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, { ...snap, allTime: ledgerSummary(revenueWallets()) }));
   } catch (e) {
     res.status(500).type("html").send('<p>Revenue view temporarily unavailable. <a href="/">Home</a></p>');
   }
@@ -1983,6 +1985,10 @@ app.use((err, req, res, _next) => {
 const httpServer = app.listen(PORT, () =>
   console.log(`Agent402 listening on :${PORT} with ${Object.keys(CATALOG).length} paid tools`)
 );
+
+// All-time revenue ledger sync loop — self-gates on /data (prod volume) or
+// REVENUE_LEDGER=true, so test/CI boots never touch public RPCs.
+startRevenueLedger({ walletAddress: WALLET_ADDRESS, solanaWallet: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null });
 
 // Tollbooth leads — lazy Postgres init. No-op if DATABASE_URL is unset; in
 // that case /api/tollbooth/waitlist returns 503 and the form falls back to the
