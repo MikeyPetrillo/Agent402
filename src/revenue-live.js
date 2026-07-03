@@ -25,8 +25,11 @@ const OUR_EVM_WALLETS = new Set(
   (process.env.OUR_WALLETS || "0xfeda7403aabe9a492ed70e810b396d8548a4a022")
     .toLowerCase().split(",").map((s) => s.trim()).filter(Boolean)
 );
+// Default = the canary's Solana burner (public address; the key lives only
+// in CI secrets) — its daily $0.05 self-buys are internal, not revenue.
 const OUR_SOLANA_WALLETS = new Set(
-  (process.env.OUR_SOLANA_WALLETS || "").split(",").map((s) => s.trim()).filter(Boolean)
+  (process.env.OUR_SOLANA_WALLETS || "9EMAayAfBR32J5d3ApEAG3NdKArRBtAqN7LA8c2WRM5o")
+    .split(",").map((s) => s.trim()).filter(Boolean)
 );
 
 // Chain read-config. Stablecoin contracts mirror scripts/revenue-scan.js;

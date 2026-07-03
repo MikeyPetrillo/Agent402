@@ -33,8 +33,11 @@
 import { fileURLToPath } from "node:url";
 
 const WALLET = (process.env.SOLANA_REVENUE_WALLET || "").trim();
+// Default = the paid canary's Solana burner (public address only — the key
+// lives in CI secrets); its daily self-buys must never count as external.
 const OUR_WALLETS = new Set(
-  (process.env.OUR_SOLANA_WALLETS || "").split(",").map((s) => s.trim()).filter(Boolean)
+  (process.env.OUR_SOLANA_WALLETS || "9EMAayAfBR32J5d3ApEAG3NdKArRBtAqN7LA8c2WRM5o")
+    .split(",").map((s) => s.trim()).filter(Boolean)
 );
 const MAX_CALL_USD = parseFloat(process.env.MAX_CALL_USD || "0.5");
 const SIG_LIMIT = Math.min(parseInt(process.env.SIG_LIMIT || "100", 10), 1000);
