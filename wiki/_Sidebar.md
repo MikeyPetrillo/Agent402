@@ -3,6 +3,7 @@
 **Using it (for agents / buyers)**
 - [[Getting Started]]
 - [[Paying with x402]]
+- [[Robinhood Chain (USDG)|Robinhood-Chain]]
 - [[Paying with Compute]]
 - [[MCP Connector]]
 - [[Adapters]]
