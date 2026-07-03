@@ -198,4 +198,45 @@ export class Agent402 {
   clearCache() { this._cache?.clear(); }
 }
 
+/**
+ * Restrict + order which chains an @x402 client will pay on (duck-typed — any
+ * client version with createPaymentPayload works, zero new dependencies).
+ * Multi-chain sellers list Base first, so an unmodified client effectively
+ * always settles there; this makes rails like USDG on Robinhood Chain
+ * (eip155:4663) reachable:
+ *
+ *   import { withNetworkPreference } from "agent402-client";
+ *   withNetworkPreference(x402client, ["robinhood"]);       // or ["eip155:4663"]
+ *   const payFetch = wrapFetchWithPayment(fetch, x402client);
+ *
+ * Short names map to CAIP-2; unknown entries pass through verbatim so future
+ * chains work without a package update. Throws (before paying) when the
+ * preference matches none of a seller's payment options.
+ */
+export const NETWORK_CAIP2 = {
+  base: "eip155:8453",
+  polygon: "eip155:137",
+  arbitrum: "eip155:42161",
+  "base-sepolia": "eip155:84532",
+  robinhood: "eip155:4663",
+  solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+  "solana-devnet": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+};
+
+export function withNetworkPreference(client, networks) {
+  const prefs = (networks || []).map((n) => NETWORK_CAIP2[String(n).trim().toLowerCase()] || String(n).trim());
+  if (!prefs.length) return client;
+  const orig = client.createPaymentPayload.bind(client);
+  client.createPaymentPayload = (paymentRequired) => {
+    const list = Array.isArray(paymentRequired?.accepts) ? paymentRequired.accepts : [];
+    const picked = prefs.flatMap((caip2) => list.filter((a) => String(a?.network || "").toLowerCase() === caip2.toLowerCase()));
+    if (!picked.length) {
+      const offered = [...new Set(list.map((a) => a?.network).filter(Boolean))];
+      throw new Error(`network preference [${prefs.join(", ")}] matched none of the seller's payment options [${offered.join(", ")}]`);
+    }
+    return orig({ ...paymentRequired, accepts: picked });
+  };
+  return client;
+}
+
 export default Agent402;

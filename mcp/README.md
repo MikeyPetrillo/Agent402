@@ -70,6 +70,7 @@ automatically:
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
 | `AGENT402_MAX_PER_CALL` | unlimited | Refuse any single call priced above this many USD (e.g. `0.01`). |
 | `AGENT402_BUDGET` | unlimited | Hard cap on total USDC spent per session (e.g. `1.00`). |
+| `AGENT402_NETWORKS` | _(unset)_ | Restrict + order the chains to pay on — e.g. `robinhood` (USDG on Robinhood Chain), `base,solana`, or a raw CAIP-2 like `eip155:4663`. Unset = the client picks (effectively Base on multi-chain sellers). |
 
 Spend controls are enforced **before a payment is signed** — a runaway model is
 refused, not billed. `payment_info` reports the caps, what's been spent, and

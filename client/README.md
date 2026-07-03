@@ -94,3 +94,26 @@ await a.topSellers({ sort: "calls", include: "all" });
 - **Zero dependencies** for the free/proof-of-work path (uses `node:crypto`).
 - **Non-custodial:** paid settlement is your `@x402/fetch` + wallet; this client never sees your key.
 - MIT licensed. Part of [Agent402](https://github.com/MikeyPetrillo/Agent402).
+
+## Pick the settlement chain (`withNetworkPreference`)
+
+Multi-chain sellers list Base first, so an unmodified x402 client effectively
+always settles there. To pin a chain — e.g. **USDG on Robinhood Chain** —
+wrap your client before building the fetch:
+
+```js
+import { withNetworkPreference } from "agent402-client";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { wrapFetchWithPayment } from "@x402/fetch";
+
+const client = new x402Client();
+registerExactEvmScheme(client, { signer });
+withNetworkPreference(client, ["robinhood"]);   // or ["base","solana"], or ["eip155:4663"]
+const payFetch = wrapFetchWithPayment(fetch, client);
+```
+
+Short names map to CAIP-2 (`base`, `solana`, `polygon`, `arbitrum`,
+`robinhood`); unknown entries pass through verbatim so future chains work
+without a package update. If the preference matches none of a seller's
+payment options it throws **before** any payment is signed.

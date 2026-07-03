@@ -16,6 +16,35 @@ const PORT = 3005;
 const API = `http://localhost:${PORT}`;
 
 const fail = (msg) => { console.error("FAIL:", msg); process.exit(1); };
+
+// 0) Offline unit tests: AGENT402_NETWORKS parsing + accept filtering — the
+// path that lets this buyer settle USDG on Robinhood Chain (or pin any chain).
+{
+  const { parseNetworkPrefs, filterAcceptsByNetworks, withNetworkPreference } = await import("./networks.js");
+  const eq = (a, b, msg) => { if (JSON.stringify(a) !== JSON.stringify(b)) fail(`${msg}: ${JSON.stringify(a)} != ${JSON.stringify(b)}`); };
+  eq(parseNetworkPrefs("robinhood"), ["eip155:4663"], "robinhood maps to CAIP-2");
+  eq(parseNetworkPrefs("base, solana"), ["eip155:8453", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"], "list maps + trims");
+  eq(parseNetworkPrefs("eip155:9999"), ["eip155:9999"], "raw CAIP-2 passes through");
+  eq(parseNetworkPrefs(""), [], "unset -> no restriction");
+  const accepts = [
+    { network: "eip155:8453", asset: "usdc-base" },
+    { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", asset: "usdc-sol" },
+    { network: "eip155:4663", asset: "usdg" },
+  ];
+  eq(filterAcceptsByNetworks(accepts, []).length, 3, "no prefs -> untouched");
+  eq(filterAcceptsByNetworks(accepts, ["eip155:4663"]).map((a) => a.asset), ["usdg"], "robinhood-only filter picks USDG");
+  eq(filterAcceptsByNetworks(accepts, ["eip155:4663", "eip155:8453"]).map((a) => a.asset), ["usdg", "usdc-base"], "preference order respected");
+  let threw = false;
+  try { filterAcceptsByNetworks(accepts, ["eip155:1"]); } catch { threw = true; }
+  if (!threw) fail("no-match filter must throw before paying");
+  // withNetworkPreference: the wrapped client only ever sees filtered accepts
+  const seen = [];
+  const fake = { createPaymentPayload: (pr) => { seen.push(pr.accepts.map((a) => a.asset)); return "payload"; } };
+  withNetworkPreference(fake, ["eip155:4663"]);
+  if (fake.createPaymentPayload({ accepts }) !== "payload") fail("wrapped client must delegate");
+  eq(seen[0], ["usdg"], "client sees only the preferred accept");
+  console.log("networks.js unit tests \u2713 (parse, filter, preference order, no-match throw, client wrap)");
+}
 const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text : `<${c.type}>`)).join("\n") ?? "";
 
 // 1) Boot a paywalled API instance (PoW gate live, facilitator not contacted).

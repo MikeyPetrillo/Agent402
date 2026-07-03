@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { Agent402 } from "./index.js";
+import { Agent402, withNetworkPreference, NETWORK_CAIP2 } from "./index.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 3081;
@@ -18,6 +18,26 @@ const proc = spawn("node", ["src/server.js"], {
 });
 const fail = (m) => { console.error("FAIL:", m); proc.kill("SIGKILL"); process.exit(1); };
 let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m); };
+
+// Offline: withNetworkPreference pins the settlement chain (e.g. USDG on
+// Robinhood Chain) on any duck-typed x402 client — no @x402 dependency here.
+{
+  ok(NETWORK_CAIP2.robinhood === "eip155:4663", "NETWORK_CAIP2 knows robinhood -> eip155:4663");
+  const accepts = [{ network: "eip155:8453", a: "base" }, { network: "eip155:4663", a: "usdg" }];
+  const seen = [];
+  const fake = { createPaymentPayload: (pr) => { seen.push(pr.accepts.map((x) => x.a)); return "ok"; } };
+  withNetworkPreference(fake, ["robinhood"]);
+  ok(fake.createPaymentPayload({ accepts }) === "ok", "wrapped client delegates");
+  ok(JSON.stringify(seen[0]) === '["usdg"]', "preference filters accepts to the pinned chain");
+  let threw = false;
+  const none = { createPaymentPayload: () => "x" };
+  withNetworkPreference(none, ["eip155:1"]);
+  try { none.createPaymentPayload({ accepts }); } catch { threw = true; }
+  ok(threw, "no-match preference throws before paying");
+  const untouched = { createPaymentPayload: (pr) => pr.accepts.length };
+  withNetworkPreference(untouched, []);
+  ok(untouched.createPaymentPayload({ accepts }) === 2, "empty preference leaves the client untouched");
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 try {

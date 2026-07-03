@@ -18,7 +18,10 @@
 //   AGENT402_TOOLS        comma-separated slugs to expose first-class (overrides default)
 //   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (e.g. 0.01)
 //   AGENT402_BUDGET       hard cap on total USDC spent this session (e.g. 1.00)
+//   AGENT402_NETWORKS     restrict + order the chains to pay on (e.g. "robinhood" for USDG on
+//                         Robinhood Chain, "base,solana", or a raw CAIP-2 like eip155:4663) — optional
 import { createHash } from "node:crypto";
+import { parseNetworkPrefs, withNetworkPreference } from "./networks.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -35,7 +38,7 @@ const AGENT_KEY = process.env.AGENT_KEY || "";
 // settle on whichever chain the seller offers (EVM accepts are tried first).
 const SOLANA_AGENT_KEY = process.env.SOLANA_AGENT_KEY || "";
 const HAS_WALLET = Boolean(AGENT_KEY || SOLANA_AGENT_KEY);
-const VERSION = "0.10.0";
+const VERSION = "0.11.0";
 
 // Spend controls — enforced BEFORE a payment is ever signed, so a confused or
 // runaway model cannot drain the wallet. Unset = unlimited (back-compat).
@@ -123,6 +126,12 @@ function getPayFetch() {
       const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
       registerExactSvmScheme(client, { signer: await solanaSigner() });
     }
+    // AGENT402_NETWORKS restricts + orders which chains this buyer will pay
+    // on (e.g. "robinhood" settles USDG on chain 4663; the accept carries the
+    // asset + EIP-712 domain, so the EVM signer needs no special handling).
+    // Without it the client effectively always picks Base on multi-chain
+    // sellers, leaving non-default rails unreachable.
+    withNetworkPreference(client, parseNetworkPrefs(process.env.AGENT402_NETWORKS));
     return wrapFetchWithPayment(fetch, client);
   })();
   return payFetchPromise;
