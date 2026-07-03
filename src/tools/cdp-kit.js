@@ -12,6 +12,11 @@
 //                            a shared per-account CDP budget)
 //   onramp-link      $0.001  single-use Coinbase Onramp URL that lets a human
 //                            fund an agent's wallet with a card / Apple Pay
+//   onchain-sql      $0.020  read-only ClickHouse-dialect SQL over Coinbase's
+//                            indexed DECODED chain data (Base events/txs/
+//                            blocks/user-ops/builder-code attributions,
+//                            Solana token instructions) — no indexer to run
+//   onchain-sql-schema $0.002 the table/column schema for the above
 //
 // Auth: CDP REST uses a short-lived JWT (ES256 for PEM EC keys, EdDSA for
 // base64 Ed25519 keys) with a per-request `uris` claim. Implemented on
@@ -293,6 +298,64 @@ export const CDP_TOOLS = [
         } } : {}),
         note: "Open the URL in a browser to complete the purchase — it is single-use and expires after first visit.",
       };
+    },
+  },
+  {
+    route: "POST /api/onchain-sql",
+    name: "Onchain SQL (query Base with SQL)",
+    slug: "onchain-sql",
+    category: "wallet",
+    price: "$0.020",
+    description:
+      "Run read-only SQL against Coinbase's indexed, DECODED blockchain data — base.events (decoded logs with parameters), base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions (builder codes), plus solana.instructions and hyperevm.events. ClickHouse-dialect SELECTs, server-side grammar validation, up to 50k rows / 30s / 12 joins. Ask Base anything — token flows, event analytics, gas studies — in one call, no indexer to run.",
+    tags: [...SHARED_TAGS, "sql", "analytics", "onchain-data", "base", "events", "clickhouse", "data-science"],
+    discovery: {
+      bodyType: "json",
+      input: { sql: "SELECT COUNT(*) AS txs FROM base.transactions WHERE block_number > 0 LIMIT 1" },
+      inputSchema: {
+        properties: {
+          sql: { type: "string", description: "Read-only SELECT (ClickHouse dialect, max 10,000 chars). Tables: base.events, base.transactions, base.blocks, base.encoded_logs, base.decoded_user_operations, base.transaction_attributions, base_sepolia.*, solana.instructions, hyperevm.events" },
+          cacheSeconds: { type: "number", description: "Accept cached results up to this old (max 900). Cheaper + faster for repeated analytics." },
+        },
+        required: ["sql"],
+      },
+      output: {
+        example: { rows: [{ txs: 123456 }], rowCount: 1, note: "Result rows exactly as returned by the SQL engine." },
+      },
+    },
+    handler: async (input) => {
+      const sql = String(input?.sql || "").trim();
+      if (!sql) throw bad('"sql" is required');
+      if (sql.length > 10_000) throw bad(`"sql" too long (${sql.length} chars, max 10,000)`);
+      if (!/^\s*(select|with)\b/i.test(sql)) throw bad('"sql" must be a read-only SELECT (or WITH … SELECT) statement');
+      const body = { sql };
+      const cacheSeconds = Number(input?.cacheSeconds);
+      if (Number.isFinite(cacheSeconds) && cacheSeconds > 0) {
+        body.cache = { maxAgeMs: Math.min(Math.floor(cacheSeconds), 900) * 1000 };
+      }
+      const res = await cdpFetch("POST", "/platform/v2/data/query/run", body);
+      const rows = res?.result ?? res?.rows ?? res?.data ?? res;
+      const list = Array.isArray(rows) ? rows : [];
+      return { rows: list, rowCount: list.length, ...(Array.isArray(rows) ? {} : { raw: res }) };
+    },
+  },
+  {
+    route: "GET /api/onchain-sql-schema",
+    name: "Onchain SQL schema",
+    slug: "onchain-sql-schema",
+    category: "wallet",
+    price: "$0.002",
+    description:
+      "The table + column schema for the onchain-sql tool — every queryable table (base.events, base.transactions, base.blocks, base.decoded_user_operations, base.transaction_attributions, solana.instructions, …) with its columns and types. Fetch once, then write SQL with confidence.",
+    tags: [...SHARED_TAGS, "sql", "schema", "onchain-data", "reference"],
+    discovery: {
+      input: {},
+      inputSchema: { properties: {}, required: [] },
+      output: { example: { schema: { "base.events": [{ name: "block_number", type: "UInt64" }] } } },
+    },
+    handler: async () => {
+      const res = await cdpFetch("GET", "/platform/v2/data/query/schema");
+      return { schema: res };
     },
   },
 ];

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Onchain SQL** (`onchain-sql` $0.02 + `onchain-sql-schema` $0.002): run read-only
+  ClickHouse-dialect SQL against Coinbase's indexed, DECODED chain data — `base.events`
+  (decoded logs with parameters), `base.transactions`, `base.blocks`,
+  `base.decoded_user_operations`, `base.transaction_attributions` (builder codes), plus
+  Solana token instructions — as a pay-per-call x402 tool. Ask Base anything in one call,
+  no indexer to run; server-side grammar validation, 50k rows / 30s / 100GB-read caps,
+  optional result caching. The groundwork for the x402 Economy Observatory.
+
 - **Solana onboarding parity**: `testnet-fund` now also drips on **Solana devnet** (USDC or
   SOL via the CDP faucet, base58 validation, solscan devnet links) and `wallet-balances`
   reads **Solana + Solana devnet** SPL balances (mint address in the `contract` field) —

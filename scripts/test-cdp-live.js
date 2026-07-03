@@ -62,6 +62,24 @@ try {
   }
 }
 
+// --- onchain-sql (read-only query + schema discovery) ---------------------------
+try {
+  const res = await tool("onchain-sql").handler({ sql: "SELECT COUNT(*) AS n FROM base.blocks WHERE block_number > 32000000", cacheSeconds: 300 });
+  ok(res.rowCount >= 1 || res.raw, `onchain-sql ran a real query (${JSON.stringify(res.rows?.[0] ?? res.raw ?? {}).slice(0, 80)})`);
+} catch (e) {
+  ok(false, `onchain-sql live call failed: ${e.statusCode || "?"} ${String(e.message).slice(0, 160)}`);
+}
+try {
+  const res = await tool("onchain-sql-schema").handler({});
+  ok(Boolean(res.schema), "onchain-sql-schema returned a schema document");
+  // Print the base.events layout — ground truth for the x402 Economy
+  // Observatory queries (this log line IS the discovery deliverable).
+  const s = JSON.stringify(res.schema);
+  console.log(`SCHEMA (first 3000 chars): ${s.slice(0, 3000)}`);
+} catch (e) {
+  ok(false, `onchain-sql-schema live call failed: ${e.statusCode || "?"} ${String(e.message).slice(0, 160)}`);
+}
+
 // --- testnet-fund (opt-in only — burns the shared faucet budget) ----------------
 if (process.env.CDP_FAUCET_LIVE_TEST === "1") {
   try {

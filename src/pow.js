@@ -158,8 +158,9 @@ export const WALLET_ONLY_SLUGS = new Set([
   "moderate",
   // CDP kit: every call hits the Coinbase Developer Platform on our API keys.
   // testnet-fund additionally spends a shared per-account faucet budget —
-  // PoW would let one client drain it for free.
-  "wallet-balances", "testnet-fund", "onramp-link",
+  // PoW would let one client drain it for free. onchain-sql burns real SQL
+  // engine quota (100GB reads / 30s per query).
+  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema",
 ]);
 
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */
