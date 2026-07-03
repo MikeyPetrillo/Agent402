@@ -8,7 +8,7 @@ import { RAILS_PAREN } from "./rails.js";
 export function ledgerDocsPage(baseUrl) {
   const canonical = baseUrl + "/docs";
   const title = "Docs — Agent402";
-  const description = "Add 1,338 deterministic tools to your agent in about a minute. No signup, no API key — start free with proof-of-work, settle ${RAILS_PAREN} when you scale.";
+  const description = `Add 1,338 deterministic tools to your agent in about a minute. No signup, no API key — start free with proof-of-work, settle ${RAILS_PAREN} when you scale.`;
 
   const jsonLd = {
     "@context": "https://schema.org",

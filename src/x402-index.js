@@ -207,6 +207,9 @@ function bazaarItemToTool(item, originUrl) {
     category: tags[0] || "other",
     tags,
     price,
+    // Every chain this resource's 402 advertises — the signal behind the
+    // router's ?network= filter ("who else settles on Robinhood Chain?").
+    networks: [...new Set(accepts.map((a) => a?.network).filter(Boolean))],
     provenance: "bazaar",
   };
 }
@@ -450,6 +453,9 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
     routable: isRoutable(v),
     history: Array.isArray(v.history) ? v.history.slice() : [],
     source: v.source || (v.manifest && !v.manifest.synthesized ? "manifest" : null),
+    // Union of the chains this seller's crawled 402s advertise (empty when
+    // the crawl source doesn't expose accepts, e.g. bare OpenAPI).
+    networks: [...new Set((v.tools || []).flatMap((t) => t.networks || []))],
   }));
   const sellers = [local, ...remote];
   const discoverySources = DISCOVERY_SOURCES.map((s) => {
@@ -499,12 +505,23 @@ const VALID_INCLUDE = new Set(["all", "external", "local"]);
  * non-Agent402 sellers (`external`) — the same router, used as a neutral
  * discovery API over the whole x402 ecosystem.
  */
-export function routeQuery({ query, top, include, baseUrl, catalog, prices, network, toolCount, walletName }) {
+// Short chain names buyers may pass to ?network= — resolved to CAIP-2.
+const ROUTE_NETWORKS = {
+  base: "eip155:8453", polygon: "eip155:137", arbitrum: "eip155:42161",
+  robinhood: "eip155:4663", solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+};
+
+export function routeQuery({ query, top, include, networkFilter, baseUrl, catalog, prices, network, toolCount, walletName }) {
   const q = String(query || "").slice(0, 500);
   const terms = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).slice(0, 32);
   const k = Math.min(Math.max(parseInt(top, 10) || 5, 1), 25);
   const inc = VALID_INCLUDE.has(include) ? include : "all";
-  if (!terms.length) return { query: q, count: 0, results: [], sellers: 0, include: inc };
+  // ?network=robinhood (or a raw CAIP-2) keeps only tools whose crawled 402
+  // advertises that chain. Positive-signal filter: local tools and sellers
+  // whose crawl source carries no accepts (networks unknown) are kept — the
+  // filter is "exclude sellers known NOT to settle there", not a guarantee.
+  const wantNet = networkFilter ? (ROUTE_NETWORKS[String(networkFilter).trim().toLowerCase()] || String(networkFilter).trim()) : null;
+  if (!terms.length) return { query: q, count: 0, results: [], sellers: 0, include: inc, ...(wantNet ? { network: wantNet } : {}) };
 
   // Always include the local catalog (we trust ourselves), plus every crawled
   // seller's tools — but only from sellers whose last crawl succeeded. A buyer
@@ -572,9 +589,10 @@ export function routeQuery({ query, top, include, baseUrl, catalog, prices, netw
       description: t.description,
       score,
       health: t.health,
+      ...(Array.isArray(t.networks) && t.networks.length ? { networks: t.networks } : {}),
     };
   });
-  return { query: q, include: inc, count: results.length, sellers: sellersSeen.size, results };
+  return { query: q, include: inc, count: results.length, sellers: sellersSeen.size, results, ...(wantNet ? { network: wantNet } : {}) };
 }
 
 /**

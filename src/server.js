@@ -116,6 +116,7 @@ import { webhooksPage } from "./webhooks.js";
 import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
+import { robinhoodPage } from "./robinhood-page.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
@@ -702,6 +703,7 @@ app.get("/quickstart", (_req, res) => htmlCache(res, 300, 900).send(quickstartPa
 app.get("/faq", (_req, res) => htmlCache(res, 300, 900).send(faqPage(BASE_URL)));
 app.get("/integrations", (_req, res) => htmlCache(res, 300, 900).send(ledgerIntegrationsPage(BASE_URL)));
 app.get("/pricing", (_req, res) => htmlCache(res, 300, 900).send(ledgerPricingPage(BASE_URL, CATALOG)));
+app.get("/robinhood", (_req, res) => htmlCache(res, 300, 900).send(robinhoodPage(BASE_URL)));
 app.get("/changelog", (_req, res) => htmlCache(res, 300, 900).send(changelogPage(BASE_URL)));
 app.get("/use-cases", (_req, res) => htmlCache(res, 300, 900).send(useCasesPage(BASE_URL)));
 app.get("/playground", (_req, res) => htmlCache(res, 300, 900).send(playgroundPage(BASE_URL)));
@@ -1127,20 +1129,22 @@ app.get("/index", (_req, res) =>
 app.get("/api/index", (_req, res) =>
   res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json(getIndexSnapshot())
 );
-const computeRoute = (q, k, include) => routeQuery({ query: q, top: k, include, ...indexCtx() });
+const computeRoute = (q, k, include, net) => routeQuery({ query: q, top: k, include, networkFilter: net, ...indexCtx() });
 const routeCachePath = "/api/route";
 const routeCachePolicy = CACHEABLE_ROUTES[routeCachePath];
 app.get("/api/route", (req, res) => {
   const q = req.query.q ?? req.query.task ?? req.query.query;
   const top = req.query.top ?? req.query.k;
   const include = req.query.include;
-  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", req, res);
+  const net = req.query.network;
+  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include, network: net }, () => computeRoute(q, top, include, net), "_route", req, res);
 });
 app.post("/api/route", (req, res) => {
   const q = req.body?.q ?? req.body?.task ?? req.body?.query;
   const top = req.body?.top ?? req.body?.k;
   const include = req.body?.include;
-  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include }, () => computeRoute(q, top, include), "_route", req, res);
+  const net = req.body?.network;
+  return serveCachedDiscovery(routeCachePath, routeCachePolicy, { q, task: q, query: q, top, k: top, include, network: net }, () => computeRoute(q, top, include, net), "_route", req, res);
 });
 // x402 Leaderboard — public on-chain ranking of every seller in the Coinbase
 // CDP Bazaar by settled USDC volume on Base. Free, like /api/find + /api/route:
