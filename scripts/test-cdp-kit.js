@@ -43,6 +43,11 @@ for (const t of CDP_TOOLS) {
   ok(header.alg === "EdDSA" && header.kid === "test-key-id" && header.typ === "JWT" && header.nonce?.length === 32, "Ed25519 JWT header (alg/kid/typ/nonce)");
   ok(claims.sub === "test-key-id" && claims.iss === "cdp", "claims carry sub + iss=cdp");
   ok(Array.isArray(claims.uris) && claims.uris[0] === "POST api.cdp.coinbase.com/platform/v2/evm/faucet", "uris claim is 'METHOD host+path'");
+  // Regression lock: query strings must NOT be signed into the uris claim —
+  // CDP validates against the pathname only (a signed query returns 401).
+  const jwtQ = await mintCdpJwt({ method: "GET", path: "/platform/v2/evm/token-balances/base/0xabc?pageSize=100", apiKeyId: "test-key-id", apiKeySecret: secret });
+  const claimsQ = JSON.parse(Buffer.from(jwtQ.split(".")[1], "base64url").toString());
+  ok(claimsQ.uris[0] === "GET api.cdp.coinbase.com/platform/v2/evm/token-balances/base/0xabc", "query string excluded from the uris claim");
   ok(claims.exp - claims.iat === 120 && claims.nbf === claims.iat, "iat/nbf/exp window is 120s");
   const valid = edVerify(null, Buffer.from(`${h}.${p}`), publicKey, Buffer.from(s, "base64url"));
   ok(valid, "Ed25519 signature cryptographically verifies");

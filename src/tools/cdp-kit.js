@@ -31,13 +31,15 @@ function bad(message, statusCode = 400) {
 
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 
-/** Mint a CDP REST JWT for one request. Exported for the offline unit test. */
+/** Mint a CDP REST JWT for one request. Exported for the offline unit test.
+ *  The uris claim signs the PATHNAME only — query strings are excluded
+ *  (mirrors the SDK's url.pathname; signing the query yields HTTP 401). */
 export async function mintCdpJwt({ method, path, apiKeyId = keyId(), apiKeySecret = keySecret(), host = CDP_HOST }) {
   const now = Math.floor(Date.now() / 1000);
   const claims = {
     sub: apiKeyId,
     iss: "cdp",
-    uris: [`${method} ${host}${path}`],
+    uris: [`${method} ${host}${path.split("?")[0]}`],
     iat: now,
     nbf: now,
     exp: now + 120,
