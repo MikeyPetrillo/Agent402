@@ -87,11 +87,15 @@ jobs:
           echo "Subject lines scanned for markers:"
           printf '%s\n' "$TITLES" | sed 's/^/  /'
           # Standalone token match: marker must be bracketed and bounded by
-          # whitespace or line edges. So "feat: stuff (publish)" never matches
-          # the publish gate, and "publish-config" never matches either.
+          # whitespace, line edges, or ANOTHER bracketED marker. So
+          # "feat: stuff (publish)" never matches the publish gate and
+          # "publish-config" never matches either — but "[test][deploy]"
+          # (no space) matches BOTH. Without the bracket boundary, that
+          # subject skipped every job while the workflow still reported
+          # success — a false-green deploy (2026-07-03 incident).
           for m in $MARKERS; do
             out_name="${m//-/_}"
-            if printf '%s\n' "$TITLES" | grep -qE "(^|[[:space:]])\[${m}\]([[:space:]]|\$)"; then
+            if printf '%s\n' "$TITLES" | grep -qE "(^|[[:space:]]|\])\[${m}\]([[:space:]]|\[|\$)"; then
               echo "${out_name}=true" >> "$GITHUB_OUTPUT"
               echo "[${m}] matched"
             else
