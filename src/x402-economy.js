@@ -24,9 +24,27 @@ const runSql = (sql) => CDP_TOOLS.find((t) => t.slug === "onchain-sql").handler(
 const utcStamp = (msAgo) => new Date(Date.now() - msAgo).toISOString().slice(0, 19).replace("T", " ");
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// Daily settlements over the last 30 days. The IN-subquery restricts to
-// transactions that emitted AuthorizationUsed on USDC (the EIP-3009 marker).
+// Daily settlements over the last 30 days — from AuthorizationUsed ALONE.
+// Every EIP-3009 settle emits exactly one AuthorizationUsed, and its
+// `authorizer` parameter IS the payer, so counts + unique payers need no
+// join with the (enormous) Transfer stream. The joined 30-day variant blew
+// CDP's per-query budget (HTTP 502); this one is cheap at any window.
 const dailyQuery = (since) => `
+SELECT
+  toDate(block_timestamp) AS day,
+  count() AS settlements,
+  uniqExact(toString(parameters['authorizer'])) AS payers
+FROM base.events
+WHERE address = '${USDC_BASE}'
+  AND event_name = 'AuthorizationUsed'
+  AND block_timestamp >= '${since}'
+GROUP BY day
+ORDER BY day DESC
+LIMIT 31`;
+
+// Dollar volume needs the Transfer values, so it joins — bounded to 7 days,
+// the window the engine handles comfortably (validated live in CI).
+const volumeQuery = (since) => `
 WITH auth_txs AS (
   SELECT DISTINCT transaction_hash
   FROM base.events
@@ -35,19 +53,16 @@ WITH auth_txs AS (
     AND block_timestamp >= '${since}'
 )
 SELECT
-  toDate(block_timestamp) AS day,
   count() AS settlements,
-  uniqExact(parameters['from']) AS payers,
-  uniqExact(parameters['to']) AS merchants,
+  uniqExact(toString(parameters['from'])) AS payers,
+  uniqExact(toString(parameters['to'])) AS merchants,
   sum(toUInt256OrZero(toString(parameters['value']))) AS volume_units
 FROM base.events
 WHERE address = '${USDC_BASE}'
   AND event_name = 'Transfer'
   AND block_timestamp >= '${since}'
   AND transaction_hash IN (SELECT transaction_hash FROM auth_txs)
-GROUP BY day
-ORDER BY day DESC
-LIMIT 31`;
+LIMIT 1`;
 
 // Top receiving wallets (merchants) over the last 7 days.
 const merchantsQuery = (since) => `
@@ -85,8 +100,9 @@ export async function x402EconomySnapshot() {
     chain: "base (eip155:8453)",
     daily: [], topMerchants: [], totals: {}, errors: [],
   };
-  const [dailyRes, merchRes] = await Promise.allSettled([
+  const [dailyRes, volRes, merchRes] = await Promise.allSettled([
     runSql(dailyQuery(utcStamp(30 * DAY_MS))),
+    runSql(volumeQuery(utcStamp(7 * DAY_MS))),
     runSql(merchantsQuery(utcStamp(7 * DAY_MS))),
   ]);
   if (dailyRes.status === "fulfilled") {
@@ -94,17 +110,21 @@ export async function x402EconomySnapshot() {
       day: r.day,
       settlements: Number(r.settlements),
       payers: Number(r.payers),
-      merchants: Number(r.merchants),
-      volumeUsd: Number(usd(r.volume_units).toFixed(2)),
     }));
-    const window = (days) => out.daily.filter((d) => new Date(d.day) >= new Date(Date.now() - days * DAY_MS));
-    const total = (rows) => ({
-      settlements: rows.reduce((s, d) => s + d.settlements, 0),
-      volumeUsd: Number(rows.reduce((s, d) => s + d.volumeUsd, 0).toFixed(2)),
-    });
-    out.totals = { last7d: total(window(7)), last30d: total(out.daily) };
+    out.totals.last30d = { settlements: out.daily.reduce((s, d) => s + d.settlements, 0) };
   } else {
     out.errors.push(`daily: ${String(dailyRes.reason?.message || dailyRes.reason).slice(0, 200)}`);
+  }
+  if (volRes.status === "fulfilled") {
+    const r = volRes.value.rows?.[0] || {};
+    out.totals.last7d = {
+      settlements: Number(r.settlements || 0),
+      payers: Number(r.payers || 0),
+      merchants: Number(r.merchants || 0),
+      volumeUsd: Number(usd(r.volume_units).toFixed(2)),
+    };
+  } else {
+    out.errors.push(`volume: ${String(volRes.reason?.message || volRes.reason).slice(0, 200)}`);
   }
   if (merchRes.status === "fulfilled") {
     out.topMerchants = (merchRes.value.rows || []).map((r) => ({
@@ -131,8 +151,8 @@ export function x402EconomyPage(baseUrl, snap) {
   const title = "x402 Economy Observatory — live on-chain settlement analytics";
   const description =
     "Live, chain-wide analytics on the x402 economy: gasless EIP-3009 USDC settlements on Base — daily volume, unique payers, and the top-earning seller wallets — measured directly from decoded on-chain events. The only public dashboard of its kind.";
-  const t7 = snap.totals?.last7d || { settlements: 0, volumeUsd: 0 };
-  const t30 = snap.totals?.last30d || { settlements: 0, volumeUsd: 0 };
+  const t7 = snap.totals?.last7d || { settlements: 0, volumeUsd: 0, payers: 0 };
+  const t30 = snap.totals?.last30d || { settlements: 0 };
   const stat = (label, value) => `
     <div style="border:1.5px solid var(--ink);background:var(--card);padding:16px 20px;">
       <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;color:var(--muted);">${esc(label)}</div>
@@ -155,8 +175,8 @@ export function x402EconomyPage(baseUrl, snap) {
     <div class="ml-2col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:0 0 30px;">
       ${stat("SETTLEMENTS · 7D", fmt(t7.settlements))}
       ${stat("VOLUME · 7D", "$" + fmt(t7.volumeUsd))}
+      ${stat("UNIQUE PAYERS · 7D", fmt(t7.payers))}
       ${stat("SETTLEMENTS · 30D", fmt(t30.settlements))}
-      ${stat("VOLUME · 30D", "$" + fmt(t30.volumeUsd))}
     </div>
     <h2 style="font-size:24px;font-weight:800;margin:0 0 12px;">Daily settlements (30 days)</h2>
     <div style="border:1.5px solid var(--ink);background:var(--card);padding:18px 20px;margin:0 0 30px;font-family:var(--font-mono);font-size:12.5px;">
@@ -164,7 +184,7 @@ export function x402EconomyPage(baseUrl, snap) {
         <div style="display:grid;grid-template-columns:90px 1fr 220px;gap:12px;align-items:center;padding:3px 0;">
           <span style="color:var(--muted);">${esc(d.day)}</span>
           <span style="display:block;height:12px;background:var(--accent);opacity:.85;width:${Math.max(1, Math.round((d.settlements / maxSett) * 100))}%;"></span>
-          <span>${fmt(d.settlements)} settle · $${fmt(d.volumeUsd)} · ${fmt(d.payers)} payers</span>
+          <span>${fmt(d.settlements)} settlements · ${fmt(d.payers)} payers</span>
         </div>`).join("")}
     </div>
     <h2 style="font-size:24px;font-weight:800;margin:0 0 12px;">Top seller wallets (7 days)</h2>
