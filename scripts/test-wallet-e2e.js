@@ -108,7 +108,12 @@ const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
     NETWORK: "base-sepolia",
     WALLET_ADDRESS: seller.address,
     PORT: String(PORT),
-    X402_SYNC_ON_START: "false",
+    // X402_SYNC_ON_START must stay ON (the default): it gates the facilitator
+    // /supported sync that populates payment kinds — with it off, every 402
+    // build throws "Facilitator does not support exact on eip155:84532".
+    // (The free-mode test boots set it false to skip the index crawl; a PAID
+    // boot must never copy that.)
+    X402_SYNC_ON_START: "true",
     STATS_ALLOW_EPHEMERAL: "true",
     FREE_MODE: "",
     PAYMENT_NETWORKS: "",
@@ -127,10 +132,18 @@ try {
   const client = new x402Client();
   registerExactEvmScheme(client, { signer: buyer });
   const payFetch = wrapFetchWithPayment(fetch, client);
-  const res = await payFetch(`${BASE}/api/hash`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: "hello from a wallet born one minute ago" }),
-  });
+  // Up to 3 attempts: the facilitator kind sync races the first request on a
+  // cold boot; a 5xx here is retryable, anything else is the real answer.
+  let res;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    res = await payFetch(`${BASE}/api/hash`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "hello from a wallet born one minute ago" }),
+    });
+    if (res.status < 500) break;
+    console.log(`(attempt ${attempt}: HTTP ${res.status} — retrying in 4s)`);
+    await sleep(4000);
+  }
   const body = await res.json().catch(() => ({}));
   ok(res.status === 200 && typeof body.hex === "string" && body.hex.length === 64, `paid call succeeded (HTTP ${res.status}, sha256 returned)`);
   if (res.status !== 200) console.error(`   response body: ${JSON.stringify(body).slice(0, 400)}`);
