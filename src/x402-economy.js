@@ -19,7 +19,20 @@ import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 
 const USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
-const runSql = (sql) => CDP_TOOLS.find((t) => t.slug === "onchain-sql").handler({ sql, cacheSeconds: 900 });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Sequential + 429-retry: CDP rate-limits concurrent SQL calls, and under the
+// 30-minute snapshot cache a few extra seconds per refresh cost nothing.
+async function runSql(sql) {
+  const tool = CDP_TOOLS.find((t) => t.slug === "onchain-sql");
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await tool.handler({ sql, cacheSeconds: 900 });
+    } catch (e) {
+      if (e?.statusCode === 429 && attempt < 4) { await sleep(4000 * attempt); continue; }
+      throw e;
+    }
+  }
+}
 
 const utcStamp = (msAgo) => new Date(Date.now() - msAgo).toISOString().slice(0, 19).replace("T", " ");
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -100,11 +113,12 @@ export async function x402EconomySnapshot() {
     chain: "base (eip155:8453)",
     daily: [], topMerchants: [], totals: {}, errors: [],
   };
-  const [dailyRes, volRes, merchRes] = await Promise.allSettled([
-    runSql(dailyQuery(utcStamp(30 * DAY_MS))),
-    runSql(volumeQuery(utcStamp(7 * DAY_MS))),
-    runSql(merchantsQuery(utcStamp(7 * DAY_MS))),
-  ]);
+  const settle = (p) => p.then((value) => ({ status: "fulfilled", value })).catch((reason) => ({ status: "rejected", reason }));
+  // Sequential on purpose — see runSql. allSettled semantics preserved so one
+  // failed query still leaves the others rendering.
+  const dailyRes = await settle(runSql(dailyQuery(utcStamp(30 * DAY_MS))));
+  const volRes = await settle(runSql(volumeQuery(utcStamp(7 * DAY_MS))));
+  const merchRes = await settle(runSql(merchantsQuery(utcStamp(7 * DAY_MS))));
   if (dailyRes.status === "fulfilled") {
     out.daily = (dailyRes.value.rows || []).map((r) => ({
       day: r.day,
