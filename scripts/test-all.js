@@ -31,6 +31,11 @@ const NETWORK = new Set([
   "/api/geocode", "/api/reverse-geocode", "/api/place-search",
   "/api/image-ocr",
   "/api/barcode-lookup", "/api/fx-rate", "/api/weather-forecast",
+  // Weather-kit: live open-meteo forecasts — same upstream class as
+  // weather-forecast above (was misfiled as pure-CPU; an open-meteo outage
+  // must not hard-block the deploy gate).
+  "/api/weather-current", "/api/weather-daily", "/api/weather-hourly",
+  "/api/weather-history", "/api/weather-air-quality",
   "/api/x402-quote", "/api/usdc-balance", "/api/tx-status", "/api/gas-estimate", "/api/x402-verify", "/api/ens-resolve",
   // Macro-kit: all routes hit live upstreams (FRED, Treasury Fiscal Data, ECB,
   // World Bank). FRED-keyed routes return 503 without FRED_API_KEY — the
