@@ -158,7 +158,10 @@ async function solanaRail(wallet) {
   try {
     const res = await rpcCall(SOLANA_RPCS, "getTokenAccountsByOwner", [wallet, { mint: USDC_SOL_MINT }, { encoding: "jsonParsed" }], 6000);
     out.balance = (res?.value || []).reduce((s, a) => s + (a?.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0), 0);
-    const sigs = await rpcCall(SOLANA_RPCS, "getSignaturesForAddress", [wallet, { limit: 6 }], 6000);
+    // Query the TOKEN ACCOUNT for signatures (not the wallet) — USDC transfers
+    // hit the associated token account, not the owner address.
+    const tokenAccount = res?.value?.[0]?.pubkey || wallet;
+    const sigs = await rpcCall(SOLANA_RPCS, "getSignaturesForAddress", [tokenAccount, { limit: 6 }], 6000);
     // Decode each recent tx's USDC delta + payer (same helpers as the daily
     // scanner) so internal test money classifies here too. Best-effort under
     // a budget — an undecodable tx stays a bare signature link.
