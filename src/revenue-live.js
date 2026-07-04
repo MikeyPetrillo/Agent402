@@ -38,7 +38,10 @@ export const EVM = {
   base: {
     label: "Base", asset: "USDC", span: 30000,
     token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-    rpcs: ["https://mainnet.base.org", "https://base.llamarpc.com", "https://base.drpc.org"],
+    rpcs: [
+      ...(process.env.ALCHEMY_API_KEY ? [`https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
+      "https://mainnet.base.org", "https://base.llamarpc.com", "https://base.drpc.org",
+    ],
     explorer: (a) => `https://basescan.org/address/${a}#tokentxns`,
     tx: (h) => `https://basescan.org/tx/${h}`,
   },
@@ -56,14 +59,20 @@ export const EVM = {
   arbitrum: {
     label: "Arbitrum", asset: "USDC", span: 90000,
     token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
-    rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum.llamarpc.com", "https://arbitrum.drpc.org"],
+    rpcs: [
+      ...(process.env.ALCHEMY_API_KEY ? [`https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
+      "https://arb1.arbitrum.io/rpc", "https://arbitrum.llamarpc.com", "https://arbitrum.drpc.org",
+    ],
     explorer: (a) => `https://arbiscan.io/address/${a}#tokentxns`,
     tx: (h) => `https://arbiscan.io/tx/${h}`,
   },
   robinhood: {
     label: "Robinhood Chain", asset: "USDG", span: 30000,
     token: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
-    rpcs: ["https://rpc.mainnet.chain.robinhood.com"],
+    rpcs: [
+      ...(process.env.ALCHEMY_API_KEY ? [`https://robinhood-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
+      "https://rpc.mainnet.chain.robinhood.com",
+    ],
     explorer: (a) => `https://robinhoodchain.blockscout.com/address/${a}`,
     tx: (h) => `https://robinhoodchain.blockscout.com/tx/${h}`,
   },
