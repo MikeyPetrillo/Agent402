@@ -76,6 +76,29 @@ export const SKILL_PACKS = [
       'Diagnose email deliverability for sender@example.com. Use Agent402 to check SPF, DMARC, DKIM (probe common selectors), and the composite email-deliverability score. If the score is below 75, explain which auth records are missing or weak and how to fix each one.',
   },
   {
+    slug: "market-brief",
+    title: "Crypto market brief",
+    tagline:
+      "Quick crypto market snapshot: price for a specific coin, trending coins, and global market stats (total cap, BTC dominance, volume) — one call.",
+    useCase:
+      "An agent needs to answer 'what's happening in crypto right now?' without making 3 separate calls. Covers the price-check + market-context combo agents buy most.",
+    promptArgs: [
+      { name: "coin", description: "Coin id to price (e.g. bitcoin, ethereum, solana)", required: true, substitute: "bitcoin" },
+    ],
+    toolSlugs: [
+      "crypto-price",
+      "crypto-trending",
+      "crypto-global",
+    ],
+    workflow: [
+      "Get the live price, 24h change, market cap, and volume for the requested coin via crypto-price.",
+      "Pull the top trending coins from crypto-trending — what the market is paying attention to right now.",
+      "Get global market stats from crypto-global — total market cap, BTC dominance, 24h volume, active coins.",
+    ],
+    claudePrompt:
+      "Give me a quick crypto market brief focused on bitcoin. Use Agent402's market-brief skill pack to get the current BTC price, today's trending coins, and global market stats. Summarize in bullet points.",
+  },
+  {
     slug: "financial-analysis",
     title: "Financial analysis",
     tagline:
