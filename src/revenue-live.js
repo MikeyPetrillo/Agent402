@@ -259,13 +259,14 @@ function salesSection(sales) {
   if (!sales) return "";
   const rows = sales.topExternal || [];
   const recent = sales.recentExternal || [];
+  const internal = sales.recentInternal || [];
   const since = sales.recordingSince ? new Date(sales.recordingSince).toISOString().slice(0, 10) : null;
-  const empty = !rows.length && !recent.length;
+  const empty = !rows.length && !recent.length && !internal.length;
   return `
     <h2 style="font-family:var(--font-body);font-weight:800;font-size:26px;margin:44px 0 6px;">What's selling</h2>
-    <p style="font-size:14px;color:var(--muted);margin:0 0 16px;">Every externally-paid call recorded by name at settle time${since ? ` (recording since ${esc(since)})` : ""} — canary, burner and heartbeat traffic excluded. Machine-readable: <a href="/api/sales">/api/sales</a>.</p>
+    <p style="font-size:14px;color:var(--muted);margin:0 0 16px;">Every paid call recorded by name at settle time${since ? ` (recording since ${esc(since)})` : ""} — external demand plus internal canary/test activity. Machine-readable: <a href="/api/sales">/api/sales</a>.</p>
     ${empty
-      ? `<p style="font-family:var(--font-mono);font-size:13px;color:var(--muted);">no external paid calls recorded yet — the ledger names each one as it lands</p>`
+      ? `<p style="font-family:var(--font-mono);font-size:13px;color:var(--muted);">no paid calls recorded yet — the ledger names each one as it lands</p>`
       : `<div class="ml-2col" style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;">
       <div style="border:1.5px solid var(--ink);background:var(--card);padding:18px 20px;">
         <div style="font-weight:800;font-size:15px;border-bottom:1px dashed #b3a98f;padding-bottom:8px;margin-bottom:10px;">top bought (30d) — $${(sales.totals?.external?.revenueUsd ?? 0).toFixed(4)} external</div>
@@ -279,6 +280,15 @@ function salesSection(sales) {
           ${recent.slice(0, 10).map((s) => {
             const link = s.tx && SALE_TX_URL[s.network] ? ` · <a href="${esc(SALE_TX_URL[s.network](s.tx))}" rel="noopener">tx</a>` : "";
             return `<div><a href="/tools/${esc(s.slug)}">${esc(s.slug)}</a> $${s.priceUsd} · ${esc((s.network || s.rail))}${s.payer ? ` · <code>${esc(short(s.payer))}</code>` : ""}${link} · ${esc(s.at.slice(0, 16))}Z</div>`;
+          }).join("") || '<div style="color:var(--muted);">—</div>'}
+        </div>
+      </div>
+      <div style="border:1.5px solid var(--ink);background:var(--card);padding:18px 20px;">
+        <div style="font-weight:800;font-size:15px;border-bottom:1px dashed #b3a98f;padding-bottom:8px;margin-bottom:10px;">recent internal (canary/test) — $${(sales.totals?.internal?.revenueUsd ?? 0).toFixed(4)}</div>
+        <div style="font-family:var(--font-mono);font-size:12.5px;display:grid;gap:6px;">
+          ${internal.slice(0, 10).map((s) => {
+            const link = s.tx && SALE_TX_URL[s.network] ? ` · <a href="${esc(SALE_TX_URL[s.network](s.tx))}" rel="noopener">tx</a>` : "";
+            return `<div style="opacity:.62;"><a href="/tools/${esc(s.slug)}">${esc(s.slug)}</a> $${s.priceUsd} · ${esc((s.network || s.rail))}${s.payer ? ` · <code>${esc(short(s.payer))}</code>` : ""}${link} · ${esc(s.at.slice(0, 16))}Z</div>`;
           }).join("") || '<div style="color:var(--muted);">—</div>'}
         </div>
       </div>

@@ -95,6 +95,10 @@ const qExtRecent = db.prepare(`
   SELECT ts, slug, price_usd, rail, network, payer, tx
   FROM sales WHERE internal = 0 AND rail IN ('usdc','marketplace')
   ORDER BY ts DESC LIMIT 20`);
+const qIntRecent = db.prepare(`
+  SELECT ts, slug, price_usd, rail, network, payer, tx
+  FROM sales WHERE internal = 1
+  ORDER BY ts DESC LIMIT 20`);
 const qExtByPayer = db.prepare(`
   SELECT payer, COUNT(*) AS sales, SUM(price_usd) AS revenue, MAX(ts) AS last_ts
   FROM sales WHERE internal = 0 AND rail IN ('usdc','marketplace') AND payer IS NOT NULL AND ts >= ?
@@ -132,6 +136,10 @@ export function salesSummary({ days = 30 } = {}) {
       slug: r.slug, sales: r.sales, revenueUsd: +r.revenue.toFixed(4), lastAt: new Date(r.last_ts).toISOString(),
     })),
     recentExternal: qExtRecent.all().map((r) => ({
+      at: new Date(r.ts).toISOString(), slug: r.slug, priceUsd: r.price_usd, rail: r.rail,
+      network: r.network, payer: r.payer, tx: r.tx,
+    })),
+    recentInternal: qIntRecent.all().map((r) => ({
       at: new Date(r.ts).toISOString(), slug: r.slug, priceUsd: r.price_usd, rail: r.rail,
       network: r.network, payer: r.payer, tx: r.tx,
     })),
