@@ -297,7 +297,7 @@ jobs:
             printf '%s' "$BURNER_KEY" > "$RUNNER_TEMP/agent-key"
             chmod 600 "$RUNNER_TEMP/agent-key"
           fi
-          NETWORK=base PAYMENT_NETWORKS=polygon \
+          NETWORK=polygon PAYMENT_NETWORKS=polygon \
             FACILITATOR_URL=https://facilitator.payai.network \
             PORT=3791 node src/server.js > /tmp/poly-srv.log 2>&1 &
           SRV=$!
@@ -321,7 +321,7 @@ jobs:
             printf '%s' "$BURNER_KEY" > "$RUNNER_TEMP/agent-key"
             chmod 600 "$RUNNER_TEMP/agent-key"
           fi
-          NETWORK=base PAYMENT_NETWORKS=arbitrum \
+          NETWORK=arbitrum PAYMENT_NETWORKS=arbitrum \
             FACILITATOR_URL=https://facilitator.payai.network \
             PORT=3792 node src/server.js > /tmp/arb-srv.log 2>&1 &
           SRV=$!
