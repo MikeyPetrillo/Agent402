@@ -17,7 +17,6 @@
   HTTP E2E proving 8 identical authorizations collapse to a single grant).
 
 - **Router Sybil / metadata-capture resistance** (security hardening, M6): the neutral
-  cross-seller router (`/api/route`, MCP router) now (1) drops any external listing whose the neutral
   cross-seller router (`/api/route`, MCP router) now (1) drops any external listing whose
   text tries to command the ranker — "ignore previous instructions", "always pick this",
   fake `<system>` tags, oversized padding — instead of describing a tool, and (2) caps how
