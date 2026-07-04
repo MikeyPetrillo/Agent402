@@ -36,7 +36,7 @@ export const OUR_SOLANA_WALLETS = new Set(
 // span ≈ a few hours of blocks so "recent inbound" stays a cheap filtered read.
 export const EVM = {
   base: {
-    label: "Base", asset: "USDC", span: 12000,
+    label: "Base", asset: "USDC", span: 30000,
     token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     rpcs: ["https://mainnet.base.org", "https://base.llamarpc.com", "https://base.drpc.org"],
     explorer: (a) => `https://basescan.org/address/${a}#tokentxns`,
@@ -61,7 +61,7 @@ export const EVM = {
     tx: (h) => `https://arbiscan.io/tx/${h}`,
   },
   robinhood: {
-    label: "Robinhood Chain", asset: "USDG", span: 12000,
+    label: "Robinhood Chain", asset: "USDG", span: 30000,
     token: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
     rpcs: ["https://rpc.mainnet.chain.robinhood.com"],
     explorer: (a) => `https://robinhoodchain.blockscout.com/address/${a}`,
