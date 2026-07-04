@@ -78,8 +78,8 @@ export function defaultMapInput(args, tool) {
 // ──────────────────────────────────────────────────────────────────────────
 export const PACK_PRICES = {
   // Premium (~8x sum-of-tools)
-  "market-brief":         0.025, // 3-tool bundle (crypto-price $0.01 + crypto-trending $0.008 + crypto-global $0.008 = $0.026); volume play
-  "financial-analysis":   0.04,  // 3-tool bundle (stock-quote $0.01 + company-financials $0.02 + earnings-calendar $0.015 = $0.045); slight discount for volume capture
+  "market-brief":         0.05,  // 3-tool bundle (crypto-price $0.01 + crypto-trending $0.008 + crypto-global $0.008 = $0.026); priced at premium for the convenience
+  "financial-analysis":   0.08,  // 3-tool bundle (stock-quote $0.01 + company-financials $0.02 + earnings-calendar $0.015 = $0.045); smaller discount but still below 2x à la carte
   "financial-research":   1.50,
   "sec-filings-deep-dive": 0.85,
   "macro-context":         0.75,
@@ -106,6 +106,9 @@ export const PACK_PRICES = {
   "schema-evolution":      0.06,
   // Strategy additions (2026-07): premium agent jobs on the newest kits —
   // priced by the same sum-of-tools × tier rule as the rest of the registry.
+  "company-dossier":       0.50, // 6-tool chain: quote + financials + EDGAR + insider + search + extract
+  "domain-intel":          0.25, // 7-tool fanout: whois + dns + tls + headers + tech + robots + CT
+  "crypto-dossier":        0.30, // 6-tool chain: price + history + trending + global + search + extract
   "onchain-analyst":       0.20, // onchain-sql is $0.02 upstream-billed CDP SQL
   "seo-audit":             0.07, // six network reads (~$0.014 × 5)
   "wallet-readiness":      0.05, // CDP-indexed balance reads + onramp session
@@ -1329,7 +1332,63 @@ export const PACK_STEPS = {
   },
 
   // ──────────────────────────────────────────────────────────────────────
-  // End of PACK_STEPS. All 46 packs above; getStepConfig auto-stubs any
+  // Premium dossier packs (2026-07): high-value "solve the whole job" bundles.
+  // ──────────────────────────────────────────────────────────────────────
+
+  // Company dossier: quote → financials → EDGAR filings → insider trades →
+  // news search → extract top article. Chain so the extract step can read
+  // the first search result URL from prior.
+  "company-dossier": {
+    mode: "chain",
+    steps: [
+      { slug: "stock-quote",         mapInput: (a) => ({ symbol: a.ticker }) },
+      { slug: "company-financials",  mapInput: (a) => ({ ticker: a.ticker }) },
+      { slug: "edgar-filings",       mapInput: (a) => ({ ticker: a.ticker, limit: 5 }) },
+      { slug: "edgar-insider-trades", mapInput: (a) => ({ ticker: a.ticker, lookbackDays: 90 }) },
+      { slug: "search",              mapInput: (a) => ({ q: `${a.ticker} company news`, count: 5, freshness: "pm" }) },
+      { slug: "extract",             mapInput: (_a, p) => {
+          const url = p["search"]?.results?.[0]?.url;
+          if (!url) throw Object.assign(new Error("no news URL to extract"), { statusCode: 422 });
+          return { url };
+      } },
+    ],
+  },
+
+  // Domain intel: full external footprint in parallel — no step depends on another.
+  "domain-intel": {
+    mode: "fanout",
+    steps: [
+      { slug: "whois",              mapInput: (a) => ({ domain: a.domain }) },
+      { slug: "dns-lookup",         mapInput: (a) => ({ host: a.domain, type: "A" }) },
+      { slug: "tls-cert",           mapInput: (a) => ({ host: a.domain }) },
+      { slug: "http-headers",       mapInput: (a) => ({ url: `https://${a.domain}` }) },
+      { slug: "tech-stack",         mapInput: (a) => ({ url: `https://${a.domain}` }) },
+      { slug: "robots-check",       mapInput: (a) => ({ url: `https://${a.domain}` }) },
+      { slug: "cert-transparency",  mapInput: (a) => ({ domain: a.domain }) },
+    ],
+  },
+
+  // Crypto dossier: price → history → trending → global → news search →
+  // extract top article. Chain so the extract step can read the first search
+  // result URL from prior.
+  "crypto-dossier": {
+    mode: "chain",
+    steps: [
+      { slug: "crypto-price",    mapInput: (a) => ({ coins: a.coin, currency: "usd" }) },
+      { slug: "crypto-history",  mapInput: (a) => ({ coin: a.coin, days: "90", currency: "usd" }) },
+      { slug: "crypto-trending", mapInput: () => ({}) },
+      { slug: "crypto-global",   mapInput: () => ({ currency: "usd" }) },
+      { slug: "search",          mapInput: (a) => ({ q: `${a.coin} cryptocurrency news`, count: 5, freshness: "pw" }) },
+      { slug: "extract",         mapInput: (_a, p) => {
+          const url = p["search"]?.results?.[0]?.url;
+          if (!url) throw Object.assign(new Error("no news URL to extract"), { statusCode: 422 });
+          return { url };
+      } },
+    ],
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // End of PACK_STEPS. All 49 packs above; getStepConfig auto-stubs any
   // SKILL_PACKS entry that lands here without a matching PACK_STEPS row.
   // ──────────────────────────────────────────────────────────────────────
 };

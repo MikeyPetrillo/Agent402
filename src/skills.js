@@ -1831,6 +1831,98 @@ export const SKILL_PACKS = [
       },
     ],
   },
+
+  {
+    slug: "company-dossier",
+    title: "Company dossier",
+    tagline:
+      "Comprehensive company research report in one call: live quote, financials, SEC filings, insider trades, news search, and top article extraction.",
+    useCase:
+      "Building an investment thesis, preparing for a board presentation, or doing acquisition diligence — you want the full public picture of a company without leaving the agent loop.",
+    promptArgs: [
+      { name: "ticker", description: "Stock ticker (e.g. NVDA, AAPL)", required: true, substitute: "NVDA" },
+    ],
+    toolSlugs: [
+      "stock-quote",
+      "company-financials",
+      "edgar-filings",
+      "edgar-insider-trades",
+      "search",
+      "extract",
+    ],
+    workflow: [
+      "Get the live quote from stock-quote — current price, market cap, day range, 52-week high/low, volume.",
+      "Pull key financials from company-financials — revenue, net income, operating income, total assets, liabilities, equity, EPS, and operating cash flow.",
+      "List the 5 most recent SEC filings via edgar-filings to surface any 10-K, 10-Q, 8-K, or S-1 activity.",
+      "Check edgar-insider-trades for Form 4 filings in the last 90 days — directional insider activity is a real signal.",
+      "Search the web for recent news about the company to catch catalysts, analyst upgrades, or red flags.",
+      "Extract the top news article as clean markdown for the brief's headline analysis section.",
+    ],
+    claudePrompt:
+      "Build a comprehensive dossier on NVDA using Agent402's company-dossier skill pack. Get (1) live quote, (2) key financials, (3) last 5 SEC filings, (4) 90-day insider trades, (5) recent news search, (6) full text of the top article. Summarize as a structured one-pager with sections for valuation, fundamentals, insider signal, and news catalyst.",
+  },
+
+  {
+    slug: "domain-intel",
+    title: "Domain intel",
+    tagline:
+      "Full domain security and SEO intelligence in one call: WHOIS, DNS, TLS cert, HTTP headers, tech stack, robots policy, and certificate transparency.",
+    useCase:
+      "Evaluating a domain for acquisition, investigating a phishing site, auditing a competitor's infrastructure, or preparing a security review — one call gives you the complete external footprint.",
+    promptArgs: [
+      { name: "domain", description: "Domain to investigate (e.g. stripe.com)", required: true, substitute: "stripe.com" },
+    ],
+    toolSlugs: [
+      "whois",
+      "dns-lookup",
+      "tls-cert",
+      "http-headers",
+      "tech-stack",
+      "robots-check",
+      "cert-transparency",
+    ],
+    workflow: [
+      "Pull WHOIS records — registrar, creation date, expiry, registrant (often privacy-shielded but the age alone is a signal).",
+      "Resolve DNS A records to identify the hosting provider and detect CDN fronting.",
+      "Inspect the live TLS certificate — issuer, expiry, SANs, and chain validity.",
+      "Fetch HTTP response headers — security posture (HSTS, CSP, XFO), caching, and server fingerprint.",
+      "Fingerprint the tech stack — CMS, framework, CDN, analytics, and third-party scripts.",
+      "Check robots.txt for crawl directives — reveals hidden paths and bot policies.",
+      "Pull the certificate transparency log to enumerate all issued certificates and subdomains.",
+    ],
+    claudePrompt:
+      "Run a full domain intelligence report on stripe.com using Agent402's domain-intel skill pack: (1) WHOIS — age, registrar, expiry. (2) DNS A records — hosting/CDN. (3) TLS cert — issuer, expiry, SANs. (4) HTTP headers — security headers score. (5) Tech stack — frameworks, CDN, analytics. (6) robots.txt — hidden paths. (7) Certificate transparency — all issued certs. Output a structured report with a risk summary.",
+  },
+
+  {
+    slug: "crypto-dossier",
+    title: "Crypto dossier",
+    tagline:
+      "Everything about a cryptocurrency in one call: live price, 90-day history, trending status, global market context, news search, and top article extraction.",
+    useCase:
+      "Building a one-pager on a token for a portfolio decision, writing a research note, or monitoring a new listing — price, history, market context, and headlines in a single payment.",
+    promptArgs: [
+      { name: "coin", description: "Coin id (e.g. bitcoin, ethereum, solana)", required: true, substitute: "bitcoin" },
+    ],
+    toolSlugs: [
+      "crypto-price",
+      "crypto-history",
+      "crypto-trending",
+      "crypto-global",
+      "search",
+      "extract",
+    ],
+    workflow: [
+      "Get the live price from crypto-price — last price, 24h change, market cap, and volume.",
+      "Pull 90 days of OHLC history from crypto-history — compute return, volatility, and max drawdown.",
+      "Check crypto-trending to see whether the coin is on the most-searched list — a fast read on retail attention.",
+      "Pull crypto-global for total market cap, BTC dominance, and 24h volume — contextualizes the coin's move.",
+      "Search the web for recent cryptocurrency news about the coin to catch catalysts and red flags.",
+      "Extract the top news article as clean markdown for the brief's headline analysis.",
+    ],
+    claudePrompt:
+      "Build a comprehensive crypto dossier on bitcoin using Agent402's crypto-dossier skill pack: (1) live price + 24h change, (2) 90-day price history with return and drawdown, (3) trending status, (4) global market context (BTC dominance, total cap), (5) recent news search, (6) full text of the top article. Output a structured brief with sections for price action, market context, and news catalyst.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.

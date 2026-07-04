@@ -134,6 +134,9 @@ export const WALLET_ONLY_SLUGS = new Set([
   "skill-link-preview", "skill-api-investigation", "skill-email-deliverability",
   "skill-location-intel", "skill-dns-network-ops", "skill-status-snapshot",
   "skill-schema-evolution",
+  // Premium dossier packs (2026-07): multi-tool chains hitting paid upstreams
+  // (EDGAR, Brave Search, Yahoo, CoinGecko, DNS resolvers).
+  "skill-company-dossier", "skill-domain-intel", "skill-crypto-dossier",
   // Strategy additions (2026-07): every underlying tool hits the network
   // (CDP-indexed balances/SQL, live gas RPCs, page fetches) — wallet-only.
   "skill-wallet-readiness", "skill-onchain-analyst", "skill-seo-audit",
