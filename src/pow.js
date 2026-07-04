@@ -141,11 +141,27 @@ export const WALLET_ONLY_SLUGS = new Set([
   // (CDP-indexed balances/SQL, live gas RPCs, page fetches) — wallet-only.
   "skill-wallet-readiness", "skill-onchain-analyst", "skill-seo-audit",
   "skill-cheapest-rail",
+  // Premium skill packs (2026-07): all fan out to paid-upstream tools.
+  "skill-earnings-watch", "skill-insider-alert", "skill-ipo-watch",
+  "skill-yield-dashboard", "skill-inflation-check", "skill-fx-monitor",
+  "skill-defi-dashboard", "skill-nft-portfolio", "skill-wallet-audit",
+  "skill-gas-optimizer", "skill-ssl-audit", "skill-email-security",
+  "skill-brand-protection", "skill-competitor-scan", "skill-page-audit",
   // Light-tier packs that call wallet-only tools in-process:
   "skill-trip-planner",       // calls weather-forecast (wallet-only)
   "skill-user-onboarding",   // calls email-validate (wallet-only)
   "skill-weather-brief",     // calls weather-current/daily/air-quality (all wallet-only)
   "skill-price-monitor",     // calls stock-quote/history + crypto-price/history (all wallet-only — the exact tools buyers pay for)
+  // Standard-tier batch 2 packs that call wallet-only tools in-process:
+  "skill-article-digest",    // calls search + answer (both wallet-only)
+  "skill-pdf-pipeline",      // calls pdf-info + pdf-to-markdown + pdf-extract-pages (all wallet-only)
+  "skill-url-inspector",     // calls http-check + meta (wallet-only)
+  "skill-content-grade",     // calls extract (wallet-only)
+  "skill-api-health",        // calls http-check + http-headers + tls-cert (all wallet-only)
+  "skill-world-data",        // calls world-bank-indicator (wallet-only)
+  "skill-fred-snapshot",     // calls fred-series (wallet-only)
+  "skill-contact-verify",    // calls email-validate + dns-lookup (both wallet-only)
+  "skill-domain-age",        // calls whois + dns-lookup + tls-cert (all wallet-only)
   // LLM proxy kit: every call burns real upstream inference credit (OpenAI).
   // PoW would let one client farm our API keys for free.
   "llm", "llm-pro", "llm-premium",

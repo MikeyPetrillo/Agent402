@@ -113,6 +113,44 @@ export const PACK_PRICES = {
   "seo-audit":             0.07, // six network reads (~$0.014 × 5)
   "wallet-readiness":      0.05, // CDP-indexed balance reads + onramp session
   "cheapest-rail":         0.05, // four live chain reads
+  // Premium skill packs (2026-07): high-value multi-tool bundles
+  "earnings-watch":        0.10, // 3-tool fanout: earnings-calendar + stock-quote + search
+  "insider-alert":         0.15, // 3-tool fanout: edgar-insider-trades + stock-quote + edgar-filings
+  "ipo-watch":             0.15, // 2-tool fanout: edgar-recent-ipos + search
+  "yield-dashboard":       0.10, // 3-tool fanout: treasury-yield-curve + yield-curve-spread + treasury-avg-rates
+  "inflation-check":       0.10, // 4-tool fanout: cpi-yoy + fed-funds + unemployment-rate + sahm-rule
+  "fx-monitor":            0.15, // 4-tool fanout: fx-rate ×3 + fx-dashboard
+  "defi-dashboard":        0.15, // 4-tool fanout: defi-tvl + crypto-price + gas-snapshot + crypto-global
+  "nft-portfolio":         0.15, // 3-tool fanout: nft-holdings + wallet-balance + crypto-price
+  "wallet-audit":          0.15, // 3-tool fanout: wallet-balance + wallet-transactions + token-metadata
+  "gas-optimizer":         0.10, // 4-tool fanout: gas-snapshot ×2 + gas-estimate + crypto-price
+  "ssl-audit":             0.10, // 3-tool fanout: tls-cert + http-headers + dns-lookup
+  "email-security":        0.10, // 4-tool fanout: spf-check + dmarc-check + dkim-lookup + email-deliverability
+  "brand-protection":      0.20, // 4-tool fanout: whois + dns-lookup + search + http-headers
+  "competitor-scan":       0.15, // 4-tool fanout: tech-stack + http-headers + whois + meta
+  "page-audit":            0.12, // 5-tool fanout: extract + meta + http-headers + robots-check + sitemap
+  // Standard-tier batch 2 (2026-07): mid-value bundles ($0.05–$0.12)
+  "article-digest":        0.08, // 2-tool fanout: search + answer
+  "pdf-pipeline":          0.06, // 3-tool fanout: pdf-info + pdf-to-markdown + pdf-extract-pages
+  "url-inspector":         0.06, // 3-tool fanout: url-parse + http-check + meta
+  "content-grade":         0.08, // 2-tool chain: extract + keywords (keywords needs extracted text)
+  "openapi-audit":         0.06, // 2-tool fanout: openapi-lint + openapi-validate-payload
+  "json-pipeline":         0.05, // 3-tool fanout: json-validate + json-format + json-to-csv
+  "data-convert":          0.05, // 2-tool chain: csv-to-json + json-to-yaml
+  "api-health":            0.06, // 3-tool fanout: http-check + http-headers + tls-cert
+  "world-data":            0.08, // 2-tool fanout: world-bank-indicator ×2 (GDP + population)
+  "fred-snapshot":         0.10, // 3-tool fanout: fred-series ×3 (FEDFUNDS + UNRATE + CPIAUCSL)
+  "contact-verify":        0.06, // 2-tool fanout: email-validate + dns-lookup (MX)
+  "domain-age":            0.06, // 3-tool fanout: whois + dns-lookup + tls-cert
+  "hash-verify":           0.05, // 3-tool fanout: hash ×3 (sha256 + sha512 + md5)
+  "encoding-suite":        0.05, // 3-tool fanout: base64 + hex + url-code
+  "jwt-toolkit":           0.05, // 2-tool fanout: jwt-decode + jwt-verify
+  "timezone-planner":      0.05, // 3-tool fanout: time-convert + business-days + cron-next
+  "text-analyze":          0.05, // 3-tool fanout: text-stats + keywords + token-count
+  "content-clean":         0.05, // 3-tool fanout: redact + dedupe-lines + sort-lines
+  "weather-brief":         0.06, // 3-tool fanout: weather-current + weather-daily + weather-air-quality
+  "price-monitor":         0.08, // 5-tool fanout: stock-quote + stock-history + crypto-price + crypto-history + date-format
+  "content-quality":       0.05, // 3-tool fanout: readability-score + word-frequency + slug-generate (pure-CPU)
   // Light ($0.05 floor — pure-CPU bundles, PoW-eligible)
   "text-hygiene":          0.05,
   "decode-blob":           0.05,
@@ -130,6 +168,23 @@ export const PACK_PRICES = {
   "investment-decision":   0.05,
   "retirement-planning":   0.05,
   "savings-goal":          0.05,
+  // Light tier — batch 2 (2026-07)
+  "color-palette":         0.05,
+  "password-audit":        0.05,
+  "uuid-suite":            0.05,
+  "regex-test":            0.05,
+  "math-suite":            0.05,
+  "date-math":             0.05,
+  "semver-check":          0.05,
+  "lorem-gen":             0.05,
+  "qr-gen":                0.05,
+  "number-crunch":         0.05,
+  "finance-calc":          0.05,
+  "text-transform":        0.05,
+  "markdown-convert":      0.05,
+  "xml-json":              0.05,
+  "checksum-suite":        0.05,
+  "validator-suite":       0.05,
 };
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1385,7 +1440,560 @@ export const PACK_STEPS = {
   },
 
   // ──────────────────────────────────────────────────────────────────────
-  // End of PACK_STEPS. All 49 packs above; getStepConfig auto-stubs any
+  // Premium skill packs (2026-07): high-value multi-tool fanout bundles.
+  // ──────────────────────────────────────────────────────────────────────
+
+  // Earnings watch: is a report coming, what's the quote, what are analysts saying?
+  "earnings-watch": {
+    mode: "fanout",
+    steps: [
+      { slug: "earnings-calendar", mapInput: (a) => ({ symbol: a.ticker }) },
+      { slug: "stock-quote",       mapInput: (a) => ({ symbol: a.ticker }) },
+      { slug: "search",            mapInput: (a) => ({ q: `${a.ticker} earnings`, count: 5 }) },
+    ],
+  },
+
+  // Insider alert: Form 4 activity + quote + recent filings.
+  "insider-alert": {
+    mode: "fanout",
+    steps: [
+      { slug: "edgar-insider-trades", mapInput: (a) => ({ ticker: a.ticker, lookbackDays: 30 }) },
+      { slug: "stock-quote",          mapInput: (a) => ({ symbol: a.ticker }) },
+      { slug: "edgar-filings",        mapInput: (a) => ({ ticker: a.ticker, limit: 3 }) },
+    ],
+  },
+
+  // IPO watch: recent S-1 filings + web search for IPO news.
+  "ipo-watch": {
+    mode: "fanout",
+    steps: [
+      { slug: "edgar-recent-ipos", mapInput: () => ({ days: 14 }) },
+      { slug: "search",            mapInput: () => ({ q: "recent IPO filings SEC", count: 5 }) },
+    ],
+  },
+
+  // Yield dashboard: full curve + spreads + average rates.
+  "yield-dashboard": {
+    mode: "fanout",
+    steps: [
+      { slug: "treasury-yield-curve", mapInput: () => ({}) },
+      { slug: "yield-curve-spread",   mapInput: () => ({}) },
+      { slug: "treasury-avg-rates",   mapInput: () => ({}) },
+    ],
+  },
+
+  // Inflation check: the four recession indicators.
+  "inflation-check": {
+    mode: "fanout",
+    steps: [
+      { slug: "cpi-yoy",           mapInput: () => ({}) },
+      { slug: "fed-funds",         mapInput: () => ({}) },
+      { slug: "unemployment-rate", mapInput: () => ({}) },
+      { slug: "sahm-rule",         mapInput: () => ({}) },
+    ],
+  },
+
+  // FX monitor: three major crosses + full dashboard.
+  "fx-monitor": {
+    mode: "fanout",
+    steps: [
+      { slug: "fx-rate",      mapInput: () => ({ from: "EUR", to: "USD" }) },
+      { slug: "fx-rate",      mapInput: () => ({ from: "GBP", to: "USD" }) },
+      { slug: "fx-rate",      mapInput: () => ({ from: "JPY", to: "USD" }) },
+      { slug: "fx-dashboard", mapInput: () => ({}) },
+    ],
+  },
+
+  // DeFi dashboard: TVL + ETH price + Base gas + global stats.
+  // defi-tvl requires a protocol slug — "aave" as the default reference protocol.
+  "defi-dashboard": {
+    mode: "fanout",
+    steps: [
+      { slug: "defi-tvl",      mapInput: () => ({ protocol: "aave" }) },
+      { slug: "crypto-price",  mapInput: () => ({ coins: "ETH", currency: "usd" }) },
+      { slug: "gas-snapshot",  mapInput: () => ({ network: "base" }) },
+      { slug: "crypto-global", mapInput: () => ({ currency: "usd" }) },
+    ],
+  },
+
+  // NFT portfolio: holdings + wallet balance + ETH price.
+  "nft-portfolio": {
+    mode: "fanout",
+    steps: [
+      { slug: "nft-holdings",   mapInput: (a) => ({ address: a.address, network: "base" }) },
+      { slug: "wallet-balance", mapInput: (a) => ({ address: a.address, network: "base" }) },
+      { slug: "crypto-price",   mapInput: () => ({ coins: "ETH", currency: "usd" }) },
+    ],
+  },
+
+  // Wallet audit: balance + transactions + token metadata.
+  "wallet-audit": {
+    mode: "fanout",
+    steps: [
+      { slug: "wallet-balance",      mapInput: (a) => ({ address: a.address, network: "base" }) },
+      { slug: "wallet-transactions", mapInput: (a) => ({ address: a.address, network: "base" }) },
+      { slug: "token-metadata",      mapInput: (a) => ({ contractAddress: a.address, network: "base" }) },
+    ],
+  },
+
+  // Gas optimizer: Base gas + Ethereum gas + Base estimate + ETH price.
+  "gas-optimizer": {
+    mode: "fanout",
+    steps: [
+      { slug: "gas-snapshot", mapInput: () => ({ network: "base" }) },
+      { slug: "gas-snapshot", mapInput: () => ({ network: "ethereum" }) },
+      { slug: "gas-estimate", mapInput: () => ({ network: "base" }) },
+      { slug: "crypto-price", mapInput: () => ({ coins: "ETH", currency: "usd" }) },
+    ],
+  },
+
+  // SSL audit: TLS cert + HTTP headers + CAA DNS record.
+  "ssl-audit": {
+    mode: "fanout",
+    steps: [
+      { slug: "tls-cert",     mapInput: (a) => ({ host: a.domain }) },
+      { slug: "http-headers", mapInput: (a) => ({ url: `https://${a.domain}` }) },
+      { slug: "dns-lookup",   mapInput: (a) => ({ host: a.domain, type: "CAA" }) },
+    ],
+  },
+
+  // Email security: SPF + DMARC + DKIM + deliverability score.
+  // dkim-lookup requires a selector — "google" is the most common default
+  // (covers Google Workspace, the largest sending platform).
+  "email-security": {
+    mode: "fanout",
+    steps: [
+      { slug: "spf-check",            mapInput: (a) => ({ domain: a.domain }) },
+      { slug: "dmarc-check",          mapInput: (a) => ({ domain: a.domain }) },
+      { slug: "dkim-lookup",          mapInput: (a) => ({ domain: a.domain, selector: "google" }) },
+      { slug: "email-deliverability", mapInput: (a) => ({ domain: a.domain }) },
+    ],
+  },
+
+  // Brand protection: WHOIS + DNS + scam search + headers.
+  "brand-protection": {
+    mode: "fanout",
+    steps: [
+      { slug: "whois",        mapInput: (a) => ({ domain: a.domain }) },
+      { slug: "dns-lookup",   mapInput: (a) => ({ host: a.domain, type: "A" }) },
+      { slug: "search",       mapInput: (a) => ({ q: `${a.domain} scam OR phishing`, count: 5 }) },
+      { slug: "http-headers", mapInput: (a) => ({ url: `https://${a.domain}` }) },
+    ],
+  },
+
+  // Competitor scan: tech stack + headers + WHOIS + meta.
+  "competitor-scan": {
+    mode: "fanout",
+    steps: [
+      { slug: "tech-stack",   mapInput: (a) => ({ url: `https://${a.domain}` }) },
+      { slug: "http-headers", mapInput: (a) => ({ url: `https://${a.domain}` }) },
+      { slug: "whois",        mapInput: (a) => {
+          return { domain: a.domain };
+      } },
+      { slug: "meta",         mapInput: (a) => ({ url: `https://${a.domain}` }) },
+    ],
+  },
+
+  // Page audit: extract + meta + headers + robots.
+  // Sitemap removed — unreliable (many sites 404 at /sitemap.xml, causes
+  // consistent partial-failures without adding actionable signal).
+  "page-audit": {
+    mode: "fanout",
+    steps: [
+      { slug: "extract",      mapInput: (a) => ({ url: a.url }) },
+      { slug: "meta",         mapInput: (a) => ({ url: a.url }) },
+      { slug: "http-headers", mapInput: (a) => ({ url: a.url }) },
+      { slug: "robots-check", mapInput: (a) => ({ url: a.url }) },
+    ],
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Light tier — batch 2 (2026-07). All pure-CPU, PoW-eligible.
+  // ──────────────────────────────────────────────────────────────────────
+
+  // Full color analysis: color info + contrast check + blindness simulation.
+  "color-palette": {
+    mode: "fanout",
+    steps: [
+      { slug: "color",           mapInput: (a) => ({ color: a.color }) },
+      { slug: "color-contrast",  mapInput: (a) => ({ foreground: a.color, background: "#ffffff" }) },
+      { slug: "color-blindness", mapInput: (a) => ({ color: a.color }) },
+    ],
+  },
+
+  // Check a password's strength + generate a strong replacement.
+  "password-audit": {
+    mode: "fanout",
+    steps: [
+      { slug: "password-strength", mapInput: (a) => ({ password: a.password }) },
+      { slug: "password",          mapInput: () => ({ length: "16", symbols: "true", count: "1" }) },
+    ],
+  },
+
+  // Generate all ID formats at once.
+  "uuid-suite": {
+    mode: "fanout",
+    steps: [
+      { slug: "uuid",    mapInput: () => ({}) },
+      { slug: "ulid",    mapInput: () => ({}) },
+      { slug: "uuid-v5", mapInput: () => ({ name: "test", namespace: "url" }) },
+    ],
+  },
+
+  // Test a regex against text + get text stats.
+  "regex-test": {
+    mode: "fanout",
+    steps: [
+      { slug: "regex",      mapInput: (a) => ({ pattern: a.pattern, text: a.text, flags: a.flags || "g" }) },
+      { slug: "text-stats", mapInput: (a) => ({ text: a.text }) },
+    ],
+  },
+
+  // Calculate + summarize + percentages.
+  "math-suite": {
+    mode: "fanout",
+    steps: [
+      { slug: "calc",       mapInput: (a) => ({ expression: a.expression }) },
+      { slug: "stats",      mapInput: (a) => ({ values: String(a.values || "").split(",").map(Number).filter(Number.isFinite) }) },
+      { slug: "percentage", mapInput: (a) => ({ value: Number(String(a.values || "").split(",")[0]) || 0, total: Number(String(a.values || "").split(",").reduce((s, v) => s + (Number(v) || 0), 0)) || 1 }) },
+    ],
+  },
+
+  // Date calculations: diff + add + age.
+  // add-time takes a duration string (e.g. "30d", "2h", "1w") not amount/unit.
+  "date-math": {
+    mode: "fanout",
+    steps: [
+      { slug: "date-diff", mapInput: (a) => ({ from: a.from, to: a.to }) },
+      { slug: "add-time",  mapInput: (a) => ({ date: a.from, duration: "30d" }) },
+      { slug: "age",       mapInput: (a) => ({ birthdate: a.from }) },
+    ],
+  },
+
+  // Compare semantic versions.
+  "semver-check": {
+    mode: "fanout",
+    steps: [
+      { slug: "semver",    mapInput: (a) => ({ a: a.a, b: a.b }) },
+      { slug: "json-diff", mapInput: (a) => ({ a: { version: a.a }, b: { version: a.b } }) },
+    ],
+  },
+
+  // Generate placeholder text then analyze it (chain: lorem feeds text-stats).
+  "lorem-gen": {
+    mode: "chain",
+    steps: [
+      { slug: "lorem",      mapInput: (a) => ({ words: Number(a.words) || 50 }) },
+      { slug: "text-stats", mapInput: (_a, p) => ({ text: p["lorem"]?.text ?? "" }) },
+    ],
+  },
+
+  // QR code + URL validation.
+  "qr-gen": {
+    mode: "fanout",
+    steps: [
+      { slug: "qr",        mapInput: (a) => ({ text: a.text, size: 512 }) },
+      { slug: "url-parse",  mapInput: (a) => ({ url: a.text }) },
+    ],
+  },
+
+  // Statistical analysis suite: summary + correlation + outliers.
+  "number-crunch": {
+    mode: "fanout",
+    steps: [
+      { slug: "stats-summary", mapInput: (a) => ({ values: String(a.values || "").split(",").map(Number).filter(Number.isFinite) }) },
+      { slug: "correlation",   mapInput: (a) => {
+          const vals = String(a.values || "").split(",").map(Number).filter(Number.isFinite);
+          return { x: vals, y: vals.map((_, i) => i) };
+      } },
+      { slug: "outliers",      mapInput: (a) => ({ values: String(a.values || "").split(",").map(Number).filter(Number.isFinite) }) },
+    ],
+  },
+
+  // Financial calculators: compound interest + amortization + loan comparison.
+  "finance-calc": {
+    mode: "fanout",
+    steps: [
+      { slug: "compound-interest", mapInput: (a) => ({ principal: Number(a.principal) || 10000, annualRate: (Number(a.rate) || 7) / 100, years: Number(a.years) || 10, compoundingPerYear: 12 }) },
+      { slug: "amortization",      mapInput: (a) => ({ principal: Number(a.principal) || 300000, annualRate: (Number(a.rate) || 6.5) / 100, termYears: Number(a.years) || 30, maxRows: 12 }) },
+      { slug: "loan-payment",      mapInput: (a) => ({ principal: Number(a.principal) || 300000, annualRate: (Number(a.rate) || 6.5) / 100, termYears: Number(a.years) || 30 }) },
+    ],
+  },
+
+  // Convert text to all cases.
+  "text-transform": {
+    mode: "fanout",
+    steps: [
+      { slug: "case",    mapInput: (a) => ({ text: a.text, to: "camel" }) },
+      { slug: "slugify", mapInput: (a) => ({ text: a.text }) },
+      // Second case call with snake — slug collision in the steps array is
+      // intentional; nothing downstream reads prior["case"].
+      { slug: "case",    mapInput: (a) => ({ text: a.text, to: "snake" }) },
+    ],
+  },
+
+  // Markdown round-trip: markdown → HTML → markdown (chain).
+  "markdown-convert": {
+    mode: "chain",
+    steps: [
+      { slug: "markdown-to-html",  mapInput: (a) => ({ markdown: a.markdown }) },
+      { slug: "html-to-markdown",  mapInput: (_a, p) => ({ html: p["markdown-to-html"]?.html ?? "" }) },
+    ],
+  },
+
+  // XML → JSON + format (chain).
+  "xml-json": {
+    mode: "chain",
+    steps: [
+      { slug: "xml-to-json", mapInput: (a) => ({ xml: a.xml }) },
+      { slug: "json-format", mapInput: (_a, p) => ({ json: JSON.stringify(p["xml-to-json"]?.json ?? {}), indent: 2 }) },
+    ],
+  },
+
+  // All checksums at once: sha256 + crc32 + multi-digest.
+  // checksum tool expects `data` (not `text`) and computes all digests at once.
+  "checksum-suite": {
+    mode: "fanout",
+    steps: [
+      { slug: "hash",     mapInput: (a) => ({ text: a.text, algo: "sha256" }) },
+      { slug: "crc32",    mapInput: (a) => ({ text: a.text }) },
+      { slug: "checksum", mapInput: (a) => ({ data: a.text }) },
+    ],
+  },
+
+  // Validate identifiers: ISBN + IBAN + credit card.
+  "validator-suite": {
+    mode: "fanout",
+    steps: [
+      { slug: "isbn-validate", mapInput: () => ({ isbn: "978-3-16-148410-0" }) },
+      { slug: "iban-validate", mapInput: (a) => ({ iban: a.iban }) },
+      { slug: "card-validate", mapInput: (a) => ({ number: a.number || "4242424242424242" }) },
+    ],
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Standard-tier batch 2 (2026-07): mid-value bundles ($0.05–$0.12).
+  // ──────────────────────────────────────────────────────────────────────
+
+  // Quick research brief: search + answer on a topic.
+  "article-digest": {
+    mode: "fanout",
+    steps: [
+      { slug: "search", mapInput: (a) => ({ q: a.topic, count: 5 }) },
+      { slug: "answer", mapInput: (a) => ({ q: a.topic }) },
+    ],
+  },
+
+  // Full PDF processing: metadata + markdown + first page.
+  "pdf-pipeline": {
+    mode: "fanout",
+    steps: [
+      { slug: "pdf-info",          mapInput: (a) => ({ url: a.url }) },
+      { slug: "pdf-to-markdown",   mapInput: (a) => ({ url: a.url }) },
+      { slug: "pdf-extract-pages", mapInput: (a) => ({ url: a.url, pages: "1" }) },
+    ],
+  },
+
+  // URL health + metadata check.
+  "url-inspector": {
+    mode: "fanout",
+    steps: [
+      { slug: "url-parse",  mapInput: (a) => ({ url: a.url }) },
+      { slug: "http-check", mapInput: (a) => ({ url: a.url }) },
+      { slug: "meta",       mapInput: (a) => ({ url: a.url }) },
+    ],
+  },
+
+  // Content quality grading — chain because keywords needs extracted text.
+  "content-grade": {
+    mode: "chain",
+    steps: [
+      { slug: "extract",  mapInput: (a) => ({ url: a.url }) },
+      { slug: "keywords", mapInput: (_a, p) => ({ text: p["extract"]?.markdown || "" }) },
+    ],
+  },
+
+  // OpenAPI spec audit: lint + validate.
+  "openapi-audit": {
+    mode: "fanout",
+    steps: [
+      { slug: "openapi-lint",             mapInput: (a) => ({ spec: a.url }) },
+      { slug: "openapi-validate-payload", mapInput: (a) => ({ spec: a.url, payload: {}, method: "get", path: "/" }) },
+    ],
+  },
+
+  // JSON validate + format + convert to CSV.
+  "json-pipeline": {
+    mode: "fanout",
+    steps: [
+      { slug: "json-validate", mapInput: (a) => ({ data: a.json, schema: {} }) },
+      { slug: "json-format",   mapInput: (a) => ({ json: a.json, indent: 2 }) },
+      { slug: "json-to-csv",   mapInput: (a) => ({ json: a.json }) },
+    ],
+  },
+
+  // CSV → JSON → YAML pipeline (chain: json-to-yaml needs csv-to-json output).
+  "data-convert": {
+    mode: "chain",
+    steps: [
+      { slug: "csv-to-json", mapInput: (a) => ({ csv: a.csv }) },
+      { slug: "json-to-yaml", mapInput: (_a, p) => ({ json: p["csv-to-json"]?.rows ?? p["csv-to-json"] ?? [] }) },
+    ],
+  },
+
+  // API endpoint health: liveness + headers + TLS.
+  "api-health": {
+    mode: "fanout",
+    steps: [
+      { slug: "http-check",   mapInput: (a) => ({ url: a.url }) },
+      { slug: "http-headers", mapInput: (a) => ({ url: a.url }) },
+      { slug: "tls-cert",     mapInput: (a) => {
+          let host = a.url;
+          try { host = new URL(a.url).hostname; } catch {}
+          return { host };
+      } },
+    ],
+  },
+
+  // World Bank GDP + population for a country.
+  "world-data": {
+    mode: "fanout",
+    steps: [
+      { slug: "world-bank-indicator", mapInput: (a) => ({ country: a.country, indicator: "NY.GDP.MKTP.CD" }) },
+      { slug: "world-bank-indicator", mapInput: (a) => ({ country: a.country, indicator: "SP.POP.TOTL" }) },
+    ],
+  },
+
+  // Fed economic snapshot: FEDFUNDS + UNRATE + CPIAUCSL.
+  "fred-snapshot": {
+    mode: "fanout",
+    steps: [
+      { slug: "fred-series", mapInput: () => ({ series: "FEDFUNDS" }) },
+      { slug: "fred-series", mapInput: () => ({ series: "UNRATE" }) },
+      { slug: "fred-series", mapInput: () => ({ series: "CPIAUCSL" }) },
+    ],
+  },
+
+  // Email verification: validate + MX check.
+  "contact-verify": {
+    mode: "fanout",
+    steps: [
+      { slug: "email-validate", mapInput: (a) => ({ email: a.email }) },
+      { slug: "dns-lookup",     mapInput: (a) => {
+          const domain = String(a.email || "").split("@")[1] || "";
+          return { host: domain, type: "MX" };
+      } },
+    ],
+  },
+
+  // Domain age: whois + DNS + TLS.
+  "domain-age": {
+    mode: "fanout",
+    steps: [
+      { slug: "whois",      mapInput: (a) => ({ domain: a.domain }) },
+      { slug: "dns-lookup", mapInput: (a) => ({ host: a.domain, type: "A" }) },
+      { slug: "tls-cert",   mapInput: (a) => ({ host: a.domain }) },
+    ],
+  },
+
+  // All three major hashes at once.
+  "hash-verify": {
+    mode: "fanout",
+    steps: [
+      { slug: "hash", mapInput: (a) => ({ text: a.text, algo: "sha256" }) },
+      { slug: "hash", mapInput: (a) => ({ text: a.text, algo: "sha512" }) },
+      { slug: "hash", mapInput: (a) => ({ text: a.text, algo: "md5" }) },
+    ],
+  },
+
+  // Encode text in all formats.
+  "encoding-suite": {
+    mode: "fanout",
+    steps: [
+      { slug: "base64",   mapInput: (a) => ({ text: a.text, mode: "encode" }) },
+      { slug: "hex",      mapInput: (a) => ({ text: a.text, mode: "encode" }) },
+      { slug: "url-code", mapInput: (a) => ({ text: a.text, mode: "encode" }) },
+    ],
+  },
+
+  // JWT decode + verify.
+  "jwt-toolkit": {
+    mode: "fanout",
+    steps: [
+      { slug: "jwt-decode",  mapInput: (a) => ({ token: a.token }) },
+      { slug: "jwt-verify",  mapInput: (a) => ({ token: a.token, secret: "test" }) },
+    ],
+  },
+
+  // Timezone conversion + business days + cron preview.
+  "timezone-planner": {
+    mode: "fanout",
+    steps: [
+      { slug: "time-convert",  mapInput: (a) => ({ time: a.time, from: a.from || "America/New_York", to: a.to || "Asia/Tokyo" }) },
+      { slug: "business-days", mapInput: (a) => ({ start: new Date().toISOString().slice(0, 10), end: String(a.time || "").slice(0, 10) }) },
+      { slug: "cron-next",     mapInput: (a) => ({ expression: "0 10 * * 1", count: 5, from: a.time }) },
+    ],
+  },
+
+  // Text stats + keywords + token count.
+  "text-analyze": {
+    mode: "fanout",
+    steps: [
+      { slug: "text-stats",  mapInput: (a) => ({ text: a.text }) },
+      { slug: "keywords",    mapInput: (a) => ({ text: a.text }) },
+      { slug: "token-count", mapInput: (a) => ({ text: a.text }) },
+    ],
+  },
+
+  // Content cleaning: redact + dedupe + sort.
+  "content-clean": {
+    mode: "fanout",
+    steps: [
+      { slug: "redact",       mapInput: (a) => ({ text: a.text, patterns: ["email", "phone"] }) },
+      { slug: "dedupe-lines", mapInput: (a) => ({ text: a.text }) },
+      { slug: "sort-lines",   mapInput: (a) => ({ text: a.text }) },
+    ],
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Strategy additions (2026-07): packs that were in SKILL_PACKS but
+  // previously fell through to TODO_MAPINPUT.
+  // ──────────────────────────────────────────────────────────────────────
+
+  // Weather briefing: current conditions + 7-day forecast + air quality.
+  "weather-brief": {
+    mode: "fanout",
+    steps: [
+      { slug: "weather-current",     mapInput: (a) => ({ lat: Number(a.lat), lon: Number(a.lon) }) },
+      { slug: "weather-daily",       mapInput: (a) => ({ lat: Number(a.lat), lon: Number(a.lon), days: 7 }) },
+      { slug: "weather-air-quality", mapInput: (a) => ({ lat: Number(a.lat), lon: Number(a.lon) }) },
+    ],
+  },
+
+  // Cross-asset price monitor: stock vs crypto side-by-side with history.
+  "price-monitor": {
+    mode: "fanout",
+    steps: [
+      { slug: "stock-quote",    mapInput: (a) => ({ symbol: a.ticker }) },
+      { slug: "stock-history",  mapInput: (a) => ({ symbol: a.ticker, range: "1y" }) },
+      { slug: "crypto-price",   mapInput: (a) => ({ coins: a.coin, currency: "usd" }) },
+      { slug: "crypto-history", mapInput: (a) => ({ coin: a.coin, days: "365", currency: "usd" }) },
+      { slug: "date-format",    mapInput: () => ({ datetime: new Date().toISOString() }) },
+    ],
+  },
+
+  // Content quality report: readability + word frequency + slug generation.
+  "content-quality": {
+    mode: "fanout",
+    steps: [
+      { slug: "readability-score", mapInput: (a) => ({ text: a.text }) },
+      { slug: "word-frequency",    mapInput: (a) => ({ text: a.text, top: 10 }) },
+      { slug: "slug-generate",     mapInput: (a) => ({ text: a.title || String(a.text || "").split(/[.!?]/)[0] || "" }) },
+    ],
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // End of PACK_STEPS. All 86 packs above; getStepConfig auto-stubs any
   // SKILL_PACKS entry that lands here without a matching PACK_STEPS row.
   // ──────────────────────────────────────────────────────────────────────
 };

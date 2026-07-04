@@ -1919,6 +1919,1044 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Build a comprehensive crypto dossier on bitcoin using Agent402's crypto-dossier skill pack: (1) live price + 24h change, (2) 90-day price history with return and drawdown, (3) trending status, (4) global market context (BTC dominance, total cap), (5) recent news search, (6) full text of the top article. Output a structured brief with sections for price action, market context, and news catalyst.",
   },
+
+  {
+    slug: "earnings-watch",
+    title: "Earnings watch",
+    tagline:
+      "Is this company reporting soon and what's the consensus? Earnings calendar, live quote, and recent search results in one call.",
+    useCase:
+      "Pre-earnings positioning — check if a report is imminent, what the stock price implies, and what analysts are saying.",
+    promptArgs: [
+      { name: "ticker", description: "Stock ticker symbol (e.g. AAPL, NVDA)", required: true, substitute: "AAPL" },
+    ],
+    toolSlugs: [
+      "earnings-calendar",
+      "stock-quote",
+      "search",
+    ],
+    workflow: [
+      "Check the earnings calendar for upcoming or recent report dates and EPS estimates.",
+      "Get the live stock quote — price, market cap, and day range heading into earnings.",
+      "Search the web for recent earnings-related coverage and analyst expectations.",
+    ],
+    claudePrompt:
+      "Check if AAPL is reporting earnings soon using Agent402's earnings-watch skill pack. Get (1) earnings calendar for dates and EPS consensus, (2) live quote, (3) recent search results for analyst expectations. Summarize the setup heading into the report.",
+  },
+
+  {
+    slug: "insider-alert",
+    title: "Insider alert",
+    tagline:
+      "Insider buying/selling activity for a stock: Form 4 trades, live quote, and recent SEC filings in one call.",
+    useCase:
+      "Screening for insider signal — large buys or cluster selling often precede material moves.",
+    promptArgs: [
+      { name: "ticker", description: "Stock ticker symbol (e.g. AAPL, NVDA)", required: true, substitute: "AAPL" },
+    ],
+    toolSlugs: [
+      "edgar-insider-trades",
+      "stock-quote",
+      "edgar-filings",
+    ],
+    workflow: [
+      "Pull Form 4 insider trades from the last 30 days — direction, size, and insider role.",
+      "Get the live stock quote for context on where the price is relative to insider activity.",
+      "List the 3 most recent SEC filings to correlate insider moves with material disclosures.",
+    ],
+    claudePrompt:
+      "Check insider activity for AAPL using Agent402's insider-alert skill pack. Get (1) 30-day insider trades, (2) live quote, (3) last 3 SEC filings. Flag any cluster buying or selling and correlate with recent filings.",
+  },
+
+  {
+    slug: "ipo-watch",
+    title: "IPO watch",
+    tagline:
+      "What companies are going public? Recent S-1/IPO filings from EDGAR plus a web search for IPO news.",
+    useCase:
+      "Tracking the IPO pipeline — new S-1 filings, pricing dates, and market commentary.",
+    promptArgs: [],
+    toolSlugs: [
+      "edgar-recent-ipos",
+      "search",
+    ],
+    workflow: [
+      "Pull recent IPO/S-1 filings from EDGAR over the last 14 days.",
+      "Search the web for recent IPO filings and pricing news.",
+    ],
+    claudePrompt:
+      "What companies are going public this month? Use Agent402's ipo-watch skill pack to (1) pull recent S-1/IPO filings from EDGAR, (2) search for IPO news. Summarize the pipeline.",
+  },
+
+  {
+    slug: "yield-dashboard",
+    title: "Yield dashboard",
+    tagline:
+      "Current yield curve snapshot: full Treasury curve, key spreads, and average rates in one call.",
+    useCase:
+      "Quick fixed-income read — is the curve inverted, what are spreads doing, and where are average rates.",
+    promptArgs: [],
+    toolSlugs: [
+      "treasury-yield-curve",
+      "yield-curve-spread",
+      "treasury-avg-rates",
+    ],
+    workflow: [
+      "Pull the live Treasury yield curve across all maturities.",
+      "Get the 10Y-2Y and 10Y-3M spreads — inversion signals.",
+      "Pull Treasury average interest rates for context on the cost of government debt.",
+    ],
+    claudePrompt:
+      "Give me a yield curve snapshot using Agent402's yield-dashboard skill pack. Pull (1) the full Treasury curve, (2) key spreads (10Y-2Y, 10Y-3M), (3) average rates. Flag any inversion.",
+  },
+
+  {
+    slug: "inflation-check",
+    title: "Inflation check",
+    tagline:
+      "Is the economy in recession territory? CPI, fed funds, unemployment, and Sahm rule in one call.",
+    useCase:
+      "Quick macro health check — the four numbers that answer 'are we in a recession?'",
+    promptArgs: [],
+    toolSlugs: [
+      "cpi-yoy",
+      "fed-funds",
+      "unemployment-rate",
+      "sahm-rule",
+    ],
+    workflow: [
+      "Pull CPI year-over-year for the headline inflation read.",
+      "Get the effective fed funds rate for the current policy stance.",
+      "Pull the unemployment rate (U-3).",
+      "Compute the Sahm rule — triggers when 3-month unemployment average rises >0.5pp above its 12-month low.",
+    ],
+    claudePrompt:
+      "Run a recession check using Agent402's inflation-check skill pack. Get (1) CPI YoY, (2) fed funds rate, (3) unemployment rate, (4) Sahm rule. Is the economy in recession territory?",
+  },
+
+  {
+    slug: "fx-monitor",
+    title: "FX monitor",
+    tagline:
+      "Major currency snapshot: EUR/USD, GBP/USD, JPY/USD rates plus the full FX dashboard in one call.",
+    useCase:
+      "Quick read on major crosses — are any at extremes, and what's the full dashboard showing.",
+    promptArgs: [],
+    toolSlugs: [
+      "fx-rate",
+      "fx-dashboard",
+    ],
+    workflow: [
+      "Pull EUR/USD, GBP/USD, and JPY/USD spot rates.",
+      "Get the full FX dashboard for a broader view of currency movements.",
+    ],
+    claudePrompt:
+      "Give me a major currency snapshot using Agent402's fx-monitor skill pack. Get EUR/USD, GBP/USD, JPY/USD rates plus the full FX dashboard. Flag any pair at a multi-month extreme.",
+  },
+
+  {
+    slug: "defi-dashboard",
+    title: "DeFi dashboard",
+    tagline:
+      "DeFi market overview: total TVL, ETH price, Base gas, and global crypto stats in one call.",
+    useCase:
+      "Quick DeFi health check — TVL trends, ETH price context, gas costs, and market-wide metrics.",
+    promptArgs: [],
+    toolSlugs: [
+      "defi-tvl",
+      "crypto-price",
+      "gas-snapshot",
+      "crypto-global",
+    ],
+    workflow: [
+      "Pull total DeFi TVL across all chains.",
+      "Get the live ETH price as the reference asset for DeFi.",
+      "Check Base gas for current transaction costs.",
+      "Pull global crypto market stats for total cap and dominance context.",
+    ],
+    claudePrompt:
+      "Give me a DeFi market overview using Agent402's defi-dashboard skill pack. Get (1) total DeFi TVL, (2) ETH price, (3) Base gas tiers, (4) global crypto stats. Summarize the health of DeFi right now.",
+  },
+
+  {
+    slug: "nft-portfolio",
+    title: "NFT portfolio",
+    tagline:
+      "NFT + wallet snapshot: NFT holdings, native balance, and ETH price for a given address in one call.",
+    useCase:
+      "Quick portfolio view — what NFTs does this address hold, what's the wallet balance, and what's ETH worth.",
+    promptArgs: [
+      { name: "address", description: "Wallet address (0x…)", required: true, substitute: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045" },
+    ],
+    toolSlugs: [
+      "nft-holdings",
+      "wallet-balance",
+      "crypto-price",
+    ],
+    workflow: [
+      "Pull NFT holdings for the address on Base.",
+      "Get the native wallet balance on Base.",
+      "Get ETH price for portfolio valuation.",
+    ],
+    claudePrompt:
+      "Show me the NFT portfolio for 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 using Agent402's nft-portfolio skill pack. Get (1) NFT holdings, (2) wallet balance, (3) ETH price. Summarize the collection.",
+  },
+
+  {
+    slug: "wallet-audit",
+    title: "Wallet audit",
+    tagline:
+      "Full wallet activity review: balance, recent transactions, and token metadata for a given address.",
+    useCase:
+      "Investigating wallet activity — what's the balance, what has it been doing, and what tokens are involved.",
+    promptArgs: [
+      { name: "address", description: "Wallet address (0x…)", required: true, substitute: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045" },
+    ],
+    toolSlugs: [
+      "wallet-balance",
+      "wallet-transactions",
+      "token-metadata",
+    ],
+    workflow: [
+      "Get the native + token balances for the address.",
+      "Pull recent transactions to see activity patterns.",
+      "Look up token metadata for contracts the wallet interacts with.",
+    ],
+    claudePrompt:
+      "Audit the wallet 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 using Agent402's wallet-audit skill pack. Get (1) balance, (2) recent transactions, (3) token metadata. Summarize activity and flag anything unusual.",
+  },
+
+  {
+    slug: "gas-optimizer",
+    title: "Gas optimizer",
+    tagline:
+      "Find the cheapest gas right now: Base gas, Ethereum gas, Base fee estimate, and ETH price for USD conversion.",
+    useCase:
+      "Timing a transaction — compare gas across chains and decide whether to act now or wait.",
+    promptArgs: [],
+    toolSlugs: [
+      "gas-snapshot",
+      "gas-estimate",
+      "crypto-price",
+    ],
+    workflow: [
+      "Get Base gas tiers (slow/standard/fast).",
+      "Get Ethereum gas tiers for comparison.",
+      "Get a Base fee estimate for a standard transfer.",
+      "Get ETH price to express costs in USD.",
+    ],
+    claudePrompt:
+      "Find the cheapest gas right now using Agent402's gas-optimizer skill pack. Get (1) Base gas tiers, (2) Ethereum gas tiers, (3) Base fee estimate, (4) ETH price. Tell me the cost in USD and whether to act now or wait.",
+  },
+
+  {
+    slug: "ssl-audit",
+    title: "SSL audit",
+    tagline:
+      "TLS/SSL security posture check: live certificate inspection, HTTP security headers, and CAA DNS records.",
+    useCase:
+      "Verifying a domain's TLS posture — cert validity, security headers, and who's authorized to issue certs.",
+    promptArgs: [
+      { name: "domain", description: "Domain to audit (e.g. stripe.com)", required: true, substitute: "stripe.com" },
+    ],
+    toolSlugs: [
+      "tls-cert",
+      "http-headers",
+      "dns-lookup",
+    ],
+    workflow: [
+      "Inspect the live TLS certificate — issuer, expiry, SANs, chain validity.",
+      "Fetch HTTP response headers — HSTS, CSP, and other security headers.",
+      "Check CAA DNS records to see which CAs are authorized to issue certs for this domain.",
+    ],
+    claudePrompt:
+      "Run an SSL audit on stripe.com using Agent402's ssl-audit skill pack. Get (1) TLS cert details — issuer, expiry, SANs, (2) HTTP security headers — HSTS, CSP, (3) CAA DNS records. Flag any near-expiry or missing HSTS.",
+  },
+
+  {
+    slug: "email-security",
+    title: "Email security",
+    tagline:
+      "Full email auth posture: SPF, DMARC, DKIM, and composite deliverability score in one call.",
+    useCase:
+      "Diagnosing email authentication — can this domain be spoofed, and is its mail configuration complete.",
+    promptArgs: [
+      { name: "domain", description: "Domain to check (e.g. stripe.com)", required: true, substitute: "stripe.com" },
+    ],
+    toolSlugs: [
+      "spf-check",
+      "dmarc-check",
+      "dkim-lookup",
+      "email-deliverability",
+    ],
+    workflow: [
+      "Parse the SPF record — flag permissive +all, excessive lookups, or syntax errors.",
+      "Parse the DMARC policy — p=none means failures are ignored.",
+      "Probe common DKIM selectors and check key strength.",
+      "Run the composite deliverability score for an overall grade.",
+    ],
+    claudePrompt:
+      "Check email security for stripe.com using Agent402's email-security skill pack. Get (1) SPF check, (2) DMARC policy, (3) DKIM probe, (4) deliverability score. Flag any missing or weak auth records.",
+  },
+
+  {
+    slug: "brand-protection",
+    title: "Brand protection",
+    tagline:
+      "Is this domain legitimate? WHOIS age, DNS resolution, scam/phishing search results, and HTTP headers for a quick trust assessment.",
+    useCase:
+      "Evaluating a suspicious domain — checking registration age, hosting, web mentions, and security posture.",
+    promptArgs: [
+      { name: "domain", description: "Domain to investigate (e.g. stripe.com)", required: true, substitute: "stripe.com" },
+    ],
+    toolSlugs: [
+      "whois",
+      "dns-lookup",
+      "search",
+      "http-headers",
+    ],
+    workflow: [
+      "Pull WHOIS for domain age, registrar, and registrant — very young domains are suspect.",
+      "Resolve DNS A records to identify hosting and detect parking pages.",
+      "Search for scam/phishing reports mentioning this domain.",
+      "Fetch HTTP headers for security posture and server fingerprint.",
+    ],
+    claudePrompt:
+      "Investigate whether stripe.com is legitimate using Agent402's brand-protection skill pack. Get (1) WHOIS — age and registrar, (2) DNS A records, (3) search for scam/phishing reports, (4) HTTP headers. Rate the domain's trustworthiness.",
+  },
+
+  {
+    slug: "competitor-scan",
+    title: "Competitor scan",
+    tagline:
+      "What's a competitor using? Tech stack, HTTP headers, WHOIS, and page metadata in one call.",
+    useCase:
+      "Competitive intelligence — fingerprint their infrastructure, hosting, frameworks, and page metadata.",
+    promptArgs: [
+      { name: "url", description: "Competitor URL (e.g. https://stripe.com)", required: true, substitute: "https://stripe.com" },
+    ],
+    toolSlugs: [
+      "tech-stack",
+      "http-headers",
+      "whois",
+      "meta",
+    ],
+    workflow: [
+      "Fingerprint the tech stack — CMS, framework, CDN, analytics, third-party scripts.",
+      "Fetch HTTP headers for server info, caching strategy, and security posture.",
+      "Pull WHOIS for domain age, registrar, and hosting provider.",
+      "Get page metadata — title, description, OG tags for their positioning.",
+    ],
+    claudePrompt:
+      "Scan the competitor at https://stripe.com using Agent402's competitor-scan skill pack. Get (1) tech stack, (2) HTTP headers, (3) WHOIS, (4) page metadata. Summarize their infrastructure and positioning.",
+  },
+
+  {
+    slug: "page-audit",
+    title: "Page audit",
+    tagline:
+      "Full page SEO + security audit: content extraction, metadata, HTTP headers, robots policy, and sitemap health in one call.",
+    useCase:
+      "Comprehensive page review — content quality, metadata completeness, security headers, crawlability, and sitemap status.",
+    promptArgs: [
+      { name: "url", description: "Page URL to audit (e.g. https://stripe.com)", required: true, substitute: "https://stripe.com" },
+    ],
+    toolSlugs: [
+      "extract",
+      "meta",
+      "http-headers",
+      "robots-check",
+      "sitemap",
+    ],
+    workflow: [
+      "Extract the page content as clean markdown.",
+      "Get page metadata — title, description, OG tags, canonical.",
+      "Fetch HTTP headers — security headers, caching, server info.",
+      "Check robots.txt policy for the page URL.",
+      "Probe the sitemap for the site.",
+    ],
+    claudePrompt:
+      "Audit the page at https://stripe.com using Agent402's page-audit skill pack. Get (1) extracted content, (2) metadata, (3) HTTP headers, (4) robots policy, (5) sitemap. Summarize SEO completeness and security posture.",
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Light tier — batch 2 (2026-07). All pure-CPU, PoW-eligible.
+  // ──────────────────────────────────────────────────────────────────────
+
+  {
+    slug: "color-palette",
+    title: "Color palette analysis",
+    tagline:
+      "Full color analysis in one call: parse any color format, check WCAG contrast against white, and simulate all three forms of color blindness.",
+    useCase:
+      "A designer or front-end agent picked a brand color and needs the accessibility picture before committing: does it pass WCAG AA/AAA against a white background? What do protanopia / deuteranopia / tritanopia users see? What's the HSL breakdown? One pack replaces three separate calls.",
+    promptArgs: [
+      { name: "color", description: "Any CSS color (hex, rgb, hsl, named — e.g. #4ade80)", required: true, substitute: "#4ade80" },
+    ],
+    toolSlugs: ["color", "color-contrast", "color-blindness"],
+    workflow: [
+      "Parse the color with the color tool — returns hex, RGB, HSL, and named-color lookup.",
+      "Check WCAG contrast against white (#ffffff) with color-contrast — returns ratio and AA/AAA pass/fail for normal and large text.",
+      "Simulate color blindness with color-blindness — returns the color as seen by protanopia, deuteranopia, and tritanopia viewers.",
+    ],
+    claudePrompt:
+      "Analyze the color #4ade80 using Agent402: (1) color {color: \"#4ade80\"} — get hex/RGB/HSL. (2) color-contrast {foreground: \"#4ade80\", background: \"#ffffff\"} — WCAG ratio + AA/AAA pass. (3) color-blindness {color: \"#4ade80\"} — simulated values for all three types. Return {parsed, contrast, blindness}.",
+  },
+
+  {
+    slug: "password-audit",
+    title: "Password audit",
+    tagline:
+      "Check a password's strength (entropy, crack time, weaknesses) and generate a strong replacement — two tools, one security decision.",
+    useCase:
+      "A user or agent needs to know whether a password is strong enough and, if not, get a better one immediately. Useful for onboarding flows, credential rotation scripts, and security reviews.",
+    promptArgs: [
+      { name: "password", description: "The password to evaluate", required: true, substitute: "MyP@ssw0rd123" },
+    ],
+    toolSlugs: ["password-strength", "password"],
+    workflow: [
+      "Evaluate the submitted password with password-strength — returns entropy bits, estimated crack time, and a list of weaknesses (common patterns, dictionary words, keyboard walks).",
+      "Generate a strong replacement with password — length 16, symbols enabled. The user can adopt it if the original fails the strength check.",
+    ],
+    claudePrompt:
+      "Audit the password \"MyP@ssw0rd123\" using Agent402: (1) password-strength {password} — get entropy + crack time + weaknesses. (2) password {length:16} — generate a strong replacement. Return {strength, replacement}.",
+  },
+
+  {
+    slug: "uuid-suite",
+    title: "UUID suite",
+    tagline:
+      "Generate all common ID formats in one call: UUIDv4 (random), ULID (time-sortable), and UUIDv5 (deterministic namespace-based).",
+    useCase:
+      "An agent is setting up a new entity and needs IDs in multiple formats — a random primary key (UUIDv4), a time-sortable index key (ULID), and a stable derived key (UUIDv5 for deduplication). One call instead of three.",
+    promptArgs: [],
+    toolSlugs: ["uuid", "ulid", "uuid-v5"],
+    workflow: [
+      "Generate a random UUIDv4 with uuid — the standard primary key format.",
+      "Generate a ULID with ulid — lexicographically sortable by creation time, useful for time-ordered indexes.",
+      "Generate a UUIDv5 with uuid-v5 using namespace=url and name=test — deterministic: same inputs always produce the same ID, useful for deduplication and content-addressing.",
+    ],
+    claudePrompt:
+      "Generate all ID formats using Agent402: (1) uuid — random UUIDv4. (2) ulid — time-sortable ULID. (3) uuid-v5 {name:\"test\", namespace:\"url\"} — deterministic UUIDv5. Return all three.",
+  },
+
+  {
+    slug: "regex-test",
+    title: "Regex tester",
+    tagline:
+      "Test a regular expression against text and get match results plus text statistics — the quick validation loop for pattern development.",
+    useCase:
+      "A developer is writing a regex (email extraction, log parsing, URL matching) and needs to see matches + capture groups + text stats in one shot. Faster than switching between a regex tester and a word counter.",
+    promptArgs: [
+      { name: "pattern", description: "Regex pattern to test (e.g. \\b\\w+@\\w+\\.\\w+\\b)", required: true, substitute: "\\b\\w+@\\w+\\.\\w+\\b" },
+      { name: "text", description: "Text to match against", required: true, substitute: "Contact us at hello@example.com or support@test.org" },
+    ],
+    toolSlugs: ["regex", "text-stats"],
+    workflow: [
+      "Run the regex against the text — returns all matches, capture groups, and match indices.",
+      "Compute text-stats on the input text — word count, character count, line count. Useful context for understanding match density (e.g. 2 matches in 50 words = low density).",
+    ],
+    claudePrompt:
+      "Test the regex \\b\\w+@\\w+\\.\\w+\\b against \"Contact us at hello@example.com or support@test.org\" using Agent402: (1) regex {pattern, text, flags:\"g\"} — get matches. (2) text-stats {text} — get word/char counts. Return {matches, stats}.",
+  },
+
+  {
+    slug: "math-suite",
+    title: "Math suite",
+    tagline:
+      "Calculate an expression, summarize a dataset, and compute percentages — the three most common math operations agents need, bundled.",
+    useCase:
+      "An agent is doing quick quantitative work: evaluate a formula (compound growth, unit conversion), get descriptive stats on a set of numbers, and express a value as a percentage of a total. One call covers the common cases.",
+    promptArgs: [
+      { name: "expression", description: "Math expression to evaluate (e.g. (100 * 1.05^10))", required: true, substitute: "(100 * 1.05^10)" },
+      { name: "values", description: "Comma-separated numbers for stats (e.g. 10,20,30,40,50)", required: false, substitute: "10,20,30,40,50" },
+    ],
+    toolSlugs: ["calc", "stats", "percentage"],
+    workflow: [
+      "Evaluate the math expression with calc — supports arithmetic, exponents, parentheses, and common functions.",
+      "Compute descriptive statistics on the values array with stats — mean, median, mode, min, max, stddev.",
+      "Compute the first value as a percentage of the total with percentage.",
+    ],
+    claudePrompt:
+      "Run the math suite using Agent402: (1) calc {expression:\"(100 * 1.05^10)\"} — evaluate. (2) stats {values:[10,20,30,40,50]} — descriptive stats. (3) percentage {value:10, total:150} — percent. Return all three results.",
+  },
+
+  {
+    slug: "date-math",
+    title: "Date math",
+    tagline:
+      "Date calculations in one pass: difference between two dates, add time to a date, and compute age from a birthdate.",
+    useCase:
+      "An agent needs to answer date questions: how many days between two events, what date is 30 days from now, how old is someone. Common in scheduling, contract management, and user-profile logic.",
+    promptArgs: [
+      { name: "from", description: "Start date (ISO format, e.g. 2024-01-01)", required: true, substitute: "2024-01-01" },
+      { name: "to", description: "End date (ISO format, e.g. 2026-07-04)", required: true, substitute: "2026-07-04" },
+    ],
+    toolSlugs: ["date-diff", "add-time", "age"],
+    workflow: [
+      "Compute the difference between the two dates with date-diff — returns days, hours, minutes, and a human-readable string.",
+      "Add 30 days to the start date with add-time — demonstrates forward-projection from an anchor date.",
+      "Compute age from the start date as a birthdate with age — returns years, months, days.",
+    ],
+    claudePrompt:
+      "Run date math using Agent402: (1) date-diff {from:\"2024-01-01\", to:\"2026-07-04\"} — get difference. (2) add-time {date:\"2024-01-01\", amount:30, unit:\"days\"} — project forward. (3) age {birthdate:\"2024-01-01\"} — compute age. Return all three.",
+  },
+
+  {
+    slug: "semver-check",
+    title: "Semver check",
+    tagline:
+      "Compare two semantic versions and see the structural diff — is it a major/minor/patch bump, and what changed?",
+    useCase:
+      "An agent is evaluating a dependency update or release decision and needs to know: which version is newer, what type of bump is it, and what's the structural difference? One call answers both questions.",
+    promptArgs: [
+      { name: "a", description: "First version (e.g. 2.4.0)", required: true, substitute: "2.4.0" },
+      { name: "b", description: "Second version (e.g. 2.10.1)", required: true, substitute: "2.10.1" },
+    ],
+    toolSlugs: ["semver", "json-diff"],
+    workflow: [
+      "Compare the two versions with semver — returns which is greater, the difference type (major/minor/patch), and parsed components.",
+      "Show the structural difference with json-diff — wraps each version in an object and diffs them, making the changed fields visible.",
+    ],
+    claudePrompt:
+      "Compare versions using Agent402: (1) semver {a:\"2.4.0\", b:\"2.10.1\"} — compare. (2) json-diff {a:{version:\"2.4.0\"}, b:{version:\"2.10.1\"}} — structural diff. Return {comparison, diff}.",
+  },
+
+  {
+    slug: "lorem-gen",
+    title: "Lorem generator",
+    tagline:
+      "Generate placeholder text and immediately analyze it — word count, character count, estimated tokens. The 'fill a content slot and know its size' workflow.",
+    useCase:
+      "A designer or content pipeline needs placeholder text of a specific length AND needs to know its token budget for LLM context planning. Chain mode: lorem generates, text-stats measures.",
+    promptArgs: [
+      { name: "words", description: "Number of words to generate (default 100)", required: false, substitute: "100" },
+    ],
+    toolSlugs: ["lorem", "text-stats"],
+    workflow: [
+      "Generate placeholder text with lorem — produces N words of lorem ipsum.",
+      "Measure the generated text with text-stats — returns word count, character count, sentence count, and estimated tokens.",
+    ],
+    claudePrompt:
+      "Generate and measure placeholder text using Agent402: (1) lorem {words:100} — generate text. (2) text-stats on the generated text — get counts. Return {text, stats}.",
+  },
+
+  {
+    slug: "qr-gen",
+    title: "QR code generator",
+    tagline:
+      "Generate a QR code and validate the URL in one pass — the encoded image plus a parsed breakdown of the URL structure.",
+    useCase:
+      "An agent is generating a QR code for a URL and wants to confirm the URL is well-formed before encoding it. Catches typos in URLs before they get printed on physical media.",
+    promptArgs: [
+      { name: "text", description: "URL or text to encode (e.g. https://agent402.tools)", required: true, substitute: "https://agent402.tools" },
+    ],
+    toolSlugs: ["qr", "url-parse"],
+    workflow: [
+      "Generate the QR code with qr — returns a base64-encoded PNG image at 512px.",
+      "Parse the URL with url-parse — validates structure and returns protocol, hostname, path, query params. Catches malformed URLs before they're encoded.",
+    ],
+    claudePrompt:
+      "Generate a QR code using Agent402: (1) qr {text:\"https://agent402.tools\", size:512} — get base64 PNG. (2) url-parse {url:\"https://agent402.tools\"} — validate URL structure. Return {qrImage, urlParsed}.",
+  },
+
+  {
+    slug: "number-crunch",
+    title: "Number crunch",
+    tagline:
+      "Statistical analysis suite: descriptive statistics, correlation analysis, and outlier detection on a single dataset.",
+    useCase:
+      "An agent has a series of numbers (prices, scores, measurements) and needs the full statistical picture in one call: central tendency, spread, whether any values are anomalous, and the trend direction.",
+    promptArgs: [
+      { name: "values", description: "Comma-separated numbers (e.g. 10,12,15,11,50,13,14)", required: true, substitute: "10,12,15,11,50,13,14" },
+    ],
+    toolSlugs: ["stats-summary", "correlation", "outliers"],
+    workflow: [
+      "Compute descriptive statistics with stats-summary — count, mean, median, stddev, quartiles, min, max.",
+      "Run correlation of the values against their indices (position trend) — r near +1/-1 means a clear upward/downward trend over the series.",
+      "Detect outliers — IQR fence + z-score methods flag anomalous values the agent should investigate or exclude.",
+    ],
+    claudePrompt:
+      "Analyze the dataset [10,12,15,11,50,13,14] using Agent402: (1) stats-summary — descriptive stats. (2) correlation with x=values, y=indices — trend detection. (3) outliers — flag anomalies. Return {stats, trend, outliers}.",
+  },
+
+  {
+    slug: "finance-calc",
+    title: "Financial calculators",
+    tagline:
+      "Compound interest, amortization schedule, and loan payment in one call — the three financial calculations agents need most.",
+    useCase:
+      "An agent is helping with a financial decision (investment projection, mortgage comparison, loan evaluation) and needs all three core calculations without making separate calls. Pure math, no market data needed.",
+    promptArgs: [
+      { name: "principal", description: "Starting amount in dollars (default 10000)", required: false, substitute: "10000" },
+      { name: "rate", description: "Annual interest rate as a percentage (default 7)", required: false, substitute: "7" },
+      { name: "years", description: "Time horizon in years (default 10)", required: false, substitute: "10" },
+    ],
+    toolSlugs: ["compound-interest", "amortization", "loan-payment"],
+    workflow: [
+      "Project growth with compound-interest — monthly compounding over the given horizon. Shows future value of the principal.",
+      "Generate an amortization schedule — first 12 periods showing principal/interest breakdown per payment.",
+      "Compute the monthly payment with loan-payment — the flat PMT for the given principal, rate, and term.",
+    ],
+    claudePrompt:
+      "Run financial calculators using Agent402: (1) compound-interest {principal:10000, annualRate:0.07, years:10, compoundingPerYear:12}. (2) amortization {principal:300000, annualRate:0.065, termYears:30, maxRows:12}. (3) loan-payment {principal:300000, annualRate:0.065, termYears:30}. Return {growth, schedule, payment}.",
+  },
+
+  {
+    slug: "text-transform",
+    title: "Text transform",
+    tagline:
+      "Convert text to all common cases in one call: camelCase, slug-form, and snake_case. The 'name this variable/URL/column' workflow.",
+    useCase:
+      "A developer or content pipeline has a human-readable string and needs it in multiple programming conventions at once — for a JS variable (camel), a URL path (slug), and a database column (snake).",
+    promptArgs: [
+      { name: "text", description: "Text to convert (e.g. Hello World Example)", required: true, substitute: "Hello World Example" },
+    ],
+    toolSlugs: ["case", "slugify", "case"],
+    workflow: [
+      "Convert to camelCase with case {to:\"camel\"} — for JavaScript/TypeScript variable names.",
+      "Convert to a URL slug with slugify — lowercase, hyphens, URL-safe.",
+      "Convert to snake_case with case {to:\"snake\"} — for database columns and Python variables.",
+    ],
+    claudePrompt:
+      "Transform \"Hello World Example\" using Agent402: (1) case {text, to:\"camel\"} → helloWorldExample. (2) slugify {text} → hello-world-example. (3) case {text, to:\"snake\"} → hello_world_example. Return all three.",
+  },
+
+  {
+    slug: "markdown-convert",
+    title: "Markdown converter",
+    tagline:
+      "Markdown to HTML and back — a round-trip conversion that proves fidelity and gives you both formats from one input.",
+    useCase:
+      "An agent has markdown content and needs HTML output (for email, CMS, or rendering), plus wants to verify the round-trip fidelity by converting back. Useful for content pipelines and format migration.",
+    promptArgs: [
+      { name: "markdown", description: "Markdown text to convert", required: true, substitute: "# Hello\\n\\nThis is **bold** and _italic_." },
+    ],
+    toolSlugs: ["markdown-to-html", "html-to-markdown"],
+    workflow: [
+      "Convert markdown to HTML with markdown-to-html — produces clean semantic HTML.",
+      "Convert the HTML back to markdown with html-to-markdown — verifies round-trip fidelity. Differences indicate formatting that doesn't survive the conversion.",
+    ],
+    claudePrompt:
+      "Round-trip markdown using Agent402: (1) markdown-to-html {markdown:\"# Hello\\n\\nThis is **bold** and _italic_.\"} — get HTML. (2) html-to-markdown on the result — verify round-trip. Return {html, roundTripped}.",
+  },
+
+  {
+    slug: "xml-json",
+    title: "XML to JSON",
+    tagline:
+      "Convert XML to JSON and pretty-print it — the 'legacy API response to modern format' workflow in one call.",
+    useCase:
+      "An agent received XML (from a SOAP service, RSS feed, or legacy API) and needs clean formatted JSON. The chain converts then pretty-prints for readability.",
+    promptArgs: [
+      { name: "xml", description: "XML string to convert", required: true, substitute: "<root><item>hello</item></root>" },
+    ],
+    toolSlugs: ["xml-to-json", "json-format"],
+    workflow: [
+      "Convert XML to JSON with xml-to-json — parses the XML structure into a JSON object.",
+      "Pretty-print the result with json-format — indented, readable JSON for inspection or downstream use.",
+    ],
+    claudePrompt:
+      "Convert XML to JSON using Agent402: (1) xml-to-json {xml:\"<root><item>hello</item></root>\"} — parse. (2) json-format on the result — pretty-print. Return the formatted JSON.",
+  },
+
+  {
+    slug: "checksum-suite",
+    title: "Checksum suite",
+    tagline:
+      "All checksums at once: SHA-256 (cryptographic), CRC32 (fast integrity), and Adler-32 (streaming check). Three algorithms, one input, one call.",
+    useCase:
+      "An agent needs to verify file or message integrity and wants multiple checksum algorithms for different use cases: SHA-256 for security, CRC32 for quick dedup checks, Adler-32 for streaming validation.",
+    promptArgs: [
+      { name: "text", description: "Text to checksum (e.g. file integrity check)", required: true, substitute: "file integrity check" },
+    ],
+    toolSlugs: ["hash", "crc32", "checksum"],
+    workflow: [
+      "Compute SHA-256 with hash — cryptographically secure, used for content-addressing and tamper detection.",
+      "Compute CRC32 with crc32 — fast, non-cryptographic, used for quick equality checks and network frame validation.",
+      "Compute Adler-32 with checksum — lightweight rolling checksum used in zlib/deflate streams and rsync-style delta detection.",
+    ],
+    claudePrompt:
+      "Checksum \"file integrity check\" using Agent402: (1) hash {text, algo:\"sha256\"} — SHA-256. (2) crc32 {text} — CRC32. (3) checksum {text, algo:\"adler32\"} — Adler-32. Return all three checksums.",
+  },
+
+  {
+    slug: "validator-suite",
+    title: "Validator suite",
+    tagline:
+      "Validate common identifiers in one call: ISBN (book), IBAN (bank account), and credit card number (Luhn check).",
+    useCase:
+      "An agent is processing form inputs or imported data and needs to validate multiple identifier formats at once — catches typos and formatting errors before they reach a database or payment processor.",
+    promptArgs: [
+      { name: "iban", description: "IBAN to validate (e.g. DE89370400440532013000)", required: true, substitute: "DE89370400440532013000" },
+      { name: "number", description: "Credit card number to validate (e.g. 4242424242424242)", required: false, substitute: "4242424242424242" },
+    ],
+    toolSlugs: ["isbn-validate", "iban-validate", "card-validate"],
+    workflow: [
+      "Validate a known-good ISBN with isbn-validate — checks format and check digit for ISBN-10 and ISBN-13.",
+      "Validate the IBAN with iban-validate — checks country code, length, and IBAN check digits.",
+      "Validate the card number with card-validate — Luhn algorithm check plus card network detection (Visa, Mastercard, etc.).",
+    ],
+    claudePrompt:
+      "Validate identifiers using Agent402: (1) isbn-validate {isbn:\"978-3-16-148410-0\"} — check ISBN. (2) iban-validate {iban:\"DE89370400440532013000\"} — check IBAN. (3) card-validate {number:\"4242424242424242\"} — Luhn check. Return {isbn, iban, card} with valid/invalid + details.",
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Standard-tier skill packs (2026-07 batch 2): mid-value bundles ($0.05–$0.12).
+  // ──────────────────────────────────────────────────────────────────────────
+
+  {
+    slug: "article-digest",
+    title: "Article digest",
+    tagline:
+      "Quick research brief on any topic — web search results plus an AI-generated answer in one pass.",
+    useCase:
+      "An agent needs a fast overview of a topic: the top 5 web results plus a synthesized answer. Useful for research briefs, background checks before a meeting, or seeding a longer document with cited sources.",
+    promptArgs: [
+      { name: "topic", description: "Topic to research (e.g. x402 payment protocol)", required: true, substitute: "x402 payment protocol" },
+    ],
+    toolSlugs: ["search", "answer"],
+    workflow: [
+      "Run search with q=<topic> and count=5 to get the top web results — titles, URLs, and snippets.",
+      "Run answer with q=<topic> to get a synthesized response with citations. Compare against the search results for consistency.",
+    ],
+    claudePrompt:
+      "Research 'x402 payment protocol' using Agent402's article-digest skill pack: (1) search for the top 5 results, (2) get an AI-generated answer with citations. Summarize findings in a brief with key points and sources.",
+  },
+
+  {
+    slug: "pdf-pipeline",
+    title: "PDF processing pipeline",
+    tagline:
+      "Full PDF processing pipeline — metadata, markdown conversion, and first-page extraction in one call.",
+    useCase:
+      "An agent receives a PDF URL and needs to understand it quickly: what's the page count and metadata, what does the full text say (as markdown), and what's on page 1? Running three separate tools is three payments; this pack does it in one.",
+    promptArgs: [
+      { name: "url", description: "URL of the PDF to process", required: true, substitute: "https://arxiv.org/pdf/1706.03762" },
+    ],
+    toolSlugs: ["pdf-info", "pdf-to-markdown", "pdf-extract-pages"],
+    workflow: [
+      "Call pdf-info to get page count, file size, title, author, and other metadata.",
+      "Call pdf-to-markdown to convert the entire PDF to clean markdown text.",
+      "Call pdf-extract-pages with pages='1' to get just the first page as a separate document.",
+    ],
+    claudePrompt:
+      "Process the PDF at https://arxiv.org/pdf/1706.03762 using Agent402's pdf-pipeline skill pack: (1) pdf-info for metadata, (2) pdf-to-markdown for full text, (3) pdf-extract-pages for page 1. Summarize the document structure and first-page content.",
+  },
+
+  {
+    slug: "url-inspector",
+    title: "URL inspector",
+    tagline:
+      "Quick URL health and metadata check — parse the URL structure, verify reachability, and pull page metadata in one pass.",
+    useCase:
+      "An agent needs to verify a URL is live and understand what's behind it before recommending it, embedding it, or crawling it. Combines structural parsing (protocol, host, path), liveness check (status, latency, redirects), and metadata extraction (title, description, OG tags).",
+    promptArgs: [
+      { name: "url", description: "URL to inspect (https://…)", required: true, substitute: "https://stripe.com" },
+    ],
+    toolSlugs: ["url-parse", "http-check", "meta"],
+    workflow: [
+      "Call url-parse to decompose the URL into protocol, hostname, path, query parameters, and fragment.",
+      "Call http-check to verify the URL is reachable — status code, latency, redirect chain.",
+      "Call meta to pull the page's title, description, canonical URL, and OpenGraph/Twitter card tags.",
+    ],
+    claudePrompt:
+      "Inspect https://stripe.com using Agent402's url-inspector skill pack: (1) url-parse for structure, (2) http-check for reachability and latency, (3) meta for page metadata and OG tags. Report the URL health status and key metadata.",
+  },
+
+  {
+    slug: "content-grade",
+    title: "Content grade",
+    tagline:
+      "Grade a page's content quality — extract the readable content then analyze keyword density.",
+    useCase:
+      "An SEO agent or content reviewer needs to evaluate a page: extract the clean text and then run keyword analysis to assess topic focus and density. Chain mode ensures keywords runs on the extracted text, not raw HTML.",
+    promptArgs: [
+      { name: "url", description: "URL of the page to grade", required: true, substitute: "https://blog.cloudflare.com/x402/" },
+    ],
+    toolSlugs: ["extract", "keywords"],
+    workflow: [
+      "Call extract to pull the page's readable content as clean markdown — strips nav, ads, and boilerplate.",
+      "Call keywords on the extracted text to identify the top terms and their frequency — reveals topic focus and potential keyword stuffing.",
+    ],
+    claudePrompt:
+      "Grade the content quality of https://blog.cloudflare.com/x402/ using Agent402's content-grade skill pack: (1) extract the readable content, (2) run keyword analysis on the extracted text. Report the top keywords, density, and whether the content is well-focused.",
+  },
+
+  {
+    slug: "openapi-audit",
+    title: "OpenAPI spec audit",
+    tagline:
+      "Lint an OpenAPI spec and validate a sample payload against it — catch schema errors in one pass.",
+    useCase:
+      "A developer has an OpenAPI spec URL and wants a quick quality check: does it lint cleanly (missing descriptions, unused schemas, invalid refs) and does a sample payload pass validation? Useful before publishing to a marketplace or generating client SDKs.",
+    promptArgs: [
+      { name: "url", description: "URL of the OpenAPI spec (JSON or YAML)", required: true, substitute: "https://petstore3.swagger.io/api/v3/openapi.json" },
+    ],
+    toolSlugs: ["openapi-lint", "openapi-validate-payload"],
+    workflow: [
+      "Call openapi-lint with the spec URL to get lint warnings and errors — missing descriptions, unused schemas, invalid references.",
+      "Call openapi-validate-payload with an empty payload to surface required-field violations and schema mismatches.",
+    ],
+    claudePrompt:
+      "Audit the OpenAPI spec at https://petstore3.swagger.io/api/v3/openapi.json using Agent402's openapi-audit skill pack: (1) lint it for warnings and errors, (2) validate an empty payload against the first endpoint. Report lint issues and validation failures.",
+  },
+
+  {
+    slug: "json-pipeline",
+    title: "JSON pipeline",
+    tagline:
+      "Validate, pretty-print, and convert JSON to CSV in one pass — the complete JSON processing workflow.",
+    useCase:
+      "An agent receives raw JSON (from an API response, a webhook body, or user input) and needs to validate it's well-formed, format it for readability, and convert it to CSV for a spreadsheet or data pipeline. Three tools in one payment.",
+    promptArgs: [
+      { name: "json", description: "JSON string to process", required: true, substitute: "[{\"name\":\"Alice\",\"age\":30}]" },
+    ],
+    toolSlugs: ["json-validate", "json-format", "json-to-csv"],
+    workflow: [
+      "Call json-validate to confirm the input is well-formed JSON (catches syntax errors, trailing commas, etc.).",
+      "Call json-format to pretty-print with consistent indentation.",
+      "Call json-to-csv to convert the JSON array to a CSV string for spreadsheet import.",
+    ],
+    claudePrompt:
+      "Process this JSON using Agent402's json-pipeline skill pack: [{\"name\":\"Alice\",\"age\":30}]. (1) Validate it, (2) pretty-print it, (3) convert to CSV. Report any validation issues and provide the formatted output.",
+  },
+
+  {
+    slug: "data-convert",
+    title: "Data format converter",
+    tagline:
+      "CSV to JSON to YAML pipeline — convert tabular data through the common interchange formats in one chain.",
+    useCase:
+      "An agent has CSV data and needs it in both JSON and YAML for different consumers (an API expects JSON, a config file needs YAML). This chain parses the CSV into JSON, then converts that JSON to YAML — two hops, one payment.",
+    promptArgs: [
+      { name: "csv", description: "CSV string to convert", required: true, substitute: "name,age\nAlice,30" },
+    ],
+    toolSlugs: ["csv-to-json", "json-to-yaml"],
+    workflow: [
+      "Call csv-to-json to parse the CSV into a JSON array of objects (headers become keys).",
+      "Call json-to-yaml on the resulting JSON to produce clean YAML output.",
+    ],
+    claudePrompt:
+      "Convert this CSV through Agent402's data-convert pipeline: 'name,age\\nAlice,30'. (1) Parse to JSON, (2) convert to YAML. Return both the JSON and YAML representations.",
+  },
+
+  {
+    slug: "api-health",
+    title: "API health check",
+    tagline:
+      "Is this API endpoint healthy? Liveness check, response headers, and TLS certificate status in one pass.",
+    useCase:
+      "An agent needs to verify an API is up and properly configured before making production calls: is it reachable (status + latency), what do the response headers say (rate limits, auth requirements, CORS), and is the TLS cert valid and not expiring soon?",
+    promptArgs: [
+      { name: "url", description: "API endpoint URL to check (https://…)", required: true, substitute: "https://api.github.com" },
+    ],
+    toolSlugs: ["http-check", "http-headers", "tls-cert"],
+    workflow: [
+      "Call http-check to verify the endpoint is reachable — status code, response time, redirect chain.",
+      "Call http-headers to inspect the response headers — rate limit headers, auth requirements, CORS policy, cache directives.",
+      "Call tls-cert with the host extracted from the URL to check certificate validity, issuer, expiry, and chain trust.",
+    ],
+    claudePrompt:
+      "Check the health of https://api.github.com using Agent402's api-health skill pack: (1) http-check for liveness and latency, (2) http-headers for rate limits and security headers, (3) tls-cert for certificate status. Report whether the endpoint is production-ready.",
+  },
+
+  {
+    slug: "world-data",
+    title: "World Bank country data",
+    tagline:
+      "GDP and population for a country — two key World Bank indicators in one call.",
+    useCase:
+      "An agent needs basic economic context for a country: what's the GDP and how many people live there? These are the two most-requested World Bank indicators and together they give GDP per capita as a derived metric.",
+    promptArgs: [
+      { name: "country", description: "ISO 3166-1 alpha-2 country code (e.g. US, GB, JP)", required: true, substitute: "US" },
+    ],
+    toolSlugs: ["world-bank-indicator", "world-bank-indicator"],
+    workflow: [
+      "Call world-bank-indicator with country and indicator='NY.GDP.MKTP.CD' to get GDP (current USD).",
+      "Call world-bank-indicator with country and indicator='SP.POP.TOTL' to get total population.",
+    ],
+    claudePrompt:
+      "Get GDP and population for the US using Agent402's world-data skill pack: (1) World Bank GDP indicator NY.GDP.MKTP.CD, (2) World Bank population indicator SP.POP.TOTL. Compute GDP per capita from the results.",
+  },
+
+  {
+    slug: "fred-snapshot",
+    title: "Fed economic snapshot",
+    tagline:
+      "Key Federal Reserve economic indicators — fed funds rate, unemployment, and CPI — in one call.",
+    useCase:
+      "An agent providing economic context needs the three most-watched Fed indicators: where rates are (FEDFUNDS), how tight the labor market is (UNRATE), and where inflation stands (CPIAUCSL). Three FRED series calls bundled into one payment.",
+    promptArgs: [],
+    toolSlugs: ["fred-series", "fred-series", "fred-series"],
+    workflow: [
+      "Call fred-series with series='FEDFUNDS' to get the effective federal funds rate.",
+      "Call fred-series with series='UNRATE' to get the unemployment rate.",
+      "Call fred-series with series='CPIAUCSL' to get the Consumer Price Index for All Urban Consumers.",
+    ],
+    claudePrompt:
+      "Get a Fed economic snapshot using Agent402's fred-snapshot skill pack: (1) FEDFUNDS — current rate, (2) UNRATE — unemployment, (3) CPIAUCSL — CPI. Summarize the macro picture: is the Fed tightening or easing, and what does the jobs/inflation combo suggest?",
+  },
+
+  {
+    slug: "contact-verify",
+    title: "Contact verification",
+    tagline:
+      "Verify an email address is deliverable — syntax validation plus MX record check on the domain.",
+    useCase:
+      "An agent collecting contact information needs to verify an email before storing it or sending to it: does the address pass syntax validation, and does the domain actually have mail servers? Catches typos, disposable domains, and dead mailboxes.",
+    promptArgs: [
+      { name: "email", description: "Email address to verify (e.g. test@gmail.com)", required: true, substitute: "test@gmail.com" },
+    ],
+    toolSlugs: ["email-validate", "dns-lookup"],
+    workflow: [
+      "Call email-validate to check syntax, domain existence, and mailbox reachability.",
+      "Call dns-lookup with host=<domain from email> and type='MX' to independently verify the domain has mail exchange records.",
+    ],
+    claudePrompt:
+      "Verify the email address test@gmail.com using Agent402's contact-verify skill pack: (1) email-validate for syntax and reachability, (2) dns-lookup for MX records on gmail.com. Report whether the address is likely deliverable.",
+  },
+
+  {
+    slug: "domain-age",
+    title: "Domain age and legitimacy",
+    tagline:
+      "How old and legit is this domain? WHOIS registration, DNS resolution, and TLS certificate in one pass.",
+    useCase:
+      "An agent evaluating a website's trustworthiness needs the basic legitimacy signals: how old is the registration (new domains are higher risk), does it resolve to a real IP, and is the TLS cert valid? Useful for fraud detection, link safety checks, and vendor due diligence.",
+    promptArgs: [
+      { name: "domain", description: "Domain to check (e.g. google.com)", required: true, substitute: "google.com" },
+    ],
+    toolSlugs: ["whois", "dns-lookup", "tls-cert"],
+    workflow: [
+      "Call whois to get registration date, registrar, expiry, and age — domains less than 6 months old are higher risk.",
+      "Call dns-lookup with host=domain and type='A' to verify the domain resolves to a real IP address.",
+      "Call tls-cert with host=domain to check the certificate issuer, validity period, and chain trust.",
+    ],
+    claudePrompt:
+      "Check the age and legitimacy of google.com using Agent402's domain-age skill pack: (1) whois for registration age and registrar, (2) dns-lookup for A record resolution, (3) tls-cert for certificate validity. Report a trust assessment based on age, DNS health, and cert status.",
+  },
+
+  {
+    slug: "hash-verify",
+    title: "Hash verification suite",
+    tagline:
+      "All major hash algorithms at once — SHA-256, SHA-512, and MD5 for any input text.",
+    useCase:
+      "An agent needs to produce file or content hashes for integrity verification, deduplication, or comparison. Instead of three separate calls, get all three standard hashes in one payment. Useful for content fingerprinting, checksum generation, and cache-key derivation.",
+    promptArgs: [
+      { name: "text", description: "Text to hash", required: true, substitute: "hello world" },
+    ],
+    toolSlugs: ["hash", "hash", "hash"],
+    workflow: [
+      "Call hash with text and algo='sha256' for the most common integrity hash.",
+      "Call hash with text and algo='sha512' for higher-security applications.",
+      "Call hash with text and algo='md5' for legacy compatibility and quick fingerprinting.",
+    ],
+    claudePrompt:
+      "Hash 'hello world' using Agent402's hash-verify skill pack: (1) SHA-256, (2) SHA-512, (3) MD5. Return all three digests for comparison and integrity verification.",
+  },
+
+  {
+    slug: "encoding-suite",
+    title: "Encoding suite",
+    tagline:
+      "Encode text in all common formats at once — Base64, hex, and URL encoding in one pass.",
+    useCase:
+      "An agent preparing data for different transport layers needs multiple encodings: Base64 for binary-in-text, hex for debugging and low-level protocols, URL encoding for query parameters. One payment produces all three.",
+    promptArgs: [
+      { name: "text", description: "Text to encode", required: true, substitute: "hello world" },
+    ],
+    toolSlugs: ["base64", "hex", "url-code"],
+    workflow: [
+      "Call base64 with text and mode='encode' for Base64 representation.",
+      "Call hex with text and mode='encode' for hexadecimal representation.",
+      "Call url-code with text and mode='encode' for URL-encoded representation.",
+    ],
+    claudePrompt:
+      "Encode 'hello world' using Agent402's encoding-suite skill pack: (1) Base64, (2) hex, (3) URL encoding. Return all three encoded forms.",
+  },
+
+  {
+    slug: "jwt-toolkit",
+    title: "JWT toolkit",
+    tagline:
+      "Decode and verify a JWT in one pass — see the payload and check the signature.",
+    useCase:
+      "An agent debugging authentication needs to both decode a JWT (see claims, expiry, issuer) and verify the signature. Two operations that always go together, bundled into one payment.",
+    promptArgs: [
+      { name: "token", description: "JWT token string", required: true, substitute: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.xxx" },
+    ],
+    toolSlugs: ["jwt-decode", "jwt-verify"],
+    workflow: [
+      "Call jwt-decode to extract the header (algorithm, type) and payload (claims, expiry) without verification.",
+      "Call jwt-verify with the token and secret='test' to check whether the signature is valid.",
+    ],
+    claudePrompt:
+      "Analyze this JWT using Agent402's jwt-toolkit skill pack: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.xxx. (1) Decode it to see the claims, (2) verify the signature with secret='test'. Report the payload and verification result.",
+  },
+
+  {
+    slug: "timezone-planner",
+    title: "Timezone planner",
+    tagline:
+      "Time zone conversion, business day calculation, and cron schedule preview — scheduling in one pass.",
+    useCase:
+      "An agent coordinating across time zones needs to convert a time, count business days between dates, and preview when a cron job will fire. Three scheduling primitives bundled together for meeting planners, deployment schedulers, and coordination agents.",
+    promptArgs: [
+      { name: "time", description: "ISO datetime to convert (e.g. 2026-06-11T10:00:00)", required: true, substitute: "2026-06-11T10:00:00" },
+      { name: "from", description: "Source timezone (e.g. America/New_York)", required: false, substitute: "America/New_York" },
+      { name: "to", description: "Target timezone (e.g. Asia/Tokyo)", required: false, substitute: "Asia/Tokyo" },
+    ],
+    toolSlugs: ["time-convert", "business-days", "cron-next"],
+    workflow: [
+      "Call time-convert with the time, from timezone, and to timezone to get the converted time.",
+      "Call business-days with start and end dates to count working days in the range.",
+      "Call cron-next with a sample expression to preview upcoming schedule occurrences.",
+    ],
+    claudePrompt:
+      "Plan a meeting using Agent402's timezone-planner skill pack: Convert 2026-06-11T10:00:00 from America/New_York to Asia/Tokyo. Also check how many business days are between now and that date, and preview the next 5 occurrences of a weekly Monday 10am cron.",
+  },
+
+  {
+    slug: "text-analyze",
+    title: "Text analysis",
+    tagline:
+      "Full text analysis — word/sentence stats, keyword extraction, and token count in one pass.",
+    useCase:
+      "An agent evaluating text content needs the complete picture: how long is it (words, sentences, paragraphs), what are the key topics (keyword extraction), and how many LLM tokens would it consume? Useful for content pipelines, RAG prep, and prompt budgeting.",
+    promptArgs: [
+      { name: "text", description: "Text to analyze", required: true, substitute: "The x402 protocol enables pay-per-call API payments using USDC stablecoins on Base and other chains." },
+    ],
+    toolSlugs: ["text-stats", "keywords", "token-count"],
+    workflow: [
+      "Call text-stats to get word count, sentence count, paragraph count, and reading time.",
+      "Call keywords to extract the top terms and their frequency.",
+      "Call token-count to estimate the LLM token consumption (useful for prompt budgeting).",
+    ],
+    claudePrompt:
+      "Analyze this text using Agent402's text-analyze skill pack: 'The x402 protocol enables pay-per-call API payments using USDC stablecoins on Base and other chains.' (1) Text stats, (2) keywords, (3) token count. Report the full analysis.",
+  },
+
+  {
+    slug: "content-clean",
+    title: "Content cleaner",
+    tagline:
+      "Clean and deduplicate text — redact PII, remove duplicate lines, and sort in one pass.",
+    useCase:
+      "An agent processing raw text (log files, user submissions, scraped content) needs to clean it before storage or analysis: redact emails and phone numbers, remove duplicate lines, and sort for consistency. Three cleanup operations in one payment.",
+    promptArgs: [
+      { name: "text", description: "Text to clean", required: true, substitute: "line b\nline a\nline b\nemail: test@test.com" },
+    ],
+    toolSlugs: ["redact", "dedupe-lines", "sort-lines"],
+    workflow: [
+      "Call redact with patterns=['email','phone'] to mask PII in the text.",
+      "Call dedupe-lines to remove duplicate lines from the text.",
+      "Call sort-lines to alphabetically sort the remaining lines.",
+    ],
+    claudePrompt:
+      "Clean this text using Agent402's content-clean skill pack: 'line b\\nline a\\nline b\\nemail: test@test.com'. (1) Redact emails and phone numbers, (2) remove duplicate lines, (3) sort alphabetically. Return the cleaned result.",
+  },
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.

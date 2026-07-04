@@ -127,6 +127,19 @@ const NETWORK = new Set([
   "/api/skill/link-preview", "/api/skill/any-to-markdown", "/api/skill/status-snapshot",
   "/api/skill/financial-analysis", "/api/skill/market-brief",
   "/api/skill/company-dossier", "/api/skill/domain-intel", "/api/skill/crypto-dossier",
+  "/api/skill/earnings-watch", "/api/skill/insider-alert", "/api/skill/ipo-watch",
+  "/api/skill/yield-dashboard", "/api/skill/inflation-check", "/api/skill/fx-monitor",
+  "/api/skill/defi-dashboard", "/api/skill/nft-portfolio", "/api/skill/wallet-audit",
+  "/api/skill/gas-optimizer", "/api/skill/ssl-audit", "/api/skill/email-security",
+  "/api/skill/brand-protection", "/api/skill/competitor-scan", "/api/skill/page-audit",
+  // Standard-tier batch 2 (2026-07): all skill packs go in NETWORK as a
+  // timeout safety hedge (bundled execution can exceed the 20s AbortSignal).
+  "/api/skill/article-digest", "/api/skill/pdf-pipeline", "/api/skill/url-inspector",
+  "/api/skill/content-grade", "/api/skill/openapi-audit", "/api/skill/json-pipeline",
+  "/api/skill/data-convert", "/api/skill/api-health", "/api/skill/world-data",
+  "/api/skill/fred-snapshot", "/api/skill/contact-verify", "/api/skill/domain-age",
+  "/api/skill/hash-verify", "/api/skill/encoding-suite", "/api/skill/jwt-toolkit",
+  "/api/skill/timezone-planner", "/api/skill/text-analyze", "/api/skill/content-clean",
   // LLM proxy kit: every call hits OpenAI upstream. Returns 503 without
   // OPENAI_API_KEY — the 502/503/504 tolerance below covers that.
   "/api/llm", "/api/llm-pro", "/api/llm-premium",
