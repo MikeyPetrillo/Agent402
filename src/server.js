@@ -33,6 +33,7 @@ import { contactPage } from "./contact.js";
 import { quickstartPage } from "./quickstart.js";
 import { robotsTxt, sitemapXml, llmsTxt, sitemapIndex, sitemapPages, sitemapTools, sitemapGuides, sitemapSkills } from "./seo.js";
 import { serviceManifest, reliabilityReport } from "./discovery.js";
+import { acpFeed, acpManifest } from "./acp.js";
 import { findTools } from "./find.js";
 import { indexPage, indexSnapshot, routeQuery, startCrawler } from "./x402-index.js";
 import { getLeaderboardSnapshot, startLeaderboardRefresh, leaderboardPage, rankBy } from "./leaderboard.js";
@@ -1046,6 +1047,18 @@ app.get("/api/reliability", (_req, res) =>
     stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }),
   }))
 );
+// Stripe Agentic Commerce Protocol (ACP) — lets AI agents on Stripe's payment
+// rails discover and browse our tool catalog. Free, unpaywalled discovery surface.
+app.get("/acp/feed", (_req, res) =>
+  res.set("Cache-Control", "public, max-age=3600").json(acpFeed({ baseUrl: BASE_URL, catalog: CATALOG, powSlugs: POW_SLUGS }))
+);
+app.get("/acp/manifest", (_req, res) =>
+  res.set("Cache-Control", "public, max-age=3600").json(acpManifest({
+    baseUrl: BASE_URL, network: NETWORK, networks: enabledNetworks(NETWORK),
+    wallet: WALLET_ADDRESS, toolCount: Object.keys(CATALOG).length, powDifficulty: POW_DIFFICULTY,
+  }))
+);
+
 // One-call tool resolver (free): an agent sends a task description and gets the
 // best-matching tools with route, price, input schema, and a ready example — so
 // it can call directly instead of burning tokens "exploring" to find a tool.
