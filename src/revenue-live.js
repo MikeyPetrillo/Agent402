@@ -45,7 +45,11 @@ export const EVM = {
   polygon: {
     label: "Polygon", asset: "USDC", span: 20000,
     token: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
-    rpcs: ["https://polygon.drpc.org", "https://polygon.llamarpc.com", "https://polygon-rpc.com", "https://rpc.ankr.com/polygon"],
+    // Alchemy first (reliable getLogs); free RPCs fail on historical queries.
+    rpcs: [
+      ...(process.env.ALCHEMY_API_KEY ? [`https://polygon-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
+      "https://polygon.drpc.org", "https://polygon.llamarpc.com", "https://polygon-rpc.com",
+    ],
     explorer: (a) => `https://polygonscan.com/address/${a}#tokentxns`,
     tx: (h) => `https://polygonscan.com/tx/${h}`,
   },
@@ -216,14 +220,27 @@ async function stellarRail(wallet) {
         const payData = await payRes.json();
         const records = payData?._embedded?.records || [];
         for (const r of records) {
-          if (r.type !== "payment" || r.to !== wallet) continue;
-          if (r.asset_code !== "USDC" || r.asset_issuer !== USDC_ISSUER) continue;
-          out.recent.push({
-            tx: `https://stellar.expert/explorer/public/tx/${r.transaction_hash}`,
-            when: r.created_at || null,
-            usd: Number(r.amount) || 0,
-            from: r.from || null,
-          });
+          // x402 settlements are invoke_host_function (Soroban); wallet funding
+          // can be path_payment_strict_send or payment. Accept all that carry USDC.
+          if (r.type === "payment" || r.type === "path_payment_strict_send" || r.type === "path_payment_strict_receive") {
+            if (r.to !== wallet) continue;
+            if (r.asset_code !== "USDC") continue;
+            out.recent.push({
+              tx: `https://stellar.expert/explorer/public/tx/${r.transaction_hash}`,
+              when: r.created_at || null,
+              usd: Number(r.amount) || 0,
+              from: r.from || null,
+            });
+          } else if (r.type === "invoke_host_function") {
+            // Soroban x402 settlement — no amount/asset in the operation itself,
+            // but it's a confirmed interaction with this wallet. Show it.
+            out.recent.push({
+              tx: `https://stellar.expert/explorer/public/tx/${r.transaction_hash}`,
+              when: r.created_at || null,
+              usd: null, // amount not directly available from the operation
+              from: r.source_account || null,
+            });
+          }
         }
       }
     } catch { /* payment scan is best-effort */ }
