@@ -78,7 +78,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "dns-lookup", "dns-propagation", "spf-check", "dmarc-check", "dkim-lookup", "email-deliverability",
   "cert-transparency", "http-headers", "tech-stack", "asn-info",
   // x402 payments toolkit — kept off the free connector (paid surface only).
-  "x402-quote", "usdc-balance", "tx-status", "gas-estimate", "x402-verify", "transfer-authorization", "ens-resolve",
+  "x402-quote", "usdc-balance", "tx-status", "gas-estimate", "x402-verify", "transfer-authorization", "ens-resolve", "x402-audit",
   // Chain-kit: every tool talks to Alchemy and counts against our compute-unit
   // quota. PoW would let one client farm our paid upstream.
   "wallet-balance", "token-metadata", "token-price", "wallet-transactions",

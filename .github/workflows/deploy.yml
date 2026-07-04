@@ -654,6 +654,9 @@ jobs:
       - name: "Router Sybil resistance (M6 — Attack IV: per-seller diversity cap, metadata-injection listings dropped)"
         run: node scripts/test-router-sybil.js
 
+      - name: "x402-audit grader (deterministic scoring: TLS, cache hygiene, terms, info-leak → letter grade)"
+        run: node scripts/test-x402-audit.js
+
       - name: /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)
         run: node scripts/test-reliability-envelope.js
 

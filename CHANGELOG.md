@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **New tool `x402-audit`** (catalog: 1,350 → **1,351** tools): grade any x402 seller's
+  externally-observable payment-security posture from a single read-only probe of its 402
+  challenge (never pays). Scores TLS transport, gated-response cache hygiene (Attack III /
+  cache leakage), error/info-leak hygiene, and payment-terms well-formedness into a letter
+  grade with per-check findings, each mapped to a failure mode from the "Five Attacks on
+  x402" analysis — and honestly notes what a black-box probe cannot see (replay/idempotency
+  and router Sybil resistance need insider or active testing). The grader is a pure,
+  deterministic function (`gradeX402Response`), so it's CI-stable; the tool is wallet-only
+  (paid surface). `GET /api/x402-audit?url=…`. CI-locked (`scripts/test-x402-audit.js`).
+
 - **Payment-nonce replay guard** (security hardening, M3): the x402 paywall now rejects a
   duplicate payment authorization *before* it reaches the facilitator, and refuses a
   concurrent replay (the same signed authorization fired many times at once, racing the

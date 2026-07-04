@@ -70,6 +70,9 @@ const NETWORK = new Set([
   // Network-kit2: crt.sh (CT logs), live HTTP fetch, signature scan, Team Cymru
   // DNS-whois. All hit free public infra; tolerate transient 4xx/5xx upstream.
   "/api/cert-transparency", "/api/http-headers", "/api/tech-stack", "/api/asn-info",
+  // x402-audit: probes an external seller's live 402 challenge — same live-fetch
+  // class as x402-quote; tolerate transient upstream reachability failures.
+  "/api/x402-audit",
   // Chain-kit: Alchemy-backed reads (JSON-RPC + NFT + Prices + Data APIs).
   // Returns 503 without ALCHEMY_API_KEY (CI env may not have it); the
   // 502/503/504 tolerance below covers that. Daily paid-canary covers
@@ -161,6 +164,7 @@ const cats = {};
 // user-facing documentation; the test just can't supply real inputs.
 const SHAPE_HAPPY_PATH_ONLY = new Set([
   "/api/x402-quote",   // example shows 402-detected case; placeholder URL may not 402
+  "/api/x402-audit",   // example shows a graded 402; live target's grade/checks vary by seller
   "/api/tx-status",    // example shows success; 0x0…0 hash returns {status:"not_found"}
   "/api/x402-verify",  // example shows verified settlement; 0x0…0 hash returns {status:"not_found"}
   "/api/mev-block-payment", // example shows found=true; placeholder block 22000000 returns {found:false}
