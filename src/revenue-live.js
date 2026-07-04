@@ -43,9 +43,9 @@ export const EVM = {
     tx: (h) => `https://basescan.org/tx/${h}`,
   },
   polygon: {
-    label: "Polygon", asset: "USDC", span: 9500,
+    label: "Polygon", asset: "USDC", span: 20000,
     token: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
-    rpcs: ["https://polygon-rpc.com", "https://polygon.llamarpc.com", "https://polygon.drpc.org"],
+    rpcs: ["https://polygon.drpc.org", "https://polygon.llamarpc.com", "https://polygon-rpc.com", "https://rpc.ankr.com/polygon"],
     explorer: (a) => `https://polygonscan.com/address/${a}#tokentxns`,
     tx: (h) => `https://polygonscan.com/tx/${h}`,
   },
@@ -191,18 +191,39 @@ async function solanaRail(wallet) {
   return out;
 }
 
-// Stellar — read USDC balance via Horizon API (the Stellar equivalent of an RPC node).
-// Best-effort, no transfer scan (Horizon pagination is complex); shows balance only.
+// Stellar — read USDC balance + recent payments via Horizon API.
+const USDC_ISSUER = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 async function stellarRail(wallet) {
   const out = { rail: "Stellar", asset: "USDC", wallet: wallet || null, explorer: wallet ? `https://stellar.expert/explorer/public/account/${wallet}` : null, balance: null, recent: [], error: null };
   if (!wallet) { out.error = "STELLAR_WALLET_ADDRESS unset"; return out; }
   try {
+    // Balance
     const res = await fetch(`https://horizon.stellar.org/accounts/${wallet}`, { signal: AbortSignal.timeout(6000) });
     if (!res.ok) { out.error = `Horizon HTTP ${res.status}`; return out; }
     const acct = await res.json();
-    // USDC on Stellar is issued by Centre/Circle: asset_code=USDC, asset_issuer=GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
-    const usdcBalance = acct.balances?.find((b) => b.asset_code === "USDC" && b.asset_issuer === "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN");
+    const usdcBalance = acct.balances?.find((b) => b.asset_code === "USDC" && b.asset_issuer === USDC_ISSUER);
     out.balance = usdcBalance ? Number(usdcBalance.balance) : 0;
+    // Recent payments (incoming USDC)
+    try {
+      const payRes = await fetch(
+        `https://horizon.stellar.org/accounts/${wallet}/payments?order=desc&limit=10`,
+        { signal: AbortSignal.timeout(6000) },
+      );
+      if (payRes.ok) {
+        const payData = await payRes.json();
+        const records = payData?._embedded?.records || [];
+        for (const r of records) {
+          if (r.type !== "payment" || r.to !== wallet) continue;
+          if (r.asset_code !== "USDC" || r.asset_issuer !== USDC_ISSUER) continue;
+          out.recent.push({
+            tx: `https://stellar.expert/explorer/public/tx/${r.transaction_hash}`,
+            when: r.created_at || null,
+            usd: Number(r.amount) || 0,
+            from: r.from || null,
+          });
+        }
+      }
+    } catch { /* payment scan is best-effort */ }
   } catch (e) {
     out.error = String(e?.message || e).slice(0, 120);
   }
