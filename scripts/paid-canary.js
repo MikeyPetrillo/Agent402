@@ -140,6 +140,12 @@ export const TOOLS = [
     priceUsd: 0.025,
     check: (r) => (r.pack === "market-brief" && Array.isArray(r.steps) && r.steps.filter((s) => s.ok).length >= 2) || `expected pack=market-brief with >=2 ok steps, got ${JSON.stringify(r).slice(0, 120)}`,
   },
+  // Stellar (USDC on Stellar) settlement is tested via a separate mechanism —
+  // the TOOLS array pays exclusively through Base EVM (registerExactEvmScheme),
+  // so adding a Stellar entry here would settle on Base, not prove the Stellar
+  // rail. First Stellar settlement confirmed manually 2026-07-04 ($0.001).
+  // A dedicated inline Stellar leg (like the Solana/Robinhood legs below) can
+  // be added once @x402/stellar/exact/client is available in the SDK.
 ];
 
 // Classify one tool result. Pure — unit-tested in scripts/test-paid-canary.js.

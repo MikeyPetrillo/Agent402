@@ -479,7 +479,7 @@ export function faqPage(baseUrl) {
   const canonical = `${baseUrl}/faq`;
   const title = "Agent402 FAQ — x402 + MCP server for AI agents";
   const description =
-    "Frequently asked questions about Agent402: pricing, proof-of-work, x402 and USDC on Base + 3 more chains, MCP, data handling, and self-hosting the open-source server.";
+    "Frequently asked questions about Agent402: pricing, proof-of-work, x402 and USDC on Base + 4 more chains, MCP, data handling, and self-hosting the open-source server.";
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "FAQPage",

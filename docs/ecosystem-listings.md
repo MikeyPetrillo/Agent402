@@ -17,7 +17,7 @@ alphabetical by repo name; legend: 📇 = TypeScript/JavaScript, ☁️ = cloud/
 2. In the Aggregators section, insert alphabetically:
 
 ```markdown
-- [MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402) 📇 ☁️ 🏠 - The headless browser, live web search, OCR, and durable wallet-keyed memory an agent's sandbox doesn't have — plus 1,000+ deterministic utilities — rented per call via x402 (USDC on Base + 3 more chains, or USDG on Robinhood Chain) or free with proof-of-work. Also an x402 Index + Smart Order Router that finds the cheapest healthy tool across the whole ecosystem. Hosted remote connector at agent402.tools/mcp.
+- [MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402) 📇 ☁️ 🏠 - The headless browser, live web search, OCR, and durable wallet-keyed memory an agent's sandbox doesn't have — plus 1,000+ deterministic utilities — rented per call via x402 (USDC on Base + 4 more chains (Solana, Polygon, Arbitrum, Stellar), or USDG on Robinhood Chain) or free with proof-of-work. Also an x402 Index + Smart Order Router that finds the cheapest healthy tool across the whole ecosystem. Hosted remote connector at agent402.tools/mcp.
 ```
 
 3. PR title: `Add Agent402 (aggregator: 1,000+ pay-per-call web tools over x402)`
@@ -39,7 +39,7 @@ Coinbase reviews within ~5 business days. Category: **Services/Endpoints**.
 ```json
 {
   "name": "Agent402",
-  "description": "Headless browser, live web search, OCR, and durable wallet-keyed memory an AI agent's sandbox doesn't have — rented per call via x402 (USDC on Base + 3 more chains, or USDG on Robinhood Chain) — plus 1,000+ deterministic utilities. Also an x402 Index + Smart Order Router that ranks the cheapest healthy tool across the whole ecosystem (auto-discovered from the CDP Bazaar). $0.001–$0.02/call, or free with proof-of-work. Open source, MCP server included.",
+  "description": "Headless browser, live web search, OCR, and durable wallet-keyed memory an AI agent's sandbox doesn't have — rented per call via x402 (USDC on Base + 4 more chains (Solana, Polygon, Arbitrum, Stellar), or USDG on Robinhood Chain) — plus 1,000+ deterministic utilities. Also an x402 Index + Smart Order Router that ranks the cheapest healthy tool across the whole ecosystem (auto-discovered from the CDP Bazaar). $0.001–$0.02/call, or free with proof-of-work. Open source, MCP server included.",
   "logoUrl": "/logos/agent402.png",
   "websiteUrl": "https://agent402.tools",
   "category": "Services/Endpoints"
@@ -144,7 +144,7 @@ that takes a GitHub repo URL; no PR, no fork.
    - **Short description (one line, ~150 chars):**
 
      ```
-     1,355 pay-per-call web tools + 46 skill packs for AI agents over x402 (USDC on Base + 3 more chains, or USDG on Robinhood Chain) — or free via proof-of-work. Browser, search, OCR, finance, EDGAR, durable memory.
+     1,355 pay-per-call web tools + 46 skill packs for AI agents over x402 (USDC on Base + 4 more chains (Solana, Polygon, Arbitrum, Stellar), or USDG on Robinhood Chain) — or free via proof-of-work. Browser, search, OCR, finance, EDGAR, durable memory.
      ```
 
    - **Long description / why (if asked):**
@@ -155,7 +155,8 @@ that takes a GitHub repo URL; no PR, no fork.
      (Yahoo, CoinGecko, FRED, ECB, World Bank), SEC EDGAR filings, DNS/TLS/WHOIS,
      wallet-keyed shared memory, and ~1,000 deterministic utilities (hash, JWT,
      regex, compression, forecasting, statistics, finance math, etc.) — paid per
-     call in USDC on Base (or Solana, Polygon, Arbitrum) via the x402 protocol, or free via built-in
+     call in USDC on Base (or Solana, Polygon, Arbitrum, Stellar) — plus USDG on
+     Robinhood Chain — 6 chains total via the x402 protocol, or free via built-in
      proof-of-work for the pure-CPU tools.
 
      One config block, no per-tool signups, no API keys. Self-hostable
@@ -178,8 +179,8 @@ that takes a GitHub repo URL; no PR, no fork.
 Merit Systems' x402 ecosystem explorer; solana.com/x402 points buyers here.
 Registration is self-serve and automatic: submit a URL, and if it returns a
 valid x402 payment-required response it is indexed. Our 402s are v2
-(base64 PAYMENT-REQUIRED header) and advertise all four chains including the
-Solana payTo, so a re-crawl also refreshes any stale pre-Solana listing.
+(base64 PAYMENT-REQUIRED header) and advertise all six chains (Base, Solana,
+Polygon, Arbitrum, Stellar, Robinhood Chain), so a re-crawl also refreshes any stale listing.
 
 **Steps**
 1. Visit https://www.x402scan.com/resources/register
@@ -193,24 +194,24 @@ Solana payTo, so a re-crawl also refreshes any stale pre-Solana listing.
    https://agent402.tools/api/hash
    ```
 
-3. Verify the listing shows all four networks (Base, Solana, Polygon,
-   Arbitrum) in the accepts. Also check
+3. Verify the listing shows all six networks (Base, Solana, Polygon,
+   Arbitrum, Stellar, Robinhood Chain) in the accepts. Also check
    https://www.x402scan.com/facilitator/payAI once the first Solana
    settlement lands — PayAI-settled traffic appears under that view.
 
 ---
 
-## 7. awesome-x402 (xpaysh/awesome-x402) — STALE ENTRY, needs Solana + Robinhood
+## 7. awesome-x402 (xpaysh/awesome-x402) — STALE ENTRY, needs Stellar + 6-chain update
 
-We are already listed, but the entry predates Solana support ("USDC on
-Base/Polygon/Arbitrum") and the USDG rail. PR a one-word-class fix:
+We are already listed, but the entry predates Stellar support and the full
+6-chain roster. PR a one-word-class fix:
 
 **Steps**
 1. Fork https://github.com/xpaysh/awesome-x402, find the Agent402 entry.
-2. Update the chain list to "USDC on Base, Solana, Polygon, Arbitrum — plus
-   USDG on Robinhood Chain" and, if the entry lists capabilities, append
-   "SOLANA_AGENT_KEY buyer support in agent402-mcp".
-3. PR title: `Update Agent402 entry — Solana + Robinhood Chain (USDG) settlement`
+2. Update the chain list to "USDC on Base, Solana, Polygon, Arbitrum, Stellar —
+   plus USDG on Robinhood Chain (6 chains)" and, if the entry lists capabilities,
+   append "STELLAR_AGENT_KEY buyer support in agent402-mcp".
+3. PR title: `Update Agent402 entry — Stellar + 6-chain settlement (USDC + USDG)`
 
 ---
 
@@ -242,7 +243,7 @@ The directory solana.com/x402 cross-links. Form submission, no PR.
    - **One-liner:**
 
      ```
-     1,355 pay-per-call web tools + 46 skill packs for AI agents over x402 — USDC on Solana (and Base/Polygon/Arbitrum) or free via proof-of-work. Open-source, self-hostable, MCP-native.
+     1,355 pay-per-call web tools + 46 skill packs for AI agents over x402 — USDC on Solana (and Base/Polygon/Arbitrum/Stellar) plus USDG on Robinhood Chain — 6 chains — or free via proof-of-work. Open-source, self-hostable, MCP-native.
      ```
 
    - **Description:** reuse the mcpservers.org long description above; lead

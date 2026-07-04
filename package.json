@@ -2,7 +2,7 @@
   "name": "agent402",
   "version": "1.0.0",
   "private": true,
-  "description": "Agent402.Tools — the open-source, self-hostable x402 + MCP server: 1,355 tools + 46 skill packs for AI agents, plus a pay-per-crawl tollbooth. Run free, or charge per call over x402 (USDC on Base, Solana, Polygon & Arbitrum — plus USDG on Robinhood Chain).",
+  "description": "Agent402.Tools — the open-source, self-hostable x402 + MCP server: 1,355 tools + 46 skill packs for AI agents, plus a pay-per-crawl tollbooth. Run free, or charge per call over x402 (USDC on Base, Solana, Polygon, Arbitrum & Stellar — plus USDG on Robinhood Chain). 6 chains supported.",
   "main": "src/server.js",
   "engines": {
     "node": ">=20"
@@ -45,7 +45,8 @@
     "arbitrum",
     "robinhood-chain",
     "usdg",
-    "multi-chain"
+    "multi-chain",
+    "stellar"
   ],
   "author": "Mike Petrillo <mike@agent402.tools> (https://github.com/MikeyPetrillo)",
   "license": "MIT",

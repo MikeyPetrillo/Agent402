@@ -78,20 +78,20 @@ export function landingPage(baseUrl, network, freeMode, catalog, stats = null) {
 <link rel="apple-touch-icon" href="/logo.png">
 <meta name="base:app_id" content="6a3dd86ca341d86b910769fb" />
 <title>Agent402 — ${SKILL_PACKS.length} agent skill packs, one x402 payment each · the open x402 index: Find, Router &amp; Leaderboard (${count} tools)</title>
-<meta name="description" content="${SKILL_PACKS.length} skill packs that do a whole agent job in one x402 payment — research a stock, audit a domain's SEO, run SQL over Base, check a wallet's readiness to pay — built on ${count} deterministic pay-per-call tools. Plus the open x402 index: /api/find resolves tasks to tools, /api/route is the neutral Smart Order Router, /api/leaderboard ranks sellers by on-chain USDC volume. Free via proof-of-work, USDC on Base + 3 more chains, or USDG on Robinhood Chain. No signup, no API key.">
+<meta name="description" content="${SKILL_PACKS.length} skill packs that do a whole agent job in one x402 payment — research a stock, audit a domain's SEO, run SQL over Base, check a wallet's readiness to pay — built on ${count} deterministic pay-per-call tools. Plus the open x402 index: /api/find resolves tasks to tools, /api/route is the neutral Smart Order Router, /api/leaderboard ranks sellers by on-chain USDC volume. Free via proof-of-work, USDC on Base + 4 more chains, or USDG on Robinhood Chain. No signup, no API key.">
 <link rel="canonical" href="${baseUrl}/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${baseUrl}/">
 <meta property="og:site_name" content="Agent402.Tools">
 <meta property="og:title" content="Agent402 — the open x402 index: Find, Router &amp; Leaderboard (${count}+ tools)">
-<meta property="og:description" content="${SKILL_PACKS.length} skill packs that do a whole agent job in one x402 payment — built on ${count} pay-per-call tools, plus the open x402 index (Find, Router, Leaderboard). Free via proof-of-work, USDC on Base + 3 more chains, or USDG on Robinhood Chain.">
+<meta property="og:description" content="${SKILL_PACKS.length} skill packs that do a whole agent job in one x402 payment — built on ${count} pay-per-call tools, plus the open x402 index (Find, Router, Leaderboard). Free via proof-of-work, USDC on Base + 4 more chains, or USDG on Robinhood Chain.">
 <meta property="og:image" content="${baseUrl}/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="${baseUrl}/card.png">
 <meta name="twitter:title" content="Agent402 — the open x402 index: Find, Router &amp; Leaderboard">
-<meta name="twitter:description" content="${SKILL_PACKS.length} agent skill packs, one x402 payment each — built on ${count} pay-per-call tools + the open x402 index. Free via proof-of-work, USDC on Base + 3 more chains, or USDG on Robinhood Chain.">
+<meta name="twitter:description" content="${SKILL_PACKS.length} agent skill packs, one x402 payment each — built on ${count} pay-per-call tools + the open x402 index. Free via proof-of-work, USDC on Base + 4 more chains, or USDG on Robinhood Chain.">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -307,9 +307,9 @@ claude mcp add agent402 -s user -- npx -y agent402-mcp@latest
 
 <span class="c"># Then ask Claude: "run the financial-research pack on AAPL",
 # "seo-audit example.com", "decode this blob" — or any single tool.
-# Free tier auto-pays in compute. USDC on 4 chains (or USDG on Robinhood) when you scale.</span></pre>
+# Free tier auto-pays in compute. USDC on 5 chains (or USDG on Robinhood) when you scale.</span></pre>
       <div class="snippet-foot">
-        <span class="dot"></span> ${freeCount.toLocaleString()} tools free via proof-of-work · USDC on Base + 3 more chains, or USDG on <a href="/guides/usdg-payments-robinhood-chain">Robinhood Chain</a>, for the rest · <a href="/llms.txt">llms.txt</a>
+        <span class="dot"></span> ${freeCount.toLocaleString()} tools free via proof-of-work · USDC on Base + 4 more chains, or USDG on <a href="/guides/usdg-payments-robinhood-chain">Robinhood Chain</a>, for the rest · <a href="/llms.txt">llms.txt</a>
       </div>
     </div>
     <script>

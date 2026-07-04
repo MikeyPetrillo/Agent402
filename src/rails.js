@@ -37,7 +37,7 @@ export const RAILS_OR = `USDC on ${usdcOr}${othersDash}`;
  *  the "primary chain first" phrasing used in buyer-facing prose. */
 export const RAILS_PAREN = `USDC on ${usdc[0]} (or ${usdc.slice(1).join(", ")}${othersDash})`;
 
-/** "USDC on Base + 3 more chains, or USDG on Robinhood Chain" — tight UI copy. */
+/** "USDC on Base + 4 more chains, or USDG on Robinhood Chain" — tight UI copy. */
 export const RAILS_SHORT = `USDC on ${usdc[0]} + ${usdc.length - 1} more chains${others.length ? `, or ${others.map((o) => `${o.asset} on ${o.name}`).join(" / ")}` : ""}`;
 
 /** Chain names for the /.well-known/x402 manifest's ecosystem.chains. */
