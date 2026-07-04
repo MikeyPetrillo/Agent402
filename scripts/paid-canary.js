@@ -146,6 +146,30 @@ export const TOOLS = [
   // rail. First Stellar settlement confirmed manually 2026-07-04 ($0.001).
   // A dedicated inline Stellar leg (like the Solana/Robinhood legs below) can
   // be added once @x402/stellar/exact/client is available in the SDK.
+  {
+    kit: "skill-pack",
+    path: "/api/skill/domain-intel",
+    method: "POST",
+    body: { domain: "stripe.com" },
+    priceUsd: 0.25,
+    check: (r) => (r.pack === "domain-intel" && r.steps?.every(s => s.ok)) || `expected ALL steps ok, got ${r.steps?.map(s=>s.ok?'✓':'✗ '+s.slug).join(',')}`,
+  },
+  {
+    kit: "skill-pack",
+    path: "/api/skill/company-dossier",
+    method: "POST",
+    body: { ticker: "AAPL" },
+    priceUsd: 0.50,
+    check: (r) => (r.pack === "company-dossier" && r.steps?.every(s => s.ok)) || `expected ALL steps ok, got ${r.steps?.map(s=>s.ok?'✓':'✗ '+s.slug).join(',')}`,
+  },
+  {
+    kit: "skill-pack",
+    path: "/api/skill/crypto-dossier",
+    method: "POST",
+    body: { coin: "bitcoin" },
+    priceUsd: 0.30,
+    check: (r) => (r.pack === "crypto-dossier" && r.steps?.every(s => s.ok)) || `expected ALL steps ok, got ${r.steps?.map(s=>s.ok?'✓':'✗ '+s.slug).join(',')}`,
+  },
 ];
 
 // Classify one tool result. Pure — unit-tested in scripts/test-paid-canary.js.
