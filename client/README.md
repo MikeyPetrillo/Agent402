@@ -82,14 +82,44 @@ await a.topSellers({ sort: "calls", include: "all" });
 
 | Method | What |
 |---|---|
-| `new Agent402({ baseUrl?, fetch?, cache?, fetchImpl? })` | `fetch` is your x402-wrapped fetch for paid tools (optional); `cache` (default `true`) memoizes deterministic results |
+| `new Agent402({ baseUrl?, fetch?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd? })` | `fetch` is your x402-wrapped fetch for paid tools (optional); `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below) |
 | `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools (route, price, schema, example) |
 | `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |
 | `await a.getWorkflowPrompt(slug, args)` | Fetch the rendered prompt messages for a skill pack with arguments substituted in |
 | `await a.topSellers({ limit?, sort?, include? })` | Live x402 leaderboard: which sellers are settling the most USDC (primarily on Base) in the last ~24h (free, no payment) |
 | `await a.call(slug, params, { idempotencyKey?, cache? })` | Call a tool; auto-pays (PoW for free tools, x402 for wallet-only); returns the JSON result |
 | `Agent402.solvePow(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value |
+| `a.spendingSummary()` | Rolling-24h paid spend so far: `{ dailyUsd, calls, byHost, limits }` |
 | `a.clearCache()` | Drop the in-memory result cache |
+
+## Spending caps (never overpay)
+
+By default the client pays whatever a tool costs. Set optional hard ceilings and a
+call that would exceed one is **refused before any payment is signed** (it throws
+`SpendingLimitError` — no funds move):
+
+```js
+import { Agent402, SpendingLimitError } from "agent402-client";
+
+const a = new Agent402({
+  fetch: payFetch,
+  maxPerCallUsd: 0.05,   // reject any single call priced above $0.05
+  dailyLimitUsd: 5,      // rolling-24h ceiling across all sellers
+  maxPerHostUsd: 1,      // rolling-24h ceiling per seller host
+});
+
+try {
+  await a.call("some-expensive-tool", { … });
+} catch (e) {
+  if (e instanceof SpendingLimitError) console.log(e.limit, e.priceUsd, e.cap);
+}
+```
+
+Only **settled** paid calls count against the rolling window — a blocked or failed
+call never consumes budget. Free proof-of-work calls are never counted. Omit a cap
+(or leave it `null`) for no limit; with none set, behavior is unchanged. This is a
+buyer-side circuit breaker against a malicious or misconfigured `402` that quotes an
+inflated price.
 
 - **Zero dependencies** for the free/proof-of-work path (uses `node:crypto`).
 - **Non-custodial:** paid settlement is your `@x402/fetch` + wallet; this client never sees your key.

@@ -38,6 +38,8 @@ ok(m.payment.x402.payTo === WALLET, "payTo is the wallet");
 ok(m.payment.x402.priceRange === "$0.001–$0.005", `price range derived (got ${m.payment.x402.priceRange})`);
 ok(m.payment.proofOfWork.difficultyBits === 20, "pow difficulty");
 ok(m.payment.proofOfWork.eligibleTools === 1, "pow eligible count");
+ok(m.payment.dataHandling?.readsPaymentMetadata === false && m.payment.dataHandling?.retainsPaymentMetadata === false,
+  "dataHandling attests payment-metadata minimisation");
 
 ok(m.capabilities.tools === 3, "capability tool count");
 const webCat = m.capabilities.categories.find((c) => c.key === "web");

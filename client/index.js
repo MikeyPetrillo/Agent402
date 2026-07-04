@@ -23,14 +23,30 @@ export class Agent402 {
    * @param {typeof fetch} [opts.fetch]      an x402-wrapped fetch for wallet-only tools (optional)
    * @param {boolean} [opts.cache=true]      cache results in memory (deterministic tools)
    * @param {typeof fetch} [opts.fetchImpl]  plain fetch (defaults to global fetch)
+   * @param {number} [opts.maxPerCallUsd]    hard ceiling on a single paid call (USD); over → SpendingLimitError before paying
+   * @param {number} [opts.dailyLimitUsd]    hard ceiling on rolling-24h paid spend (USD)
+   * @param {number} [opts.maxPerHostUsd]    hard ceiling on rolling-24h paid spend to one seller host (USD)
    */
-  constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = globalThis.fetch } = {}) {
+  constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = globalThis.fetch,
+    maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null } = {}) {
     if (typeof fetchImpl !== "function") throw new Error("No fetch available — pass { fetchImpl } on Node < 18");
     this.baseUrl = String(baseUrl).replace(/\/$/, "");
     this.payFetch = payFetch || null;
     this.f = fetchImpl;
     this._catalog = null;
     this._cache = cache ? new Map() : null;
+    // Spending policy (defends the x402 "wallet drain via uncapped spending"
+    // failure mode): optional hard ceilings enforced BEFORE any payment is
+    // signed. A malicious or misconfigured 402 that quotes an inflated price is
+    // refused instead of paid. null = no limit (default — behavior unchanged).
+    // Amounts commit to the rolling window only on a settled paid call, so a
+    // failed/blocked call never counts against the budget.
+    this._spend = {
+      maxPerCall: numOrNull(maxPerCallUsd),
+      daily: numOrNull(dailyLimitUsd),
+      perHost: numOrNull(maxPerHostUsd),
+      log: [], // [{ ts, host, usd }] — settled paid calls in the last 24h
+    };
   }
 
   async _loadCatalog() {
@@ -167,8 +183,14 @@ export class Agent402 {
     // Wallet-only tool → settle in USDC via the provided x402 fetch.
     if (!tool.computePayable) {
       if (this.payFetch) {
+        // Spending policy: refuse to pay BEFORE signing if the quoted price
+        // breaks a configured ceiling (per-call / rolling-24h / per-host).
+        const usd = parseUsd(tool.price);
+        const host = hostOf(this.baseUrl);
+        this._spendCheck(host, usd, slug);
         const r = await send({}, this.payFetch);
         if (!r.ok) throw new Error(`call "${slug}" failed: HTTP ${r.status}`);
+        this._spendCommit(host, usd); // record spend only once the call actually settled
         return this._store(cacheKey, await r.json(), cache);
       }
       const r = await send(); // no wallet — succeeds only on a FREE_MODE instance
@@ -196,7 +218,72 @@ export class Agent402 {
 
   _store(key, val, cache) { if (this._cache && cache) this._cache.set(key, val); return val; }
   clearCache() { this._cache?.clear(); }
+
+  /** Throw SpendingLimitError if paying `usd` to `host` now would break a cap.
+   *  Prunes the rolling 24h window first; a null cap is unlimited. */
+  _spendCheck(host, usd, slug) {
+    const s = this._spend;
+    if (s.maxPerCall == null && s.daily == null && s.perHost == null) return;
+    if (s.maxPerCall != null && usd > s.maxPerCall) {
+      throw new SpendingLimitError(
+        `refusing to pay $${usd} for "${slug}" — exceeds maxPerCallUsd $${s.maxPerCall}`,
+        { limit: "maxPerCallUsd", slug, priceUsd: usd, cap: s.maxPerCall });
+    }
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    s.log = s.log.filter((e) => e.ts >= cutoff);
+    if (s.daily != null) {
+      const spent = s.log.reduce((a, e) => a + e.usd, 0);
+      if (spent + usd > s.daily) {
+        throw new SpendingLimitError(
+          `refusing to pay $${usd} for "${slug}" — would bring 24h spend to $${(spent + usd).toFixed(6)}, over dailyLimitUsd $${s.daily}`,
+          { limit: "dailyLimitUsd", slug, priceUsd: usd, spent, cap: s.daily });
+      }
+    }
+    if (s.perHost != null) {
+      const spentHost = s.log.filter((e) => e.host === host).reduce((a, e) => a + e.usd, 0);
+      if (spentHost + usd > s.perHost) {
+        throw new SpendingLimitError(
+          `refusing to pay $${usd} for "${slug}" — would bring 24h spend to ${host} to $${(spentHost + usd).toFixed(6)}, over maxPerHostUsd $${s.perHost}`,
+          { limit: "maxPerHostUsd", slug, host, priceUsd: usd, spent: spentHost, cap: s.perHost });
+      }
+    }
+  }
+
+  /** Record a settled paid call against the rolling budget. */
+  _spendCommit(host, usd) { if (usd > 0) this._spend.log.push({ ts: Date.now(), host, usd }); }
+
+  /** Rolling-24h spend summary (settled paid calls only) — for observability. */
+  spendingSummary() {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const log = this._spend.log.filter((e) => e.ts >= cutoff);
+    const byHost = {};
+    for (const e of log) byHost[e.host] = Number(((byHost[e.host] || 0) + e.usd).toFixed(6));
+    return {
+      dailyUsd: Number(log.reduce((a, e) => a + e.usd, 0).toFixed(6)),
+      calls: log.length,
+      byHost,
+      limits: { maxPerCallUsd: this._spend.maxPerCall, dailyLimitUsd: this._spend.daily, maxPerHostUsd: this._spend.perHost },
+    };
+  }
 }
+
+/** Thrown when a paid call would exceed a configured spending ceiling. The call
+ *  is refused BEFORE any payment is signed, so no funds move. */
+export class SpendingLimitError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.name = "SpendingLimitError";
+    Object.assign(this, details);
+  }
+}
+
+function numOrNull(v) { if (v == null) return null; const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; }
+function parseUsd(price) {
+  if (typeof price === "number") return Number.isFinite(price) ? price : 0;
+  const n = Number(String(price ?? "").replace(/[^0-9.]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+function hostOf(url) { try { return new URL(url).host; } catch { return String(url); } }
 
 /**
  * Restrict + order which chains an @x402 client will pay on (duck-typed — any

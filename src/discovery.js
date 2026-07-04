@@ -120,6 +120,18 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
         challengeUrl: `${baseUrl}/api/pow/challenge`,
         info: `${baseUrl}/api/pow`,
       },
+      // Data minimisation on the payment path (machine-readable so a
+      // compliance-aware buyer can verify posture before transacting). An x402
+      // token may carry optional annotation fields; we read only the signed
+      // payer address (already public on-chain) and never parse, log, or retain
+      // the rest.
+      dataHandling: {
+        readsPaymentMetadata: false,
+        retainsPaymentMetadata: false,
+        readsOnly: ["authorization.from (signed payer address, public on-chain)"],
+        note: "Optional x402 token annotation fields (resource URL, description, reason) are never parsed, logged, or retained. Data-minimisation by construction.",
+        policy: `${baseUrl}/privacy`,
+      },
     },
     capabilities: {
       tools: toolCount,

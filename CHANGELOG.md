@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Buyer SDK spending caps** (`agent402-client` → **0.5.0**): the client now takes optional
+  `maxPerCallUsd`, `dailyLimitUsd`, and `maxPerHostUsd` ceilings. A paid call that would break
+  a cap is refused with `SpendingLimitError` **before any payment is signed** — a buyer-side
+  circuit breaker against a malicious or misconfigured `402` that quotes an inflated price (the
+  "wallet drain via uncapped spending" failure mode). Only settled paid calls count against the
+  rolling-24h window; blocked/failed calls and free proof-of-work calls never consume budget.
+  New `a.spendingSummary()` for observability. Default (no caps set) behaviour is unchanged.
+
+- **Payment-metadata minimisation, stated explicitly** (privacy + discovery manifest): an x402
+  token can carry optional annotation fields (resource URL, description, `reason`) that a buyer
+  might fill with personal data. Agent402 reads **only** the signed payer address and never
+  parses, logs, or retains those fields — now spelled out on `/privacy` and exposed
+  machine-readably at `/.well-known/x402` (`payment.dataHandling`) so a compliance-aware buyer
+  can verify posture before transacting. No behaviour change — the code already did this; this
+  documents and attests it.
+
 - **New tool `x402-audit`** (catalog: 1,350 → **1,351** tools): grade any x402 seller's
   externally-observable payment-security posture from a single read-only probe of its 402
   challenge (never pays). Scores TLS transport, gated-response cache hygiene (Attack III /

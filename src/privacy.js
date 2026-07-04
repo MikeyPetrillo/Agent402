@@ -48,6 +48,12 @@ so every claim below is verifiable in code.</p>
   the public Base blockchain (or Solana, Polygon, Arbitrum, Robinhood Chain) via the x402 protocol; wallet addresses, amounts, and timestamps are public
   on-chain by the protocol's design, not collected by us. Payment verification is performed by the
   payment facilitator (Coinbase CDP).</li>
+  <li><b>Payment metadata.</b> An x402 payment token can carry optional annotation fields (a resource URL, a
+  description, a <code>reason</code> string) that some buyers use to label a purchase. Agent402 reads <i>only</i>
+  the cryptographically-signed payer wallet address from the token — the exact field the settlement authorization
+  covers, and one that is already public on-chain. Those annotation fields are never parsed, logged, or retained,
+  so a buyer that inadvertently placed personal data in them does not expose it to us. Data-minimisation by
+  construction, not by policy.</li>
   <li><b>Memory tools.</b> Data written via <code>/api/memory</code> is stored on our server keyed to the
   paying wallet, readable only by that wallet (or wallets it explicitly grants), until the owner deletes
   it or its TTL expires. A tamper-evident audit log of accesses is kept for the namespace owner.</li>

@@ -38,6 +38,76 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
   withNetworkPreference(untouched, []);
   ok(untouched.createPaymentPayload({ accepts }) === 2, "empty preference leaves the client untouched");
 }
+// Offline: buyer spending caps refuse to overpay BEFORE signing (defends the
+// x402 "wallet drain via uncapped spending" failure mode). No server needed —
+// stub the catalog and a paying fetch.
+{
+  const okResp = { ok: true, json: async () => ({ ok: true }) };
+  const mk = (opts) => {
+    let paid = 0;
+    const c = new Agent402({
+      baseUrl: "https://seller.example", cache: false,
+      fetch: async () => { paid++; return okResp; },     // x402 payFetch (wallet-only path)
+      fetchImpl: async () => okResp,                       // plain fetch (unused; catalog is stubbed)
+      ...opts,
+    });
+    c._catalog = new Map([
+      ["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.01" }],
+      ["pricey", { method: "POST", path: "/api/pricey", computePayable: false, price: "$1.00" }],
+    ]);
+    return { c, paid: () => paid };
+  };
+
+  // per-call cap refuses an over-price tool before any payment
+  {
+    const { c, paid } = mk({ maxPerCallUsd: 0.05 });
+    let e = null; try { await c.call("pricey"); } catch (err) { e = err; }
+    ok(e && e.name === "SpendingLimitError" && e.limit === "maxPerCallUsd", "maxPerCallUsd blocks an over-price tool");
+    ok(paid() === 0, "blocked call never paid (refused before signing)");
+    await c.call("cheap");
+    ok(paid() === 1, "under-cap tool pays normally");
+    ok(c.spendingSummary().dailyUsd === 0.01, "settled spend is recorded");
+  }
+
+  // daily cap sums across calls and blocks the one that would cross it
+  {
+    const { c, paid } = mk({ dailyLimitUsd: 0.025 });
+    await c.call("cheap"); await c.call("cheap"); // 0.02 total
+    let e = null; try { await c.call("cheap"); } catch (err) { e = err; }
+    ok(e && e.limit === "dailyLimitUsd", "dailyLimitUsd blocks the call that would cross the ceiling");
+    ok(paid() === 2, "exactly the two under-budget calls paid");
+  }
+
+  // per-host cap bounds spend to a single seller host
+  {
+    const { c } = mk({ maxPerHostUsd: 0.015 });
+    await c.call("cheap");
+    let e = null; try { await c.call("cheap"); } catch (err) { e = err; }
+    ok(e && e.limit === "maxPerHostUsd", "maxPerHostUsd bounds per-seller spend");
+  }
+
+  // no caps configured → behavior unchanged (pays regardless of price)
+  {
+    const { c, paid } = mk({});
+    await c.call("pricey");
+    ok(paid() === 1, "no caps → default behavior, pays any price");
+  }
+
+  // a failed paid call does NOT count against the budget (commit only on settle)
+  {
+    let paid = 0;
+    const c = new Agent402({
+      baseUrl: "https://seller.example", cache: false, dailyLimitUsd: 0.05,
+      fetch: async () => { paid++; return { ok: false, status: 500 }; },
+      fetchImpl: async () => okResp,
+    });
+    c._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.01" }]]);
+    let failed = false; try { await c.call("cheap"); } catch { failed = true; }
+    ok(failed && paid === 1, "a failed paid call throws");
+    ok(c.spendingSummary().dailyUsd === 0, "a failed paid call does not count against the budget");
+  }
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 try {
