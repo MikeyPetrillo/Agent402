@@ -311,8 +311,10 @@ async function techStackHandler(body) {
   const raw = body?.url || body?.href || body?.target;
   if (typeof raw !== "string" || !raw.trim()) throw bad('Missing "url". Send {"url":"https://example.com"}');
   // safeFetch handles SSRF, redirects, size cap, timeout, and honest 4xx/5xx
-  // attribution. We just need the final HTML + headers.
-  const { finalUrl, html } = await safeFetch(raw, { maxBytes: 256 * 1024 });
+  // attribution. We just need the final HTML + headers. 2MB cap — modern SPA
+  // homepages (Stripe, Vercel) can exceed 256KB easily; the signature scan
+  // below only reads substrings so memory is bounded regardless of page size.
+  const { finalUrl, html } = await safeFetch(raw, { maxBytes: 2 * 1024 * 1024 });
   // safeFetch doesn't return response headers — re-fetch HEAD for headers only.
   // If HEAD is rejected, fall back to an empty headers object: the HTML signals
   // alone still catch most frameworks/CMSes.
