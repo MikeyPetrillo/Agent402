@@ -2011,24 +2011,34 @@ const networkTools = [
       }
       const domain = raw.toLowerCase().replace(/\.$/, "");
       if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain)) throw bad(`Invalid domain "${raw}". Expected a hostname like example.com`);
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15_000);
+      // rdap.org's bootstrap redirect can be flaky — retry once on timeout/5xx.
+      async function rdapFetch() {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 12_000);
+        try {
+          const res = await fetch(`https://rdap.org/domain/${domain}`, {
+            signal: controller.signal,
+            redirect: "follow",
+            dispatcher: ssrfDispatcher,
+            headers: { Accept: "application/rdap+json" },
+          });
+          if (res.status === 404) throw Object.assign(new Error("Domain not found in RDAP"), { statusCode: 404 });
+          if (!res.ok) throw Object.assign(new Error(`RDAP returned HTTP ${res.status}`), { statusCode: 502 });
+          return await res.json();
+        } finally {
+          clearTimeout(timer);
+        }
+      }
       let data;
       try {
-        const res = await fetch(`https://rdap.org/domain/${domain}`, {
-          signal: controller.signal,
-          redirect: "follow",
-          dispatcher: ssrfDispatcher,
-          headers: { Accept: "application/rdap+json" },
-        });
-        if (res.status === 404) throw Object.assign(new Error("Domain not found in RDAP"), { statusCode: 404 });
-        if (!res.ok) throw Object.assign(new Error(`RDAP returned HTTP ${res.status}`), { statusCode: 502 });
-        data = await res.json();
+        data = await rdapFetch();
       } catch (err) {
-        if (err.statusCode) throw err;
-        throw Object.assign(new Error(err.name === "AbortError" ? "RDAP lookup timed out" : `RDAP lookup failed: ${err.message}`), { statusCode: 502 });
-      } finally {
-        clearTimeout(timer);
+        if (err.statusCode === 404) throw err;
+        // Single retry on timeout or 5xx — rdap.org flaps transiently.
+        try { data = await rdapFetch(); } catch (err2) {
+          if (err2.statusCode) throw err2;
+          throw Object.assign(new Error(err2.name === "AbortError" ? "RDAP lookup timed out" : `RDAP lookup failed: ${err2.message}`), { statusCode: 502 });
+        }
       }
       const event = (name) => data.events?.find((e) => e.eventAction === name)?.eventDate ?? null;
       const registrar = data.entities?.find((e) => e.roles?.includes("registrar"));
