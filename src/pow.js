@@ -124,6 +124,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // turn one free request into N paid sub-calls. Light-tier packs that
   // call at least one wallet-only tool must also be listed here — the
   // skill runner calls handlers in-process, bypassing the route paywall.
+  "skill-financial-analysis",
   "skill-financial-research", "skill-sec-filings-deep-dive", "skill-macro-context",
   "skill-crypto-research", "skill-regulatory-watch", "skill-search-and-cite",
   "skill-macro-economics",

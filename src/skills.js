@@ -76,6 +76,29 @@ export const SKILL_PACKS = [
       'Diagnose email deliverability for sender@example.com. Use Agent402 to check SPF, DMARC, DKIM (probe common selectors), and the composite email-deliverability score. If the score is below 75, explain which auth records are missing or weak and how to fix each one.',
   },
   {
+    slug: "financial-analysis",
+    title: "Financial analysis",
+    tagline:
+      "Quick company snapshot: live quote, 9 key financial metrics (revenue through cash flow), and upcoming earnings — one call, one payment.",
+    useCase:
+      "An agent needs to answer 'how is this company doing?' without knowing XBRL tags or juggling 3 separate API calls. The $0.04 bundle is cheaper than calling the tools individually ($0.045).",
+    promptArgs: [
+      { name: "ticker", description: "Stock ticker symbol (e.g. AAPL, MSFT, NVDA)", required: true, substitute: "AAPL" },
+    ],
+    toolSlugs: [
+      "stock-quote",
+      "company-financials",
+      "earnings-calendar",
+    ],
+    workflow: [
+      "Get the live quote from stock-quote — current price, market cap, day range, 52-week high/low, volume.",
+      "Pull key financials from company-financials — revenue, net income, operating income, total assets, liabilities, equity, EPS, and operating cash flow from the latest annual and quarterly SEC filings.",
+      "Check the earnings calendar for today's date to see if this company has upcoming or just-reported earnings (EPS estimate vs actual).",
+    ],
+    claudePrompt:
+      "Give me a quick financial snapshot of AAPL. Use Agent402's financial-analysis skill pack to get the current quote, key financial metrics (revenue, net income, EPS, cash flow), and any upcoming earnings. Summarize in a few bullet points.",
+  },
+  {
     slug: "financial-research",
     title: "Financial research",
     tagline:

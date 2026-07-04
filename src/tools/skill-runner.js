@@ -78,6 +78,7 @@ export function defaultMapInput(args, tool) {
 // ──────────────────────────────────────────────────────────────────────────
 export const PACK_PRICES = {
   // Premium (~8x sum-of-tools)
+  "financial-analysis":   0.04,  // 3-tool bundle (stock-quote $0.01 + company-financials $0.02 + earnings-calendar $0.015 = $0.045); slight discount for volume capture
   "financial-research":   1.50,
   "sec-filings-deep-dive": 0.85,
   "macro-context":         0.75,
@@ -246,6 +247,16 @@ export const PACK_STEPS = {
           const testSize = Math.max(5, Math.floor(close.length / 10));
           return { values: close, testSize, method: "drift" };
       } },
+    ],
+  },
+
+  // Financial analysis: lightweight 3-tool fanout for a quick company snapshot.
+  "financial-analysis": {
+    mode: "fanout",
+    steps: [
+      { slug: "stock-quote",         mapInput: (a) => ({ symbol: a.ticker }) },
+      { slug: "company-financials",  mapInput: (a) => ({ ticker: a.ticker }) },
+      { slug: "earnings-calendar",   mapInput: (a) => ({ symbol: a.ticker }) },
     ],
   },
 
