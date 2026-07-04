@@ -245,7 +245,7 @@ export function docsIndex(baseUrl) {
   return shell(
     baseUrl,
     "Agent402 Docs",
-    "Open-source x402 + MCP server: 1,358 pay-per-call tools for AI agents. Browse the docs — getting started, paying with x402, MCP connector, Tollbooth pay-per-crawl, architecture, and security.",
+    "Open-source x402 + MCP server: 1,407 pay-per-call tools for AI agents. Browse the docs — getting started, paying with x402, MCP connector, Tollbooth pay-per-crawl, architecture, and security.",
     "/docs",
     renderMarkdown(home),
     "Home"

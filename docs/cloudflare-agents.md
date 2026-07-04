@@ -1,7 +1,7 @@
 # Cloudflare Agents + Agent402 — integration guide
 
 Cloudflare's Agents SDK has native x402 support (`withX402`, `paidTool`,
-`x402-hono` middleware). Agent402 is an x402 seller — 1,358 pay-per-call
+`x402-hono` middleware). Agent402 is an x402 seller — 1,407 pay-per-call
 tools at `https://agent402.tools`. This guide shows how a Cloudflare Worker
 or Agent can discover and call Agent402 tools, paying per request in USDC.
 

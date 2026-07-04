@@ -15,7 +15,7 @@ export function robinhoodPage(baseUrl) {
   const title = "USDG payments on Robinhood Chain — Agent402";
   const description =
     `Agent402 settles x402 payments in ${RH.asset} (Global Dollar) on ${RH.name} (chain id ${RH.chainId}) — live since day 2 of mainnet, verifiable on-chain. ` +
-    `1,358 pay-per-call tools for AI agents: ${RAILS_SHORT}.`;
+    `1,407 pay-per-call tools for AI agents: ${RAILS_SHORT}.`;
 
   const jsonLd = {
     "@context": "https://schema.org",

@@ -1654,8 +1654,8 @@ export const PACK_STEPS = {
     mode: "fanout",
     steps: [
       { slug: "calc",       mapInput: (a) => ({ expression: a.expression }) },
-      { slug: "stats",      mapInput: (a) => ({ values: String(a.values || "").split(",").map(Number).filter(Number.isFinite) }) },
-      { slug: "percentage", mapInput: (a) => ({ value: Number(String(a.values || "").split(",")[0]) || 0, total: Number(String(a.values || "").split(",").reduce((s, v) => s + (Number(v) || 0), 0)) || 1 }) },
+      { slug: "stats",      mapInput: (a) => ({ numbers: String(a.values || "").split(",").map(Number).filter(Number.isFinite) }) },
+      { slug: "percentage", mapInput: (a) => ({ op: "of", a: Number(String(a.values || "").split(",")[0]) || 0, b: Number(String(a.values || "").split(",").reduce((s, v) => s + (Number(v) || 0), 0)) || 1 }) },
     ],
   },
 
@@ -1826,9 +1826,17 @@ export const PACK_STEPS = {
   "json-pipeline": {
     mode: "fanout",
     steps: [
-      { slug: "json-validate", mapInput: (a) => ({ data: a.json, schema: {} }) },
+      { slug: "json-validate", mapInput: (a) => {
+          let data = a.json;
+          if (typeof data === "string") try { data = JSON.parse(data); } catch {}
+          return { data, schema: {} };
+      } },
       { slug: "json-format",   mapInput: (a) => ({ json: a.json, indent: 2 }) },
-      { slug: "json-to-csv",   mapInput: (a) => ({ json: a.json }) },
+      { slug: "json-to-csv",   mapInput: (a) => {
+          let json = a.json;
+          if (typeof json === "string") try { json = JSON.parse(json); } catch {}
+          return { json };
+      } },
     ],
   },
 
@@ -1929,9 +1937,9 @@ export const PACK_STEPS = {
   "timezone-planner": {
     mode: "fanout",
     steps: [
-      { slug: "time-convert",  mapInput: (a) => ({ time: a.time, from: a.from || "America/New_York", to: a.to || "Asia/Tokyo" }) },
-      { slug: "business-days", mapInput: (a) => ({ start: new Date().toISOString().slice(0, 10), end: String(a.time || "").slice(0, 10) }) },
-      { slug: "cron-next",     mapInput: (a) => ({ expression: "0 10 * * 1", count: 5, from: a.time }) },
+      { slug: "time-convert",  mapInput: (a) => ({ value: a.time, tz: a.to || "Asia/Tokyo" }) },
+      { slug: "business-days", mapInput: (a) => ({ from: new Date().toISOString().slice(0, 10), to: String(a.time || "").slice(0, 10) }) },
+      { slug: "cron-next",     mapInput: (a) => ({ expr: "0 10 * * 1", count: 5, from: a.time }) },
     ],
   },
 

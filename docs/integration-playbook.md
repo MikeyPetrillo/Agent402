@@ -16,11 +16,11 @@ via x402 + USDC nanopayments. Agent402 is a natural fit — we already speak x40
 3. Provide:
    - Service name: `Agent402.Tools`
    - URL: `https://agent402.tools`
-   - Description: "1,358 deterministic pay-per-call tools for AI agents (search, finance, EDGAR, crypto, PDFs, OCR, and more). x402 native."
+   - Description: "1,407 deterministic pay-per-call tools for AI agents (search, finance, EDGAR, crypto, PDFs, OCR, and more). x402 native."
    - Payment: x402 / USDC on Base (primary), Solana, Polygon, Arbitrum
    - MCP endpoint: `https://agent402.tools/mcp`
    - Discovery: `https://agent402.tools/.well-known/x402`
-   - Tool count: 1,358 + 51 skill packs
+   - Tool count: 1,407 + 100 skill packs
 4. Reference our Bazaar registration (already indexed by Coinbase CDP)
 
 **Why it matters:** Circle has "high enterprise visibility" — their marketplace is where
@@ -42,7 +42,7 @@ include Google, Visa, Stripe, AWS, Mastercard, Circle, Microsoft, Shopify, Anthr
 3. Apply as: Individual / Startup tier (likely free or nominal)
 4. Provide:
    - Project: Agent402.Tools (https://agent402.tools)
-   - Role: x402 seller (1,358 tool endpoints, 1,500+ settlements)
+   - Role: x402 seller (1,407 tool endpoints, 1,500+ settlements)
    - Open source: https://github.com/MikeyPetrillo/Agent402
    - Contribution: First large-scale open-source x402 tool marketplace; ships
      agent402-tollbooth (pay-per-crawl) and agent402-client (buyer SDK)
@@ -57,7 +57,7 @@ Agent402 is one of the most active x402 sellers by endpoint count.
 **Status:** Already discoverable (via Bazaar MCP server in AgentCore)
 **Opportunity:** Get featured in AWS docs/blog as an example x402 seller
 
-AgentCore ships a managed Bazaar MCP server — Agent402's 1,358 endpoints are already
+AgentCore ships a managed Bazaar MCP server — Agent402's 1,407 endpoints are already
 in the Bazaar. The opportunity is being a *featured* example in the AWS getting-started
 guide for AgentCore Payments.
 
