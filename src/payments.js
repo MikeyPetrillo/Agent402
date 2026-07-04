@@ -2,6 +2,7 @@ import { paymentMiddleware } from "@x402/express";
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
+import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { convertToTokenAmount, numberToDecimalString } from "@x402/core/utils";
 import {
   bazaarResourceServerExtension,
@@ -35,9 +36,12 @@ const SVM_NETWORKS = {
   solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
   "solana-devnet": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
 };
+const STELLAR_NETWORKS = {
+  stellar: "stellar:pubnet",
+};
 // Exported for scripts/test-rails.js: the copy layer (src/rails.js) must
 // advertise every mainnet rail this file can settle — the test cross-checks.
-export const NETWORKS = { ...EVM_NETWORKS, ...SVM_NETWORKS };
+export const NETWORKS = { ...EVM_NETWORKS, ...SVM_NETWORKS, ...STELLAR_NETWORKS };
 
 // Robinhood Chain settles USDG (Global Dollar), not Circle USDC, and @x402/evm
 // has no default asset for chain 4663 — so we resolve the asset ourselves and
@@ -120,6 +124,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const caip2List = networks.map((n) => NETWORKS[n]);
   let evmCaip2 = caip2List.filter((c) => c.startsWith("eip155:"));
   const svmCaip2 = caip2List.filter((c) => c.startsWith("solana:"));
+  const stellarCaip2 = caip2List.filter((c) => c.startsWith("stellar:"));
 
   // Facilitator routing. x402ResourceServer accepts a LIST of facilitator
   // clients: at sync it asks each for its /supported kinds and routes every
@@ -197,6 +202,22 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     server = server.register(caip2, caip2 === ROBINHOOD_CAIP2 ? makeUsdgScheme() : new ExactEvmScheme());
   }
   for (const caip2 of svmCaip2) server = server.register(caip2, new ExactSvmScheme());
+  // Stellar — settlement via the OpenZeppelin-operated x402 facilitator on pubnet.
+  // STELLAR_FACILITATOR_URL defaults to the public OpenZeppelin endpoint; override
+  // for a self-hosted or private facilitator instance.
+  const stellarFacilitatorUrl = (process.env.STELLAR_FACILITATOR_URL || "https://channels.openzeppelin.com/x402").trim();
+  const stellarWallet = (process.env.STELLAR_WALLET_ADDRESS || "").trim();
+  if (stellarCaip2.length && stellarWallet) {
+    facilitatorClients.push(new HTTPFacilitatorClient({ url: stellarFacilitatorUrl }));
+    for (const caip2 of stellarCaip2) server = server.register(caip2, new ExactStellarScheme());
+    console.log(`Stellar: settling USDC via facilitator ${stellarFacilitatorUrl} → ${stellarWallet}`);
+  } else if (stellarCaip2.length && !stellarWallet) {
+    console.warn(
+      "WARNING: PAYMENT_NETWORKS enables `stellar` but STELLAR_WALLET_ADDRESS is unset — " +
+        "the Stellar payment option will be OMITTED from every 402. Set STELLAR_WALLET_ADDRESS " +
+        "(Stellar public key, G...) to accept USDC on Stellar."
+    );
+  }
   registerFacilitatorFailureHooks(server, payAiClient);
   console.log(
     `Accepting USDC on: ${networks.join(", ")} (${caip2List.join(", ")})` +
@@ -224,6 +245,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const acceptsFor = (item) => [
     ...evmCaip2.map((caip2) => ({ scheme: "exact", payTo: walletAddress, price: item.price, network: caip2 })),
     ...(solanaWallet ? svmCaip2.map((caip2) => ({ scheme: "exact", payTo: solanaWallet, price: item.price, network: caip2 })) : []),
+    ...(stellarWallet ? stellarCaip2.map((caip2) => ({ scheme: "exact", payTo: stellarWallet, price: item.price, network: caip2 })) : []),
   ];
 
   // The payment-required header is one base64-encoded JSON blob carrying
