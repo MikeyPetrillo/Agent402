@@ -12,7 +12,7 @@ import { wrapFetchWithPayment } from "@x402/fetch";
 const TARGET = process.env.TARGET_URL || "https://agent402.tools";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; // USDC on Base
 const KEY_FILE = process.env.KEY_FILE || "/tmp/agent-key";
-const SUITE_BUDGET = 150000n; // full 56-tool suite costs ~$0.13; require $0.15
+const SUITE_BUDGET = 1300000n; // full 63-tool suite costs ~$1.22; require $1.30 (includes premium packs $0.50+$0.25+$0.30)
 const FUND_WAIT_MINUTES = 40;
 
 let pk;
@@ -138,6 +138,10 @@ const CASES = [
   { slug: "pdf-to-markdown", method: "POST", path: "/api/pdf-to-markdown", body: { url: "https://arxiv.org/pdf/1706.03762" }, check: (b) => b.pages === 15 && b.markdown.length > 1000, show: (b) => `${b.pages}p → ${b.markdown.length} chars of markdown` },
   { slug: "media-info", method: "POST", path: "/api/media-info", body: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" }, check: (b) => b.durationSec > 1 && b.streams?.[0]?.type === "audio", show: (b) => `${b.formatName} ${b.durationSec}s` },
   { slug: "audio-convert", method: "POST", path: "/api/audio-convert", body: { url: "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg" }, check: (b) => b.bytes > 1000 && !!b.mp3Base64, show: (b) => `mp3 ${b.bytes} bytes` },
+  // --- Premium skill packs (must score ALL steps) ---
+  { slug: "skill/domain-intel", method: "POST", path: "/api/skill/domain-intel", body: { domain: "stripe.com" }, check: (b) => b.pack === "domain-intel" && b.steps?.every(s => s.ok), show: (b) => `${b.steps.filter(s=>s.ok).length}/${b.steps.length} steps` },
+  { slug: "skill/company-dossier", method: "POST", path: "/api/skill/company-dossier", body: { ticker: "AAPL" }, check: (b) => b.pack === "company-dossier" && b.steps?.every(s => s.ok), show: (b) => `${b.steps.filter(s=>s.ok).length}/${b.steps.length} steps` },
+  { slug: "skill/crypto-dossier", method: "POST", path: "/api/skill/crypto-dossier", body: { coin: "bitcoin" }, check: (b) => b.pack === "crypto-dossier" && b.steps?.every(s => s.ok), show: (b) => `${b.steps.filter(s=>s.ok).length}/${b.steps.length} steps` },
 ];
 
 let passed = 0;
