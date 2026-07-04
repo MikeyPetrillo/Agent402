@@ -281,6 +281,55 @@ jobs:
           done
           shred -u /tmp/burner-key 2>/dev/null || rm -f /tmp/burner-key
           if [ "$settled" = "1" ]; then echo "RESULT: ✅ real USDG settlement on Robinhood Chain succeeded"; else echo "RESULT: settlement did not succeed (see reasons above)"; fi
+      # Polygon USDC settlement via PayAI facilitator. Boots a Polygon-ONLY
+      # server so the buyer's only option is USDC on chain 137, then buys one
+      # cheap tool. Non-gating: PayAI free-tier flaps must not block the run.
+      - name: Polygon USDC settlement probe (PayAI facilitator, chain 137)
+        if: always()
+        env:
+          WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
+          CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
+          CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+        run: |
+          if [ ! -f "$RUNNER_TEMP/agent-key" ]; then
+            if [ -z "$BURNER_KEY" ]; then echo "No burner key — skipping Polygon settlement."; exit 0; fi
+            printf '%s' "$BURNER_KEY" > "$RUNNER_TEMP/agent-key"
+            chmod 600 "$RUNNER_TEMP/agent-key"
+          fi
+          NETWORK=base PAYMENT_NETWORKS=polygon \
+            FACILITATOR_URL=https://facilitator.payai.network \
+            PORT=3791 node src/server.js > /tmp/poly-srv.log 2>&1 &
+          SRV=$!
+          for i in $(seq 1 40); do curl -sf http://localhost:3791/health >/dev/null 2>&1 && break; sleep 1; done
+          grep -iE 'facilitator|polygon|accepting usdc|multi-chain' /tmp/poly-srv.log | head -4 || true
+          CHAIN=polygon TARGET_URL=http://localhost:3791 KEY_FILE="$RUNNER_TEMP/agent-key" \
+            node scripts/evm-settle-test.js || true
+          kill $SRV 2>/dev/null || true
+      # Arbitrum USDC settlement via PayAI facilitator. Same pattern as Polygon
+      # but chain 42161. Non-gating.
+      - name: Arbitrum USDC settlement probe (PayAI facilitator, chain 42161)
+        if: always()
+        env:
+          WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS || '0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0' }}
+          CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
+          CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+        run: |
+          if [ ! -f "$RUNNER_TEMP/agent-key" ]; then
+            if [ -z "$BURNER_KEY" ]; then echo "No burner key — skipping Arbitrum settlement."; exit 0; fi
+            printf '%s' "$BURNER_KEY" > "$RUNNER_TEMP/agent-key"
+            chmod 600 "$RUNNER_TEMP/agent-key"
+          fi
+          NETWORK=base PAYMENT_NETWORKS=arbitrum \
+            FACILITATOR_URL=https://facilitator.payai.network \
+            PORT=3792 node src/server.js > /tmp/arb-srv.log 2>&1 &
+          SRV=$!
+          for i in $(seq 1 40); do curl -sf http://localhost:3792/health >/dev/null 2>&1 && break; sleep 1; done
+          grep -iE 'facilitator|arbitrum|accepting usdc|multi-chain' /tmp/arb-srv.log | head -4 || true
+          CHAIN=arbitrum TARGET_URL=http://localhost:3792 KEY_FILE="$RUNNER_TEMP/agent-key" \
+            node scripts/evm-settle-test.js || true
+          kill $SRV 2>/dev/null || true
       - name: Shred burner key
         if: always()
         run: |
