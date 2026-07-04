@@ -97,7 +97,7 @@ tollbooth-gated endpoint paid by an AgentCore agent.
 
    > **Proposal: Add `integrations/agent402/` sample — x402 buy + sell side**
    >
-   > Agent402 is an open-source x402 + MCP server with 1,350 pay-per-call web
+   > Agent402 is an open-source x402 + MCP server with 1,355 pay-per-call web
    > tools, plus `agent402-tollbooth` for pay-per-crawl on the other side.
    > Both speak vanilla x402, so an AgentCore-hosted Strands agent works
    > end-to-end with no protocol bridging.
@@ -144,7 +144,7 @@ that takes a GitHub repo URL; no PR, no fork.
    - **Short description (one line, ~150 chars):**
 
      ```
-     1,350 pay-per-call web tools + 46 skill packs for AI agents over x402 (USDC on Base + 3 more chains, or USDG on Robinhood Chain) — or free via proof-of-work. Browser, search, OCR, finance, EDGAR, durable memory.
+     1,355 pay-per-call web tools + 46 skill packs for AI agents over x402 (USDC on Base + 3 more chains, or USDG on Robinhood Chain) — or free via proof-of-work. Browser, search, OCR, finance, EDGAR, durable memory.
      ```
 
    - **Long description / why (if asked):**
@@ -242,7 +242,7 @@ The directory solana.com/x402 cross-links. Form submission, no PR.
    - **One-liner:**
 
      ```
-     1,350 pay-per-call web tools + 46 skill packs for AI agents over x402 — USDC on Solana (and Base/Polygon/Arbitrum) or free via proof-of-work. Open-source, self-hostable, MCP-native.
+     1,355 pay-per-call web tools + 46 skill packs for AI agents over x402 — USDC on Solana (and Base/Polygon/Arbitrum) or free via proof-of-work. Open-source, self-hostable, MCP-native.
      ```
 
    - **Description:** reuse the mcpservers.org long description above; lead

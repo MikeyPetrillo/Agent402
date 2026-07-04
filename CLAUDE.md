@@ -1,6 +1,6 @@
 # Agent402.Tools — project memory for Claude Code
 
-Agent402.Tools is an **open-source, self-hostable x402 + MCP server**: 1,338 deterministic
+Agent402.Tools is an **open-source, self-hostable x402 + MCP server**: 1,355 deterministic
 web tools an AI agent can call and pay for per request (USDC on Base via the x402
 protocol, or free via proof-of-work). It's two-sided — it also ships
 `agent402-tollbooth` (pay-per-crawl for site owners) and `agent402-client` (a buyer SDK).

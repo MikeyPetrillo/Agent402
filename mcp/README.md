@@ -1,6 +1,6 @@
 # agent402-mcp
 
-MCP server for [Agent402](https://agent402.tools) — **1,350 pay-per-call web tools** and **46 curated multi-tool skill packs** for AI agents, paid per call in USDC via the [x402 protocol](https://www.x402.org), or **with compute (proof-of-work)** when no wallet is configured. Built by [Mike Petrillo](https://github.com/MikeyPetrillo).
+MCP server for [Agent402](https://agent402.tools) — **1,355 pay-per-call web tools** and **46 curated multi-tool skill packs** for AI agents, paid per call in USDC via the [x402 protocol](https://www.x402.org), or **with compute (proof-of-work)** when no wallet is configured. Built by [Mike Petrillo](https://github.com/MikeyPetrillo).
 
 Your agent gets browser rendering, screenshots, PDF text extraction, URL→markdown, live web search **+ web answers with citations**, live **financial/crypto/macro data** (Yahoo stock quotes, CoinGecko, FRED, ECB FX, World Bank, yield curve), **SEC EDGAR filings** (10-K/10-Q text, XBRL, insider, 13F, IPO calendar), **deterministic stats & forecasting** (Pearson correlation, OLS, Holt-Winters), **compression** (gzip/brotli), DNS/TLS/WHOIS + email-deliverability checks, wallet-keyed shared memory, and ~1,000 utility/conversion tools — plus 42 **skill packs** like `security-audit`, `trend-analysis`, `structured-scrape`, `decode-blob`, and `forecasting-bake-off` callable as MCP prompts. Payment handled invisibly underneath the MCP calls. No signup, no API key.
 
@@ -41,7 +41,7 @@ Claude Code: `claude mcp add agent402 -- npx -y agent402-mcp`
 
 - On startup the server reads the live catalog from `https://agent402.tools/api/pricing` + `/openapi.json`.
 - The high-value tools (`extract`, `render`, `screenshot`, `pdf`, `meta`, `dns`, `http-check`, `tls-cert`, `whois`, the `memory-*` coordination tools, `hash`) are exposed as first-class MCP tools.
-- The rest of the ~1,350-tool catalog is reachable via `search_tools` (find by description) + `call_tool` (call by slug) — keeping your context window small.
+- The rest of the ~1,355-tool catalog is reachable via `search_tools` (find by description) + `call_tool` (call by slug) — keeping your context window small.
 - When a call hits HTTP 402: with a wallet key set (`AGENT_KEY` for Base/Polygon/Arbitrum, `SOLANA_AGENT_KEY` for Solana), the server signs an x402 USDC payment on a chain the seller accepts and retries; without a key it solves the tool's proof-of-work challenge (~0.2 s of CPU) on the eligible tools.
 - `payment_info` tells the model which mode it's in and what a wallet would unlock.
 - `top_x402_sellers` returns the live x402 leaderboard — which sellers are settling the most USDC (primarily on Base) in the last ~24h, derived from on-chain transfers. Free to call (no payment, no proof-of-work). Useful for agents discovering the wider x402 economy beyond this single service's catalog.
