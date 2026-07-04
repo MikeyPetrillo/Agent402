@@ -17,13 +17,14 @@ const TARGET = process.env.TARGET_URL || "http://localhost:3000";
 // scripts/test-search-kit.js and post-deploy by scripts/paid-canary.js.
 const BRAVE_ROUTES = new Set([
   "/api/search", "/api/search-news", "/api/search-images", "/api/search-suggest", "/api/answer",
+  "/api/multi-search",
 ]);
 const skipBrave = process.env.BRAVE_LIVE_TEST !== "1";
 
 const NETWORK = new Set([
   "/api/extract", "/api/meta", "/api/dns", "/api/render", "/api/screenshot", "/api/pdf",
   "/api/http-check", "/api/tls-cert", "/api/whois", "/api/robots-check", "/api/sitemap",
-  "/api/email-validate", "/api/ip-info", "/api/search", "/api/search-news", "/api/search-images", "/api/search-suggest", "/api/answer",
+  "/api/email-validate", "/api/ip-info", "/api/search", "/api/search-news", "/api/search-images", "/api/search-suggest", "/api/answer", "/api/multi-search",
   "/api/pdf-info", "/api/pdf-merge", "/api/pdf-extract-pages", "/api/pdf-rotate", "/api/images-to-pdf",
   "/api/pdf-to-markdown",
   "/api/media-info", "/api/audio-convert", "/api/audio-normalize",
@@ -56,6 +57,7 @@ const NETWORK = new Set([
   "/api/edgar-company-lookup", "/api/edgar-filings", "/api/edgar-company-concept",
   "/api/edgar-company-facts", "/api/edgar-xbrl-frame",
   "/api/edgar-insider-trades", "/api/edgar-13f-holdings", "/api/edgar-recent-ipos", "/api/edgar-search",
+  "/api/company-financials",
   // Finance-kit: Yahoo Finance chart (quote + history) and Nasdaq earnings
   // calendar — keyless live upstreams; tolerate transient 502/503/504.
   "/api/stock-quote", "/api/stock-history", "/api/earnings-calendar",

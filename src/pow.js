@@ -48,7 +48,7 @@ const pruneStmt = db.prepare("DELETE FROM pow_used WHERE exp < ?");
 // Tools that cost real money or reach the network are NOT compute-payable —
 // they stay wallet-only so PoW can't be used to farm Chromium/egress/storage.
 export const WALLET_ONLY_SLUGS = new Set([
-  "extract", "meta", "dns", "render", "screenshot", "pdf",
+  "extract", "meta", "dns", "render", "screenshot", "pdf", "multi-search",
   "memory-write", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-revoke",
   "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",
   "http-check", "tls-cert", "whois", "robots-check", "sitemap",
@@ -67,6 +67,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "fred-release-observations",
   "edgar-company-lookup", "edgar-filings", "edgar-company-concept", "edgar-company-facts", "edgar-xbrl-frame",
   "edgar-insider-trades", "edgar-13f-holdings", "edgar-recent-ipos", "edgar-search",
+  "company-financials",
   "stock-quote", "stock-history", "earnings-calendar",
   "crypto-price", "crypto-market", "crypto-history", "crypto-trending", "crypto-global",
   // Composite research tools fan out to multiple paid upstreams; PoW would

@@ -431,4 +431,68 @@ export const SEARCH_TOOLS = [
       return { query: q, answer, citations, citationCount: citations.length };
     },
   },
+
+  // multi-search — run 2-5 web searches in one call with a bundled discount.
+  // Unit economics: 5 × $0.02 = $0.10 at full price; we charge $0.08 for the
+  // batch (20% volume discount). Agents that need multiple queries per task
+  // (compare sources, multi-faceted research) save on roundtrips + per-call overhead.
+  {
+    route: "POST /api/multi-search",
+    name: "Multi-search (batch)",
+    slug: "multi-search",
+    category: "web",
+    price: "$0.08",
+    description:
+      "Run 2-5 web searches in one call with a 20% volume discount vs. individual searches. Each query returns ranked results (title, URL, snippet). Ideal for multi-faceted research or comparing sources on different aspects of a topic.",
+    tags: ["search", "batch", "multi-search", "research", "parallel"],
+    discovery: {
+      bodyType: "json",
+      input: { queries: ["x402 payment protocol", "USDC micropayments"] },
+      inputSchema: {
+        properties: {
+          queries: {
+            type: "array",
+            items: { type: "string" },
+            description: "Array of 2-5 search queries (each max 400 chars)",
+          },
+          count: { type: "number", description: "Results per query, 1-10 (default 5)" },
+          freshness: { type: "string", description: "Optional: pd, pw, pm, or py (past day/week/month/year)" },
+        },
+        required: ["queries"],
+      },
+      output: {
+        example: {
+          searches: [
+            { query: "x402 payment protocol", count: 2, results: [{ title: "x402.org", url: "https://www.x402.org/", description: "An open standard…", age: null }] },
+            { query: "USDC micropayments", count: 2, results: [{ title: "Circle USDC", url: "https://www.circle.com/usdc", description: "Digital dollar…", age: null }] },
+          ],
+          totalResults: 4,
+        },
+      },
+    },
+    handler: async (i) => {
+      const queries = i.queries;
+      if (!Array.isArray(queries) || queries.length < 2 || queries.length > 5) {
+        throw bad('"queries" must be an array of 2-5 search query strings');
+      }
+      const count = Math.min(Math.max(parseInt(i.count, 10) || 5, 1), 10);
+      const freshness = FRESHNESS.has(i.freshness) ? i.freshness : undefined;
+      const searches = await Promise.all(
+        queries.map(async (raw) => {
+          const q = typeof raw === "string" ? raw.trim().slice(0, 400) : "";
+          if (!q) return { query: "", count: 0, results: [], error: "empty query skipped" };
+          const data = await braveGet("/web/search", { q, count, freshness });
+          const results = (data.web?.results ?? []).slice(0, count).map((r) => ({
+            title: r.title ?? null,
+            url: r.url ?? null,
+            description: r.description ?? null,
+            age: r.age ?? null,
+          }));
+          return { query: q, count: results.length, results };
+        }),
+      );
+      const totalResults = searches.reduce((sum, s) => sum + s.count, 0);
+      return { searches, totalResults };
+    },
+  },
 ];

@@ -495,7 +495,7 @@ export const CHAIN_TOOLS = [
     name: "Gas snapshot (slow / standard / fast)",
     slug: "gas-snapshot",
     category: "crypto",
-    price: "$0.001",
+    price: "$0.005",
     description:
       "Live gas price snapshot for a chain — slow / standard / fast tiers in gwei, plus the latest base fee. Sampled from eth_feeHistory (last 4 blocks, 25th/50th/90th percentile priority fees). Use to estimate before broadcasting a transaction from another tool.",
     tags: ["crypto", "gas", "fees", "evm", "transaction"],

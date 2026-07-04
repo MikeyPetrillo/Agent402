@@ -1984,7 +1984,7 @@ const networkTools = [
     name: "Domain WHOIS (RDAP)",
     slug: "whois",
     category: "network",
-    price: "$0.003",
+    price: "$0.005",
     description: "Domain registration data via RDAP (the structured WHOIS successor): registrar, creation/expiry dates, status, nameservers.",
     tags: ["whois", "rdap", "domain", "registration"],
     discovery: {

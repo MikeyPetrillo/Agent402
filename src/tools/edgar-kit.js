@@ -136,7 +136,7 @@ export const EDGAR_TOOLS = [
     name: "EDGAR company lookup (ticker → CIK)",
     slug: "edgar-company-lookup",
     category: "data",
-    price: "$0.001",
+    price: "$0.005",
     description:
       "Resolve a US stock ticker (e.g. AAPL) to its SEC CIK number, the primitive every other EDGAR call needs. Returns CIK in both zero-padded (0000320193) and integer form, plus the registered company name. Backed by SEC's company_tickers.json (public domain). ?ticker=AAPL",
     tags: ["edgar", "sec", "cik", "ticker", "lookup", "company", "stocks", "filings"],
@@ -621,7 +621,91 @@ async function fetchXmlText(url) {
   return await res.text();
 }
 
+// Key XBRL tags for the company-financials summary tool. Companies may report
+// under different tag names (GAAP evolved; "Revenues" → "RevenueFromContract..."
+// in ASC 606 era). `alts` lists fallback tags tried in order.
+const FINANCIALS_TAGS = [
+  { tag: "Revenues", label: "Revenue", alts: ["RevenueFromContractWithCustomerExcludingAssessedTax", "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet"] },
+  { tag: "NetIncomeLoss", label: "Net Income", alts: ["ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"] },
+  { tag: "OperatingIncomeLoss", label: "Operating Income", alts: ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"] },
+  { tag: "Assets", label: "Total Assets", alts: [] },
+  { tag: "Liabilities", label: "Total Liabilities", alts: ["LiabilitiesCurrent"] },
+  { tag: "StockholdersEquity", label: "Stockholders Equity", alts: ["StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"] },
+  { tag: "EarningsPerShareBasic", label: "EPS (Basic)", alts: [] },
+  { tag: "EarningsPerShareDiluted", label: "EPS (Diluted)", alts: [] },
+  { tag: "NetCashProvidedByUsedInOperatingActivities", label: "Operating Cash Flow", alts: ["NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"] },
+];
+
 EDGAR_TOOLS.push(
+  {
+    route: "GET /api/company-financials",
+    name: "Company financials summary",
+    slug: "company-financials",
+    category: "data",
+    price: "$0.02",
+    description:
+      "Key financial metrics (Revenue, Net Income, Operating Income, Total Assets, Liabilities, Equity, EPS, Operating Cash Flow) for a US public company in one call. Returns the latest annual and quarterly values from SEC XBRL filings. No XBRL knowledge needed — just pass a ticker. ?ticker=AAPL",
+    tags: ["edgar", "sec", "financials", "fundamentals", "income-statement", "balance-sheet", "cash-flow"],
+    discovery: {
+      input: { ticker: "AAPL" },
+      inputSchema: {
+        properties: {
+          ticker: { type: "string", description: "US stock ticker (alternative to cik)" },
+          cik: { type: "string", description: "SEC CIK number (alternative to ticker)" },
+        },
+      },
+      output: {
+        example: {
+          ticker: "AAPL",
+          cik: "0000320193",
+          entityName: "Apple Inc.",
+          metrics: [
+            { label: "Revenue", tag: "Revenues", latestAnnual: { value: 391035000000, period: "2024-09-28", form: "10-K" }, latestQuarterly: { value: 94930000000, period: "2025-03-29", form: "10-Q" } },
+            { label: "Net Income", tag: "NetIncomeLoss", latestAnnual: { value: 93736000000, period: "2024-09-28", form: "10-K" }, latestQuarterly: { value: 24780000000, period: "2025-03-29", form: "10-Q" } },
+          ],
+          source: "SEC EDGAR XBRL (public domain)",
+        },
+      },
+    },
+    handler: async (i) => {
+      const { cik, name } = await resolveCompany({ ticker: i.ticker, cik: i.cik });
+      const j = await edgarGetJson(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`);
+      const facts = j?.facts?.["us-gaap"] ?? {};
+      const metrics = [];
+      for (const { tag, label, alts } of FINANCIALS_TAGS) {
+        // Try all candidate tags and pick the one with the freshest annual filing.
+        // Companies migrate tag names over time (e.g. "Revenues" → ASC 606 tag),
+        // so the primary tag may have stale data while an alt has current filings.
+        const candidates = [tag, ...(alts || [])];
+        let bestTag = null, bestAnnual = null, bestQuarterly = null;
+        for (const t of candidates) {
+          const concept = facts[t];
+          if (!concept) continue;
+          const units = concept.units?.USD ?? concept.units?.["USD/shares"] ?? concept.units?.pure ?? [];
+          let annual = null, quarterly = null;
+          for (const row of units) {
+            if (row.form === "10-K" && (!annual || row.end > annual.end)) annual = row;
+            if (row.form === "10-Q" && (!quarterly || row.end > quarterly.end)) quarterly = row;
+          }
+          // Pick the candidate whose annual data is most recent
+          if (annual && (!bestAnnual || annual.end > bestAnnual.end)) {
+            bestTag = t; bestAnnual = annual; bestQuarterly = quarterly;
+          } else if (!bestAnnual && quarterly && (!bestQuarterly || quarterly.end > bestQuarterly.end)) {
+            bestTag = t; bestQuarterly = quarterly;
+          }
+        }
+        const fmt = (r) => r ? { value: r.val, period: r.end, form: r.form } : null;
+        metrics.push({ label, tag: bestTag ?? tag, latestAnnual: fmt(bestAnnual), latestQuarterly: fmt(bestQuarterly) });
+      }
+      return {
+        ticker: typeof i.ticker === "string" ? i.ticker.trim().toUpperCase() : null,
+        cik,
+        entityName: j?.entityName ?? name,
+        metrics,
+        source: "SEC EDGAR XBRL (public domain)",
+      };
+    },
+  },
   {
     route: "GET /api/edgar-insider-trades",
     name: "EDGAR insider trades (Form 4)",
