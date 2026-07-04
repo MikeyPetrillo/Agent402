@@ -30,7 +30,7 @@
 [![npm](https://img.shields.io/npm/v/agent402-google-adk?label=google-adk)](https://www.npmjs.com/package/agent402-google-adk)
 [![npm](https://img.shields.io/npm/v/agent402-openai-agents?label=openai-agents)](https://www.npmjs.com/package/agent402-openai-agents)
 
-**Give your AI agent 1,358 ready-to-use web tools — plus 42 multi-tool skill packs — from one server. Browser
+**Give your AI agent 1,358 ready-to-use web tools — plus 51 multi-tool skill packs — from one server. Browser
 rendering, web search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, deterministic stats and forecasting, compression, and ~1,000 pure-CPU utilities.** Run it yourself for free in 30 seconds (MCP **or**
 plain HTTP, no API keys, no signup), connect it to Claude/ChatGPT/any MCP
 client, and add your own tools in a few lines. Every tool is deterministic —
@@ -113,7 +113,7 @@ and [`/llms.txt`](https://agent402.tools/llms.txt). Don't know which tool you ne
 a task description to the right tool — route, price, schema, and a ready example —
 so an agent skips the token-heavy "search around to find a tool" step.
 
-## Skill packs — 42 multi-tool workflows
+## Skill packs — 51 multi-tool workflows
 
 For jobs that span several tools — "audit a domain", "diagnose deliverability",
 "work up a time-series", "peel an opaque blob" — Agent402 ships curated

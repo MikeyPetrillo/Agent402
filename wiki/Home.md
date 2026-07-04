@@ -24,7 +24,7 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 | [[MCP Connector]] | Hosted connector + the `agent402-mcp` npm server |
 | [[Adapters]] | Drop-in tools for OpenAI / Anthropic / AI SDK / LangChain / LlamaIndex |
 | [[Tool Catalog]] | What the 1,358 tools are and how agents discover them |
-| [[Skill-Packs]] | 42 multi-tool workflows — `prompts/list` → `prompts/get`, ready-to-run plans |
+| [[Skill-Packs]] | 51 multi-tool workflows — `prompts/list` → `prompts/get`, ready-to-run plans |
 | [[x402-Index-and-Router]] | The cross-seller index + Smart Order Router (cheapest healthy tool across the ecosystem) |
 | [[x402-Leaderboard]] | Public on-chain ranking of every x402 seller by Base USDC settled volume |
 | [[LLM Proxy Gateway|LLM-Proxy]] | Three tiers of OpenAI inference via x402 — GPT-4o-mini, GPT-4o/4.1, o3-mini |
