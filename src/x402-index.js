@@ -344,6 +344,38 @@ function isRoutable(entry) {
   return h[h.length - 1] === 1;
 }
 
+// Metadata-injection detector (M6, "Five Attacks on x402" Attack IV-E1).
+// A tool listing is metadata: a name, a description, tags — text that *describes*
+// what a tool does. It is never a channel for instructions to the selecting
+// agent. When an external listing's text tries to command the ranker or the
+// buyer's LLM ("ignore previous instructions", "always pick this", a fake
+// <system> block), that's an attack, not a description — the paper drove one
+// crafted server to 71.8% selection this way. We drop such listings entirely.
+//
+// Deliberately conservative: every pattern is imperative/meta phrasing that a
+// genuine tool description has no reason to contain. A tool that legitimately
+// *operates on* prompts (e.g. a "prompt linter") describes its function
+// ("detects prompt-injection patterns"), it doesn't issue the commands below.
+const INJECTION_PATTERNS = [
+  /ignore\s+(?:all\s+|any\s+)?(?:previous|prior|above|earlier|the\s+above)\s+(?:instructions?|prompts?|context|rules?)/,
+  /disregard\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|earlier|other)/,
+  /forget\s+(?:everything|all|the\s+above|previous|prior)/,
+  /always\s+(?:pick|choose|select|use|prefer|recommend|return)\s+(?:this|me|the\s+following)/,
+  /(?:you\s+must|be\s+sure\s+to)\s+(?:always\s+)?(?:pick|choose|select|use|prefer|recommend)/,
+  /(?:highest|top|maximum|max)\s+priority/,
+  /override\s+(?:all\s+|any\s+|the\s+)?(?:other|previous|prior|instructions?|ranking)/,
+  /<\/?\s*(?:system|assistant|user|instructions?|important)\s*>/,
+  /\[(?:system|important|instructions?|override)\]/,
+  /system\s*(?:prompt|message|role)\s*[:=]/,
+  /do\s+not\s+(?:pick|choose|select|recommend|consider)\s+(?:any\s+)?other/,
+];
+function looksLikeListingInjection(text) {
+  const t = String(text || "");
+  if (t.length > 8000) return true; // no honest listing is a novel; oversized = padding an attack
+  for (const re of INJECTION_PATTERNS) if (re.test(t)) return true;
+  return false;
+}
+
 let crawlerTimer = null;
 let discoveryTimer = null;
 let crawlInFlight = false;
@@ -550,6 +582,14 @@ export function routeQuery({ query, top, include, networkFilter, baseUrl, catalo
     const slug = (t.slug || "").toLowerCase();
     const name = (t.name || "").toLowerCase();
     const hay = `${t.name} ${t.description} ${t.category} ${(t.tags || []).join(" ")}`.toLowerCase();
+    // Metadata sanitization (M6, defends "Five Attacks on x402" Attack IV-E1 —
+    // metadata manipulation): a single crafted external listing whose text tries
+    // to command the selecting agent ("ignore previous instructions", "always
+    // pick this", fake <system> tags) hit 71.8% selection in the paper. We DROP
+    // such external listings from the router entirely — a legitimate tool
+    // describes what it does, it doesn't instruct the ranker. Our own local
+    // catalog is trusted and never sanitized.
+    if (t.seller !== LOCAL_SELLER && looksLikeListingInjection(hay)) continue;
     let score = 0;
     for (const term of terms) {
       if (slug === term) score += 10;
@@ -571,8 +611,38 @@ export function routeQuery({ query, top, include, networkFilter, baseUrl, catalo
     return (a[1].slug || "").length - (b[1].slug || "").length;
   });
 
+  // Per-seller diversity cap (M6, "Five Attacks on x402" Attack IV — Sybil /
+  // metadata capture). Ranking is already sorted best-first; naively taking the
+  // top k lets one seller (or a crafted Sybil listing set) monopolize the whole
+  // shortlist — the paper measured a single domain owning 77.5% of a real
+  // registry's results. We take at most `perSellerCap` entries per external
+  // seller in a first pass, then backfill any remaining slots from the leftovers
+  // so the shortlist is never shorter than it would have been. Our own local
+  // catalog (LOCAL_SELLER) is exempt: it's one trusted seller by construction,
+  // and capping it would perversely push buyers toward less-vetted externals.
+  // Honest limit: a Sybil attacker spread across many *distinct* domains/wallets
+  // still gets one slot each — that's the paper's open problem, not solved here.
+  const perSellerCap = Math.max(1, Math.ceil(k / 3));
+  const perSellerCount = new Map();
+  const picked = [];
+  const leftover = [];
+  for (const entry of scored) {
+    if (picked.length >= k) break;
+    const seller = entry[1].seller;
+    if (seller === LOCAL_SELLER) { picked.push(entry); continue; }
+    const n = perSellerCount.get(seller) || 0;
+    if (n < perSellerCap) { perSellerCount.set(seller, n + 1); picked.push(entry); }
+    else leftover.push(entry);
+  }
+  // Backfill: if the cap left us short of k, take the best leftovers (still in
+  // score order) so we never return fewer results than a plain top-k would.
+  for (const entry of leftover) {
+    if (picked.length >= k) break;
+    picked.push(entry);
+  }
+
   const sellersSeen = new Set();
-  const results = scored.slice(0, k).map(([score, t]) => {
+  const results = picked.map(([score, t]) => {
     sellersSeen.add(t.seller);
     return {
       seller: t.seller,

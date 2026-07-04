@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Router Sybil / metadata-capture resistance** (security hardening, M6): the neutral
+  cross-seller router (`/api/route`, MCP router) now (1) drops any external listing whose
+  text tries to command the ranker — "ignore previous instructions", "always pick this",
+  fake `<system>` tags, oversized padding — instead of describing a tool, and (2) caps how
+  many shortlist slots any one external seller can occupy (`ceil(k/3)`), backfilling from
+  the remainder so a full shortlist is still returned. This blunts the discovery-capture
+  failure mode (Attack IV) from the "Five Attacks on x402" analysis, where one crafted
+  server reached 71.8% selection via metadata injection and a single domain owned 77.5% of
+  a real registry's results. The local catalog is exempt (one trusted seller by construction);
+  honest limitation: a Sybil spread across many distinct domains/wallets still gets one slot
+  each — the paper's open problem. CI-locked (`scripts/test-router-sybil.js`).
+
 - **Cache hygiene on paid responses** (security hardening, M5): every gated catalog
   response now sets `Cache-Control: no-store, private`, so a shared cache or CDN can never
   serve a paid result to a later unpaid caller of the same URL. This closes the cache-leakage

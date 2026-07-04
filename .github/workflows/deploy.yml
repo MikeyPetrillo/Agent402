@@ -648,6 +648,9 @@ jobs:
       - name: /api/route neutral cross-seller router envelope (per-row shape, include filter, missing-query)
         run: node scripts/test-route-envelope.js
 
+      - name: "Router Sybil resistance (M6 — Attack IV: per-seller diversity cap, metadata-injection listings dropped)"
+        run: node scripts/test-router-sybil.js
+
       - name: /api/reliability envelope (guarantees claim+verify pairing — every listing portal reads this)
         run: node scripts/test-reliability-envelope.js
 
