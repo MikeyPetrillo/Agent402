@@ -1859,13 +1859,14 @@ app.use((req, res, next) => {
           const network = method === "usdc" ? networkFromPaymentResponse(settleReceipt) : null;
           const priceUsd = Number(String(def.price ?? "").replace(/[^0-9.]/g, "")) || 0;
           const synthetic = method === "heartbeat" || isSyntheticRequest(req);
-          capturePostHogSettlement({ slug: def.slug, rail, network, priceUsd, synthetic });
+          const payer = payerFromRequest(req);
+          capturePostHogSettlement({ slug: def.slug, rail, network, priceUsd, synthetic, payer });
           // Sales ledger — the same sale, BY NAME, persisted on /data with the
           // verified payer + settle tx so "what do external wallets actually
           // buy" is answerable forever (the question the odometer can't).
           recordSale({
             slug: def.slug, priceUsd, rail, network,
-            payer: payerFromRequest(req),
+            payer,
             tx: txFromPaymentResponse(settleReceipt),
             synthetic,
           });
@@ -2020,6 +2021,7 @@ for (const tool of ALL_KIT) {
     // Threaded into analytics + Sentry + PostHog so test traffic never inflates
     // the public error rate (see /api/analytics ?include_synthetic to override).
     const synthetic = isSyntheticRequest(req);
+    const payer = payerFromRequest(req);
     let cached = false;
     let errored = false;
     let probe = false;
@@ -2098,7 +2100,7 @@ for (const tool of ALL_KIT) {
       const latencyMs = Date.now() - startedAt;
       // Fire-and-forget. Analytics outages must NEVER affect agents.
       recordToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic, probe }).catch(() => {});
-      capturePostHogToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic, probe });
+      capturePostHogToolCall({ slug: tool.slug, latencyMs, cached, errored, status, synthetic, probe, payer });
     }
   });
 }

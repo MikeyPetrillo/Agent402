@@ -130,7 +130,7 @@ export function capturePostHogToolError({ slug, status, message, shape, syntheti
 // total volume, latency, cache hits, and success rates per slug. Errors are
 // also captured separately via capturePostHogToolError with richer detail;
 // this event is the volume/latency layer.
-export function capturePostHogToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe }) {
+export function capturePostHogToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe, payer }) {
   if (!active()) return;
   capture("tool_call", {
     slug,
@@ -140,6 +140,7 @@ export function capturePostHogToolCall({ slug, latencyMs, cached, errored, statu
     status: Number(status) || 200,
     synthetic: !!synthetic,
     probe: !!probe,
+    ...(payer ? { payer } : {}),
   });
 }
 
@@ -242,7 +243,7 @@ export function _flushPaywallRollupForTest() {
 // Settlements are rare and precious — always per-event. `rail` is what the
 // gate actually accepted (mirrors the /api/stats three-rail attribution);
 // `network` is the settlement chain decoded from the x402 receipt for USDC.
-export function capturePostHogSettlement({ slug, rail, network, priceUsd, synthetic }) {
+export function capturePostHogSettlement({ slug, rail, network, priceUsd, synthetic, payer }) {
   if (!active()) return;
   capture("payment_settled", {
     slug: String(slug || "unknown"),
@@ -250,6 +251,7 @@ export function capturePostHogSettlement({ slug, rail, network, priceUsd, synthe
     network: network ? String(network) : null,
     priceUsd: Number(priceUsd) || 0,
     synthetic: !!synthetic,
+    ...(payer ? { payer } : {}),
   });
 }
 
