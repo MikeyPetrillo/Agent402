@@ -12,7 +12,9 @@
 
 const UPSTREAM_HOST = "https://api.nasdaq.com";
 const ALLOWED_PATH = /^\/api\/calendar\/[a-z]+$/;
-const DEFAULT_UA = "Mozilla/5.0 (compatible; Agent402-nasdaq-relay/1.0; +https://agent402.tools)";
+// Nasdaq's CloudFront CDN rejects non-browser User-Agents with empty responses
+// (520). Always send a browser-like UA regardless of what the caller passes.
+const UPSTREAM_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
 export default {
   async fetch(request, env) {
@@ -41,7 +43,7 @@ export default {
       upstream = await fetch(upstreamUrl, {
         method: "GET",
         headers: {
-          "User-Agent": request.headers.get("User-Agent") || DEFAULT_UA,
+          "User-Agent": UPSTREAM_UA,
           Accept: "application/json,text/plain,*/*",
           "Accept-Language": "en-US,en;q=0.9",
         },
