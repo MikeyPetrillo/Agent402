@@ -191,20 +191,40 @@ async function solanaRail(wallet) {
   return out;
 }
 
+// Stellar — read USDC balance via Horizon API (the Stellar equivalent of an RPC node).
+// Best-effort, no transfer scan (Horizon pagination is complex); shows balance only.
+async function stellarRail(wallet) {
+  const out = { rail: "Stellar", asset: "USDC", wallet: wallet || null, explorer: wallet ? `https://stellar.expert/explorer/public/account/${wallet}` : null, balance: null, recent: [], error: null };
+  if (!wallet) { out.error = "STELLAR_WALLET_ADDRESS unset"; return out; }
+  try {
+    const res = await fetch(`https://horizon.stellar.org/accounts/${wallet}`, { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) { out.error = `Horizon HTTP ${res.status}`; return out; }
+    const acct = await res.json();
+    // USDC on Stellar is issued by Centre/Circle: asset_code=USDC, asset_issuer=GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
+    const usdcBalance = acct.balances?.find((b) => b.asset_code === "USDC" && b.asset_issuer === "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN");
+    out.balance = usdcBalance ? Number(usdcBalance.balance) : 0;
+  } catch (e) {
+    out.error = String(e?.message || e).slice(0, 120);
+  }
+  return out;
+}
+
 // 60s snapshot cache — refresh costs at most one scan per minute regardless
 // of page traffic, and a burst of refreshes can't hammer public RPCs.
 let cached = null;
 let cachedAt = 0;
 export async function revenueSnapshot({ walletAddress, solanaWallet }) {
   if (cached && Date.now() - cachedAt < 60_000) return cached;
-  const [base, polygon, arbitrum, robinhood, solana] = await Promise.all([
+  const stellarWallet = (process.env.STELLAR_WALLET_ADDRESS || "").trim();
+  const [base, polygon, arbitrum, robinhood, solana, stellar] = await Promise.all([
     evmRail("base", walletAddress),
     evmRail("polygon", walletAddress),
     evmRail("arbitrum", walletAddress),
     evmRail("robinhood", walletAddress),
     solanaRail(solanaWallet),
+    stellarRail(stellarWallet),
   ]);
-  const rails = [base, solana, polygon, arbitrum, robinhood];
+  const rails = [base, solana, polygon, arbitrum, stellar, robinhood];
   const totalUsd = rails.reduce((s, r) => s + (Number.isFinite(r.balance) ? r.balance : 0), 0);
   const windowExternalUsd = rails.reduce((s, r) => s + (Number.isFinite(r.externalUsd) ? r.externalUsd : 0), 0);
   cached = {
@@ -325,6 +345,6 @@ export function revenuePage(baseUrl, snap) {
 // RAILS import keeps this module honest if the rail set changes: a rail in
 // rails.js with no read-config here is a wiring bug the test below catches.
 export function railsCoveredByLiveView() {
-  const covered = new Set([...Object.values(EVM).map((c) => c.label), "Solana"]);
+  const covered = new Set([...Object.values(EVM).map((c) => c.label), "Solana", "Stellar"]);
   return RAILS.every((r) => covered.has(r.name));
 }
