@@ -124,6 +124,22 @@ export const TOOLS = [
     priceUsd: 0.08,
     check: (r) => (Array.isArray(r.searches) && r.searches.length === 2 && r.totalResults > 0) || `expected 2 searches with totalResults>0, got ${JSON.stringify(r).slice(0, 120)}`,
   },
+  {
+    kit: "skill-pack",
+    path: "/api/skill/financial-analysis",
+    method: "POST",
+    body: { ticker: "AAPL" },
+    priceUsd: 0.04,
+    check: (r) => (r.pack === "financial-analysis" && Array.isArray(r.steps) && r.steps.filter((s) => s.ok).length >= 2) || `expected pack=financial-analysis with >=2 ok steps, got ${JSON.stringify(r).slice(0, 120)}`,
+  },
+  {
+    kit: "skill-pack",
+    path: "/api/skill/market-brief",
+    method: "POST",
+    body: { coin: "bitcoin" },
+    priceUsd: 0.025,
+    check: (r) => (r.pack === "market-brief" && Array.isArray(r.steps) && r.steps.filter((s) => s.ok).length >= 2) || `expected pack=market-brief with >=2 ok steps, got ${JSON.stringify(r).slice(0, 120)}`,
+  },
 ];
 
 // Classify one tool result. Pure — unit-tested in scripts/test-paid-canary.js.
