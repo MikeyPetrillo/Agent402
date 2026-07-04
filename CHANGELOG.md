@@ -2,7 +2,22 @@
 
 ## Unreleased
 
+- **Payment-nonce replay guard** (security hardening, M3): the x402 paywall now rejects a
+  duplicate payment authorization *before* it reaches the facilitator, and refuses a
+  concurrent replay (the same signed authorization fired many times at once, racing the
+  settle). Agent402 already settles-before-grant — an EIP-3009 nonce is single-use on-chain,
+  so a replayed authorization fails at the facilitator and the duplicate-grant rate was
+  already 1 — this is a strictly-earlier, cheaper defense-in-depth layer against Attack II
+  ("replay / insufficient idempotency") from the "Five Attacks on x402" analysis.
+  Release-on-failure: a nonce is only marked consumed on a granted 200 (which, under
+  settle-before-grant, means the payment settled); any non-200 releases it so a legitimate
+  retry of the still-valid authorization proceeds. Requests without a payment header (unpaid
+  402 challenges, discovery crawls, proof-of-work calls) are never touched. New
+  `src/replay-guard.js`; CI-locked (`scripts/test-replay-guard.js`, incl. a concurrent-replay
+  HTTP E2E proving 8 identical authorizations collapse to a single grant).
+
 - **Router Sybil / metadata-capture resistance** (security hardening, M6): the neutral
+  cross-seller router (`/api/route`, MCP router) now (1) drops any external listing whose the neutral
   cross-seller router (`/api/route`, MCP router) now (1) drops any external listing whose
   text tries to command the ranker — "ignore previous instructions", "always pick this",
   fake `<system>` tags, oversized padding — instead of describing a tool, and (2) caps how

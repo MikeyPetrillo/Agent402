@@ -12,6 +12,7 @@ import {
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
 import { payerFromRequest } from "./payer.js";
+import { paymentReplayKey, createReplayGuard } from "./replay-guard.js";
 import { landingPage } from "./landing.js";
 import { statusPage } from "./status.js";
 import { tollboothLandingPage } from "./tollbooth-landing.js";
@@ -1716,6 +1717,11 @@ if (FREE_MODE) {
     baseUrl: BASE_URL,
     catalog: CATALOG,
   });
+  // Payment-nonce replay guard (M3, defends "Five Attacks on x402" Attack II).
+  // Defense-in-depth over settle-before-grant: rejects a duplicate payment
+  // authorization before it reaches the facilitator and closes the concurrent-
+  // replay window. See src/replay-guard.js.
+  const replayGuard = createReplayGuard();
   // Funnel stage 2 — a 402 challenge issued for a catalog route. Mounted
   // BEFORE the paywall because the paywall ends 402 responses without
   // calling next(), so the post-paywall tally middleware never sees them.
@@ -1771,6 +1777,38 @@ if (FREE_MODE) {
         res.setHeader("X-Pow-Error", result.reason);
       }
       res.setHeader("X-Pow-Challenge", `${BASE_URL}/api/pow/challenge?slug=${slug}`);
+    }
+    // Payment-nonce replay guard (M3, defends "Five Attacks on x402" Attack II —
+    // replay / insufficient idempotency). Reached only on the genuine x402 path:
+    // the PoW-accepted and marketplace-bridged branches above already returned.
+    // Settle-before-grant already makes an on-chain nonce single-use; this
+    // rejects a duplicate authorization BEFORE the facilitator and refuses a
+    // concurrent replay (same authorization fired at once, racing the settle —
+    // the paper's duplicate-grant window). Release-on-failure: the nonce is only
+    // marked consumed on a granted 200 (settle-before-grant ⇒ 200 means settled);
+    // any non-200 releases it so a legitimate retry of the still-valid
+    // authorization proceeds. Requests without a payment header (unpaid 402
+    // challenges, discovery crawls) return a null key and are never guarded.
+    const replayKey = paymentReplayKey(req);
+    if (replayKey) {
+      const verdict = replayGuard.begin(replayKey);
+      if (verdict !== "ok") {
+        res.setHeader("X-Payment-Replay", verdict); // "consumed" | "inflight"
+        return res.status(409).json({
+          error:
+            "Payment authorization already used. Each x402 payment authorization (nonce) is single-use — sign a fresh authorization to make another paid call.",
+          reason: verdict,
+        });
+      }
+      let resolved = false;
+      const finishGuard = () => {
+        if (resolved) return;
+        resolved = true;
+        if (res.statusCode === 200) replayGuard.settle(replayKey);
+        else replayGuard.release(replayKey); // not granted (facilitator rejected, handler errored, client aborted)
+      };
+      res.on("finish", finishGuard);
+      res.on("close", finishGuard); // client aborted before the response finished
     }
     return x402mw(req, res, next);
   });

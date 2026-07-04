@@ -621,6 +621,9 @@ jobs:
       - name: "Cache hygiene (M5 — Attack III: paid responses no-store, free discovery stays cacheable)"
         run: node scripts/test-cache-hygiene.js
 
+      - name: "Payment-nonce replay guard (M3 — Attack II: concurrent replay collapses to one grant, release-on-failure)"
+        run: node scripts/test-replay-guard.js
+
       - name: CDP kit live check (real balances + onramp session — skips without secrets)
         env:
           CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
