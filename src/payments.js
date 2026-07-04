@@ -204,11 +204,19 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   for (const caip2 of svmCaip2) server = server.register(caip2, new ExactSvmScheme());
   // Stellar — settlement via the OpenZeppelin-operated x402 facilitator on pubnet.
   // STELLAR_FACILITATOR_URL defaults to the public OpenZeppelin endpoint; override
-  // for a self-hosted or private facilitator instance.
+  // for a self-hosted or private facilitator instance. Requires a Bearer token
+  // (STELLAR_FACILITATOR_KEY) generated at https://channels.openzeppelin.com/gen
+  // via GitHub OAuth. Without the key, the facilitator returns 401 on /supported
+  // and the scheme registration is skipped (same graceful-degrade as Solana).
   const stellarFacilitatorUrl = (process.env.STELLAR_FACILITATOR_URL || "https://channels.openzeppelin.com/x402").trim();
+  const stellarFacilitatorKey = (process.env.STELLAR_FACILITATOR_KEY || "").trim();
   const stellarWallet = (process.env.STELLAR_WALLET_ADDRESS || "").trim();
-  if (stellarCaip2.length && stellarWallet) {
-    facilitatorClients.push(new HTTPFacilitatorClient({ url: stellarFacilitatorUrl }));
+  if (stellarCaip2.length && stellarWallet && stellarFacilitatorKey) {
+    const stellarAuthHeaders = { Authorization: `Bearer ${stellarFacilitatorKey}` };
+    facilitatorClients.push(new HTTPFacilitatorClient({
+      url: stellarFacilitatorUrl,
+      createAuthHeaders: async () => ({ verify: stellarAuthHeaders, settle: stellarAuthHeaders, supported: stellarAuthHeaders }),
+    }));
     for (const caip2 of stellarCaip2) server = server.register(caip2, new ExactStellarScheme());
     console.log(`Stellar: settling USDC via facilitator ${stellarFacilitatorUrl} → ${stellarWallet}`);
   } else if (stellarCaip2.length && !stellarWallet) {
@@ -216,6 +224,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       "WARNING: PAYMENT_NETWORKS enables `stellar` but STELLAR_WALLET_ADDRESS is unset — " +
         "the Stellar payment option will be OMITTED from every 402. Set STELLAR_WALLET_ADDRESS " +
         "(Stellar public key, G...) to accept USDC on Stellar."
+    );
+  } else if (stellarCaip2.length && !stellarFacilitatorKey) {
+    console.warn(
+      "WARNING: PAYMENT_NETWORKS enables `stellar` but STELLAR_FACILITATOR_KEY is unset — " +
+        "the OpenZeppelin facilitator requires a Bearer token. Generate one at " +
+        "https://channels.openzeppelin.com/gen (GitHub OAuth). Stellar will be OMITTED until set."
     );
   }
   registerFacilitatorFailureHooks(server, payAiClient);
