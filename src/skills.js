@@ -1836,7 +1836,7 @@ export const SKILL_PACKS = [
     slug: "company-dossier",
     title: "Company dossier",
     tagline:
-      "Comprehensive company research report in one call: live quote, financials, SEC filings, insider trades, news search, and top article extraction.",
+      "Comprehensive company research report in one call: live quote, financials, SEC filings, insider trades, and recent news — all in parallel.",
     useCase:
       "Building an investment thesis, preparing for a board presentation, or doing acquisition diligence — you want the full public picture of a company without leaving the agent loop.",
     promptArgs: [
@@ -1848,7 +1848,6 @@ export const SKILL_PACKS = [
       "edgar-filings",
       "edgar-insider-trades",
       "search",
-      "extract",
     ],
     workflow: [
       "Get the live quote from stock-quote — current price, market cap, day range, 52-week high/low, volume.",
@@ -1856,7 +1855,6 @@ export const SKILL_PACKS = [
       "List the 5 most recent SEC filings via edgar-filings to surface any 10-K, 10-Q, 8-K, or S-1 activity.",
       "Check edgar-insider-trades for Form 4 filings in the last 90 days — directional insider activity is a real signal.",
       "Search the web for recent news about the company to catch catalysts, analyst upgrades, or red flags.",
-      "Extract the top news article as clean markdown for the brief's headline analysis section.",
     ],
     claudePrompt:
       "Build a comprehensive dossier on NVDA using Agent402's company-dossier skill pack. Get (1) live quote, (2) key financials, (3) last 5 SEC filings, (4) 90-day insider trades, (5) recent news search, (6) full text of the top article. Summarize as a structured one-pager with sections for valuation, fundamentals, insider signal, and news catalyst.",

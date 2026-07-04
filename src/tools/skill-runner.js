@@ -1335,22 +1335,18 @@ export const PACK_STEPS = {
   // Premium dossier packs (2026-07): high-value "solve the whole job" bundles.
   // ──────────────────────────────────────────────────────────────────────
 
-  // Company dossier: quote → financials → EDGAR filings → insider trades →
-  // news search → extract top article. Chain so the extract step can read
-  // the first search result URL from prior.
+  // Company dossier: all 5 data calls in parallel (fanout), no extract step.
+  // Chain mode exceeded Railway's 30s response timeout (6 sequential API calls
+  // each 3-10s = 30-60s total). Fanout runs in max(individual) ≈ 10s.
+  // Removed extract: marginal value (one article) not worth the timeout risk.
   "company-dossier": {
-    mode: "chain",
+    mode: "fanout",
     steps: [
-      { slug: "stock-quote",         mapInput: (a) => ({ symbol: a.ticker }) },
-      { slug: "company-financials",  mapInput: (a) => ({ ticker: a.ticker }) },
-      { slug: "edgar-filings",       mapInput: (a) => ({ ticker: a.ticker, limit: 5 }) },
+      { slug: "stock-quote",          mapInput: (a) => ({ symbol: a.ticker }) },
+      { slug: "company-financials",   mapInput: (a) => ({ ticker: a.ticker }) },
+      { slug: "edgar-filings",        mapInput: (a) => ({ ticker: a.ticker, limit: 5 }) },
       { slug: "edgar-insider-trades", mapInput: (a) => ({ ticker: a.ticker, lookbackDays: 90 }) },
-      { slug: "search",              mapInput: (a) => ({ q: `${a.ticker} company news`, count: 5, freshness: "pm" }) },
-      { slug: "extract",             mapInput: (a, p) => {
-          const results = p["search"]?.results || [];
-          const url = results[0]?.url || results[1]?.url || results[2]?.url;
-          return { url: url || `https://finance.yahoo.com/quote/${a.ticker}` };
-      } },
+      { slug: "search",               mapInput: (a) => ({ q: `${a.ticker} company news`, count: 5, freshness: "pm" }) },
     ],
   },
 
