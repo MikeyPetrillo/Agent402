@@ -1,22 +1,19 @@
 # Handoff
 
 ## State
-Massive multi-session sprint. PRs #213-#226 shipped. 1,355 tools, 6 chains (Base/Solana/Polygon/Arbitrum/Stellar/Robinhood), Stripe ACP live, viral demos ready. Stellar first payment confirmed ($0.001 USDC settled on stellar:pubnet). Canary 60/60 on last clean run.
+PRs #213-#229 shipped. 1,358 tools, 51 skill packs, 6 chains. Stellar confirmed with real payment. ACP live. Premium packs deployed. Canary 60/60 on last clean run.
 
-## Next — Updates needed everywhere for Stellar + 1,355 count
-1. **Revenue scan** — `src/revenue-live.js` has Stellar balance read, but `scripts/revenue-scan.js` may need Stellar transfer scanning (currently just balance)
-2. **Paid canary** — add a Stellar-specific settlement test to `scripts/paid-canary.js` (buy a tool via stellar:pubnet)
-3. **GitHub SEO** — update repo description, release notes, topics to mention Stellar + 6 chains
-4. **Website copy** — landing page, docs, FAQ should mention Stellar (rails.js auto-handles most derived copy but check manual prose)
-5. **PostHog** — the Stellar payment should show up in payment_settled events with network=stellar:pubnet
-6. **Ecosystem listings** — update entries on awesome-x402, MCP Registry, PulseMCP, Bazaar to mention 6 chains
-7. **Stellar ecosystem** — submit Agent402 to stellar.org/ecosystem or Stellar community listings
-8. **Record viral demo** — `AGENT_KEY=0x... node scripts/demo-company-onepager.js NVDA` → post to @Agent402Tools
-9. **Circle + x402 Foundation** — manual registration (docs/integration-playbook.md has steps)
+## Next — Fix skill pack reliability
+1. **Premium packs failing steps** — company-dossier, domain-intel, crypto-dossier all have steps that timeout locally. On prod with relays they may score better, but VERIFY. Every step must pass.
+   - Likely culprits: `extract` (needs Chromium, can timeout), `search` (Brave rate limit), `cert-transparency` (slow upstream)
+   - Fix: add retries, increase timeouts for chain-mode packs, or remove unreliable steps
+2. **Run paid canary with the new packs** — add company-dossier/domain-intel/crypto-dossier to canary and confirm ALL steps pass on prod
+3. **Framework adoption** — starter templates are in `examples/`. Submit as PRs to LangChain/CrewAI docs.
+4. **Registrations** — Circle (agents.circle.com/services), x402 Foundation (linuxfoundation.org/x402foundation), Stellar ecosystem
 
 ## Context
-- Stellar facilitator key: `a464b9b7-1496-4845-b6e2-41fb26ab3eef` (on Railway as STELLAR_FACILITATOR_KEY)
-- Client-side gotcha: `ExactStellarScheme(signer, { url: '<soroban-rpc>' })` — two args, `.url` not `.rpcUrl`
-- First Stellar payment was 49s (Soroban simulation overhead); subsequent should be ~5-10s
-- ACP feed is 603KB (all 1,355 tools) — may want pagination or a lighter variant later
-- Demo scripts require AGENT_KEY (wallet-only tools can't PoW)
+- Partial success in skill packs is NOT OK — user expects 100% of steps to work (see feedback memory)
+- Premium pack prices: company-dossier $0.50, domain-intel $0.25, crypto-dossier $0.30
+- financial-analysis bumped to $0.08, market-brief to $0.05
+- Stellar facilitator key: on Railway as STELLAR_FACILITATOR_KEY (OpenZeppelin, Bearer auth)
+- First Stellar payment confirmed: 49s settlement, $0.001 USDC

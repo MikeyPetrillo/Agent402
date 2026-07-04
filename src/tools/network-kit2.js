@@ -58,25 +58,34 @@ async function certTransparencyHandler(body) {
 
   // crt.sh supports JSON output via ?output=json. Queries are slow but free and
   // require no auth. We use the % wildcard prefix to match all subdomains.
+  // Retries once on timeout/5xx — crt.sh is notoriously flaky under load.
   const q = encodeURIComponent("%." + domain);
-  const url = `https://crt.sh/?q=${q}&output=json${includeExpired ? "" : "&exclude=expired"}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
+  const crtUrl = `https://crt.sh/?q=${q}&output=json${includeExpired ? "" : "&exclude=expired"}`;
+  async function crtFetch() {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const res = await fetch(crtUrl, {
+        signal: controller.signal,
+        dispatcher: ssrfDispatcher,
+        headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+      });
+      if (!res.ok) throw bad(`crt.sh returned HTTP ${res.status}`, res.status >= 500 ? 502 : 422);
+      return res;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   let response;
   try {
-    response = await fetch(url, {
-      signal: controller.signal,
-      dispatcher: ssrfDispatcher,
-      headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
-    });
+    response = await crtFetch();
   } catch (err) {
-    if (err.name === "AbortError") throw bad("crt.sh did not respond within 12s — try again later", 504);
-    throw bad(`Could not reach crt.sh: ${err.message}`, 502);
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!response.ok) {
-    throw bad(`crt.sh returned HTTP ${response.status} — try again later`, response.status >= 500 ? 502 : 422);
+    if (err.statusCode === 422) throw err; // client error, don't retry
+    // Single retry on timeout or 5xx
+    try { response = await crtFetch(); } catch (err2) {
+      if (err2.statusCode) throw err2;
+      throw bad(err2.name === "AbortError" ? "crt.sh did not respond — try again later" : `Could not reach crt.sh: ${err2.message}`, 502);
+    }
   }
   const text = await response.text();
   let rows;

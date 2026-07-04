@@ -1879,7 +1879,6 @@ export const SKILL_PACKS = [
       "http-headers",
       "tech-stack",
       "robots-check",
-      "cert-transparency",
     ],
     workflow: [
       "Pull WHOIS records — registrar, creation date, expiry, registrant (often privacy-shielded but the age alone is a signal).",
@@ -1888,10 +1887,9 @@ export const SKILL_PACKS = [
       "Fetch HTTP response headers — security posture (HSTS, CSP, XFO), caching, and server fingerprint.",
       "Fingerprint the tech stack — CMS, framework, CDN, analytics, and third-party scripts.",
       "Check robots.txt for crawl directives — reveals hidden paths and bot policies.",
-      "Pull the certificate transparency log to enumerate all issued certificates and subdomains.",
     ],
     claudePrompt:
-      "Run a full domain intelligence report on stripe.com using Agent402's domain-intel skill pack: (1) WHOIS — age, registrar, expiry. (2) DNS A records — hosting/CDN. (3) TLS cert — issuer, expiry, SANs. (4) HTTP headers — security headers score. (5) Tech stack — frameworks, CDN, analytics. (6) robots.txt — hidden paths. (7) Certificate transparency — all issued certs. Output a structured report with a risk summary.",
+      "Run a full domain intelligence report on stripe.com using Agent402's domain-intel skill pack: (1) WHOIS — age, registrar, expiry. (2) DNS A records — hosting/CDN. (3) TLS cert — issuer, expiry, SANs. (4) HTTP headers — security headers score. (5) Tech stack — frameworks, CDN, analytics. (6) robots.txt — hidden paths. Output a structured report with a risk summary.",
   },
 
   {

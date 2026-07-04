@@ -542,7 +542,12 @@ for (const tool of ALL_KIT) {
 // covers routes that are bound inline in this file (extract/meta/dns/render/
 // pdf) rather than declared in a kit — the runner tries this map first.
 const SKILL_INLINE_HANDLERS = {
-  extract: async ({ url } = {}) => extractArticle(url),
+  // extract retries once on timeout/5xx (page fetches are flaky under load);
+  // 422 (content not parseable) fails immediately — retry won't help there.
+  extract: async ({ url } = {}) => {
+    try { return await extractArticle(url); }
+    catch (e) { if (e.statusCode === 422 || e.statusCode === 400) throw e; return await extractArticle(url); }
+  },
   meta:    async ({ url } = {}) => fetchPageMeta(url),
   dns:     async ({ name, type } = {}) => dnsLookup(name, type),
   render:  async ({ url } = {}) => renderArticle(url),

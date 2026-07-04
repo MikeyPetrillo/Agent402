@@ -1346,15 +1346,17 @@ export const PACK_STEPS = {
       { slug: "edgar-filings",       mapInput: (a) => ({ ticker: a.ticker, limit: 5 }) },
       { slug: "edgar-insider-trades", mapInput: (a) => ({ ticker: a.ticker, lookbackDays: 90 }) },
       { slug: "search",              mapInput: (a) => ({ q: `${a.ticker} company news`, count: 5, freshness: "pm" }) },
-      { slug: "extract",             mapInput: (_a, p) => {
-          const url = p["search"]?.results?.[0]?.url;
-          if (!url) throw Object.assign(new Error("no news URL to extract"), { statusCode: 422 });
-          return { url };
+      { slug: "extract",             mapInput: (a, p) => {
+          const results = p["search"]?.results || [];
+          const url = results[0]?.url || results[1]?.url || results[2]?.url;
+          return { url: url || `https://finance.yahoo.com/quote/${a.ticker}` };
       } },
     ],
   },
 
   // Domain intel: full external footprint in parallel — no step depends on another.
+  // cert-transparency (crt.sh) excluded: free public service with no SLA, times out
+  // frequently. Available as a standalone tool for agents that want it.
   "domain-intel": {
     mode: "fanout",
     steps: [
@@ -1364,7 +1366,6 @@ export const PACK_STEPS = {
       { slug: "http-headers",       mapInput: (a) => ({ url: `https://${a.domain}` }) },
       { slug: "tech-stack",         mapInput: (a) => ({ url: `https://${a.domain}` }) },
       { slug: "robots-check",       mapInput: (a) => ({ url: `https://${a.domain}` }) },
-      { slug: "cert-transparency",  mapInput: (a) => ({ domain: a.domain }) },
     ],
   },
 
@@ -1379,10 +1380,10 @@ export const PACK_STEPS = {
       { slug: "crypto-trending", mapInput: () => ({}) },
       { slug: "crypto-global",   mapInput: () => ({ currency: "usd" }) },
       { slug: "search",          mapInput: (a) => ({ q: `${a.coin} cryptocurrency news`, count: 5, freshness: "pw" }) },
-      { slug: "extract",         mapInput: (_a, p) => {
-          const url = p["search"]?.results?.[0]?.url;
-          if (!url) throw Object.assign(new Error("no news URL to extract"), { statusCode: 422 });
-          return { url };
+      { slug: "extract",         mapInput: (a, p) => {
+          const results = p["search"]?.results || [];
+          const url = results[0]?.url || results[1]?.url || results[2]?.url;
+          return { url: url || `https://www.coingecko.com/en/coins/${a.coin}` };
       } },
     ],
   },
