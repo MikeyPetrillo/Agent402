@@ -39,7 +39,7 @@ export const TOOLS = [
     kit: "edgar",
     path: "/api/edgar-company-lookup?ticker=AAPL",
     method: "GET",
-    priceUsd: 0.001,
+    priceUsd: 0.005,
     check: (r) => r.cik === "0000320193" || `expected cik 0000320193, got ${JSON.stringify(r).slice(0, 80)}`,
   },
   {
@@ -75,7 +75,7 @@ export const TOOLS = [
     path: "/api/gas-snapshot",
     method: "POST",
     body: { network: "base" },
-    priceUsd: 0.001,
+    priceUsd: 0.005,
     check: (r) => (
       typeof r.baseFeeGwei === "number" && r.baseFeeGwei > 0 && r.baseFeeGwei < 1000 &&
       r.fast && typeof r.fast.totalGwei === "number" && r.fast.totalGwei >= r.baseFeeGwei &&
@@ -108,6 +108,21 @@ export const TOOLS = [
     body: { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 },
     priceUsd: 0.02,
     check: (r) => (typeof r.choices?.[0]?.message?.content === "string" && r.choices[0].message.content.length > 0) || `expected choices[0].message.content, got ${JSON.stringify(r).slice(0, 100)}`,
+  },
+  {
+    kit: "edgar",
+    path: "/api/company-financials?ticker=AAPL",
+    method: "GET",
+    priceUsd: 0.02,
+    check: (r) => (Array.isArray(r.metrics) && r.metrics.length === 9 && r.metrics[0].label === "Revenue" && r.metrics[0].latestAnnual?.value > 1e9) || `expected 9 metrics with Revenue > $1B, got ${JSON.stringify(r).slice(0, 120)}`,
+  },
+  {
+    kit: "search",
+    path: "/api/multi-search",
+    method: "POST",
+    body: { queries: ["x402 protocol", "USDC micropayments"], count: 2 },
+    priceUsd: 0.08,
+    check: (r) => (Array.isArray(r.searches) && r.searches.length === 2 && r.totalResults > 0) || `expected 2 searches with totalResults>0, got ${JSON.stringify(r).slice(0, 120)}`,
   },
 ];
 
