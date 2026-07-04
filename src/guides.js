@@ -9,7 +9,7 @@ const GUIDES = [
     slug: "x402-in-5-minutes",
     title: "Make your AI agent pay for what it needs: x402 in 5 minutes",
     description:
-      "A working example of the x402 payment protocol: your agent calls an API, gets an HTTP 402 quote, pays USDC on Base (or Solana, Polygon, Arbitrum — or USDG on Robinhood Chain) from its own wallet, and gets the result — no signup, no API key.",
+      "A working example of the x402 payment protocol: your agent calls an API, gets an HTTP 402 quote, pays USDC on Base (or Solana, Polygon, Arbitrum, Stellar — or USDG on Robinhood Chain) from its own wallet, and gets the result — no signup, no API key.",
     md: `
 The useful web hides behind signups, captchas, and API keys — none of which an
 autonomous agent can obtain mid-task. [x402](https://x402.org) fixes this with
@@ -36,7 +36,7 @@ curl -i -X POST https://agent402.tools/api/extract \\
 
 ## Pay it (JavaScript)
 
-Fund a wallet with a little USDC on Base (or Solana, Polygon, Arbitrum — the payer needs no ETH on EVM chains; USDG works too, on Robinhood Chain), then:
+Fund a wallet with a little USDC on Base (or Solana, Polygon, Arbitrum, Stellar — the payer needs no ETH on EVM chains; USDG works too, on Robinhood Chain), then:
 
 \`\`\`js
 import { wrapFetchWithPayment } from "@x402/fetch";
@@ -178,7 +178,7 @@ for the full API.
     slug: "sell-your-api-over-x402",
     title: "Sell your API to AI agents over x402 — no billing system required",
     description:
-      "Put a per-call USDC paywall in front of any HTTP endpoint with the x402 protocol: quote over HTTP 402, settle on Base (or Solana, Polygon, Arbitrum — even USDG on Robinhood Chain) through a facilitator, and get discovered by agents — no accounts, invoices, or payment forms.",
+      "Put a per-call USDC paywall in front of any HTTP endpoint with the x402 protocol: quote over HTTP 402, settle on Base (or Solana, Polygon, Arbitrum, Stellar — even USDG on Robinhood Chain) through a facilitator, and get discovered by agents — no accounts, invoices, or payment forms.",
     md: `
 If you run an API, the next wave of customers can't sign up for it. Autonomous
 agents don't have credit cards, can't pass captchas, and won't wait for a sales
@@ -389,7 +389,7 @@ const res = await fetch(url, { ...init, headers: { ...init.headers, ...http.enco
 The open-source server ships the rail; enabling it is config:
 
 \`\`\`bash
-PAYMENT_NETWORKS=base,solana,polygon,arbitrum,robinhood \\
+PAYMENT_NETWORKS=base,solana,polygon,arbitrum,stellar,robinhood \\
 ROBINHOOD_FACILITATOR_URL=<an x402 facilitator that settles eip155:4663> \\
 WALLET_ADDRESS=0xYourRevenueWallet npm start
 \`\`\`

@@ -244,7 +244,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.02",
     description:
-      "OpenAI-compatible chat completions over x402 — point any OpenAI SDK at base_url https://agent402.tools/v1 and pay per call in USDC (Base, Solana, Polygon, Arbitrum), no API key, no signup. Budget/mid models: gpt-4o-mini, claude haiku, gemini flash, deepseek, llama, mistral, qwen. Full wire compatibility incl. tools/function-calling and response_format. GET /v1/models lists every model. No streaming.",
+      "OpenAI-compatible chat completions over x402 — point any OpenAI SDK at base_url https://agent402.tools/v1 and pay per call in USDC (Base, Solana, Polygon, Arbitrum, Stellar), no API key, no signup. Budget/mid models: gpt-4o-mini, claude haiku, gemini flash, deepseek, llama, mistral, qwen. Full wire compatibility incl. tools/function-calling and response_format. GET /v1/models lists every model. No streaming.",
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: INPUT_SCHEMA, output: { example: EXAMPLE_OUT } },
     handler: makeHandler("v1-chat"),
@@ -288,5 +288,5 @@ export function modelsList() {
       });
     }
   }
-  return { object: "list", data, note: "Prefixes ending in /* allow the whole vendor family. Pay per call via x402 (USDC on Base, Solana, Polygon, Arbitrum) — no API key. Bare OpenAI-style names (gpt-4o-mini) are accepted and mapped." };
+  return { object: "list", data, note: "Prefixes ending in /* allow the whole vendor family. Pay per call via x402 (USDC on Base, Solana, Polygon, Arbitrum, Stellar) — no API key. Bare OpenAI-style names (gpt-4o-mini) are accepted and mapped." };
 }

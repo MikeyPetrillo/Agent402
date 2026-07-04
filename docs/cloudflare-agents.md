@@ -46,7 +46,7 @@ interface Env {
 ```
 
 The Worker receives a 402 response from Agent402, signs a USDC payment on
-Base (or Solana/Polygon/Arbitrum), and replays the request with a valid
+Base (or Solana/Polygon/Arbitrum/Stellar), and replays the request with a valid
 payment header — all handled by `@x402/fetch`.
 
 ---
@@ -139,4 +139,4 @@ for the npm package and deploy templates.
 | Any paid tool | `GET\|POST /api/{slug}` | x402 (USDC) |
 | x402 manifest | `GET /.well-known/x402` | None |
 
-Prices: $0.001–$0.02 per call. Networks: Base, Solana, Polygon, Arbitrum.
+Prices: $0.001–$0.02 per call. Networks: Base, Solana, Polygon, Arbitrum, Stellar.

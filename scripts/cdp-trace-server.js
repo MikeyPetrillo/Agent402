@@ -18,7 +18,7 @@
 // the failure is client-side negotiation (challenge size / malformed), not CDP.
 //
 //   CDP_API_KEY_ID=.. CDP_API_KEY_SECRET=.. WALLET_ADDRESS=.. \
-//   PAYMENT_NETWORKS=base,solana,polygon,arbitrum NETWORK=base \
+//   PAYMENT_NETWORKS=base,solana,polygon,arbitrum,stellar NETWORK=base \
 //   PORT=3777 node scripts/cdp-trace-server.js
 import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
 

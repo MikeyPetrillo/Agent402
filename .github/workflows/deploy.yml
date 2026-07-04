@@ -1009,13 +1009,13 @@ jobs:
           # is exactly the silent misconfig this gate must not reproduce).
           WALLET_ADDRESS=0x000000000000000000000000000000000000dEaD NETWORK=base \
           SOLANA_WALLET_ADDRESS=11111111111111111111111111111111 \
-          PAYMENT_NETWORKS=base,solana,polygon,arbitrum FACILITATOR_URL=https://facilitator.payai.network \
+          PAYMENT_NETWORKS=base,solana,polygon,arbitrum,stellar FACILITATOR_URL=https://facilitator.payai.network \
           PORT=3002 node src/server.js >/tmp/mc.log 2>&1 &
           for i in $(seq 1 30); do curl -s localhost:3002/health >/dev/null && break; sleep 1; done
           grep -i "Accepting USDC" /tmp/mc.log
           NETS=$(curl -s localhost:3002/api/pricing | jq -c '.payment.networks')
           echo "pricing.payment.networks = $NETS"
-          [ "$NETS" = '["base","solana","polygon","arbitrum"]' ] || { echo "code did not register all chains"; exit 1; }
+          [ "$NETS" = '["base","solana","polygon","arbitrum","stellar"]' ] || { echo "code did not register all chains"; exit 1; }
           echo "--- live 402 against PayAI (informational status; hard gate on the accepts below) ---"
           curl -s -D /tmp/402.h -o /tmp/402.body -w "status %{http_code}\n" -X POST localhost:3002/api/hash \
             -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{"text":"x"}' || true

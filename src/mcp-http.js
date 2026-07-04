@@ -191,7 +191,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           name: "about_agent402",
           title: "About this connector",
           annotations: { title: "About this connector", ...SAFE },
-          description: "What this connector is: the free tier of agent402.tools, what's free vs wallet-only, the curated multi-tool workflows (skill packs) available as prompts, and how paid access works (x402 — USDC on Base/Solana/Polygon/Arbitrum, USDG on Robinhood Chain — plus proof-of-work).",
+          description: "What this connector is: the free tier of agent402.tools, what's free vs wallet-only, the curated multi-tool workflows (skill packs) available as prompts, and how paid access works (x402 — USDC on Base/Solana/Polygon/Arbitrum/Stellar, USDG on Robinhood Chain — plus proof-of-work).",
           inputSchema: { type: "object", properties: {} },
         },
         // Hosted leaderboard of x402 sellers settled in the recent window

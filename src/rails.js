@@ -27,13 +27,13 @@ const usdcOr = `${usdc.slice(0, -1).join(", ")}, or ${usdc.at(-1)}`;
 const othersDash = others.map((o) => ` — or ${o.asset} on ${o.name}`).join("");
 const othersPlus = others.map((o) => ` — plus ${o.asset} on ${o.name}`).join("");
 
-/** "USDC on Base, Solana, Polygon & Arbitrum — plus USDG on Robinhood Chain" */
+/** "USDC on Base, Solana, Polygon, Arbitrum & Stellar — plus USDG on Robinhood Chain" */
 export const RAILS_AMP = `USDC on ${usdcAmp}${othersPlus}`;
 
-/** "USDC on Base, Solana, Polygon, or Arbitrum — or USDG on Robinhood Chain" */
+/** "USDC on Base, Solana, Polygon, Arbitrum, or Stellar — or USDG on Robinhood Chain" */
 export const RAILS_OR = `USDC on ${usdcOr}${othersDash}`;
 
-/** "USDC on Base (or Solana, Polygon, Arbitrum — or USDG on Robinhood Chain)" —
+/** "USDC on Base (or Solana, Polygon, Arbitrum, Stellar — or USDG on Robinhood Chain)" —
  *  the "primary chain first" phrasing used in buyer-facing prose. */
 export const RAILS_PAREN = `USDC on ${usdc[0]} (or ${usdc.slice(1).join(", ")}${othersDash})`;
 
