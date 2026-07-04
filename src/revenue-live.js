@@ -134,6 +134,13 @@ async function recentInbound(c, wallet, latest) {
     })
     .sort((a, b) => b.block - a.block)
     .slice(0, 8);
+  // Best-effort block timestamps — one RPC call per transfer (8 max).
+  for (const t of recent) {
+    try {
+      const blk = await rpcCall(c.rpcs, "eth_getBlockByNumber", ["0x" + t.block.toString(16), false], 3000);
+      if (blk?.timestamp) t.when = new Date(parseInt(blk.timestamp, 16) * 1000).toISOString();
+    } catch { /* timestamp is nice-to-have, not required */ }
+  }
   return { recent, missed };
 }
 
@@ -360,9 +367,10 @@ export function revenuePage(baseUrl, snap) {
                   : t.internal ? ` · <span style="color:var(--muted);">internal canary/test</span>`
                   : ` · <span style="color:var(--muted);">not a per-call buy</span>`;
                 const dim = t.usd !== undefined && !t.external ? "opacity:.62;" : "";
+                const when = t.when ? ` · <span style="color:var(--muted);">${esc(t.when.slice(0, 16))}Z</span>` : "";
                 return t.usd !== undefined
-                  ? `<div style="${dim}">+$${t.usd} from <code>${esc(short(t.from))}</code> · <a href="${esc(t.tx)}" rel="noopener">tx</a>${tag}</div>`
-                  : `<div><a href="${esc(t.tx)}" rel="noopener">tx</a>${t.when ? ` · ${esc(t.when.slice(0, 16))}Z` : ""}${t.err ? " · failed" : ""}</div>`;
+                  ? `<div style="${dim}">+$${t.usd} from <code>${esc(short(t.from))}</code> · <a href="${esc(t.tx)}" rel="noopener">tx</a>${tag}${when}</div>`
+                  : `<div><a href="${esc(t.tx)}" rel="noopener">tx</a>${when}${t.err ? " · failed" : ""}</div>`;
               })
               .join("")}</div>`
           : `<div style="font-family:var(--font-mono);font-size:12px;color:var(--muted);">no inbound transfers in the recent window</div>`}
