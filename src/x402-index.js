@@ -72,7 +72,7 @@ const DISCOVERY_SOURCES = [
 // stale entry self-heals — but keep this to STABLE origins only. No ephemeral
 // tunnels (*.trycloudflare.com and friends flap to STALE on every restart).
 const DEFAULT_SEEDS = [
-  "https://api.aiservices.to", // AgentServices — 46 paid APIs for AI agents (#aiservices)
+  "https://agentservices.to", // AgentServices — 50 paid APIs for AI agents (#aiservices)
   "https://agents.daedalusdevelopmentgroup.com", // DDG Agent-Payable Services (#222)
   "https://jmt-x402-proxy.jmthomasofficial.workers.dev", // JMT x402 server (#221)
 ];
