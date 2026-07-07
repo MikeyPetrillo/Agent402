@@ -41,14 +41,14 @@ const DRY = process.env.DRY_RUN === "1";
 
 // ---- args -----------------------------------------------------------------
 function parseArgs(argv) {
-  const out = { force: false, replyTo: null, text: null, file: null };
+  const out = { force: false, replyTo: null, text: null, file: null, dryRun: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--text" || a === "-t") out.text = argv[++i];
     else if (a === "--file" || a === "-f") out.file = argv[++i];
     else if (a === "--reply-to" || a === "-r") out.replyTo = argv[++i];
     else if (a === "--force") out.force = true;
-    else if (a === "--dry-run") process.env.DRY_RUN = "1";
+    else if (a === "--dry-run") out.dryRun = true;
     else if (!a.startsWith("-") && out.text == null) out.text = a; // positional
   }
   return out;
@@ -118,7 +118,7 @@ async function main() {
   const body = { text };
   if (args.replyTo) body.reply = { in_reply_to_tweet_id: String(args.replyTo) };
 
-  if (DRY) {
+  if (DRY || args.dryRun) {
     console.log("DRY RUN — would POST", API_URL);
     console.log(JSON.stringify(body, null, 2));
     console.log(`(${text.length} chars)`);
