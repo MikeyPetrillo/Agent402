@@ -1,10 +1,11 @@
-// Post a tweet to X (Twitter) from Agent402's own account — the publish step of
-// the daily "proposed tweets" bot. Deterministic, dependency-free: signs the
-// request with OAuth 1.0a (HMAC-SHA1) using Node's built-in crypto and posts to
-// POST /2/tweets. A human approves the text first; this only publishes.
+// Post to X (Twitter) from the CLI — an ops utility for release and changelog
+// announcements, in the spirit of scripts/marketplace-register.js. Deterministic,
+// dependency-free: signs the request with OAuth 1.0a (HMAC-SHA1) using Node's
+// built-in crypto and posts to POST /2/tweets.
 //
-// The four credentials come from an X developer App (one-time setup, see
-// docs/tweet-bot.md). Set them on Railway (or export locally) — never commit them.
+// The four credentials come from an X developer App (developer.x.com — create a
+// Project + App, set permissions to Read and write, generate keys and tokens).
+// Set them in the environment — never commit them.
 //
 // Env:
 //   X_API_KEY         App API Key       (aka Consumer Key).    Required.
@@ -126,7 +127,7 @@ async function main() {
   }
 
   for (const [name, v] of Object.entries({ X_API_KEY: CONSUMER_KEY, X_API_SECRET: CONSUMER_SECRET, X_ACCESS_TOKEN: ACCESS_TOKEN, X_ACCESS_SECRET: ACCESS_SECRET })) {
-    if (!v) { console.error(`${name} is required (X developer App — see docs/tweet-bot.md). Set it on Railway; do not commit it.`); process.exit(1); }
+    if (!v) { console.error(`${name} is required (from an X developer App with Read-and-write permissions). Set it in the environment; do not commit it.`); process.exit(1); }
   }
 
   let res, json;
