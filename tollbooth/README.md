@@ -8,12 +8,15 @@ proof-of-work. No Cloudflare, no Stripe, no Merchant-of-Record, no signup.
 The big platforms are converging on the same model: Cloudflare's
 [pay-per-crawl](https://stackoverflow.blog/2026/02/26/how-pay-per-crawl-is-reshaping-data-monetization/)
 and now its [Monetization Gateway](https://blog.cloudflare.com/monetization-gateway/)
-(announced 2026 — x402 charging for anything behind Cloudflare, waitlist at the time of writing) confirm that
-pay-per-request is the business model of the agentic web. Tollbooth is the
-**open-source monetization gateway**: the same idea, live today, MIT-licensed,
-running in front of *any* origin (even a Cloudflare Worker), with a proof-of-work
-free tier the platform gateways don't offer — built on the same hardened 402 + proof-of-work
-machinery as [Agent402](https://github.com/MikeyPetrillo/Agent402).
+(launched July 2026 — x402 charging in USDC on Base for anything behind Cloudflare:
+pages, APIs, datasets, MCP tools) confirm that pay-per-request is the business model
+of the agentic web. Tollbooth is the **open-source monetization gateway**: the same
+idea, but MIT-licensed and live today (Cloudflare's is waitlist-only), running in
+front of *any* origin (even a Cloudflare Worker), non-custodial (you hold the wallet,
+no signup or Merchant-of-Record), and — the wedge the platform gateways don't offer —
+with a **proof-of-work free tier** so a walletless agent still has a path through.
+Built on the same hardened 402 + proof-of-work machinery as
+[Agent402](https://github.com/MikeyPetrillo/Agent402).
 
 ## See it work (one command)
 
