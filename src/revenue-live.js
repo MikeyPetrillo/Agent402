@@ -295,6 +295,10 @@ async function stellarRail(wallet) {
           out.recent.push(entry);
         }
       }
+      // Same aggregation the EVM and Solana rails do: sum the per-call-sized
+      // external inbound so the card's "external in window" line and the
+      // site-wide windowExternalUsd total include Stellar.
+      out.externalUsd = Number(out.recent.filter((t) => t.external).reduce((s, t) => s + (t.usd || 0), 0).toFixed(6));
     } catch { /* payment scan is best-effort */ }
   } catch (e) {
     out.error = String(e?.message || e).slice(0, 120);
