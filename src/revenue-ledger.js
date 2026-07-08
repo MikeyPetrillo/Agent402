@@ -34,7 +34,7 @@ export const ledgerPersistent = HAS_DATA_DIR || Boolean(process.env.REVENUE_LEDG
 // per-chain block numbers need hardcoding. Env-overridable per chain with
 // an absolute block: REVENUE_LEDGER_FROM_BASE=31000000 etc.
 const LEDGER_EPOCH_MS = Date.parse(process.env.REVENUE_LEDGER_EPOCH || "2026-05-20T00:00:00Z");
-const BLOCK_MS = { base: 2000, polygon: 2100, arbitrum: 250, robinhood: 2000 };
+const BLOCK_MS = { base: 2000, polygon: 2100, arbitrum: 250, robinhood: 150 }; // robinhood measured ~0.15s (not the 2s Orbit default)
 
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
@@ -92,7 +92,13 @@ async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
   const head = parseInt(await rpcCall(c.rpcs, "eth_blockNumber", [], 6000), 16);
   const cur = getCursor.get(chain, wallet);
   let next = cur?.next_block ?? startBlockFor(chain, head);
-  const chunkSize = Math.ceil(c.span / 4); // same free-tier-safe window as the live view
+  // Capped at 9,000 blocks like the other two scanners (revenue-scan.js and
+  // the live view's recentInbound) — Alchemy rejects getLogs ranges over 10k
+  // on some chains (Robinhood, verified 2026-07-08). Without the cap, any
+  // cursor gap wider than the RPC limit (≈25 min of downtime at Robinhood's
+  // 0.15s blocks) made every subsequent getLogs request span the whole gap,
+  // fail, and never advance — the all-time figure froze with ↺ forever.
+  const chunkSize = Math.min(9000, Math.ceil(c.span / 4));
   let chunks = 0;
   while (next <= head && chunks < maxChunks) {
     const to = Math.min(next + chunkSize - 1, head);
