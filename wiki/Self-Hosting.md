@@ -91,7 +91,7 @@ Set these on your host. None are committed to the repo.
 ## Free mode vs paid mode
 
 - **`FREE_MODE=true`** -- every tool responds without payment. Good for development, internal deployments, or self-hosted agents that don't need metering. The PoW gate and x402 paywall are both disabled.
-- **Without `FREE_MODE`** -- the x402 paywall activates. Callers pay per request (USDC on Base, Solana, Polygon, Arbitrum, Stellar, or Algorand via x402) or solve a proof-of-work challenge for pure-CPU tools. You need `WALLET_ADDRESS`, `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, and `POW_SECRET` at minimum. To also accept **USDG on Robinhood Chain**, add `robinhood` to `PAYMENT_NETWORKS` and set `ROBINHOOD_FACILITATOR_URL`.
+- **Without `FREE_MODE`** -- the x402 paywall activates. Callers pay per request (USDC on Base, Solana, Polygon, Arbitrum, Stellar, or Algorand via x402) or solve a proof-of-work challenge for pure-CPU tools. You need `WALLET_ADDRESS`, `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, and `POW_SECRET` at minimum. To also accept **USDC on Monad** (EVM chain 143), add `monad` to `PAYMENT_NETWORKS` (settles via `MONAD_FACILITATOR_URL`, default the molandak-operated public facilitator). To accept **USDG on Robinhood Chain**, add `robinhood` to `PAYMENT_NETWORKS` and set `ROBINHOOD_FACILITATOR_URL`.
 
 See [[Paying with x402]] and [[Paying with Compute]] for the buyer-side flows.
 

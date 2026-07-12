@@ -2,7 +2,7 @@
 
 > **Looking for the OpenAI-compatible wire paths?** The [[LLM Gateway (OpenAI /v1)|LLM-Gateway]] serves standard `chat/completions` and `embeddings` at `https://agent402.tools/v1` — six tiers from $0.002, model-optional auto-routing, streaming, and response caching. Any OpenAI SDK adopts it by changing `base_url`. The `/api/llm*` tools below remain available as the simpler custom-JSON proxy.
 
-Three tiers of OpenAI inference, paywalled via x402. An agent sends a standard `chat/completions` request and pays per call with USDC on Base, Solana, Polygon, Arbitrum, Stellar, or Algorand -- no OpenAI API key needed on the caller's side, no signup, no account. The operator's own `OPENAI_API_KEY` handles upstream auth; per-tier input and output caps keep worst-case upstream cost well below the x402 price.
+Three tiers of OpenAI inference, paywalled via x402. An agent sends a standard `chat/completions` request and pays per call with USDC on Base, Solana, Polygon, Arbitrum, Monad, Stellar, or Algorand -- no OpenAI API key needed on the caller's side, no signup, no account. The operator's own `OPENAI_API_KEY` handles upstream auth; per-tier input and output caps keep worst-case upstream cost well below the x402 price.
 
 ## Tiers
 

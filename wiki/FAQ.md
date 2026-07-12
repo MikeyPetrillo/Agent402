@@ -13,7 +13,7 @@ Yes — ~1,189 pure-CPU tools accept proof-of-work (sub-second of your CPU), and
 An open HTTP payment standard built on the `402 Payment Required` status code, with settlement infrastructure from Coinbase and open client tooling from Stripe. See [[Paying with x402]].
 
 **Which chain/asset?**
-USDC on Base (primary), Solana, Polygon, Arbitrum, Stellar, or Algorand — plus USDG (Global Dollar) on Robinhood Chain. The buyer needs only the stablecoin — gas/fees are sponsored by the facilitator on every rail.
+USDC on Base (primary), Solana, Polygon, Arbitrum, Monad, Stellar, or Algorand — plus USDG (Global Dollar) on Robinhood Chain. The buyer needs only the stablecoin — gas/fees are sponsored by the facilitator on every rail.
 
 **Does using this spend my AI tokens?**
 No. There's no LLM anywhere in the serving path — every tool is deterministic code. Proof-of-work spends your CPU; x402 spends USDC.
