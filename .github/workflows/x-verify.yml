@@ -7,6 +7,9 @@ name: X Verify
 # present and valid before trusting the Announce workflow with a real post.
 on:
   workflow_dispatch:
+  push:
+    branches: ["claude/twitter-integration-explore-vi54ux"]
+    paths: [".github/trigger-x-verify"]
 
 permissions:
   contents: read
