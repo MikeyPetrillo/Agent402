@@ -23,8 +23,9 @@
 //   node scripts/tweet.js --text "commentary" --quote 1234567890   # quote tweet
 //   DRY_RUN=1 node scripts/tweet.js --text "dry run, nothing leaves the box"
 //   node scripts/tweet.js --text "over 280 on purpose…" --force   # skip length guard
+//   node scripts/tweet.js --verify   # read-only credential check (GET /2/users/me); posts nothing
 //
-// Exit codes: 0 posted (or dry-run OK), 1 usage/credential/length error, 2 API error.
+// Exit codes: 0 posted (or dry-run/verify OK), 1 usage/credential/length error, 2 API error.
 
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -43,7 +44,7 @@ const DRY = process.env.DRY_RUN === "1";
 
 // ---- args -----------------------------------------------------------------
 function parseArgs(argv) {
-  const out = { force: false, replyTo: null, quote: null, media: null, text: null, file: null, dryRun: false };
+  const out = { force: false, replyTo: null, quote: null, media: null, text: null, file: null, dryRun: false, verify: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--text" || a === "-t") out.text = argv[++i];
@@ -53,6 +54,7 @@ function parseArgs(argv) {
     else if (a === "--media" || a === "-m") out.media = argv[++i];
     else if (a === "--force") out.force = true;
     else if (a === "--dry-run") out.dryRun = true;
+    else if (a === "--verify") out.verify = true;
     else if (!a.startsWith("-") && out.text == null) out.text = a; // positional
   }
   return out;
@@ -125,9 +127,44 @@ async function uploadMedia(path) {
   return json.media_id_string;
 }
 
+function requireCredentials() {
+  let ok = true;
+  for (const [name, v] of Object.entries({ X_API_KEY: CONSUMER_KEY, X_API_SECRET: CONSUMER_SECRET, X_ACCESS_TOKEN: ACCESS_TOKEN, X_ACCESS_SECRET: ACCESS_SECRET })) {
+    if (!v) { console.error(`${name} is required (from an X developer App with Read-and-write permissions). Set it in the environment; do not commit it.`); ok = false; }
+  }
+  if (!ok) process.exit(1);
+}
+
+// Read-only credential check: GET /2/users/me under the same OAuth 1.0a user
+// context used for posting. Confirms the four keys are valid and shows which
+// account they belong to — nothing is written to the timeline.
+async function verifyCredentials() {
+  requireCredentials();
+  const ME_URL = "https://api.twitter.com/2/users/me";
+  let res, json;
+  try {
+    res = await fetch(ME_URL, { headers: { Authorization: authHeader("GET", ME_URL) } });
+    json = await res.json().catch(() => ({}));
+  } catch (e) {
+    console.error("Network error reaching X:", e.message);
+    process.exit(2);
+  }
+  if (!res.ok) {
+    console.error(`X API ${res.status}:`, JSON.stringify(json));
+    // 401 → bad/expired credentials or clock skew; 403 → app/account access-level issue.
+    process.exit(2);
+  }
+  const u = json?.data || {};
+  console.log(`Credentials OK ✓ authenticated as @${u.username} (${u.name}, id ${u.id})`);
+  console.log("Note: /2/users/me proves the keys sign correctly; posting additionally requires the App's Read-and-write permission.");
+}
+
 // ---- main -----------------------------------------------------------------
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.verify) return verifyCredentials();
+
   const text = resolveText(args).replace(/\s+$/, "");
 
   if (!text) {
@@ -155,9 +192,7 @@ async function main() {
     return;
   }
 
-  for (const [name, v] of Object.entries({ X_API_KEY: CONSUMER_KEY, X_API_SECRET: CONSUMER_SECRET, X_ACCESS_TOKEN: ACCESS_TOKEN, X_ACCESS_SECRET: ACCESS_SECRET })) {
-    if (!v) { console.error(`${name} is required (from an X developer App with Read-and-write permissions). Set it in the environment; do not commit it.`); process.exit(1); }
-  }
+  requireCredentials();
 
   if (args.media) body.media = { media_ids: [await uploadMedia(args.media)] };
 
