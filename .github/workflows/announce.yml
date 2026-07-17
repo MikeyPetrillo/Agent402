@@ -10,7 +10,9 @@ name: Announce
 #   card     — a demo card rendered LIVE at post time: 'bestsellers' buys one
 #              /api/bestsellers response with the canary burner (x402,
 #              internal-marked via POW_SECRET) and renders the terminal-style
-#              card from it. Real numbers only — never a fixture.
+#              card from it; 'robinhood' renders the Robinhood Chain
+#              marketplace card from the free /api/revenue rail (no buy).
+#              Real numbers only — never a fixture.
 #   (neither) — text-only post.
 #
 # text — inline tweet copy for dispatch-only posting: no announcement file,
@@ -47,7 +49,7 @@ on:
         required: false
         default: ""
       card:
-        description: "Optional demo card to render live and attach: 'bestsellers'. Mutually exclusive with media."
+        description: "Optional demo card to render live and attach: 'bestsellers' or 'robinhood'. Mutually exclusive with media."
         required: false
         default: ""
       delete_id:
@@ -87,12 +89,12 @@ jobs:
       # ledger it pictures. Text-only and media-path posts (and every
       # push-triggered post) skip all of this — tweet.js is dependency-free.
       - name: Set up node deps for the card render
-        if: github.event.inputs.card == 'bestsellers'
+        if: github.event.inputs.card != ''
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 22
       - name: Install deps + Chromium (card render)
-        if: github.event.inputs.card == 'bestsellers'
+        if: github.event.inputs.card != ''
         run: |
           npm ci
           npx playwright install --with-deps chromium
@@ -105,6 +107,14 @@ jobs:
       - name: Render the demo card from the live response
         if: github.event.inputs.card == 'bestsellers'
         run: node scripts/bestsellers-card.js --from /tmp/bestsellers.json --out /tmp/announce-card.png
+      # card=robinhood: same REAL-numbers doctrine, cheaper capture — the
+      # /api/revenue endpoint is free and unpaywalled, so the card renders
+      # straight from the live rail with no burner buy.
+      - name: Render the Robinhood marketplace card from live /api/revenue
+        if: github.event.inputs.card == 'robinhood'
+        run: |
+          curl -fsSL --max-time 30 https://agent402.tools/api/revenue -o /tmp/revenue.json
+          node scripts/robinhood-card.js --from /tmp/revenue.json --out /tmp/announce-card.png
       - name: Delete the previous post (replace flow)
         if: github.event.inputs.delete_id != ''
         env:
