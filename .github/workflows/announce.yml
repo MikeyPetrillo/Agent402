@@ -13,6 +13,9 @@ name: Announce
 #              card from it. Real numbers only — never a fixture.
 #   (neither) — text-only post.
 #
+# quote — optional id of a post to quote-tweet (passed through as
+# tweet.js --quote). Dispatch-only; the push trigger posts text-only.
+#
 # delete_id — optional id of a previous post to delete BEFORE posting (the
 # replace-a-bad-post flow); deleting an already-gone id is a no-op. The delete
 # runs only after any card/media is ready, so a failed render can never leave
@@ -40,6 +43,10 @@ on:
         default: ""
       delete_id:
         description: "Optional id of a previous post to delete BEFORE posting (replace-a-bad-post flow)."
+        required: false
+        default: ""
+      quote:
+        description: "Optional id of a post to quote (tweet.js --quote)."
         required: false
         default: ""
   push:
@@ -112,6 +119,8 @@ jobs:
           echo "Posting: $FILE${MEDIA:+ (media: $MEDIA)}"
           [ -f "$FILE" ] || { echo "announcement file not found: $FILE"; exit 1; }
           ARGS=(--file "$FILE")
+          QUOTE="${{ github.event.inputs.quote }}"
+          [ -n "$QUOTE" ] && ARGS+=(--quote "$QUOTE")
           if [ -n "$MEDIA" ]; then
             case "$MEDIA" in
               http*) curl -fsSL --max-time 30 -o /tmp/announce-media.png "$MEDIA" && MEDIA=/tmp/announce-media.png ;;
