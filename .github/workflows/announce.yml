@@ -46,7 +46,11 @@ on:
         required: false
         default: ""
       quote:
-        description: "Optional id of a post to quote (tweet.js --quote)."
+        description: "Optional id of a post to quote (tweet.js --quote). Free-tier X API only allows quoting your own or mentioning posts; otherwise embed the post URL in the text and pass force."
+        required: false
+        default: ""
+      force:
+        description: "Pass tweet.js --force to skip the local 280-char guard (raw length overcounts URLs, which X weights at 23 chars)."
         required: false
         default: ""
   push:
@@ -121,6 +125,7 @@ jobs:
           ARGS=(--file "$FILE")
           QUOTE="${{ github.event.inputs.quote }}"
           [ -n "$QUOTE" ] && ARGS+=(--quote "$QUOTE")
+          [ -n "${{ github.event.inputs.force }}" ] && ARGS+=(--force)
           if [ -n "$MEDIA" ]; then
             case "$MEDIA" in
               http*) curl -fsSL --max-time 30 -o /tmp/announce-media.png "$MEDIA" && MEDIA=/tmp/announce-media.png ;;

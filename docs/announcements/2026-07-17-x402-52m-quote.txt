@@ -1,5 +1,7 @@
 $52M isn't people buying crypto. It's software buying answers.
 
-We're on the sell side of that number: 500+ deterministic tools an agent can discover, pay for in USDC on @base, and call in a single request. No API key, no signup, no invoice.
+We're on the sell side of that number: 500+ tools an agent can discover, pay for in USDC on @base, and call in one request. No API key, no signup, no invoice.
 
 agent402.tools
+
+https://x.com/base/status/2077749647703949603
