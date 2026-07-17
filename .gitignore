@@ -20,8 +20,11 @@ agent-address.txt
 # Private, machine-local Claude Code memory (never committed)
 CLAUDE.local.md
 
-# Local Claude Code per-project settings — never committed
-.claude/
+# Local Claude Code per-project settings — never committed, EXCEPT
+# .claude/skills/ (shared project skills, e.g. /tweet). A parent-dir
+# exclude would block re-including children, hence the /* form.
+.claude/*
+!.claude/skills/
 *.traineddata
 
 # Python build artifacts
