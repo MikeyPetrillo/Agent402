@@ -13,6 +13,10 @@ name: Announce
 #              card from it. Real numbers only — never a fixture.
 #   (neither) — text-only post.
 #
+# text — inline tweet copy for dispatch-only posting: no announcement file,
+# no commit. Mutually exclusive with file. Rides an env var (never shell
+# interpolation) so arbitrary copy can't break or inject into the run step.
+#
 # quote — optional id of a post to quote-tweet (passed through as
 # tweet.js --quote). Dispatch-only; the push trigger posts text-only.
 #
@@ -31,8 +35,13 @@ on:
   workflow_dispatch:
     inputs:
       file:
-        description: "Repo path of the announcement text file"
-        required: true
+        description: "Repo path of the announcement text file (or pass text instead)"
+        required: false
+        default: ""
+      text:
+        description: "Inline tweet text - mutually exclusive with file; posts without any repo commit"
+        required: false
+        default: ""
       media:
         description: "Optional image to attach (URL or repo path). Mutually exclusive with card."
         required: false
@@ -110,9 +119,17 @@ jobs:
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+          # Inline text rides an env var, not shell interpolation — quotes,
+          # backticks, and $(...) in tweet copy must never reach the script.
+          ANNOUNCE_TEXT: ${{ github.event.inputs.text }}
         run: |
           FILE="${{ github.event.inputs.file }}"
           MEDIA="${{ github.event.inputs.media }}"
+          if [ -n "$ANNOUNCE_TEXT" ]; then
+            [ -n "$FILE" ] && { echo "Pass text OR file, not both."; exit 1; }
+            printf '%s' "$ANNOUNCE_TEXT" > /tmp/announce-text.txt
+            FILE=/tmp/announce-text.txt
+          fi
           if [ -z "$FILE" ]; then
             FILE=$(sed -n 1p .github/trigger-announce)
             MEDIA=$(sed -n 2p .github/trigger-announce)
