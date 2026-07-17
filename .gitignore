@@ -39,3 +39,4 @@ build/
 .algorand-burner.env
 # Brainstorming visual-companion mockups (superpowers) — machine-local scratch
 .superpowers/
+.aider*
