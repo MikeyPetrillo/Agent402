@@ -1,0 +1,41 @@
+name: X Read
+
+# Read-only: print a public X post's content (text, author, any quoted post)
+# by fetching the public fxtwitter/vxtwitter mirror APIs from the runner,
+# which has open egress (the Claude Code sandbox does not). No credentials,
+# posts nothing. Dispatch with a status id or full x.com URL; the push
+# trigger runs it once with the default status when this file changes on the
+# dev branch.
+on:
+  workflow_dispatch:
+    inputs:
+      status:
+        description: "Status id or full x.com/twitter.com URL of the post to read"
+        required: true
+  push:
+    branches: ["claude/tweet-from-x-post-5r8j3x"]
+    paths: [".github/workflows/x-read.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch post JSON (fxtwitter, vxtwitter fallback)
+        run: |
+          S="${{ github.event.inputs.status }}"
+          [ -z "$S" ] && S="2077749647703949603"
+          ID=$(echo "$S" | grep -oE '[0-9]{10,}' | head -1)
+          [ -n "$ID" ] || { echo "no status id found in: $S"; exit 1; }
+          echo "Reading status $ID"
+          if curl -fsSL --max-time 30 "https://api.fxtwitter.com/status/$ID" -o /tmp/post.json; then
+            echo "--- fxtwitter ---"
+          elif curl -fsSL --max-time 30 "https://api.vxtwitter.com/i/status/$ID" -o /tmp/post.json; then
+            echo "--- vxtwitter ---"
+          else
+            echo "both mirrors failed for status $ID"; exit 1
+          fi
+          jq . /tmp/post.json
