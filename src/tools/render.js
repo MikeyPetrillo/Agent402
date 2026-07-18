@@ -10,7 +10,11 @@ const MAX_CONCURRENT = 3;
 // plus an EXEC_DEADLINE_MS ceiling over the whole in-slot run.
 const MAX_QUEUE = 24;
 let QUEUE_DEADLINE_MS = 20_000; // let: a test hook shortens it to exercise the deadline
-const EXEC_DEADLINE_MS = 60_000; // > NAV_TIMEOUT_MS; a backstop over fn(page) too
+let EXEC_DEADLINE_MS = 60_000; // > NAV_TIMEOUT_MS; a backstop over fn(page) too (let: test hook)
+// After the exec deadline fires we force the context closed and wait for the
+// timed-out run to unwind before releasing its slot (audit R-09). Bound that
+// wait so a pathologically wedged run can't hold a slot forever.
+let CLEANUP_DEADLINE_MS = 10_000;
 // Cap total bytes the page is allowed to download (sum of all subresources).
 // A page that tries to balloon Chromium with a multi-GB asset is treated like
 // a malicious upstream and aborted. 50 MB covers heavy real sites; anything
@@ -103,10 +107,12 @@ async function withPage(rawUrl, fn, { signal } = {}) {
   // of joining an unbounded queue or waiting forever.
   await acquireSlot(signal);
   let deadlineTimer = null;
+  let context = null;   // hoisted so the deadline path can force-close it (R-09)
+  let timedOut = false;
   try {
     const run = (async () => {
       const browser = await getBrowser();
-      const context = await browser.newContext({
+      context = await browser.newContext({
         viewport: { width: 1280, height: 800 },
         userAgent:
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
@@ -152,18 +158,38 @@ async function withPage(rawUrl, fn, { signal } = {}) {
         return await fn(page);
       } finally {
         await context.close().catch(() => {});
+        context = null;
       }
     })();
     // Hard ceiling over the whole in-slot run (nav timeout only bounds a single
     // goto; fn(page) — e.g. a screenshot of a pathological page — could still
-    // hang). On deadline the run's own finally still closes the context.
+    // hang).
     const deadline = new Promise((_, reject) => {
       deadlineTimer = setTimeout(() => {
+        timedOut = true;
         const e = new Error("render exceeded the execution deadline"); e.statusCode = 504;
         reject(e);
       }, EXEC_DEADLINE_MS);
     });
-    return await Promise.race([run, deadline]);
+    try {
+      return await Promise.race([run, deadline]);
+    } finally {
+      // R-09: if the deadline won the race, `run` is STILL executing against a
+      // live context. Releasing the slot now (outer finally) would admit a new
+      // render while this one's context is still open — briefly exceeding
+      // MAX_CONCURRENT live contexts (CPU/RAM exhaustion under a timeout storm).
+      // So force the context closed and await the run's own teardown BEFORE the
+      // slot is released. Force-closing makes the in-flight goto/fn reject, so
+      // the run unwinds promptly; bounded by CLEANUP_DEADLINE_MS so a wedged run
+      // can't hold the slot forever.
+      if (timedOut) {
+        try { if (context) await context.close(); } catch { /* already closing */ }
+        await Promise.race([
+          run.catch(() => {}),
+          new Promise((r) => setTimeout(r, CLEANUP_DEADLINE_MS)),
+        ]);
+      }
+    }
   } finally {
     // The slot is always released, even when newContext/newPage throws or the
     // deadline fires — otherwise crashes would starve every later call.
@@ -222,8 +248,14 @@ export const __test = {
   acquireSlot,
   releaseSlot,
   state: () => ({ active, queued: queue.length }),
-  reset: () => { active = 0; queue.length = 0; },
+  reset: () => { active = 0; queue.length = 0; browserPromise = null; },
   setQueueDeadline: (ms) => { QUEUE_DEADLINE_MS = ms; },
+  setExecDeadline: (ms) => { EXEC_DEADLINE_MS = ms; },
+  setCleanupDeadline: (ms) => { CLEANUP_DEADLINE_MS = ms; },
+  // Inject a fake browser so withPage's context lifecycle (R-09 cancellation)
+  // can be exercised without launching Chromium.
+  injectBrowser: (fake) => { browserPromise = Promise.resolve(fake); },
+  withPage,
   MAX_CONCURRENT,
   MAX_QUEUE,
 };

@@ -40,7 +40,10 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
   // A402-11: public /health hides internal wiring.
   const health = await (await fetch(`${base}/health`)).json();
   ok(health.ok === true, "public /health still reports ok");
-  ok(!("flags" in health) && !("checks" in health), "public /health hides flags+checks (meta stays public)");
+  ok(!("flags" in health) && !("checks" in health), "public /health hides flags+checks");
+  // R-15: public /health carries only toolCount — not process uptime or freeMode.
+  ok(health.meta && typeof health.meta.toolCount === "number", "public /health keeps meta.toolCount (sync-count reads it)");
+  ok(!("uptime" in (health.meta || {})) && !("freeMode" in (health.meta || {})), "public /health hides uptime + freeMode (operator-only diagnostics)");
 
   // A402-12: /mcp CORS is wildcard but credential-free.
   const mcp = await fetch(`${base}/mcp`, { method: "OPTIONS", headers: { Origin: "https://evil.example", "Access-Control-Request-Method": "POST" } });

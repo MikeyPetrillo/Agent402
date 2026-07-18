@@ -800,6 +800,9 @@ jobs:
       - name: Browser pool admission (A402-08 bounded queue, deadline, disconnect-abort — offline)
         run: node scripts/test-render-queue.js
 
+      - name: Render deadline cancellation (R-09 — timed-out contexts close before the slot frees; live contexts never exceed the limit — offline)
+        run: node scripts/test-render-cancel.js
+
       - name: Safe-regex guard (rejects ReDoS patterns for caller-supplied regexes — DoS lock — offline)
         run: node scripts/test-safe-regex.js
 
@@ -871,6 +874,9 @@ jobs:
 
       - name: MCP call_tool contract (canonical + flattened + stringified + wallet-refusal + self-correction envelope)
         run: node scripts/test-mcp-call-tool-contract.js
+
+      - name: MCP outer transport limits (R-11 — per-IP cap + concurrency ceiling bound floods before server/transport allocation — spawns child)
+        run: node scripts/test-mcp-limits.js
 
       - name: /health envelope + .flags shape (boolean discipline locks the Yahoo-relay-flap class)
         run: node scripts/test-health-envelope.js

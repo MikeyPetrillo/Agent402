@@ -19,7 +19,7 @@ export const MAX_CALLS_PER_BURST =
 // but mixing them in one bucket would mean an MCP burst silently throttles a
 // later x402-paid call on the same IP (because some routes are PoW-eligible
 // even for buyers). Separate buckets, shared policy.
-export function createLimiter(name = "default") {
+export function createLimiter(name = "default", { perMin = MAX_CALLS_PER_BURST, perHour = MAX_CALLS_PER_WINDOW } = {}) {
   const buckets = new Map(); // ip -> number[] timestamps
   function check(ip) {
     const now = Date.now();
@@ -28,8 +28,8 @@ export function createLimiter(name = "default") {
     while (hits.length && hits[0] < now - WINDOW_MS) hits.shift();
     const inBurst = hits.filter((t) => t > now - BURST_WINDOW_MS).length;
     if (
-      hits.length >= MAX_CALLS_PER_WINDOW ||
-      inBurst >= MAX_CALLS_PER_BURST
+      hits.length >= perHour ||
+      inBurst >= perMin
     ) {
       return { limited: true, name };
     }

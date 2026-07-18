@@ -46,6 +46,23 @@ const WISH_HINT_TEXT = "Nothing matched well? Tell us what you needed via POST /
 const mcpLimiter = createLimiter("mcp");
 const rateLimited = (ip) => mcpLimiter.check(ip).limited;
 
+// Outer transport guards (audit R-11). The tool limiter above only fires INSIDE
+// call_tool; a flood of initialize/discovery/malformed POSTs would otherwise
+// allocate a server + transport per request before any tool limit applies.
+// These bound raw POST volume BEFORE server creation:
+//   - a per-IP request cap on its OWN bucket, deliberately more generous than
+//     the tool limiter so a legit session (one initialize + many tool calls)
+//     is never throttled by it;
+//   - a global in-flight transport semaphore capping concurrent allocation;
+//   - a per-request deadline so a stalled request can't pin a transport.
+// All env-tunable; defaults are generous for real clients, tight against floods.
+const MCP_REQ_PER_MIN = Number(process.env.AGENT402_MCP_REQ_PER_MIN) || Math.max(60, MAX_CALLS_PER_BURST * 3);
+const MCP_REQ_PER_HOUR = Number(process.env.AGENT402_MCP_REQ_PER_HOUR) || Math.max(600, MAX_CALLS_PER_WINDOW * 3);
+const mcpReqLimiter = createLimiter("mcp-transport", { perMin: MCP_REQ_PER_MIN, perHour: MCP_REQ_PER_HOUR });
+const MCP_MAX_CONCURRENT = Number(process.env.AGENT402_MCP_MAX_CONCURRENT) || 64;
+const MCP_REQ_DEADLINE_MS = Number(process.env.AGENT402_MCP_REQ_DEADLINE_MS) || 30_000;
+let mcpInFlight = 0;
+
 /**
  * Mount the MCP endpoint on the express app.
  * `catalog` is the CATALOG map (route -> tool def), `opts.isComputePayable`
@@ -637,6 +654,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     // X-Forwarded-For value. This is the only abuse control on the free tier,
     // so it must not be bypassable by injecting a header.
     const ip = (req.ip || req.socket.remoteAddress || "?").trim();
+    // R-11 outer gate #1: per-IP raw-request cap, BEFORE allocating anything.
+    if (mcpReqLimiter.check(ip).limited) {
+      return res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: "Too many requests to /mcp — slow down and retry shortly." }, id: req.body?.id ?? null });
+    }
+    // R-11 outer gate #2: global in-flight transport ceiling, BEFORE building
+    // the server/transport (bounds allocation under an initialize/malformed flood).
+    if (mcpInFlight >= MCP_MAX_CONCURRENT) {
+      return res.status(503).json({ jsonrpc: "2.0", error: { code: -32000, message: "MCP endpoint is at capacity — retry shortly." }, id: req.body?.id ?? null });
+    }
     // Adoption telemetry: every MCP session announces its client at
     // initialize (e.g. "claude-ai", "claude-code"). In-memory since boot.
     const ci = req.body?.method === "initialize" ? req.body?.params?.clientInfo : null;
@@ -645,15 +671,25 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       mcpClients.set(key, (mcpClients.get(key) || 0) + 1);
       console.log(`[mcp] initialize from ${key}`);
     }
+    mcpInFlight++;
+    let deadlineTimer = null;
     try {
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on("close", () => transport.close());
       await buildServer(ip).connect(transport);
-      await transport.handleRequest(req, res, req.body);
+      // R-11 outer gate #3: per-request deadline — a stalled request can't pin
+      // a transport (and its slot) forever.
+      const deadline = new Promise((_, reject) => {
+        deadlineTimer = setTimeout(() => reject(Object.assign(new Error("mcp request deadline exceeded"), { __deadline: true })), MCP_REQ_DEADLINE_MS);
+      });
+      await Promise.race([transport.handleRequest(req, res, req.body), deadline]);
     } catch (err) {
       if (!res.headersSent) {
-        res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: err.message }, id: null });
+        res.status(err.__deadline ? 504 : 500).json({ jsonrpc: "2.0", error: { code: -32603, message: err.message }, id: req.body?.id ?? null });
       }
+    } finally {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      mcpInFlight--;
     }
   });
 

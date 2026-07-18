@@ -785,23 +785,23 @@ app.get("/health", (req, res) => {
     wallet: FREE_MODE || Boolean(WALLET_ADDRESS),
   };
   const ok = checks.db && checks.wallet;
-  // `meta` stays public: toolCount is already published on /api/pricing,
-  // /openapi.json, and /api/stats, and sync-count.js reads it here. uptime and
-  // freeMode are non-sensitive.
-  const meta = {
-    toolCount: Object.keys(CATALOG).length,
-    uptime: Math.floor(process.uptime()),
-    freeMode: FREE_MODE,
-  };
+  // Public `meta` carries ONLY toolCount — it's already published on
+  // /api/pricing, /openapi.json, and /api/stats, and sync-count.js reads it
+  // here. Process uptime (restart-timing recon) and freeMode (operating mode)
+  // are operator-only diagnostics (audit R-15), added to the authenticated
+  // response below.
+  const meta = { toolCount: Object.keys(CATALOG).length };
   // The sensitive disclosure is the enabled-integration flags (which upstreams
-  // are wired, whether the operator token is configured) and the health checks
-  // — that internal wiring is returned ONLY to an authenticated operator
-  // (security audit A402-11). Monitoring (Railway healthcheck, heartbeat.yml)
-  // needs just the 200 + ok. operatorTokenOk / getOperatorToken are module
-  // consts defined below; this handler runs at request time, after they init.
+  // are wired, whether the operator token is configured), the health checks,
+  // and now uptime/freeMode — that internal wiring is returned ONLY to an
+  // authenticated operator (audit A402-11 / R-15). Monitoring (Railway
+  // healthcheck, heartbeat.yml) needs just the 200 + ok. operatorTokenOk /
+  // getOperatorToken are module consts defined below; this handler runs at
+  // request time, after they init.
   if (!operatorTokenOk(getOperatorToken(req))) {
     return res.status(ok ? 200 : 503).json({ ok, meta });
   }
+  const diagnostics = { uptime: Math.floor(process.uptime()), freeMode: FREE_MODE };
   // Non-fatal flags — surface tollbooth-leads wiring so we can verify the
   // Railway DATABASE_URL / AGENT402_OPERATOR_TOKEN env without poking either.
   // These don't affect overall ok status; the tollbooth waitlist is optional.
@@ -834,7 +834,7 @@ app.get("/health", (req, res) => {
     llmGateway: Boolean((process.env.OPENROUTER_API_KEY || "").trim()),
     baseNotifications: baseNotificationsEnabled(),
   };
-  res.status(ok ? 200 : 503).json({ ok, checks, flags, meta });
+  res.status(ok ? 200 : 503).json({ ok, checks, flags, meta: { ...meta, ...diagnostics } });
 });
 // Security disclosure contact (RFC 9116, security audit A402-13). Expires is
 // computed ~1 year out on each request so the file is never stale. Contact
