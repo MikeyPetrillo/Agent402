@@ -143,6 +143,20 @@ because /v1 settles before the handler and an empty balance = charged-but-failed
   and the cap is the margin bound, not a UX nicety. Unreadable duration → 422 (an
   unreadable container would be an unbounded upstream bill). `assertWithinDurationCap` /
   `probeDurationSeconds` exported for `scripts/test-stt-cap.js`.
+- **Marketplace latency / snapshot caching (`src/x402-economy.js`):** `GET /marketplace`
+  (and `/api/x402-economy`) render from `x402EconomySnapshot()` — a ~500ms on-chain read
+  (EIP-3009 USDC settlements on Base via CDP SQL). It is **stale-while-revalidate**: a fresh
+  cache (30 min, `ECONOMY_FRESH_MS`) returns as-is; a stale-but-present cache is served
+  immediately while a single **deduped** background rebuild (`startEconomyRefresh`, one
+  in-flight query for a concurrent burst) runs; only a cold cache (first request after boot)
+  awaits the build. Errored reads back-date `cachedAt` so they expire in ~5 min, not 30.
+  No visitor request ever blocks on the rebuild — before this, the first visitor after each
+  30-min expiry ate the full ~500ms. `getIndexSnapshot()` is a separate 30s in-memory cache
+  (`INDEX_SNAPSHOT_TTL_MS`). Measured live 2026-07-18: `/marketplace` p50 135ms / max 224ms,
+  `/api/x402-economy` p50 93ms, zero requests >500ms across 26 samples. NB: there is **no CDN**
+  in front (no `age`/`cf-cache` header) — the server-side snapshot caches are the origin
+  protection; the `max-age=120` on the response is a browser-only hint. Contract pinned by
+  `scripts/test-x402-economy.js` (dedup + warm-cache identity, never-throws).
 - **Homepage = `src/ledger-home.js`** (`ledgerHomePage`; the old `src/landing.js` is unused
   but still unit-tested). Its `faqs` array renders BOTH the visible FAQ and the FAQPage
   JSON-LD, and the WebApplication offer is an AggregateOffer — deploy.yml's SEO gate greps
