@@ -123,7 +123,7 @@ td a:hover{color:var(--accent)}
 <div class="op-wrap">
 
 <h1 class="op-h1">Operator dashboard</h1>
-<p class="op-sub">Per-tool usage, settlement split, and live activity. Auto-refreshes every 10s. Not public — gated by <code>AGENT402_OPERATOR_TOKEN</code>. <a href="/__operator/wishes">Agent demand</a> · <a href="/__operator/leads">Tollbooth leads</a> · <a href="/__operator/logout">Log out</a></p>
+<p class="op-sub">Per-tool usage, settlement split, and live activity. Auto-refreshes every 10s. Not public — gated by <code>AGENT402_OPERATOR_TOKEN</code>. <a href="/__operator/wishes">Agent demand</a> · <a href="/__operator/leads">Tollbooth leads</a> · <form method="POST" action="/__operator/logout" style="display:inline;margin:0"><button type="submit" style="background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer">Log out</button></form></p>
 
 <div class="op-grid">
   <div class="op-stat"><div class="op-k">Total calls</div><div class="op-v" id="t-total">${esc(t.total ?? 0)}</div><div class="op-s">all tools, all rails</div></div>

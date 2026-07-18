@@ -878,6 +878,9 @@ jobs:
       - name: MCP outer transport limits (R-11 — per-IP cap + concurrency ceiling bound floods before server/transport allocation — spawns child)
         run: node scripts/test-mcp-limits.js
 
+      - name: PostHog analytics proxy abuse controls (R-17 — method allowlist + per-IP cap before the upstream call — spawns child)
+        run: node scripts/test-posthog-proxy.js
+
       - name: /health envelope + .flags shape (boolean discipline locks the Yahoo-relay-flap class)
         run: node scripts/test-health-envelope.js
 

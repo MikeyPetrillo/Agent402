@@ -51,6 +51,8 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
   ok(/HttpOnly/i.test(setCookie), "cookie is HttpOnly (no JS/XSS read)");
   ok(/SameSite=Strict/i.test(setCookie), "cookie is SameSite=Strict (CSRF-safe)");
   ok(/Max-Age=/i.test(setCookie), "cookie has an expiry");
+  // R-12 core fix: the cookie carries an OPAQUE session id, never the root token.
+  ok(!setCookie.includes(TOKEN), "cookie is an opaque session id, NOT the root token (R-12)");
 
   // 4. The cookie authenticates the dashboard; so does a header (curl/API path).
   const cookie = setCookie.split(";")[0];
@@ -58,12 +60,27 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
   ok((await status("/__operator/wishes", { headers: { cookie } })) === 200, "session cookie authenticates sub-pages");
   ok((await status("/__operator", { headers: { authorization: `Bearer ${TOKEN}` } })) === 200, "Authorization: Bearer still works (curl/API)");
   ok((await status("/__operator", { headers: { "x-operator-token": TOKEN } })) === 200, "X-Operator-Token header still works");
+  // A forged/random session id must NOT authenticate.
+  ok((await status("/__operator", { headers: { cookie: "a402_op=deadbeefdeadbeef" } })) === 404, "a random session id does not authenticate");
 
-  // 5. Logout clears the cookie.
-  const logoutRes = await fetch(`${base}/__operator/logout`, { headers: { cookie }, redirect: "manual" });
-  ok(/a402_op=;/.test(logoutRes.headers.get("set-cookie") || ""), "logout clears the cookie");
+  // 5. Logout is a POST that REVOKES the session server-side (audit R-12).
+  ok((await status("/__operator/logout", { method: "GET" })) === 404, "GET /__operator/logout is not a route (no GET side effect)");
+  const logoutRes = await fetch(`${base}/__operator/logout`, { method: "POST", headers: { cookie }, redirect: "manual" });
+  ok(/a402_op=;/.test(logoutRes.headers.get("set-cookie") || ""), "POST logout clears the cookie");
+  ok(logoutRes.status === 303, "POST logout redirects (303) back to login");
+  // The revoked session id must no longer authenticate — even presenting the
+  // same cookie value fails (server-side revocation, not just a client clear).
+  ok((await status("/__operator", { headers: { cookie } })) === 404, "the logged-out session is revoked server-side (cookie no longer works)");
 
-  // 6. No token ever appeared in a request-line the server logged.
+  // 6. Login is rate-limited (audit R-12): a burst of attempts from one IP 429s.
+  let saw429 = false;
+  for (let i = 0; i < 8; i++) {
+    const s = await status("/__operator/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: "wrong" }) });
+    if (s === 429) { saw429 = true; break; }
+  }
+  ok(saw429, "login is rate-limited — a burst of attempts eventually 429s");
+
+  // 7. No token ever appeared in a request-line the server logged.
   ok(!serverLog.includes(TOKEN), "the operator token never appears in server logs");
 
   console.log(`\n${pass} passed, ${fail} failed`);

@@ -96,7 +96,7 @@ tr:last-child td{border-bottom:0}
   const body = `
 <div class="ow-wrap">
   <h1 class="ow-h1">Agent demand</h1>
-  <p class="ow-sub">The full wish board, ranked — every cluster including single-source and below-threshold, which the public feed never shows ranked. A cluster auto-opens a GitHub issue only when <b>qualified</b> (count &ge; ${esc(threshold)} and either &ge;2 sources or sustained past ${esc(qualifyMinSpanHours)}h). Not public — gated by <code>AGENT402_OPERATOR_TOKEN</code>. <a href="/__operator">Back to operator</a> &middot; <a href="/__operator/logout">Log out</a></p>
+  <p class="ow-sub">The full wish board, ranked — every cluster including single-source and below-threshold, which the public feed never shows ranked. A cluster auto-opens a GitHub issue only when <b>qualified</b> (count &ge; ${esc(threshold)} and either &ge;2 sources or sustained past ${esc(qualifyMinSpanHours)}h). Not public — gated by <code>AGENT402_OPERATOR_TOKEN</code>. <a href="/__operator">Back to operator</a> &middot; <form method="POST" action="/__operator/logout" style="display:inline;margin:0"><button type="submit" style="background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer">Log out</button></form></p>
   ${summary}
   ${table}
 </div>

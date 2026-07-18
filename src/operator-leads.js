@@ -109,7 +109,7 @@ tr:last-child td{border-bottom:0}
   const body = `
 <div class="ol-wrap">
   <h1 class="ol-h1">Tollbooth leads</h1>
-  <p class="ol-sub">Submissions from <a href="/tollbooth/waitlist">/tollbooth/waitlist</a>. <a href="/__operator">Back to operator</a> &middot; <a href="/__operator/logout">Log out</a></p>
+  <p class="ol-sub">Submissions from <a href="/tollbooth/waitlist">/tollbooth/waitlist</a>. <a href="/__operator">Back to operator</a> &middot; <form method="POST" action="/__operator/logout" style="display:inline;margin:0"><button type="submit" style="background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer">Log out</button></form></p>
   ${banner}
   ${summary}
   ${table}
