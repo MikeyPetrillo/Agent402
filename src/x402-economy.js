@@ -174,8 +174,13 @@ const usd = (units) => Number(units || 0) / 1e6;
 
 let cached = null;
 let cachedAt = 0;
-export async function x402EconomySnapshot() {
-  if (cached && Date.now() - cachedAt < 30 * 60 * 1000) return cached;
+let inFlight = null;
+const ECONOMY_FRESH_MS = 30 * 60 * 1000;
+
+// Build the snapshot from scratch — the ~500ms on-chain read. Never throws:
+// per-query failures are collected into out.errors so a partial read still
+// renders. Cache bookkeeping lives in startEconomyRefresh, not here.
+async function buildEconomySnapshot() {
   const out = {
     spec: "agent402-x402-economy/1",
     asOf: new Date().toISOString(),
@@ -222,10 +227,36 @@ export async function x402EconomySnapshot() {
   } else {
     out.errors.push(`merchants: ${String(merchRes.reason?.message || merchRes.reason).slice(0, 200)}`);
   }
-  // Only cache successful reads for the full window; retry errors sooner.
-  cached = out;
-  cachedAt = out.errors.length ? Date.now() - 25 * 60 * 1000 : Date.now();
   return out;
+}
+
+// Kick off (or join) a single in-flight rebuild, committing the result to the
+// cache when it lands. Only cache successful reads for the full window; errored
+// reads expire in ~5 min instead of 30 so a transient upstream failure retries
+// sooner. Deduped: a concurrent burst runs one query, not one per caller.
+function startEconomyRefresh() {
+  if (inFlight) return inFlight;
+  inFlight = buildEconomySnapshot()
+    .then((out) => {
+      cached = out;
+      cachedAt = out.errors.length ? Date.now() - 25 * 60 * 1000 : Date.now();
+      return out;
+    })
+    .finally(() => { inFlight = null; });
+  return inFlight;
+}
+
+// Stale-while-revalidate. A fresh cache returns as-is; a stale-but-present
+// cache is served immediately while a background rebuild runs, so no visitor
+// ever waits on the on-chain read; only a cold cache (the first request after
+// boot) awaits the build.
+export async function x402EconomySnapshot() {
+  if (cached && Date.now() - cachedAt < ECONOMY_FRESH_MS) return cached;
+  if (cached) {
+    startEconomyRefresh().catch(() => {}); // stale cache stays valid on failure
+    return cached;
+  }
+  return startEconomyRefresh();
 }
 
 // esc/fmt formatting for the rendered section now live in x402-index.js,

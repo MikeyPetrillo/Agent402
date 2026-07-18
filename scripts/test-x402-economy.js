@@ -119,6 +119,21 @@ ok(!noDay.includes("Last 24h across the ecosystem"), "warming leaderboard snapsh
 const noDay2 = economySectionHtml({ daily: sampleDaily, totals: {}, errors: [] }, null);
 ok(!noDay2.includes("Last 24h across the ecosystem"), "missing leaderboard snapshot renders no 24h block");
 
+// --- snapshot cache is stale-while-revalidate (no visitor waits on the
+// ~500ms on-chain rebuild) -----------------------------------------------------
+// Offline (no CDP key) the on-chain reads throw immediately and are collected
+// into errors, so the build returns fast — enough to exercise the caching
+// contract without network: concurrent callers dedupe onto one in-flight
+// build, and a warm call returns the identical cached object (no rebuild).
+{
+  const { x402EconomySnapshot } = await import("../src/x402-economy.js");
+  const [a, b] = await Promise.all([x402EconomySnapshot(), x402EconomySnapshot()]);
+  ok(a === b, "concurrent cold callers dedupe onto one in-flight build (same object)");
+  ok(Array.isArray(a.errors), "snapshot never throws — returns an object with errors[]");
+  const c = await x402EconomySnapshot();
+  ok(a === c, "a warm call returns the cached object, not a rebuild");
+}
+
 // --- /x402-economy now 301s to /marketplace#economy (straight to the unified
 // surface — never chaining through the /index 301) ---------------------------
 {
