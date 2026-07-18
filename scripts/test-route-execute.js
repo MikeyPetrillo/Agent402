@@ -2,6 +2,8 @@
 // Uses a miniature catalog — no server boot, no network.
 import { createHash } from "node:crypto";
 import { buildRouteExecuteTool } from "../src/tools/route-execute.js";
+import { USAGE_TOOLS } from "../src/tools/usage-kit.js";
+import { isIdentityBoundRoute } from "../src/payments.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, name) => { cond ? pass++ : fail++; console.log(`${cond ? "ok" : "FAIL"} - ${name}`); };
@@ -106,6 +108,33 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   const req = { header: () => Buffer.from("not json").toString("base64") };
   const r = await tool.handler({ slug: "hash", params: { text: "x" } }, req);
   ok(r.receipt.callRef === undefined, "malformed payment header degrades to no callRef, not an error");
+}
+
+// 7. Identity-bound tools (audit R-03): the executor must refuse EVERY
+// identity-bound def BEFORE dispatch. These tools read the SIGNED payment
+// identity off the Express request (payerFromRequest / the memory namespace);
+// route-execute invokes handlers as `def.handler(params)` with no request, so
+// dispatching my-usage would 502 mid-handler AFTER the buyer paid, and memory
+// would key the wrong namespace. Verified with the REAL my-usage definition.
+{
+  const myUsage = USAGE_TOOLS.find((t) => t.slug === "my-usage");
+  ok(!!myUsage && isIdentityBoundRoute(myUsage), "real my-usage def is classified identity-bound");
+  CATALOG[myUsage.route] = myUsage;
+  // A 409 here (not a 502 from payerFromRequest(undefined)) proves the block
+  // fires BEFORE the handler runs — no charged deterministic failure.
+  await expectErr({ slug: "my-usage", params: {} }, 409, "real my-usage refused pre-dispatch (not a post-payment 502)", "identity-bound");
+}
+{
+  // Memory-category def: the other arm of isIdentityBoundRoute. Its handler
+  // throws a NON-statusCode error, so a clean 409 (not a 500) proves the tool
+  // was refused before dispatch and the handler never ran.
+  addTool({
+    route: "POST /api/memory-incr", slug: "memory-incr", name: "Memory incr", category: "memory", price: "$0.002",
+    description: "Increment a wallet-keyed counter", tags: ["memory"],
+    discovery: { bodyType: "json", input: { key: "k" } },
+    handler: async () => { throw new Error("identity-bound handler must never run through route-execute"); },
+  });
+  await expectErr({ slug: "memory-incr", params: {} }, 409, "memory-category tool refused pre-dispatch", "identity-bound");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

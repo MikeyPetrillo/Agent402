@@ -18,6 +18,7 @@
 // price instead.
 import { createHash } from "node:crypto";
 import { findTools } from "../find.js";
+import { isIdentityBoundRoute } from "../payments.js";
 
 const EXEC_PRICE_USD = 0.01;
 const UNDERLYING_MAX_USD = 0.005;
@@ -50,15 +51,23 @@ function bad(message, statusCode = 400) {
 const toUsd = (price) => Number(String(price ?? "").replace(/[^0-9.]/g, "")) || 0;
 
 // Tools the executor refuses to dispatch regardless of price:
-// - memory*: wallet-keyed — the payment identity of the execute caller is not
-//   the identity the memory namespace expects (memHandler reads the payer).
+// - identity-bound (memory* AND my-usage): wallet-keyed — the tool reads the
+//   SIGNED payment identity off the Express request (payerFromRequest / the
+//   memory namespace). The executor invokes handlers as `def.handler(params)`
+//   with no request, so the identity is absent: memory would key the wrong
+//   namespace and my-usage would 502 on `req.header` — AFTER the buyer already
+//   paid for route-execute. Worse, route-execute advertises all eight rails
+//   while identity-bound tools are EVM-only, so even threading the request
+//   through would break the identity contract. These MUST be called directly.
+//   Guarded by isIdentityBoundRoute (the single source of truth in payments.js)
+//   so this holds on a raw catalog, independent of server.js's flag mutation.
 // - route-execute itself (no recursion).
 // - non-JSON bodies (binary/multipart uploads don't fit the {params} envelope).
 function dispatchable(def) {
   if (!def || typeof def.handler !== "function") return { ok: false, why: "tool has no internal handler" };
   if (def.slug === "route-execute") return { ok: false, why: "cannot dispatch to itself" };
-  if (def.slug.startsWith("memory") || def.route.includes("/api/memory")) {
-    return { ok: false, why: "memory tools are wallet-keyed — call them directly so the payment identity matches the namespace" };
+  if (def.identityBound || isIdentityBoundRoute(def)) {
+    return { ok: false, why: "identity-bound tools are wallet-keyed — call them directly so the signed payment identity is preserved" };
   }
   const bodyType = def.discovery?.bodyType;
   if (bodyType && bodyType !== "json") return { ok: false, why: `bodyType "${bodyType}" is not dispatchable through the JSON params envelope` };

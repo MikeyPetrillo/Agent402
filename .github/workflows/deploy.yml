@@ -710,6 +710,9 @@ jobs:
       - name: Secret-leak guard (canary keys never reach responses, caches, or errors; gateway cost-strip — offline)
         run: node scripts/test-leak-guard.js
 
+      - name: Burner-key log guard (agent-e2e never prints a private key on funding timeout; no console.* emits a raw key — offline)
+        run: node scripts/test-burner-log-guard.js
+
       - name: Deploy quiet gate (lull detection, fail-open paths — offline)
         run: node scripts/test-quiet-gate.js
 

@@ -13,7 +13,7 @@ const TARGET = process.env.TARGET_URL || "https://agent402.tools";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"; // USDC on Base
 const KEY_FILE = process.env.KEY_FILE || "/tmp/agent-key";
 const SUITE_BUDGET = 1300000n; // full 63-tool suite costs ~$1.22; require $1.30 (includes premium packs $0.50+$0.25+$0.30)
-const FUND_WAIT_MINUTES = 40;
+const FUND_WAIT_MINUTES = Number(process.env.FUND_WAIT_MINUTES ?? 40); // 0 forces an immediate no-funding exit (leak-guard test)
 
 let pk;
 if (existsSync(KEY_FILE)) {
@@ -47,7 +47,10 @@ for (let i = 0; i < FUND_WAIT_MINUTES * 4; i++) {
   await new Promise((r) => setTimeout(r, 15000));
 }
 if (bal < SUITE_BUDGET) {
-  console.log("Never funded — nothing spent, nothing lost. Burner key (throwaway, do not reuse):", pk);
+  // Never print the private key. A CI failure log is public; the key is a
+  // credential even for a throwaway wallet (it can sign EIP-3009 authorizations
+  // the moment the address is funded). The public address is enough to debug.
+  console.error(`Never funded — wallet ${account.address} stayed below the $${formatUnits(SUITE_BUDGET, 6)} test threshold. Nothing spent.`);
   process.exit(1);
 }
 const startBal = bal;
