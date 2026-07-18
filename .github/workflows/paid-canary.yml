@@ -18,25 +18,13 @@ jobs:
   canary:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Wallet/pow secrets are NOT at job scope (audit R-07): job-scope env is in
+    # the environment of EVERY step, including the dependency install, where a
+    # malicious package lifecycle script could read them. They are scoped to the
+    # buy step only. GH_TOKEN (github.token, issue management) and the
+    # non-secret TARGET_URL stay job-wide.
     env:
       GH_TOKEN: ${{ github.token }}
-      BURNER_KEY: ${{ secrets.BURNER_KEY }}
-      # Optional: base58 secret key of a Solana wallet funded with USDC (+ a
-      # little SOL). Enables the daily Solana-path purchase; unset = skipped.
-      SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
-      # Marks every canary buy with X-Heartbeat-Token so it records as internal
-      # traffic (synthetic) instead of external demand in the sales ledger and
-      # PostHog. Without it paid-canary.js warns and the daily basket shows up
-      # as an organic buyer in every revenue analysis.
-      POW_SECRET: ${{ secrets.POW_SECRET }}
-      # Optional: S… secret key of a Stellar account holding USDC (Circle
-      # trustline) + a little XLM. Enables the daily Stellar-path purchase;
-      # unset = the leg is skipped.
-      STELLAR_BURNER_SECRET: ${{ secrets.STELLAR_BURNER_SECRET }}
-      # Optional: 25-word mnemonic of an Algorand account holding USDC (ASA
-      # 31566704, opted in) + a little ALGO. Enables the daily Algorand-path
-      # purchase; unset = the leg is skipped.
-      ALGORAND_BURNER_MNEMONIC: ${{ secrets.ALGORAND_BURNER_MNEMONIC }}
       TARGET_URL: https://agent402.tools
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -44,12 +32,23 @@ jobs:
         with:
           node-version: 22
       - name: Install x402 client
-        # @x402/* pinned to the server's version (src/payments.js runs 2.16) —
-        # an unpinned install pulled 2.17 and protocol skew is one suspect for
-        # SVM settle failures. viem/@solana/kit float within their majors.
-        run: npm ci && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 @x402/core@2.16.0 @x402/evm@2.16.0 @x402/svm@2.16.0 @x402/stellar@2.17.0 @stellar/stellar-sdk @solana/kit viem
+        # No wallet secrets are in scope for this step (they live on the buy
+        # step), and --ignore-scripts blocks dependency lifecycle scripts
+        # entirely (audit R-07). @x402/* pinned to the server's protocol version
+        # (src/payments.js runs 2.16) — an unpinned install pulled 2.17 and
+        # protocol skew is one suspect for SVM settle failures. viem /
+        # @solana/kit / @stellar/stellar-sdk are pinned to the repo lock's
+        # resolved versions (no floating installs in a paid job).
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 @x402/core@2.16.0 @x402/evm@2.16.0 @x402/svm@2.16.0 @x402/stellar@2.17.0 @stellar/stellar-sdk@16.0.1 @solana/kit@5.5.1 viem@2.52.2
       - name: Buy one tool from production (real USDC)
         id: canary
+        # Wallet/pow secrets scoped to THIS step only (audit R-07).
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
+          STELLAR_BURNER_SECRET: ${{ secrets.STELLAR_BURNER_SECRET }}
+          ALGORAND_BURNER_MNEMONIC: ${{ secrets.ALGORAND_BURNER_MNEMONIC }}
+          POW_SECRET: ${{ secrets.POW_SECRET }}
         run: |
           if [ -z "$BURNER_KEY" ]; then
             echo "No BURNER_KEY secret — canary cannot run (configure a funded test wallet)."

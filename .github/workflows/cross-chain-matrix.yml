@@ -26,14 +26,10 @@ jobs:
   matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # Wallet/pow secrets are NOT at job scope (audit R-07) — that would expose
+    # them to the dependency-install step's environment. They are scoped to the
+    # run step only. Non-secret config (TARGET_URL, matrix inputs) stays job-wide.
     env:
-      BURNER_KEY: ${{ secrets.BURNER_KEY }}
-      SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
-      STELLAR_BURNER_SECRET: ${{ secrets.STELLAR_BURNER_SECRET }}
-      ALGORAND_BURNER_MNEMONIC: ${{ secrets.ALGORAND_BURNER_MNEMONIC }}
-      # Marks every buy with X-Heartbeat-Token so the matrix records as internal
-      # traffic (synthetic), not external demand, in the sales ledger + PostHog.
-      POW_SECRET: ${{ secrets.POW_SECRET }}
       TARGET_URL: https://agent402.tools
       MATRIX_TOP_N: ${{ github.event.inputs.top_n }}
       MATRIX_DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '' }}
@@ -43,12 +39,22 @@ jobs:
         with:
           node-version: 22
       - name: Install x402 client SDKs
-        # Same pinned set as scripts/paid-canary.js: @x402/* matched to the
-        # server's protocol version (src/payments.js runs 2.16); @x402/avm +
-        # algosdk come from package.json via `npm ci`. Version skew is a known
-        # cause of SVM/AVM settle failures — keep this in lockstep with the canary.
-        run: npm ci && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 @x402/core@2.16.0 @x402/evm@2.16.0 @x402/svm@2.16.0 @x402/stellar@2.17.0 @stellar/stellar-sdk @solana/kit viem
+        # No wallet secrets are in scope here, and --ignore-scripts blocks
+        # dependency lifecycle scripts entirely (audit R-07). Same pinned set as
+        # scripts/paid-canary.js: @x402/* matched to the server's protocol
+        # version (src/payments.js runs 2.16); viem / @solana/kit /
+        # @stellar/stellar-sdk pinned to the repo lock (no floating installs);
+        # @x402/avm + algosdk come from package.json via `npm ci`. Keep in
+        # lockstep with the canary — version skew causes SVM/AVM settle failures.
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 @x402/core@2.16.0 @x402/evm@2.16.0 @x402/svm@2.16.0 @x402/stellar@2.17.0 @stellar/stellar-sdk@16.0.1 @solana/kit@5.5.1 viem@2.52.2
       - name: Run the cross-chain tool matrix
+        # Wallet/pow secrets scoped to THIS step only (audit R-07).
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
+          STELLAR_BURNER_SECRET: ${{ secrets.STELLAR_BURNER_SECRET }}
+          ALGORAND_BURNER_MNEMONIC: ${{ secrets.ALGORAND_BURNER_MNEMONIC }}
+          POW_SECRET: ${{ secrets.POW_SECRET }}
         run: |
           if [ -z "$BURNER_KEY" ] && [ "$MATRIX_DRY_RUN" != "1" ]; then
             echo "No BURNER_KEY secret — cannot run the paid grid. Re-run with dry_run=true for a plumbing check."

@@ -881,6 +881,9 @@ jobs:
       - name: PostHog analytics proxy abuse controls (R-17 — method allowlist + per-IP cap before the upstream call — spawns child)
         run: node scripts/test-posthog-proxy.js
 
+      - name: Untrusted-content provenance (R-14 — external page/search content carries untrustedContent; extract/render/search marked — offline)
+        run: node scripts/test-provenance.js
+
       - name: /health envelope + .flags shape (boolean discipline locks the Yahoo-relay-flap class)
         run: node scripts/test-health-envelope.js
 

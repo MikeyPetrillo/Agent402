@@ -2,6 +2,7 @@ import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
 import { safeFetch } from "./fetch-guard.js";
+import { markUntrusted } from "./provenance.js";
 
 const turndown = new TurndownService({
   headingStyle: "atx",
@@ -21,7 +22,9 @@ export function htmlToArticle(html, finalUrl) {
     throw err;
   }
   const markdown = turndown.turndown(article.content);
-  return {
+  // R-14: mark the extracted (and, via renderArticle, rendered) page content as
+  // untrusted external data. `url` above is the source; this adds the flag.
+  return markUntrusted({
     url: finalUrl,
     title: article.title || null,
     byline: article.byline || null,
@@ -30,7 +33,7 @@ export function htmlToArticle(html, finalUrl) {
     lang: article.lang || null,
     wordCount: markdown.split(/\s+/).filter(Boolean).length,
     markdown,
-  };
+  });
 }
 
 /**
