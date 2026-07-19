@@ -41,32 +41,35 @@ wants around them.
 
 ## Phase 1 — Harden the current single container (no new service)
 
-Lowest-effort, highest-immediate-return: shrink the blast radius of a
-compromise on the container we already run, via Railway/platform config only.
-No code change, no second service.
+Shrink the blast radius of a compromise on the container we already run.
 
-**Steps (Railway service config):**
-1. `no-new-privileges` + drop all Linux capabilities the app doesn't need
-   (it needs none for serving; gosu drops privileges at boot).
-2. Read-only root filesystem, with `/tmp` (tmpfs, size-capped) and the `/data`
-   volume as the only writable mounts. Media temp files already live under a
-   temp dir — point them at the tmpfs.
-3. A restrictive seccomp profile (start from the Docker default, deny the
-   exotic syscalls neither Node, Chromium-headless, nor ffmpeg need).
-4. Egress network policy at the platform layer: deny the container's outbound
-   path to loopback, RFC1918, link-local (169.254.0.0/16), CGNAT
-   (100.64.0.0/10), IPv6 ULA/link-local, and the cloud metadata endpoint
-   (169.254.169.254). This makes the app-layer SSRF guard defence-in-depth, not
-   the only control (R-05 partial, R-02 defence-in-depth).
+**Reality check (verified 2026-07-18):** Railway is a PaaS that does **not**
+expose Docker `--security-opt` (seccomp), `--cap-drop`, `--read-only`, or an
+egress firewall. So most of the classic single-container hardening below is
+**not settable from this repo** on Railway. What IS achievable in the Dockerfile
+shipped; the rest is a platform gap that only the worker services (Phases 2-3)
+or a different platform can close.
 
-**Acceptance:**
-- Container boots, `/health` 200, a render + a screenshot + an audio-convert all
-  still succeed on the preview.
-- From inside the container, a curl to `http://169.254.169.254/` and to an
-  RFC1918 address is refused at the network layer (not just by the app guard).
-- Writing outside `/tmp` and `/data` fails (read-only rootfs proven).
+**Shipped (Dockerfile):**
+- **Setuid/setgid strip** — `find / -xdev -perm /6000 -type f -exec chmod a-s`.
+  Removes every local privilege-escalation helper (su, mount, chsh, Chromium's
+  SUID sandbox) so a post-compromise attacker in the container can't escalate.
+  Safe: the app runs non-root, gosu drops privileges via syscalls (not a setuid
+  bit), and Chromium runs `--no-sandbox` (SUID helper unused). Verify post-deploy
+  that `/health` is 200 and render/media still work.
 
-**Rollback:** revert the Railway service settings; no image or code change.
+**Blocked on Railway (needs a platform feature or the Phase-2/3 workers):**
+- `no-new-privileges` + capability drop — not exposed by Railway.
+- Read-only root filesystem + tmpfs `/tmp` — not exposed by Railway.
+- Restrictive seccomp profile — not exposed by Railway.
+- Egress network policy (deny loopback / RFC1918 / link-local / CGNAT / IPv6
+  special / metadata `169.254.169.254`) — Railway has no egress firewall. This
+  is the piece that would fully close R-05; until it exists, the app-layer SSRF
+  guard (`render.js` `context.route` + `hostIsPublic`, connect-time Undici
+  validation on `safeFetch`) remains the control. Note Railway is a PaaS with no
+  classic cloud-metadata IAM endpoint, which limits R-05's real blast radius.
+
+**Rollback:** revert the Dockerfile hardening line; no data migration.
 
 ---
 

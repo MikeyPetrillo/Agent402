@@ -25,11 +25,33 @@ RUN npm ci --omit=dev && npx playwright install --with-deps chromium \
   && rm -rf /var/lib/apt/lists/* \
   # sanity-check gosu works (it silently no-ops on a broken install)
   && gosu node true \
-  # A402-06 / CVE-2026-8461 (FFmpeg MagicYUV): record the exact ffmpeg build and
-  # whether the vulnerable decoder is even present, so the live image is
-  # auditable without guessing. scripts/check-ffmpeg-cve.sh reads this.
-  && (ffmpeg -version | head -1 > /app/.ffmpeg-version || true) \
+  # A402-06 / CVE-2026-8461 (FFmpeg MagicYUV) build gate: the audio toolchain
+  # MUST be present — a base-image drift that drops ffmpeg/ffprobe should FAIL
+  # the build loudly, not ship an image that 500s every media tool. Then record
+  # the exact build + whether the vulnerable MagicYUV *video* decoder is present.
+  # We do NOT fail on its presence: our tools only decode AUDIO (`-vn` on every
+  # ffmpeg call, enforced by scripts/test-ffmpeg-novideo.js), so the decoder is
+  # unreachable through our flags; failing would just break builds over an
+  # unexploitable path. scripts/check-ffmpeg-cve.sh reads the recorded status.
+  && { command -v ffmpeg >/dev/null || { echo "FATAL: ffmpeg missing from image"; exit 1; }; } \
+  && { command -v ffprobe >/dev/null || { echo "FATAL: ffprobe missing from image"; exit 1; }; } \
+  && ffmpeg -version | head -1 > /app/.ffmpeg-version \
   && (ffmpeg -hide_banner -decoders 2>/dev/null | grep -i magicyuv >> /app/.ffmpeg-version || echo "magicyuv-decoder: absent" >> /app/.ffmpeg-version)
+
+# Container hardening (audit R-04/R-05 blast-radius reduction — the achievable
+# subset). Strip the setuid/setgid bit from every binary in the image so a
+# post-compromise attacker inside the container has NO local privilege-escalation
+# helper (su, mount, chsh, Chromium's SUID sandbox, …). Safe for our runtime:
+# the server already runs non-root; gosu drops privileges via syscalls as root,
+# not via a setuid bit; and Chromium runs with --no-sandbox so the SUID sandbox
+# helper is unused. `-xdev` keeps the sweep on the image filesystem.
+#
+# NOTE: seccomp, capability-drop, a read-only root filesystem, and network
+# egress firewalling are the REST of the container-hardening story — Railway's
+# platform does not expose Docker security-opt / egress controls, so they are
+# NOT settable from this repo. Closing them needs the secretless worker services
+# in docs/worker-isolation-plan.md (Phases 2-3) or a platform that supports them.
+RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 
 COPY src ./src
 # scripts/demo-payment.js is served at /demo.js (the runnable buyer demo)

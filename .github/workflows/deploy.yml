@@ -884,6 +884,9 @@ jobs:
       - name: Untrusted-content provenance (R-14 — external page/search content carries untrustedContent; extract/render/search marked — offline)
         run: node scripts/test-provenance.js
 
+      - name: FFmpeg video-decode lockout (R-06 — every ffmpeg call is -vn/audio-only; CVE-2026-8461 MagicYUV video decoder unreachable — offline)
+        run: node scripts/test-ffmpeg-novideo.js
+
       - name: /health envelope + .flags shape (boolean discipline locks the Yahoo-relay-flap class)
         run: node scripts/test-health-envelope.js
 
