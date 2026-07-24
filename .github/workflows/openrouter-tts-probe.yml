@@ -73,7 +73,7 @@ jobs:
       # full E2E through our booted server (route binder, __binary sentinel,
       # failover chain head) — the part unit tests can only mock.
       # ------------------------------------------------------------------
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
         if: env.HAVE_KEY == 'true'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: env.HAVE_KEY == 'true'
