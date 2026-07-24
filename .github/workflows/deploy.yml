@@ -258,7 +258,7 @@ jobs:
       - name: Generate burner agent wallet
         run: MODE=address KEY_FILE=$RUNNER_TEMP/agent-key node scripts/agent-e2e.js
       - name: Publish funding address
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: agent-address
           path: agent-address.txt
@@ -638,7 +638,7 @@ jobs:
           [ -n "$AGENT_KEY" ] || { echo "::error::BURNER_KEY secret is not set"; exit 1; }
           node scripts/demo-company-onepager.js "$DEMO_TICKER" | tee demo-output.txt
       - name: Upload demo output
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: demo-output
           path: demo-output.txt
