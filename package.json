@@ -86,7 +86,7 @@
     "pngjs": "^7.0.0",
     "posthog-node": "^5.46.1",
     "qrcode": "^1.5.4",
-    "redis": "^4.7.0",
+    "redis": "^6.1.0",
     "tesseract.js": "^5.1.1",
     "turndown": "^7.2.4"
   },
