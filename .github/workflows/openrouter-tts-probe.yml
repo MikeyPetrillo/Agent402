@@ -73,9 +73,9 @@ jobs:
       # full E2E through our booted server (route binder, __binary sentinel,
       # failover chain head) — the part unit tests can only mock.
       # ------------------------------------------------------------------
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
         if: env.HAVE_KEY == 'true'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: env.HAVE_KEY == 'true'
         with:
           node-version: 22
@@ -231,7 +231,7 @@ jobs:
           ffmpeg -v error -i /tmp/demo.mp3 -filter_complex "aformat=channel_layouts=mono,compand=gain=3,showwavespic=s=880x200:colors=#F2EAD8" -frames:v 1 /tmp/waveform.png
           ls -la /tmp/demo.mp3 /tmp/waveform.png
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: github.event.inputs.mode == 'capture'
         with:
           name: tts-demo
