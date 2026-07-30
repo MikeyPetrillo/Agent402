@@ -80,7 +80,7 @@ function cardSvg(data) {
   <path d="M36 48 a18 18 0 0 1 18 -18 h1092 a18 18 0 0 1 18 18 v34 h-1128 z" fill="${B.titlebar}"/>
   <circle cx="72" cy="61" r="8" fill="${B.dotRed}"/><circle cx="98" cy="61" r="8" fill="${B.dotAmber}"/><circle cx="124" cy="61" r="8" fill="${B.dotGray}"/>
   <text x="152" y="68" font-size="20" font-weight="700" font-family=${mono} fill="${B.text}">one payment, one wallet · the router receipt</text>
-  <text x="96" y="130" font-size="22" font-family=${mono}><tspan font-weight="700" fill="${B.text}">Agent402 POST /api/route/execute</tspan><tspan fill="${B.muted}"> · routed buy from the open x402 index${liveDate ? ` · ${esc(liveDate)} UTC` : ""}</tspan></text>
+  <text x="96" y="130" font-size="22" font-family=${mono}><tspan font-weight="700" fill="${B.text}">Agent402 POST /api/route/execute</tspan><tspan fill="${B.muted}"> · routed buy${liveDate ? ` · ${esc(liveDate)} UTC` : ""}</tspan></text>
   ${okRow(180, "resolve", "best proven seller in the index", esc(sellerHost))}
   ${okRow(214, "settle", `chain-matched · ${esc(r.settleNetwork || "internal")}`, r.external ? "paid on your behalf" : "internal dispatch")}
   ${okRow(248, "price", `$${r.paidUsd} flat · $${r.underlyingPriceUsd} to seller`, `routing fee $${r.routingFeeUsd}`)}
