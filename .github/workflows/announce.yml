@@ -155,6 +155,12 @@ jobs:
             FILE=/tmp/announce-text.txt
           fi
           if [ -z "$FILE" ]; then
+            # The trigger-announce fallback is for the PUSH path only. A bare
+            # dispatch (neither text nor file) must refuse, not silently
+            # repost whatever stale announcement the trigger file points at.
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "Dispatch needs text or file."; exit 1
+            fi
             FILE=$(sed -n 1p .github/trigger-announce)
             MEDIA=$(sed -n 2p .github/trigger-announce)
           fi

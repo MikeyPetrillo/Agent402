@@ -383,6 +383,31 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   no settle receipt) because external sellers publish no example inputs the way our bazaar
   extension does; `algo.netintel.dev` alone accounted for 42. A failed third-party buy
   never pages (their outage, not our defect).
+- **X ops (post + read, all via Actions — keys never local):** `scripts/tweet.js` is a
+  dependency-free OAuth 1.0a CLI (`--text/--file/--quote/--reply-to/--media/--delete/
+  --verify/--force`, `DRY_RUN=1`; secrets `X_API_KEY/X_API_SECRET/X_ACCESS_TOKEN/
+  X_ACCESS_SECRET`, Actions-only). The X App is **Free tier**: POST /2/tweets + GET
+  /2/users/me only — `--quote`/`--reply-to` against a post that doesn't mention us 403s
+  ("only … mentioned or are the author"), and API tweet READS are unavailable. Both
+  workarounds verified live 2026-07-17: **quote anyone** = append the target post URL as
+  the LAST line of the text (X renders a trailing status URL as a real quote embed);
+  **read any public post** = dispatch `x-read.yml` (credential-free, prints the post's
+  JSON via fxtwitter → vxtwitter from the runner — the CC-web sandbox can't reach x.com
+  or the mirrors). Char counting: X weighs EVERY URL at 23 chars (incl. bare
+  `agent402.tools`); tweet.js's guard counts raw length, so copy that's ≤280 weighted but
+  >280 raw needs `force`. **`announce.yml` dispatch (ref main) posts with NO repo
+  commit** — inputs: `text` (inline copy) | `file` | `media` | `card` = `bestsellers`
+  (burner buy) or `robinhood` (free /api/revenue → `scripts/robinhood-card.js`) |
+  `quote`/`reply_to` (own posts only) | `delete_id` (replace flow: delete runs first) |
+  `force`; every input rides an env var (N-03), never shell interpolation; a dispatch
+  with neither `text` nor `file` is refused (the trigger-announce fallback is for the
+  push path only, else a bare dispatch reposts stale copy). Cards render LIVE at post
+  time (real-numbers doctrine; `--preview` fixture tag for layout checks only). The
+  **/tweet skill** (`.claude/skills/tweet/SKILL.md`, committed via the `.gitignore`
+  carve-out `!.claude/skills/`) carries the playbook + house style: no em dashes,
+  evergreen counts, ALWAYS explicit user OK before any post. Posted 2026-07-17: the
+  x402 "$52M" quote (status 2078081744235122786). PARKED awaiting explicit go: the
+  RobinHub quote (copy drafted, `card=robinhood` ready).
 
 ## Environment / ops (set on Railway, not in repo)
 `WALLET_ADDRESS`, `WALLET_ENS`, `NETWORK`, `CDP_API_KEY_ID/SECRET`, `FACILITATOR_URL`,
