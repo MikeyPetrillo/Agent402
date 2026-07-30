@@ -405,9 +405,10 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   time (real-numbers doctrine; `--preview` fixture tag for layout checks only). The
   **/tweet skill** (`.claude/skills/tweet/SKILL.md`, committed via the `.gitignore`
   carve-out `!.claude/skills/`) carries the playbook + house style: no em dashes,
-  evergreen counts, ALWAYS explicit user OK before any post. Posted 2026-07-17: the
-  x402 "$52M" quote (status 2078081744235122786). PARKED awaiting explicit go: the
-  RobinHub quote (copy drafted, `card=robinhood` ready).
+  evergreen counts, ALWAYS explicit user OK before any post. **Tweet copy is never
+  committed** - it rides the dispatch `text` input only (docs/announcements files
+  are the legacy push-trigger path; card PNGs under docs/announcements/media are
+  fine to commit). No posted-tweet log or conversation state in this file.
 
 ## Environment / ops (set on Railway, not in repo)
 `WALLET_ADDRESS`, `WALLET_ENS`, `NETWORK`, `CDP_API_KEY_ID/SECRET`, `FACILITATOR_URL`,

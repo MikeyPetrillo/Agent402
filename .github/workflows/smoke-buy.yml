@@ -27,6 +27,10 @@ on:
         description: "Optional substring the response must contain"
         required: false
         default: ""
+      target:
+        description: "Optional external seller origin to buy from instead of production (x402 compatibility check, e.g. https://api.utilia.ink)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -55,6 +59,7 @@ jobs:
           SMOKE_QUERY: ${{ github.event.inputs.query }}
           SMOKE_BODY: ${{ github.event.inputs.body }}
           SMOKE_EXPECT: ${{ github.event.inputs.expect }}
+          SMOKE_TARGET: ${{ github.event.inputs.target }}
         run: |
           if [ -z "$BURNER_KEY" ]; then echo "No BURNER_KEY secret — cannot run the paid smoke test"; exit 1; fi
           echo "::add-mask::$BURNER_KEY"
