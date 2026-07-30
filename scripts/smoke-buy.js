@@ -54,7 +54,10 @@ const res = await payFetch(url, init);
 const text = await res.text();
 let body = null; try { body = JSON.parse(text); } catch {}
 console.log(`status: ${res.status}`);
-console.log(`  response: ${text.slice(0, 220).replace(/\s+/g, " ")}`);
+// Full response (bounded) — receipts carry fields a partner may need to
+// verify a routed buy (callRef, settleTx, result payload for hashing); a
+// 220-char preview silently dropped them.
+console.log(`  response: ${text.slice(0, 8000).replace(/\s+/g, " ")}`);
 
 const ok200 = res.status === 200 && body && typeof body === "object";
 const expectOk = !EXPECT || text.includes(EXPECT);
