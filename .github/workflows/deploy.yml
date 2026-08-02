@@ -1255,6 +1255,9 @@ jobs:
       - name: Cold start (a wallet-less agent reaches its first call from the docs alone)
         run: node scripts/test-coldstart.js
 
+      - name: Rail isolation (one chain down stays one chain's problem, and is visible)
+        run: node scripts/test-rails-isolation.js
+
       - name: upto scheme ships dark, refuses what it cannot price
         run: node scripts/test-upto-scheme.js
 

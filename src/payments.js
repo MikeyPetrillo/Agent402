@@ -541,6 +541,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           "X-API-Key (free: sign a no-gas message at https://x402.celo.org)" : "CELO_FACILITATOR_URL is empty") +
         " - dropping Celo from the offered networks (other chains unaffected)."
     );
+    noteRailDropped("celo", CELO_FACILITATOR_URL ? "CELO_FACILITATOR_KEY unset" : "CELO_FACILITATOR_URL empty");
     evmCaip2 = evmCaip2.filter((c) => c !== CELO_CAIP2);
   }
   if (celoEnabled) {
@@ -754,6 +755,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // wrong way (it did, 2026-07-28: a keyless optimism boot logged optimism).
   const offeredCaip2 = new Set([...evmCaip2, ...svmCaip2, ...stellarCaip2, ...avmCaip2]);
   const offeredNames = networks.filter((n) => offeredCaip2.has(NETWORKS[n]));
+  // Snapshot for railStatus(): what was asked for vs what is actually on offer.
+  railsConfigured = [...networks];
+  railsOffered = [...offeredNames];
   console.log(
     `Accepting USDC on: ${offeredNames.join(", ")} (${[...offeredCaip2].join(", ")})` +
       (robinhoodEnabled ? " - note: robinhood settles USDG, not USDC" : "")
@@ -977,6 +981,36 @@ export function fallbackCandidatesFor(network, payAiClient, solvadorClient) {
   if (payAiClient && PAYAI_SETTLE_NETWORKS.has(network)) out.push({ name: "PayAI", client: payAiClient });
   if (solvadorClient) out.push({ name: "Solvador", client: solvadorClient });
   return out;
+}
+
+
+// WHICH RAILS DID WE ACTUALLY END UP OFFERING, and why not the rest?
+//
+// The drop-don't-break guards below are correct and load-bearing: a chain whose
+// facilitator is missing or down is removed from the offer instead of throwing
+// while building the challenge, which once turned one bad rail into HTTP 500 on
+// EVERY paid endpoint (2026-07-02). Revenue keeps flowing on the other chains,
+// which is exactly right.
+//
+// What was missing is that the removal is SILENT after boot. Celo vanished from
+// the offer and nothing said so: the 402 quietly advertised 11 networks while
+// the config asked for 12, /health said ok, and the only trace was one boot log
+// nobody re-reads. It surfaced days later via a canary WARN.
+//
+// So every drop records itself here, and railStatus() reports configured vs
+// offered per chain with the reason. One chain failing stays one chain's
+// problem - now a VISIBLE one.
+const railDrops = new Map();   // network name -> reason
+let railsConfigured = [];
+let railsOffered = [];
+export function noteRailDropped(network, reason) { railDrops.set(network, reason); }
+export function railStatus() {
+  return railsConfigured.map((n) => ({
+    network: n,
+    caip2: NETWORKS[n] || null,
+    offered: railsOffered.includes(n),
+    reason: railsOffered.includes(n) ? null : (railDrops.get(n) || "not advertised by any configured facilitator"),
+  }));
 }
 
 export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null) {

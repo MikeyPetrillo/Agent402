@@ -58,7 +58,7 @@ import { recordWish, getWishesAggregate, annotateServed } from "./wish.js";
 import { indexSnapshot, sellerDetail, routableSellerSummaries, routeQuery, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories } from "./x402-index.js";
 import { indexToolsPage, INDEX_TOOLS_PAGE_SIZE } from "./index-tools-page.js";
 import { getLeaderboardSnapshot, startLeaderboardRefresh, leaderboardPage, rankBy } from "./leaderboard.js";
-import { buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute } from "./payments.js";
+import { buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus} from "./payments.js";
 import { createMppShim } from "./mpp-shim.js";
 import { KIT } from "./tools/kit.js";
 import { KIT2 } from "./tools/kit2.js";
@@ -1780,6 +1780,28 @@ app.get("/__operator/wishes.json", (req, res) => {
 // activity — that is how celo settlements verified on-chain went missing from
 // /revenue while every health surface read "ok". `lagBlocks` is the number
 // that separates the two.
+// Which settlement rails are CONFIGURED vs actually OFFERED, and why not.
+//
+// Public on purpose: the 402 already advertises the offered set, so this adds
+// no secret - it adds the DIFFERENCE, which is the part that was invisible.
+// A rail whose facilitator is down is dropped from the offer so the other
+// chains keep earning (correct, and load-bearing since 2026-07-02), but that
+// drop used to be silent: Celo disappeared and the only trace was a boot log,
+// found days later by a canary WARN. Now anyone, including our own heartbeat,
+// can see "configured 12, offering 11, celo: <reason>".
+app.get("/api/rails", (_req, res) => {
+  const rails = railStatus();
+  const offered = rails.filter((r) => r.offered);
+  res.set("Cache-Control", "no-store");
+  res.json({
+    asOf: new Date().toISOString(),
+    configured: rails.length,
+    offered: offered.length,
+    degraded: rails.length - offered.length,
+    note: "A configured rail that is not offered is dropped deliberately so the other rails keep settling. Non-zero `degraded` means one chain is down, not the service.",
+    rails,
+  });
+});
 app.get("/__operator/ledger-sync.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store");
