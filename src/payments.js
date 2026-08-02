@@ -433,9 +433,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const networks = enabledNetworks(network);
   const caip2List = networks.map((n) => NETWORKS[n]);
   let evmCaip2 = caip2List.filter((c) => c.startsWith("eip155:"));
-  const svmCaip2 = caip2List.filter((c) => c.startsWith("solana:"));
-  const stellarCaip2 = caip2List.filter((c) => c.startsWith("stellar:"));
-  const avmCaip2 = caip2List.filter((c) => c.startsWith("algorand:"));
+  // `let`, not `const`: the reachability check below may drop any of these, and
+  // a chain we cannot settle must never reach the offer. See that block.
+  let svmCaip2 = caip2List.filter((c) => c.startsWith("solana:"));
+  let stellarCaip2 = caip2List.filter((c) => c.startsWith("stellar:"));
+  let avmCaip2 = caip2List.filter((c) => c.startsWith("algorand:"));
 
   // Facilitator routing. x402ResourceServer accepts a LIST of facilitator
   // clients: at sync it asks each for its /supported kinds and routes every
@@ -602,6 +604,74 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     }, solvadorPrimaryWanted));
     console.log(`Solvador (primary, filtered): settling USDC on ${solvadorPrimaryWanted.join(", ")}`);
   }
+  // A CONFIGURED-BUT-UNREACHABLE FACILITATOR MUST NOT TAKE DOWN EVERY CHAIN.
+  //
+  // The guards above only cover a MISSING url/key. A facilitator that is
+  // configured and simply DOWN takes the opposite path: the client is added,
+  // its /supported handshake fails, and the network stays in the offer with
+  // nothing able to settle it. @x402/core then refuses to BUILD the 402 and
+  // every paid route on EVERY chain answers 500 - while /health stays 200, so
+  // it reads as healthy with all revenue dead.
+  //
+  // Reproduced 2026-08-02 with Celo's facilitator returning 500 (its real state
+  // that day): POST /api/hash -> 500 RouteConfigurationError, with Base
+  // perfectly healthy and configured. The only thing protecting production was
+  // that someone had manually removed `celo` from PAYMENT_NETWORKS.
+  //
+  // So the offer is now verified against what the facilitators we route through
+  // ACTUALLY advertise, which is the same discipline the upto gate below has
+  // always applied - it just never covered `exact`.
+  //
+  // Two deliberate safety properties:
+  //   * a network is dropped only on a POSITIVE answer, i.e. at least one
+  //     facilitator responded and did not list it. If none respond (a boot-time
+  //     network blip), the configured offer is left alone rather than emptied.
+  //   * each client gets a second attempt, so a slow facilitator is not
+  //     mistaken for a dead one and a transient blip cannot cost a rail.
+  const advertisedExact = new Set();
+  const advertisedUpto = new Set();
+  let anyFacilitatorResponded = false;
+  await Promise.all(facilitatorClients.map(async (client) => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const kinds = (await client.getSupported())?.kinds || [];
+        anyFacilitatorResponded = true;
+        for (const k of kinds) {
+          const scheme = String(k?.scheme || "").toLowerCase();
+          if (!k?.network) continue;
+          if (scheme === "exact") advertisedExact.add(String(k.network));
+          if (scheme === "upto") advertisedUpto.add(String(k.network));
+        }
+        return;
+      } catch {
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 750));
+      }
+    }
+  }));
+  if (anyFacilitatorResponded) {
+    const nameFor = (caip2) => Object.keys(NETWORKS).find((n) => NETWORKS[n] === caip2) || caip2;
+    const keepSettleable = (list, label) => list.filter((caip2) => {
+      if (advertisedExact.has(caip2)) return true;
+      console.warn(
+        `WARNING: ${label} ${caip2} is configured but NO reachable facilitator advertises exact/${caip2} - ` +
+        "dropping it from the offer so the other rails keep settling. Leaving it in would make @x402/core " +
+        "refuse to build the 402 and answer 500 on EVERY paid route, on every chain."
+      );
+      noteRailDropped(nameFor(caip2), "no reachable facilitator advertises exact for it");
+      return false;
+    });
+    evmCaip2 = keepSettleable(evmCaip2, "EVM network");
+    svmCaip2 = keepSettleable(svmCaip2, "Solana network");
+    stellarCaip2 = keepSettleable(stellarCaip2, "Stellar network");
+    avmCaip2 = keepSettleable(avmCaip2, "Algorand network");
+  } else {
+    console.error(
+      "WARNING: no facilitator answered /supported at boot, so the offer could not be verified. " +
+      "Leaving the configured networks in place rather than emptying the offer on what may be a " +
+      "transient blip - but if this persists, paid routes will 500."
+    );
+  }
+
   // Which networks may offer `upto`. Two gates, both required:
   //   1. Operator opt-in — X402_UPTO_NETWORKS (CSV of CAIP-2 ids, or "all").
   //      Unset means the scheme is never registered and every 402 is
@@ -628,16 +698,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // deliberately not routed for. Going through the client honours the same
     // filter the settle path uses, so the gate can only ever agree with where
     // payments will really go.
-    const advertised = new Set();
-    await Promise.all(facilitatorClients.map(async (client) => {
-      try {
-        const kinds = (await client.getSupported())?.kinds || [];
-        for (const k of kinds) {
-          if (String(k?.scheme || "").toLowerCase() === "upto" && k?.network) advertised.add(String(k.network));
-        }
-      } catch { /* a facilitator that cannot be reached advertises nothing */ }
-    }));
-    const claimed = wanted.filter((c) => advertised.has(c));
+    const claimed = wanted.filter((c) => advertisedUpto.has(c));
 
     // PROVE it, do not take its word. A facilitator advertising upto says
     // nothing about whether WE can price the asset on that chain: the scheme

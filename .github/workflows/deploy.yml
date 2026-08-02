@@ -1258,6 +1258,9 @@ jobs:
       - name: Rail isolation (one chain down stays one chain's problem, and is visible)
         run: node scripts/test-rails-isolation.js
 
+      - name: Rail OUTAGE isolation (a DOWN facilitator must not 500 every chain)
+        run: node scripts/test-rail-outage-isolation.js
+
       - name: upto scheme ships dark, refuses what it cannot price
         run: node scripts/test-upto-scheme.js
 
