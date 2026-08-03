@@ -377,16 +377,27 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   quote it as current quality; use a recent window from the operator endpoint.**
 - **Paid canary (`scripts/paid-canary.js`):** 32 legs — tools across all twelve rails
   (Base/Solana/Polygon/Arbitrum/Monad/Celo/Avalanche/Sei/Optimism/Stellar/Algorand/Robinhood).
-  **KNOWN BLIND SPOT — a green canary does NOT mean twelve rails settle.** The Stellar
-  leg only ever `console.warn`s: its 402 branch, its non-402 branch, and its catch are
-  all warnings, so Stellar can fail every run while the script exits 0 and the workflow
-  reports success. Measured 2026-08-03 (run 30835380742): "30/30 settled", exit green,
-  and Stellar did **not** settle — facilitator reason `settle_channel_service_failed`
-  from `channels.openzeppelin.com/x402`. It is not a funding problem (burner
-  GBA2DD…NY6O4 held 0.742 USDC on a valid trustline plus 5 XLM) and not an accepts
-  problem (`stellar:pubnet` is advertised on live 402s). Eleven rails settled real USDC
-  that run; Stellar is advertised but unproven. When reading a canary result, check for
-  the `WARN stellar` line explicitly — "30/30" counts only the legs that can fail.
+  **Rail legs are graded separately from tool legs and now FAIL the run** (fixed
+  2026-08-03). They live outside `results`, so `decideCanary()` never saw them and every
+  rail branch was `console.warn` + `continue`: a rail could fail on every run for weeks
+  while the script exited 0. Measured on run 30835380742 — "30/30 settled", exit green,
+  Stellar broken on that run and the nine before it. All eleven rail failure paths now
+  go through `railFail()`, and `main()` exits 1 if any fired. Silent skips are gone too:
+  a rail missing from the live 402 accepts (the Celo-outage shape) is a failure, not a
+  `continue`.
+  **STELLAR SETTLES LATE — the rail is NOT broken, we answer before it can.** Stellar
+  closes a ledger about every 5s. The OpenZeppelin channel service gives up before that
+  and returns `settle_channel_service_failed`, we return 402, and the transfer then
+  confirms anyway: measured 402 at 17:10:48.044, transfer confirmed 17:10:52, on-chain
+  effects `account_debited CANARY BURNER 0.001 USDC` → `account_credited OUR PAYTO`. It
+  reproduces every run because it is a race nobody can win, not a fault. Consequence:
+  **the buyer is charged and gets a 402** (charged-but-failed). Do NOT read this as a
+  dead rail and do NOT pull `stellar` from `PAYMENT_NETWORKS` — payments succeed. Scope
+  is small (`externalCount: 1` on Stellar ever; the rest is the canary paying itself).
+  The canary's 402 branch now asks Horizon before believing the 402
+  (`stellarDebitedSince`) and grades a late settle as the distinct, worse defect. The
+  real fix is upstream: our settle verdict must outlive one Stellar ledger close, and
+  OpenZeppelin should not report failure for transfers that subsequently confirm.
   incl. two federal-data legs
   (vin-decode / geo-lookup) whose Base settlements also seed the gov tools into
   settlement-driven indexes like x402scan, plus llm-nano (failover), llm-stream

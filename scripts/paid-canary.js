@@ -516,6 +516,54 @@ export function decideCanary(results, { coreKit = CORE_KIT } = {}) {
   return { broken: reasons.length > 0, coreSettled, settled, unsettled, unreachable, rows, warnings, reasons };
 }
 
+// Rail-leg failures. The chain legs live outside `results`, so decideCanary()
+// never saw them and every one of them was console.warn-only: a rail could fail
+// on every run for weeks while the script exited 0 and the workflow went green.
+// Measured 2026-08-03 (run 30835380742): "30/30 settled", exit 0, and the
+// Stellar leg had not settled on that run or the nine before it.
+const railFailures = [];
+function railFail(key, detail) {
+  railFailures.push(`${key}: ${detail}`);
+  console.error(`\nFAIL  ${key} leg — ${detail}`);
+}
+
+// Did a Stellar payment land AFTER we answered?
+//
+// Stellar closes a ledger roughly every 5s, and the facilitator returns
+// settle_channel_service_failed when its channel service gives up before that
+// close. The transfer then confirms anyway. Measured: we answered 402 at
+// 17:10:48.044 and the transfer confirmed at 17:10:52 — four seconds later, on
+// every run, because it is a race nobody can win rather than a fault.
+//
+// A canary that stops at the 402 reports "did not settle" for a payment that
+// DID settle, which is the opposite of the truth and sends you looking for an
+// outage that is not there. So on a 402 we ask the chain, and the two outcomes
+// are graded differently: a late settle means the buyer was CHARGED and got a
+// 402 (a real defect, and the worse one), while no debit at all means the
+// payment genuinely did not happen.
+const HORIZON = (process.env.STELLAR_HORIZON_URL || "https://horizon.stellar.org").replace(/\/+$/, "");
+async function stellarDebitedSince(payer, sinceMs, { waitMs = 20_000, stepMs = 3_000 } = {}) {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      const r = await fetch(`${HORIZON}/accounts/${payer}/effects?order=desc&limit=20`, {
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (r.ok) {
+        const recs = (await r.json())?._embedded?.records || [];
+        const hit = recs.find((e) => {
+          if (e.type !== "account_debited" || e.asset_code !== "USDC") return false;
+          const t = Date.parse(e.created_at || "");
+          return Number.isFinite(t) && t >= sinceMs;
+        });
+        if (hit) return hit;
+      }
+    } catch { /* Horizon flake must not decide the verdict — keep polling */ }
+    if (Date.now() >= deadline) return null;
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+}
+
 // --- CLI (network). Importing this module for tests does NOT run any of this. ---
 async function main() {
   const TARGET = process.env.TARGET_URL || "https://agent402.tools";
@@ -856,7 +904,7 @@ async function main() {
       const reqInit = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `${leg.key}-canary` }) };
       const bare = await synthFetch(`${TARGET}/api/hash`, reqInit);
       if (bare.status !== 402) {
-        console.warn(`\nWARN  ${leg.key} leg: expected a 402 challenge from /api/hash, got HTTP ${bare.status}`);
+        railFail(leg.key, `expected a 402 challenge from /api/hash, got HTTP ${bare.status} — the leg proved nothing`);
         continue;
       }
       let paymentRequired;
@@ -864,12 +912,12 @@ async function main() {
         const bareBody = await bare.json().catch(() => undefined);
         paymentRequired = http.getPaymentRequiredResponse((n) => bare.headers.get(n), bareBody);
       } catch (e) {
-        console.warn(`\nWARN  ${leg.key} leg: could not parse the 402 challenge: ${(e?.message || String(e)).slice(0, 120)}`);
+        railFail(leg.key, `could not parse the 402 challenge: ${(e?.message || String(e)).slice(0, 120)} — the leg proved nothing`);
         continue;
       }
       const accepts = (paymentRequired.accepts || []).filter((a) => String(a.network || "") === leg.caip2);
       if (!accepts.length) {
-        console.warn(`\nWARN  ${leg.key} leg: ${leg.caip2} NOT among the live 402 accepts — the ${leg.chainLabel} rail has dropped out of the offer (PAYMENT_NETWORKS changed on prod?)`);
+        railFail(leg.key, `${leg.caip2} NOT among the live 402 accepts — the ${leg.chainLabel} rail has DROPPED OUT of the offer (PAYMENT_NETWORKS changed, or the boot /supported guard dropped it). This is the Celo-outage shape and must never be a silent skip.`);
         continue;
       }
       const payload = await client.createPaymentPayload({ ...paymentRequired, accepts });
@@ -892,12 +940,12 @@ async function main() {
         console.log(`\nOK    ${leg.key.padEnd(9)} /api/hash  → settled $0.001 ${leg.sym} on ${leg.chainLabel} (payer ${account.address}${net ? `, network ${net}` : ""})${tx ? `\n      tx: ${leg.tx(tx)}` : "\n      (no settle receipt header found — settlement claimed by 200 only)"}`);
       } else if (paid.status === 402) {
         const reason = settleRejectReason(paid.headers);
-        console.warn(`\nWARN  ${leg.key} leg did NOT settle (HTTP 402, payer ${account.address}) — facilitator reason: ${JSON.stringify(reason)} (unfunded ${leg.sym} burner on ${leg.chainLabel}, facilitator outage, or EIP-712 domain drift)`);
+        railFail(leg.key, `did NOT settle (HTTP 402, payer ${account.address}) — facilitator reason: ${JSON.stringify(reason)} (unfunded ${leg.sym} burner on ${leg.chainLabel}, facilitator outage, or EIP-712 domain drift)`);
       } else {
-        console.warn(`\nWARN  ${leg.key} leg: HTTP ${paid.status} ${JSON.stringify(body).slice(0, 120)}`);
+        railFail(leg.key, `HTTP ${paid.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      console.warn(`\nWARN  ${leg.key} leg errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      railFail(leg.key, `errored: ${(e?.message || String(e)).slice(0, 160)}`);
     }
   }
 
@@ -927,6 +975,10 @@ async function main() {
       const stellarClient = new StellarX402Client();
       stellarClient.register("stellar:*", new ExactStellarScheme(signer, { url: rpcUrl }));
       const stellarPay = wrapStellar(synthFetch, stellarClient);
+      // Anchor BEFORE the call, with a small skew allowance, so a late-confirming
+      // transfer is still attributable to this attempt. Prior runs are days
+      // apart, so this window cannot pick up an older debit.
+      const legStart = Date.now() - 5_000;
       const res = await stellarPay(`${TARGET}/api/hash`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: "stellar-canary" }),
@@ -940,13 +992,25 @@ async function main() {
         }
         console.log(`\nOK    stellar    /api/hash  → settled $0.001 USDC on Stellar (payer ${keypair.publicKey()})${tx ? `\n      tx: https://stellar.expert/explorer/public/tx/${tx}` : "\n      (no settle receipt header found — settlement claimed by 200 only)"}`);
       } else if (res.status === 402) {
+        // Ask the CHAIN before believing the 402. See stellarDebitedSince().
         const reason = settleRejectReason(res.headers);
-        console.warn(`\nWARN  stellar leg did NOT settle (HTTP 402, payer ${keypair.publicKey()}) — facilitator reason: ${JSON.stringify(reason)} (missing USDC trustline/funds, facilitator outage, or stellar missing from the live accepts)`);
+        const late = await stellarDebitedSince(keypair.publicKey(), legStart);
+        if (late) {
+          railFail("stellar",
+            `SETTLED LATE — we answered 402 (facilitator reason ${JSON.stringify(reason)}) but ` +
+            `${late.amount} USDC left the payer on-chain at ${late.created_at}. The rail is NOT broken; ` +
+            `we judged the settle before Stellar could close a ledger, so the buyer WAS charged and got nothing.`);
+        } else {
+          railFail("stellar",
+            `did NOT settle (HTTP 402, payer ${keypair.publicKey()}) — facilitator reason ` +
+            `${JSON.stringify(reason)}, and no USDC debit appeared on-chain either ` +
+            `(missing trustline/funds, facilitator outage, or stellar missing from the live accepts)`);
+        }
       } else {
-        console.warn(`\nWARN  stellar leg: HTTP ${res.status} ${JSON.stringify(body).slice(0, 120)}`);
+        railFail("stellar", `HTTP ${res.status} ${JSON.stringify(body).slice(0, 120)}`);
       }
     } catch (e) {
-      console.warn(`\nWARN  stellar leg errored: ${(e?.message || String(e)).slice(0, 160)}`);
+      railFail("stellar", `errored: ${(e?.message || String(e)).slice(0, 160)}`);
     }
   })();
 
@@ -1073,7 +1137,19 @@ async function main() {
     );
     process.exit(1);
   }
-  console.log(`\npaid-canary OK — buying works (${decision.settled}/${results.length} settled${decision.warnings.length ? `; ${decision.warnings.length} upstream warning(s)` : ""}).`);
+  // The rail legs are not part of `results`, so decideCanary() cannot see them.
+  // Without this check a rail failure has no path to the exit code at all,
+  // which is why Stellar failed ten consecutive runs under a green verdict.
+  if (railFailures.length) {
+    console.error(
+      `\nPAID CANARY FAILED — ${railFailures.length} rail leg(s) did not settle cleanly:\n  ` +
+        railFailures.join("\n  ") +
+        `\n  (the tool legs are fine: ${decision.settled}/${results.length} settled. A rail leg is a ` +
+        `per-chain payment proof and is graded separately.)`
+    );
+    process.exit(1);
+  }
+  console.log(`\npaid-canary OK — buying works (${decision.settled}/${results.length} settled${decision.warnings.length ? `; ${decision.warnings.length} upstream warning(s)` : ""}; all rail legs settled).`);
   // Low-water check AFTER a green verdict: page for a top-up while buying
   // still works, instead of discovering starvation as a 27-leg failure
   // (2026-07-27: the burner silently drained to $0.00 between runs). The
