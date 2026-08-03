@@ -41,20 +41,42 @@ const PRELOAD = join(tmpdir(), `egress-preload-${process.pid}.cjs`);
 writeFileSync(PRELOAD, `
 const fs = require("fs");
 const OUT = ${JSON.stringify(LOG)};
+// Attribution. This has to skip TRANSPORT PLUMBING, and there is more of it
+// than there looks: the server installs its own always-on meter that also wraps
+// globalThis.fetch, so a call arrives here as
+//   real caller -> meteredFetch (src/egress-meter.js) -> this preload -> note()
+// The first version took the first /src/ frame in a 6-line window, which is
+// always src/egress-meter.js. Every census since the meter shipped therefore
+// reported "<- egress-meter.js" for every metered vendor - the meter blamed for
+// all 235 Alchemy calls, naming nothing. Same defect that was just fixed inside
+// egress-meter.js itself, living in a second copy here.
+// So: raise the frame limit (the default 10 does not reach past the wrappers),
+// scan the WHOLE stack, skip known plumbing, and fall back to the package name
+// when a vendor SDK made the call and no app frame exists.
+const PLUMBING = /egress-meter\\.js|fetch-guard\\.js|egress-preload-/;
 const note = (host, stack) => { try {
-  const f = (stack||"").split("\\n").slice(2,8).map(s=>(s.match(/\\/src\\/([^\\s:)]+)/)||[])[1]).filter(Boolean)[0];
-  fs.appendFileSync(OUT, host + "\\t" + (f||"?") + "\\n");
+  const lines = (stack||"").split("\\n").slice(1);
+  let f = null, pkg = null;
+  for (const line of lines) {
+    if (PLUMBING.test(line)) continue;
+    const m = line.match(/\\/src\\/([^\\s:)]+)/);
+    if (m) { f = m[1]; break; }
+    if (!pkg) { const p = line.match(/node_modules\\/((?:@[^/]+\\/)?[^/]+)\\//); if (p) pkg = "pkg:" + p[1]; }
+  }
+  fs.appendFileSync(OUT, host + "\\t" + (f || pkg || "?") + "\\n");
 } catch {} };
+const grab = () => { const prev = Error.stackTraceLimit; Error.stackTraceLimit = 60;
+  try { return new Error().stack; } finally { Error.stackTraceLimit = prev; } };
 const of = globalThis.fetch;
 globalThis.fetch = function (i) {
   let h=""; try { const u = typeof i==="string" ? new URL(i) : (i instanceof URL ? i : new URL(i.url)); h=u.host; } catch {}
-  if (h) note(h, new Error().stack);
+  if (h) note(h, grab());
   return of.apply(this, arguments);
 };
 for (const m of ["http","https"]) {
   const mod = require("node:"+m), orig = mod.request;
   mod.request = function (...a) {
-    try { const x=a[0]; const h = typeof x==="string" ? new URL(x).host : (x && (x.host||x.hostname)); if (h) note(String(h), new Error().stack); } catch {}
+    try { const x=a[0]; const h = typeof x==="string" ? new URL(x).host : (x && (x.host||x.hostname)); if (h) note(String(h), grab()); } catch {}
     return orig.apply(this, a);
   };
 }
