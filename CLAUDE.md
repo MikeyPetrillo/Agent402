@@ -376,7 +376,18 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   settlement *rejections* — where the buyer kept their money — as charged failures. Never
   quote it as current quality; use a recent window from the operator endpoint.**
 - **Paid canary (`scripts/paid-canary.js`):** 32 legs — tools across all twelve rails
-  (Base/Solana/Polygon/Arbitrum/Monad/Celo/Avalanche/Sei/Optimism/Stellar/Algorand/Robinhood), incl. two federal-data legs
+  (Base/Solana/Polygon/Arbitrum/Monad/Celo/Avalanche/Sei/Optimism/Stellar/Algorand/Robinhood).
+  **KNOWN BLIND SPOT — a green canary does NOT mean twelve rails settle.** The Stellar
+  leg only ever `console.warn`s: its 402 branch, its non-402 branch, and its catch are
+  all warnings, so Stellar can fail every run while the script exits 0 and the workflow
+  reports success. Measured 2026-08-03 (run 30835380742): "30/30 settled", exit green,
+  and Stellar did **not** settle — facilitator reason `settle_channel_service_failed`
+  from `channels.openzeppelin.com/x402`. It is not a funding problem (burner
+  GBA2DD…NY6O4 held 0.742 USDC on a valid trustline plus 5 XLM) and not an accepts
+  problem (`stellar:pubnet` is advertised on live 402s). Eleven rails settled real USDC
+  that run; Stellar is advertised but unproven. When reading a canary result, check for
+  the `WARN stellar` line explicitly — "30/30" counts only the legs that can fail.
+  incl. two federal-data legs
   (vin-decode / geo-lookup) whose Base settlements also seed the gov tools into
   settlement-driven indexes like x402scan, plus llm-nano (failover), llm-stream
   (`raw:true`, asserts SSE `data:`…`[DONE]`), llm-auto (model-less request must carry the

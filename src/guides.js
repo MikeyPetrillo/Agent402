@@ -556,7 +556,7 @@ exact tier that can execute it, so there is never any guessing.
 curl -X POST https://agent402.tools/api/route/execute \\
   -H 'Content-Type: application/json' \\
   -d '{"task":"sha256 hash of a string","params":{"text":"agent402"}}'
-# → 402 quote; retry with an x402 payment header on ANY of the 10 chains
+# → 402 quote; retry with an x402 payment header on ANY chain the quote lists
 \`\`\`
 
 The receipt itemizes what you paid vs. what the tool lists for - the spread is
