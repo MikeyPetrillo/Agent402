@@ -385,19 +385,33 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   go through `railFail()`, and `main()` exits 1 if any fired. Silent skips are gone too:
   a rail missing from the live 402 accepts (the Celo-outage shape) is a failure, not a
   `continue`.
-  **STELLAR SETTLES LATE — the rail is NOT broken, we answer before it can.** Stellar
+  **STELLAR SETTLES LATE — FIXED 2026-08-03, and the rail was never broken.** Stellar
   closes a ledger about every 5s. The OpenZeppelin channel service gives up before that
-  and returns `settle_channel_service_failed`, we return 402, and the transfer then
-  confirms anyway: measured 402 at 17:10:48.044, transfer confirmed 17:10:52, on-chain
+  and returns `settle_channel_service_failed`, so we returned 402 while the transfer
+  confirmed anyway: measured 402 at 17:10:48.044, transfer confirmed 17:10:52, on-chain
   effects `account_debited CANARY BURNER 0.001 USDC` → `account_credited OUR PAYTO`. It
-  reproduces every run because it is a race nobody can win, not a fault. Consequence:
-  **the buyer is charged and gets a 402** (charged-but-failed). Do NOT read this as a
-  dead rail and do NOT pull `stellar` from `PAYMENT_NETWORKS` — payments succeed. Scope
-  is small (`externalCount: 1` on Stellar ever; the rest is the canary paying itself).
-  The canary's 402 branch now asks Horizon before believing the 402
-  (`stellarDebitedSince`) and grades a late settle as the distinct, worse defect. The
-  real fix is upstream: our settle verdict must outlive one Stellar ledger close, and
-  OpenZeppelin should not report failure for transfers that subsequently confirm.
+  reproduced on EVERY run because it is a race nobody can win, not a fault. The handler
+  had already run, so we did the work, took the money, and discarded the answer — the
+  buyer was charged and told they were not. Do NOT pull `stellar` from
+  `PAYMENT_NETWORKS`: payments always succeeded, delivery did not.
+  Fixed by `StellarConfirmingFacilitatorClient` in `src/payments.js` + `src/stellar-confirm.js`:
+  on a settle failure we poll Horizon and, if a confirmed transfer from that payer to our
+  payTo exists, honour the settlement that actually happened. **Verification, never a
+  re-settle** — nothing is broadcast, so it cannot double-charge. A transfer counts only
+  when the payer was debited AND our payTo credited in the SAME successful transaction
+  after the attempt began; native XLM (fee) debits are excluded; any error returns null
+  and leaves the original failure standing. Proven in production: canary
+  `OK stellar → settled $0.001 USDC` on run 30845721207, all rail legs green.
+  **The payer comes from the FACILITATOR (`SettleError.payer` / settle response), never
+  from the payload** — the first version read `paymentPayload.payload.payer`, which does
+  not exist (a Stellar payload carries `transaction`, a base64 XDR envelope), so the fix
+  shipped DEAD and the canary caught it in one run. Parsing the XDR would not help
+  either: the transaction source is the facilitator's channel account, not the buyer
+  (measured GBA2DD…NY6O4 vs GDR2UY…KGE3T). `scripts/test-stellar-confirm.js` (18
+  assertions, in CI) pins both halves — the original 13 all passed against the dead
+  version because every one supplied a payer as an argument and none asked where a
+  caller obtains one. Still worth reporting upstream: OpenZeppelin should not report
+  failure for transfers that subsequently confirm.
   incl. two federal-data legs
   (vin-decode / geo-lookup) whose Base settlements also seed the gov tools into
   settlement-driven indexes like x402scan, plus llm-nano (failover), llm-stream
