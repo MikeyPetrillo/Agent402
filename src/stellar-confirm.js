@@ -27,6 +27,28 @@
 
 const DEFAULT_HORIZON = "https://horizon.stellar.org";
 
+/**
+ * Who paid, according to the FACILITATOR — not according to the payload.
+ *
+ * The first version of this read `paymentPayload.payload.payer`, which does not
+ * exist: a Stellar payload carries `payload.transaction`, a base64 XDR envelope.
+ * So the payer was always undefined, confirmStellarTransfer bailed immediately,
+ * and the whole fix was dead on arrival while its unit tests passed — they
+ * tested the confirmation, and nothing tested where the payer came from.
+ *
+ * Parsing the XDR would not help either: the transaction's source account is the
+ * facilitator's channel account, not the buyer. Measured — the buyer was
+ * GBA2DD…NY6O4 while the transaction source was GDR2UY…KGE3T.
+ *
+ * `SettleError` and the settle response both carry `payer`, populated from the
+ * verify step, so the facilitator hands us the buyer's address even when it is
+ * telling us the settlement failed. That is the only reliable source.
+ */
+export function settlePayerOf(resultOrError) {
+  const p = resultOrError?.payer;
+  return typeof p === "string" && p.trim() ? p.trim() : null;
+}
+
 /** One Horizon GET returning parsed JSON, or null on any failure. */
 async function getJson(url, fetchImpl, timeoutMs) {
   try {

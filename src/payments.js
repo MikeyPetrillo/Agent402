@@ -6,7 +6,7 @@ import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
 import { convertToTokenAmount, numberToDecimalString } from "@x402/core/utils";
-import { confirmStellarTransfer } from "./stellar-confirm.js";
+import { confirmStellarTransfer, settlePayerOf } from "./stellar-confirm.js";
 import {
   bazaarResourceServerExtension,
   declareDiscoveryExtension,
@@ -671,23 +671,27 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     async settle(paymentPayload, paymentRequirements) {
       const startedAt = Date.now() - 5_000;   // skew allowance for Horizon clocks
       const payTo = paymentRequirements?.payTo || stellarWallet;
-      const payerOf = (p) => p?.payload?.payer || p?.payload?.from || p?.payer || null;
+      // The payer comes from the FACILITATOR's own settle result/error, never
+      // from the payload — see settlePayerOf(). Reading it from the payload is
+      // what made the first version of this a no-op in production.
       try {
         const res = await super.settle(paymentPayload, paymentRequirements);
         if (res?.success !== false) return res;
-        const found = await confirmStellarTransfer({ payer: payerOf(paymentPayload), payTo, sinceMs: startedAt });
+        const payer = settlePayerOf(res);
+        const found = await confirmStellarTransfer({ payer, payTo, sinceMs: startedAt });
         if (!found) return res;
         console.warn(`[stellar] facilitator said ${JSON.stringify(res.errorReason || "failed")} but ${found.transaction} is confirmed on-chain - honouring the settlement`);
         return { ...res, success: true, errorReason: undefined, errorMessage: undefined, transaction: found.transaction };
       } catch (e) {
-        const found = await confirmStellarTransfer({ payer: payerOf(paymentPayload), payTo, sinceMs: startedAt });
+        const payer = settlePayerOf(e);
+        const found = await confirmStellarTransfer({ payer, payTo, sinceMs: startedAt });
         if (!found) throw e;
         console.warn(`[stellar] settle threw (${(e?.message || String(e)).slice(0, 120)}) but ${found.transaction} is confirmed on-chain - honouring the settlement`);
         return {
           success: true,
           transaction: found.transaction,
           network: paymentRequirements?.network || "stellar:pubnet",
-          payer: payerOf(paymentPayload) || undefined,
+          payer: payer || undefined,
           amount: found.amount || undefined,
         };
       }

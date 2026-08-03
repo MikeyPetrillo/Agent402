@@ -6,7 +6,7 @@
 // every "yes" must be backed by a payer debit AND a credit to our payTo in the
 // SAME successful transaction. Missing a real payment only costs us the sale,
 // which is already the status quo, so null is always the safe answer.
-import { confirmStellarTransfer } from "../src/stellar-confirm.js";
+import { confirmStellarTransfer, settlePayerOf } from "../src/stellar-confirm.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -137,6 +137,30 @@ const run = (opts, extra = {}) => confirmStellarTransfer({
   ok((await confirmStellarTransfer({ payer: null, payTo: PAYTO, sinceMs: T0 })) === null, "no payer -> null");
   ok((await confirmStellarTransfer({ payer: PAYER, payTo: null, sinceMs: T0 })) === null, "no payTo -> null");
   ok((await confirmStellarTransfer({ payer: PAYER, payTo: PAYTO, sinceMs: NaN })) === null, "no time anchor -> null");
+}
+
+
+// 10. WHERE THE PAYER COMES FROM. This is the assertion whose absence let the
+//     production fix ship dead: every test above supplied a payer directly, so
+//     nothing checked that the caller could actually obtain one. In production
+//     it read paymentPayload.payload.payer, which does not exist on a Stellar
+//     payload (that carries `transaction`, a base64 XDR envelope), so the payer
+//     was always undefined and confirmStellarTransfer returned instantly.
+//
+//     Parsing the XDR would not save it either: the transaction source is the
+//     facilitator's channel account, not the buyer (measured — buyer GBA2DD…,
+//     source GDR2UY…). The facilitator's own settle result/error carries the
+//     payer, and that is the only reliable source.
+{
+  ok(settlePayerOf({ payer: PAYER }) === PAYER, "reads the payer off a failed settle RESULT");
+  const err = Object.assign(new Error("settle_channel_service_failed"), { payer: PAYER });
+  ok(settlePayerOf(err) === PAYER, "reads the payer off a thrown SettleError");
+  ok(settlePayerOf({ payload: { payer: PAYER } }) === null,
+    "does NOT read the payer from a payload — that shape is the bug that shipped");
+  ok(settlePayerOf({ payload: { transaction: "AAAAAgAAA..." } }) === null,
+    "an XDR-carrying payload yields no payer");
+  ok(settlePayerOf(null) === null && settlePayerOf({}) === null && settlePayerOf({ payer: "  " }) === null,
+    "missing or blank payer is null, never a truthy near-miss");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
