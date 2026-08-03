@@ -6,6 +6,7 @@ import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
 import { convertToTokenAmount, numberToDecimalString } from "@x402/core/utils";
+import { confirmStellarTransfer } from "./stellar-confirm.js";
 import {
   bazaarResourceServerExtension,
   declareDiscoveryExtension,
@@ -650,9 +651,51 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const stellarFacilitatorKey = (process.env.STELLAR_FACILITATOR_KEY || "").trim();
   const stellarWallet = (process.env.STELLAR_WALLET_ADDRESS || "").trim();
   const stellarEnabled = !!(stellarCaip2.length && stellarWallet && stellarFacilitatorKey);
+  // A settle failure on Stellar is not the last word - ask the chain.
+  //
+  // Stellar closes a ledger about every 5s and the channel service answers
+  // before that, so `settle_channel_service_failed` is routinely returned for a
+  // transfer that then confirms. @x402/express reacts by discarding the
+  // already-computed response body and returning 402, which means the buyer is
+  // CHARGED and told they were not. The handler had already run: we did the
+  // work, took the money, and threw the answer away. Measured 2026-08-03 on ten
+  // consecutive canary runs, deterministic because it is a race nobody can win.
+  //
+  // So on failure we poll Horizon for a confirmed transfer from this payer to
+  // our payTo and, if one exists, report the settlement that actually happened.
+  // This is verification, never a re-settle: nothing new is broadcast, so it
+  // cannot double-charge. confirmStellarTransfer returns null on any error or
+  // timeout, leaving the original failure exactly as it was - the only unsafe
+  // direction is claiming a payment that did not occur, and it never guesses.
+  class StellarConfirmingFacilitatorClient extends HTTPFacilitatorClient {
+    async settle(paymentPayload, paymentRequirements) {
+      const startedAt = Date.now() - 5_000;   // skew allowance for Horizon clocks
+      const payTo = paymentRequirements?.payTo || stellarWallet;
+      const payerOf = (p) => p?.payload?.payer || p?.payload?.from || p?.payer || null;
+      try {
+        const res = await super.settle(paymentPayload, paymentRequirements);
+        if (res?.success !== false) return res;
+        const found = await confirmStellarTransfer({ payer: payerOf(paymentPayload), payTo, sinceMs: startedAt });
+        if (!found) return res;
+        console.warn(`[stellar] facilitator said ${JSON.stringify(res.errorReason || "failed")} but ${found.transaction} is confirmed on-chain - honouring the settlement`);
+        return { ...res, success: true, errorReason: undefined, errorMessage: undefined, transaction: found.transaction };
+      } catch (e) {
+        const found = await confirmStellarTransfer({ payer: payerOf(paymentPayload), payTo, sinceMs: startedAt });
+        if (!found) throw e;
+        console.warn(`[stellar] settle threw (${(e?.message || String(e)).slice(0, 120)}) but ${found.transaction} is confirmed on-chain - honouring the settlement`);
+        return {
+          success: true,
+          transaction: found.transaction,
+          network: paymentRequirements?.network || "stellar:pubnet",
+          payer: payerOf(paymentPayload) || undefined,
+          amount: found.amount || undefined,
+        };
+      }
+    }
+  }
   if (stellarEnabled) {
     const stellarAuthHeaders = { Authorization: `Bearer ${stellarFacilitatorKey}` };
-    addFacilitator(`Stellar (${stellarFacilitatorUrl})`, new HTTPFacilitatorClient({
+    addFacilitator(`Stellar (${stellarFacilitatorUrl})`, new StellarConfirmingFacilitatorClient({
       url: stellarFacilitatorUrl,
       createAuthHeaders: async () => ({ verify: stellarAuthHeaders, settle: stellarAuthHeaders, supported: stellarAuthHeaders }),
     }));
