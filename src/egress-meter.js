@@ -43,20 +43,57 @@ function rollIfNeeded() {
 // caller, falling back to the plumbing only if there is nothing else.
 const PLUMBING = /\/src\/tools\/fetch-guard\.js|\/src\/egress-meter\.js/;
 
-/** Which src/ file initiated this? Best-effort, first NON-plumbing frame. */
+/** Which src/ file initiated this? Best-effort, first NON-plumbing frame.
+ *
+ *  Scans the WHOLE stack, not a 18-line window. The window version reported
+ *  "egress-meter.js" for every metered vendor in a production census — the
+ *  meter blaming itself — because the app frame was never inside it. Two
+ *  independent causes, both fixed here and both needed:
+ *
+ *    1. Error.stackTraceLimit defaults to 10. Three of those frames are this
+ *       module's own plumbing, so a caller more than ~7 frames down was never
+ *       captured at all. See captureStack() for the lift.
+ *    2. A request made from inside a vendor SDK (viem, the CDP client) has no
+ *       /src/ frame anywhere near the top, so the /src/-only match found
+ *       nothing and returned the plumbing fallback. An SDK is still a useful
+ *       answer — "this is the CDP client, not our code" narrows the search a
+ *       lot — so a package name is reported rather than discarded.
+ *
+ *  Preference order: our own code, then the package that called out, then "?".
+ *  Never the plumbing unless there is genuinely nothing else. */
 function callerOf(stack) {
   try {
-    const lines = String(stack || "").split("\n").slice(2, 20);
-    let fallback = "";
+    const lines = String(stack || "").split("\n").slice(1);
+    let plumbing = "";
+    let pkg = "";
     for (const line of lines) {
       const m = line.match(/\/src\/([A-Za-z0-9._/-]+\.js)/);
-      if (!m) continue;
-      if (PLUMBING.test(line)) { fallback = fallback || m[1]; continue; }
-      return m[1];
+      if (m) {
+        if (PLUMBING.test(line)) { plumbing = plumbing || m[1]; continue; }
+        return m[1];                       // our code — the answer we want
+      }
+      if (!pkg) {
+        // Deepest-wins would name a transport shim; the FIRST node_modules
+        // frame is the package our code actually called.
+        const p = line.match(/node_modules\/((?:@[^/]+\/)?[^/]+)\//);
+        if (p) pkg = `pkg:${p[1]}`;
+      }
     }
-    return fallback || "?";
+    return pkg || plumbing || "?";
   } catch { /* attribution is a nicety, never a failure */ }
   return "?";
+}
+
+/** Materialise a stack deep enough to contain the app frame.
+ *
+ *  The default limit of 10 is the reason attribution silently failed. Raised
+ *  only for this capture and restored immediately, and only reached while a
+ *  host still needs attribution (MAX_CALLERS), so the cost stays bounded to a
+ *  handful of traces per host rather than one per request. */
+function captureStack() {
+  const prev = Error.stackTraceLimit;
+  Error.stackTraceLimit = 60;
+  try { return new Error().stack; } finally { Error.stackTraceLimit = prev; }
 }
 
 const MAX_CALLERS = 4;
@@ -115,7 +152,7 @@ export function installEgressMeter() {
         else if (input && typeof input.url === "string") h = new URL(input.url).host;
         // Lazy: the stack is only materialised while this host still needs
         // attribution. Building it unconditionally is what slowed boot.
-        if (h) recordEgress(h, needsCaller(h) ? () => new Error().stack : null);
+        if (h) recordEgress(h, needsCaller(h) ? captureStack : null);
       } catch { /* an unparseable input is the caller's problem, not ours */ }
       return origFetch.apply(this, arguments);
     };
