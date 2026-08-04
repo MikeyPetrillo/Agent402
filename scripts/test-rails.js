@@ -49,13 +49,13 @@ ok(RAILS_SHORT.includes("USDG") && RAILS_SHORT.includes("Robinhood"), "RAILS_SHO
 ok(RAIL_CHAIN_NAMES.length === RAILS.length, "RAIL_CHAIN_NAMES covers every rail");
 ok(railsCoveredByLiveView(), "/revenue live view has a read-config for every rail — new rails can't be invisible there");
 
-// --- the daily revenue digest names every rail ----------------------------
-// The digest workflow (issue #199's daily body rewrite) carries its own rail
-// list; Monad and Celo were silently missing from it for days. Lock it to
-// rails.js so a new rail that skips the digest fails CI, not a human's memory.
-import { readFileSync } from "node:fs";
-const digestYml = readFileSync(new URL("../.github/workflows/revenue-digest.yml", import.meta.url), "utf8");
-for (const r of RAILS) ok(digestYml.includes(`"${r.name}"`), `revenue-digest.yml names ${r.name}`);
+// The daily revenue-digest guard used to live here. It was removed with the
+// workflow (2026-08-04): the digest kept its OWN copy of the rail list, which
+// is what the guard existed to police - no duplicate list, nothing to drift.
+// The digest itself was retired because /revenue and /api/revenue already
+// serve every rail live in ~0.2s, nobody had engaged with the issue it wrote
+// in 13 months, and it was the only surface publishing buyer wallet addresses
+// to the public internet - re-publishing them daily.
 
 // --- 2. live pages render the rails (opt-in via TARGET_URL) ---------------
 const TARGET = process.env.TARGET_URL;
