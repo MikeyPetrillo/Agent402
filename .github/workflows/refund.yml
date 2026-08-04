@@ -10,16 +10,17 @@
 # Actions secrets, never on Railway — the server can record debts but can
 # never pay them.
 #
-# Keys (all optional — a missing key HOLDS that chain's rows, listed loudly):
-#   REFUND_EVM_KEY            one EVM key for all eip155 rails (fund per chain)
-#   REFUND_STELLAR_SECRET     classic payment + "agent402 refund" memo
-#   REFUND_ALGORAND_MNEMONIC  USDC ASA transfer + note
-# Solana is detection-only until the SVM spending wallet lands; its rows stay
-# owed and are listed on every run.
-#
-# NEVER the treasury, NEVER the CI canary burners — refunds get their own
-# wallets so purposes cannot blur (same doctrine as the upstream spending
-# wallets).
+# Keys: refunds ride the CI CANARY BURNERS by default (Mike's decision,
+# 2026-08-04 — they already hold small USDC on exactly the chains buyers pay
+# on, and the canary low-water alarms already watch their balances, so refund
+# spend pages for a top-up the same way canary spend does). Dedicated
+# REFUND_* secrets take precedence whenever they are set, so the burners can
+# be retired from this duty without touching the workflow:
+#   REFUND_EVM_KEY            || BURNER_KEY             (all eip155 rails)
+#   REFUND_STELLAR_SECRET     || STELLAR_BURNER_SECRET  (+ "agent402 refund" memo)
+#   REFUND_ALGORAND_MNEMONIC  || ALGORAND_BURNER_MNEMONIC (+ note)
+# NEVER the treasury. Solana is detection-only until the SVM spending wallet
+# lands; its rows stay owed and are listed on every run.
 name: Refund run
 on:
   workflow_dispatch:
@@ -64,7 +65,7 @@ jobs:
           REFUND_MAX_EACH_USD: ${{ inputs.max_each_usd }}
           REFUND_ONLY_CHAIN: ${{ inputs.only_chain }}
           REFUND_INCLUDE_SYNTHETIC: ${{ inputs.include_synthetic && 'true' || 'false' }}
-          REFUND_EVM_KEY: ${{ secrets.REFUND_EVM_KEY }}
-          REFUND_STELLAR_SECRET: ${{ secrets.REFUND_STELLAR_SECRET }}
-          REFUND_ALGORAND_MNEMONIC: ${{ secrets.REFUND_ALGORAND_MNEMONIC }}
+          REFUND_EVM_KEY: ${{ secrets.REFUND_EVM_KEY != '' && secrets.REFUND_EVM_KEY || secrets.BURNER_KEY }}
+          REFUND_STELLAR_SECRET: ${{ secrets.REFUND_STELLAR_SECRET != '' && secrets.REFUND_STELLAR_SECRET || secrets.STELLAR_BURNER_SECRET }}
+          REFUND_ALGORAND_MNEMONIC: ${{ secrets.REFUND_ALGORAND_MNEMONIC != '' && secrets.REFUND_ALGORAND_MNEMONIC || secrets.ALGORAND_BURNER_MNEMONIC }}
         run: node scripts/refund-run.js

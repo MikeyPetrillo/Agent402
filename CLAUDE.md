@@ -379,9 +379,12 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   hand-maintained token table; EVM decimals read from the contract). Caps: $0.25/refund,
   $2/run, both overridable at dispatch; over-cap and unsupported rows are HELD and
   listed, never dropped. Canary/synthetic rows are recorded but held unless
-  `include_synthetic`. Spending keys are Actions secrets ONLY (`REFUND_EVM_KEY`,
-  `REFUND_STELLAR_SECRET` — classic payment + "agent402 refund" memo,
-  `REFUND_ALGORAND_MNEMONIC` — dedicated wallets, NEVER the treasury or CI burners);
+  `include_synthetic`. Spending keys are Actions secrets ONLY and refunds ride
+  the CI CANARY BURNERS by default (Mike's decision 2026-08-04 — refund volume is
+  minimal, the burners already hold USDC on the paying chains, and the canary
+  low-water alarms watch their balances, so refund spend pages for a top-up like
+  canary spend does). Dedicated `REFUND_EVM_KEY` / `REFUND_STELLAR_SECRET` /
+  `REFUND_ALGORAND_MNEMONIC` take precedence whenever set. NEVER the treasury;
   the server records debts but can never send money. Solana is detection-only until
   the SVM spending wallet lands (rare there anyway: a failed Solana txn moves no
   tokens, measured 2026-08-03). A failed send leaves the row owed and exits 1.
