@@ -101,10 +101,13 @@
     "ws": "8.21.0",
     "tar": "7.5.22",
     "axios": "1.18.1",
-    "fast-uri": "3.1.4",
+    "fast-uri": "3.1.5",
     "brace-expansion": "5.0.9",
     "body-parser": "2.3.0",
-    "hono": "4.12.32",
-    "@hono/node-server": "2.0.12"
+    "hono": "4.12.34",
+    "@hono/node-server": "2.0.12",
+    "@e2b/code-interpreter": {
+      "undici": "7.29.0"
+    }
   }
 }
