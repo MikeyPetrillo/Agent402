@@ -1,0 +1,93 @@
+# Refund ledger monitor — watches for the states that need a human.
+#
+# The refund executor is dispatch-only, so somebody is already watching when it
+# RUNS. This watches the states that arise when nobody is:
+#
+#   * a row STUCK in `sending` — a send began and never resolved. The claim
+#     happens BEFORE the broadcast, so the money may already be gone with no
+#     recorded tx, and it will never retry by design.
+#   * debts sitting OWED past the window — real buyers who paid and got nothing.
+#
+# Follows the heartbeat convention exactly: upserts ONE issue, closes it when
+# the ledger is clean, never comment-spams. Reports COUNTS AND IDS ONLY, never
+# wallet addresses — this issue is public, and a roster of who we owe is a
+# customer list (the rule that retired the revenue digest).
+#
+# An UNREADABLE ledger (exit 2) is reported as its own failure, not as clean:
+# "we found nothing" and "we could not look" produce the same output otherwise,
+# which is how the charged-failure alarm sat dead for months.
+name: Refund monitor
+
+on:
+  schedule:
+    - cron: "17 */6 * * *" # every 6h, offset off the hour
+  workflow_dispatch:
+
+concurrency:
+  group: refund-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Check the refund ledger
+        id: check
+        env:
+          AGENT402_OPERATOR_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+        run: |
+          set +e
+          OUT=$(node scripts/refund-monitor.js 2>&1); CODE=$?
+          echo "$OUT"
+          {
+            echo "code=$CODE"
+            echo "body<<XEOF"
+            echo "$OUT"
+            echo "XEOF"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Open or close the issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CODE: ${{ steps.check.outputs.code }}
+          DETAIL: ${{ steps.check.outputs.body }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="Refund ledger needs attention"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+
+          if [ "$CODE" = "0" ]; then
+            if [ -n "$OPEN" ]; then
+              gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" \
+                --comment "Refund ledger clean at $(date -u +%FT%TZ). $DETAIL"
+            fi
+            echo "clean"
+            exit 0
+          fi
+
+          if [ "$CODE" = "2" ]; then
+            HEAD="**The refund ledger could not be READ.** That is not the same as clean - an unreadable ledger and an empty one look identical, which is how an alarm stays dead without anyone noticing. Check the operator token and that production is serving /__operator/refunds.json."
+          else
+            HEAD="The refund ledger has rows that need a human. **A row stuck in \`sending\` means a send began and never resolved - the money may already have left with no recorded transaction, and it will never retry by design.** Check the chain before resolving it, then mark it paid with the outbound tx or void it with a note."
+          fi
+
+          BODY=$(printf '%s\n\n```\n%s\n```\n\nOperator view (token-gated, resolves ids to wallets privately):\n`GET /__operator/refunds.json?status=sending`\n\nRun: %s\n\n_Counts and ids only - never addresses. This issue is public._' \
+            "$HEAD" "$DETAIL" "$RUN_URL")
+
+          if [ -n "$OPEN" ]; then
+            gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+          fi
