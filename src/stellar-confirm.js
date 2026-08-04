@@ -71,6 +71,7 @@ export async function confirmStellarTransfer({
   payTo,
   sinceMs,
   horizon = process.env.STELLAR_HORIZON_URL || DEFAULT_HORIZON,
+  assetCode = "USDC",          // pin the asset; see the filter below
   waitMs = 8_000,
   stepMs = 1_500,
   timeoutMs = 4_000,
@@ -91,10 +92,13 @@ export async function confirmStellarTransfer({
     const debits = recs.filter((e) => {
       if (e?.type !== "account_debited") return false;
       if (e?.asset_type === "native") return false;      // XLM fees are not the payment
+      // Pin the ASSET when the caller supplies one. Excluding native alone
+      // accepts ANY non-XLM token, and anyone can issue an asset called
+      // whatever they like on Stellar - so "a token arrived" proves nothing.
+      if (assetCode && e?.asset_code && e.asset_code !== assetCode) return false;
       const t = Date.parse(e?.created_at || "");
       return Number.isFinite(t) && t >= sinceMs;
     });
-
     for (const d of debits) {
       const txHref = d?._links?.transaction?.href;
       const txHash = d?.transaction_hash
@@ -112,6 +116,7 @@ export async function confirmStellarTransfer({
         (e) => e?.type === "account_credited" && e?.account === payTo,
       );
       if (credited) {
+        if (assetCode && credited.asset_code && credited.asset_code !== assetCode) continue;
         return { transaction: txHash, amount: credited.amount || d.amount || null };
       }
     }

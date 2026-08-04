@@ -215,16 +215,34 @@ export async function verifyInboundPayment({
         payer, payTo, sinceMs: Number(createdAt || 0) - 120_000, waitMs: 0,
       });
       if (!found) return fail("no confirmed transfer from this payer to our payTo");
-      // BIND IT TO THIS DEBT. The Stellar confirmer answers "did this payer pay
-      // us near this time", which is weaker than the other rails: they resolve
-      // a specific transaction hash. Without this check one genuine payment
-      // could vouch for a DIFFERENT debt from the same buyer in the same
-      // window - the same payment counted twice. When the row recorded a
-      // transaction, the confirmed one must be it.
+      // BIND IT TO THIS DEBT, UNCONDITIONALLY. The confirmer answers "did this
+      // payer pay us near this time", which is weaker than the other rails:
+      // they resolve a specific transaction. The binding used to apply only
+      // when the row happened to record a 64-hex hash - but the ledger's
+      // fallback evidence is payer|slug|minute, and on THAT path the check was
+      // skipped entirely. Two such rows plus one dust payment would then verify
+      // both, and each would be repaid at full face value. A row we cannot bind
+      // is held for a human, which is the asymmetry this module exists for.
       const recorded = String(tx || "");
-      if (/^[0-9a-fA-F]{64}$/.test(recorded) && String(found.transaction) !== recorded) {
+      if (!/^[0-9a-fA-F]{64}$/.test(recorded)) {
+        return fail("no transaction recorded - cannot bind a confirmation to this debt");
+      }
+      if (String(found.transaction) !== recorded) {
         return fail("the confirmed transfer is a different transaction than this debt recorded");
       }
+      // COMPARE THE AMOUNT. Every other rail enforces "at least the amount";
+      // this branch carried found.amount and never checked it, so a dust
+      // transfer satisfied a debt of any size. Stellar amounts are decimal
+      // strings with 7 places - compare in integer stroops, not floats.
+      const stroops = (v) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? Math.round(n * 1e7) : null;
+      };
+      const got = stroops(found.amount);
+      const want = stroops(amountUsd);
+      if (got === null || want === null) return fail("could not read the transferred amount");
+      if (want <= 0) return fail("expected amount is zero");
+      if (got < want) return fail(`transfer is short: ${found.amount} < ${amountUsd}`);
       return pass({ tx: found.transaction, amount: found.amount });
     }
 

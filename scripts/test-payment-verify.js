@@ -138,11 +138,15 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
 {
   const netS = "stellar:pubnet";
   const acc = { [netS]: { payTo: "GPAYTO" } };
+  // A recorded transaction is now REQUIRED (see the unbound-path case below),
+  // so the happy path supplies one - this test used to pass without any tx,
+  // which is precisely the gap that let one payment vouch for several debts.
+  const H = "c".repeat(64);
   const yes = await verifyInboundPayment({
-    network: netS, payer: "GBUYER", amountUsd: 0.001, createdAt: Date.now(),
-    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: "STXHASH", amount: "0.001" }),
+    network: netS, payer: "GBUYER", amountUsd: 0.001, tx: H, createdAt: Date.now(),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: H, amount: "0.001" }),
   });
-  ok(yes.verified === true && yes.tx === "STXHASH", "stellar verifies through the shared confirmer");
+  ok(yes.verified === true && yes.tx === H, "stellar verifies through the shared confirmer");
   const no = await verifyInboundPayment({
     network: netS, payer: "GBUYER", amountUsd: 0.001, createdAt: Date.now(),
     acceptsFor: (n) => acc[n], stellarConfirm: async () => null,
@@ -165,6 +169,31 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
     acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: A, amount: "0.001" }),
   });
   ok(match.verified === true, "the debt's own transaction verifies it");
+
+  // THE DUST EXPLOIT. Every other rail enforces "at least the amount"; this
+  // branch carried found.amount and never compared it, so one dust transfer
+  // satisfied a debt of any size.
+  const dust = await verifyInboundPayment({
+    network: netS, payer: "GBUYER", amountUsd: 5, tx: A, createdAt: Date.now(),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: A, amount: "0.0000001" }),
+  });
+  ok(dust.verified === false && /short/.test(dust.reason),
+    "a dust transfer cannot satisfy a larger debt");
+  const exact = await verifyInboundPayment({
+    network: netS, payer: "GBUYER", amountUsd: 0.001, tx: A, createdAt: Date.now(),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: A, amount: "0.0010000" }),
+  });
+  ok(exact.verified === true, "7-decimal Stellar amounts compare correctly in stroops");
+
+  // THE UNBOUND PATH. The ledger's fallback evidence is payer|slug|minute, and
+  // the binding used to be skipped whenever the row lacked a 64-hex hash - so
+  // two such rows plus one payment verified both, each repaid in full.
+  const unbound = await verifyInboundPayment({
+    network: netS, payer: "GBUYER", amountUsd: 0.001, createdAt: Date.now(),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: A, amount: "0.001" }),
+  });
+  ok(unbound.verified === false && /cannot bind/.test(unbound.reason),
+    "a row with no recorded transaction is HELD, never verified by a time-window match");
 }
 
 // 13. SOLANA. Balances are compared per OWNER pre/post, because a payer may

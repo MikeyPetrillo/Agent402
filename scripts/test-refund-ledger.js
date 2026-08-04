@@ -216,6 +216,31 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
     "addresses are logged through a non-reversible tag");
 }
 
+
+// 19. CAPS MUST FAIL CLOSED. They come from free-text workflow inputs, and
+//     Number("$2") is NaN - every `x > NaN` is false, so a malformed cap did
+//     not clamp, it DISAPPEARED. Measured before the fix: a "$2" run cap sent
+//     40 refunds totalling $10 where "2" sent 8 totalling $2. That is the one
+//     direction this pipeline must never fail, reachable by a single typo.
+{
+  const rows = Array.from({ length: 40 }, (_, i) => mk({ id: i + 1, priceUsd: 0.25, payer: `0xP${i}` }));
+  const nan = planRefunds(rows, { senders: SENDERS, maxEachUsd: Number("$0.25"), maxTotalUsd: Number("$2") });
+  ok(nan.send.length === 0, `a NaN cap holds every row instead of sending (${nan.send.length})`);
+  // Each cap is asserted ALONE. With several NaN at once every guard covers
+  // the others, so a mutation of any single comparison survives - the caps
+  // must each fail closed on their own.
+  const onlyEach = planRefunds(rows, { senders: SENDERS, maxEachUsd: Number("$0.25"), maxTotalUsd: 1e9, maxPerPayerUsd: 1e9 });
+  ok(onlyEach.send.length === 0, `a NaN per-refund cap alone holds everything (${onlyEach.send.length})`);
+  const onlyTotal = planRefunds(rows, { senders: SENDERS, maxEachUsd: 1e9, maxTotalUsd: Number("$2"), maxPerPayerUsd: 1e9 });
+  ok(onlyTotal.send.length === 0, `a NaN run cap alone holds everything (${onlyTotal.send.length})`);
+  const onlyPayer = planRefunds(rows, { senders: SENDERS, maxEachUsd: 1e9, maxTotalUsd: 1e9, maxPerPayerUsd: Number("x") });
+  ok(onlyPayer.send.length === 0, `a NaN per-payer cap alone holds everything (${onlyPayer.send.length})`);
+  const good = planRefunds(rows, { senders: SENDERS, maxEachUsd: 0.25, maxTotalUsd: 2 });
+  ok(good.send.length === 8 && good.totalUsd === 2, `a valid cap still works (${good.send.length} rows, $${good.totalUsd})`);
+  const nanPayer = planRefunds(rows, { senders: SENDERS, maxPerPayerUsd: Number("abc") });
+  ok(nanPayer.send.length === 0, "a NaN per-payer cap holds too");
+}
+
 __resetRefunds();
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
