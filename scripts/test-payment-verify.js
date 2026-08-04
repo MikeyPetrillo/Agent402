@@ -148,6 +148,23 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
     acceptsFor: (n) => acc[n], stellarConfirm: async () => null,
   });
   ok(no.verified === false, "an unconfirmed stellar payment holds the debt");
+
+  // The Stellar confirmer answers "did this payer pay us near this time",
+  // which is weaker than resolving a specific hash. Unbound, ONE genuine
+  // payment could vouch for a DIFFERENT debt from the same buyer in the same
+  // window - counted twice, refunded twice.
+  const A = "a".repeat(64), B = "b".repeat(64);
+  const mismatch = await verifyInboundPayment({
+    network: netS, payer: "GBUYER", amountUsd: 0.001, tx: A, createdAt: Date.now(),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: B, amount: "0.001" }),
+  });
+  ok(mismatch.verified === false && /different transaction/.test(mismatch.reason),
+    "a confirmed payment that is NOT this debt's transaction cannot vouch for it");
+  const match = await verifyInboundPayment({
+    network: netS, payer: "GBUYER", amountUsd: 0.001, tx: A, createdAt: Date.now(),
+    acceptsFor: (n) => acc[n], stellarConfirm: async () => ({ transaction: A, amount: "0.001" }),
+  });
+  ok(match.verified === true, "the debt's own transaction verifies it");
 }
 
 // 13. SOLANA. Balances are compared per OWNER pre/post, because a payer may

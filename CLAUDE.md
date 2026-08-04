@@ -403,6 +403,19 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   in `scripts/test-payment-verify.js`; 15 mutations killed (accept a revert, ignore who
   paid, ignore who was credited, accept an underpayment, accept any token, assume 6
   decimals, proceed without a receipt).
+  **Deep review 2026-08-04 — two MORE findings, both fixed.** (a) **Double-refund
+  window.** The executor sent, then marked paid; a failure in between (a blip on the
+  mark call) left the row `owed` while the money was gone — and the next run
+  re-verifies the INBOUND payment, which is true forever, and pays again.
+  Verification proves we were PAID; it can never prove we have not already REFUNDED.
+  Rows are now CLAIMED (`owed → sending`) before any broadcast, only from `owed`, so
+  a crash leaves a stuck `sending` row for a human instead of a silent second
+  payment. `refund.yml` also has a `concurrency: refund-run` group so two dispatches
+  cannot race at all. (b) **Stellar could vouch for the wrong debt.** Its confirmer
+  answers "did this payer pay us near this time" — weaker than the other rails, which
+  resolve a specific hash — so one genuine payment could verify a DIFFERENT debt from
+  the same buyer in the same window, refunding it twice. When a row recorded a
+  transaction, the confirmed one must now BE it.
   **Abuse review 2026-08-04 — two guards exist because of it.** (1) A debt requires
   POSITIVE PROOF: `receiptProvesCharge()` demands an explicit `success === true`. The
   charged-failure ALARM still fires on an unreadable/legacy receipt (loud on ambiguity

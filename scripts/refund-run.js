@@ -197,6 +197,15 @@ async function sendAlgorand(row) {
   return txId;
 }
 
+async function claimForSend(id) {
+  const res = await fetch(`${TARGET}/__operator/refunds/update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({ id, action: "claim", note: "refund-run: claimed before broadcast" }),
+  });
+  return res.ok;
+}
+
 async function markPaid(id, tx) {
   const res = await fetch(`${TARGET}/__operator/refunds/update`, {
     method: "POST",
@@ -264,6 +273,17 @@ async function main() {
         continue;
       }
       console.log(`      #${row.id} inbound payment confirmed on-chain (${proof.tx || "matched"})`);
+      // CLAIM BEFORE SENDING. Verification proves we were paid; it can never
+      // prove we have not already refunded, and it stays true forever. So the
+      // row is moved to `sending` first: a crash between broadcast and
+      // mark-paid leaves it stuck there for a human instead of being re-sent
+      // by the next run. Losing the claim race means another runner has it.
+      const claimed = await claimForSend(row.id);
+      if (!claimed) {
+        console.warn(`HOLD  #${row.id}: could not claim (already sending, resolved, or another run has it)`);
+        unverified++;
+        continue;
+      }
       const family = familyOf(row.network);
       const tx = family === "evm" ? await sendEvm(row, accepts[row.network])
         : family === "stellar" ? await sendStellar(row)
@@ -273,8 +293,11 @@ async function main() {
       console.log(`PAID  #${row.id} $${row.priceUsd} -> ${row.payer}  tx ${tx}`);
       ok++;
     } catch (e) {
-      // The row stays owed - a failed refund is retried next run, never lost.
+      // If the failure came after the claim, the row is now stuck in `sending`
+      // and will NOT be retried automatically - that is deliberate. Whether the
+      // money left is exactly what a human must check before releasing it.
       console.error(`FAIL  #${row.id}: ${(e?.message || String(e)).slice(0, 160)}`);
+      console.error(`      -> if this row is now 'sending', check the chain before resolving it; it will not auto-retry`);
       failed++;
     }
   }

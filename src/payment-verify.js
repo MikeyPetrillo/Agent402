@@ -214,7 +214,18 @@ export async function verifyInboundPayment({
       const found = await stellarConfirm({
         payer, payTo, sinceMs: Number(createdAt || 0) - 120_000, waitMs: 0,
       });
-      return found ? pass({ tx: found.transaction, amount: found.amount }) : fail("no confirmed transfer from this payer to our payTo");
+      if (!found) return fail("no confirmed transfer from this payer to our payTo");
+      // BIND IT TO THIS DEBT. The Stellar confirmer answers "did this payer pay
+      // us near this time", which is weaker than the other rails: they resolve
+      // a specific transaction hash. Without this check one genuine payment
+      // could vouch for a DIFFERENT debt from the same buyer in the same
+      // window - the same payment counted twice. When the row recorded a
+      // transaction, the confirmed one must be it.
+      const recorded = String(tx || "");
+      if (/^[0-9a-fA-F]{64}$/.test(recorded) && String(found.transaction) !== recorded) {
+        return fail("the confirmed transfer is a different transaction than this debt recorded");
+      }
+      return pass({ tx: found.transaction, amount: found.amount });
     }
 
     if (n.startsWith("solana:")) {

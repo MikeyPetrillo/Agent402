@@ -214,7 +214,7 @@ const TRIAL_IP_HOUR = Math.max(1, Number(process.env.TRIAL_PER_IP_PER_HOUR) || 1
 const trialToolLimiter = createRateLimiter("trial-tool", { perMin: TRIAL_PER_TOOL_HOUR, perHour: TRIAL_PER_TOOL_HOUR });
 const trialIpLimiter = createRateLimiter("trial-ip", { perMin: TRIAL_IP_MIN, perHour: TRIAL_IP_HOUR });
 const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP_HOUR} per hour per client`;
-import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, refundTotals } from "./refund-ledger.js";
+import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, refundTotals } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
@@ -1858,7 +1858,11 @@ app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), (req, re
   let ok = false;
   if (action === "paid") ok = markRefundPaid(rowId, tx, note || null);
   else if (action === "void") ok = markRefundVoid(rowId, note);
-  else return res.status(400).json({ error: 'action must be "paid" (requires tx) or "void" (requires note)' });
+  // `claim` moves owed -> sending before any broadcast, so a crash between
+  // sending and marking paid cannot be re-sent by the next run. Only one
+  // caller can win a given row.
+  else if (action === "claim") ok = claimRefundForSend(rowId, note || null);
+  else return res.status(400).json({ error: 'action must be "claim", "paid" (requires tx) or "void" (requires note)' });
   if (!ok) return res.status(409).json({ error: "not updated - row missing, already resolved, or evidence missing (paid needs tx, void needs note)" });
   res.json({ ok: true, id: rowId, action, totals: refundTotals() });
 });

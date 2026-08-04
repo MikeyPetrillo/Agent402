@@ -61,6 +61,11 @@ const selectByStatus = db.prepare("SELECT * FROM refunds WHERE status = ? ORDER 
 const selectAll = db.prepare("SELECT * FROM refunds ORDER BY id DESC LIMIT ?");
 const resolveRow = db.prepare(`
   UPDATE refunds SET status = @status, paidTx = @paidTx, note = @note, resolvedAt = @resolvedAt
+  WHERE id = @id AND status IN ('owed', 'sending')
+`);
+// Claim a row BEFORE money moves. See claimRefundForSend().
+const claimRow = db.prepare(`
+  UPDATE refunds SET status = 'sending', note = @note, resolvedAt = NULL
   WHERE id = @id AND status = 'owed'
 `);
 const totalsQ = db.prepare(`
@@ -116,6 +121,27 @@ export function listRefunds({ status = "owed", limit = 200 } = {}) {
   } catch { return []; }
 }
 
+/**
+ * Claim a debt for sending, BEFORE the transfer is broadcast.
+ *
+ * Without this the pipeline had a double-refund window: the executor sent the
+ * money and then marked the row paid, so a failure in between (network blip on
+ * the mark call) left the row `owed` while the funds were already gone. The
+ * next run re-verifies the INBOUND payment - which is true forever, that is the
+ * point of it - and pays a second time. Verification proves we were paid; it
+ * can never prove we have not already refunded.
+ *
+ * So a row is moved to `sending` first, and only `owed` rows can be claimed:
+ * a crash after this point leaves it stuck in `sending`, which the executor
+ * refuses to touch and a human resolves. A stuck row costs a delay; a double
+ * refund costs money twice and is invisible.
+ *
+ * Returns true only for the claimer that won the row.
+ */
+export function claimRefundForSend(id, note = null) {
+  try { return claimRow.run({ id, note }).changes > 0; } catch { return false; }
+}
+
 /** Mark a debt repaid. Requires the outbound transaction - a refund without
  *  evidence is a deletion wearing a nicer name. Only `owed` rows transition. */
 export function markRefundPaid(id, paidTx, note = null) {
@@ -138,6 +164,7 @@ export function markRefundVoid(id, note) {
 export function refundTotals() {
   try {
     const out = { owed: { n: 0, usd: 0 }, paid: { n: 0, usd: 0 }, void: { n: 0, usd: 0 } };
+    out.sending = { n: 0, usd: 0 };   // in-flight or stuck mid-send; needs a human
     for (const r of totalsQ.all()) {
       if (out[r.status]) out[r.status] = { n: r.n, usd: Number((r.usd || 0).toFixed(6)), synthetic: r.synth || 0 };
     }

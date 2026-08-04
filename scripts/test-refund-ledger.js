@@ -6,7 +6,7 @@
 // silent write-offs, refunding the canary to ourselves, skipping caps, and
 // case-folding an address on a case-sensitive rail.
 process.env.REFUND_DB_DIR = process.env.TMPDIR || "/tmp";
-import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, refundTotals, __resetRefunds } from "../src/refund-ledger.js";
+import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, refundTotals, __resetRefunds } from "../src/refund-ledger.js";
 import { planRefunds, familyOf } from "./refund-run.js";
 
 let pass = 0, fail = 0;
@@ -170,6 +170,34 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
   ok(receiptProvesCharge({ success: 1 }) === false, "a truthy number is not proof either");
   ok(receiptProvesCharge("success") === false && receiptProvesCharge(undefined) === false,
     "non-objects are never proof");
+}
+
+
+// 16. THE DOUBLE-REFUND WINDOW. Verification proves we were PAID; it can never
+//     prove we have not already refunded, and it stays true forever. So a row
+//     whose money left but whose mark-paid failed would be re-sent by the next
+//     run. Claiming before broadcast turns that into a stuck row for a human.
+{
+  __resetRefunds();
+  recordRefundOwed({ slug: "hash", network: "eip155:8453", payer: "0xC", priceUsd: 0.001, tx: "0xclaimtest" });
+  const r = listRefunds().find((x) => x.evidence === "0xclaimtest");
+  ok(claimRefundForSend(r.id) === true, "an owed row can be claimed for sending");
+  ok(claimRefundForSend(r.id) === false, "a claimed row cannot be claimed again (no second sender)");
+  ok(listRefunds({ status: "owed" }).some((x) => x.id === r.id) === false,
+    "a claimed row leaves the owed queue, so the next run will not re-send it");
+  ok(listRefunds({ status: "sending" }).some((x) => x.id === r.id) === true,
+    "it is visible as sending - stuck, not lost");
+  ok(markRefundPaid(r.id, "0xoutbound") === true, "the sender can complete it to paid");
+  ok(refundTotals().paid.n === 1, "and it counts as paid");
+}
+
+// 17. A claim cannot resurrect a resolved debt.
+{
+  __resetRefunds();
+  recordRefundOwed({ slug: "hash", network: "eip155:8453", payer: "0xD", priceUsd: 0.001, tx: "0xdone" });
+  const r = listRefunds().find((x) => x.evidence === "0xdone");
+  markRefundVoid(r.id, "written off in test");
+  ok(claimRefundForSend(r.id) === false, "a voided row can never be claimed for sending");
 }
 
 __resetRefunds();

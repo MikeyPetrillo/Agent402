@@ -43,6 +43,13 @@ on:
         type: boolean
         default: false
 
+# One refund run at a time, repo-wide. Two concurrent dispatches would each
+# read the same owed rows; the ledger's claim step makes a double-send unlikely,
+# but not racing at all is better than relying on the claim to win.
+concurrency:
+  group: refund-run
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
