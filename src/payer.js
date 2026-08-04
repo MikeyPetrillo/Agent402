@@ -40,12 +40,35 @@ export function payerFromPaymentResponse(headerValue) {
   }
 }
 
+/**
+ * The payment header the MIDDLEWARE will actually settle from.
+ *
+ * This ordering is a security boundary, not a style choice. @x402/express
+ * resolves `payment-signature` FIRST and falls back to `x-payment`
+ * (node_modules/@x402/express/dist/esm/index.mjs), and @x402/core puts
+ * `PAYMENT-SIGNATURE` on the wire. Reading them in the opposite order lets a
+ * request that carries BOTH be settled from one header and attributed from the
+ * other — and the second copy is never signature-checked by anything.
+ *
+ * Concretely, the inverted order allowed: pay with your own valid
+ * PAYMENT-SIGNATURE, add `X-Payment: base64({"payload":{"authorization":
+ * {"from":"<victim>"}}})`, and every consumer of payerFromRequest believes the
+ * victim paid. Memory namespaces are wallet-keyed ("payment = identity"), so
+ * that was a namespace takeover for the price of one call, plus poisoned
+ * revenue attribution and refund-ledger rows.
+ *
+ * Every consumer MUST use this helper. Three modules had grown their own copy
+ * of the same expression and all three had it backwards.
+ */
+export function paymentHeaderOf(req) {
+  try {
+    return (req?.header?.("payment-signature") || req?.header?.("x-payment")) || null;
+  } catch { return null; }
+}
+
 export function payerFromRequest(req) {
-  // x402 v2 clients send the authorization in `X-PAYMENT` (what @x402/fetch and
-  // the middleware use); `payment-signature` is the legacy name. Read X-PAYMENT
-  // first so real buyers aren't silently attributed to null — every other
-  // consumer (replay-guard, the gate) already reads both.
-  const header = req.header("x-payment") || req.header("payment-signature");
+  // Read exactly what the middleware settles from — see paymentHeaderOf().
+  const header = paymentHeaderOf(req);
   if (!header) return null;
   try {
     const payload = JSON.parse(Buffer.from(header, "base64").toString("utf-8"));

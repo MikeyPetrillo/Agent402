@@ -8,6 +8,7 @@
 process.env.REFUND_DB_DIR = process.env.TMPDIR || "/tmp";
 import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, refundTotals, __resetRefunds } from "../src/refund-ledger.js";
 import { planRefunds, familyOf } from "./refund-run.js";
+import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -198,6 +199,21 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
   const r = listRefunds().find((x) => x.evidence === "0xdone");
   markRefundVoid(r.id, "written off in test");
   ok(claimRefundForSend(r.id) === false, "a voided row can never be claimed for sending");
+}
+
+
+// 18. THE PUBLIC-LOG RULE. This repo is public, so Actions logs are
+//     world-readable, and the project's standing rule is "counts only, never
+//     addresses - a per-day roster of who pays us is a customer list". The
+//     refund run must not print one, and it printed the whole plan BEFORE the
+//     live check, so even a dry run published it.
+{
+  const src = readFileSync(new URL("./refund-run.js", import.meta.url), "utf8");
+  const logLines = src.split("\n").filter((l) => /console\.(log|warn|error)/.test(l));
+  const leaks = logLines.filter((l) => /\$\{(r|row)\.payer\}|\$\{(r|row)\.evidence\}|\$\{tx\}|proof\.tx/.test(l));
+  ok(leaks.length === 0, `no log line prints a raw payer, evidence or tx (${leaks.length} found)`);
+  ok(/createHash\(/.test(src) && /payer:\$\{/.test(src.replace(/\\/g, "")) === false || /tag\(/.test(src),
+    "addresses are logged through a non-reversible tag");
 }
 
 __resetRefunds();

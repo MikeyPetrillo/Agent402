@@ -23,6 +23,7 @@
  * Pure, offline, no network — unit-testable in isolation.
  */
 import { createHash } from "node:crypto";
+import { paymentHeaderOf } from "./payer.js";
 
 /**
  * Stable replay identity for the x402 payment credential on this request, or
@@ -37,7 +38,7 @@ import { createHash } from "node:crypto";
  */
 export function paymentReplayKey(req) {
   const cred =
-    (req.header && (req.header("x-payment") || req.header("payment-signature"))) || null;
+    paymentHeaderOf(req);   // middleware order — see src/payer.js
   if (!cred || typeof cred !== "string") return null;
   try {
     const p = JSON.parse(Buffer.from(cred, "base64").toString("utf-8"));

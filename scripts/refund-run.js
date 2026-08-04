@@ -35,6 +35,18 @@
 // charged-but-failed there is rare; rows are held and listed until the SVM
 // sender lands with the planned Solana spending wallet.
 
+import { createHash } from "node:crypto";
+
+// This repo is PUBLIC, so every Actions log is world-readable. The project's
+// standing rule for buyer identities is "counts only, never addresses - a
+// per-day roster of who pays us is a customer list", and it is enforced on
+// /revenue. A refund run would otherwise print the full roster (wallet, amount,
+// tool, settle evidence) on the DRY-RUN path too, since the plan is printed
+// before the live check. So logs carry a stable non-reversible tag; the
+// operator resolves it to the address privately via /__operator/refunds.json,
+// which is already token-gated.
+const tag = (a) => (a ? `payer:${createHash("sha256").update(String(a)).digest("hex").slice(0, 8)}` : "?");
+
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
 const TOKEN = (process.env.AGENT402_OPERATOR_TOKEN || "").trim();
 const LIVE = /^(1|true|yes)$/i.test((process.env.REFUND_LIVE || "").trim());
@@ -239,10 +251,10 @@ async function main() {
   });
   for (const [reason, rows] of Object.entries(plan.held)) {
     console.log(`\nHELD (${reason}): ${rows.length}`);
-    for (const r of rows) console.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${r.payer || "?"} (${r.slug})`);
+    for (const r of rows) console.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${tag(r.payer)} (${r.slug})`);
   }
   console.log(`\nTO SEND: ${plan.send.length} refund(s), $${plan.totalUsd} total`);
-  for (const r of plan.send) console.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${r.payer} (${r.slug}, evidence ${String(r.evidence).slice(0, 20)}…)`);
+  for (const r of plan.send) console.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${tag(r.payer)} (${r.slug})`);
 
   if (!LIVE) { console.log("\nDRY RUN - no money moved. Set REFUND_LIVE=true to execute."); return; }
   if (!plan.send.length) { console.log("nothing to send."); return; }
@@ -268,11 +280,11 @@ async function main() {
         stellarConfirm: confirmStellarTransfer,
       });
       if (!proof.verified) {
-        console.warn(`HOLD  #${row.id} $${row.priceUsd} -> ${row.payer}: UNVERIFIED - ${proof.reason}`);
+        console.warn(`HOLD  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}: UNVERIFIED - ${proof.reason}`);
         unverified++;
         continue;
       }
-      console.log(`      #${row.id} inbound payment confirmed on-chain (${proof.tx || "matched"})`);
+      console.log(`      #${row.id} inbound payment confirmed on-chain`);
       // CLAIM BEFORE SENDING. Verification proves we were paid; it can never
       // prove we have not already refunded, and it stays true forever. So the
       // row is moved to `sending` first: a crash between broadcast and
@@ -290,7 +302,7 @@ async function main() {
         : family === "algorand" ? await sendAlgorand(row)
         : (() => { throw new Error(`no sender for ${family}`); })();
       await markPaid(row.id, String(tx));
-      console.log(`PAID  #${row.id} $${row.priceUsd} -> ${row.payer}  tx ${tx}`);
+      console.log(`PAID  #${row.id} $${row.priceUsd} -> ${tag(row.payer)}  (tx in the ledger, not this log)`);
       ok++;
     } catch (e) {
       // If the failure came after the claim, the row is now stuck in `sending`

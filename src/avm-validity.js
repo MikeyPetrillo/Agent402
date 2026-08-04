@@ -14,6 +14,7 @@
 // decode/algod failure defers to the facilitator's verify as the authority.
 
 import algosdk from "algosdk";
+import { paymentHeaderOf } from "./payer.js";
 import { ALGORAND_ALGOD_BASES, getJsonAcross } from "./revenue-live.js";
 
 const AVG_ROUND_SECONDS = 2.8;
@@ -109,7 +110,7 @@ export async function currentRoundEstimate() {
 
 /** Express-side entry: cheap no-op unless the request carries an AVM payment. */
 export async function assertAvmValidityCovers(req, slug) {
-  const header = req.header("x-payment") || req.header("payment-signature");
+  const header = paymentHeaderOf(req);   // middleware order — see src/payer.js
   if (!header) return;
   const lastValid = lastValidFromPaymentHeader(header);
   if (lastValid == null) return; // not AVM (or unreadable) — facilitator decides
