@@ -192,6 +192,29 @@ for (const h of hits) {
 }
 if (!unattached) console.log("  (none observed in this run)");
 
+// COLD-LEDGER CAVEAT. This is not a footnote — without it the run reports a
+// leak that production does not have.
+//
+// The census points DATA_DIR at a fresh temp dir (a laptop has no /data volume,
+// and a warm cache would suppress the very crawl traffic we want to see). But
+// the settlement ledger lives there too, so it comes up EMPTY, and every
+// ledger-backed surface degrades to its fallback. src/revenue-live.js only
+// skips the chain scan when ledgerRecent() returns rows, so with a cold ledger
+// all nine EVM rails scan the chain instead — which is exactly the Alchemy
+// traffic the ledger-first change was written to remove.
+//
+// Measured 2026-08-03: this run reported 231 Alchemy calls from revenue-live.js,
+// while production served 9 of 12 rails with recentSource="ledger" and ZERO
+// chain scans (GET /api/revenue). Both numbers are true; they describe different
+// states. Read the vendor counts for ledger-backed callers as COLD-START worst
+// case, not steady state, and confirm against prod before chasing one.
+if (!process.env.CENSUS_DATA_DIR) {
+  console.log(`\n  NOTE — the ledger was COLD for this run (DATA_DIR is a fresh temp dir).`);
+  console.log(`  Ledger-backed surfaces fall back to chain scans, so RPC counts here are a`);
+  console.log(`  cold-start worst case. Check prod's steady state before treating one as a leak:`);
+  console.log(`    curl -s https://agent402.tools/api/revenue | grep -o '"recentSource":"[a-z-]*"' | sort | uniq -c`);
+}
+
 console.log(`\nBLIND SPOTS — vendors this run could NOT observe because their key is unset:`);
 if (!blind.length) console.log("  (none — every metered vendor was reachable)");
 for (const [host, env, name] of blind) console.log(`  ${name.padEnd(26)} ${env} unset  → ${host} unreachable`);
