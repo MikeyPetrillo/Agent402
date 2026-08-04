@@ -54,10 +54,11 @@ async function rpc(url, method, params, fetchImpl, timeoutMs) {
  * payer to our payTo. Everything is taken from the transaction itself - we
  * never trust the ledger row's own claim about what happened.
  */
-async function verifyEvm({ tx, payer, payTo, amountUsd, asset, rpcUrl, fetchImpl, timeoutMs }) {
+async function verifyEvm({ tx, payer, payToSet, amountUsd, asset, rpcUrl, fetchImpl, timeoutMs }) {
+  const ours = new Set([...payToSet].map((a) => String(a).toLowerCase()));
   if (!/^0x[0-9a-fA-F]{64}$/.test(String(tx || ""))) return fail("no usable transaction hash recorded");
   if (!/^0x[0-9a-fA-F]{40}$/.test(String(payer || ""))) return fail("payer is not an EVM address");
-  if (!/^0x[0-9a-fA-F]{40}$/.test(String(payTo || ""))) return fail("payTo is not an EVM address");
+  if (![...ours].some((a) => /^0x[0-9a-fA-F]{40}$/.test(a))) return fail("no EVM payTo to check against");
   if (!/^0x[0-9a-fA-F]{40}$/.test(String(asset || ""))) return fail("no token address for this network");
 
   let receipt, decimalsHex;
@@ -80,7 +81,7 @@ async function verifyEvm({ tx, payer, payTo, amountUsd, asset, rpcUrl, fetchImpl
   if (expected <= 0n) return fail("expected amount is zero");
 
   const from = String(payer).toLowerCase();
-  const to = String(payTo).toLowerCase();
+
   const token = String(asset).toLowerCase();
   let moved = 0n;
   for (const log of receipt.logs || []) {
@@ -88,7 +89,7 @@ async function verifyEvm({ tx, payer, payTo, amountUsd, asset, rpcUrl, fetchImpl
     const topics = log.topics || [];
     if (String(topics[0] || "").toLowerCase() !== ERC20_TRANSFER_TOPIC) continue;
     if (addrFromTopic(topics[1]) !== from) continue;                     // from the SAME payer
-    if (addrFromTopic(topics[2]) !== to) continue;                       // to OUR wallet
+    if (!ours.has(addrFromTopic(topics[2]))) continue;                   // to ANY wallet we control
     try { moved += BigInt(log.data); } catch { /* unparseable value - ignore this log */ }
   }
   if (moved === 0n) return fail("no transfer from this payer to our payTo in that transaction");
@@ -104,7 +105,7 @@ async function verifyEvm({ tx, payer, payTo, amountUsd, asset, rpcUrl, fetchImpl
  * actually changed hands - token-account addresses are derived, and matching
  * on them instead would miss a payer using a non-default account.
  */
-async function verifySolana({ tx, payer, payTo, amountUsd, asset, rpcs, fetchImpl, timeoutMs }) {
+async function verifySolana({ tx, payer, payToSet, amountUsd, asset, rpcs, fetchImpl, timeoutMs }) {
   if (typeof tx !== "string" || tx.length < 40) return fail("no usable Solana signature recorded");
   let txn = null, lastErr = "";
   for (const url of rpcs) {
@@ -127,7 +128,8 @@ async function verifySolana({ tx, payer, payTo, amountUsd, asset, rpcs, fetchImp
   const decimals = Number(((meta.postTokenBalances || []).find((b) => b?.mint === mint) || {}).uiTokenAmount?.decimals);
   if (!Number.isFinite(decimals)) return fail("token decimals unreadable from the transaction");
 
-  const credited = sum(meta.postTokenBalances, payTo) - sum(meta.preTokenBalances, payTo);
+  const credited = [...payToSet].reduce(
+    (a, w) => a + (sum(meta.postTokenBalances, w) - sum(meta.preTokenBalances, w)), 0n);
   if (credited <= 0n) return fail("our payTo was not credited in that transaction");
   const debited = sum(meta.preTokenBalances, payer) - sum(meta.postTokenBalances, payer);
   if (debited <= 0n) return fail("this payer was not debited in that transaction");
@@ -143,7 +145,7 @@ async function verifySolana({ tx, payer, payTo, amountUsd, asset, rpcs, fetchImp
  * success proof - but sender, receiver, ASA and amount are still all checked
  * against the debt rather than assumed from it.
  */
-async function verifyAlgorand({ tx, payer, payTo, amountUsd, asset, indexers, fetchImpl, timeoutMs }) {
+async function verifyAlgorand({ tx, payer, payToSet, amountUsd, asset, indexers, fetchImpl, timeoutMs }) {
   if (typeof tx !== "string" || tx.length < 40) return fail("no usable Algorand txid recorded");
   const assetId = Number(String(asset || "").replace(/[^0-9]/g, ""));
   if (!Number.isFinite(assetId) || assetId <= 0) return fail("no ASA id for this network");
@@ -167,7 +169,7 @@ async function verifyAlgorand({ tx, payer, payTo, amountUsd, asset, indexers, fe
   if (!ax) return fail("not an asset-transfer transaction");
   if (Number(ax["asset-id"]) !== assetId) return fail(`wrong asset (${ax["asset-id"]} != ${assetId})`);
   if (t.sender !== payer) return fail("sender is not the payer we would repay");
-  if (ax.receiver !== payTo) return fail("receiver is not our payTo");
+  if (![...payToSet].includes(ax.receiver)) return fail("receiver is not a wallet we control");
   // USDC on Algorand is 6-decimal; the amount is already in atomic units.
   const expected = BigInt(Math.round(Number(amountUsd) * 1e6));
   const moved = BigInt(ax.amount || 0);
@@ -189,6 +191,7 @@ export async function verifyInboundPayment({
   acceptsFor = () => null,
   rpcFor = () => null,
   stellarConfirm = null,       // injected: (opts) => Promise<{transaction}|null>
+  payToSetFor = null,          // (network) => iterable of every payTo WE control
   solanaRpcs = SOLANA_RPCS,
   algorandIndexers = ALGORAND_INDEXERS,
   fetchImpl = fetch,
@@ -196,14 +199,24 @@ export async function verifyInboundPayment({
 } = {}) {
   try {
     const accepts = acceptsFor(network);
-    const payTo = accepts?.payTo;
-    if (!payTo) return fail(`no live payTo for ${network} - cannot prove where the money went`);
+    // payTo is per-SLUG: self-funding routes settle to the SPENDING wallet, not
+    // the treasury. Verifying against a single address made every debt for
+    // those routes unverifiable forever - and they are the ones most likely to
+    // charged-fail. `payToSetFor` supplies every address WE control on this
+    // network; a transfer to any of them is a transfer to us. It still proves
+    // the money reached us, which is the property that matters.
+    const extra = typeof payToSetFor === "function" ? payToSetFor(network) : null;
+    const payToSet = new Set(
+      [...(extra || []), accepts?.payTo].filter(Boolean).map((x) => String(x)),
+    );
+    const payTo = accepts?.payTo || [...payToSet][0];
+    if (!payToSet.size) return fail(`no live payTo for ${network} - cannot prove where the money went`);
     const n = String(network || "");
 
     if (n.startsWith("eip155:")) {
       const rpcUrl = rpcFor(network);
       if (!rpcUrl) return fail(`no RPC configured for ${network}`);
-      return await verifyEvm({ tx, payer, payTo, amountUsd, asset: accepts.asset, rpcUrl, fetchImpl, timeoutMs });
+      return await verifyEvm({ tx, payer, payToSet, amountUsd, asset: accepts.asset, rpcUrl, fetchImpl, timeoutMs });
     }
 
     if (n.startsWith("stellar:")) {
@@ -247,11 +260,11 @@ export async function verifyInboundPayment({
     }
 
     if (n.startsWith("solana:")) {
-      return await verifySolana({ tx, payer, payTo, amountUsd, asset: accepts.asset, rpcs: solanaRpcs, fetchImpl, timeoutMs });
+      return await verifySolana({ tx, payer, payToSet, amountUsd, asset: accepts.asset, rpcs: solanaRpcs, fetchImpl, timeoutMs });
     }
 
     if (n.startsWith("algorand:")) {
-      return await verifyAlgorand({ tx, payer, payTo, amountUsd, asset: accepts.asset, indexers: algorandIndexers, fetchImpl, timeoutMs });
+      return await verifyAlgorand({ tx, payer, payToSet, amountUsd, asset: accepts.asset, indexers: algorandIndexers, fetchImpl, timeoutMs });
     }
 
     // Any FUTURE chain holds its rows rather than being assumed good:

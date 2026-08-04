@@ -265,5 +265,31 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
     "an unsupported family holds the debt and says why");
 }
 
+
+// 16. SELF-FUNDING ROUTES SETTLE TO A DIFFERENT WALLET. route-execute and the
+//     Blockscout tools pay into the SPENDING wallet, not the treasury, so
+//     verifying every row against one /api/hash payTo made exactly those debts
+//     unverifiable forever - and they are the routes most likely to
+//     charged-fail, since they spend upstream on the buyer's behalf.
+{
+  const SPEND = "0x7706000000000000000000000000000000004121";
+  const toSpend = [defaultLog({ topics: [TRANSFER, topic(PAYER), topic(SPEND)] })];
+  const treasuryOnly = await run({}, { logs: toSpend });
+  ok(treasuryOnly.verified === false, "a payment to the spending wallet does NOT verify against the treasury alone");
+  const withSet = await verifyInboundPayment({
+    network: NET, payer: PAYER, amountUsd: 0.001, tx: TX, createdAt: Date.now(),
+    acceptsFor: (n) => ACCEPTS[n], payToSetFor: () => [PAYTO, SPEND],
+    rpcFor: () => "stub://rpc", fetchImpl: evmRpc({ logs: toSpend }), timeoutMs: 500,
+  });
+  ok(withSet.verified === true, "it verifies once the spending wallet is included in our payTo set");
+  const stranger = await verifyInboundPayment({
+    network: NET, payer: PAYER, amountUsd: 0.001, tx: TX, createdAt: Date.now(),
+    acceptsFor: (n) => ACCEPTS[n], payToSetFor: () => [PAYTO, SPEND],
+    rpcFor: () => "stub://rpc",
+    fetchImpl: evmRpc({ logs: [defaultLog({ topics: [TRANSFER, topic(PAYER), topic(OTHER)] })] }), timeoutMs: 500,
+  });
+  ok(stranger.verified === false, "widening to our own wallets does not accept a transfer to a stranger");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

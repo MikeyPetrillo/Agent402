@@ -1843,7 +1843,17 @@ app.get("/__operator/egress.json", (req, res) => {
 // Actions secrets - this server never holds a spending key.
 app.get("/__operator/refunds.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
-  const status = ["owed", "paid", "void", "all"].includes(String(req.query.status)) ? String(req.query.status) : "owed";
+  // The real brute-force bound is operatorAuthed's own per-IP attempt limiter,
+  // which charges budget only on a WRONG credential - CodeQL cannot see it
+  // because it matches recognised middleware, not hand-rolled limiters
+  // (js/missing-rate-limiting #84/#85). Added anyway rather than dismissed:
+  // these are the money path's read and write, and a second bound on the
+  // authorization check of a route that can void a debt is cheap.
+  if (operatorHeavyLimited(req, res)) return;
+  // "sending" must be listable: a row stranded mid-send is exactly what a human
+  // has to resolve, and omitting it meant ?status=sending silently returned the
+  // OWED list - the stuck rows were invisible except by paging status=all.
+  const status = ["owed", "sending", "paid", "void", "all"].includes(String(req.query.status)) ? String(req.query.status) : "owed";
   res.set("Cache-Control", "no-store").json({
     totals: refundTotals(),
     status,
@@ -1852,6 +1862,7 @@ app.get("/__operator/refunds.json", (req, res) => {
 });
 app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (operatorHeavyLimited(req, res)) return;   // see refunds.json above
   const { id, action, tx, note } = req.body || {};
   const rowId = Number(id);
   if (!Number.isInteger(rowId) || rowId <= 0) return res.status(400).json({ error: "id required" });

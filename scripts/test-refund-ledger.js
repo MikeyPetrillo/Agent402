@@ -247,6 +247,22 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
   ok(nanPayer.send.length === 0, "a NaN per-payer cap holds too");
 }
 
+
+// 20. A PLACEHOLDER IS NOT EVIDENCE. A sender reading the wrong field off an
+//     SDK response yields the STRING "undefined", which passes a non-empty
+//     check while proving nothing - in the one column the ledger treats as
+//     proof of repayment. (The Algorand sender did exactly this: algosdk v3
+//     returns `txid`, the code read `txId`.)
+{
+  __resetRefunds();
+  recordRefundOwed({ slug: "hash", network: "algorand:x", payer: "AAA", priceUsd: 0.001, tx: "algo-placeholder" });
+  const r = listRefunds().find((x) => x.evidence === "algo-placeholder");
+  for (const junk of ["undefined", "null", "NaN", "false", "0", "  undefined  "]) {
+    ok(markRefundPaid(r.id, junk) === false, `"${junk.trim()}" is refused as a refund tx`);
+  }
+  ok(markRefundPaid(r.id, "REALTXID123") === true, "a real tx id still resolves the row");
+}
+
 __resetRefunds();
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

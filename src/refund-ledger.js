@@ -145,7 +145,12 @@ export function claimRefundForSend(id, note = null) {
 /** Mark a debt repaid. Requires the outbound transaction - a refund without
  *  evidence is a deletion wearing a nicer name. Only `owed` rows transition. */
 export function markRefundPaid(id, paidTx, note = null) {
+  // "undefined"/"null" as a STRING is what a sender produces when it reads the
+  // wrong field off an SDK response. It passes a non-empty check while being
+  // no evidence at all, in the one column the ledger treats as proof.
+  const bad = new Set(["undefined", "null", "nan", "false", "0"]);
   if (!paidTx || typeof paidTx !== "string" || !paidTx.trim()) return false;
+  if (bad.has(paidTx.trim().toLowerCase())) return false;
   try {
     return resolveRow.run({ id, status: "paid", paidTx: paidTx.trim(), note, resolvedAt: Date.now() }).changes > 0;
   } catch { return false; }
