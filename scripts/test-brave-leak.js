@@ -173,7 +173,15 @@ const searchSrc = readFileSync(new URL("../src/tools/search.js", import.meta.url
 // `await braveGet(` only - matching bare "braveGet(" also catches the function
 // DEFINITION, which of course has no literal caller argument and made this
 // assertion fail against correct code.
-const calls = [...searchSrc.matchAll(/await braveGet\((?:[^()]|\([^()]*\)|\{[^{}]*\})*\)/gs)].map((m) => m[0]);
+// The `\{[^{}]*\}` alternative that used to sit here was both REDUNDANT and
+// exponential: `[^()]` already matches `{` and `}`, so a braced argument could
+// be matched two different ways, and CodeQL flagged the backtracking (js/redos,
+// alert #83). Measured on `await braveGet(` followed by 24 repetitions of `{}`:
+// 893ms with the extra branch, 0ms without, and both produce the identical 6
+// matches against src/tools/search.js. Not exploitable here - the input is our
+// own source file, not anything a caller supplies - but an ambiguous alternation
+// is a defect wherever it lives, and this one cost nothing to remove.
+const calls = [...searchSrc.matchAll(/await braveGet\((?:[^()]|\([^()]*\))*\)/gs)].map((m) => m[0]);
 ok(calls.length >= 5, `found the braveGet call sites to check (${calls.length})`);
 const unnamed = calls.filter((c) => !/,\s*"[a-z-]+"\s*\)\s*$/.test(c.trim()));
 ok(unnamed.length === 0,
