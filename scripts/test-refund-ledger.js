@@ -6,7 +6,7 @@
 // silent write-offs, refunding the canary to ourselves, skipping caps, and
 // case-folding an address on a case-sensitive rail.
 process.env.REFUND_DB_DIR = process.env.TMPDIR || "/tmp";
-import { recordRefundOwed, listRefunds, markRefundPaid, markRefundVoid, refundTotals, __resetRefunds } from "../src/refund-ledger.js";
+import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, refundTotals, __resetRefunds } from "../src/refund-ledger.js";
 import { planRefunds, familyOf } from "./refund-run.js";
 
 let pass = 0, fail = 0;
@@ -84,7 +84,11 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
 {
   const p = planRefunds([mk({ priceUsd: 0.5 })], { senders: SENDERS, maxEachUsd: 0.25 });
   ok(p.send.length === 0 && Object.keys(p.held).some((k) => /per-refund cap/.test(k)), "over per-refund cap -> held");
-  const rows = Array.from({ length: 12 }, (_, i) => mk({ id: i + 1, priceUsd: 0.2 }));
+  // Distinct payers on purpose: this asserts the RUN cap, and the per-payer
+  // cap is a separate control that would otherwise bind first (it did, when
+  // these rows all shared one payer - the run-cap assertion then measured the
+  // per-payer cap instead).
+  const rows = Array.from({ length: 12 }, (_, i) => mk({ id: i + 1, priceUsd: 0.2, payer: `0xP${i}` }));
   const p2 = planRefunds(rows, { senders: SENDERS, maxEachUsd: 0.25, maxTotalUsd: 1 });
   ok(p2.send.length === 5 && p2.totalUsd === 1, `run cap enforced (sent ${p2.send.length}, $${p2.totalUsd})`);
   ok((p2.held[Object.keys(p2.held).find((k) => /deferred/.test(k))] || []).length === 7, "overflow is deferred and listed");
@@ -114,6 +118,58 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
   ok(familyOf("algorand:wGHE2Pw") === "algorand", "algorand family");
   ok(familyOf("solana:5eykt4") === "solana", "solana family");
   ok(familyOf("") === "unknown" && familyOf(null) === "unknown", "empty/None -> unknown, never a default family");
+}
+
+
+// ---- abuse resistance (the "can someone milk the wallet" review) ----
+
+// 12. PER-PAYER CAP. Gas is sponsored for buyers on EVM, so one wallet can
+//     force charged-failures for free while every refund costs US gas. Each
+//     debt is real, so the answer is a bound per wallet - not a refusal.
+{
+  const rows = Array.from({ length: 10 }, (_, i) => mk({ id: i + 1, priceUsd: 0.1, payer: "0xGRIEFER" }));
+  const p = planRefunds(rows, { senders: SENDERS, maxPerPayerUsd: 0.5, maxTotalUsd: 100 });
+  ok(p.send.length === 5, `one wallet is capped per run (sent ${p.send.length}/10)`);
+  ok(Object.keys(p.held).some((k) => /per-payer cap/.test(k)), "the rest are held under a named per-payer reason");
+}
+
+// 13. The per-payer cap is PER WALLET, not global - one abuser must not block
+//     everyone else's refunds.
+{
+  const rows = [
+    mk({ id: 1, priceUsd: 0.5, payer: "0xGRIEFER" }),
+    mk({ id: 2, priceUsd: 0.5, payer: "0xGRIEFER" }),
+    mk({ id: 3, priceUsd: 0.1, payer: "0xHONEST" }),
+  ];
+  const p = planRefunds(rows, { senders: SENDERS, maxPerPayerUsd: 0.5, maxTotalUsd: 100, maxEachUsd: 1 });
+  ok(p.send.some((r) => r.payer === "0xHONEST"), "an innocent payer still gets refunded while another is capped");
+  ok(p.send.filter((r) => r.payer === "0xGRIEFER").length === 1, "the capped wallet gets exactly its allowance");
+}
+
+// 14. Dust floor is OFF by default - a real debt is owed however small, and
+//     silently withholding one is the failure mode this pipeline prevents.
+{
+  const p = planRefunds([mk({ priceUsd: 0.001 })], { senders: SENDERS });
+  ok(p.send.length === 1, "a $0.001 debt is repaid by default");
+  const p2 = planRefunds([mk({ priceUsd: 0.001 })], { senders: SENDERS, minRefundUsd: 0.01 });
+  ok(p2.send.length === 0 && Object.keys(p2.held).some((k) => /dust floor/.test(k)),
+    "an explicit floor holds it, loudly, rather than dropping it");
+}
+
+
+// 15. THE MINT GUARD. A debt requires positive proof of settlement. The alarm
+//     may stay loud on ambiguity; money may not. An unreadable or legacy
+//     receipt reaching the debt path would create refundable rows for calls
+//     nobody paid for - and with no tx to key on, one per slug per minute.
+{
+  ok(receiptProvesCharge({ success: true }) === true, "explicit success:true proves the charge");
+  ok(receiptProvesCharge({ success: false }) === false, "a rejected settle is not a debt (the buyer kept their money)");
+  ok(receiptProvesCharge(null) === false, "an UNREADABLE receipt never mints a debt");
+  ok(receiptProvesCharge({}) === false, "a receipt with no success field never mints a debt");
+  ok(receiptProvesCharge({ success: "true" }) === false, "a truthy STRING is not proof - strict true only");
+  ok(receiptProvesCharge({ success: 1 }) === false, "a truthy number is not proof either");
+  ok(receiptProvesCharge("success") === false && receiptProvesCharge(undefined) === false,
+    "non-objects are never proof");
 }
 
 __resetRefunds();

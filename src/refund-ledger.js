@@ -68,6 +68,24 @@ const totalsQ = db.prepare(`
   FROM refunds GROUP BY status
 `);
 
+/**
+ * Does this settle receipt PROVE the buyer was charged?
+ *
+ * The charged-failure ALARM deliberately fires on ambiguity too - for a
+ * warning, unclear should be loud. A DEBT is money leaving a wallet, so it
+ * needs positive proof: only an explicit `success === true`.
+ *
+ * Without this split, any future middleware change that made the receipt
+ * unparseable would mint a refundable debt on every failing paid call, with no
+ * evidence anyone was charged - and with no tx to key on, one fresh row per
+ * slug per minute. The receipt itself is unforgeable (a RESPONSE header
+ * written only by @x402/express, never echoed from a request), so
+ * `success:true` is trustworthy; the gap was trusting the ABSENCE of a field.
+ */
+export function receiptProvesCharge(receipt) {
+  return !!receipt && typeof receipt === "object" && receipt.success === true;
+}
+
 /** Record a debt. Returns true when a NEW row was created (false = duplicate
  *  evidence, already on the books). Addresses are stored exactly as given -
  *  base58/base32 rails are case-sensitive and must never be folded. */

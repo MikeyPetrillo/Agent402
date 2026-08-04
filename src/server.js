@@ -214,7 +214,7 @@ const TRIAL_IP_HOUR = Math.max(1, Number(process.env.TRIAL_PER_IP_PER_HOUR) || 1
 const trialToolLimiter = createRateLimiter("trial-tool", { perMin: TRIAL_PER_TOOL_HOUR, perHour: TRIAL_PER_TOOL_HOUR });
 const trialIpLimiter = createRateLimiter("trial-ip", { perMin: TRIAL_IP_MIN, perHour: TRIAL_IP_HOUR });
 const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP_HOUR} per hour per client`;
-import { recordRefundOwed, listRefunds, markRefundPaid, markRefundVoid, refundTotals } from "./refund-ledger.js";
+import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, refundTotals } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
@@ -4151,13 +4151,20 @@ app.use((req, res, next) => {
           // kept in this bucket ON PURPOSE: the buyer-was-charged alarm must
           // fail loud, so only an explicit success:false downgrades it.
           recordChargedFailure(def.slug, res.statusCode);
-          // The refund ledger - the debt itself, not just the alarm. The
-          // odometer above says it HAPPENED; this row says who is owed what,
-          // on which chain, with the settle tx as evidence, and it stays owed
-          // until the dispatch-only refund workflow repays it (the server
-          // never holds a spending key). Idempotent on the tx, so a retried
-          // response cannot double-book the debt.
-          recordRefundOwed({
+          // The refund ledger - the debt itself, not just the alarm.
+          //
+          // NOTE THE DIFFERENT BAR. The alarm above deliberately fires on an
+          // unreadable or legacy receipt too: for a WARNING, ambiguity should
+          // be loud. A DEBT is money leaving a wallet, so it needs positive
+          // proof - only an explicit success:true records one. Without this
+          // split, any future middleware change that made the receipt
+          // unparseable would mint a refundable debt per failing call, with no
+          // evidence that anyone was ever charged, and (no tx to key on) one
+          // fresh row per slug per minute. The receipt itself is unforgeable -
+          // it is a RESPONSE header written only by @x402/express, never
+          // echoed from a request - so success:true is trustworthy; the gap
+          // was trusting the ABSENCE of a field.
+          if (receiptProvesCharge(receipt)) recordRefundOwed({
             slug: def.slug,
             network,
             payer,

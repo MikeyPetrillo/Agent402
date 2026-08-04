@@ -40,6 +40,13 @@ const TOKEN = (process.env.AGENT402_OPERATOR_TOKEN || "").trim();
 const LIVE = /^(1|true|yes)$/i.test((process.env.REFUND_LIVE || "").trim());
 const MAX_EACH = Number(process.env.REFUND_MAX_EACH_USD || "0.25");
 const MAX_TOTAL = Number(process.env.REFUND_MAX_TOTAL_USD || "2");
+// One wallet's share of a run. Bounds the sponsored-gas griefing loop below.
+const MAX_PER_PAYER = Number(process.env.REFUND_MAX_PER_PAYER_USD || "0.5");
+// Optional dust floor: refunds smaller than this cost more to send than they
+// repay. Default 0 (off) - a real debt is owed however small, and holding one
+// silently is exactly what this pipeline exists to prevent. Set it only when
+// gas genuinely outweighs the debt, and the held rows say so out loud.
+const MIN_REFUND = Number(process.env.REFUND_MIN_USD || "0");
 const ONLY_CHAIN = (process.env.REFUND_ONLY_CHAIN || "").trim(); // optional CAIP-2 filter
 
 // Public RPCs for the EVM rails we can refund on. Overridable per chain via
@@ -72,6 +79,8 @@ export function familyOf(network) {
 export function planRefunds(rows, {
   maxEachUsd = MAX_EACH,
   maxTotalUsd = MAX_TOTAL,
+  maxPerPayerUsd = MAX_PER_PAYER,
+  minRefundUsd = MIN_REFUND,
   onlyChain = "",
   includeSynthetic = false,
   senders = {},              // family -> truthy when a key+implementation exists
@@ -80,6 +89,7 @@ export function planRefunds(rows, {
   const held = {}; // reason -> rows
   const hold = (reason, row) => { (held[reason] ||= []).push(row); };
   let total = 0;
+  const perPayer = new Map();   // payer -> usd already planned this run
   for (const row of rows) {
     if (row.status && row.status !== "owed") continue;
     if (onlyChain && row.network !== onlyChain) { hold("filtered by chain", row); continue; }
@@ -91,7 +101,18 @@ export function planRefunds(rows, {
     const family = familyOf(row.network);
     if (family === "unknown") { hold(`unsupported network ${row.network}`, row); continue; }
     if (!senders[family]) { hold(`no sender/key for ${family} - debt stays on the ledger`, row); continue; }
+    if (usd < minRefundUsd) { hold(`below the dust floor $${minRefundUsd} - costs more in gas than it repays; batch or void with a note`, row); continue; }
+    // PER-PAYER BOUND. Gas is sponsored for buyers on the EVM rails, so a
+    // griefer can pay $0.001, force a charged-failure, take the $0.001 back
+    // and lose nothing - while WE pay gas on every refund. Each debt is real
+    // and each refund is correct, so the answer is not to refuse them: it is
+    // to bound how much one wallet can extract per run, making the loop
+    // visible (rows pile up, held, under that payer) instead of draining a
+    // burner one sponsored call at a time.
+    const already = perPayer.get(row.payer) || 0;
+    if (already + usd > maxPerPayerUsd) { hold(`per-payer cap $${maxPerPayerUsd} reached for this wallet - review before repaying more`, row); continue; }
     if (total + usd > maxTotalUsd) { hold(`deferred - run total would exceed $${maxTotalUsd}`, row); continue; }
+    perPayer.set(row.payer, already + usd);
     total += usd;
     send.push(row);
   }
@@ -198,6 +219,8 @@ async function main() {
 
   const plan = planRefunds(refunds, {
     onlyChain: ONLY_CHAIN,
+    maxPerPayerUsd: MAX_PER_PAYER,
+    minRefundUsd: MIN_REFUND,
     includeSynthetic: /^(1|true|yes)$/i.test(process.env.REFUND_INCLUDE_SYNTHETIC || ""),
     senders,
   });
