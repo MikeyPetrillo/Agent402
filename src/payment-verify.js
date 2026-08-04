@@ -21,6 +21,9 @@
 // refund costs a delay and is visible in the ledger, while paying an unreal
 // one costs money and is invisible.
 
+const SOLANA_RPCS = (process.env.REFUND_SOLANA_RPCS || "https://api.mainnet-beta.solana.com,https://solana-rpc.publicnode.com").split(",").map((x) => x.trim()).filter(Boolean);
+const ALGORAND_INDEXERS = (process.env.REFUND_ALGORAND_INDEXERS || "https://mainnet-idx.4160.nodely.dev").split(",").map((x) => x.trim()).filter(Boolean);
+
 const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
 const fail = (reason) => ({ verified: false, reason });
@@ -96,6 +99,84 @@ async function verifyEvm({ tx, payer, payTo, amountUsd, asset, rpcUrl, fetchImpl
 }
 
 /**
+ * Solana: read the recorded signature and prove the token moved from the payer
+ * to our payTo. Balances are compared pre/post for the OWNER, which is what
+ * actually changed hands - token-account addresses are derived, and matching
+ * on them instead would miss a payer using a non-default account.
+ */
+async function verifySolana({ tx, payer, payTo, amountUsd, asset, rpcs, fetchImpl, timeoutMs }) {
+  if (typeof tx !== "string" || tx.length < 40) return fail("no usable Solana signature recorded");
+  let txn = null, lastErr = "";
+  for (const url of rpcs) {
+    try {
+      txn = await rpc(url, "getTransaction", [tx, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }], fetchImpl, timeoutMs);
+      if (txn) break;
+    } catch (e) { lastErr = e.message; }
+  }
+  if (!txn) return fail(`transaction not found on chain${lastErr ? ` (${lastErr})` : ""}`);
+  const meta = txn.meta || {};
+  // A failed Solana transaction moves no tokens - exactly what our own best
+  // customer's wallet produced when it ran dry (insufficient funds, 2026-08-03).
+  if (meta.err) return fail(`transaction failed on chain (${JSON.stringify(meta.err).slice(0, 60)})`);
+
+  const mint = String(asset || "");
+  if (!mint) return fail("no mint for this network");
+  const sum = (rows, owner) => (rows || [])
+    .filter((b) => b && b.owner === owner && b.mint === mint)
+    .reduce((a, b) => a + BigInt(b.uiTokenAmount?.amount || "0"), 0n);
+  const decimals = Number(((meta.postTokenBalances || []).find((b) => b?.mint === mint) || {}).uiTokenAmount?.decimals);
+  if (!Number.isFinite(decimals)) return fail("token decimals unreadable from the transaction");
+
+  const credited = sum(meta.postTokenBalances, payTo) - sum(meta.preTokenBalances, payTo);
+  if (credited <= 0n) return fail("our payTo was not credited in that transaction");
+  const debited = sum(meta.preTokenBalances, payer) - sum(meta.postTokenBalances, payer);
+  if (debited <= 0n) return fail("this payer was not debited in that transaction");
+
+  const expected = BigInt(Math.round(Number(amountUsd) * 10 ** decimals));
+  if (expected <= 0n) return fail("expected amount is zero");
+  if (credited < expected) return fail(`transfer is short: credited ${credited} < expected ${expected} (atomic)`);
+  return pass({ movedAtomic: credited.toString(), decimals, tx });
+}
+
+/**
+ * Algorand: the indexer stores only CONFIRMED transactions, so presence is the
+ * success proof - but sender, receiver, ASA and amount are still all checked
+ * against the debt rather than assumed from it.
+ */
+async function verifyAlgorand({ tx, payer, payTo, amountUsd, asset, indexers, fetchImpl, timeoutMs }) {
+  if (typeof tx !== "string" || tx.length < 40) return fail("no usable Algorand txid recorded");
+  const assetId = Number(String(asset || "").replace(/[^0-9]/g, ""));
+  if (!Number.isFinite(assetId) || assetId <= 0) return fail("no ASA id for this network");
+
+  let body = null, lastErr = "";
+  for (const base of indexers) {
+    try {
+      const res = await fetchImpl(`${String(base).replace(/\/+$/, "")}/v2/transactions/${encodeURIComponent(tx)}`, {
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) { lastErr = `HTTP ${res.status}`; continue; }
+      body = await res.json();
+      if (body) break;
+    } catch (e) { lastErr = e.message; }
+  }
+  const t = body?.transaction;
+  if (!t) return fail(`transaction not found on chain${lastErr ? ` (${lastErr})` : ""}`);
+  if (!t["confirmed-round"]) return fail("transaction is not confirmed");
+
+  const ax = t["asset-transfer-transaction"];
+  if (!ax) return fail("not an asset-transfer transaction");
+  if (Number(ax["asset-id"]) !== assetId) return fail(`wrong asset (${ax["asset-id"]} != ${assetId})`);
+  if (t.sender !== payer) return fail("sender is not the payer we would repay");
+  if (ax.receiver !== payTo) return fail("receiver is not our payTo");
+  // USDC on Algorand is 6-decimal; the amount is already in atomic units.
+  const expected = BigInt(Math.round(Number(amountUsd) * 1e6));
+  const moved = BigInt(ax.amount || 0);
+  if (expected <= 0n) return fail("expected amount is zero");
+  if (moved < expected) return fail(`transfer is short: moved ${moved} < expected ${expected} (atomic)`);
+  return pass({ movedAtomic: moved.toString(), decimals: 6, tx });
+}
+
+/**
  * Confirm the inbound payment a refund row claims. Returns
  * `{ verified:true, … }` or `{ verified:false, reason }` - never throws.
  *
@@ -108,6 +189,8 @@ export async function verifyInboundPayment({
   acceptsFor = () => null,
   rpcFor = () => null,
   stellarConfirm = null,       // injected: (opts) => Promise<{transaction}|null>
+  solanaRpcs = SOLANA_RPCS,
+  algorandIndexers = ALGORAND_INDEXERS,
   fetchImpl = fetch,
   timeoutMs = 8_000,
 } = {}) {
@@ -134,9 +217,17 @@ export async function verifyInboundPayment({
       return found ? pass({ tx: found.transaction, amount: found.amount }) : fail("no confirmed transfer from this payer to our payTo");
     }
 
-    // Deliberately unimplemented rather than assumed. A family without a
-    // verifier holds its rows: unverifiable is not the same as unpaid, and the
-    // debt stays visible until someone can prove it.
+    if (n.startsWith("solana:")) {
+      return await verifySolana({ tx, payer, payTo, amountUsd, asset: accepts.asset, rpcs: solanaRpcs, fetchImpl, timeoutMs });
+    }
+
+    if (n.startsWith("algorand:")) {
+      return await verifyAlgorand({ tx, payer, payTo, amountUsd, asset: accepts.asset, indexers: algorandIndexers, fetchImpl, timeoutMs });
+    }
+
+    // Any FUTURE chain holds its rows rather than being assumed good:
+    // unverifiable is not the same as unpaid, and the debt stays visible until
+    // someone can prove it.
     return fail(`no on-chain verifier for ${n.split(":")[0] || "unknown"} yet - debt held, not written off`);
   } catch (e) {
     return fail(`verification error: ${(e?.message || String(e)).slice(0, 120)}`);

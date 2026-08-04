@@ -150,12 +150,70 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
   ok(no.verified === false, "an unconfirmed stellar payment holds the debt");
 }
 
-// 13. A family with no verifier HOLDS - unverifiable is not unpaid, and the
-//     row must not be silently written off.
+// 13. SOLANA. Balances are compared per OWNER pre/post, because a payer may
+//     use a non-default token account and matching on derived addresses would
+//     miss it.
+{
+  const MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const SPAYER = "TeStKWyNPayer", SPAYTO = "J7aNOurWallet";
+  const bal = (owner, amount) => ({ owner, mint: MINT, uiTokenAmount: { amount: String(amount), decimals: 6 } });
+  const solRpc = (meta) => async () => ({ ok: true, json: async () => ({ result: meta === null ? null : { meta } }) });
+  const good = { err: null, preTokenBalances: [bal(SPAYTO, 0), bal(SPAYER, 5000)], postTokenBalances: [bal(SPAYTO, 1000), bal(SPAYER, 4000)] };
+  const solRun = (meta, over = {}) => verifyInboundPayment({
+    network: "solana:5eykt4", payer: SPAYER, amountUsd: 0.001, tx: "S".repeat(80),
+    acceptsFor: () => ({ payTo: SPAYTO, asset: MINT }), solanaRpcs: ["stub://sol"],
+    fetchImpl: solRpc(meta), timeoutMs: 500, ...over,
+  });
+
+  ok((await solRun(good)).verified === true, "a real Solana payment verifies");
+  ok((await solRun({ ...good, err: { InstructionError: [2, { Custom: 1 }] } })).verified === false,
+    "a FAILED Solana txn never verifies (this is the insufficient-funds shape we saw live)");
+  ok((await solRun({ ...good, postTokenBalances: [bal(SPAYTO, 0), bal(SPAYER, 4000)] })).verified === false,
+    "our payTo not credited -> unverified");
+  ok((await solRun({ ...good, preTokenBalances: [bal(SPAYTO, 0), bal(SPAYER, 4000)] })).verified === false,
+    "this payer not debited -> unverified");
+  ok((await solRun({ ...good, postTokenBalances: [bal(SPAYTO, 999), bal(SPAYER, 4001)] })).verified === false,
+    "a short Solana transfer -> unverified");
+  ok((await solRun(null)).verified === false, "a missing Solana transaction -> unverified");
+  ok((await solRun(good, { tx: "short" })).verified === false, "a junk signature -> unverified");
+}
+
+// 14. ALGORAND. The indexer stores only confirmed transactions, but sender,
+//     receiver, ASA and amount are all still checked against the debt.
+{
+  const APAYER = "ZKFACAZATPUUYUXVVVE7QWMMZTSMLGQVA4G4QKW7D2UI7FCIFE3QB2SHRE";
+  const APAYTO = "C7IIHG7SPLPZ5H7ZT6HW3UV2OQMQQE6Y2HBNGZXSLRJULE42BEE2OY2XIE";
+  const txn = (over = {}) => ({ transaction: {
+    "confirmed-round": 63718052, sender: APAYER,
+    "asset-transfer-transaction": { "asset-id": 31566704, amount: 1000, receiver: APAYTO },
+    ...over } });
+  const idx = (body, status = 200) => async () => ({ ok: status === 200, status, json: async () => body });
+  const algoRun = (body, over = {}) => verifyInboundPayment({
+    network: "algorand:wGHE2Pw", payer: APAYER, amountUsd: 0.001, tx: "A".repeat(52),
+    acceptsFor: () => ({ payTo: APAYTO, asset: "31566704" }), algorandIndexers: ["stub://idx"],
+    fetchImpl: idx(body), timeoutMs: 500, ...over,
+  });
+
+  ok((await algoRun(txn())).verified === true, "a real Algorand payment verifies");
+  ok((await algoRun(txn({ sender: "SOMEONEELSE" }))).verified === false, "a different sender -> unverified");
+  ok((await algoRun(txn({ "asset-transfer-transaction": { "asset-id": 31566704, amount: 1000, receiver: "NOTUS" } }))).verified === false,
+    "a receiver that is not our payTo -> unverified");
+  ok((await algoRun(txn({ "asset-transfer-transaction": { "asset-id": 999, amount: 1000, receiver: APAYTO } }))).verified === false,
+    "the WRONG ASA (any token can be minted on Algorand) -> unverified");
+  ok((await algoRun(txn({ "asset-transfer-transaction": { "asset-id": 31566704, amount: 999, receiver: APAYTO } }))).verified === false,
+    "a short Algorand transfer -> unverified");
+  ok((await algoRun(txn({ "confirmed-round": 0 }))).verified === false, "an unconfirmed transaction -> unverified");
+  ok((await algoRun({})).verified === false, "an empty indexer response -> unverified");
+  ok((await algoRun(txn({ "asset-transfer-transaction": undefined }))).verified === false,
+    "a non-asset-transfer (e.g. a plain ALGO payment) -> unverified");
+}
+
+// 15. A FUTURE family with no verifier still HOLDS - unverifiable is not
+//     unpaid, and the row must not be silently written off.
 {
   const r = await verifyInboundPayment({
-    network: "solana:5eykt4", payer: "SoLPayer", amountUsd: 0.001,
-    acceptsFor: () => ({ payTo: "J7aN", asset: "EPjF" }),
+    network: "cosmos:hub-4", payer: "cosmos1abc", amountUsd: 0.001,
+    acceptsFor: () => ({ payTo: "cosmos1ours", asset: "uusdc" }),
   });
   ok(r.verified === false && /no on-chain verifier/.test(r.reason) && /held, not written off/.test(r.reason),
     "an unsupported family holds the debt and says why");

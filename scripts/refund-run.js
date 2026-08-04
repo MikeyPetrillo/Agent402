@@ -60,6 +60,10 @@ const EVM_RPCS = {
   "eip155:10": "https://mainnet.optimism.io",
   "eip155:42220": "https://forno.celo.org",
   "eip155:1329": "https://evm-rpc.sei-apis.com",
+  // Rails that had no entry until the all-chains verifier sweep - without one
+  // their rows held as "no RPC configured", which is safe but never repays.
+  "eip155:143": "https://rpc.monad.xyz",
+  "eip155:4663": "https://rpc.robinhoodchain.com",
 };
 
 export function familyOf(network) {

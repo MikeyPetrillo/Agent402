@@ -392,8 +392,15 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   status is success, with the token address matched and `decimals()` READ not assumed.
   Fails closed on every uncertainty — RPC error, missing receipt, junk tx, no verifier
   for that family — and the row is HELD, still owed, never paid and never written off.
-  Solana/Algorand have no verifier yet, so their rows hold. 21 assertions in
-  `scripts/test-payment-verify.js`; 7 mutations killed (accept a revert, ignore who
+  **All twelve rails verify** (2026-08-04): every EVM chain via receipt logs;
+  Solana via pre/post token balances compared per OWNER (a payer may use a
+  non-default token account, so matching derived addresses would miss it) with
+  `meta.err` rejecting failed transactions — the exact shape our own whale produced
+  when it ran dry; Algorand via the indexer, checking sender, receiver, **ASA id**
+  (anyone can mint a token called USDC on Algorand) and amount; Stellar via the shared
+  same-transaction confirmer. Monad and Robinhood RPCs were missing entirely, so their
+  rows had been holding as "no RPC configured" — safe, but never repaid. 36 assertions
+  in `scripts/test-payment-verify.js`; 15 mutations killed (accept a revert, ignore who
   paid, ignore who was credited, accept an underpayment, accept any token, assume 6
   decimals, proceed without a receipt).
   **Abuse review 2026-08-04 — two guards exist because of it.** (1) A debt requires
