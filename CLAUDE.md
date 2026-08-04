@@ -377,8 +377,24 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   default (`live=true` to send), refunds the exact priceUsd to the recorded payer on
   the chain they paid on, asset read from OUR OWN live 402 accepts (never a
   hand-maintained token table; EVM decimals read from the contract). Caps: $0.25/refund,
-  $2/run, both overridable at dispatch; over-cap and unsupported rows are HELD and
-  listed, never dropped. Canary/synthetic rows are recorded but held unless
+  $2/run, and **$0.50/payer/run** (`REFUND_MAX_PER_PAYER_USD`); optional dust floor
+  `REFUND_MIN_USD` (default 0 = off). Over-cap, unsupported and dust rows are HELD and
+  listed, never dropped.
+  **Abuse review 2026-08-04 — two guards exist because of it.** (1) A debt requires
+  POSITIVE PROOF: `receiptProvesCharge()` demands an explicit `success === true`. The
+  charged-failure ALARM still fires on an unreadable/legacy receipt (loud on ambiguity
+  is right for a warning), but a DEBT is money, so ambiguity must not mint one —
+  otherwise a middleware change making the receipt unparseable would create a
+  refundable row per failing call, one per slug per minute (no tx to key on). The
+  receipt is unforgeable — a RESPONSE header written only by `@x402/express`, never
+  echoed from a request — so `success:true` is trustworthy; the gap was trusting the
+  ABSENCE of a field. (2) The per-payer cap bounds the sponsored-gas griefing loop:
+  gas is sponsored for buyers on EVM, so a wallet can pay $0.001, force a
+  charged-failure, take the $0.001 back and lose nothing while WE pay refund gas. Each
+  debt is real, so the answer is a per-wallet bound (rows pile up visibly, held), never
+  a refusal. Also verified: `isSyntheticRequest` needs a signed heartbeat token (a buyer
+  cannot flag themselves), and refunds pay `def.price` (list) — on premium chains the
+  buyer paid slightly MORE, so we under-refund by the premium: safe direction, known gap. Canary/synthetic rows are recorded but held unless
   `include_synthetic`. Spending keys are Actions secrets ONLY and refunds ride
   the CI CANARY BURNERS by default (Mike's decision 2026-08-04 — refund volume is
   minimal, the burners already hold USDC on the paying chains, and the canary
