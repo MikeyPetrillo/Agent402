@@ -27,11 +27,21 @@ import { join } from "node:path";
 // Vendors that bill per request, and the env var that makes them reachable.
 const METERED = [
   ["api.search.brave.com", "BRAVE_API_KEY", "Brave Search"],
-  ["api.cdp.coinbase.com", "CDP_API_KEY_ID", "Coinbase CDP (SQL + x402)"],
+  // NB this host serves TWO different things: the BILLED SQL API (via the
+  // onchain-sql tool, ~$0.0083/query, the source of the $245/mo invoice) and the
+  // FREE x402 Bazaar discovery directory that the index crawler reads. A
+  // host-level census cannot tell them apart, so a crawler doing its job reads
+  // as paid queries. Check the attributed caller: x402-index.js / leaderboard.js
+  // are discovery, anything via the onchain-sql tool is the billed path.
+  ["api.cdp.coinbase.com", "CDP_API_KEY_ID", "Coinbase CDP (SQL billed + Bazaar discovery free)"],
   ["api.openai.com", "OPENAI_API_KEY", "OpenAI"],
   ["openrouter.ai", "OPENROUTER_API_KEY", "OpenRouter"],
   ["e2b.dev", "E2B_API_KEY", "E2B sandboxes"],
-  ["api.neynar.com", "NEYNAR_API_KEY", "Neynar"],
+  // The tool reads NEYNAR_API_KEY || WARPCAST_API_KEY (onchain-identity-kit.js),
+  // so checking only the first reports a BLIND SPOT on a perfectly reachable
+  // vendor - and a false blind spot makes the run exit non-zero and reads as
+  // "we could not look" when we could.
+  ["api.neynar.com", ["NEYNAR_API_KEY", "WARPCAST_API_KEY"], "Neynar"],
   ["g.alchemy.com", "ALCHEMY_API_KEY", "Alchemy RPC"],
   ["blockscout.com", "X402_UPSTREAM_BUYER_KEY", "Blockscout Pro"],
 ];
@@ -105,7 +115,9 @@ if (process.env.RENDER_WORKER_TOKEN && !process.env.RENDER_WORKER_URL) {
   console.log("note: dropped RENDER_WORKER_TOKEN (set without RENDER_WORKER_URL) so the server can boot for the census.\n");
 }
 
-const blind = METERED.filter(([, env]) => !process.env[env]);
+const envSet = (env) => (Array.isArray(env) ? env : [env]).some((e) => process.env[e]);
+const envName = (env) => (Array.isArray(env) ? env.join(" / ") : env);
+const blind = METERED.filter(([, env]) => !envSet(env));
 
 // The wrong-service check. If EVERY metered key is missing, this is almost
 // certainly not the main app's environment - and without saying so, the run
@@ -179,7 +191,7 @@ const hits = METERED
     const matched = [...byHost.entries()].filter(([h]) => h.includes(host));
     const n = matched.reduce((a, [, v]) => a + v.n, 0);
     const files = new Set(matched.flatMap(([, v]) => [...v.files]));
-    return { host, env, name, n, files: [...files], observable: Boolean(process.env[env]) };
+    return { host, env, name, n, files: [...files], observable: envSet(env) };
   })
   .filter((x) => x.n > 0 || x.observable);
 
@@ -217,7 +229,7 @@ if (!process.env.CENSUS_DATA_DIR) {
 
 console.log(`\nBLIND SPOTS — vendors this run could NOT observe because their key is unset:`);
 if (!blind.length) console.log("  (none — every metered vendor was reachable)");
-for (const [host, env, name] of blind) console.log(`  ${name.padEnd(26)} ${env} unset  → ${host} unreachable`);
+for (const [host, env, name] of blind) console.log(`  ${name.padEnd(26)} ${envName(env)} unset  → ${host} unreachable`);
 
 try { unlinkSync(PRELOAD); } catch {}
 console.log("");
