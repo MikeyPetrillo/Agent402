@@ -16,8 +16,22 @@ ok(payerFromRequest(req({ "x-payment": enc(A) })) === A.toLowerCase(),
   "reads the standard X-PAYMENT header (the bug returned null here)");
 ok(payerFromRequest(req({ "payment-signature": enc(A) })) === A.toLowerCase(),
   "still reads the legacy payment-signature header");
-ok(payerFromRequest(req({ "x-payment": enc(A), "payment-signature": enc(B) })) === A.toLowerCase(),
-  "X-PAYMENT takes precedence over the legacy header");
+// PRECEDENCE REVERSED 2026-08-04 — this assertion used to demand the opposite,
+// and in doing so it PINNED a vulnerability in place.
+//
+// @x402/express settles from `payment-signature` first, falling back to
+// `x-payment`. Attributing in the opposite order meant a request carrying BOTH
+// was settled from one header and attributed from the other, and the second
+// copy is signature-checked by nothing. An attacker paid with their own valid
+// PAYMENT-SIGNATURE and added an X-Payment naming a victim; since memory
+// namespaces are wallet-keyed ("payment = identity"), that was a namespace
+// takeover for the price of one call.
+//
+// Attribution must read whatever settlement reads. Single-header clients are
+// unaffected either way - the fallback still covers them, which the two
+// assertions above prove.
+ok(payerFromRequest(req({ "x-payment": enc(B), "payment-signature": enc(A) })) === A.toLowerCase(),
+  "the SETTLED header (payment-signature) wins when both are present - an unsigned x-payment cannot name a victim");
 ok(payerFromRequest(req({})) === null, "no payment header → null");
 ok(payerFromRequest(req({ "x-payment": "not-base64-json!" })) === null, "garbage header → null, no throw");
 ok(payerFromRequest(req({ "x-payment": Buffer.from(JSON.stringify({ payload: { authorization: { from: "0xNOTHEX" } } })).toString("base64") })) === null,
