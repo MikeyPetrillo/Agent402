@@ -235,9 +235,31 @@ async function main() {
   if (!plan.send.length) { console.log("nothing to send."); return; }
 
   const accepts = await liveAcceptsByNetwork();
-  let ok = 0, failed = 0;
+  const { verifyInboundPayment } = await import("../src/payment-verify.js");
+  const { confirmStellarTransfer } = await import("../src/stellar-confirm.js");
+  let ok = 0, failed = 0, unverified = 0;
   for (const row of plan.send) {
     try {
+      // PROVE THE PAYMENT BEFORE REPAYING IT. The debt was recorded on the
+      // facilitator's success:true, which is unforgeable by a buyer but not
+      // guaranteed true - a facilitator can be wrong, and this week it was, in
+      // the opposite direction (Stellar reported failure for transfers that
+      // confirmed). So the same payer, our payTo, and at least the amount must
+      // be confirmed on-chain before anything leaves. Fails closed: an
+      // unverifiable row is HELD, still owed, never paid and never written off.
+      const proof = await verifyInboundPayment({
+        network: row.network, payer: row.payer, amountUsd: row.priceUsd,
+        tx: row.evidence, createdAt: row.createdAt,
+        acceptsFor: (n) => accepts[n],
+        rpcFor: (n) => (process.env[`REFUND_RPC_${String(n).split(":")[1]}`] || EVM_RPCS[n] || "").trim() || null,
+        stellarConfirm: confirmStellarTransfer,
+      });
+      if (!proof.verified) {
+        console.warn(`HOLD  #${row.id} $${row.priceUsd} -> ${row.payer}: UNVERIFIED - ${proof.reason}`);
+        unverified++;
+        continue;
+      }
+      console.log(`      #${row.id} inbound payment confirmed on-chain (${proof.tx || "matched"})`);
       const family = familyOf(row.network);
       const tx = family === "evm" ? await sendEvm(row, accepts[row.network])
         : family === "stellar" ? await sendStellar(row)
@@ -252,7 +274,7 @@ async function main() {
       failed++;
     }
   }
-  console.log(`\ndone: ${ok} paid, ${failed} failed (failed rows remain owed)`);
+  console.log(`\ndone: ${ok} paid, ${failed} failed, ${unverified} held unverified (all unpaid rows remain owed)`);
   process.exit(failed ? 1 : 0);
 }
 

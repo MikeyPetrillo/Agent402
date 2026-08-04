@@ -380,6 +380,22 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   $2/run, and **$0.50/payer/run** (`REFUND_MAX_PER_PAYER_USD`); optional dust floor
   `REFUND_MIN_USD` (default 0 = off). Over-cap, unsupported and dust rows are HELD and
   listed, never dropped.
+  **PRE-SEND ON-CHAIN PROOF (`src/payment-verify.js`) — no refund leaves on a
+  facilitator's word.** A debt is recorded on the settle receipt's `success:true`,
+  which is unforgeable by a buyer but NOT guaranteed true — a facilitator can be
+  wrong, and one demonstrably was this week in the opposite direction (Stellar
+  reported failure for transfers that confirmed). The mirror (success reported for a
+  reverted or never-landed transfer) would refund money we never received, with no
+  attacker involved. So before each send the executor re-derives the payment from the
+  chain: the SAME payer → OUR payTo (from the live 402 accepts), for AT LEAST the
+  amount (>= because premium chains quote above list), in a transaction whose receipt
+  status is success, with the token address matched and `decimals()` READ not assumed.
+  Fails closed on every uncertainty — RPC error, missing receipt, junk tx, no verifier
+  for that family — and the row is HELD, still owed, never paid and never written off.
+  Solana/Algorand have no verifier yet, so their rows hold. 21 assertions in
+  `scripts/test-payment-verify.js`; 7 mutations killed (accept a revert, ignore who
+  paid, ignore who was credited, accept an underpayment, accept any token, assume 6
+  decimals, proceed without a receipt).
   **Abuse review 2026-08-04 — two guards exist because of it.** (1) A debt requires
   POSITIVE PROOF: `receiptProvesCharge()` demands an explicit `success === true`. The
   charged-failure ALARM still fires on an unreadable/legacy receipt (loud on ambiguity

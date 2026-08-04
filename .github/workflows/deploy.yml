@@ -757,6 +757,9 @@ jobs:
       - name: Refund ledger + planner (idempotent debts, evidence-gated resolution, caps, canary excluded, no silent chain drops — offline)
         run: node scripts/test-refund-ledger.js
 
+      - name: Refund pre-send proof (same payer, our payTo, enough value, on a transaction that actually succeeded — offline)
+        run: node scripts/test-payment-verify.js
+
       - name: Revenue daily series (day bucketing, EVM block estimation, canary-vs-funding split — offline)
         run: node scripts/test-revenue-daily.js
 
