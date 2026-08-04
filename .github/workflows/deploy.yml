@@ -751,6 +751,9 @@ jobs:
       - name: Stellar late-settle confirmation (a confirmed transfer overrides the facilitator; a payment to anyone else never does — offline)
         run: node scripts/test-stellar-confirm.js
 
+      - name: SVM settle-reason clarity (a measured empty wallet becomes "insufficient_funds"; specific reasons and funded wallets never rewritten — offline)
+        run: node scripts/test-svm-clarify.js
+
       - name: Revenue daily series (day bucketing, EVM block estimation, canary-vs-funding split — offline)
         run: node scripts/test-revenue-daily.js
 

@@ -7,6 +7,7 @@ import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
 import { convertToTokenAmount, numberToDecimalString } from "@x402/core/utils";
 import { confirmStellarTransfer, settlePayerOf } from "./stellar-confirm.js";
+import { clarifySvmSettleFailure } from "./svm-clarify.js";
 import {
   bazaarResourceServerExtension,
   declareDiscoveryExtension,
@@ -491,6 +492,51 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     facilitatorLabels.push(label);
     return client;
   };
+  // PayAI's Solana settles report an on-chain "insufficient funds" failure as
+  // `settle_exact_svm_transaction_confirmation_timed_out` - measured
+  // 2026-08-03 when our best Solana buyer drained its wallet to $0 and its
+  // last four purchases all "timed out". That wording reads as a seller
+  // outage: the buyer's agent logs tell its operator to wait, and our own
+  // settle_failed telemetry sent us hunting a rail problem. So on an
+  // ambiguous Solana settle failure we measure the payer's balance and, only
+  // when it is genuinely below the price, rewrite the receipt to
+  // `insufficient_funds` with a self-explaining message. Specific reasons are
+  // never overwritten, an unreadable balance changes nothing, and the payer
+  // comes from the facilitator's own result/error - never the payload (the
+  // stellar-confirm lesson). Both failure shapes are covered: the graceful
+  // { success:false } return AND the thrown SettleError, because @x402/core
+  // builds the buyer's 402 receipt from whichever one it gets.
+  class SvmClarifyingFacilitatorClient extends HTTPFacilitatorClient {
+    async settle(paymentPayload, paymentRequirements) {
+      const network = paymentRequirements?.network;
+      try {
+        const res = await super.settle(paymentPayload, paymentRequirements);
+        if (res?.success === false) {
+          const fix = await clarifySvmSettleFailure({
+            network, reason: res.errorReason || res.errorMessage,
+            payer: settlePayerOf(res), requirements: paymentRequirements,
+          }).catch(() => null);
+          if (fix) {
+            console.warn(`[payments] solana settle failure clarified: ${res.errorReason} -> ${fix.reason} (${fix.message})`);
+            return { ...res, errorReason: fix.reason, errorMessage: fix.message };
+          }
+        }
+        return res;
+      } catch (e) {
+        const fix = await clarifySvmSettleFailure({
+          network, reason: e?.errorReason || e?.message,
+          payer: settlePayerOf(e), requirements: paymentRequirements,
+        }).catch(() => null);
+        if (fix) {
+          console.warn(`[payments] solana settle failure clarified: ${e?.errorReason || e?.message} -> ${fix.reason}`);
+          e.errorReason = fix.reason;
+          e.errorMessage = fix.message;
+        }
+        throw e;
+      }
+    }
+  }
+
   let payAiClient = null;
   if (isMultiChain) {
     const cdpConfig = await resolveCdpFacilitatorConfig();
@@ -503,7 +549,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           "CDP_API_KEY_ID + CDP_API_KEY_SECRET to keep Base on CDP (Bazaar discovery + fee-free)."
       );
     }
-    payAiClient = addFacilitator("PayAI", new HTTPFacilitatorClient(await resolvePayAIFacilitatorConfig()));
+    payAiClient = addFacilitator("PayAI", new SvmClarifyingFacilitatorClient(await resolvePayAIFacilitatorConfig()));
     console.log(
       `Multi-chain facilitator routing: ${cdpConfig ? "CDP (Base + Bazaar) → PayAI (remaining chains)" : "PayAI (all chains)"}`
     );
