@@ -7,7 +7,7 @@
 // case-folding an address on a case-sensitive rail.
 process.env.REFUND_DB_DIR = process.env.TMPDIR || "/tmp";
 import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, refundTotals, __resetRefunds } from "../src/refund-ledger.js";
-import { planRefunds, familyOf } from "./refund-run.js";
+import { planRefunds, familyOf, ourPayToSet } from "./refund-run.js";
 import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;
@@ -261,6 +261,40 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
     ok(markRefundPaid(r.id, junk) === false, `"${junk.trim()}" is refused as a refund tx`);
   }
   ok(markRefundPaid(r.id, "REALTXID123") === true, "a real tx id still resolves the row");
+}
+
+
+// 21. THE PAYTO SET MUST NOT FOLD CASE OFF EVM. This is the caller-path
+//     function the verifier tests never touch - they pass payToSetFor
+//     directly - and the first version lowercased EVERY address. Correct for
+//     EVM, fatal for base32/base58: the Algorand indexer returns
+//     C7IIHG7SPL...OY2XIE and a folded copy never matches, so every Algorand
+//     and Solana debt would have been held forever. Same rule stated in
+//     src/payer.js and src/revenue-ledger.js.
+{
+  const ALGO = "C7IIHG7SPLPZ5H7ZT6HW3UV2OQMQQE6Y2HBNGZXSLRJULE42BEE2OY2XIE";
+  const SOL = "J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg";
+  const EVM = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
+  const s = ourPayToSet({
+    "eip155:8453": { payTo: EVM },
+    "algorand:x": { payTo: ALGO },
+    "solana:y": { payTo: SOL },
+  }, {});
+  ok([...s.get("algorand:x")].includes(ALGO), "Algorand base32 payTo is preserved verbatim");
+  ok([...s.get("solana:y")].includes(SOL), "Solana base58 payTo is preserved verbatim");
+  ok([...s.get("eip155:8453")].includes(EVM.toLowerCase()), "EVM payTo IS folded (case-insensitive by spec)");
+
+  // The spending wallets from env follow the same rule.
+  const s2 = ourPayToSet(
+    { "eip155:8453": { payTo: EVM }, "algorand:x": { payTo: ALGO } },
+    { X402_UPSTREAM_BUYER_ADDRESS: "0x7706D81E18AD403BCD6E9A0616B288E16744121A",
+      ALGORAND_UPSTREAM_BUYER_ADDRESS: "W4GZHN36AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+  );
+  ok([...s2.get("algorand:x")].includes("W4GZHN36AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+    "the AVM spending wallet keeps its case too");
+  ok([...s2.get("eip155:8453")].includes("0x7706d81e18ad403bcd6e9a0616b288e16744121a"),
+    "the EVM spending wallet is folded");
+  ok(s2.get("eip155:8453").size === 2, "both EVM wallets are accepted, not one replacing the other");
 }
 
 __resetRefunds();

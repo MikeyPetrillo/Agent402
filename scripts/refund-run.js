@@ -184,18 +184,29 @@ async function liveAcceptsByNetwork() {
 // charged-fail, since they spend upstream on the buyer's behalf. Probing the
 // row's own route is the precise fix; accepting any wallet WE control on that
 // network is the safe one, and it needs no slug->route map to drift.
-async function ourPayToSet(accepts) {
-  const set = new Map();   // network -> Set(lowercased payTo)
-  for (const [net, a] of Object.entries(accepts)) {
-    if (a?.payTo) set.set(net, new Set([String(a.payTo).toLowerCase()]));
+export function ourPayToSet(accepts, env = process.env) {
+  // CASE MATTERS ON EVERY RAIL BUT EVM. The first version lowercased every
+  // address, which is correct for EVM and DESTROYS base32 (Algorand) and
+  // base58 (Solana): the indexer returns
+  // C7IIHG7SPLPZ...BEE2OY2XIE and a folded copy never matches it, so every
+  // Algorand and Solana debt would have been held forever. Same rule the rest
+  // of the codebase states repeatedly (src/payer.js, src/revenue-ledger.js):
+  // lowercase EVM only, preserve everything else verbatim.
+  const norm = (a) => (/^0x[0-9a-fA-F]{40}$/.test(String(a)) ? String(a).toLowerCase() : String(a));
+  const set = new Map();   // network -> Set(payTo, EVM-folded only)
+  for (const [net, a] of Object.entries(accepts || {})) {
+    if (a?.payTo) set.set(net, new Set([norm(a.payTo)]));
   }
-  for (const [env, nets] of [
-    ["X402_UPSTREAM_BUYER_ADDRESS", Object.keys(accepts).filter((n) => n.startsWith("eip155:"))],
-    ["ALGORAND_UPSTREAM_BUYER_ADDRESS", Object.keys(accepts).filter((n) => n.startsWith("algorand:"))],
+  for (const [key, nets] of [
+    ["X402_UPSTREAM_BUYER_ADDRESS", Object.keys(accepts || {}).filter((n) => n.startsWith("eip155:"))],
+    ["ALGORAND_UPSTREAM_BUYER_ADDRESS", Object.keys(accepts || {}).filter((n) => n.startsWith("algorand:"))],
   ]) {
-    const v = (process.env[env] || "").trim();
+    const v = (env[key] || "").trim();
     if (!v) continue;
-    for (const n of nets) (set.get(n) || set.set(n, new Set()).get(n)).add(v.toLowerCase());
+    for (const n of nets) {
+      if (!set.has(n)) set.set(n, new Set());
+      set.get(n).add(norm(v));
+    }
   }
   return set;
 }
@@ -324,7 +335,7 @@ async function main() {
   if (!plan.send.length) { console.log("nothing to send."); return; }
 
   const accepts = await liveAcceptsByNetwork();
-  const payToSets = await ourPayToSet(accepts);
+  const payToSets = ourPayToSet(accepts);
   const { verifyInboundPayment } = await import("../src/payment-verify.js");
   const { confirmStellarTransfer } = await import("../src/stellar-confirm.js");
   let ok = 0, failed = 0, unverified = 0;
