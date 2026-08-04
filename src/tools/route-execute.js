@@ -17,6 +17,7 @@
 // that names the tool and its direct route, so the buyer can call it at list
 // price instead.
 import { createHash } from "node:crypto";
+import { paymentHeaderOf } from "../payer.js";
 import { findTools } from "../find.js";
 import { isIdentityBoundRoute } from "../payments.js";
 
@@ -62,7 +63,7 @@ export function routeExecuteHint(underlyingUsd) {
 // Used to CHAIN-MATCH external routing (pay the seller on the chain the buyer paid us on). Never throws.
 export function buyerPaymentNetwork(req) {
   try {
-    const header = req?.header?.("x-payment") || req?.header?.("payment-signature");
+    const header = paymentHeaderOf(req);   // the header settlement reads — see src/payer.js
     if (!header) return null;
     const p = JSON.parse(Buffer.from(header, "base64").toString("utf-8"));
     // v1 payloads carry `network` top-level; v2 payloads carry the CHOSEN
@@ -79,7 +80,7 @@ export function buyerPaymentNetwork(req) {
 
 export function callRefFrom(req, slug, ts) {
   try {
-    const header = req?.header?.("x-payment") || req?.header?.("payment-signature");
+    const header = paymentHeaderOf(req);   // the header settlement reads — see src/payer.js
     if (!header) return null;
     const payload = JSON.parse(Buffer.from(header, "base64").toString("utf-8"));
     const nonce = payload?.payload?.authorization?.nonce;
@@ -224,7 +225,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // external can't run there without a wallet anyway.
           const supported = externalChains();
           const payNet = buyerPaymentNetwork(req);
-          const hasPayment = !!(req?.header?.("x-payment") || req?.header?.("payment-signature"));
+          const hasPayment = !!paymentHeaderOf(req);
           const chain = hasPayment ? EXTERNAL_CHAIN_BY_NETWORK[payNet] : "base";
           if (!chain || !supported.includes(chain)) {
             const offer = supported.map((c) => `${c} (${EXTERNAL_CHAIN_CAIP2[c]})`).join(" or ");

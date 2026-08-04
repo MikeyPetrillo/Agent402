@@ -57,8 +57,12 @@ export function payerFromPaymentResponse(headerValue) {
  * that was a namespace takeover for the price of one call, plus poisoned
  * revenue attribution and refund-ledger rows.
  *
- * Every consumer MUST use this helper. Three modules had grown their own copy
- * of the same expression and all three had it backwards.
+ * Every consumer MUST use this helper. The first sweep fixed three modules and
+ * asserted "all three" in this comment — there were FIVE decoding sites, and
+ * the two it missed were the worst ones: route-execute's buyerPaymentNetwork
+ * decodes the header to choose which chain we spend FROM, so an unsigned
+ * x-payment could name a hot wallet that had nothing to do with the payment.
+ * Counting the call sites before claiming completeness is the lesson.
  */
 export function paymentHeaderOf(req) {
   try {

@@ -25,6 +25,16 @@ function horizon({ debits = [], tx = {}, txEffects = {}, failOn = null } = {}) {
     if (url.includes("/effects?order=desc")) {
       return { ok: true, json: async () => ({ _embedded: { records: debits } }) };
     }
+    // The effect -> OPERATION -> transaction_hash hop. Horizon effects carry no
+    // transaction hash; the operation does. The old stub injected
+    // `transaction_hash` straight onto the effect, a field Horizon never
+    // returns, so 18 assertions passed against a module that confirmed nothing
+    // on live data.
+    const opm = url.match(/\/operations\/(\d+)$/);
+    if (opm) {
+      const hash = OP_TO_TX[opm[1]];
+      return { ok: true, json: async () => (hash ? { transaction_hash: hash, transaction_successful: true } : {}) };
+    }
     const m = url.match(/\/transactions\/([A-Za-z0-9]+)\/effects/);
     if (m) return { ok: true, json: async () => ({ _embedded: { records: txEffects[m[1]] || [] } }) };
     const t = url.match(/\/transactions\/([A-Za-z0-9]+)$/);
@@ -35,10 +45,22 @@ function horizon({ debits = [], tx = {}, txEffects = {}, failOn = null } = {}) {
   return impl;
 }
 
-const debit = (hash, at, assetType = "credit_alphanum4") => ({
-  type: "account_debited", asset_type: assetType, asset_code: "USDC",
-  amount: "0.0010000", created_at: at, transaction_hash: hash,
-});
+// VERBATIM HORIZON SHAPE. Fields present on a real effect and nothing else -
+// note there is NO transaction_hash and NO _links.transaction. The hash is
+// reached through _links.operation, and the operation id is the effect id up to
+// the dash. Keeping the fixture honest is what makes this suite mean anything.
+const OP_TO_TX = {};
+let opSeq = 1000;
+const debit = (hash, at, assetType = "credit_alphanum4") => {
+  const opId = String(++opSeq);
+  OP_TO_TX[opId] = hash;
+  return {
+    type: "account_debited", asset_type: assetType, asset_code: "USDC",
+    amount: "0.0010000", created_at: at,
+    id: `${opId}-0000000001`,
+    _links: { operation: { href: `https://horizon.stellar.org/operations/${opId}` } },
+  };
+};
 const credit = (acct) => ({ type: "account_credited", account: acct, amount: "0.0010000", asset_code: "USDC" });
 
 const run = (opts, extra = {}) => confirmStellarTransfer({
@@ -115,11 +137,14 @@ const run = (opts, extra = {}) => confirmStellarTransfer({
 //    empty, the transfer appears on the second.
 {
   let n = 0;
+  const late = debit("TX8", "2026-08-03T17:10:52Z");   // registers its op id
   const impl = async (url) => {
     if (url.includes("/effects?order=desc")) {
       n++;
-      return { ok: true, json: async () => ({ _embedded: { records: n === 1 ? [] : [debit("TX8", "2026-08-03T17:10:52Z")] } }) };
+      return { ok: true, json: async () => ({ _embedded: { records: n === 1 ? [] : [late] } }) };
     }
+    const opm = url.match(/\/operations\/(\d+)$/);
+    if (opm) return { ok: true, json: async () => ({ transaction_hash: OP_TO_TX[opm[1]], transaction_successful: true }) };
     if (/\/transactions\/TX8\/effects/.test(url)) return { ok: true, json: async () => ({ _embedded: { records: [credit(PAYTO)] } }) };
     if (/\/transactions\/TX8$/.test(url)) return { ok: true, json: async () => ({ successful: true }) };
     return { ok: false, json: async () => ({}) };
@@ -161,6 +186,21 @@ const run = (opts, extra = {}) => confirmStellarTransfer({
     "an XDR-carrying payload yields no payer");
   ok(settlePayerOf(null) === null && settlePayerOf({}) === null && settlePayerOf({ payer: "  " }) === null,
     "missing or blank payer is null, never a truthy near-miss");
+}
+
+
+// 10. THE SHAPE ITSELF. This suite passed 18/18 against a module that could not
+//     confirm a single real payment, because the fixture invented a
+//     `transaction_hash` field on the effect. Assert the fixture matches
+//     Horizon: effects carry _links.operation and an id, never a transaction
+//     hash. If someone reintroduces the shortcut, this fails.
+{
+  const e = debit("TXSHAPE", "2026-08-03T17:10:52Z");
+  ok(!("transaction_hash" in e), "the effect fixture has NO transaction_hash (Horizon does not send one)");
+  ok(!(e._links || {}).transaction, "and no _links.transaction either");
+  ok(typeof e._links.operation.href === "string" && /\/operations\/\d+$/.test(e._links.operation.href),
+    "the hash is reachable only through _links.operation");
+  ok(/^\d+-\d+$/.test(e.id), "the effect id is <opId>-<index>, which is the operation-id fallback");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

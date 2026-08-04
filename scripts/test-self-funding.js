@@ -91,5 +91,26 @@ ok(buyerPaymentNetwork(mkHdr({ x402Version: 2, payload: {} })) === null, "v2 pay
 ok(buyerPaymentNetwork({ header: () => null }) === null, "no X-PAYMENT -> null (fail-open)");
 ok(buyerPaymentNetwork({ header: () => "not-base64-json!!" }) === null, "malformed X-PAYMENT -> null, no throw");
 
+
+// BOTH HEADERS, DISAGREEING. buyerPaymentNetwork decodes the payment header to
+// pick which chain we spend FROM (route-execute -> payX402 -> getUpstreamBuyer
+// vs getUpstreamBuyerAvm). It used to read x-payment first while settlement
+// reads payment-signature, so a buyer could pay on one chain with a valid
+// signature and add an unsigned x-payment naming another - funding their
+// external purchase from a hot wallet that never received their money, and
+// defeating the fail-closed chain-matching rule outright.
+{
+  const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
+  const both = {
+    header: (n) => ({
+      "payment-signature": enc({ network: "eip155:8453" }),
+      "x-payment": enc({ network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=" }),
+    })[String(n).toLowerCase()],
+  };
+  const net = buyerPaymentNetwork(both);
+  ok(net === "eip155:8453",
+    `the SETTLED header decides the spending chain, not an unsigned one (got ${net})`);
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

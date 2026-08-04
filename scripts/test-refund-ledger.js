@@ -212,6 +212,12 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
   const logLines = src.split("\n").filter((l) => /console\.(log|warn|error)/.test(l));
   const leaks = logLines.filter((l) => /\$\{(r|row)\.payer\}|\$\{(r|row)\.evidence\}|\$\{tx\}|proof\.tx/.test(l));
   ok(leaks.length === 0, `no log line prints a raw payer, evidence or tx (${leaks.length} found)`);
+  // A thrown Error reaches the same public log through the catch-all, so the
+  // THROW sites matter as much as the console lines - one of them printed the
+  // address verbatim.
+  const throwLeaks = src.split("\n").filter((l) => /throw new Error/.test(l) && /\$\{row\.payer\}/.test(l));
+  ok(throwLeaks.length === 0, `no thrown error interpolates a raw payer (${throwLeaks.length} found)`);
+  ok(/createHmac\(/.test(src), "the log tag is KEYED - an unsalted digest over an enumerable buyer set is confirmable, not private");
   ok(/createHash\(/.test(src) && /payer:\$\{/.test(src.replace(/\\/g, "")) === false || /tag\(/.test(src),
     "addresses are logged through a non-reversible tag");
 }

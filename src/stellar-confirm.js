@@ -100,9 +100,26 @@ export async function confirmStellarTransfer({
       return Number.isFinite(t) && t >= sinceMs;
     });
     for (const d of debits) {
-      const txHref = d?._links?.transaction?.href;
-      const txHash = d?.transaction_hash
-        || (typeof txHref === "string" ? txHref.split("/").filter(Boolean).pop() : null);
+      // Resolve the transaction via the effect's OPERATION.
+      //
+      // A Horizon EFFECT carries no transaction hash and no transaction link -
+      // its _links are operation/succeeds/precedes only. The first version read
+      // `transaction_hash` and a `_links.transaction.href` that do not exist, so
+      // every candidate was skipped and this function returned null for every
+      // real payment. It looked correct because the unit-test stub injected
+      // `transaction_hash`; against live Horizon it never confirmed anything,
+      // which made both the late-settle fix and the Stellar refund verifier
+      // inert. The operation DOES carry transaction_hash, and the operation id
+      // is the effect id up to the dash.
+      const opHref = d?._links?.operation?.href;
+      const opId = String(d?.id || "").split("-")[0];
+      const opUrl = (typeof opHref === "string" && opHref) || (opId ? `${base}/operations/${encodeURIComponent(opId)}` : null);
+      if (!opUrl) continue;
+      const op = await getJson(opUrl, fetchImpl, timeoutMs);
+      // transaction_successful false = the operation is on-ledger but its
+      // transaction failed, so nothing moved.
+      if (!op || op.transaction_successful === false) continue;
+      const txHash = op.transaction_hash;
       if (!txHash) continue;
 
       // The debit alone is not proof the money reached US - it could be any

@@ -35,7 +35,7 @@
 // charged-but-failed there is rare; rows are held and listed until the SVM
 // sender lands with the planned Solana spending wallet.
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 
 // This repo is PUBLIC, so every Actions log is world-readable. The project's
 // standing rule for buyer identities is "counts only, never addresses - a
@@ -45,7 +45,20 @@ import { createHash } from "node:crypto";
 // before the live check. So logs carry a stable non-reversible tag; the
 // operator resolves it to the address privately via /__operator/refunds.json,
 // which is already token-gated.
-const tag = (a) => (a ? `payer:${createHash("sha256").update(String(a)).digest("hex").slice(0, 8)}` : "?");
+// KEYED, not plain sha256. Every wallet that has ever paid us is enumerable
+// from the chain (~200 distinct buyers), so an unsalted digest over that set is
+// trivially CONFIRMABLE: hash each candidate, match 8 hex chars, and the public
+// log identifies the buyer again. Non-reversible is not the property we need -
+// unconfirmable is. The operator token is already in this job's env, keeps the
+// tag stable across an operator's runs, and is not something a reader has.
+const TAG_KEY = (process.env.AGENT402_OPERATOR_TOKEN || "").trim();
+const tag = (a) => {
+  if (!a) return "?";
+  const h = TAG_KEY
+    ? createHmac("sha256", TAG_KEY).update(String(a)).digest("hex")
+    : createHash("sha256").update(String(a)).digest("hex");
+  return `payer:${h.slice(0, 8)}`;
+};
 
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/+$/, "");
 const TOKEN = (process.env.AGENT402_OPERATOR_TOKEN || "").trim();
@@ -174,7 +187,7 @@ async function sendEvm(row, accepts) {
   if (!rpc) throw new Error(`no RPC for ${row.network}`);
   const token = accepts?.asset;
   if (!/^0x[0-9a-fA-F]{40}$/.test(String(token))) throw new Error(`no ERC-20 asset in live accepts for ${row.network}`);
-  if (!/^0x[0-9a-fA-F]{40}$/.test(String(row.payer))) throw new Error(`payer is not an EVM address: ${row.payer}`);
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(row.payer))) throw new Error(`payer is not an EVM address (${tag(row.payer)})`);
   const account = privateKeyToAccount(process.env.REFUND_EVM_KEY.trim());
   const chain = defineChain({ id, name: row.network, nativeCurrency: { name: "n", symbol: "n", decimals: 18 }, rpcUrls: { default: { http: [rpc] } } });
   const client = createWalletClient({ account, chain, transport: http(rpc) }).extend(publicActions);

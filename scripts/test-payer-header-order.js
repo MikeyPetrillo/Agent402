@@ -15,7 +15,7 @@
 // This file pins the ordering against the INSTALLED middleware, so a future
 // dependency bump that flips it fails CI instead of silently re-opening the
 // hole.
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { payerFromRequest, paymentHeaderOf } from "../src/payer.js";
 
 let pass = 0, fail = 0;
@@ -65,7 +65,13 @@ const reqWith = (headers) => ({ header: (n) => headers[String(n).toLowerCase()] 
 {
   let src = "";
   try { src = readFileSync("node_modules/@x402/express/dist/esm/index.mjs", "utf8"); } catch { /* optional */ }
-  if (!src) {
+  // A pin that degrades to a silent pass stops being a pin. If the package is
+  // installed but its entry file moved, that is exactly when the guard is most
+  // needed and least likely to be noticed - so it FAILS rather than skips.
+  const installed = existsSync("node_modules/@x402/express");
+  if (!src && installed) {
+    ok(false, "@x402/express is installed but its entry file could not be read - the version pin is no longer guarding anything");
+  } else if (!src) {
     console.log("ok - (skipped: @x402/express not installed)"); pass++;
   } else {
     const m = src.match(/paymentHeader:\s*adapter\.getHeader\("([a-z-]+)"\)\s*\|\|\s*adapter\.getHeader\("([a-z-]+)"\)/);
