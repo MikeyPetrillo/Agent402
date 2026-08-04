@@ -1,0 +1,70 @@
+# Refund run — repay the refund ledger (charged-but-failed buyers).
+#
+# Dispatch-only and DRY BY DEFAULT: a run with live=false (the default) prints
+# the plan — who is owed, what would be sent, what is held and why — and moves
+# no money. A live run requires explicitly setting live=true at dispatch.
+#
+# The ledger lives on production (src/refund-ledger.js, written the moment a
+# settle receipt with success:true goes out on a non-200 response). This
+# workflow is the ONLY thing that sends money: the spending keys live here as
+# Actions secrets, never on Railway — the server can record debts but can
+# never pay them.
+#
+# Keys (all optional — a missing key HOLDS that chain's rows, listed loudly):
+#   REFUND_EVM_KEY            one EVM key for all eip155 rails (fund per chain)
+#   REFUND_STELLAR_SECRET     classic payment + "agent402 refund" memo
+#   REFUND_ALGORAND_MNEMONIC  USDC ASA transfer + note
+# Solana is detection-only until the SVM spending wallet lands; its rows stay
+# owed and are listed on every run.
+#
+# NEVER the treasury, NEVER the CI canary burners — refunds get their own
+# wallets so purposes cannot blur (same doctrine as the upstream spending
+# wallets).
+name: Refund run
+on:
+  workflow_dispatch:
+    inputs:
+      live:
+        description: "Actually send money (default is a dry run)"
+        type: boolean
+        default: false
+      max_total_usd:
+        description: "Hard cap on this run's total refunds"
+        default: "2"
+      max_each_usd:
+        description: "Hard cap per individual refund"
+        default: "0.25"
+      only_chain:
+        description: "Optional CAIP-2 filter (e.g. eip155:8453)"
+        default: ""
+      include_synthetic:
+        description: "Also refund canary self-harm rows (churn - normally leave false)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  refund:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@6044e13b5dc448bd6bd11ba8e2d61b7c8151e2d4
+        with:
+          node-version: 22
+      - name: Install deps (senders only load for chains that have rows)
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @stellar/stellar-sdk@16.0.1 viem@2.52.2 algosdk@3.5.0
+      - name: Run refunds
+        env:
+          AGENT402_OPERATOR_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+          REFUND_LIVE: ${{ inputs.live && 'true' || 'false' }}
+          REFUND_MAX_TOTAL_USD: ${{ inputs.max_total_usd }}
+          REFUND_MAX_EACH_USD: ${{ inputs.max_each_usd }}
+          REFUND_ONLY_CHAIN: ${{ inputs.only_chain }}
+          REFUND_INCLUDE_SYNTHETIC: ${{ inputs.include_synthetic && 'true' || 'false' }}
+          REFUND_EVM_KEY: ${{ secrets.REFUND_EVM_KEY }}
+          REFUND_STELLAR_SECRET: ${{ secrets.REFUND_STELLAR_SECRET }}
+          REFUND_ALGORAND_MNEMONIC: ${{ secrets.REFUND_ALGORAND_MNEMONIC }}
+        run: node scripts/refund-run.js

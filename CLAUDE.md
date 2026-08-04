@@ -365,6 +365,27 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   `timeout-minutes` is 75 to cover it. `scripts/test-heartbeat-probe.sh` (22 assertions,
   offline, stubbed curl, in CI) pins the FAILS -> per-component mapping — a mismap would
   silently report the wrong component down, or a broken one as operational.
+- **Refund pipeline (`src/refund-ledger.js` + `scripts/refund-run.js` + `refund.yml`, 2026-08-04):**
+  charged-but-failed is now a DEBT, not only an alarm. The moment a settle receipt with
+  `success:true` goes out on a non-200 (the existing detection at the charged-failure
+  tally in server.js), a row lands in `/data/agent402-refunds.db`: payer, network,
+  priceUsd, settle tx as evidence, synthetic flag. Idempotent on the settle tx.
+  Operator surface: `GET /__operator/refunds.json` (+ `POST /__operator/refunds/update`
+  — `paid` REQUIRES the outbound tx, `void` REQUIRES a note; a silent write-off is the
+  failure mode the ledger exists to prevent; resolved rows never re-resolve).
+  Execution is the dispatch-only `refund.yml` → `scripts/refund-run.js`: DRY RUN by
+  default (`live=true` to send), refunds the exact priceUsd to the recorded payer on
+  the chain they paid on, asset read from OUR OWN live 402 accepts (never a
+  hand-maintained token table; EVM decimals read from the contract). Caps: $0.25/refund,
+  $2/run, both overridable at dispatch; over-cap and unsupported rows are HELD and
+  listed, never dropped. Canary/synthetic rows are recorded but held unless
+  `include_synthetic`. Spending keys are Actions secrets ONLY (`REFUND_EVM_KEY`,
+  `REFUND_STELLAR_SECRET` — classic payment + "agent402 refund" memo,
+  `REFUND_ALGORAND_MNEMONIC` — dedicated wallets, NEVER the treasury or CI burners);
+  the server records debts but can never send money. Solana is detection-only until
+  the SVM spending wallet lands (rare there anyway: a failed Solana txn moves no
+  tokens, measured 2026-08-03). A failed send leaves the row owed and exits 1.
+  `scripts/test-refund-ledger.js` (27 assertions, 7 mutations killed, in CI).
 - **Charged-failure alarm — READ THIS BEFORE TRUSTING IT.** `charged-failure-alert.yml`
   polled PUBLIC `/api/stats` for `.chargedFailures`, a field that only exists on
   `getOperatorBreakdown()` behind `/__operator/stats`. `jq -e` failed every run, it took

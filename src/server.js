@@ -214,6 +214,7 @@ const TRIAL_IP_HOUR = Math.max(1, Number(process.env.TRIAL_PER_IP_PER_HOUR) || 1
 const trialToolLimiter = createRateLimiter("trial-tool", { perMin: TRIAL_PER_TOOL_HOUR, perHour: TRIAL_PER_TOOL_HOUR });
 const trialIpLimiter = createRateLimiter("trial-ip", { perMin: TRIAL_IP_MIN, perHour: TRIAL_IP_HOUR });
 const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP_HOUR} per hour per client`;
+import { recordRefundOwed, listRefunds, markRefundPaid, markRefundVoid, refundTotals } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
@@ -1832,6 +1833,34 @@ app.get("/__operator/egress.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   // Cheap read of an in-memory counter - no upstream, so no heavy-route limiter.
   res.set("Cache-Control", "no-store").json(egressReport({ top: Math.min(200, parseInt(req.query.top, 10) || 60) }));
+});
+// The refund ledger - who is owed money for a charged-but-failed call, and
+// what happened to each debt. Local sqlite reads/writes only (no upstream),
+// so no heavy-route limiter. Writes require the outbound tx (paid) or a note
+// (void): repayment needs evidence, and a silent write-off is exactly what
+// the ledger exists to prevent. The refund EXECUTOR (refund.yml -> scripts/
+// refund-run.js) is the only thing that sends money, from its own keys in
+// Actions secrets - this server never holds a spending key.
+app.get("/__operator/refunds.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const status = ["owed", "paid", "void", "all"].includes(String(req.query.status)) ? String(req.query.status) : "owed";
+  res.set("Cache-Control", "no-store").json({
+    totals: refundTotals(),
+    status,
+    refunds: listRefunds({ status, limit: Math.min(500, parseInt(req.query.limit, 10) || 200) }),
+  });
+});
+app.post("/__operator/refunds/update", express.json({ limit: "16kb" }), (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  const { id, action, tx, note } = req.body || {};
+  const rowId = Number(id);
+  if (!Number.isInteger(rowId) || rowId <= 0) return res.status(400).json({ error: "id required" });
+  let ok = false;
+  if (action === "paid") ok = markRefundPaid(rowId, tx, note || null);
+  else if (action === "void") ok = markRefundVoid(rowId, note);
+  else return res.status(400).json({ error: 'action must be "paid" (requires tx) or "void" (requires note)' });
+  if (!ok) return res.status(409).json({ error: "not updated - row missing, already resolved, or evidence missing (paid needs tx, void needs note)" });
+  res.json({ ok: true, id: rowId, action, totals: refundTotals() });
 });
 app.get("/__operator/ledger-sync.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
@@ -4122,6 +4151,21 @@ app.use((req, res, next) => {
           // kept in this bucket ON PURPOSE: the buyer-was-charged alarm must
           // fail loud, so only an explicit success:false downgrades it.
           recordChargedFailure(def.slug, res.statusCode);
+          // The refund ledger - the debt itself, not just the alarm. The
+          // odometer above says it HAPPENED; this row says who is owed what,
+          // on which chain, with the settle tx as evidence, and it stays owed
+          // until the dispatch-only refund workflow repays it (the server
+          // never holds a spending key). Idempotent on the tx, so a retried
+          // response cannot double-book the debt.
+          recordRefundOwed({
+            slug: def.slug,
+            network,
+            payer,
+            priceUsd,
+            tx: txFromPaymentResponse(settleReceipt),
+            httpStatus: res.statusCode,
+            synthetic,
+          });
           // Mirror to PostHog with payer attribution so a spike is alertable in
           // near-real-time and traceable to a wallet (the local table keeps only
           // slug/status/ts, and the 30-min GitHub alert can't say WHO was hurt).

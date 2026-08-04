@@ -754,6 +754,9 @@ jobs:
       - name: SVM settle-reason clarity (a measured empty wallet becomes "insufficient_funds"; specific reasons and funded wallets never rewritten — offline)
         run: node scripts/test-svm-clarify.js
 
+      - name: Refund ledger + planner (idempotent debts, evidence-gated resolution, caps, canary excluded, no silent chain drops — offline)
+        run: node scripts/test-refund-ledger.js
+
       - name: Revenue daily series (day bucketing, EVM block estimation, canary-vs-funding split — offline)
         run: node scripts/test-revenue-daily.js
 
