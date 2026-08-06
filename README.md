@@ -1,5 +1,7 @@
 # Agent402.Tools - the open x402 index (Find · Route · Leaderboard) + a catalog of 500+ tools & skill packs for AI agents
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.MikeyPetrillo%2Fagent402.svg)](https://mcptoplist.com/server/io.github.MikeyPetrillo%2Fagent402)
+
 > **What makes it different:** Agent402 is **open-source and self-hostable** - and a
 > single integration gives a buyer **three free primitives over the whole x402
 > ecosystem**:
