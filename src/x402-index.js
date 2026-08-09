@@ -1052,7 +1052,11 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     return fits.length === 1 ? fits[0] : null;
   };
   const used = new Set();
-  const enrich = (b, o, route) => ({
+  const enrich = (b, o, route) => {
+    const bazaarPrice = b.price == null ? null : Number(b.price);
+    const originPrice = o.price == null ? null : Number(o.price);
+    const priceConflict = Number.isFinite(bazaarPrice) && Number.isFinite(originPrice) && bazaarPrice !== originPrice;
+    return ({
     ...b,
     // Bazaar defaults missing methods to POST. The OpenAPI operation is the
     // authoritative verb once the route-only fallback finds a match.
@@ -1066,11 +1070,20 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     // Keep a settlement-observed Bazaar amount (including an explicit free
     // price of 0); only fill an absent amount from the OpenAPI extension.
     price: b.price == null ? o.price : b.price,
+    // A settlement-observed amount remains the routing price, but a healthy
+    // seller origin can now declare a different current amount. Preserve both
+    // observations so buyers can fail closed instead of learning only after a
+    // runtime 402 rejects the stale quote.
+    ...(priceConflict ? {
+      priceConflict: true,
+      priceObservations: { bazaar: b.price, origin: o.price },
+    } : {}),
     // A registry row IS a settlement record: an operation the document left
     // unannotated (paid:false) that has real settled payments is buyable —
     // observed truth beats the doc's silence. An explicit zero price stays free.
     ...(b.price != null && b.price > 0 ? { paid: true } : o.paid !== undefined ? { paid: o.paid } : {}),
   });
+  };
   const merged = bazaarTools.map((b) => {
     // Only an inferred Bazaar verb may fall back to a route-only match. An
     // explicit verb must match exactly: GET and POST on the same path can be
@@ -2152,6 +2165,10 @@ export function sellerDetail(originOrHost) {
         slug: t.slug || null,
         name: t.name || null,
         price: t.price ?? null,
+        ...(t.priceConflict === true ? {
+          priceConflict: true,
+          priceObservations: t.priceObservations,
+        } : {}),
         ...(t.paid !== undefined ? { paid: t.paid } : {}),
         networks: t.networks || undefined,
       })),

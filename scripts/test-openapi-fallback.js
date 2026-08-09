@@ -16,6 +16,7 @@ import {
   normaliseOpenapiTools,
   openapiHasPaymentSignal,
   routeQuery,
+  sellerDetail,
   _cacheForTests,
 } from "../src/x402-index.js";
 
@@ -221,7 +222,18 @@ const openapiTools = [
   ok(free.price === 0, `explicit free Bazaar price survives (got ${free.price})`);
 }
 
-// ---- 3d. Route-only fallback refuses ambiguous OpenAPI paths ----
+// ---- 3d. Same-route price disagreement stays observable ----
+{
+  const documented = [{ ...openapiTools[0], method: "GET", price: "0.003" }];
+  const observed = [{ ...bazaarTools[0], method: "GET", price: 0.009 }];
+  const [merged] = mergeOpenapiIntoBazaar(documented, observed);
+  ok(merged.price === 0.009, "the settlement-observed price remains the routing price");
+  ok(merged.priceConflict === true, "a differing current origin price is visible as a conflict");
+  ok(merged.priceObservations?.bazaar === 0.009, "price conflict preserves the Bazaar observation");
+  ok(merged.priceObservations?.origin === "0.003", "price conflict preserves the origin observation");
+}
+
+// ---- 3e. Route-only fallback refuses ambiguous OpenAPI paths ----
 {
   const documented = [
     { ...openapiTools[0], method: "GET", slug: "read-md" },
@@ -300,6 +312,18 @@ seed("https://competitor.example", [
   },
 ]);
 seed("https://md.example", mergeOpenapiIntoBazaar(openapiTools, bazaarTools));
+{
+  const conflictTools = mergeOpenapiIntoBazaar(
+    [{ ...openapiTools[0], method: "GET", price: "0.003" }],
+    [{ ...bazaarTools[0], method: "GET", price: 0.009 }],
+  );
+  seed("https://price-conflict.example", conflictTools);
+  const detail = sellerDetail("price-conflict.example");
+  const tool = detail?.tools?.find((item) => item.route === "/md");
+  ok(tool?.priceConflict === true, "seller detail exposes a price conflict");
+  ok(tool?.priceObservations?.bazaar === 0.009, "seller detail exposes the registry observation");
+  ok(tool?.priceObservations?.origin === "0.003", "seller detail exposes the origin observation");
+}
 {
   // "url to markdown" is the seller's own operationId phrasing — the merged
   // slug carries every term and must now WIN outright.
