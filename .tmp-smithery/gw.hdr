@@ -1,0 +1,14 @@
+HTTP/2 401 
+date: Mon, 10 Aug 2026 15:55:29 GMT
+content-type: application/json
+content-length: 76
+access-control-allow-origin: *
+www-authenticate: Bearer error="invalid_token", error_description="Missing Authorization header", resource_metadata="https://agent402--mike-kq9d.run.tools/.well-known/oauth-protected-resource"
+cf-placement: remote-SEA
+access-control-expose-headers: mcp-session-id,www-authenticate
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=lATrgNGwEd7igsazA8euXINhPTJzrOVUKfIulQaZHguVVU5FqTXZk80v52LZo927YYuysbz%2BJ%2BDlOvaEvlp4SZn%2Fc2cUd4cncvTIg51RhTjBqzfuWR5zZ9yYLFTCde1HpbWvAf4FYAKDFEkbQB96Tw%3D%3D"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+server: cloudflare
+cf-ray: a2902f5e88625394-ATL
+alt-svc: h3=":443"; ma=86400
+
