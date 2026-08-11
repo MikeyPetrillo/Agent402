@@ -1,5 +1,7 @@
 # Agent402.Tools - search + answer front door, 500+ tools, open x402 index
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.MikeyPetrillo%2Fagent402.svg)](https://mcptoplist.com/server/io.github.MikeyPetrillo%2Fagent402)
+
 > **What makes it different:** Agent402 is **open-source and self-hostable** - and a
 > single integration gives a buyer **three free primitives over the whole x402
 > ecosystem**:
