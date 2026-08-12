@@ -14,6 +14,7 @@ import {
   bazaarItemToTool,
   mergeOpenapiIntoBazaar,
   normaliseOpenapiTools,
+  responseContractFromOperation,
   openapiHasPaymentSignal,
   routeQuery,
   sellerDetail,
@@ -41,6 +42,118 @@ ok(
   "a plain Swagger site is NOT a payment signal",
 );
 ok(!openapiHasPaymentSignal(null) && !openapiHasPaymentSignal({}), "null/empty openapi is not a signal");
+
+// ---- 1a. response contracts report without changing routing ----
+{
+  const operation = {
+    "x-price": "$0.01",
+    responses: {
+      200: {
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["data", "ok"],
+              properties: {
+                data: {
+                  type: "object",
+                  required: ["attributes"],
+                  properties: { attributes: { type: "object" } },
+                },
+                ok: { type: "boolean" },
+              },
+            },
+          },
+        },
+      },
+      201: {
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["data"],
+              properties: { data: { type: "object" } },
+            },
+          },
+        },
+      },
+    },
+  };
+  const report = responseContractFromOperation(
+    { paths: { "/simulate": { post: operation } } },
+    "https://seller.example",
+    "POST",
+    "/simulate",
+    operation,
+  );
+  ok(report.state === "declared", `all admissible JSON variants are declared (got ${report.state})`);
+  ok(report.successResponseVariants === 2 && report.successJsonSchemas === 2,
+    "the response report counts both explicit success variants");
+  ok(report.guaranteedPaths.join(",") === "data",
+    `only paths required by every success variant are guaranteed (got ${report.guaranteedPaths})`);
+  ok(report.runtimeVerified === false, "seller OpenAPI evidence never claims runtime delivery");
+
+  const envelopeOperation = {
+    operationId: "simulation",
+    "x-price": "$0.01",
+    responses: {
+      200: {
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["data"],
+              properties: {
+                data: { type: "object", properties: { attributes: { type: "object" } } },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const envelope = responseContractFromOperation({
+    paths: {
+      "/simulation": {
+        post: envelopeOperation,
+      },
+    },
+  }, "https://seller.example", "POST", "/simulation", envelopeOperation);
+  ok(envelope.state === "declared", "an envelope schema is still a declared contract");
+  ok(envelope.guaranteedPaths.join(",") === "data",
+    "a described but optional nested field is not projected as guaranteed");
+
+  const partial = responseContractFromOperation({}, "https://seller.example", "GET", "/partial", {
+    responses: {
+      200: { content: { "application/json": { schema: { $ref: "#/components/schemas/Result" } } } },
+      204: { description: "No content" },
+    },
+  });
+  ok(partial.state === "partial", "an unresolved schema plus a non-JSON success variant reports partial");
+  ok(partial.runtimeVerified === false, "partial evidence also stays runtime-unverified");
+
+  const absent = responseContractFromOperation({}, "https://seller.example", "GET", "/absent", {});
+  ok(absent.state === "absent" && absent.successResponseVariants === 0,
+    "an operation without explicit success responses reports absent");
+
+  const malformed = responseContractFromOperation({}, "https://seller.example", "GET", "/malformed", {
+    responses: {
+      200: {
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["result", "result"],
+              properties: { result: { type: "string" } },
+            },
+          },
+        },
+      },
+    },
+  });
+  ok(malformed.state === "partial" && malformed.successJsonSchemas === 1,
+    "a malformed response schema reports partial instead of failing the seller crawl");
+}
 
 // ---- 1b. annotated documents list free siblings, flagged, and drop deprecated ----
 // Revised 2026-07-27 (seller escalation): unannotated operations in an
@@ -139,6 +252,7 @@ const openapiTools = [
     category: "markdown",
     tags: ["markdown", "scraping"],
     price: "0.005",
+    responseContractEvidence: ["a", 0, 0, []],
   },
   {
     seller: "https://md.example",
@@ -150,6 +264,7 @@ const openapiTools = [
     category: "extraction",
     tags: ["extraction"],
     price: "0.01",
+    responseContractEvidence: ["a", 0, 0, []],
   },
 ];
 {
@@ -162,6 +277,7 @@ const openapiTools = [
   ok(md.payToByNetwork["eip155:8453"], "Bazaar payTo survives the merge");
   ok(md.networks.length === 1, "Bazaar networks survive the merge");
   ok(md.tags.includes("markdown"), "openapi tags win when present");
+  ok(md.responseContractEvidence?.[0] === "a", "compact OpenAPI response evidence survives the Bazaar merge");
   const extract = merged.find((t) => t.route === "/extract");
   ok(extract && extract.slug === "extract-structured-data", "openapi-only route is appended");
 }

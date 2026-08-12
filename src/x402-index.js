@@ -39,6 +39,7 @@ import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
 import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, isQuoteResponse } from "./x402-live-quote.js";
 import { summarize, fmtUsd, fmtPct } from "./economy.js";
 import { rankBy, canonicalHost } from "./leaderboard.js";
+import { SCHEMAS as PAYMENT_POLICY_SCHEMAS, evaluateResponseContract } from "agent-payment-policy";
 import { routeExecuteHint } from "./tools/route-execute.js";
 
 // RAILS caip2 -> CHAIN_PAGES key, same join the homepage's by-chain strip uses
@@ -434,6 +435,126 @@ function priceConflictProjection(t) {
   };
 }
 
+/** Compact seller-declared response evidence shared by every external-tool
+ * projection. This reports only. It does not re-rank, authorize payment, or
+ * claim a runtime response has been delivered.
+ *
+ * Each explicit 2xx variant is evaluated independently. A path is guaranteed
+ * only when every such variant guarantees it. Missing/non-JSON variants and
+ * unsupported schema constructs make the aggregate partial rather than
+ * letting one strong variant hide a weaker success path. */
+export function responseContractFromOperation(openapi, originUrl, method, route, operation) {
+  const responses = operation?.responses && typeof operation.responses === "object"
+    ? operation.responses
+    : {};
+  const allSuccess = Object.entries(responses)
+    .filter(([status]) => /^2\d\d$/.test(status))
+    .sort(([a], [b]) => a.localeCompare(b));
+  const success = allSuccess.slice(0, 16);
+  const reports = success.map(([status, declaration]) => {
+    const content = declaration?.content && typeof declaration.content === "object"
+      ? declaration.content
+      : {};
+    const mediaKey = Object.keys(content).find((key) => key.toLowerCase().split(";", 1)[0].trim() === "application/json");
+    const media = mediaKey && content[mediaKey] && typeof content[mediaKey] === "object"
+      ? content[mediaKey]
+      : null;
+    let example = media?.example;
+    if (example === undefined) {
+      const first = Object.values(media?.examples && typeof media.examples === "object" ? media.examples : {})
+        .find((item) => item && typeof item === "object" && item.value !== undefined);
+      example = first?.value;
+    }
+    if (example === undefined && media?.schema?.example !== undefined) example = media.schema.example;
+    const schemaPresent = Boolean(media?.schema && typeof media.schema === "object");
+    try {
+      return {
+        schemaPresent,
+        report: evaluateResponseContract({
+          schemaVersion: PAYMENT_POLICY_SCHEMAS.responseContractObservation,
+          source: "seller_openapi",
+          request: { method: String(method).toUpperCase(), url: new URL(route, originUrl).toString() },
+          response: {
+            status: Number(status),
+            mediaType: "application/json",
+            schema: schemaPresent ? media.schema : null,
+            ...(example === undefined ? {} : { example }),
+          },
+        }),
+      };
+    } catch {
+      // A malformed seller declaration is evidence about that operation, not
+      // permission to fail the seller's entire crawl.
+      return { schemaPresent, report: { decision: "invalid", requiredPaths: [] } };
+    }
+  });
+  const jsonSchemas = reports.filter((item) => item.schemaPresent);
+  const state = jsonSchemas.length === 0
+    ? "absent"
+    : allSuccess.length <= 16 && reports.length === success.length && reports.every((item) => item.report.decision === "admissible")
+      ? "declared"
+      : "partial";
+  const guaranteedPaths = reports.length
+    ? reports
+        .map((item) => new Set(item.report.requiredPaths || []))
+        .reduce((common, paths) => new Set([...common].filter((path) => paths.has(path))))
+    : new Set();
+  return {
+    source: "seller_openapi",
+    state,
+    successResponseVariants: Math.min(allSuccess.length, 16),
+    successJsonSchemas: jsonSchemas.length,
+    guaranteedPaths: [...guaranteedPaths].sort().slice(0, 64),
+    runtimeVerified: false,
+  };
+}
+
+/** Persist a compact tuple rather than repeating constant public labels across
+ * tens of thousands of cached tool rows. Public projections expand it back to
+ * the readable contract below. */
+function responseContractStorage(value) {
+  const state = value?.state === "declared" ? "d" : value?.state === "absent" ? "a" : "p";
+  return [
+    state,
+    Math.max(0, Math.min(16, Number(value?.successResponseVariants) || 0)),
+    Math.max(0, Math.min(16, Number(value?.successJsonSchemas) || 0)),
+    Array.isArray(value?.guaranteedPaths) ? value.guaranteedPaths.slice(0, 64) : [],
+  ];
+}
+
+function responseContractStorageProjection(t) {
+  if (Array.isArray(t?.responseContractEvidence)) {
+    return { responseContractEvidence: t.responseContractEvidence.slice(0, 4) };
+  }
+  // Backward-compatible with a cache written by an earlier draft of this
+  // change, before the compact storage tuple existed.
+  if (t?.responseContract && typeof t.responseContract === "object") {
+    return { responseContractEvidence: responseContractStorage(t.responseContract) };
+  }
+  return {};
+}
+
+/** Shared public projection so sellerDetail / route / index-tools never drift. */
+function responseContractProjection(t) {
+  const stored = Array.isArray(t?.responseContractEvidence)
+    ? t.responseContractEvidence
+    : t?.responseContract && typeof t.responseContract === "object"
+      ? responseContractStorage(t.responseContract)
+      : null;
+  if (!stored) return {};
+  const state = stored[0] === "d" ? "declared" : stored[0] === "a" ? "absent" : "partial";
+  return {
+    responseContract: {
+      source: "seller_openapi",
+      state,
+      successResponseVariants: Math.max(0, Math.min(16, Number(stored[1]) || 0)),
+      successJsonSchemas: Math.max(0, Math.min(16, Number(stored[2]) || 0)),
+      guaranteedPaths: Array.isArray(stored[3]) ? stored[3].slice(0, 64) : [],
+      runtimeVerified: false,
+    },
+  };
+}
+
 // Tie-break rank for price. parsePrice maps unknown (null / unparseable) to 0
 // for display, which is right for priceUsd but wrong for ranking: it let
 // listings with NO published amount masquerade as "free" and outrank sellers
@@ -622,6 +743,9 @@ export function normaliseOpenapiTools(openapi, originUrl) {
         category: tags[0] || "other",
         tags,
         price: op["x-price"] || op["x-x402-price"] || op["x-payment-info"]?.price?.amount || op["x-x402-price-usdc"] || null,
+        responseContractEvidence: responseContractStorage(
+          responseContractFromOperation(openapi, originUrl, method, pathStr, op),
+        ),
         ...(documentDistinguishesPaidOperations ? { paid: annotated } : {}),
       });
     }
@@ -1247,6 +1371,7 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     // unannotated (paid:false) that has real settled payments is buyable —
     // observed truth beats the doc's silence. An explicit zero price stays free.
     ...(b.price != null && b.price > 0 ? { paid: true } : o.paid !== undefined ? { paid: o.paid } : {}),
+    ...responseContractStorageProjection(o),
   });
   };
   const merged = bazaarTools.map((b) => {
@@ -2376,6 +2501,7 @@ export function sellerDetail(originOrHost) {
         name: t.name || null,
         price: t.price ?? null,
         ...priceConflictProjection(t),
+        ...responseContractProjection(t),
         ...(t.paid !== undefined ? { paid: t.paid } : {}),
         networks: t.networks || undefined,
       })),
@@ -2729,6 +2855,7 @@ export function routeQuery({ query, top, include, networkFilter, baseUrl, catalo
       price: t.price,
       priceUsd: parsePrice(t.price),
       ...priceConflictProjection(t),
+      ...responseContractProjection(t),
       // "x402" = we have positive evidence this is payable in-protocol (a price,
       // or a registry accepts entry someone settled against). "unknown" = we
       // have none, which is NOT the same as "not payable" - see payabilityOf.
@@ -3448,6 +3575,7 @@ function flattenedThirdPartyTools(excludeOrigin = "") {
         // a measurement taken during this audit came out wrong.
         price: t?.price ?? null,
         ...priceConflictProjection(t),
+        ...responseContractProjection(t),
         // The identifier a caller needs to actually invoke the tool. Present on
         // /api/route and /api/find, missing here, on the surface that lists all
         // 65k third-party rows.

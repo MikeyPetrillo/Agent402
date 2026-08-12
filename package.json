@@ -71,6 +71,7 @@
     "@x402/stellar": "^2.21.0",
     "@x402/svm": "^2.16.0",
     "@zxing/library": "^0.21.3",
+    "agent-payment-policy": "^0.11.1",
     "algosdk": "^3.6.0",
     "better-sqlite3": "^12.11.1",
     "compression": "^1.8.1",
