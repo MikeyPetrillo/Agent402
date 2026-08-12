@@ -196,7 +196,7 @@ export async function assertPublicUrl(rawUrl) {
  * Fetch a public http(s) URL with SSRF protection, size cap, and timeout.
  * Returns { finalUrl, html } — or { finalUrl, buffer } with `binary: true`.
  */
-export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
+export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, redirect = "follow" } = {}) {
   const url = await assertPublicUrl(rawUrl);
 
   const controller = new AbortController();
@@ -211,7 +211,7 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
       // safety is identical to a GET.
       ...(body !== undefined ? { body } : {}),
       signal: controller.signal,
-      redirect: "follow",
+      redirect,
       dispatcher: ssrfDispatcher,
       // Caller headers (e.g. an upstream API key) merge over the defaults;
       // headers don't change the connection target, so SSRF safety is unaffected.
@@ -281,6 +281,7 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
   // (text/html when an audio file is expected), instead of burning a worker
   // slot on a doomed ffprobe/parse and returning a less specific error.
   const contentType = response.headers.get("content-type") || "";
-  if (binary) return { finalUrl: response.url, buffer, contentType };
-  return { finalUrl: response.url, html: buffer.toString("utf-8"), contentType };
+  const linkHeader = String(response.headers.get("link") || "").slice(0, 32_768) || null;
+  if (binary) return { finalUrl: response.url, buffer, contentType, linkHeader };
+  return { finalUrl: response.url, html: buffer.toString("utf-8"), contentType, linkHeader };
 }

@@ -39,7 +39,13 @@ import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
 import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, isQuoteResponse } from "./x402-live-quote.js";
 import { summarize, fmtUsd, fmtPct } from "./economy.js";
 import { rankBy, canonicalHost } from "./leaderboard.js";
-import { SCHEMAS as PAYMENT_POLICY_SCHEMAS, evaluateResponseContract } from "agent-payment-policy";
+import {
+  PURCHASE_EVIDENCE_RELATION,
+  SCHEMAS as PAYMENT_POLICY_SCHEMAS,
+  evaluateResponseContract,
+  selectPurchaseEvidenceLink,
+  verifyPurchaseEvidenceManifest,
+} from "agent-payment-policy";
 import { routeExecuteHint } from "./tools/route-execute.js";
 
 // RAILS caip2 -> CHAIN_PAGES key, same join the homepage's by-chain strip uses
@@ -499,14 +505,102 @@ export function responseContractFromOperation(openapi, originUrl, method, route,
         .map((item) => new Set(item.report.requiredPaths || []))
         .reduce((common, paths) => new Set([...common].filter((path) => paths.has(path))))
     : new Set();
+  const schemaDigests = [...new Set(jsonSchemas.map((item) => item.report.schemaDigest).filter(Boolean))];
   return {
     source: "seller_openapi",
     state,
     successResponseVariants: Math.min(allSuccess.length, 16),
     successJsonSchemas: jsonSchemas.length,
     guaranteedPaths: [...guaranteedPaths].sort().slice(0, 64),
+    schemaDigest: schemaDigests.length === 1 ? schemaDigests[0] : null,
     runtimeVerified: false,
   };
+}
+
+/** Optional seller-owned pre-purchase evidence. Missing evidence is reported,
+ * never penalized. One same-origin manifest is fetched once per seller, then
+ * exact operations are cross-checked against the OpenAPI already in memory.
+ * This does not probe routes, rank, route, or authorize. */
+export async function inspectPurchaseEvidence({ originUrl, linkHeaders = [], openapi, tools, fetchImpl = safeFetch } = {}) {
+  const advertised = [];
+  try {
+    for (const header of linkHeaders.filter(Boolean)) {
+      const selected = selectPurchaseEvidenceLink(header, originUrl);
+      if (selected) advertised.push(selected);
+    }
+  } catch {
+    return { status: "invalid", relation: PURCHASE_EVIDENCE_RELATION, compatibleOperationCount: 0 };
+  }
+  const unique = [...new Set(advertised)];
+  if (!unique.length) return { status: "missing", relation: PURCHASE_EVIDENCE_RELATION, compatibleOperationCount: 0 };
+  if (unique.length !== 1) return { status: "invalid", relation: PURCHASE_EVIDENCE_RELATION, compatibleOperationCount: 0 };
+  if (!openapi || typeof openapi !== "object") {
+    return { status: "unverified", relation: PURCHASE_EVIDENCE_RELATION, manifestUrl: unique[0], reason: "openapi_unavailable", compatibleOperationCount: 0 };
+  }
+  let manifest;
+  try {
+    const response = await fetchImpl(unique[0], { maxBytes: 512_000, headers: { Accept: "application/json" }, redirect: "manual" });
+    if (response.finalUrl !== unique[0]) throw new Error("purchase evidence redirected");
+    manifest = JSON.parse(response.html);
+  } catch {
+    return { status: "invalid", relation: PURCHASE_EVIDENCE_RELATION, manifestUrl: unique[0], reason: "manifest_unavailable", compatibleOperationCount: 0 };
+  }
+  const basePath = openapiBasePath(openapi, originUrl);
+  const contracts = new Map();
+  for (const [rawPath, item] of Object.entries(openapi.paths || {})) {
+    const route = basePath && !rawPath.startsWith(basePath + "/") && rawPath !== basePath ? basePath + rawPath : rawPath;
+    for (const method of ["get", "post"]) {
+      const operation = item?.[method];
+      if (!operation) continue;
+      contracts.set(`${method.toUpperCase()} ${route}`, responseContractFromOperation(openapi, originUrl, method, route, operation));
+    }
+  }
+  const compatible = new Set();
+  let binding = null;
+  try {
+    for (const operation of manifest.operations || []) {
+      const key = `${operation.method} ${operation.path}`;
+      const contract = contracts.get(key);
+      if (!contract || contract.state !== "declared" || !contract.schemaDigest) continue;
+      const verified = verifyPurchaseEvidenceManifest(manifest, {
+        target: new URL(operation.path, originUrl),
+        method: operation.method,
+        requiredPaths: contract.guaranteedPaths,
+      });
+      if (verified.responseSchemaDigest !== contract.schemaDigest) continue;
+      binding ||= verified;
+      compatible.add(key);
+    }
+  } catch {
+    return { status: "invalid", relation: PURCHASE_EVIDENCE_RELATION, manifestUrl: unique[0], reason: "manifest_contract_invalid", compatibleOperationCount: 0 };
+  }
+  for (const tool of tools || []) {
+    if (compatible.has(`${String(tool.method || "GET").toUpperCase()} ${tool.route}`)) tool.purchaseEvidenceVerified = true;
+  }
+  if (!binding || !compatible.size) {
+    return { status: "unverified", relation: PURCHASE_EVIDENCE_RELATION, manifestUrl: unique[0], reason: "no_current_openapi_match", compatibleOperationCount: 0 };
+  }
+  return {
+    status: "verified",
+    relation: PURCHASE_EVIDENCE_RELATION,
+    manifestUrl: unique[0],
+    manifestDigest: binding.manifestDigest,
+    serviceVersion: binding.serviceVersion,
+    declaration: binding.declaration,
+    compatibleOperationCount: compatible.size,
+    totalOperationCount: Array.isArray(manifest.operations) ? manifest.operations.length : 0,
+  };
+}
+
+function purchaseEvidenceToolProjection(tool) {
+  return tool?.purchaseEvidenceVerified === true
+    ? { purchaseEvidence: { status: "verified", source: "seller_manifest", sellerDeclared: true } }
+    : {};
+}
+
+function purchaseEvidenceSellerProjection(entry) {
+  const value = entry?.purchaseEvidence;
+  return value && typeof value === "object" ? { purchaseEvidence: { ...value } } : {};
 }
 
 /** Persist a compact tuple rather than repeating constant public labels across
@@ -1729,10 +1823,12 @@ async function crawlSeller(originUrl) {
     // OpenAPI is the tool-level detail. Best-effort: a seller without one still
     // shows up in the Index based on their manifest alone.
     let openapi = null;
+    let openapiLink = null;
     let tools = [];
     try {
       const openapiRes = await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES });
       openapi = JSON.parse(openapiRes.html);
+      openapiLink = openapiRes.linkHeader;
       tools = normaliseOpenapiTools(openapi, originUrl);
     } catch {
       /* manifest-only seller — fine */
@@ -1759,11 +1855,18 @@ async function crawlSeller(originUrl) {
     // routes we still know nothing about.
     tools = carryForwardLearnedQuotes(tools, prev);
     tools = await enrichLiveQuotes(tools, originUrl);
+    const purchaseEvidence = await inspectPurchaseEvidence({
+      originUrl,
+      linkHeaders: [manifestRes.linkHeader, openapiLink],
+      openapi,
+      tools,
+    });
 
     cache.set(originUrl, {
       manifest,
       openapiSummary: openapi ? { paths: Object.keys(openapi.paths || {}).length } : null,
       tools,
+      purchaseEvidence,
       fetchedAt: Date.now(),
       error: null,
       history: rollHistory(prev, true),
@@ -1803,13 +1906,14 @@ async function crawlSeller(originUrl) {
     let openapi = null;
     let openapiTools = [];
     let openapiPath = null;
+    let openapiLink = null;
     try {
       const openapiRes = await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES });
       const parsed = JSON.parse(openapiRes.html);
       if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
         openapi = parsed;
         openapiTools = normaliseOpenapiTools(parsed, originUrl);
-        if (openapiTools.length) openapiPath = "/openapi.json";
+        if (openapiTools.length) { openapiPath = "/openapi.json"; openapiLink = openapiRes.linkHeader; }
       }
     } catch {
       /* no openapi either — Bazaar-only seller */
@@ -1865,6 +1969,12 @@ async function crawlSeller(originUrl) {
       // skipping it here would leave the worst-served sellers unpriced.
       carryForwardLearnedQuotes(tools, prev);
       await enrichLiveQuotes(tools, originUrl);
+      const purchaseEvidence = await inspectPurchaseEvidence({
+        originUrl,
+        linkHeaders: [openapiLink],
+        openapi,
+        tools,
+      });
       // A real (non-synthesized) manifest from a past crawl is kept; a stale
       // synthesized one is rebuilt so a newly appeared openapi title wins.
       const keepManifest = prev?.manifest && !prev.manifest.synthesized ? prev.manifest : null;
@@ -1877,6 +1987,7 @@ async function crawlSeller(originUrl) {
             : synthManifestFromBazaar(originUrl, bazaarTools)),
         openapiSummary: openapi ? { paths: Object.keys(openapi.paths || {}).length } : prev?.openapiSummary ?? null,
         tools,
+        purchaseEvidence,
         fetchedAt: Date.now(),
         error: null,
         source: openapiTools.length ? "openapi-fallback" : "bazaar-fallback",
@@ -2413,6 +2524,7 @@ export function routableSellerSummaries() {
       // file has twice shipped a field present on two of three, which is
       // inert on whichever surface happens to render.
       discoveryPath: v.discoveryPath || null,
+      ...purchaseEvidenceSellerProjection(v),
       // payTo per advertised network, so callers can join an origin to on-chain
       // settlements it received. Sourced ONLY from facilitator discovery-registry
       // items (bazaarItemToRow) - a seller's own crawled manifest never
@@ -2480,6 +2592,7 @@ export function sellerDetail(originOrHost) {
       // file has twice shipped a field present on two of three, which is
       // inert on whichever surface happens to render.
       discoveryPath: v.discoveryPath || null,
+      ...purchaseEvidenceSellerProjection(v),
       // payTo per advertised network. Registry-sourced only (bazaarItemToTool);
       // a seller's own crawled manifest never contributes one. Omitting it made
       // advertisedPayToEvidence inert: server.js passes THIS object as `seller`,
@@ -2502,6 +2615,7 @@ export function sellerDetail(originOrHost) {
         price: t.price ?? null,
         ...priceConflictProjection(t),
         ...responseContractProjection(t),
+        ...purchaseEvidenceToolProjection(t),
         ...(t.paid !== undefined ? { paid: t.paid } : {}),
         networks: t.networks || undefined,
       })),
@@ -2532,6 +2646,7 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
     // file has twice shipped a field present on two of three, which is
     // inert on whichever surface happens to render.
     discoveryPath: v.discoveryPath || null,
+    ...purchaseEvidenceSellerProjection(v),
     // Present only when the seller's document distinguishes paid from free
     // (tools carry paid flags): the buyable subset. Display uses it to show
     // "42 tools · 21 paid" so a padded free surface can't read as paid depth.
@@ -2856,6 +2971,7 @@ export function routeQuery({ query, top, include, networkFilter, baseUrl, catalo
       priceUsd: parsePrice(t.price),
       ...priceConflictProjection(t),
       ...responseContractProjection(t),
+      ...purchaseEvidenceToolProjection(t),
       // "x402" = we have positive evidence this is payable in-protocol (a price,
       // or a registry accepts entry someone settled against). "unknown" = we
       // have none, which is NOT the same as "not payable" - see payabilityOf.
@@ -3576,6 +3692,7 @@ function flattenedThirdPartyTools(excludeOrigin = "") {
         price: t?.price ?? null,
         ...priceConflictProjection(t),
         ...responseContractProjection(t),
+        ...purchaseEvidenceToolProjection(t),
         // The identifier a caller needs to actually invoke the tool. Present on
         // /api/route and /api/find, missing here, on the surface that lists all
         // 65k third-party rows.

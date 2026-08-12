@@ -10,11 +10,13 @@
 //
 // Offline, no server, no network: pure helpers + the in-memory cache via the
 // _cacheForTests() escape hatch.
+import { PURCHASE_EVIDENCE_RELATION, createPurchaseEvidenceManifest } from "agent-payment-policy";
 import {
   bazaarItemToTool,
   mergeOpenapiIntoBazaar,
   normaliseOpenapiTools,
   responseContractFromOperation,
+  inspectPurchaseEvidence,
   openapiHasPaymentSignal,
   routeQuery,
   sellerDetail,
@@ -404,6 +406,103 @@ const openapiTools = [
 ok(mergeOpenapiIntoBazaar([], bazaarTools).length === 1, "no openapi → Bazaar tools pass through");
 ok(mergeOpenapiIntoBazaar(openapiTools, []).length === 2, "no Bazaar → openapi tools pass through");
 ok(mergeOpenapiIntoBazaar([], []).length === 0, "nothing in, nothing out");
+
+// ---- 4b. purchase evidence is seller-level once and route-level only where
+// the exact current OpenAPI operation agrees. It never affects routing order. ----
+{
+  const origin = "https://evidence.example";
+  const openapi = {
+    paths: {
+      "/read": {
+        get: {
+          summary: "Read evidence",
+          responses: { 200: { content: { "application/json": { schema: {
+            type: "object",
+            required: ["ok", "data"],
+            properties: { ok: { type: "boolean" }, data: { type: "object", required: ["value"], properties: { value: { type: "number" } } } },
+          } } } } },
+          "x-payment-info": { price: { amount: "0.001" } },
+        },
+      },
+    },
+  };
+  const tools = normaliseOpenapiTools(openapi, origin);
+  const contract = responseContractFromOperation(openapi, origin, "GET", "/read", openapi.paths["/read"].get);
+  const manifest = createPurchaseEvidenceManifest({
+    service: { origin, version: "1.0.0" },
+    protocols: ["x402"],
+    evidence: {},
+    operations: [{
+      method: "GET",
+      path: "/read",
+      effect: "read_only",
+      output: { mediaType: "application/json", schemaDigest: contract.schemaDigest, requiredPaths: contract.guaranteedPaths, declaration: "seller_declared" },
+      replay: {},
+      receipt: { runtimeValidationRequired: true },
+    }],
+    boundary: {},
+  });
+  const manifestUrl = `${origin}/evidence.json`;
+  const link = `<${manifestUrl}>; rel="describedby ${PURCHASE_EVIDENCE_RELATION}"; type="application/json"`;
+  let fetches = 0;
+  const observed = await inspectPurchaseEvidence({
+    originUrl: origin,
+    linkHeaders: [link],
+    openapi,
+    tools,
+    fetchImpl: async (url, options) => {
+      fetches += 1;
+      ok(url === manifestUrl, "purchase evidence fetch stays on the advertised URL");
+      ok(options.redirect === "manual", "purchase evidence refuses redirects");
+      return { finalUrl: manifestUrl, html: JSON.stringify(manifest) };
+    },
+  });
+  ok(fetches === 1, `one seller manifest is fetched once (got ${fetches})`);
+  ok(observed.status === "verified" && observed.compatibleOperationCount === 1, "exact current operation is verified");
+  ok(tools[0].purchaseEvidenceVerified === true, "compatible route carries a compact marker");
+
+  let unrelatedFetches = 0;
+  const missing = await inspectPurchaseEvidence({
+    originUrl: origin,
+    linkHeaders: [`<${origin}/openapi.json>; rel="describedby"`],
+    openapi,
+    tools: normaliseOpenapiTools(openapi, origin),
+    fetchImpl: async () => { unrelatedFetches += 1; },
+  });
+  ok(missing.status === "missing" && unrelatedFetches === 0, "unrelated describedby is ignored without a fetch");
+
+  const drifted = structuredClone(manifest);
+  drifted.operations[0].output.schemaDigest = `sha256:${"f".repeat(64)}`;
+  const changed = createPurchaseEvidenceManifest(drifted);
+  const drift = await inspectPurchaseEvidence({
+    originUrl: origin,
+    linkHeaders: [link],
+    openapi,
+    tools: normaliseOpenapiTools(openapi, origin),
+    fetchImpl: async () => ({ finalUrl: manifestUrl, html: JSON.stringify(changed) }),
+  });
+  ok(drift.status === "unverified" && drift.compatibleOperationCount === 0, "OpenAPI schema drift is not promoted");
+
+  const evidenceCache = _cacheForTests();
+  evidenceCache.clear();
+  evidenceCache.set(origin, {
+    manifest: { name: "Evidence seller", homepage: origin },
+    purchaseEvidence: observed,
+    tools,
+    fetchedAt: Date.now(), error: null, history: [1, 1, 1, 1, 1],
+  });
+  _resetFlatCacheForTest();
+  const detail = sellerDetail(origin);
+  ok(detail.purchaseEvidence?.manifestDigest === manifest.manifestDigest, "seller detail exposes the seller-level manifest identity");
+  ok(detail.tools[0].purchaseEvidence?.status === "verified", "seller detail exposes the route marker");
+  const evidenceCtx = { baseUrl: "https://agent402.tools", catalog: {}, prices: {}, network: "base", toolCount: 0, walletName: "agent402.base.eth" };
+  const routed = routeQuery({ query: "read evidence", top: 5, include: "external", ...evidenceCtx });
+  ok(routed.results[0].purchaseEvidence?.status === "verified", "route output exposes the same marker without re-ranking");
+  const listed = allIndexedTools({ excludeOrigin: "https://agent402.tools", limit: 500 });
+  ok(listed.results[0].purchaseEvidence?.status === "verified", "full tool index exposes the same marker");
+  evidenceCache.clear();
+  _resetFlatCacheForTest();
+}
 
 // ---- 5. end-to-end ranking: the merged listing is actually findable ----
 const cache = _cacheForTests();
