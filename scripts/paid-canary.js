@@ -872,6 +872,16 @@ async function main() {
   // which is the Stellar class of defect: the shim (or its secret) could drop
   // out of prod for weeks while the canary stayed green. Base is the load-
   // bearing proof; Celo pins the second offered challenge network.
+  //
+  // MPP_CANARY_ROUNDS: runs both legs this many times per canary invocation
+  // (sequential, awaited - never concurrent, so the same burner's nonce
+  // advances normally between buys). Mike's call 2026-08-13 to raise real
+  // MPP-wire settlement volume once we joined mppscan.com's directory -
+  // doubling this doubles ONLY the mpp/mpp-celo legs' spend and transaction
+  // count, leaving the other 30 legs' cadence and cost untouched. Each round
+  // is a genuine new $0.001 settlement, not a replay.
+  const MPP_CANARY_ROUNDS = Number(process.env.MPP_CANARY_ROUNDS) || 2;
+  for (let mppRound = 1; mppRound <= MPP_CANARY_ROUNDS; mppRound++) {
   await (async () => {
     try {
       const [{ Mppx: MppClientNS, evm: mppEvm }, { Challenge: MppChallenge, Receipt: MppReceipt }] = await Promise.all([
@@ -915,7 +925,7 @@ async function main() {
         if (!receiptHdr) {
           railFail("mpp", "settled 200 over Authorization: Payment but carried no Payment-Receipt header — MPP receipt mirroring is broken");
         } else {
-          console.log(`\nOK    mpp        /api/uuid  → settled $0.001 over the NATIVE MPP wire (Authorization: Payment, payer ${account.address})${ref ? `\n      Payment-Receipt tx: https://basescan.org/tx/${ref}` : ""}`);
+          console.log(`\nOK    mpp        /api/uuid  → settled $0.001 over the NATIVE MPP wire (round ${mppRound}/${MPP_CANARY_ROUNDS}, Authorization: Payment, payer ${account.address})${ref ? `\n      Payment-Receipt tx: https://basescan.org/tx/${ref}` : ""}`);
           noteRail("mpp", true);
         }
       } else if (paid.status === 402) {
@@ -964,7 +974,7 @@ async function main() {
         if (!celoReceiptHdr) {
           railFail("mpp-celo", "settled 200 over Authorization: Payment on Celo but carried no Payment-Receipt header");
         } else {
-          console.log(`\nOK    mpp-celo   /api/uuid  → settled $0.001 over the NATIVE MPP wire on Celo (payer ${account.address})${celoRef ? `\n      Payment-Receipt tx: https://celoscan.io/tx/${celoRef}` : ""}`);
+          console.log(`\nOK    mpp-celo   /api/uuid  → settled $0.001 over the NATIVE MPP wire on Celo (round ${mppRound}/${MPP_CANARY_ROUNDS}, payer ${account.address})${celoRef ? `\n      Payment-Receipt tx: https://celoscan.io/tx/${celoRef}` : ""}`);
           noteRail("mpp-celo", true);
         }
       } else if (celoPaid.status === 402) {
@@ -977,6 +987,7 @@ async function main() {
       railFail("mpp", `errored: ${(e?.message || String(e)).slice(0, 160)}`);
     }
   })();
+  }
 
   // Pinned EVM legs — Polygon, Arbitrum, Monad, Celo: same negotiation as the Robinhood
   // leg above (filter the live 402's accepts down to ONE CAIP-2 chain and pay
