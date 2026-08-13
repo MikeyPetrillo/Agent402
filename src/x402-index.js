@@ -192,13 +192,21 @@ const bazaarToolsByOrigin = new Map();
 // discovery endpoint; we extract unique origins from the listings.
 const DISCOVERY_SOURCES = [
   { name: "Coinbase CDP Bazaar", url: "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources" },
-  // GoPlausible's AVM facilitator registry — where Algorand-native x402
-  // sellers live (they register by settling through the facilitator, not on
-  // the CDP Bazaar; found 2026-07-10 when the Bazaar showed 2 Algorand
-  // origins but this registry had ~8). Same item shape as Bazaar except
-  // `resourceUrl` instead of `resource`; synthesizeTools makes their sellers
-  // list with tools even when they serve no /.well-known/x402 manifest.
-  { name: "GoPlausible AVM registry", url: "https://facilitator.goplausible.xyz/discovery/resources?limit=1000", synthesizeTools: true, seedImmediately: true },
+  // GoPlausible's facilitator registry (multi-chain - AVM/EVM/SVM - despite
+  // the name; Algorand-native x402 sellers live here, registering by settling
+  // through the facilitator rather than on the CDP Bazaar). Same
+  // {items, pagination:{total}} contract as PayAI/Solvador below - confirmed
+  // 2026-08-13. Was a single un-paginated ?limit=1000 fetch (sized when the
+  // registry had ~8 Algorand origins, 2026-07-10); by 2026-08-13 the full
+  // registry had grown to ~5,962 resources, so that single page was only
+  // ever seeing ~17% of it. paginate walks the rest, matching PayAI/Solvador.
+  // strict drops testnet-only listings and placeholder origins, same as
+  // those two - Algorand's testnet CAIP-2 id needed itemHasMainnetAccept
+  // taught to recognize it first (it's a genesis-hash id, not a
+  // "testnet"-labeled string the existing EVM-shaped check could see).
+  // synthesizeTools makes their sellers list with tools even when they serve
+  // no /.well-known/x402 manifest.
+  { name: "GoPlausible registry", url: "https://facilitator.goplausible.xyz/discovery/resources", paginate: true, synthesizeTools: true, seedImmediately: true, strict: true },
   // PayAI's facilitator registry — where non-Base-native sellers (Solana
   // especially) that settle through PayAI register instead of the Base-centric
   // CDP Bazaar (added 2026-07-12; the Bazaar showed ~378 Solana sellers, PayAI
@@ -277,7 +285,13 @@ export function itemHasMainnetAccept(item) {
   if (!accepts.length) return true; // no accepts info → don't over-filter it out
   return accepts.some((a) => {
     const n = String(a?.network || "");
-    return n && !TESTNET_NET_RE.test(n) && !TESTNET_CAIP2.has(n);
+    if (!n) return false;
+    // Algorand's testnet CAIP-2 id is a genesis hash (algorand:SGO1GKSz...),
+    // not a "testnet"-labeled string, so the EVM-shaped checks below can't
+    // see it - check the known mainnet prefix directly instead, same source
+    // of truth as CHAIN_PAGES.algorand.isNetwork (src/market-page.js).
+    if (n.startsWith("algorand:")) return CHAIN_PAGES.algorand.isNetwork(n);
+    return !TESTNET_NET_RE.test(n) && !TESTNET_CAIP2.has(n);
   });
 }
 // Placeholder / non-real hosts that show up in open registries. extractOrigin
