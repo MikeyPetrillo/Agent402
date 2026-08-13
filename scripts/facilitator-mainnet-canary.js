@@ -134,8 +134,21 @@ console.log(`\nsettled tx: ${txHash}`);
 console.log(`explorer: https://stellar.expert/explorer/public/tx/${txHash}`);
 
 // Independently confirm on Horizon mainnet - the whole point of this exercise.
+// Horizon's own indexer typically lags the network by a second or two right
+// after a ledger closes (measured live 2026-08-13: an immediate lookup 404'd
+// on a transaction that WAS already successful moments later) - retry
+// through that normal ingestion lag rather than treating it as a failure.
 const horizon = getHorizonClient(NETWORK);
-const tx = await horizon.transactions().transaction(txHash).call();
+let tx;
+for (let attempt = 1; attempt <= 5; attempt++) {
+  try {
+    tx = await horizon.transactions().transaction(txHash).call();
+    break;
+  } catch (e) {
+    if (e?.response?.status !== 404 || attempt === 5) throw e;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+}
 if (tx.successful !== true) {
   console.error(`FAIL: Horizon reports successful=${tx.successful} for ${txHash}`);
   process.exit(1);
