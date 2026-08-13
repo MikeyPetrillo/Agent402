@@ -1833,7 +1833,7 @@ const validationTools = [
 // Network & web
 // ---------------------------------------------------------------------------
 
-function parseRobots(text) {
+export function parseRobots(text) {
   const groups = [];
   let current = null;
   for (const raw of text.split("\n").slice(0, 5000)) {
@@ -1855,7 +1855,7 @@ function parseRobots(text) {
   return groups;
 }
 
-function robotsAllows(groups, ua, path) {
+export function robotsAllows(groups, ua, path) {
   const uaLower = ua.toLowerCase();
   let group =
     groups.find((g) => g.agents.some((a) => a !== "*" && uaLower.includes(a))) ??
@@ -1864,6 +1864,20 @@ function robotsAllows(groups, ua, path) {
   let best = null;
   for (const rule of group.rules) {
     if (!rule.path) continue;
+    // rule.path comes from the TARGET SITE'S OWN robots.txt (attacker-controlled
+    // if the caller points us at a site they host) and every `*` becomes a `.*`
+    // in the compiled regex, while `path` is the caller's own request path — so
+    // a rule with a chain of wildcards (e.g. `/a*a*a*a*a*a*a*a*!`) against a
+    // long, deliberately non-matching path is catastrophic backtracking with
+    // BOTH sides attacker-controlled in one request. Measured live: 5 chained
+    // wildcards ~20ms, 7 ~1.6s, 8+ effectively hangs — exponential, not linear.
+    // Node is single-threaded and every tool shares this event loop (the same
+    // reason src/tools/safe-regex.js and the sandboxed `regex` tool exist), so
+    // an unbounded hang here freezes the whole server for every buyer. Real
+    // robots.txt rules essentially never need more than one or two wildcards;
+    // capping well under where the blowup becomes measurable costs nothing
+    // legitimate and removes the exponential shape entirely.
+    if ((rule.path.match(/\*/g) || []).length > 3) continue;
     const pattern = rule.path.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
     const re = new RegExp("^" + pattern.replace(/\\\$$/, "$"));
     if (re.test(path) && (!best || rule.path.length > best.path.length)) best = rule;

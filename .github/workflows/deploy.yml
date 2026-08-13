@@ -1347,6 +1347,9 @@ jobs:
       - name: Router alias-collapse tests (redirect aliases, subset guard, Sybil slots — offline)
         run: node scripts/test-router-alias.js
 
+      - name: robots-check ReDoS regression (wildcard cap, normal robots.txt behavior — offline)
+        run: node scripts/test-robots-redos.js
+
       - name: Agent wish loop tests (caps, dedup clustering, rate limits, file cap, aggregate shape — offline)
         run: node scripts/test-wish.js
 
