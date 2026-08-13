@@ -56,7 +56,19 @@ const requirements = {
   asset: USDC_PUBNET_ADDRESS,
   amount: "10000", // 0.001 USDC at 7 decimals
   payTo: PAYTO,
-  maxTimeoutSeconds: 60,
+  // @x402/stellar anchors the transaction's ledgerbounds to THIS value at
+  // client-side createPaymentPayload() time, then the facilitator copies
+  // those same bounds onto its rebuilt tx and separately polls for
+  // maxTimeoutSeconds MORE seconds starting from ITS OWN (later) submission
+  // - so a short value here systematically expires the tx's real validity
+  // window before the facilitator ever broadcasts, once you account for the
+  // /verify + /settle round trips in between. Measured live 2026-08-13:
+  // two different RPC providers (Lightsail, Alchemy) both showed "accepted
+  // into the pending pool, then genuinely never landed on a ledger" with
+  // maxTimeoutSeconds:60 - a short-window structural expiry, not a provider
+  // fault. 120s leaves real margin while staying well under this job's
+  // timeout-minutes.
+  maxTimeoutSeconds: 120,
   extra: { areFeesSponsored: true },
 };
 
