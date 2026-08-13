@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       rpc_url:
-        description: "Soroban mainnet RPC URL to test against (client-side sim; the facilitator's own RPC is set separately on Railway)"
+        description: "Override Soroban mainnet RPC URL to test against (client-side sim only; the facilitator's own RPC is set separately on Railway). Leave blank to use our Alchemy key (default, higher rate limit than free public endpoints)."
         required: false
-        default: "https://stellar.api.onfinality.io/public"
+        default: ""
 
 permissions:
   contents: read
@@ -33,7 +33,11 @@ jobs:
           FACILITATOR_URL: https://agent402-facilitator-production.up.railway.app
           FACILITATOR_TOKEN: ${{ secrets.AGENT402_FACILITATOR_AUTH_TOKEN }}
           STELLAR_BURNER_SECRET: ${{ secrets.STELLAR_BURNER_SECRET }}
-          STELLAR_MAINNET_RPC_URL: ${{ inputs.rpc_url }}
+          # Default to our own Alchemy key (paid tier, no free-public-endpoint
+          # rate-limit roulette - measured OnFinality's free tier at 1 req/sec,
+          # which a single verify+settle cycle trivially exceeds). rpc_url
+          # input overrides for testing a different provider.
+          STELLAR_MAINNET_RPC_URL: ${{ inputs.rpc_url != '' && inputs.rpc_url || format('https://stellar-mainnet.g.alchemy.com/v2/{0}', secrets.ALCHEMY_API_KEY) }}
           # Public Stellar address (our own existing revenue wallet) - not
           # sensitive, no need to store as a secret.
           PAYTO: GDNJXCKW7ZM7GEEVP674TWPU26YJNBQ2FI4ZIPRKTPTNUEJMDHFJWWRL

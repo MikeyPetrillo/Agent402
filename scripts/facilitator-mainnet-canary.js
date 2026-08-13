@@ -25,6 +25,17 @@ const PAYTO = process.env.PAYTO || "";
 const RPC_URL = process.env.STELLAR_MAINNET_RPC_URL || "https://rpc.lightsail.network/";
 const NETWORK = "stellar:pubnet";
 
+// Some providers (e.g. Alchemy) embed an API key directly in the RPC path -
+// this repo is public, so never print RPC_URL verbatim (host only).
+function redactRpcUrl(url) {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return "(unparseable URL)";
+  }
+}
+
 function need(name, val) {
   if (!val) { console.error(`FAIL: ${name} is required`); process.exit(1); }
   return val;
@@ -96,7 +107,7 @@ if (settle.status !== 200 || settle.body.success !== true) {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getTransaction", params: { hash: settle.body.transaction } }),
       });
       const rpcBody = await rpcRes.json();
-      console.error(`RPC (${RPC_URL}): status=${rpcBody?.result?.status}`);
+      console.error(`RPC (${redactRpcUrl(RPC_URL)}): status=${rpcBody?.result?.status}`);
     } catch (e) {
       console.error(`RPC check failed: ${e?.message || String(e)}`);
     }
