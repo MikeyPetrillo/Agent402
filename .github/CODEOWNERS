@@ -11,6 +11,13 @@
 /.github/workflows/            @MikeyPetrillo
 /.github/CODEOWNERS            @MikeyPetrillo
 
+# Dependency surface — a new runtime dependency is a new supply-chain trust
+# boundary regardless of which file it's wired into; require review at the
+# point it's introduced, not just at the CI/CD or payment paths it might
+# later touch.
+/package.json                  @MikeyPetrillo
+/package-lock.json             @MikeyPetrillo
+
 # Container + deploy surface
 /Dockerfile                    @MikeyPetrillo
 /Dockerfile.mcp                @MikeyPetrillo
