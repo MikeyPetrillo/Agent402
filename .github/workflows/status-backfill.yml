@@ -44,6 +44,12 @@ jobs:
           LIMIT: ${{ inputs.limit || '0' }}
         run: |
           [ -n "$OP_TOKEN" ] && echo "::add-mask::$OP_TOKEN"
-          ARGS="--limit $LIMIT"
-          [ "$DRY" = "1" ] && ARGS="$ARGS --dry"
-          node scripts/backfill-status-history.js $ARGS
+          # Array, not a string: LIMIT is a free-text workflow_dispatch input,
+          # and an unquoted string expansion would word-split on any embedded
+          # whitespace in it, letting a crafted value inject extra CLI args
+          # the dispatcher didn't intend (argument injection, not command
+          # injection - bash doesn't re-parse already-substituted content for
+          # shell metacharacters without eval, which isn't used here).
+          ARGS=(--limit "$LIMIT")
+          [ "$DRY" = "1" ] && ARGS+=(--dry)
+          node scripts/backfill-status-history.js "${ARGS[@]}"

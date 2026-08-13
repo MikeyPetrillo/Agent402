@@ -26,6 +26,14 @@ const METHOD = (arg("--method", "GET") || "GET").toUpperCase();
 const BODY = arg("--body");
 const CHAIN = arg("--chain", "eip155:8453");
 const OUT = arg("--out");
+// --target lets a dispatcher point this at ANY external x402 seller (by
+// design, for ecosystem demos) - unlike every other spend-capable workflow in
+// this repo (algorand-external-buy.yml, algorand-rail-canary.yml, refund.yml),
+// this one had no ceiling on what it would pay. A malicious or misbehaving
+// external seller's 402 could quote an arbitrary price and this would pay it
+// from the funded demo burner. Real tool prices are cents; $2 is generous
+// headroom for even a premium-priced legitimate demo.
+const MAX_USD = Number(arg("--max-usd", "2.00"));
 if (!PATH || !PATH.startsWith("/")) {
   console.error('usage: BURNER_KEY=0x… node scripts/paid-demo.js --path "/api/…" [--method GET] [--body json] [--chain eip155:…] [--out file.json]');
   process.exit(1);
@@ -117,6 +125,10 @@ const quote = {
   usd: Number(accepts[0].amount ?? accepts[0].maxAmountRequired) / 1e6,
 };
 console.log(`→ HTTP 402 · quote $${quote.usd} on ${quote.network} (payer ${payerAddress})`);
+if (!(quote.usd >= 0) || quote.usd > MAX_USD) {
+  console.error(`paid-demo: quote $${quote.usd} exceeds the $${MAX_USD} cap (--max-usd to override) - refusing to pay`);
+  process.exit(2);
+}
 
 // Normalize v1-style accepts before signing: some sellers (e.g. Stelar) carry
 // the amount ONLY in maxAmountRequired, and the scheme's BigInt(amount) throws

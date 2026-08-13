@@ -57,22 +57,36 @@ jobs:
             DETAIL="$(echo "$RESP" | jq -r '[.results[] | select(.ok==false) | "\(.slug)(\(.status // "?")): \(.error // "failed")"] | join("; ")')"
             echo "failing tools: $DETAIL"
             echo "status=down" >> "$GITHUB_OUTPUT"
-            { echo "detail<<EOF"; echo "$DETAIL"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+            # Random delimiter, not a fixed "EOF": DETAIL is built from upstream
+            # .error strings we don't control, and a literal "EOF" line in there
+            # would otherwise prematurely close this heredoc and let the rest be
+            # parsed as forged GITHUB_OUTPUT key=value pairs.
+            DELIM="EOF_$(date +%s%N)_$RANDOM"
+            { echo "detail<<$DELIM"; echo "$DETAIL"; echo "$DELIM"; } >> "$GITHUB_OUTPUT"
           fi
       - name: Open, comment, or close the alert issue
         if: steps.check.outputs.status != 'skip'
+        env:
+          # DETAIL is built from upstream API error strings we don't control -
+          # route it through env: (safe, runtime bash variable substitution)
+          # rather than splicing it into the run: script via ${{ }} (unsafe:
+          # that substitution happens at YAML template-render time, before bash
+          # ever sees it, so a crafted upstream error string could break out of
+          # the quoted context and execute as shell in a step holding
+          # issues:write via GH_TOKEN).
+          DETAIL: ${{ steps.check.outputs.detail }}
         run: |
           TITLE="Tool self-check: paid tool failing"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "${{ steps.check.outputs.status }}" = "down" ]; then
             BODY="A curated high-value tool failed its own documented example on prod (twice in a row — transient blips are already filtered).
 
-          **Failing:** ${{ steps.check.outputs.detail }}
+          **Failing:** $DETAIL
 
           Live surface: $PROD/api/selfcheck
           Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             if [ -n "$OPEN" ]; then
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ): ${{ steps.check.outputs.detail }}"
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ): $DETAIL"
             else
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
             fi

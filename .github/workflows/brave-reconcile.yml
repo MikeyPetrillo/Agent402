@@ -32,10 +32,14 @@ jobs:
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
-      OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
     steps:
       - name: Read the prior month's outbound Brave series
         id: series
+        # Scoped to just this step (audit R-07 pattern) - it's the only one
+        # that needs the full-access operator token; the issue-filing step
+        # below only needs values already resolved into step outputs.
+        env:
+          OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
         run: |
           [ -n "$OP_TOKEN" ] || { echo "::error::no AGENT402_OPERATOR_TOKEN - cannot read the meter"; exit 1; }
           CODE="$(curl -s --max-time 30 -o /tmp/opstats.json -w '%{http_code}' \
@@ -59,21 +63,30 @@ jobs:
           { echo "month=$MONTH"; echo "total=$TOTAL"; echo "bycaller=$BYCALLER";
             echo "dayswithdata=$DAYS_WITH_DATA"; echo "daysinmonth=$DAYS_IN_MONTH"; } >> "$GITHUB_OUTPUT"
       - name: File the reconciliation issue
+        # Values are our own server's numeric/day/caller-slug data, not
+        # attacker-facing free text, but routed through env: anyway (not
+        # spliced via ${{ }} into the script) to match the repo-wide
+        # convention and stay safe if that assumption ever changes upstream.
+        env:
+          MONTH: ${{ steps.series.outputs.month }}
+          TOTAL: ${{ steps.series.outputs.total }}
+          BYCALLER: ${{ steps.series.outputs.bycaller }}
+          DAYS_WITH_DATA: ${{ steps.series.outputs.dayswithdata }}
+          DAYS_IN_MONTH: ${{ steps.series.outputs.daysinmonth }}
         run: |
-          MONTH="${{ steps.series.outputs.month }}"
           TITLE="Brave reconciliation: $MONTH"
           EXISTS=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ -n "$EXISTS" ]; then echo "issue for $MONTH already filed (#$EXISTS) - not duplicating"; exit 0; fi
           NOTE=""
-          if [ "${{ steps.series.outputs.dayswithdata }}" = "0" ]; then
+          if [ "$DAYS_WITH_DATA" = "0" ]; then
             NOTE="**No days recorded for $MONTH.** Either the meter shipped after this month (persistent recording began 2026-07-29) or something is wrong with the series - distinguish the two before trusting a zero."
-          elif [ "${{ steps.series.outputs.dayswithdata }}" != "${{ steps.series.outputs.daysinmonth }}" ]; then
-            NOTE="Note: only ${{ steps.series.outputs.dayswithdata }} of ${{ steps.series.outputs.daysinmonth }} days have rows. Days with zero outbound calls record nothing, so a short count here is normal on quiet days - but if recording began mid-month, compare only the covered range."
+          elif [ "$DAYS_WITH_DATA" != "$DAYS_IN_MONTH" ]; then
+            NOTE="Note: only $DAYS_WITH_DATA of $DAYS_IN_MONTH days have rows. Days with zero outbound calls record nothing, so a short count here is normal on quiet days - but if recording began mid-month, compare only the covered range."
           fi
           BODY="Our outbound Brave call count for **$MONTH**, from the deploy-proof meter (stats DB \`daily_upstream_calls\`, counted where the request leaves the process):
 
-          **Total: ${{ steps.series.outputs.total }}** (by caller: ${{ steps.series.outputs.bycaller }})
-          Days with data: ${{ steps.series.outputs.dayswithdata }}/${{ steps.series.outputs.daysinmonth }}. $NOTE
+          **Total: $TOTAL** (by caller: $BYCALLER)
+          Days with data: $DAYS_WITH_DATA/$DAYS_IN_MONTH. $NOTE
 
           To reconcile: compare against the Brave dashboard's Search-plan usage for the same date range (their daily CSV). CI spend is guarded off (test-brave-leak.js), so the dashboard number should match this count - the July 2026 gap (5,106 billed vs ~600 accountable) must not recur. Answers and Autosuggest reconciled exactly last cycle and are metered under their own callers here.
 

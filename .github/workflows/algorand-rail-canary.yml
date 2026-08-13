@@ -93,10 +93,16 @@ jobs:
       # heartbeat uses, so repeated failures comment instead of piling up.
       - name: Alert (open issue) or clear (close issue)
         if: always() && steps.sweep.outputs.result != 'noconfig' && inputs.dry != 'true'
+        # RESULT is only ever pass/fail/noconfig today (set by this same
+        # workflow's own prior step), but routed through env: rather than
+        # spliced via ${{ }} to match the repo-wide convention for step
+        # outputs referenced inside run: - cheap consistency, not a live fix.
+        env:
+          RESULT: ${{ steps.sweep.outputs.result }}
         run: |
           TITLE="Algorand rail canary FAILING"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
-          if [ "${{ steps.sweep.outputs.result }}" = "fail" ]; then
+          if [ "$RESULT" = "fail" ]; then
             BODY="The weekly Algorand rail sweep found problems. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
           Three failure classes, all real defects:

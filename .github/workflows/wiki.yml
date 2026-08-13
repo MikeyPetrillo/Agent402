@@ -24,8 +24,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
       - name: Mirror wiki/ to the GitHub wiki repo
+        env:
+          # github.token isn't attacker-controlled, but embedding it directly
+          # in a clone URL has git persist it in plaintext to .git/config for
+          # the rest of the job (visible to a plain `git remote -v`, and to any
+          # future debug step or artifact upload in this job) - nothing reads
+          # or uploads that directory today, but there's no need to expose it
+          # at all: the repo is PUBLIC, so the clone itself needs no auth, and
+          # the token is only set as a scoped http.extraHeader (the same
+          # mechanism actions/checkout itself uses) right before the one
+          # command that actually needs it.
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git clone "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.wiki.git" /tmp/wiki || {
+          git clone "https://github.com/${GITHUB_REPOSITORY}.wiki.git" /tmp/wiki || {
             echo "::error::Could not clone ${GITHUB_REPOSITORY}.wiki. If the wiki has never been initialized, open the repo's Wiki tab once, click 'Create the first page', save anything, and re-run this workflow."
             exit 1
           }
@@ -36,5 +47,6 @@ jobs:
           git add -A
           git diff --cached --quiet && { echo "wiki already up to date"; exit 0; }
           git commit -m "Sync wiki from ${GITHUB_SHA::7}"
+          git config "http.https://github.com/.extraheader" "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           git push
           echo "synced -> https://github.com/${GITHUB_REPOSITORY}/wiki"
