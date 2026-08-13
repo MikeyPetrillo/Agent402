@@ -134,6 +134,45 @@ try {
     console.log(`skip - altPayment hint (paywall returned ${r.status}, no 402 body to inspect)`);
   }
 
+  // 7. SECURITY REGRESSION: the cache key must bind to the credential the
+  // paywall would actually settle from (payment-signature, per @x402/express's
+  // own precedence — node_modules/@x402/express), never to x-payment when both
+  // are present. Proven with externally observable behavior, not by trusting
+  // that the shared helper exists: seed a cache entry via valid PoW while ALSO
+  // attaching two divergent payment-shaped headers, then replay with the SAME
+  // x-payment value but a DIFFERENT payment-signature value and no usable PoW
+  // of its own. If the cache key were still derived from x-payment (the
+  // pre-fix behavior), this would replay the first result for free; bound to
+  // payment-signature (the fix), it's a cache miss with nothing left to admit it.
+  const solSec = await powFor();
+  const seed = await fetch(`${B}/api/hash`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Pow-Solution": solSec,
+      "Idempotency-Key": "sec-key",
+      "X-Payment": "unchanged-attacker-chosen-value",
+      "Payment-Signature": "seed-signature-value",
+    },
+    body: JSON.stringify({ text: "sec-probe" }),
+  });
+  const seedBody = await seed.json().catch(() => ({}));
+  ok(seed.status === 200 && !!seedBody.hex, `security regression setup: PoW-admitted call with divergent payment headers seeds the cache (got ${seed.status})`);
+
+  const replaySameXPayment = await fetch(`${B}/api/hash`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": "sec-key",
+      "X-Payment": "unchanged-attacker-chosen-value", // SAME as seed
+      "Payment-Signature": "different-signature-value", // CHANGED from seed
+      // No X-Pow-Solution: this request has no admission path of its own.
+    },
+    body: JSON.stringify({ text: "sec-probe" }),
+  });
+  ok(replaySameXPayment.status !== 200 && replaySameXPayment.headers.get("x-idempotent-replay") !== "true",
+    `same x-payment + different payment-signature does NOT replay (cache key binds to payment-signature, got ${replaySameXPayment.status})`);
+
   console.log(`\n${pass} passed`);
   proc.kill("SIGKILL");
   process.exit(0);

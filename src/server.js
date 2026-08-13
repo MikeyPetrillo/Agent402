@@ -23,7 +23,7 @@ import {
   grant, revoke, listGrants, getLog, remember, recall, forget,
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
-import { payerFromRequest, payerFromPaymentResponse } from "./payer.js";
+import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf } from "./payer.js";
 import { resolveSpend as resolveExternalSpend } from "./external-spend-guard.js";
 import { registerWellKnown, removeWellKnown, getWellKnown, listWellKnown } from "./well-known-store.js";
 import { backupPlan, backupStatus, runBackup, startBackupScheduler } from "./backup.js";
@@ -3689,7 +3689,16 @@ setInterval(() => {
 const idemHashKey = (req) => {
   const idem = req.header("idempotency-key");
   if (!idem || idem.length > 256) return null;
-  const cred = req.header("x-payment") || req.header("payment-signature") || req.header("x-pow-solution");
+  // Must match @x402/express's OWN precedence exactly (payment-signature wins
+  // when both are present, verified against node_modules/@x402/express) - the
+  // credential that actually settles the payment is the only one allowed to
+  // seed the cache key. Checking x-payment first let an attacker settle for
+  // real via a valid Payment-Signature while binding the cache entry to a
+  // SELF-CHOSEN, non-secret X-Payment string - any third party who later knew
+  // that string (the payer can simply publish it) could replay the same
+  // Idempotency-Key + that string + the same body and hit the cache BEFORE
+  // the paywall middleware below ever runs, with no payment of their own.
+  const cred = paymentHeaderOf(req) || req.header("x-pow-solution");
   if (!cred) return null; // nothing to securely bind the key to → don't cache
   // Bind to the exact route AND the request body, so the same key+credential
   // can't be used to retrieve a cached response from a different payload or
@@ -3739,7 +3748,7 @@ app.use((req, res, next) => {
     // dev/test only, so it keeps caching.)
     if (res.getHeader("X-Trial-Accepted") === "true") return;
     const powVerified = res.getHeader("X-Pow-Accepted") === "true";
-    const paid = Boolean(req.header("x-payment") || req.header("payment-signature"));
+    const paid = Boolean(paymentHeaderOf(req));
     if (!FREE_MODE && !paid && !powVerified) return;
     let bytes = 0;
     try { bytes = Buffer.byteLength(JSON.stringify(captured), "utf8"); } catch { bytes = 0; }
