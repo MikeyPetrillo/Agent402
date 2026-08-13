@@ -49,11 +49,18 @@ jobs:
           set +e
           OUT=$(node scripts/refund-monitor.js 2>&1); CODE=$?
           echo "$OUT"
+          # Random delimiter: OUT is scripted/program output today (confirmed
+          # by reading scripts/refund-monitor.js), but a fixed "XEOF" is still
+          # one refactor away from a literal-"XEOF"-line prematurely closing
+          # this heredoc and letting the rest be parsed as forged
+          # GITHUB_OUTPUT key=value pairs - the OP_TOKEN-scoped step is not
+          # where that risk should live even at low probability.
+          DELIM="XEOF_$(date +%s%N)_$RANDOM"
           {
             echo "code=$CODE"
-            echo "body<<XEOF"
+            echo "body<<$DELIM"
             echo "$OUT"
-            echo "XEOF"
+            echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
           exit 0
 

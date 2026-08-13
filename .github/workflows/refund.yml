@@ -57,6 +57,17 @@ jobs:
   refund:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A dedicated environment (never agent402/production - that one is also
+    # deploy.yml's, and this repo deliberately deploys unconditionally on
+    # push to main; gating IT would silently break that). Requires a manual
+    # approval click before this job's steps run, even for a dry run - the
+    # real value is on a LIVE run: a compromised write-access credential could
+    # dispatch this, but the run pauses and needs a separate, visible
+    # "approve deployment" action first, which is a chance to notice and stop
+    # it. Solo-maintainer repo, so self-approval is allowed (there is no one
+    # else) - the gate is against a compromised session, not a second-person
+    # review.
+    environment: refund-approval
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

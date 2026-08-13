@@ -75,10 +75,24 @@ jobs:
           else
             DETAIL="$(echo "$OUT" | sed -n '/^Failures:/,$p' | tail -n +2)"
             echo "status=down" >> "$GITHUB_OUTPUT"
-            { echo "detail<<EOF"; echo "$DETAIL"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+            # Random delimiter: DETAIL can carry arbitrary live-content
+            # snippets (whatever the drifted agent-facing text actually says),
+            # not fixed program text - a literal "EOF" line in there would
+            # otherwise prematurely close this heredoc and let the rest be
+            # parsed as forged GITHUB_OUTPUT key=value pairs (same class as
+            # tool-alert.yml).
+            DELIM="EOF_$(date +%s%N)_$RANDOM"
+            { echo "detail<<$DELIM"; echo "$DETAIL"; echo "$DELIM"; } >> "$GITHUB_OUTPUT"
           fi
       - name: Open, comment, or close the alert issue
         if: steps.check.outputs.status != 'skip'
+        # DETAIL is live agent-facing content, not attacker-facing free text
+        # by intent, but it reflects whatever's actually deployed - routed
+        # through env: (safe) rather than spliced via ${{ }} into run: (YAML
+        # template-render time, before bash sees it) to match the repo-wide
+        # convention and stay safe regardless of what that content ever is.
+        env:
+          DETAIL: ${{ steps.check.outputs.detail }}
         run: |
           TITLE="Discovery self-consistency: live prod drifted from source"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
@@ -86,7 +100,7 @@ jobs:
             BODY="Live agent402.tools's agent-facing text (tools/list, about_agent402, get_payment_info, /llms.txt, /.well-known/x402) no longer matches what source says is registered — the same class of defect as #705, caught here before an outside agent reports it.
 
           \`\`\`
-          ${{ steps.check.outputs.detail }}
+          $DETAIL
           \`\`\`
 
           Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
