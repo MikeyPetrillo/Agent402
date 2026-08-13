@@ -241,8 +241,8 @@ for (const c of NEW_CHAINS) {
   const EXT = { origin: "https://ext1.example", displayName: "Ext One", homepage: "https://ext1.example", local: false, toolCount: 3, routable: true, networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": "0xabc0000000000000000000000000000000000abc" } };
   const leaderboardSnap = { leaderboard: [{ name: "Ext One", homepage: "https://ext1.example", wallet: "0xabc0000000000000000000000000000000000abc", wallets: ["0xabc0000000000000000000000000000000000abc"], callsSettled: 42, totalUsd: 3.5, uniqueBuyers: 7 }] };
   const allHtml = marketPage(null, "https://agent402.tools", { snapshot: { sellers: [LOCAL, EXT] }, leaderboardSnap });
-  ok(/<tr data-mfb-row data-local="0" data-health="1" data-calls="42" data-usd="3\.5" data-buyers="7" data-tools="3"/.test(allHtml), "all view: roster row carries numeric data-calls/usd/buyers/tools attributes");
-  ok(/<tr data-mfb-row data-local="1"/.test(allHtml), "all view: local row is marked data-local=1 (stays pinned through client sorts)");
+  ok(/<div data-mfb-row data-local="0" data-health="1" data-calls="42" data-usd="3\.5" data-buyers="7" data-tools="3"/.test(allHtml), "all view: roster row carries numeric data-calls/usd/buyers/tools attributes");
+  ok(/<div data-mfb-row data-local="1"/.test(allHtml), "all view: local row is marked data-local=1 (stays pinned through client sorts)");
   // Per-chain compact view (>12 sellers forces compact rows).
   const many = Array.from({ length: 14 }, (_, i) => ({ origin: `https://e${i}.example`, displayName: `E${i}`, homepage: `https://e${i}.example`, local: false, toolCount: i, routable: true, networks: ["eip155:8453"], payToByNetwork: {} }));
   const chainHtml = marketPage("base", "https://agent402.tools", { snapshot: { sellers: [LOCAL, ...many] }, rail: null, activity: null, wallet: "0x1" });
@@ -258,19 +258,19 @@ for (const c of NEW_CHAINS) {
   const many = Array.from({ length: 120 }, (_, i) => ({ origin: `https://s${i}.example`, displayName: `Seller ${i}`, homepage: `https://s${i}.example`, local: false, toolCount: 1, routable: true, networks: ["eip155:8453"], payToByNetwork: {} }));
   const snapshot = { sellers: [LOCAL, ...many] }; // 121 deduped sellers
   const capped = marketPage(null, "https://agent402.tools", { snapshot, leaderboardSnap: { leaderboard: [] } });
-  // Count `<tr data-mfb-row` (not the bare attribute — the filter-bar script
+  // Count `<div data-mfb-row` (not the bare attribute — the filter-bar script
   // legitimately mentions the attribute name once in its querySelectorAll).
   // THIS HOST is PINNED at the top: the cap applies to the RANKED (non-local)
   // sellers only, so the roster renders the pinned local row + top-100 ranked =
   // 101 rows, and the note counts INDEPENDENT sellers (120 of the 121, since
   // one is the pinned host).
-  ok((capped.match(/<tr data-mfb-row/g) || []).length === 101, `all view: cap renders pinned local + top 100 ranked (got ${(capped.match(/<tr data-mfb-row/g) || []).length})`);
+  ok((capped.match(/<div data-mfb-row/g) || []).length === 101, `all view: cap renders pinned local + top 100 ranked (got ${(capped.match(/<div data-mfb-row/g) || []).length})`);
   ok(capped.includes("this host pinned · showing the top 100 of 120 independent sellers"), "all view: cap note discloses the pin + truncation honestly");
   ok(capped.includes('href="/marketplace?all=1"'), "all view: cap note links the ?all=1 escape hatch");
-  ok(/<tr data-mfb-row data-local="1"/.test(capped), "all view: the local seller survives the cap (ranked or appended, never dropped)");
+  ok(/<div data-mfb-row data-local="1"/.test(capped), "all view: the local seller survives the cap (ranked or appended, never dropped)");
   ok(/SELLERS LISTED<\/div><div[^>]*>121</.test(capped), "all view: SELLERS LISTED card still counts the full roster (121), not the capped table");
   const full = marketPage(null, "https://agent402.tools", { snapshot, leaderboardSnap: { leaderboard: [] }, all: true });
-  ok((full.match(/<tr data-mfb-row/g) || []).length === 121, `all view: all:true renders every roster row (got ${(full.match(/<tr data-mfb-row/g) || []).length})`);
+  ok((full.match(/<div data-mfb-row/g) || []).length === 121, `all view: all:true renders every roster row (got ${(full.match(/<div data-mfb-row/g) || []).length})`);
   ok(!full.includes("showing the top 100"), "all view: no cap note when the full roster is rendered");
 }
 
@@ -446,6 +446,36 @@ for (const c of NEW_CHAINS) {
   ok(marketOperatorCount("base", snapshot, lb) === 2, "grouped wallets collapse in the operator count (2, not 3)");
   ok(marketOperatorCount("base", snapshot, null) === 3, "no leaderboard -> no grouping evidence -> all count");
   ok(marketOperatorCount(null, snapshot, lb) === 2, "all-chains view collapses the same way");
+}
+
+// --- Per-chain roster cap: a busy chain must not render its full roster
+// unconditionally (measured live on /base: 1,125 sellers -> a 700KB+ page,
+// 56,000px of desktop scroll, 7,500+ DOM nodes before "Sell on Base" is even
+// reachable). Mirrors marketPageAll's already-proven ALL_ROW_CAP=100 pattern;
+// 100 here must match market-page.js's own (unexported) ALL_ROW_CAP.
+{
+  const ROW_CAP = 100;
+  const many = Array.from({ length: 150 }, (_, i) => ({
+    origin: `https://seller${i}.example`, displayName: `Seller ${i}`, homepage: `https://seller${i}.example`,
+    local: false, toolCount: 1, routable: true, networks: ["eip155:8453"],
+  }));
+  const snapshot = { sellers: [LOCAL, ...many] };
+  // mlr-host only appears on actual roster rows (compact or card variant,
+  // never both in one render) - data-mfb-row was tried first and rejected:
+  // it also appears as a literal string inside the filter bar's embedded
+  // client-side script (a querySelectorAll call), which isn't a roster row.
+  const rowCount = (html) => (html.match(/class="mlr-host"/g) || []).length;
+
+  const capped = marketPage("base", "https://agent402.tools", { snapshot, rail: null, activity: null, wallet: "0x1111111111111111111111111111111111111111" });
+  // +1 for the pinned local seller, which is never part of the capped count.
+  ok(rowCount(capped) === ROW_CAP + 1, `roster caps at ${ROW_CAP} + pinned local row (got ${rowCount(capped)})`);
+  ok(/showing the top 100 of 150 sellers/.test(capped), "cap note states the true total (150), not the capped count");
+  ok(/href="\/base\?all=1"/.test(capped), "cap note links to this chain's own ?all=1, not /marketplace");
+  ok(/SELLERS LISTED[\s\S]{0,200}151/.test(capped), "SELLERS LISTED stat stays the full honest count (151), unaffected by the render cap");
+
+  const uncapped = marketPage("base", "https://agent402.tools", { snapshot, rail: null, activity: null, wallet: "0x1111111111111111111111111111111111111111", all: true });
+  ok(rowCount(uncapped) === 151, `?all=1 renders every seller (got ${rowCount(uncapped)}, want 151)`);
+  ok(!/showing the top/.test(uncapped), "?all=1 shows no cap note");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

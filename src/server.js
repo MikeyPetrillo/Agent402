@@ -2645,10 +2645,11 @@ app.get("/algorand", async (req, res) => {
 // that are flakier than Horizon/AlgoNode, so a single bad refresh shouldn't
 // blank out charts that were fine 10 minutes ago). A wallet that has never
 // scanned successfully still reads null → the template's honest
-// "unavailable" line. No `?seller=` switching for these five chains yet —
-// the index snapshot carries no per-seller EVM/Solana payTo extraction (only
-// Stellar/Algorand do), so scope stays THIS HOST only; do not invent
-// external-seller wallets here.
+// "unavailable" line. This cache is THIS-HOST-only — per-seller `?seller=`
+// switching for every chain is handled separately by resolveMarketSeller()
+// below, which reads a picked seller's payToByNetwork directly off the index
+// snapshot rather than through this map; do not invent external-seller
+// wallets here.
 const CHAIN_ACTIVITY_TTL_MS = 10 * 60_000;
 const EVM_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
 const SOLANA_ADDR_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -2822,7 +2823,7 @@ for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
         scanWallet ? getActivityForChain(chainKey, scanWallet) : Promise.resolve(null),
       ]);
       const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
-      htmlCache(res, 120, 600).send(marketPage(chainKey, BASE_URL, { snapshot, rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot() }));
+      htmlCache(res, 120, 600).send(marketPage(chainKey, BASE_URL, { snapshot, rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all: req.query.all === "1" }));
     } catch (e) {
       res.status(500).type("text/plain").send("temporarily unavailable");
     }

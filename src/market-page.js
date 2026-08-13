@@ -571,7 +571,7 @@ export function marketPanelHtml(chainKey, { snapshot, activity, selectedSeller, 
 
 export function marketPage(chainKey, baseUrl, opts = {}) {
   if (chainKey == null) return marketPageAll(baseUrl, opts);
-  const { snapshot, rail, activity, selectedSeller, wallet, leaderboardSnap } = opts;
+  const { snapshot, rail, activity, selectedSeller, wallet, leaderboardSnap, all = false } = opts;
   const C = CHAIN_PAGES[chainKey];
   const effectiveWallet = wallet || C.wallet;
   // Stellar/Algorand ship a committed public default wallet in CHAIN_PAGES;
@@ -658,6 +658,22 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   // row; every independent seller stays ranked by its own on-chain volume below.
   const localIdx = rosterSellers.findIndex((s) => s.local);
   if (localIdx > 0) { const [loc] = rosterSellers.splice(localIdx, 1); rosterSellers.unshift(loc); }
+  // Cap the RENDERED roster the same way marketPageAll's all-chains view
+  // already does (?all=1 opts out) - a busy chain's full roster (Base:
+  // 1,125+ sellers) rendered unconditionally was a 700KB+ page, 56,000px of
+  // desktop scroll, and 7,500+ DOM nodes to reach "Sell on X" below it. The
+  // FULL rosterSellers/rosterSellers.length stays untouched everywhere else
+  // (SELLERS LISTED stat, the single-seller honesty line, structured-data
+  // counts) - only what actually renders as rows is capped here.
+  const localSellerPinned = rosterSellers[0]?.local ? rosterSellers[0] : null;
+  const rankedForCap = localSellerPinned ? rosterSellers.slice(1) : rosterSellers;
+  const rosterTruncated = !all && rankedForCap.length > ALL_ROW_CAP;
+  const visibleRoster = rosterTruncated
+    ? (localSellerPinned ? [localSellerPinned, ...rankedForCap.slice(0, ALL_ROW_CAP)] : rankedForCap.slice(0, ALL_ROW_CAP))
+    : rosterSellers;
+  const rosterCapNote = rosterTruncated
+    ? `<p class="chips-note" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:10px 0 0;">showing the top ${ALL_ROW_CAP} of ${rankedForCap.length} sellers &middot; <a href="/${chainKey}?all=1" style="color:var(--muted);">show all &rarr;</a></p>`
+    : "";
   // "+N more endpoints" on the surviving row so the collapsed hosts are disclosed, not hidden.
   const endpointsNote = (s) => { const gid = s.local ? null : sellerStat(s)?.gid; const n = gid ? extraByGid.get(gid) || 0 : 0; return n > 0 ? ` &middot; +${n} more endpoint${n === 1 ? "" : "s"}` : ""; };
   const prices = tools.map((t) => Number(t.price)).filter((n) => Number.isFinite(n) && n > 0);
@@ -684,19 +700,19 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   const activityHref = (s) => (s.local ? `/${chainKey}#activity` : `/${chainKey}?seller=${encodeURIComponent(hostOf(s.homepage).toLowerCase())}#activity`);
   // Cards read well up to a dozen sellers; past that, compact rows keep the
   // roster scannable at any size.
-  const compact = rosterSellers.length > 12;
+  const compact = visibleRoster.length > 12;
   const sellersHtml = compact
-    ? rosterSellers.map((s) => {
+    ? visibleRoster.map((s) => {
         const good = s.local || s.routable;
         return `
     <a href="${activityHref(s)}"${rowData(s)} data-seller-link data-seller-host="${s.local ? "" : esc(hostOf(s.homepage).toLowerCase())}" data-seller-local="${s.local ? "1" : "0"}" class="ml-roster-compact mlr-row${isSelected(s) ? " sel" : ""}">
       <span class="mlr-name">${esc(s.displayName)}${s.local ? ' <span class="mlr-badge">THIS HOST</span>' : ""}</span>
       <span class="mlr-host">${esc(hostOf(s.homepage))}</span>
-      <span class="mlr-tools">${s.toolCount || 0} tools${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
+      <span class="mlr-tools">${s.toolCount || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
       <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${s.local ? "live" : (s.routable ? "healthy" : "unreachable")}</span>
     </a>`;
       }).join("")
-    : rosterSellers.map((s) => {
+    : visibleRoster.map((s) => {
         const health = s.local ? "live" : (s.routable ? "healthy" : "unreachable");
         const good = s.local || s.routable;
         return `
@@ -707,7 +723,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
       </div>
       <div class="mlr-host">${esc(hostOf(s.homepage))}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
-        <span style="color:var(--muted);font-family:var(--font-mono);font-size:13px;">${s.toolCount || 0} tools${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
+        <span style="color:var(--muted);font-family:var(--font-mono);font-size:13px;">${s.toolCount || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
         <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${health}</span>
       </div>
       <a href="${activityHref(s)}" data-seller-link data-seller-host="${s.local ? "" : esc(hostOf(s.homepage).toLowerCase())}" data-seller-local="${s.local ? "1" : "0"}" style="font-family:var(--font-mono);font-size:12px;color:var(--accent);text-decoration:none;margin-top:2px;">${isSelected(s) ? "activity shown above" : "view activity →"}</a>
@@ -767,7 +783,8 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
     try {
       const r = await fetch("/api/index/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ origin: document.getElementById("reg-origin").value }) });
       const j = await r.json();
-      out.textContent = j.listed ? ("Listed - " + (j.seller?.displayName || j.origin) + " (" + (j.seller?.toolCount || 0) + " tools). ${C.chainName} sellers appear on this page; all sellers appear on /index.") : ("Not listed: " + (j.error || "unknown error"));
+      const n = j.seller?.toolCount || 0;
+      out.textContent = j.listed ? ("Listed - " + (j.seller?.displayName || j.origin) + " (" + n + " tool" + (n === 1 ? "" : "s") + "). ${C.chainName} sellers appear on this page; all sellers appear on /index.") : ("Not listed: " + (j.error || "unknown error"));
     } catch { out.textContent = "submission failed - try again"; }
   });
   </script>`;
@@ -776,7 +793,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   const manifestRow = (label, value) => `<div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);flex:none;">${label}</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><span style="font-weight:700;min-width:0;overflow-wrap:anywhere;text-align:right;">${value}</span></div>`;
   const railManifestHtml = `
     <div style="border:1.5px solid var(--ink);background:var(--card);padding:18px 20px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--muted);border-bottom:1px dashed var(--dash);padding-bottom:10px;margin-bottom:12px;"><span>·· RAIL MANIFEST ··</span><span>${esc(C.tickerLabel)}</span></div>
+      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 10px;font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--muted);border-bottom:1px dashed var(--dash);padding-bottom:10px;margin-bottom:12px;"><span>·· RAIL MANIFEST ··</span><span>${esc(C.tickerLabel)}</span></div>
       <div style="display:flex;flex-direction:column;gap:9px;font-family:var(--font-mono);font-size:13px;">
         ${manifestRow("network", esc(C.caip2))}
         ${manifestRow("wires", C.mpp ? "x402 + MPP" : "x402")}
@@ -835,6 +852,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   ${compact
     ? `<div style="display:flex;flex-direction:column;gap:8px;">${sellersHtml}</div>`
     : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;">${sellersHtml}</div>`}
+  ${rosterCapNote}
   ${honesty}`;
 
   const sellSectionHtml = `
@@ -845,7 +863,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
       ${formHtml}
     </div>
     <div style="background:var(--surface);border:1.5px solid var(--ink);">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 15px;border-bottom:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;color:var(--dk-muted);letter-spacing:.06em;"><span>402 challenge · accepts[]</span><span>JSON</span></div>
+      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 10px;padding:10px 15px;border-bottom:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;color:var(--dk-muted);letter-spacing:.06em;"><span>402 challenge · accepts[]</span><span>JSON</span></div>
       <pre style="margin:0;padding:16px 18px;font-family:var(--font-mono);font-size:12px;line-height:1.8;color:var(--on-dark);white-space:pre-wrap;word-break:break-word;">{
   <span style="color:var(--dk-muted3);">"scheme"</span>: "exact",
   <span style="color:var(--dk-muted3);">"network"</span>: <span style="color:var(--accent);">"${esc(C.acceptNetwork)}"</span>,
@@ -1074,19 +1092,30 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
     ? `<p class="chips-note" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:10px 0 0;">this host pinned · showing the top ${ALL_ROW_CAP} of ${ranked.length} independent sellers &middot; <a href="/marketplace?all=1" style="color:var(--muted);">show all &rarr;</a></p>`
     : "";
 
+  // Grid rows, not a <table> - reuses the exact .mlr-row/.ml-roster-compact
+  // classes + mobile media query already proven on every per-chain page
+  // (src/ledger-chrome.js's @media rule collapses .ml-roster-compact to a
+  // single column). The plain <table> this replaced had no responsive
+  // treatment at all: on a 390px phone its fixed columns clipped Tools/
+  // Status text mid-word inside a silent horizontal-scroll container, with
+  // no scroll affordance - found in a live mobile screenshot review
+  // 2026-08-13. A <div>, not an outer <a> like the per-chain compact rows:
+  // this row's primary link is the seller's OWN site (safeHref(s.homepage)),
+  // not an internal activity view, so only the name text is a link, same
+  // interaction model the old table had.
   const rows = visibleSellers.map((s) => {
     const health = s.local ? "live" : (s.routable ? "healthy" : "unreachable");
     const good = s.local || s.routable;
     return `
-    <tr${rowData(s)}${s.local ? ' style="background:var(--card-zebra);"' : ""}>
-      <td style="padding:9px 12px;border-bottom:1px solid var(--hairline);">
+    <div${rowData(s)} class="mlr-row ml-roster-compact"${s.local ? ' style="background:var(--card-zebra);"' : ""}>
+      <div>
         <a href="${safeHref(s.homepage)}" rel="noopener" style="color:var(--ink);text-decoration:none;font-weight:700;">${esc(s.displayName)}</a>${s.local ? ' <span class="mlr-badge">THIS HOST</span>' : ""}
         <div class="mlr-host">${esc(hostOf(s.homepage))}</div>
-      </td>
-      <td style="padding:9px 12px;border-bottom:1px solid var(--hairline);font-family:var(--font-mono);font-size:12.5px;">${chainCell(s)}</td>
-      <td style="padding:9px 12px;border-bottom:1px solid var(--hairline);" class="mlr-tools">${s.toolCount || 0} tools${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</td>
-      <td style="padding:9px 12px;border-bottom:1px solid var(--hairline);"><span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${health}</span></td>
-    </tr>`;
+      </div>
+      <span style="font-family:var(--font-mono);font-size:12.5px;">${chainCell(s)}</span>
+      <span class="mlr-tools">${s.toolCount || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
+      <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${health}</span>
+    </div>`;
   }).join("");
 
   const honesty = rosterSellers.length === 1 && rosterSellers[0]?.local
@@ -1095,18 +1124,8 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
 
   const rosterHtml = `
   <h2 id="sellers" style="font-size:21px;font-weight:800;margin:40px 0 14px;border-bottom:1.5px solid var(--ink);padding-bottom:8px;">Every seller, every chain</h2>
-  <p style="font-size:13px;color:var(--faint);margin:-6px 0 12px;">THIS HOST = run by agent402 · every other seller is independent, found by the open crawl · Chain shows where each seller settles · tx = settled calls, last 7 days on-chain</p>
-  <div style="overflow-x:auto;">
-  <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
-    <thead><tr style="text-align:left;">
-      <th style="padding:9px 12px;border-bottom:1.5px solid var(--ink);">Seller</th>
-      <th style="padding:9px 12px;border-bottom:1.5px solid var(--ink);">Chain</th>
-      <th style="padding:9px 12px;border-bottom:1.5px solid var(--ink);">Tools <span style="font-weight:400;color:var(--faint);font-size:11.5px;">&middot; settled tx (last 7d)</span></th>
-      <th style="padding:9px 12px;border-bottom:1.5px solid var(--ink);">Status</th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table>
-  </div>
+  <p style="font-size:13px;color:var(--faint);margin:-6px 0 12px;">THIS HOST = run by agent402 · every other seller is independent, found by the open crawl · Chain shows where each seller settles · Tools shows settled tx, last 7 days on-chain</p>
+  <div style="display:flex;flex-direction:column;gap:8px;">${rows}</div>
   ${capNote}
   ${honesty}`;
 

@@ -1,7 +1,8 @@
-// Offline unit test for the strict-source discovery filters (testnet + junk),
-// used when indexing open facilitator registries like PayAI. No network.
+// Offline unit test for the strict-source discovery filters (testnet + junk)
+// and network-id normalization, used when indexing open facilitator
+// registries like PayAI. No network.
 import assert from "node:assert";
-import { itemHasMainnetAccept, isJunkOrigin } from "../src/x402-index.js";
+import { itemHasMainnetAccept, isJunkOrigin, bazaarItemToTool } from "../src/x402-index.js";
 
 // --- itemHasMainnetAccept: keep mainnet, drop testnet-only ------------------
 const mainnetBase = { accepts: [{ network: "eip155:8453" }] };
@@ -18,6 +19,13 @@ const noAccepts = { accepts: [] };
 const algorandMainnet = { accepts: [{ network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=" }] };
 const algorandTestnet = { accepts: [{ network: "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=" }] };
 const algorandMixed = { accepts: [{ network: "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=" }, { network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=" }] };
+// TESTNET_CAIP2 was never extended when Monad/Celo/Avalanche/Sei joined as
+// rails - none of these testnet ids contain "sepolia"/"testnet"/"devnet",
+// so without an explicit set entry they'd pass the string-pattern check.
+const monadTestnet = { accepts: [{ network: "eip155:10143" }] };
+const celoTestnet = { accepts: [{ network: "eip155:11142220" }] };
+const avalancheTestnet = { accepts: [{ network: "eip155:43113" }] };
+const seiTestnet = { accepts: [{ network: "eip155:1328" }] };
 
 assert.strictEqual(itemHasMainnetAccept(mainnetBase), true, "base mainnet kept");
 assert.strictEqual(itemHasMainnetAccept(mainnetSol), true, "solana mainnet kept");
@@ -29,6 +37,47 @@ assert.strictEqual(itemHasMainnetAccept(noAccepts), true, "no accepts info → n
 assert.strictEqual(itemHasMainnetAccept(algorandMainnet), true, "algorand mainnet kept");
 assert.strictEqual(itemHasMainnetAccept(algorandTestnet), false, "algorand testnet-only dropped (genesis-hash id, not string-pattern-matchable)");
 assert.strictEqual(itemHasMainnetAccept(algorandMixed), true, "algorand mixed testnet+mainnet kept (mainnet leg)");
+assert.strictEqual(itemHasMainnetAccept(monadTestnet), false, "monad testnet dropped");
+assert.strictEqual(itemHasMainnetAccept(celoTestnet), false, "celo sepolia dropped");
+assert.strictEqual(itemHasMainnetAccept(avalancheTestnet), false, "avalanche fuji dropped");
+assert.strictEqual(itemHasMainnetAccept(seiTestnet), false, "sei testnet (atlantic-2) dropped");
+
+// --- bazaarItemToTool: normalize shorthand network strings to CAIP-2 -------
+// PayAI's open registry carries `network` as a bare shorthand string on some
+// listings instead of proper CAIP-2 - every downstream CHAIN_PAGES isNetwork
+// exact-match then fails silently, so the seller is indexed (shows on
+// /marketplace) but invisible on its own chain's page. Fixtures modeled on
+// two real, currently-affected sellers found live 2026-08-13: bluepages.fyi
+// (network:"base") and 1mpixels-one.vercel.app (network:"solana").
+const shorthandBase = bazaarItemToTool(
+  { resource: "https://bluepages.fyi/api/lookup", accepts: [{ network: "base", amount: "1000", payTo: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }] },
+  "https://bluepages.fyi"
+);
+assert.strictEqual(shorthandBase.networks[0], "eip155:8453", "shorthand \"base\" normalized to eip155:8453");
+assert.strictEqual(shorthandBase.payToByNetwork["eip155:8453"], "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "payToByNetwork keyed by the normalized CAIP-2 id, not the raw shorthand");
+
+const shorthandSolana = bazaarItemToTool(
+  { resource: "https://1mpixels-one.vercel.app/api/pixels", accepts: [{ network: "solana", amount: "1000", payTo: "9EMAayAfBR32J5d3ApEAG3NdKArRBtAqN7LA8c2WRM5o" }] },
+  "https://1mpixels-one.vercel.app"
+);
+assert.strictEqual(shorthandSolana.networks[0], "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "shorthand \"solana\" normalized to its real CAIP-2 id");
+
+// Already-correct CAIP-2 input must pass through unchanged (no double
+// normalization / no regression for the 99%+ of listings already correct).
+const alreadyCaip2 = bazaarItemToTool(
+  { resource: "https://real-caip2.example/api/x", accepts: [{ network: "eip155:8453", amount: "1000", payTo: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }] },
+  "https://real-caip2.example"
+);
+assert.strictEqual(alreadyCaip2.networks[0], "eip155:8453", "already-CAIP-2 network passes through unchanged");
+
+// An unrecognized string (not a known chain's shorthand, not CAIP-2) is left
+// as-is rather than guessed at - it simply won't match any isNetwork check,
+// same (safe) behavior as before this fix for genuinely unknown networks.
+const unknownShorthand = bazaarItemToTool(
+  { resource: "https://mystery-chain.example/api/x", accepts: [{ network: "some-future-chain", amount: "1000", payTo: "0xcccccccccccccccccccccccccccccccccccccc" }] },
+  "https://mystery-chain.example"
+);
+assert.strictEqual(unknownShorthand.networks[0], "some-future-chain", "unrecognized shorthand left untouched, not guessed at");
 
 // --- isJunkOrigin: drop documentation/placeholder hosts ---------------------
 assert.strictEqual(isJunkOrigin("https://api.example.com"), true, "example.com dropped");

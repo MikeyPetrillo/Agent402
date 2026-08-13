@@ -279,6 +279,17 @@ const TESTNET_CAIP2 = new Set([
   "eip155:80002", // polygon amoy
   "eip155:421614", // arbitrum sepolia
   "eip155:11155420", // optimism sepolia
+  // Added 2026-08-13: this set was never extended when Monad/Celo/Avalanche/Sei
+  // joined as rails (their mainnet ids were added to CHAIN_PAGES, but their
+  // testnet ids - none of which contain "sepolia"/"testnet"/"devnet", the
+  // only strings TESTNET_NET_RE above can see - were not added here). Latent
+  // gap: a strict-source listing whose only accept is one of these would have
+  // incorrectly passed itemHasMainnetAccept. Values per each chain's own
+  // isNetwork comment in src/market-page.js.
+  "eip155:10143", // monad testnet
+  "eip155:11142220", // celo sepolia
+  "eip155:43113", // avalanche fuji
+  "eip155:1328", // sei testnet (atlantic-2)
 ]);
 export function itemHasMainnetAccept(item) {
   const accepts = Array.isArray(item?.accepts) ? item.accepts : [];
@@ -498,11 +509,32 @@ function priceRank(p) {
 // We deliberately keep the price in atomic USDC units → USD here so the router
 // can compare across sellers without a per-network price lookup.
 // Exported for offline merge-contract tests alongside normaliseOpenapiTools.
+// PayAI's open registry (and occasionally others) carries `network` as a bare
+// shorthand string ("base", "solana") instead of proper CAIP-2
+// ("eip155:8453", "solana:5eykt4Us...") on some listings - every downstream
+// CHAIN_PAGES isNetwork exact-match then fails silently, so the seller is
+// indexed (shows on /marketplace) but invisible on its own chain's page.
+// Measured live 2026-08-13: bluepages.fyi (network:"base"),
+// 1mpixels-one.vercel.app (network:"solana"), ~72 of 1,000 sampled PayAI
+// resources affected. Built from CHAIN_PAGES itself (networkParam -> that
+// chain's real mainnet id) rather than a hand-maintained list, so a future
+// chain addition is covered automatically with no second edit required here.
+const NETWORK_SHORTHAND = new Map(Object.values(CHAIN_PAGES).map((C) => [C.networkParam, C.acceptNetwork]));
+function normalizeNetwork(n) {
+  if (typeof n !== "string") return n;
+  return NETWORK_SHORTHAND.get(n.toLowerCase()) || n;
+}
+
 export function bazaarItemToTool(item, originUrl) {
   // `resource` = CDP Bazaar; `resourceUrl` = GoPlausible's AVM registry.
   const resource = item.resource || item.resourceUrl || item.url;
   if (typeof resource !== "string" || !resource.startsWith(originUrl)) return null;
-  const accepts = Array.isArray(item.accepts) ? item.accepts : [];
+  // Normalized ONCE here so every downstream read (the `preferred` accept
+  // below, `networks:`, `stellarPayTo`, `algorandPayTo`, `payToByNetwork`)
+  // sees a real CAIP-2 id without each site needing its own fix.
+  const accepts = (Array.isArray(item.accepts) ? item.accepts : []).map((a) =>
+    a && typeof a.network === "string" ? { ...a, network: normalizeNetwork(a.network) } : a
+  );
   // Prefer the first Base USDC accept; fall back to any USDC; fall back to first.
   const preferred =
     accepts.find((a) => a?.network === "eip155:8453" && /USDC|USD Coin/i.test(a?.extra?.name || "")) ||
