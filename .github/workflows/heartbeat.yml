@@ -151,6 +151,37 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
           fi
 
+      # Stellar facilitator XLM balance watch. This signer pays the network
+      # fee on every settlement it handles, so an empty balance means real
+      # settlement failures, not just a degraded feature. /health is
+      # deliberately unauthenticated (a public address + a balance number,
+      # nothing sensitive), so this needs no facilitator token.
+      - name: Stellar facilitator balance check (alarm on low XLM)
+        if: always()
+        continue-on-error: true
+        run: |
+          RESP=$(curl -s --max-time 15 "https://agent402-facilitator-production.up.railway.app/health" 2>/dev/null || echo '{}')
+          LOW=$(echo "$RESP" | jq -r '.low // "unknown"' 2>/dev/null || echo unknown)
+          BALANCE=$(echo "$RESP" | jq -r '.xlmBalance // "unknown"' 2>/dev/null || echo unknown)
+          echo "facilitator XLM balance: $BALANCE (low=$LOW)"
+          # Unreadable is logged LOUDLY, never silently treated as "fine" -
+          # a silent skip is exactly what kept the charged-failure alarm dead
+          # for months (same doctrine as the canary burner watch below).
+          if [ "$LOW" = "unknown" ]; then
+            echo "::warning::facilitator /health UNREADABLE or missing .low - not silently skipping, investigate"
+          fi
+          TITLE="Stellar facilitator XLM LOW"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "$LOW" = "true" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The standalone Stellar facilitator's signer (facilitator/) is below its low-balance mark (FACILITATOR_LOW_BALANCE_XLM, default 5 XLM). It pays the network fee on every settlement it handles, so an empty balance means real settlement failures. Balance: $BALANCE XLM. Top up the signer address at \`/health\` on the facilitator service."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ) ($BALANCE XLM)."
+            fi
+          elif [ "$LOW" = "false" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ) ($BALANCE XLM)."
+          fi
+
       # Canary burner balance watch — the 2026-07-27 lesson: the Base burner
       # hit $0.000 mid-sweep, the canary filed it as a settlement outage, and
       # the public status page said OUTAGE while buyers settled fine. The
