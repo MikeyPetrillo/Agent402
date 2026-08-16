@@ -1,0 +1,31 @@
+{
+  "name": "Polymarket Prediction Market Intelligence API & MCP Server",
+  "description": "Live Polymarket prediction market analysis, implied probabilities, volume/liquidity metrics, and risk flags for autonomous AI agents on Base Mainnet ($0.05 USDC).",
+  "author": "Jonbaz32",
+  "version": "1.0.0",
+  "x402_manifest": "https://agent-payment-gateway.vercel.app/.well-known/x402",
+  "openapi_spec": "https://agent-payment-gateway.vercel.app/openapi.json",
+  "mcp_endpoint": "https://agent-payment-gateway.vercel.app/v1/mcp",
+  "endpoints": [
+    {
+      "path": "/v1/prediction-market-analysis",
+      "method": "POST",
+      "pricing": {
+        "amount": "0.05",
+        "currency": "USDC",
+        "network": "BASE",
+        "payTo": "0x43f9a721B59C247B6258e72A1Bf5A384b64F8A38"
+      }
+    },
+    {
+      "path": "/v1/prediction-market-comparison",
+      "method": "POST",
+      "pricing": {
+        "amount": "0.10",
+        "currency": "USDC",
+        "network": "BASE",
+        "payTo": "0x43f9a721B59C247B6258e72A1Bf5A384b64F8A38"
+      }
+    }
+  ]
+}
