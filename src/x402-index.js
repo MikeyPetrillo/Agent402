@@ -39,13 +39,6 @@ import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
 import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, isQuoteResponse } from "./x402-live-quote.js";
 import { summarize, fmtUsd, fmtPct } from "./economy.js";
 import { rankBy, canonicalHost } from "./leaderboard.js";
-import {
-  PURCHASE_EVIDENCE_RELATION,
-  SCHEMAS as PAYMENT_POLICY_SCHEMAS,
-  evaluateResponseContract,
-  selectPurchaseEvidenceLink,
-  verifyPurchaseEvidenceManifest,
-} from "agent-payment-policy";
 import { routeExecuteHint } from "./tools/route-execute.js";
 
 // RAILS caip2 -> CHAIN_PAGES key, same join the homepage's by-chain strip uses
@@ -449,6 +442,90 @@ function priceConflictProjection(t) {
  * only when every such variant guarantees it. Missing/non-JSON variants and
  * unsupported schema constructs make the aggregate partial rather than
  * letting one strong variant hide a weaker success path. */
+const RESPONSE_SCHEMA_UNSUPPORTED = new Set([
+  "$ref", "$dynamicRef", "allOf", "anyOf", "oneOf", "not", "if", "then", "else",
+  "dependentSchemas", "patternProperties", "unevaluatedProperties",
+]);
+const JSON_SCHEMA_TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
+
+function isSchemaRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function schemaTypes(schema) {
+  const raw = schema?.type;
+  const values = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+  return [...new Set(values.map(String))];
+}
+
+function cleanRequiredField(field) {
+  if (typeof field !== "string") return "";
+  const trimmed = field.trim();
+  return trimmed && trimmed.length <= 200 ? trimmed : "";
+}
+
+function unsupportedSchemaKeywords(value, found = []) {
+  if (Array.isArray(value)) {
+    for (const item of value) unsupportedSchemaKeywords(item, found);
+    return found;
+  }
+  if (!isSchemaRecord(value)) return found;
+  for (const [key, item] of Object.entries(value)) {
+    if (RESPONSE_SCHEMA_UNSUPPORTED.has(key)) found.push(key);
+    unsupportedSchemaKeywords(item, found);
+  }
+  return found;
+}
+
+function guaranteedRequiredPaths(schema, prefix = "", depth = 0, paths = []) {
+  if (!isSchemaRecord(schema) || depth > 20 || paths.length >= 64) return paths;
+  const properties = isSchemaRecord(schema.properties) ? schema.properties : {};
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  for (const field of required) {
+    const clean = cleanRequiredField(field);
+    if (!clean || !isSchemaRecord(properties[clean])) continue;
+    const path = prefix ? `${prefix}.${clean}` : clean;
+    paths.push(path);
+    if (schemaTypes(properties[clean]).includes("object")) {
+      guaranteedRequiredPaths(properties[clean], path, depth + 1, paths);
+    }
+  }
+  return paths;
+}
+
+/** In-repo JSON Schema walk for seller OpenAPI success variants. Reports
+ * whether a schema is self-contained enough to declare required paths.
+ * Does not resolve $ref, fetch, pay, or authorize. */
+function evaluateOpenapiJsonSchema(schema) {
+  if (schema == null) return { decision: "absent", requiredPaths: [] };
+  if (!isSchemaRecord(schema)) throw new Error("response schema must be an object");
+  const properties = isSchemaRecord(schema.properties) ? schema.properties : {};
+  const required = Array.isArray(schema.required) ? schema.required.map(cleanRequiredField) : [];
+  if (required.some((value) => !value) || new Set(required).size !== required.length) {
+    throw new Error("required fields are invalid or duplicated");
+  }
+  const requiredPaths = [...new Set(guaranteedRequiredPaths(schema))].sort();
+  const unsupported = unsupportedSchemaKeywords(schema);
+  const topTypes = schemaTypes(schema);
+  const structuralProblems = [];
+  if (!topTypes.includes("object")) structuralProblems.push("top_level_type_not_object");
+  if (!Object.keys(properties).length) structuralProblems.push("properties_missing");
+  if (!required.length) structuralProblems.push("required_fields_missing");
+  for (const field of required) {
+    if (!isSchemaRecord(properties[field])) structuralProblems.push(`required_property_missing:${field}`);
+    else {
+      const types = schemaTypes(properties[field]);
+      if (!types.length || types.some((type) => !JSON_SCHEMA_TYPES.has(type))) {
+        structuralProblems.push(`required_property_type_missing:${field}`);
+      }
+    }
+  }
+  return {
+    decision: structuralProblems.length || unsupported.length ? "partial" : "admissible",
+    requiredPaths,
+  };
+}
+
 export function responseContractFromOperation(openapi, originUrl, method, route, operation) {
   const responses = operation?.responses && typeof operation.responses === "object"
     ? operation.responses
@@ -457,7 +534,7 @@ export function responseContractFromOperation(openapi, originUrl, method, route,
     .filter(([status]) => /^2\d\d$/.test(status))
     .sort(([a], [b]) => a.localeCompare(b));
   const success = allSuccess.slice(0, 16);
-  const reports = success.map(([status, declaration]) => {
+  const reports = success.map(([, declaration]) => {
     const content = declaration?.content && typeof declaration.content === "object"
       ? declaration.content
       : {};
@@ -465,28 +542,11 @@ export function responseContractFromOperation(openapi, originUrl, method, route,
     const media = mediaKey && content[mediaKey] && typeof content[mediaKey] === "object"
       ? content[mediaKey]
       : null;
-    let example = media?.example;
-    if (example === undefined) {
-      const first = Object.values(media?.examples && typeof media.examples === "object" ? media.examples : {})
-        .find((item) => item && typeof item === "object" && item.value !== undefined);
-      example = first?.value;
-    }
-    if (example === undefined && media?.schema?.example !== undefined) example = media.schema.example;
     const schemaPresent = Boolean(media?.schema && typeof media.schema === "object");
     try {
       return {
         schemaPresent,
-        report: evaluateResponseContract({
-          schemaVersion: PAYMENT_POLICY_SCHEMAS.responseContractObservation,
-          source: "seller_openapi",
-          request: { method: String(method).toUpperCase(), url: new URL(route, originUrl).toString() },
-          response: {
-            status: Number(status),
-            mediaType: "application/json",
-            schema: schemaPresent ? media.schema : null,
-            ...(example === undefined ? {} : { example }),
-          },
-        }),
+        report: evaluateOpenapiJsonSchema(schemaPresent ? media.schema : null),
       };
     } catch {
       // A malformed seller declaration is evidence about that operation, not
@@ -505,102 +565,14 @@ export function responseContractFromOperation(openapi, originUrl, method, route,
         .map((item) => new Set(item.report.requiredPaths || []))
         .reduce((common, paths) => new Set([...common].filter((path) => paths.has(path))))
     : new Set();
-  const schemaDigests = [...new Set(jsonSchemas.map((item) => item.report.schemaDigest).filter(Boolean))];
   return {
     source: "seller_openapi",
     state,
     successResponseVariants: Math.min(allSuccess.length, 16),
     successJsonSchemas: jsonSchemas.length,
     guaranteedPaths: [...guaranteedPaths].sort().slice(0, 64),
-    schemaDigest: schemaDigests.length === 1 ? schemaDigests[0] : null,
     runtimeVerified: false,
   };
-}
-
-/** Optional seller-owned pre-purchase evidence. Missing evidence is reported,
- * never penalized. One same-origin manifest is fetched once per seller, then
- * exact operations are cross-checked against the OpenAPI already in memory.
- * This does not probe routes, rank, route, or authorize. */
-export async function inspectPurchaseEvidence({ originUrl, linkHeaders = [], openapi, tools, fetchImpl = safeFetch } = {}) {
-  const advertised = [];
-  try {
-    for (const header of linkHeaders.filter(Boolean)) {
-      const selected = selectPurchaseEvidenceLink(header, originUrl);
-      if (selected) advertised.push(selected);
-    }
-  } catch {
-    return { status: "invalid", relation: PURCHASE_EVIDENCE_RELATION, compatibleOperationCount: 0 };
-  }
-  const unique = [...new Set(advertised)];
-  if (!unique.length) return { status: "missing", relation: PURCHASE_EVIDENCE_RELATION, compatibleOperationCount: 0 };
-  if (unique.length !== 1) return { status: "invalid", relation: PURCHASE_EVIDENCE_RELATION, compatibleOperationCount: 0 };
-  if (!openapi || typeof openapi !== "object") {
-    return { status: "unverified", relation: PURCHASE_EVIDENCE_RELATION, manifestUrl: unique[0], reason: "openapi_unavailable", compatibleOperationCount: 0 };
-  }
-  let manifest;
-  try {
-    const response = await fetchImpl(unique[0], { maxBytes: 512_000, headers: { Accept: "application/json" }, redirect: "manual" });
-    if (response.finalUrl !== unique[0]) throw new Error("purchase evidence redirected");
-    manifest = JSON.parse(response.html);
-  } catch {
-    return { status: "invalid", relation: PURCHASE_EVIDENCE_RELATION, manifestUrl: unique[0], reason: "manifest_unavailable", compatibleOperationCount: 0 };
-  }
-  const basePath = openapiBasePath(openapi, originUrl);
-  const contracts = new Map();
-  for (const [rawPath, item] of Object.entries(openapi.paths || {})) {
-    const route = basePath && !rawPath.startsWith(basePath + "/") && rawPath !== basePath ? basePath + rawPath : rawPath;
-    for (const method of ["get", "post"]) {
-      const operation = item?.[method];
-      if (!operation) continue;
-      contracts.set(`${method.toUpperCase()} ${route}`, responseContractFromOperation(openapi, originUrl, method, route, operation));
-    }
-  }
-  const compatible = new Set();
-  let binding = null;
-  try {
-    for (const operation of manifest.operations || []) {
-      const key = `${operation.method} ${operation.path}`;
-      const contract = contracts.get(key);
-      if (!contract || contract.state !== "declared" || !contract.schemaDigest) continue;
-      const verified = verifyPurchaseEvidenceManifest(manifest, {
-        target: new URL(operation.path, originUrl),
-        method: operation.method,
-        requiredPaths: contract.guaranteedPaths,
-      });
-      if (verified.responseSchemaDigest !== contract.schemaDigest) continue;
-      binding ||= verified;
-      compatible.add(key);
-    }
-  } catch {
-    return { status: "invalid", relation: PURCHASE_EVIDENCE_RELATION, manifestUrl: unique[0], reason: "manifest_contract_invalid", compatibleOperationCount: 0 };
-  }
-  for (const tool of tools || []) {
-    if (compatible.has(`${String(tool.method || "GET").toUpperCase()} ${tool.route}`)) tool.purchaseEvidenceVerified = true;
-  }
-  if (!binding || !compatible.size) {
-    return { status: "unverified", relation: PURCHASE_EVIDENCE_RELATION, manifestUrl: unique[0], reason: "no_current_openapi_match", compatibleOperationCount: 0 };
-  }
-  return {
-    status: "verified",
-    relation: PURCHASE_EVIDENCE_RELATION,
-    manifestUrl: unique[0],
-    manifestDigest: binding.manifestDigest,
-    serviceVersion: binding.serviceVersion,
-    declaration: binding.declaration,
-    compatibleOperationCount: compatible.size,
-    totalOperationCount: Array.isArray(manifest.operations) ? manifest.operations.length : 0,
-  };
-}
-
-function purchaseEvidenceToolProjection(tool) {
-  return tool?.purchaseEvidenceVerified === true
-    ? { purchaseEvidence: { status: "verified", source: "seller_manifest", sellerDeclared: true } }
-    : {};
-}
-
-function purchaseEvidenceSellerProjection(entry) {
-  const value = entry?.purchaseEvidence;
-  return value && typeof value === "object" ? { purchaseEvidence: { ...value } } : {};
 }
 
 /** Persist a compact tuple rather than repeating constant public labels across
@@ -1823,12 +1795,10 @@ async function crawlSeller(originUrl) {
     // OpenAPI is the tool-level detail. Best-effort: a seller without one still
     // shows up in the Index based on their manifest alone.
     let openapi = null;
-    let openapiLink = null;
     let tools = [];
     try {
       const openapiRes = await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES });
       openapi = JSON.parse(openapiRes.html);
-      openapiLink = openapiRes.linkHeader;
       tools = normaliseOpenapiTools(openapi, originUrl);
     } catch {
       /* manifest-only seller — fine */
@@ -1855,18 +1825,11 @@ async function crawlSeller(originUrl) {
     // routes we still know nothing about.
     tools = carryForwardLearnedQuotes(tools, prev);
     tools = await enrichLiveQuotes(tools, originUrl);
-    const purchaseEvidence = await inspectPurchaseEvidence({
-      originUrl,
-      linkHeaders: [manifestRes.linkHeader, openapiLink],
-      openapi,
-      tools,
-    });
 
     cache.set(originUrl, {
       manifest,
       openapiSummary: openapi ? { paths: Object.keys(openapi.paths || {}).length } : null,
       tools,
-      purchaseEvidence,
       fetchedAt: Date.now(),
       error: null,
       history: rollHistory(prev, true),
@@ -1906,14 +1869,13 @@ async function crawlSeller(originUrl) {
     let openapi = null;
     let openapiTools = [];
     let openapiPath = null;
-    let openapiLink = null;
     try {
       const openapiRes = await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES });
       const parsed = JSON.parse(openapiRes.html);
       if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
         openapi = parsed;
         openapiTools = normaliseOpenapiTools(parsed, originUrl);
-        if (openapiTools.length) { openapiPath = "/openapi.json"; openapiLink = openapiRes.linkHeader; }
+        if (openapiTools.length) openapiPath = "/openapi.json";
       }
     } catch {
       /* no openapi either — Bazaar-only seller */
@@ -1969,12 +1931,6 @@ async function crawlSeller(originUrl) {
       // skipping it here would leave the worst-served sellers unpriced.
       carryForwardLearnedQuotes(tools, prev);
       await enrichLiveQuotes(tools, originUrl);
-      const purchaseEvidence = await inspectPurchaseEvidence({
-        originUrl,
-        linkHeaders: [openapiLink],
-        openapi,
-        tools,
-      });
       // A real (non-synthesized) manifest from a past crawl is kept; a stale
       // synthesized one is rebuilt so a newly appeared openapi title wins.
       const keepManifest = prev?.manifest && !prev.manifest.synthesized ? prev.manifest : null;
@@ -1987,7 +1943,6 @@ async function crawlSeller(originUrl) {
             : synthManifestFromBazaar(originUrl, bazaarTools)),
         openapiSummary: openapi ? { paths: Object.keys(openapi.paths || {}).length } : prev?.openapiSummary ?? null,
         tools,
-        purchaseEvidence,
         fetchedAt: Date.now(),
         error: null,
         source: openapiTools.length ? "openapi-fallback" : "bazaar-fallback",
@@ -2524,7 +2479,6 @@ export function routableSellerSummaries() {
       // file has twice shipped a field present on two of three, which is
       // inert on whichever surface happens to render.
       discoveryPath: v.discoveryPath || null,
-      ...purchaseEvidenceSellerProjection(v),
       // payTo per advertised network, so callers can join an origin to on-chain
       // settlements it received. Sourced ONLY from facilitator discovery-registry
       // items (bazaarItemToRow) - a seller's own crawled manifest never
@@ -2592,7 +2546,6 @@ export function sellerDetail(originOrHost) {
       // file has twice shipped a field present on two of three, which is
       // inert on whichever surface happens to render.
       discoveryPath: v.discoveryPath || null,
-      ...purchaseEvidenceSellerProjection(v),
       // payTo per advertised network. Registry-sourced only (bazaarItemToTool);
       // a seller's own crawled manifest never contributes one. Omitting it made
       // advertisedPayToEvidence inert: server.js passes THIS object as `seller`,
@@ -2615,7 +2568,6 @@ export function sellerDetail(originOrHost) {
         price: t.price ?? null,
         ...priceConflictProjection(t),
         ...responseContractProjection(t),
-        ...purchaseEvidenceToolProjection(t),
         ...(t.paid !== undefined ? { paid: t.paid } : {}),
         networks: t.networks || undefined,
       })),
@@ -2646,7 +2598,6 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
     // file has twice shipped a field present on two of three, which is
     // inert on whichever surface happens to render.
     discoveryPath: v.discoveryPath || null,
-    ...purchaseEvidenceSellerProjection(v),
     // Present only when the seller's document distinguishes paid from free
     // (tools carry paid flags): the buyable subset. Display uses it to show
     // "42 tools · 21 paid" so a padded free surface can't read as paid depth.
@@ -2971,7 +2922,6 @@ export function routeQuery({ query, top, include, networkFilter, baseUrl, catalo
       priceUsd: parsePrice(t.price),
       ...priceConflictProjection(t),
       ...responseContractProjection(t),
-      ...purchaseEvidenceToolProjection(t),
       // "x402" = we have positive evidence this is payable in-protocol (a price,
       // or a registry accepts entry someone settled against). "unknown" = we
       // have none, which is NOT the same as "not payable" - see payabilityOf.
@@ -3692,7 +3642,6 @@ function flattenedThirdPartyTools(excludeOrigin = "") {
         price: t?.price ?? null,
         ...priceConflictProjection(t),
         ...responseContractProjection(t),
-        ...purchaseEvidenceToolProjection(t),
         // The identifier a caller needs to actually invoke the tool. Present on
         // /api/route and /api/find, missing here, on the surface that lists all
         // 65k third-party rows.
