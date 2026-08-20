@@ -1591,6 +1591,9 @@ jobs:
       - name: Index openapi-fallback crawl tests (payment-signal gate, Bazaar merge, ranking — offline)
         run: node scripts/test-openapi-fallback.js
 
+      - name: Marketplace request-contract parsing and projection pipeline (offline)
+        run: node scripts/test-request-contract.js && node scripts/test-request-contract-pipeline.js
+
       - name: Router alias-collapse tests (redirect aliases, subset guard, Sybil slots — offline)
         run: node scripts/test-router-alias.js
 

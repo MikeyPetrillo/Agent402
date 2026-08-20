@@ -41,6 +41,16 @@ import { summarize, fmtUsd, fmtPct } from "./economy.js";
 import { rankBy, canonicalHost, getLeaderboardSnapshot } from "./leaderboard.js";
 import { routeExecuteHint } from "./tools/route-execute.js";
 import { recordSellerRegistrationSeen } from "./stats.js";
+import {
+  requestContractFromOperation,
+  requestContractFromBazaarItem,
+  requestContractStorage,
+  requestContractStorageProjection,
+  preferRequestContractStorage,
+  requestContractProjection,
+} from "./request-contract.js";
+import { looksLikeListingInjection } from "./listing-injection.js";
+export { looksLikeListingInjection };
 
 // RAILS caip2 -> CHAIN_PAGES key, same join the homepage's by-chain strip uses
 // (see ledger-home.js) so /index's own row derives the same way: page
@@ -62,6 +72,20 @@ const NETWORK_MATCHERS = new Map(RAILS.map((r) => {
 }));
 
 const LOCAL_SELLER = "self";
+
+function requestContractEvidenceSafe(build) {
+  try {
+    return { requestContractEvidence: requestContractStorage(build()) };
+  } catch {
+    // One hostile operation must not drop the seller's remaining listing.
+    return {};
+  }
+}
+
+function requestContractProjectionExternal(tool) {
+  return tool?.seller === LOCAL_SELLER ? {} : requestContractProjection(tool);
+}
+
 // /index used to render every crawled seller server-side (~1,477 rows → a
 // 475KB response with no compression). Cap the default render to the top N
 // by whatever metric the page is currently sorted on; ?all=1 opts back into
@@ -623,6 +647,7 @@ export function bazaarItemToTool(item, originUrl) {
     category: tags[0] || "other",
     tags,
     price,
+    ...requestContractEvidenceSafe(() => requestContractFromBazaarItem(item)),
     // Every chain this resource's 402 advertises — the signal behind the
     // router's ?network= filter ("who else settles on Robinhood Chain?").
     networks: [...new Set(accepts.map((a) => a?.network).filter(Boolean))],
@@ -715,20 +740,26 @@ export function normaliseOpenapiTools(openapi, originUrl) {
       // many settlement-proven sellers do not use payment extensions yet.
       if (nonToolPath.test(rawPath) || nonToolPath.test(pathStr)) continue;
       if (op.deprecated === true) continue;
-      const annotated = openapiOperationHasPaymentSignal(op);
-      const tags = Array.isArray(op.tags) ? op.tags : [];
-      out.push({
-        seller: originUrl,
-        method: method.toUpperCase(),
-        route: pathStr,
-        slug: op.operationId || pathStr.replace(/^\//, "").replace(/\//g, "-"),
-        name: op.summary || op.operationId || pathStr,
-        description: op.description || "",
-        category: tags[0] || "other",
-        tags,
-        price: op["x-price"] || op["x-x402-price"] || op["x-payment-info"]?.price?.amount || op["x-x402-price-usdc"] || null,
-        ...(documentDistinguishesPaidOperations ? { paid: annotated } : {}),
-      });
+      try {
+        const annotated = openapiOperationHasPaymentSignal(op);
+        const tags = Array.isArray(op.tags) ? op.tags : [];
+        out.push({
+          seller: originUrl,
+          method: method.toUpperCase(),
+          route: pathStr,
+          slug: op.operationId || pathStr.replace(/^\//, "").replace(/\//g, "-"),
+          name: op.summary || op.operationId || pathStr,
+          description: op.description || "",
+          category: tags[0] || "other",
+          tags,
+          price: op["x-price"] || op["x-x402-price"] || op["x-payment-info"]?.price?.amount || op["x-x402-price-usdc"] || null,
+          ...requestContractEvidenceSafe(() => requestContractFromOperation(openapi, method, pathStr, op, methods)),
+          ...(documentDistinguishesPaidOperations ? { paid: annotated } : {}),
+        });
+      } catch {
+        // One operation's parse must not drop the seller. Before this catch,
+        // a throw escaped into crawlSeller's manifest-only handler.
+      }
     }
   }
   return out;
@@ -1092,9 +1123,31 @@ export function mergeManifestIntoTools(manifestTools = [], existing = []) {
     )];
     const forceObserved =
       manifestMethods.length <= 1 && observedMethods.length === 1 ? observedMethods[0] : null;
+    const requestEvidenceByMethod = new Map();
+    for (const i of indices) {
+      const method = String(existing[i].method || "").toUpperCase();
+      const projected = requestContractStorageProjection(existing[i]);
+      if (method && projected.requestContractEvidence) requestEvidenceByMethod.set(method, projected);
+    }
     for (const i of indices) replaced.add(i);
     for (const e of entries) {
-      append.push({ ...e, method: forceObserved || e.method || "GET" });
+      const method = forceObserved || e.method || "GET";
+      const inherited = requestEvidenceByMethod.get(String(method).toUpperCase()) || {};
+      // A query-template variant is a different concrete call. Reusing the
+      // base operation's example can attach contradictory inputs to it, so
+      // retain the required-field report but downgrade the example until the
+      // manifest itself publishes a structured contract.
+      const safeEvidence = String(e.route || "").includes("?") && inherited.requestContractEvidence
+        ? { requestContractEvidence: [
+            inherited.requestContractEvidence[0],
+            inherited.requestContractEvidence[1] === "a" ? "a" : "m",
+            inherited.requestContractEvidence[2] || {},
+            null,
+            inherited.requestContractEvidence[4] || 0,
+            inherited.requestContractEvidence[5] || 0,
+          ] }
+        : inherited;
+      append.push({ ...e, method, ...safeEvidence });
     }
   }
   const out = existing.filter((_, i) => !replaced.has(i));
@@ -1348,6 +1401,7 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
         origin: microUsdToPrice(originMicro),
       },
     } : {}),
+    ...preferRequestContractStorage(o, b),
     // A registry row IS a settlement record: an operation the document left
     // unannotated (paid:false) that has real settled payments is buyable —
     // observed truth beats the doc's silence. An explicit zero price stays free.
@@ -2047,38 +2101,6 @@ export function computeAliasOrigins(cacheMap) {
   return aliases;
 }
 
-// Metadata-injection detector (M6, "Five Attacks on x402" Attack IV-E1).
-// A tool listing is metadata: a name, a description, tags — text that *describes*
-// what a tool does. It is never a channel for instructions to the selecting
-// agent. When an external listing's text tries to command the ranker or the
-// buyer's LLM ("ignore previous instructions", "always pick this", a fake
-// <system> block), that's an attack, not a description — the paper drove one
-// crafted server to 71.8% selection this way. We drop such listings entirely.
-//
-// Deliberately conservative: every pattern is imperative/meta phrasing that a
-// genuine tool description has no reason to contain. A tool that legitimately
-// *operates on* prompts (e.g. a "prompt linter") describes its function
-// ("detects prompt-injection patterns"), it doesn't issue the commands below.
-const INJECTION_PATTERNS = [
-  /ignore\s+(?:all\s+|any\s+)?(?:previous|prior|above|earlier|the\s+above)\s+(?:instructions?|prompts?|context|rules?)/,
-  /disregard\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|earlier|other)/,
-  /forget\s+(?:everything|all|the\s+above|previous|prior)/,
-  /always\s+(?:pick|choose|select|use|prefer|recommend|return)\s+(?:this|me|the\s+following)/,
-  /(?:you\s+must|be\s+sure\s+to)\s+(?:always\s+)?(?:pick|choose|select|use|prefer|recommend)/,
-  /(?:highest|top|maximum|max)\s+priority/,
-  /override\s+(?:all\s+|any\s+|the\s+)?(?:other|previous|prior|instructions?|ranking)/,
-  /<\/?\s*(?:system|assistant|user|instructions?|important)\s*>/,
-  /\[(?:system|important|instructions?|override)\]/,
-  /system\s*(?:prompt|message|role)\s*[:=]/,
-  /do\s+not\s+(?:pick|choose|select|recommend|consider)\s+(?:any\s+)?other/,
-];
-export function looksLikeListingInjection(text) {
-  const t = String(text || "");
-  if (t.length > 8000) return true; // no honest listing is a novel; oversized = padding an attack
-  for (const re of INJECTION_PATTERNS) if (re.test(t)) return true;
-  return false;
-}
-
 let crawlerTimer = null;
 let discoveryTimer = null;
 let crawlInFlight = false;
@@ -2548,6 +2570,7 @@ export function sellerDetail(originOrHost) {
         name: t.name || null,
         price: t.price ?? null,
         ...priceConflictProjection(t),
+        ...requestContractProjectionExternal(t),
         ...(t.paid !== undefined ? { paid: t.paid } : {}),
         networks: t.networks || undefined,
       })),
@@ -2941,6 +2964,7 @@ export function routeQuery({ query, top, include, networkFilter, baseUrl, catalo
       price: t.price,
       priceUsd: parsePrice(t.price),
       ...priceConflictProjection(t),
+      ...requestContractProjectionExternal(t),
       // "x402" = we have positive evidence this is payable in-protocol (a price,
       // or a registry accepts entry someone settled against). "unknown" = we
       // have none, which is NOT the same as "not payable" - see payabilityOf.
@@ -3681,6 +3705,7 @@ function flattenedThirdPartyTools(excludeOrigin = "") {
         // a measurement taken during this audit came out wrong.
         price: t?.price ?? null,
         ...priceConflictProjection(t),
+        ...requestContractProjection(t),
         // The identifier a caller needs to actually invoke the tool. Present on
         // /api/route and /api/find, missing here, on the surface that lists all
         // 65k third-party rows.
