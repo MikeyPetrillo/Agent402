@@ -39,9 +39,25 @@ function prototypeSpecial(value) {
   return PROTOTYPE_SPECIAL_NAMES.has(String(value || "").toLowerCase());
 }
 
+function listingInjectionLike(value) {
+  // Router case-folds listing hay before looksLikeListingInjection. Projected
+  // names and examples need the same fold, plus bounded decoded variants and
+  // URL path/query/fragment parts, or mixed-case and encoded commands leak.
+  const text = String(value);
+  if (decodedVariants(text).some((variant) => looksLikeListingInjection(variant.toLowerCase()))) return true;
+  if (!/^https?:\/\//i.test(text)) return false;
+  try {
+    const parsed = new URL(text);
+    return [parsed.pathname, parsed.hash, ...[...parsed.searchParams].flatMap(([name, item]) => [name, item])]
+      .some((part) => decodedVariants(part).some((variant) => looksLikeListingInjection(variant.toLowerCase())));
+  } catch {
+    return false;
+  }
+}
+
 function safeName(value) {
   const name = String(value || "");
-  return name && name.length <= MAX_REQUIRED_NAME && !prototypeSpecial(name) && !/[\u0000-\u001f\u007f]/.test(name) && !looksLikeListingInjection(name) ? name : null;
+  return name && name.length <= MAX_REQUIRED_NAME && !prototypeSpecial(name) && !/[\u0000-\u001f\u007f]/.test(name) && !listingInjectionLike(name) ? name : null;
 }
 
 function pointerPart(value) {
@@ -135,7 +151,7 @@ function safeScalar(value) {
     // A seller can put a credential in an innocently named field. Names and
     // schema markers are therefore only the first privacy boundary: reject
     // common secret and identity value shapes before anything enters cache.
-    if (secretValueShape(value) || looksLikeListingInjection(value)) return { ok: false };
+    if (secretValueShape(value) || listingInjectionLike(value)) return { ok: false };
     if (/^https?:\/\//i.test(value)) {
       try {
         const parsed = new URL(value);
