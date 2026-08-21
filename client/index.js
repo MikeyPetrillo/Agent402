@@ -18,8 +18,10 @@ import { createHash } from "node:crypto";
 // `User-Agent: agent402-client/<version>` — a standard header, no extra
 // network calls — so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.6.1";
+const VERSION = "0.6.12";
 const USER_AGENT = `agent402-client/${VERSION}`;
+const OUTPUT_MAX_RESPONSE_BYTES_DEFAULT = 100_000;
+const OUTPUT_MAX_RESPONSE_BYTES_CEILING = 10_000_000;
 
 const leadingZeroBits = (buf) => { let n = 0; for (const b of buf) { if (b === 0) { n += 8; continue; } n += Math.clz32(b) - 24; break; } return n; };
 
@@ -33,9 +35,13 @@ export class Agent402 {
    * @param {number} [opts.maxPerCallUsd]    hard ceiling on a single paid call (USD); over → SpendingLimitError before paying
    * @param {number} [opts.dailyLimitUsd]    hard ceiling on rolling-24h paid spend (USD)
    * @param {number} [opts.maxPerHostUsd]    hard ceiling on rolling-24h paid spend to one seller host (USD)
+   * @param {object} [opts.outputSchema]     buyer-owned JSON Schema 2020-12; compiled before payFetch via optional peer agent-payment-policy@0.15.0. Only null/undefined omits the contract; any other inadmissible value throws.
+   * @param {string[]} [opts.requiredFields] dotted paths the paid JSON must contain (bound into the same contract)
+   * @param {number} [opts.maxResponseBytes] paid-body raw-byte ceiling (default 100000); enforced on actual response bytes before JSON parse
    */
   constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = globalThis.fetch,
-    maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null } = {}) {
+    maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null,
+    outputSchema = null, requiredFields = null, maxResponseBytes = null } = {}) {
     if (typeof fetchImpl !== "function") throw new Error("No fetch available — pass { fetchImpl } on Node < 18");
     this.baseUrl = String(baseUrl).replace(/\/$/, "");
     this.payFetch = payFetch || null;
@@ -56,6 +62,16 @@ export class Agent402 {
       perHost: numOrNull(maxPerHostUsd),
       log: [], // [{ ts, host, usd }] — settled paid calls in the last 24h
     };
+    // Optional buyer-owned acceptance contract. Compiled with public
+    // agent-payment-policy@0.15.0 APIs before payFetch so a paid HTTP 200
+    // with the wrong shape cannot be cached as a successful purchase.
+    // Absent (null/undefined) → existing behavior. The package is an optional
+    // peer, so the default client stays zero-dependency (same pattern as
+    // mppx / @x402/fetch). Inadmissible control values throw here rather than
+    // being coerced into a weaker/null default.
+    this._outputSchema = assertOutputSchemaControl(outputSchema, "constructor");
+    this._outputRequiredFields = assertRequiredFieldsControl(requiredFields, "constructor") ?? [];
+    this._outputMaxResponseBytes = assertMaxResponseBytesControl(maxResponseBytes, "constructor") ?? OUTPUT_MAX_RESPONSE_BYTES_DEFAULT;
   }
 
   async _loadCatalog() {
@@ -163,16 +179,90 @@ export class Agent402 {
   }
 
   /**
+   * Compile a buyer-owned output contract before any payment credential or
+   * signature is created. Uses only public agent-payment-policy@0.15.0 APIs:
+   * inspectOutputSchema, prepareOutputValidator, validateOutput.
+   */
+  async _prepareOutputContract(schema, requiredFields, maxResponseBytes) {
+    if (schema == null) return null;
+    let policy;
+    try {
+      policy = await import("agent-payment-policy");
+    } catch {
+      throw new Error("outputSchema requires the optional peer agent-payment-policy@0.15.0 (Node >=22)");
+    }
+    const fields = normalizeOutputContractRequiredFields(requiredFields || []);
+    const inspected = policy.inspectOutputSchema({ schema, requiredFields: fields });
+    // Identity fields are the cache namespace. Raw schema is retained only
+    // for the validator and is never used as a cache key or log value.
+    const contract = {
+      mediaType: "application/json",
+      requiredFields: fields,
+      maxResponseBytes: maxResponseBytes ?? OUTPUT_MAX_RESPONSE_BYTES_DEFAULT,
+      schemaDigest: inspected.schemaDigest,
+    };
+    return {
+      contract,
+      validator: policy.prepareOutputValidator({ schema, contract }),
+      validateOutput: policy.validateOutput,
+    };
+  }
+
+  _assertOutput(slug, body, prepared) {
+    try {
+      prepared.validateOutput(body, prepared.contract, { schemaValidator: prepared.validator });
+    } catch (err) {
+      throw new Error(`call "${slug}" completed but output failed the buyer contract: ${err.message}`);
+    }
+  }
+
+  async _deliverResponse(slug, response, cacheKey, cache, prepared) {
+    const body = prepared
+      ? await parseContractJson(slug, response, prepared.contract.maxResponseBytes)
+      : await response.json();
+    if (prepared) this._assertOutput(slug, body, prepared);
+    return this._store(cacheKey, body, cache);
+  }
+
+  /**
    * Call a tool by slug; pays automatically (PoW for free tools, x402 for
    * wallet-only) and returns the parsed JSON result.
    */
-  async call(slug, params = {}, { idempotencyKey, cache = true } = {}) {
+  async call(slug, params = {}, { idempotencyKey, cache = true, outputSchema, requiredFields, maxResponseBytes } = {}) {
+    // Reject inadmissible per-call controls before catalog I/O, cache lookup, or payFetch.
+    // Only null/undefined falls back to the constructor contract; false and
+    // other coerced-falsey values must not disable a valid constructor schema.
+    const schema = assertOutputSchemaControl(outputSchema, "call") ?? this._outputSchema;
+    const fields = assertRequiredFieldsControl(requiredFields, "call") ?? this._outputRequiredFields;
+    const maxBytes = assertMaxResponseBytesControl(maxResponseBytes, "call") ?? this._outputMaxResponseBytes;
+
+    // Prepare the buyer output contract before any cache lookup so a cached
+    // uncontracted or different-contract body cannot hide an invalid control
+    // or satisfy a stricter identity.
+    const prepared = await this._prepareOutputContract(schema, fields, maxBytes);
+
     const cat = await this._loadCatalog();
     const tool = cat.get(slug);
     if (!tool) throw new Error(`unknown tool "${slug}" — use client.find(task) to discover one`);
 
-    const cacheKey = `${slug}:${JSON.stringify(params)}`;
-    if (this._cache && cache && this._cache.has(cacheKey)) return this._cache.get(cacheKey);
+    const cacheKey = resultCacheKey(slug, params, prepared);
+    if (this._cache && cache && this._cache.has(cacheKey)) {
+      const cached = this._cache.get(cacheKey);
+      // Contracted hits must revalidate the stored object. The public API
+      // returns this same reference, so a caller can mutate a previously
+      // valid nested field into a schema-invalid value. Evict that exact
+      // entry and throw without paying or fetching. No-contract hits stay
+      // as stored.
+      if (prepared) {
+        try {
+          this._assertOutput(slug, cached, prepared);
+        } catch (err) {
+          this._cache.delete(cacheKey);
+          throw err;
+        }
+      }
+      return cached;
+    }
 
     const idem = idempotencyKey || `a402-${createHash("sha256").update(`${cacheKey}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`;
     const send = (extraHeaders = {}, useFetch = this.f) => {
@@ -217,18 +307,24 @@ export class Agent402 {
         // can't each observe the pre-commit total and collectively blow a rolling
         // cap; release the reservation if the call doesn't settle.
         const reservation = this._spendReserve(host, usd, slug);
+        let settled = false;
         try {
           const r = await send({}, this.payFetch);
           if (!r.ok) throw new Error(`call "${slug}" failed: HTTP ${r.status}`);
-          this._spendSettle(reservation); // confirm the reservation as settled spend
-          return this._store(cacheKey, await r.json(), cache);
+          // HTTP success means the wallet fetch already settled. Mark spend
+          // before reading, parsing, or validating the body so a malformed,
+          // empty, oversized, or schema-invalid payload cannot roll back funds
+          // that have already moved.
+          this._spendSettle(reservation);
+          settled = true;
+          return await this._deliverResponse(slug, r, cacheKey, cache, prepared);
         } catch (e) {
-          this._spendRelease(reservation); // roll back — nothing settled
+          if (!settled) this._spendRelease(reservation); // roll back — nothing settled
           throw e;
         }
       }
       const r = await send(); // no wallet — succeeds only on a FREE_MODE instance
-      if (r.ok) return this._store(cacheKey, await r.json(), cache);
+      if (r.ok) return this._deliverResponse(slug, r, cacheKey, cache, prepared);
       throw new Error(`call "${slug}" failed: HTTP ${r.status} — wallet-only tool; construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch)`);
     }
 
@@ -241,7 +337,7 @@ export class Agent402 {
       r = await send({ "X-Pow-Solution": Agent402.solvePow(chal) });
     }
     if (!r.ok) throw new Error(`call "${slug}" failed after proof-of-work: HTTP ${r.status}`);
-    return this._store(cacheKey, await r.json(), cache);
+    return this._deliverResponse(slug, r, cacheKey, cache, prepared);
   }
 
   async _powChallenge(slug) {
@@ -354,6 +450,135 @@ function parse402Usd(body) {
 }
 
 function numOrNull(v) { if (v == null) return null; const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; }
+function isJsonObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function assertOutputSchemaControl(value, where) {
+  if (value == null) return null;
+  if (!isJsonObject(value)) {
+    throw new Error(`${where} outputSchema must be a JSON object; only null or undefined omits the contract`);
+  }
+  return value;
+}
+function assertRequiredFieldsControl(value, where) {
+  if (value == null) return null;
+  if (!Array.isArray(value) || value.some((field) => typeof field !== "string" || !field.trim())) {
+    throw new Error(`${where} requiredFields must be an array of non-empty dotted paths`);
+  }
+  return value;
+}
+function assertMaxResponseBytesControl(value, where) {
+  if (value == null) return null;
+  if (!Number.isInteger(value) || value < 1 || value > OUTPUT_MAX_RESPONSE_BYTES_CEILING) {
+    throw new Error(`${where} maxResponseBytes must be a positive integer`);
+  }
+  return value;
+}
+function normalizeOutputContractRequiredFields(fields) {
+  if (!Array.isArray(fields)) return [];
+  return [...new Set(fields.map((field) => String(field).trim()).filter(Boolean))].sort();
+}
+// Deterministic identity for contracted cache entries. Key order is sorted.
+// Raw schema content is never included; only the inspected digest is.
+function outputContractIdentityCanonical(contract) {
+  return JSON.stringify({
+    maxResponseBytes: Number(contract.maxResponseBytes),
+    mediaType: String(contract.mediaType || "").split(";", 1)[0].trim().toLowerCase(),
+    requiredFields: normalizeOutputContractRequiredFields(contract.requiredFields),
+    schemaDigest: String(contract.schemaDigest || "").toLowerCase(),
+  });
+}
+function outputContractIdentityDigest(contract) {
+  return createHash("sha256").update(outputContractIdentityCanonical(contract), "utf8").digest("hex");
+}
+function resultCacheKey(slug, params, prepared) {
+  const requestKey = `${slug}:${JSON.stringify(params)}`;
+  if (!prepared) return requestKey;
+  return `${requestKey}#output-contract/v1/${outputContractIdentityDigest(prepared.contract)}`;
+}
+function responseContentType(response) {
+  const headers = response && response.headers;
+  if (!headers) return null;
+  if (typeof headers.get === "function") {
+    const value = headers.get("content-type");
+    return value == null ? null : String(value);
+  }
+  const raw = headers["content-type"] ?? headers["Content-Type"];
+  if (raw == null) return null;
+  return String(Array.isArray(raw) ? raw[0] : raw);
+}
+// RFC 9110 media-type: type/subtype is case-insensitive; parameters follow `;`.
+// The output contract's intended JSON media type is exactly application/json
+// (same rule agent-payment-policy@0.15.0 uses on declared mediaType).
+function isApplicationJsonContentType(contentType) {
+  if (contentType == null) return false;
+  const media = String(contentType).split(";", 1)[0].trim().toLowerCase();
+  return media === "application/json";
+}
+function assertContractJsonMediaType(slug, response) {
+  const contentType = responseContentType(response);
+  if (contentType == null || !String(contentType).trim()) {
+    throw new Error(`call "${slug}" completed but output Content-Type was missing`);
+  }
+  if (!isApplicationJsonContentType(contentType)) {
+    throw new Error(`call "${slug}" completed but output Content-Type was not application/json`);
+  }
+}
+async function readResponseBytes(response, maxBytes, slug) {
+  const tooLarge = () => new Error(`call "${slug}" completed but output exceeded maxResponseBytes`);
+  const unreadable = () => new Error(`call "${slug}" completed but the response body could not be read as bytes`);
+  const stream = response && response.body;
+  if (stream && typeof stream.getReader === "function") {
+    const reader = stream.getReader();
+    const chunks = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        try { await reader.cancel(); } catch { /* already over the bound */ }
+        throw tooLarge();
+      }
+      chunks.push(value);
+    }
+    const out = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.byteLength; }
+    return out;
+  }
+  if (typeof response?.arrayBuffer === "function") {
+    const buf = new Uint8Array(await response.arrayBuffer());
+    if (buf.byteLength > maxBytes) throw tooLarge();
+    return buf;
+  }
+  throw unreadable();
+}
+async function parseContractJson(slug, response, maxBytes) {
+  // Media type is part of the output contract. Check it before touching the
+  // body so a paid 200 with the wrong or missing Content-Type cannot be
+  // parsed or cached even when the bytes happen to be JSON.
+  assertContractJsonMediaType(slug, response);
+  const raw = await readResponseBytes(response, maxBytes, slug);
+  if (raw.byteLength === 0) {
+    throw new Error(`call "${slug}" completed but output body was empty`);
+  }
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
+  } catch {
+    throw new Error(`call "${slug}" completed but output was not valid UTF-8 JSON`);
+  }
+  if (!text.trim()) {
+    throw new Error(`call "${slug}" completed but output body was empty`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`call "${slug}" completed but output was not valid JSON`);
+  }
+}
 function parseUsd(price) {
   if (typeof price === "number") return Number.isFinite(price) ? price : 0;
   const n = Number(String(price ?? "").replace(/[^0-9.]/g, ""));

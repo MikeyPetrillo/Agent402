@@ -1418,8 +1418,26 @@ jobs:
       - name: Tool correctness regressions (20 wrong-answer bugs from the review; boots free-mode, TZ=UTC)
         run: node scripts/test-correctness-fixes.js
 
+      - name: Buyer output-contract peer (agent-payment-policy@0.15.0 once, --ignore-scripts)
+        # Optional peer for outputSchema tests. Install once here so client/test.js
+        # and test-client-output-contract.js never run `npm install` themselves
+        # (npm 11 `--no-save` can toggle an optional peer on repeated runs).
+        # `--ignore-scripts` matches every non-native install in this repo.
+        # Secretless: same F07 shadow as the root `npm ci` step.
+        env:
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          E2B_API_KEY: ""
+        run: npm --prefix client install --ignore-scripts --no-save --no-package-lock agent-payment-policy@0.15.0
+
       - name: Buyer SDK (agent402-client — resolve + auto-pay via PoW; boots paid-mode)
         run: node client/test.js
+
+      - name: Buyer SDK output contract (offline; peer already installed; twice to prove no install mutation)
+        run: |
+          node scripts/test-client-output-contract.js
+          node scripts/test-client-output-contract.js
 
       - name: Buyer SDK spending caps (concurrency reservation + 402-amount inspection — wallet-safety lock — offline)
         run: node scripts/test-client-caps.js
@@ -2325,8 +2343,16 @@ jobs:
           fi
 
       - name: Gate agent402-client (tests run with NO npm token in env)
+        env:
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          E2B_API_KEY: ""
         run: |
+          npm --prefix client install --ignore-scripts --no-save --no-package-lock agent-payment-policy@0.15.0
           node client/test.js            # gate: the buyer SDK must pass before shipping
+          node scripts/test-client-output-contract.js
+          node scripts/test-client-output-contract.js
           node scripts/test-client-caps.js  # gate: spending-cap safety must pass too
 
       - name: Publish agent402-client to npm
