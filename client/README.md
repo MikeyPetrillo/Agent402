@@ -113,12 +113,12 @@ await a.topSellers({ sort: "calls", include: "all" });
 
 | Method | What |
 |---|---|
-| `new Agent402({ baseUrl?, fetch?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd? })` | `fetch` is your x402-wrapped fetch for paid tools (optional); `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below) |
+| `new Agent402({ baseUrl?, fetch?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, outputSchema?, requiredFields?, maxResponseBytes? })` | `fetch` is your x402-wrapped fetch for paid tools (optional); `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below); `outputSchema` is an optional buyer-owned JSON Schema compiled before payment |
 | `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools (route, price, schema, example) |
 | `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |
 | `await a.getWorkflowPrompt(slug, args)` | Fetch the rendered prompt messages for a skill pack with arguments substituted in |
 | `await a.topSellers({ limit?, sort?, include? })` | Live x402 leaderboard: which sellers are settling the most USDC (primarily on Base) in the last ~24h (free, no payment) |
-| `await a.call(slug, params, { idempotencyKey?, cache? })` | Call a tool; auto-pays (PoW for free tools, x402 for wallet-only); returns the JSON result |
+| `await a.call(slug, params, { idempotencyKey?, cache?, outputSchema?, requiredFields?, maxResponseBytes? })` | Call a tool; auto-pays (PoW for free tools, x402 for wallet-only); returns the JSON result; optional per-call output contract overrides the constructor |
 | `Agent402.solvePow(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value |
 | `a.spendingSummary()` | Rolling-24h paid spend so far: `{ dailyUsd, calls, byHost, limits }` |
 | `a.clearCache()` | Drop the in-memory result cache |
@@ -147,8 +147,91 @@ try {
 ```
 
 Only **settled** paid calls count against the rolling window — a blocked or failed
-call never consumes budget. Free proof-of-work calls are never counted. Omit a cap
+HTTP call never consumes budget. Once `payFetch` returns HTTP success, spend is
+marked settled before the body is read. A paid `200` whose `Content-Type` is
+missing or not `application/json`, whose body is empty, malformed, over
+`maxResponseBytes`, or that fails the optional buyer output contract still
+counts as spend (funds already moved) but is not cached or returned as a
+successful purchase. Free proof-of-work calls are never counted. Omit a cap
 (or leave it `null`) for no limit; with none set, behavior is unchanged.
+
+## Buyer-owned output contract (optional)
+
+A settled HTTP 200 is not the same as valid delivery. Install the optional peer
+and bind a local JSON Schema before `payFetch` runs. The schema is never sent to
+the seller. Wrong types, missing required fields, invalid formats, and extra
+properties fail closed.
+
+```js
+import { Agent402 } from "agent402-client";
+// npm i agent-payment-policy@0.15.0
+
+const outputSchema = {
+  type: "object",
+  properties: {
+    data: {
+      type: "object",
+      properties: {
+        value: { type: "number" },
+        source: { type: "string", format: "uri" },
+      },
+      required: ["value", "source"],
+      additionalProperties: false,
+    },
+  },
+  required: ["data"],
+  additionalProperties: false,
+};
+
+const a = new Agent402({
+  fetch: payFetch,
+  outputSchema,
+  requiredFields: ["data.value", "data.source"],
+});
+
+const out = await a.call("extract", { url: "https://example.com/article" });
+```
+
+The client uses only public `agent-payment-policy@0.15.0` APIs
+(`inspectOutputSchema`, `prepareOutputValidator`, `validateOutput`). An
+inadmissible schema throws before any payment credential is created.
+
+Only `null` or omitted `outputSchema` means no output contract. Constructor
+and per-call `outputSchema`, `requiredFields`, and `maxResponseBytes` are not
+coerced into weaker defaults: `false`, strings, arrays, invalid
+`requiredFields`, and zero, negative, or non-integer byte bounds throw before
+`payFetch`. A per-call `outputSchema: false` does not disable a valid
+constructor contract.
+
+When the contract is active, the JSON media type is enforced **before** the
+body is read. Type and subtype compare case-insensitively (RFC 9110);
+parameters such as `charset=utf-8` are allowed. Only `application/json` is
+accepted, not `text/json`, `application/ld+json`, or a missing
+`Content-Type`. A paid `200` with the wrong media type fails delivery even
+when the bytes parse as JSON, retains settled spend, and is not cached.
+`maxResponseBytes` is enforced on the actual response bytes (UTF-8/raw `Body`
+bytes) before JSON parse. `JSON.stringify` of the parsed object is not the
+wire-size bound. Empty or non-JSON bodies fail closed after HTTP success.
+Omit `outputSchema` and `Content-Type` is not checked.
+
+Contracted cache entries are namespaced by the complete prepared identity:
+inspected schema digest, normalized required fields, required media type, and
+exact `maxResponseBytes`. The raw schema is never a cache key. A no-contract,
+weaker, different-schema, different-media-type, or larger-byte-ceiling cache
+entry cannot satisfy a stricter or different contracted call. A response
+accepted under one contract satisfies only that exact contract. No-contract
+calls keep the legacy slug+params cache key.
+
+A contracted cache hit revalidates the stored object before returning it.
+If a caller mutated a previously valid response into a schema-invalid value,
+that exact contract-qualified entry is deleted and the call fails closed
+without paying or fetching. A later identical call refetches and may cache
+a valid result. No-contract cache hits are unchanged.
+
+The default client is Node `>=18` with no runtime dependencies. Using
+`outputSchema` requires the optional peer `agent-payment-policy@0.15.0`, whose
+engine is Node `>=22`. That configuration is not zero-dependency. Omit
+`outputSchema` and Node `>=18` with zero runtime dependencies is unchanged.
 
 **What the caps check.** When a cap is set, the client preflights the `402` and
 checks the ceiling against the **larger** of the advertised price (from the
@@ -161,7 +244,7 @@ its amount synchronously, so N simultaneous calls can't each pass against the sa
 pre-commit total. (The `402` amount is derived assuming stablecoin settlement —
 `atomic / 10^decimals ≈ USD` — which matches x402's USDC/USDG rails.)
 
-- **Zero dependencies** for the free/proof-of-work path (uses `node:crypto`).
+- **Zero runtime dependencies** for the default/proof-of-work path (uses `node:crypto`). Binding `outputSchema` adds the optional peer `agent-payment-policy@0.15.0` (Node `>=22`).
 - **Non-custodial:** paid settlement is your `@x402/fetch` + wallet; this client never sees your key.
 - MIT licensed. Part of [Agent402](https://github.com/MikeyPetrillo/Agent402).
 
