@@ -514,6 +514,193 @@ function priceConflictProjection(t) {
   };
 }
 
+/** Compact seller-declared response evidence shared by every external-tool
+ * projection. This reports only. It does not re-rank, authorize payment, or
+ * claim a runtime response has been delivered.
+ *
+ * Each explicit 2xx variant is evaluated independently. A path is guaranteed
+ * only when every such variant guarantees it. Missing/non-JSON variants and
+ * unsupported schema constructs make the aggregate partial rather than
+ * letting one strong variant hide a weaker success path. */
+const RESPONSE_SCHEMA_UNSUPPORTED = new Set([
+  "$ref", "$dynamicRef", "allOf", "anyOf", "oneOf", "not", "if", "then", "else",
+  "dependentSchemas", "patternProperties", "unevaluatedProperties",
+]);
+const JSON_SCHEMA_TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
+
+function isSchemaRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function schemaTypes(schema) {
+  const raw = schema?.type;
+  const values = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+  return [...new Set(values.map(String))];
+}
+
+function cleanRequiredField(field) {
+  if (typeof field !== "string") return "";
+  const trimmed = field.trim();
+  return trimmed && trimmed.length <= 200 ? trimmed : "";
+}
+
+function unsupportedSchemaKeywords(value, found = []) {
+  if (Array.isArray(value)) {
+    for (const item of value) unsupportedSchemaKeywords(item, found);
+    return found;
+  }
+  if (!isSchemaRecord(value)) return found;
+  for (const [key, item] of Object.entries(value)) {
+    if (RESPONSE_SCHEMA_UNSUPPORTED.has(key)) found.push(key);
+    unsupportedSchemaKeywords(item, found);
+  }
+  return found;
+}
+
+function guaranteedRequiredPaths(schema, prefix = "", depth = 0, paths = []) {
+  if (!isSchemaRecord(schema) || depth > 20 || paths.length >= 64) return paths;
+  const properties = isSchemaRecord(schema.properties) ? schema.properties : {};
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  for (const field of required) {
+    const clean = cleanRequiredField(field);
+    if (!clean || !isSchemaRecord(properties[clean])) continue;
+    const path = prefix ? `${prefix}.${clean}` : clean;
+    paths.push(path);
+    if (schemaTypes(properties[clean]).includes("object")) {
+      guaranteedRequiredPaths(properties[clean], path, depth + 1, paths);
+    }
+  }
+  return paths;
+}
+
+/** In-repo JSON Schema walk for seller OpenAPI success variants. Reports
+ * whether a schema is self-contained enough to declare required paths.
+ * Does not resolve $ref, fetch, pay, or authorize. */
+function evaluateOpenapiJsonSchema(schema) {
+  if (schema == null) return { decision: "absent", requiredPaths: [] };
+  if (!isSchemaRecord(schema)) throw new Error("response schema must be an object");
+  const properties = isSchemaRecord(schema.properties) ? schema.properties : {};
+  const required = Array.isArray(schema.required) ? schema.required.map(cleanRequiredField) : [];
+  if (required.some((value) => !value) || new Set(required).size !== required.length) {
+    throw new Error("required fields are invalid or duplicated");
+  }
+  const requiredPaths = [...new Set(guaranteedRequiredPaths(schema))].sort();
+  const unsupported = unsupportedSchemaKeywords(schema);
+  const topTypes = schemaTypes(schema);
+  const structuralProblems = [];
+  if (!topTypes.includes("object")) structuralProblems.push("top_level_type_not_object");
+  if (!Object.keys(properties).length) structuralProblems.push("properties_missing");
+  if (!required.length) structuralProblems.push("required_fields_missing");
+  for (const field of required) {
+    if (!isSchemaRecord(properties[field])) structuralProblems.push(`required_property_missing:${field}`);
+    else {
+      const types = schemaTypes(properties[field]);
+      if (!types.length || types.some((type) => !JSON_SCHEMA_TYPES.has(type))) {
+        structuralProblems.push(`required_property_type_missing:${field}`);
+      }
+    }
+  }
+  return {
+    decision: structuralProblems.length || unsupported.length ? "partial" : "admissible",
+    requiredPaths,
+  };
+}
+
+export function responseContractFromOperation(openapi, originUrl, method, route, operation) {
+  const responses = operation?.responses && typeof operation.responses === "object"
+    ? operation.responses
+    : {};
+  const allSuccess = Object.entries(responses)
+    .filter(([status]) => /^2\d\d$/.test(status))
+    .sort(([a], [b]) => a.localeCompare(b));
+  const success = allSuccess.slice(0, 16);
+  const reports = success.map(([, declaration]) => {
+    const content = declaration?.content && typeof declaration.content === "object"
+      ? declaration.content
+      : {};
+    const mediaKey = Object.keys(content).find((key) => key.toLowerCase().split(";", 1)[0].trim() === "application/json");
+    const media = mediaKey && content[mediaKey] && typeof content[mediaKey] === "object"
+      ? content[mediaKey]
+      : null;
+    const schemaPresent = Boolean(media?.schema && typeof media.schema === "object");
+    try {
+      return {
+        schemaPresent,
+        report: evaluateOpenapiJsonSchema(schemaPresent ? media.schema : null),
+      };
+    } catch {
+      // A malformed seller declaration is evidence about that operation, not
+      // permission to fail the seller's entire crawl.
+      return { schemaPresent, report: { decision: "invalid", requiredPaths: [] } };
+    }
+  });
+  const jsonSchemas = reports.filter((item) => item.schemaPresent);
+  const state = jsonSchemas.length === 0
+    ? "absent"
+    : allSuccess.length <= 16 && reports.length === success.length && reports.every((item) => item.report.decision === "admissible")
+      ? "declared"
+      : "partial";
+  const guaranteedPaths = reports.length
+    ? reports
+        .map((item) => new Set(item.report.requiredPaths || []))
+        .reduce((common, paths) => new Set([...common].filter((path) => paths.has(path))))
+    : new Set();
+  return {
+    source: "seller_openapi",
+    state,
+    successResponseVariants: Math.min(allSuccess.length, 16),
+    successJsonSchemas: jsonSchemas.length,
+    guaranteedPaths: [...guaranteedPaths].sort().slice(0, 64),
+    runtimeVerified: false,
+  };
+}
+
+/** Persist a compact tuple rather than repeating constant public labels across
+ * tens of thousands of cached tool rows. Public projections expand it back to
+ * the readable contract below. */
+function responseContractStorage(value) {
+  const state = value?.state === "declared" ? "d" : value?.state === "absent" ? "a" : "p";
+  return [
+    state,
+    Math.max(0, Math.min(16, Number(value?.successResponseVariants) || 0)),
+    Math.max(0, Math.min(16, Number(value?.successJsonSchemas) || 0)),
+    Array.isArray(value?.guaranteedPaths) ? value.guaranteedPaths.slice(0, 64) : [],
+  ];
+}
+
+function responseContractStorageProjection(t) {
+  if (Array.isArray(t?.responseContractEvidence)) {
+    return { responseContractEvidence: t.responseContractEvidence.slice(0, 4) };
+  }
+  // Backward-compatible with a cache written by an earlier draft of this
+  // change, before the compact storage tuple existed.
+  if (t?.responseContract && typeof t.responseContract === "object") {
+    return { responseContractEvidence: responseContractStorage(t.responseContract) };
+  }
+  return {};
+}
+
+/** Shared public projection so sellerDetail / route / index-tools never drift. */
+function responseContractProjection(t) {
+  const stored = Array.isArray(t?.responseContractEvidence)
+    ? t.responseContractEvidence
+    : t?.responseContract && typeof t.responseContract === "object"
+      ? responseContractStorage(t.responseContract)
+      : null;
+  if (!stored) return {};
+  const state = stored[0] === "d" ? "declared" : stored[0] === "a" ? "absent" : "partial";
+  return {
+    responseContract: {
+      source: "seller_openapi",
+      state,
+      successResponseVariants: Math.max(0, Math.min(16, Number(stored[1]) || 0)),
+      successJsonSchemas: Math.max(0, Math.min(16, Number(stored[2]) || 0)),
+      guaranteedPaths: Array.isArray(stored[3]) ? stored[3].slice(0, 64) : [],
+      runtimeVerified: false,
+    },
+  };
+}
+
 // Tie-break rank for price. parsePrice maps unknown (null / unparseable) to 0
 // for display, which is right for priceUsd but wrong for ranking: it let
 // listings with NO published amount masquerade as "free" and outrank sellers
@@ -727,6 +914,9 @@ export function normaliseOpenapiTools(openapi, originUrl) {
         category: tags[0] || "other",
         tags,
         price: op["x-price"] || op["x-x402-price"] || op["x-payment-info"]?.price?.amount || op["x-x402-price-usdc"] || null,
+        responseContractEvidence: responseContractStorage(
+          responseContractFromOperation(openapi, originUrl, method, pathStr, op),
+        ),
         ...(documentDistinguishesPaidOperations ? { paid: annotated } : {}),
       });
     }
@@ -1352,6 +1542,7 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     // unannotated (paid:false) that has real settled payments is buyable —
     // observed truth beats the doc's silence. An explicit zero price stays free.
     ...(b.price != null && b.price > 0 ? { paid: true } : o.paid !== undefined ? { paid: o.paid } : {}),
+    ...responseContractStorageProjection(o),
   });
   };
   const merged = bazaarTools.map((b) => {
@@ -2548,6 +2739,7 @@ export function sellerDetail(originOrHost) {
         name: t.name || null,
         price: t.price ?? null,
         ...priceConflictProjection(t),
+        ...responseContractProjection(t),
         ...(t.paid !== undefined ? { paid: t.paid } : {}),
         networks: t.networks || undefined,
       })),
@@ -2941,6 +3133,7 @@ export function routeQuery({ query, top, include, networkFilter, baseUrl, catalo
       price: t.price,
       priceUsd: parsePrice(t.price),
       ...priceConflictProjection(t),
+      ...responseContractProjection(t),
       // "x402" = we have positive evidence this is payable in-protocol (a price,
       // or a registry accepts entry someone settled against). "unknown" = we
       // have none, which is NOT the same as "not payable" - see payabilityOf.
@@ -3681,6 +3874,7 @@ function flattenedThirdPartyTools(excludeOrigin = "") {
         // a measurement taken during this audit came out wrong.
         price: t?.price ?? null,
         ...priceConflictProjection(t),
+        ...responseContractProjection(t),
         // The identifier a caller needs to actually invoke the tool. Present on
         // /api/route and /api/find, missing here, on the surface that lists all
         // 65k third-party rows.

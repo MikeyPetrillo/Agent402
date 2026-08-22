@@ -73,6 +73,20 @@ ok(!/priceUsd: typeof t\?\.price === "number"/.test(externalRow),
   "...and not the number-only rule that silently nulled every string price");
 ok(/\bprice: t\?\.price \?\? null,/.test(externalRow) && /payable: payabilityOf\(t\)/.test(externalRow),
   "the external row carries price and payable too, not just our own rows");
+ok(/responseContractProjection\(t\)/.test(externalRow),
+  "the external row carries seller response-contract evidence too");
+ok(/responseContractEvidence/.test(src) && /responseContractStorage\(/.test(src),
+  "cached rows use the compact response-contract tuple rather than the public repeated object");
+ok(!/purchaseEvidence/.test(src) && !/inspectPurchaseEvidence/.test(src),
+  "the recut has no purchase-evidence or manifest-ingestion path");
+
+const routeProjection = src.slice(src.indexOf("const results = picked.map"), src.indexOf("neutrality:", src.indexOf("const results = picked.map")));
+ok(/responseContractProjection\(t\)/.test(routeProjection),
+  "the router carries the same response-contract evidence without changing its ranking");
+
+const detailProjection = src.slice(src.indexOf("export function sellerDetail"), src.indexOf("export function indexSnapshot"));
+ok(/responseContractProjection\(t\)/.test(detailProjection),
+  "seller detail carries the same response-contract evidence");
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
