@@ -297,6 +297,7 @@ const DEFAULT_SEEDS = [
   "https://nolawealthfinancial.com", // Still OS Notary Protocol — Ed25519-signed notarization, OFAC/SDN screening, CPI/GDP signals, USDC on Base (#434)
   "https://x402.evidencesupply.com", // Evidence Supply — corroborated agent-action verification, USDC on Base
   "https://x402.lagaceta.net", // Colombia TRM — official USD/COP Superfinanciera series, prepaid x402 GET on Base USDC
+  "https://billing.ideatrace.cn", // Idie — self-evolving autonomy RPC, exact-scheme pay-per-use USDC on Solana
 ];
 
 export const seedList = () => {
