@@ -178,6 +178,7 @@ for (const kw of ["$ref", "allOf", "anyOf", "oneOf", "not", "if", "patternProper
     /^import \{.*\} from ".\/response-contract.js";$/,
     /^const packed = packResponseContract\(responseContractOf\(op\)\);$/,
     /^return packed \? \{ responseContract: packed \} : \{\};$/,
+    /^responseContract: _bazaarResponseContract,$/,
     /^\.\.\.\(Array\.isArray\(o\.responseContract\) \? \{ responseContract: o\.responseContract \} : \{\}\),$/,
     /^\.\.\.responseContractProjection\(t\),$/,
     /^\.\.\.\(external \? responseContractProjection\(t\) : \{\}\),$/,

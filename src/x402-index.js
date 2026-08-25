@@ -1453,6 +1453,14 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
   };
   const used = new Set();
   const enrich = (b, o, route) => {
+    // Bazaar is settlement evidence, never application-contract authority.
+    // Strip contract-shaped fields before carrying only the matched seller
+    // OpenAPI operation's packed tuples below.
+    const {
+      requestContract: _bazaarRequestContract,
+      responseContract: _bazaarResponseContract,
+      ...bazaar
+    } = b;
     const bazaarMicro = priceToMicroUsd(b.price);
     const originMicro = priceToMicroUsd(o.price);
     const priceConflict = bazaarMicro != null && originMicro != null && bazaarMicro !== originMicro;
@@ -1464,7 +1472,7 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     if (priceConflict) price = microUsdToPrice(Math.max(bazaarMicro, originMicro));
     else price = b.price == null ? o.price : b.price;
     return ({
-    ...b,
+    ...bazaar,
     // Bazaar defaults missing methods to POST. The OpenAPI operation is the
     // authoritative verb once the route-only fallback finds a match.
     method: b.methodInferred ? (o.method || b.method) : b.method,

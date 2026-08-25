@@ -366,6 +366,25 @@ const openapiTools = [
   const [missing] = mergeOpenapiIntoBazaar([withoutContracts], [bazaar]);
   ok(!("requestContract" in missing) && !("responseContract" in missing),
     "an operation with no declared contracts gains no contract fields during the merge");
+
+  const [untrustedBazaar] = mergeOpenapiIntoBazaar(
+    [withoutContracts],
+    [{
+      ...bazaar,
+      requestContract: documented.requestContract,
+      responseContract: documented.responseContract,
+    }],
+  );
+  ok(!("requestContract" in untrustedBazaar) && !("responseContract" in untrustedBazaar),
+    "contract-shaped Bazaar fields are stripped because settlement evidence is not contract authority");
+
+  const [sellerWins] = mergeOpenapiIntoBazaar(
+    [documented],
+    [{ ...bazaar, requestContract: ["foreign"], responseContract: ["foreign"] }],
+  );
+  ok(requestContractProjection(sellerWins).requestContract?.required?.body?.[0] === "input" &&
+    responseContractProjection(sellerWins).responseContract?.guaranteedPaths?.[0] === "result",
+  "the exact matched seller operation replaces hostile Bazaar-shaped contract fields");
 }
 
 // ---- 4. degenerate inputs pass through ----
