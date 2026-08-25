@@ -116,15 +116,19 @@ export function responseContractOf(operation) {
 
   // EXPLICIT 2xx only. `default` is a catch-all the seller wrote for everything
   // including errors; treating it as a success guarantee would manufacture one.
-  const codes = Object.keys(operation.responses)
-    .filter((c) => /^2\d\d$/.test(c))
-    .sort()
-    .slice(0, MAX_VARIANTS);
+  // OpenAPI's `2XX` range is also an explicit success declaration. Ignoring it
+  // would let a narrower numeric response speak for statuses the range covers.
+  const allCodes = Object.keys(operation.responses)
+    .filter((c) => /^(?:2\d\d|2XX)$/.test(c))
+    .sort();
+  const codes = allCodes.slice(0, MAX_VARIANTS);
   if (!codes.length) return empty;
 
   let jsonSchemas = 0;
   let intersection = null;
-  let everyVariantAdmissible = true;
+  // A capped walk is not complete evidence. Refuse guarantees exactly as the
+  // depth and breadth bounds do, while retaining the seller's truthful count.
+  let everyVariantAdmissible = allCodes.length <= MAX_VARIANTS;
 
   for (const code of codes) {
     const schema = jsonSchemaOf(operation.responses[code]);
@@ -142,7 +146,7 @@ export function responseContractOf(operation) {
     : "partial";
   return {
     state, source: "seller_openapi",
-    successVariants: codes.length, jsonSchemas,
+    successVariants: allCodes.length, jsonSchemas,
     guaranteedPaths, runtimeVerified: false,
   };
 }
