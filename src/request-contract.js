@@ -139,7 +139,15 @@ export function packRequestContract(c) {
 }
 
 export function unpackRequestContract(t) {
-  const v = t?.requestContract;
+  let descriptor;
+  try {
+    descriptor = t && typeof t === "object"
+      ? Object.getOwnPropertyDescriptor(t, "requestContract")
+      : undefined;
+  } catch {
+    return null;
+  }
+  const v = descriptor && "value" in descriptor ? descriptor.value : undefined;
   if (!Array.isArray(v) || v.length !== 2) return null;
   const [state, required] = v;
   if (state !== "declared" && state !== "partial") return null;

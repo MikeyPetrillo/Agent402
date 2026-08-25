@@ -158,7 +158,15 @@ export function packResponseContract(c) {
 /** Rehydrate for a public projection. Anything unrecognised reads as absent
  *  rather than throwing: a stale cache entry must not break a listing. */
 export function unpackResponseContract(t) {
-  const v = t?.responseContract;
+  let descriptor;
+  try {
+    descriptor = t && typeof t === "object"
+      ? Object.getOwnPropertyDescriptor(t, "responseContract")
+      : undefined;
+  } catch {
+    return null;
+  }
+  const v = descriptor && "value" in descriptor ? descriptor.value : undefined;
   if (!Array.isArray(v) || v.length !== 4) return null;
   const [state, successVariants, jsonSchemas, guaranteedPaths] = v;
   if (state !== "declared" && state !== "partial") return null;

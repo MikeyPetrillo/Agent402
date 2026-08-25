@@ -143,6 +143,22 @@ for (const kw of ["$ref", "allOf", "anyOf", "oneOf", "not", "if", "patternProper
     ok(unpackResponseContract({ responseContract: junk }) === null,
       `a stale or malformed cache value reads as no contract, never a throw (${JSON.stringify(junk)})`);
   }
+
+  const inherited = Object.create({ responseContract: ["declared", 1, 1, ["inherited"]] });
+  ok(unpackResponseContract(inherited) === null,
+    "an inherited tuple is never promoted to seller OpenAPI evidence");
+  let getterRead = false;
+  const accessor = {};
+  Object.defineProperty(accessor, "responseContract", {
+    get() { getterRead = true; return ["declared", 1, 1, ["getter"]]; },
+  });
+  ok(unpackResponseContract(accessor) === null && getterRead === false,
+    "an accessor-backed tuple is refused without executing its getter");
+  const hostile = new Proxy({}, {
+    getOwnPropertyDescriptor() { throw new Error("hostile descriptor trap"); },
+  });
+  ok(unpackResponseContract(hostile) === null,
+    "a hostile descriptor trap fails closed without escaping");
 }
 
 // --- ALL THREE SURFACES, or the field is inert -------------------------------
@@ -178,8 +194,9 @@ for (const kw of ["$ref", "allOf", "anyOf", "oneOf", "not", "if", "patternProper
     /^import \{.*\} from ".\/response-contract.js";$/,
     /^const packed = packResponseContract\(responseContractOf\(op\)\);$/,
     /^return packed \? \{ responseContract: packed \} : \{\};$/,
-    /^responseContract: _bazaarResponseContract,$/,
-    /^\.\.\.\(Array\.isArray\(o\.responseContract\) \? \{ responseContract: o\.responseContract \} : \{\}\),$/,
+    /^if \(key === "requestContract" \|\| key === "responseContract"\) continue;$/,
+    /^const responseContract = ownContractTuple\(o, "responseContract"\);$/,
+    /^\.\.\.\(responseContract \? \{ responseContract \} : \{\}\),$/,
     /^\.\.\.responseContractProjection\(t\),$/,
     /^\.\.\.\(external \? responseContractProjection\(t\) : \{\}\),$/,
   ];

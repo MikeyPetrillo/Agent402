@@ -1422,8 +1422,38 @@ function routeMatchesTemplate(templateRoute, concreteRoute) {
   return true;
 }
 
+// Bazaar and other registry rows are settlement/discovery evidence, never
+// seller application-contract authority. Build a fresh plain object from own
+// enumerable data fields so contract-shaped own accessors are not invoked and
+// inherited/prototype-carried fields cannot become own published evidence.
+function withoutRegistryContracts(row) {
+  if (!row || typeof row !== "object") return row;
+  const clean = {};
+  for (const key of Object.keys(row)) {
+    if (key === "requestContract" || key === "responseContract") continue;
+    clean[key] = row[key];
+  }
+  return clean;
+}
+
+// OpenAPI contract tuples may cross the join only as own data properties of
+// the normalized seller operation. Refuse accessors and prototype values.
+function ownContractTuple(row, key) {
+  let descriptor;
+  try {
+    descriptor = row && typeof row === "object"
+      ? Object.getOwnPropertyDescriptor(row, key)
+      : undefined;
+  } catch {
+    return null;
+  }
+  return descriptor && "value" in descriptor && Array.isArray(descriptor.value)
+    ? descriptor.value
+    : null;
+}
+
 export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { allRoutes = [] } = {}) {
-  if (!openapiTools.length && !allRoutes.length) return bazaarTools.slice();
+  if (!openapiTools.length && !allRoutes.length) return bazaarTools.map(withoutRegistryContracts);
   if (!bazaarTools.length) return openapiTools.slice();
   const exact = new Map();
   const byRoute = new Map();
@@ -1456,11 +1486,9 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     // Bazaar is settlement evidence, never application-contract authority.
     // Strip contract-shaped fields before carrying only the matched seller
     // OpenAPI operation's packed tuples below.
-    const {
-      requestContract: _bazaarRequestContract,
-      responseContract: _bazaarResponseContract,
-      ...bazaar
-    } = b;
+    const bazaar = withoutRegistryContracts(b);
+    const requestContract = ownContractTuple(o, "requestContract");
+    const responseContract = ownContractTuple(o, "responseContract");
     const bazaarMicro = priceToMicroUsd(b.price);
     const originMicro = priceToMicroUsd(o.price);
     const priceConflict = bazaarMicro != null && originMicro != null && bazaarMicro !== originMicro;
@@ -1486,8 +1514,8 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     // contract tuples. Carry them across the settlement-evidence join without
     // reconstructing them from the Bazaar row or letting them affect ranking,
     // routing, pricing, or payment behavior.
-    ...(Array.isArray(o.requestContract) ? { requestContract: o.requestContract } : {}),
-    ...(Array.isArray(o.responseContract) ? { responseContract: o.responseContract } : {}),
+    ...(requestContract ? { requestContract } : {}),
+    ...(responseContract ? { responseContract } : {}),
     price,
     // Preserve both observations (normalized numbers) so a buyer can see the
     // drift and fail closed — and so we can audit which side won the max().
@@ -1529,11 +1557,15 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     if (d) {
       const key = `${d.method} ${d.route}`;
       if (collapsedDocRows.has(key)) return null;
-      const row = { ...b, route: d.route, slug: d.route.replace(/^\//, "").replace(/\//g, "-") };
+      const row = {
+        ...withoutRegistryContracts(b),
+        route: d.route,
+        slug: d.route.replace(/^\//, "").replace(/\//g, "-"),
+      };
       collapsedDocRows.set(key, row);
       return row;
     }
-    return b;
+    return withoutRegistryContracts(b);
   }).filter(Boolean);
   for (const o of openapiTools) if (!used.has(o)) merged.push(o);
   return merged;

@@ -385,6 +385,78 @@ const openapiTools = [
   ok(requestContractProjection(sellerWins).requestContract?.required?.body?.[0] === "input" &&
     responseContractProjection(sellerWins).responseContract?.guaranteedPaths?.[0] === "result",
   "the exact matched seller operation replaces hostile Bazaar-shaped contract fields");
+
+  const [unmatchedPoison] = mergeOpenapiIntoBazaar(
+    [documented],
+    [{
+      ...bazaar,
+      method: "GET",
+      methodInferred: false,
+      requestContract: documented.requestContract,
+      responseContract: documented.responseContract,
+    }],
+  );
+  ok(!("requestContract" in unmatchedPoison) && !("responseContract" in unmatchedPoison),
+    "an unmatched Bazaar row cannot publish well-formed contract-shaped fields");
+
+  const [bazaarOnly] = mergeOpenapiIntoBazaar([], [{
+    ...bazaar,
+    requestContract: documented.requestContract,
+    responseContract: documented.responseContract,
+  }]);
+  ok(!("requestContract" in bazaarOnly) && !("responseContract" in bazaarOnly),
+    "the no-OpenAPI passthrough strips registry contract-shaped fields");
+
+  const [collapsed] = mergeOpenapiIntoBazaar(
+    [],
+    [{
+      ...bazaar,
+      route: "/ghosts/abc123",
+      requestContract: documented.requestContract,
+      responseContract: documented.responseContract,
+    }],
+    { allRoutes: [{ method: "POST", route: "/ghosts/{id}" }] },
+  );
+  ok(collapsed.route === "/ghosts/{id}" &&
+    !("requestContract" in collapsed) && !("responseContract" in collapsed),
+  "a document-template representative cannot publish registry contract-shaped fields");
+
+  let accessorRead = false;
+  const accessorBazaar = { ...bazaar };
+  Object.defineProperty(accessorBazaar, "requestContract", {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error("registry contract getter must not run"); },
+  });
+  const [accessorClean] = mergeOpenapiIntoBazaar([withoutContracts], [accessorBazaar]);
+  ok(!accessorRead && !("requestContract" in accessorClean),
+    "stripping a registry contract accessor does not execute it");
+
+  const inheritedBazaar = Object.assign(Object.create({
+    requestContract: documented.requestContract,
+    responseContract: documented.responseContract,
+  }), bazaar);
+  const [inheritedClean] = mergeOpenapiIntoBazaar([withoutContracts], [inheritedBazaar]);
+  ok(!("requestContract" in inheritedClean) && !("responseContract" in inheritedClean),
+    "prototype-carried registry contract tuples do not become published evidence");
+
+  const inheritedSeller = { ...withoutContracts };
+  Object.setPrototypeOf(inheritedSeller, {
+    requestContract: documented.requestContract,
+    responseContract: documented.responseContract,
+  });
+  const [ownOnly] = mergeOpenapiIntoBazaar([inheritedSeller], [bazaar]);
+  ok(!("requestContract" in ownOnly) && !("responseContract" in ownOnly),
+    "only own seller-operation contract tuples can cross the merge");
+
+  let sellerAccessorRead = false;
+  const accessorSeller = { ...withoutContracts };
+  Object.defineProperty(accessorSeller, "responseContract", {
+    enumerable: true,
+    get() { sellerAccessorRead = true; throw new Error("seller contract getter must not run"); },
+  });
+  const [sellerAccessorClean] = mergeOpenapiIntoBazaar([accessorSeller], [bazaar]);
+  ok(!sellerAccessorRead && !("responseContract" in sellerAccessorClean),
+    "an accessor-backed seller tuple is refused without executing it");
 }
 
 // ---- 4. degenerate inputs pass through ----

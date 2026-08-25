@@ -139,6 +139,22 @@ for (const kw of ["$ref", "allOf", "oneOf", "not"]) {
   for (const junk of [undefined, null, [], ["declared"], ["nope", {}], ["declared", "notanobject"]]) {
     ok(unpackRequestContract({ requestContract: junk }) === null, `malformed cache value reads as no contract (${JSON.stringify(junk)})`);
   }
+
+  const inherited = Object.create({ requestContract: ["declared", { query: ["inherited"] }] });
+  ok(unpackRequestContract(inherited) === null,
+    "an inherited tuple is never promoted to seller OpenAPI evidence");
+  let getterRead = false;
+  const accessor = {};
+  Object.defineProperty(accessor, "requestContract", {
+    get() { getterRead = true; return ["declared", { query: ["getter"] }]; },
+  });
+  ok(unpackRequestContract(accessor) === null && getterRead === false,
+    "an accessor-backed tuple is refused without executing its getter");
+  const hostile = new Proxy({}, {
+    getOwnPropertyDescriptor() { throw new Error("hostile descriptor trap"); },
+  });
+  ok(unpackRequestContract(hostile) === null,
+    "a hostile descriptor trap fails closed without escaping");
 }
 
 // --- ALL THREE SURFACES ------------------------------------------------------
