@@ -1474,6 +1474,12 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     description: o.description || b.description,
     tags: o.tags?.length ? o.tags : b.tags,
     category: o.tags?.length ? o.category : b.category,
+    // The seller's OpenAPI operation is the only source of these packed
+    // contract tuples. Carry them across the settlement-evidence join without
+    // reconstructing them from the Bazaar row or letting them affect ranking,
+    // routing, pricing, or payment behavior.
+    ...(Array.isArray(o.requestContract) ? { requestContract: o.requestContract } : {}),
+    ...(Array.isArray(o.responseContract) ? { responseContract: o.responseContract } : {}),
     price,
     // Preserve both observations (normalized numbers) so a buyer can see the
     // drift and fail closed — and so we can audit which side won the max().

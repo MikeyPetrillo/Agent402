@@ -21,6 +21,8 @@ import {
   _cacheForTests,
   _resetFlatCacheForTest,
 } from "../src/x402-index.js";
+import { requestContractProjection } from "../src/request-contract.js";
+import { responseContractProjection } from "../src/response-contract.js";
 
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
 const ok = (c, m) => { if (!c) fail(m); };
@@ -282,6 +284,88 @@ const openapiTools = [
   ok(bazaar.slug === "md", `GET slug does not contaminate POST (got ${bazaar.slug})`);
   ok(bazaar.description !== "GET-only metadata", "GET description does not contaminate POST");
   ok(bazaar.price === null, `GET price does not contaminate POST (got ${bazaar.price})`);
+}
+
+// ---- 3f. seller contracts survive only an exact OpenAPI/Bazaar join ----
+{
+  const operation = (method = "post", operationId = "summarize") => ({
+    openapi: "3.0.0",
+    paths: {
+      "/contracted": {
+        [method]: {
+          operationId,
+          summary: operationId,
+          "x-price": "$0.001",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: {
+              type: "object",
+              required: ["input"],
+              properties: { input: { type: "string" } },
+            } } },
+          },
+          responses: { 200: { content: { "application/json": { schema: {
+            type: "object",
+            required: ["result"],
+            properties: { result: { type: "string" } },
+          } } } } },
+        },
+      },
+    },
+  });
+  const [documented] = normaliseOpenapiTools(operation(), "https://contracts.example");
+  const bazaar = {
+    seller: "https://contracts.example",
+    method: "POST",
+    route: "/contracted",
+    price: 0.002,
+    provenance: "bazaar",
+  };
+
+  const [exact] = mergeOpenapiIntoBazaar([documented], [bazaar]);
+  ok(requestContractProjection(exact).requestContract?.required?.body?.[0] === "input",
+    "an exact Bazaar merge preserves the seller's request contract");
+  ok(responseContractProjection(exact).responseContract?.guaranteedPaths?.[0] === "result",
+    "an exact Bazaar merge preserves the seller's response contract");
+
+  const [inferred] = mergeOpenapiIntoBazaar(
+    [documented],
+    [{ ...bazaar, method: "GET", methodInferred: true }],
+  );
+  ok(inferred.method === "POST" && requestContractProjection(inferred).requestContract?.required?.body?.[0] === "input",
+    "a unique inferred-method match preserves the matching operation's contracts");
+
+  const explicitMismatch = mergeOpenapiIntoBazaar(
+    [documented],
+    [{ ...bazaar, method: "GET", methodInferred: false }],
+  );
+  const unmatchedBazaar = explicitMismatch.find((t) => t.provenance === "bazaar");
+  ok(explicitMismatch.length === 2 && requestContractProjection(unmatchedBazaar).requestContract === undefined &&
+    responseContractProjection(unmatchedBazaar).responseContract === undefined,
+  "an explicit method mismatch never copies contracts onto the Bazaar row");
+
+  const [documentedGet] = normaliseOpenapiTools(operation("get", "readContracted"), "https://contracts.example");
+  const ambiguous = mergeOpenapiIntoBazaar(
+    [documented, documentedGet],
+    [{ ...bazaar, method: "POST", methodInferred: true }],
+  );
+  const ambiguousBazaar = ambiguous.find((t) => t.provenance === "bazaar");
+  ok(ambiguous.length === 3 && requestContractProjection(ambiguousBazaar).requestContract === undefined &&
+    responseContractProjection(ambiguousBazaar).responseContract === undefined,
+  "an ambiguous route-only match never copies either operation's contracts");
+
+  const [malformed] = mergeOpenapiIntoBazaar(
+    [{ ...documented, requestContract: ["foreign"], responseContract: ["foreign"] }],
+    [bazaar],
+  );
+  ok(requestContractProjection(malformed).requestContract === undefined &&
+    responseContractProjection(malformed).responseContract === undefined,
+  "malformed packed tuples remain untrusted after the merge and project nothing");
+
+  const { requestContract: _request, responseContract: _response, ...withoutContracts } = documented;
+  const [missing] = mergeOpenapiIntoBazaar([withoutContracts], [bazaar]);
+  ok(!("requestContract" in missing) && !("responseContract" in missing),
+    "an operation with no declared contracts gains no contract fields during the merge");
 }
 
 // ---- 4. degenerate inputs pass through ----
