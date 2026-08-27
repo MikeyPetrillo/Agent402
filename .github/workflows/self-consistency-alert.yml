@@ -44,6 +44,11 @@ env:
 
 jobs:
   consistency:
+    # Owner-only live alarm against production. Skip when we KNOW this is a
+    # fork or issues are disabled (ordinary fork / unconfigured clone). A
+    # missing event.repository object fail-opens so a scheduled owner run
+    # still fires. Never keyed on a repository-name literal.
+    if: ${{ github.event.repository.fork != true && github.event.repository.has_issues != false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -95,7 +100,18 @@ jobs:
           DETAIL: ${{ steps.check.outputs.detail }}
         run: |
           TITLE="Discovery self-consistency: live prod drifted from source"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          set +e
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/tmp/gh-issues.err)
+          GH_LIST=$?
+          set -e
+          if [ "$GH_LIST" -ne 0 ]; then
+            if grep -qi "disabled issues" /tmp/gh-issues.err; then
+              echo "Issues are disabled on ${GITHUB_REPOSITORY} — skipping alert issue management."
+              exit 0
+            fi
+            cat /tmp/gh-issues.err >&2
+            exit "$GH_LIST"
+          fi
           if [ "${{ steps.check.outputs.status }}" = "down" ]; then
             BODY="Live agent402.tools's agent-facing text (tools/list, about_agent402, get_payment_info, /llms.txt, /.well-known/x402) no longer matches what source says is registered — the same class of defect as #705, caught here before an outside agent reports it.
 
