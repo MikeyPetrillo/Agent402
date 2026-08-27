@@ -2035,7 +2035,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (23 scripts, one process each)
+      - name: Offline suites (24 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2059,6 +2059,8 @@ jobs:
           t node scripts/test-crawl-cadence.js
           # CI lane gating (every test lane blocks deploy/publish; Chromium only where a script needs it — offline)
           t node scripts/test-ci-gating.js
+          # Owner-only workflows skip without red CI when declared prerequisites are missing (token / wiki remote / issues) — offline
+          t node scripts/test-owner-workflow-prereqs.js
           # CI tree gate (a merge may skip the suite ONLY on a tree that already passed it — offline)
           t node scripts/test-ci-tree-gate.js
           # Single-resource x402 manifest (spec 402-body shape; chains reach an OpenAPI-sourced row — offline)
@@ -4518,8 +4520,37 @@ jobs:
       - name: Builder Code attribution check (live 402 declaration + on-chain suffix scan)
         run: SPAN_BLOCKS=350000 MAX_TXS=80 node scripts/check-builder-attribution.js || true
 
+  deploy-prereq:
+    # Job-level `if` cannot read `secrets` (github/needs/vars/inputs only).
+    # A step can, and exports a non-secret ready flag. Missing token is a
+    # skip, not a failure — owner deploys are unchanged when the token exists.
+    needs: [markers]
+    if: >-
+      !cancelled()
+      && (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' || needs.markers.outputs.deploy == 'true'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      ready: ${{ steps.gate.outputs.ready }}
+    steps:
+      - id: gate
+        name: Require RAILWAY_TOKEN without treating its absence as a failure
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          [ -n "$RAILWAY_API_TOKEN" ] && echo "::add-mask::$RAILWAY_API_TOKEN"
+          if [ -n "$RAILWAY_API_TOKEN" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "RAILWAY_TOKEN is present — deploy may proceed after the suite."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "RAILWAY_TOKEN is not configured — skipping owner deploy (fork/unconfigured clone)."
+          fi
+
   deploy:
-    needs: [markers, tree-gate, test, test-sweeps, test-sweeps2, test-paid, test-paid2, test-unit-a, test-unit-a2, test-unit-a3, test-unit-a4, test-unit-b, test-unit-b2, test-unit-b3, test-unit-b4, test-unit-c, test-unit-c2, test-unit-d, test-pricing]
+    needs: [markers, tree-gate, test, test-sweeps, test-sweeps2, test-paid, test-paid2, test-unit-a, test-unit-a2, test-unit-a3, test-unit-a4, test-unit-b, test-unit-b2, test-unit-b3, test-unit-b4, test-unit-c, test-unit-c2, test-unit-d, test-pricing, deploy-prereq]
     # Unconditional on a push to main (same reasoning as the test job above -
     # a merge to main has no marker to scan and needs none), otherwise the
     # existing dispatch/marker gates for the dev branch.
@@ -4529,6 +4560,11 @@ jobs:
     # is tree-gate proving this exact tree already passed the full suite on the
     # dev branch. A lane that FAILED, errored, or was skipped for any other
     # reason still blocks the release.
+    # RAILWAY_TOKEN is the deploy prerequisite, read by deploy-prereq (job-level
+    # `if` cannot use the secrets context). Missing it SKIPS this job — a fork
+    # or unconfigured clone must not go red after a green suite, and must not
+    # treat an empty token as authority. Present, the owner path is unchanged.
+    # Gated on the secret's presence, never a repository-name match.
     if: >-
       !cancelled()
       && (
@@ -4538,6 +4574,7 @@ jobs:
       && (
         (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' || needs.markers.outputs.deploy == 'true'
       )
+      && needs.deploy-prereq.outputs.ready == 'true'
     runs-on: ubuntu-latest
     # F01: bind the production-mutating job to the protected GitHub environment.
     # Today this just associates the job; once the owner configures the
