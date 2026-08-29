@@ -101,19 +101,26 @@ export function schemaFromExample(value, depth = 0) {
   return schema;
 }
 
+function addRequiredForRoute(path, example, schema) {
+  if (!path || SHAPE_HAPPY_PATH_ONLY.has(path)) return schema;
+  if (!example || typeof example !== "object" || Array.isArray(example)) return schema;
+  if (schema?.type !== "object" || !schema.properties) return schema;
+  // Promise only fields that both survived the byte-bounded projection and
+  // are covered by the catalog's response-shape sweep. Null examples still
+  // say nothing about a value's type, so keep the OpenAPI rule here too.
+  const required = Object.keys(schema.properties)
+    .filter((k) => example[k] !== null && example[k] !== undefined);
+  if (required.length) schema.required = required;
+  return schema;
+}
+
 /** The 200 schema for a tool: typed properties from its example, and a
  *  `required` list only where the sweeps enforce it. */
 export function responseSchemaFor(path, example) {
   if (!example || typeof example !== "object" || Array.isArray(example)) return { type: "object" };
   const schema = schemaFromExample(example);
   if (schema.type !== "object" || !schema.properties) return { type: "object" };
-  if (SHAPE_HAPPY_PATH_ONLY.has(path)) return schema;
-  // Only keys whose example value is non-null: a null example value tells us
-  // the field exists but not that it always carries a value, and requiring it
-  // would promise more than the example shows.
-  const required = Object.keys(schema.properties).filter((k) => example[k] !== null && example[k] !== undefined);
-  if (required.length) schema.required = required;
-  return schema;
+  return addRequiredForRoute(path, example, schema);
 }
 
 /** A typed schema for a tool's output that fits a byte budget.
@@ -128,15 +135,25 @@ export function responseSchemaFor(path, example) {
  *  Returns null when even a depth-1 schema does not fit. */
 export function boundedSchemaFromExample(example, maxBytes = 1500) {
   if (!example || typeof example !== "object" || Array.isArray(example)) return null;
+  return boundedResponseSchemaFor(null, example, maxBytes);
+}
+
+/** The challenge-side response schema. It uses the same route-aware required
+ *  policy as /openapi.json, but keeps the 402's stricter byte budget. Arrays
+ *  and scalar/raw outputs are schemas too: treating a speech response string
+ *  as an object makes the official Bazaar validator reject the declaration. */
+export function boundedResponseSchemaFor(path, example, maxBytes = 1500) {
+  if (example === null || example === undefined) return null;
   for (let depth = MAX_DEPTH; depth >= 1; depth--) {
-    const schema = schemaAtDepth(example, depth);
-    if (!schema || !schema.properties) return null;
+    const schema = addRequiredForRoute(path, example, schemaAtDepth(example, depth));
+    if (!schema || !Object.keys(schema).length) return null;
     if (JSON.stringify(schema).length <= maxBytes) return schema;
   }
   return null;
 }
 
-/** schemaFromExample with a shallower ceiling than the default. */
+/** schemaFromExample with a shallower ceiling than the default. Handles any
+ *  JSON value because Bazaar output examples are not necessarily objects. */
 function schemaAtDepth(value, limit, depth = 0) {
   if (value === null || value === undefined) return {};
   if (Array.isArray(value)) {

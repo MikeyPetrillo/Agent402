@@ -1,5 +1,5 @@
 import { handlerInputOf } from "./handler-input.js";
-import { boundedSchemaFromExample } from "./openapi-schema.js";
+import { boundedResponseSchemaFor } from "./openapi-schema.js";
 import { paymentMiddleware } from "@x402/express";
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
@@ -13,6 +13,7 @@ import { clarifySvmSettleFailure } from "./svm-clarify.js";
 import {
   bazaarResourceServerExtension,
   declareDiscoveryExtension,
+  sanitizeTags,
 } from "@x402/extensions/bazaar";
 import {
   BUILDER_CODE,
@@ -1179,7 +1180,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // (BAZAAR_DESCRIPTIONS, by slug); everyone else gets the catalog description
   // truncated at a SENTENCE boundary under 500, never mid-word with "...".
   const capDesc = (s) => bazaarCapDescription(s);
-  const slimDiscovery = (d) => {
+  const slimDiscovery = (d, path) => {
     if (!d) return d;
     const slim = { ...d };
     if (slim.output) {
@@ -1205,7 +1206,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // a per-accept schema would cost 13x on every 402.
       const example = slim.output.example;
       const oversized = example !== undefined && JSON.stringify(example).length > 2048;
-      const schema = oversized ? null : boundedSchemaFromExample(example, BAZAAR_SCHEMA_MAX_BYTES);
+      const schema = oversized ? null : boundedResponseSchemaFor(path, example, BAZAAR_SCHEMA_MAX_BYTES);
       slim.output = {
         type: slim.output.type || "json",
         ...(example !== undefined
@@ -1223,7 +1224,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const routes = Object.fromEntries(
     Object.entries(catalog).map(([route, item]) => {
       const ext = {};
-      if (item.bazaar !== false) Object.assign(ext, declareDiscoveryExtension(slimDiscovery(item.discovery)));
+      const path = route.split(" ")[1];
+      if (item.bazaar !== false) Object.assign(ext, declareDiscoveryExtension(slimDiscovery(item.discovery, path)));
       const listingDescription = capDesc(BAZAAR_DESCRIPTIONS[item.slug] || item.description);
       if (builderCode) Object.assign(ext, { [BUILDER_CODE]: declareBuilderCodeExtension(builderCode) });
       // x402 payment-identifier (optional): a buyer MAY attach a payment id to
@@ -1240,9 +1242,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           // Discovery tags feed marketplace categorizers (x402scan, the Bazaar).
           // Include the resource's own category alongside its specific tags so
           // an indexer sees the real category signal (unit conversion, data,
-          // crypto, llm, ...) - every entry is honestly tagged with what it is,
-          // never a blanket label. Deduped, ≤10 to keep the 402 header lean.
-          tags: [...new Set(["web", "tools", "agents", "x402", item.category, ...(item.tags ?? [])].filter(Boolean))].slice(0, 10),
+          // crypto, llm, ...) - every entry is honestly tagged with what it is.
+          // Use the protocol's own sanitizer: printable ASCII, ≤32 chars,
+          // case-insensitive dedupe, and the official maximum of five tags.
+          tags: sanitizeTags([item.category, ...(item.tags ?? []), "agents", "x402", "tools"]),
           mimeType: "application/json",
           resource: `${baseUrl}${route.split(" ")[1]}`,
           // Canonical brand icon on every Bazaar/discovery record. Without it,
@@ -1270,7 +1273,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       accepts: acceptsFor(cfg),
       description: capDesc(cfg.description),
       serviceName: "Agent402.tools",
-      tags: ["web", "tools", "agents", "x402", cfg.category].filter(Boolean).slice(0, 10),
+      tags: sanitizeTags([cfg.category, "agents", "x402", "tools"]),
       mimeType: "application/json",
       resource: `${baseUrl}${route.split(" ")[1]}`,
       iconUrl: `${baseUrl}/favicon.ico`,
