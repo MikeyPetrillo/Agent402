@@ -1,0 +1,2039 @@
+{
+ "product": "ticker-pack",
+ "input": "MSFT",
+ "title": "MSFT",
+ "report": "# Ticker Pack: MICROSOFT CORP (MSFT)\n\n**2026-08-28** · company dossier · insider flow (90d) · 12 institutional holders (sample) · 70 sources\n\n## Executive summary\n\nMicrosoft Corp files with the SEC under CIK 0000789019 and trades on Nasdaq under the ticker MSFT. Its own SEC industry classification is SIC \"Services-Prepackaged Software\" - the label the company files under, and the only formal characterization of its business used here. Nothing in the material below describes Microsoft's products, segments, revenue mix or market position; readers wanting that detail should go to the company dossier and the primary filings named at the end of this pack.\n\nThe filing cadence across the 24 most recent EDGAR submissions is dominated by insider-related paper. Twelve of the listed items are Form 4 or Form 144 filings: Form 4s filed 2026-08-17 (period 2026-08-17), 2026-08-06 (period 2026-08-05), 2026-08-05 (period 2026-08-04), 2026-07-15 (period 2026-07-15) and 2026-07-01 (period 2026-07-01), plus Form 144 notices of proposed sale filed 2026-08-05 and 2026-08-04. The periodic anchor is the annual report: a 10-K filed 2026-07-29 for the period ended 2026-06-30, paired the same day with an 8-K for period 2026-07-29 - the pattern of a June fiscal year-end with a results announcement filed alongside the annual report. An 11-K filed 2026-06-25 covers an employee benefit plan for the period ended 2025-12-31. Two PX14A6G filings, on 2026-07-22 and 2026-07-02, indicate exempt shareholder solicitation notices from third parties rather than company statements; their subject matter is not captured in the facts here and must be read directly.\n\nInsider flow was measured over the 90-day window 2026-05-30 to 2026-08-28. Thirty-four Form 4 filings fell in that window and all 34 were read, yielding 15 parsed transactions. Open-market buying was zero: no purchases, $0, no distinct insiders. Open-market selling totalled $17.3M across 5 sales by 2 distinct insiders, giving net open-market flow of $-17.3M. Alongside that, the window contained 5 awards, 5 tax-withholding dispositions and no option exercises. The shape is routine compensation mechanics plus concentrated discretionary selling by a small number of people, with no offsetting purchase activity in the period. The gap between 34 filings and 15 parsed transactions means some line items were not extracted, so the dollar figures should be read as the measured subset, not a guaranteed total.\n\nOn 5%-plus ownership disclosures between 2025-07-24 and 2026-08-28, one event was captured: The Vanguard Group reported falling BELOW 5% as of 03/13/2026. No other Schedule 13G or 13D activity was measured in that window.\n\nThe institutional-holder picture rests on 13F-HR information tables for periods 2026-03-31 to 2026-08-28, and the sampling caveat is central. EDGAR full-text search matched at least 10,000 information tables naming Microsoft; 12 were scanned and all 12 reported a position, for 15,218,534 shares in the sample. The largest sampled positions by share count were BNP PARIBAS FINANCIAL MARKETS at 7,319,367 shares (reported value $2.73B, period 2026-06-30); COATUE MANAGEMENT LLC at 5,171,976 shares ($2.50B, period 2025-12-31); DDD Partners, LLC at 1,136,862 shares ($424.1M, 2026-06-30); ALKEON CAPITAL MANAGEMENT LLC at 851,176 shares ($317.5M, 2026-06-30); Rokos Capital Management LLP at 279,213 shares ($104.1M, 2026-06-30); Soltis Investment Advisors LLC at 226,152 shares ($84.4M, 2026-06-30); MAPLELANE CAPITAL, LLC at 157,900 shares ($58.9M, 2026-06-30); and ZEGA Investments, LLC at 38,149 shares ($14.2M, 2026-06-30). This is a sample, not the complete holder list, and it captures roughly one-thousandth of the matched tables - so no ownership percentage, ranking of top holders or aggregate institutional stake can be inferred. Reported dollar values are not comparable across filers, since some still report in thousands, and must not be summed. Coverage: the dossier drew on 3 10-K, 3 10-Q and 6 8-K filings plus 18 Form 4s and 4 grounded web angles across 20 cited sources; the holder table reflects 12 of at least 10,000 matched 13F information tables and is therefore illustrative only.\n\n## Company\n\n### MICROSOFT CORP (MSFT): Company Due-Diligence Dossier\n\n#### SNAPSHOT\n\nMicrosoft Corp is a global technology company whose reported results are organized around commercial and consumer cloud, productivity software, and gaming/hardware businesses, with an increasingly dominant AI narrative attached to Azure and Copilot [13][17]. The company files with the SEC under CIK 789019 and its most recent annual report is the 10-K filed 2026-07-29 for the fiscal year ended 2026-06-30 [1].\n\nThe live quote shows a last price of 516.66 USD against a previous close of 505.06, with a day range of 504.867-517.78 and a 52-week range of 349.20-553.72; the change field was not supplied, so we do not characterize the day's move beyond the fact that the last print sits above the prior close. That 52-week band is wide - the low is roughly a third below the high - which matters for anyone underwriting entry price.\n\n**Bottom line:** On the reported numbers this is an exceptionally profitable, over-capitalized enterprise: FY2026 operating income of $155.24B, net income of $133.75B, total assets of $758.38B and stockholders' equity of $442.39B against $315.99B of total liabilities. The diligence tension is not solvency or earnings quality in the ordinary sense - it is (a) the scale and speed of capital-expenditure escalation funding the AI buildout [15], (b) the degree to which recent earnings growth was assisted by investment gains and one-off items rather than operations [13], and (c) active securities and derivative litigation specifically targeting the AI/Copilot disclosure record [19][20]. The equity market has evidently not rewarded the earnings growth in line with its magnitude [15].\n\n#### BUSINESS & RECENT FILINGS\n\nThe current filing record supplied here consists of three annual reports - 10-Ks filed 2026-07-29 (period 2026-06-30) [1], 2025-07-30 [2] and 2024-07-30 [3] - plus three quarterly reports for the FY2026 quarters ended 2026-03-31 [4], 2025-12-31 [5] and 2025-09-30 [6], and six 8-Ks: 2026-07-29 [7], 2026-06-05 (period 2026-06-02) [8], 2026-05-14 (period 2026-05-13) [9], 2026-04-29 [10], 2026-01-28 [11] and 2025-12-08 (period 2025-12-05) [12]. Three of those 8-Ks are same-day companions to a periodic report - 2026-07-29 with the 10-K [7][1], 2026-04-29 with the Q3 10-Q [10][4], and 2026-01-28 with the Q2 10-Q [11][5] - a pattern consistent with earnings-release furnishing. The material provided here does not state the subject matter of the 8-Ks filed 2026-06-05 [8], 2026-05-14 [9] or 2025-12-08 [12], and we do not speculate.\n\nThe 10-K's own risk language is unusually candid about the AI investment cycle: it states that Microsoft \"will continue to make significant investments in research, development, and marketing for existing products, services, and technologies, including AI-based products and serv[ices]\" under a heading titled \"RISKS RELATING TO THE EVOLUTION OF OUR BUSINESS - We make significant investments in products and services that may not achieve expected returns\" [18]. The web research on the same filing family adds that management acknowledges it may not achieve significant revenue from new product investments for several years, if at all, and that such products may not be profitable or reach historical operating margins.\n\nThe Q3 FY2026 10-Q is instructive on where the volatility in Microsoft's income statement now lives. Its critical-estimates paragraph lists standalone selling price, variable consideration, loss contingencies, \"the fair value of and/or potential impairment of goodwill and intangible assets,\" stock-based compensation forfeiture rates, uncertain tax positions, and \"determining the timing and amount of impairments for investments\" [4]. The filing further explains that for equity investments recorded at fair value it performs a periodic qualitative assessment and recognizes impairment where indicators exist, that \"[c]hanges in fair value are recorded in other income (expense), net,\" and that equity-method investments \"may be recorded on a lag of up to three months\" [4]. It states plainly: \"If market, industry, and/or investee conditions deteriorate, we may incur future impairments\" [4]. For a diligence reader, that is the accounting channel through which the company's large private-AI investment portfolio flows into reported earnings.\n\n#### FINANCIAL POSTURE\n\n**Profitability and the operating-to-net bridge.** For FY2026 the latest reported annual figures are operating income of $155.24B, non-operating income of $10.70B, pre-tax income of $165.93B, income tax expense of $32.19B and net income of $133.75B, with basic EPS reported as 18. The bridge is fully accounted for by the reported lines: operating income plus a positive $10.70B of non-operating income equals pre-tax income, less tax gives net income - an effective tax rate of roughly 19% on pre-tax income. Critically, net income here is *higher* than it would be on operating income alone because non-operating items were a $10.70B tailwind, not a drag. The 10-Q's disclosure of the components of other income (expense), net corroborates the mechanism: for the nine months ended 2026-03-31 the company reported interest and dividends income of $730M/$2,546M (quarter/nine-month), interest expense of $(778)M/$(2,212)M, net recognized gains on investments of $1,652M/$1,419M, net gains on derivatives of $124M/$1,740M, foreign-currency remeasurement losses of $(295)M/$(367)M, and \"Other, net\" of $(491)M/$4,127M, totaling $942M for the quarter and $7,253M for nine months, versus $(623)M and $(3,194)M in the prior-year comparatives [4]. The same excerpt notes that other income (expense), net \"included $19 million of net losses and $5.9 billion of net gains for the three and nine months ended March 31, 2026\" [4]. In other words, the swing from prior-year negative to current-year strongly positive non-operating income is investment- and derivative-driven, and is disclosed as such.\n\n**Balance sheet.** Total assets of $758.38B against total liabilities of $315.99B leaves $442.39B of stockholders' equity - equity is roughly 58% of the balance sheet. Cash and equivalents of $20.93B is a small fraction of assets; note this is the narrow cash-and-equivalents line only, and the material provided here does not give short-term investments, total debt, or operating cash flow, so we do not draw net-cash or leverage-ratio conclusions.\n\n**A data caveat, not a company finding.** The revenue tags in the XBRL extract are anomalous: the \"latest annual\" total revenue is shown as $16.04B for FY2010 (10-K filed 2010-07-30) and the most recent quarterly figure as $19.95B for the period ending 2010-12-31. These are plainly legacy-period tags surfaced by the extraction, not FY2026 revenue, and they are inconsistent with FY2026 operating income of $155.24B drawn from the same extract. For revenue we therefore rely on the company's own FY26 Q4 release: revenue of $90.0 billion for the quarter ended June 30, 2026, up 18% (up 17% in constant currency), with operating income of $40.6 billion [13]. The web research adds full-year FY2026 revenue of $331.8 billion, up 18%, GAAP net income of $133.7 billion, up 31%, and GAAP diluted EPS of $17.95, up 32% - the net income figure reconciles with the $133.75B in the XBRL data, which raises confidence in both.\n\n#### RECENT DEVELOPMENTS\n\n**FY26 Q4 results (announced July 29, 2026).** The press release confirms revenue of $90.0 billion, up 18%, and operating income of $40.6 billion [13]. The web research adds GAAP net income of $35.8 billion (up 31%), GAAP diluted EPS of $4.81 (up 32%), non-GAAP net income of $35.3 billion (up 22%) and non-GAAP diluted EPS of $4.74 (up 23%), with non-GAAP results excluding the impact from investments in OpenAI. Revenue beat a cited analyst expectation of $87.62 billion and non-GAAP EPS beat an expected $4.24.\n\n**Quality-of-earnings detail.** Per the research, discrete items contributed $0.27 to diluted EPS: a $3.2 billion gain from an investment in Anthropic and lower-than-expected Voluntary Retirement Program expenses, partially offset by severance and XBOX impairment charges. Management's stated position is that results exceeded expectations even adjusted for these items. This is the single most important quality-of-earnings fact in the file: a material slice of the 31% GAAP net income growth is attributable to a mark on a private AI investment and to program-expense timing, not to recurring operations.\n\n**Demand signals.** Microsoft Cloud revenue was $59.3 billion in FY26 Q4, up 27%, and commercial remaining performance obligation rose 84% to $678 billion per the research. Independently, a conference report describes backlog increasing by more than $50 billion in the most recent quarter, \"entirely outside of OpenAI and Anthropic,\" and Foundry surpassing more than 100,000 users or customers [14]. A Deutsche Bank conference transcript characterizes customer AI adoption as having \"shifted from experimentation to scaled, governed deployments, with strong demand for Azure and Microsoft 365 Copilot,\" alongside product innovation, hybrid pricing, and the \"Microsoft Frontier Company\" initiative [17]. The concentration point is that the backlog growth is credibly broader than the two headline AI partners [14].\n\n**Capital intensity - the central watch item.** Microsoft spent $115.9 billion on property and equipment in fiscal 2026, up 80% from $64.6 billion the prior year; Q4 alone saw capex and finance leases of $41 billion, up 69% year over year; and CFO Amy Hood has guided to about $175 billion for calendar 2026 [15]. The same source frames the paradox in its headline: the company \"Earns 31% More Than It Did a Year Ago and Is Worth Less\" [15]. That is the crux - earnings are compounding, but so is the invested capital base, and the market is discounting the return on it.\n\n**Competitive position.** Research citing third-party trackers puts Microsoft second in global cloud infrastructure services with 20% share in Q2 2026, flat year over year, versus 21% in Q1 2026, with Intelligent Cloud revenue of $39.3 billion in Q2 2026, up 32%. Software & Programming industry share was cited at 37.90% in Q1 2026 (44.53% on a 12-month trailing basis). Note these are third-party estimates and the flat/slightly-down cloud share sits somewhat awkwardly beside 27-32% cloud revenue growth - a reminder that share is being measured against a fast-growing pie. One source estimates roughly $4.2 billion of incremental enterprise revenue from autonomous-agent products in the first half of 2026 but explicitly describes the figure as \"not yet disclosed publicly\" and sourced to unnamed people [16]; we flag it as unverified and would not underwrite it.\n\n#### INSIDER ACTIVITY\n\nThe Form 4 data supplied is filing metadata only - filer name and filing date, with no transaction direction, share count, or price - so nothing about buying or selling can or should be inferred. Form 4 filings in the window show eighteen filings. A dense cluster of ten filings landed on 2026-06-12 from names consistent with board membership: Walmsley Emma N, Rainey John D, Pritzker Penny S, Mason Mark, Peterson Sandra E, MacGregor Catherine, List Teri, Johnston Hugh F, Di Sibio Carmine and Hoffman Reid, alongside Numoto Takeshi. Same-date group filings of this kind are typical of an annual director-compensation or equity-cycle event, though the material here does not state the reason. Executive-side filers include Coleman Amy (three filings: 2026-06-15, 2026-07-15 and 2026-08-17), Althoff Judson (2026-08-06), Numoto Takeshi (2026-08-05 and 2026-06-12), Hogan Kathleen T (2026-07-01) and Jolla Alice L. (2026-06-16). The repeated monthly-cadence filings by Coleman are the kind of pattern that warrants pulling the actual Form 4s to read the transaction codes - which this dataset does not contain. Governance-hygiene read: filings are frequent, timely-looking, and span both officers and the board, which is what you want to see.\n\n#### RISKS & RED FLAGS\n\n1. **Securities litigation on the AI disclosure record.** A securities fraud class action alleges that Microsoft and certain officers made materially false and misleading statements about AI-related capacity constraints and the commercial traction of Copilot, with a lead-plaintiff deadline of August 11, 2026 [20]. Separately, a shareholder derivative complaint filed in the U.S. District Court for the Western District of Washington at Seattle seeks \"to remedy wrongdoing committed by certain of the Company's officers and directors\" over a relevant period beginning January 1, 2022 [19]; the research describes its allegations as false and misleading statements about AI strategy and Copilot plus training AI on copyrighted works without licenses. Both actions target precisely the narrative driving the equity story.\n\n2. **Capital-intensity risk.** Capex of $115.9 billion in FY2026 (up 80%) and ~$175 billion guided for calendar 2026 [15] converts an asset-light software franchise into something structurally more capital-heavy, with depreciation and utilization risk if AI demand disappoints.\n\n3. **Investment-gain dependence and impairment exposure.** The $3.2 billion Anthropic gain within the FY26 Q4 discrete items, plus non-GAAP results that explicitly exclude OpenAI investment effects, mean reported earnings carry mark-driven volatility. The 10-Q states directly that deteriorating market or investee conditions may produce future impairments, and that fair-value changes run through other income (expense), net [4].\n\n4. **Management's own return caveat.** The 10-K warns that significant investments \"may not achieve expected returns\" [18].\n\n5. **Regulatory breadth.** Evolving privacy, data-storage, digital-accessibility and online-safety regimes - including EU Member State laws under the European Electronic Communications Code that increasingly define certain services as regulated - expand compliance obligations per the research.\n\n6. **Non-financial red flag on data hygiene:** the XBRL revenue tags in this extract point to FY2010 periods. That is a limitation of the material, not a finding about the company.\n\n#### DILIGENCE READ\n\nMicrosoft presents as an institutionally sound, deeply capitalized counterparty: $442.39B of equity, 19%-ish effective tax rate, an operating-to-net bridge that reconciles cleanly on the reported lines, and a demand book - $678 billion commercial RPO per the research, plus $50 billion-plus of quarterly backlog growth outside the headline AI partners [14] - that supports the growth narrative. For partnering purposes, credit and continuity risk is minimal on this evidence.\n\nFor an investment decision the calculus is harder and the file explains why the stock has lagged the earnings [15]. Three things must be underwritten independently: whether ~$175 billion of calendar-2026 capex earns its cost of capital [15]; how much of the 31% GAAP net income growth is durable versus mark-and-timing driven, given the $3.2 billion Anthropic gain and the $0.27 discrete-item EPS benefit; and how the AI-disclosure litigation resolves [19][20]. The company's own filings do not oversell - they warn explicitly about unreturned investment [18] and future investment impairments [4]. A buyer should treat the operating franchise as high-confidence and the AI capital cycle as the unresolved variable, and should pull the underlying Form 4s, the full 10-K MD&A, and the unspecified 8-Ks of 2025-12-08 [12], 2026-05-14 [9] and 2026-06-05 [8] before finalizing a position.\n\n## Filings\n\nMICROSOFT CORP (CIK 0000789019) · Services-Prepackaged Software · listed on Nasdaq · fiscal year end 0630.\n\nThe 24 most recent filings on EDGAR [69]:\n\n| Form | Filed | Period | Document |\n| --- | --- | --- | --- |\n| 4 | 2026-08-17 | 2026-08-17 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000145/xslF345X06/form4.xml) |\n| 4 | 2026-08-06 | 2026-08-05 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000143/xslF345X06/form4.xml) |\n| 4 | 2026-08-05 | 2026-08-04 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000141/xslF345X06/form4.xml) |\n| 144 | 2026-08-05 |  | [filing](https://www.sec.gov/Archives/edgar/data/789019/000195917326005674/xsl144X01/primary_doc.xml) |\n| 144 | 2026-08-04 |  | [filing](https://www.sec.gov/Archives/edgar/data/789019/000195917326005608/xsl144X01/primary_doc.xml) |\n| 10-K | 2026-07-29 | 2026-06-30 | [10-K](https://www.sec.gov/Archives/edgar/data/789019/000119312526323660/msft-20260630.htm) |\n| 8-K | 2026-07-29 | 2026-07-29 | [8-K](https://www.sec.gov/Archives/edgar/data/789019/000119312526323632/msft-20260729.htm) |\n| PX14A6G | 2026-07-22 |  | [filing](https://www.sec.gov/Archives/edgar/data/789019/000121465926008806/w721267px14a6g.htm) |\n| 4 | 2026-07-15 | 2026-07-15 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000139/xslF345X06/form4.xml) |\n| PX14A6G | 2026-07-02 |  | [filing](https://www.sec.gov/Archives/edgar/data/789019/000121465926008121/j72261px14a6g.htm) |\n| 4 | 2026-07-01 | 2026-07-01 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000137/xslF345X06/form4.xml) |\n| 11-K | 2026-06-25 | 2025-12-31 | [11-K](https://www.sec.gov/Archives/edgar/data/789019/000119312526282817/msft-20251231.htm) |\n| 11-K | 2026-06-25 | 2025-12-31 | [11-K](https://www.sec.gov/Archives/edgar/data/789019/000119312526282773/d839790d11k.htm) |\n| 4 | 2026-06-16 | 2026-06-15 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000135/xslF345X06/form4.xml) |\n| 4 | 2026-06-15 | 2026-06-15 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000133/xslF345X06/form4.xml) |\n| 4 | 2026-06-12 | 2026-06-11 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000131/xslF345X06/form4.xml) |\n| 4 | 2026-06-12 | 2026-06-11 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000130/xslF345X06/form4.xml) |\n| 4 | 2026-06-12 | 2026-06-11 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000129/xslF345X06/form4.xml) |\n| 4 | 2026-06-12 | 2026-06-11 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000128/xslF345X06/form4.xml) |\n| 4 | 2026-06-12 | 2026-06-11 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000127/xslF345X06/form4.xml) |\n| 4 | 2026-06-12 | 2026-06-11 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000126/xslF345X06/form4.xml) |\n| 4 | 2026-06-12 | 2026-06-11 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000125/xslF345X06/form4.xml) |\n| 4 | 2026-06-12 | 2026-06-11 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000124/xslF345X06/form4.xml) |\n| 4 | 2026-06-12 | 2026-06-11 | [STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES](https://www.sec.gov/Archives/edgar/data/789019/000078901926000123/xslF345X06/form4.xml) |\n\n## Insider flow (last 90 days)\n\n### Insider Flow Report: MICROSOFT CORP (MSFT)\n\n**2026-05-30 to 2026-08-28** · 34 Form 4 filings read · 0 open-market buys ($0) · 5 open-market sales ($17,256,393)\n\n### INSIDER FLOW REPORT: MICROSOFT CORP (MSFT)\n##### Form 4 filings, 2026-05-30 through 2026-08-28\n\n---\n\n#### SNAPSHOT\n\nAcross the three-month window we read all 34 Form 4 filings fetched for Microsoft (34 of 34 in the window). Those filings contain **15 non-derivative transactions**, **19 derivative transactions** (RSU grants), and **25 reported-holdings rows** (positions disclosed without an accompanying transaction).\n\nThe open-market picture is one-sided but narrow:\n\n| | Count | Shares | Value |\n|---|---|---|---|\n| Open-market purchases [P] | 0 | 0 | $0 |\n| Open-market sales [S] | 5 | 37,310.353 | $17,256,393 |\n| **Net open-market flow** | | | ** - $17,256,393** |\n\nOnly **two insiders** transacted in the open market, both operating executives. There were **zero open-market purchases by anyone** - no director, no officer, no 10% holder appears on the buy side anywhere in this material. The remaining activity is mechanical: **5 grants/awards [A]**, **5 tax-withholding dispositions [F]**, and **0 option exercises [M]**. Every director who appears in the window appears only through equity awards or a holdings restatement - they neither bought nor sold.\n\nThis is, in short, a thin and unsurprising window: two executives trimming, a board being paid in stock, and routine vest-date tax withholding.\n\n---\n\n#### OPEN-MARKET BUYS\n\n**None.** The material contains no open-market purchases by any Microsoft insider in the 2026-05-30 to 2026-08-28 window. There is therefore no buy cluster and no lone buyer to assess.\n\n---\n\n#### OPEN-MARKET SALES\n\nFive sales, two sellers, $17.26m gross.\n\n**Judson Althoff - CEO, Microsoft Commercial (2 filings, $12.02m sold)**\n- **2026-06-01:** sold **15,500 sh @ $460.988** = **$7,145,314**; 110,477.434 sh held directly afterward [52]\n- **2026-08-05:** sold **10,000 sh @ $487.893** = **$4,878,930**; 100,447.434 sh held directly afterward [22]\n\nAlthoff is the largest seller in the window by value. The two sales are roughly nine weeks apart and at rising prices. After the second sale he still reports a direct holding of **100,447.434 shares** [22] - so the two disposals together reduced his reported direct position by roughly a fifth, leaving a substantial stake intact.\n\n**Takeshi Numoto - EVP, Chief Marketing Officer (3 filings, $5.23m sold)**\n- **2026-06-08:** sold **2,500 sh @ $412.45** = **$1,031,125**; 51,967.76 sh held afterward [39]\n- **2026-06-10:** sold **4,500 sh @ $402.84** = **$1,812,780**; 47,467.76 sh held afterward [38]\n- **2026-08-04:** sold **4,810.353 sh @ $496.48** = **$2,388,244**; 42,677.448 sh held afterward [23]\n\nNumoto's sales form two episodes - a June pair two days apart, then a single August sale - totalling **11,810.353 shares**. His reported direct holding falls from 51,967.76 after the first sale [39] to **42,677.448** after the last [23], again leaving a large residual position.\n\n**On 10b5-1 plans:** the material extracted from these filings **does not carry a 10b5-1 footnote for any of the five sales**, so we cannot state that any of them was pre-scheduled. Equally, the absence of a note is not evidence of its absence: large-cap executives commonly sell under pre-arranged plans, and such plans may exist without appearing in the parsed text. Readers who need certainty should open filings [22], [23], [38], [39] and [52] directly and read the footnotes.\n\nNote also the **price spread**: sales occurred at prices from $402.84 [38] to $496.48 [23]. That range - a ~23% swing across the window - matters for interpretation: the June sales were struck materially below the August ones, which is more consistent with calendar-driven timing than with tactical selling into strength.\n\n---\n\n#### AWARDS, EXERCISES AND WITHHOLDING (context, not conviction)\n\n**Grants/awards [A] - 5 non-derivative:**\n- **2026-06-15:** Alice L. Jolla, Chief Accounting Officer - **5,004 sh** at $0; 76,152.665 sh afterward [26]\n- **2026-06-05:** Charles W. Scharf, director - 149 sh; 45,041 sh afterward [43]\n- **2026-06-05:** Teri List, director - 149 sh; 149 sh afterward [45]\n- **2026-06-05:** John W. Stanton, director - 149 sh; 84,054 sh afterward [47]\n- **2026-06-05:** Carmine Di Sibio, director - 15 sh; 360 sh afterward [51]\n\n**Derivative RSU awards - 19, all directors, all grants, no exercises.** On **2026-06-05** ten directors received RSU awards ranging from 13.2 units (Di Sibio [51]) to 275.998 units (Sandra E. Peterson [48]), with Hugh F. Johnston at 251.998 [41], MacGregor 245.998 [46], Penny S. Pritzker 239.998 [42], Mark Mason 231.262 [44], Reid Hoffman 224.998 [49], Rainey 149.999 [40] and Walmsley 149.999 [50]. On **2026-06-11** the same cohort received a second, much smaller tranche - fractional-to-small unit counts (Di Sibio 0.03 [36] up to Peterson 61.012 [32], with List 53.667 [34], Hoffman 39.453 [37], Pritzker 33.314 [30], MacGregor 5.068 [33], Johnston 4.975 [35], Walmsley 2.935 [28], Rainey 0.688 [29], Mason 0.539 [31]) - a pattern consistent with dividend-equivalent accrual on existing RSUs, though the material does not label it as such.\n\n**Tax withholding [F] - 5, all shares surrendered to cover vest-date taxes, not sales:**\n- Amy Coleman, EVP & CHRO: 433.827 sh @ $450.24 ($195,326) on 2026-06-01 [54]; 35.944 sh @ $390.74 ($14,045) on 2026-06-15 [27]; 32.344 sh @ $384.93 ($12,450) on 2026-07-15 [24]; 89.044 sh @ $495.40 ($44,112) on 2026-08-17 [21]. Ending direct holding 45,323.576 sh [21].\n- Alice L. Jolla, CAO: 412.578 sh @ $450.24 ($185,759) on 2026-06-01 [53].\n\nColeman and Jolla therefore **did not buy or sell** in this window; they appear solely through awards and withholding. Note the $384.93 - $495.40 withholding-price range [24][21] - again a wide intra-window price band.\n\n**Holdings-only rows:** Kathleen T. Hogan (EVP, Strategy) is reported at 137,985.958 sh held directly as of 2026-07-01 with no transaction [25]. Eleven directors have holdings rows restated on 2026-06-09 and 2026-06-12 [28] - [37], [40] - [50] - including indirect trust positions (Pritzker 12,000 sh by trust [30]; Hoffman 15,905 sh by living trust [37]; Stanton 3,622 sh by family trust [47]; Scharf 525 sh by trust [43]; List 2,947 sh by trust [34]). These are disclosures, not trades.\n\n---\n\n#### WHO IS TRADING\n\n- **Operating executives:** the only open-market activity. Althoff (Commercial CEO) and Numoto (CMO) account for 100% of the $17.26m sold [22][23][38][39][52]. Two other officers - Coleman (CHRO) and Jolla (CAO) - appear only via awards and withholding [21][24][26][27][53][54]; Hogan appears only as a holdings line [25].\n- **Directors:** eleven named directors appear, and **not one bought or sold**. Their activity is entirely RSU grants plus the small 2026-06-05 share awards [43][45][47][51] and holdings restatements.\n- **10% holders:** none appear in this material.\n\n---\n\n#### SIGNAL READ\n\nThe honest read is that this window carries **little directional information**.\n\nWhat we can say: net open-market flow is **negative $17.26m**, entirely from **two executives**, across **five sales**, with **no offsetting purchases** [22][23][38][39][52]. That is the fact.\n\nWhat we should not over-read: (1) two sellers is not a cluster - clustered, unprompted open-market *buying* by several insiders is the stronger signal, and there is none of either kind of clustering here; (2) both sellers retained large positions afterward (Althoff 100,447.434 sh [22]; Numoto 42,677.448 sh [23]), so neither exited; (3) senior-executive compensation at Microsoft is delivered largely in stock, so recurring sales are the normal mechanism by which pay becomes cash, and the June-versus-August price gap ($402.84 [38] vs $496.48 [23]) looks more like a calendar than a view; (4) the director cohort's complete absence from both sides of the market is itself unremarkable - directors here are being paid in RSUs [28] - [37][40] - [50], and non-participation is neither bullish nor bearish.\n\nCaveats that bound everything above. Form 4 covers only officers, directors and 10% beneficial owners - not institutions, not employees below officer level. Filings are due within two business days of the transaction, so this is a near-real-time but backward-looking record. **Form 4 discloses no intent**: it does not say why a share was sold, and diversification, tax, charitable and liquidity motives are indistinguishable from view-driven ones on the face of the form. Where the material carries no 10b5-1 footnote, we have neither confirmed nor excluded a pre-arranged plan. Any filing not fetched, or any table that is empty here, is a limit of this material and not a finding about Microsoft or any individual.\n\n**Bottom line:** routine, executive-only trimming against a backdrop of board and officer equity compensation. Insufficient evidence of an insider signal in either direction.\n\n*This is not investment advice.*\n\n## Institutional holders (13F)\n\n**5%+ holders as disclosed on Schedule 13G / 13D** (2025-07-24 to 2026-08-28; 1 matching filing, newest per filer shown). A row reporting 0 shares / 0% is a filer disclosing that it fell BELOW the 5% threshold - a disclosed exit, not a data gap.\n\n| Filer | Type | Shares | % of class | As of | Form | Filed | Filing |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| The Vanguard Group | IA | 0 (below 5%) | 0% (below 5%) | 03/13/2026 | SCHEDULE 13G/A | 2026-03-27 | [70] |\n\n12 institutional managers in this sample report a position in MICROSOFT CORP (CUSIP issuer prefix 594918), totalling 15,218,534 shares across the periods shown [68].\n\n| Manager | Period | Shares reported | Value reported | Implied $/share | Option rows | Filing |\n| --- | --- | --- | --- | --- | --- | --- |\n| BNP PARIBAS FINANCIAL MARKETS | 2026-06-30 | 7,319,367 | $2.73B | $373.02 | 47,229 (267 rows) | [56] |\n| COATUE MANAGEMENT LLC | 2025-12-31 | 5,171,976 | $2.50B | $483.62 |  | [57] |\n| DDD Partners, LLC | 2026-06-30 | 1,136,862 | $424.1M | $373.02 | 11,800 (2 rows) | [58] |\n| ALKEON CAPITAL MANAGEMENT LLC | 2026-06-30 | 851,176 | $317.5M | $373.02 | 2,800,000 (4 rows) | [59] |\n| Rokos Capital Management LLP | 2026-06-30 | 279,213 | $104.1M | $372.94 | 43,600 (6 rows) | [60] |\n| Soltis Investment Advisors LLC | 2026-06-30 | 226,152 | $84.4M | $373.02 | 75,100 (12 rows) | [61] |\n| MAPLELANE CAPITAL, LLC | 2026-06-30 | 157,900 | $58.9M | $373.02 | 600,000 (4 rows) | [62] |\n| ZEGA Investments, LLC | 2026-06-30 | 38,149 | $14.2M | $373.02 | 17,900 (15 rows) | [63] |\n| HAZLETT, BURT & WATSON, INC. | 2026-06-30 | 21,618 | $8K | $0.37 |  | [64] |\n| Axiom Investment Management LLC | 2026-06-30 | 8,406 | $3.1M | $372.98 |  | [65] |\n| Aberdeen Wealth Management LLC | 2026-06-30 | 5,983 | $2.2M | $373.04 |  | [66] |\n| Royal Palms Capital LLC | 2026-06-30 | 1,732 | $646K | $373.02 |  | [67] |\n\n**How to read this.** SEC EDGAR full-text search returned at least 10,000 13F-HR information tables naming this issuer between 2026-03-31 and 2026-08-28; this pack scanned 12 of them and reports each manager's most recent table in that window. **It is a sample of holders, not the complete holder list**, and the search result window is capped by EDGAR, so absence from this table is not evidence that a manager does not hold the stock. A 13F-HR reports only long US-listed equity and option positions, is filed up to 45 days after quarter end, and excludes shorts, cash, non-US holdings and most fixed income.\n\nShare counts are summed only from rows a filer marked SH; rows marked PRN are principal amounts on the issuer's debt, which shares the CUSIP prefix, and are excluded. Values are reproduced exactly as each manager reported them: the SEC moved 13F values to whole dollars for filings submitted from 2023-01-03, a minority of filers still report thousands, and the implied price per share column makes that visible rather than folding it into a total. For that reason the dollar column is not summed here.\n\n## What to check next\n\n- Read the 10-K filed 2026-07-29 for the period ended 2026-06-30 in full - it is the only annual report in the recent filing list and the primary source for the business description that the SIC code \"Services-Prepackaged Software\" only gestures at.\n- Pull the 8-K filed 2026-07-29 (period 2026-07-29) that accompanied the 10-K; same-day 8-Ks alongside an annual report typically carry the results announcement or a specific disclosable event, and its contents are not captured here.\n- Read both PX14A6G filings (2026-07-22 and 2026-07-02) to identify who filed them and what proposal or issue they are soliciting on; these\n\n---\n\nSEC EDGAR data as filed, plus cited web research. This is information, not investment advice, and not a recommendation to buy or sell any security.\n\n## Sources\n[1] 10-K filed 2026-07-29 (period 2026-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/789019/000119312526323660/msft-20260630.htm\n[2] 10-K filed 2025-07-30 (period 2025-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/789019/000095017025100235/msft-20250630.htm\n[3] 10-K filed 2024-07-30 (period 2024-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/789019/000095017024087843/msft-20240630.htm\n[4] 10-Q filed 2026-04-29 (period 2026-03-31) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/789019/000119312526191507/msft-20260331.htm\n[5] 10-Q filed 2026-01-28 (period 2025-12-31) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/789019/000119312526027207/msft-20251231.htm\n[6] 10-Q filed 2025-10-29 (period 2025-09-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/789019/000119312525256321/msft-20250930.htm\n[7] 8-K filed 2026-07-29 (period 2026-07-29) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/789019/000119312526323632/msft-20260729.htm\n[8] 8-K filed 2026-06-05 (period 2026-06-02) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/789019/000119312526258667/d26760d8k.htm\n[9] 8-K filed 2026-05-14 (period 2026-05-13) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/789019/000119312526224155/d125909d8k.htm\n[10] 8-K filed 2026-04-29 (period 2026-04-29) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/789019/000119312526191457/msft-20260429.htm\n[11] 8-K filed 2026-01-28 (period 2026-01-28) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/789019/000119312526027198/msft-20260128.htm\n[12] 8-K filed 2025-12-08 (period 2025-12-05) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/789019/000119312525311196/d34077d8k.htm\n[13] FY26 Q4 - Press Releases - Investor Relations - Microsoft - https://www.microsoft.com/en-us/Investor/earnings/FY-2026-Q4/press-release-webcast\n[14] Microsoft Says Enterprise AI Is Moving From Experimentation to Scaled Production - Ticker Report - https://www.tickerreport.com/banking-finance/13561873/microsoft-says-enterprise-ai-is-moving-from-experimentation-to-scaled-production.html\n[15] Microsoft Earns 31% More Than It Did a Year Ago and Is Worth Less | The Motley Fool - https://www.fool.com/investing/2026/08/26/microsoft-earns-31-more-than-it-did-a-year-ago-and-is-worth-less/\n[16] Microsoft’s Autonomous Agent Push Is Rewriting Enterprise Software - USA Business Times - https://usabusinesstimes.com/microsofts-autonomous-agent-push-is-rewriting-enterprise-software/\n[17] Microsoft (MSFT) Transcript: Deutsche Bank 2026 Technology Conference - https://stockanalysis.com/stocks/msft/transcripts/729289-deutsche-bank-2026-technology-conference/\n[18] [PDF] Form 10-K for Microsoft Corp filed 07/29/2026 - https://microsoft.gcs-web.com/static-files/8a9beeed-0e9e-48e6-b4fb-593d558e2693\n[19] DEMAND FOR JURY TRIAL - https://www.dandodiary.com/wp-content/uploads/sites/893/2026/07/Microsoft-Derivative-Complaint.pdf\n[20] Regulatory and Legal Environment - https://nova.kapualabs.com/msft-stock_panel_c/regulatory-and-legal-environment/\n[21] Form 4 filed 2026-08-17 by Coleman Amy - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/2062356/000078901926000145/form4.xml\n[22] Form 4 filed 2026-08-06 by Althoff Judson - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1868758/000078901926000143/form4.xml\n[23] Form 4 filed 2026-08-05 by Numoto Takeshi - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1899931/000078901926000141/form4.xml\n[24] Form 4 filed 2026-07-15 by Coleman Amy - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/2062356/000078901926000139/form4.xml\n[25] Form 4 filed 2026-07-01 by Hogan Kathleen T - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1626431/000078901926000137/form4.xml\n[26] Form 4 filed 2026-06-16 by Jolla Alice L. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1819285/000078901926000135/form4.xml\n[27] Form 4 filed 2026-06-15 by Coleman Amy - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/2062356/000078901926000133/form4.xml\n[28] Form 4 filed 2026-06-12 by Walmsley Emma N - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1795429/000078901926000131/form4.xml\n[29] Form 4 filed 2026-06-12 by Rainey John D - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1547433/000078901926000130/form4.xml\n[30] Form 4 filed 2026-06-12 by PRITZKER PENNY S - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1087398/000078901926000129/form4.xml\n[31] Form 4 filed 2026-06-12 by Mason Mark - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1487290/000078901926000128/form4.xml\n[32] Form 4 filed 2026-06-12 by PETERSON SANDRA E - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1192752/000078901926000127/form4.xml\n[33] Form 4 filed 2026-06-12 by MacGregor Catherine - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1415757/000078901926000126/form4.xml\n[34] Form 4 filed 2026-06-12 by List Teri - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1529370/000078901926000125/form4.xml\n[35] Form 4 filed 2026-06-12 by Johnston Hugh F - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1377489/000078901926000124/form4.xml\n[36] Form 4 filed 2026-06-12 by Di Sibio Carmine - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/2028185/000078901926000123/form4.xml\n[37] Form 4 filed 2026-06-12 by Hoffman Reid - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1519339/000078901926000122/form4.xml\n[38] Form 4 filed 2026-06-12 by Numoto Takeshi - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1899931/000078901926000121/form4.xml\n[39] Form 4 filed 2026-06-10 by Numoto Takeshi - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1899931/000078901926000109/form4.xml\n[40] Form 4 filed 2026-06-09 by Rainey John D - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1547433/000078901926000107/form4.xml\n[41] Form 4 filed 2026-06-09 by Johnston Hugh F - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1377489/000078901926000106/form4.xml\n[42] Form 4 filed 2026-06-09 by PRITZKER PENNY S - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1087398/000078901926000105/form4.xml\n[43] Form 4 filed 2026-06-09 by SCHARF CHARLES W - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1195358/000078901926000104/form4.xml\n[44] Form 4 filed 2026-06-09 by Mason Mark - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1487290/000078901926000103/form4.xml\n[45] Form 4 filed 2026-06-09 by List Teri - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1529370/000078901926000102/form4.xml\n[46] Form 4 filed 2026-06-09 by MacGregor Catherine - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1415757/000078901926000101/form4.xml\n[47] Form 4 filed 2026-06-09 by STANTON JOHN W - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/904858/000078901926000100/form4.xml\n[48] Form 4 filed 2026-06-09 by PETERSON SANDRA E - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1192752/000078901926000099/form4.xml\n[49] Form 4 filed 2026-06-09 by Hoffman Reid - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1519339/000078901926000098/form4.xml\n[50] Form 4 filed 2026-06-09 by Walmsley Emma N - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1795429/000078901926000097/form4.xml\n[51] Form 4 filed 2026-06-09 by Di Sibio Carmine - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/2028185/000078901926000096/form4.xml\n[52] Form 4 filed 2026-06-02 by Althoff Judson - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1868758/000078901926000083/form4.xml\n[53] Form 4 filed 2026-06-01 by Jolla Alice L. - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1819285/000078901926000081/form4.xml\n[54] Form 4 filed 2026-06-01 by Coleman Amy - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/2062356/000078901926000080/form4.xml\n[55] SEC EDGAR full-text search, Form 4 against CIK 0000789019, 2026-05-30 to 2026-08-28 - https://efts.sec.gov/LATEST/search-index?q=&forms=4&ciks=0000789019\n[56] 13F-HR information table filed 2026-08-13 by BNP PARIBAS FINANCIAL MARKETS (period 2026-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1166588/000116658826000008/PBI13F06302026.xml\n[57] 13F-HR information table filed 2026-05-15 by COATUE MANAGEMENT LLC (period 2025-12-31) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1135730/000091957426003414/infotable.xml\n[58] 13F-HR information table filed 2026-08-05 by DDD Partners, LLC (period 2026-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1729673/000172967326000006/TG13F06302026.xml\n[59] 13F-HR information table filed 2026-08-14 by ALKEON CAPITAL MANAGEMENT LLC (period 2026-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1230239/000091957426005175/infotable.xml\n[60] 13F-HR information table filed 2026-08-14 by Rokos Capital Management LLP (period 2026-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1666335/000166633526000007/13f_submission_202606.xml\n[61] 13F-HR information table filed 2026-07-31 by Soltis Investment Advisors LLC (period 2026-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1802530/000180253026000004/2qtr.xml\n[62] 13F-HR information table filed 2026-08-13 by MAPLELANE CAPITAL, LLC (period 2026-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1512173/000091957426005126/infotable.xml\n[63] 13F-HR information table filed 2026-07-31 by ZEGA Investments, LLC (period 2026-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/2045703/000204570326000001/informationtable06302026.xml\n[64] 13F-HR information table filed 2026-07-30 by HAZLETT, BURT & WATSON, INC. (period 2026-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/46392/000004639226000004/13f_2q2026.xml\n[65] 13F-HR information table filed 2026-07-31 by Axiom Investment Management LLC (period 2026-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1513703/000139834426013168/fp0099957-1_13fhr-table.xml\n[66] 13F-HR information table filed 2026-08-13 by Aberdeen Wealth Management LLC (period 2026-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1802654/000139834426014393/fp0100343-1_13fhr-table.xml\n[67] 13F-HR information table filed 2026-08-07 by Royal Palms Capital LLC (period 2026-06-30) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/2107886/000210788626000003/rpcq2202613f.xml\n[68] SEC EDGAR full-text search: 13F-HR information tables naming MICROSOFT CORP, 2026-03-31 to 2026-08-28 - https://efts.sec.gov/LATEST/search-index?q=%22MICROSOFT%20CORP%22&forms=13F-HR&dateRange=custom&startdt=2026-03-31&enddt=2026-08-28\n[69] SEC EDGAR filing history for MICROSOFT CORP (CIK 0000789019) - https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000789019&type=&dateb=&owner=include&count=40\n[70] SCHEDULE 13G/A filed 2026-03-27 by The Vanguard Group - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/102909/000010290926001884/primary_doc.xml",
+ "sources": [
+  {
+   "n": 1,
+   "title": "10-K filed 2026-07-29 (period 2026-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526323660/msft-20260630.htm"
+  },
+  {
+   "n": 2,
+   "title": "10-K filed 2025-07-30 (period 2025-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/789019/000095017025100235/msft-20250630.htm"
+  },
+  {
+   "n": 3,
+   "title": "10-K filed 2024-07-30 (period 2024-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/789019/000095017024087843/msft-20240630.htm"
+  },
+  {
+   "n": 4,
+   "title": "10-Q filed 2026-04-29 (period 2026-03-31) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526191507/msft-20260331.htm"
+  },
+  {
+   "n": 5,
+   "title": "10-Q filed 2026-01-28 (period 2025-12-31) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526027207/msft-20251231.htm"
+  },
+  {
+   "n": 6,
+   "title": "10-Q filed 2025-10-29 (period 2025-09-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312525256321/msft-20250930.htm"
+  },
+  {
+   "n": 7,
+   "title": "8-K filed 2026-07-29 (period 2026-07-29) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526323632/msft-20260729.htm"
+  },
+  {
+   "n": 8,
+   "title": "8-K filed 2026-06-05 (period 2026-06-02) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526258667/d26760d8k.htm"
+  },
+  {
+   "n": 9,
+   "title": "8-K filed 2026-05-14 (period 2026-05-13) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526224155/d125909d8k.htm"
+  },
+  {
+   "n": 10,
+   "title": "8-K filed 2026-04-29 (period 2026-04-29) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526191457/msft-20260429.htm"
+  },
+  {
+   "n": 11,
+   "title": "8-K filed 2026-01-28 (period 2026-01-28) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526027198/msft-20260128.htm"
+  },
+  {
+   "n": 12,
+   "title": "8-K filed 2025-12-08 (period 2025-12-05) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312525311196/d34077d8k.htm"
+  },
+  {
+   "n": 13,
+   "title": "FY26 Q4 - Press Releases - Investor Relations - Microsoft",
+   "url": "https://www.microsoft.com/en-us/Investor/earnings/FY-2026-Q4/press-release-webcast"
+  },
+  {
+   "n": 14,
+   "title": "Microsoft Says Enterprise AI Is Moving From Experimentation to Scaled Production - Ticker Report",
+   "url": "https://www.tickerreport.com/banking-finance/13561873/microsoft-says-enterprise-ai-is-moving-from-experimentation-to-scaled-production.html"
+  },
+  {
+   "n": 15,
+   "title": "Microsoft Earns 31% More Than It Did a Year Ago and Is Worth Less | The Motley Fool",
+   "url": "https://www.fool.com/investing/2026/08/26/microsoft-earns-31-more-than-it-did-a-year-ago-and-is-worth-less/"
+  },
+  {
+   "n": 16,
+   "title": "Microsoft’s Autonomous Agent Push Is Rewriting Enterprise Software: USA Business Times",
+   "url": "https://usabusinesstimes.com/microsofts-autonomous-agent-push-is-rewriting-enterprise-software/"
+  },
+  {
+   "n": 17,
+   "title": "Microsoft (MSFT) Transcript: Deutsche Bank 2026 Technology Conference",
+   "url": "https://stockanalysis.com/stocks/msft/transcripts/729289-deutsche-bank-2026-technology-conference/"
+  },
+  {
+   "n": 18,
+   "title": "[PDF] Form 10-K for Microsoft Corp filed 07/29/2026",
+   "url": "https://microsoft.gcs-web.com/static-files/8a9beeed-0e9e-48e6-b4fb-593d558e2693"
+  },
+  {
+   "n": 19,
+   "title": "DEMAND FOR JURY TRIAL",
+   "url": "https://www.dandodiary.com/wp-content/uploads/sites/893/2026/07/Microsoft-Derivative-Complaint.pdf"
+  },
+  {
+   "n": 20,
+   "title": "Regulatory and Legal Environment",
+   "url": "https://nova.kapualabs.com/msft-stock_panel_c/regulatory-and-legal-environment/"
+  },
+  {
+   "n": 21,
+   "title": "Form 4 filed 2026-08-17 by Coleman Amy - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/2062356/000078901926000145/form4.xml"
+  },
+  {
+   "n": 22,
+   "title": "Form 4 filed 2026-08-06 by Althoff Judson - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1868758/000078901926000143/form4.xml"
+  },
+  {
+   "n": 23,
+   "title": "Form 4 filed 2026-08-05 by Numoto Takeshi - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1899931/000078901926000141/form4.xml"
+  },
+  {
+   "n": 24,
+   "title": "Form 4 filed 2026-07-15 by Coleman Amy - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/2062356/000078901926000139/form4.xml"
+  },
+  {
+   "n": 25,
+   "title": "Form 4 filed 2026-07-01 by Hogan Kathleen T - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1626431/000078901926000137/form4.xml"
+  },
+  {
+   "n": 26,
+   "title": "Form 4 filed 2026-06-16 by Jolla Alice L. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1819285/000078901926000135/form4.xml"
+  },
+  {
+   "n": 27,
+   "title": "Form 4 filed 2026-06-15 by Coleman Amy - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/2062356/000078901926000133/form4.xml"
+  },
+  {
+   "n": 28,
+   "title": "Form 4 filed 2026-06-12 by Walmsley Emma N - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1795429/000078901926000131/form4.xml"
+  },
+  {
+   "n": 29,
+   "title": "Form 4 filed 2026-06-12 by Rainey John D - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1547433/000078901926000130/form4.xml"
+  },
+  {
+   "n": 30,
+   "title": "Form 4 filed 2026-06-12 by PRITZKER PENNY S - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1087398/000078901926000129/form4.xml"
+  },
+  {
+   "n": 31,
+   "title": "Form 4 filed 2026-06-12 by Mason Mark - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1487290/000078901926000128/form4.xml"
+  },
+  {
+   "n": 32,
+   "title": "Form 4 filed 2026-06-12 by PETERSON SANDRA E - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1192752/000078901926000127/form4.xml"
+  },
+  {
+   "n": 33,
+   "title": "Form 4 filed 2026-06-12 by MacGregor Catherine - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1415757/000078901926000126/form4.xml"
+  },
+  {
+   "n": 34,
+   "title": "Form 4 filed 2026-06-12 by List Teri - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1529370/000078901926000125/form4.xml"
+  },
+  {
+   "n": 35,
+   "title": "Form 4 filed 2026-06-12 by Johnston Hugh F - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1377489/000078901926000124/form4.xml"
+  },
+  {
+   "n": 36,
+   "title": "Form 4 filed 2026-06-12 by Di Sibio Carmine - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/2028185/000078901926000123/form4.xml"
+  },
+  {
+   "n": 37,
+   "title": "Form 4 filed 2026-06-12 by Hoffman Reid - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1519339/000078901926000122/form4.xml"
+  },
+  {
+   "n": 38,
+   "title": "Form 4 filed 2026-06-12 by Numoto Takeshi - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1899931/000078901926000121/form4.xml"
+  },
+  {
+   "n": 39,
+   "title": "Form 4 filed 2026-06-10 by Numoto Takeshi - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1899931/000078901926000109/form4.xml"
+  },
+  {
+   "n": 40,
+   "title": "Form 4 filed 2026-06-09 by Rainey John D - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1547433/000078901926000107/form4.xml"
+  },
+  {
+   "n": 41,
+   "title": "Form 4 filed 2026-06-09 by Johnston Hugh F - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1377489/000078901926000106/form4.xml"
+  },
+  {
+   "n": 42,
+   "title": "Form 4 filed 2026-06-09 by PRITZKER PENNY S - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1087398/000078901926000105/form4.xml"
+  },
+  {
+   "n": 43,
+   "title": "Form 4 filed 2026-06-09 by SCHARF CHARLES W - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1195358/000078901926000104/form4.xml"
+  },
+  {
+   "n": 44,
+   "title": "Form 4 filed 2026-06-09 by Mason Mark - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1487290/000078901926000103/form4.xml"
+  },
+  {
+   "n": 45,
+   "title": "Form 4 filed 2026-06-09 by List Teri - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1529370/000078901926000102/form4.xml"
+  },
+  {
+   "n": 46,
+   "title": "Form 4 filed 2026-06-09 by MacGregor Catherine - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1415757/000078901926000101/form4.xml"
+  },
+  {
+   "n": 47,
+   "title": "Form 4 filed 2026-06-09 by STANTON JOHN W - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/904858/000078901926000100/form4.xml"
+  },
+  {
+   "n": 48,
+   "title": "Form 4 filed 2026-06-09 by PETERSON SANDRA E - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1192752/000078901926000099/form4.xml"
+  },
+  {
+   "n": 49,
+   "title": "Form 4 filed 2026-06-09 by Hoffman Reid - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1519339/000078901926000098/form4.xml"
+  },
+  {
+   "n": 50,
+   "title": "Form 4 filed 2026-06-09 by Walmsley Emma N - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1795429/000078901926000097/form4.xml"
+  },
+  {
+   "n": 51,
+   "title": "Form 4 filed 2026-06-09 by Di Sibio Carmine - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/2028185/000078901926000096/form4.xml"
+  },
+  {
+   "n": 52,
+   "title": "Form 4 filed 2026-06-02 by Althoff Judson - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1868758/000078901926000083/form4.xml"
+  },
+  {
+   "n": 53,
+   "title": "Form 4 filed 2026-06-01 by Jolla Alice L. - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1819285/000078901926000081/form4.xml"
+  },
+  {
+   "n": 54,
+   "title": "Form 4 filed 2026-06-01 by Coleman Amy - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/2062356/000078901926000080/form4.xml"
+  },
+  {
+   "n": 55,
+   "title": "SEC EDGAR full-text search, Form 4 against CIK 0000789019, 2026-05-30 to 2026-08-28",
+   "url": "https://efts.sec.gov/LATEST/search-index?q=&forms=4&ciks=0000789019"
+  },
+  {
+   "n": 56,
+   "title": "13F-HR information table filed 2026-08-13 by BNP PARIBAS FINANCIAL MARKETS (period 2026-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1166588/000116658826000008/PBI13F06302026.xml"
+  },
+  {
+   "n": 57,
+   "title": "13F-HR information table filed 2026-05-15 by COATUE MANAGEMENT LLC (period 2025-12-31) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1135730/000091957426003414/infotable.xml"
+  },
+  {
+   "n": 58,
+   "title": "13F-HR information table filed 2026-08-05 by DDD Partners, LLC (period 2026-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1729673/000172967326000006/TG13F06302026.xml"
+  },
+  {
+   "n": 59,
+   "title": "13F-HR information table filed 2026-08-14 by ALKEON CAPITAL MANAGEMENT LLC (period 2026-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1230239/000091957426005175/infotable.xml"
+  },
+  {
+   "n": 60,
+   "title": "13F-HR information table filed 2026-08-14 by Rokos Capital Management LLP (period 2026-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1666335/000166633526000007/13f_submission_202606.xml"
+  },
+  {
+   "n": 61,
+   "title": "13F-HR information table filed 2026-07-31 by Soltis Investment Advisors LLC (period 2026-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1802530/000180253026000004/2qtr.xml"
+  },
+  {
+   "n": 62,
+   "title": "13F-HR information table filed 2026-08-13 by MAPLELANE CAPITAL, LLC (period 2026-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1512173/000091957426005126/infotable.xml"
+  },
+  {
+   "n": 63,
+   "title": "13F-HR information table filed 2026-07-31 by ZEGA Investments, LLC (period 2026-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/2045703/000204570326000001/informationtable06302026.xml"
+  },
+  {
+   "n": 64,
+   "title": "13F-HR information table filed 2026-07-30 by HAZLETT, BURT & WATSON, INC. (period 2026-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/46392/000004639226000004/13f_2q2026.xml"
+  },
+  {
+   "n": 65,
+   "title": "13F-HR information table filed 2026-07-31 by Axiom Investment Management LLC (period 2026-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1513703/000139834426013168/fp0099957-1_13fhr-table.xml"
+  },
+  {
+   "n": 66,
+   "title": "13F-HR information table filed 2026-08-13 by Aberdeen Wealth Management LLC (period 2026-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1802654/000139834426014393/fp0100343-1_13fhr-table.xml"
+  },
+  {
+   "n": 67,
+   "title": "13F-HR information table filed 2026-08-07 by Royal Palms Capital LLC (period 2026-06-30) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/2107886/000210788626000003/rpcq2202613f.xml"
+  },
+  {
+   "n": 68,
+   "title": "SEC EDGAR full-text search: 13F-HR information tables naming MICROSOFT CORP, 2026-03-31 to 2026-08-28",
+   "url": "https://efts.sec.gov/LATEST/search-index?q=%22MICROSOFT%20CORP%22&forms=13F-HR&dateRange=custom&startdt=2026-03-31&enddt=2026-08-28"
+  },
+  {
+   "n": 69,
+   "title": "SEC EDGAR filing history for MICROSOFT CORP (CIK 0000789019)",
+   "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000789019&type=&dateb=&owner=include&count=40"
+  },
+  {
+   "n": 70,
+   "title": "SCHEDULE 13G/A filed 2026-03-27 by The Vanguard Group - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/102909/000010290926001884/primary_doc.xml"
+  }
+ ],
+ "tables": [
+  {
+   "name": "filings",
+   "label": "Recent SEC filings",
+   "columns": [
+    "Form",
+    "Filed",
+    "Period",
+    "Description",
+    "Document"
+   ],
+   "rows": [
+    [
+     "4",
+     "2026-08-17",
+     "2026-08-17",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000145/xslF345X06/form4.xml"
+    ],
+    [
+     "4",
+     "2026-08-06",
+     "2026-08-05",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000143/xslF345X06/form4.xml"
+    ],
+    [
+     "4",
+     "2026-08-05",
+     "2026-08-04",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000141/xslF345X06/form4.xml"
+    ],
+    [
+     "144",
+     "2026-08-05",
+     "",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/789019/000195917326005674/xsl144X01/primary_doc.xml"
+    ],
+    [
+     "144",
+     "2026-08-04",
+     "",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/789019/000195917326005608/xsl144X01/primary_doc.xml"
+    ],
+    [
+     "10-K",
+     "2026-07-29",
+     "2026-06-30",
+     "10-K",
+     "https://www.sec.gov/Archives/edgar/data/789019/000119312526323660/msft-20260630.htm"
+    ],
+    [
+     "8-K",
+     "2026-07-29",
+     "2026-07-29",
+     "8-K",
+     "https://www.sec.gov/Archives/edgar/data/789019/000119312526323632/msft-20260729.htm"
+    ],
+    [
+     "PX14A6G",
+     "2026-07-22",
+     "",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/789019/000121465926008806/w721267px14a6g.htm"
+    ],
+    [
+     "4",
+     "2026-07-15",
+     "2026-07-15",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000139/xslF345X06/form4.xml"
+    ],
+    [
+     "PX14A6G",
+     "2026-07-02",
+     "",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/789019/000121465926008121/j72261px14a6g.htm"
+    ],
+    [
+     "4",
+     "2026-07-01",
+     "2026-07-01",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000137/xslF345X06/form4.xml"
+    ],
+    [
+     "11-K",
+     "2026-06-25",
+     "2025-12-31",
+     "11-K",
+     "https://www.sec.gov/Archives/edgar/data/789019/000119312526282817/msft-20251231.htm"
+    ],
+    [
+     "11-K",
+     "2026-06-25",
+     "2025-12-31",
+     "11-K",
+     "https://www.sec.gov/Archives/edgar/data/789019/000119312526282773/d839790d11k.htm"
+    ],
+    [
+     "4",
+     "2026-06-16",
+     "2026-06-15",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000135/xslF345X06/form4.xml"
+    ],
+    [
+     "4",
+     "2026-06-15",
+     "2026-06-15",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000133/xslF345X06/form4.xml"
+    ],
+    [
+     "4",
+     "2026-06-12",
+     "2026-06-11",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000131/xslF345X06/form4.xml"
+    ],
+    [
+     "4",
+     "2026-06-12",
+     "2026-06-11",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000130/xslF345X06/form4.xml"
+    ],
+    [
+     "4",
+     "2026-06-12",
+     "2026-06-11",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000129/xslF345X06/form4.xml"
+    ],
+    [
+     "4",
+     "2026-06-12",
+     "2026-06-11",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000128/xslF345X06/form4.xml"
+    ],
+    [
+     "4",
+     "2026-06-12",
+     "2026-06-11",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000127/xslF345X06/form4.xml"
+    ],
+    [
+     "4",
+     "2026-06-12",
+     "2026-06-11",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000126/xslF345X06/form4.xml"
+    ],
+    [
+     "4",
+     "2026-06-12",
+     "2026-06-11",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000125/xslF345X06/form4.xml"
+    ],
+    [
+     "4",
+     "2026-06-12",
+     "2026-06-11",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000124/xslF345X06/form4.xml"
+    ],
+    [
+     "4",
+     "2026-06-12",
+     "2026-06-11",
+     "STATEMENT OF CHANGES IN BENEFICIAL OWNERSHIP OF SECURITIES",
+     "https://www.sec.gov/Archives/edgar/data/789019/000078901926000123/xslF345X06/form4.xml"
+    ]
+   ]
+  },
+  {
+   "name": "dossier-insider-filings",
+   "label": "Dossier: Form 4 insider filings",
+   "columns": [
+    "Insider",
+    "Form",
+    "Filed",
+    "Filing URL"
+   ],
+   "rows": [
+    [
+     "Coleman Amy; MICROSOFT CORP",
+     "4",
+     "2026-08-17",
+     "https://www.sec.gov/Archives/edgar/data/2062356/000078901926000145/form4.xml"
+    ],
+    [
+     "Althoff Judson; MICROSOFT CORP",
+     "4",
+     "2026-08-06",
+     "https://www.sec.gov/Archives/edgar/data/1868758/000078901926000143/form4.xml"
+    ],
+    [
+     "Numoto Takeshi; MICROSOFT CORP",
+     "4",
+     "2026-08-05",
+     "https://www.sec.gov/Archives/edgar/data/1899931/000078901926000141/form4.xml"
+    ],
+    [
+     "Coleman Amy; MICROSOFT CORP",
+     "4",
+     "2026-07-15",
+     "https://www.sec.gov/Archives/edgar/data/2062356/000078901926000139/form4.xml"
+    ],
+    [
+     "Hogan Kathleen T; MICROSOFT CORP",
+     "4",
+     "2026-07-01",
+     "https://www.sec.gov/Archives/edgar/data/1626431/000078901926000137/form4.xml"
+    ],
+    [
+     "Jolla Alice L.; MICROSOFT CORP",
+     "4",
+     "2026-06-16",
+     "https://www.sec.gov/Archives/edgar/data/1819285/000078901926000135/form4.xml"
+    ],
+    [
+     "Coleman Amy; MICROSOFT CORP",
+     "4",
+     "2026-06-15",
+     "https://www.sec.gov/Archives/edgar/data/2062356/000078901926000133/form4.xml"
+    ],
+    [
+     "Walmsley Emma N; MICROSOFT CORP",
+     "4",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1795429/000078901926000131/form4.xml"
+    ],
+    [
+     "Rainey John D; MICROSOFT CORP",
+     "4",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1547433/000078901926000130/form4.xml"
+    ],
+    [
+     "PRITZKER PENNY S; MICROSOFT CORP",
+     "4",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1087398/000078901926000129/form4.xml"
+    ],
+    [
+     "Mason Mark; MICROSOFT CORP",
+     "4",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1487290/000078901926000128/form4.xml"
+    ],
+    [
+     "PETERSON SANDRA E; MICROSOFT CORP",
+     "4",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1192752/000078901926000127/form4.xml"
+    ],
+    [
+     "MacGregor Catherine; MICROSOFT CORP",
+     "4",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1415757/000078901926000126/form4.xml"
+    ],
+    [
+     "List Teri; MICROSOFT CORP",
+     "4",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1529370/000078901926000125/form4.xml"
+    ],
+    [
+     "Johnston Hugh F; MICROSOFT CORP",
+     "4",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1377489/000078901926000124/form4.xml"
+    ],
+    [
+     "Di Sibio Carmine; MICROSOFT CORP",
+     "4",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/2028185/000078901926000123/form4.xml"
+    ],
+    [
+     "Hoffman Reid; MICROSOFT CORP",
+     "4",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1519339/000078901926000122/form4.xml"
+    ],
+    [
+     "Numoto Takeshi; MICROSOFT CORP",
+     "4",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1899931/000078901926000121/form4.xml"
+    ]
+   ]
+  },
+  {
+   "name": "dossier-financials",
+   "label": "Dossier: SEC XBRL financials",
+   "columns": [
+    "Metric",
+    "Latest annual",
+    "Annual period",
+    "Most recent",
+    "Recent period"
+   ],
+   "rows": [
+    [
+     "Total revenue",
+     "$16.04B",
+     "FY 2010 10-K filed 2010-07-30",
+     "$19.95B",
+     "2010-12-31 (10-Q)"
+    ],
+    [
+     "Net income",
+     "$133.75B",
+     "FY 2026 10-K filed 2026-07-29",
+     "",
+     ""
+    ],
+    [
+     "Operating income",
+     "$155.24B",
+     "FY 2026 10-K filed 2026-07-29",
+     "",
+     ""
+    ],
+    [
+     "Non-operating income (expense)",
+     "$10.70B",
+     "FY 2026 10-K filed 2026-07-29",
+     "",
+     ""
+    ],
+    [
+     "Pre-tax income",
+     "$165.93B",
+     "FY 2026 10-K filed 2026-07-29",
+     "",
+     ""
+    ],
+    [
+     "Income tax expense (benefit)",
+     "$32.19B",
+     "FY 2026 10-K filed 2026-07-29",
+     "",
+     ""
+    ],
+    [
+     "Total assets",
+     "$758.38B",
+     "FY 2026 10-K filed 2026-07-29",
+     "",
+     ""
+    ],
+    [
+     "Total liabilities",
+     "$315.99B",
+     "FY 2026 10-K filed 2026-07-29",
+     "",
+     ""
+    ],
+    [
+     "Stockholders' equity",
+     "$442.39B",
+     "FY 2026 10-K filed 2026-07-29",
+     "",
+     ""
+    ],
+    [
+     "Cash & equivalents",
+     "$20.93B",
+     "FY 2026 10-K filed 2026-07-29",
+     "",
+     ""
+    ],
+    [
+     "EPS (basic)",
+     "18",
+     "FY 2026 10-K filed 2026-07-29",
+     "",
+     ""
+    ]
+   ]
+  },
+  {
+   "name": "insider-transactions",
+   "label": "Insider flow: Form 4 transactions",
+   "columns": [
+    "Date",
+    "Filed",
+    "Insider",
+    "Role",
+    "Security",
+    "Code",
+    "Kind",
+    "Shares",
+    "Price",
+    "Value (USD)",
+    "Owned after",
+    "10b5-1",
+    "Filing"
+   ],
+   "rows": [
+    [
+     "2026-08-17",
+     "2026-08-17",
+     "Coleman Amy",
+     "EVP, Chief Human Resources Off",
+     "Common Stock",
+     "F",
+     "tax withholding (shares surrendered)",
+     "89.044",
+     "495.4",
+     "44112",
+     "45323.5761",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/2062356/000078901926000145/form4.xml"
+    ],
+    [
+     "2026-08-05",
+     "2026-08-06",
+     "Althoff Judson",
+     "CEO Microsoft Commercial",
+     "Common Stock",
+     "S",
+     "open-market sale",
+     "10000",
+     "487.893",
+     "4878930",
+     "100447.434",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/1868758/000078901926000143/form4.xml"
+    ],
+    [
+     "2026-08-04",
+     "2026-08-05",
+     "Numoto Takeshi",
+     "EVP, Chief Marketing Officer",
+     "Common Stock",
+     "S",
+     "open-market sale",
+     "4810.353",
+     "496.48",
+     "2388244",
+     "42677.4483",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/1899931/000078901926000141/form4.xml"
+    ],
+    [
+     "2026-07-15",
+     "2026-07-15",
+     "Coleman Amy",
+     "EVP, Chief Human Resources Off",
+     "Common Stock",
+     "F",
+     "tax withholding (shares surrendered)",
+     "32.344",
+     "384.93",
+     "12450",
+     "45412.6201",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/2062356/000078901926000139/form4.xml"
+    ],
+    [
+     "2026-06-15",
+     "2026-06-16",
+     "Jolla Alice L.",
+     "Chief Accounting Officer",
+     "Common Stock",
+     "A",
+     "grant/award",
+     "5004",
+     "0",
+     "0",
+     "76152.6646",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/1819285/000078901926000135/form4.xml"
+    ],
+    [
+     "2026-06-15",
+     "2026-06-15",
+     "Coleman Amy",
+     "EVP, Chief Human Resources Off",
+     "Common Stock",
+     "F",
+     "tax withholding (shares surrendered)",
+     "35.944",
+     "390.74",
+     "14045",
+     "45444.9641",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/2062356/000078901926000133/form4.xml"
+    ],
+    [
+     "2026-06-10",
+     "2026-06-12",
+     "Numoto Takeshi",
+     "EVP, Chief Marketing Officer",
+     "Common Stock",
+     "S",
+     "open-market sale",
+     "4500",
+     "402.84",
+     "1812780",
+     "47467.7595",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/1899931/000078901926000121/form4.xml"
+    ],
+    [
+     "2026-06-08",
+     "2026-06-10",
+     "Numoto Takeshi",
+     "EVP, Chief Marketing Officer",
+     "Common Stock",
+     "S",
+     "open-market sale",
+     "2500",
+     "412.45",
+     "1031125",
+     "51967.7595",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/1899931/000078901926000109/form4.xml"
+    ],
+    [
+     "2026-06-05",
+     "2026-06-09",
+     "SCHARF CHARLES W",
+     "director",
+     "Common Stock",
+     "A",
+     "grant/award",
+     "149",
+     "0",
+     "0",
+     "45041",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/1195358/000078901926000104/form4.xml"
+    ],
+    [
+     "2026-06-05",
+     "2026-06-09",
+     "List Teri",
+     "director",
+     "Common Stock",
+     "A",
+     "grant/award",
+     "149",
+     "0",
+     "0",
+     "149",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/1529370/000078901926000102/form4.xml"
+    ],
+    [
+     "2026-06-05",
+     "2026-06-09",
+     "STANTON JOHN W",
+     "director",
+     "Common Stock",
+     "A",
+     "grant/award",
+     "149",
+     "0",
+     "0",
+     "84054",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/904858/000078901926000100/form4.xml"
+    ],
+    [
+     "2026-06-05",
+     "2026-06-09",
+     "Di Sibio Carmine",
+     "director",
+     "Common Stock",
+     "A",
+     "grant/award",
+     "15",
+     "0",
+     "0",
+     "360",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/2028185/000078901926000096/form4.xml"
+    ],
+    [
+     "2026-06-01",
+     "2026-06-02",
+     "Althoff Judson",
+     "CEO Microsoft Commercial",
+     "Common Stock",
+     "S",
+     "open-market sale",
+     "15500",
+     "460.988",
+     "7145314",
+     "110477.434",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/1868758/000078901926000083/form4.xml"
+    ],
+    [
+     "2026-06-01",
+     "2026-06-01",
+     "Jolla Alice L.",
+     "Chief Accounting Officer",
+     "Common Stock",
+     "F",
+     "tax withholding (shares surrendered)",
+     "412.578",
+     "450.24",
+     "185759",
+     "71148.6646",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/1819285/000078901926000081/form4.xml"
+    ],
+    [
+     "2026-06-01",
+     "2026-06-01",
+     "Coleman Amy",
+     "EVP, Chief Human Resources Off",
+     "Common Stock",
+     "F",
+     "tax withholding (shares surrendered)",
+     "433.827",
+     "450.24",
+     "195326",
+     "45480.9081",
+     "",
+     "https://www.sec.gov/Archives/edgar/data/2062356/000078901926000080/form4.xml"
+    ]
+   ]
+  },
+  {
+   "name": "insider-insiders",
+   "label": "Insider flow: Per-insider totals",
+   "columns": [
+    "Insider",
+    "Role",
+    "Bought (sh)",
+    "Bought (USD)",
+    "Sold (sh)",
+    "Sold (USD)",
+    "Other events",
+    "Derivative events",
+    "Net (USD)",
+    "Filings",
+    "Direct holding after latest tx"
+   ],
+   "rows": [
+    [
+     "Althoff Judson",
+     "CEO Microsoft Commercial",
+     "0",
+     "0",
+     "25500",
+     "12024244",
+     "0",
+     "0",
+     "-12024244",
+     "2",
+     "100447.434"
+    ],
+    [
+     "Numoto Takeshi",
+     "EVP, Chief Marketing Officer",
+     "0",
+     "0",
+     "11810.353",
+     "5232149",
+     "0",
+     "0",
+     "-5232149",
+     "3",
+     "42677.4483"
+    ],
+    [
+     "Walmsley Emma N",
+     "director",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "2",
+     "0",
+     "2",
+     ""
+    ],
+    [
+     "Rainey John D",
+     "director",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "2",
+     "0",
+     "2",
+     ""
+    ],
+    [
+     "PRITZKER PENNY S",
+     "director",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "2",
+     "0",
+     "2",
+     ""
+    ],
+    [
+     "Mason Mark",
+     "director",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "2",
+     "0",
+     "2",
+     ""
+    ],
+    [
+     "PETERSON SANDRA E",
+     "director",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "2",
+     "0",
+     "2",
+     ""
+    ],
+    [
+     "MacGregor Catherine",
+     "director",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "2",
+     "0",
+     "2",
+     ""
+    ],
+    [
+     "List Teri",
+     "director",
+     "0",
+     "0",
+     "0",
+     "0",
+     "1",
+     "1",
+     "0",
+     "2",
+     "149"
+    ],
+    [
+     "Johnston Hugh F",
+     "director",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "2",
+     "0",
+     "2",
+     ""
+    ],
+    [
+     "Di Sibio Carmine",
+     "director",
+     "0",
+     "0",
+     "0",
+     "0",
+     "1",
+     "2",
+     "0",
+     "2",
+     "360"
+    ],
+    [
+     "Hoffman Reid",
+     "director",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "2",
+     "0",
+     "2",
+     ""
+    ],
+    [
+     "Coleman Amy",
+     "EVP, Chief Human Resources Off",
+     "0",
+     "0",
+     "0",
+     "0",
+     "4",
+     "0",
+     "0",
+     "4",
+     "45323.5761"
+    ],
+    [
+     "Jolla Alice L.",
+     "Chief Accounting Officer",
+     "0",
+     "0",
+     "0",
+     "0",
+     "2",
+     "0",
+     "0",
+     "2",
+     "76152.6646"
+    ],
+    [
+     "SCHARF CHARLES W",
+     "director",
+     "0",
+     "0",
+     "0",
+     "0",
+     "1",
+     "0",
+     "0",
+     "1",
+     "45041"
+    ],
+    [
+     "STANTON JOHN W",
+     "director",
+     "0",
+     "0",
+     "0",
+     "0",
+     "1",
+     "0",
+     "0",
+     "1",
+     "84054"
+    ]
+   ]
+  },
+  {
+   "name": "insider-derivatives",
+   "label": "Insider flow: Derivative transactions",
+   "columns": [
+    "Date",
+    "Filed",
+    "Insider",
+    "Role",
+    "Security",
+    "Underlying",
+    "Underlying shares",
+    "Code",
+    "Kind",
+    "Units",
+    "Exercise price",
+    "Expires",
+    "Owned after",
+    "Filing"
+   ],
+   "rows": [
+    [
+     "2026-06-11",
+     "2026-06-12",
+     "Walmsley Emma N",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "2.935",
+     "A",
+     "grant/award",
+     "2.935",
+     "0",
+     "",
+     "1262.609",
+     "https://www.sec.gov/Archives/edgar/data/1795429/000078901926000131/form4.xml"
+    ],
+    [
+     "2026-06-11",
+     "2026-06-12",
+     "Rainey John D",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "0.688",
+     "A",
+     "grant/award",
+     "0.688",
+     "0",
+     "",
+     "296.266",
+     "https://www.sec.gov/Archives/edgar/data/1547433/000078901926000130/form4.xml"
+    ],
+    [
+     "2026-06-11",
+     "2026-06-12",
+     "PRITZKER PENNY S",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "33.314",
+     "A",
+     "grant/award",
+     "33.314",
+     "0",
+     "",
+     "14323.467",
+     "https://www.sec.gov/Archives/edgar/data/1087398/000078901926000129/form4.xml"
+    ],
+    [
+     "2026-06-11",
+     "2026-06-12",
+     "Mason Mark",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "0.539",
+     "A",
+     "grant/award",
+     "0.539",
+     "0",
+     "",
+     "231.801",
+     "https://www.sec.gov/Archives/edgar/data/1487290/000078901926000128/form4.xml"
+    ],
+    [
+     "2026-06-11",
+     "2026-06-12",
+     "PETERSON SANDRA E",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "61.012",
+     "A",
+     "grant/award",
+     "61.012",
+     "0",
+     "",
+     "26232.907",
+     "https://www.sec.gov/Archives/edgar/data/1192752/000078901926000127/form4.xml"
+    ],
+    [
+     "2026-06-11",
+     "2026-06-12",
+     "MacGregor Catherine",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "5.068",
+     "A",
+     "grant/award",
+     "5.068",
+     "0",
+     "",
+     "2179.633",
+     "https://www.sec.gov/Archives/edgar/data/1415757/000078901926000126/form4.xml"
+    ],
+    [
+     "2026-06-11",
+     "2026-06-12",
+     "List Teri",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "53.667",
+     "A",
+     "grant/award",
+     "53.667",
+     "0",
+     "",
+     "23074.515",
+     "https://www.sec.gov/Archives/edgar/data/1529370/000078901926000125/form4.xml"
+    ],
+    [
+     "2026-06-11",
+     "2026-06-12",
+     "Johnston Hugh F",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "4.975",
+     "A",
+     "grant/award",
+     "4.975",
+     "0",
+     "",
+     "2139.555",
+     "https://www.sec.gov/Archives/edgar/data/1377489/000078901926000124/form4.xml"
+    ],
+    [
+     "2026-06-11",
+     "2026-06-12",
+     "Di Sibio Carmine",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "0.03",
+     "A",
+     "grant/award",
+     "0.03",
+     "0",
+     "",
+     "13.23",
+     "https://www.sec.gov/Archives/edgar/data/2028185/000078901926000123/form4.xml"
+    ],
+    [
+     "2026-06-11",
+     "2026-06-12",
+     "Hoffman Reid",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "39.453",
+     "A",
+     "grant/award",
+     "39.453",
+     "0",
+     "",
+     "16963.167",
+     "https://www.sec.gov/Archives/edgar/data/1519339/000078901926000122/form4.xml"
+    ],
+    [
+     "2026-06-05",
+     "2026-06-09",
+     "Rainey John D",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "149.999",
+     "A",
+     "grant/award",
+     "149.999",
+     "0",
+     "",
+     "295.578",
+     "https://www.sec.gov/Archives/edgar/data/1547433/000078901926000107/form4.xml"
+    ],
+    [
+     "2026-06-05",
+     "2026-06-09",
+     "Johnston Hugh F",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "251.998",
+     "A",
+     "grant/award",
+     "251.998",
+     "0",
+     "",
+     "2134.58",
+     "https://www.sec.gov/Archives/edgar/data/1377489/000078901926000106/form4.xml"
+    ],
+    [
+     "2026-06-05",
+     "2026-06-09",
+     "PRITZKER PENNY S",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "239.998",
+     "A",
+     "grant/award",
+     "239.998",
+     "0",
+     "",
+     "14290.152",
+     "https://www.sec.gov/Archives/edgar/data/1087398/000078901926000105/form4.xml"
+    ],
+    [
+     "2026-06-05",
+     "2026-06-09",
+     "Mason Mark",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "231.262",
+     "A",
+     "grant/award",
+     "231.262",
+     "0",
+     "",
+     "231.262",
+     "https://www.sec.gov/Archives/edgar/data/1487290/000078901926000103/form4.xml"
+    ],
+    [
+     "2026-06-05",
+     "2026-06-09",
+     "MacGregor Catherine",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "245.998",
+     "A",
+     "grant/award",
+     "245.998",
+     "0",
+     "",
+     "2174.565",
+     "https://www.sec.gov/Archives/edgar/data/1415757/000078901926000101/form4.xml"
+    ],
+    [
+     "2026-06-05",
+     "2026-06-09",
+     "PETERSON SANDRA E",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "275.998",
+     "A",
+     "grant/award",
+     "275.998",
+     "0",
+     "",
+     "26171.895",
+     "https://www.sec.gov/Archives/edgar/data/1192752/000078901926000099/form4.xml"
+    ],
+    [
+     "2026-06-05",
+     "2026-06-09",
+     "Hoffman Reid",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "224.998",
+     "A",
+     "grant/award",
+     "224.998",
+     "0",
+     "",
+     "16923.714",
+     "https://www.sec.gov/Archives/edgar/data/1519339/000078901926000098/form4.xml"
+    ],
+    [
+     "2026-06-05",
+     "2026-06-09",
+     "Walmsley Emma N",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "149.999",
+     "A",
+     "grant/award",
+     "149.999",
+     "0",
+     "",
+     "1259.674",
+     "https://www.sec.gov/Archives/edgar/data/1795429/000078901926000097/form4.xml"
+    ],
+    [
+     "2026-06-05",
+     "2026-06-09",
+     "Di Sibio Carmine",
+     "director",
+     "Restricted Stock Units",
+     "Common Stock",
+     "13.2",
+     "A",
+     "grant/award",
+     "13.2",
+     "0",
+     "",
+     "13.2",
+     "https://www.sec.gov/Archives/edgar/data/2028185/000078901926000096/form4.xml"
+    ]
+   ]
+  },
+  {
+   "name": "insider-holdings",
+   "label": "Insider flow: Reported holdings (no transaction)",
+   "columns": [
+    "Insider",
+    "Role",
+    "Security",
+    "Shares",
+    "Ownership",
+    "Nature",
+    "Reported",
+    "Filing"
+   ],
+   "rows": [
+    [
+     "Hogan Kathleen T",
+     "EVP, Strategy",
+     "Common Stock",
+     "137985.9576",
+     "D",
+     "",
+     "2026-07-01",
+     "https://www.sec.gov/Archives/edgar/data/1626431/000078901926000137/form4.xml"
+    ],
+    [
+     "Walmsley Emma N",
+     "director",
+     "Common Stock",
+     "9913.797",
+     "D",
+     "",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1795429/000078901926000131/form4.xml"
+    ],
+    [
+     "Rainey John D",
+     "director",
+     "Common Stock",
+     "5464",
+     "D",
+     "",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1547433/000078901926000130/form4.xml"
+    ],
+    [
+     "PRITZKER PENNY S",
+     "director",
+     "Common Stock",
+     "12000",
+     "I",
+     "By Trust",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1087398/000078901926000129/form4.xml"
+    ],
+    [
+     "Mason Mark",
+     "director",
+     "Common Stock",
+     "1675",
+     "D",
+     "",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1487290/000078901926000128/form4.xml"
+    ],
+    [
+     "PETERSON SANDRA E",
+     "director",
+     "Common Stock",
+     "5400",
+     "D",
+     "",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1192752/000078901926000127/form4.xml"
+    ],
+    [
+     "MacGregor Catherine",
+     "director",
+     "Common Stock",
+     "0",
+     "D",
+     "",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1415757/000078901926000126/form4.xml"
+    ],
+    [
+     "List Teri",
+     "director",
+     "Common Stock",
+     "149",
+     "D",
+     "",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1529370/000078901926000125/form4.xml"
+    ],
+    [
+     "List Teri",
+     "director",
+     "Common Stock",
+     "2947",
+     "I",
+     "By Trust",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1529370/000078901926000125/form4.xml"
+    ],
+    [
+     "Johnston Hugh F",
+     "director",
+     "Common Stock",
+     "7750",
+     "D",
+     "",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1377489/000078901926000124/form4.xml"
+    ],
+    [
+     "Johnston Hugh F",
+     "director",
+     "Common Stock",
+     "68",
+     "I",
+     "By trust",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1377489/000078901926000124/form4.xml"
+    ],
+    [
+     "Di Sibio Carmine",
+     "director",
+     "Common Stock",
+     "360",
+     "D",
+     "",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/2028185/000078901926000123/form4.xml"
+    ],
+    [
+     "Hoffman Reid",
+     "director",
+     "Common Stock",
+     "15905",
+     "I",
+     "By Living Trust",
+     "2026-06-12",
+     "https://www.sec.gov/Archives/edgar/data/1519339/000078901926000122/form4.xml"
+    ],
+    [
+     "Rainey John D",
+     "director",
+     "Common Stock",
+     "5464",
+     "D",
+     "",
+     "2026-06-09",
+     "https://www.sec.gov/Archives/edgar/data/1547433/000078901926000107/form4.xml"
+    ],
+    [
+     "Johnston Hugh F",
+     "director",
+     "Common Stock",
+     "7750",
+     "D",
+     "",
+     "2026-06-09",
+     "https://www.sec.gov/Archives/edgar/data/1377489/000078901926000106/form4.xml"
+    ],
+    [
+     "Johnston Hugh F",
+     "director",
+     "Common Stock",
+     "68",
+     "I",
+     "By trust",
+     "2026-06-09",
+     "https://www.sec.gov/Archives/edgar/data/1377489/000078901926000106/form4.xml"
+    ],
+    [
+     "PRITZKER PENNY S",
+     "director",
+     "Common Stock",
+     "12000",
+     "I",
+     "By Trust",
+     "2026-06-09",
+     "https://www.sec.gov/Archives/edgar/data/1087398/000078901926000105/form4.xml"
+    ],
+    [
+     "SCHARF CHARLES W",
+     "director",
+     "Common Stock",
+     "525",
+     "I",
+     "By Trust",
+     "2026-06-09",
+     "https://www.sec.gov/Archives/edgar/data/1195358/000078901926000104/form4.xml"
+    ],
+    [
+     "Mason Mark",
+     "director",
+     "Common Stock",
+     "1675",
+     "D",
+     "",
+     "2026-06-09",
+     "https://www.sec.gov/Archives/edgar/data/1487290/000078901926000103/form4.xml"
+    ],
+    [
+     "List Teri",
+     "director",
+     "Common Stock",
+     "2947",
+     "I",
+     "By Trust",
+     "2026-06-09",
+     "https://www.sec.gov/Archives/edgar/data/1529370/000078901926000102/form4.xml"
+    ],
+    [
+     "MacGregor Catherine",
+     "director",
+     "Common Stock",
+     "0",
+     "D",
+     "",
+     "2026-06-09",
+     "https://www.sec.gov/Archives/edgar/data/1415757/000078901926000101/form4.xml"
+    ],
+    [
+     "STANTON JOHN W",
+     "director",
+     "Common Stock",
+     "3622",
+     "I",
+     "By Family Trust",
+     "2026-06-09",
+     "https://www.sec.gov/Archives/edgar/data/904858/000078901926000100/form4.xml"
+    ],
+    [
+     "PETERSON SANDRA E",
+     "director",
+     "Common Stock",
+     "5400",
+     "D",
+     "",
+     "2026-06-09",
+     "https://www.sec.gov/Archives/edgar/data/1192752/000078901926000099/form4.xml"
+    ],
+    [
+     "Hoffman Reid",
+     "director",
+     "Common Stock",
+     "15905",
+     "I",
+     "By Living Trust",
+     "2026-06-09",
+     "https://www.sec.gov/Archives/edgar/data/1519339/000078901926000098/form4.xml"
+    ],
+    [
+     "Walmsley Emma N",
+     "director",
+     "Common Stock",
+     "9913.797",
+     "D",
+     "",
+     "2026-06-09",
+     "https://www.sec.gov/Archives/edgar/data/1795429/000078901926000097/form4.xml"
+    ]
+   ]
+  },
+  {
+   "name": "holders",
+   "label": "Institutional holders (13F sample)",
+   "columns": [
+    "Manager",
+    "CIK",
+    "Period",
+    "Filed",
+    "Shares reported",
+    "Value reported (as filed)",
+    "Implied USD/share",
+    "Option rows",
+    "Option shares",
+    "Principal rows",
+    "Partial read",
+    "Share classes",
+    "Information table"
+   ],
+   "rows": [
+    [
+     "BNP PARIBAS FINANCIAL MARKETS",
+     "0001166588",
+     "2026-06-30",
+     "2026-08-13",
+     "7319367",
+     "2730270278",
+     "373.0200",
+     "267",
+     "47229",
+     "0",
+     "",
+     "Equity / Option",
+     "https://www.sec.gov/Archives/edgar/data/1166588/000116658826000008/PBI13F06302026.xml"
+    ],
+    [
+     "COATUE MANAGEMENT LLC",
+     "0001135730",
+     "2025-12-31",
+     "2026-05-15",
+     "5171976",
+     "2501271034",
+     "483.6200",
+     "0",
+     "0",
+     "0",
+     "",
+     "COM",
+     "https://www.sec.gov/Archives/edgar/data/1135730/000091957426003414/infotable.xml"
+    ],
+    [
+     "DDD Partners, LLC",
+     "0001729673",
+     "2026-06-30",
+     "2026-08-05",
+     "1136862",
+     "424072079",
+     "373.0198",
+     "2",
+     "11800",
+     "0",
+     "",
+     "COM",
+     "https://www.sec.gov/Archives/edgar/data/1729673/000172967326000006/TG13F06302026.xml"
+    ],
+    [
+     "ALKEON CAPITAL MANAGEMENT LLC",
+     "0001230239",
+     "2026-06-30",
+     "2026-08-14",
+     "851176",
+     "317505682",
+     "373.0200",
+     "4",
+     "2800000",
+     "0",
+     "",
+     "COM",
+     "https://www.sec.gov/Archives/edgar/data/1230239/000091957426005175/infotable.xml"
+    ],
+    [
+     "Rokos Capital Management LLP",
+     "0001666335",
+     "2026-06-30",
+     "2026-08-14",
+     "279213",
+     "104129696",
+     "372.9400",
+     "6",
+     "43600",
+     "0",
+     "",
+     "COM",
+     "https://www.sec.gov/Archives/edgar/data/1666335/000166633526000007/13f_submission_202606.xml"
+    ],
+    [
+     "Soltis Investment Advisors LLC",
+     "0001802530",
+     "2026-06-30",
+     "2026-07-31",
+     "226152",
+     "84359119",
+     "373.0196",
+     "12",
+     "75100",
+     "0",
+     "",
+     "COM",
+     "https://www.sec.gov/Archives/edgar/data/1802530/000180253026000004/2qtr.xml"
+    ],
+    [
+     "MAPLELANE CAPITAL, LLC",
+     "0001512173",
+     "2026-06-30",
+     "2026-08-13",
+     "157900",
+     "58899858",
+     "373.0200",
+     "4",
+     "600000",
+     "0",
+     "",
+     "COM",
+     "https://www.sec.gov/Archives/edgar/data/1512173/000091957426005126/infotable.xml"
+    ],
+    [
+     "ZEGA Investments, LLC",
+     "0002045703",
+     "2026-06-30",
+     "2026-07-31",
+     "38149",
+     "14230298",
+     "373.0189",
+     "15",
+     "17900",
+     "0",
+     "",
+     "COM",
+     "https://www.sec.gov/Archives/edgar/data/2045703/000204570326000001/informationtable06302026.xml"
+    ],
+    [
+     "HAZLETT, BURT & WATSON, INC.",
+     "0000046392",
+     "2026-06-30",
+     "2026-07-30",
+     "21618",
+     "8068",
+     "0.3732",
+     "0",
+     "0",
+     "0",
+     "",
+     "COM",
+     "https://www.sec.gov/Archives/edgar/data/46392/000004639226000004/13f_2q2026.xml"
+    ],
+    [
+     "Axiom Investment Management LLC",
+     "0001513703",
+     "2026-06-30",
+     "2026-07-31",
+     "8406",
+     "3135262",
+     "372.9791",
+     "0",
+     "0",
+     "0",
+     "",
+     "COM",
+     "https://www.sec.gov/Archives/edgar/data/1513703/000139834426013168/fp0099957-1_13fhr-table.xml"
+    ],
+    [
+     "Aberdeen Wealth Management LLC",
+     "0001802654",
+     "2026-06-30",
+     "2026-08-13",
+     "5983",
+     "2231921",
+     "373.0438",
+     "0",
+     "0",
+     "0",
+     "",
+     "COM",
+     "https://www.sec.gov/Archives/edgar/data/1802654/000139834426014393/fp0100343-1_13fhr-table.xml"
+    ],
+    [
+     "Royal Palms Capital LLC",
+     "0002107886",
+     "2026-06-30",
+     "2026-08-07",
+     "1732",
+     "646071",
+     "373.0202",
+     "0",
+     "0",
+     "0",
+     "",
+     "COM",
+     "https://www.sec.gov/Archives/edgar/data/2107886/000210788626000003/rpcq2202613f.xml"
+    ]
+   ]
+  }
+ ],
+ "meta": {
+  "tier": "ticker-pack",
+  "company": "MICROSOFT CORP",
+  "ticker": "MSFT",
+  "cik": "0000789019",
+  "generated": "2026-08-28",
+  "elapsed_ms": 104321,
+  "legs_produced": 3,
+  "legs": {
+   "dossier": true,
+   "insider": true,
+   "holders": true
+  },
+  "insider_window_days": 90,
+  "holder_sample_managers": 12,
+  "holder_sample_complete": false,
+  "sources_cited": 70,
+  "synthesis_model": "anthropic/claude-opus-5",
+  "disclaimer": "SEC EDGAR data as filed, plus cited web research. This is information, not investment advice, and not a recommendation to buy or sell any security."
+ },
+ "at": "2026-08-28T16:54:13.149Z",
+ "generatedWith": "the production handler, FREE_MODE local run"
+}

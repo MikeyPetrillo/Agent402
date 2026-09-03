@@ -62,6 +62,7 @@ const sess = await hc.createSession("dossier", "AAPL");
 ok(sess.url && sess.id === "cs_new", "createSession returns a Stripe Checkout url");
 await hc.createSession("research", "Q".repeat(1200));
 ok(stripe._last.metadata.input.length === 500 && stripe._last.metadata.input3.length === 200, "createSession chunks a 1200-char input across metadata keys");
+ok(stripe._last.allow_promotion_codes === true, "one-shot Checkout accepts promotion codes (dashboard-created first-report / partner codes)");
 let threw = false; try { await hc.createSession("dossier", ""); } catch { threw = true; }
 ok(threw, "createSession rejects empty input");
 threw = false; try { await hc.createSession("not-a-product", "x"); } catch { threw = true; }

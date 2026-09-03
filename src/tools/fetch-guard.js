@@ -112,6 +112,14 @@ function guardedLookup(hostname, options, callback) {
 // and never set as the process-global dispatcher, so the x402 payment client's
 // own outbound calls are unaffected.
 export const ssrfDispatcher = new Agent({ connect: { lookup: guardedLookup, timeout: FETCH_TIMEOUT_MS } });
+// A FRESH pinned dispatcher for callers that must not reuse a kept-alive
+// connection. Measured 2026-09-01 on a real seller: their edge corrupts the
+// socket after serving a 402, so a paid retry reusing the bare leg's
+// connection died with undici's "invalid content-length header" - an async
+// throw that surfaced as an uncaught exception - while the same request on a
+// fresh connection settled fine. Same guardedLookup pin, so SSRF safety is
+// identical; the caller owns close().
+export const freshSsrfDispatcher = () => new Agent({ connect: { lookup: guardedLookup, timeout: FETCH_TIMEOUT_MS } });
 
 // Distinguish an SSRF-block from a generic network failure on a thrown fetch error.
 export function isSsrfBlock(err) {

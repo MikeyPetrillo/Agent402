@@ -240,5 +240,30 @@ const run = (opts, extra = {}) => confirmStellarTransfer({
   ok(logs.some((l) => /re-submitting the same payload via the fallback/.test(l)) && logs.some((l) => /fallback facilitator settled/.test(l)), "every fallback use is logged loudly, both the attempt and the outcome");
 }
 
+// ---- confirm by the hash the facilitator named (2026-08-28) ----
+{
+  const { settleTxOf } = await import("../src/stellar-confirm.js");
+  const H = "f72ec04b04da87d05f45c1090100c918f44402ceeb5b4b262409b9c2ff3f76a6";
+  ok(settleTxOf({ success: false, errorReason: "settle_timed_out", transaction: H }) === H && settleTxOf({ transaction: "nope" }) === null && settleTxOf(null) === null, "settleTxOf reads a 64-hex transaction from a failed settle body, nothing else");
+  const PAYTO = "GDNJXCKW7ZM7GEEVP674TWPU26YJNBQ2FI4ZIPRKTPTNUEJMDHFJWWRL";
+  const hits = [];
+  const fetchByHash = async (url) => {
+    hits.push(String(url));
+    if (url.endsWith(`/transactions/${H}`)) return { ok: true, json: async () => ({ hash: H, successful: true }) };
+    if (url.endsWith(`/transactions/${H}/effects?limit=50`)) return { ok: true, json: async () => ({ _embedded: { records: [{ type: "account_debited", account: "GPAYER", asset_code: "USDC", amount: "0.0010000" }, { type: "account_credited", account: PAYTO, asset_code: "USDC", amount: "0.0010000" }] } }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+  const byHash = await confirmStellarTransfer({ payer: null, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: fetchByHash, waitMs: 10, stepMs: 1 });
+  ok(byHash?.transaction === H && byHash.amount === "0.0010000" && hits.every((u) => u.includes(`/transactions/${H}`)), "a named hash is confirmed directly - no payer scan, no window");
+  const wrongPayTo = await confirmStellarTransfer({ payer: null, payTo: "GSOMEONEELSE", sinceMs: Date.now(), txHash: H, fetchImpl: fetchByHash, waitMs: 10, stepMs: 1 });
+  ok(wrongPayTo === null, "a named hash that credited someone else is not ours");
+  const failedTx = await confirmStellarTransfer({ payer: null, payTo: PAYTO, sinceMs: Date.now(), txHash: H, fetchImpl: async (url) => ({ ok: true, json: async () => (url.endsWith(`/transactions/${H}`) ? { hash: H, successful: false } : {}) }), waitMs: 10, stepMs: 1 });
+  ok(failedTx === null, "a named hash whose transaction failed on-chain moves nothing");
+  // The orchestrator hands the hash from the failure body to confirm().
+  let seen = null;
+  const r = await settleWithStellarFallback({ primary: async () => ({ success: false, errorReason: "settle_timed_out", payer: "GPAYER", transaction: H }), confirm: async (a) => { seen = a; return { transaction: H, amount: "0.0010000" }; }, log: () => {} });
+  ok(seen?.txHash === H && seen?.payer === "GPAYER" && r.success === true && r.transaction === H, "settleWithStellarFallback confirms by the facilitator's named hash and honours the settlement");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

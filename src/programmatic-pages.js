@@ -37,6 +37,7 @@ import { DOSSIER_TIERS } from "./tools/dossier-kit.js";
 import { probeInsiderFilings, parseForm4 } from "./tools/insider-flow-kit.js";
 import { resolveCompany, resolveManager, edgarGetJson, fetchXmlText, findInformationTable, parse13fInformationTable, latest13fFiling } from "./tools/edgar-kit.js";
 import { SEED_TICKERS, SEED_MANAGERS, seededManager, isSeededTicker } from "./programmatic-seeds.js";
+import { alertFormHtml } from "./free-alerts.js";
 
 // --- validation -------------------------------------------------------------
 // Shape first, upstream second. Anything that fails here costs one regex.
@@ -440,9 +441,9 @@ const fmtUsd = (n) => (Number.isFinite(n) ? `$${Math.round(n).toLocaleString("en
 const fmtPrice = (n) => (Number.isFinite(n) && n > 0 ? `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "");
 const fmtPct = (n) => (Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : "");
 
-function buySection({ family, input, headline, blurb }) {
+function buySection({ family, input, headline, blurb, alertKind = null }) {
   const price = cardUsd(family.product);
-  return `<div class="pg-buy">
+  return `${alertKind ? alertFormHtml({ kind: alertKind, target: input, source: `/reports/${family.key || alertKind}` }) : ""}<div class="pg-buy">
   <h2>${esc(headline)}</h2>
   <p>${esc(blurb)}</p>
   <button class="btn btn-primary" data-buy-product="${esc(family.product)}" data-buy-input="${esc(input)}">Get the full report, $${esc(price)} →</button>
@@ -467,6 +468,7 @@ function productLd(baseUrl, family, name, description, canonical) {
   return {
     "@context": "https://schema.org", "@type": "Product",
     name: `${p.label}: ${name}`, description,
+    image: `${baseUrl}/tools/${p.slug}/card.png`,
     brand: { "@type": "Brand", name: "Agent402" },
     offers: { "@type": "Offer", price: (p.price / 100).toFixed(2), priceCurrency: "USD", availability: "https://schema.org/InStock", url: canonical, seller: { "@type": "Organization", name: "Havok Holdings LLC" } },
   };
@@ -488,7 +490,7 @@ function shell({ title, description, canonical, baseUrl, body, jsonLd }) {
   return ledgerShell({
     title, description, canonical, baseUrl, activePath: "/reports",
     extraCss: REPORTS_CSS + PROGRAMMATIC_CSS,
-    body: `<div class="wrap">${body}</div>${ledgerFooterCompact()}<script src="/js/report-buy.js"></script>`,
+    body: `<div class="wrap">${body}</div>${ledgerFooterCompact()}<script src="/js/report-buy.js"></script><script src="/js/alert-signup.js"></script>`,
     jsonLd,
   });
 }
@@ -520,7 +522,7 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
 <section>
   ${table}
   ${rows.length ? `<div class="pg-meta">Transaction codes: P is an open-market purchase, S an open-market sale, A a grant or award, M an option exercise, F shares surrendered for tax. ${buys} open-market buy${buys === 1 ? "" : "s"} and ${sells} open-market sale${sells === 1 ? "" : "s"} in the rows above.</div>` : ""}
-  ${buySection({ family, input: ticker, headline: `Every Form 4 against ${name}, parsed and explained`, blurb: `The free view above is the newest few filings. The paid report reads every Form 4 in your window (up to 365 days), separates open-market buys and sales from awards, exercises and tax withholding, totals the flow per insider, flags 10b5-1 plans where the filing notes them, and hands you a cited write-up plus a downloadable transactions table.` })}
+  ${buySection({ family, alertKind: "insider", input: ticker, headline: `Every Form 4 against ${name}, parsed and explained`, blurb: `The free view above is the newest few filings. The paid report reads every Form 4 in your window (up to 365 days), separates open-market buys and sales from awards, exercises and tax withholding, totals the flow per insider, flags 10b5-1 plans where the filing notes them, and hands you a cited write-up plus a downloadable transactions table.` })}
   ${crossLinks([
     { href: `/reports/dossier/${ticker}`, label: `${ticker} company profile` },
     { href: "/reports/insider", label: "All insider pages" },
@@ -573,7 +575,7 @@ export function fundPage({ slug, data, baseUrl, degraded = false }) {
   ${facts}
   ${table}
   ${holdings.length ? `<div class="pg-meta">Positions are folded by CUSIP: this filing lists ${esc(fmtInt(data.lineItems))} line items across ${esc(fmtInt(data.totalHoldings))} securities. A 13F reports long US-listed equity positions held at the period end, filed up to 45 days later. It is a snapshot, not a live portfolio, and it excludes shorts, cash and most non-US holdings.</div>` : ""}
-  ${buySection({ family, input: name, headline: `What ${name} bought, added, trimmed and exited`, blurb: `The free view above is the top of one quarter's filing. The paid report diffs the two most recent 13F filings, so you see new positions, adds, trims and exits with the size of each move, a cited write-up, and the full holdings plus changes table to download.` })}
+  ${buySection({ family, alertKind: "fund", input: name, headline: `What ${name} bought, added, trimmed and exited`, blurb: `The free view above is the top of one quarter's filing. The paid report diffs the two most recent 13F filings, so you see new positions, adds, trims and exits with the size of each move, a cited write-up, and the full holdings plus changes table to download.` })}
   ${crossLinks([
     { href: "/reports/fund", label: "All 13F fund pages" },
     { href: "/reports/insider", label: "Insider filings by ticker" },
@@ -625,7 +627,7 @@ export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
 <section>
   ${facts}
   ${table}
-  ${buySection({ family, input: ticker, headline: `The full due-diligence dossier on ${name}`, blurb: `The free view above is identity and filing dates. The paid dossier reads the filings: business and segments, financial trend, insider and institutional activity, litigation and risk-factor themes, recent news, and the red flags, every claim cited and delivered with a data appendix.` })}
+  ${buySection({ family, alertKind: "filing", input: ticker, headline: `The full due-diligence dossier on ${name}`, blurb: `The free view above is identity and filing dates. The paid dossier reads the filings: business and segments, financial trend, insider and institutional activity, litigation and risk-factor themes, recent news, and the red flags, every claim cited and delivered with a data appendix.` })}
   ${crossLinks([
     { href: `/reports/insider/${ticker}`, label: `${ticker} insider filings` },
     { href: "/reports/dossier", label: "All company profiles" },

@@ -24,13 +24,15 @@
 // code_interpreter, image_generation) are refused: their spend is bounded by
 // neither max_output_tokens nor provider.max_price. Function tools only.
 import {
-  TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor,
+  TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor, meteredQuoteForProbe, costFor,
   clampToMargin, flexAttempts, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
   defaultReasoningFor, validateReasoning,
   refuseCostVariants,
+  assertUpstreamBody,
 } from "./llm-gateway-kit.js";
 
+import { METER_MARKUP, METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 const OPENROUTER_RESPONSES_URL = "https://openrouter.ai/api/v1/responses";
 const MAX_TOOLS = 64;
 const MAX_INPUT_ITEMS = 200;
@@ -41,7 +43,24 @@ export const RESPONSES_PATH_BY_TIER = {
   "v1-chat": "/v1/responses",
   "v1-chat-pro": "/v1/pro/responses",
   "v1-chat-premium": "/v1/premium/responses",
+  // LAST (the TIERS ordering rule): the metered tier's prefixes are the
+  // union of the flat tiers', so tierFor() must keep resolving explicit
+  // models to their home tiers first.
+  "v1-chat-metered": "/v1/metered/responses",
 };
+/** Per-request price of the metered Responses route, from the RAW body.
+ *  Never throws: an invalid body quotes the floor (the handler's own 400
+ *  refuses it, uncharged); an over-cap body quotes the cap (the handler
+ *  refuses that too). Same arithmetic as the chat and Messages wires. */
+export function meteredResponsesQuoteUsd(input) {
+  const tier = TIERS["v1-chat-metered"];
+  try {
+    const { probe, imageCount } = validateResponsesRequest(input, "v1-chat-metered");
+    return meteredQuoteForProbe(probe, imageCount);
+  } catch (e) {
+    return { usd: tier.price, invalid: true, reason: String(e?.message || e).slice(0, 160) };
+  }
+}
 export const RESPONSES_TIER_BY_PATH = Object.fromEntries(Object.entries(RESPONSES_PATH_BY_TIER).map(([t, p]) => [p, t]));
 
 const ROLES = new Set(["user", "assistant", "system", "developer"]);
@@ -84,9 +103,11 @@ export function validateResponsesRequest(input, tierSlug) {
   if (input.previous_response_id !== undefined) throw bad('"previous_response_id" is not supported - this gateway stores no conversation state (store is always false); send the full input each call');
   if (input.background === true) throw bad('"background" responses are not served (no server-side state)');
   const isRouted = tier.router === true && (!canonicalModel(input.model) || canonicalModel(input.model) === "auto");
-  const model = canonicalModel(input.model);
+  let model = canonicalModel(input.model);
+  let defaultedModel = null;
   if (!isRouted) {
     refuseCostVariants(model);
+    if (!model && tier.defaultModel) { model = tier.defaultModel; defaultedModel = model; } // see llm-messages-kit: serve the tier default, never refuse a missing model
     if (!model) throw bad(`"model" is required (e.g. openai/gpt-4o-mini). This tier serves: ${tier.prefixes?.slice(0, 6).join(", ") || "see /v1/models"}`);
     if (!tierAllows(tierSlug, model)) {
       const home = tierFor(model);
@@ -138,8 +159,13 @@ export function validateResponsesRequest(input, tierSlug) {
   }
   if (acc.chars > tier.maxInputChars) throw bad(`Input too large (${acc.chars} chars). The ${tierSlug} tier allows up to ${tier.maxInputChars} chars`);
   if (acc.images > MAX_IMAGES) throw bad(`Too many images (${acc.images}). Maximum is ${MAX_IMAGES} per request`);
-  let maxOut = input.max_output_tokens != null ? parseInt(input.max_output_tokens, 10) : Math.min(1024, tier.maxTokens);
-  if (!Number.isFinite(maxOut) || maxOut < 1) maxOut = Math.min(1024, tier.maxTokens);
+  // The tier's own default budget, like the chat wire: a premium model that
+  // reasons before it speaks spent a hardcoded 1024 entirely on reasoning and
+  // our own documented example answered 502 "reasoning consumed it"
+  // (2026-09-02 audit); the chat wire has given such tiers 4,096 since 08-19.
+  const tierDefaultMax = Math.min(tier.defaultMaxTokens || 1024, tier.maxTokens);
+  let maxOut = input.max_output_tokens != null ? parseInt(input.max_output_tokens, 10) : tierDefaultMax;
+  if (!Number.isFinite(maxOut) || maxOut < 1) maxOut = tierDefaultMax;
   if (maxOut > tier.maxTokens) maxOut = tier.maxTokens;
 
   const body = { model: isRouted ? undefined : model, input: input.input, max_output_tokens: maxOut, store: false };
@@ -177,7 +203,7 @@ export function validateResponsesRequest(input, tierSlug) {
   const routedQuality = isRouted ? (input.quality === undefined ? "balanced" : String(input.quality)) : null;
   if (isRouted && !AUTO_RANKINGS[routedQuality]) throw bad('"quality" must be "fast", "balanced", or "best"');
   const chain = isRouted ? [...AUTO_RANKINGS[routedQuality][routedCategory]] : [model, ...(tier.fallbacks || []).filter((m) => m !== model)];
-  return { body, probe, imageCount: acc.images, isRouted, routedCategory, routedQuality, chain };
+  return { body, probe, imageCount: acc.images, isRouted, routedCategory, routedQuality, chain, defaultedModel };
 }
 
 /** status incomplete for max_output_tokens with no text/function output =
@@ -199,10 +225,28 @@ function stripBilling(usage) {
 export function makeResponsesHandler(tierSlug) {
   return async function responsesHandler(input, req) {
     const tier = TIERS[tierSlug];
-    const { body, probe, imageCount, isRouted, routedCategory, routedQuality, chain } = validateResponsesRequest(input, tierSlug);
+    const { body, probe, imageCount, isRouted, routedCategory, routedQuality, chain, defaultedModel } = validateResponsesRequest(input, tierSlug);
     const structured = body.text?.format?.type === "json_schema" || body.text?.format?.type === "json_object";
+    // Metered belt (chat + Messages wire parity): an over-cap body is refused
+    // before any upstream call (the 402 quoted the cap, not the cost), and
+    // the price this request was gated at must cover the body being served.
+    if (tier.metered) {
+      const q = meteredQuoteForProbe(probe, imageCount);
+      if (q.overCap) throw bad(`This request would cost $${q.rawUsd.toFixed(4)} metered, above the $${tier.maxQuoteUsd} per-call cap of ${RESPONSES_PATH_BY_TIER[tierSlug]} - lower max_output_tokens or the input, or use a flat tier (GET /v1/models lists them)`, 400);
+    }
+    if (tier.metered && Number.isFinite(req?.__meteredQuoteUsd)) {
+      const q = meteredResponsesQuoteUsd(input);
+      if (q.invalid || q.overCap || q.usd > req.__meteredQuoteUsd * (1 + 1e-6) + 1e-9) {
+        throw bad(`This request was quoted at $${req.__meteredQuoteUsd} but the body being served quotes $${q.usd}${q.invalid ? ` (${q.reason})` : ""}. Nothing was charged; resend the request exactly as it should be served.`, 400);
+      }
+    }
+    // Metered: the quote priced THIS model at its MODEL_COST row, so the
+    // upstream bound is that row, never the tier-wide cap.
+    const meteredBound = tier.metered ? costFor(body.model) : null;
+    const quotedUsd = tier.metered && Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0 ? req.__meteredQuoteUsd : null;
     const providerPrefs = {
-      ...(tier.maxPrice ? { max_price: tier.maxPrice } : {}),
+      ...(meteredBound ? { max_price: { prompt: meteredBound.prompt, completion: meteredBound.completion } }
+        : tier.maxPrice ? { max_price: tier.maxPrice } : {}),
       ...(body.zdr === true ? { zdr: true } : {}),
       ...(tier.priceSort === true && PROVIDER_SORT_ENABLED() ? { sort: "price" } : {}),
       ...(structured ? { require_parameters: true } : {}),
@@ -224,8 +268,8 @@ export function makeResponsesHandler(tierSlug) {
     };
     const recordUsage = (usage, upstreamUsd, served, serviceTier) => import("../posthog.js")
       .then(({ capturePostHogGatewayUsage }) => capturePostHogGatewayUsage({
-        tier: `${tierSlug}:responses`, model: served, priceUsd: tier.price, upstreamUsd,
-        promptTokens: usage?.input_tokens, completionTokens: usage?.output_tokens, serviceTier,
+        tier: `${tierSlug}:responses`, model: served, priceUsd: quotedUsd ?? tier.price, upstreamUsd,
+        promptTokens: usage?.input_tokens, completionTokens: usage?.output_tokens, serviceTier, defaulted: !!defaultedModel,
       })).catch(() => {});
     const attempts = flexAttempts(chain);
     const routerNote = isRouted ? { category: routedCategory, quality: routedQuality } : null;
@@ -264,6 +308,7 @@ export function makeResponsesHandler(tierSlug) {
         const text = await res.text();
         let data;
         try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
+        assertUpstreamBody(data);
         if (data?.status === "failed" || data?.error) {
           lastErr = bad(`Upstream error: ${String(data?.error?.message || data?.error?.code || "response failed").slice(0, 200)}`, 502);
           continue;
@@ -276,6 +321,11 @@ export function makeResponsesHandler(tierSlug) {
         const upstreamUsd = stripBilling(data.usage);
         await recordUsage(data.usage, upstreamUsd, data.model || model, data.service_tier || (flex ? "flex" : "default"));
         if (routerNote) data.agent402_router = { ...routerNote, served: data.model || model };
+        if (defaultedModel) data.agent402_default_model = defaultedModel;
+        // Metered settlement sentinel (chat-wire parity): the route binder
+        // settles actual x markup for upto/credits buyers and strips this
+        // before the body leaves. Non-enumerable; a non-number means "no meter".
+        if (typeof upstreamUsd === "number") setMeterSentinel(data, upstreamUsd);
         return data;
       } catch (e) {
         if (![502, 503, 504].includes(e?.statusCode)) throw e;
@@ -287,13 +337,14 @@ export function makeResponsesHandler(tierSlug) {
 }
 
 const EXAMPLE_MODEL_BY_TIER = {
-  "v1-chat-nano": "openai/gpt-4.1-nano",
+  "v1-chat-nano": "openai/gpt-5.6-luna",
   "v1-chat": "openai/gpt-4o-mini",
   "v1-chat-pro": "openai/gpt-4o",
   "v1-chat-premium": "anthropic/claude-opus-5",
+  "v1-chat-metered": "anthropic/claude-haiku-4.5",
 };
-const TIER_LABEL = { "v1-chat-nano": "nano", "v1-chat-auto": "auto", "v1-chat": "base", "v1-chat-pro": "pro", "v1-chat-premium": "premium" };
-const priceString = (tierSlug) => (tierSlug === "v1-chat-nano" ? "$0.003" : `$${TIERS[tierSlug].price.toFixed(2)}`);
+const TIER_LABEL = { "v1-chat-nano": "nano", "v1-chat-auto": "auto", "v1-chat": "base", "v1-chat-pro": "pro", "v1-chat-premium": "premium", "v1-chat-metered": "metered" };
+const priceString = (tierSlug) => (tierSlug === "v1-chat-nano" ? "$0.003" : tierSlug === "v1-chat-metered" ? `$${METER_MIN_SETTLE_USD}` : `$${TIERS[tierSlug].price.toFixed(2)}`);
 const EXAMPLE_OUT = { id: "resp_…", object: "response", status: "completed", model: "openai/gpt-4o-mini", output: [{ id: "msg_…", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "x402 is an HTTP-native way for agents to pay per request with USDC.", annotations: [] }] }], usage: { input_tokens: 14, output_tokens: 18, total_tokens: 32 } };
 const INPUT_SCHEMA = {
   properties: {
@@ -311,8 +362,12 @@ const INPUT_SCHEMA = {
 };
 function describe(tierSlug) {
   const t = TIERS[tierSlug];
+  if (tierSlug === "v1-chat-metered") {
+    return `OpenAI Responses API billed per request from what the call costs: the 402 quotes exact-BPE input (instructions + input items + tools) plus your max_output_tokens at the model's list price, times ${METER_MARKUP}, never under $${METER_MIN_SETTLE_USD}; an upto (Permit2) or credits buyer settles actual usage under that quote. Point the OpenAI SDK's responses.create(), the OpenAI Agents SDK, or OpenAI Codex CLI's model_providers base_url at https://agent402.tools/v1/metered. Any model the flat tiers serve (GET /v1/models); function tools only; store is always false.`;
+  }
   const base = `OpenAI Responses API over x402 - point the OpenAI SDK's responses.create() (or the OpenAI Agents SDK) at base_url https://agent402.tools${RESPONSES_PATH_BY_TIER[tierSlug].replace(/\/responses$/, "")} and pay ${priceString(tierSlug)} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Responses wire. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported; function tools yes, server-side tools (web_search, file_search, computer, mcp) no; no stored conversation state (send the full input each call).`;
-  return tierSlug === "v1-chat-auto" ? `${base} Omit "model" and the gateway routes the prompt to the top-ranked model for its task type; the response adds agent402_router {category, quality, served}.` : base;
+  const dflt = t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel} (named back in agent402_default_model); the price does not change.` : "";
+  return tierSlug === "v1-chat-auto" ? `${base} Omit "model" and the gateway routes the prompt to the top-ranked model for its task type; the response adds agent402_router {category, quality, served}.` : base + dflt;
 }
 
 export const LLM_RESPONSES_TOOLS = Object.entries(RESPONSES_PATH_BY_TIER).map(([tierSlug, path]) => ({
@@ -322,10 +377,17 @@ export const LLM_RESPONSES_TOOLS = Object.entries(RESPONSES_PATH_BY_TIER).map(([
   category: "llm",
   price: priceString(tierSlug),
   description: describe(tierSlug),
-  tags: ["llm", "ai", "inference", "openai-compatible", "responses-api", "agents-sdk", "gateway", "openrouter"],
+  tags: tierSlug === "v1-chat-metered" ? ["llm", "ai", "inference", "openai-compatible", "responses-api", "agents-sdk", "codex", "gateway", "openrouter", "metered", "pay-per-token"] : ["llm", "ai", "inference", "openai-compatible", "responses-api", "agents-sdk", "gateway", "openrouter"],
+  ...(tierSlug === "v1-chat-metered" ? { quote: (body) => meteredResponsesQuoteUsd(body).usd } : {}),
   discovery: {
     bodyType: "json",
-    input: tierSlug === "v1-chat-auto" ? { input: "Summarize x402 in one sentence.", max_output_tokens: 128 } : { model: EXAMPLE_MODEL_BY_TIER[tierSlug], input: "Summarize x402 in one sentence.", max_output_tokens: 128 },
+    // A tier whose default model reasons before it speaks (it carries
+    // defaultMaxTokens) publishes NO budget in its example: 128 tokens were
+    // consumed entirely by reasoning on the premium tier and our own example
+    // answered 502 (2026-09-02 audit). The tier default leaves room.
+    input: tierSlug === "v1-chat-auto"
+      ? { input: "Summarize x402 in one sentence.", max_output_tokens: 128 }
+      : { model: EXAMPLE_MODEL_BY_TIER[tierSlug], input: "Summarize x402 in one sentence.", ...(TIERS[tierSlug]?.defaultMaxTokens ? {} : { max_output_tokens: 128 }) },
     inputSchema: INPUT_SCHEMA,
     output: { example: EXAMPLE_OUT },
   },

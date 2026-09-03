@@ -41,7 +41,11 @@ function rollIfNeeded() {
 // tell you which feature is spending money, which is the only question the
 // meter exists to answer. Skip them and report the first frame that is a real
 // caller, falling back to the plumbing only if there is nothing else.
-const PLUMBING = /\/src\/tools\/fetch-guard\.js|\/src\/egress-meter\.js/;
+// Frames that sit BETWEEN a caller and the network without being the caller:
+// the SSRF guard, this meter, and the two global fetch wrappers. Missing one
+// makes every host read as that wrapper (the drain-aware fetch shipped
+// 2026-09-02 and the Alchemy row read "drain-abort.js" within the hour).
+const PLUMBING = /\/src\/tools\/fetch-guard\.js|\/src\/egress-meter\.js|\/src\/drain-abort\.js|\/src\/facilitator-diagnostics\.js/;
 
 /** Which src/ file initiated this? Best-effort, first NON-plumbing frame.
  *

@@ -1,0 +1,118 @@
+{
+ "product": "domain-audit",
+ "input": "github.com",
+ "title": "Domain Security Audit: github.com",
+ "report": "# Domain Security Audit: github.com\n\n**Overall grade: A** (91/100)\n\n# DOMAIN SECURITY & DELIVERABILITY AUDIT\n## github.com\n\n---\n\n## OVERALL GRADE\n\n**Grade: A — Composite 91/100**\n\n**Bottom line:** github.com presents a mature, well-maintained security and deliverability posture. Email authentication is exemplary and scored a full 100/100: SPF, DMARC, DKIM, and MX all pass, with DMARC enforcing at `p=quarantine` (100% of mail) and a stricter subdomain policy of `sp=reject`. TLS is correctly configured, trusted, and negotiating a modern TLSv1.3 cipher suite. The primary point deduction comes from the web security header layer (75/100), where the core headers are all present but the newer cross-origin isolation family (COOP, CORP, COEP) and Permissions-Policy are absent. Two secondary items — an unsigned DNS zone (no DNSSEC) and the absence of MTA-STS/TLS-RPT — represent hardening opportunities rather than active vulnerabilities. The single time-sensitive item in this report is the TLS certificate, which has **33 days remaining** before expiry and should be confirmed as on an automated renewal path.\n\n**Scope of this grade:** The composite 91/100 covers three dimensions only — **email authentication**, **web security headers**, and **TLS certificate**. DNS posture items (DNSSEC, CAA, MTA-STS, TLS-RPT, BIMI) were probed and are reported below, but are discussed as advisory findings. The grade does not cover any check that could not be completed. No probe in this engagement returned a FAILED or unknown state, so no dimension has been silently omitted — but equally, no claim is made here about any control that was not probed (for example, no assessment of mail content filtering, IP reputation, WAF behavior, or authenticated application security was performed).\n\n---\n\n## EMAIL AUTHENTICATION\n\n**Score: 100/100 (good). All four checks pass: spf=pass, dmarc=pass, dkim=pass, mx=pass.**\n\n**SPF — present and valid.** The record terminates in a `softfail` all mechanism (`~all`) rather than a hard fail (`-all`). A softfail instructs receivers to accept but mark suspicious mail from unlisted sources, whereas `-all` instructs outright rejection. Because DMARC is already enforcing at quarantine, the practical deliverability impact of `~all` is limited — DMARC is doing the enforcement work — but it does leave a wider margin for spoofed mail to reach a mailbox as \"suspicious\" rather than being dropped at the SPF layer.\n\n**A material operational risk exists in the SPF lookup count.** The probe counted **10 DNS lookups** resolved recursively through include/redirect mechanisms. RFC 7208 sets the hard limit at 10. The domain is therefore sitting exactly at the ceiling with zero headroom. If any included third party adds a single mechanism to their own SPF record — entirely outside github.com's control — the record will exceed the limit and receivers will return a `permerror`. A `permerror` causes SPF to stop evaluating and effectively fail, which removes one of the two DMARC authentication paths. Given `aspf=r` (relaxed alignment), mail that had been passing DMARC via SPF alignment would then depend entirely on DKIM. This is the single highest-priority email finding.\n\n**DMARC — strong.** Policy is `p=quarantine` applied to 100% of mail, with `sp=reject` for subdomains. Aggregate and forensic reporting are both enabled (`rua=mailto:dmarc@github.com`, `ruf=mailto:dmarc@github.com`, `fo=1`), meaning the domain owner has visibility into authentication failures — the prerequisite for safely moving to full rejection. Alignment is relaxed for both SPF and DKIM (`aspf=r`, `adkim=r`), which is the pragmatic setting for an organization sending through multiple platforms.\n\n**DKIM — excellent breadth.** Six valid selectors were observed: `google`, `selector1`, `k1`, `k2`, `s1`, and `s2`. Four are 2048-bit (`google`, `k2`, `s1`, `s2`); two are 1024-bit (`selector1`, `k1`). 1024-bit RSA keys are still widely accepted but are considered legacy and are increasingly deprecated. Rotating those two selectors to 2048-bit removes any future risk of a receiver discounting the signature. DKIM's strength matters directly for inbox placement: because DKIM signatures survive forwarding and most mailing-list relaying (whereas SPF does not), a healthy multi-selector DKIM deployment is what keeps legitimate forwarded mail from being quarantined under a `p=quarantine` policy.\n\n**MX — present.** A single record was observed: `github-com.mail.protection.outlook.com`, indicating inbound mail is handled by Microsoft 365. This resolves and passes.\n\n**Inbound transport hardening — not published.** MTA-STS and TLS-RPT are both absent. Without MTA-STS, a sending server has no authenticated policy telling it that TLS is required for delivery to github.com, leaving inbound mail theoretically exposed to a downgrade or man-in-the-middle attack against opportunistic STARTTLS. Without TLS-RPT, no reporting exists on failed TLS negotiation attempts. BIMI is also not published; this has no security effect but forgoes the verified brand logo display in supporting mailbox providers.\n\n---\n\n## WEB SECURITY HEADERS\n\n**Score: 75/100.** HTTP status 200 was returned.\n\n**Present and well-configured:**\n\n- **HSTS** — `max-age=31536000; includeSubdomains; preload`. This is the ideal configuration: a one-year max-age, subdomain coverage, and the preload directive.\n- **CSP** — a restrictive policy anchored on `default-src 'none'` with `base-uri 'self'` and explicit allow-lists for `child-src` and `connect-src`. Starting from `'none'` rather than `'self'` is the strongest possible baseline and materially reduces XSS and data-exfiltration surface.\n- **X-Frame-Options** — `deny`. Blocks clickjacking via framing.\n- **X-Content-Type-Options** — `nosniff`. Prevents MIME-type confusion attacks.\n- **Referrer-Policy** — `origin-when-cross-origin, strict-origin-when-cross-origin`. Limits referrer leakage.\n\n**Missing:**\n\n- **Permissions-Policy (PP)** — absent. Without it, browsers apply default permission behavior for powerful features (camera, microphone, geolocation, payment, USB). Any embedded or injected content inherits a broader feature surface than necessary.\n- **Cross-Origin-Opener-Policy (COOP)** — absent. Windows opened by the page retain a cross-origin browsing-context reference, keeping the door open to cross-window scripting and tab-nabbing style attacks.\n- **Cross-Origin-Resource-Policy (CORP)** — absent. Resources can be embedded by arbitrary cross-origin documents, which is a component of speculative side-channel and resource-inclusion attacks.\n- **Cross-Origin-Embedder-Policy (COEP)** — absent. Cross-origin isolation is not achieved; combined with the missing COOP, the origin cannot reach the isolated state required to safely use high-resolution timers and shared memory.\n\n**Warning:** the `Server` header leaks identity as `github.com`. This is low-severity information disclosure — it does not reveal a software version or stack — but it is unnecessary surface.\n\n---\n\n## TLS CERTIFICATE\n\n- **Chain trusted:** YES\n- **Covers github.com:** Yes\n- **Issuer:** Sectigo Limited\n- **Subject:** github.com\n- **SANs:** 2\n- **Valid to:** 2026-09-30T23:59:59.000Z\n- **Days remaining:** **33**\n- **Negotiated:** TLSv1.3 / TLS_AES_128_GCM_SHA256\n\nThe certificate is valid, correctly scoped to the audited hostname, and negotiating the current protocol version with an AEAD cipher suite. **Flag: 33 days remaining places this inside the standard 30–45 day renewal window.** This is not yet an outage risk, but it is the one clock-driven item in this report and warrants confirmation that renewal is automated and monitored rather than manual.\n\n**CAA is correctly published**, restricting issuance to digicert.com, globalsign.com, letsencrypt.org, and sectigo.com, with wildcard issuance restricted to digicert.com, letsencrypt.org, and sectigo.com. The current Sectigo certificate is consistent with this policy. This is a strong control against mis-issuance.\n\n**DNSSEC: the zone is not signed or validated.** Because DNSSEC is absent, none of the DNS-based controls audited here — SPF, DMARC, DKIM, MX, or CAA — are cryptographically protected against DNS spoofing or cache-poisoning in transit. An attacker able to manipulate DNS responses could substitute alternative records. This is the broadest structural gap in the posture.\n\n---\n\n## PRIORITIZED FIXES\n\n1. **Reduce the SPF DNS lookup count below 10 — highest priority.** The record is at exactly 10 of 10 permitted recursive lookups, leaving zero headroom; any third-party change will push it into `permerror` and break SPF authentication. Audit each `include:` for unused senders and remove them. Where a provider's IP ranges are stable, flatten the include into explicit `ip4:`/`ip6:` mechanisms to eliminate the lookup entirely. Target 7 or fewer lookups so future provider changes are absorbed safely.\n\n2. **Confirm automated renewal of the TLS certificate (33 days remaining).** Verify the Sectigo certificate is on an automated ACME or managed renewal path and that expiry alerting fires at 30, 14, and 7 days. If renewal is manual, schedule it now.\n\n3. **Sign the zone with DNSSEC.** This protects every DNS-based control in this report — SPF, DMARC, DKIM, MX, and CAA — from spoofing. Enable DNSSEC signing",
+ "sources": [],
+ "tables": [
+  {
+   "name": "email-checks",
+   "label": "Email authentication checks",
+   "columns": [
+    "Check",
+    "Status",
+    "Detail"
+   ],
+   "rows": [
+    [
+     "spf",
+     "pass",
+     "SPF record present, 10 DNS lookups, ~all qualifier"
+    ],
+    [
+     "dmarc",
+     "pass",
+     "p=quarantine at 100% - strict enforcement"
+    ],
+    [
+     "dkim",
+     "pass",
+     "Found DKIM at selector google (2048-bit RSA)"
+    ],
+    [
+     "mx",
+     "pass",
+     "1 MX record configured"
+    ]
+   ]
+  },
+  {
+   "name": "security-headers",
+   "label": "Web security headers",
+   "columns": [
+    "Header",
+    "Present",
+    "Value"
+   ],
+   "rows": [
+    [
+     "HSTS",
+     "yes",
+     "max-age=31536000; includeSubdomains; preload"
+    ],
+    [
+     "CSP",
+     "yes",
+     "default-src 'none'; base-uri 'self'; child-src github.githubassets.com github.com/assets-cdn/worker/ github.com/assets/ gist.github.com/assets-cdn/worker/; connect-src 'self' uploads.github.com www.githubstatus.com collector.github.com raw.githubusercontent.com api.github.com github-cloud.s3.amazonaws.com github-production-repository-file-5c1aeb.s3.amazonaws.com github-production-upload-manifest-file-7fdce7.s3.amazonaws.com github-production-user-asset-6210df.s3.amazonaws.com *.rel.tunnels.api.visualstudio.com wss://*.rel.tunnels.api.visualstudio.com github.githubassets.com objects-origin.githubusercontent.com copilot-proxy.githubusercontent.com proxy.individual.githubcopilot.com proxy.business.githubcopilot.com proxy.enterprise.githubcopilot.com *.actions.githubusercontent.com wss://*.actions.githubusercontent.com productionresultssa0.blob.core.windows.net productionresultssa1.blob.core.windows.net productionresultssa2.blob.core.windows.net productionresultssa3.blob.core.windows.net productionresultssa4.blob.core.windows.net productionresultssa5.blob.core.windows.net productionresultssa6.blob.core.windows.net productionresultssa7.blob.core.windows.net productionresultssa8.blob.core.windows.net productionresultssa9.blob.core.windows.net productionresultssa10.blob.core.windows.net productionresultssa11.blob.core.windows.net productionresultssa12.blob.core.windows.net productionresultssa13.blob.core.windows.net productionresultssa14.blob.core.windows.net productionresultssa15.blob.core.windows.net productionresultssa16.blob.core.windows.net productionresultssa17.blob.core.windows.net productionresultssa18.blob.core.windows.net productionresultssa19.blob.core.windows.net github-production-repository-image-32fea6.s3.amazonaws.com github-production-release-asset-2e65be.s3.amazonaws.com insights.github.com wss://alive.github.com wss://alive-staging.github.com api.githubcopilot.com api.individual.githubcopilot.com api.business.githubcopilot.com api.enterprise.githubcopilot.com wss://production-copilot-host.webpubsub.azure.com edge.fullstory.com rs.fullstory.com; font-src github.githubassets.com; form-action 'self' github.com gist.github.com copilot-workspace.githubnext.com objects-origin.githubusercontent.com; frame-ancestors 'none'; frame-src viewscreen.githubusercontent.com notebooks.githubusercontent.com www.youtube-nocookie.com; img-src 'self' data: blob: github.githubassets.com media.githubusercontent.com camo.githubusercontent.com identicons.github.com avatars.githubusercontent.com private-avatars.githubusercontent.com github-cloud.s3.amazonaws.com objects.githubusercontent.com release-assets.githubusercontent.com secured-user-images.githubusercontent.com user-images.githubusercontent.com private-user-images.githubusercontent.com opengraph.githubassets.com repository-images.githubusercontent.com marketplace-screenshots.githubusercontent.com copilotprodattachments.blob.core.windows.net/github-production-copilot-attachments/ github-production-user-asset-6210df.s3.amazonaws.com customer-stories-feed.github.com spotlights-feed.github.com explore-feed.github.com objects-origin.githubusercontent.com *.githubusercontent.com images.ctfassets.net/8aevphvgewt8/; manifest-src 'self'; media-src github.com user-images.githubusercontent.com secured-user-images.githubusercontent.com private-user-images.githubusercontent.com github-production-user-asset-6210df.s3.amazonaws.com gist.github.com github.githubassets.com assets.ctfassets.net/8aevphvgewt8/ videos.ctfassets.net/8aevphvgewt8/; script-src github.githubassets.com; style-src 'unsafe-inline' github.githubassets.com; upgrade-insecure-requests; worker-src github.githubassets.com github.com/assets-cdn/worker/ github.com/assets/ gist.github.com/assets-cdn/worker/"
+    ],
+    [
+     "XFO",
+     "yes",
+     "deny"
+    ],
+    [
+     "XCTO",
+     "yes",
+     "nosniff"
+    ],
+    [
+     "RP",
+     "yes",
+     "origin-when-cross-origin, strict-origin-when-cross-origin"
+    ],
+    [
+     "PP",
+     "no",
+     ""
+    ],
+    [
+     "COOP",
+     "no",
+     ""
+    ],
+    [
+     "CORP",
+     "no",
+     ""
+    ],
+    [
+     "COEP",
+     "no",
+     ""
+    ]
+   ]
+  }
+ ],
+ "meta": {
+  "tier": "domain-audit",
+  "domain": "github.com",
+  "grade": "A",
+  "composite": 91,
+  "assessed": [
+   "email auth",
+   "security headers",
+   "TLS"
+  ],
+  "email_score": 100,
+  "header_score": 75,
+  "tls_days_remaining": 33,
+  "probes": {
+   "email": true,
+   "tls": true,
+   "headers": true
+  },
+  "synthesis_model": "anthropic/claude-opus-5"
+ },
+ "at": "2026-08-28T01:46:57.973Z",
+ "generatedWith": "the production handler, FREE_MODE local run"
+}

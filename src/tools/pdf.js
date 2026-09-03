@@ -14,7 +14,8 @@ export async function pdfToText(rawUrl) {
   const parser = new PDFParse({ data: buffer });
   try {
     // The parser's worker cannot handle concurrent calls — keep these sequential.
-    const textResult = await parser.getText();
+    // A 20 MB PDF with pathological content can hold the thread for minutes; bound it.
+    const textResult = await Promise.race([parser.getText(), new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("PDF text extraction timed out (30 s)"), { statusCode: 422 })), 30_000).unref?.())]);
     let info = {};
     try {
       info = (await parser.getInfo())?.info ?? {};

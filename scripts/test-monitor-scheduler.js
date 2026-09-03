@@ -1,4 +1,4 @@
-// Monitor scheduler (Phase 2b) test - offline, stubbed report pipeline / probes /
+// Monitor scheduler test - offline, stubbed report pipeline / probes /
 // EDGAR / email, injected clock. Proves the cost + delivery invariants:
 //   - first sight = welcome report + email; a quiet domain is re-probed FREE
 //     daily and never regenerated; the 30-day full re-run fires on schedule;
@@ -260,6 +260,24 @@ ipoRows = [{ stage: "registration", name: "Later Inc", accessionNumber: "A-2" }]
 r = await sch.tick({ subId: "sub_i" });
 m = calls.mail[calls.mail.length - 1];
 ok(r.full === 1 && m.reason === "digest" && /1 new registration/.test(m.changes[0]), "a week with filings: digest run + 'digest' email with the counts");
+
+// --- research watch: the product IS the weekly re-run (no cheap probe) ------------------------
+active.set("sub_q", { subId: "sub_q", status: "active", product: "research-monitor", target: "Which US airlines hedge jet fuel and how?", email: "q@x.com" });
+clock += HOUR;
+r = await sch.tick({ force: true, subId: "sub_q" });
+let qg = calls.generate.filter((g) => g.kind === "research");
+m = calls.mail[calls.mail.length - 1];
+ok(r.full === 1 && qg.length === 1 && qg[0].slug === "research" && qg[0].input === "Which US airlines hedge jet fuel and how?" && m.reason === "welcome", "research first sight: welcome run with the question as the input");
+clock += 3 * DAY; r = await sch.tick({ subId: "sub_q" });
+ok(r.skip === 1 && calls.generate.filter((g) => g.kind === "research").length === 1, "inside the week: nothing runs, nothing is emailed");
+clock += 5 * DAY; r = await sch.tick({ subId: "sub_q" });
+m = calls.mail[calls.mail.length - 1];
+ok(r.full === 1 && calls.generate.filter((g) => g.kind === "research").length === 2 && m.reason === "scheduled" && /Weekly re-run/.test(m.changes[0]), "a week later: a fresh paid run + 'scheduled' email");
+for (let w = 0; w < 2; w++) { clock += 7 * DAY; await sch.tick({ subId: "sub_q" }); }
+const qBefore = calls.generate.filter((g) => g.kind === "research").length;
+clock += 7 * DAY; r = await sch.tick({ subId: "sub_q" });
+ok(qBefore === 4 && r.checked === 1 && calls.generate.filter((g) => g.kind === "research").length === 4, "the 30-day cap holds a 5th weekly run (checked, not full) until old runs age out");
+
 active.delete("sub_i");
 
 // --- insider watch: welcome, daily free probe, paid run only on a NEW Form 4 accession ----------

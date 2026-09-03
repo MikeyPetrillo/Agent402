@@ -54,7 +54,7 @@ export function contributePage(baseUrl) {
 <!-- Section 1: Add a tool kit -->
 <div class="ct-section">
 <h2>Add a tool kit</h2>
-<p>A tool kit is a JavaScript file in <code>src/tools/</code> that exports an array of tool objects. Each tool is a self-contained, deterministic function - no LLM in the serving path.</p>
+<p>A tool kit is a JavaScript file in <code>src/tools/</code> that exports an array of tool objects. Each utility tool is a self-contained, deterministic function - no LLM in the serving path (the model-backed gateway and report kits are the exception and say so on their tool page).</p>
 
 <h3>Step 1 - Create the file</h3>
 <p>Add a new file in <code>src/tools/</code>, for example <code>my-kit.js</code>. Export a named array of tool objects:</p>
@@ -125,7 +125,7 @@ TARGET_URL=http://localhost:3000 node scripts/test-all.js</code></pre>
 </div>
 
 <div class="ct-note">
-<strong>Key rules:</strong> Tools must be deterministic - same input, same output, every time. No LLM calls, no non-deterministic dependencies. Pure-CPU tools are automatically eligible for the free proof-of-work tier. Tools that make external network requests must be added to <code>WALLET_ONLY_SLUGS</code> in <code>src/pow.js</code>.
+<strong>Key rules:</strong> Utility tools must be deterministic - same input, same output, every time. No LLM calls, no non-deterministic dependencies. Pure-CPU tools are automatically eligible for the free proof-of-work tier. Tools that make external network requests must be added to <code>WALLET_ONLY_SLUGS</code> in <code>src/pow.js</code>.
 </div>
 
 <h3>Tool object shape</h3>

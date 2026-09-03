@@ -16,6 +16,8 @@
     "rpc-diagnostics.js",
     "rpc-timeout.js",
     "rpc-failover.js",
+    "settle-poll.js",
+    "fee-bid.js",
     "README.md"
   ],
   "engines": {
@@ -25,11 +27,14 @@
     "start": "node index.js",
     "test": "node test.js"
   },
+  "overrides": {
+    "qs": "6.16.0"
+  },
   "dependencies": {
     "express": "^5.0.0",
     "@x402/core": "2.21.0",
     "@x402/stellar": "2.21.0",
-    "@stellar/stellar-sdk": "16.2.0"
+    "@stellar/stellar-sdk": "16.3.0"
   },
   "keywords": [
     "x402",

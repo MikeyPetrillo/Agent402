@@ -11,8 +11,11 @@ name: Announce
 #              /api/bestsellers response with the canary burner (x402,
 #              internal-marked via POW_SECRET) and renders the terminal-style
 #              card from it; 'robinhood' renders the Robinhood Chain
-#              marketplace card from the free /api/revenue rail (no buy).
-#              Real numbers only — never a fixture.
+#              marketplace card from the free /api/revenue rail (no buy);
+#              'proof' renders the metered-tier receipt card from the free
+#              /api/proof feed (latest external settlement, else our own
+#              canary row labelled as such) - the weekly proof post.
+#              Real numbers only, never a fixture.
 #   (neither) — text-only post.
 #
 # text — inline tweet copy for dispatch-only posting: no announcement file,
@@ -49,7 +52,7 @@ on:
         required: false
         default: ""
       card:
-        description: "Optional demo card to render live and attach: 'bestsellers' or 'robinhood'. Mutually exclusive with media."
+        description: "Optional demo card to render live and attach: 'bestsellers', 'robinhood' or 'proof'. Mutually exclusive with media."
         required: false
         default: ""
       delete_id:
@@ -119,6 +122,14 @@ jobs:
         run: |
           curl -fsSL --max-time 30 https://agent402.tools/api/revenue -o /tmp/revenue.json
           node scripts/robinhood-card.js --from /tmp/revenue.json --out /tmp/announce-card.png
+      # card=proof: the weekly receipt. /api/proof is free and unpaywalled;
+      # the card picks the latest external settlement and falls back to the
+      # canary's, labelled as ours on the card itself.
+      - name: Render the proof receipt card from live /api/proof
+        if: github.event.inputs.card == 'proof'
+        run: |
+          curl -fsSL --max-time 30 https://agent402.tools/api/proof -o /tmp/proof.json
+          node scripts/proof-card.js --from /tmp/proof.json --out /tmp/announce-card.png
       - name: Delete the previous post (replace flow)
         if: github.event.inputs.delete_id != ''
         env:

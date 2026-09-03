@@ -412,7 +412,7 @@ export const CRYPTO_TOOLS = [
     name: "Crypto order book",
     slug: "crypto-orderbook",
     category: "crypto",
-    price: "$0.003",
+    price: "$0.001",
     description:
       "L2 order-book snapshot for a spot pair: best bid/ask, mid price, spread (absolute + %), and the top N aggregated price levels per side (default 25, max 100). Pairs use BASE-QUOTE format (BTC-USD, ETH-USD, SOL-USDC). Backed by Coinbase Exchange's public market-data API - keyless; coverage is Coinbase-listed markets.",
     tags: ["crypto", "orderbook", "depth", "spread", "trading", "market-data"],

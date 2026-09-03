@@ -14,6 +14,7 @@ import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 import { CATEGORIES } from "./pages.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { discoveryNote } from "./discovery-note.js";
+import { hostCardHtml } from "./host-entry.js";
 
 // Seller-roster row styles hoisted to classes. A busy chain (e.g. Base) renders
 // 1000+ roster rows; when each row carried its 6 styles inline the page ballooned
@@ -212,8 +213,8 @@ export const CHAIN_PAGES = {
     settleLatency: "~1 second",
     facilitatorLabel: "PayAI",
     gasNote: "sponsored",
-    explorerUrl: "seitrace.com",
-    explorerWalletUrl: (wallet) => `https://seitrace.com/address/${wallet}?chain=pacific-1`,
+    explorerUrl: "seiscan.io",
+    explorerWalletUrl: (wallet) => `https://seiscan.io/address/${wallet}?chain=pacific-1`,
     networkParam: "sei",
     acceptNetwork: "eip155:1329",
     // Sei mainnet (pacific-1) CAIP-2 is "eip155:1329"; testnets are different
@@ -373,7 +374,19 @@ export function marketFilterBar(chainKey, _baseUrl) {
     <select class="mfb-sel" data-mfb-sort><option value="calls">most settled</option><option value="usd">volume</option><option value="buyers">buyers</option><option value="tools">tools</option><option value="health">health</option></select>
     <input class="mfb-search" data-mfb-search placeholder="search sellers">
   </div>
+  <p class="mfb-legend" style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:6px 0 0;line-height:1.5;"><strong style="color:var(--muted);">healthy</strong> = the last crawl of the origin succeeded, nothing more. <strong style="color:var(--muted);">dispatch</strong> = this host's router will pay the seller on a buyer's behalf right now; a seller can be listed, healthy and still not dispatch-eligible (no known payment network, or no settlement history on Base yet). The reason is on each row and on <code>/api/index</code> as <code>routerDispatchReason</code>.</p>
   <script src="/js/market-filter-bar.js"></script>`;
+}
+
+  // Dispatch badge, rendered ONLY when the handler labelled the seller
+// (src/dispatch-eligibility.js via server.js withDispatchSnapshot); an
+// unlabelled snapshot renders no badge rather than a guessed one.
+function dispatchBadge(s) {
+  if (s.local || s.routerDispatchEligible === undefined) return "";
+  const reason = String(s.routerDispatchReason || "").replace(/_/g, " ");
+  return s.routerDispatchEligible
+    ? ` <span class="mlr-dispatch" title="the router will pay this seller on a buyer's behalf (${esc(reason)})" style="font-family:var(--font-mono);font-size:11px;color:var(--accent);">dispatch</span>`
+    : ` <span class="mlr-dispatch off" title="not dispatch-eligible: ${esc(reason)}" style="font-family:var(--font-mono);font-size:11px;color:var(--faint);">no dispatch &middot; ${esc(reason)}</span>`;
 }
 
 function categoryGroups(tools, { maxCategories = 12, maxPerCategory = 6 } = {}) {
@@ -558,7 +571,7 @@ export function marketPanelHtml(chainKey, { snapshot, activity, selectedSeller, 
 
 export function marketPage(chainKey, baseUrl, opts = {}) {
   if (chainKey == null) return marketPageAll(baseUrl, opts);
-  const { snapshot, rail, activity, selectedSeller, wallet, leaderboardSnap, all = false } = opts;
+  const { snapshot, rail, activity, selectedSeller, wallet, leaderboardSnap, all = false, host = null } = opts;
   const C = CHAIN_PAGES[chainKey];
   const effectiveWallet = wallet || C.wallet;
   // Stellar/Algorand ship a committed public default wallet in CHAIN_PAGES;
@@ -612,7 +625,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   // attributes on the all-chains <tr> rows in marketPageAll.
   const rowData = (s) => {
     const st = sellerStat(s);
-    return ` data-mfb-row data-local="${s.local ? 1 : 0}" data-health="${s.local || s.routable ? 1 : 0}" data-calls="${st?.calls || 0}" data-usd="${st?.usd || 0}" data-buyers="${st?.buyers || 0}" data-tools="${s.toolCount || 0}"`;
+    return ` data-mfb-row data-local="${s.local ? 1 : 0}" data-health="${s.local || s.routable ? 1 : 0}" data-calls="${st?.calls || 0}" data-usd="${st?.usd || 0}" data-buyers="${st?.buyers || 0}" data-tools="${Number(s.toolCount) || 0}"`;
   };
 
   // Collapse hosts that settle to the SAME leaderboard group into one roster
@@ -695,8 +708,8 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
     <a href="${activityHref(s)}"${rowData(s)} data-seller-link data-seller-host="${s.local ? "" : esc(hostOf(s.homepage).toLowerCase())}" data-seller-local="${s.local ? "1" : "0"}" class="ml-roster-compact mlr-row${isSelected(s) ? " sel" : ""}">
       <span class="mlr-name">${esc(s.displayName)}${s.local ? ' <span class="mlr-badge">THIS HOST</span>' : ""}${s.mpp === true ? ' <span class="mlr-mpp" title="Also reachable over the native MPP wire">MPP</span>' : ""}</span>
       <span class="mlr-host">${esc(hostOf(s.homepage))}</span>
-      <span class="mlr-tools">${s.toolCount || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
-      <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${s.local ? "live" : (s.routable ? "healthy" : "unreachable")}</span>
+      <span class="mlr-tools">${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
+      <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${s.local ? "live" : (s.routable ? "healthy" : "unreachable")}</span>${dispatchBadge(s)}
     </a>`;
       }).join("")
     : visibleRoster.map((s) => {
@@ -710,8 +723,8 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
       </div>
       <div class="mlr-host">${esc(hostOf(s.homepage))}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
-        <span style="color:var(--muted);font-family:var(--font-mono);font-size:13px;">${s.toolCount || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
-        <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${health}</span>
+        <span style="color:var(--muted);font-family:var(--font-mono);font-size:13px;">${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
+        <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${health}</span>${dispatchBadge(s)}
       </div>
       <a href="${activityHref(s)}" data-seller-link data-seller-host="${s.local ? "" : esc(hostOf(s.homepage).toLowerCase())}" data-seller-local="${s.local ? "1" : "0"}" style="font-family:var(--font-mono);font-size:12px;color:var(--accent);text-decoration:none;margin-top:2px;">${isSelected(s) ? "activity shown above" : "view activity →"}</a>
     </div>`;
@@ -820,6 +833,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
     </div>
     ${railManifestHtml}
   </div>
+  ${hostCardHtml(host)}
   ${marketFilterBar(chainKey, baseUrl)}
   ${statsHtml}`;
 
@@ -943,7 +957,7 @@ function economyStripHtml(economySnap) {
 // rationale + honest-disclosure pattern as x402-index.js's INDEX_ROW_CAP.
 const ALL_ROW_CAP = 100;
 
-function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = false, wallet } = {}) {
+function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = false, wallet, host = null } = {}) {
   const sellers = marketSellersAll(snapshot);
   const hostOf = (u) => { try { return new URL(u).host; } catch { return ""; } };
 
@@ -1027,7 +1041,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   // same attributes as the per-chain roster rows (see rowData in marketPage).
   const rowData = (s) => {
     const st = sellerStat(s);
-    return ` data-mfb-row data-local="${s.local ? 1 : 0}" data-health="${s.local || s.routable ? 1 : 0}" data-calls="${st?.calls || 0}" data-usd="${st?.usd || 0}" data-buyers="${st?.buyers || 0}" data-tools="${s.toolCount || 0}"`;
+    return ` data-mfb-row data-local="${s.local ? 1 : 0}" data-health="${s.local || s.routable ? 1 : 0}" data-calls="${st?.calls || 0}" data-usd="${st?.usd || 0}" data-buyers="${st?.buyers || 0}" data-tools="${Number(s.toolCount) || 0}"`;
   };
 
   // THIS HOST is PINNED at the top of the roster (transparency: the operator of
@@ -1068,8 +1082,8 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
         <div class="mlr-host">${esc(hostOf(s.homepage))}</div>
       </div>
       <span style="font-family:var(--font-mono);font-size:12.5px;">${chainCell(s)}</span>
-      <span class="mlr-tools">${s.toolCount || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
-      <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${health}</span>
+      <span class="mlr-tools">${Number(s.toolCount) || 0} tool${s.toolCount === 1 ? "" : "s"}${paidSuffix(s)}${txSuffix(s)}${endpointsNote(s)}</span>
+      <span class="mlr-stat${good ? "" : " bad"}"><span class="mlr-dot"></span>${health}</span>${dispatchBadge(s)}
     </div>`;
   }).join("");
 
@@ -1125,7 +1139,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
         <a href="#sellers" style="color:var(--muted);text-decoration:none;">browse all sellers</a>
       </div>
     </div>
-    <p style="font-size:13px;color:var(--faint);margin:10px 0 0;">Describe the job, not the tool name - filters as you type. Resolving is free (<span style="color:var(--muted);">GET /api/find</span>), you only pay to execute. This is the neutral x402 index: every seller, not just ours.</p>
+    <p style="font-size:13px;color:var(--faint);margin:10px 0 0;">Describe the job, not the tool name - FIND searches every tool and shows live results. Resolving is free (<span style="color:var(--muted);">GET /api/find</span>), you only pay to execute. This is the neutral x402 index: every seller, not just ours.</p>
     ${statsHtml}
   </div>`;
 
@@ -1257,6 +1271,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
 <div style="max-width:1080px;margin:0 auto;padding:36px 24px;">
   <section>${headerHtml}</section>
   <section>
+    ${hostCardHtml(host)}
     ${marketFilterBar(null, baseUrl)}
     ${rosterHtml}
   </section>

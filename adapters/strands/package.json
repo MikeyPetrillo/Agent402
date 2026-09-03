@@ -1,7 +1,7 @@
 {
   "name": "agent402-strands",
   "version": "0.1.7",
-  "description": "Drop-in Strands Agents tools for Agent402.Tools (the applied layer of Agentic Finance): turn its catalog - 500+ strong: 400+ pay-per-call tools (x402 or MPP) + 100+ skill packs (browser, web search, OCR, PDFs, finance, memory) - into Strands tool() instances via four meta-tools (find/route/call/about), plus the cross-seller x402 + MPP Smart Order Router. Snaps into AWS Bedrock AgentCore Payments. Free via proof-of-work or pay per call in USDC on Base + 11 more chains, or USDG on Robinhood Chain (12 chains total).",
+  "description": "Drop-in Strands Agents tools for Agent402.Tools (the applied layer of Agentic Finance): turn its catalog - 500+ strong: 400+ pay-per-call tools (x402 or MPP) + 70+ skill packs (browser, web search, OCR, PDFs, finance, memory) - into Strands tool() instances via four meta-tools (find/route/call/about), plus the cross-seller x402 + MPP Smart Order Router. Snaps into AWS Bedrock AgentCore Payments. Free via proof-of-work or pay per call in USDC on Base + 11 more chains, or USDG on Robinhood Chain (12 chains total).",
   "type": "module",
   "main": "index.js",
   "exports": {

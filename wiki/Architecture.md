@@ -71,7 +71,7 @@ the x402 payment headers on acceptance and refuse identity-bound routes (memory,
 `my-usage`), where the signed wallet is the identity.
 
 **The hosted MCP connector is payable over MPP too** (`src/mcp-mpp.js`): a paid call
-arrives as JSON-RPC error `-32042` + challenges / `_meta` credential, and the connector
+arrives as JSON-RPC error `-32042` (`-32043` for a refused credential) + challenges / `_meta` credential, and the connector
 replays it as a loopback HTTP request to its own paid route so the gates above keep
 sole settlement authority.
 
@@ -99,6 +99,6 @@ packs. The Stripe webhook endpoint is signature-verified with
 
 ## Design positions
 
-- **No LLM in the serving path.** Determinism is the product: schemas, flat prices, reproducible outputs.
+- **No LLM in the utility serving path.** The utility tools are deterministic: schemas, flat prices, reproducible outputs. The model gateway (`/v1`) and the report products are the model-backed surfaces, and each says so and is priced for it (the metered tier quotes a ceiling per request).
 - **Payment is identity.** No accounts means no credential database, no signup abuse surface, and memory ownership falls out of the payment protocol for free.
 - **Charge-then-fail is unacceptable.** Get the ordering right: the installed `@x402/express` runs the **handler first and settles afterwards**, and it settles **only** a response whose `statusCode` is `< 400`. Any `4xx`/`5xx` (a bad input, a capacity `503`, an upstream `502`) **cancels settlement**, so the buyer is never charged for a failure. A `200` is charged only if settlement then succeeds; if settlement of a `200` fails, the buffered body is discarded and the caller gets a `402` instead. Two consequences the code depends on: anything that caches, credits, or bills must key off the **final, post-settlement** response (`res.on("finish")` with `statusCode === 200`), never the handler's own status; and a tool that cannot be served reliably (e.g. upstreams that block datacenter IPs) gets removed from the catalog rather than monetized, because a steady stream of cancelled settlements is a broken product even though nobody was billed.

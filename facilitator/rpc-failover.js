@@ -28,6 +28,16 @@
 //     second submission of the same bytes yields the same hash and cannot
 //     double-charge; the calling side's on-chain confirmation handles the
 //     "timed out but landed" case exactly as before.
+//   - HEDGED READS (2026-08-28): a primary that ANSWERS, just slowly, never
+//     trips the 10 s bound and never fails over - and a settle is a chain of
+//     six to ten RPC round-trips before submission plus one per poll, so a
+//     node answering in 8 s each burned the whole 60 s settle budget with no
+//     error anywhere (paid canary 15:14Z: 60 s timeout, no failover line, no
+//     submission, nothing on-chain). With `hedgeMs` > 0, every read that is
+//     still silent after hedgeMs is ALSO sent to the first fallback and the
+//     first ANSWER wins (a JSON-RPC error is an answer; a transport failure
+//     waits for the other side). sendTransaction is never hedged (a second
+//     submit is the ordinary failover's job, only on a transport failure).
 import { rpc } from "@stellar/stellar-sdk";
 
 let installed = false;
@@ -76,15 +86,15 @@ let protoPatched = false;
 
 /** Install the failover on rpc.Server.prototype. `fallbackUrls` in order.
  *  Returns the number of methods patched (0 when nothing to fail over to). */
-export function installRpcFailover(fallbackUrls, { log = console.log, allowHttp = false, requestTimeoutMs = null } = {}) {
+export function installRpcFailover(fallbackUrls, { log = console.log, allowHttp = false, requestTimeoutMs = null, hedgeMs = 0 } = {}) {
   if (installed) return 0;
   installed = true;
   const urls = (fallbackUrls || []).map((u) => String(u).replace(/\/$/, ""));
   if (!urls.length) { state = null; log("[startup] RPC failover DISABLED (no fallback RPC urls) - a stalled primary is bounded only by the request timeout"); return 0; }
-  state = { urls, log, allowHttp, requestTimeoutMs, instances: new Map() };
+  state = { urls, log, allowHttp, requestTimeoutMs, hedgeMs: Number(hedgeMs) > 0 ? Number(hedgeMs) : 0, instances: new Map() };
   const patched = protoPatched ? countMethods() : patchPrototype();
   protoPatched = true;
-  log(`[startup] RPC failover installed: ${urls.map(hostOf).join(", ")} (${patched} rpc.Server methods; transport failures only)`);
+  log(`[startup] RPC failover installed: ${urls.map(hostOf).join(", ")} (${patched} rpc.Server methods; transport failures only${state.hedgeMs ? `; reads hedged to ${hostOf(urls[0])} after ${state.hedgeMs}ms of silence` : ""})`);
   return patched;
 }
 
@@ -122,6 +132,54 @@ async function failover(self, name, args, primaryErr, original) {
   throw primaryErr;
 }
 
+/** Should this call be hedged? Reads only, never on a fallback instance,
+ *  never when the primary IS a fallback url. Exported for tests. */
+export function shouldHedge(name, self) {
+  const st = state;
+  if (!st || !(st.hedgeMs > 0) || !st.urls.length) return false;
+  if (name === "sendTransaction" || self?.[IS_FALLBACK]) return false;
+  const here = String(self?.serverURL || "").replace(/\/$/, "");
+  return !st.urls.includes(here);
+}
+
+// First ANSWER wins. A transport failure from one side waits for the other;
+// a transport failure from the primary BEFORE the hedge fired takes the
+// ordinary failover path (fallbacks in order); both sides failing rejects
+// with the primary's error (fallback error attached), as failover() does.
+function hedged(self, name, args, primary, original) {
+  const st = state;
+  const here = String(self?.serverURL || "").replace(/\/$/, "");
+  const url = st.urls[0];
+  return new Promise((resolve, reject) => {
+    let done = false, hedgeStarted = false, hedgeErr = null, primaryErr = null;
+    let timer = null;
+    const finish = (fn, v) => { if (done) return; done = true; if (timer) clearTimeout(timer); fn(v); };
+    timer = setTimeout(() => {
+      if (done) return;
+      hedgeStarted = true;
+      st.log(`[rpc-hedge] ${name}: ${hostOf(here)} silent for ${st.hedgeMs}ms -> also asking ${hostOf(url)}`);
+      Promise.resolve().then(() => original.apply(fallbackFor(url), args)).then(
+        (v) => { st.log(`[rpc-hedge] ${name}: served by ${hostOf(url)}`); finish(resolve, v); },
+        (e) => {
+          if (!isTransportFailure(e)) return finish(reject, e); // an answer from the fallback stands
+          hedgeErr = e;
+          if (primaryErr) { try { primaryErr.fallbackErrors = [{ url, error: String(e?.code || e?.message || e).slice(0, 120) }]; } catch { /* frozen */ } finish(reject, primaryErr); }
+        },
+      );
+    }, st.hedgeMs);
+    primary.then(
+      (v) => finish(resolve, v),
+      (e) => {
+        if (done) return;
+        if (!isTransportFailure(e)) return finish(reject, e);
+        if (!hedgeStarted) { done = true; clearTimeout(timer); failover(self, name, args, e, original).then(resolve, reject); return; }
+        primaryErr = e;
+        if (hedgeErr) { try { e.fallbackErrors = [{ url, error: String(hedgeErr?.code || hedgeErr?.message || hedgeErr).slice(0, 120) }]; } catch { /* frozen */ } finish(reject, e); }
+      },
+    );
+  });
+}
+
 function countMethods() {
   return Object.getOwnPropertyNames(rpc.Server.prototype).filter((n) => n !== "constructor" && typeof Object.getOwnPropertyDescriptor(rpc.Server.prototype, n)?.value === "function").length;
 }
@@ -142,6 +200,7 @@ function patchPrototype() {
         let r;
         try { r = original.apply(this, args); } catch (e) { return failover(this, name, args, e, original); }
         if (!r || typeof r.then !== "function") return r;
+        if (shouldHedge(name, this)) return hedged(this, name, args, r, original);
         return r.catch((e) => failover(this, name, args, e, original));
       },
     });

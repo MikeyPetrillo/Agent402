@@ -5,8 +5,10 @@ instance) - the buy side of [Agentic Finance](https://agent402.tools/agentic-fin
 agents paying per request over x402 or MPP. **Resolve a task to a tool, then call it - with payment handled for
 you.** Free pure-CPU tools settle with a built-in proof-of-work (no wallet, zero
 dependencies); wallet-only tools settle via an x402- or MPP-wrapped fetch you
-provide, or by card through a prepaid credits key. Results are cached, and
-retries reuse an `Idempotency-Key` so a lost response never double-charges.
+provide, or by card through a prepaid credits key. Results are cached, and every
+send carries an `Idempotency-Key` that is stable per client and per operation, so
+a retried lost response replays the paid answer on the credits and proof-of-work
+paths (the wallet path is different: see "Retries and double charges").
 
 ```bash
 npm install agent402-client
@@ -89,14 +91,32 @@ credits call reserves its price like a wallet call). A payment `fetch` still win
 when both are given, and free pure-CPU tools keep settling with proof-of-work.
 The same Bearer header also reads the balance directly, e.g. `curl -H "Authorization: Bearer a402_..." https://agent402.tools/api/credits/balance`.
 
-## Retries never double-charge
+## Retries and double charges
 
-Every paid call the SDK makes carries an `Idempotency-Key`, so a retry of a
-call whose response was lost replays the original result instead of paying
-again. If your x402 client attaches the standard `payment-identifier`
-extension to its payloads instead, Agent402 honours that id the same way (an
-exact retry with the same credential replays; a fresh authorization with the
-same id is a new payment).
+Every send carries an `Idempotency-Key`. By default it is derived from the
+client instance plus the operation (slug, params, output validator), so it is
+the same key when the SDK retries inside one `call()` AND when your framework
+calls `client.call(slug, params)` again after a timeout or a dropped connection.
+With `{ cache: false }` on the call, identical calls are treated as distinct
+purchases and the key is fresh per invocation. Pass `idempotencyKey` yourself to
+override either behavior. Keys are scoped to the client instance: two processes
+buying the same thing are two purchases.
+
+What the server does with it depends on how the call was paid:
+
+- **Prepaid credits and proof-of-work:** the server binds the key to the credits
+  key (or the accepted solution) plus the route and body, and replays the
+  original 200 for ten minutes. A retry of a lost response is not debited again.
+- **x402 wallet:** the server binds the key to the exact signed authorization.
+  An exact retry (same signed header, same key) replays without a second
+  settlement, and that is what the `payment-identifier` extension gives a stock
+  x402 client. A fresh `call()` through an `@x402/fetch`-wrapped fetch signs a
+  fresh authorization, which the server deliberately treats as a new payment
+  (a client-chosen id on an unverified payload is never a cross-authorization
+  dedupe). So on the wallet path a retry after a lost response can settle twice;
+  the `Idempotency-Key` cannot prevent that on its own. If that matters for your
+  workload, use a credits key for the tools you retry, or keep the signed
+  request and resend it yourself.
 
 ## Workflows (skill packs)
 
@@ -127,7 +147,8 @@ const { query, include, results } = await a.route(task, {
   include: "external",   // all | external | local
   network: "robinhood",  // optional chain filter (short name or CAIP-2)
 });
-// results[]: opaque server rows - { seller, slug, url, priceUsd, executeVia?, ... }
+// results[]: opaque server rows - { seller, slug, url, priceUsd, routerDispatchEligible, routerDispatchReason,
+//            executeVia? (only when executeViaCallableNow is true) | executeViaWhenEligible?, ... }
 
 // executeVia quotes which route-execute* tier fits a row's underlying price.
 // It does NOT bind that row: the tier re-resolves an eligible match under its
@@ -165,13 +186,13 @@ await a.topSellers({ sort: "calls", include: "all" });
 
 | Method | What |
 |---|---|
-| `new Agent402({ baseUrl?, fetch?, creditsKey?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, maxResponseBytes? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `creditsKey` is a prepaid card-credits key (`a402_...`) used for paid tools when no `fetch` is given; `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed |
+| `new Agent402({ baseUrl?, fetch?, creditsKey?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, maxResponseBytes?, outputValidator? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `creditsKey` is a prepaid card-credits key (`a402_...`) used for paid tools when no `fetch` is given; `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check |
 | `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools on **this host** (route, price, schema, example) |
 | `await a.route(task, { k?, include?, network? })` | Cross-seller Smart Order Router: rank eligible/routable seller rows from the host's current index (free, read-only; opaque results may include server-reported `executeVia`) |
 | `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |
 | `await a.getWorkflowPrompt(slug, args)` | Fetch the rendered prompt messages for a skill pack with arguments substituted in |
 | `await a.topSellers({ limit?, sort?, include? })` | Live x402 leaderboard: which sellers are settling the most USDC (primarily on Base) in the last ~24h (free, no payment) |
-| `await a.call(slug, params, { idempotencyKey?, cache?, maxResponseBytes? })` | Call a tool; auto-pays (PoW for free tools; your payment `fetch` or the credits key for wallet-only); returns the JSON result |
+| `await a.call(slug, params, { idempotencyKey?, cache?, maxResponseBytes?, outputValidator? })` | Call a tool; auto-pays (PoW for free tools; your payment `fetch` or the credits key for wallet-only); returns the JSON result |
 | `Agent402.solvePow(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value |
 | `a.spendingSummary()` | Rolling-24h paid spend so far: `{ dailyUsd, calls, byHost, limits }` |
 | `a.clearCache()` | Drop the in-memory result cache |
@@ -196,6 +217,56 @@ An oversized body throws `ResponseTooLargeError` carrying `size`, `cap`,
 `source` and `paid`. Check `paid`: on a wallet-only tool the money moved before
 the body arrived, so a refused response is still a spend you made.
 
+## Buyer-owned output validation
+
+A successful payment and HTTP 200 do not prove that the delivered result is
+useful. Supply a stable contract id and a local callback to enforce the exact
+output your agent needs:
+
+```js
+const a = new Agent402({
+  fetch: payFetch,
+  outputValidator: {
+    id: "unemployment-result/v1",
+    validate: (body) =>
+      typeof body.current === "number" &&
+      Array.isArray(body.history) &&
+      typeof body.source === "string",
+  },
+});
+```
+
+`validate` may return `false` or throw to reject delivery, and may be async.
+Use any local validator you prefer: Ajv, Zod, agent-payment-policy, or ordinary
+application code. The client adds no dependency and never sends the validator
+or its id to the seller.
+
+Validation runs after bounded JSON parsing and before cache admission. A
+rejected paid response throws `OutputValidationError` with `paid: true`, stays
+in `spendingSummary()`, and is never cached. Contracted cache entries are
+namespaced by a SHA-256 digest of `id` and revalidated on every hit, so a
+different contract or a caller-mutated cached object cannot bypass the check.
+The caller owns the meaning and stability of `id`; changing validation
+semantics requires a new id. A per-call validator may replace the constructor
+validator, but `null` or omission preserves the constructor policy rather than
+silently weakening it. Use a separate client when a route intentionally has no
+output contract.
+
+**Two costs worth knowing.** `validate` is awaited inside `call()`, so it is
+bounded: a validator that has not settled in **5 seconds** rejects delivery with
+`OutputValidationError` rather than hanging the call. On a paid route the money
+has already moved by then, so an indefinite hang would be the worst place to
+have one; a timeout is a rejection, because an unfinished contract is not a
+satisfied one. Override per validator with `timeoutMs`:
+
+```js
+outputValidator: { id: "big-schema/v1", validate: slowCheck, timeoutMs: 30_000 }
+```
+
+And because contracted cache entries are revalidated on **every** hit, an
+expensive validator is paid for on cache hits too, not just on the network call.
+Keep it cheap, or accept that cost knowingly.
+
 ## Spending caps (never overpay)
 
 By default the client pays whatever a tool costs. Set optional hard ceilings and a
@@ -219,9 +290,11 @@ try {
 }
 ```
 
-Only **settled** paid calls count against the rolling window - a blocked or failed
-call never consumes budget. Free proof-of-work calls are never counted. Omit a cap
-(or leave it `null`) for no limit; with none set, behavior is unchanged.
+Only **settled** paid calls count against the rolling window. A call refused or
+failed before settlement never consumes budget. A paid HTTP-success response
+that later fails byte, JSON, or output validation remains settled spend. Free
+proof-of-work calls are never counted. Omit a cap (or leave it `null`) for no
+limit; with none set, behavior is unchanged.
 
 **What the caps check.** When a cap is set, the client preflights the `402` and
 checks the ceiling against the **larger** of the advertised price (from the

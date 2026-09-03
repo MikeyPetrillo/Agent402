@@ -19,7 +19,7 @@
       },
       "walletKey": {
         "type": "string",
-        "description": "Optional EVM private key for x402 USDC payment (needs @x402/fetch + @x402/evm + viem installed)."
+        "description": "Optional EVM private key for x402 USDC payment (needs @x402/fetch + @x402/evm + viem installed). Precedence: this, then AGENT402_WALLET_KEY, then the wallet `setup` generates at ~/.openclaw/agent402/wallet.key."
       },
       "port": {
         "type": "number",

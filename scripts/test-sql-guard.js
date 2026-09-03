@@ -128,5 +128,19 @@ for (const tool of SQL_GUARD_TOOLS) {
   try { guard.handler({}); } catch (e) { ok(e.statusCode === 400, "missing sql is a 400"); }
 }
 
+
+// 2026-08-28 review: a backslash is not an escape outside E'...' (standard_conforming_strings),
+// and several write-shaped statements wore a read's hat.
+{
+  const a = analyzeSql("SELECT '\\'; DELETE FROM users; --'");
+  ok(a.statementCount === 2 && a.mutating === true, "backslash inside a plain literal does not hide a second statement (2 statements, mutating)");
+  const e = analyzeSql("SELECT E'it\\'s'");
+  ok(e.statementCount === 1 && e.mutating === false, "a backslash escape inside an E'...' literal is still honoured");
+  for (const q of ["EXPLAIN ANALYZE DELETE FROM t", "SELECT * INTO newt FROM t", "DO $$ BEGIN DELETE FROM t; END $$", "CALL f()", "WITH x AS (MERGE INTO t USING s ON 1=1 WHEN MATCHED THEN DELETE) SELECT 1"]) {
+    ok(analyzeSql(q).mutating === true, `classified mutating: ${q.slice(0, 40)}`);
+  }
+  ok(analyzeSql("EXPLAIN SELECT 1").mutating === false && analyzeSql("SELECT 1").mutating === false, "plain reads stay reads");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

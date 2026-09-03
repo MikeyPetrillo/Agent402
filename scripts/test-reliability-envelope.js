@@ -10,7 +10,9 @@
 //   1. GET /api/reliability → 200 application/json.
 //   2. Envelope: { service, status, asOf, servingSince, processUptimeSeconds,
 //      toolCallsServed, onchain{}, guarantees[], endpoints{}, incidents }.
-//   3. service === 'Agent402.Tools', status === 'operational' (a 200 by definition
+//   3. service === 'Agent402.Tools', and `status` MIRRORS the measured overall
+//      from /api/status (never a self-assessment: the two surfaces contradicted
+//      each other in the same minute before 2026-08-28). A 200 by definition
 //      means the node is serving — the field documents that contract).
 //   4. asOf parses as ISO; processUptimeSeconds and toolCallsServed are numbers.
 //   5. onchain has revenueProof URL (or null in FREE_MODE) + a note.
@@ -54,7 +56,11 @@ try {
   ok(body.service === "Agent402.Tools", `service='Agent402.Tools' (got ${body.service})`);
   // status field documents the contract — a 200 from this URL means the
   // node is up; the field is the machine-readable version of that fact.
-  ok(body.status === "operational", `status='operational' (got ${body.status}) — a 200 here documents node liveness`);
+  // The word must come from the OUTSIDE observers, so any state /api/status can
+  // report is valid here; what is NOT valid is this endpoint inventing one.
+  const OBSERVED = new Set(["operational", "degraded", "outage", "unknown", "serving", "no data"]);
+  ok(OBSERVED.has(String(body.status)), `status mirrors the measured overall (got ${body.status})`);
+  ok(typeof body.statusMeasuredFrom === "string" && body.statusMeasuredFrom.endsWith("/api/status"), "the report names where that status was measured");
   ok(typeof body.asOf === "string" && !isNaN(Date.parse(body.asOf)), `asOf is parseable ISO (got ${body.asOf})`);
   ok(typeof body.servingSince === "string", `servingSince is string (got ${typeof body.servingSince})`);
   ok(typeof body.processUptimeSeconds === "number" && body.processUptimeSeconds >= 0, `processUptimeSeconds is non-negative number (got ${body.processUptimeSeconds})`);

@@ -213,6 +213,18 @@ ok(isMeterable({ x402: { scheme: "upto" } }) === false && isMeterable({ _x402Sch
 }
 
 
+// ---- setMeterSentinel: the sentinel is NON-enumerable (never serializes, even nested) ----
+{
+  const { setMeterSentinel } = await import("../src/gateway-meter.js");
+  const data = setMeterSentinel({ choices: [] }, 0.0042);
+  ok(data.__meterUpstreamUsd === 0.0042 && !Object.keys(data).includes("__meterUpstreamUsd") && !JSON.stringify({ nested: data }).includes("__meterUpstreamUsd"), "setMeterSentinel: readable by the binder, invisible to JSON.stringify and Object.keys (nested too)");
+  ok(setMeterSentinel({ a: 1 }, "0.1").__meterUpstreamUsd === undefined && setMeterSentinel(null, 0.1) === null, "setMeterSentinel: refuses a non-number cost and a non-object result");
+  const overrides = [];
+  const req = { ...reqWith({ "payment-signature": paymentHeader(uptoPayload) }), __meteredQuoteUsd: 0.058011 };
+  const amount = applyMeteredSettlement({ result: data, req, tool: { slug: "v1-chat-metered", price: "$0.001" }, res: { headersSent: false, setHeader() {} }, enabled: true, setOverrides: (_r, o) => overrides.push(o) });
+  ok(typeof amount === "number" && amount > 0.0042 && amount < 0.0049 && !("__meterUpstreamUsd" in data) && overrides.length === 1, `applyMeteredSettlement reads the non-enumerable sentinel, meters ($${amount}), and deletes it`);
+}
+
 // ---- metered tier: the ceiling is the per-request quote, not the catalog floor ----
 {
   const overrides = [];

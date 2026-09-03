@@ -182,5 +182,24 @@ ok(!noDay2.includes("Last 24h across the ecosystem"), "missing leaderboard snaps
   }
 }
 
+// Boot warm-up (2026-08-28): the snapshot cache is stale-while-revalidate, so
+// only a COLD cache blocks - and it is cold exactly once per deploy. An
+// outside reviewer measured /marketplace at 5.58 s on that first request
+// against 0.25-0.42 s warm. The warm-up must be unref'd (never hold the
+// process open), must not run when the offline flag is set, and must never
+// throw into boot.
+{
+  const { warmEconomySnapshot } = await import("../src/x402-economy.js");
+  const prev = process.env.X402_SYNC_ON_START;
+  process.env.X402_SYNC_ON_START = "false";
+  ok(warmEconomySnapshot() === null, "the offline flag skips the warm-up entirely");
+  process.env.X402_SYNC_ON_START = prev === undefined ? "" : prev;
+  if (prev === undefined) delete process.env.X402_SYNC_ON_START;
+  const t = warmEconomySnapshot({ delayMs: 3_600_000 });
+  ok(t && typeof t === "object", "the warm-up returns its timer handle");
+  ok(t.hasRef ? t.hasRef() === false : true, "the warm-up timer is unref'd and cannot hold the process open");
+  clearTimeout(t);
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

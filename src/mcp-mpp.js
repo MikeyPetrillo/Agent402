@@ -26,6 +26,14 @@
 import { Challenge, Credential, Receipt } from "mppx";
 
 export const MCP_PAYMENT_REQUIRED_CODE = -32042;
+// mppx 0.9.1+ ("Fixed MCP payment errors to use the specification-defined
+// JSON-RPC codes"): a PRESENTED credential that is refused is -32043, not a
+// fresh -32042. Both codes carry the same data shape ({httpStatus, challenges,
+// problem}); the 0.9.x client reads challenges from either, an 0.8.x client
+// reads only -32042 and so stops re-paying a refused credential on its own -
+// which is the spec's intent for a refusal (a tampered credential should not
+// be silently retried with money).
+export const MCP_PAYMENT_VERIFICATION_FAILED_CODE = -32043;
 export const MCP_CREDENTIAL_META = "org.paymentauth/credential";
 export const MCP_RECEIPT_META = "org.paymentauth/receipt";
 export const MCP_PAYMENT_REQUIRED_META = "org.paymentauth/payment-required";

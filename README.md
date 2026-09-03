@@ -1,4 +1,24 @@
-# Agent402.Tools - 500+ tools, the open x402 + MPP index and router for AI agents
+# Agent402.Tools: 500+ tools, metered models and finished reports for AI agents
+
+**The paid door for AI agents: 500+ tools, metered models and finished reports, paid per call in USDC over x402 and MPP, or by card. Open source, self-hostable, MCP-native.**
+
+Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent402.tools) · [Why pay here](https://agent402.tools/why) · [Receipts](https://agent402.tools/proof) · [Status](https://agent402.tools/status) · [Security](https://agent402.tools/security) · [Company](https://agent402.tools/company)
+
+**Try it in 30 seconds:** `claude mcp add agent402 -- npx -y agent402-mcp`, or paste `https://agent402.tools/mcp` into any MCP client. The free tier needs no wallet. Verified setup blocks for Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS and AgentCore: [agent402.tools/guides/agent-hosts](https://agent402.tools/guides/agent-hosts) (shortlinks `agent402.sh/<host>`, e.g. `agent402.sh/cursor`).
+
+**Who pays:** agents pay per call (from $0.001; models metered under a quoted ceiling and settled at actual usage); people buy finished reports ($2 to $5) and monitors ($5 a month) by card; sites charge crawlers with the tollbooth.
+
+[![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
+[![CodeQL](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml)
+[![Secret scan](https://github.com/MikeyPetrillo/Agent402/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/secret-scan.yml)
+[![npm](https://img.shields.io/npm/v/agent402-mcp?label=agent402-mcp)](https://www.npmjs.com/package/agent402-mcp)
+[![npm](https://img.shields.io/npm/v/agent402-client?label=agent402-client)](https://www.npmjs.com/package/agent402-client)
+[![npm](https://img.shields.io/npm/v/agent402-tollbooth?label=agent402-tollbooth)](https://www.npmjs.com/package/agent402-tollbooth)
+[![CI](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
+[Listed on Smithery](https://smithery.ai/servers/mike-kq9d/agent402)
+
+## What Agent402 is
 
 > **Agentic Finance** is software agents paying and getting paid on their
 > own: discovering a service, paying per request from a wallet over open protocols
@@ -14,18 +34,18 @@
 > - **Leaderboard** - [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) is the **public on-chain ranking** of every x402 seller by **Base USDC settled volume** - calls served, totalUsd, unique buyers per seller. Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate by `payTo`. Hourly snapshot.
 >
 > Plus the catalog - **500+ strong: search/answer as the MCP front door, then
-> 400+ tools + 100+ curated skill packs** (multi-tool workflows callable as MCP
+> 500+ tools and curated skill packs** (multi-tool workflows callable as MCP
 > prompts) - all runnable yourself, plus
 > [`agent402-tollbooth`](tollbooth) - an open pay-per-crawl gate for the other
 > side of x402.
 >
 > **Two doors, two price lists.** Agents pay per call in USDC (x402 / MPP) or
-> free via proof-of-work, and a finished **report** costs $0.20 to $1.10 that
+> free via proof-of-work, and a finished **report** costs $0.60 to $2.00 that
 > way. People pay by card: the same reports at
 > [agent402.tools/reports](https://agent402.tools/reports) (company dossier, 13F fund
 > report, insider flow, market brief, deep research, FDA recall, domain audit)
-> are $1, or $2 for the deepest three, **monitors** that re-run on change at
-> [/monitors](https://agent402.tools/monitors) are $3 a month, and **prepaid
+> are $2 to $5, **monitors** that re-run on change at
+> [/monitors](https://agent402.tools/monitors) are $5 a month, and **prepaid
 > credits** at [/credits](https://agent402.tools/credits) are one `a402_` key
 > that pays every tool by card (`Authorization: Bearer a402_…`, debited per
 > successful call; supported by `agent402-mcp` via `AGENT402_CREDITS_KEY` and
@@ -46,13 +66,6 @@
 > seller we can verify live. Details: [What is MPP](https://agent402.tools/what-is-mpp)
 > · [live MPP settlements](https://agent402.tools/revenue).
 
-[![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
-[![npm](https://img.shields.io/npm/v/agent402-mcp?label=agent402-mcp)](https://www.npmjs.com/package/agent402-mcp)
-[![npm](https://img.shields.io/npm/v/agent402-client?label=agent402-client)](https://www.npmjs.com/package/agent402-client)
-[![npm](https://img.shields.io/npm/v/agent402-tollbooth?label=agent402-tollbooth)](https://www.npmjs.com/package/agent402-tollbooth)
-[![CI](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/deploy.yml)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
-[![smithery badge](https://smithery.ai/badge/mike-kq9d/agent402)](https://smithery.ai/servers/mike-kq9d/agent402)
 
 **Framework adapters** (drop-in tools for the major agent stacks - auto-payment underneath):
 [![npm](https://img.shields.io/npm/v/agent402-openai-tools?label=openai-tools)](https://www.npmjs.com/package/agent402-openai-tools)
@@ -65,15 +78,15 @@
 [![npm](https://img.shields.io/npm/v/agent402-openai-agents?label=openai-agents)](https://www.npmjs.com/package/agent402-openai-agents)
 [![npm](https://img.shields.io/npm/v/agent402-agentkit?label=agentkit)](https://www.npmjs.com/package/agent402-agentkit)
 
-**500+ strong - live web search and cited answers as the MCP front door, then 400+ ready-to-use web tools + 100+ multi-tool skill packs for your AI agent, from one server. Every one tested, priced, and settled on-chain; every one earns its place. Browser
+**500+ strong - live web search and cited answers as the MCP front door, then ready-to-use web tools and multi-tool skill packs for your AI agent, from one server. Every one tested, priced, and settled on-chain; every one earns its place. Browser
 rendering, web search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, deterministic stats, forecasting, and options/bond pricing (Black-Scholes, YTM), compression, and 200+ pure-CPU utilities.** Run it yourself for free in 30 seconds (MCP **or**
 plain HTTP, no API keys, no signup - the free tier and x402/MPP payments never
 need a key; only the optional prepaid card credits use one bearer key), connect
 it to Claude/ChatGPT/any MCP client, and add your own tools in a few lines.
-Every catalog tool is deterministic - **no LLM in the serving path** - and
-re-tested against its own example before every release. The two sanctioned
-LLM surfaces are explicit and priced as such: the `/v1` gateway and the
-finished report products (`/v1/research`, `/v1/dossier`, ... below).
+Every utility tool is deterministic - **no LLM in the serving path** - and
+re-tested against its own example before every release. The model-backed
+surfaces are explicit and priced as such: the `/v1` gateway (metered under a
+quoted ceiling, or flat tiers) and the finished report products (`/v1/research`, `/v1/dossier`, ... below).
 
 > Optionally, the same server can charge per call over the [x402
 > protocol](https://x402.org) (USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche,
@@ -140,7 +153,7 @@ Boots straight from the repo's `railway.toml` + `Dockerfile`. Optional plugins a
 | **Crypto derivatives & options** | `perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`, `perp-open-interest`, `perp-klines`, `perp-orderbook` (live perpetuals: mark/oracle price, funding, OI, candles, depth); `options-summary`, `crypto-options-chain`, `options-ticker`, `options-volume` (options book, IV and greeks, onchain options volume) - $0.002 to $0.005 a call, no exchange account |
 | **DeFi & stablecoins** | `defi-yields` (screen pools by chain, project, TVL and stablecoin-only), `defi-yield-history`, `defi-protocols`, `defi-protocol`, `defi-chains`, `defi-chain-tvl-history`, `defi-fees`, `defi-dex-volume`, `stablecoins`, `stablecoin-supply-history` - $0.002 to $0.003 a call |
 | **Solana token intel** | `sol-token-safety` (authorities, liquidity, holder concentration, graded), `sol-token-report` (full risk write-up), `sol-token-holders`, `sol-token-pairs`, `sol-token-search`, `sol-trending`, `sol-price`, `sol-swap-quote`, `sol-token-lookup` - the due-diligence pass an agent needs before it touches a mint |
-| **Crypto market coverage** | `crypto-news`, `crypto-indicators` (RSI, MACD, moving averages, computed here), `crypto-market-pulse`, `coin-profile`, `coin-history`, `coin-ohlc`, `coin-market-chart-range`, `coin-categories`, `coin-price-by-contract` (price by token ADDRESS, no coin id needed), `global-defi`, `exchanges`, `exchange-tickers`, `exchange-rates`, `coin-search`, `coins-list` |
+| **Crypto market coverage** | `crypto-news`, `crypto-indicators` (RSI, MACD, moving averages, computed here), `crypto-market-pulse`, `coin-profile`, `coin-history`, `coin-ohlc`, `coin-market-chart-range`, `coin-categories`, `coin-price-by-contract` (price by token ADDRESS, no coin id needed), `global-defi`, `exchanges`, `exchange-tickers`, `exchange-rates`, `coin-search`, `coins-list` - plus tokenized real-world assets from the same CoinGecko key: `rwa-list`, `rwa-markets`, `rwa-asset`, `rwa-issuers`, `rwa-issuer` (tokenized stocks, ETFs and commodities with onchain market data and the issuers behind them) |
 | **Indexed chain data** | `asset-transfers` (filtered transfer history), `token-balances`, `token-allowance`, `tx-receipt` (decoded transfers), `block-receipts`, `token-price-history` - indexed reads across the major EVM chains, no node and no key of your own |
 | **Farcaster social** | `fc-cast-search`, `fc-channel-feed`, `fc-trending`, `fc-user-casts`, `fc-cast`, `fc-cast-replies`, `fc-channel`, `fc-user-search`, `fc-cast-metrics` - search, feeds and engagement metrics on the onchain social graph |
 | **Site crawling** | `site-map` (enumerate a site's URLs) and `site-crawl` (breadth-first crawl to clean markdown, robots-respecting, hard page/depth/time budgets) - the deterministic pair behind any "read this whole site" task |
@@ -243,7 +256,7 @@ enables it with `STRIPE_SECRET_KEY`, otherwise these pages simply do not mount):
 
 | Page | What you get |
 |---|---|
-| [agent402.tools/reports](https://agent402.tools/reports) | Buy any finished report from the table above by card (`POST /api/buy`) for $1, or $2 for the deepest three (research max, dossier max, ticker pack), delivered at `/r/<session>` - no wallet, no account. The card price includes payment processing; an agent paying per call pays the lower tool price for the same report. A report is generated only against a Stripe-verified paid session, once; a failed generation is refunded automatically. |
+| [agent402.tools/reports](https://agent402.tools/reports) | Buy any finished report from the table above by card (`POST /api/buy`) for $2 to $5 (the deepest tiers and the ticker pack sit at the top of that range; current prices on the page), delivered at `/r/<session>` - no wallet, no account. The card price includes payment processing; an agent paying per call pays the lower tool price for the same report. A report is generated only against a Stripe-verified paid session, once; a failed generation is refunded automatically. |
 | [agent402.tools/monitors](https://agent402.tools/monitors) | $5/month subscriptions that re-run a report when something changes and email you: **domain security monitor** (free daily re-probe, full paid re-run on a security change, a certificate inside 14 days of expiry, or every 30 days), **SEC filing watch** (new filing), **Solana token safety watch** (changed safety facts), **fund 13F watch** (new filing), **FDA recall watch** (new recall number), **insider flow watch** (new Form 4), **IPO pipeline watch** (weekly digest). Reports land at `/m/<id>`; manage or cancel through the Stripe Customer Portal at `/monitors/manage`. |
 | [agent402.tools/credits](https://agent402.tools/credits) | Prepaid credits in $20 / $50 / $100 packs. You get one `a402_…` key (shown once on the thanks page and emailed); send it as `Authorization: Bearer a402_…` on any priced route and the call is paid from the balance - **debited only on a successful response**, integer micro-dollars so sub-cent prices are exact, never expires. `GET /api/credits/balance` (same header) reads the balance; a 402 with `{reason, balanceUsd, topup}` means insufficient. Identity-bound tools (`/api/memory*`, `my-usage`) refuse credits because the payment is the identity there; pay those over an x402 rail. |
 
@@ -251,7 +264,7 @@ The credits key is understood by the SDKs: `agent402-mcp` reads
 `AGENT402_CREDITS_KEY` and `agent402-client` takes `{ creditsKey }`, so a wallet-less
 agent can still call every wallet-only tool by card.
 
-## Skill packs - 100+ multi-tool workflows
+## Skill packs - 70+ multi-tool workflows
 
 For jobs that span several tools - "audit a domain", "diagnose deliverability",
 "work up a time-series", "peel an opaque blob" - Agent402 ships curated
@@ -300,6 +313,15 @@ curl -X POST https://agent402.tools/api/route \
 # "Who are the most-used x402 sellers right now? (on-chain proof, not self-reports)"
 curl 'https://agent402.tools/api/leaderboard?top=25&include=external'
 ```
+
+**Dispatch is labelled, never implied:** every `/api/route` row and `/api/index`
+seller carries `routerDispatchEligible` and `routerDispatchReason` (`crawl_failed`,
+`network_unknown`, `settlement_required`, `settlement_checked_at_pay_time`,
+`eligible`, ...); `executeVia` appears only on a row the router will pay right
+now (`executeViaCallableNow: true`), otherwise the tier moves to
+`executeViaWhenEligible`. `routable` is crawl readiness, never a promise to pay.
+A manifest-priced route is also read live once and then weekly, so the chains
+its 402 actually offers reach the row even when the seller's manifest lags.
 
 **Health-aware:** sellers whose last few crawls errored are excluded from the
 router (a buyer routed to a dead seller wastes money). Healthier sellers also
@@ -365,7 +387,7 @@ const res = await openai.chat.completions.create({ model: "gpt-4o-mini", tools, 
 
 Already a Claude/MCP user? `agent402-mcp` is still the better path - paste `https://agent402.tools/mcp` into your client. The adapters are for direct API integrations where MCP isn't available. Sources: [`adapters/`](adapters).
 
-**OpenClaw agents:** drop in [`skills/openclaw/agent402/SKILL.md`](skills/openclaw/agent402/SKILL.md) - teaches an OpenClaw agent to find, pay (x402 USDC on Base, eleven other chains accepted, or free proof-of-work), and call any of the 400+ tools (or 100+ packs).
+**OpenClaw agents:** drop in [`skills/openclaw/agent402/SKILL.md`](skills/openclaw/agent402/SKILL.md) - teaches an OpenClaw agent to find, pay (x402 USDC on Base, eleven other chains accepted, or free proof-of-work), and call any of the 500+ tools and packs.
 
 ## Add your own tool (~15 lines)
 
@@ -409,6 +431,11 @@ and agents pay in USDC on Base (or Solana, Polygon, Arbitrum, Monad, Celo, Avala
 Algorand - or USDG on Robinhood Chain via `PAYMENT_NETWORKS=…,robinhood` +
 `ROBINHOOD_FACILITATOR_URL`) via standard x402 clients:
 
+Every 402 is valid under `@x402/core`'s own schemas (at most five tags, CI-checked
+on all routes) and carries a typed output schema twice: in the `bazaar` discovery
+extension and as `accepts[0].outputSchema` on the first accept, so a client that
+reads the spec's field sees the response shape before paying.
+
 ```js
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
@@ -447,8 +474,8 @@ sha256 proof-of-work (sub-second; the MCP servers do it automatically). Details:
 Every claim links to the surface that proves it (the one-page version: [agent402.tools/why](https://agent402.tools/why)).
 
 1. **Pay for what the model used, with the ceiling quoted first.** The metered gateway (`POST /v1/metered/chat/completions`) quotes each 402 from the request's own body; a wallet paying `upto` settles actual usage under that ceiling, provider discounts such as prompt-cache reads pass through at cost, and every settled x402 or MPP response carries a receipt.
-2. **A failed call is not charged, and the response proves it.** Settlement runs after the handler and an error status cancels it, so a response with no payment receipt, or a receipt marked `success:false`, moved no money; a retry carrying an `Idempotency-Key` replays the paid answer instead of paying again; the one residual case (a settled receipt on an error response) is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.
-3. **One key buys everything.** The same wallet or credits key pays for five LLM tiers on three wires (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ deterministic tools, wallet-keyed memory and finished reports.
+2. **A failed call is not charged, and the response proves it.** Settlement runs after the handler and an error status cancels it, so a response with no payment receipt, or a receipt marked `success:false`, moved no money; a retry carrying the same `Idempotency-Key` and the same payment credential replays the paid answer instead of paying again; the one residual case (a settled receipt on an error response) is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.
+3. **One key buys everything.** The same wallet or credits key pays for five LLM tiers on three wires (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools, wallet-keyed memory and finished reports.
 4. **No wallet required.** [Prepaid credits by card](https://agent402.tools/credits), cards over MPP and card checkout for reports sit beside USDC or USDG on twelve chains and native MPP on Tempo.
 5. **Finished work, ready to use.** Dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a LinkedIn article package, grounded in primary sources with a data appendix; [monitors](https://agent402.tools/monitors) probe daily for free and re-run the paid report when the facts change.
 6. **We buy on your behalf.** `POST /api/route/execute` resolves a task to the best proven seller across the ecosystem, pays them from our wallet and relays the result under one receipt.
@@ -466,7 +493,7 @@ Every claim links to the surface that proves it (the one-page version: [agent402
 - **Hardened** - connect-time SSRF guard on every URL tool (DNS-rebind safe),
   proof-of-work that's signed/single-use/slug-scoped, per-IP rate limits, and
   security headers. See [wiki: Security Model](https://github.com/MikeyPetrillo/Agent402/wiki/Security-Model).
-- **Deterministic** - no model in the serving path, so the same input always
+- **Deterministic utilities** - no model in the serving path of the utility tools, so the same input always
   gives the same output, with full OpenAPI schemas.
 - **Auditable, on-chain revenue** - every paid call settles in USDC to
   [`agent402.base.eth`](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns)
@@ -514,6 +541,11 @@ evm challenges from the same 402, or give it a Tempo relay key
 (`createTollbooth({ tempo: { apiKey, recipient, currency, splits } })`) and it
 settles MPP `tempo/charge` credentials on Tempo with optional split payments,
 with no x402 middleware at all.
+Since 0.10.0 the **edge build speaks MPP too**: with `secret`, `payTo` and your
+`verifyX402` callback set, every 402 carries a `WWW-Authenticate: Payment`
+challenge beside the x402 quote, and an `Authorization: Payment` credential
+(HMAC-bound to that challenge, unexpired, minted for that exact resource) is
+translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 
 ## Repository map
 
@@ -547,7 +579,7 @@ with no x402 middleware at all.
 - AI-gateway traffic (`/v1` chat, embeddings, images, speech) is additionally subject to the
   upstream model providers' usage policies. Wallets used for prohibited content are blocked
   before settlement (`WALLET_BLOCKLIST`).
-- The **server code** is AGPL-3.0-licensed (the client SDK, MCP connector, and tollbooth packages are MIT) and provided as-is, without warranty (see [LICENSE](LICENSE) and [NOTICE](NOTICE)). "Agent402" and the logo are trademarks of Havok Holdings LLC - the license covers the code, not the name; forks must rename (see [TRADEMARKS.md](TRADEMARKS.md)).
+- The **server code** is AGPL-3.0-licensed and provided as-is; every **published npm package** is MIT with its own LICENSE file in its directory: `agent402-mcp` (`mcp/`), `agent402-client` (`client/`), `agent402-tollbooth` (`tollbooth/`), `agent402-openclaw` (`openclaw/`), `agent402-agentkit` (`adapters/agentkit/`), `elizaos-plugin-agent402` (`adapters/eliza/`) and the facilitator (`facilitator/`). GitHub's repository-level license badge reports the server's AGPL; a package's `license` field and its directory's LICENSE are what apply to that package. Provided as-is, without warranty (see [LICENSE](LICENSE) and [NOTICE](NOTICE)). "Agent402" and the logo are trademarks of Havok Holdings LLC - the license covers the code, not the name; forks must rename (see [TRADEMARKS.md](TRADEMARKS.md)).
   If you self-host, you are the operator: your deployment, your terms, your compliance -
   Havok Holdings LLC operates only the hosted instance and is not responsible for third-party
   deployments.
@@ -561,5 +593,5 @@ with no x402 middleware at all.
 ## Contributing
 
 PRs that add useful tools, fix bugs, or improve docs are very welcome - see
-[CONTRIBUTING.md](CONTRIBUTING.md). AGPL-3.0 licensed (packages MIT). Maintained by
+[CONTRIBUTING.md](CONTRIBUTING.md). Server AGPL-3.0, every published package MIT (see Legal above). Maintained by
 [Havok Holdings LLC](https://github.com/MikeyPetrillo/Agent402).

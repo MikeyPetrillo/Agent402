@@ -346,7 +346,7 @@ export function docsIndex(baseUrl) {
 }
 
 export function docsPage(baseUrl, slug) {
-  const md = WIKI[slug];
+  const md = Object.hasOwn(WIKI, slug) ? WIKI[slug] : null;
   if (!md) return null;
   const title = slug.replace(/-/g, " ");
   const firstPara = (md.replace(/^#.*$/m, "").match(/\n\n([^\n#][^\n]+)/) || [])[1] || `Agent402 documentation: ${title}.`;

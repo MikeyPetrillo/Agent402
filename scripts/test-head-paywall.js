@@ -46,7 +46,7 @@ const proc = spawn("node", ["src/server.js"], {
 });
 
 try {
-  for (let i = 0; i < 40; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
+  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
 
   const head = await fetch(`${B}/api/uuid`, { method: "HEAD" });
   ok(head.status === 402, `unpaid HEAD on a paid GET tool -> 402 (got ${head.status})`);
@@ -57,6 +57,18 @@ try {
 
   const get = await fetch(`${B}/api/uuid`);
   ok(get.status === 402, `unpaid GET still 402s (got ${get.status})`);
+  // POST on a GET-only tool takes the SAME gate chain (2026-08-28 alias): an
+  // unpaid POST is a 402 with the same challenge, never a free execution.
+  const postAlias = await fetch(`${B}/api/uuid`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 4 }) });
+  ok(postAlias.status === 402 && !!postAlias.headers.get("payment-required"), `unpaid POST on a GET-only paid tool -> 402 with PAYMENT-REQUIRED, not 405 and never free (got ${postAlias.status})`);
+  // ... and the other direction: GET / HEAD on a POST-only paid tool answers
+  // the same unpaid 402 (the paywall is VISIBLE to GET-only trust indexers).
+  const getOnPost = await fetch(`${B}/api/hash`);
+  ok(getOnPost.status === 402 && !!getOnPost.headers.get("payment-required"), `unpaid GET on POST-only /api/hash -> 402 with PAYMENT-REQUIRED, not 405 (got ${getOnPost.status})`);
+  const headOnPost = await fetch(`${B}/api/hash`, { method: "HEAD" });
+  ok(headOnPost.status === 402 && !!headOnPost.headers.get("payment-required") && (await headOnPost.text()).length === 0, `unpaid HEAD on POST-only /api/hash -> 402, same headers, empty body (got ${headOnPost.status})`);
+  const postGarbage = await fetch(`${B}/api/uuid`, { method: "POST", headers: { "Content-Type": "application/json", "payment-signature": "bm90LWEtcGF5bWVudA" }, body: "{}" });
+  ok(postGarbage.status === 402, `a POST with a garbage payment header on a GET-only tool is refused like a GET would be (got ${postGarbage.status})`);
   ok((await get.text()).length > 0, "GET 402 keeps its JSON body (no over-suppression)");
 
   const health = await fetch(`${B}/health`, { method: "HEAD" });

@@ -22,7 +22,7 @@ An open HTTP payment standard built on the `402 Payment Required` status code, w
 USDC on Base (primary), Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, or Algorand - plus USDG (Global Dollar) on Robinhood Chain. The buyer needs only the stablecoin - gas/fees are sponsored by the facilitator on every rail.
 
 **Does using this spend my AI tokens?**
-No. There's no LLM anywhere in the serving path of the per-call tools - every tool is deterministic code. Proof-of-work spends your CPU; x402 or MPP spends USDC. (The report products are the exception by design: deterministic evidence gathering plus a grounded, cited synthesis, priced per report, and the `/v1` LLM gateway is inference you ask for explicitly.)
+No. There's no LLM in the serving path of the utility tools - they are deterministic code. Proof-of-work spends your CPU; x402 or MPP spends USDC. (The report products are the exception by design: deterministic evidence gathering plus a grounded, cited synthesis, priced per report, and the `/v1` LLM gateway is inference you ask for explicitly.)
 
 **Is my data stored?**
 Tool inputs are processed in memory and not persisted - except the memory tools, whose purpose is storage (wallet-keyed, owner-deletable, TTL-able). Full policy: [agent402.tools/privacy](https://agent402.tools/privacy).

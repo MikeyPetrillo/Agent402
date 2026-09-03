@@ -13,6 +13,10 @@ import { CODE_RUN_TOOLS } from "../src/tools/code-run-kit.js";
 const tool = (slug) => CODE_RUN_TOOLS.find((t) => t.slug === slug);
 const h = (slug) => tool(slug).handler;
 let assertFail = 0, liveOk = 0, liveErr = 0;
+const liveErrors = [];
+// An upstream that cannot mint a sandbox at all (E2B 5xx / their own timeouts) is THEIR outage, not a broken
+// integration: the same 502-is-not-ours rule the probe lanes use. Anything else (401, unexpected shape) stays fatal.
+const isSandboxOutage = (e) => Number(e.statusCode) >= 502 && /Sandbox creation failed|connection pool timeout|aborted due to timeout|Failed to create sandbox/i.test(String(e.message));
 const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; console.error(`ASSERT FAIL - ${m}`); } };
 
 // --- deterministic validation (no E2B key, no network) ---
@@ -79,7 +83,7 @@ async function live(slug, args, check, label) {
     if (check(r)) { liveOk++; console.log(`ok - LIVE ${label}: ${JSON.stringify(r).slice(0, 200)}`); }
     else { assertFail++; console.error(`ASSERT FAIL - LIVE ${label}: unexpected shape ${JSON.stringify(r).slice(0, 300)}`); }
   } catch (e) {
-    liveErr++;
+    liveErr++; liveErrors.push(e);
     console.warn(`warn - LIVE ${label}: upstream error (${e.statusCode || "?"}) ${e.message} — tolerated`);
   }
 }
@@ -123,8 +127,14 @@ console.log(`\nvalidation: ${assertFail === 0 ? "all passed" : `${assertFail} FA
 if (process.env.E2B_LIVE_TEST === "1") {
   console.log(`live: ${liveOk} ok, ${liveErr} upstream errors`);
   if (liveOk === 0 && liveErr > 0) {
-    console.error("FAIL: every live call errored — E2B integration may be broken");
-    process.exit(1);
+    if (liveErrors.every(isSandboxOutage)) {
+      let status = "status page unreadable";
+      try { const j = await (await fetch("https://status.e2b.dev/api/v2/status.json", { signal: AbortSignal.timeout(8000) })).json(); status = `status page: ${j?.status?.description || "?"}`; } catch {}
+      console.warn(`warn - every live call failed at SANDBOX CREATION (E2B 5xx; ${status}) — upstream outage, not ours; live coverage NOT obtained this run`);
+    } else {
+      console.error("FAIL: every live call errored — E2B integration may be broken");
+      process.exit(1);
+    }
   }
 }
 if (assertFail > 0) process.exit(1);

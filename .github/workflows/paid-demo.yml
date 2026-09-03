@@ -23,6 +23,10 @@ on:
         description: "Pinned CAIP-2 chain to pay on (must be among the live accepts)"
         required: false
         default: "eip155:8453"
+      mirror:
+        description: "Mirror the credential under X-PAYMENT too (default on); 'off' = pure stock client, PAYMENT-SIGNATURE only"
+        required: false
+        default: "on"
       target:
         description: "Seller base URL - defaults to our prod; set to buy from an EXTERNAL x402 seller (ecosystem demos)"
         required: false
@@ -46,7 +50,7 @@ jobs:
         # Same pinning + lifecycle-script hygiene as the paid canary (audit
         # R-07): no wallet secrets in scope here, --ignore-scripts everywhere,
         # @x402/* pinned to the server's protocol version (2.16).
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.16.0 @x402/evm@2.16.0 @x402/svm@2.16.0 @x402/stellar@2.21.0 @stellar/stellar-sdk@16.0.1 @solana/kit@5.5.1 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.22.0 @x402/evm@2.22.0 @x402/svm@2.22.0 @x402/stellar@2.21.0 @stellar/stellar-sdk@16.0.1 @solana/kit@5.5.1 viem@2.52.2
       - name: Buy the tool (real funds, pinned chain)
         # Wallet secrets scoped to THIS step only (audit R-07) — only the one
         # matching the pinned chain's namespace is read by the script. Inputs
@@ -54,6 +58,7 @@ jobs:
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
           SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
+          PAID_DEMO_MIRROR: ${{ github.event.inputs.mirror }}
           STELLAR_BURNER_SECRET: ${{ secrets.STELLAR_BURNER_SECRET }}
           ALGORAND_BURNER_MNEMONIC: ${{ secrets.ALGORAND_BURNER_MNEMONIC }}
           DEMO_PATH: ${{ inputs.path }}

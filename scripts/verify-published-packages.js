@@ -20,6 +20,21 @@ import { join } from "node:path";
 
 const TARGET = process.env.TARGET_URL || "https://agent402.tools";
 let pass = 0;
+/** Run `fn`; if it fails a transient check, wait and run it once more. Only what
+ *  survives the second attempt is reported - and a NON-transient failure is
+ *  raised at once rather than being retried into a slower identical answer. */
+const RETRY_DELAY_MS = Number(process.env.VERIFY_RETRY_DELAY_MS || 30_000);
+async function retryOnce(fn, isTransient, label) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (!isTransient(e)) throw e;
+    console.log(`  (${label} failed transiently: ${String(e?.message || e).slice(0, 120)} - retrying once in ${RETRY_DELAY_MS / 1000}s)`);
+    await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+    return fn();
+  }
+}
+
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exitCode = 1; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -83,7 +98,17 @@ try {
   ok(missing.length === 0, `it advertises the catalog tools an agent needs${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
 
   // A free, read-only call that must reach live prod and come back with real data.
-  const called = await rpc(3, "tools/call", { name: "catalog.search", arguments: { query: "uuid" } });
+  // Same deploy-window exposure as the SDK check below, but rpc() returns an
+  // error OBJECT rather than throwing, so it needs its own second look. The
+  // package also logs "Could not load the catalog ... starting with an empty
+  // catalog" to stderr when /api/pricing is mid-rollout, which is the same
+  // moment expressed a second way.
+  let called = await rpc(3, "tools/call", { name: "catalog.search", arguments: { query: "uuid" } });
+  if (called?.error || !(called?.result?.content?.[0]?.text || "").length) {
+    console.log(`  (catalog.search came back empty or errored - retrying once in ${RETRY_DELAY_MS / 1000}s, prod may be mid-deploy)`);
+    await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+    called = await rpc(4, "tools/call", { name: "catalog.search", arguments: { query: "uuid" } });
+  }
   const text = called?.result?.content?.map((c) => c.text || "").join("") || "";
   ok(!called?.error && text.length > 0, `a catalog.search through the published package reaches ${TARGET} and returns results${called?.error ? ` (${JSON.stringify(called.error).slice(0, 160)})` : ""}`);
 
@@ -93,7 +118,18 @@ try {
   // --- 2. the published buyer SDK ------------------------------------------
   const { Agent402 } = await import(join(dir, "node_modules", "agent402-client", "index.js"));
   const client = new Agent402({ baseUrl: TARGET });
-  const found = await client.find("generate a uuid");
+  // SINGLE RETRY, the same doctrine every other prod-facing probe in this repo
+  // uses. The service is volume-backed, so EVERY deploy has a 60-90s window with
+  // no container answering, and this job runs daily plus after each deploy - on
+  // 2026-08-31 it ran at 15:33 between main deploys at 15:29 and 15:36 and paged
+  // on a 502 that was our own rollout. A published package being unreachable for
+  // one moment during our deploy is not the package being broken; a package that
+  // is still unreachable 30 seconds later is worth waking someone for.
+  const found = await retryOnce(
+    () => client.find("generate a uuid"),
+    (e) => /HTTP 50[0-9]|fetch failed|ECONNREFUSED|ETIMEDOUT|socket hang up/i.test(String(e?.message || e)),
+    "agent402-client find()",
+  );
   ok(Array.isArray(found) ? found.length > 0 : !!found, `the published agent402-client@${cliVer} resolves a task against live prod via find()`);
 
   console.log(`\n${pass} passed${process.exitCode ? " (with failures above)" : ", 0 failed"}`);

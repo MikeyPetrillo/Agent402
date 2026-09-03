@@ -11,12 +11,21 @@ Guide: https://agent402.tools/guides/openclaw-model-provider
 
 ```bash
 openclaw plugins install agent402-openclaw
-AGENT402_CREDITS_KEY=a402_... npx agent402-openclaw setup --write   # key by env (or `--credits-key -` on stdin); buy one by card at https://agent402.tools/credits
+npx agent402-openclaw setup --write        # no key? it mints a wallet and prints the address to fund
 openclaw gateway restart
 ```
 
+With no credits key and no `AGENT402_WALLET_KEY`, `setup` generates an EVM
+wallet into `~/.openclaw/agent402/wallet.key` (0600, the only copy, never
+printed) and prints its address: send it USDC on Base and every call is paid
+from it over x402. `agent402-openclaw wallet` shows the address and balance;
+`--no-wallet` skips the generation. Prefer a card? Buy a pack at
+https://agent402.tools/credits and run
+`AGENT402_CREDITS_KEY=a402_... npx agent402-openclaw setup --write` (key by env,
+or `--credits-key -` on stdin).
+
 (`openclaw plugins install` copies the plugin into `~/.openclaw/extensions` and
-does not link its CLI, hence `npx`.) `setup` stores the key under
+does not link its CLI, hence `npx`.) `setup` stores a credits key under
 `~/.openclaw/agent402/credits.key` (0600) and prints the `openclaw.json` block;
 add `--write` to merge it in. The primary model it writes is the cheapest
 metered model that can hold OpenClaw's own prompt: OpenClaw sends roughly 70k
@@ -77,6 +86,7 @@ the key.
 - `agent402-openclaw setup [--credits-key K | --credits-key - (stdin) | AGENT402_CREDITS_KEY env] [--write] [--port N] [--flat]`
 - `agent402-openclaw proxy [--port N] [--upstream URL]`
 - `agent402-openclaw doctor`
+- `agent402-openclaw wallet [--rpc URL]` (address + USDC balance of the wallet the proxy pays from)
 - `agent402-openclaw permit2-approve [--rpc URL]` (one-time USDC approval so the wallet pays actual usage over upto)
 
 ## What else the same key buys
@@ -84,7 +94,7 @@ the key.
 The key or wallet that pays for chat also pays for the rest of the gateway and
 the catalog, with one 402 shape and one receipt shape: OpenAI Responses and
 Anthropic Messages wires, embeddings, rerank, images, video, speech,
-transcription, grounded answers with citations, 500+ deterministic tools over
+transcription, grounded answers with citations, 500+ tools over
 MCP or HTTP, wallet-keyed memory, finished reports (dossiers, insider flow, 13F,
 domain audits, token risk, deep research) and monitors, plus routing that buys
 from proven external sellers on the agent's behalf.

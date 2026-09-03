@@ -72,6 +72,11 @@ regexes = [
   '''alch_TESTKEY_0123456789abcdef''',
   # Placeholder KDF-output example in the crypto-hash tool docs.
   '''a1b2c3d4e5f6''',
+  # test-backup.js's first encryption test key (2026-08-28, commit 4d456753): the
+  # ascending hex pattern repeated four times, a fixture with no live
+  # counterpart; the test now builds its key at runtime. Kept only so the
+  # full-history scan stays clean.
+  '''0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef''',
   # erc721-owner's discovery example tokenId (chain-kit.js): the keccak-256
   # labelhash of "vitalik" - the PUBLIC ENS registrar token id for
   # vitalik.eth, recomputable by anyone from the name. On-chain public data,

@@ -1,6 +1,6 @@
 {
   "name": "agent402-tollbooth",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "description": "Agent402 tollbooth: open-source, self-hostable pay-per-crawl for x402 AND MPP (the sell side of Agentic Finance): charge AI bots per request (USDC via x402, or MPP - the Machine Payments Protocol - through the same settlement, or USDG on Robinhood Chain, or free proof-of-work) while humans browse free. Drop-in Express middleware or reverse proxy that settles both wires from env alone - no Cloudflare, no Stripe, no signup.",
   "type": "module",
   "main": "index.js",
@@ -18,7 +18,10 @@
     "./replay": "./replay.js",
     "./replay.js": "./replay.js",
     "./mpp": "./mpp.js",
-    "./mpp.js": "./mpp.js"
+    "./mpp.js": "./mpp.js",
+    "./edge-mpp": "./edge-mpp.js",
+    "./edge-mpp.js": "./edge-mpp.js",
+    "./mpp-codec.js": "./mpp-codec.js"
   },
   "files": [
     "index.js",
@@ -27,6 +30,8 @@
     "bots.js",
     "pow.js",
     "mpp.js",
+    "mpp-codec.js",
+    "edge-mpp.js",
     "tempo.js",
     "dashboard.js",
     "sinks.js",

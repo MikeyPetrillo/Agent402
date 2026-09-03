@@ -3,7 +3,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 export function contactPage(baseUrl) {
   const canonical = `${baseUrl}/contact`;
   const title = "Contact - Agent402.Tools";
-  const description = "Get in touch with the Agent402 team. Email mike@agent402.tools or reach out on GitHub and X.";
+  const description = "Get in touch with the Agent402 team. Email mike@agent402.tools, mike@agent402.tools for vulnerabilities, or reach out on GitHub and X.";
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -54,6 +54,7 @@ export function contactPage(baseUrl) {
   <section>
   <div class="ct-eyebrow">$ GET /contact</div>
   <h1 class="ct-h1">Get in touch.</h1>
+  <p style="font-size:15px;color:var(--muted);max-width:60ch;margin:0 0 18px;">Questions, integrations, partnerships, press or investment: pick the channel below. Security reports go to <a href="/security">/security</a>; investors and partnerships to hello@havok.holdings; abuse, copyright and legal requests to mike@agent402.tools (see <a href="/terms">/terms</a>). The company page is at <a href="/company">/company</a>.</p>
   <p class="ct-intro">Have a question, want to integrate, or just want to say hi? Reach out through any of the channels below.</p>
   </section>
 
@@ -76,7 +77,7 @@ export function contactPage(baseUrl) {
     </div>
     <div class="ct-card">
       <div class="ct-card-label">built by</div>
-      <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">Havok Holdings LLC</a>
+      <a href="https://havok.holdings" rel="noopener">Havok Holdings LLC</a>
       <p>Open source, open book.</p>
     </div>
   </div>

@@ -28,7 +28,7 @@ description: >
   Use this skill when the user (or your own task) needs a web capability you
   cannot get without signing up for something: live web search and cited
   answers, browser rendering, PDF/OCR/image processing, live financial, crypto
-  and macro data, SEC EDGAR, wallet-keyed memory, or any of 500+ deterministic
+  and macro data, SEC EDGAR, wallet-keyed memory, or any of 500+
   pay-per-call tools. Agent402 needs no account and no API key - you pay per
   request with USDC over x402 or MPP, with proof-of-work (CPU) on the
   pure-compute tools, or with a prepaid card-credits key (Bearer a402_...). Triggers: agent402, x402, MPP, pay-per-call API, "I need
@@ -50,7 +50,7 @@ https://github.com/MikeyPetrillo/Agent402
   (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`).
 - Resolve a plain-language task to the right tool, with its price, input
   schema and a ready example (\`/api/find?q=<task>\`).
-- Call any of ${total} deterministic tools (${powCount} of them free via
+- Call any of ${total} tools (${powCount} of them free via
   proof-of-work): rendering, PDFs, OCR, images, conversions, data lookups,
   finance/crypto/macro, government data, wallet-keyed memory, and an
   OpenAI-compatible LLM gateway (\`/v1/chat/completions\`, \`/v1/embeddings\`,

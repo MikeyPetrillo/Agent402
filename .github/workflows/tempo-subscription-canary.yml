@@ -16,6 +16,13 @@ name: Tempo subscription canary - live verification (daily + dispatch)
 # it, so a rail that quietly stops billing cannot go unnoticed - which is the
 # exact failure mode this rail has, since a renewal that never fires means we
 # serve a subscriber for free until their grace window ends.
+# Least privilege: the default token on this repo is read-only, so a job that
+# opens an issue on failure needs issues: write spelled out (two alarms could
+# not page before 2026-08-28).
+permissions:
+  contents: read
+  issues: write
+
 on:
   workflow_dispatch:
   schedule:

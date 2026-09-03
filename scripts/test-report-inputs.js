@@ -3,6 +3,7 @@
 // reader would have been misled by, verified live before it was fixed.
 import { recallRow, fdaDate } from "../src/tools/gov-kit.js";
 import { tlsScoreOf, certCoversHost } from "../src/tools/domain-audit-kit.js";
+import { readFileSync } from "node:fs";
 import { itemLabels, exhibitFromIndexHeaders, sliceForBudget, docMaxBytesFor, PERIODIC_DOC_MAX_BYTES, __test as fw } from "../src/tools/filing-watch-kit.js";
 import { parseForm4 } from "../src/tools/insider-flow-kit.js";
 import { parse13fCover } from "../src/tools/edgar-kit.js";
@@ -71,6 +72,27 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
   ok(sliceForBudget("short doc", 100, "10-Q").excerpted === false, "a document that fits is returned whole");
   const s1 = sliceForBudget("x".repeat(5000), 1000, "S-1");
   ok(s1.excerpted && s1.sections[0].label === "opening portion" && s1.text.length === 1000, "non-periodic forms keep the opening-portion cut");
+}
+
+// ---- filing-report: routine ownership forms are parsed, not "NOT FETCHED" ----
+{
+  const { parseForm144, describeRoutineForm, rawXmlUrl, ROUTINE_PARSE_FORMS } = await import("../src/tools/filing-watch-kit.js");
+  const { parseForm4 } = await import("../src/tools/insider-flow-kit.js");
+  ok(rawXmlUrl("https://www.sec.gov/Archives/edgar/data/320193/000114036126034741/xslF345X06/form4.xml") === "https://www.sec.gov/Archives/edgar/data/320193/000114036126034741/form4.xml" && rawXmlUrl("https://www.sec.gov/Archives/edgar/data/1/2/xsl144X01/primary_doc.xml") === "https://www.sec.gov/Archives/edgar/data/1/2/primary_doc.xml", "the raw XML sits at the index URL without the xsl segment");
+  ok(["3", "4", "5", "144"].every((f) => ROUTINE_PARSE_FORMS.has(f)) && !ROUTINE_PARSE_FORMS.has("8-K"), "Forms 3/4/5/144 are parsed; substantive forms are read as documents");
+  const x144 = "<edgarSubmission><formData><issuerInfo><issuerName>Apple Inc.</issuerName></issuerInfo><securitiesInformation><securitiesClassTitle>Common Stock</securitiesClassTitle><brokerOrMarketmakerDetails><name>Morgan Stanley</name></brokerOrMarketmakerDetails><noOfUnitsSold>50000</noOfUnitsSold><aggregateMarketValue>11500000</aggregateMarketValue><noOfUnitsOutstanding>14900000000</noOfUnitsOutstanding><approxSaleDate>08/12/2026</approxSaleDate><securitiesExchangeName>NASDAQ</securitiesExchangeName></securitiesInformation><securitiesToBeSold><natureOfAcquisitionTransaction>Restricted Stock Vesting</natureOfAcquisitionTransaction><nameOfPersonfromWhomAcquired>Issuer</nameOfPersonfromWhomAcquired><amountOfSecuritiesAcquired>50000</amountOfSecuritiesAcquired></securitiesToBeSold><relationshipsToIssuer><relationshipToIssuer>Officer</relationshipToIssuer></relationshipsToIssuer><nameOfPersonForWhoseAccountTheSecuritiesAreToBeSold>Jane Example</nameOfPersonForWhoseAccountTheSecuritiesAreToBeSold><planAdoptionDates><planAdoptionDate>05/01/2026</planAdoptionDate></planAdoptionDates></formData></edgarSubmission>";
+  const r = parseForm144(x144);
+  ok(r && r.seller === "Jane Example" && r.relationship === "Officer" && r.units === 50000 && r.aggregateValueUsd === 11500000 && r.approxSaleDate === "08/12/2026" && /Morgan Stanley/.test(r.broker) && r.planAdoptionDate === "05/01/2026", `Form 144 fields parse (${JSON.stringify(r).slice(0, 120)})`);
+  ok(parseForm144("<html>not a form</html>") === null, "a non-144 document parses to null, never a hollow record");
+  const line144 = describeRoutineForm({ f: { form: "144", filed: "2026-08-11", accession: "0001950047-26-007959" }, r144: r });
+  ok(/Jane Example \(Officer\) proposes to sell 50,000 Common Stock \(aggregate market value \$11,500,000\) on or about 08\/12\/2026 on NASDAQ via Morgan Stanley/.test(line144) && /10b5-1 plan adopted 05\/01\/2026/.test(line144), "the Form 144 prompt line names seller, size, value, date, broker and the plan");
+  const x4 = "<ownershipDocument><issuer><issuerName>Apple Inc.</issuerName><issuerTradingSymbol>AAPL</issuerTradingSymbol></issuer><periodOfReport>2026-08-25</periodOfReport><reportingOwner><reportingOwnerId><rptOwnerCik>1</rptOwnerCik><rptOwnerName>Sam Example</rptOwnerName></reportingOwnerId><reportingOwnerRelationship><isDirector>0</isDirector><isOfficer>1</isOfficer><officerTitle>SVP, General Counsel</officerTitle></reportingOwnerRelationship></reportingOwner><nonDerivativeTable><nonDerivativeTransaction><securityTitle><value>Common Stock</value></securityTitle><transactionDate><value>2026-08-25</value></transactionDate><transactionCoding><transactionCode>S</transactionCode></transactionCoding><transactionAmounts><transactionShares><value>4000</value></transactionShares><transactionPricePerShare><value>231.5</value></transactionPricePerShare><transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode></transactionAmounts><postTransactionAmounts><sharesOwnedFollowingTransaction><value>120000</value></sharesOwnedFollowingTransaction></postTransactionAmounts><ownershipNature><directOrIndirectOwnership><value>D</value></directOrIndirectOwnership></ownershipNature></nonDerivativeTransaction></nonDerivativeTable><footnotes><footnote id=\"F1\">Sale effected pursuant to a Rule 10b5-1 trading plan.</footnote></footnotes></ownershipDocument>";
+  const line4 = describeRoutineForm({ f: { form: "4", filed: "2026-08-27", period: "2026-08-25", accession: "0001140361-26-034741" }, form4: parseForm4(x4) });
+  ok(/Sam Example \(SVP, General Counsel\)/.test(line4) && /S\/D 4,000 Common Stock @ \$231\.5 on 2026-08-25, 120,000 owned after \(D\)/.test(line4) && /Rule 10b5-1 plan/.test(line4) && /Transaction codes/.test(line4), `the Form 4 prompt line names the insider, the sale, the price, what is owned after and the plan (${line4.slice(0, 100)})`);
+  const src = readFileSync(new URL("../src/tools/filing-watch-kit.js", import.meta.url), "utf8");
+  ok(/=== ROUTINE FORMS PARSED/.test(src) && /!routineAcc\.has\(f\.accession\)/.test(src) && /deps\.fetchForm \|\| fetchXmlText/.test(src), "the prompt carries the parsed block, parsed forms leave NOT FETCHED, and the reader is injectable");
+  const tb = readFileSync(new URL("../src/tools/token-brief-kit.js", import.meta.url), "utf8");
+  ok(/TODAY is \$\{new Date\(\)\.toISOString\(\)\.slice\(0, 10\)\}/.test(tb) && /has already passed/.test(tb), "token brief: the prompt states today's date so a past unlock date is never called upcoming (JUP sample, 2026-08-28)");
 }
 
 // ---- Form 4 derivative + holdings -------------------------------------------

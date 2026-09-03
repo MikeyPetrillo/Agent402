@@ -285,5 +285,25 @@ export async function x402EconomySnapshot() {
   return startEconomyRefresh();
 }
 
+/** Build the snapshot ONCE at boot so no visitor is ever the cold one.
+ *
+ *  The cache is stale-while-revalidate, so only a COLD cache blocks - and the
+ *  cache is cold exactly once per deploy. Measured by an outside reviewer
+ *  2026-08-28: /marketplace took 5.58 s wall clock on that first request,
+ *  against 0.25-0.42 s warm, and we deployed ~25 times that day, so the odds
+ *  of a crawler or a partner landing on the cold one were not small. Unref'd
+ *  and delayed so it never competes with the boot path or the readiness
+ *  probe, and a failure is swallowed: this is a warm-up, not a dependency.
+ */
+export function warmEconomySnapshot({ delayMs = 20_000 } = {}) {
+  if (String(process.env.X402_SYNC_ON_START || "").toLowerCase() === "false") return null;
+  const t = setTimeout(() => {
+    if (cached) return; // a visitor already paid for it; nothing to warm
+    startEconomyRefresh().catch(() => {});
+  }, delayMs);
+  t.unref?.();
+  return t;
+}
+
 // esc/fmt formatting for the rendered section now live in x402-index.js,
 // next to the section that consumes this snapshot.

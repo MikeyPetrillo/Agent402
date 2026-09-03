@@ -1,0 +1,53 @@
+# Did anyone BUY what we are paying to advertise?
+#
+# The keep-alive pays a tiny settlement so CDP keeps a route listed, and that is
+# strictly advertisement - it buys presence, not demand. The question that
+# decides whether to keep paying is whether a listing produced an outside buyer,
+# and CDP answers it per resource: quality.l30DaysUniquePayers.
+#
+# READ THAT FIELD CAREFULLY. Our own burner is a payer, so "1 unique payer"
+# means nobody but us, and lastCalledAt is refreshed by our own sweep too.
+# Measured 2026-08-31: 452 listings, 442 "called in the last 7 days", and yet
+# 371 of them had exactly one payer. Only 62 had a second.
+#
+# So this reports payers >= 2, never call counts, and it says plainly when a
+# group is costing money and returning nothing.
+name: Bazaar usage report
+
+on:
+  schedule:
+    # Monthly on the 21st, 06:11 UTC. The 63 skill packs were swept 2026-08-31
+    # and are culled 30 days later, so a report on the 21st lands with nine days
+    # left to act on what it says.
+    - cron: "11 6 21 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: bazaar-usage-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+      - name: Who is actually buying the listings
+        id: r
+        run: |
+          node scripts/bazaar-usage-report.js > report.md
+          cat report.md
+      - name: File it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Bazaar usage report $(date -u +%Y-%m-%d)" \
+            --body-file report.md

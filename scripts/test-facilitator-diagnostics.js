@@ -212,5 +212,43 @@ const CF_BLOCK = `<html> <head> <title>Coinbase</title> <meta name="robots" cont
   ok(ray.includes("8f2c1d4e5a6b7c8d-ATL"), "a ray id survives redaction - it is the thing a provider asks for");
 }
 
+
+// ---- one retry of a verify that died at the socket level ------------------
+// (2026-09-02, seen twice in CI: a pooled keep-alive socket the facilitator
+// closed during the post-listen stall; the verify was written to it and died
+// UND_ERR_SOCKET with the facilitator having seen nothing, buyer told 402.)
+{
+  const { installFacilitatorDiagnostics, isRetryableFacilitatorRead, socketErrorCode } = await import("../src/facilitator-diagnostics.js");
+  const sock = () => Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }) });
+  const hosts = new Set(["fac.example"]);
+  ok(isRetryableFacilitatorRead("https://fac.example/verify", { method: "POST", body: "{}" }, sock(), hosts), "POST /verify + UND_ERR_SOCKET on a facilitator host is retryable");
+  ok(isRetryableFacilitatorRead("https://fac.example/supported", { method: "GET" }, sock(), hosts), "GET /supported too");
+  ok(!isRetryableFacilitatorRead("https://fac.example/settle", { method: "POST", body: "{}" }, sock(), hosts), "a SETTLE is never retried from here (it can move money)");
+  ok(!isRetryableFacilitatorRead("https://other.example/verify", { method: "POST", body: "{}" }, sock(), hosts), "a non-facilitator host is never retried");
+  ok(!isRetryableFacilitatorRead("https://fac.example/verify", { method: "POST", body: "{}" }, new Error("boom"), hosts), "a non-socket error is not retried");
+  ok(!isRetryableFacilitatorRead("https://fac.example/verify", { method: "POST", body: new ReadableStream() }, sock(), hosts), "a stream body cannot be resent, so no retry");
+  ok(socketErrorCode(sock()) === "UND_ERR_SOCKET" && socketErrorCode({ code: "ECONNRESET" }) === "ECONNRESET" && socketErrorCode(new Error("x")) === null, "the socket code is read from the error or its cause");
+  const calls = []; const lines = [];
+  let first = true;
+  const fetchImpl = async (url, init) => {
+    calls.push(String(url));
+    if (first) { first = false; throw sock(); }
+    return new Response(JSON.stringify({ isValid: true }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const f = installFacilitatorDiagnostics(["https://fac.example"], { log: (l) => lines.push(l), fetchImpl });
+  const r = await f("https://fac.example/verify", { method: "POST", body: "{}" });
+  ok(r.status === 200 && calls.length === 2 && /retrying once/.test(lines[0] || ""), `a verify that died on the socket is resent once and the answer is the retry's (calls ${calls.length})`);
+  calls.length = 0; first = true;
+  let threw = null;
+  try { await f("https://fac.example/settle", { method: "POST", body: "{}" }); } catch (e) { threw = e; }
+  ok(threw && calls.length === 1, "the same failure on /settle propagates after ONE attempt");
+  calls.length = 0;
+  const twice = async () => { calls.push("x"); throw sock(); };
+  const g = installFacilitatorDiagnostics(["https://fac.example"], { log: () => {}, fetchImpl: twice });
+  let second = null;
+  try { await g("https://fac.example/verify", { method: "POST", body: "{}" }); } catch (e) { second = e; }
+  ok(second && calls.length === 2, "a verify that dies twice propagates after exactly two attempts (one retry, never a loop)");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

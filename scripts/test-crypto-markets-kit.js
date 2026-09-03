@@ -58,8 +58,9 @@ const EXPECTED = {
   "coin-price-by-contract": "$0.005", "coin-profile": "$0.008", "coin-history": "$0.005", "coin-ohlc": "$0.008",
   "coin-market-chart-range": "$0.008", "coin-categories": "$0.005", "global-defi": "$0.005", "exchanges": "$0.005",
   "exchange-tickers": "$0.008", "exchange-rates": "$0.005", "coin-search": "$0.005", "coins-list": "$0.005",
+  "rwa-list": "$0.003", "rwa-markets": "$0.006", "rwa-asset": "$0.006", "rwa-issuers": "$0.003", "rwa-issuer": "$0.006",
 };
-ok(CRYPTO_MARKETS_TOOLS.length === 12, `12 tools exported (got ${CRYPTO_MARKETS_TOOLS.length})`);
+ok(CRYPTO_MARKETS_TOOLS.length === 17, `17 tools exported (got ${CRYPTO_MARKETS_TOOLS.length})`);
 const slugs = new Set();
 for (const t of CRYPTO_MARKETS_TOOLS) {
   ok(EXPECTED[t.slug] === t.price, `${t.slug}: priced ${t.price}`);
@@ -128,6 +129,45 @@ ok(__test.TTL.price === 60_000 && __test.TTL.list === 300_000 && __test.TTL.coin
   Date.now = () => realNow() + 61_000;
   try { await h("coin-ohlc")({ coin: "bitcoin", days: 1 }); } finally { Date.now = realNow; }
   ok(calls.length === 2, "cache: a 60s price entry expires after its TTL");
+}
+
+// ----------------------------------------------------------------------------
+// Real-world assets (/rwas, live shapes captured 2026-09-02)
+// ----------------------------------------------------------------------------
+{
+  reset();
+  const gold = { id: "gold", symbol: "xau", name: "Gold", asset_type: "commodity", image: "https://img/gold.png", tokenized_market_data: { current_price: 4376.6, market_cap: 5219552133, total_volume: 557496353, high_24h: 4394.94, low_24h: 4289.36, price_change_24h: 42.77, price_change_percentage_24h: 0.98698, market_cap_change_24h: 44135859, market_cap_change_percentage_24h: 0.8528, last_updated: "2026-09-02T18:49:00Z" } };
+  routes = {
+    "/api/v3/rwas/list": jsonRes(200, [{ id: "gold", symbol: "xau", name: "Gold", asset_type: "commodity" }, { id: "nvidia", symbol: "nvda", name: "Nvidia", asset_type: "stock" }, { id: "spdr-gold", symbol: "gld", name: "SPDR Gold Shares", asset_type: "etf" }]),
+    "/api/v3/rwas/markets": jsonRes(200, [gold]),
+    "/api/v3/rwas/issuers/list": jsonRes(200, [{ id: "coinbase-ecosystem", name: "Coinbase" }]),
+    "/api/v3/rwas/issuers/coinbase-ecosystem": jsonRes(200, { id: "coinbase-ecosystem", name: "Coinbase", market_cap: 9982908.5, market_cap_change_24h: 100918.3, volume_24h: 20001148, updated_at: "2026-09-02T17:00:00Z", tokens: [{ id: "nvidia-coinbase-tokenized-stock", symbol: "nvdac", name: "NVIDIA (Coinbase Tokenized Stock)", platforms: { base: "0xb20000000000000000000078ee7ce2fe4908108c", junk: null } }] }),
+    "/api/v3/rwas/gold": jsonRes(200, { id: "gold", symbol: "xau", name: "Gold", asset_type: "commodity", image: { large: "https://img/gold-large.png" }, web_slug: "gold", last_updated: "2026-09-02T18:49:00Z" }),
+  };
+  const l = await h("rwa-list")({ type: "commodity" });
+  ok(l.total === 3 && l.byType.stock === 1 && l.byType.etf === 1 && l.count === 1 && l.assets[0].id === "gold" && l.assets[0].symbol === "XAU", "rwa-list: type filter + counts by type + upper-cased symbol");
+  const lq = await h("rwa-list")({ q: "nvda" });
+  ok(calls.length === 1 && lq.count === 1 && lq.assets[0].id === "nvidia" && lq.cached === true, "rwa-list: q matches symbol, projected from the cached list");
+  await throws(h("rwa-list")({ type: "bond" }), 400, "rwa-list: unknown type");
+  const m = await h("rwa-markets")({ type: "stock", order: "volume_desc", perPage: 10, currency: "eur" });
+  const mu = calls.at(-1).url.searchParams;
+  ok(mu.get("vs_currency") === "eur" && mu.get("asset_type") === "stock" && mu.get("order") === "volume_desc" && mu.get("per_page") === "10" && mu.get("page") === "1", "rwa-markets: every filter rides as a query parameter");
+  ok(m.count === 1 && m.markets[0].price === 4376.6 && m.markets[0].change24hPct === 0.98698 && m.markets[0].symbol === "XAU" && m.markets[0].currency === "eur", "rwa-markets: tokenized_market_data flattened");
+  await throws(h("rwa-markets")({ order: "alphabetical" }), 400, "rwa-markets: unknown order");
+  await throws(h("rwa-markets")({ perPage: 500 }), 400, "rwa-markets: perPage bound");
+  const ids = await h("rwa-markets")({ ids: "gold,nvidia" });
+  ok(calls.at(-1).url.searchParams.get("ids") === "gold,nvidia" && ids.ids.length === 2, "rwa-markets: ids list");
+  const a = await h("rwa-asset")({ id: "gold" });
+  ok(a.id === "gold" && a.webSlug === "gold" && a.image === "https://img/gold-large.png" && a.market?.price === 4376.6 && a.market.currency === "usd", "rwa-asset: metadata joined with its market row");
+  ok(calls.filter((c) => c.url.pathname === "/api/v3/rwas/gold").length === 1 && calls.filter((c) => c.url.pathname === "/api/v3/rwas/markets").length === 3, "rwa-asset: two upstream reads, both through the cache");
+  await throws(h("rwa-asset")({}), 400, "rwa-asset: id required");
+  const is = await h("rwa-issuers")({});
+  ok(is.count === 1 && is.issuers[0].id === "coinbase-ecosystem", "rwa-issuers: list");
+  const one = await h("rwa-issuer")({ id: "coinbase-ecosystem" });
+  ok(one.name === "Coinbase" && one.marketCap === 9982908.5 && one.count === 1 && one.tokens[0].symbol === "NVDAC" && one.tokens[0].platforms.base === "0xb20000000000000000000078ee7ce2fe4908108c" && !("junk" in one.tokens[0].platforms), "rwa-issuer: aggregate + tokens with contracts, empty platforms dropped");
+  routes["/api/v3/rwas/issuers/nope"] = jsonRes(404, {});
+  await throws(h("rwa-issuer")({ id: "nope" }), 422, "rwa-issuer: unknown id -> 422");
+  for (const t of CRYPTO_MARKETS_TOOLS.filter((x) => x.slug.startsWith("rwa-"))) ok(!/\u2014/.test(t.description) && t.discovery.output.example.source === "coingecko" && typeof t.discovery.output.example.fetchedAt === "string", `${t.slug}: description + example envelope`);
 }
 
 // ----------------------------------------------------------------------------

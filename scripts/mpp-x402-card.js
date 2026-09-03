@@ -99,7 +99,7 @@ function cardSvg(d) {
   ${hRow(430, "pay on either →", "HTTP 200 + settle receipt on the matching wire", false)}
   ${hRow(458, "served so far  →", `${Number(d.paidCalls).toLocaleString()} paid calls · ${Number(d.mppWire).toLocaleString()} over the MPP wire`, false)}
   ${insetNote}
-  <text x="96" y="572" font-size="20" font-family=${mono}><tspan fill="${B.muted}">500+ deterministic tools · </tspan><tspan font-weight="700" fill="${B.text}">every one speaks both wires</tspan></text>
+  <text x="96" y="572" font-size="20" font-family=${mono}><tspan fill="${B.muted}">500+ tools · </tspan><tspan font-weight="700" fill="${B.text}">every one speaks both wires</tspan></text>
   <text x="1104" y="572" font-size="20" font-weight="700" font-family=${mono} text-anchor="end" fill="${B.red}">agent402.tools</text>
 </svg>`;
 }

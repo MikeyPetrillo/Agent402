@@ -446,7 +446,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       title: "Search the Agent402 tool catalog",
       annotations: { title: "Search the Agent402 tool catalog", ...SAFE },
       description:
-        `BROWSE the long catalog behind the flagship set: keyword search over Agent402's 500+ deterministic pay-per-call tools (exact count ${catalog.size}). Start with listed flagships for search/answer/news/render/stock/transcribe/memory; use this for long-tail slugs. Counterpart catalog.find resolves a task to ONE ready-to-run pick. Many pure-CPU tools are free via proof-of-work. OpenAI-compatible LLM gateway at ${BASE}/v1 (chat nano $0.003, auto $0.01, embeddings $0.002) via catalog.call when a wallet key is set. Returns matching tools + workflow templates; call them with catalog.call.`,
+        `BROWSE the long catalog behind the flagship set: keyword search over Agent402's 500+ pay-per-call tools (exact count ${catalog.size}). Start with listed flagships for search/answer/news/render/stock/transcribe/memory; use this for long-tail slugs. Counterpart catalog.find resolves a task to ONE ready-to-run pick. Many pure-CPU tools are free via proof-of-work. OpenAI-compatible LLM gateway at ${BASE}/v1 (chat nano $0.003, auto $0.01, embeddings $0.002) via catalog.call when a wallet key is set. Returns matching tools + workflow templates; call them with catalog.call.`,
       inputSchema: {
         type: "object",
         properties: {

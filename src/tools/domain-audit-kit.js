@@ -54,6 +54,23 @@ async function settle(p, timeoutMs) {
   } catch (e) { return { ok: false, error: e?.message || String(e) }; }
 }
 
+/** Mailboxes a domain already publishes for reports: DMARC rua + ruf, plus any
+ *  CAA iodef contact.
+ *
+ *  `reportingUris` is an OBJECT ({aggregate, failure}) - see parseDmarc in
+ *  network-kit.js. The first version of this spread it as an ARRAY, so every
+ *  domain publishing a rua or ruf (most of them) threw "is not iterable" and
+ *  took the whole $0.60 report down with a 500. Nothing saw it for a day: the
+ *  report composites are excluded from BOTH catalog sweeps, being metered and
+ *  costly, and the line four above this one reads the same field correctly,
+ *  which is how the two drifted apart. Exported so a test can hold the shape. */
+export function reportMailboxesFrom(reportingUris, caa) {
+  const ru = reportingUris;
+  const fromDmarc = Array.isArray(ru) ? ru : [...(ru?.aggregate || []), ...(ru?.failure || [])];
+  const fromCaa = (Array.isArray(caa) ? caa : []).filter((c) => c?.tag === "iodef").map((c) => c.value);
+  return [...new Set([...fromDmarc, ...fromCaa].map((u) => String(u).replace(/^mailto:/i, "")).filter((u) => /@/.test(u)))];
+}
+
 export function normDomain(input) {
   let d = String(input?.domain ?? input?.url ?? input?.host ?? "").trim();
   if (!d) throw bad('"domain" is required, e.g. "example.com"');
@@ -84,7 +101,41 @@ async function txtAt(name) {
     return { ok: true, records: (recs || []).map((chunks) => chunks.join("")) };
   } catch (e) { return { ok: dnsErrOk(e), records: [], error: e.code || e.message }; }
 }
+// Nameserver suffix -> the DNS host and what its panel can publish. A
+// recommendation the reader cannot execute costs the report its credibility
+// (Railway's DNS offers no CAA record type; the audit told a Railway-hosted
+// domain to add one, 2026-08-28). `caa`/`dnssec` = false means the host is
+// known not to offer it; null means unknown (say "check your DNS host").
+// Exported for tests.
+export const DNS_HOSTS = [
+  { host: "Railway", ns: [".railway.app", ".railway.com"], caa: false, dnssec: false, platformCerts: true },
+  { host: "Vercel", ns: [".vercel-dns.com"], caa: true, dnssec: false, platformCerts: true },
+  { host: "Netlify", ns: [".nsone.net", ".netlify.com"], caa: true, dnssec: false, platformCerts: true },
+  { host: "Cloudflare", ns: [".ns.cloudflare.com"], caa: true, dnssec: true, platformCerts: true },
+  { host: "Amazon Route 53", ns: [".awsdns-"], caa: true, dnssec: true, platformCerts: false },
+  { host: "Google Cloud DNS / Squarespace", ns: [".googledomains.com", ".google.com", ".squarespacedns.com"], caa: true, dnssec: true, platformCerts: false },
+  { host: "GoDaddy", ns: [".domaincontrol.com"], caa: true, dnssec: true, platformCerts: false },
+  { host: "Namecheap", ns: [".registrar-servers.com"], caa: true, dnssec: true, platformCerts: false },
+  { host: "DigitalOcean", ns: [".digitalocean.com"], caa: true, dnssec: false, platformCerts: false },
+  { host: "Hetzner", ns: [".hetzner.com", ".hetzner.de"], caa: true, dnssec: true, platformCerts: false },
+  { host: "OVH", ns: [".ovh.net"], caa: true, dnssec: true, platformCerts: false },
+  { host: "Gandi", ns: [".gandi.net"], caa: true, dnssec: true, platformCerts: false },
+  { host: "Porkbun", ns: [".porkbun.com"], caa: true, dnssec: true, platformCerts: false },
+  { host: "Hover", ns: [".hover.com"], caa: true, dnssec: false, platformCerts: false },
+  { host: "Fly.io", ns: [".fly.io"], caa: null, dnssec: null, platformCerts: true },
+  // Railway registers domains through name.com: the nameservers read name.com
+  // but the owner edits DNS in Railway's panel, which offers no CAA record type
+  // (and no DNSSEC). A domain managed at name.com directly can publish both.
+  { host: "Name.com (Railway domain registrations use it)", ns: [".name.com"], caa: null, dnssec: null, platformCerts: false, note: "if this domain was bought through Railway, DNS is edited in Railway's panel, which offers no CAA record type and no DNSSEC; managed at name.com directly, both are available" },
+];
+export function dnsHostFor(nameservers) {
+  const ns = (nameservers || []).map((h) => String(h || "").toLowerCase().replace(/\.$/, ""));
+  for (const h of DNS_HOSTS) if (ns.some((n) => h.ns.some((suf) => n.includes(suf)))) return h;
+  return null;
+}
 export async function probeDnsPosture(domain) {
+  const nsR = await (async () => { try { const r = await Promise.race([dnsPromises.resolveNs(domain), new Promise((_, rj) => setTimeout(() => rj(new Error("DNS timeout")), DNS_TIMEOUT_MS))]); return { ok: true, records: r }; } catch (e) { return { ok: false, error: String(e?.code || e?.message || e) }; } })();
+  const dnsHost = nsR.ok ? dnsHostFor(nsR.records) : null;
   const [caaR, sts, rpt, bimi, sec] = await Promise.all([
     (async () => { try { const r = await Promise.race([dnsPromises.resolveCaa(domain), new Promise((_, rj) => setTimeout(() => rj(new Error("DNS timeout")), DNS_TIMEOUT_MS))]); return { ok: true, records: r || [] }; } catch (e) { return { ok: dnsErrOk(e), records: [], error: e.code || e.message }; } })(),
     txtAt(`_mta-sts.${domain}`), txtAt(`_smtp._tls.${domain}`), txtAt(`default._bimi.${domain}`),
@@ -104,7 +155,22 @@ export async function probeDnsPosture(domain) {
     tlsRpt: pick(rpt, /^v=TLSRPTv1/i), tlsRptError: rpt.ok ? null : rpt.error,
     bimi: pick(bimi, /^v=BIMI1/i), bimiError: bimi.ok ? null : bimi.error,
     dnssec: sec.ok ? sec.ad : null, dnssecError: sec.ok ? null : sec.error,
+    nameservers: nsR.ok ? nsR.records.slice(0, 8) : [], nsError: nsR.ok ? null : nsR.error,
+    dnsHost: dnsHost ? { name: dnsHost.host, caa: dnsHost.caa, dnssec: dnsHost.dnssec, platformCerts: dnsHost.platformCerts, ...(dnsHost.note ? { note: dnsHost.note } : {}) } : null,
   };
+}
+// Both hosts: the www twin of an apex (or the apex of a www) - whether it
+// answers, where it redirects, and whether HSTS is consistent across the pair.
+// A common misconfiguration that costs one extra request. Exported for tests.
+export async function probeWwwPair(domain, hdrTool) {
+  const twin = /^www\./i.test(domain) ? domain.replace(/^www\./i, "") : `www.${domain}`;
+  try {
+    const r = await Promise.race([hdrTool({ url: `https://${twin}` }), new Promise((_, rj) => setTimeout(() => rj(new Error("timeout")), PROBE_TIMEOUT_MS))]);
+    const finalHost = (() => { try { return new URL(r.finalUrl || r.url || `https://${twin}`).hostname; } catch { return null; } })();
+    return { twin, reachable: true, status: r.status ?? null, finalHost, redirectsToOther: !!finalHost && finalHost.toLowerCase() !== twin.toLowerCase(), hsts: !!(r.headers?.["strict-transport-security"] || (r.security?.findings || []).some((f) => f.header === "HSTS" && f.present)), error: null };
+  } catch (e) {
+    return { twin, reachable: false, status: null, finalHost: null, redirectsToOther: null, hsts: null, error: String(e?.message || e).slice(0, 120) };
+  }
 }
 
 // Grade: email auth (40%) + web headers (35%) + TLS (25%).
@@ -140,6 +206,7 @@ export async function probeDomain(domain, { pro = false } = {}) {
   ]);
   const [emailR, tlsR, hdrR, dnsR] = core;
   const dnsx = dnsR.ok ? dnsR.data : null;
+  const www = await probeWwwPair(domain, hdrH);
   let ct = null, tech = null, whois = null;
   if (pro) {
     const proTools = await Promise.all([
@@ -200,7 +267,7 @@ export async function probeDomain(domain, { pro = false } = {}) {
   const { tls_days_remaining: _d, tls_issuer: _i, tls_valid_to: _v, ...stable } = signals;
   const fingerprint = JSON.stringify(stable);
 
-  return { domain, emailR, tlsR, hdrR, dnsR, dnsx, email, tls, hdr, ct, tech, whois, emailScore, headerScore, tlsScore, composite, grade, assessed, gradeCaveat, signals, fingerprint };
+  return { domain, emailR, tlsR, hdrR, dnsR, dnsx, www, email, tls, hdr, ct, tech, whois, emailScore, headerScore, tlsScore, composite, grade, assessed, gradeCaveat, signals, fingerprint };
 }
 
 function makeDomainAuditHandlerInner(tierSlug) {
@@ -211,7 +278,7 @@ function makeDomainAuditHandlerInner(tierSlug) {
     const user = safeUser(req);
 
     // 1) LIVE PROBES + GRADE (shared with the monitor scheduler's free re-probe).
-    const { emailR, tlsR, hdrR, dnsR, dnsx, email, tls, hdr, ct, tech, whois, emailScore, headerScore, composite, grade, assessed, gradeCaveat } = await probeDomain(domain, { pro: t.pro });
+    const { emailR, tlsR, hdrR, dnsR, dnsx, www, email, tls, hdr, ct, tech, whois, emailScore, headerScore, composite, grade, assessed, gradeCaveat } = await probeDomain(domain, { pro: t.pro });
 
     // 2) GROUNDING BLOCKS (the probe results are the only source of truth).
     const emailBlock = email
@@ -226,6 +293,20 @@ function makeDomainAuditHandlerInner(tierSlug) {
     const dnsBlock = dnsx
       ? `DNSSEC: ${dnsx.dnssec === true ? "validated (AD)" : dnsx.dnssec === false ? "NOT signed/validated" : `unknown (${dnsx.dnssecError || "resolver unreadable"})`}. CAA: ${dnsx.caa ? (dnsx.caa.length ? dnsx.caa.map((c) => `${c.tag} ${c.value}`).join("; ") : "none published (any CA may issue)") : `unknown (${dnsx.caaError})`}. MTA-STS: ${dnsx.mtaSts ? `present (${dnsx.mtaSts})` : dnsx.mtaStsError ? `unknown (${dnsx.mtaStsError})` : "not published"}. TLS-RPT: ${dnsx.tlsRpt ? `present (${dnsx.tlsRpt})` : dnsx.tlsRptError ? `unknown (${dnsx.tlsRptError})` : "not published"}. BIMI: ${dnsx.bimi ? "present" : dnsx.bimiError ? `unknown (${dnsx.bimiError})` : "not published"}.`
       : `DNS posture probe FAILED: ${dnsR.error} - DNSSEC/CAA/MTA-STS/TLS-RPT/BIMI were NOT checked.`;
+    const hostBlock = dnsx
+      ? `Nameservers: ${dnsx.nameservers?.length ? dnsx.nameservers.join(", ") : `unknown (${dnsx.nsError || "no answer"})`}. DNS host: ${dnsx.dnsHost ? `${dnsx.dnsHost.name} - CAA records ${dnsx.dnsHost.caa === false ? "NOT OFFERED by this host's DNS panel" : dnsx.dnsHost.caa ? "supported" : "support unknown"}; DNSSEC ${dnsx.dnsHost.dnssec === false ? "NOT OFFERED by this host" : dnsx.dnsHost.dnssec ? "supported" : "support unknown"}${dnsx.dnsHost.platformCerts ? "; TLS certificates are issued and rotated by the hosting platform (it may switch CA, e.g. Let's Encrypt <-> Google Trust Services)" : ""}${dnsx.dnsHost.note ? `; NOTE: ${dnsx.dnsHost.note}` : ""}` : "not recognised (CAA/DNSSEC support unknown - the reader must check their DNS host's panel)"}.`
+      : "Nameservers / DNS host: not checked (DNS posture probe failed).";
+    const wwwBlock = www
+      ? (www.reachable ? `${www.twin}: reachable (HTTP ${www.status ?? "?"}), ${www.redirectsToOther ? `redirects to ${www.finalHost}` : "serves its own response (no redirect to the other host)"}, HSTS ${www.hsts ? "present" : "ABSENT"} there${hdr ? ` vs ${(hdr.security?.findings || []).some((f) => f.header === "HSTS" && f.present) ? "present" : "absent"} on ${domain}` : ""}.` : `${www.twin}: NOT reachable (${www.error}) - if people type it, they get an error.`)
+      : "www/apex twin: not checked.";
+    // `reportingUris` is an OBJECT ({aggregate, failure}) - see parseDmarc in
+    // network-kit.js. Spreading it as an array threw "is not iterable" on every
+    // domain that publishes a rua or ruf, which is most of them, and took the
+    // whole report down with a 500 (found 2026-08-29; the composite is excluded
+    // from both catalog sweeps, so nothing could see it). Line 268 above reads
+    // the same field correctly, which is how the two drifted apart.
+    const knownMailboxes = reportMailboxesFrom(email?.dmarc?.reportingUris, dnsx?.caa);
+    const mailboxBlock = `Addresses this domain already publishes for reports: ${knownMailboxes.length ? knownMailboxes.join(", ") : "NONE (no rua/ruf/iodef published)"}. Mail is ${email?.mx?.count ? `received at ${email.mx.provider || "the MX hosts above"}` : "not receivable (no MX)"}.`;
     const proBlock = t.pro ? [
       ct ? `CERTIFICATE TRANSPARENCY: ${ct.count ?? (ct.certs?.length || 0)} certificates read${ct.truncated ? " (MORE exist - the log was truncated at the read limit)" : ""}, ${(ct.subdomains || []).length} distinct subdomains among them. Subdomains: ${(ct.subdomains || ct.names || []).slice(0, 40).join(", ") || "(none parsed)"}${(ct.subdomains || []).length > 40 ? ` (+${(ct.subdomains || []).length - 40} more)` : ""}.` : "CT probe unavailable.",
       tech ? `TECH STACK: ${(tech.technologies || tech.stack || tech.detected || []).map((x) => (typeof x === "string" ? x : x.name || x.technology)).filter(Boolean).slice(0, 40).join(", ") || "(none detected)"}.` : "Tech-stack probe unavailable.",
@@ -242,12 +323,25 @@ The overall grade is ${grade} (composite ${composite}/100)${gradeCaveat}. Write 
 - TLS CERTIFICATE: issuer, expiry, and days remaining - flag clearly if it is expiring soon.${t.pro ? "\n- ATTACK SURFACE & STACK: notable subdomains from Certificate Transparency, the detected tech stack, and domain registration." : ""}
 - PRIORITIZED FIXES: a NUMBERED, actionable remediation list, most impactful first. Name the exact record or header to add and a concrete example value where you can (e.g. the DMARC record to publish). Be specific and practical.
 
+Rules for the fixes, each learned from a real report:
+1. MAILBOXES: never present an address as ready to receive reports unless it appears under "Addresses this domain already publishes". Otherwise write the rua/ruf/iodef step as "create a mailbox first (for example dmarc@${domain}), then publish", never as a finished record with an address you invented. A DMARC rua that points at a dead mailbox silently swallows every report.
+2. FEASIBILITY: if the DNS host is marked NOT OFFERED for CAA or DNSSEC, do not recommend adding it; say "your DNS host (${dnsx?.dnsHost?.name || "the detected host"}) does not offer this record type" and, at most, note that moving DNS to a host that does is the only way. If support is unknown, say the reader must check their DNS host's panel first.
+3. CAA WITH PLATFORM CERTIFICATES: when the TLS certificate is issued by a hosting platform's automation, a CAA record naming only today's CA breaks renewal the day the platform rotates CA. Recommend the full set the platform uses (for Let's Encrypt and Google Trust Services: both "letsencrypt.org" and "pki.goog"), or say to skip CAA until the platform documents its CAs.
+4. CROSS-ORIGIN HEADERS (COOP, CORP, COEP) are advisory: they matter only for a site that needs cross-origin isolation, COEP require-corp breaks third-party assets, and they are not in the score. Mention them once as optional, never as missing headers to fix.
+5. CSP: distinguish a strict policy (nonces/hashes, no 'unsafe-inline') from a permissive one; a permissive CSP is a partial fix, not a pass.
+6. The Server header is informational (the platform is visible from DNS anyway and an edge-injected header cannot be removed by the app); X-Powered-By is a real, removable disclosure.
+7. Escalate safely: DMARC p=none with reporting first then quarantine/reject; HSTS with a short max-age first; CSP report-only first.
+8. Check both hosts: use the www/apex twin result - a twin that does not redirect, or lacks HSTS while the other has it, is a finding.
+
 Do NOT write a sources section. Ground every claim in the probe data; where a probe failed, say the check could not be completed rather than guessing.
 
 === EMAIL AUTH PROBE ===\n${emailBlock}
 === WEB SECURITY HEADERS PROBE ===\n${hdrBlock}
 === TLS CERTIFICATE PROBE ===\n${tlsBlock}
 === DNS POSTURE (DNSSEC, CAA, MTA-STS, TLS-RPT, BIMI) ===\n${dnsBlock}
+=== NAMESERVERS / DNS HOST (what the reader CAN publish) ===\n${hostBlock}
+=== WWW / APEX TWIN ===\n${wwwBlock}
+=== REPORT MAILBOXES ===\n${mailboxBlock}
 NOTE: a gap in this material is never a finding about the domain - a probe marked FAILED or unknown was not checked here; say so instead of "not configured".${t.pro ? `\n=== ATTACK SURFACE / STACK / REGISTRATION ===\n${proBlock}` : ""}`;
 
     let spent = 0;
@@ -280,11 +374,14 @@ NOTE: a gap in this material is never a finding about the domain - a probe marke
       email_score: emailScore,
       header_score: headerScore,
       tls_days_remaining: tls?.daysRemaining ?? null,
+      dns_host: dnsx?.dnsHost?.name || null,
+      mx_provider: email?.mx?.provider || null,
+      www: www ? { twin: www.twin, reachable: www.reachable, redirectsToOther: www.redirectsToOther, hsts: www.hsts } : null,
       probes: { email: emailR.ok, tls: tlsR.ok, headers: hdrR.ok, ...(t.pro ? { certTransparency: !!ct, techStack: !!tech, whois: !!whois } : {}) },
       synthesis_model: SYNTH,
     };
     const out = { report, domain, grade, composite, sources: [], tables, meta };
-    if (process.env.RESEARCH_DEBUG === "1") out._debug = { emailBlock, hdrBlock, tlsBlock, proBlock };
+    if (process.env.RESEARCH_DEBUG === "1") out._debug = { emailBlock, hdrBlock, tlsBlock, proBlock, hostBlock, wwwBlock, mailboxBlock };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(DOMAIN_AUDIT_TIERS[tierSlug]) });
     return out;
   };

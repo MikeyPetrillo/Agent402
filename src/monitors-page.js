@@ -1,4 +1,4 @@
-// Served pages for the monitoring subscriptions (Phase 2): the /monitors
+// Served pages for the monitoring subscriptions: the /monitors
 // storefront and the /monitors/thanks confirmation. Rendered through the
 // shared ledger shell (2026-08-22 redesign); shares REPORTS_CSS with the
 // one-shot reports pages. External JS (site CSP drops inline script).
@@ -50,7 +50,7 @@ ${ledgerFooterCompact()}
     // A prefilled variant is the same page with a form filled in: keep one
     // canonical URL and keep the variants out of the index.
     ...(wanted ? { robots: "noindex, follow" } : {}),
-    jsonLd: { "@context": "https://schema.org", "@type": "ItemList", "@id": `${baseUrl}/monitors#products`, name: "Agent402 monitors", itemListElement: Object.entries(MONITOR_PRODUCTS).map(([key, p], i) => ({ "@type": "ListItem", position: i + 1, item: { "@type": "Product", name: p.label, description: p.blurb, url: `${baseUrl}/monitors`, brand: { "@type": "Brand", name: "Agent402" }, offers: { "@type": "Offer", url: `${baseUrl}/monitors`, priceCurrency: "USD", price: (p.price / 100).toFixed(2), priceSpecification: { "@type": "UnitPriceSpecification", price: (p.price / 100).toFixed(2), priceCurrency: "USD", billingDuration: "P1M" }, availability: "https://schema.org/InStock", seller: { "@type": "Organization", name: "Havok Holdings LLC" } } } })) },
+    jsonLd: { "@context": "https://schema.org", "@type": "ItemList", "@id": `${baseUrl}/monitors#products`, name: "Agent402 monitors", itemListElement: Object.entries(MONITOR_PRODUCTS).map(([key, p], i) => ({ "@type": "ListItem", position: i + 1, item: { "@type": "Product", name: p.label, description: p.blurb, image: `${baseUrl}/tools/${p.slug}/card.png`, url: `${baseUrl}/monitors`, brand: { "@type": "Brand", name: "Agent402" }, offers: { "@type": "Offer", url: `${baseUrl}/monitors`, priceCurrency: "USD", price: (p.price / 100).toFixed(2), priceSpecification: { "@type": "UnitPriceSpecification", price: (p.price / 100).toFixed(2), priceCurrency: "USD", billingDuration: "P1M" }, availability: "https://schema.org/InStock", seller: { "@type": "Organization", name: "Havok Holdings LLC" } } } })) },
   });
 }
 

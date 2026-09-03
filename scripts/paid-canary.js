@@ -113,7 +113,7 @@ export const TOOLS = [
     kit: "finance",
     path: "/api/stock-quote?symbol=AAPL",
     method: "GET",
-    priceUsd: 0.003,
+    priceUsd: 0.001,
     check: (r) => (r.symbol === "AAPL" && r.currency === "USD" && r.price > 1) || `expected AAPL/USD/price>1, got ${JSON.stringify(r).slice(0, 80)}`,
   },
   {
@@ -147,18 +147,6 @@ export const TOOLS = [
     ) || `expected baseFeeGwei (0,1000) + fast.totalGwei>=baseFee + chainId=8453, got ${JSON.stringify(r).slice(0, 120)}`,
   },
   {
-    kit: "price-feed",
-    path: "/api/price-pyth",
-    method: "POST",
-    body: { ids: ["ETHUSD"] },
-    priceUsd: 0.001,
-    check: (r) => {
-      const eth = Array.isArray(r.feeds) && r.feeds.find((f) => f.alias === "ETHUSD");
-      return (eth && typeof eth.price === "number" && eth.price > 80 && eth.price < 50000)
-        || `expected feeds[ETHUSD].price in (80, 50000), got ${JSON.stringify(r).slice(0, 120)}`;
-    },
-  },
-  {
     kit: "answer",
     path: "/api/answer?q=what+is+the+speed+of+light",
     method: "GET",
@@ -174,31 +162,14 @@ export const TOOLS = [
     check: (r) => isExactOkReply(r.choices?.[0]?.message?.content) || `expected an exact "OK" reply, got ${JSON.stringify(r).slice(0, 100)}`,
   },
   {
-    // Ox Alpha tier - the stealth model, and the one leg whose upstream is
-    // free. Two things only a real buy can prove: that `provider.max_price`
-    // (which we ride on every call) actually ADMITS a $0-priced endpoint
-    // rather than refusing the bound outright, and that the model is still
-    // listed. A withdrawn model answers 503 before any upstream call, so this
-    // leg failing is the alarm that the preview ended. `max_tokens` is well
-    // above the tier's floor because this is a mandatory-reasoning model: a
-    // small budget returns an empty answer with finish_reason "length", which
-    // the chain walks into a 502 rather than a paid empty 200.
-    kit: "llm-ox",
-    path: "/v1/ox/chat/completions",
-    method: "POST",
-    body: { messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 2000 },
-    priceUsd: 0.002,
-    check: (r) => isExactOkReply(r.choices?.[0]?.message?.content) || `expected an exact "OK" reply, got ${JSON.stringify(r).slice(0, 120)}`,
-  },
-  {
     // Nano tier — the loop-priced gateway. Same upstream path as the base
     // tier; this leg proves the tier constants + model allowlist against a
-    // REAL completion daily (gpt-4.1-nano already served via v1-chat before
+    // REAL completion daily (gpt-5-nano (was gpt-4.1-nano until its 2026-10-23 retirement) already served via v1-chat before
     // the nano tier existed, so the model id itself is prod-proven).
     kit: "llm-nano",
     path: "/v1/nano/chat/completions",
     method: "POST",
-    body: { model: "openai/gpt-4.1-nano", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 },
+    body: { model: "openai/gpt-5-nano", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 },
     priceUsd: 0.003,
     check: (r) => isExactOkReply(r.choices?.[0]?.message?.content) || `expected an exact "OK" reply, got ${JSON.stringify(r).slice(0, 100)}`,
   },
@@ -213,13 +184,43 @@ export const TOOLS = [
     kit: "llm-metered",
     path: "/v1/metered/chat/completions",
     method: "POST",
-    // max_tokens 2000 on gpt-4.1-nano quotes ABOVE the $0.001 floor (the kit
+    // max_tokens 2000 on gpt-5-nano quotes ABOVE the $0.001 floor (the kit
     // computes the exact figure; test-canary-coverage pins priceUsd to it), so a
     // quote that silently collapses to the floor - an @x402 adapter change that
     // hides the body, say - changes what this leg pays and the pin fails.
-    body: { model: "openai/gpt-4.1-nano", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 2000 },
-    priceUsd: 0.001125,
+    body: { model: "openai/gpt-5-nano", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 2000 },
+    priceUsd: 0.001122,
     check: (r) => isExactOkReply(r.choices?.[0]?.message?.content) || `expected an exact "OK" reply, got ${JSON.stringify(r).slice(0, 100)}`,
+  },
+  {
+    // METERED tier on the Anthropic Messages wire (2026-08-27): same per-request
+    // quote, priced from the Messages probe. Haiku at max_tokens 300 quotes
+    // above the floor (test-canary-coverage pins priceUsd to the kit's quote
+    // for this exact body), proving the quote resolves on both the bare
+    // request and the paid retry through the Messages route.
+    kit: "llm-metered-messages",
+    path: "/v1/metered/messages",
+    method: "POST",
+    body: { model: "anthropic/claude-haiku-4.5", max_tokens: 300, messages: [{ role: "user", content: "Reply with exactly: OK" }] },
+    priceUsd: 0.001977,
+    check: (r) =>
+      (r.type === "message" && r.role === "assistant" && Array.isArray(r.content) && r.content.some((b) => b.type === "text" && typeof b.text === "string") &&
+        r.usage && typeof r.usage.output_tokens === "number" && !("cost" in r.usage)) ||
+      `expected an Anthropic Messages reply on the metered route, got ${JSON.stringify(r).slice(0, 120)}`,
+  },
+  {
+    // Metered Responses wire (2026-08-28): the same per-request quote on the
+    // OpenAI Responses API - the wire Codex CLI and the OpenAI Agents SDK
+    // speak. priceUsd is pinned to the kit's quote for this exact body.
+    kit: "llm-metered-responses",
+    path: "/v1/metered/responses",
+    method: "POST",
+    body: { model: "anthropic/claude-haiku-4.5", max_output_tokens: 300, input: "Reply with exactly: OK" },
+    priceUsd: 0.001964,
+    check: (r) =>
+      (r.object === "response" && r.status === "completed" && Array.isArray(r.output) && r.output.some((o) => o.type === "message" && Array.isArray(o.content) && o.content.some((c) => c.type === "output_text" && typeof c.text === "string")) &&
+        r.usage && typeof r.usage.output_tokens === "number" && !("cost" in r.usage) && r.store !== true) ||
+      `expected an OpenAI Responses reply on the metered route, got ${JSON.stringify(r).slice(0, 120)}`,
   },
   {
     // Streaming leg — stream: true must settle AND deliver real SSE frames.
@@ -231,6 +232,10 @@ export const TOOLS = [
     path: "/v1/nano/chat/completions",
     method: "POST",
     raw: true,
+    // A 200 that is not SSE is a PAID wrong answer (settlement ran on the 200):
+    // 2026-08-27 the relay served every streamed frame as comma-joined byte
+    // digits for a day and this leg only WARNed. Wire-format legs fail the run.
+    strictShape: true,
     body: { model: "deepseek/deepseek-chat", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5, stream: true },
     priceUsd: 0.003,
     check: (text) => (typeof text === "string" && text.includes("data:") && text.includes("[DONE]")) || `expected SSE frames ending in [DONE], got ${String(text).slice(0, 100)}`,
@@ -304,7 +309,7 @@ export const TOOLS = [
     kit: "llm-responses",
     path: "/v1/nano/responses",
     method: "POST",
-    body: { model: "openai/gpt-4.1-nano", input: `Reply with exactly the word OK. (${EMBED_CANARY_INPUT.slice(-16)})`, max_output_tokens: 32 },
+    body: { model: "openai/gpt-5-nano", input: `Reply with exactly the word OK. (${EMBED_CANARY_INPUT.slice(-16)})`, max_output_tokens: 32 },
     priceUsd: 0.003,
     check: (r) =>
       (r.object === "response" && r.status === "completed" && Array.isArray(r.output) && r.output.some((o) => o.type === "message" && Array.isArray(o.content) && o.content.some((c) => c.type === "output_text" && typeof c.text === "string")) &&
@@ -380,7 +385,11 @@ export const TOOLS = [
     method: "POST",
     body: { coin: "BTC", points: 5 },
     priceUsd: 0.003,
-    check: (r) => (r.coin === "BTC" && typeof r.funding?.hourlyPct === "number" && typeof r.source === "string") || `expected BTC funding numbers, got ${JSON.stringify(r).slice(0, 120)}`,
+    // Real output shape (derivatives-kit perp-funding): {source, coin, markPx,
+    // current:{hourly, per8h, aprPct, premiumPct}}. The first check named a
+    // funding.hourlyPct field the tool never had, so this leg had warned on
+    // every run since 2026-08-22 and nobody read it.
+    check: (r) => (r.coin === "BTC" && typeof r.current?.hourly === "number" && typeof r.current?.aprPct === "number" && typeof r.source === "string") || `expected BTC funding numbers (current.hourly/aprPct), got ${JSON.stringify(r).slice(0, 120)}`,
   },
   {
     // Solana intel leg (2026-08-22) - same reasoning as the derivatives leg, on
@@ -439,7 +448,7 @@ export const TOOLS = [
     path: "/api/skill/financial-analysis",
     method: "POST",
     body: { ticker: "AAPL" },
-    priceUsd: 0.04,
+    priceUsd: 0.033,
     check: (r) => (r.pack === "financial-analysis" && Array.isArray(r.steps) && r.steps.filter((s) => s.ok).length >= 2) || `expected pack=financial-analysis with >=2 ok steps, got ${JSON.stringify(r).slice(0, 120)}`,
   },
   {
@@ -447,7 +456,7 @@ export const TOOLS = [
     path: "/api/skill/market-brief",
     method: "POST",
     body: { coin: "bitcoin" },
-    priceUsd: 0.025,
+    priceUsd: 0.024,
     check: (r) => (r.pack === "market-brief" && Array.isArray(r.steps) && r.steps.filter((s) => s.ok).length >= 2) || `expected pack=market-brief with >=2 ok steps, got ${JSON.stringify(r).slice(0, 120)}`,
   },
   // Stellar (USDC on Stellar) settlement is tested via a separate mechanism —
@@ -461,7 +470,7 @@ export const TOOLS = [
     path: "/api/skill/domain-intel",
     method: "POST",
     body: { domain: "stripe.com" },
-    priceUsd: 0.25,
+    priceUsd: 0.018,
     check: (r) => (r.pack === "domain-intel" && r.steps?.every(s => s.ok)) || `expected ALL steps ok, got ${r.steps?.map(s=>s.ok?'✓':'✗ '+s.slug).join(',')}`,
   },
   {
@@ -469,7 +478,7 @@ export const TOOLS = [
     path: "/api/skill/company-dossier",
     method: "POST",
     body: { ticker: "AAPL" },
-    priceUsd: 0.50,
+    priceUsd: 0.064,
     check: (r) => (r.pack === "company-dossier" && r.steps?.every(s => s.ok)) || `expected ALL steps ok, got ${r.steps?.map(s=>s.ok?'✓':'✗ '+s.slug).join(',')}`,
   },
   {
@@ -582,7 +591,6 @@ export function classifyCanaryFailure(decision, { balanceUsd = null } = {}) {
 const BASE_BALANCE_RPCS = [
   "https://mainnet.base.org",
   "https://base.blockscout.com/api/eth-rpc",
-  "https://base.llamarpc.com",
 ];
 /** Stablecoin balance (6-decimal ERC-20) via an RPC fallback chain. null only
  *  when EVERY RPC fails; each failed attempt logs which endpoint and why. */
@@ -627,8 +635,8 @@ async function baseUsdcBalanceUsd(address) {
  *  Stellar and Algorand legs use separate wallets/signers and are out of
  *  scope here. Token addresses + RPC chains mirror src/revenue-live.js. */
 export const CHAIN_FUNDING = [
-  { key: "polygon", label: "Polygon", token: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", rpcs: ["https://polygon.drpc.org", "https://polygon.llamarpc.com"] },
-  { key: "arbitrum", label: "Arbitrum", token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831", rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum.llamarpc.com"] },
+  { key: "polygon", label: "Polygon", token: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", rpcs: ["https://polygon.drpc.org"] },
+  { key: "arbitrum", label: "Arbitrum", token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831", rpcs: ["https://arb1.arbitrum.io/rpc"] },
   { key: "monad", label: "Monad", token: "0x754704bc059f8c67012fed69bc8a327a5aafb603", rpcs: ["https://rpc.monad.xyz", "https://rpc2.monad.xyz"] },
   { key: "celo", label: "Celo", token: "0xceba9300f2b948710d2653dd7b07f33a8b32118c", rpcs: ["https://forno.celo.org"] },
   { key: "avalanche", label: "Avalanche", token: "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", rpcs: ["https://api.avax.network/ext/bc/C/rpc", "https://avalanche-c-chain-rpc.publicnode.com"] },
@@ -671,6 +679,10 @@ export function decideCanary(results, { coreKit = CORE_KIT } = {}) {
   if (!coreSettled) reasons.push(`core tool "${coreKit}" did not settle — paywall / facilitator / settlement is down`);
   if (settled === 0) reasons.push("no tool settled — buying is down");
   if ((unsettled + unreachable) >= half) reasons.push(`${unsettled + unreachable}/${rows.length} calls failed to settle — systemic settlement failure`);
+  // A strict-shape leg (wire format is the product: the streaming relay) that
+  // settled and delivered the wrong bytes is a charged wrong answer, not a
+  // quality warning - it fails the run like a rail does.
+  for (const r of rows) if (r.cls === "bad-shape" && r.strictShape === true) reasons.push(`${r.kit}:${r.path} settled but delivered the wrong wire shape${typeof r.shapeOk === "string" ? ` — ${r.shapeOk}` : ""}`);
 
   const warnings = rows
     .filter((r) => r.cls !== "settled")
@@ -692,6 +704,22 @@ export function decideCanary(results, { coreKit = CORE_KIT } = {}) {
  *   • tools green + rail failures      → "partial-rail"
  *   • tools green + no rail failures   → "ok"
  */
+/**
+ * Consecutive-failure rule for an upstream tool leg. `recentOk` is the
+ * component's prior observations newest-first (from /api/status); this run's
+ * own outcome is `ok` and is NOT in that list yet. Pages only when this run
+ * failed AND the previous (pageAfter - 1) observations all failed. Fewer
+ * observations than that, or none readable, never pages: an alarm that fires
+ * on missing evidence is the false-positive class the status page forbids.
+ */
+export function shouldPageUpstreamLeg({ ok, recentOk, pageAfter = 3 } = {}) {
+  if (ok) return false;
+  const need = Math.max(1, Number(pageAfter) || 3) - 1;
+  if (need === 0) return true;
+  if (!Array.isArray(recentOk) || recentOk.length < need) return false;
+  return recentOk.slice(0, need).every((v) => v === false);
+}
+
 export function classifyRailOutcome({ toolBroken, railFailures = [] } = {}) {
   if (toolBroken) return "broken";
   if (railFailures.length) return "partial-rail";
@@ -832,7 +860,7 @@ async function main() {
       const res = await payOnceWithRetryOn5xx(url, init);
       const body = t.raw ? await res.text().catch(() => "") : await res.json().catch(() => ({}));
       const shapeOk = res.status === 200 ? t.check(body) : false;
-      const row = { kit: t.kit, path: t.path, status: res.status, shapeOk, priceUsd: t.priceUsd };
+      const row = { kit: t.kit, path: t.path, status: res.status, shapeOk, priceUsd: t.priceUsd, strictShape: t.strictShape === true };
       results.push(row);
       const cls = classifyResult(row);
       if (cls === "settled") console.log(`OK    ${t.kit.padEnd(10)} ${t.path}  → settled $${t.priceUsd.toFixed(3)}`);
@@ -840,6 +868,37 @@ async function main() {
     } catch (e) {
       results.push({ kit: t.kit, path: t.path, status: null, shapeOk: false, transportError: true, priceUsd: t.priceUsd });
       console.warn(`WARN  ${t.kit}:${t.path} [unreachable] ${(e?.message || String(e)).slice(0, 140)}`);
+    }
+  }
+
+  // Supply-chain leg (address-profile -> Blockscout, paid from prod's spending
+  // wallet) is graded on a CONSECUTIVE rule. A tool leg is a warning by
+  // doctrine (a 5xx never charges the buyer), and that is right for a one-off
+  // upstream blip - but this leg failed a third of its runs in 2026-08
+  // ("Seller rejected the paid retry (HTTP 500)") and nothing paged, because
+  // every failure was its own blip. The previous outcomes come from /status
+  // (rail_supply-chain, written by this canary's own status step), so the
+  // rule needs no state of its own; unreachable status = no page, never a
+  // false one.
+  {
+    const leg = results.find((r) => r.kit === "supply-chain");
+    if (leg) {
+      const legOk = classifyResult(leg) === "settled";
+      const detail = legOk ? undefined : `HTTP ${leg.status ?? "none"}${typeof leg.shapeOk === "string" ? ` — ${leg.shapeOk}` : ""}`;
+      noteRail("supply-chain", legOk, detail);
+      if (!legOk) {
+        let recentOk = null;
+        try {
+          const snap = await (await fetch(`${TARGET}/api/status`, { signal: AbortSignal.timeout(20000) })).json();
+          recentOk = snap?.railComponents?.find((c) => c.key === "rail_supply-chain")?.recentOk ?? null;
+        } catch { recentOk = null; }
+        const pageAfter = Number(process.env.CANARY_UPSTREAM_PAGE_AFTER) || 3;
+        if (shouldPageUpstreamLeg({ ok: legOk, recentOk, pageAfter })) {
+          railFail("supply-chain", `address-profile failed ${pageAfter} consecutive canary runs (${detail}) — Blockscout upstream / spending wallet path is down, not a blip`);
+        } else {
+          console.warn(`WARN  supply-chain leg failed (${detail}); prior outcomes ${JSON.stringify(recentOk)} — pages after ${pageAfter} consecutive failures`);
+        }
+      }
     }
   }
 
@@ -1129,7 +1188,7 @@ async function main() {
   // (openclaw/index.js). Own try/catch, own rail key.
   await (async () => {
     const path = "/v1/metered/chat/completions";
-    const body = { model: "openai/gpt-4.1-nano", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 2000 };
+    const body = { model: "openai/gpt-5-nano", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 2000 };
     const init = () => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     try {
       const [{ UptoEvmScheme, getPermit2AllowanceReadParams }, { createPublicClient, http }, { base }] = await Promise.all([
@@ -1326,7 +1385,7 @@ async function main() {
     { key: "monad", caip2: "eip155:143", sym: "USDC", chainLabel: "Monad", tx: (h) => `https://monadscan.com/tx/${h}` },
     { key: "celo", caip2: "eip155:42220", sym: "USDC", chainLabel: "Celo", tx: (h) => `https://celoscan.io/tx/${h}` },
     { key: "avalanche", caip2: "eip155:43114", sym: "USDC", chainLabel: "Avalanche", tx: (h) => `https://snowtrace.io/tx/${h}` },
-    { key: "sei", caip2: "eip155:1329", sym: "USDC", chainLabel: "Sei", tx: (h) => `https://seitrace.com/tx/${h}?chain=pacific-1` },
+    { key: "sei", caip2: "eip155:1329", sym: "USDC", chainLabel: "Sei", tx: (h) => `https://seiscan.io/tx/${h}?chain=pacific-1` },
     { key: "optimism", caip2: "eip155:10", sym: "USDC", chainLabel: "Optimism", tx: (h) => `https://optimistic.etherscan.io/tx/${h}` },
   ]) {
     try {

@@ -55,7 +55,7 @@ export function aifiCardSvg(width = 1200, height = 630) {
   ${rows}
   <line x1="84" y1="540" x2="1116" y2="540" stroke="${B.hairline}" stroke-width="2"/>
   <text x="84" y="574" font-size="17" font-family=${mono} fill="${B.muted}">the definition, the stack, every term: <tspan font-weight="700" fill="${B.ink}">agent402.tools/glossary</tspan></text>
-  <text x="1116" y="574" font-size="17" font-family=${mono} text-anchor="end" fill="${B.muted}">500+ deterministic tools</text>
+  <text x="1116" y="574" font-size="17" font-family=${mono} text-anchor="end" fill="${B.muted}">500+ tools</text>
   </g>
 </svg>`;
 }

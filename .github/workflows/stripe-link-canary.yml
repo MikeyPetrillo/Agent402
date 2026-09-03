@@ -1,0 +1,34 @@
+name: Stripe card canary (Link wallet, dispatch-only)
+
+# Live proof that the stripe/charge MPP challenge settles a REAL card payment on
+# production: a Link wallet (the operator's, via @stripe/link-cli) buys one $0.50
+# route. The operator approves the spend request in the Link app while the job
+# waits, so every run is a human-approved $0.50. Not scheduled on purpose.
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      route:
+        description: "Paid route (>= $0.50, stripe challenge offered)"
+        default: "/v1/premium/chat/completions"
+        required: false
+
+jobs:
+  buy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Real card settlement over stripe/charge (operator approves in the Link app)
+        env:
+          LINK_ACCESS_TOKEN: ${{ secrets.LINK_ACCESS_TOKEN }}
+          LINK_REFRESH_TOKEN: ${{ secrets.LINK_REFRESH_TOKEN }}
+          STRIPE_PROFILE_ID: ${{ secrets.STRIPE_PROFILE_ID }}
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+          STRIPE_CANARY_ROUTE: ${{ inputs.route }}
+        run: node scripts/stripe-link-canary.mjs

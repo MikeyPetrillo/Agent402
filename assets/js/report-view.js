@@ -17,13 +17,25 @@
 
   // Per-line inline markdown. Input is ALREADY entity-escaped, so a quote can
   // never break out of an href; each class stops at an escaped quote or angle.
+  // Links in a report body may only point at a cited source (host allowlist
+  // built from s.sources): a fetched page that instructs the model to plant a
+  // link gets plain text instead of an anchor (review 2026-08-28).
+  var allowedHosts = null;
+  function setAllowedHosts(sources) {
+    allowedHosts = {};
+    (sources || []).forEach(function (src) { try { allowedHosts[new URL(src.url).host] = true; } catch (e) { /* not a URL */ } });
+  }
+  function linkOk(url) {
+    if (!allowedHosts) return true;
+    try { return allowedHosts[new URL(url).host] === true; } catch (e) { return false; }
+  }
   function inline(l) {
     l = l.replace(/\[(\d+)\]/g, '<span class="cite">[$1]</span>');
     l = l.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     // [label](https://…) before the bare-URL autolink, or the bare rule would
     // eat the URL out of the parentheses and leave the label stranded.
-    l = l.replace(/\[([^\]<>]+)\]\((https?:\/\/[^\s)<>"']+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    l = l.replace(/(^|[\s(])(https?:\/\/[^\s)<>"']+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+    l = l.replace(/\[([^\]<>]+)\]\((https?:\/\/[^\s)<>"']+)\)/g, function (m, label, url) { return linkOk(url) ? '<a href="' + url + '" target="_blank" rel="noopener">' + label + '</a>' : label + ' (' + url + ')'; });
+    l = l.replace(/(^|[\s(])(https?:\/\/[^\s)<>"']+)/g, function (m, pre, url) { return linkOk(url) ? pre + '<a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>' : pre + url; });
     return l;
   }
 
@@ -165,7 +177,30 @@
     });
   }
 
+  function inputNoun(kind) {
+    return { dossier: "ticker", insider: "ticker", fund: "fund name or ticker", domain: "domain", research: "question", recall: "drug, food or device", filing: "ticker", token: "token mint", ticker: "ticker", linkedin: "topic" }[kind] || "subject";
+  }
+  function wireSampleBuy(s) {
+    var form = document.getElementById("sample-buy");
+    if (!form) return;
+    form.addEventListener("submit", async function (ev) {
+      ev.preventDefault();
+      var input = (document.getElementById("sample-input").value || "").trim();
+      var err = document.getElementById("sample-err");
+      if (!input) { err.textContent = "Enter your own " + inputNoun(s.kind) + " first."; return; }
+      var btn = form.querySelector("button"); var label = btn.textContent; btn.disabled = true; btn.textContent = "Redirecting to checkout…";
+      try { if (window.posthog && window.posthog.capture) window.posthog.capture("report_buy_click", { product: s.product, kind: "sample" }); } catch (e) { /* telemetry never blocks a buy */ }
+      try {
+        var r = await fetch("/api/buy", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ product: s.product, input: input }) });
+        var j = await r.json();
+        if (j && j.url) { window.location = j.url; return; }
+        err.textContent = (j && j.error) || "Could not start checkout.";
+      } catch (e) { err.textContent = "Network error, please try again."; }
+      btn.disabled = false; btn.textContent = label;
+    });
+  }
   function renderDone(s) {
+    setAllowedHosts(Array.isArray(s.sources) && s.sources.length ? s.sources : null);
     var base = slugify(s.title);
     var tables = Array.isArray(s.tables) ? s.tables : [];
     var sources = Array.isArray(s.sources) ? s.sources : [];
@@ -193,9 +228,18 @@
         dl +
         '<button class="btn btn-ghost" id="dl-json">Download all data (JSON)</button>' +
         '<a class="btn btn-ghost" id="copy-link" href="#">Copy link</a>' +
+        (s.sample !== true && s.publicView !== true && s.status === "done" ? '<button class="btn btn-ghost" id="mk-public">' + (s.public === true ? "Make private" : "Make public") + "</button>" : "") +
       "</div>" +
-      (included.length ? '<div class="keep-hint no-print">Includes ' + included.join(" · ") + ". This page is yours to keep, bookmark it or use the link we emailed you.</div>"
-                       : '<div class="keep-hint no-print">This page is yours to keep, bookmark it or use the link we emailed you.</div>');
+      (s.sample !== true && s.publicView !== true && s.public === true && s.publicId ? '<div class="keep-hint no-print" id="public-note">Public at <a href="/reports/public/' + esc(s.publicId) + '">' + esc(location.origin + "/reports/public/" + s.publicId) + "</a>. Anyone with that link can read it and search engines may index it; make it private again any time.</div>" : "") +
+      (s.sample === true || s.publicView === true
+        ? '<div class="keep-hint no-print">' + (s.publicView === true ? "A " + esc(productLabel(s.kind)).toLowerCase() + ' on "' + esc(s.input) + '" shared by its buyer' : "A real " + esc(productLabel(s.kind)).toLowerCase() + ' generated for "' + esc(s.input) + '"') + (s.at ? " on " + esc(fmtDate(s.at)) : "") + (included.length ? ". Includes " + included.join(" · ") : "") + ". Every report is generated fresh at request time from live sources.</div>" +
+          '<form class="sample-buy no-print" id="sample-buy" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 22px;">' +
+            '<input id="sample-input" class="field" style="flex:1 1 240px;" placeholder="Your own ' + esc(inputNoun(s.kind)) + '" aria-label="Your own ' + esc(inputNoun(s.kind)) + '">' +
+            '<button class="btn btn-primary" type="submit">Get this report, ' + "$" + esc(String(Math.round(s.priceUsd || 0))) + ' →</button>' +
+            '<span id="sample-err" style="color:var(--muted);font-size:13px;"></span>' +
+          "</form>"
+        : included.length ? '<div class="keep-hint no-print">Includes ' + included.join(" · ") + ". This page is yours to keep, bookmark it or use the link we emailed you.</div>"
+                          : '<div class="keep-hint no-print">This page is yours to keep, bookmark it or use the link we emailed you.</div>');
 
     // Monitor deliveries carry what triggered them + a manage/cancel link.
     var mon = "";
@@ -231,6 +275,17 @@
     }
     wireUpgrade();
 
+    wireSampleBuy(s);
+    var mp = document.getElementById("mk-public");
+    if (mp) mp.addEventListener("click", async function () {
+      mp.disabled = true;
+      try {
+        var r = await fetch(api + encodeURIComponent(id) + "/public", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ public: s.public !== true }) });
+        var j = await r.json();
+        if (j && j.status === "done") { s.public = j.public; s.publicId = j.publicId || s.publicId; renderDone(s); return; }
+      } catch (e) { /* fall through */ }
+      mp.disabled = false;
+    });
     var pdf = document.getElementById("dl-pdf");
     if (pdf) pdf.addEventListener("click", function () { window.print(); });
 
@@ -261,12 +316,20 @@
     if (s.status === "not_found" || s.status === "invalid") { app.innerHTML = notFound(); return true; }
     return false; // generating -> keep polling
   }
+  var startedAt = Date.now();
+  function tickElapsed() {
+    var el = document.getElementById("rv-elapsed");
+    if (!el) return;
+    var s = Math.round((Date.now() - startedAt) / 1000);
+    el.textContent = s < 60 ? "Working for " + s + "s" : "Working for " + Math.floor(s / 60) + "m " + (s % 60) + "s";
+  }
   async function poll() {
     try {
       var r = await fetch(api + encodeURIComponent(id));
       var s = await r.json();
       if (render(s)) return;
     } catch (e) { /* transient; keep polling */ }
+    tickElapsed();
     setTimeout(poll, 3000);
   }
   poll();

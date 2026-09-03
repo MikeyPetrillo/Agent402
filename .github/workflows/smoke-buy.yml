@@ -24,9 +24,18 @@ on:
         required: false
         default: ""
       expect:
-        description: "Optional substring the response must contain"
+        description: "Response substring to require (required only when an external target is set)"
         required: false
         default: ""
+      strip_extensions:
+        description: "Diagnostic: comma-separated x402 extensions to drop from the challenge before paying (e.g. offer-receipt)"
+        required: false
+        default: ""
+      capture_receipt:
+        description: "Capture the seller-signed offer receipt as a workflow artifact (external target only - this host issues none)"
+        required: false
+        type: boolean
+        default: false
       target:
         description: "Optional external seller origin to buy from instead of production (x402 compatibility check, e.g. https://seller.example)"
         required: false
@@ -49,7 +58,13 @@ jobs:
       - name: Install x402 client (EVM only)
         # No secrets in scope here; --ignore-scripts blocks dependency lifecycle
         # scripts. Pinned to the server's protocol version + the repo lock (R-07).
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 @x402/core@2.16.0 @x402/evm@2.16.0 viem@2.52.2
+        # KEEP THIS IN STEP WITH package.json's @x402/* range. It drifted to
+        # 2.16.0 while the server ran 2.22.0, and on 2026-08-29 a buy against an
+        # external seller failed with CDP's `'paymentPayload' is invalid: must
+        # match one of [x402V2Pay...]` - our own canary never caught it because
+        # it only pays OUR 402s, which the old client still shaped correctly.
+        # A buyer workflow that cannot pay a third party is not a buyer test.
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.22.0 @x402/core@2.22.0 @x402/evm@2.22.0 viem@2.52.2
       - name: Buy one tool from production (real USDC)
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -60,7 +75,17 @@ jobs:
           SMOKE_BODY: ${{ github.event.inputs.body }}
           SMOKE_EXPECT: ${{ github.event.inputs.expect }}
           SMOKE_TARGET: ${{ github.event.inputs.target }}
+          SMOKE_STRIP_EXTENSIONS: ${{ github.event.inputs.strip_extensions }}
+          SMOKE_RECEIPT_OUT: ${{ inputs.capture_receipt && format('{0}/signed-offer-receipt.json', runner.temp) || '' }}
         run: |
           if [ -z "$BURNER_KEY" ]; then echo "No BURNER_KEY secret — cannot run the paid smoke test"; exit 1; fi
           echo "::add-mask::$BURNER_KEY"
           node scripts/smoke-buy.js
+      - name: Preserve signed offer receipt
+        if: ${{ always() && inputs.capture_receipt }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-offer-receipt
+          path: ${{ runner.temp }}/signed-offer-receipt.json
+          if-no-files-found: warn
+          retention-days: 7

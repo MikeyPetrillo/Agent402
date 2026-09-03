@@ -44,7 +44,7 @@ export const BLOG_POSTS = [
 <p>Agent402 is built as the applied layer, and every piece of it is live on both wires:</p>
 
 <ul>
-  <li><strong>Buy:</strong> a catalog of 500+ deterministic pay-per-call tools - search, browser rendering, PDFs, OCR, financial and chain data, an OpenAI-compatible LLM gateway - each priced, tested against its own example in CI, and settled on chain over x402 or MPP. <a href="/tools">Browse the catalog</a>.</li>
+  <li><strong>Buy:</strong> a catalog of 500+ pay-per-call tools - search, browser rendering, PDFs, OCR, financial and chain data, an OpenAI-compatible LLM gateway - each priced, tested against its own example in CI, and settled on chain over x402 or MPP. <a href="/tools">Browse the catalog</a>.</li>
   <li><strong>Route:</strong> an open <a href="/marketplace">cross-seller index</a> and a <a href="/guides/smart-order-router">Smart Order Router</a> that resolves a task to the best seller across the ecosystem - ours or anyone's - pays them on the agent's behalf on the same chain the agent paid on, and relays the result with a receipt. Only sellers with proven on-chain settlement are routable.</li>
   <li><strong>Sell:</strong> the open-source <a href="/sell">tollbooth</a> that lets any site or API charge agents per request over both wires while humans browse free. Non-custodial, no signup.</li>
   <li><strong>Prove:</strong> <a href="/revenue">live transactions</a> by rail and by wire (external revenue too), every figure linked to its on-chain receipt, an on-chain seller leaderboard, uptime measured from outside, and a ledger for the rare charged-but-failed call so it is refunded rather than forgotten.</li>
@@ -243,7 +243,7 @@ export const BLOG_POSTS = [
 export function blogIndex(baseUrl) {
   const canonical = `${baseUrl}/blog`;
   const pageTitle = "Blog - Agent402";
-  const pageDesc = "News, deep-dives, and announcements from the Agent402 project - deterministic tools, x402 payments, and MCP integrations for autonomous agents.";
+  const pageDesc = "News, deep-dives, and announcements from the Agent402 project - tools, models, x402 payments, and MCP integrations for autonomous agents.";
 
   const jsonLd = {
     "@context": "https://schema.org",

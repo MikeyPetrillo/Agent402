@@ -730,6 +730,7 @@ function makeTickerPackHandlerInner(tierSlug, depsIn) {
 3. A leg marked FAILED produced NOTHING. Say the leg was unavailable. Never treat a missing number as zero and never guess what it would have been.
 4. Do NOT use bracketed citations - this section carries none. Do not write a "Sources" section.
 5. This is information, not investment advice. Do not recommend buying or selling.
+6. Write about the COMPANY, never about this pipeline: do not say a leg "was produced", "ran successfully" or "cited N sources", and do not narrate what was read. Coverage facts (how many filings, the holders sample size and its limitation) belong in ONE short sentence at the end of the executive summary, nowhere else. Only a FAILED leg is named as such (rule 3).
 
 Write EXACTLY two parts, separated by a line containing only ===NEXT===.
 

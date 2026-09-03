@@ -12,7 +12,7 @@
 //   3. the paid write is readable by the same wallet (payer attribution
 //      survived the loopback);
 //   4. a free tool is untouched (runs free, no challenge);
-//   5. a tampered credential is a -32042 with an RFC 9457 `problem`.
+//   5. a tampered credential is a -32043 (verification failed) with an RFC 9457 `problem`.
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -111,14 +111,14 @@ try {
   const read = await payer.callTool({ name: "catalog.call", arguments: { slug: "memory-read", params: { key } } });
   ok(!read.isError && JSON.stringify(read.structuredContent?.result || read.content).includes("\"hello\""), `the paying wallet reads its own write back over MPP (${JSON.stringify(read.structuredContent?.result || "").slice(0, 80)})`);
 
-  // 5. Tampered credential -> -32042 with RFC 9457 problem
+  // 5. Tampered credential -> -32043 (spec: verification failed, mppx 0.9.1+) with RFC 9457 problem
   const evmCh = challenges.find((c) => c.method === "evm");
   const tampered = { challenge: { ...evmCh, id: "x".repeat(evmCh.id.length) }, payload: { from: account.address, to: TREASURY, value: evmCh.request.amount, validAfter: "0", validBefore: String(Math.floor(Date.now() / 1000) + 300), nonce: `0x${"77".repeat(32)}`, signature: `0x${"11".repeat(65)}`, type: "authorization" } };
   let rejected = null;
   try {
     await plain.callTool({ name: "catalog.call", arguments: { slug: "memory-write", params: { key: "k2", value: 1 } }, _meta: { [MCP_CREDENTIAL_META]: tampered } });
   } catch (e) { rejected = e; }
-  ok(rejected && rejected.code === MCP_PAYMENT_REQUIRED_CODE && rejected.data?.problem?.type === "https://paymentauth.org/problems/invalid-challenge" && Array.isArray(rejected.data.challenges) && rejected.data.challenges.length >= 1, `a tampered credential -> -32042 with problem invalid-challenge + fresh challenges (got ${rejected?.data?.problem?.type})`);
+  ok(rejected && rejected.code === -32043 && rejected.data?.problem?.type === "https://paymentauth.org/problems/invalid-challenge" && Array.isArray(rejected.data.challenges) && rejected.data.challenges.length >= 1, `a tampered credential -> -32043 with problem invalid-challenge + fresh challenges (got ${rejected?.data?.problem?.type})`);
   // sanity: the test's own serializer agrees with the wire
   ok(typeof Credential.serialize(tampered) === "string", "Credential.serialize round-trips the tampered object (test harness sanity)");
 

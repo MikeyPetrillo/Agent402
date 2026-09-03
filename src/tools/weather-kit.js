@@ -269,7 +269,7 @@ export const WEATHER_TOOLS = [
     name: "Historical weather (global)",
     slug: "weather-history",
     category: "data",
-    price: "$0.005",
+    price: "$0.002",
     description:
       "Historical daily weather for any location and date range (up to 1 year): high/low temp, precipitation, wind, conditions. Open-Meteo archive, no key, global. Data from 1940 to 5 days ago. ?lat=51.51&lon=-0.13&start=2025-06-01&end=2025-06-07.",
     tags: ["weather", "historical", "archive", "climate", "global", "open-meteo"],

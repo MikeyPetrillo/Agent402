@@ -16,7 +16,7 @@ via x402 + USDC nanopayments. Agent402 is a natural fit - we already speak x402.
 3. Provide:
    - Service name: `Agent402.Tools`
    - URL: `https://agent402.tools`
-   - Description: "500+ deterministic pay-per-call tools for AI agents (search, finance, EDGAR, crypto, PDFs, OCR, and more), plus report products ($0.20-$1.10 deep research, dossier, fund, SEC filing, domain audit, token risk, recall, insider; $1-$2 by card) and $3/month monitors. x402 native; MPP on the same 402; free proof-of-work tier; prepaid card credits."
+   - Description: "500+ pay-per-call tools for AI agents (search, finance, EDGAR, crypto, PDFs, OCR, and more), plus report products ($0.20-$1.10 deep research, dossier, fund, SEC filing, domain audit, token risk, recall, insider; $1-$2 by card) and $3/month monitors. x402 native; MPP on the same 402; free proof-of-work tier; prepaid card credits."
    - Payment: x402 / USDC on Base (primary), Solana, Polygon, Arbitrum, Monad,
      Celo, Avalanche, Sei, Optimism, Stellar, Algorand, plus USDG on Robinhood
      Chain (12 chains); MPP (Base/Celo, native Tempo); card credits

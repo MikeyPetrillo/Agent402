@@ -17,14 +17,14 @@ export const WHY_POINTS = [
     id: "never-charged",
     kicker: "02 / FAILURE",
     h: "A failed call is not charged, and the response proves it.",
-    p: "Settlement runs after the handler answers and an error status cancels it, so a response with no payment receipt, or a receipt marked success:false, moved no money. A retry that carries an idempotency key replays the paid answer instead of paying again. The one residual case, a settled receipt on an error response, is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.",
+    p: "Settlement runs after the handler answers and an error status cancels it, so a response with no payment receipt, or a receipt marked success:false, moved no money. A retry that carries the same idempotency key and the same payment credential replays the paid answer instead of paying again. The one residual case, a settled receipt on an error response, is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.",
     links: [["/status", "uptime measured from outside"], ["/guides/x402-and-mpp", "how the paywall settles"]],
   },
   {
     id: "one-key",
     kicker: "03 / ONE KEY",
     h: "One key buys everything.",
-    p: "The same wallet or credits key pays for five LLM tiers on three wires (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ deterministic tools, wallet-keyed memory and finished reports. One paywall, one key.",
+    p: "The same wallet or credits key pays for five LLM tiers on three wires (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools, wallet-keyed memory and finished reports. One paywall, one key.",
     links: [["/tools", "the catalog"], ["/v1/models", "gateway models"], ["/reports", "reports"]],
   },
   {
@@ -53,7 +53,7 @@ export const WHY_POINTS = [
     kicker: "07 / PROOF",
     h: "Everything is checkable.",
     p: "Uptime is observed by two probes outside production, a real-money canary buys through every rail daily, transactions are published by rail and by wire, and the whole server is open source and self-hostable. Tools are deterministic: no model in the serving path.",
-    links: [["/status", "status"], ["/revenue", "transactions"], ["https://github.com/MikeyPetrillo/Agent402", "source"]],
+    links: [["/proof", "receipts"], ["/status", "status"], ["/revenue", "transactions"], ["https://github.com/MikeyPetrillo/Agent402", "source"]],
   },
 ];
 

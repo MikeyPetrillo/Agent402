@@ -61,17 +61,17 @@ const redact = (s) => {
 const EVM_NETWORKS = {
   base: {
     usdc: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-    rpcs: [...alchemy("base-mainnet"), "https://mainnet.base.org", "https://base.llamarpc.com", "https://base.drpc.org"],
+    rpcs: [...alchemy("base-mainnet"), "https://mainnet.base.org", "https://base.drpc.org"],
     spanBlocks: 12000, // ~6.5h at 2s blocks
   },
   polygon: {
     usdc: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
-    rpcs: [...alchemy("polygon-mainnet"), "https://polygon.drpc.org", "https://polygon.llamarpc.com", "https://polygon-rpc.com"],
+    rpcs: [...alchemy("polygon-mainnet"), "https://polygon.drpc.org", "https://polygon-rpc.com"],
     spanBlocks: 9500, // ~5.5h at 2.1s blocks — free-tier RPCs cap getLogs ranges at 10k blocks
   },
   arbitrum: {
     usdc: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
-    rpcs: [...alchemy("arb-mainnet"), "https://arb1.arbitrum.io/rpc", "https://arbitrum.llamarpc.com", "https://arbitrum.drpc.org"],
+    rpcs: [...alchemy("arb-mainnet"), "https://arb1.arbitrum.io/rpc", "https://arbitrum.drpc.org"],
     spanBlocks: 90000, // ~6h at 0.25s blocks (address-filtered getLogs stays cheap)
   },
   avalanche: {

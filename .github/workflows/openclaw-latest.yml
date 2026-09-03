@@ -1,0 +1,95 @@
+# Does the plugin still load on the NEWEST OpenClaw?
+#
+# openclaw/test-real-install.js installs the host from npm, so tracking @latest
+# there hands a third party a veto over every merge in this repo: OpenClaw
+# published 2026.8.1 overnight on 2026-08-30 (capability consent on local
+# archives, and the exported plugin id must equal the manifest id) and the lane
+# went red with no commit of ours, blocking an unrelated catalog fix for hours.
+#
+# So that file is PINNED and this workflow runs the very same file against
+# @latest on a schedule. A host change still reaches us - as an issue, not as a
+# blocked merge. Nothing here gates deploy or publish.
+#
+# When this goes red: fix the plugin, then raise the pin in test-real-install.js
+# so the merge lane proves the new host too.
+name: OpenClaw latest
+
+on:
+  schedule:
+    # Daily 05:41 UTC. GitHub throttles schedules on a busy repo, and that is
+    # fine here: this is a notice, never a gate.
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+# Read-only by default: the job below runs a third-party binary with network
+# access, so it must not hold a token that can write anything. Only the report
+# job, which runs no untrusted code, gets issues: write.
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-latest
+  cancel-in-progress: false
+
+jobs:
+  latest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    outputs:
+      pinned: ${{ steps.versions.outputs.pinned }}
+      latest: ${{ steps.versions.outputs.latest }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22.22"
+      - name: Which version is pinned, and which is newest
+        id: versions
+        run: |
+          PINNED=$(node -e 'const s=require("fs").readFileSync("openclaw/test-real-install.js","utf8");const m=/OPENCLAW_SPEC = process\.env\.OPENCLAW_SPEC \|\| "openclaw@([^"]+)"/.exec(s);console.log(m?m[1]:"")')
+          LATEST=$(npm view openclaw version 2>/dev/null || echo "")
+          echo "pinned=$PINNED" >> "$GITHUB_OUTPUT"
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "pinned=$PINNED latest=$LATEST"
+          # An unreadable pin means the regex drifted from the file: that is a
+          # real failure, not a quiet skip.
+          [ -n "$PINNED" ] || { echo "could not read the pin from test-real-install.js"; exit 1; }
+      - name: Run the real-install lane against openclaw@latest
+        if: steps.versions.outputs.latest != '' && steps.versions.outputs.latest != steps.versions.outputs.pinned
+        env:
+          OPENCLAW_SPEC: openclaw@latest
+        run: node openclaw/test-real-install.js
+
+  report:
+    needs: latest
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Page if the newest OpenClaw rejects the plugin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.latest.result }}
+          PINNED: ${{ needs.latest.outputs.pinned }}
+          LATEST: ${{ needs.latest.outputs.latest }}
+        run: |
+          TITLE="agent402-openclaw FAILS on the newest OpenClaw"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "$RESULT" != "success" ]; then
+            BODY="openclaw/test-real-install.js failed against openclaw@${LATEST:-unknown} (the merge lane is pinned to ${PINNED:-unknown}, so this did NOT block any merge).
+
+          Users installing the plugin on the newest host are affected; CI is not. Fix the plugin, republish, then raise the pin in openclaw/test-real-install.js so the merge lane proves the new host too.
+
+          Re-run: \`gh workflow run openclaw-latest.yml --ref main\`"
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ) against openclaw@${LATEST:-unknown}."
+            fi
+          elif [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Passing at $(date -u +%FT%TZ) against openclaw@${LATEST:-unknown}."
+          fi

@@ -1,0 +1,158 @@
+{
+ "product": "research",
+ "input": "Which US airlines are most exposed to jet fuel price spikes in 2026, and how are they hedged?",
+ "title": "Which US Airlines Are Most Exposed to Jet Fuel Price Spikes in 2026: and How Are They Hedged?",
+ "report": "# Which US Airlines Are Most Exposed to Jet Fuel Price Spikes in 2026 — and How Are They Hedged?\n\n## Short answer\n\nThe large US carriers are, as a group, the most exposed airlines in the world to the 2026 fuel shock, because virtually none of them still runs a financial hedging program: as of their FY2025 filings, three of the four largest US carriers held zero hedging positions, and only Delta Air Lines pursues an alternative through its Monroe Energy refinery [4]. American Airlines screens as the most pressured large-cap US carrier under current forward fuel curves — CreditSights models 2026 EBITDA down roughly 46% year over year, leverage rising to about 12.3x from 6.7x adjusted a year earlier, and roughly $1.5bn of likely cash burn — while Delta is the least affected, down about 7% [3]. Among smaller carriers, the highest fuel share of operating expense sits with ultra-low-cost and mid-size operators, but the material here provides far less carrier-specific hedging detail for them than for the Big Four.\n\n## Jet fuel cost sensitivity for US airlines (2026)\n\nFuel is the largest expense line after labor for US airlines. Estimates of its share of operating costs differ meaningfully across the sources, and that spread matters for any sensitivity calculation:\n\n- 20–35% of US airlines' operating costs, \"the single largest expense line after labor\" [1];\n- typically a fifth to a quarter of operating expenses [5];\n- around 20%–25% of airline costs [6];\n- typically 15–25% of total operating expenses, with US scheduled passenger airlines spending roughly $40 billion on jet fuel in 2025 — about 15% of domestic and 22% of international operating expenses, or on the order of $110 million per day [4];\n- around 20% to 30% of total operating costs globally, rising to as much as 40% in extreme high-price periods [2].\n\nThe sub-answer material also gives 2025 carrier-level fuel shares that inform 2026: Allegiant Air approximately 25%; JetBlue around 22%; Alaska Air Group about 21%; United roughly 21%; American approximately 20%; Southwest around 19%; and Delta about 17%, the lowest of the group, attributed to its Monroe Energy refinery, against an industry average near 17%. Note that these carrier-level percentages are not attributable to any single numbered source in the appended list and should be treated as lower-confidence than the source-cited ranges above; the highest carrier-specific figures cited in the numbered sources are American at 28% fuel cost exposure and Southwest at 31% [1], which sit well above the same carriers' figures in the sub-answer data. Readers should treat 28%/31% as one analyst's exposure assumption rather than a reported accounting share.\n\nOn earnings sensitivity, UBS data cited by StockwireX quantifies the asymmetry: a single $0.10 per unit decline in jet fuel prices lifts American Airlines' estimated 2027 EPS by about 16%, versus roughly 4.5% for Delta [8]. Read in reverse, that is the cleanest available ranking of upside/downside torque: American's earnings are roughly three and a half times as levered to the jet fuel price as Delta's. This is consistent with CreditSights' EBITDA work (American −46%, United −24%, Delta −7%, with Southwest still improving year over year on revenue/profit initiatives) [3], and with Drillr's estimate that American faces an 8% operating income headwind [1]. Two independent modelling approaches therefore converge on the same ordering: **American most exposed, United next, Delta least; Southwest's position is contested** — Drillr treats Southwest as one of the two most exposed names alongside American [1], whereas CreditSights expects Southwest EBITDA to still improve year over year [3]. That disagreement is not resolved by the material and is best read as a difference between a pure fuel-input model and a full-company model that credits Southwest's revenue initiatives.\n\n## Jet fuel price projections for 2026\n\nThe trigger was geopolitical. Sources date the US–Israeli strikes on Iran and the effective closure of the Strait of Hormuz to late February 2026 [1][4][12] — DWU gives February 28, 2026 [4] — with Reuters and Morningstar dating the price spike itself from March 6 [5][6]. Brent spiked above $100/barrel after the strikes, averaged about $117 in April 2026, reached a high of $138/barrel, and had eased to the high-$90s to low-$100s by early June [4]. IATA describes oil briefly exceeding 120–125 USD/bbl before stabilising [12], and one trade report notes Brent passing $100 on the morning of 9 March, its first time in four years [2].\n\nJet fuel itself:\n\n- Gulf Coast spot jet fuel surged to $4.30/gal (+102% YoY) before easing to $3.82 the next day; the forward curve then implied an average of ~$3.30/gal in 2Q26, ~$2.73 in 3Q26 and ~$2.41 in 4Q26, contingent on Strait of Hormuz security normalising [3].\n- Drillr frames the move as jet fuel going from $85–$90/bbl pre-crisis to $150–$200/bbl, with North American jet cracks at $32 versus $7 pre-crisis [1]; the European jet crack reached roughly $102/bbl in early March [4]. Spot jet fuel ran well above its 2025 full-year average of about $2.11/gal [4].\n- Los Angeles: the weekly outright price jumped 45.1% to $3.7571/gal in the week ending March 6 from $2.5892/gal, peaked at a weekly average of $4.7849/gal in early May, and by the week ending July 17 stood at $3.6146/gal — with the cash differential at roughly 31 cents below NYMEX ULSD, its deepest discount since 2024, i.e. local physical tightness had cleared while the global cost floor had not [14]. Q1 volatility for LA jet fuel reached 87.2%, the highest Q1 reading since 2010.\n- Index data show US jet fuel at $0.750/KG in Q1 2026, the highest of the tracked markets (Europe $0.733, Asia-Pacific $0.693, Middle East $0.644), on elevated refining and distribution costs [9], up 3.2% from $0.727/KG in Q4 2025 and holding near $0.71–$0.79/KG through August 2026.\n- Business-aviation retail Jet-A (not airline contract fuel) rose 70 cents in August 2026 versus July to average $8.31/gal, $1.70 higher than a year earlier, across a survey of more than 200 US FBOs [10]; the largest regional increase was the Great Lakes region at 83 cents [10].\n\nThe forecasts do not agree. CreditSights' forward curve points to material relief by 4Q26 [3]; Drillr treats the disruption as structural rather than episodic, citing 2.1 million b/d of middle distillate supply removed indefinitely and inventories at five-year lows, and sets a reversion to $90 jet fuel by September 2026 as the condition that would break its thesis [1]. A separate technical forecast puts 2026 Jet A-1 in a $2.10–$2.45 range [13] — near the low end of, and hard to reconcile with, the spot and forward levels reported in March–July [3][14]. Direction of travel is thus genuinely uncertain, and the range of credible 2026 average outcomes is wide.\n\n## Airline hedging strategies and exposures\n\nThe defining fact for 2026 is the industry's retreat from hedging. US airlines largely stopped hedging over the past two decades, on the view that post-shale domestic supply and the prospect of \"peak oil\" demand would structurally temper price risk — a stance now being tested [3][5]. Southwest, the most widely cited airline hedger (an estimated $3.5 billion of savings 1998–2008), stopped adding positions alongside its FY2024 results and terminated its remaining hedge book in the second quarter of 2025 [4]; Reuters records Southwest ending the practice in 2025, calling it expensive and unreliable [5]. Aerotime dates the program's end to early 2026 as part of a broader cost-cutting push and quotes CEO Bob Jordan saying at a JPMorgan conference in March 2025 that hedging had not been beneficial for \"the past 10 to 15 years\" [11] — a discrepancy in timing versus the 10-K-sourced Q2 2025 date [4] that the material does not reconcile.\n\nCarrier-by-carrier hedging status as reported:\n\n| Carrier | Reported hedging position | Exposure |\n|---|---|---|\n| American | No large-scale hedging [2]; zero positions per FY2025 filings [4] | Highly exposed [2] |\n| United | No large-scale hedging [2] | Highly exposed to oil price volatility [2] |\n| JetBlue | No significant hedging [2] | Highly sensitive [2] |\n| Southwest | Limited legacy hedging contracts [2] | Some protection, less than historically [2] |\n| Delta | No major hedging; refinery ownership [2] | Partially insulated via fuel supply chain [2] |\n\nDelta's Monroe Energy refinery in Trainer, Pennsylvania processes roughly 200,000 barrels of crude per day and, with exchange agreements, supplied approximately 75% of Delta's jet-fuel consumption in FY2025, lowering Delta's average fuel price by roughly 4 cents per gallon that year. This is crack-spread insulation, not a price hedge [4] — an important distinction, since it protects Delta when refining margins blow out (as in March 2026 [1][4]) but not against the underlying crude move. The 4-cent FY2025 benefit is small relative to a dollar-scale price move, so Delta's advantage in 2026 rests on the crack-spread channel and on its lower reported fuel share, not on the historical cents-per-gallon saving.\n\nThe contrast with foreign carriers is stark and quantified: easyJet 84% hedged for H1 2026; Lufthansa Group 82% for Q1 2026 and 77% for full-year 2026; Air France-KLM 70%/69%/60%/47% across 2026 quarters; IAG 75%/64%/58%/50%; Ryanair and Wizz Air mostly hedged for 2026; Icelandair 31%–47% [2]. Reuters likewise notes European and Asian carriers including Air France-KLM and Cathay Pacific maintain active hedging books [5]. **No source in this material reports a 2026 hedge ratio for any US carrier**, which is itself the finding: the instruments US airlines historically used — costless collars, fixed-for-floating swaps, standalone calls, and CME/NYMEX Gulf Coast futures (with heating oil futures at 3-month maturity the most effective cross-hedge among proxies studied, none highly effective) [7] — are described in the material as historical practice rather than current coverage.\n\n## Analysis of vulnerability\n\nThree factors compound: fuel share of cost, balance-sheet capacity, and pricing power. American ranks worst on the first two — highest EPS sensitivity [8], deepest modelled EBITDA decline, sharply rising leverage, cash burn, and reliance on potential first-lien issuance capacity of about $13bn [3] — and CreditSights flags carriers facing potential financing needs exceeding $1bn under current forward curves [3]. United sits in the middle (~24% EBITDA decline) with investment-grade progress viewed as delayed rather than derailed [3], and has already cut roughly 5% of scheduled capacity, mostly off-peak and lower-yield flying [4]. Delta is the relative safe harbour.\n\nPricing power is the binding constraint on self-help: a 10% fare increase offsets only about one-third of the fuel cost increase, leaving 600–800 basis points of margin erosion, on Drillr's arithmetic [1]. Morningstar frames the spike as jeopardising profitability while offsetting some benefit from long-term tax deferrals [6]; the sub-answer material adds that carriers typically operate on low-single-digit operating margins. Industry-wide, DWU estimates each of the three largest carriers faces on the order of $400 million in additional monthly fuel cost (assuming ~$1/gal above the 2025 average on ~4.5 billion gallons each), with unbudgeted 2026 fuel expense approaching $20 billion across the industry's roughly 20 billion gallons if elevated prices persist for a full year [4]. These are explicitly labelled DWU estimates on a stated method, not reported results [4].\n\nWeighing the evidence: the hedging-status facts are the strongest, being tied to FY2025 10-K filings [4]. The sensitivity rankings rest on two independent models that agree on ordering [3][8]. The weakest links are the 2026 price paths, where sources diverge, and the carrier-level fuel-share percentages, where the numbered sources conflict with the sub-answer figures.\n\n## Conclusion and recommendations\n\nFor a fuel spike in 2026, exposure ranks American > United > JetBlue/other unhedged mid-caps > Southwest > Delta, with the American-versus-Delta gap the single most actionable relationship in the data (16% vs ~4.5% EPS sensitivity to a $0.10 move) [8]. Because no US carrier has meaningful financial coverage [2][4], the differentiators are structural: refinery ownership, cost base, capacity flexibility, and liquidity. Investors and counterparties should therefore (i) monitor Gulf Coast spot and forward jet fuel against the $3.30/$2.73/$2.41 quarterly path as the key swing variable [3]; (ii) treat Strait of Hormuz normalisation as the binary that separates the relief case from the structural case [1][3]; (iii) watch for capacity discipline of the kind United has already announced [4] and for incremental financing at American [3]; and (iv) recognise that Delta's protection is crack-spread insulation covering roughly three-quarters of its consumption, not a price hedge [4]. Where hedged comparators are needed, European and Asian carriers with 47%–84% 2026 coverage offer the contrast [2][5].\n\n**Not covered by the material:** current 2026 hedge ratios or notional volumes for any US carrier; carrier-level fuel-share percentages traceable to a numbered source for Allegiant, JetBlue, Alaska or Frontier; any Spirit Airlines filings or disclosures; and full-text detail behind the excerpt-only sources [5][6][7][8][9][10][11][12][13][14].\n\n## Sources\n[1] Airlines' Jet Fuel Costs Dwarf Refiners' Crack Spread Gains by 3:1 Margin | Drillr - https://drillr.ai/research/aal-airlines-jet-fuel-costs-refiners-crack-spread-3-1\n[2] Oil hits $100 a barrel: Which airlines are protected from rising fuel costs? - https://aerospaceglobalnews.com/news/oil-fuel-cost-airline-hedging-fare-prices/\n[3] US Airlines: Update on Fuel Shock / RV - CreditSights - https://know.creditsights.com/insights/us-airlines-update-on-fuel-shock-rv/\n[4] Airline Fuel Hedging Strategies & Financial Impact - https://dwuconsulting.com/dwu-ai/airline-fuel-hedging-strategies\n[5] US airlines no longer hedge fuel costs. That could hurt margins if Iran conflict lingers | Reuters (excerpt only) - https://www.reuters.com/business/energy/us-airlines-no-longer-hedge-fuel-costs-that-could-hurt-margins-if-iran-conflict-2026-03-06/\n[6] US Airlines: Fuel Price Spike Jeopardizes Profitability, Offsetting Some Benefit from Tax Deferrals | Morningstar (excerpt only) - https://www.morningstar.com/stocks/us-airlines-fuel-price-spike-jeopardizes-profitability-offsetting-some-benefit-tax-deferrals\n[7] Hedging jet fuel price risk: The case of U.S. passenger airlines (excerpt only) - https://ideas.repec.org/a/eee/jaitra/v44-45y2015ip54-64.html\n[8] Airline Stocks & Jet Fuel: AAL Leads on EPS Sensitivity (excerpt only) - https://stockwirex.com/analysis/airline-stocks-jet-fuel-price-sensitivity/\n[9] Jet Fuel Price Trend 2026, Forecast, Chart, News & Index (excerpt only) - https://www.expertmarketresearch.com/price-forecast/jet-fuel-price-trends\n[10] Jet-A Fuel Prices Rise In August 2026 | Aviation Week (excerpt only) - https://aviationweek.com/business-aviation/aircraft-propulsion/jet-fuel-prices-rise-august-2026\n[11] Airline fuel hedging: who is protected in Iran's fuel crisis (excerpt only) - https://www.aerotime.aero/articles/airline-fuel-hedging-iran-conflict-crisis\n[12] Media Briefing Jet Fuel Update - AGM 2026 (excerpt only) - https://www.iata.org/en/iata-repository/pressroom/presentations/media-briefing-jet-fuel-update-agm-2026/\n[13] Jet A-1 Price Forecast 2026–2030 — Technical Data-Driven Analysis - NNRV TRADE (excerpt only) - https://nnrvtradepartners.com/jet-a-1-price-forecast-2026-2030-technical-data-driven-analysis/\n[14] Analysis: Los Angeles Jet Fuel Reprices for Local Balance but Pays for Global Risk - OPIS, A Dow Jones Company (excerpt only) - https://www.opis.com/resources/energy-market-news-from-opis/analysis-los-angeles-jet-fuel-reprices-for-local-balance-but-pays-for-global-risk/",
+ "sources": [
+  {
+   "n": 1,
+   "title": "Airlines' Jet Fuel Costs Dwarf Refiners' Crack Spread Gains by 3:1 Margin | Drillr",
+   "url": "https://drillr.ai/research/aal-airlines-jet-fuel-costs-refiners-crack-spread-3-1",
+   "snippet": "Jet fuel represents 20-35% of US airlines' operating costs, making it the single largest expense line after labor. For American Airlines, with $53.7 billion in 2025 revenue and 28% fuel cost exposure, the $65 per barrel increase translates to $9.8 billion in incremental annual cost—roughly 18% of revenue. Southwest Airlines, with minimal recent hedging and 31% fuel exposure on $26.5 billion revenue, faces $5.1 billion in added cost (19% of revenue). Delta's partial hedging cushions the blow to $",
+   "rank": 0.82048416,
+   "fullText": true,
+   "bodyChars": 7922
+  },
+  {
+   "n": 2,
+   "title": "Oil hits $100 a barrel: Which airlines are protected from rising fuel costs?",
+   "url": "https://aerospaceglobalnews.com/news/oil-fuel-cost-airline-hedging-fare-prices/",
+   "snippet": "| Airline | Fuel hedging coverage | Exposure to rising oil prices |\n| --- | --- | --- |\n| American Airlines | No large-scale fuel hedging | Highly exposed to rising fuel prices |\n| United Airlines | No large-scale fuel hedging | Highly exposed to oil price volatility |\n| JetBlue | No significant hedging | Highly sensitive to fuel price increases |\n| Southwest Airlines | Limited legacy hedging contracts | Some protection but less than historically |\n| Delta Air Lines | No major hedging, refinery ",
+   "rank": 0.80089486,
+   "fullText": true,
+   "bodyChars": 11602
+  },
+  {
+   "n": 3,
+   "title": "US Airlines: Update on Fuel Shock / RV - CreditSights",
+   "url": "https://know.creditsights.com/insights/us-airlines-update-on-fuel-shock-rv/",
+   "snippet": "Spot Gulf Coast jet fuel surged to $4.30/gal on Thursday (+102% YoY) before easing to $3.82 on Friday, while the forward curve now implies $3.30 average in 2Q26, declining to $2.73 in 3Q and $2.41 in 4Q amid uncertainty around the Strait of Hormuz.\n\n...\n\nUsing the current forward fuel curve, we updated 2026 EBITDA expectations across our coverage, with Delta down ~7% YoY aided by its owned refinery, Southwest still improving YoY on revenue/profit initiatives, and United down ~24% YoY with invest",
+   "rank": 0.7409441,
+   "fullText": true,
+   "bodyChars": 2871
+  },
+  {
+   "n": 4,
+   "title": "Airline Fuel Hedging Strategies & Financial Impact",
+   "url": "https://dwuconsulting.com/dwu-ai/airline-fuel-hedging-strategies",
+   "snippet": "- Brent crude spiked above $100/barrel after the strikes, averaging about $117 in April 2026 and reaching a high of $138 per barrel (U.S. Energy Information Administration); by early June 2026 it had eased to the high-$90s to low-$100s per barrel (EIA daily spot price) — still well above pre-conflict levels, near the “$90 Brent (stress)” case in the scenario table below.\n- Jet-fuel prices and crack spreads spiked. Spot jet fuel ran well above its 2025 full-year average near $2.11/gallon, and the",
+   "rank": 0.6320719,
+   "fullText": true,
+   "bodyChars": 37197
+  },
+  {
+   "n": 5,
+   "title": "US airlines no longer hedge fuel costs. That could hurt margins if Iran conflict lingers | Reuters",
+   "url": "https://www.reuters.com/business/energy/us-airlines-no-longer-hedge-fuel-costs-that-could-hurt-margins-if-iran-conflict-2026-03-06/",
+   "snippet": "Fuel is the second-largest expense for air carriers after labor, typically accounting for a fifth to a quarter of operating expenses, and U.S. airlines largely stopped hedging that cost over the past two decades. Southwest(LUV.N), opens new tab, an active hedger in the past, ended the practice in 2025, calling it expensive and ​unreliable. European and Asian companies, including Air France-KLM(AIRF.PA), opens new tab and Cathay Pacific(0293.HK), opens new tab, maintain active hedging books.\n\n...",
+   "rank": 0.6161283,
+   "fullText": false
+  },
+  {
+   "n": 6,
+   "title": "US Airlines: Fuel Price Spike Jeopardizes Profitability, Offsetting Some Benefit from Tax Deferrals | Morningstar",
+   "url": "https://www.morningstar.com/stocks/us-airlines-fuel-price-spike-jeopardizes-profitability-offsetting-some-benefit-tax-deferrals",
+   "snippet": "American Airlines Group Inc (AAL)\n\n...\n\nSouthwest Airlines Co (LUV)\n\nDelta Air Lines Inc (DAL)\n\nUnited Airlines Holdings Inc (UAL)\n\n...\n\nFuel prices have spiked since March 6, as US-Israeli attacks on oil infrastructure in Iran threatened global petroleum supply. We updated our forecasts to reflect the impact of higher fuel costs through the second quarter, offsetting some of the benefit of long-term tax deferrals in our valuations.\n\n...\n\nWhy it matters: Fuel accounts for around 20%-25% of airli",
+   "rank": 0.60274047,
+   "fullText": false
+  },
+  {
+   "n": 7,
+   "title": "Hedging jet fuel price risk: The case of U.S. passenger airlines",
+   "url": "https://ideas.repec.org/a/eee/jaitra/v44-45y2015ip54-64.html",
+   "snippet": "Jet fuel accounts for a large portion of passenger airlines' operating costs, and airlines' earnings are susceptible to swings in the price of jet fuel. This study uses daily data over the past two decades to determine the minimum variance hedge ratio for airlines wishing to hedge jet fuel price risk with futures, while also establishing the best cross hedging asset. Airlines hedging with futures would create the most effective hedge by using heating oil futures contracts with a 3-month maturity",
+   "rank": 0.55767727,
+   "fullText": false
+  },
+  {
+   "n": 8,
+   "title": "Airline Stocks & Jet Fuel: AAL Leads on EPS Sensitivity",
+   "url": "https://stockwirex.com/analysis/airline-stocks-jet-fuel-price-sensitivity/",
+   "snippet": "It was not that simple. UBS data published the same week revealed that a single $0.10 per unit decline in jet fuel prices produces wildly different earnings outcomes across the five largest U.S. carriers. At the top of the range, American Airlines (AAL) sees an estimated 16% boost to 2027 EPS. At the bottom, Delta Air Lines (DAL) registers approximately 4.5%.\n\n...\n\nA $0.10 fuel price decline lifts AAL’s projected 2027 EPS by approximately 16%, compared to roughly 4.5% for DAL. The same macro tai",
+   "rank": 0.54317886,
+   "fullText": false
+  },
+  {
+   "n": 9,
+   "title": "Jet Fuel Price Trend 2026, Forecast, Chart, News & Index",
+   "url": "https://www.expertmarketresearch.com/price-forecast/jet-fuel-price-trends",
+   "snippet": "Global jet fuel prices in Q1 2026 stood at USD 0.750 per KG in the United States, the highest among tracked markets, USD 0.733 per KG in Europe, USD 0.693 per KG in Asia-Pacific, and USD 0.644 per KG in the Middle East, the most competitively priced tracked market. The United States held the highest tracked price on elevated refining and distribution costs, while the Middle East benefited from proximity to crude oil feedstock and integrated refinery economics. Steady aviation demand dynamics con",
+   "rank": 0.48616135,
+   "fullText": false
+  },
+  {
+   "n": 10,
+   "title": "Jet-A Fuel Prices Rise In August 2026 | Aviation Week",
+   "url": "https://aviationweek.com/business-aviation/aircraft-propulsion/jet-fuel-prices-rise-august-2026",
+   "snippet": "BCA Staff August 13, 2026\n\n...\n\nThe price for a gallon of Jet-A fuel rose 70 cents in August 2026 when compared to July figures to settle at an average price of $8.31 per gallon.\n\nWhen compared to a year ago, Jet-A fuel prices were up $1.70 per gallon in August, according to a fuel survey of more than 200 U.S. FBOs conducted by the Aviation Research Group.\n\n...\n\nThe largest monthly price increase was in the Great Lakes region, with prices up 83 cents per gallon, while the smallest increase was i",
+   "rank": 0.459295,
+   "fullText": false
+  },
+  {
+   "n": 11,
+   "title": "Airline fuel hedging: who is protected in Iran's fuel crisis",
+   "url": "https://www.aerotime.aero/articles/airline-fuel-hedging-iran-conflict-crisis",
+   "snippet": "hedger among US carriers, ended its fuel hedging program in early 2026 as part of a broader cost-cutting push. CEO Bob Jordan said at a JPMorgan investor conference in March 2025 that hedging had not been beneficial for “the past 10 to 15 years” with",
+   "rank": 0.45638612,
+   "fullText": false
+  },
+  {
+   "n": 12,
+   "title": "Media Briefing Jet Fuel Update - AGM 2026",
+   "url": "https://www.iata.org/en/iata-repository/pressroom/presentations/media-briefing-jet-fuel-update-agm-2026/",
+   "snippet": "USD/BBL\n\nBrent Singapore Northwest Europe US West Coast US Gulf Coast\n\n...\n\n#### Impact of the oil crisis on the jet fuel market Volatility and regional variance\n\n...\n\nRegional variance USD 9–85/bbl\n\n...\n\nRegional price variance USD 2–41/bbl\n\n...\n\nSource: S&P Global Energy, IATA Sustainability and Economics\n\n...\n\n• Since the start of the Iran conflict in late February 2026, oil prices rose sharply, briefly exceeding 120–125 USD/BBL amid the effective closure of the Strait of Hormuz, before stabi",
+   "rank": 0.30361873,
+   "fullText": false
+  },
+  {
+   "n": 13,
+   "title": "Jet A-1 Price Forecast 2026–2030 — Technical Data-Driven Analysis - NNRV TRADE",
+   "url": "https://nnrvtradepartners.com/jet-a-1-price-forecast-2026-2030-technical-data-driven-analysis/",
+   "snippet": "2026 | $2.10–$2.45 | $0.55–$0.64 | $785–$915 |\n| 2027 | $2.05–$2.40 | $0.54–$0.63 | $770–$890 |\n| 2028 | $2.00–$2.38 | $0.52–$0.62 | $760–$880 |\n| 2029 | $2.08–$2.50 | $0.55–$0.66 | $790–$940 |\n| 2030 | $2.15–$2.62 | $0.56–$0.69",
+   "rank": 0.15498921,
+   "fullText": false
+  },
+  {
+   "n": 14,
+   "title": "Analysis: Los Angeles Jet Fuel Reprices for Local Balance but Pays for Global Risk - OPIS, A Dow Jones Company",
+   "url": "https://www.opis.com/resources/energy-market-news-from-opis/analysis-los-angeles-jet-fuel-reprices-for-local-balance-but-pays-for-global-risk/",
+   "snippet": "The Los Angeles jet fuel market is telling two stories at once. The weekly average cash differential fell to its deepest discount since 2024 for the week ended July 17, at roughly 31cts below the NYMEX ULSD futures contract while the outright price is still climbing, according to OPIS data.\n\n...\n\nThe local physical market has worked off its shortage. The global market that sets the region’s cost floor has not come down.\n\n...\n\nThe Los Angeles weekly average jet fuel cash price spent most of 2025 ",
+   "rank": 0.08642383,
+   "fullText": false
+  }
+ ],
+ "tables": [],
+ "meta": {
+  "tier": "research",
+  "searches_run": 3,
+  "sources_consulted": 14,
+  "sources_listed": 14,
+  "sources_cited": 14,
+  "sources_with_full_text": 4,
+  "citations_stripped": 0,
+  "unverified_numeric_claims": 1,
+  "unverified_numeric_claims_detail": [
+   {
+    "sentence": "**Not covered by the material:** current 2026 hedge ratios or notional volumes for any US carrier; carrier-level fuel-share percentages traceable to a numbered source for Allegiant, JetBlue, Alaska or Frontier; any Spirit Airlines filings o",
+    "numbers": [
+     "11"
+    ],
+    "sources": [
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14
+    ]
+   }
+  ],
+  "synthesis_model": "anthropic/claude-opus-5"
+ },
+ "at": "2026-08-28T01:46:57.973Z",
+ "generatedWith": "the production handler, FREE_MODE local run"
+}

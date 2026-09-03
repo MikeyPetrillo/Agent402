@@ -72,6 +72,20 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
   ok(p.send.length === 2 && p.totalUsd === 0.003, `sends both and sums the total ($${p.totalUsd})`);
 }
 
+// 6b. A row carrying the SALES LEDGER's short chain name plans exactly like
+// its CAIP-2 twin. The 2026-09-01 backfill minted "base" where receipts write
+// "eip155:8453", and familyOf + the accepts lookup both key on CAIP-2 - four
+// provably-owed Base rows were held "unsupported network base" on the first
+// live dry run. Normalization at intake is what un-held them; this pins it.
+{
+  const p = planRefunds([mk({ id: 1, network: "base" }), mk({ id: 2, network: "solana" })], { senders: SENDERS });
+  ok(p.send.length === 1 && p.send[0].network === "eip155:8453",
+    "a short-name base row normalizes to eip155:8453 and plans as evm");
+  const heldReasons = Object.keys(p.held).join("|");
+  ok(/no sender\/key for solana/.test(heldReasons),
+    `a short-name solana row normalizes and is held for the REAL reason - no sender - not "unsupported network" (got ${heldReasons})`);
+}
+
 // 7. Synthetic rows are HELD by default - refunding our own canary is churn.
 {
   const p = planRefunds([mk({ synthetic: 1 })], { senders: SENDERS });

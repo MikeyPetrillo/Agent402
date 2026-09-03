@@ -10,6 +10,7 @@
       if (errEl) errEl.textContent = "";
       var label = btn.textContent;
       btn.disabled = true;
+      try { if (window.posthog && window.posthog.capture) window.posthog.capture("report_buy_click", { product: btn.dataset.buyProduct, kind: "programmatic" }); } catch (e) { /* telemetry never blocks a buy */ }
       btn.innerHTML = '<span class="spin"></span>Redirecting to checkout…';
       try {
         var r = await fetch("/api/buy", {

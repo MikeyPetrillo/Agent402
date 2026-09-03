@@ -11,6 +11,7 @@ If your agent isn't an MCP client, there's a zero-dependency npm package that tu
 | Vercel AI SDK (`streamText` / `generateText` / `generateObject`) | [`agent402-ai-sdk`](https://www.npmjs.com/package/agent402-ai-sdk) | `Record<name, tool()>` |
 | LangChain JS / LangGraph | [`agent402-langchain`](https://www.npmjs.com/package/agent402-langchain) | `DynamicStructuredTool[]` |
 | LlamaIndex TS | [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) | `FunctionTool[]` |
+| elizaOS | [`elizaos-plugin-agent402`](https://www.npmjs.com/package/elizaos-plugin-agent402) | a `Plugin` with `AGENT402_FIND` / `AGENT402_CALL` / `AGENT402_ABOUT` actions and an `AGENT402` provider |
 | Coinbase AgentKit (CDP, Privy, ZeroDev, viem wallets) | [`agent402-agentkit`](https://www.npmjs.com/package/agent402-agentkit) | an `ActionProvider` for `AgentKit.from({ actionProviders })` |
 | Strands Agents (AWS Bedrock AgentCore) | [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) | `StrandsTool[]` for `new Agent({ tools })` |
 
@@ -122,6 +123,14 @@ const { tools } = await agent402Tools({ slugs: ["extract", "hash"] });
 const agent = new OpenAIAgent({ tools });
 const res = await agent.chat({ message: "Get the title of https://example.com/article" });
 ```
+
+## elizaOS
+
+```json
+{ "plugins": ["elizaos-plugin-agent402"], "settings": { "AGENT402_CREDITS_KEY": "a402_..." } }
+```
+
+Three actions: `AGENT402_FIND` (free discovery from a plain-language task), `AGENT402_CALL` (`content.slug` + `content.params`; proof-of-work for the free tier, the credits key or an x402 wallet for wallet-only tools, capped by `AGENT402_MAX_PER_CALL_USD`), `AGENT402_ABOUT`. The `AGENT402` provider tells the agent every turn that the catalog exists and which payment mode is configured. No runtime dependency on `@elizaos/core`. Package: [`elizaos-plugin-agent402`](https://www.npmjs.com/package/elizaos-plugin-agent402).
 
 ## Coinbase AgentKit
 

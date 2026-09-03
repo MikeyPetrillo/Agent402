@@ -1,7 +1,7 @@
 // The plugin against a REAL OpenClaw, the way a user gets it - not the fake
 // plugin api in test.js. Every green run of that file proved the plugin against
 // OUR MODEL of OpenClaw; this proves it against OpenClaw:
-//   npm i openclaw@latest        (the actual host, ~90 MB, Node >= 22.22)
+//   npm i openclaw@<pinned>      (the actual host, ~90 MB, Node >= 22.22)
 //   npm pack + npm i -g <tgz>    (the bin SYMLINK path - 0.1.0/0.1.1 were no-ops through it)
 //   openclaw plugins install <tgz>   (the documented install; 0.1.0-0.2.0 were REFUSED here:
 //                                    "plugin manifest requires configSchema")
@@ -23,7 +23,15 @@ import { spawn } from "node:child_process";
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
 const pkgDir = new URL(".", import.meta.url).pathname;
-const OPENCLAW_SPEC = process.env.OPENCLAW_SPEC || "openclaw@latest";
+// PINNED, deliberately. This lane installs the host from npm, so tracking
+// @latest hands a third party a veto over every merge in this repo: OpenClaw
+// published 2026.8.1 overnight on 2026-08-30 and the lane went red with no
+// commit of ours, blocking an unrelated catalog fix for hours. The pin is the
+// newest version the plugin is PROVEN against; openclaw-latest.yml runs this
+// same file against @latest on a schedule and opens an issue, so a host change
+// still reaches us - as a page, not as a blocked merge. Raise the pin when
+// that watcher goes red and the plugin has been fixed to match.
+const OPENCLAW_SPEC = process.env.OPENCLAW_SPEC || "openclaw@2026.8.1";
 
 // ASYNC spawn only: the stub gateway lives in this process, and a synchronous
 // spawn blocks the event loop so nothing the child asks the stub is answered
@@ -115,12 +123,36 @@ try {
   ok(realpathSync(bin) !== bin, "the bin IS a symlink - the entry guard must survive it (0.1.0/0.1.1 did not)");
 
   // 3. The documented install: openclaw plugins install.
-  const pi = await sh(oc, ["plugins", "install", tgz, "--force"], { env, cwd: home });
-  ok(pi.status === 0 && /Installed plugin: agent402/.test(pi.out), `openclaw plugins install <tgz> accepts the package (${pi.out.trim().split("\n").filter((l) => /manifest|Installed|error/i.test(l)).join(" | ").slice(0, 300)})`);
+  // 2026.8.1 gates a plugin from a LOCAL ARCHIVE ("outside ClawHub review and
+  // trust metadata") behind capability consent: without --accept-capabilities the
+  // CLI refuses to start at all. CI cannot answer an interactive prompt, and this
+  // is our own tgz, so consent is given here explicitly.
+  // --accept-capabilities exists only on 2026.8.1+, where a plugin from a LOCAL
+  // ARCHIVE ("outside ClawHub review and trust metadata") is gated behind
+  // consent and the CLI refuses to start without it. 2026.7.1 rejects the flag
+  // outright ("does not recognize option"), so probe the help text rather than
+  // hardcoding either host: pinning the flag on made this test measure the CLI's
+  // option list instead of our plugin.
+  const installHelp = await sh(oc, ["plugins", "install", "--help"], { env });
+  const CONSENT = /--accept-capabilities/.test(installHelp.out) ? ["--accept-capabilities"] : [];
+  const pi = await sh(oc, ["plugins", "install", tgz, "--force", ...CONSENT], { env, cwd: home });
+  ok(pi.status === 0 && /Installed plugin: agent402/.test(pi.out), `openclaw plugins install <tgz> accepts the package (exit ${pi.status}: ${(/Reason:\s*([^\n]+(?:\n(?!\[)[^\n]*)*)/.exec(pi.out)?.[1] || pi.out).trim().replace(/\s+/g, " ").slice(0, 900) || "<no output>"})`);
   const insp = await sh(oc, ["plugins", "inspect", "agent402"], { env });
   ok(/Status: loaded/.test(insp.out) && /text-inference: agent402/.test(insp.out), "openclaw plugins inspect agent402: loaded, registers text-inference");
+  // Consent given at install time does not survive into the gateway's runtime:
+  // 2026.8.1 quarantines the plugin until it is enabled with consent too (the
+  // refusal names this command itself). Without it the gateway loads every other
+  // plugin and silently never starts ours.
+  const pe = CONSENT.length
+    ? await sh(oc, ["plugins", "enable", "agent402", ...CONSENT], { env, cwd: home })
+    : { status: 0, out: "(host has no capability gate)" };
+  ok(pe.status === 0, `plugins enable${CONSENT.length ? " --accept-capabilities" : " (not gated on this host)"} (exit ${pe.status}: ${pe.out.trim().replace(/\s+/g, " ").slice(0, 300)})`);
   const doc = await sh(oc, ["plugins", "doctor"], { env });
-  ok(/No plugin issues detected/.test(doc.out), `openclaw plugins doctor: ${doc.out.trim().split("\n").pop()}`);
+  // 2026.8.1 reworded a clean bill of health ("...checks passed"); a plugin it
+  // rejects still prints a "Plugin errors:" block (that is how the id mismatch
+  // surfaced), so require BOTH a success phrase and the absence of that block -
+  // matching the wording alone would pass on a doctor that found real errors.
+  ok(!/Plugin errors/.test(doc.out) && /(No plugin issues detected|checks passed)/.test(doc.out), `openclaw plugins doctor: ${doc.out.trim().replace(/\s+/g, " ").slice(0, 600)}`);
 
   // 4. setup --write through the SYMLINK, against the stub gateway.
   const setup = await sh(bin, ["setup", "--write", "--port", String(proxyPort)], { env });
@@ -128,9 +160,15 @@ try {
   const cfg = JSON.parse(readFileSync(join(home, "openclaw.json"), "utf8"));
   const primary = String(cfg.agents?.defaults?.model?.primary || "");
   if (!primary) console.log(`setup stdout: ${setup.stdout.trim()}\nsetup stderr: ${setup.stderr.trim()}\nconfig: ${JSON.stringify(cfg).slice(0, 400)}`);
-  ok(cfg.plugins?.entries?.agent402?.config?.port === proxyPort, `setup --port wrote the plugin's own port into plugins.entries.agent402.config (${JSON.stringify(cfg.plugins?.entries?.agent402)})`);
+  // The config key is the MANIFEST id, not the provider id - OpenClaw 2026.8.1
+  // requires the manifest id to equal the npm package name, so it is
+  // "agent402-openclaw" while the provider a user types stays "agent402".
+  // Asserting the old key here is how the 2026-08-26 --port defect hid: setup
+  // wrote one key and the service read another, and nothing errored.
+  const entry = cfg.plugins?.entries?.["agent402"];
+  ok(entry?.config?.port === proxyPort, `setup --port wrote the plugin's own port into plugins.entries["agent402"].config (${JSON.stringify(entry)})`);
   ok(primary === "agent402/anthropic/claude-haiku-4.5", `primary is a model that can hold OpenClaw's prompt: ${primary}`);
-  ok(cfg.plugins?.entries?.agent402?.enabled === true, "setup --write preserved OpenClaw's own plugins.entries block");
+  ok(entry?.enabled === true, `setup --write preserved the plugin's enabled flag while writing its port (${JSON.stringify(entry)})`);
 
   // 5. What OpenClaw itself now lists.
   const ml = await sh(oc, ["models", "list", "--provider", "agent402", "--plain"], { env });

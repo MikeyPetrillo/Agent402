@@ -82,7 +82,7 @@ function installFetch() {
     }
     const body = init.body ? JSON.parse(init.body) : null;
     calls.push({ url: u, method: init.method || "GET", body, headers: init.headers || {} });
-    const cost = body?.model === "openai/gpt-image-1-mini" ? 0.0085 : 0.014;
+    const cost = body?.model === "openai/gpt-5-image-mini" ? 0.0085 : 0.014;
     const r = perModel[body?.model] ? perModel[body.model](body) : { status: 200, json: { created: 1, data: [{ b64_json: JPEG_B64, media_type: "image/jpeg" }], usage: { prompt_tokens: 11, completion_tokens: 4096, total_tokens: 4107, cost, is_byok: false, cost_details: { upstream_inference_cost: cost } } } };
     return { ok: r.status < 400, status: r.status, text: async () => JSON.stringify(r.json), json: async () => r.json, headers: { get: () => "application/json" } };
   };
@@ -126,13 +126,13 @@ process.env.OPENROUTER_API_KEY = "test-key";
 {
   calls = []; perModel = { "black-forest-labs/flux.2-klein-4b": () => ({ status: 502, json: { error: { message: "provider down" } } }) };
   const out = await bySlug("v1-images-fast").handler({ prompt: "a fox" });
-  ok(calls.length === 2 && calls[1].body.model === "openai/gpt-image-1-mini" && calls[1].body.quality === "medium" && calls[1].body.provider.only[0] === "openai" && out.model === "openai/gpt-image-1-mini", "primary 502 walks to the failover with its locked quality + provider pin");
+  ok(calls.length === 2 && calls[1].body.model === "openai/gpt-5-image-mini" && calls[1].body.quality === "medium" && calls[1].body.provider.only[0] === "openai" && out.model === "openai/gpt-5-image-mini", "primary 502 walks to the failover with its locked quality + provider pin");
   calls = []; perModel = { "black-forest-labs/flux.2-klein-4b": () => ({ status: 429, json: { error: { message: "slow down" } } }) };
   const out2 = await bySlug("v1-images-fast").handler({ prompt: "a fox" });
-  ok(calls.length === 2 && out2.model === "openai/gpt-image-1-mini", "upstream 429 (-> 503) walks the chain too");
+  ok(calls.length === 2 && out2.model === "openai/gpt-5-image-mini", "upstream 429 (-> 503) walks the chain too");
   // An upstream 4xx (e.g. a provider safety refusal) is a 502 on our side, so
   // the chain walks to the failover; refused end to end -> 502, not charged.
-  calls = []; perModel = { "black-forest-labs/flux.2-klein-4b": () => ({ status: 400, json: { error: { message: "prompt rejected by safety" } } }), "openai/gpt-image-1-mini": () => ({ status: 400, json: { error: { message: "prompt rejected by safety" } } }) };
+  calls = []; perModel = { "black-forest-labs/flux.2-klein-4b": () => ({ status: 400, json: { error: { message: "prompt rejected by safety" } } }), "openai/gpt-5-image-mini": () => ({ status: 400, json: { error: { message: "prompt rejected by safety" } } }) };
   const e = await throws(() => bySlug("v1-images-fast").handler({ prompt: "a fox" }), "Upstream error: prompt rejected", "upstream 4xx on every link -> 502 carrying the upstream message");
   ok(e?.statusCode === 502 && calls.length === 2, "…both links tried, 502 (settlement cancelled)");
   calls = []; perModel = { "black-forest-labs/flux.2-pro": () => ({ status: 503, json: {} }) };
@@ -144,7 +144,7 @@ process.env.OPENROUTER_API_KEY = "test-key";
 {
   calls = []; perModel = {
     "black-forest-labs/flux.2-klein-4b": () => ({ status: 200, json: { data: [], usage: { cost: 0 } } }),
-    "openai/gpt-image-1-mini": () => ({ status: 200, json: { data: [{ b64_json: "" }] } }),
+    "openai/gpt-5-image-mini": () => ({ status: 200, json: { data: [{ b64_json: "" }] } }),
   };
   const e = await throws(() => bySlug("v1-images-fast").handler({ prompt: "a fox" }), "no image", "imageless upstream on both links -> 502");
   ok(e?.statusCode === 502 && calls.length === 2, "…both links tried, 502 (not charged)");
@@ -165,7 +165,7 @@ process.env.OPENROUTER_API_KEY = "test-key";
     ? { data: { id: "black-forest-labs/flux.2-klein-4b", endpoints: [{ provider_tag: "black-forest-labs", pricing: [{ billable: "output_image", unit: "megapixel", cost_usd: 0.02 }] }] } }
     : { data: { endpoints: [{ provider_tag: "openai", pricing: [{ billable: "output_image", unit: "token", cost_usd: 0.000008 }] }] } };
   const out = await bySlug("v1-images-fast").handler({ prompt: "a fox" });
-  ok(calls.length === 1 && calls[0].body.model === "openai/gpt-image-1-mini" && out.model === "openai/gpt-image-1-mini", "a primary repriced ABOVE its bound on the live listing is skipped before any spend; the failover serves");
+  ok(calls.length === 1 && calls[0].body.model === "openai/gpt-5-image-mini" && out.model === "openai/gpt-5-image-mini", "a primary repriced ABOVE its bound on the live listing is skipped before any spend; the failover serves");
   listingReply = () => ({ data: { endpoints: [{ provider_tag: "black-forest-labs", pricing: [{ billable: "output_image", unit: "megapixel", cost_usd: 0.02 }] }, { provider_tag: "openai", pricing: [{ billable: "output_image", unit: "token", cost_usd: 0.00001 }] }] } });
   _resetListingCacheForTest(); calls = [];
   const e = await throws(() => bySlug("v1-images-fast").handler({ prompt: "a fox" }), "repriced", "chain repriced end to end -> 503, nothing spent");

@@ -12,6 +12,24 @@ name: Heartbeat
 # became a new comment on one issue, which becomes unreadable at volume.
 on:
   schedule:
+    # MEASURED 2026-08-30, and the reason this is not "*/15": GitHub delivered
+    # that schedule with gaps of 2h02, 2h18, 2h32, 3h16, 5h22, 7h00, 7h01,
+    # 7h57, 9h58 and 12h29 over the preceding twelve runs. Eighteen alarm
+    # checks ride this workflow - every wallet balance, the settlement
+    # freshness check, Postgres reachability, the quota watches - so at that
+    # cadence a drained wallet or a dead database can go unseen for half a day,
+    # and a resolved alarm (the credits issue on 08-30) stays open for hours
+    # after the operator has fixed it.
+    #
+    # GitHub throttles high-frequency schedules first, and "*/15" with its
+    # :00-aligned ticks is both the most aggressive ask and the most contended
+    # minute. Asking for less, on uncontended offsets, is the documented way to
+    # get MORE actual delivery. This is a mitigation, not a cure: re-measure
+    # the real gaps here before trusting any number in this comment.
+    #
+    # The structural fix, if this is still bad: trigger it from the Cloudflare
+    # status worker, which already runs every 5 minutes reliably on separate
+    # infra - it needs a GitHub token there, which is a blast-radius decision.
     - cron: "*/15 * * * *"
   push:
     branches:
@@ -78,6 +96,8 @@ jobs:
         continue-on-error: true
         env:
           OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+          # Narrow credential for POST /api/status/probe; falls back to OP_TOKEN.
+          PROBE_TOKEN: ${{ secrets.STATUS_PROBE_TOKEN }}
           STATUS: ${{ steps.probe.outputs.status }}
           FAILS: ${{ steps.probe.outputs.fails }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -271,26 +291,63 @@ jobs:
       # open/close pattern as the gateway-credits alarm. A missing/unparseable
       # field is logged LOUDLY and never silently treated as "fine" — a silent
       # skip is exactly what kept the charged-failure alarm dead for months.
-      - name: PayAI settlement quota watch (10k/month free tier)
+      - name: PayAI settlement quota watch (1k/month free tier)
         if: always()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          THRESH: ${{ vars.PAYAI_QUOTA_WARN || 8000 }}
+          THRESH: ${{ vars.PAYAI_QUOTA_WARN || 800 }}
         run: |
           CUT=$(date -u -d '30 days ago' +%F)
           COUNT=$(curl -s --max-time 20 "$PROD/api/revenue/daily" | jq -e --arg cut "$CUT"             '[.days[] | select(.day >= $cut) | select(.chain=="solana" or .chain=="polygon" or .chain=="arbitrum" or .chain=="avalanche") | (.extTx + .intTx)] | add // 0')             || { echo "::warning::PayAI quota watch UNREADABLE — /api/revenue/daily missing or unparseable. NOT skipping silently: investigate."; exit 0; }
-          echo "PayAI-chain settles, rolling 30d: $COUNT / 10000 (warn at $THRESH)"
+          echo "PayAI-chain settles, rolling 30d: $COUNT / 1000 free (warn at $THRESH)"
           TITLE="PayAI settlement quota HIGH"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$COUNT" -ge "$THRESH" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Rolling 30-day settlements on PayAI-settled chains (Solana/Polygon/Arbitrum/Avalanche) reached $COUNT of the 10,000/month free tier (warn threshold $THRESH). If the cap is hit, PayAI rejects settles and those rails go dark — the settle-fallback chain (Solvador) catches clean rejections, but the durable fixes are PAYAI_API_KEY_ID/SECRET (authenticated tier, merchant.payai.network) or shifting canary volume. Count is on-chain settles (ext+int) from /api/revenue/daily — a lower bound, rejected settles may also meter."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still high: $COUNT / 10000 at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still high: $COUNT / 1000 free at $(date -u +%FT%TZ)."
             fi
           elif [ -n "$OPEN" ]; then
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: rolling 30-day count back to $COUNT (below $THRESH) at $(date -u +%FT%TZ)."
+          fi
+
+      # CDP settlement metering watch. Measured 2026-08-28: 3,677 settlements
+      # in 30 days on the chains CDP is tried FIRST for (Base, Solana, Polygon,
+      # Arbitrum) against a documented 1,000/month free tier, so the account is
+      # metered and has been for a while. That is a few dollars a month, not a
+      # problem, but nothing was watching the BIG rail while a step watched the
+      # small one, and CDP's billing gate answers `payment-method-required` on
+      # /settle when an account cannot be charged - which would take Base down.
+      # Informational at CDP_METERED_WARN (default 20,000 = ~$20/month); the
+      # real alarm for a billing lapse is the paid canary failing a rail leg.
+      - name: CDP settlement metering watch (1k/month free, then $0.001/tx)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          THRESH: ${{ vars.CDP_METERED_WARN || 20000 }}
+        run: |
+          CUT=$(date -u -d '30 days ago' +%F)
+          COUNT=$(curl -s --max-time 20 "$PROD/api/revenue/daily" | jq -e --arg cut "$CUT" \
+            '[.days[] | select(.day >= $cut) | select(.chain=="base" or .chain=="solana" or .chain=="polygon" or .chain=="arbitrum") | (.extTx + .intTx)] | add // 0' 2>/dev/null || echo "unreadable")
+          if [ "$COUNT" = "unreadable" ]; then
+            echo "WARNING: CDP metering count unreadable from /api/revenue/daily - not treating that as fine"
+            exit 0
+          fi
+          BILLED=$(( COUNT > 1000 ? COUNT - 1000 : 0 ))
+          echo "CDP-first-chain settles, rolling 30d: $COUNT (1000 free, ~$BILLED billed at \$0.001 = \$$(( BILLED / 1000 )).$(printf '%03d' $(( BILLED % 1000 ))))"
+          TITLE="CDP settlement metering HIGH"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "$COUNT" -ge "$THRESH" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Rolling 30-day settlements on CDP-first chains (Base/Solana/Polygon/Arbitrum): $COUNT, of which ~$BILLED are billed at \$0.001 each beyond the 1,000/month free tier. Check the CDP account has a working payment method: a billing lapse answers payment-method-required on /settle and takes the Base rail down. Threshold: repo var CDP_METERED_WARN."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still high: $COUNT settles, ~$BILLED billed, at $(date -u +%FT%TZ)."
+            fi
+          elif [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: rolling 30-day count back to $COUNT at $(date -u +%FT%TZ)."
           fi
 
       # x402 spending-wallet check — same pattern as gateway credits above:
@@ -339,6 +396,27 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
           fi
 
+      # Solana (SVM) spending-wallet check - same pattern: this wallet pays
+      # Solana x402 sellers for the SOR's external leg (src/solana-buyer.js).
+      # "unknown"/"unconfigured" never page.
+      - name: Solana upstream buyer wallet check (alarm on low SVM spending balance)
+        if: always()
+        continue-on-error: true
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.upstreamBuyerSvm.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "solana upstream buyer wallet: $STATUS"
+          TITLE="Solana upstream buyer wallet LOW (x402)"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "$STATUS" = "low" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Solana x402 spending wallet (SOLANA_UPSTREAM_BUYER_KEY) behind the SOR's Solana external routing is below the low-water mark (SOLANA_UPSTREAM_BUYER_LOW_USD, default \$0.50). When it empties, Solana external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Solana to the SVM spending wallet address (see CLAUDE.md env docs)."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
+            fi
+          elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
+          fi
+
       # Tempo (MPP) spending-wallet check - same pattern: this wallet pays MPP
       # sellers on Tempo for the SOR's external leg (src/tempo-buyer.js), in
       # USDC.e. "unknown"/"unconfigured" never page.
@@ -353,6 +431,32 @@ jobs:
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Tempo spending wallet (TEMPO_UPSTREAM_BUYER_KEY) behind the SOR's MPP external routing is below the low-water mark (TEMPO_UPSTREAM_BUYER_LOW_USD, default \$0.50) in USDC.e on Tempo. When it empties, MPP external routing fails (buyers are never charged, but the path goes dark). Top up: send USDC on Tempo (0x20C0...8b50) to the Tempo spending wallet address (see CLAUDE.md env docs)."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
+            fi
+          elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
+          fi
+
+      # The Stellar facilitator's own fee-paying account. It pays the
+      # transaction fee on EVERY Stellar settlement, and until 2026-08-31 it
+      # was the one spending wallet we run with no alarm on it. Settlement is
+      # cheap (0.00235 XLM each), so this is a slow alarm: it exists because an
+      # empty fee account does not look like an outage - settlements simply
+      # stop landing and the rail reads as a payment failure - not because the
+      # balance is ever close. "unknown"/"unconfigured" never page - the
+      # facilitator URL can point at a third party whose /health is not this.
+      - name: Stellar facilitator fee account check (alarm on low XLM)
+        if: always()
+        continue-on-error: true
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.stellarFacilitator.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "stellar facilitator fee account: $STATUS"
+          TITLE="Stellar facilitator fee account LOW (XLM)"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "$STATUS" = "low" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The self-hosted Stellar facilitator's signing account is below its low-water mark (FACILITATOR_LOW_BALANCE_XLM on the agent402-facilitator service, default 1 XLM, roughly 425 settlements at the observed 0.00235 XLM each). That account pays the transaction fee on every Stellar settlement, so when it empties, Stellar settlements stop landing - buyers are never charged, but the rail goes dark and the paid canary reports it as a rail failure rather than as an empty wallet. Top up: send XLM to the address on the facilitator's GET /health (signerAddress). Auto-closes when the balance recovers."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -386,6 +490,29 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: PathUSD back above the low-water mark at $(date -u +%FT%TZ)."
           fi
 
+      # Operator-token guessing: the per-IP limiter caps one source; this is the
+      # aggregate. "elevated" = OPERATOR_AUTH_FAIL_ALERT (default 100) wrong
+      # operator credentials in the last hour. Counts only; rotate the token if
+      # it persists. "ok"/"unknown" never page.
+      - name: Operator token guessing check (alarm when wrong-credential rate is elevated)
+        if: always()
+        continue-on-error: true
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.operatorAuth.status // "unknown"' 2>/dev/null || echo unknown)
+          FAILS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.operatorAuth.failures1h // "?"' 2>/dev/null || echo "?")
+          echo "operator auth: $STATUS ($FAILS wrong credentials in the last hour)"
+          TITLE="Operator token guessing ELEVATED"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "elevated" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports operatorAuth.status=elevated: $FAILS wrong operator credentials in the last hour (threshold OPERATOR_AUTH_FAIL_ALERT). The per-IP limiter caps each source; this is the aggregate. If it persists, rotate AGENT402_OPERATOR_TOKEN on Railway and in Actions secrets. Auto-closes when the rate drops." >/dev/null 2>&1 || echo "issue create failed"
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still elevated at $(date -u +%FT%TZ): $FAILS in the last hour." >/dev/null 2>&1 || true
+            fi
+          elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: wrong-credential rate back under the threshold at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+          fi
+
       # Postgres reachability (leads + analytics). Both databases were DOWN from
       # 2026-07-02 to 2026-08-25 and nothing paged: the app degrades quietly when
       # they are gone, which is right for buyers and exactly why it went
@@ -394,9 +521,28 @@ jobs:
         if: always()
         continue-on-error: true
         run: |
-          BODY=$(curl -s --max-time 20 "$PROD/api/gateway-status" 2>/dev/null || echo '{}')
-          LEADS=$(echo "$BODY" | jq -r '.databases.leads.status // "unknown"' 2>/dev/null || echo unknown)
-          ANALYTICS=$(echo "$BODY" | jq -r '.databases.analytics.status // "unknown"' 2>/dev/null || echo unknown)
+          # SINGLE-RETRY, like every other probe in this file. This leg shipped
+          # without one and paged on 2026-08-29 during our own deploy: the
+          # service is volume-backed, so each deploy has a ~60-90s window with
+          # no container, and the app's Postgres pools re-init behind a ~10-18s
+          # boot stall after that. The boot log showed "[leads-db] ready" three
+          # minutes BEFORE the issue was filed - a reading taken in that window,
+          # reported later. Five merges in a day is five chances to page on
+          # nothing, and an alarm that cries wolf is worse than no alarm.
+          # A REAL outage (a stopped Postgres container) fails both readings.
+          probe_db() {
+            local body leads analytics
+            body=$(curl -s --max-time 20 "$PROD/api/gateway-status" 2>/dev/null || echo '{}')
+            leads=$(echo "$body" | jq -r '.databases.leads.status // "unknown"' 2>/dev/null || echo unknown)
+            analytics=$(echo "$body" | jq -r '.databases.analytics.status // "unknown"' 2>/dev/null || echo unknown)
+            echo "$leads $analytics"
+          }
+          read -r LEADS ANALYTICS <<< "$(probe_db)"
+          if [ "$LEADS" = "unreachable" ] || [ "$ANALYTICS" = "unreachable" ]; then
+            echo "postgres: first read leads=$LEADS analytics=$ANALYTICS - re-probing in 30s before paging"
+            sleep 30
+            read -r LEADS ANALYTICS <<< "$(probe_db)"
+          fi
           echo "postgres: leads=$LEADS analytics=$ANALYTICS"
           TITLE="Postgres UNREACHABLE (leads/analytics)"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
@@ -553,6 +699,8 @@ jobs:
           POW_SECRET: ${{ secrets.POW_SECRET }}
           ROBINHOOD_FACILITATOR_URL: ${{ secrets.ROBINHOOD_FACILITATOR_URL }}
           OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+          # Narrow credential for POST /api/status/probe; falls back to OP_TOKEN.
+          PROBE_TOKEN: ${{ secrets.STATUS_PROBE_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           [ -n "$OP_TOKEN" ] || { echo "no operator token - skipping freshness loop"; exit 0; }

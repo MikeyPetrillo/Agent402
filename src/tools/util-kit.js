@@ -210,4 +210,86 @@ export const UTIL_TOOLS = [
   },
 
 
+
+
+
+  // Restored 2026-08-30 with the packs that compose them (skill-jwt-toolkit,
+  // skill-webhook-intake). Retired 08-25 on a use figure that was capped at 20
+  // by a LIMIT in the ledger query - see src/sales-ledger.js.
+  {
+    route: "POST /api/jwt-sign", name: "JWT sign", slug: "jwt-sign", category: "encoding", price: "$0.001",
+    description:
+      "Mint a signed JSON Web Token (HMAC: HS256 default, HS384, HS512) from a payload + secret. Pairs with jwt-decode/jwt-verify to complete the trio. Deterministic - same payload, secret, and alg always produce the same token.",
+    tags: ["jwt", "jws", "hmac", "token", "auth"],
+    discovery: {
+      bodyType: "json",
+      input: { payload: { sub: "123", role: "admin" }, secret: "s3cr3t", alg: "HS256" },
+      inputSchema: {
+        properties: {
+          payload: { type: "object", description: "claims to encode (object)" },
+          secret: { type: "string", description: "HMAC signing secret" },
+          alg: { type: "string", description: "HS256 (default) | HS384 | HS512" },
+        },
+        required: ["payload", "secret"],
+      },
+      output: { example: { token: "eyJhbGci...", alg: "HS256" } },
+    },
+    handler: (i) => {
+      const payload = parseMaybeJson(i.payload, "payload");
+      if (typeof payload !== "object" || payload === null || Array.isArray(payload)) throw bad('"payload" must be a JSON object');
+      const secret = need(i, "secret");
+      const alg = (i.alg || "HS256").toUpperCase();
+      if (!HS[alg]) throw bad(`unsupported alg "${alg}" (HS256 | HS384 | HS512)`);
+      const head = b64url(JSON.stringify({ alg, typ: "JWT" }));
+      const body = b64url(JSON.stringify(payload));
+      const sig = b64url(createHmac(HS[alg], secret).update(`${head}.${body}`).digest());
+      return { token: `${head}.${body}.${sig}`, alg };
+    },
+  },
+  {
+    route: "POST /api/webhook-verify", name: "Webhook signature verify", slug: "webhook-verify", category: "validation", price: "$0.001",
+    description:
+      "Verify a webhook's HMAC signature against the correct per-provider scheme: GitHub (X-Hub-Signature-256, sha256=hex), Stripe (Stripe-Signature t/v1 over \"<t>.<body>\" with replay tolerance), Shopify (X-Shopify-Hmac-Sha256, base64), Slack (X-Slack-Signature, v0:<ts>:<body> with replay tolerance). Constant-time comparison; the secret is never echoed. Pass the RAW request body string - signatures are over the raw bytes. Deterministic.",
+    tags: ["webhook", "hmac", "signature", "security", "github", "stripe", "shopify", "slack"],
+    discovery: {
+      bodyType: "json",
+      input: { provider: "github", payload: '{"hello":"world"}', secret: "it's a secret", signature: "sha256=8d4063f0a81aa1531d9891a028a68cf2bb537ecdf0e82557674d71e168d570f9" },
+      inputSchema: {
+        properties: {
+          provider: { type: "string", description: "github | stripe | shopify | slack" },
+          payload: { type: "string", description: "the RAW request body string, byte-for-byte as received (never a re-serialized object)" },
+          secret: { type: "string", description: "the provider signing secret (never echoed back)" },
+          signature: { type: "string", description: "the signature header value, with or without its scheme prefix (sha256= / v0= / t=...,v1=...)" },
+          timestamp: { type: "string", description: "provider timestamp, required for stripe + slack (stripe may be parsed from a t= element in the signature)" },
+          toleranceSeconds: { type: "number", description: "max timestamp age for stripe/slack replay protection (default 300; 0 skips the age check)" },
+        },
+        required: ["provider", "payload", "secret", "signature"],
+      },
+      output: { example: { valid: true, provider: "github", scheme: "X-Hub-Signature-256: sha256=hex(HMAC-SHA256(secret, rawBody))", reason: "signature matches the recomputed HMAC for this payload and secret" } },
+    },
+    handler: (i) => {
+      const provider = need(i, "provider").trim().toLowerCase();
+      const verify = WEBHOOK_SCHEMES[provider];
+      if (!verify) throw bad(`unsupported "provider" (github | stripe | shopify | slack)`);
+      if (typeof i.payload !== "string") throw bad('"payload" must be the RAW request body as a string - webhook signatures are computed over the raw bytes, so a parsed-then-restringified JSON object will not match. Pass the body exactly as received.');
+      const secret = need(i, "secret");
+      const signature = need(i, "signature");
+      const tol = i.toleranceSeconds === undefined || i.toleranceSeconds === null ? 300 : Number(i.toleranceSeconds);
+      if (!Number.isFinite(tol) || tol < 0) throw bad('"toleranceSeconds" must be a number >= 0 (0 skips the age check)');
+
+      const meta = { toleranceSeconds: tol };
+      const r = verify(i.payload, secret, signature, i, meta);
+      const out = {
+        valid: r.valid,
+        provider,
+        scheme: r.scheme,
+        reason: r.valid
+          ? "signature matches the recomputed HMAC for this payload and secret"
+          : (r.reason || "signature does not match the recomputed HMAC for this payload and secret"),
+      };
+      if (meta.timestampAgeSeconds !== undefined) out.timestampAgeSeconds = meta.timestampAgeSeconds;
+      return out;
+    },
+  },
+
 ];

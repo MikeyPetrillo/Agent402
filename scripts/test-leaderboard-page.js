@@ -20,7 +20,7 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
     leaderboard: [
       // Our own row - highest volume, must be excluded from the ranked table.
       { rank: 1, name: "Agent402.Tools", wallet: SELF_WALLET.toLowerCase(), homepage: "https://agent402.tools", totalUsd: 900.5, callsSettled: 30000, uniqueBuyers: 300 },
-      { rank: 2, name: "BlockRun.AI", wallet: "0xbbb", homepage: "https://blockrun.ai", totalUsd: 21422.22932, callsSettled: 1127246, uniqueBuyers: 166 },
+      { rank: 2, name: "Seller-One.example", wallet: "0xbbb", homepage: "https://seller-one.example", totalUsd: 21422.22932, callsSettled: 1127246, uniqueBuyers: 166 },
       { rank: 3, name: "agents.chain.link", wallet: "0xccc", homepage: "https://agents.chain.link", totalUsd: 103.432, callsSettled: 9711, uniqueBuyers: 2 },
     ],
   };
@@ -29,14 +29,14 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
 
   ok(html.includes("Who is actually") && html.includes("settling <span"), "hero H1 renders");
   ok(!html.slice(0, html.indexOf("Agent402, for comparison")).includes(">Agent402.Tools<"), "Agent402's own row is excluded from the ranked table (wallet-matched)");
-  ok(html.includes(">BlockRun.AI<") && html.includes(">agents.chain.link<"), "external sellers render in the ranked table");
-  // Re-ranked after exclusion: BlockRun.AI (was rank 2) must now read 01.
-  const blockrunRow = html.split("lb-row").find((s) => s.includes("BlockRun.AI"));
-  ok(blockrunRow && />01</.test(blockrunRow), "ranks are consecutive after Agent402's row is filtered out, not left with a gap");
+  ok(html.includes(">Seller-One.example<") && html.includes(">agents.chain.link<"), "external sellers render in the ranked table");
+  // Re-ranked after exclusion: Seller-One.example (was rank 2) must now read 01.
+  const sellerOneRow = html.split("lb-row").find((s) => s.includes("Seller-One.example"));
+  ok(sellerOneRow && />01</.test(sellerOneRow), "ranks are consecutive after Agent402's row is filtered out, not left with a gap");
   ok(html.includes("$21,422.23"), "real USDC settled renders with real formatting");
   // avg ticket = totalUsd / callsSettled = 21422.22932 / 1127246 = 0.0190...
   ok(/\$0\.0190/.test(html), "avg ticket is computed from real totalUsd/callsSettled");
-  // organic = uniqueBuyers/callsSettled*100: BlockRun 166/1127246*100 = 0.0147 -> "0.01"; agents.chain.link 2/9711*100=0.0206 -> "0.02"
+  // organic = uniqueBuyers/callsSettled*100: Seller-One 166/1127246*100 = 0.0147 -> "0.01"; agents.chain.link 2/9711*100=0.0206 -> "0.02"
   ok(html.includes("0.01"), "organic ratio for a high-volume, low-buyer seller computes correctly");
   ok(html.includes("0.02"), "organic ratio for a low-buyer seller computes correctly");
   ok(html.includes("824") && html.includes("1,040") && html.includes("14,866") && html.includes("302,400"), "snapshot meta table renders real scan figures");
@@ -104,5 +104,23 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
   ok(html.includes("Evil Seller"), "the seller still renders, just with no clickable link");
 }
 
+
+// --- the host's own entry (2026-08-28): external-only rows + a pinned unnumbered row ---
+{
+  const snapshot = { windowLabel: "7d", scannedSellers: 2, leaderboard: [
+    { rank: 1, name: "Agent402.Tools", wallet: SELF_WALLET.toLowerCase(), homepage: "https://agent402.tools", totalUsd: 900.5, callsSettled: 30000, uniqueBuyers: 300 },
+    { rank: 2, name: "Seller-One.example", wallet: "0xbbb", homepage: "https://seller-one.example", totalUsd: 21.2, callsSettled: 1127, uniqueBuyers: 16 },
+  ] };
+  const stats = { toolCallsServed: { viaUSDC: 28200, viaProofOfWork: 7608, viaMPPWire: 69, viaUSDCByNetwork: { base: 28200 } } };
+  const HOSTF = { baseUrl: BASE_URL, toolCount: 560, recordingSince: "2026-06-15T00:00:00.000Z", external30d: { settlements: 109, buyers: 7, tools: 21 }, externalAllTime: { settlements: 3945, buyers: 250, tools: 105 } };
+  const without = ledgerLeaderboardPage(BASE_URL, snapshot, { stats, walletAddress: SELF_WALLET });
+  const html = ledgerLeaderboardPage(BASE_URL, snapshot, { stats, walletAddress: SELF_WALLET, host: HOSTF });
+  ok(!without.includes("data-host-row") && html.includes("data-host-row"), "pinned host row renders only with host figures");
+  ok(/data-host-ext-30d>109</.test(html) && /data-host-buyers-30d>7</.test(html) && /data-host-ext-all>3,945</.test(html), "disclosed panel carries external-only 30d settlements, 30d buyers and all-time settlements");
+  ok(html.includes("canary and volume runs are excluded"), "the exclusion note is stated");
+  const row = html.slice(html.indexOf("data-host-row"), html.indexOf("data-host-row") + 900);
+  ok(!/lb-rank/.test(row) && /NOT RANKED/.test(row), "host row carries no rank and says so");
+  ok(!html.slice(0, html.indexOf("Agent402, for comparison")).includes(">Agent402.Tools<"), "ranked table still excludes the host");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

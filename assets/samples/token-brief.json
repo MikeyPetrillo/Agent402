@@ -1,0 +1,424 @@
+{
+ "product": "token-brief",
+ "input": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+ "title": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+ "report": "# Solana Token Due-Diligence Brief: Jupiter (JUP)\n\n**Mint** `JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN` · **Mint authority** revoked · **Freeze authority** revoked · **LP locked** partial-low · **Top-10 holders** very-high · **RugCheck band** good\n\n---\n\n## SNAPSHOT\n\n**Headline:** Both supply-critical authorities - mint and freeze - are REVOKED, which removes the two most severe on-chain control risks; the single live control surface is **mutable metadata**, held by update authority `61aq585V8cR2sZBeawJFt2NPqmN7zDi1sws4KLs5xHXV`, which is also the **#2 holder at 24.52% of supply** [1]. The offsetting concerns are structural rather than authority-based: wallet concentration is bucketed **very-high** (66.04% across the top 10 excluding labelled pool/locker accounts), overall LP locked is only **1.92%**, and Jupiter's own organic-volume signal puts organic buyers at just **8% of 24h buy volume** [1][3].\n\n- **Identity:** Name \"Jupiter\", symbol JUP, 6 decimals, SPL Token program `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` [1]. Note that name, symbol and image are metadata written by the minter and are currently mutable - treat them as untrusted labels, not guarantees.\n- **Supply:** 6,862,431,149.18 total; 3,320,312,968.08 circulating [1].\n- **Price:** $0.22232734531630582 (Jupiter price v3, block 442383991), 24h change -3.2117% [5].\n- **Market cap:** $738,196,367.81; **FDV** $1,525,706,099.81 [1]. The ~2x gap between the two reflects that roughly half the total supply is not counted as circulating.\n- **Age:** First pool `2pspvjWWaf3dNgt3jsgSzFCNvMGPb7t8FrEYvLGjvcCe` created 2024-01-29; first detected by the indexer 2024-05-29 [1]. Deepest DexScreener pairs show ages of ~22,560-22,594 hours (~2.6 years) [3]. No launchpad reported.\n- **Verification:** Jupiter verified = true; Jupiter strict list = true; organic score **98.48 (high)**; tags: defi, birdeye-trending, community, moonshot-verified, strict, verified [4]. Links: website jup.ag, X @JupiterExchange, Discord discord.gg/jup [1][3]. Verification means the token appears on curated lists - it is not an audit of the team or the contract's future behaviour.\n- **Holders:** 2,882,482 [1].\n- **RugCheck score:** 101 raw / **7 of 100 normalised (lower is safer)**, banded \"good\"; 0 danger, 1 warn, 0 info; rugged flag false; insider networks 0 [1][2].\n\n---\n\n## AUTHORITIES AND CONTROL\n\n| Control | State | What it means |\n|---|---|---|\n| **Mint authority** | **REVOKED** | No new supply can be minted. Supply cannot be inflated at will [1]. |\n| **Freeze authority** | **REVOKED** | Holder token accounts cannot be frozen. No party can lock your ability to transfer [1]. |\n| **Metadata mutable** | **TRUE - live** | The name, symbol and image can be changed by the update authority at any time [1][2]. |\n| **Update authority** | `61aq585V8cR2sZBeawJFt2NPqmN7zDi1sws4KLs5xHXV` | Same address as the **#2 holder (24.52%)** [1]. |\n| **Transfer fee** | 0% (max 0) | No fee skimmed on transfers as currently configured [1]. |\n\n**Reading this correctly.** The two authorities that can destroy or trap a position - mint and freeze - are both off. That is the single most consequential fact in the brief and it is a genuinely favourable one. What remains live is cosmetic-but-not-trivial: mutable metadata lets whoever holds the update authority rewrite the token's presentation. It does **not** let them mint, freeze, tax or move your tokens. Its real-world risk is impersonation and confusion - a token can be re-labelled to look like something else - and, less directly, the fact that a mutable-metadata token is by definition still under active administrative control by a keyholder.\n\n**Creator and dev balances.** Creator address is **unknown**; creator balance reported as 0 [1]. Dev wallet is `JUPhop9E8ZfdJ5FNHhxQt4uAih822Vs4QpqsWcewFbq` with **dev balance unknown** and dev mints = 1 [1]. Treat \"unknown\" as unknown: the evidence does not establish that the dev wallet is empty, and a zero creator balance is not the same as no insider supply, especially given the two ~24-25% unlabelled wallets discussed below.\n\n---\n\n## LIQUIDITY AND MARKETS\n\n**Depth.** RugCheck total market liquidity: **$3,642,137.86**, of which stable-pair liquidity is **$1,370,233.71**; 174 LP providers [1]. DexScreener, covering 30 pairs, reports combined liquidity of **$2,476,301.65** [3]. The two figures differ because they cover different pool sets - cite whichever source you rely on. RugCheck knows of **1,409 markets** [1].\n\n**Where it trades (deepest first) [1][3]:**\n\n| Pool | Venue | Liquidity | LP locked |\n|---|---|---|---|\n| `C8Gr6AUu…NNwg` JUP/SOL | meteoraDlmm | $1,434,932.87 (DS: $1,437,898.26) | 0.00% ($0) |\n| `C1MgLojN…W8Wz` JUP/SOL | orca | $450,653.26 (DS: $453,340.20) | 0.00% ($0.56) |\n| `2QrWsSWr…SxBL` | meteoraDlmm | $446,333.87 | 0.00% ($0) |\n| `6cDtJkcJ…zJ7U` | meteoraDlmm | $231,564.09 | 0.00% ($0) |\n| `HfgjZDme…RHhL` JUP/USDC | meteoraDlmm | $100,898.96 (DS: $101,143.02) | 0.00% ($0) |\n| `AUgbdzNo…juDbL` JUP/USDC | meteoraDlmm | $77,637.39 (DS: $76,976.74) | 0.00% ($0) |\n\nLiquidity is concentrated: the single deepest Meteora JUP/SOL pool holds roughly 39% of RugCheck's total market liquidity figure.\n\n**LP locking.** Overall **LP locked = 1.92%**, bucketed **partial-low** [1]. Every one of the six deepest pools reports **0.00% LP locked**. Sixteen lockers exist; six were returned, and the amounts are trivial in context: raydium_locker $123.95, jupiter_locker $498.79, raydium_locker $456.24, raydium_locker $102.99, raydium_locker $1.22, raydium_locker $0.05 [1]. Only one has a stated unlock date - the **jupiter_locker `5Rcjsna…zzoc`, locked until 2025-08-13**, which is **before today (2026-08-28) and has therefore already elapsed** [1]. The other unlock dates are **unknown**. Practical reading: LP in the pools that actually matter is unlocked and can be withdrawn by its providers at any time. The 174 LP providers spread that discretion across many parties rather than one, but it is not a lock.\n\n**Volume and buy/sell balance.** DexScreener 24h volume **$6,377,134.17** across **85,472 transactions** [3]. Jupiter's aggregate 24h: buy $5,741,169.20 vs sell $5,905,911.97 - **net selling** - with 85,409 buys / 84,169 sells, 10,724 traders, 2,445 net buyers, price -3.45%, holders 0%, **liquidity -4.28%**, volume +23.15% [3]. The trend tightens on shorter windows: 6h buy $1,396,403.75 vs sell $1,724,386.23, price -4.64%, liquidity -3.62%; 1h buy $432,003.36 vs sell $698,164.14, price -3.64%, liquidity -3.16% [3]. Liquidity has declined across all three windows.\n\n**Organic share.** Jupiter's wash-trade signal: **organic buyers account for 8% of 24h buy volume** ($472,296.66 organic of $5,741,169.20) and only **398 of 10,724 traders** are organic buyers [3]. A low organic share means most flow is not from organic buyers - it is a hint of bot, arbitrage or wash activity, not proof of any of them. Note the tension with the organic *score* of 98.48 (high) [4]: these are two different metrics and the brief reports both as given.\n\n**Pair age.** The deepest pairs are mature - 22,561.9h and 22,572.3h (~2.6 years) - with the newest listed pair at 14,015.2h [3]. This is not a fresh launch.\n\n---\n\n## HOLDER CONCENTRATION\n\n**The figure to use is the top 10 EXCLUDING labelled pool/locker accounts: 66.04%, bucketed \"very-high\"** [1]. For context, the unfiltered ladder is: top 1 **24.77%**, top 5 **57.70%**, top 10 **66.37%**, top 20 **72.63%** [1]. The two figures barely differ because only one labelled account appears in the top 10.\n\n**Top holders [1]:**\n\n1. `EXJHiMkj…yHm6T` - **24.77% [unlabelled wallet]**\n2. `61aq585V…5xHXV` - **24.52% [unlabelled wallet]** - *this is the metadata update authority*\n3. `FVhQ3QHv…Kfekf` - 3.26% [unlabelled wallet]\n4. `Any5gL74…7T7iz` - 2.79% [unlabelled wallet]\n5. `6tZT9AUc…VNsFX` - 2.36% [unlabelled wallet]\n6. `6DByueU4…rWA3P` - 2.33% [unlabelled wallet]\n7. `CbU4oSFC…P8gAo` - 1.84% [unlabelled wallet]\n8. `3gd3dqgt…CkW2u` - 1.60% [unlabelled wallet]\n9. `CPZmKkAh…cW8XK` - 1.51% [unlabelled wallet]\n10. `6wsjaQTi…QeJe7` - 1.38% **[LOCKER: Jupiter Locker]**\n\nPositions 11-15 run 1.05% down to 0.65%, all unlabelled [1].\n\n**What this does and does not say.** Nine of the top ten are **unlabelled wallets**, which is the signal that matters: these are not identified as AMM pools, lockers or exchange vaults, so on this evidence they read as single-wallet stacks rather than liquidity or pooled custody. Two of them hold **~49.3% of supply between them**. Combined, the top ten unlabelled wallets could exit into total market liquidity of $3.64M - a fraction of the $738M market cap - with severe price impact. Against that: 2,882,482 holders exist in total, so the long tail is extremely broad, and **insider-flagged holders = 0** with **0 insider networks detected** [1]. RugCheck's insider heuristic returning zero is the absence of a flag, not evidence of independence - unlabelled wallets can be custodial, treasury, foundation, vesting or exchange accounts that simply are not labelled in this dataset. The evidence does not tell us which. **Jupiter's own top-holder share is reported as 15.34%** [4], a materially lower number than RugCheck's 24.77%; the two methodologies disagree and the brief reports both rather than reconciling them.\n\n---\n\n## RISK FLAGS\n\n**RugCheck score: 101 raw / 7 of 100 normalised (lower is safer), band \"good\"** - 0 danger, 1 warn, 0 info; **rugged = false** [1][2].\n\n**All named flags (1 of 1 returned):**\n\n1. **[WARN] Mutable metadata** - \"Token metadata can be changed by the owner\" [1]. Plain language: the update authority can rewrite the token's name, symbol and image. It cannot mint, freeze, tax or seize tokens. The risk is impersonation and display confusion, plus the general fact that a keyholder retains administrative reach over the token's presentation.\n\n**What the score does NOT capture.** The \"good\" band is driven heavily by the revoked mint and freeze authorities. It does **not** reflect: the **very-high** 66.04% concentration in unlabelled wallets; **1.92% LP locked** with 0.00% in every deep pool; liquidity declining across 1h/6h/24h; the **8% organic buy-volume share**; the **elapsed** jupiter_locker date and the **unknown** unlock dates on the other lockers; **unknown** dev balance and **unknown** creator address. A low normalised score is a statement about a specific checklist, not a summary of everything above.\n\n---\n\n## WHAT THIS DATA CANNOT TELL YOU\n\nThis is on-chain and market data captured at one moment. It **cannot** see:\n\n- **Off-chain rug mechanics** - treasury movements, OTC deals, private agreements, custodial arrangements behind any unlabelled wallet.\n- **Social-engineering scams** - impersonation sites, fake support, phishing, drainer approvals. Nothing here tests those.\n- **Team intent** - who controls the update authority key, whether it is a multisig or a single key, or what they plan.\n- **A future authority change** - metadata is mutable *now*; the name, symbol and image can change after this brief is written. Revoked mint/freeze cannot be re-enabled, but mutability is live.\n- **Wash trading** beyond what the 8% organic share and the buy/sell counts hint at. Those are hints, not determinations.\n- **Whether the two ~24-25% wallets are one entity, a treasury, a foundation or an exchange.** Unlabelled means unlabelled.\n- **Unknown fields as reassurance** - creator address, dev balance, five of six locker unlock dates, and per-pool LP provider counts are unknown. An unknown is not a zero.\n\n---\n\n## WHAT WOULD CHANGE THIS BRIEF\n\nCheckable events, in order of consequence:\n\n1. **Metadata becomes immutable, or the update authority is revoked/moved.** Removing the only live warn flag would close the last authority surface. Conversely, an actual name/symbol/image change is an event worth investigating immediately.\n2. **Either ~24% wallet moves.** `EXJHiMkj…yHm6T` (24.77%) or `61aq585V…5xHXV` (24.52%) transferring or selling any meaningful portion against $3.64M of liquidity would be material. Set alerts on both.\n3. **Concentration shifts out of the very-high bucket.** Re-check the *top 10 excluding labelled accounts* figure against **66.04%**.\n4. **LP locking changes.** Overall LP locked rising materially above **1.92%**, or the deepest Meteora pool `C8Gr6AUu…NNwg` moving off **0.00%** locked, would be a real improvement. LP being withdrawn from that pool would be the opposite.\n5. **Liquidity falls below the levels reported here** - RugCheck total **$3,642,137.86**, stable-pair **$1,370,233.71**, DexScreener combined **$2,476,301.65**. Jupiter already reports liquidity -4.28% (24h) / -3.62% (6h) / -3.16% (1h); continued decline compounds every concentration risk above.\n6. **Organic share moves off 8%.** A rising organic buy share would weaken the wash/bot-flow concern; a falling one strengthens it.\n7. **New danger-level flags, or RugCheck's rugged flag or insider-network count changing from false/0.**\n8. **Resolution of the unknowns** - creator address, dev balance, and the unstated locker unlock dates. Any of these becoming known could move the picture in either direction.\n9. **Delisting from the Jupiter verified/strict list**, or loss of the verified tag.\n\nThis brief is evidence from public Solana data sources, not investment advice.\n\n## Sources\n[1] RugCheck full report for JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN - https://api.rugcheck.xyz/v1/tokens/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN/report\n[2] RugCheck safety summary for JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN - https://api.rugcheck.xyz/v1/tokens/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN/report/summary\n[3] DexScreener pairs trading JUP - https://api.dexscreener.com/token-pairs/v1/solana/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN\n[4] Jupiter token index entry for JUP - https://lite-api.jup.ag/tokens/v2/search?query=JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN\n[5] Jupiter price v3 for JUP - https://lite-api.jup.ag/price/v3?ids=JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+ "sources": [
+  {
+   "n": 1,
+   "title": "RugCheck full report for JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+   "url": "https://api.rugcheck.xyz/v1/tokens/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN/report"
+  },
+  {
+   "n": 2,
+   "title": "RugCheck safety summary for JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+   "url": "https://api.rugcheck.xyz/v1/tokens/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN/report/summary"
+  },
+  {
+   "n": 3,
+   "title": "DexScreener pairs trading JUP",
+   "url": "https://api.dexscreener.com/token-pairs/v1/solana/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"
+  },
+  {
+   "n": 4,
+   "title": "Jupiter token index entry for JUP",
+   "url": "https://lite-api.jup.ag/tokens/v2/search?query=JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"
+  },
+  {
+   "n": 5,
+   "title": "Jupiter price v3 for JUP",
+   "url": "https://lite-api.jup.ag/price/v3?ids=JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"
+  }
+ ],
+ "tables": [
+  {
+   "name": "holders",
+   "label": "Top holders",
+   "columns": [
+    "Rank",
+    "Owner",
+    "Token account",
+    "Share of supply",
+    "Type",
+    "Insider flag"
+   ],
+   "rows": [
+    [
+     "1",
+     "EXJHiMkj6NRFDfhWBMKccHNwdSpCT7tdvQeRf87yHm6T",
+     "6G4XDSge4txj5tBkA5gZqefXXE3BRxqA37Yb1pmrHv6N",
+     "24.77%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "2",
+     "61aq585V8cR2sZBeawJFt2NPqmN7zDi1sws4KLs5xHXV",
+     "26ddLrqXDext6caX1gRxARePN4kzajyGiAUz9JmzmTGQ",
+     "24.52%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "3",
+     "FVhQ3QHvXudWSdGix2sdcG47YmrmUxRhf3KCBmiKfekf",
+     "K6U4dQ8jANMEqQQycXYiDcf3172NGefpQBzdDbavQbA",
+     "3.26%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "4",
+     "Any5gL74oUQy9Psb3goym9STaYMau4CMrTkryS37T7iz",
+     "64cmXBSdHeBQ4zK9yVXtVuLMcVUwGg3fvG7fooSqHwmk",
+     "2.79%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "5",
+     "6tZT9AUcQn4iHMH79YZEXSy55kDLQ4VbA3PMtfLVNsFX",
+     "DpVH8xQZ4aapxwZ6KW9nuEUs9zEePa8HQvXny9Ajj93T",
+     "2.36%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "6",
+     "6DByueU46di4eSLW19Q5dg3oCBGL4knENTtHqVxrWA3P",
+     "79S8nKFYLog9dD8sQaYPnxKFda8sEPJwuhXNwng8zhdX",
+     "2.33%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "7",
+     "CbU4oSFCk8SVgW23NLvb5BwctvWcZZHfxRD6HudP8gAo",
+     "7bEL9XkPGNg7a3oSiUERKsZtFoJMqKh6VhGDCmMCPqdg",
+     "1.84%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "8",
+     "3gd3dqgtJ4jWfBfLYTX67DALFetjc5iS72sCgRhCkW2u",
+     "7HbXjqp4BWCcRPh61ZdESdCfvQtyg7aQu7KKaGAChxX6",
+     "1.60%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "9",
+     "CPZmKkAhD2wv1Z21EUZvdH8ZeSD13geAnSfyVBwcW8XK",
+     "DWVtxR7oo3uTiuM3o1cCxTJ5wM8Wnjvu1apwMkQhdedY",
+     "1.51%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "10",
+     "6wsjaQTidXNqmPDw4st2yMtFmTk7yyBEox5SydFQeJe7",
+     "HG6XGeAwBueqMbubLbMMWRCfhC1wKjDJmQiJjjFdTJDc",
+     "1.38%",
+     "LOCKER: Jupiter Locker",
+     "no"
+    ],
+    [
+     "11",
+     "27b4PRN7K37rpTywq65t29rjuNfQkYpxZUjkbtHc5VvZ",
+     "ASehmX2sjG1Qz7MQyLJu8wBoV2Xx8cCV3uU8VbBDGQJQ",
+     "1.05%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "12",
+     "GM3sDVg4B3WavAzcVtwgjPMwCmCcrUHRVEPzsTZ6JkDx",
+     "DfwpZe8oKWFFNEJJtmPMo53Y8TxFUUV78ua9USpofYZ8",
+     "0.73%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "13",
+     "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+     "GDijXRGfd1jhk5GkRPp1TDnEH2FfHURSRZeB5um3pUWk",
+     "0.72%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "14",
+     "DRAuGJnQXKiViJpGV6SEReLd4bYaR1c9swqnF9cKvZzn",
+     "2WVJ4nSZtLZH4ov8M1XSTTKxVygYhRLtWo2uzZf6WChq",
+     "0.70%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "15",
+     "BN5sEedysJxragPcFoR5UDXSiA7oZLe2FPbo7tZ2MZCG",
+     "5geWWjsZ3kEP4rg8MAqKE94o4jKT6e8aQn6dF43ku3W5",
+     "0.65%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "16",
+     "9K1SJYStwyA7kV2j5gZvqhtSujEhRr5WvES6JRgMyYUY",
+     "DKKF4uAjQejgU2p9zdpUhAVvhjxVSZR6UU1zVR7Ab3H",
+     "0.59%",
+     "unlabelled wallet",
+     "no"
+    ],
+    [
+     "17",
+     "HmU2GUjRjWxFJ7PLZWC4ULKco5qN4NCUhx6hsRo6WgG3",
+     "9NRsfzqyQ2NBx81KPimEAJWpfaLgP2jz6Up7EAoufsdi",
+     "0.46%",
+     "LOCKER: Jupiter Locker",
+     "no"
+    ],
+    [
+     "18",
+     "HZVW75BkNM6JyFerRgrtkpAzDSoZj6Z8HSaf9RPWvydy",
+     "8q4NPnGVL4fsRxC8exK4gnUqb4pcsA3PGhcxA3BunEyR",
+     "0.46%",
+     "LOCKER: Jupiter Locker",
+     "no"
+    ],
+    [
+     "19",
+     "5JA6jjjTKSEMDUKRcNgVmVtn7QcpWWkL7svTNVjgksEq",
+     "BaMkcyGYuEuwsh3e7v583hP9RgL1o7TLd7TbALyq6nB1",
+     "0.46%",
+     "LOCKER: Jupiter Locker",
+     "no"
+    ],
+    [
+     "20",
+     "DxqXs26CLNiFd7Dm2WG7J28RPmbrzRXYfM5tfb84dkkx",
+     "ApjK7HXwfnvEse5EfYopRnGnonsa55W4vSzCrT2FEj1t",
+     "0.45%",
+     "unlabelled wallet",
+     "no"
+    ]
+   ]
+  },
+  {
+   "name": "pairs",
+   "label": "DEX pairs",
+   "columns": [
+    "DEX",
+    "Pair",
+    "Address",
+    "Liquidity USD",
+    "24h volume USD",
+    "24h change %",
+    "24h buys",
+    "24h sells",
+    "Age hours"
+   ],
+   "rows": [
+    [
+     "meteora",
+     "JUP/SOL",
+     "C8Gr6AUuq9hEdSYJzoEpNcdjpojPZwqG5MtQbeouNNwg",
+     "1437898.26",
+     "2591763.47",
+     "-3.08",
+     "1985",
+     "2478",
+     "22561.9"
+    ],
+    [
+     "orca",
+     "JUP/SOL",
+     "C1MgLojNLWBKADvu9BHdtgzz1oZX4dZ5zGdGcgvvW8Wz",
+     "453340.2",
+     "2392299.65",
+     "-2.93",
+     "12489",
+     "12399",
+     "22572.3"
+    ],
+    [
+     "meteora",
+     "JUP/USDC",
+     "HfgjZDmexhFVD28Vkb1NbQwWeXP3uDcVTLPjSGHmRHhL",
+     "101143.02",
+     "479203.7",
+     "-3.22",
+     "1305",
+     "1362",
+     "19746.6"
+    ],
+    [
+     "meteora",
+     "JUP/USDC",
+     "AUgbdzNob9S8MiVHm4Qruqz3VsZGoqtMZnSzv45juDbL",
+     "76976.74",
+     "5629.11",
+     "-5.98",
+     "30",
+     "55",
+     "22561.8"
+    ],
+    [
+     "meteora",
+     "JUP/SOL",
+     "Eio6hAieGTAmKgfvbEfbnXke6o5kfEd74tqHm2Z9SFjf",
+     "50744.96",
+     "459360.52",
+     "-2.93",
+     "4830",
+     "5351",
+     "14015.2"
+    ],
+    [
+     "meteora",
+     "JUP/SOL",
+     "hPkPt9Mvu3f6Bpky38ekfqRb37DSFnHtdjnFpfF86wY",
+     "38622.87",
+     "2134.8",
+     "-5.54",
+     "204",
+     "195",
+     "22581.8"
+    ],
+    [
+     "raydium",
+     "JUP/SOL",
+     "EZVkeboWeXygtq8LMyENHyXdF5wpYrtExRNH9UwB1qYw",
+     "35622.03",
+     "101962.07",
+     "-2.92",
+     "5269",
+     "5119",
+     "17843.5"
+    ],
+    [
+     "orca",
+     "JUP/USDC",
+     "HrLmpzp8Nu5wkn9SGZYSS9Ms6deTvMgGc6BETp4161ZX",
+     "31728.1",
+     "16434.85",
+     "-2.91",
+     "940",
+     "1039",
+     "22593.8"
+    ]
+   ]
+  },
+  {
+   "name": "markets",
+   "label": "Pools (RugCheck)",
+   "columns": [
+    "Type",
+    "Pool",
+    "Liquidity USD",
+    "LP locked %",
+    "LP locked USD",
+    "LP providers"
+   ],
+   "rows": [
+    [
+     "meteoraDlmm",
+     "C8Gr6AUuq9hEdSYJzoEpNcdjpojPZwqG5MtQbeouNNwg",
+     "1434932.87",
+     "0",
+     "0",
+     ""
+    ],
+    [
+     "orca",
+     "C1MgLojNLWBKADvu9BHdtgzz1oZX4dZ5zGdGcgvvW8Wz",
+     "450653.26",
+     "0",
+     "0.56",
+     ""
+    ],
+    [
+     "meteoraDlmm",
+     "2QrWsSWrGvoAqkDC5XSGqjS752RWLaopqAaGrbugSxBL",
+     "446333.87",
+     "0",
+     "0",
+     ""
+    ],
+    [
+     "meteoraDlmm",
+     "6cDtJkcJKFEsGDhptmgvy3XtbwyRqnW3GoGcmnwVzJ7U",
+     "231564.09",
+     "0",
+     "0",
+     ""
+    ],
+    [
+     "meteoraDlmm",
+     "HfgjZDmexhFVD28Vkb1NbQwWeXP3uDcVTLPjSGHmRHhL",
+     "100898.96",
+     "0",
+     "0",
+     ""
+    ],
+    [
+     "meteoraDlmm",
+     "AUgbdzNob9S8MiVHm4Qruqz3VsZGoqtMZnSzv45juDbL",
+     "77637.39",
+     "0",
+     "0",
+     ""
+    ]
+   ]
+  },
+  {
+   "name": "risks",
+   "label": "Risk flags",
+   "columns": [
+    "Level",
+    "Flag",
+    "Value",
+    "Description"
+   ],
+   "rows": [
+    [
+     "warn",
+     "Mutable metadata",
+     "",
+     "Token metadata can be changed by the owner"
+    ]
+   ]
+  }
+ ],
+ "meta": {
+  "tier": "token-brief",
+  "mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+  "name": "Jupiter",
+  "symbol": "JUP",
+  "mint_authority": "revoked",
+  "freeze_authority": "revoked",
+  "lp_locked_bucket": "partial-low",
+  "top10_bucket": "very-high",
+  "risk_level": "good",
+  "top10_pct": 66.3684,
+  "lp_locked_pct": 1.92,
+  "price_usd": 0.22232734531630582,
+  "holders_listed": 20,
+  "pairs_listed": 8,
+  "risk_flags": 1,
+  "probes": {
+   "report": true,
+   "safety": true,
+   "pairs": true,
+   "lookup": true,
+   "price": true
+  },
+  "sources_cited": 5,
+  "synthesis_model": "anthropic/claude-opus-5",
+  "fingerprint": "{\"mintAuthority\":\"revoked\",\"freezeAuthority\":\"revoked\",\"lpLocked\":\"partial-low\",\"topHolders\":\"very-high\",\"riskLevel\":\"good\",\"dangerRisks\":0,\"risks\":[\"Mutable metadata\"]}",
+  "disclaimer": "Evidence from public Solana data sources (RugCheck, DexScreener, Jupiter) at the time of the request. Not investment advice, not a verdict, not exhaustive: this data cannot see off-chain rug mechanics, social scams, or team intent."
+ },
+ "at": "2026-08-28T16:52:28.762Z",
+ "generatedWith": "the production handler, FREE_MODE local run"
+}

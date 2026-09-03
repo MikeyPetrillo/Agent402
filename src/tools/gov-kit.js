@@ -57,8 +57,11 @@ async function getJson(url, opts = {}) {
       ({ html } = await safeFetch(url, { maxBytes: 5 * 1024 * 1024, ...opts }));
       break;
     } catch (e) {
-      if (attempt === 0 && (e.statusCode === 422 || e.statusCode === 502 || e.statusCode === 504)) continue;
-      if (e.statusCode === 422) throw bad(e.message, 502);
+      // An upstream 404 is an ANSWER for openFDA (no matches) - never retried,
+      // and the upstream code rides on the re-labelled error so
+      // getJsonAllowEmpty can read it (it was lost here until 2026-08-27).
+      if (attempt === 0 && e.upstreamStatus !== 404 && (e.statusCode === 422 || e.statusCode === 502 || e.statusCode === 504)) continue;
+      if (e.statusCode === 422) throw Object.assign(bad(e.message, 502), { upstreamStatus: e.upstreamStatus });
       throw e;
     }
   }
@@ -76,7 +79,13 @@ async function getJsonAllowEmpty(url, opts = {}) {
   try {
     return await getJson(url, opts);
   } catch (e) {
-    if (e.statusCode === 404) return null;
+    // fetch-guard re-labels an upstream 4xx as OUR 422 and keeps the upstream
+    // code in `upstreamStatus` - so `statusCode === 404` never matched, every
+    // no-match query threw "Source URL returned HTTP 404", and recall-report
+    // (which needs 2 of 3 feeds) 502'd for any drug name absent from the food
+    // and device feeds, i.e. most of them (found 2026-08-27 generating the
+    // losartan sample; the buyer was refunded, the product was unsellable).
+    if (e.statusCode === 404 || e.upstreamStatus === 404) return null;
     throw e;
   }
 }

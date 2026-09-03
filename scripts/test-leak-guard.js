@@ -169,7 +169,7 @@ const wavRes = () => ({
 });
 
 const okChatFixture = () => ({
-  id: "gen-1", object: "chat.completion", created: 1750000000, model: "openai/gpt-4.1-nano",
+  id: "gen-1", object: "chat.completion", created: 1750000000, model: "openai/gpt-5-nano",
   choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
   usage: {
     prompt_tokens: 12, completion_tokens: 1, total_tokens: 13,
@@ -217,7 +217,7 @@ const scan = (obj) => {
 };
 
 const HANDLER_CASES = [
-  { slug: "v1-chat-nano", handler: bySlug(LLM_GATEWAY_TOOLS, "v1-chat-nano"), input: { model: "gpt-4.1-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 5 } },
+  { slug: "v1-chat-nano", handler: bySlug(LLM_GATEWAY_TOOLS, "v1-chat-nano"), input: { model: "gpt-5-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 5 } },
   { slug: "v1-embeddings", handler: bySlug(LLM_GATEWAY_TOOLS, "v1-embeddings"), input: { input: "hello", cache: false } },
   { slug: "v1-rerank", handler: bySlug(LLM_GATEWAY_TOOLS, "v1-rerank"), input: { query: "q", documents: ["a", "b"], cache: false } },
   { slug: "v1-chat-messages", handler: bySlug(LLM_MESSAGES_TOOLS, "v1-chat-messages"), input: { model: "anthropic/claude-haiku-4.5", max_tokens: 16, messages: [{ role: "user", content: "hi" }] } },
@@ -411,7 +411,7 @@ for (const { slug, handler, input, mode: m } of ALCHEMY_ERROR_CASES) {
   // where cred includes the full canary — with redact-then-slice the canary is
   // gone regardless of where the 200-char cut falls.
   let err = null;
-  try { await nano({ model: "gpt-4.1-nano", messages: [{ role: "user", content: "boundary" }], max_tokens: 5 }); }
+  try { await nano({ model: "gpt-5-nano", messages: [{ role: "user", content: "boundary" }], max_tokens: 5 }); }
   catch (e) { err = e; }
   ok(err && !CANARIES.some((c) => String(err.message).includes(c)), "redact-then-slice: canary absent from the (redacted) sliced error message");
 }
@@ -422,7 +422,7 @@ for (const { slug, handler, input, mode: m } of ALCHEMY_ERROR_CASES) {
 {
   mode = "ok-chat-cost";
   const nano = bySlug(LLM_GATEWAY_TOOLS, "v1-chat-nano");
-  const input = { model: "gpt-4.1-nano", messages: [{ role: "user", content: "cost strip" }], max_tokens: 5, cache: true };
+  const input = { model: "gpt-5-nano", messages: [{ role: "user", content: "cost strip" }], max_tokens: 5, cache: true };
   const res = await nano(structuredClone(input));
   ok(res?.usage?.prompt_tokens === 12 && res?.usage?.total_tokens === 13, "chat: standard token counts survive");
   ok(!("cost" in (res?.usage || {})), "chat: usage.cost stripped from the buyer response");

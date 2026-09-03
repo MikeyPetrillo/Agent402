@@ -5,7 +5,7 @@ any site or API: humans browse free, AI crawlers and agents pay per request** -
 in USDC over the [x402 protocol](https://x402.org), over
 [MPP](https://mpp.dev) (the Machine Payments Protocol `Payment` HTTP auth
 scheme, settled through the same stack), or for free by solving a
-proof-of-work. No Cloudflare, no Stripe, no Merchant-of-Record, no signup.
+proof-of-work. No platform lock-in, no card processor required, no Merchant-of-Record, no signup.
 The first self-hostable pay-per-crawl gate that speaks both wires on one 402 -
 the sell side of [Agentic Finance](https://agent402.tools/agentic-finance),
 where agents pay and sites get paid, per request, with no account in between.
@@ -156,8 +156,16 @@ export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)
 > On the edge, pass a stable `secret` (PoW tokens are HMAC-signed). For
 > single-use replay protection across stateless invocations, supply a `store`
 > (e.g. a Cloudflare KV wrapper - the Worker entry wires this for you).
-> The `x402:` middleware mode, MPP and the native Tempo rail are Node/Express
-> features today; the edge gate offers proof-of-work plus the `verifyX402` callback.
+> The `x402:` middleware mode and the native Tempo rail are Node/Express
+> features; the edge gate offers proof-of-work plus the `verifyX402` callback,
+> and since 0.10.0 **MPP on that same verifier**: with `secret`, `payTo` and
+> `verifyX402` set, every 402 also carries a `WWW-Authenticate: Payment`
+> evm/charge challenge for the quote, and an `Authorization: Payment`
+> credential (HMAC-bound to our challenge, unexpired, minted for that exact
+> resource) is translated to `PAYMENT-SIGNATURE` and handed to `verifyX402` as
+> if an x402 client had sent it. `mpp:false` turns it off; `mppAssetAddress` +
+> `mppAssetName` name a token outside the built-in USDC table (Base, Celo,
+> Polygon, Arbitrum, Optimism, Avalanche, Sei).
 
 ## Accepting USDC: x402 and MPP on the same 402
 

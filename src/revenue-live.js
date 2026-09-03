@@ -24,6 +24,20 @@ export const USDC_SOL_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 // Same envs (and defaults) as scripts/revenue-scan{,-solana}.js.
 export const MAX_CALL_USD = parseFloat(process.env.MAX_CALL_USD || "0.75");
+// Audited 2026-08-30: our own payTo addresses were absent from all four sets
+// below. They are RECEIVERS, so a payer-classification set arguably need not
+// carry them, and none has ever appeared as a payer - checked against both the
+// ledger and telemetry before adding. They are listed anyway because a
+// self-payment counted as external REVENUE is the error nobody would spot, and
+// the belt costs one string per chain.
+//
+// The same audit found two wallets that PAY and were also absent, which is not
+// cosmetic: 0xaF13AA07… is the Tempo upstream buyer (it pays external MPP
+// sellers) and 0x130Ce484… is the Tempo subscription gas sponsor. Neither has
+// ever bought from us, so nothing was miscounted - but a payer missing from
+// this set books our own spend as somebody else's revenue, and both addresses
+// live only inside Railway keys with no _ADDRESS variable, so nothing in the
+// tree could have told you they existed. Derived from the keys, not guessed.
 export const OUR_EVM_WALLETS = new Set(
   // Canary/burner EVM addresses (public; keys live only in CI). Rotated
   // 2026-07-17: 0xfeda7403… retired (drained), 0x902dcf34… is the current
@@ -35,19 +49,19 @@ export const OUR_EVM_WALLETS = new Set(
   // buys are self-funded test traffic on every chain it pays from, never
   // revenue (its first Tempo MPP buy classified external for a day because
   // tempo settles carried no payer; both halves fixed the same day).
-  (process.env.OUR_WALLETS || "0xfeda7403aabe9a492ed70e810b396d8548a4a022,0x902dcf34e53695bdea2ffb354b1a2e58bd598256,0x77065d81e18ad403bcd6e9a0616b288e16744121,0x24e6a249111ae0cc8ea09f487a114f7e7ef15e12")
+  (process.env.OUR_WALLETS || "0xfeda7403aabe9a492ed70e810b396d8548a4a022,0x902dcf34e53695bdea2ffb354b1a2e58bd598256,0x77065d81e18ad403bcd6e9a0616b288e16744121,0x24e6a249111ae0cc8ea09f487a114f7e7ef15e12,0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0,0xaf13aa07e7360cc56b3dabf649ffef087c0cd5a6,0x130ce484c8046988ae8e2804289eaf4c7c67f30d")
     .toLowerCase().split(",").map((s) => s.trim()).filter(Boolean)
 );
 // Default = the canary's Solana burner (public address; the key lives only
 // in CI secrets) — its daily $0.05 self-buys are internal, not revenue.
 export const OUR_SOLANA_WALLETS = new Set(
-  (process.env.OUR_SOLANA_WALLETS || "9EMAayAfBR32J5d3ApEAG3NdKArRBtAqN7LA8c2WRM5o")
+  (process.env.OUR_SOLANA_WALLETS || "9EMAayAfBR32J5d3ApEAG3NdKArRBtAqN7LA8c2WRM5o,J7aN3PLJnTCF5qpEnvJHJsnCjcGuqC2rYtEM8Gv3xwg")
     .split(",").map((s) => s.trim()).filter(Boolean)
 );
 // Same convention for Stellar: the canary burner's public address is committed;
 // extend via env (comma-separated) if other internal wallets settle here.
 export const OUR_STELLAR_WALLETS = new Set(
-  (process.env.OUR_STELLAR_WALLETS || "GBA2DDJ4KQXQCGNB7RUU5I2BK5SXROJFUNZV7EZ4XUS7RXFOXEPNY6O4")
+  (process.env.OUR_STELLAR_WALLETS || "GBA2DDJ4KQXQCGNB7RUU5I2BK5SXROJFUNZV7EZ4XUS7RXFOXEPNY6O4,GDNJXCKW7ZM7GEEVP674TWPU26YJNBQ2FI4ZIPRKTPTNUEJMDHFJWWRL")
     .split(",").map((s) => s.trim()).filter(Boolean)
 );
 // Same convention for Algorand: the canary burner's public address is
@@ -57,7 +71,7 @@ export const OUR_ALGORAND_WALLETS = new Set(
   // ZKFACA… = the CI canary burner; W4GZHN36… = the AVM SPENDING wallet
   // (ALGORAND_UPSTREAM_BUYER_MNEMONIC's address, verified on-chain as the
   // sender of settle 6TLUWU6R…MKAQ — positive provenance, never inferred).
-  (process.env.OUR_ALGORAND_WALLETS || "ZKFACAZATPUUYUXVVVE7QWMMZTSMLGQVA4G4QKW7D2UI7FCIFE3QB2SHRE,W4GZHN36X35LGSJTTLNZNFPGSSBLMJKFLCMZK4NBLQGUS6PYPPCDB67UOE")
+  (process.env.OUR_ALGORAND_WALLETS || "ZKFACAZATPUUYUXVVVE7QWMMZTSMLGQVA4G4QKW7D2UI7FCIFE3QB2SHRE,W4GZHN36X35LGSJTTLNZNFPGSSBLMJKFLCMZK4NBLQGUS6PYPPCDB67UOE,C7IIHG7SPLPZ5H7ZT6HW3UV2OQMQQE6Y2HBNGZXSLRJULE42BEE2OY2XIE")
     .split(",").map((s) => s.trim()).filter(Boolean)
 );
 
@@ -69,7 +83,7 @@ export const EVM = {
     token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://mainnet.base.org", "https://base.llamarpc.com", "https://base.drpc.org",
+      "https://mainnet.base.org", "https://base.drpc.org",
     ],
     explorer: (a) => `https://basescan.org/address/${a}#tokentxns`,
     tx: (h) => `https://basescan.org/tx/${h}`,
@@ -80,7 +94,7 @@ export const EVM = {
     // Alchemy first (reliable getLogs); free RPCs fail on historical queries.
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://polygon-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://polygon.drpc.org", "https://polygon.llamarpc.com", "https://polygon-rpc.com",
+      "https://polygon.drpc.org", "https://polygon-rpc.com",
     ],
     explorer: (a) => `https://polygonscan.com/address/${a}#tokentxns`,
     tx: (h) => `https://polygonscan.com/tx/${h}`,
@@ -90,7 +104,7 @@ export const EVM = {
     token: "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
     rpcs: [
       ...(process.env.ALCHEMY_API_KEY ? [`https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
-      "https://arb1.arbitrum.io/rpc", "https://arbitrum.llamarpc.com", "https://arbitrum.drpc.org",
+      "https://arb1.arbitrum.io/rpc", "https://arbitrum.drpc.org",
     ],
     explorer: (a) => `https://arbiscan.io/address/${a}#tokentxns`,
     tx: (h) => `https://arbiscan.io/tx/${h}`,
@@ -155,8 +169,8 @@ export const EVM = {
         : []),
       "https://evm-rpc.sei-apis.com", "https://sei-evm-rpc.publicnode.com",
     ],
-    explorer: (a) => `https://seitrace.com/address/${a}?chain=pacific-1`,
-    tx: (h) => `https://seitrace.com/tx/${h}?chain=pacific-1`,
+    explorer: (a) => `https://seiscan.io/address/${a}?chain=pacific-1`,
+    tx: (h) => `https://seiscan.io/tx/${h}?chain=pacific-1`,
   },
   optimism: {
     // Optimism (OP mainnet, chain 10), native Circle USDC. ~2s blocks → 10.8k ≈ 6h.
@@ -1509,16 +1523,21 @@ export function revenuePage(baseUrl, snap) {
     <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">$ GET /api/revenue</div>
     <h1 style="font-family:var(--font-body);font-weight:800;font-size:44px;line-height:1.05;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink);">Transactions.</h1>
     <p style="font-size:16px;line-height:1.6;color:var(--muted);max-width:640px;margin:0 0 8px;">
-      Every payment that flows through our rails - both wires, <strong>x402</strong> and <strong>MPP</strong>, one page. Refreshed from public RPCs (60s cache), every figure verifiable at its explorer link.
+      Every payment that flows through our rails - both wires, <strong>x402</strong> and <strong>MPP</strong>, plus card purchases through Stripe, one page. Refreshed from public RPCs (60s cache), every figure verifiable at its explorer link.
       Machine-readable: <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a>.
     </p>
     ${(() => {
       const at = snap.allTime;
       const mpp = snap.mpp || {};
-      // Hero number = THROUGHPUT (every settled transaction, ours included):
-      // a rail that clears real on-chain payments continuously is the thing
-      // being proven. Revenue is real too and sits right under it, external
-      // only. See railThroughput() for why MPP is Tempo-only here (no double
+      // TWO hero numbers - THROUGHPUT (every settled transaction, ours
+      // included: the rail-stability signal) and DISTINCT PAYING AGENTS (the
+      // demand signal). The dollar figure stays on the page, external-only
+      // and explorer-linked as always, but at footnote weight: the decision
+      // (the operator, 2026-09-01) was to lead with the strong counts and
+      // never to REMOVE the revenue split - hiding it would be the
+      // registry-inflation move this page calls out in others, and every
+      // figure here is independently derivable from the chain anyway.
+      // See railThroughput() for why MPP is Tempo-only here (no double
       // count of on-chain-settled Base/Celo MPP).
       const throughput = railThroughput(snap).total;
       const extCount = Number(at?.allTimeExternalCount || 0);
@@ -1526,8 +1545,9 @@ export function revenuePage(baseUrl, snap) {
       const agents = Number(snap.agents?.buyers || 0);
       if (!throughput) return "";
       return `<p style="font-family:var(--font-mono);font-size:15px;margin:0 0 6px;"><strong style="color:var(--accent);font-size:26px;">${throughput.toLocaleString()}</strong> settled transactions through our pay rails <span style="color:var(--muted);">- x402 + MPP, all-time · <strong>ours included</strong>: we run ~200 Tempo MPP settles/day plus a daily canary on every rail, so the plumbing is exercised continuously${at?.syncing ? " · ledger backfilling - total still rising" : ""}</span></p>
-    ${agents ? `<p style="font-family:var(--font-mono);font-size:14px;margin:0 0 6px;"><strong style="color:var(--accent);font-size:18px;">${agents.toLocaleString()}</strong> distinct agent${agents === 1 ? "" : "s"} have paid us <span style="color:var(--muted);">- unique external wallets across all rails${snap.agents?.top5SharePct != null ? ` · top 5 = ${snap.agents.top5SharePct}% of external payments` : ""}</span></p>` : ""}
-    <p style="font-family:var(--font-mono);font-size:14px;margin:0 0 6px;"><strong style="color:var(--accent);">${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} <span style="color:var(--muted);">- <strong style="color:var(--ink);">$${extUsd.toFixed(4)}</strong> real revenue settled on-chain, each linked to its explorer proof</span></p>`;
+    ${agents ? `<p style="font-family:var(--font-mono);font-size:15px;margin:0 0 6px;"><strong style="color:var(--accent);font-size:26px;">${agents.toLocaleString()}</strong> distinct agent${agents === 1 ? "" : "s"} have paid us <span style="color:var(--muted);">- unique external wallets across all rails${snap.agents?.top5SharePct != null ? ` · top 5 = ${snap.agents.top5SharePct}% of external payments` : ""}</span></p>` : ""}
+    <p style="font-family:var(--font-mono);font-size:12.5px;color:var(--muted);margin:0 0 4px;">${extCount.toLocaleString()} external payment${extCount === 1 ? "" : "s"} · $${extUsd.toFixed(4)} real revenue settled on-chain, external only, each linked to its explorer proof</p>
+    ${snap.card?.allTimeCount ? `<p style="font-family:var(--font-mono);font-size:12.5px;color:var(--muted);margin:0 0 4px;">${Number(snap.card.allTimeCount).toLocaleString()} card purchase${snap.card.allTimeCount === 1 ? "" : "s"} (reports, monitors, credits via Stripe, external only) · $${Number(snap.card.allTimeUsd).toFixed(2)} all-time · ${Number(snap.card.count).toLocaleString()} in the last ${snap.card.days} days${snap.card.lastAt ? ` · last ${esc(String(snap.card.lastAt).slice(0, 13))}Z` : ""}</p>` : ""}`;
     })()}
     <p style="font-family:var(--font-mono);font-size:13px;color:var(--muted);margin:0 0 30px;">as of ${esc(snap.asOf)} · external in recent window <strong style="color:var(--accent);">$${(snap.windowExternalUsd ?? 0).toFixed(4)}</strong><br>the big number is <strong style="color:var(--ink);">total throughput</strong> (ours included - the rail-stability signal); every <strong style="color:var(--accent);">revenue</strong> figure is external only - our own canary/test/funding money is never counted as earnings (wallet balances are float, not shown)</p>
     </section>

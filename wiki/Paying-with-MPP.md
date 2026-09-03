@@ -12,6 +12,14 @@ Every paid endpoint on Agent402.Tools is **dual-stack**: the same 402 carries an
 | `tempo` charge | USDC.e, PathUSD | Tempo (chain 4217) | Native TIP-20 settlement through Tempo's hosted MPP relay, no x402 facilitator involved. The hosted instance offers USDC.e first, then PathUSD (one challenge per currency; a stock mppx client pays the first it can, or `autoSwap` between them) |
 | `stripe` charge | card (USD) | Stripe | Cards over the MPP wire via Stripe Shared Payment Tokens, offered only on routes priced $0.50 or more (the card minimum); settles a PaymentIntent after the handler, same settle-after-handler discipline. Mounted when the operator sets `STRIPE_SECRET_KEY` + `STRIPE_PROFILE_ID` |
 
+### Signing an `evm` challenge: use the token's own EIP-712 domain
+
+An `evm`/`charge` credential is an EIP-3009 `TransferWithAuthorization` signed under the **token's** EIP-712 domain, and that domain's `name` differs by chain: Base USDC is `"USD Coin"`, while Celo, Monad and Sei USDC each report `"USDC"`. Hardcoding one of them produces a signature no facilitator and no contract can accept on the chains that use the other, and it fails quietly, looking like a rejected payment rather than a wrong one.
+
+There is nothing to guess: the challenge carries the verbatim x402 accepts entry it was minted from, and that entry's `extra.name` / `extra.version` are the domain to sign under, read from the token on chain.
+
+If a credential arrives signed under a different known name, we recover the signer and recognise it before spending a facilitator round trip. The reply is a `402` with an RFC 9457 `application/problem+json` body naming both the name you signed under and the one the token uses. That response deliberately carries no `WWW-Authenticate` header, so a client whose manager prefers MPP has nothing to select and falls through to the x402 offer in the same `402`, which the same wallet can pay. The hold is short, self-clearing, and never applied to a request that presents a credential.
+
 The [MPP marketplace](https://agent402.tools/mpp-marketplace) lists other MPP sellers we can verify live and ranks them on the **MPP leaderboard**: inbound USDC.e transfers on Tempo to the recipient each seller's live challenge names, read from the chain by us over the most recent window (transfers, distinct payers, volume; rows at or above the router's floor are marked routable). Machine-readable at [`/api/mpp-index`](https://agent402.tools/api/mpp-index) and [`/api/mpp-leaderboard`](https://agent402.tools/api/mpp-leaderboard). The [transactions page](https://agent402.tools/revenue) shows every MPP-wire settlement per rail with explorer links, led by transaction counts (adoption) with external revenue underneath.
 
 ## JavaScript (mppx)
@@ -33,7 +41,7 @@ For `evm` you need USDC on Base or Celo in the paying wallet; for `tempo` you ne
 
 ## MPP on the MCP connector
 
-The hosted connector at `https://agent402.tools/mcp` speaks MPP's MCP wire too: a wallet-only tool called through `catalog.call` (or a flagship such as `web.search`) answers JSON-RPC error `-32042` with `data.challenges`, the client retries with the credential in `_meta["org.paymentauth/credential"]`, and the paid result carries `_meta["org.paymentauth/receipt"]`. mppx's `McpClient.wrap` over a stock MCP SDK client handles it. The connector replays the call as a loopback request to its own paid HTTP route, so the real gates verify and settle and the same invariants hold (`src/mcp-mpp.js`). See [[MCP Connector]].
+The hosted connector at `https://agent402.tools/mcp` speaks MPP's MCP wire too: a wallet-only tool called through `catalog.call` (or a flagship such as `web.search`) answers JSON-RPC error `-32042` (`-32043` when a presented credential was refused) with `data.challenges`, the client retries with the credential in `_meta["org.paymentauth/credential"]`, and the paid result carries `_meta["org.paymentauth/receipt"]`. mppx's `McpClient.wrap` over a stock MCP SDK client handles it. The connector replays the call as a loopback request to its own paid HTTP route, so the real gates verify and settle and the same invariants hold (`src/mcp-mpp.js`). See [[MCP Connector]].
 
 ## Verifying a settlement
 

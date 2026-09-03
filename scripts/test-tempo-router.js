@@ -17,7 +17,7 @@
 import { createServer } from "node:http";
 import { tempoCatalog, rankTempoResources } from "../src/tempo-sellers.js";
 import { payTempo, __testResetProofCache, tempoInboundCount, TEMPO_USDC, TEMPO_CAIP2 } from "../src/tempo-buyer.js";
-import { buyerPaymentNetwork, externalChainsFor, EXTERNAL_CHAIN_BY_NETWORK } from "../src/tools/route-execute.js";
+import { buyerPaymentNetwork, externalChainsFor, EXTERNAL_CHAIN_BY_NETWORK, buildRouteExecuteTool, EXEC_TIERS } from "../src/tools/route-execute.js";
 import { Challenge } from "mppx";
 
 let pass = 0;
@@ -157,5 +157,86 @@ ok(JSON.stringify(externalChainsFor("eip155:8453", supported, { tempoFromBase: f
 ok(JSON.stringify(externalChainsFor("eip155:8453", supported, { tempoFromBase: true })) === '["base","tempo"]', "SOR_TEMPO_FROM_BASE=true -> base first, then MPP/tempo fallthrough");
 ok(JSON.stringify(externalChainsFor("eip155:4217", ["base"])) === "[]", "tempo buyer with no Tempo wallet configured -> no chain (409 upstream)");
 ok(JSON.stringify(externalChainsFor("eip155:137", supported)) === "[]", "unsupported inbound chain -> none");
+
+
+// ---- Tempo time budget on the external leg ----
+// A Tempo buyer's credential expires ~25s after the client signs it and we
+// settle AFTER the handler; an external buy that outlives the window is a
+// paid seller and a refused settle (measured live 2026-08-27: 69s Firecrawl
+// scrape -> $0.002 spent, buyer 402). The leg runs under a budget on Tempo.
+{
+  const tempoReq = () => ({ mppTempoCredential: true, headers: {}, header: () => undefined, ip: "127.0.0.1" });
+  const seller = { seller: "https://firecrawl.example", slug: "v1/scrape", url: "https://firecrawl.example/v1/scrape", method: "POST", price: "$0.002", priceUsd: 0.002, networks: [TEMPO_CAIP2], wire: "mpp" };
+  let payOpts = null;
+  const tool = buildRouteExecuteTool({
+    getCatalog: () => ({}), tier: EXEC_TIERS[0],
+    resolveExternal: async () => seller,
+    payExternal: async (_url, opts) => { payOpts = opts; return { result: { ok: 1 }, quote: { usd: 0.002 }, receipt: { transaction: "0x" + "ab".repeat(32) } }; },
+    externalEnabled: () => true, externalChains: () => ["base", "tempo"],
+  });
+  const r = await tool.handler({ task: "scrape a url", include: "external", params: { url: "https://example.com" } }, tempoReq());
+  ok(r.receipt.wire === "mpp" && r.receipt.settleNetwork === TEMPO_CAIP2, "tempo buyer -> receipt says wire mpp on eip155:4217");
+  ok(Number.isFinite(payOpts?.timeoutMs) && payOpts.timeoutMs <= 16000 && payOpts.timeoutMs >= 3000, `the seller call carries the remaining Tempo budget as its timeout (got ${payOpts?.timeoutMs})`);
+  // Resolution that eats the budget refuses BEFORE any spend (504, nothing paid).
+  const prev = process.env.SOR_TEMPO_BUDGET_MS; process.env.SOR_TEMPO_BUDGET_MS = "120";
+  let paid = false, threw = null;
+  const slow = buildRouteExecuteTool({
+    getCatalog: () => ({}), tier: EXEC_TIERS[0],
+    resolveExternal: async () => { await new Promise((res) => setTimeout(res, 150)); return seller; },
+    payExternal: async () => { paid = true; return { result: { ok: 1 } }; },
+    externalEnabled: () => true, externalChains: () => ["base", "tempo"],
+  });
+  try { await slow.handler({ task: "scrape a url", include: "external" }, tempoReq()); } catch (e) { threw = e; }
+  process.env.SOR_TEMPO_BUDGET_MS = prev ?? "";
+  if (prev == null) delete process.env.SOR_TEMPO_BUDGET_MS;
+  ok(threw?.statusCode === 504 && /time budget/.test(threw.message) && paid === false, "resolution past the Tempo budget -> 504 before any spend");
+  // A Base buyer gets no budget (x402 credentials carry their own validity and settle server-side).
+  payOpts = null;
+  const baseReq = { headers: { "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, accepted: { network: "eip155:8453" }, payload: {} })).toString("base64") }, header: (n) => (n.toLowerCase() === "payment-signature" ? baseReq.headers["payment-signature"] : undefined), ip: "127.0.0.1" };
+  const baseTool = buildRouteExecuteTool({
+    getCatalog: () => ({}), tier: EXEC_TIERS[0],
+    resolveExternal: async () => ({ ...seller, networks: ["eip155:8453"], wire: "x402" }),
+    payExternal: async (_url, opts) => { payOpts = opts; return { result: { ok: 1 }, quote: { usd: 0.002 }, receipt: { transaction: "0x" + "cd".repeat(32) } }; },
+    externalEnabled: () => true, externalChains: () => ["base", "tempo"],
+  });
+  await baseTool.handler({ task: "scrape a url", include: "external" }, baseReq);
+  ok(payOpts && !("timeoutMs" in payOpts), "a Base buyer's external call carries no Tempo budget");
+}
+
+// ---- External spend ceiling is keyed for Tempo buyers ----
+// The tempo gate strips the x402 payment headers on acceptance, so
+// payerFromRequest() is null for an MPP/Tempo buyer and the per-payer
+// unsettled-spend ceiling (external-spend-guard) saw "payer not attributable"
+// = always allowed. Keyed on the credential's payer now, like the composite
+// guard; a request with no payer at all falls back to the client IP.
+{
+  const { __reset, noteSpend, payerExposureUsd, __config } = await import("../src/external-spend-guard.js");
+  __reset();
+  const tempoReq = () => ({ mppTempoCredential: true, mppTempoPayer: "0xTempoBuyer", headers: {}, header: () => undefined, ip: "203.0.113.9" });
+  const seller = { seller: "https://firecrawl.example", slug: "v1/scrape", url: "https://firecrawl.example/v1/scrape", method: "POST", price: "$0.002", priceUsd: 0.002, networks: [TEMPO_CAIP2], wire: "mpp" };
+  const tool = buildRouteExecuteTool({
+    getCatalog: () => ({}), tier: EXEC_TIERS[0],
+    resolveExternal: async () => seller,
+    payExternal: async () => ({ result: { ok: 1 }, quote: { usd: 0.002 }, receipt: { transaction: "0x" + "ef".repeat(32) } }),
+    externalEnabled: () => true, externalChains: () => ["base", "tempo"],
+  });
+  await tool.handler({ task: "scrape a url", include: "external" }, tempoReq());
+  ok(payerExposureUsd("tempo:0xTempoBuyer") > 0, "a Tempo buyer's external spend is recorded under its credential payer");
+  noteSpend("tempo:0xTempoBuyer", __config.DEFAULT_MAX_UNSETTLED_USD);
+  let threw = null, paid = false;
+  const tool2 = buildRouteExecuteTool({
+    getCatalog: () => ({}), tier: EXEC_TIERS[0],
+    resolveExternal: async () => seller,
+    payExternal: async () => { paid = true; return { result: { ok: 1 } }; },
+    externalEnabled: () => true, externalChains: () => ["base", "tempo"],
+  });
+  try { await tool2.handler({ task: "scrape a url", include: "external" }, tempoReq()); } catch (e) { threw = e; }
+  ok(threw?.statusCode === 429 && /paused/.test(threw.message) && paid === false, "a Tempo buyer over the unsettled ceiling is refused before any spend (429)");
+  __reset();
+  const noPayer = { mppTempoCredential: true, headers: {}, header: () => undefined, ip: "203.0.113.9" };
+  await tool.handler({ task: "scrape a url", include: "external" }, noPayer);
+  ok(payerExposureUsd("ip:203.0.113.9") > 0, "with no readable payer the spend is keyed on the client IP (nobody is unkeyed)");
+  __reset();
+}
 
 console.log(`\nAll ${pass} assertions passed`);

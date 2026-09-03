@@ -1,0 +1,57 @@
+name: Refund backfill (broken skill packs)
+
+# Mints refund debts for external buyers charged by packs that answered HTTP
+# 200 with zero successful steps between 2026-07-08 and 2026-08-31. The
+# charged-failure detector never saw them: it mints a debt only on a NON-200.
+#
+# This RECORDS debts. It sends no money. refund.yml -> scripts/refund-run.js
+# remains the only thing that pays, and it re-derives every inbound payment
+# from the chain before each send and fails closed.
+#
+# Dispatch-only, and dry by default: `write: true` is what actually mints.
+on:
+  workflow_dispatch:
+    inputs:
+      write:
+        description: "Actually mint the debts (false = dry run, just report)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency: refund-backfill
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Same refund-approval gate as refund.yml: a required-reviewer click per
+    # run. The in-script gates bound the AS-SHIPPED code, but a workflow can be
+    # dispatched from any branch someone with write access pushes, and a
+    # modified script bypasses scripts entirely - the environment gate is what
+    # still stands in that case. Solo-maintainer repo, so self-approval is the
+    # design: the gate is against a compromised session, not a second person.
+    environment: refund-approval
+    steps:
+      - name: Backfill (via the operator route - the ledgers live on the prod volume)
+        env:
+          TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+          WRITE: ${{ inputs.write && '1' || '0' }}
+        run: |
+          if [ -z "$TOKEN" ]; then echo "AGENT402_OPERATOR_TOKEN is not set"; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          CODE=$(curl -s -o /tmp/backfill.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            "https://agent402.tools/__operator/refunds/backfill?write=$WRITE")
+          echo "HTTP $CODE"
+          # A 404 is what the operator routes answer to a bad credential, so it
+          # is an auth failure here and not a missing route.
+          [ "$CODE" = "200" ] || { echo "backfill refused:"; cat /tmp/backfill.json; exit 1; }
+          jq . /tmp/backfill.json
+          if [ "$WRITE" = "1" ]; then
+            echo "Debts recorded. Nothing has been SENT - run refund.yml (dry first) to pay them."
+          else
+            echo "DRY RUN - nothing recorded. Re-dispatch with write=true to mint."
+          fi

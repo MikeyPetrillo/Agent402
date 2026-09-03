@@ -28,11 +28,16 @@ const {
   capturePostHogPowChallenge,
   capturePostHogSettlement,
   capturePostHogToolError,
+  capturePostHogToolGone,
+  capturePostHogToolCall,
   _flushPaywallRollupForTest,
   _testEventsForTest,
 } = await import("../src/posthog.js");
 
 let passed = 0, failed = 0;
+// PostHog's own control properties ($-prefixed, e.g. $process_person_profile)
+// are not caller data: the leak guards below compare the keys WE set.
+const ourKeys = (props) => Object.keys(props || {}).filter((k) => !k.startsWith("$")).sort().join(",");
 const ok = (cond, msg) => {
   if (cond) { passed++; console.log(`ok - ${msg}`); }
   else { failed++; console.error(`FAIL - ${msg}`); }
@@ -42,11 +47,13 @@ const take = () => events.splice(0, events.length); // read + clear
 
 // --- unit: discovery ------------------------------------------------------------
 capturePostHogDiscovery({ surface: "llms.txt", synthetic: false });
+ok(take().length === 0, "discovery accumulates silently (rolled up, no event before flush)");
+_flushPaywallRollupForTest();
 let got = take();
-ok(got.length === 1 && got[0].event === "discovery" && got[0].properties.surface === "llms.txt" && got[0].properties.synthetic === false,
-  "discovery event carries surface + synthetic");
-ok(Object.keys(got[0].properties).sort().join(",") === "surface,synthetic",
-  "discovery properties are exactly {surface, synthetic} — nothing about the caller");
+ok(got.length === 1 && got[0].event === "discovery" && got[0].properties.surface === "llms.txt" && got[0].properties.synthetic === false && got[0].properties.count === 1,
+  "discovery event carries surface + synthetic + count");
+ok(ourKeys(got[0].properties) === "count,surface,synthetic",
+  "discovery properties are exactly {count, surface, synthetic} — nothing about the caller");
 
 // --- unit: paywall rollup -------------------------------------------------------
 for (let i = 0; i < 3; i++) capturePostHogPaywall({ slug: "hash", priceUsd: 0.001, powEligible: true, synthetic: false });
@@ -61,6 +68,29 @@ ok(byKey.get("hash|0")?.count === 3 && byKey.get("hash|0")?.powEligible === true
 ok(byKey.get("hash|1")?.count === 1, "synthetic 402s roll up separately");
 ok(byKey.get("screenshot|0")?.count === 1 && byKey.get("screenshot|0")?.priceUsd === 0.01, "price rides along");
 ok(byKey.get("hash|0")?.attempt === "none", "402 with no payment header rolls up as attempt=none");
+
+// The WHY behind a refused payment (src/payment-reject.js). Added 2026-08-30
+// with that classifier: without this, the rollup could silently stop carrying
+// the reason and the only symptom would be a diagnosis that quietly went blank
+// - the same shape of failure the classifier exists to end.
+capturePostHogPaywall({ slug: "render", priceUsd: 0.02, powEligible: false, synthetic: false, attempt: "usdc_failed", reason: "amount-below-price" });
+capturePostHogPaywall({ slug: "render", priceUsd: 0.02, powEligible: false, synthetic: false, attempt: "usdc_failed", reason: "amount-below-price" });
+capturePostHogPaywall({ slug: "render", priceUsd: 0.02, powEligible: false, synthetic: false, attempt: "usdc_failed", reason: "authorization-expired" });
+capturePostHogPaywall({ slug: "render", priceUsd: 0.02, powEligible: false, synthetic: false, attempt: "usdc_failed" });
+// A reason is only ever meaningful for a payment that was actually tried.
+capturePostHogPaywall({ slug: "render", priceUsd: 0.02, powEligible: false, synthetic: false, attempt: "none", reason: "amount-below-price" });
+_flushPaywallRollupForTest();
+const rr = take().filter((e) => e.properties.slug === "render");
+const byReason = new Map(rr.map((e) => [`${e.properties.attempt}|${e.properties.reason ?? "-"}`, e.properties]));
+ok(byReason.get("usdc_failed|amount-below-price")?.count === 2, `identical reasons aggregate (got ${byReason.get("usdc_failed|amount-below-price")?.count})`);
+ok(byReason.get("usdc_failed|authorization-expired")?.count === 1, "different reasons roll up separately, so the split is readable");
+ok(byReason.get("usdc_failed|-")?.count === 1,
+  "a refused payment we could not diagnose carries no reason, and does not merge with the ones we could");
+ok(byReason.get("none|-")?.count === 1, "a 402 with no payment at all stays its own bucket");
+ok(rr.every((e) => e.properties.reason === undefined || typeof e.properties.reason === "string"),
+  "reason is a string or absent - never an object that could carry caller text");
+ok(!rr.some((e) => e.properties.attempt === "none" && e.properties.reason),
+  "attempt=none never carries a reason: nothing was tried, so there is nothing to explain");
 _flushPaywallRollupForTest();
 ok(take().length === 0, "empty rollup flush emits nothing");
 
@@ -89,7 +119,7 @@ got = take().filter((e) => e.event === "pow_challenge");
 const pc = new Map(got.map((e) => [`${e.properties.slug}|${e.properties.synthetic ? 1 : 0}`, e.properties.count]));
 ok(pc.get("hash|0") === 4 && pc.get("qr|0") === 1 && pc.get("hash|1") === 1,
   `pow_challenge rolls up per (slug, synthetic) (hash=${pc.get("hash|0")}, qr=${pc.get("qr|0")}, hash-synth=${pc.get("hash|1")})`);
-ok(got.every((e) => Object.keys(e.properties).sort().join(",") === "count,slug,synthetic"),
+ok(got.every((e) => ourKeys(e.properties) === "count,slug,synthetic"),
   "pow_challenge properties are exactly {slug, count, synthetic} — no caller identity");
 
 // --- unit: rollup "_other" remainder keeps the exact total -----------------------
@@ -111,7 +141,7 @@ got = take();
 ok(got.length === 2 && got.every((e) => e.event === "payment_settled"), "settlements are per-event, never rolled up");
 ok(got[0].properties.rail === "usdc" && got[0].properties.network === "eip155:8453", "USDC settlement carries the chain");
 ok(got[1].properties.rail === "pow" && got[1].properties.network === null, "PoW settlement has no chain");
-ok(Object.keys(got[0].properties).sort().join(",") === "network,paid,priceUsd,rail,slug,synthetic",
+ok(ourKeys(got[0].properties) === "network,paid,priceUsd,rail,slug,synthetic",
   "settlement properties are exactly {slug, rail, network, priceUsd, paid, synthetic} — no payer identity");
 
 // `paid` is the fix for a real misreading, so assert the distinction it draws
@@ -152,10 +182,42 @@ capturePostHogToolError({ slug: "hash", status: 500, message: "x", shape: ["b:ur
 got = take();
 ok(got.length === 1 && got[0].event === "tool_error" && got[0].properties.errorClass === "5xx", "real tool_errors still captured");
 
-// --- unit: discovery hourly cap ---------------------------------------------------
+// --- unit: discovery rollup (the 2026-08-25 scanner: 57k /api/find calls in a day) ---
 for (let i = 0; i < 1200; i++) capturePostHogDiscovery({ surface: "find", synthetic: false });
+capturePostHogDiscovery({ surface: "find", synthetic: true });
+ok(take().length === 0, "1,201 discovery hits produce no events before the flush");
+_flushPaywallRollupForTest();
+got = take().filter((e) => e.event === "discovery");
+const findRow = got.find((e) => e.properties.surface === "find" && e.properties.synthetic === false);
+ok(got.length === 2 && findRow?.count !== 0 && findRow?.properties.count === 1200,
+  `1,200 find hits flush as ONE discovery event with count 1200 (+1 synthetic row; got ${got.length} events, count ${findRow?.properties.count})`);
+
+// --- unit: _find / _route tool_call rollup; real slugs stay per-event -------------
+for (let i = 0; i < 5; i++) capturePostHogToolCall({ slug: "_find", latencyMs: 10 + i, cached: i < 3, errored: false, status: 200, synthetic: false });
+capturePostHogToolCall({ slug: "_route", latencyMs: 700, cached: false, errored: false, status: 200, synthetic: false });
+capturePostHogToolCall({ slug: "hash", latencyMs: 2, cached: false, errored: false, status: 200, synthetic: false });
 got = take();
-ok(got.length === 999, `discovery capped per rolling hour (got ${got.length} of 1200 — 1 was used above)`);
+ok(got.length === 1 && got[0].event === "tool_call" && got[0].properties.slug === "hash" && !("count" in got[0].properties),
+  "a real tool call is still one per-event tool_call (no count field)");
+_flushPaywallRollupForTest();
+got = take().filter((e) => e.event === "tool_call");
+const findCached = got.find((e) => e.properties.slug === "_find" && e.properties.cached === true);
+const findMiss = got.find((e) => e.properties.slug === "_find" && e.properties.cached === false);
+const routeRow = got.find((e) => e.properties.slug === "_route");
+ok(got.length === 3 && findCached?.properties.count === 3 && findMiss?.properties.count === 2 && routeRow?.properties.count === 1,
+  `_find/_route roll up per (slug, cached): got ${got.length} rows, _find cached ${findCached?.properties.count} miss ${findMiss?.properties.count} _route ${routeRow?.properties.count}`);
+ok(findCached?.properties.latencyMs === 11 && findMiss?.properties.latencyMs === 14,
+  `rolled-up latencyMs is the window average (cached ${findCached?.properties.latencyMs}, miss ${findMiss?.properties.latencyMs})`);
+
+// --- unit: tool_gone rollup (scanners walk all ~970 retired routes daily) --------
+for (let r = 0; r < 60; r++) for (let i = 0; i <= r % 3; i++) capturePostHogToolGone({ route: `/api/convert/unit${r}-to-other`, replacement: "POST /api/unit-convert" });
+ok(take().length === 0, "tool_gone accumulates silently");
+_flushPaywallRollupForTest();
+got = take().filter((e) => e.event === "tool_gone");
+const goneOther = got.find((e) => e.properties.route === "_other");
+const goneTotal = got.reduce((s, e) => s + e.properties.count, 0);
+ok(got.length === 51 && goneOther?.properties.routes === 10 && goneTotal === 120,
+  `60 retired routes flush as 50 rows + one _other (10 routes) with the exact total (got ${got.length} rows, other routes ${goneOther?.properties.routes}, total ${goneTotal})`);
 
 // --- integration: the real funnel through a paid-mode server ----------------------
 const FAC_PORT = 3082, PORT = 3081, B = `http://127.0.0.1:${PORT}`;
@@ -294,6 +356,36 @@ try {
   ok(forced.ok === true, `key + POSTHOG_FORCE=true overrides a non-prod NODE_ENV (got ${JSON.stringify(forced)})`);
   const nokey = await initWith({ NODE_ENV: "production" });
   ok(nokey.ok === false && nokey.reason === "no-key", `no key stays a no-op regardless of NODE_ENV (got ${JSON.stringify(nokey)})`);
+}
+
+// ---- verify_failed: reason + chain + path, never the payer, capped per hour (2026-08-28) ----
+{
+  const { capturePostHogVerifyFailed, _testEventsForTest } = await import("../src/posthog.js");
+  const before = _testEventsForTest().filter((e) => e.event === "verify_failed").length;
+  capturePostHogVerifyFailed({ network: "eip155:8453", scheme: "exact", resource: "https://agent402.tools/api/x402-trending?x=1", errorReason: "invalid_exact_evm_payload_authorization_value_insufficient", synthetic: false });
+  const ev = _testEventsForTest().filter((e) => e.event === "verify_failed").pop();
+  ok(ev && ev.properties.network === "eip155:8453" && ev.properties.scheme === "exact" && ev.properties.path === "/api/x402-trending" && /insufficient/.test(ev.properties.errorReason) && !("payer" in ev.properties), "verify_failed carries chain, scheme, route path and reason - no payer, no query string");
+  for (let i = 0; i < 400; i++) capturePostHogVerifyFailed({ network: "eip155:8453", scheme: "exact", resource: "https://agent402.tools/api/random", errorReason: "x" });
+  const after = _testEventsForTest().filter((e) => e.event === "verify_failed").length;
+  ok(after - before <= 300, `verify_failed is capped per hour (${after - before} of 401 captured)`);
+}
+
+// ---- wrong_method: the 405 dead end is counted (2026-08-28) ----
+{
+  const { capturePostHogWrongMethod, _testEventsForTest } = await import("../src/posthog.js");
+  capturePostHogWrongMethod({ path: "/api/search", method: "POST", allow: ["GET"], ua: "axios/1.14.0 (foo)" });
+  const ev = _testEventsForTest().filter((e) => e.event === "wrong_method").pop();
+  ok(ev && ev.properties.path === "/api/search" && ev.properties.method === "POST" && ev.properties.allow === "GET" && ev.properties.uaFamily === "axios", "wrong_method carries path, method, allow and the UA family only");
+}
+
+// Server events are ANONYMOUS (2026-08-28): person processing bills at about
+// five times the anonymous rate once the free allowance is spent, and the one
+// constant-id profile carried no signal (every query here reads event
+// properties). Every captured event must say so.
+{
+  const evs = _testEventsForTest();
+  const missing = evs.filter((e) => e?.properties?.$process_person_profile !== false);
+  ok(evs.length > 0 && missing.length === 0, `every server event carries $process_person_profile:false (${evs.length} events, ${missing.length} missing${missing.length ? ": " + missing.slice(0, 3).map((e) => e.event).join(",") : ""})`);
 }
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);

@@ -78,8 +78,15 @@ export function acceptsFromLive402({ header, body } = {}) {
 /** Is this accepts entry denominated in USDC? Checked by NAME (what x402 v2
  *  puts in `extra`) rather than by address, so a new chain's USDC works without
  *  a table to forget to update. */
+const SVM_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 function isUsdc(a) {
-  return USDC_NAME.test(String(a?.extra?.name || "").trim());
+  if (USDC_NAME.test(String(a?.extra?.name || "").trim())) return true;
+  // Solana v2 accepts carry NO extra.name (their extra is feePayer et al) -
+  // the name convention is an EVM EIP-712 artifact. On Solana the mint
+  // address IS the identity, so the one well-known mainnet mint is
+  // recognized directly. Without this, every pure-Solana catalog priced as
+  // "networks only" forever (measured 2026-09-01: sol.blockrun's 128 routes).
+  return String(a?.asset || "") === SVM_USDC_MINT;
 }
 
 /**

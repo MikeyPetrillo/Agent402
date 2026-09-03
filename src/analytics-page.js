@@ -85,7 +85,15 @@ pre{background:var(--ink-panel);border:1px solid var(--dark-border);padding:14px
 @media(max-width:600px){.an-h1{font-size:36px !important}}
 `;
 
-export function analyticsPage(data, { baseUrl }) {
+export function analyticsPage(data, { baseUrl, toolHrefFor = null } = {}) {
+  // A telemetry slug is not proof a route exists: pseudo-slugs (_find, _route)
+  // and tools whose route is not /api/<slug> (route-execute lives at
+  // /api/route/execute) rendered dead links for a month. The resolver maps a
+  // slug to a real href or null; null renders plain text, never a guessed URL.
+  const slugCell = (safeSlug) => {
+    const href = typeof toolHrefFor === "function" ? toolHrefFor(safeSlug) : null;
+    return href ? `<a href="${href}" rel="nofollow">${safeSlug}</a>` : `<span>${safeSlug}</span>`;
+  };
   // Disabled (no DB): clean, friendly empty state with self-host hint.
   if (!data || !data.enabled) {
     return renderShell({
@@ -147,10 +155,9 @@ export function analyticsPage(data, { baseUrl }) {
       const serverErrCellPct = pct("serverErrorRate", "server_errored");
       const clientErrClass = (Number(r.client_errored || 0) > 0 || Number(r.clientErrorRate || 0) > 0) ? "an-warn" : "an-muted";
       const serverErrClass = (Number(r.server_errored || 0) > 0 || Number(r.serverErrorRate || 0) > 0) ? "an-danger" : "an-muted";
-      const route = "/api/" + safeSlug;
       return `<tr>
         <td class="num an-muted">${esc(i + 1)}</td>
-        <td><a href="${route}" rel="nofollow">${safeSlug}</a></td>
+        <td>${slugCell(safeSlug)}</td>
         <td class="num">${esc(fmtInt(r.calls))}</td>
         <td class="num an-muted">${esc(cachedPct)}</td>
         <td class="num ${clientErrClass}">${esc(clientErrCellPct)}</td>
@@ -170,10 +177,9 @@ export function analyticsPage(data, { baseUrl }) {
       const c4 = Number(r.client_errored || 0);
       const c5 = Number(r.server_errored || 0);
       const errPct = r.calls ? fmtPct(total, r.calls) : "-";
-      const route = "/api/" + safeSlug;
       return `<tr>
         <td class="num an-muted">${esc(i + 1)}</td>
-        <td><a href="${route}" rel="nofollow">${safeSlug}</a></td>
+        <td>${slugCell(safeSlug)}</td>
         <td class="num">${esc(fmtInt(r.calls))}</td>
         <td class="num an-warn">${esc(fmtInt(c4))}</td>
         <td class="num an-danger">${esc(fmtInt(c5))}</td>

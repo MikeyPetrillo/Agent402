@@ -32,7 +32,7 @@ const NEW_CHAINS = [
   { key: "arbitrum", network: "eip155:42161", offNetwork: "eip155:421614", asset: "USDC", explorer: "arbiscan.io", wallet: "0x3333333333333333333333333333333333333333" },
   { key: "celo", network: "eip155:42220", offNetwork: "eip155:11142220", asset: "USDC", explorer: "celoscan.io", wallet: "0x5555555555555555555555555555555555555555" },
   { key: "avalanche", network: "eip155:43114", offNetwork: "eip155:43113", asset: "USDC", explorer: "snowtrace.io", wallet: "0x6666666666666666666666666666666666666666" },
-  { key: "sei", network: "eip155:1329", offNetwork: "eip155:1328", asset: "USDC", explorer: "seitrace.com", wallet: "0x7777777777777777777777777777777777777777" },
+  { key: "sei", network: "eip155:1329", offNetwork: "eip155:1328", asset: "USDC", explorer: "seiscan.io", wallet: "0x7777777777777777777777777777777777777777" },
   { key: "optimism", network: "eip155:10", offNetwork: "eip155:11155420", asset: "USDC", explorer: "optimistic.etherscan.io", wallet: "0x9999999999999999999999999999999999999999" },
   { key: "robinhood", network: "eip155:4663", offNetwork: "eip155:99999", asset: "USDG", explorer: "robinhoodchain.blockscout.com", wallet: "0x4444444444444444444444444444444444444444" },
 ];

@@ -1,0 +1,50 @@
+name: Tempo SOR live proof
+
+# Proves the Tempo spending wallet end to end with real money: the canary
+# burner pays production over MPP/Tempo for a task that resolves to an external
+# Tempo seller, and route-and-execute pays that seller from
+# TEMPO_UPSTREAM_BUYER_KEY's wallet. Dispatch-only.
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "Task text (default: scrape a web page with firecrawl)"
+        required: false
+        default: ""
+      route:
+        description: "/api/route/execute (cap $0.005) or /api/route/execute-plus (cap $0.04)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - name: Pay production over Tempo for an externally-routed task
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+          TASK: ${{ github.event.inputs.task }}
+          ROUTE: ${{ github.event.inputs.route }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY secret missing"; exit 1; }
+          echo "::add-mask::$BURNER_KEY"; [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
+          [ -n "$TASK" ] || unset TASK; [ -n "$ROUTE" ] || unset ROUTE
+          node scripts/tempo-sor-live.js
+      - name: Keep the real response for the announcement card
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tempo-sor-response
+          path: tempo-sor-response.json
+          if-no-files-found: ignore
+          retention-days: 7

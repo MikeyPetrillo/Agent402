@@ -10,6 +10,12 @@ name: Metered settlement canary - sub-ceiling settle (dispatch-only)
 #
 # Dispatch-only until it has run green: metering changes what buyers are
 # charged, and a scheduled canary for an unproven billing path just pages.
+# Least privilege: the default token on this repo is read-only, so a job that
+# opens an issue on failure needs issues: write spelled out (two alarms could
+# not page before 2026-08-28).
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:

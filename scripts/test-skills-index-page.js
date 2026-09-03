@@ -2,7 +2,7 @@
 // skillsIndex, Aug 2026 revamp). No server, no network - real SKILL_PACKS
 // data, since the page has no fixture-able inputs of its own (unlike the
 // other revamped pages, it takes only baseUrl).
-import { skillsIndex, SKILL_PACKS, PACK_PRICES, skillPackPage, skillPacksJson } from "../src/skills.js";
+import { skillsIndex, SKILL_PACKS, PACK_PRICES, skillPackPage, skillPacksJson, PACK_PRICE_RANGE } from "../src/skills.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -14,7 +14,7 @@ const html = skillsIndex(BASE_URL);
 
 // --- real data rendering ------------------------------------------------------
 ok(html.includes("Seven tools.") && html.includes("One <span"), "hero H1 renders");
-ok(html.includes(`${SKILL_PACKS.length}+ packs, $0.05 to $1.50`), "hero cites the real live pack count and real price range");
+ok(html.includes(`${SKILL_PACKS.length}+ packs, ${PACK_PRICE_RANGE.text}`) && html.includes("priced below the sum of its tools"), "hero cites the real live pack count, the derived price range and the rule");
 
 const flagshipCount = (html.match(/class="sk-flagship"/g) || []).length;
 ok(flagshipCount === 6, `exactly 6 flagship cards render (got ${flagshipCount})`);
@@ -44,9 +44,9 @@ ok(!/[^-]\bnaive\b/.test(html.split("forecasting-bake-off")[1]?.split("</a>")[0]
 
 // --- pricing honesty: real range, not invented -------------------------------
 {
-  const prices = SKILL_PACKS.map((p) => PACK_PRICES[p.slug] ?? 0.05);
-  const min = Math.min(...prices), max = Math.max(...prices);
-  ok(min === 0.05 && max === 1.5, `sanity: live PACK_PRICES range is still $0.05-$1.50 (got $${min}-$${max}) - if this ever fails, the hero copy must be updated to match, not silently left stale`);
+  const prices = SKILL_PACKS.map((p) => PACK_PRICES[p.slug]);
+  ok(prices.every((n) => Number.isFinite(n) && n >= 0.001), "every listed pack has a derived price at or above the $0.001 floor");
+  ok(html.includes("How is a pack priced?") && html.includes("10% bundle discount"), "the FAQ states the pricing rule");
 }
 
 // --- illustrative run is labelled, not presented as a live guarantee --------

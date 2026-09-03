@@ -1,0 +1,273 @@
+{
+ "product": "market-brief",
+ "input": "Electric vehicle fast-charging networks in the United States",
+ "title": "Electric vehicle fast-charging networks in the United States",
+ "report": "# Electric Vehicle Fast-Charging Networks in the United States\n\n**Direct answer:** The U.S. public DC fast-charging (DCFC) network has roughly 75,000-78,000 ports depending on the database used, and it is still growing at over 1,000 ports per month - but the *rate* of new construction has fallen year-over-year for two consecutive quarters [2][8][9][12]. Tesla remains the dominant single network at roughly half of all ports, yet its share of *new* builds has fallen from above 40% in 2025 to 26-27% in the first two quarters of 2026 as automaker-backed and retailer-backed entrants scale up [2][10][15]. The strategic battleground has shifted from raw port count to reliability, connector standardization on NACS, ultra-fast hardware, and - most acutely - profitability [2][12][21].\n\n---\n\n## MARKET AT A GLANCE\n\n**Definition.** DC fast charging (also called Level 3) delivers direct current at 50-350+ kW, sitting above Level 1 (120V AC) and Level 2 (240V AC) in the broader charging-station ecosystem, which spans residential, workplace/retail, public fast charging, and fleet depot applications [5]. A \"port\" powers only one vehicle at a time even if it carries multiple connectors [8].\n\n**Installed base.** Two credible trackers give different totals, and the gap matters:\n\n- **Paren** counted **77,776 ports across 14,514 stations** at the end of Q2 2026, with **4,382 new ports and 806 new stations** added in the quarter [2].\n- The **Alternative Fuels Data Center (AFDC)** counted **74,265 ports across an estimated 15,632 locations** as of July 1, 2026 (up 27% year-over-year), and **75,293 ports** as of July 28, 2026 [8][9].\n\nThe two databases have diverged before: one tracker noted a roughly 2,000-stall difference between Paren's end-2025 figure and AFDC's [6]. AFDC also counts temporarily unavailable ports (864, or 1.2%, on July 1, 2026) and warns its station count may be inflated because adjacent chargers are sometimes logged separately [8]. Treat the totals as a range, not a settled number.\n\n**Growth rate.** AFDC-based reporting puts average expansion at over 1,000 new ports per month, and the July 28, 2026 total of 75,293 represents a **50% jump from the 50,000 ports counted in mid-December 2024** [9]. Site size is rising: average ports per AFDC location reached 4.75 on July 1, 2026, up from 4.4 a year earlier [8].\n\n**But the build rate is decelerating.** Paren's Q2 2026 additions (4,382 ports) were **10% below Q2 2025's 4,865**, and first-half 2026 additions of 7,903 ports were **7.4% below the 8,532 added in H1 2025** [12]. Paren itself calls a two-quarter year-over-year decline \"not definitive proof of a slowdown,\" but pairs it with \"recent CPO layoffs and pullbacks\" [12].\n\n**Market value forecasts diverge sharply** and should be treated as vendor estimates, not facts. IMARC values the U.S. EV *charging station* market (all levels) at **$3.20 billion in 2025**, reaching **$34.20 billion by 2034** at a **28.60% CAGR** [5]. Precedence Research puts 2025 at **$22.52 billion**, reaching **$190.45 billion by 2035** at a **23.8% CAGR** [16]. The roughly seven-fold gap in the 2025 base year implies fundamentally different scope definitions; the material provided here does not include the methodologies behind either. IMARC's segmentation is more useful than its headline: commercial applications hold **63.4%** of 2025 share, Level 2 retains the largest charging-level share at **49.5%**, and Level 3 DC fast is the fastest-growing level at roughly **35.2% CAGR** (2026-2034), with the West region leading at **36.7%** [5].\n\n**Technology mix.** Ultra-fast is becoming default: approximately **62% of new non-Tesla ports** in Q2 2026 supported 250 kW or higher (up from 39% a year earlier), and including Tesla, roughly **72%** of all new ports offered at least 250 kW [2]. NACS reached **22.9% of new non-Tesla ports** in Q2 2026, more than double its ~10% share a year earlier - but CCS still accounts for **70.8% of new non-Tesla builds** and nearly three-quarters of the installed non-Tesla base, versus just 8% for NACS, so \"full parity between the two standards remains years off\" [2].\n\n---\n\n## KEY PLAYERS\n\nPort counts below come from two databases with different totals; both are given where available.\n\n**Tesla Supercharger** - The largest network: **38,733 ports (49.8% of all-time ports)** per Paren at end-Q2 2026, or **37,159 ports (50% share)** per AFDC on July 1, 2026 [2][8]. All stalls use NACS; more than two-thirds of North American stalls are open to non-Tesla EVs, some via built-in NACS-to-CCS1 \"Magic Dock\" adapters [8]. Tesla builds far larger sites - **12.1 ports per station** in Q2 2026 versus 4.4 for non-Tesla operators [2]. Peak speed is quoted as 250 kW (V3) to up to 350 kW (V4) [13]; one comparison site instead claims V4 goes to 500 kW [4]. Independent testing cited by one source measured 230 kW achieved on V3 and 235 kW on V4, with 10-80% times of 19 and 18 minutes [22]. Pricing is per kWh (per minute in a few states), demand-priced by time of day, typically **~$0.30-0.45/kWh, up to ~$0.60 at peak/congested sites** [13][18][26]; another tracker cites **$0.42 - $0.49/kWh** non-member with no membership required [17], while a third quotes **~$0.25 - $0.50/kWh** [4]. Tesla does not sell an all-you-can-charge subscription in North America, though an optional membership lowering per-kWh price exists in some regions, especially for non-Tesla EVs [26].\n\n**Electrify America** (Shell-owned, Volkswagen Group-backed [4]) - The largest non-Tesla network: **5,185 ports (6.7% all-time share)** per Paren, or **5,743 ports (7.7%)** per AFDC [2][8]. Highway-corridor focused with 350 kW hardware capable of fully using 800V platforms [4]. Supports CCS and NACS [18]. Pricing is per kWh, roughly **$0.43-0.60**, with **Pass+ (~$7/mo)** cutting the rate about 25% and dropping the session fee [18]; Electrify America's own page confirms Pass+ saves \"about 25%\" and that pricing varies by charger location and plan, with possible idle fees [24]. A separate tracker cites **$0.48/kWh** non-member with Pass+ at $7.99/mo reducing the rate ~20% [17] - the membership fee and discount figures are not consistent across sources.\n\n**EVgo** (Nasdaq: EVGO) - **3,963 ports (5.1%)** per Paren; AFDC lists **5,208 ports (7%) including Pilot & Flying J** [2][8]. EVgo describes itself as having more than 1,200 fast charging stations across 47 states, deployed with retailers, grocery stores, restaurants, shopping centers, gas stations, rideshare operators, and autonomous vehicle companies [1][7]. Positioning is urban/suburban rather than long-haul [4]. Pricing is per kWh on CCS and NACS, roughly **$0.31-0.4…** per one comparison [18]; another cites **$0.28 - $0.32/kWh** non-member with an **EVgo+ membership at $6.99/mo** [17]; a third cites **~$0.40 - $0.55/kWh** and a \"ReVolt\" subscription at $7.99/mo [4]. These figures conflict and the material does not reconcile them.\n\n**ChargePoint** - **4,713 ports (6.1%)** per Paren, **4,848 (6.5%)** per AFDC [2][8]. Critically, ChargePoint does not own most of its ports; they belong to thousands of individual owners or companies [6][8]. Its overall connector footprint (over 70,000) is the largest by count but majority Level 2, best suited to workplace, hotel and residential dwell-time charging rather than road-trip fast charging [4]. Pricing is host-set: per kWh where permitted, per minute otherwise, at **$0.49 - $0.69/kWh for DC fast** non-member [17].\n\n**IONNA** - The eight-automaker joint venture (BMW, GM, Honda, Hyundai, Kia, Mercedes-Benz, Stellantis, Toyota) [13][3]. **1,201 ports (1.5%)** per Paren, **1,190 (1.6%)** per AFDC, and **1,375 ports across 150 stations** as of mid-August 2026 per its CEO [2][8][3]. Peak speed up to 400 kW, both connectors [13]. Its \"Rechargery\" sites combine fast chargers with canopies, restrooms, food and lounges; it uses Alpitronic hardware with in-house software and measures reliability by first-attempt success rate [3].\n\n**Retailer and fuel-retail entrants** - **Walmart** added 368 ports in Q2 2026 (8.4% of quarterly additions) off a base of 612, the fastest-growing challenger [2]. **Red E** added 315 ports to reach 1,974 (Paren) or 2,037 (AFDC) [2][8]. **Pilot Flying J** added 146 ports (1,279 total) [2]; the Pilot - GM - EVgo partnership passed **300 fast-charging locations and 1,300 stalls across 40 states**, and EVgo has more than 900 Pilot travel-center locations to draw on across the parent network [1][2].\n\n**Others in the top ranks:** Blink (2,123 ports per Paren; 2,039 per AFDC), EV Connect (1,793), Ford Charge (1,258), Rivian Adventure Network (1,065, crossed 1,000 in June 2026), Mercedes-Benz HPC (872 per Paren; 724 per AFDC), Francis Energy (884), EVCS (847) and BP Pulse (796) [2][8].\n\n---\n\n## RECENT MOVES\n\n- **EVgo × Tesla (Aug 5, 2026):** EVgo will add \"EVgo Superchargers\" - V4 units capable of **up to 500 kW / 1000 V**, adding up to 200 miles in 15 minutes - to its metropolitan network under Tesla's Supercharger for Business program, which lets third parties own Tesla-built and Tesla-operated hardware [7][20]. Sites will carry Magic Dock for native CCS *and* NACS charging without an adapter, longer cables, and will appear in Tesla's in-car navigation and Trip Planner [7]. Deployments start in fall 2026, first sites operational in H2 2026 [7]. EVgo says demand on its network has risen over 700% in three years and cites more than 35 NACS-equipped models expected by end-2026 and over 3 million Teslas already sold in the U.S. [7]. EVgo also expects first units of a next-generation architecture from its El Segundo Innovation Lab by end of year [7].\n- **IONNA tops JD Power (Aug 2026):** IONNA scored **807/1,000** in the 2026 JD Power U.S. EV Experience Public Charging Study, ahead of Mercedes-Benz Charging Network (797) and Rivian Adventure Network (755) - the first year all three were eligible, and all three took the top spots [3]. Newer automaker-backed networks scored especially well on ease of charging, charging speed and charger availability, in some cases more than 100 points above segment average [3].\n- **Electrify America white-label (Aug 2026):** Electrify America formalized a third-party white-label program, \"Powered by Electrify America,\" with **Wawa branding eight Electrify America sites in Pennsylvania**; it has built host-owned networks since 2020 via Electrify Commercial, with Costco, WS Development, the New York Power Authority and Rocky Mountain Power among earlier customers [14].\n- **Retreats:** Engie and Enel X both left the U.S. market in 2024; Shell said in December 2024 it would stop supporting licensed charging software to focus on its own retail locations, and scaled back further in August 2025 [21].\n- **Federal funding disruption:** A February 6, 2025 Federal Highway Administration memorandum suspended state EV infrastructure deployment plans and rescinded related guidance, effectively barring \"no new obligations\" until guidance was updated; a large portion of NEVI funds remained without approved obligations at the time of the freeze [23].\n\n---\n\n## HOW THEY DIFFER\n\n**Three distinct positioning models are now visible.** Paren's guest analyst frames it as a \"Charging 2.0\" phase: newer players (Ionna, Walmart, Red E, Mercedes-Benz HPC, Pilot Flying J) are \"aggressively building national footprints,\" while Tesla, Electrify America and EVgo increasingly use \"retail clustering\" - adding stations inside existing urban markets to capture more share of charge [2]. Layered on that is a *destination-quality* model: JD Power found DC fast chargers at hotels scored highest (692), followed by gas stations/convenience stores (689) and restaurants (688), versus 570 at dealerships and 606 at stand-alone lots and garages - which explains why IONNA, Mercedes-Benz and Rivian invest in site design and amenities [3].\n\n**Moats.** Tesla's is vertical integration and scale: it designs, owns and operates its stalls and ships failing hardware for same-day repair, which one comparison calls the biggest single differentiator, with consistently 99%+ reported uptime [22][4]. Its 12.1-ports-per-station average is nearly triple the non-Tesla figure, which reduces queueing risk at any given site [2]. IONNA's moat is capital and demand from eight automakers plus an explicit reliability metric (first-attempt success rate) [3]. ChargePoint's is the opposite of ownership: an asset-light footprint owned by thousands of hosts, which limits its control over quality but also its capital exposure [6][8].\n\n**Switching costs are falling - and Tesla is monetizing that.** The historical lock-in was the connector. That is eroding from both sides: non-Tesla networks are adding NACS alongside CCS rather than replacing it [2], Magic Dock lets CCS vehicles use Tesla hardware natively [8], and EVgo's Supercharger deal means Tesla hardware will sit inside a competitor's network and appear in Tesla's own navigation [7]. The residual switching costs are now soft: app/RFID accounts, subscription break-even points (Electrify America's Pass+ at ~$7-7.99/mo; EVgo+ at $6.99/mo), and OEM-bundled credits - some GM vehicles include free EVgo charging credits, and BMW and Mini owners get discounted IONNA rates [18][17][4]. None of these approaches the hardware lock-in of five years ago.\n\n**Price is not a strong differentiator.** Headline non-member DC fast rates cluster between roughly $0.28 and $0.69/kWh across networks, with typical DC fast cost cited at **$0.35 - $0.60/kWh** - about $26 - $45 for a 75 kWh battery, or roughly 300 miles of range [25][17][18][13]. The sources disagree on individual network ranges, likely reflecting location-, time- and plan-dependent pricing that Electrify America explicitly acknowledges [24]. Differentiation is therefore running through reliability, siting and amenities, not per-kWh price.\n\n---\n\n## RISKS & OPEN QUESTIONS\n\n**Profitability.** Paren's own read is that the industry's \"new mantra\" is \"operations, customer experience, and profitability,\" cited alongside CPO layoffs and pullbacks [12]. The 2024 exits of Engie and Enel X and Shell's 2024-2025 retrenchment are concrete evidence that operators with charging experience elsewhere could not make U.S. economics work [21].\n\n**Build-rate deceleration.** Two consecutive quarters of year-over-year declines in new ports (−10% in Q2 2026, −7.4% for H1) sit uneasily against still-rising totals [12]. Whether this is a pause or an inflection is genuinely unresolved in the material.\n\n**Policy.** The February 6, 2025 FHWA memorandum suspended state deployment plans with a large share of NEVI funds not yet obligated [23]. NEVI's $5 billion highway-corridor mandate (stations every 50 miles on designated corridors, with 150+ kW capability at federally funded sites) and the IRA Section 30C 30% credit are cited as structural demand drivers [5] - which makes them structural risks if disrupted.\n\n**Reliability gap.** Failed charging visits fell to **12%** in the most recent quarter measured, from 14% a year earlier and the lowest since the study began in 2021 - still roughly one unsuccessful visit in eight, which JD Power's reporting notes is short of gas-station reliability [3]. Overall DC fast satisfaction rose 12 points to 666, with charger availability up 27 points, perceived safety up 18 and charging cost up 18 [3]. Public Level 2 satisfaction moved the other way, down 12 points to 595 on payment and session-start problems [3]. The study drew on 6,594 BEV and PHEV owners surveyed January - June 2026 [3]. Electrify America's reliability is described as improving but still materially below Supercharger, historically with one-quarter to one-third of chargers showing outage or error at a given visit [4] - a strong claim from a single comparison site, and worth discounting accordingly.\n\n**Connector transition timing.** With NACS at only 8% of the installed non-Tesla base and CCS still 70.8% of new non-Tesla builds, mixed-connector infrastructure and adapters will govern access for years [2].\n\n**Data quality.** Paren and AFDC disagree by roughly 2,000-3,500 ports, and AFDC recorded an unexplained ~580-stall month-over-month *drop* in Tesla stalls in June 2026 that the tracker itself could not account for [6][8]. Any single port figure should be read as an estimate.\n\n---\n\n## BOTTOM LINE\n\nThe U.S. fast-charging market has crossed from a land-grab into a consolidation-and-execution phase: capacity keeps compounding toward 75,000-78,000 ports, but new-build volume is down year-over-year and the operators winning credit are those scoring on reliability and site quality rather than raw count [2][12][3]. Tesla's structural advantages - half of all ports, sites nearly three times larger than rivals', and the highest reported uptime - remain intact even as its share of new builds has fallen to 26-27% [2][8][22][10]. The most consequential development is that Tesla is now licensing its hardware to competitors like EVgo, which simultaneously entrenches NACS, dissolves the connector-based moat, and turns Tesla into a supplier to the very networks challenging it [7][20]. Investors should weigh the credible demand signals against the plain evidence that this business has not yet proven it can earn a return: two European entrants and one oil major have already retreated [21].\n\n---\n\n*Not covered by the material: the material provided here does not include current financial results or net income for Blink, ChargePoint or EVgo (beyond EVgo's stated network growth), utility interconnection or grid-upgrade cost data, medium/heavy-duty and megawatt-charging deployment figures, funding rounds or M&A valuations, or state-level pricing regulation detail beyond the note that some states require per-minute billing.*\n\n## Sources\n[1] Pilot, General Motors and EVgo Power EV Road Trips with More Than 300 Fast-Charging Locations Nationwide - https://newsroom.pilotcompany.com/pilot-general-motors-and-evgo-power-ev-road-trips-with-more-than-300-fast-charging-locations-nationwide/\n[2] US EV fast-charging network grew to 77,776 ports in Q2, NACS adoption accelerates: Paren data - https://evwire.com/p/us-ev-fast-charging-network-q2-2026-paren-report\n[3] IONNA just beat every major EV fast-charging network | Electrek - https://electrek.co/2026/08/13/ionna-just-beat-every-major-ev-fast-charging-network/\n[4] EV Charging Networks Compared 2026: Supercharger, Electrify America, EVgo, ChargePoint, and IONNA | EV Charge Savings - https://www.evchargesavings.com/guides/ev-charging-network-comparison-2026\n[5] U.S. Electric Vehicle Charging Station Market Report 2034 - https://www.imarcgroup.com/united-states-electric-vehicle-charging-station-market\n[6] Largest DC Fast-Charging Networks in the US: March 2026 - https://evchargingstations.com/chargingnews/largest-dc-fast-charging-networks-us-march-2026/\n[7] EVgo Expands Fast Charging in the U.S. with Supercharger - https://www.globenewswire.com/news-release/2026/08/05/3339124/0/en/EVgo-Expands-Fast-Charging-in-the-U-S-with-Supercharger-Deployment.html\n[8] Largest DC Fast-Charging Networks in the US: July 2026 - https://evchargingstations.com/chargingnews/dc-fast-charging-july-2026/\n[9] US Has 75,000+ Public DC Fast-Charging Stalls (excerpt only) - https://evchargingstations.com/chargingnews/us-75000-dc-fast-charging/\n[10] One automaker's charging network held more than 40 percent of every new fast-charger installed across America a year ago, and rivals have since pushed that share down to 26 percent (excerpt only) - https://gcn.com/one-automaker-charging-network-held-percent/20912/\n[11] Why America Built Fewer EV Fast-Charging Stations In Q2 (excerpt only) - https://insideevs.com/news/801501/us-public-ev-fast-charging-growth-q2/\n[12] Paren | US EV Fast Charging - Q2 2026 (excerpt only) - https://www.paren.app/reports/us-ev-fast-charging-q2-2026\n[13] EV Charging Networks 2026: Compared (Tesla, IONNA, EA) (excerpt only) - https://thechargeport.com/ev-charging-networks\n[14] Electrify America announces its own third-party white-label charging program: Powered by Electrify America. Wawa is first (excerpt only) - https://evwire.com/p/powered-by-electrify-america-white-label-wawa\n[15] EV fast charging is stabilizing in the US - here's what changed | Electrek (excerpt only) - https://electrek.co/2026/04/23/ev-fast-charging-is-stabilizing-in-the-us-heres-what-changed/\n[16] U.S. Electric Vehicle (EV) Charging Station Market Size to Attain USD 190.45 Billion by 2035 (excerpt only) - https://www.precedenceresearch.com/us-electric-vehicle-charging-station-market\n[17] EV Charging Networks: Pricing, Coverage & Comparison | The Juice Index (excerpt only) - https://thejuiceindex.com/networks/\n[18] DC Fast Charging Networks Compared - Plugs, Prices & NACS | ChargeCalcs (excerpt only) - https://chargecalcs.com/blog/dc-fast-charging-networks-compared\n[19] EV Fast Charging Stations Market in United States | Report - IndexBox - Prices, Size, Forecast, and Companies (excerpt only) - https://www.indexbox.io/store/united-states-ev-fast-charging-stations-market-analysis-forecast-size-trends-and-insights/\n[20] EVgo Will Deploy 500-kW EVgo Superchargers Starting in 2026 (excerpt only) - https://evchargingstations.com/chargingnews/evgo-500-kw-superchargers/\n[21] Charged EVs | Why EV charging is still such a hard business - Charged EVs (excerpt only) - https://chargedevs.com/features/why-ev-charging-is-still-such-a-hard-business/\n[22] Tesla Supercharger vs Electrify America vs EVgo: Charging Networks Compared - EV Range Tools Blog | EV Range Tools (excerpt only) - https://www.evrangetools.com/blog/supercharger-vs-electrify-america-vs-evgo\n[23] Billions in federal EV charging money were frozen, then restored by courts, and the private industry that rushed into the gap is now hitting the grid with numbers Washington never planned for (excerpt only) - https://gcn.com/ev-charging-billions-federal-money-frozen/20138/\n[24] EV Charging Subscription | Pricing Plans | Electrify America (excerpt only) - https://www.electrifyamerica.com/pricing/\n[25] How Much Does It Cost to DC Fast Charge an Electric Car? (excerpt only) - https://evchargingstations.com/chargingnews/cost-dc-fast-charge-ev/\n[26] Tesla Supercharger Subscription Plan: Pricing & When It Pays | Recharged (excerpt only) - https://recharged.com/articles/tesla-supercharger-subscription-plan",
+ "sources": [
+  {
+   "n": 1,
+   "title": "Pilot, General Motors and EVgo Power EV Road Trips with More Than 300 Fast-Charging Locations Nationwide",
+   "url": "https://newsroom.pilotcompany.com/pilot-general-motors-and-evgo-power-ev-road-trips-with-more-than-300-fast-charging-locations-nationwide/",
+   "snippet": "Pilot Company (Pilot), General Motors (NYSE: GM) and EVgo Inc. (NASDAQ: EVGO) today announced their collaborative electric vehicle (EV) fast-charging network has surpassed 300 locations with 1,300 fast-charging stalls across 40 states, marking a major milestone in expanding convenient, reliable EV travel across the United States. The network now spans approximately 75% of the contiguous United States, covering more than 2.2 million square miles and connecting drivers to destinations across the c",
+   "rank": 0.92700076,
+   "fullText": true,
+   "bodyChars": 2395
+  },
+  {
+   "n": 2,
+   "title": "US EV fast-charging network grew to 77,776 ports in Q2, NACS adoption accelerates: Paren data",
+   "url": "https://evwire.com/p/us-ev-fast-charging-network-q2-2026-paren-report",
+   "snippet": "EVwire brief: Tesla remained the largest builder of new public fast chargers in the United States during the second quarter of 2026, but new industry data suggests the gap between the Supercharger network and its competitors is gradually narrowing as charging providers expand their footprints and embrace the North American Charging Standard (NACS).\n\n...\n\nThe US public DC fast-charging network grew to 77,776 ports across 14,514 stations by the end of Q2 2026, according to Paren's latest State of ",
+   "rank": 0.86767644,
+   "fullText": true,
+   "bodyChars": 5006
+  },
+  {
+   "n": 3,
+   "title": "IONNA just beat every major EV fast-charging network | Electrek",
+   "url": "https://electrek.co/2026/08/13/ionna-just-beat-every-major-ev-fast-charging-network/",
+   "snippet": "IONNA has been operating public fast chargers for less than two years, but EV drivers already rank it higher than every other eligible US fast-charging network.\n\n...\n\nThe automaker-backed network earned a score of 807 out of 1,000 in the just-published 2026 JD Power US Electric Vehicle Experience Public Charging Study. That puts IONNA (with 1,375 ports and 150 charging stations as of yesterday) comfortably ahead of the Mercedes-Benz Charging Network at 797 and the Rivian Adventure Network at 755",
+   "rank": 0.84948516,
+   "fullText": true,
+   "bodyChars": 6299
+  },
+  {
+   "n": 4,
+   "title": "EV Charging Networks Compared 2026: Supercharger, Electrify America, EVgo, ChargePoint, and IONNA | EV Charge Savings",
+   "url": "https://www.evchargesavings.com/guides/ev-charging-network-comparison-2026",
+   "snippet": "Public charging in the US runs through five meaningful networks: Tesla Supercharger, Electrify America,\n\n...\n\n- ·Tesla Supercharger: ~20,000+ US chargers, best reliability, now open to NACS-equipped EVs\n- ·Electrify America: ~1,000+ stations, 150-350kW, improving reliability, Shell-owned\n- ·EVgo: ~1,000+ stations, urban-focused, 100-350kW\n- ·ChargePoint: largest footprint by count, mostly Level 2, slower speeds\n- ·IONNA: new joint venture, 100kW - 400kW target speeds, growing fast in 2025-2026\n\n..",
+   "rank": 0.7942736,
+   "fullText": true,
+   "bodyChars": 8077
+  },
+  {
+   "n": 5,
+   "title": "U.S. Electric Vehicle Charging Station Market Report 2034",
+   "url": "https://www.imarcgroup.com/united-states-electric-vehicle-charging-station-market",
+   "snippet": "The United States electric vehicle charging station market reached USD 3.20 Billion in 2025 and is projected to reach USD 34.20 Billion by 2034, growing at a CAGR of 28.60% during 2026-2034. The growth trajectory of the market reflects the convergence of landmark federal legislation surging EV adoption across all vehicle segments, and the accelerating corporate sustainability commitments of US fleet operators, retailers, and commercial real estate developers investing in charging infrastructure ",
+   "rank": 0.72559077,
+   "fullText": true,
+   "bodyChars": 29897
+  },
+  {
+   "n": 6,
+   "title": "Largest DC Fast-Charging Networks in the US: March 2026",
+   "url": "https://evchargingstations.com/chargingnews/largest-dc-fast-charging-networks-us-march-2026/",
+   "snippet": "According to the Alternative Fuels Data Center (AFDC), as of March 1, 2026, there were 70,017 public DC fast-charging ports (aka stalls), including all connector standards. This number includes DC fast-charging ports that are temporarily unavailable (906 ports, or 1.3%).\n\n...\n\nThe number of public DC fast-charging stalls in the US increased by over 2,000 in the first two months of the year. The data indicates that, on average, 36 new stalls go online every day.\n\n...\n\nThe Tesla Supercharging netw",
+   "rank": 0.70847535,
+   "fullText": true,
+   "bodyChars": 6256
+  },
+  {
+   "n": 7,
+   "title": "EVgo Expands Fast Charging in the U.S. with Supercharger",
+   "url": "https://www.globenewswire.com/news-release/2026/08/05/3339124/0/en/EVgo-Expands-Fast-Charging-in-the-U-S-with-Supercharger-Deployment.html",
+   "snippet": "LOS ANGELES, Aug. 05, 2026 (GLOBE NEWSWIRE) -- EVgo Inc. (NASDAQ: EVGO) (“EVgo” or the “Company”), one of the nation’s largest providers of public fast charging infrastructure for electric vehicles (EVs), announced plans to add “EVgo Superchargers” to its metropolitan network. The V4 Superchargers are capable of up to 500kW / 1000 Volts, bringing more fast charging choices to EV drivers.\n\n...\n\nEVgo Superchargers will appear on the in-car Tesla navigation, and Tesla drivers can be automatically r",
+   "rank": 0.7018975,
+   "fullText": true,
+   "bodyChars": 6374
+  },
+  {
+   "n": 8,
+   "title": "Largest DC Fast-Charging Networks in the US: July 2026",
+   "url": "https://evchargingstations.com/chargingnews/dc-fast-charging-july-2026/",
+   "snippet": "According to the Alternative Fuels Data Center (AFDC), as of July 1, 2026, there were 74,265 public DC fast-charging ports (also known as stalls) across all connector standards. That’s 27% more than a year ago. This number includes DC fast-charging ports that are temporarily unavailable (864 ports, or 1.2%).\n\n...\n\nThe top 10 largest DC fast-charging networks, by number of charging ports, account for roughly 84% of the total available ports. The remaining 16% belong to other networks or are non-n",
+   "rank": 0.7016523,
+   "fullText": true,
+   "bodyChars": 5373
+  },
+  {
+   "n": 9,
+   "title": "US Has 75,000+ Public DC Fast-Charging Stalls",
+   "url": "https://evchargingstations.com/chargingnews/us-75000-dc-fast-charging/",
+   "snippet": "The number of public DC fast-charging stalls in the United States increased to over 75,000.\n\nOn average, the infrastructure expands at over 1,000 new DC fast-charging ports per month.\n\n...\n\nAccording to the Alternative Fuels Data Center (AFDC), as of July 28, 2026, there were 75,293 public DC fast-charging ports (also known as stalls) across all connector standards.\n\nThat’s a 50% jump from mid-December 2024, when the DCFC infrastructure counted 50,000 ports. The average expansion rate over 19 mo",
+   "rank": 0.6708892,
+   "fullText": false
+  },
+  {
+   "n": 10,
+   "title": "One automaker's charging network held more than 40 percent of every new fast-charger installed across America a year ago, and rivals have since pushed that share down to 26 percent",
+   "url": "https://gcn.com/one-automaker-charging-network-held-percent/20912/",
+   "snippet": "during Q1 2026, according to data from charging analytics firm Paren. That firm’s Q1 2026 report put Tesla’s share of new deployments at 26 percent, down from above 40 percent the prior year. Whichever measure you use, the direction is the same.",
+   "rank": 0.6641271,
+   "fullText": false
+  },
+  {
+   "n": 11,
+   "title": "Why America Built Fewer EV Fast-Charging Stations In Q2",
+   "url": "https://insideevs.com/news/801501/us-public-ev-fast-charging-growth-q2/",
+   "snippet": "picked up the pace. The company accounted for just 27% of new deployments in Q2, with 1,185 new ports. Walmart and ChargePoint followed with 368 and 333 new ports, respectively, while Red E and Electrify America rounded out the top five with 315 and 202.",
+   "rank": 0.62495816,
+   "fullText": false
+  },
+  {
+   "n": 12,
+   "title": "Paren | US EV Fast Charging: Q2 2026",
+   "url": "https://www.paren.app/reports/us-ev-fast-charging-q2-2026",
+   "snippet": "But from a business perspective, the signal is more mixed. The 4,382 new ports added in Q2 2026 was 10% lower than the 4,865 added in Q2 2025. Year to date, the 7,903 new ports added in 2026 is 7.4% lower than the 8,532 added in the first half of 2025. A two-quarter YoY decline is not definitive proof of a slowdown, but combined with recent CPO layoffs and pullbacks, it reinforces the industry's new mantra: operations, customer experience, and profitability.\n\n...\n\nThe industry is also entering a",
+   "rank": 0.5973971,
+   "fullText": false
+  },
+  {
+   "n": 13,
+   "title": "EV Charging Networks 2026: Compared (Tesla, IONNA, EA)",
+   "url": "https://thechargeport.com/ev-charging-networks",
+   "snippet": "| Network | US size | Peak speed | Plug | Typical price | Best for |\n| --- | --- | --- | --- | --- | --- |\n| Tesla SuperchargerTesla | ~37,700 | 250 (V3) / up to 350 (V4) kW | NACS (J3400) | ~$0.30-0.45/kWh typical, up to ~$0.60 at peak/congested sites | Road trips and everyday fast charging - the largest, most reliable network by a wide margin |\n| IONNA8-automaker joint venture (BMW, GM, Honda, Hyundai, Kia, Mercedes-Benz, Stellantis, Toyota) | ~1,160 (and climbing fast) | Up to 400 kW | Both N",
+   "rank": 0.5737984,
+   "fullText": false
+  },
+  {
+   "n": 14,
+   "title": "Electrify America announces its own third-party white-label charging program: Powered by Electrify America. Wawa is first",
+   "url": "https://evwire.com/p/powered-by-electrify-america-white-label-wawa",
+   "snippet": "EVwire brief: Wawa is putting its own brand on eight Electrify America charging sites in Pennsylvania, through Electrify America's white-label program, Powered by Electrify America.\n\n...\n\nElectrify America has been building host-owned networks like this since 2020, through its Electrify Commercial arm. Costco, WS Development, the New York Power Authority and Rocky Mountain Power are among the customers that came before Wawa.\n\n...\n\nUPDATE, 20 August 2026: An earlier version of this article said E",
+   "rank": 0.5518883,
+   "fullText": false
+  },
+  {
+   "n": 15,
+   "title": "EV fast charging is stabilizing in the US: here's what changed | Electrek",
+   "url": "https://electrek.co/2026/04/23/ev-fast-charging-is-stabilizing-in-the-us-heres-what-changed/",
+   "snippet": "Tesla is still the largest single player in DC fast charging, but its share of new ports dropped to 26% in Q1 2026. That’s down from more than 40% at points in 2025.\n\n...\n\nNewer players are also showing up fast. Ionna accounted for 8.2% of new ports, while Red E came in at 7.8%. And here’s a big shift: Six of the top 10 charging providers in Q1 2026 weren’t even in the top 10 a year ago.\n\n...\n\nThe industry is also changing how it builds. Instead of adding more locations, operators are packing mo",
+   "rank": 0.5357549,
+   "fullText": false
+  },
+  {
+   "n": 16,
+   "title": "U.S. Electric Vehicle (EV) Charging Station Market Size to Attain USD 190.45 Billion by 2035",
+   "url": "https://www.precedenceresearch.com/us-electric-vehicle-charging-station-market",
+   "snippet": "The U.S. electric vehicle (EV) charging station market size is calculated at USD 22.52 Billion in 2025 and is predicted to attain around USD 190.45 Billion by 2035, expanding at a CAGR of 23.8% from 2026 to 2035. The Market is driven by the growing adoption of EVs by consumers and businesses, significant federal and state incentives, and the need to reduce \"range anxiety\".\n\n...\n\n| Reports Attributes | Statistics |\n| --- | --- |\n| Market Size in 2025 | USD 22.52 Billion |\n| Market Size in 2026 | ",
+   "rank": 0.5198388,
+   "fullText": false
+  },
+  {
+   "n": 17,
+   "title": "EV Charging Networks: Pricing, Coverage & Comparison | The Juice Index",
+   "url": "https://thejuiceindex.com/networks/",
+   "snippet": "Per kWh, $0.42 - $0.49 non-member. No membership required.\n\n...\n\nPer kWh, $0.48 non-member. Pass+ membership $7.99/mo reduces rate ~20%.\n\n 110K searches/mo\n\n...\n\nPer kWh. $0.28 - $0.32/kWh non-member. EVgo+ membership $6.99/mo for reduced rates.\n\n...\n\nPer kWh where permitted, per minute otherwise. $0.29-0.49/kWh Level 2, $0.49-0.69/kWh DC fast (non-member). Host-set, so it varies by location.\n\n...\n\n| Feature | Tesla Supercharger | Electrify America | ChargePoint | EVgo | Blink | Shell Recharge | Ion",
+   "rank": 0.48499045,
+   "fullText": false
+  },
+  {
+   "n": 18,
+   "title": "DC Fast Charging Networks Compared: Plugs, Prices & NACS | ChargeCalcs",
+   "url": "https://chargecalcs.com/blog/dc-fast-charging-networks-compared",
+   "snippet": "| Network | Plug standard | Pricing model | Membership option | Notes (mid-2026) |\n| --- | --- | --- | --- | --- |\n| Tesla Supercharger | NACS (some CCS via Magic Dock) | Per kWh, demand-priced by time of day | Tesla app; non-Tesla access by brand | Highest reported uptime; access widening |\n| Electrify America | CCS and NACS | Per kWh, ~$0.43-0.60 | Pass+ (~$7/mo) cuts rate ~25%, drops session fee | Broad highway coverage; reliability varies by site |\n| EVgo | CCS and NACS | Per kWh, ~$0.31-0.4",
+   "rank": 0.45638612,
+   "fullText": false
+  },
+  {
+   "n": 19,
+   "title": "EV Fast Charging Stations Market in United States | Report - IndexBox - Prices, Size, Forecast, and Companies",
+   "url": "https://www.indexbox.io/store/united-states-ev-fast-charging-stations-market-analysis-forecast-size-trends-and-insights/",
+   "snippet": "Pricing in the EV fast charging market is multifaceted, encompassing equipment costs, installation expenses, and the retail price of electricity sold to the consumer. The capital expenditure (CapEx) for a fast charging station is substantial, driven by the cost of high-power chargers, site preparation, trenching, electrical upgrades, and potential energy storage systems. While hardware costs per kilowatt have been on a gradual downward trajectory due to economies of scale and technological impro",
+   "rank": 0.4543517,
+   "fullText": false
+  },
+  {
+   "n": 20,
+   "title": "EVgo Will Deploy 500-kW EVgo Superchargers Starting in 2026",
+   "url": "https://evchargingstations.com/chargingnews/evgo-500-kw-superchargers/",
+   "snippet": "EVgo, one of the largest providers of public fast charging infrastructure in the US, announced the upcoming deployment of 500-kW Tesla Superchargers.\n\n...\n\nThe company signed an agreement with Tesla to install Superchargers under Tesla’s Supercharger for Business program, which enables third-party businesses to own Tesla-built and Tesla-operated charging infrastructure.\n\n...\n\nEVgo plans to install EVgo Superchargers across the country at scale. It even says that it’s expected to be one of the la",
+   "rank": 0.42262435,
+   "fullText": false
+  },
+  {
+   "n": 21,
+   "title": "Charged EVs | Why EV charging is still such a hard business - Charged EVs",
+   "url": "https://chargedevs.com/features/why-ev-charging-is-still-such-a-hard-business/",
+   "snippet": "During the past two years, the charging network landscape continued its evolution as several operators shuttered or retreated due to challenging economics. In 2024, European companies Engie and Enel X both left the US market after trying to leverage their domestic charging experience. In December 2024, Shell announced it would stop supporting the charging software it had licensed to other companies and instead focus on managing chargers at its own retail locations. In August 2025, Shell scaled b",
+   "rank": 0.39187187,
+   "fullText": false
+  },
+  {
+   "n": 22,
+   "title": "Tesla Supercharger vs Electrify America vs EVgo: Charging Networks Compared: EV Range Tools Blog | EV Range Tools",
+   "url": "https://www.evrangetools.com/blog/supercharger-vs-electrify-america-vs-evgo",
+   "snippet": "Reliability: Consistently 99%+ uptime across the network. Tesla's tight vertical integration (Tesla designs the stalls, owns the sites, and ships failing hardware for same-day repair) is the biggest differentiator.\n\n...\n\n| Network | Peak Power Achieved | 10-80% Time | Cost | |---------|---------------------|-------------|------| | Tesla Supercharger V3 (250 kW cap) | 230 kW | 19 min | $22.50 | | Tesla Supercharger V4 (350 kW) | 235 kW | 18 min | $22.50 | | Electrify America 350 kW | 235 kW | 18 ",
+   "rank": 0.3058533,
+   "fullText": false
+  },
+  {
+   "n": 23,
+   "title": "Billions in federal EV charging money were frozen, then restored by courts, and the private industry that rushed into the gap is now hitting the grid with numbers Washington never planned for",
+   "url": "https://gcn.com/ev-charging-billions-federal-money-frozen/20138/",
+   "snippet": "The Trump administration issued a February 6, 2025 memorandum through the Federal Highway Administration that suspended state EV infrastructure deployment plans and rescinded related guidance, effectively telling state transportation directors that “no new obligations” could occur until guidance was updated.\n\n...\n\nAlthough a significant share of allocated NEVI funds had been committed to specific projects before the freeze, a large portion of the total remained without approved obligations. A co",
+   "rank": 0.2946821,
+   "fullText": false
+  },
+  {
+   "n": 24,
+   "title": "EV Charging Subscription | Pricing Plans | Electrify America",
+   "url": "https://www.electrifyamerica.com/pricing/",
+   "snippet": "Pricing for DC fast charging is determined by charger location, your plan, and the amount of energy delivered. Real-time pricing is available in the app or at the charger.\n\n...\n\n- View pricing on the charger screen at any station. Idle fees may be imposed for parking time after your charging session has ended.\n\n...\n\nSave about 25% on charging when you sign up to be a Pass+ member via the Electrify America mobile app.\n\n...\n\nPlease refer to the charger screen for the most up-to-date information co",
+   "rank": 0.26231045,
+   "fullText": false
+  },
+  {
+   "n": 25,
+   "title": "How Much Does It Cost to DC Fast Charge an Electric Car?",
+   "url": "https://evchargingstations.com/chargingnews/cost-dc-fast-charge-ev/",
+   "snippet": "The cost to DC fast charge typically ranges from $0.35 to $0.60 per kWh. For an average electric car with, let’s say, a 75 kWh battery, a full charge from empty typically costs between $26 and $45. That cost will add approximately 300 miles of range to an electric car (on average). This average range varies significantly depending on factors such as vehicle efficiency, driving conditions, and outdoor temperature, among others.\n\n...\n\nPrices can vary significantly depending on the charging provide",
+   "rank": 0.21295168,
+   "fullText": false
+  },
+  {
+   "n": 26,
+   "title": "Tesla Supercharger Subscription Plan: Pricing & When It Pays | Recharged",
+   "url": "https://recharged.com/articles/tesla-supercharger-subscription-plan",
+   "snippet": "In North America, Tesla does not currently sell an all‑you‑can‑charge Supercharger subscription. Instead, you pay by the kWh or by the minute, and in some regions there’s an optional membership that lowers your per‑kWh price, especially if you drive a non‑Tesla EV.\n\n...\n\nBefore you compare any Supercharger subscription or membership, it helps to understand the base pricing model. Tesla’s fast chargers bill you either by the amount of energy delivered (per kilowatt‑hour, or kWh) or, in a few stat",
+   "rank": 0.15164265,
+   "fullText": false
+  }
+ ],
+ "tables": [],
+ "meta": {
+  "tier": "market-brief",
+  "searches_run": 6,
+  "sources_consulted": 26,
+  "sources_listed": 26,
+  "sources_cited": 24,
+  "sources_with_full_text": 8,
+  "citations_stripped": 0,
+  "unverified_numeric_claims": 3,
+  "unverified_numeric_claims_detail": [
+   {
+    "sentence": "public DC fast-charging (DCFC) network has roughly 75,000-78,000 ports depending on the database used, and it is still growing at over 1,000 ports per month - but the *rate* of new construction has fallen year-over-year for two consecutive ",
+    "numbers": [
+     "78,000"
+    ],
+    "sources": [
+     2,
+     8,
+     9,
+     12
+    ]
+   },
+   {
+    "sentence": "**Data quality.** Paren and AFDC disagree by roughly 2,000-3,500 ports, and AFDC recorded an unexplained ~580-stall month-over-month *drop* in Tesla stalls in June 2026 that the tracker itself could not account for [6][8].",
+    "numbers": [
+     "3,500"
+    ],
+    "sources": [
+     6,
+     8
+    ]
+   },
+   {
+    "sentence": "fast-charging market has crossed from a land-grab into a consolidation-and-execution phase: capacity keeps compounding toward 75,000-78,000 ports, but new-build volume is down year-over-year and the operators winning credit are those scorin",
+    "numbers": [
+     "78,000"
+    ],
+    "sources": [
+     2,
+     12,
+     3
+    ]
+   }
+  ],
+  "synthesis_model": "anthropic/claude-opus-5"
+ },
+ "at": "2026-08-28T16:45:38.578Z",
+ "generatedWith": "the production handler, FREE_MODE local run"
+}

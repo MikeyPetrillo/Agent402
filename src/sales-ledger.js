@@ -67,6 +67,11 @@ CREATE INDEX IF NOT EXISTS idx_sales_payer  ON sales (payer, ts);
 // answerable from the ledger history the day it starts, and /revenue can
 // surface the split once external MPP sales exist. NULL = pre-column rows.
 try { db.exec("ALTER TABLE sales ADD COLUMN wire TEXT"); } catch { /* exists */ }
+// Additive column (2026-08-27): the QUOTED ceiling of a metered call, next to
+// the settled amount in price_usd, so "settled under the quote" is a fact the
+// ledger can prove per row (see proofFeed / GET /api/proof). NULL on flat
+// routes and pre-column rows.
+try { db.exec("ALTER TABLE sales ADD COLUMN quote_usd REAL"); } catch { /* exists */ }
 
 // Boot-time reclassification (2026-08-20): `internal` is decided at record
 // time, so a wallet that JOINS the burner/test set later leaves stale
@@ -90,7 +95,7 @@ try {
 } catch (e) { console.warn(`[sales-ledger] internal reclassification sweep failed: ${String(e?.message || e).slice(0, 200)}`); }
 
 const insertSale = db.prepare(
-  "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  "INSERT INTO sales (ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 );
 
 /** Settle tx hash/signature out of the base64 PAYMENT-RESPONSE receipt. */
@@ -108,10 +113,11 @@ export function txFromPaymentResponse(headerValue) {
  * Record one served catalog call. Fire-and-forget from the serving path:
  * never throws, and a broken disk only costs the row, not the response.
  */
-export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic, wire }) {
+export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic, wire, quoteUsd }) {
   try {
     const p = normalizePayerAddress(payer); // lowercases EVM only — base58/Stellar stay case-exact
     const internal = Boolean(synthetic) || rail === "heartbeat" || (p !== null && BURNERS.has(p));
+    const q = Number(quoteUsd);
     insertSale.run(
       Date.now(),
       String(slug || "unknown"),
@@ -121,7 +127,8 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
       p,
       tx ? String(tx) : null,
       internal ? 1 : 0,
-      wire ? String(wire) : null
+      wire ? String(wire) : null,
+      Number.isFinite(q) && q > 0 ? q : null
     );
   } catch { /* never break serving for accounting */ }
 }
@@ -207,6 +214,21 @@ export function claimedSettlements(since, until = Date.now()) {
   return qClaimedSettlements.all(since, until);
 }
 
+// TRUE distinct counts. These must NOT be derived from the ranked lists below:
+// those carry LIMIT 20 / LIMIT 10 for display, so `list.length` silently
+// becomes min(actual, limit) and can never report more. That is exactly what
+// happened - `distinctToolsSoldExternal` read 20 and `distinctExternalBuyers`
+// read 10 against real figures many times larger, both PUBLISHED on
+// /marketplace, /leaderboard, every chain page and /api/index, and the capped
+// "20 of 627 tools had any external use" was the measurement that justified
+// retiring 40 tools and 29 skill packs on 2026-08-25. A ceiling that looks like
+// a count is worse than no count: it reads as a finding.
+const qExtDistinctSlugs = db.prepare(`
+  SELECT COUNT(DISTINCT slug) AS n
+  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?`);
+const qExtDistinctPayers = db.prepare(`
+  SELECT COUNT(DISTINCT payer) AS n
+  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?`);
 const qExtByPayer = db.prepare(`
   SELECT payer, COUNT(*) AS sales, SUM(price_usd) AS revenue, MAX(ts) AS last_ts
   FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?
@@ -250,6 +272,24 @@ const qPayerByNetwork = db.prepare(`
   SELECT network, COUNT(*) AS n, SUM(price_usd) AS usd
   FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
   GROUP BY network`);
+// External settlements and distinct external buyers per settlement network,
+// for the per-rail host entry on the chain marketplace pages (2026-08-28).
+// Same PAYING_RAILS / internal=0 line the summary draws; CAIP-2 ids collapse
+// to the friendly rail key like everywhere else.
+const qExternalByNetwork = db.prepare(`
+  SELECT network, COUNT(*) AS n, COUNT(DISTINCT payer) AS buyers
+  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+  GROUP BY network`);
+export function externalByNetwork({ days = 30 } = {}) {
+  const since = Date.now() - days * 86_400_000;
+  const out = {};
+  for (const r of qExternalByNetwork.all(since)) {
+    const key = canonRail(r.network);
+    const cur = out[key] || (out[key] = { settlements: 0, buyers: 0 });
+    cur.settlements += r.n; cur.buyers += r.buyers; // buyers summed only across CAIP aliases of ONE rail
+  }
+  return out;
+}
 const qPayerRecent = db.prepare(`
   SELECT ts, slug, price_usd, network, tx
   FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL}
@@ -261,6 +301,26 @@ const qPayerRecent = db.prepare(`
  * memory tools). No internal/external filter: a wallet always sees all of
  * its own rows.
  */
+/** External settlements of specific slugs in a window, with the settle tx.
+ *  Read-only, for the refund backfill: the charged-failure detector only mints
+ *  a debt on a NON-200, and the packs that shipped broken all answered 200 with
+ *  an empty envelope, so this is the only record of who was charged. Internal
+ *  rows (our own canaries and burners) are excluded by the ledger's own
+ *  classification - refunding ourselves would just burn gas. */
+export function externalSalesForSlugs(slugs, sinceMs, untilMs) {
+  const list = (Array.isArray(slugs) ? slugs : []).filter((s) => typeof s === "string" && s);
+  if (!list.length) return [];
+  const holes = list.map(() => "?").join(",");
+  try {
+    return db.prepare(
+      `SELECT ts, slug, price_usd AS priceUsd, network, payer, tx
+         FROM sales
+        WHERE internal = 0 AND ts >= ? AND ts < ? AND slug IN (${holes})
+        ORDER BY ts ASC`
+    ).all(Number(sinceMs) || 0, Number(untilMs) || Date.now(), ...list);
+  } catch { return []; }
+}
+
 export function payerUsage(payer, { days = 30, limit = 50 } = {}) {
   const since = Date.now() - days * 86_400_000;
   const t = qPayerTotals.get(payer, since);
@@ -397,7 +457,12 @@ export function mppSales({ limit = 30, detailed = false } = {}) {
   }
   return {
     persistent: salesPersistent,
-    count: rows.length,
+    // `returned`, not `count`: rows is capped at the requested limit, so its
+    // length describes THIS PAGE and nothing else. The all-time total sits
+    // beside it, from the aggregate. Naming a page size `count` is how the
+    // capped figures on the public surfaces happened.
+    returned: rows.length,
+    count: qMppTotals.all().reduce((n, t) => n + t.n, 0),
     // No payer. This feed is public (the /revenue MPP section + /api/revenue/mpp)
     // and exists to make MPP-wire adoption verifiable, which the tx hash does on
     // its own - anyone who wants chain truth can resolve the payer from the tx.
@@ -425,6 +490,39 @@ export function mppSales({ limit = 30, detailed = false } = {}) {
  *  - detailed:true (OPERATOR ONLY): the itemized rows. Never wire this to a
  *    public route; it lives behind the operator token at /__operator/sales.json.
  */
+// Card revenue (Stripe checkout, subscription invoices, prepaid credits spend):
+// external only, counts and dollars, for the /revenue page. The page rendered
+// only the on-chain wires until 2026-08-28, so a $2 card sale in the ledger
+// never appeared on it. Last-sale time is truncated to the hour (no per-buyer
+// timing), like the metered proof feed.
+const qCard = db.prepare(`
+  SELECT COUNT(*) AS n, COALESCE(SUM(price_usd), 0) AS usd, MAX(ts) AS last_ts
+  FROM sales WHERE internal = 0 AND rail IN ('card', 'credits') AND ts >= ?`);
+const qCardSubs = db.prepare(`
+  SELECT COUNT(*) AS n FROM sales WHERE internal = 0 AND rail = 'card' AND wire = 'stripe-subscription' AND ts >= ?`);
+export function cardSales({ days = 30 } = {}) {
+  const since = Date.now() - days * 86_400_000;
+  const w = qCard.get(since), all = qCard.get(0), subs = qCardSubs.get(0);
+  const lastAt = all?.last_ts ? new Date(Math.floor(all.last_ts / 3_600_000) * 3_600_000).toISOString() : null;
+  return { days, count: Number(w?.n || 0), usd: +Number(w?.usd || 0).toFixed(2), allTimeCount: Number(all?.n || 0), allTimeUsd: +Number(all?.usd || 0).toFixed(2), subscriptionInvoices: Number(subs?.n || 0), lastAt };
+}
+
+/**
+ * External PAID revenue per UTC day: [{day, revenueUsd, sales}]. The margin
+ * view's revenue side - external rows on money rails only, same isPaidRail
+ * rule as salesSummary (a pow row's price is what it WOULD have cost).
+ */
+export function externalDailyRevenue({ days = 60 } = {}) {
+  const since = Date.now() - days * 86_400_000;
+  const rows = db.prepare(
+    `SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS day,
+            SUM(price_usd) AS usd, COUNT(*) AS n
+     FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+     GROUP BY day ORDER BY day`
+  ).all(since);
+  return rows.map((r) => ({ day: r.day, revenueUsd: +Number(r.usd || 0).toFixed(6), sales: r.n }));
+}
+
 export function salesSummary({ days = 30, detailed = false } = {}) {
   const since = Date.now() - days * 86_400_000;
   const totals = { external: { sales: 0, revenueUsd: 0 }, internal: { sales: 0, revenueUsd: 0 }, byRail: {} };
@@ -451,12 +549,14 @@ export function salesSummary({ days = 30, detailed = false } = {}) {
     totals,
     // Counts, never rosters or rankings: enough to show the market is real
     // without naming a single buyer or ranking a single tool.
-    distinctExternalBuyers: byPayer.length,
-    distinctToolsSoldExternal: qExtBySlug.all(since).length,
+    distinctExternalBuyers: qExtDistinctPayers.get(since)?.n ?? 0,
+    distinctToolsSoldExternal: qExtDistinctSlugs.get(since)?.n ?? 0,
   };
   if (!detailed) return base;
   return {
     ...base,
+    // The weekly number: external buyers on the metered route (counts only).
+    meteredExternal7d: meteredExternal({ days: 7 }),
     topExternal: qExtBySlug.all(since).map((r) => ({
       slug: r.slug, sales: r.sales, revenueUsd: +r.revenue.toFixed(4), lastAt: new Date(r.last_ts).toISOString(),
     })),
@@ -506,4 +606,59 @@ export function tempoDailyRevenue() {
 export function tempoDailyRecordingSince() {
   const rows = qTempoDaily.all();
   return rows.length ? rows[0].day : null;
+}
+
+// ---------------------------------------------------------------------------
+// Public receipts for the metered tier (GET /api/proof, /proof).
+//
+// Shape is deliberately NOT a purchase feed (the mppSales lesson: tool + price
+// + timestamp per row is a customer's buying pattern). It is aggregates plus
+// ONE latest external row and ONE latest internal (canary) row, each with the
+// settle tx so the amount is checkable on-chain, and never a payer.
+const qProofAgg = db.prepare(`
+  SELECT COUNT(*) AS n, SUM(price_usd) AS settled, SUM(quote_usd) AS quoted,
+         SUM(CASE WHEN quote_usd IS NOT NULL THEN 1 ELSE 0 END) AS quoted_n
+  FROM sales WHERE slug = ? AND internal = ? AND rail IN ${PAYING_RAILS_SQL}`);
+const qProofLatest = db.prepare(`
+  SELECT ts, price_usd, quote_usd, network, tx, wire, rail
+  FROM sales WHERE slug = ? AND internal = ? AND rail IN ${PAYING_RAILS_SQL}
+  ORDER BY ts DESC LIMIT 1`);
+const qMeteredExtWindow = db.prepare(`
+  SELECT COUNT(*) AS n, COUNT(DISTINCT payer) AS buyers, SUM(price_usd) AS settled, MAX(ts) AS last_ts
+  FROM sales WHERE slug = ? AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?`);
+/** External metered settlements in a window: counts only, never a roster. The
+ *  weekly number the distribution work is measured by (PostHog mirror:
+ *  "External metered buyers per week"). */
+export function meteredExternal({ days = 7, slug = "v1-chat-metered" } = {}) {
+  const r = qMeteredExtWindow.get(slug, Date.now() - days * 86_400_000) || {};
+  return { days, slug, settlements: Number(r.n) || 0, buyers: Number(r.buyers) || 0, settledUsd: +Number(r.settled || 0).toFixed(6), lastAt: r.last_ts ? new Date(r.last_ts).toISOString() : null };
+}
+
+export function proofFeed({ slug = "v1-chat-metered" } = {}) {
+  const side = (internal) => {
+    const a = qProofAgg.get(slug, internal ? 1 : 0) || {};
+    const l = qProofLatest.get(slug, internal ? 1 : 0) || null;
+    // External rows carry the hour, not the second: /api/revenue/mpp withholds
+    // per-tx timestamps for the same reason, and the block explorer already
+    // has the exact time for anyone who wants it. Our own canary row keeps it.
+    const at = new Date(l ? l.ts : 0);
+    if (l && !internal) at.setUTCMinutes(0, 0, 0);
+    const row = l ? {
+      at: at.toISOString(),
+      atPrecision: internal ? "second" : "hour",
+      settledUsd: +Number(l.price_usd).toFixed(6),
+      quoteUsd: l.quote_usd == null ? null : +Number(l.quote_usd).toFixed(6),
+      underQuote: l.quote_usd == null ? null : Number(l.price_usd) <= Number(l.quote_usd) + 1e-9,
+      network: l.network, wire: l.wire, rail: l.rail, tx: l.tx,
+    } : null;
+    return {
+      count: Number(a.n) || 0,
+      settledUsd: +Number(a.settled || 0).toFixed(6),
+      quotedUsd: a.quoted == null ? null : +Number(a.quoted).toFixed(6),
+      quotedCount: Number(a.quoted_n) || 0,
+      latest: row,
+    };
+  };
+  const week = meteredExternal({ days: 7, slug });
+  return { slug, persistent: salesPersistent, external: { ...side(false), buyers7d: week.buyers, settlements7d: week.settlements }, internal: side(true), generatedAt: new Date().toISOString() };
 }

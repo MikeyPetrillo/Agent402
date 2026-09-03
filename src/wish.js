@@ -416,7 +416,7 @@ export function recordWish({ need, context, source, ip } = {}) {
  *  - detailed:false (DEFAULT, the public /api/wishes) — a BEACON only:
  *    headline totals plus qualified-cluster COUNT, no per-cluster text or
  *    counts. The itemized demand board is strategic intel (which unmet
- *    agent needs to build against, and how hot each is) that a competitor
+ *    agent needs to build against, and how hot each is) that an outsider
  *    should not be able to poll for free — while "there is real demand
  *    here, come sell" stays public to pull sellers in. The paid demand-radar
  *    tool sells the analysis layer; this keeps the raw list off the free path.

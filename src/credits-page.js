@@ -48,7 +48,7 @@ ${ledgerFooterCompact()}
     title: "Agent402 Credits: prepaid card credits for 500+ tools",
     description: "Buy $20, $50 or $100 by card, get a key, spend it on 500+ pay-per-call tools and every report at list price. Debited only on success. No account, no wallet.",
     canonical: `${baseUrl}/credits`, baseUrl, activePath: "/credits", extraCss: REPORTS_CSS, body,
-    jsonLd: { "@context": "https://schema.org", "@type": "Product", "@id": `${baseUrl}/credits#product`, name: "Agent402 prepaid credits", description: "Prepaid card credits for every pay-per-call tool and report, debited per successful call.", url: `${baseUrl}/credits`, brand: { "@type": "Brand", name: "Agent402" }, offers: Object.entries(CREDIT_PACKS).map(([key, p]) => ({ "@type": "Offer", name: `${p.label} ($${(p.cents / 100).toFixed(0)})`, price: (p.cents / 100).toFixed(2), priceCurrency: "USD", url: `${baseUrl}/credits`, availability: "https://schema.org/InStock", seller: { "@type": "Organization", name: "Havok Holdings LLC" } })) },
+    jsonLd: { "@context": "https://schema.org", "@type": "Product", "@id": `${baseUrl}/credits#product`, name: "Agent402 prepaid credits", description: "Prepaid card credits for every pay-per-call tool and report, debited per successful call.", image: `${baseUrl}/card.png`, url: `${baseUrl}/credits`, brand: { "@type": "Brand", name: "Agent402" }, offers: Object.entries(CREDIT_PACKS).map(([key, p]) => ({ "@type": "Offer", name: `${p.label} ($${(p.cents / 100).toFixed(0)})`, price: (p.cents / 100).toFixed(2), priceCurrency: "USD", url: `${baseUrl}/credits`, availability: "https://schema.org/InStock", seller: { "@type": "Organization", name: "Havok Holdings LLC" } })) },
   });
 }
 

@@ -1,7 +1,7 @@
 {
   "name": "agent402-google-adk",
   "version": "0.1.6",
-  "description": "Google ADK (Agent Development Kit) tools for Agent402.Tools (the applied layer of Agentic Finance): turn its catalog - 500+ strong: 400+ pay-per-call tools (x402 or MPP) + 100+ skill packs - into ADK FunctionTool instances via four meta-tools (find/route/call/about), with auto-payment (proof-of-work free; USDC on Base + 11 more chains or USDG on Robinhood Chain - 12 chains total - via x402 paid). Zero deps beyond peer deps.",
+  "description": "Google ADK (Agent Development Kit) tools for Agent402.Tools (the applied layer of Agentic Finance): turn its catalog - 500+ strong: 400+ pay-per-call tools (x402 or MPP) + 70+ skill packs - into ADK FunctionTool instances via four meta-tools (find/route/call/about), with auto-payment (proof-of-work free; USDC on Base + 11 more chains or USDG on Robinhood Chain - 12 chains total - via x402 paid). Zero deps beyond peer deps.",
   "type": "module",
   "main": "index.js",
   "exports": {

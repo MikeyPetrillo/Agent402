@@ -54,7 +54,7 @@ import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
 import { SKILL_PACKS } from "../src/skills.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
-import { missingDocumentedKeys } from "./sweep-shape.js";
+import { missingDocumentedKeys, emptyPromisedArrays } from "./sweep-shape.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.NON_METERED_PORT) || 3143;
@@ -97,6 +97,7 @@ const COINGECKO_SLUGS = new Set([
   "coin-price-by-contract", "coin-profile", "coin-history", "coin-ohlc", "coin-market-chart-range",
   "coin-categories", "global-defi", "exchanges", "exchange-tickers", "exchange-rates", "coin-search",
   "coins-list", "price-coingecko",
+  "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer",
 ]);
 const CG_SAMPLE_SIZE = Number(process.env.NON_METERED_CG_SAMPLE) || 2;
 
@@ -142,8 +143,8 @@ const METERED_SLUGS = new Set([
   // OpenRouter gateway
   "v1-chat-nano", "v1-chat-auto", "v1-chat-grounded", "v1-chat-ox", "v1-chat", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered",
   "v1-embeddings", "v1-rerank", "v1-images", "v1-audio-speech",
-  "v1-chat-nano-messages", "v1-chat-auto-messages", "v1-chat-messages", "v1-chat-pro-messages", "v1-chat-premium-messages",
-  "v1-chat-nano-responses", "v1-chat-auto-responses", "v1-chat-responses", "v1-chat-pro-responses", "v1-chat-premium-responses",
+  "v1-chat-nano-messages", "v1-chat-auto-messages", "v1-chat-messages", "v1-chat-pro-messages", "v1-chat-premium-messages", "v1-chat-metered-messages",
+  "v1-chat-nano-responses", "v1-chat-auto-responses", "v1-chat-responses", "v1-chat-pro-responses", "v1-chat-premium-responses", "v1-chat-metered-responses",
   // Calls the v1-chat gateway handler in-process — same OpenRouter key dependency.
   "pdf-summarize",
   // research-deep composites — fan out to grounded search + rerank + synthesis
@@ -210,8 +211,16 @@ for (const p of SKILL_PACKS) {
   if (hits.length) METERED_PACK_SLUGS.add(p.slug);
 }
 
+// Upstreams whose edge BLOCKS GitHub runners: Kalshi's Cloudflare answered the
+// sweep an HTML 403 page on 2026-08-28 (both examples, same run) while the same
+// request answered 200 from a laptop and from production. A strict sweep
+// cannot tell that block from a dead tool, and the lenient test-all NETWORK
+// set still calls them every run; production is watched by the tool alert.
+const RUNNER_BLOCKED_SLUGS = new Set(["kalshi-markets", "kalshi-event"]);
+
 function excludeReason(slug, path) {
   if (METERED_SLUGS.has(slug)) return "metered_upstream_key_or_buyer";
+  if (RUNNER_BLOCKED_SLUGS.has(slug)) return "upstream_blocks_github_runners";
   const packName = slug.startsWith("skill-") ? slug.slice(6) : null;
   if (packName && METERED_PACK_SLUGS.has(packName)) return "skill_pack_reaches_metered";
   if (path.startsWith("/api/skill/")) {
@@ -498,8 +507,8 @@ function runControls() {
       "control: only CoinGecko-backed slugs are ever sampled");
     ok(!COINGECKO_SLUGS.has("price-pyth") && !COINGECKO_SLUGS.has("defi-tvl"),
       "control: Pyth and DefiLlama tools are NOT in the CoinGecko family - they have their own upstreams and stay swept");
-    ok(COINGECKO_SLUGS.has("crypto-price") && COINGECKO_SLUGS.has("coins-list") && COINGECKO_SLUGS.size === 19,
-      `control: the family is the full 19 CoinGecko-backed slugs (got ${COINGECKO_SLUGS.size})`);
+    ok(COINGECKO_SLUGS.has("crypto-price") && COINGECKO_SLUGS.has("coins-list") && COINGECKO_SLUGS.size === 24,
+      `control: the family is the full 24 CoinGecko-backed slugs (got ${COINGECKO_SLUGS.size})`);
     ok(coingeckoSample("x", 99).size === COINGECKO_SLUGS.size,
       "control: raising the sample past the family size sweeps all of them, so the cap is a budget and not a lock");
   }
@@ -633,8 +642,13 @@ async function main() {
     if (isStrictPass(r.status, r.body)) {
       // A binary response is recorded here as { __bytes } - not a body to hold
       // against a JSON example (test-all.js records it as a byte count).
-      const missing = r.body && r.body.__bytes !== undefined ? [] : missingDocumentedKeys(t.path, t.op, r.body);
+      const binary = r.body && r.body.__bytes !== undefined;
+      const missing = binary ? [] : missingDocumentedKeys(t.path, t.op, r.body);
       if (missing.length) shapeMismatches.push(`${t.method} ${t.path} → missing documented keys: ${missing.join(",")}`);
+      // Present-but-empty is its own failure: a published example that returns
+      // nothing teaches an agent the tool is broken (2026-08-29, sweep-shape.js).
+      const hollow = binary ? [] : emptyPromisedArrays(t.path, t.op, r.body);
+      if (hollow.length) shapeMismatches.push(`${t.method} ${t.path} → documented example returns an EMPTY array for: ${hollow.join(",")} (its own published input produces nothing)`);
       return;
     }
 

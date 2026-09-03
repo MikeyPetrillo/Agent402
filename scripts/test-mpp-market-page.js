@@ -77,5 +77,18 @@ const xssSnap = {
 const xssHtml = mppMarketPage("https://agent402.tools", xssSnap);
 ok(!xssHtml.includes('href="javascript:'), "a non-http(s) seller-supplied URL never becomes a clickable href");
 
+
+// --- the host's own entry (2026-08-28): pinned under the table, never a numbered row ---
+{
+  const lb = { generatedAt: Date.now(), window: { approxHours: 15, source: "rpc", blocks: 99000 }, rows: [
+    { rank: 1, recipient: "0x" + "a".repeat(40), sellers: [{ name: "Ext", origin: "https://ext.example", url: "https://ext.example" }], intents: ["charge"], self: false, transfers: 40, payers: 3, volumeUsdc: 0.04, d7: { transfers: 40, volumeUsdc: 0.04 }, d30: { transfers: 40, volumeUsdc: 0.04 }, proven: true, routable: true },
+  ] };
+  const HOSTF = { baseUrl: "https://agent402.tools", toolCount: 560, recordingSince: null, external30d: { settlements: 109, buyers: 7, tools: 21 }, externalAllTime: { settlements: 3945, buyers: 250, tools: 105 } };
+  const without = mppMarketPage("https://agent402.tools", { verifiedSellers: 1, discoveredTotal: 1, sellers: [] }, lb);
+  const html = mppMarketPage("https://agent402.tools", { verifiedSellers: 1, discoveredTotal: 1, sellers: [] }, lb, { host: HOSTF });
+  ok(!without.includes("data-host-row") && html.includes("data-host-row"), "MPP board: host row renders only with host figures");
+  ok(html.indexOf("data-host-row") > html.indexOf("</table>"), "MPP board: host row sits below the ranked table, not inside it");
+  ok(/HOST &middot; NOT RANKED/.test(html) && html.includes("109 settlements"), "MPP board: host row is labelled unranked and carries the external-only figure");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

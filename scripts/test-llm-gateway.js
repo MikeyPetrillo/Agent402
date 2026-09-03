@@ -23,6 +23,8 @@ ok(canonicalModel("gpt-4o-mini") === "openai/gpt-4o-mini", "bare gpt name maps t
 ok(canonicalModel("claude-opus-4") === "anthropic/claude-opus-4", "bare claude name maps to anthropic/");
 ok(canonicalModel("gemini-2.5-flash") === "google/gemini-2.5-flash", "bare gemini name maps to google/");
 ok(canonicalModel("o3-mini") === "openai/o3-mini", "bare o3 name maps to openai/");
+ok(canonicalModel("claude-haiku-4-5-20251001") === "anthropic/claude-haiku-4.5" && canonicalModel("claude-sonnet-4-5-20250929") === "anthropic/claude-sonnet-4.5" && canonicalModel("claude-opus-4-1-20250805") === "anthropic/claude-opus-4.1", "Anthropic dated ids (what Claude Code / the SDKs send) resolve to the OpenRouter family id");
+ok(canonicalModel("claude-sonnet-5") === "anthropic/claude-sonnet-5" && canonicalModel("claude-opus-5") === "anthropic/claude-opus-5" && canonicalModel("claude-3-5-sonnet-20241022") === "anthropic/claude-3-5-sonnet", "undated ids untouched; legacy claude-3-5-sonnet-<date> only loses the date");
 // A family prefix that is not an upstream id resolves to its concrete model
 // (2026-08-26: "anthropic/claude-opus" was advertised on /v1/models and
 // OpenRouter rejected it verbatim). Bare and OpenRouter forms, any case.
@@ -55,7 +57,10 @@ ok(tierAllows("v1-chat", "openai/gpt-4o-mini-2024-07-18"), "dated gpt-4o-mini sn
 // and gpt-5.6 ids do NOT ride the "openai/gpt-5" prefix (boundary-aware
 // matching: "gpt-5" + "-" never matches "gpt-5.6-…").
 ok(tierFor("openai/gpt-5.6-luna") === "v1-chat-nano", "gpt-5.6-luna homes on nano");
-ok(tierFor("openai/gpt-5.6-terra") === "v1-chat", "gpt-5.6-terra homes on base");
+// gpt-5.6-terra came OFF the base tier 2026-08-28: it lists at $2/$12, over
+// that tier's completion bound, so max_price refused every non-flex attempt.
+ok(tierFor("openai/gpt-5.6-terra") === null || tierFor("openai/gpt-5.6-terra") !== "v1-chat", `gpt-5.6-terra no longer homes on base (got ${tierFor("openai/gpt-5.6-terra")})`);
+ok(!tierAllows("v1-chat", "openai/gpt-5.6-terra"), "the base tier refuses terra rather than sending a request max_price will reject");
 ok(tierFor("openai/gpt-5.6-sol") === "v1-chat-premium", "gpt-5.6-sol homes on premium");
 ok(tierFor("anthropic/claude-sonnet-5") === "v1-chat-pro", "claude-sonnet-5 homes on pro via the sonnet prefix");
 ok(tierFor("anthropic/claude-opus-5") === "v1-chat-premium", "claude-opus-5 homes on premium via the opus prefix");
@@ -82,7 +87,7 @@ throws(() => validateRequest({ model: "made-up-model-9000", messages: msg1() }, 
   ok(nv.stream === undefined, "non-stream requests carry no stream flag");
 }
 throws(() => validateRequest({ model: "gpt-4o-mini", messages: [] }, "v1-chat"), "non-empty", "empty messages rejected");
-throws(() => validateRequest({ messages: msg1() }, "v1-chat"), "required", "missing model rejected");
+ok(validateRequest({ messages: msg1() }, "v1-chat").model === "openai/gpt-4o-mini", "missing model is served as the tier default (was a 400 until 2026-08-28)");
 throws(() => validateRequest({ model: "gpt-4o-mini", messages: msg1("x".repeat(40_000)) }, "v1-chat"), "Input too large", "input char cap enforced");
 throws(() => validateRequest({ model: "gpt-4o-mini", messages: Array.from({ length: 101 }, () => ({ role: "user", content: "x" })) }, "v1-chat"), "Too many messages", "message count cap enforced");
 
@@ -119,13 +124,13 @@ ok(LLM_GATEWAY_TOOLS.length === 12, "twelve gateway routes (five chat tiers + gr
 // Nano tier — priced for loops; nano models keep working on the base tier
 // (drop-in callers can overpay) but tierFor leads with the cheapest home.
 ok(TIERS["v1-chat-nano"].price === 0.003, "nano tier priced at $0.003");
-ok(tierAllows("v1-chat-nano", "gpt-4.1-nano"), "gpt-4.1-nano allowed on nano tier");
-ok(tierAllows("v1-chat", "gpt-4.1-nano"), "gpt-4.1-nano STILL allowed on base tier (non-breaking)");
-ok(tierFor("openai/gpt-4.1-nano") === "v1-chat-nano", "tierFor leads with the nano tier");
+ok(tierAllows("v1-chat-nano", "gpt-5-nano"), "gpt-5-nano allowed on nano tier");
+ok(tierAllows("v1-chat", "gpt-5-nano"), "gpt-5-nano STILL allowed on base tier (non-breaking)");
+ok(tierFor("openai/gpt-5-nano") === "v1-chat-nano", "tierFor leads with the nano tier");
 ok(!tierAllows("v1-chat-nano", "openai/gpt-4o"), "gpt-4o NOT on nano tier");
 ok(tierAllows("v1-chat-nano", "deepseek/deepseek-chat"), "deepseek-chat on nano tier");
 {
-  const v = validateRequest({ model: "gpt-4.1-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 99999 }, "v1-chat-nano");
+  const v = validateRequest({ model: "gpt-5-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 99999 }, "v1-chat-nano");
   ok(v.max_tokens === TIERS["v1-chat-nano"].maxTokens, "nano output cap clamps");
 }
 ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live at OpenAI wire paths");
@@ -139,16 +144,17 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   globalThis.fetch = async (url, init) => {
     const body = JSON.parse(init.body);
     calls.push(body.model);
-    if (body.model === "openai/gpt-4.1-nano") {
+    if (body.model === "mistralai/ministral-8b-2512") {
       return { ok: false, status: 502, text: async () => JSON.stringify({ error: { message: "Provider returned error" } }) };
     }
     return { ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-1", object: "chat.completion", model: body.model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] }) };
   };
   const nano = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-nano");
-  const res = await nano.handler({ model: "gpt-4.1-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 5 });
+  // A NON-flex nano model: a flex-eligible one is tried twice (flex, then default) before the chain.
+  const res = await nano.handler({ model: "mistralai/ministral-8b-2512", messages: [{ role: "user", content: "hi" }], max_tokens: 5 });
   ok(res.choices?.[0]?.message?.content === "OK", "failover serves the buyer despite the requested model's provider error");
   ok(res.model === "deepseek/deepseek-chat", `response discloses the serving model (got ${res.model})`);
-  ok(calls.join(",") === "openai/gpt-4.1-nano,deepseek/deepseek-chat", `tried requested model first, then the chain (got ${calls.join(",")})`);
+  ok(calls.join(",") === "mistralai/ministral-8b-2512,deepseek/deepseek-chat", `tried requested model first, then the chain (got ${calls.join(",")})`);
 
   // Validation errors must NOT trigger the chain — the buyer's input is wrong.
   calls.length = 0;
@@ -204,6 +210,27 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(!/"cost"|cost_details|is_byok/.test(streamed), "OpenRouter billing fields are stripped from the streamed usage frame (even split across chunks)");
   ok(/"usage":\{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4\}/.test(streamed), "standard token counts still reach the streaming buyer");
   ok(typeof seenStreamBody.user === "string" && /^a402:[0-9a-f]{32}$/.test(seenStreamBody.user), `per-buyer user id rides upstream on streams (${seenStreamBody.user})`);
+
+  // An upstream stream that only ever sends keep-alive comments and then
+  // closes (measured live: ": OPENROUTER PROCESSING" x N, no data frame) must
+  // NOT become a paid 200: no status is written, the __sse writer rejects 502,
+  // and the chain moves on. A comment followed by a real frame still serves.
+  {
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return { ok: true, status: 200, body: sseBody([": OPENROUTER PROCESSING\n\n", ": OPENROUTER PROCESSING\n\n"]) }; };
+    const r = await nano.handler({ model: "deepseek/deepseek-chat", messages: [{ role: "user", content: "hi" }], stream: true }, fakeReq);
+    const resEmpty = fakeRes();
+    let err = null; try { await r.__sse(resEmpty); } catch (e) { err = e; }
+    ok(err?.statusCode === 502 && resEmpty.headersSent === false && resEmpty.chunks.length === 0 && resEmpty.ended === false,
+      `a comment-only upstream stream is a 502 with nothing written, never a paid empty 200 (got status ${err?.statusCode}, headersSent ${resEmpty.headersSent})`);
+    ok(calls >= 2, `the chain was walked after the empty stream (${calls} upstream attempts)`);
+    globalThis.fetch = async () => ({ ok: true, status: 200, body: sseBody([": OPENROUTER PROCESSING\n\n", 'data: {"choices":[{"delta":{"content":"O"}}]}\n\n', "data: [DONE]\n\n"]) });
+    const r2 = await nano.handler({ model: "deepseek/deepseek-chat", messages: [{ role: "user", content: "hi" }], stream: true }, fakeReq);
+    const resOk = fakeRes();
+    await r2.__sse(resOk);
+    const got = resOk.chunks.join("");
+    ok(resOk.status === 200 && got.startsWith(": OPENROUTER PROCESSING") && got.includes('"content":"O"') && got.includes("[DONE]") && resOk.ended, "a keep-alive comment followed by a data frame is served in order, comment included");
+  }
   {
     const { _testEventsForTest } = await import("../src/posthog.js");
     await new Promise((r) => setTimeout(r, 20));
@@ -223,12 +250,38 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   globalThis.fetch = async (url, init) => {
     const body = JSON.parse(init.body);
     tried.push(body.model);
-    if (body.model === "openai/gpt-4.1-nano") return { ok: false, status: 502, text: async () => "provider down" };
+    if (body.model === "mistralai/ministral-8b-2512") return { ok: false, status: 502, text: async () => "provider down" };
     return { ok: true, status: 200, body: sseBody(["data: [DONE]\n\n"]) };
   };
   const res2 = fakeRes();
-  await (await nano.handler({ model: "gpt-4.1-nano", messages: [{ role: "user", content: "hi" }], stream: true })).__sse(res2);
-  ok(tried.join(",") === "openai/gpt-4.1-nano,deepseek/deepseek-chat" && res2.ended, `pre-stream failover walks the chain (tried ${tried.join(",")})`);
+  await (await nano.handler({ model: "mistralai/ministral-8b-2512", messages: [{ role: "user", content: "hi" }], stream: true })).__sse(res2);
+  ok(tried.join(",") === "mistralai/ministral-8b-2512,deepseek/deepseek-chat" && res2.ended, `pre-stream failover walks the chain (tried ${tried.join(",")})`);
+
+  // An upstream HTTP 200 whose body is an error with NO output (OpenRouter's
+  // shape for a provider rate limit after the response line) is an upstream
+  // failure, not an answer: the chain walks, and a chain that ends that way
+  // surfaces 503/502 (never a paid empty 200). Measured on the auto tier's own
+  // example 2026-09-02.
+  {
+    const { assertUpstreamBody } = await import("../src/tools/llm-gateway-kit.js");
+    let e1 = null; try { assertUpstreamBody({ id: "gen-1", error: { message: "openai/gpt-5.6-luna is temporarily rate-limited upstream. Please retry shortly" } }); } catch (e) { e1 = e; }
+    ok(e1?.statusCode === 503 && /rate-limited/.test(e1.message), "200 + {error: rate-limited} + no choices -> 503 (walkable)");
+    let e2 = null; try { assertUpstreamBody({ error: { code: 500, message: "provider exploded" } }); } catch (e) { e2 = e; }
+    ok(e2?.statusCode === 502, "200 + a non-rate-limit error + no output -> 502");
+    ok(assertUpstreamBody({ error: { message: "partial" }, choices: [{ message: { content: "x" } }] })?.choices?.length === 1, "an error beside real output is returned as-is (partial answers are the buyer's)");
+    ok(assertUpstreamBody({ choices: [] })?.choices?.length === 0 && assertUpstreamBody(null) === null, "no error field -> untouched (the empty-refusal / empty-length walks judge those)");
+    const walked = [];
+    globalThis.fetch = async (url, init) => {
+      const body = JSON.parse(init.body); walked.push(body.model);
+      if (walked.length === 1) return { ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-1", error: { message: "temporarily rate-limited upstream" } }), headers: { get: () => "application/json" } };
+      return { ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-2", model: body.model, choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }), headers: { get: () => "application/json" } };
+    };
+    const out = await nano.handler({ model: "gpt-5-nano", messages: [{ role: "user", content: "hi" }] }, { header: () => undefined, headers: {}, ip: "127.0.0.1" });
+    ok(walked.length === 2 && out?.choices?.[0]?.message?.content === "ok", `a 200-with-error link is walked past, the next link answers (tried ${walked.join(",")})`);
+    globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-x", error: { message: "temporarily rate-limited upstream" } }), headers: { get: () => "application/json" } });
+    let all = null; try { await nano.handler({ model: "gpt-5-nano", messages: [{ role: "user", content: "hi" }] }, { header: () => undefined, headers: {}, ip: "127.0.0.1" }); } catch (e) { all = e; }
+    ok(all && all.statusCode >= 500 && all.statusCode < 600, `a chain that is rate-limited end to end surfaces ${all?.statusCode}, never a paid empty 200`);
+  }
 
   // Validation still precedes everything: wrong-tier model rejects with 400.
   let threw = null;
@@ -243,6 +296,20 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(sc.flush() === "" && sc.push("data: [DONE]") === "" && sc.flush() === "data: [DONE]", "flush forwards a trailing unterminated line");
   const clean = 'data: {"usage":{"prompt_tokens":1,"completion_tokens":1}}';
   ok(createSseUsageScrubber().push(clean + "\n") === clean + "\n", "a usage frame with no billing fields passes through byte-for-byte");
+  {
+    // fetch's body yields Uint8Array chunks (never Buffers): the scrubber must
+    // decode them as UTF-8 text, and a multibyte character split across two
+    // chunks must survive. Before 2026-08-27 String(Uint8Array) turned every
+    // streamed frame into comma-joined digits and the relay never saw "data:".
+    const frame = 'data: {"choices":[{"delta":{"content":"héllo"}}]}\n';
+    const bytes = new TextEncoder().encode(frame);
+    const cut = frame.indexOf("é") + 1; // byte index inside the 2-byte "é"
+    const u8 = createSseUsageScrubber();
+    const first = u8.push(new Uint8Array(bytes.subarray(0, cut)));
+    const rest = u8.push(new Uint8Array(bytes.subarray(cut)));
+    ok(first === "" && rest === frame, "Uint8Array chunks decode as UTF-8 text (never comma-joined digits), a split multibyte char is reassembled");
+    ok(createSseUsageScrubber().push(new Uint8Array(bytes)) === frame, "a whole Uint8Array frame passes through byte-for-byte");
+  }
   // NESTED usage (Responses API final frame) must be scrubbed too - the
   // first scrubber only looked at top-level obj.usage, which would have
   // forwarded response.usage.cost on every streamed /v1/.../responses call.
@@ -294,12 +361,12 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(stableStringify({ b: 1, a: [{ y: 2, x: 1 }] }) === stableStringify({ a: [{ x: 1, y: 2 }], b: 1 }), "stableStringify is key-order independent");
 
   const msgs = [{ role: "user", content: "hi" }];
-  const k1 = promptCacheKey("v1-chat-nano", { model: "gpt-4.1-nano", messages: msgs, cache: true });
-  const k2 = promptCacheKey("v1-chat-nano", { cache: true, messages: msgs, model: "openai/gpt-4.1-nano" });
+  const k1 = promptCacheKey("v1-chat-nano", { model: "gpt-5-nano", messages: msgs, cache: true });
+  const k2 = promptCacheKey("v1-chat-nano", { cache: true, messages: msgs, model: "openai/gpt-5-nano" });
   ok(k1 && k1 === k2, "model alias + field order collapse to one cache key");
-  const k3 = promptCacheKey("v1-chat-nano", { model: "gpt-4.1-nano", messages: msgs, temperature: 0.7, cache: true });
+  const k3 = promptCacheKey("v1-chat-nano", { model: "gpt-5-nano", messages: msgs, temperature: 0.7, cache: true });
   ok(k3 !== k1, "sampling params (temperature) change the key");
-  ok(promptCacheKey("v1-chat-nano", { model: "gpt-4.1-nano", messages: msgs, stream: true, cache: true }) === null, "streamed requests are never cacheable");
+  ok(promptCacheKey("v1-chat-nano", { model: "gpt-5-nano", messages: msgs, stream: true, cache: true }) === null, "streamed requests are never cacheable");
 
   promptCacheStore(k1, { id: "gen-cached", choices: [] });
   ok(promptCacheGet(k1)?.id === "gen-cached", "store/get roundtrip");
@@ -817,7 +884,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(again.max_tokens === opusFull.max_tokens, "clamp is deterministic (cache keys stay stable)");
 
   // Cheap tiers keep today's behavior: the tier's own cap is the binding one.
-  const nanoBody = validateRequest({ model: "gpt-4.1-nano", messages: msg1(), max_tokens: 768 }, "v1-chat-nano");
+  const nanoBody = validateRequest({ model: "gpt-5-nano", messages: msg1(), max_tokens: 768 }, "v1-chat-nano");
   ok(nanoBody.max_tokens === 768, "nano-tier small input is untouched by the margin clamp");
 }
 
@@ -1129,8 +1196,8 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
 {
   const M = TIERS["v1-chat-metered"];
   ok(M.metered === true && M.route === "POST /v1/metered/chat/completions" && Object.keys(TIERS).at(-1) === "v1-chat-metered", "metered tier exists and is listed LAST (tierFor keeps home tiers first)");
-  ok(tierFor("anthropic/claude-opus-5") === "v1-chat-premium" && tierAllows("v1-chat-metered", "anthropic/claude-opus-5") && tierAllows("v1-chat-metered", "openai/gpt-4.1-nano"), "explicit models still resolve to their home tier, and the metered tier admits every flat-tier model");
-  const tiny = meteredQuoteUsd({ model: "openai/gpt-4.1-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 5 });
+  ok(tierFor("anthropic/claude-opus-5") === "v1-chat-premium" && tierAllows("v1-chat-metered", "anthropic/claude-opus-5") && tierAllows("v1-chat-metered", "openai/gpt-5-nano"), "explicit models still resolve to their home tier, and the metered tier admits every flat-tier model");
+  const tiny = meteredQuoteUsd({ model: "openai/gpt-5-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 5 });
   ok(tiny.usd === M.price && !tiny.invalid, `a nano "hi" quotes the floor ($${M.price})`);
   const mid = meteredQuoteUsd({ model: "anthropic/claude-opus-5", messages: [{ role: "user", content: "write an essay" }], max_tokens: 2000 });
   const more = meteredQuoteUsd({ model: "anthropic/claude-opus-5", messages: [{ role: "user", content: "write an essay" }], max_tokens: 4000 });
@@ -1142,7 +1209,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const bad = meteredQuoteUsd({ model: "nope/x", messages: [{ role: "user", content: "hi" }] });
   ok(bad.invalid === true && bad.usd === M.price, "an invalid body quotes the floor and is flagged (the handler's own 400 refuses it)");
   const tool = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-metered");
-  ok(typeof tool.quote === "function" && tool.quote({ model: "openai/gpt-4.1-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 5 }) === M.price, "the catalog entry exposes quote() for payments.js");
+  ok(typeof tool.quote === "function" && tool.quote({ model: "openai/gpt-5-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 5 }) === M.price, "the catalog entry exposes quote() for payments.js");
   const listed = modelsList().data;
   ok(!listed.some((m) => m.x402.tier === "v1-chat-metered") && listed.filter((m) => m.x402.meteredEndpoint === "/v1/metered/chat/completions").length > 30, "/v1/models lists no duplicate metered ids; chat entries carry meteredEndpoint instead");
 }
@@ -1157,6 +1224,20 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(e2?.statusCode === 400, "equal budgets are refused too (strictly below)");
   const v = validateRequest({ ...base, max_tokens: 2000, reasoning: { max_tokens: 1000 } }, "v1-chat-metered");
   ok(v.reasoning?.max_tokens === 1000 && v.max_tokens === 2000, "a reasoning budget under max_tokens passes on the metered tier");
+}
+
+// ---- a missing model is served as the tier default, never refused (2026-08-28) ----
+{
+  const { validateRequest: vr, TIERS: T } = await import("../src/tools/llm-gateway-kit.js");
+  for (const [slug, expect] of [["v1-chat-nano", "openai/gpt-5.6-luna"], ["v1-chat", "openai/gpt-4o-mini"], ["v1-chat-pro", "openai/gpt-4o"], ["v1-chat-premium", "anthropic/claude-opus-5"], ["v1-chat-metered", "anthropic/claude-haiku-4.5"]]) {
+    const b = vr({ messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, slug, { clamp: false });
+    ok(b.model === expect && b.__defaultedModel === expect && !Object.keys(b).includes("__defaultedModel") && T[slug].defaultModel === expect, `${slug}: no model -> ${expect} (marker non-enumerable)`);
+    ok(T[slug].prefixes.some((p) => expect === p || expect.startsWith(p.endsWith("/") ? p : p + "-") || expect === p), `${slug}: the default is inside the tier's own allowlist`);
+  }
+  const explicit = vr({ model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, "v1-chat", { clamp: false });
+  ok(explicit.model === "openai/gpt-4o-mini" && explicit.__defaultedModel === undefined, "an explicit model is never marked as defaulted");
+  const routed = vr({ messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, "v1-chat-auto", { clamp: false });
+  ok(routed.__defaultedModel === undefined, "the auto tier routes; it does not default");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

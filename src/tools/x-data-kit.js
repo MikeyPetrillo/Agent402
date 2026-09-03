@@ -21,8 +21,14 @@
 import { markUntrusted } from "./provenance.js";
 // The upstream bills per POST RETURNED, not per request, so the page size is
 // the real cost lever: a 100-post page at our per-call price would be sold far
-// below cost. 25 keeps every call inside the price on the read tiers.
-const X_MAX_POSTS_PER_CALL = () => Math.max(5, Math.min(100, parseInt(process.env.X_MAX_POSTS_PER_CALL || "25", 10) || 25));
+// below cost. Priced 2026-08-27 against X's published pay-per-use rate card
+// ($0.005 per post read, $0.010 per user read; resources deduplicated within a
+// UTC day, so repeats cost us nothing): a 10-post page is $0.05 upstream, so
+// the search and timeline tools sell at $0.08 (upstream <= 70% of price, the
+// gateway's own margin rule) with the page capped at 10; a single post read
+// is $0.008, a user read $0.015, a 10-username lookup $0.15.
+const X_MAX_POSTS_PER_CALL = () => Math.max(5, Math.min(100, parseInt(process.env.X_MAX_POSTS_PER_CALL || "10", 10) || 10));
+const X_MAX_USERS_PER_LOOKUP = 10;
 
 const X_API = "https://api.x.com/2";
 const TIMEOUT_MS = 12_000;
@@ -233,9 +239,9 @@ export const X_DATA_TOOLS = [
     name: "X recent tweet search",
     slug: "x-search-recent",
     category: "web",
-    price: "$0.006",
+    price: "$0.08",
     description:
-      "Search public tweets from the last 7 days on X (Twitter) by query, using X API v2 search operators (keywords, from:, #hashtag, lang:, -is:retweet). Returns up to 100 tweets with text, created time, language, engagement metrics (likes, retweets, replies, quotes, impressions) and the author's username flattened onto each row, plus a next_token for paging.",
+      "Search public tweets from the last 7 days on X (Twitter) by query, using X API v2 search operators (keywords, from:, #hashtag, lang:, -is:retweet). Returns up to 10 tweets per call with text, created time, language, engagement metrics (likes, retweets, replies, quotes, impressions) and the author's username flattened onto each row, plus a next_token for paging.",
     tags: [...SHARED_TAGS, "search", "recent"],
     discovery: {
       bodyType: "json",
@@ -243,7 +249,7 @@ export const X_DATA_TOOLS = [
       inputSchema: {
         properties: {
           query: { type: "string", description: "X search query (max 512 chars). Supports X operators: from:user, #tag, lang:en, -is:retweet, has:links." },
-          max_results: { type: "number", description: "Tweets per page, 10-25 (default 10). The upstream bills per post returned, so the page size is capped." },
+          max_results: { type: "number", description: "Tweets per page, up to 10 (default 10). The upstream bills per post returned, so the page size is capped." },
           sort_order: { type: "string", description: "recency (default) or relevancy." },
           next_token: { type: "string", description: "Pagination token from a previous response." },
         },
@@ -264,7 +270,7 @@ export const X_DATA_TOOLS = [
       const query = typeof i.query === "string" ? i.query.trim() : "";
       if (!query) throw bad('"query" is required - an X search query, e.g. "x402 -is:retweet"');
       if (query.length > 512) throw bad(`"query" is too long (${query.length} chars, max 512)`);
-      const maxResults = takeMaxResults(i.max_results, { min: 10, max: X_MAX_POSTS_PER_CALL(), dflt: 10 });
+      const maxResults = takeMaxResults(i.max_results, { min: 10, max: Math.max(10, X_MAX_POSTS_PER_CALL()), dflt: 10 });
       const sort = i.sort_order === undefined || i.sort_order === null || i.sort_order === "" ? "recency" : String(i.sort_order);
       if (sort !== "recency" && sort !== "relevancy") throw bad('"sort_order" must be "recency" or "relevancy"');
       const nextToken = takeToken(i.next_token, "next_token");
@@ -296,7 +302,7 @@ export const X_DATA_TOOLS = [
     name: "X user profile",
     slug: "x-user",
     category: "web",
-    price: "$0.005",
+    price: "$0.015",
     description:
       "Look up one X (Twitter) account by username: id, display name, bio, account creation date, verification status and type, location, link, protected flag, and public metrics (followers, following, tweet count, listed count).",
     tags: [...SHARED_TAGS, "user", "profile", "followers"],
@@ -323,7 +329,7 @@ export const X_DATA_TOOLS = [
     name: "X user timeline",
     slug: "x-user-tweets",
     category: "web",
-    price: "$0.010",
+    price: "$0.08",
     description:
       "Fetch an X (Twitter) account's most recent tweets by user id or username (username is resolved first). Options to exclude retweets and replies, page with pagination_token, or fetch only tweets newer than since_id. Each tweet carries text, created time, language and engagement metrics.",
     tags: [...SHARED_TAGS, "timeline", "user-tweets"],
@@ -334,7 +340,7 @@ export const X_DATA_TOOLS = [
         properties: {
           id: { type: "string", description: "Numeric X user id. Provide id OR username." },
           username: { type: "string", description: "X username (resolved to an id first). Provide id OR username." },
-          max_results: { type: "number", description: "Tweets per page, 5-25 (default 10). The upstream bills per post returned, so the page size is capped." },
+          max_results: { type: "number", description: "Tweets per page, 5-10 (default 10). The upstream bills per post returned, so the page size is capped." },
           exclude_retweets: { type: "boolean", description: "Drop retweets (default false)." },
           exclude_replies: { type: "boolean", description: "Drop replies (default false)." },
           since_id: { type: "string", description: "Only tweets with an id greater than this." },
@@ -403,7 +409,7 @@ export const X_DATA_TOOLS = [
     name: "X tweet lookup",
     slug: "x-tweet",
     category: "web",
-    price: "$0.005",
+    price: "$0.008",
     description:
       "Fetch one public tweet on X (Twitter) by id: text, created time, language, conversation id, engagement metrics (likes, retweets, replies, quotes, bookmarks, impressions) and the author's username, name and verification.",
     tags: [...SHARED_TAGS, "tweet", "status"],
@@ -436,16 +442,16 @@ export const X_DATA_TOOLS = [
     name: "X bulk user lookup",
     slug: "x-users-lookup",
     category: "web",
-    price: "$0.010",
+    price: "$0.15",
     description:
-      "Look up up to 100 X (Twitter) accounts by username in one call. Returns each found profile with public metrics (followers, following, tweets, listed), verification status and bio, plus the list of usernames X did not resolve.",
+      "Look up up to 10 X (Twitter) accounts by username in one call. Returns each found profile with public metrics (followers, following, tweets, listed), verification status and bio, plus the list of usernames X did not resolve.",
     tags: [...SHARED_TAGS, "users", "bulk", "lookup"],
     discovery: {
       bodyType: "json",
       input: { usernames: ["coinbase", "base"] },
       inputSchema: {
         properties: {
-          usernames: { type: "array", items: { type: "string" }, description: "1-100 usernames (array, or a comma-separated string)." },
+          usernames: { type: "array", items: { type: "string" }, description: "1-10 usernames (array, or a comma-separated string)." },
         },
         required: ["usernames"],
       },
@@ -463,7 +469,7 @@ export const X_DATA_TOOLS = [
       let raw = i.usernames;
       if (typeof raw === "string") raw = raw.split(",");
       if (!Array.isArray(raw) || raw.length === 0) throw bad('"usernames" is required - an array of 1-100 X usernames');
-      if (raw.length > 100) throw bad(`Too many usernames (${raw.length}); the cap is 100 per call`);
+      if (raw.length > X_MAX_USERS_PER_LOOKUP) throw bad(`Too many usernames (${raw.length}); the cap is ${X_MAX_USERS_PER_LOOKUP} per call`);
       const usernames = [...new Set(raw.map((u, idx) => takeUsername(u, `usernames[${idx}]`)))];
 
       const data = await xGet("/users/by", { usernames: usernames.join(","), "user.fields": USER_FIELDS });

@@ -116,4 +116,15 @@ function baseCtx(baseUrl) {
 
 cache.clear();
 _resetFlatCacheForTest();
+// ---- The host's own /api/index answer (2026-08-28): built OUTSIDE the cache, never from it ----
+{
+  const { hostFigures, hostIndexEntry, isSelfSellerQuery } = await import("../src/host-entry.js");
+  const summary = ({ days }) => ({ recordingSince: 1750000000000, totals: { external: { sales: days === 30 ? 109 : 3945 }, internal: { sales: 999 } }, distinctExternalBuyers: days === 30 ? 7 : 250, distinctToolsSoldExternal: 21 });
+  const f = hostFigures({ summaryFn: summary, toolCount: 560, baseUrl: "https://agent402.tools" });
+  const me = hostIndexEntry(f);
+  ok(me.self === true && me.listed === true && me.external.days30.settlements === 109 && me.external.allTime.buyers === 250, "host index entry is self:true with external-only figures (internal 999 never appears)");
+  ok(JSON.stringify(me).includes("999") === false, "internal settlements never leak into the host entry");
+  ok(isSelfSellerQuery("agent402.tools", "https://agent402.tools") && isSelfSellerQuery("https://agent402.tools/", "https://x.test") && isSelfSellerQuery("x.test", "https://x.test") && !isSelfSellerQuery("a.example", "https://agent402.tools"), "self detection accepts the canonical host/origin and the instance's own base URL only");
+  ok(hostFigures({}) === null && hostIndexEntry(null) === null, "no ledger -> no entry, never a fabricated zero row");
+}
 console.log("\ntest-self-listing-exclusion: all scenarios passed");

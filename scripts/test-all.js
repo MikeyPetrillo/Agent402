@@ -7,7 +7,7 @@
 // Pure-CPU tools must return 200 with no error. Network/browser tools are
 // exercised but tolerant of upstream/sandbox failures (they need real egress;
 // CI has it). Memory tools get a demo namespace and accept their valid 4xx.
-import { missingDocumentedKeys } from "./sweep-shape.js";
+import { missingDocumentedKeys, emptyPromisedArrays } from "./sweep-shape.js";
 
 const TARGET = process.env.TARGET_URL || "http://127.0.0.1:3000";
 
@@ -66,7 +66,8 @@ const NETWORK = new Set([
   "/v1/images/fast", "/v1/images/pro", "/v1/videos/generations",  // llm-images-fast-kit.js
   "/api/asset-transfers", "/api/token-balances", "/api/token-allowance", "/api/tx-receipt", "/api/block-receipts", "/api/token-price-history",  // alchemy-data-kit.js
   "/api/fc-cast-search", "/api/fc-channel-feed", "/api/fc-trending", "/api/fc-user-casts", "/api/fc-cast", "/api/fc-cast-replies", "/api/fc-channel", "/api/fc-user-search", "/api/fc-cast-metrics",  // farcaster-social-kit.js
-  "/api/coin-price-by-contract", "/api/coin-profile", "/api/coin-history", "/api/coin-ohlc", "/api/coin-market-chart-range", "/api/coin-categories", "/api/global-defi", "/api/exchanges", "/api/exchange-tickers", "/api/exchange-rates", "/api/coin-search", "/api/coins-list",  // crypto-markets-kit.js
+  "/api/coin-price-by-contract", "/api/coin-profile", "/api/coin-history", "/api/coin-ohlc", "/api/coin-market-chart-range", "/api/coin-categories", "/api/global-defi", "/api/exchanges", "/api/exchange-tickers", "/api/exchange-rates", "/api/coin-search", "/api/coins-list",
+  "/api/rwa-list", "/api/rwa-markets", "/api/rwa-asset", "/api/rwa-issuers", "/api/rwa-issuer",  // crypto-markets-kit.js
   "/api/defi-yields", "/api/defi-yield-history", "/api/defi-protocols", "/api/defi-protocol", "/api/defi-chains", "/api/defi-chain-tvl-history", "/api/stablecoins", "/api/stablecoin-supply-history", "/api/defi-fees", "/api/defi-dex-volume",  // defi-kit.js
   "/api/crypto-news", "/api/crypto-indicators", "/api/crypto-market-pulse",  // crypto-signals-kit.js
   "/api/site-map", "/api/site-crawl",  // crawl-kit.js
@@ -223,6 +224,12 @@ const NETWORK = new Set([
   // also pass — NETWORK membership is a timeout safety hedge. All 39 packs:
   "/api/skill/security-audit", "/api/skill/email-deliverability", "/api/skill/financial-research",
   "/api/skill/macro-economics", "/api/skill/macro-dashboard", "/api/skill/dns-network-ops", "/api/skill/crypto-research",
+  // fixed-income-desk joined 2026-09-01: it was an instant 0/5 (no PACK_STEPS
+  // entry, every step todoError'd in microseconds) so it never needed the
+  // hedge - implementing it for real gave it three sequential upstream reads
+  // (fiscaldata twice + FRED), the same dependencies as macro-economics above,
+  // and a slow upstream moment pushed it past the 20s cap on its first CI run.
+  "/api/skill/fixed-income-desk",
   "/api/skill/content-extraction", "/api/skill/sec-filings-deep-dive", "/api/skill/structured-scrape",
   "/api/skill/decode-blob", "/api/skill/trend-analysis", "/api/skill/forecasting-bake-off",
   "/api/skill/document-intel", "/api/skill/loan-comparison", "/api/skill/investment-decision",
@@ -301,8 +308,8 @@ const NETWORK = new Set([
   // dossier-kit composites: EDGAR + grounded web search + synthesis, 503 without key.
   "/v1/dossier", "/v1/dossier/max",
   // Anthropic Messages wire (OpenRouter /messages upstream) - same tolerance.
-  "/v1/nano/messages", "/v1/auto/messages", "/v1/messages", "/v1/pro/messages", "/v1/premium/messages",
-  "/v1/nano/responses", "/v1/auto/responses", "/v1/responses", "/v1/pro/responses", "/v1/premium/responses",
+  "/v1/nano/messages", "/v1/auto/messages", "/v1/messages", "/v1/pro/messages", "/v1/premium/messages", "/v1/metered/messages",
+  "/v1/nano/responses", "/v1/auto/responses", "/v1/responses", "/v1/pro/responses", "/v1/premium/responses", "/v1/metered/responses",
   // Image generation wire path: hits OpenRouter upstream (Gemini image model).
   // 503 without OPENROUTER_API_KEY — same tolerance as the chat tiers.
   "/v1/images/generations",
@@ -348,6 +355,11 @@ const cats = {};
 function checkShape(path, method, op, body) {
   const missing = missingDocumentedKeys(path, op, body);
   if (missing.length) shapeMismatches.push(`${method} ${path} → missing documented keys: ${missing.join(",")}`);
+  // A key can be PRESENT and still teach an agent the tool is broken: three
+  // tools published an example whose own input returned an empty array where
+  // the docs promise entries (2026-08-29). See sweep-shape.js.
+  const hollow = emptyPromisedArrays(path, op, body);
+  if (hollow.length) shapeMismatches.push(`${method} ${path} → documented example returns an EMPTY array for: ${hollow.join(",")} (its own published input produces nothing)`);
 }
 
 // ONE HIT PER ENDPOINT ACROSS THE TWO SWEEPS. scripts/test-non-metered-examples.js

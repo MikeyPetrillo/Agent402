@@ -66,10 +66,32 @@ async function getJson(url, fetchImpl, timeoutMs) {
  * Returns `{ transaction, amount }` when one is found, otherwise null.
  * Polls because the whole point is that the transfer lands LATE.
  */
+/** The transaction hash a failed settle names, if any: the facilitator's
+ *  timeout body carries `transaction` when something was submitted before
+ *  its bound (2026-08-28), so the chain can be asked about THAT transaction
+ *  instead of scanning the payer's recent effects. Exported for tests. */
+export function settleTxOf(resultOrError) {
+  const r = resultOrError;
+  const h = r?.transaction || r?.response?.transaction || r?.data?.transaction;
+  return typeof h === "string" && /^[0-9a-f]{64}$/i.test(h) ? h.toLowerCase() : null;
+}
+
+/** Confirm ONE named transaction: it must be on-chain, successful, and carry
+ *  an account_credited effect to our payTo in the pinned asset. Any miss ->
+ *  null (the caller falls back to the payer scan). */
+async function confirmByHash({ txHash, payTo, assetCode, base, fetchImpl, timeoutMs }) {
+  const tx = await getJson(`${base}/transactions/${encodeURIComponent(txHash)}`, fetchImpl, timeoutMs);
+  if (!tx || tx.successful !== true) return null;
+  const txEff = await getJson(`${base}/transactions/${encodeURIComponent(txHash)}/effects?limit=50`, fetchImpl, timeoutMs);
+  const credited = (txEff?._embedded?.records || []).find((e) => e?.type === "account_credited" && e?.account === payTo && (!assetCode || !e?.asset_code || e.asset_code === assetCode));
+  return credited ? { transaction: txHash, amount: credited.amount || null } : null;
+}
+
 export async function confirmStellarTransfer({
   payer,
   payTo,
   sinceMs,
+  txHash = null,
   horizon = process.env.STELLAR_HORIZON_URL || DEFAULT_HORIZON,
   assetCode = "USDC",          // pin the asset; see the filter below
   waitMs = 8_000,
@@ -77,8 +99,22 @@ export async function confirmStellarTransfer({
   timeoutMs = 4_000,
   fetchImpl = fetch,
 } = {}) {
-  if (!payer || !payTo || !Number.isFinite(sinceMs)) return null;
   const base = String(horizon).replace(/\/+$/, "");
+  // A named transaction is checked first and exactly - no window, no payer
+  // matching (the same-buyer-window ambiguity the refund verifier had to
+  // close). It is polled for the wait window too: a settle that timed out
+  // right after submission lands a ledger or two later.
+  if (txHash && payTo) {
+    const hashDeadline = Date.now() + waitMs;
+    for (;;) {
+      const found = await confirmByHash({ txHash, payTo, assetCode, base, fetchImpl, timeoutMs });
+      if (found) return found;
+      if (Date.now() >= hashDeadline || !payer) break;
+      await new Promise((r) => setTimeout(r, stepMs));
+    }
+    if (!payer) return null;
+  }
+  if (!payer || !payTo || !Number.isFinite(sinceMs)) return null;
   const deadline = Date.now() + waitMs;
 
   for (;;) {
@@ -177,8 +213,10 @@ export async function settleWithStellarFallback({ primary, fallback = null, conf
   if (primaryRes && primaryRes.success !== false) return primaryRes;
   const failure = primaryErr || primaryRes;
   const payer = settlePayerOf(failure);
-  // 1. Did the primary's submission land anyway? (the settle-late race)
-  let found = await confirm({ payer });
+  const txHash = settleTxOf(failure);
+  // 1. Did the primary's submission land anyway? (the settle-late race) - by
+  //    the exact hash when the facilitator named one, else by the payer scan.
+  let found = await confirm({ payer, txHash });
   if (found) return honour(primaryRes, found, primaryErr ? `settle threw (${String(primaryErr?.message || primaryErr).slice(0, 120)})` : `facilitator said ${JSON.stringify(primaryRes?.errorReason || "failed")}`);
   // 2. Not on chain: same signed envelope through the fallback facilitator.
   if (typeof fallback === "function") {
@@ -190,7 +228,7 @@ export async function settleWithStellarFallback({ primary, fallback = null, conf
       return { ...fbRes, viaFallback: true };
     }
     // 3. Both refused: the primary may still have landed late, or the fallback's.
-    found = await confirm({ payer: settlePayerOf(fbErr || fbRes) || payer });
+    found = await confirm({ payer: settlePayerOf(fbErr || fbRes) || payer, txHash: settleTxOf(fbErr || fbRes) || txHash });
     if (found) return honour(primaryRes, found, "both facilitators reported failure");
     // errorReason alone hid what the fallback objected to (canary run
     // 32972751838: "unexpected_verify_error" and nothing else) - carry the

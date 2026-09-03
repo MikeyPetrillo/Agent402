@@ -46,7 +46,7 @@ export function ledgerCatalogPage(baseUrl, catalog, skillPacks) {
   // ---- SEO ----
   const canonical = baseUrl + "/tools";
   const title = `${fmtNum(count)} pay-per-call tools for AI agents - the Agent402 catalog`;
-  const description = `${fmtNum(count)} deterministic tools an AI agent can call and pay for per request in USDC. ${fmtNum(freeCount)} run free on proof-of-work. No signup, no API keys. Browse by category, or describe a task and let the router resolve it.`;
+  const description = `${fmtNum(count)} tools an AI agent can call and pay for per request in USDC. ${fmtNum(freeCount)} run free on proof-of-work. No signup, no API keys. Browse by category, or describe a task and let the router resolve it.`;
 
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, sameAs: [`https://github.com/MikeyPetrillo/Agent402`, "https://x.com/Agent402Tools"] };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
@@ -87,14 +87,15 @@ table{border-collapse:collapse;width:100%}
       <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">our tools</span>
     </nav>
     <h1 style="font-weight:800;font-size:46px;line-height:1;letter-spacing:-.03em;margin:0 0 12px;color:var(--ink);">Our tools</h1>
-    <p style="font-size:16.5px;line-height:1.55;color:var(--muted);margin:0;max-width:640px;">${fmtNum(count)} deterministic tools an agent can call and pay for per request. Around ${fmtNum(freeCount)} of them run free on proof-of-work. This is <em style="color:var(--on-dark2);">our own</em> catalog - for every tool in the index, ours and other sellers', see <a href="/marketplace/tools" style="color:var(--ink);border-bottom:1px solid var(--accent);text-decoration:none;">all indexed tools</a>.</p>
+    <p style="font-size:16.5px;line-height:1.55;color:var(--muted);margin:0;max-width:640px;">${fmtNum(count)} tools an agent can call and pay for per request. Around ${fmtNum(freeCount)} of them run free on proof-of-work. This is <em style="color:var(--on-dark2);">our own</em> catalog - for every tool in the index, ours and other sellers', see <a href="/marketplace/tools" style="color:var(--ink);border-bottom:1px solid var(--accent);text-decoration:none;">all indexed tools</a>.</p>
 
     <div class="cat-search-wrap" style="display:flex;gap:0;background:var(--card);max-width:760px;margin:22px 0 0;">
       <label for="cat-search" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">Search tools</label>
       <span style="font-family:var(--font-mono);color:var(--accent);padding:0 12px;display:flex;align-items:center;font-weight:700;">⌕</span>
       <input id="cat-search" type="text" placeholder="Describe a task: decode a JWT, OCR an image, verify a settlement…" style="flex:1;min-width:0;background:transparent;border:none;outline:none;color:var(--ink);font-family:var(--font-mono);font-size:14px;padding:15px 0;">
     </div>
-    <p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:11px 0 0;">Filters the table below as you type. Agents skip the browsing and call <span style="color:var(--muted);">GET /api/find</span> directly - free, no wallet.</p>
+    <p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:11px 0 0;">Searches every tool as you type - same free <span style="color:var(--muted);">GET /api/find</span> agents call, no wallet.</p>
+    <div id="cat-results" style="display:none;max-width:760px;margin:14px 0 0;border:1px solid var(--hairline);background:var(--card);"></div>
 
     <div style="display:flex;flex-wrap:wrap;margin-top:30px;border-top:1px dashed var(--dash);">
       <div style="flex:1 1 140px;padding:16px 20px 16px 0;margin-right:20px;border-right:1px dashed var(--dash);"><div style="font-family:var(--font-mono);font-weight:700;font-size:21px;line-height:1;font-variant-numeric:tabular-nums;">${fmtNum(count)}</div><div style="font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-top:6px;">tools</div></div>
@@ -135,7 +136,7 @@ table{border-collapse:collapse;width:100%}
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--green);margin-bottom:14px;">FREE TIER</div>
       <h2 style="font-weight:800;font-size:25px;margin:0 0 14px;color:var(--ink);">Pay with CPU, not USDC</h2>
       <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 16px;">Every pure-CPU tool is payable in compute. Your machine solves a single-use sha256 puzzle - about 85,000 hashes, a tenth of a second - and the call goes through. No wallet, no funding, no signup.</p>
-      <pre style="margin:0 0 16px;background:var(--paper);border:1px solid var(--hairline);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># the MCP connector solves it for you
+      <pre style="margin:0 0 16px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># the MCP connector solves it for you
 </span>claude mcp add --transport http \
   agent402 https://agent402.tools/mcp</pre>
       <a href="/playground" style="font-family:var(--font-mono);font-size:12.5px;color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--green);padding-bottom:1px;">watch it run in the playground →</a>
@@ -144,7 +145,7 @@ table{border-collapse:collapse;width:100%}
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">PAID TOOLS</div>
       <h2 style="font-weight:800;font-size:25px;margin:0 0 14px;color:var(--ink);">Quoted before you're charged</h2>
       <p style="font-size:15px;line-height:1.6;color:var(--muted);margin:0 0 16px;">Anything that costs us money to run - live search, browser rendering, inference, stored memory - is priced per call and states its price in the 402 challenge. A failed call is never charged, and there is no key to leak.</p>
-      <pre style="margin:0 0 16px;background:var(--paper);border:1px solid var(--hairline);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># price, asset and rail, before paying
+      <pre style="margin:0 0 16px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># price, asset and rail, before paying
 </span>curl -i https://agent402.tools/api/search \
   -d '{"q":"x402 adoption"}'</pre>
       <a href="/pricing" style="font-family:var(--font-mono);font-size:12.5px;color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">the full price list →</a>

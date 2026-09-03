@@ -100,8 +100,8 @@ function validateResponseFormat(rf) {
 }
 
 function validateInput(input, tierSlug) {
-  const model = typeof input.model === "string" ? input.model.trim() : "";
-  if (!model) throw bad('"model" is required (e.g. "gpt-4o-mini")');
+  // A missing model is served as gpt-4o-mini (the tier's proven default), never refused.
+  const model = (typeof input.model === "string" && input.model.trim()) || "gpt-4o-mini";
   if (!isAllowed(model, tierSlug)) {
     throw bad(`Model "${model}" is not allowed in the ${tierSlug} tier. Allowed prefixes: ${TIERS[tierSlug].prefixes.join(", ")}`);
   }

@@ -58,6 +58,33 @@ export function declaredDimensions(buf) {
     if (format === "gif" && buf.length >= 10) {
       return { width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
     }
+    if (format === "tiff" && buf.length >= 8) {
+      // IFD0: tag 256 = ImageWidth, 257 = ImageLength. A 138-byte TIFF declaring
+      // 30000x30000 reached 4.4 GB in the decoder before the post-decode cap
+      // (review 2026-08-28), so the header must be read here.
+      const le = buf.toString("ascii", 0, 2) === "II";
+      const u16 = (o) => (le ? buf.readUInt16LE(o) : buf.readUInt16BE(o));
+      const u32 = (o) => (le ? buf.readUInt32LE(o) : buf.readUInt32BE(o));
+      const ifd = u32(4);
+      if (ifd + 2 <= buf.length) {
+        const n = Math.min(u16(ifd), 512);
+        let width = 0, height = 0;
+        for (let k = 0; k < n; k++) {
+          const e = ifd + 2 + k * 12;
+          if (e + 12 > buf.length) break;
+          const tag = u16(e), type = u16(e + 2);
+          const val = type === 3 ? u16(e + 8) : u32(e + 8);
+          if (tag === 256) width = val; else if (tag === 257) height = val;
+        }
+        if (width && height) return { width, height };
+      }
+    }
+    if (format === "webp" && buf.length >= 30) {
+      const chunk = buf.toString("ascii", 12, 16);
+      if (chunk === "VP8X") return { width: 1 + buf.readUIntLE(24, 3), height: 1 + buf.readUIntLE(27, 3) };
+      if (chunk === "VP8 ") return { width: buf.readUInt16LE(26) & 0x3fff, height: buf.readUInt16LE(28) & 0x3fff };
+      if (chunk === "VP8L") { const b = buf.readUInt32LE(21); return { width: (b & 0x3fff) + 1, height: ((b >> 14) & 0x3fff) + 1 }; }
+    }
     if (format === "jpeg") {
       // Walk the marker chain to the first Start-Of-Frame; bounded by length.
       let i = 2;
@@ -97,6 +124,9 @@ export async function readImage(buf, { maxPixels = MAX_SRC_PIXELS } = {}) {
   // synchronous, so a small file declaring a huge canvas costs seconds of solid
   // CPU before any dimension is known.
   assertDeclaredWithinPixelCap(buf, maxPixels);
+  // A container whose size cannot be read from its header is refused: the
+  // decoder would otherwise allocate the full canvas before any check runs.
+  if (!declaredDimensions(buf)) throw bad("unsupported or unreadable image container (png, jpeg, gif, bmp, webp, tiff with a readable header)");
   let img;
   try { img = await Jimp.read(buf); }
   catch (e) { throw bad(`could not decode image: ${e.message}`); }

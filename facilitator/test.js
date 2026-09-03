@@ -186,6 +186,15 @@ const horizon = getHorizonClient(NETWORK);
 
   ok(decodeErrorResultXdr(undefined) === null, "decodeErrorResultXdr: no errorResultXdr at all -> null, not a crash");
 
+  // stellar-sdk >= 13 hands the parsed xdr.TransactionResult as `errorResult`
+  // (no string): the 2026-08-27 production line "(no errorResultXdr in
+  // response) ... otherKeys:[errorResult]" was this decoder reading the old field.
+  const { decodeErrorResult } = await import("./rpc-diagnostics.js");
+  const parsed = xdr.TransactionResult.fromXDR(encodeResult(xdr.TransactionResultResult.txFailed([badAuthOp])), "base64");
+  ok(decodeErrorResult({ status: "ERROR", errorResult: parsed })?.opCodes?.[0] === "opBadAuth", "decodeErrorResult: the SDK's parsed errorResult object decodes like the XDR string did");
+  ok(decodeErrorResult({ status: "ERROR", errorResultXdr: encodeResult(xdr.TransactionResultResult.txFailed([badAuthOp])) })?.opCodes?.[0] === "opBadAuth", "decodeErrorResult: the legacy errorResultXdr string still decodes");
+  ok(decodeErrorResult({ status: "ERROR" }) === null, "decodeErrorResult: neither field -> null");
+
   console.log("rpc-diagnostics.js unit tests ✓");
 }
 
@@ -319,6 +328,163 @@ const horizon = getHorizonClient(NETWORK);
   ok(err && /timeout/i.test(String(err.message)) && Array.isArray(err.fallbackErrors) && err.fallbackErrors.length === 1 && took < 8_000, `failover: all nodes down -> the primary's timeout error, fallbackErrors attached (${took}ms)`);
   for (const s of [good, fb2, rpcErr, blackhole, fbDown]) { s.closeAllConnections?.(); s.close(); }
   console.log("rpc-failover.js unit tests ✓");
+}
+
+// ---------------------------------------------------------------------------
+// Hedged reads (rpc-failover.js hedgeMs): a slow-but-answering primary no
+// longer costs the settle. Same process-wide prototype, new install list.
+// ---------------------------------------------------------------------------
+{
+  const { createServer } = await import("node:http");
+  const { rpc } = await import("@stellar/stellar-sdk");
+  const { installRpcFailover, shouldHedge, _resetForTest } = await import("./rpc-failover.js");
+  const jsonRpc = (handler, delayMs = 0) => createServer((req, res) => { let b = ""; req.on("data", (c) => { b += c; }); req.on("end", () => { let j = {}; try { j = JSON.parse(b); } catch { /* ignore */ } const send = () => { const out = handler(j); res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ jsonrpc: "2.0", id: j.id ?? 1, ...out })); }; delayMs ? setTimeout(send, delayMs) : send(); }); });
+  let slowHits = 0, fbHits = 0, quickHits = 0;
+  const slow = jsonRpc(() => { slowHits++; return { result: { status: "slow", latestLedger: 1, oldestLedger: 1, ledgerRetentionWindow: 1 } }; }, 1_500);
+  const fb = jsonRpc(() => { fbHits++; return { result: { status: "fb", latestLedger: 1, oldestLedger: 1, ledgerRetentionWindow: 1 } }; });
+  const quick = jsonRpc(() => { quickHits++; return { result: { status: "quick", latestLedger: 1, oldestLedger: 1, ledgerRetentionWindow: 1 } }; }, 50);
+  const rpcErr = jsonRpc(() => ({ error: { code: -32602, message: "invalid params from slow primary" } }), 100);
+  for (const s of [slow, fb, quick, rpcErr]) await new Promise((r) => s.listen(0, "127.0.0.1", r));
+  const url = (s) => `http://127.0.0.1:${s.address().port}`;
+  const logs = [];
+  _resetForTest();
+  installRpcFailover([url(fb)], { log: (m) => logs.push(m), allowHttp: true, hedgeMs: 200 });
+  ok(logs.some((m) => /reads hedged .* after 200ms/.test(m)), "hedge: the startup line names the hedge delay and node");
+
+  // (a) primary silent past the hedge delay -> the fallback's answer wins, well before the primary would have answered
+  const s1 = new rpc.Server(url(slow), { allowHttp: true });
+  let t0 = Date.now();
+  const h1 = await s1.getHealth();
+  let took = Date.now() - t0;
+  ok(h1.status === "fb" && fbHits === 1 && took < 1_200, `hedge: a slow primary is out-raced by the fallback (${took}ms, status ${h1.status})`);
+  ok(logs.some((m) => /\[rpc-hedge\] getHealth: .*silent for 200ms -> also asking/.test(m)) && logs.some((m) => /\[rpc-hedge\] getHealth: served by/.test(m)), "hedge: both the hedge and the winner are logged");
+
+  // (b) a primary that answers inside the delay is never hedged
+  fbHits = 0; logs.length = 0;
+  const s2 = new rpc.Server(url(quick), { allowHttp: true });
+  const h2 = await s2.getHealth();
+  ok(h2.status === "quick" && quickHits === 1 && fbHits === 0 && !logs.some((m) => /rpc-hedge/.test(m)), "hedge: a prompt primary answers alone (no fallback traffic)");
+
+  // (c) a JSON-RPC error from the primary is an answer even when it arrives slowly - no hedge result replaces it
+  fbHits = 0;
+  const s3 = new rpc.Server(url(rpcErr), { allowHttp: true });
+  let err = null;
+  try { await s3.getHealth(); } catch (e) { err = e; }
+  ok(err && /invalid params from slow primary/.test(String(err?.message || JSON.stringify(err))), "hedge: a JSON-RPC error from the primary stands (it is an answer)");
+
+  // (d) the rule: sendTransaction is never hedged, a fallback instance is never hedged
+  ok(shouldHedge("getTransaction", s1) === true && shouldHedge("sendTransaction", s1) === false, "hedge: reads are hedged, sendTransaction never");
+  const fbInstance = new rpc.Server(url(fb), { allowHttp: true });
+  ok(shouldHedge("getHealth", fbInstance) === false, "hedge: a call already on a fallback url is not hedged again");
+  for (const s of [slow, fb, quick, rpcErr]) { s.closeAllConnections?.(); s.close(); }
+  console.log("rpc-hedge unit tests ✓");
+}
+
+// ---------------------------------------------------------------------------
+// settle-poll.js: the post-submit poll is capped, observable, and hands the
+// tx hash out (so a timed-out /settle can still name what it submitted).
+// ---------------------------------------------------------------------------
+{
+  const { installPollClamp } = await import("./settle-poll.js");
+  const seen = [];
+  const proto = { async pollForTransaction(server, hash, max, delay) { seen.push({ hash, max, delay }); return { success: max === 5 }; } };
+  const logs = [], hashes = [];
+  ok(installPollClamp(proto, { maxAttempts: 8, log: (m) => logs.push(m), onHash: (h) => hashes.push(h) }) === true, "poll clamp: installs on a scheme prototype with pollForTransaction");
+  const r1 = await proto.pollForTransaction(null, "abc123def456xyz", 300, 1000);
+  ok(seen[0].max === 8 && seen[0].delay === 1000 && r1.success === false, `poll clamp: the caller's 300 attempts (maxTimeoutSeconds) become 8 (got ${seen[0].max})`);
+  ok(hashes[0] === "abc123def456xyz" && logs.some((m) => /submitted abc123def456.* polling up to 8 attempt\(s\) \(caller asked 300\)/.test(m)) && logs.some((m) => /not confirmed after \d+ms/.test(m)), "poll clamp: hash handed out, attempts and elapsed logged");
+  const r2 = await proto.pollForTransaction(null, "h2", 5, 1000);
+  ok(seen[1].max === 5 && r2.success === true && logs.some((m) => /h2\.\.\. SUCCESS after/.test(m)), "poll clamp: a request under the cap passes through unchanged");
+  ok(installPollClamp({}, {}) === false, "poll clamp: refuses a prototype without pollForTransaction");
+  console.log("settle-poll.js unit tests ✓");
+}
+
+// ---------------------------------------------------------------------------
+// fee-bid.js: the settlement transaction goes out bidding ABOVE the vendor's
+// hardcoded network minimum, because bidding the minimum lost Stellar's fee
+// auction on busy ledgers (measured 2026-08-31: 37.5% of Stellar rail legs
+// failed over 30 days, in two shapes that both reduce to this bid). The
+// assertions that matter are the ones that would let the defect back in: a
+// build() that does not actually carry the raised bid, and a malformed env
+// value quietly restoring the minimum.
+// ---------------------------------------------------------------------------
+{
+  const { installFeeBid, resolveBidStroops, assertFeeBumpUnpatched, DEFAULT_BID_STROOPS, VENDOR_BID_STROOPS } =
+    await import("./fee-bid.js");
+  const { Account, Asset, Networks, Operation, TransactionBuilder: TB, BASE_FEE } =
+    await import("@stellar/stellar-sdk");
+
+  ok(VENDOR_BID_STROOPS === Number(BASE_FEE), `fee bid: the vendor default we raise from is the SDK's BASE_FEE (got ${VENDOR_BID_STROOPS})`);
+
+  // The patch mutates ONE TransactionBuilder class, and it only reaches the
+  // vendor because both resolve to the same physical @stellar/stellar-sdk.
+  // A transitive dependency pinning a second copy would shadow it and leave
+  // the fix installed, logged at startup, and completely inert - the silent-
+  // dead-fix class this repo has been burned by before. Pin the invariant.
+  {
+    const { readdirSync, existsSync } = await import("node:fs");
+    const nested = readdirSync(new URL("./node_modules/@x402/", import.meta.url), { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .filter((d) => existsSync(new URL(`./node_modules/@x402/${d.name}/node_modules/@stellar/stellar-sdk`, import.meta.url)));
+    ok(nested.length === 0, `fee bid: no nested @stellar/stellar-sdk copy shadows the one this patch mutates (found: ${nested.map((d) => d.name).join(", ") || "none"})`);
+  }
+
+  // Env parsing. A typo must fall back to the DEFAULT, never to disabled -
+  // disabled is the old broken behaviour, and a typo must not select it.
+  ok(resolveBidStroops(undefined) === DEFAULT_BID_STROOPS, "fee bid: unset env uses the default bid");
+  ok(resolveBidStroops("") === DEFAULT_BID_STROOPS, "fee bid: empty env uses the default bid");
+  ok(resolveBidStroops("12345") === 12345, "fee bid: an explicit whole-stroop value is honoured");
+  ok(resolveBidStroops("off") === 0 && resolveBidStroops("0") === 0, "fee bid: off/0 disables the patch");
+  {
+    const warned = [];
+    ok(resolveBidStroops("50_000!", { log: (m) => warned.push(m) }) === DEFAULT_BID_STROOPS,
+      "fee bid: a malformed value falls back to the default, never silently to the network minimum");
+    ok(resolveBidStroops("-5", { log: (m) => warned.push(m) }) === DEFAULT_BID_STROOPS, "fee bid: a negative value falls back to the default");
+    ok(resolveBidStroops("1.5", { log: (m) => warned.push(m) }) === DEFAULT_BID_STROOPS, "fee bid: a fractional stroop falls back to the default");
+    ok(warned.length === 3, `fee bid: every fallback says so out loud (got ${warned.length})`);
+  }
+
+  // The patch itself, against a private subclass so the real SDK class is not
+  // mutated for the rest of this suite.
+  class IsolatedBuilder extends TB {}
+  const logs = [];
+  ok(installFeeBid({ bidStroops: 50_000, builder: IsolatedBuilder, log: (m) => logs.push(m) }) === true, "fee bid: installs on the builder prototype");
+  ok(logs.some((m) => /inclusion-fee bid installed: 50000 stroops/.test(m)), "fee bid: startup line names the bid actually installed");
+  ok(installFeeBid({ bidStroops: 50_000, builder: IsolatedBuilder, log: () => {} }) === false, "fee bid: refuses to double-patch");
+
+  const src = "GBA2DDJ4KQXQCGNB7RUU5I2BK5SXROJFUNZV7EZ4XUS7RXFOXEPNY6O4";
+  const payment = () => Operation.payment({ destination: src, asset: Asset.native(), amount: "1" });
+  const built = (Builder, fee) => new Builder(new Account(src, "1"), { fee, networkPassphrase: Networks.PUBLIC })
+    .setTimeout(30).addOperation(payment()).build();
+
+  // The assertion the whole module exists for: a builder handed the vendor's
+  // BASE_FEE must produce a transaction bidding the raised fee. Reading
+  // this.baseFee would pass even if build() ignored it.
+  ok(Number(built(IsolatedBuilder, BASE_FEE).fee) === 50_000,
+    `fee bid: a transaction built at the vendor's BASE_FEE goes out at the raised bid (got ${built(IsolatedBuilder, BASE_FEE).fee})`);
+  ok(Number(built(IsolatedBuilder, "500000").fee) === 500_000,
+    "fee bid: a caller already bidding above the minimum is left alone, never lowered");
+  ok(Number(built(TB, BASE_FEE).fee) === Number(BASE_FEE),
+    "fee bid: an unpatched builder is untouched (the patch is scoped, not global-by-accident)");
+
+  class DisabledBuilder extends TB {}
+  ok(installFeeBid({ bidStroops: 0, builder: DisabledBuilder, log: () => {} }) === false, "fee bid: a disabled bid installs nothing");
+  ok(Number(built(DisabledBuilder, BASE_FEE).fee) === Number(BASE_FEE), "fee bid: disabled leaves the vendor minimum in place");
+  class NoRaiseBuilder extends TB {}
+  ok(installFeeBid({ bidStroops: VENDOR_BID_STROOPS, builder: NoRaiseBuilder, log: () => {} }) === false,
+    "fee bid: a bid equal to the minimum is a no-op rather than a patch that changes nothing");
+
+  // The fee-bump path carries its own hardcoded BASE_FEE that build() never
+  // sees. We configure no feeBumpSigner today; if that changes, this must be
+  // a loud startup line and not a silent return to the minimum bid.
+  ok(assertFeeBumpUnpatched({}, { log: () => {} }) === true, "fee bid: no feeBumpSigner configured is the expected state");
+  {
+    const warned = [];
+    ok(assertFeeBumpUnpatched({ feeBumpSigner: { address: src } }, { log: (m) => warned.push(m) }) === false
+      && warned.some((m) => /fee bump is built with the vendor's hardcoded BASE_FEE/.test(m)),
+      "fee bid: a configured feeBumpSigner warns that the bid does not reach the submitted transaction");
+  }
+  console.log("fee-bid.js unit tests ✓");
 }
 
 // Everything above is offline and deterministic; everything below needs

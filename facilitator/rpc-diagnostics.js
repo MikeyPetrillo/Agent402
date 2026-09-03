@@ -50,7 +50,7 @@ function decodeOperationResult(opResult) {
 export function decodeErrorResultXdr(errorResultXdr) {
   if (!errorResultXdr) return null;
   try {
-    const result = xdr.TransactionResult.fromXDR(errorResultXdr, "base64");
+    const result = typeof errorResultXdr === "string" ? xdr.TransactionResult.fromXDR(errorResultXdr, "base64") : errorResultXdr;
     const code = result.result().switch().name;
     // txFailed carries a richer, per-operation breakdown - the actual
     // reason a transaction that got as far as fee/sequence checks then
@@ -63,6 +63,17 @@ export function decodeErrorResultXdr(errorResultXdr) {
   } catch (e) {
     return { decodeError: (e?.message || String(e)).slice(0, 200) };
   }
+}
+
+/** stellar-sdk >= 13 parses the RPC's errorResultXdr into `errorResult` (an
+ *  xdr.TransactionResult INSTANCE) and drops the string; the 2026-08-27 log
+ *  line "(no errorResultXdr in response) ... otherKeys:[errorResult]" was
+ *  this decoder reading the old field. Accept both. Exported for tests. */
+export function decodeErrorResult(result) {
+  const obj = result?.errorResult;
+  if (obj && typeof obj === "object" && typeof obj.result === "function") return decodeErrorResultXdr(obj);
+  if (typeof obj === "string") return decodeErrorResultXdr(obj);
+  return decodeErrorResultXdr(result?.errorResultXdr);
 }
 
 /** What to log for a rejected sendTransaction when the RPC gave no result XDR:
@@ -90,7 +101,7 @@ export function installRpcDiagnostics() {
   rpc.Server.prototype.sendTransaction = async function patchedSendTransaction(transaction) {
     const result = await original.call(this, transaction);
     if (result?.status !== "PENDING") {
-      const decoded = decodeErrorResultXdr(result?.errorResultXdr);
+      const decoded = decodeErrorResult(result);
       console.warn(
         `[rpc-diagnostics] sendTransaction rejected: status=${result?.status} hash=${result?.hash || "none"}`,
         decoded ? JSON.stringify(decoded) : `(no errorResultXdr in response) raw=${describeRpcRejection(result)}`,

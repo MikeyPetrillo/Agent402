@@ -25,6 +25,14 @@ const TIMEOUT_MS = 12_000;
 // - https://docs.polymarket.com/developers/CLOB/overview
 // - https://trading-api.readme.io/reference/getmarkets (Kalshi)
 const POLY_GAMMA = "https://gamma-api.polymarket.com";
+// How far a keyword search looks. Gamma CAPS a keyset page at 100 rows however
+// large a `limit` you ask for (measured 2026-08-29: asking 500 returns 100), so
+// the real reach is 100 x 6 = 600 of the highest-volume active markets. The loop
+// exits as soon as it has enough matches, so a common term still costs one
+// request; only a rare or absent term pays the full budget, and the response
+// says how deep it went so 0 results are never ambiguous.
+const POLY_SEARCH_PAGE = Number(process.env.POLYMARKET_SEARCH_PAGE) || 100;
+const POLY_SEARCH_MAX_PAGES = Number(process.env.POLYMARKET_SEARCH_MAX_PAGES) || 6;
 const POLY_CLOB = "https://clob.polymarket.com";
 const KALSHI = "https://api.elections.kalshi.com/trade-api/v2";
 
@@ -162,7 +170,38 @@ function shapeMarket(m) {
   };
 }
 
+// Kalshi REMOVED the integer-cents fields this shaper was built on
+// (`yes_bid`, `yes_ask`, `no_bid`, `no_ask`, `last_price`, `volume`,
+// `open_interest`). Verified 2026-08-28 against the live API: not one of them
+// is present on any market, so both paid Kalshi tools were answering HTTP 200
+// with every price, volume and open-interest field null - a charged empty
+// answer that no guard could see, because 200 + nulls is not an error.
+//
+// The replacements are STRINGS in DOLLARS ("0.4700") and fixed-point
+// ("volume_fp"). The buyer-facing shape stays in CENTS so an existing caller's
+// arithmetic keeps working, and the dollar values ride alongside under their
+// own names. `centsFrom` reads the new field first and falls back to the old
+// one, so a Kalshi rollback cannot break us a second time.
+const centsFrom = (dollars, legacyCents) => {
+  const d = asNumber(dollars);
+  if (d !== null) return Math.round(d * 100 * 1e6) / 1e6; // dollars -> cents, no float dust
+  return asNumber(legacyCents);
+};
+
+/** Gamma list payload -> array. `/markets/keyset` returns {markets, next_cursor};
+ *  the deprecated `/markets` returned a bare array. Accepts either, so a
+ *  rollback on their side cannot empty these tools. */
+function polyList(raw) {
+  if (Array.isArray(raw)) return raw;
+  return Array.isArray(raw?.markets) ? raw.markets : [];
+}
+
 function shapeKalshiMarket(m) {
+  const yesBid = centsFrom(m.yes_bid_dollars, m.yes_bid);
+  const yesAsk = centsFrom(m.yes_ask_dollars, m.yes_ask);
+  const noBid = centsFrom(m.no_bid_dollars, m.no_bid);
+  const noAsk = centsFrom(m.no_ask_dollars, m.no_ask);
+  const lastPrice = centsFrom(m.last_price_dollars, m.last_price);
   return {
     ticker: m.ticker ?? null,
     eventTicker: m.event_ticker ?? null,
@@ -172,13 +211,16 @@ function shapeKalshiMarket(m) {
     openTime: m.open_time ?? null,
     closeTime: m.close_time ?? null,
     expirationTime: m.expiration_time ?? null,
-    yesBid: asNumber(m.yes_bid),
-    yesAsk: asNumber(m.yes_ask),
-    noBid: asNumber(m.no_bid),
-    noAsk: asNumber(m.no_ask),
-    lastPrice: asNumber(m.last_price),
-    volume: asNumber(m.volume),
-    openInterest: asNumber(m.open_interest),
+    yesBid, yesAsk, noBid, noAsk, lastPrice,
+    // The same five in dollars (0 to 1), which is how Kalshi now publishes them.
+    yesBidUsd: asNumber(m.yes_bid_dollars, yesBid === null ? null : yesBid / 100),
+    yesAskUsd: asNumber(m.yes_ask_dollars, yesAsk === null ? null : yesAsk / 100),
+    noBidUsd: asNumber(m.no_bid_dollars, noBid === null ? null : noBid / 100),
+    noAskUsd: asNumber(m.no_ask_dollars, noAsk === null ? null : noAsk / 100),
+    lastPriceUsd: asNumber(m.last_price_dollars, lastPrice === null ? null : lastPrice / 100),
+    volume: asNumber(m.volume_fp, asNumber(m.volume)),
+    openInterest: asNumber(m.open_interest_fp, asNumber(m.open_interest)),
+    liquidityUsd: asNumber(m.liquidity_dollars),
     venue: "kalshi",
     venueUrl: m.ticker ? `https://kalshi.com/markets/${m.ticker.toLowerCase()}` : null,
   };
@@ -192,8 +234,16 @@ async function polymarketSearch({ query, limit, activeOnly } = {}) {
     throw bad('"query" is required (non-empty string)');
   }
   const lim = Math.max(1, Math.min(50, Number.parseInt(limit, 10) || 10));
+  // Gamma has no server-side keyword filter, so the match is client-side - which
+  // means the only thing that decides whether a term is FINDABLE is how many
+  // markets we look at. Fetching `lim * 4` (20 rows for the default limit) made
+  // this a search of "today's top 20 by 24h volume" wearing a search tool's
+  // name: on 2026-08-29 it answered 0 markets for "election", "Trump",
+  // "bitcoin" and "2028" while Polymarket was actively listing all of them, and
+  // 4 for "Fed" only because a Fed market happened to be hot that hour. Page the
+  // cursor instead, stopping the moment we have enough matches.
   const params = new URLSearchParams({
-    limit: String(Math.min(lim * 4, 200)), // overfetch then filter client-side
+    limit: String(POLY_SEARCH_PAGE),
     order: "volume24hr",
     ascending: "false",
   });
@@ -202,20 +252,42 @@ async function polymarketSearch({ query, limit, activeOnly } = {}) {
     params.set("closed", "false");
   }
   const meta = {};
-  const raw = await fetchJson(`${POLY_GAMMA}/markets?${params}`, "Polymarket Gamma", meta);
-  const arr = Array.isArray(raw) ? raw : [];
+  // Polymarket's gamma LIST endpoints answer `deprecation: true` and
+  // `sunset: Fri, 01 May 2026` in HTTP HEADERS ONLY - nothing in their docs or
+  // OpenAPI spec says so (found 2026-08-28). `/markets/keyset` is the named
+  // replacement: same filters and ordering, but it returns an OBJECT with a
+  // `markets` array and a `next_cursor`, and it REFUSES `offset` with a 422.
   const q = query.trim().toLowerCase();
-  const matched = arr
-    .filter((m) => {
+  const hits = [];
+  let cursor = null;
+  let scanned = 0;
+  let pages = 0;
+  // Bounded: at most POLY_SEARCH_MAX_PAGES requests, and it stops early as soon
+  // as `lim` matches are in hand, so a common term still costs one page.
+  for (; pages < POLY_SEARCH_MAX_PAGES && hits.length < lim; pages++) {
+    if (cursor) params.set("cursor", cursor); else params.delete("cursor");
+    const raw = await fetchJson(`${POLY_GAMMA}/markets/keyset?${params}`, "Polymarket Gamma", meta);
+    const arr = polyList(raw);
+    scanned += arr.length;
+    for (const m of arr) {
       const hay = `${m.question || ""} ${m.slug || ""} ${m.description || ""}`.toLowerCase();
-      return hay.includes(q);
-    })
-    .slice(0, lim)
-    .map(shapeMarket);
+      if (hay.includes(q) && hits.length < lim) hits.push(m);
+    }
+    cursor = (raw && typeof raw === "object" && !Array.isArray(raw) && raw.next_cursor) || null;
+    if (!cursor || arr.length === 0) break; // end of the list, not of our budget
+  }
+  const matched = hits.map(shapeMarket);
   return {
     query: query.trim(),
     count: matched.length,
     markets: matched,
+    // How deep the search actually went, because the match is client-side: a
+    // caller seeing 0 should be able to tell "not listed" from "not reached".
+    scannedMarkets: scanned,
+    searchExhausted: !cursor,
+    ...(matched.length === 0
+      ? { note: `No active Polymarket market matched ${JSON.stringify(query.trim())} in the ${scanned} highest-volume active markets${cursor ? " searched (more exist beyond the search depth)" : " (the full active list)"}.` }
+      : {}),
     source: "polymarket-gamma",
     ...staleFields(meta),
   };
@@ -237,11 +309,11 @@ async function polymarketMarket({ slug, id } = {}) {
     // excludes closed markets by default, so a resolved market "disappears"
     // from ?slug= even though it's still queryable — fall back to closed=true
     // before declaring not-found.
-    let r = await fetchJson(`${POLY_GAMMA}/markets?slug=${encodeURIComponent(s)}`, "Polymarket Gamma", meta);
-    if (!Array.isArray(r) || !r.length) {
-      r = await fetchJson(`${POLY_GAMMA}/markets?slug=${encodeURIComponent(s)}&closed=true`, "Polymarket Gamma", meta);
+    let r = polyList(await fetchJson(`${POLY_GAMMA}/markets/keyset?slug=${encodeURIComponent(s)}`, "Polymarket Gamma", meta));
+    if (!r.length) {
+      r = polyList(await fetchJson(`${POLY_GAMMA}/markets/keyset?slug=${encodeURIComponent(s)}&closed=true`, "Polymarket Gamma", meta));
     }
-    if (!Array.isArray(r) || !r.length) throw bad(`Market not found for slug "${s}"`, 404);
+    if (!r.length) throw bad(`Market not found for slug "${s}"`, 404);
     raw = r[0];
   }
   return { ...shapeMarket(raw), ...staleFields(meta) };
@@ -280,10 +352,20 @@ async function polymarketOrderbook({ tokenId, depth } = {}) {
     spread: bestBid != null && bestAsk != null ? bestAsk - bestBid : null,
     bids: topBids,
     asks: topAsks,
+    ...(topBids.length || topAsks.length ? {} : { note: RESOLVED_NOTE }),
     source: "polymarket-clob",
     ...staleFields(meta),
   };
 }
+
+/** An empty result on a prediction market usually means the market has stopped
+ *  trading, not that the tool failed. A caller cannot tell those apart from an
+ *  empty array, so the answer says which one it is: any saved token id or event
+ *  ticker eventually points at something resolved, and a silent empty read is
+ *  exactly how the Kalshi field rename hid for weeks. */
+const RESOLVED_NOTE = "No open orders for this outcome token. A market that has resolved or been delisted still answers, with an empty book - check the market's status before reading this as an outage.";
+const NO_HISTORY_NOTE = "No price samples in this window. The token id may belong to a market that never traded, or the interval may predate it.";
+const NO_MARKETS_NOTE = "This event carries no markets. Kalshi removes the markets of settled events, so a saved event ticker can resolve to an event with none left.";
 
 // ----------------------------------------------------------------------------
 // 4. polymarket-price-history — historical odds for a market outcome
@@ -314,6 +396,7 @@ async function polymarketPriceHistory({ tokenId, interval, fidelity } = {}) {
     first: points[0]?.price ?? null,
     last: points[points.length - 1]?.price ?? null,
     points,
+    ...(points.length ? {} : { note: NO_HISTORY_NOTE }),
     source: "polymarket-clob",
     ...staleFields(meta),
   };
@@ -370,6 +453,7 @@ async function kalshiEvent({ eventTicker } = {}) {
     mutuallyExclusive: !!event.mutually_exclusive,
     marketCount: markets.length,
     markets,
+    ...(markets.length ? {} : { note: NO_MARKETS_NOTE }),
     source: "kalshi",
     ...staleFields(meta),
   };
@@ -471,13 +555,13 @@ export const PREDICTION_MARKET_TOOLS = [
     name: "Polymarket orderbook",
     slug: "polymarket-orderbook",
     category: "crypto",
-    price: "$0.002",
+    price: "$0.001",
     description:
       "Live CLOB orderbook for a Polymarket outcome token. Returns top N bids (highest first), top N asks (lowest first), best bid/ask, mid-price, and spread. Use a clobTokenId from polymarket-market or polymarket-search.",
     tags: ["polymarket", "orderbook", "bids-asks", "spread", "liquidity"],
     discovery: {
       bodyType: "json",
-      input: { tokenId: "60447443643099453130956385288904175887233107411078568881602330835010340506057", depth: 5 },
+      input: { tokenId: "73572420636299743863462231021719080735797435555188685901000528926122020595832", depth: 5 },
       inputSchema: {
         type: "object",
         required: ["tokenId"],
@@ -515,7 +599,7 @@ export const PREDICTION_MARKET_TOOLS = [
     tags: ["polymarket", "history", "odds-history", "time-series", "probability"],
     discovery: {
       bodyType: "json",
-      input: { tokenId: "72909859729837290837290837290837290837290837290837290837290837290", interval: "1d" },
+      input: { tokenId: "73572420636299743863462231021719080735797435555188685901000528926122020595832", interval: "1d" },
       inputSchema: {
         type: "object",
         required: ["tokenId"],
@@ -604,7 +688,7 @@ export const PREDICTION_MARKET_TOOLS = [
     tags: ["kalshi", "event", "prediction-market", "regulated"],
     discovery: {
       bodyType: "json",
-      input: { eventTicker: "PRES-24" },
+      input: { eventTicker: "KXELONMARS-99" },
       inputSchema: {
         type: "object",
         required: ["eventTicker"],
@@ -647,6 +731,7 @@ export const PREDICTION_MARKET_TOOLS = [
 // Test-only exports
 export const __test = {
   asNumber,
+  polyList,
   parseJsonArray,
   shapeMarket,
   shapeKalshiMarket,

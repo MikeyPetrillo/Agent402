@@ -27,8 +27,8 @@
 // the stream finishes.) Streamed responses are not idempotency-replayable (the
 // cache hooks res.json only).
 
-import { METER_MARKUP, METER_FLOOR_USD, METER_MIN_SETTLE_USD } from "../gateway-meter.js";
-import { createHash } from "node:crypto";
+import { METER_MARKUP, METER_FLOOR_USD, METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
+import { createHash, createHmac } from "node:crypto";
 // Static import (not agent-kit's lazy pattern): validateRequest must stay
 // synchronous because promptCacheKey — called from the pre-paywall cache
 // middleware — normalizes through it.
@@ -280,6 +280,7 @@ export const TIERS = {
   // discipline as the other tiers. Listed FIRST so tierFor()'s
   // self-correcting 400s and /v1/models lead with the cheapest home.
   "v1-chat-nano": {
+    defaultModel: "openai/gpt-5.6-luna", // gpt-4.1-nano retires 2026-10-23 (OpenAI deprecations, read 2026-08-28); luna is its named successor. served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
     route: "POST /v1/nano/chat/completions",
     price: 0.003,
     priceSort: true, // cheapest provider under max_price (budget tier: price IS the product)
@@ -294,7 +295,8 @@ export const TIERS = {
     // the tier allowlist (server-chosen, caps still enforced by the body).
     fallbacks: ["deepseek/deepseek-chat", "openai/gpt-4o-mini"],
     prefixes: [
-      "openai/gpt-4.1-nano", "openai/gpt-5-nano",
+      // gpt-4.1-nano retired here 2026-09-02 ahead of OpenAI's 2026-10-23 removal; gpt-5.6-luna is its named successor and the tier default.
+      "openai/gpt-5-nano",
       // gpt-5.6-luna: $0.10/$0.60 after OpenAI's 2026-07-30 cut — frontier-lab
       // efficiency in the nano price class (live-verified 2026-08-04).
       "openai/gpt-5.6-luna",
@@ -312,6 +314,7 @@ export const TIERS = {
     ],
   },
   "v1-chat": {
+    defaultModel: "openai/gpt-4o-mini", // served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
     reasoningDefault: "lowest", // budget tier: lowest non-none effort on default-on reasoning models
     route: "POST /v1/chat/completions",
     price: 0.02,
@@ -319,8 +322,16 @@ export const TIERS = {
     maxTokens: 2048,
     maxPrice: { prompt: 2.5, completion: 8 }, // family prefixes reach mistral-large ~$2/$6, qwen-max ~$1.6/$6.4
     prefixes: [
-      "openai/gpt-4o-mini", "openai/gpt-4.1-mini", "openai/gpt-4.1-nano",
-      "openai/gpt-5.6-terra", // $1/$6 after the 2026-07-30 cut — under the tier bound
+      // gpt-5-nano is admitted on base as well (a nano model on a pricier tier is
+      // harmless), the way gpt-4.1-nano was until its 2026-10-23 retirement.
+      "openai/gpt-4o-mini", "openai/gpt-4.1-mini", "openai/gpt-5-nano",
+      // gpt-5.6-terra was admitted here when it listed at $1/$6. It lists at
+      // $2/$12 today (live 2026-08-28), OVER this tier's completion bound, so
+      // `provider.max_price` refused every non-flex attempt and each call burnt
+      // a wasted round trip; with OPENROUTER_FLEX=off it was unservable. Kept
+      // off the base tier rather than raising the bound, which is the belt that
+      // catches a model repriced upward: a buyer naming it now gets a
+      // self-explaining 400 instead of a silent failover.
       "anthropic/claude-haiku", "anthropic/claude-3-haiku", // claude-3.5-haiku left OpenRouter (live-verified 2026-08-19)
       // gemini-flash (bare) and gemini-2.0-flash left OpenRouter (live-verified
       // 2026-08-19, scripts/test-gateway-model-ids.js); 2.5 + 3.x remain.
@@ -330,6 +341,7 @@ export const TIERS = {
     ],
   },
   "v1-chat-pro": {
+    defaultModel: "openai/gpt-4o", // served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
     reasoningDefault: "low", // real reasoning, but never medium/high by default under a 4k cap
     route: "POST /v1/pro/chat/completions",
     price: 0.10,
@@ -362,6 +374,7 @@ export const TIERS = {
     ],
   },
   "v1-chat-premium": {
+    defaultModel: "anthropic/claude-opus-5", // served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
     reasoningDefault: "model", // premium buyers bought depth; 8k cap leaves room for the model default
     route: "POST /v1/premium/chat/completions",
     price: 0.50,
@@ -377,19 +390,24 @@ export const TIERS = {
     // chain below tries the next one - never a buyer charge (settlement is
     // post-handler, and a <400 response is required to settle).
     //
-    // NOT YET REACHABLE past ~90k chars: server.js's global
+    // NOT REACHABLE past ~90k chars ON THIS FLAT TIER: server.js's global
     // `app.use(express.json({ limit: "100kb" }))` runs before this route and
     // rejects a bigger body with a 413 first (confirmed live - a 60k-char
     // input passes both layers, 150k/250k both 413 identically at the outer
-    // layer regardless of this cap). The old 64k cap always fit safely under
-    // 100kb; this one won't until that route (or /v1/* generally) gets its
-    // own larger express.json limit - deliberately NOT done in this change,
-    // since the only clean way found (mounting a path-scoped express.json
-    // ahead of the global one) risks a second body-parser pass on an
-    // already-consumed stream for the same request, which needs its own
-    // careful verification, not a same-night bolt-on.
+    // layer regardless of this cap). The METERED routes are different: server.js
+    // mounts `express.json({ limit: "1mb" })` on /v1/metered AHEAD of the global
+    // parser (2026-08-27; body-parser sets req._body and the global one skips
+    // an already-parsed request, so there is no second pass), because a metered
+    // body is priced from its size - a 110 KB agent-host turn is a bigger
+    // quote, never an unpriced cost. A flat $0.50 tier has no such bound, so
+    // this one keeps the global limit on purpose.
     maxInputChars: 200_000,
     maxTokens: 8192,
+    // A tier whose default model REASONS before it speaks (claude-opus-5) needs
+    // room before the first visible token: on the Responses wire a hardcoded
+    // 1,024 was consumed entirely by reasoning and our own documented example
+    // answered 502 (2026-09-02 audit). Same lever the ox tier already had.
+    defaultMaxTokens: 4_096,
     maxPrice: { prompt: 20, completion: 100 }, // priciest allowlisted: claude opus ~$15/$75
     // Server tools (see SERVER_TOOL_POLICY): the $0.50 price buys two search
     // steps and richer results. The clamp still decides per request - premium
@@ -407,7 +425,9 @@ export const TIERS = {
       // gpt-5.6-sol needs its own entry: prefix matching is boundary-aware
       // ("openai/gpt-5" matches gpt-5-*, not gpt-5.6-*). claude-opus covers
       // claude-opus-5 ($5/$25) and claude-opus-5-fast ($10/$50).
-      "openai/gpt-5", "openai/gpt-5.6-sol", "openai/o3", "openai/o4",
+      // openai/o4 (the never-released flagship prefix) retired 2026-09-02 ahead of its
+      // 2026-10-23 removal: o4-mini stays by its own id, gpt-5.6-terra is the successor.
+      "openai/gpt-5", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/o3", "openai/o4-mini",
       "anthropic/claude-opus",
     ],
   },
@@ -526,8 +546,7 @@ export const TIERS = {
 // measured 170x-2,162x upstream on the chat tiers (see gateway-meter.js). The
 // `upto` meter already fixes that for buyers whose client speaks upto: they
 // authorize the tier price as a ceiling and settle actual usage + 15%. But
-// most x402 clients (ClawRouter and every stock exact-scheme client among
-// them) pay `exact`, and for them the price IS what the 402 says.
+// most x402 clients (every stock exact-scheme client among them) pay `exact`, and for them the price IS what the 402 says.
 //
 // So this tier quotes the 402 amount FROM THE REQUEST BODY: @x402/core
 // resolves a `price` function per request (payments.js acceptsForItem hands
@@ -555,6 +574,7 @@ const METERED_PREFIXES = [...new Set(Object.values(TIERS)
   .filter((t) => !t.router && !t.lockedModel && !t.stealth)
   .flatMap((t) => t.prefixes || []))];
 TIERS["v1-chat-metered"] = {
+  defaultModel: "anthropic/claude-haiku-4.5", // served when the caller names no model (quoted like any explicit model)
   metered: true,
   reasoningDefault: "lowest", // the buyer pays for reasoning tokens: default to the cheapest effort, opt up explicitly
   route: "POST /v1/metered/chat/completions",
@@ -587,7 +607,6 @@ export const PREFIX_CANONICAL = Object.freeze({
   "anthropic/claude-sonnet": "anthropic/claude-sonnet-5",
   "anthropic/claude-haiku": "anthropic/claude-haiku-4.5",
   "x-ai/grok": "x-ai/grok-4.6",
-  "openai/o4": "openai/o4-mini",
   "google/gemini-3.1-pro": "google/gemini-3.1-pro-preview",
 });
 
@@ -607,7 +626,15 @@ function canonicalModelRaw(model) {
   if (!m) return m;
   if (m.includes("/")) return m; // already an OpenRouter id
   if (/^(gpt|o[0-9])/i.test(m)) return `openai/${m}`;
-  if (/^claude/i.test(m)) return `anthropic/${m}`;
+  if (/^claude/i.test(m)) {
+    // Anthropic's own dated ids (claude-haiku-4-5-20251001, claude-sonnet-4-5-
+    // 20250929 - what Claude Code and the Anthropic SDKs send by default) are
+    // not OpenRouter ids; OpenRouter lists the family as claude-haiku-4.5.
+    // Drop the date and dot the minor version so a stock Anthropic client's
+    // default model resolves to a live upstream id instead of a 502.
+    const undated = m.replace(/-\d{8}$/, "").replace(/^(claude-[a-z]+-\d+)-(\d+)$/i, "$1.$2");
+    return `anthropic/${undated}`;
+  }
   if (/^gemini/i.test(m)) return `google/${m}`;
   if (/^grok/i.test(m)) return `x-ai/${m}`;
   if (/^deepseek/i.test(m)) return `deepseek/${m}`;
@@ -662,16 +689,22 @@ export const MODEL_COST = [
   ["openai/o3-mini", { prompt: 1.1, completion: 4.4 }],
   ["openai/o3", { prompt: 2, completion: 8 }],
   ["openai/o4-mini", { prompt: 1.1, completion: 4.4 }],
-  ["openai/o4", { prompt: 20, completion: 80 }], // unreleased flagship - assume pro-tier pricing until known
   ["openai/gpt-5-nano", { prompt: 0.05, completion: 0.4 }],
   ["openai/gpt-5-mini", { prompt: 0.25, completion: 2 }],
   // gpt-5.6 family — explicit entries are LOAD-BEARING: costFor's plain
   // startsWith would otherwise match "openai/gpt-5" and price sol at a fifth
-  // of its real cost. Live prices 2026-08-04 (post 07-30 cut): sol $5/$30,
-  // terra $1/$6, luna $0.10/$0.60; -pro variants share their base price and
-  // match these prefixes.
-  ["openai/gpt-5.6-sol", { prompt: 6, completion: 35 }],
-  ["openai/gpt-5.6-terra", { prompt: 1.5, completion: 8 }],
+  // of its real cost. -pro variants share their base price and match these
+  // prefixes. The per-row comments carry the date each was last read live;
+  // the figures BELOW are the source of truth, not this block - it once still
+  // said "sol $5/$30" a day after the row beneath it had been corrected to
+  // 2/10, so a reader could not tell which to believe. test-gateway-model-ids
+  // checks every row against the live catalog on each run.
+  ["openai/gpt-5.6-sol", { prompt: 2, completion: 10 }],   // live 2026-08-28 (was 6/35: the clamp cut max_tokens ~3.5x too hard)
+  ["openai/gpt-5.6-terra", { prompt: 2, completion: 12 }], // live 2026-08-28: the row was UNDER the real price
+  // Nano-tier small models, live 2026-09-02 (exact rows so the clamp prices
+  // them at cost instead of the tier bound).
+  ["mistralai/ministral-8b-2512", { prompt: 0.15, completion: 0.15 }],
+  ["mistralai/ministral-3b-2512", { prompt: 0.1, completion: 0.1 }],
   ["openai/gpt-5.6-luna", { prompt: 0.2, completion: 1.2 }], // live 2026-08-19: $0.20/$1.20 (was $1)
   // gpt-5-pro / gpt-5-image (+ -mini, :batch) sit under the "openai/gpt-5"
   // prefix at far higher rates - explicit so the family rate never prices them
@@ -680,9 +713,12 @@ export const MODEL_COST = [
   ["openai/gpt-5-image", { prompt: 10, completion: 10 }],
   ["openai/gpt-5", { prompt: 1.25, completion: 10 }],
   ["openai/gpt-4o-mini", { prompt: 0.15, completion: 0.6 }],
-  ["openai/gpt-4o-2024-05-13", { prompt: 5, completion: 15 }], // the original 4o snapshot still lists at its launch price
+  // STILL LIVE upstream at $5/$15 until OpenAI removes it on 2026-10-23, and the
+  // "openai/gpt-4o" prefix admits it, so the row stays until the id is gone: with
+  // no row the plain gpt-4o price would UNDER-count it (the live guard says so).
+  // Delete this row once the live guard reports the id absent.
+  ["openai/gpt-4o-2024-05-13", { prompt: 5, completion: 15 }],
   ["openai/gpt-4o", { prompt: 2.5, completion: 10 }],
-  ["openai/gpt-4.1-nano", { prompt: 0.1, completion: 0.4 }],
   ["openai/gpt-4.1-mini", { prompt: 0.4, completion: 1.6 }],
   ["openai/gpt-4.1", { prompt: 2, completion: 8 }],
   // claude-opus covers claude-opus-5 ($5/$25) and -fast ($10/$50) — the $15/$75
@@ -712,18 +748,18 @@ export const MODEL_COST = [
   ["anthropic/claude-3.5-sonnet", { prompt: 3, completion: 15 }],
   ["anthropic/claude-3.7-sonnet", { prompt: 3, completion: 15 }],
   ["anthropic/claude", { prompt: 1, completion: 5 }], // haiku family
-  ["google/gemini-2.5-pro", { prompt: 2.5, completion: 15 }],
+  ["google/gemini-2.5-pro", { prompt: 1.25, completion: 10 }], // live 2026-08-28
   ["google/gemini-pro", { prompt: 2.5, completion: 15 }],
   // gemini-3.x — explicit entries: the bare "google/gemini" flash-family rate
   // would underestimate them. Live 2026-08-04: 3.5-flash $1.5/$9, 3.6-flash
   // $1.5/$7.5, 3.1-pro(-preview) $2/$12, lites $0.25-0.30/$1.5-2.5.
   ["google/gemini-3.5-flash-lite", { prompt: 0.4, completion: 3 }],
   ["google/gemini-3.5-flash", { prompt: 2, completion: 10 }],
-  ["google/gemini-3.6-flash", { prompt: 2, completion: 9 }],
+  ["google/gemini-3.6-flash", { prompt: 0.75, completion: 3.75 }], // live 2026-08-28
   ["google/gemini-3.1-flash-lite", { prompt: 0.4, completion: 2 }],
   ["google/gemini-3.1-pro", { prompt: 2.5, completion: 15 }],
   ["google/gemini", { prompt: 0.4, completion: 2.5 }], // flash family
-  ["x-ai/grok", { prompt: 3, completion: 15 }],
+  ["x-ai/grok", { prompt: 2, completion: 6 }],           // live 2026-08-28 (grok-4.6)
   // deepseek-v4-pro and r1 price above deepseek-chat; explicit so the family
   // rate keeps fitting chat. This prefix covers TWO live pools that repriced
   // three times in two days (completion 3.168 -> 3.96 on -0813; then base
@@ -814,7 +850,6 @@ const IMAGE_TOKENS = 1600;   // conservative flat per-image input estimate (high
 // (2.46x / 1.62x on <=1,536 patches): ~3.8k / ~2.5k worst case.
 const IMAGE_TOKENS_BY_MODEL = [
   ["openai/gpt-4o-mini", 48_200],
-  ["openai/gpt-4.1-nano", 3_800],
   ["openai/gpt-4.1-mini", 2_500],
 ];
 export function imageTokensFor(model) {
@@ -1057,7 +1092,12 @@ function estimateInputTokens(body, imageCount) {
  *  runtime can never disagree on the math. */
 export function worstCaseUpstreamCost(body, tier, imageCount = 0) {
   const listed = costFor(body.model) || tier.maxPrice;
-  const cost = {
+  // Flat tiers bound the provider price with `max_price` (tier.maxPrice), so
+  // the worst case is the min of the two. The METERED tier quotes the model's
+  // own row and sends THAT row as its bound (`costFor` in the handlers), so
+  // its quote must not be min'd with a ceiling the request never carries
+  // (review 2026-08-27: opus-4.7-fast at 30/150 quoted as 20/100, ~30% under).
+  const cost = tier.metered ? { prompt: listed.prompt, completion: listed.completion } : {
     prompt: Math.min(listed.prompt, tier.maxPrice.prompt),
     completion: Math.min(listed.completion, tier.maxPrice.completion),
   };
@@ -1295,6 +1335,8 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   } else if (tier.router === true && input.quality !== undefined) {
     throw bad('"quality" applies only when the gateway picks the model - omit "model" (or send "auto") to use it');
   }
+  let defaultedModel = null;
+  if (!model && tier.defaultModel) { model = tier.defaultModel; defaultedModel = model; } // serve the tier default, never refuse a missing model (2026-08-28)
   if (!model) throw bad('"model" is required (e.g. "openai/gpt-4o-mini" or "gpt-4o-mini")');
   // Model-id variants that change what is BILLED, not just how it routes.
   // The allowlist's ":variant" match exists for cost-neutral routing hints
@@ -1328,7 +1370,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
       totalImages += images;
     }
   }
-  if (totalChars > tier.maxInputChars) throw bad(`Input too large (${totalChars} chars). The ${tierSlug} tier allows up to ${tier.maxInputChars} chars`);
+  if (totalChars > tier.maxInputChars) throw bad(`Input too large (${totalChars} chars). The ${tierSlug} tier allows up to ${tier.maxInputChars} chars${tierSlug === "v1-chat-metered" ? "" : "; POST /v1/metered/chat/completions takes up to 200k chars and is priced from the body"}`);
   if (totalImages > MAX_IMAGES) throw bad(`Too many images (${totalImages}). Maximum is ${MAX_IMAGES} per request`);
 
   // OpenAI's newer SDKs send max_completion_tokens (reasoning-model wire);
@@ -1442,6 +1484,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
       throw bad(`This request would cost $${q.toFixed(4)} metered, above the $${tier.maxQuoteUsd} per-call cap of ${tier.route.split(" ")[1]} - lower max_tokens or the input, or use a flat tier (GET /v1/models).`);
     }
   }
+  if (defaultedModel) Object.defineProperty(body, "__defaultedModel", { value: defaultedModel, enumerable: false });
   return body;
 }
 
@@ -1617,7 +1660,15 @@ export function upstreamUserId(req) {
     if (ip) basis = `trial:${String(ip).split(",")[0].trim()}`;
   }
   if (!basis) return null;
-  return `a402:${createHash("sha256").update(basis).digest("hex").slice(0, 32)}`;
+  // HMAC, not a bare hash - this one is sent to OPENROUTER, a third party, so an
+  // enumerable digest of a public wallet address would hand an outside vendor a
+  // way to recover which wallet each request belongs to. Keyed, it still groups
+  // a buyer's calls for provider policy while carrying no recoverable identity.
+  // Call-time only and never part of a cache key, so changing it is inert.
+  const idSecret = process.env.TELEMETRY_ID_SECRET || process.env.POW_SECRET || process.env.MPP_SECRET_KEY || "";
+  return idSecret
+    ? `a402:${createHmac("sha256", idSecret).update(basis).digest("hex").slice(0, 32)}`
+    : `a402:${createHash("sha256").update(basis).digest("hex").slice(0, 32)}`;
 }
 
 /** Line-aware SSE pass-through that strips OpenRouter's billing fields from
@@ -1632,6 +1683,16 @@ export function upstreamUserId(req) {
  *  `onUsage(usage, rawCost)` fires once with the stripped cost for telemetry. */
 export function createSseUsageScrubber({ onUsage } = {}) {
   let buf = "";
+  // fetch's body yields Uint8Array chunks, NOT Buffers: String(Uint8Array) is
+  // "100,97,116,97" - the comma-joined bytes - so the old `Buffer.isBuffer(chunk)
+  // ? ... : String(chunk)` decode never saw a newline, buffered the whole
+  // stream, and handed it to flush() as digits: no "data:" frame was ever
+  // recognised and every streamed call 502'd "no data frame" (found 2026-08-27
+  // driving Claude Code against the Messages wire; the relay's own unit tests
+  // fed Buffers and passed). A streaming TextDecoder also keeps a multibyte
+  // character split across two chunks intact, which per-chunk toString did not.
+  const decoder = new TextDecoder("utf-8");
+  const decode = (chunk) => (typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true }));
   // Usage can sit at the top level (chat completions, Anthropic message_delta)
   // or NESTED: the Responses API's final frame is {type:"response.completed",
   // response:{..., usage:{cost,...}}} (live-verified 2026-08-19) and an
@@ -1662,7 +1723,7 @@ export function createSseUsageScrubber({ onUsage } = {}) {
   };
   return {
     push(chunk) {
-      buf += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+      buf += decode(chunk);
       const i = buf.lastIndexOf("\n");
       if (i < 0) return "";
       const complete = buf.slice(0, i);
@@ -1670,6 +1731,7 @@ export function createSseUsageScrubber({ onUsage } = {}) {
       return complete.split("\n").map(processLine).join("\n") + "\n";
     },
     flush() {
+      buf += decoder.decode(); // drain a trailing partial multibyte sequence
       const rest = buf; buf = "";
       return rest ? processLine(rest) : "";
     },
@@ -1724,12 +1786,35 @@ export async function throwUpstreamError(res) {
   throw bad(`Upstream error: ${msg}`, 502);
 }
 
+/** OpenRouter can answer HTTP 200 with an error object and NO output - a
+ *  provider rate limit or provider error surfaced after the response line was
+ *  committed. Measured 2026-09-02 on the auto tier's own documented example:
+ *  `{"id":"gen-…","error":{"message":"openai/gpt-5.6-luna is temporarily
+ *  rate-limited upstream…"}}`, status 200, no choices - and our route relayed
+ *  it as a 200, which on prod is a PAID empty answer, the same class the
+ *  empty-refusal and empty-length walks exist for. A body that carries an
+ *  error and no output is an upstream failure: 503 for a rate limit (the
+ *  chain walks on 502/503/504), 502 otherwise. A body with output beside an
+ *  error (a partial answer) is returned as-is. Applied at every place a wire
+ *  parses an upstream 200. */
+export function assertUpstreamBody(data) {
+  if (!data || typeof data !== "object" || !data.error) return data;
+  const has = (k) => Array.isArray(data[k]) && data[k].length > 0;
+  if (has("choices") || has("output") || has("content") || has("data")) return data;
+  const err = typeof data.error === "object" ? data.error : { message: String(data.error) };
+  const msg = redactSecrets(String(err.message || err.code || "upstream error")).slice(0, 200);
+  const code = Number(err.code);
+  const rateLimited = code === 429 || /rate.?limit/i.test(msg);
+  throw bad(`Upstream error: ${msg}`, rateLimited ? 503 : 502);
+}
+
 async function callOpenRouter(body) {
   const res = await fetchOpenRouter(body);
   if (!res.ok) await throwUpstreamError(res);
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
+  assertUpstreamBody(data);
   // Full OpenAI wire shape passes through untouched (id, object, created,
   // model, choices incl. tool_calls, usage) — drop-in fidelity is the product.
   return data;
@@ -1771,20 +1856,48 @@ export async function streamOpenRouterTo(body, res, { onUsage, url } = {}) {
   try {
     const upstream = await fetchOpenRouter(body, { signal: ctrl.signal, url });
     if (!upstream.ok) await throwUpstreamError(upstream);
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-store",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    });
-    res.flushHeaders?.();
-    // Billing fields are stripped in flight (see createSseUsageScrubber);
-    // everything else passes through byte-for-byte.
+    // The 200 is NOT committed until the first `data:` frame arrives. Measured
+    // live (paid canary 2026-08-27 20:06:42Z): OpenRouter answered a nano
+    // stream with only ": OPENROUTER PROCESSING" keep-alive comments and then
+    // closed - no tokens, no usage frame - and the old relay had already
+    // written 200, so the buyer paid $0.003 for an empty stream (settlement
+    // runs on a <400 status). Holding the status until real data exists turns
+    // that into a 502 before any byte is sent, which the callers' chain walk
+    // catches (`!res.headersSent`) and which cancels settlement end to end.
+    // Comment-only prelude is bounded so a comment flood cannot buffer forever.
     const scrub = createSseUsageScrubber({ onUsage });
+    let committed = false;
+    let pending = "";
+    const commit = () => {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-store",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      res.flushHeaders?.();
+      committed = true;
+      if (pending) { res.write(pending); pending = ""; }
+    };
+    const offer = (out) => {
+      if (committed) { res.write(out); return; }
+      pending += out;
+      if (/^data:/m.test(pending) || pending.length > 64_000) commit();
+    };
     try {
-      for await (const chunk of upstream.body) { const out = scrub.push(chunk); if (out) res.write(out); }
-      const tail = scrub.flush(); if (tail) res.write(tail);
-    } catch { /* upstream dropped mid-stream — end what we have */ }
+      // Billing fields are stripped in flight (see createSseUsageScrubber);
+      // everything else passes through byte-for-byte.
+      for await (const chunk of upstream.body) { const out = scrub.push(chunk); if (out) offer(out); }
+      const tail = scrub.flush(); if (tail) offer(tail);
+    } catch (e) {
+      // Upstream dropped mid-stream: end what we have once something real was
+      // sent; before that, it is an upstream failure the chain can walk. The
+      // cause is logged either way - a bare catch hid a relay-side throw for a
+      // day (2026-08-27: every Messages stream read as "no data frame").
+      console.warn(`[gateway] stream relay ${committed ? "dropped mid-stream" : "failed before the first data frame"}: ${e?.message || e}`);
+      if (!committed) throw bad("Upstream stream ended before producing any data frame", 502);
+    }
+    if (!committed) throw bad("Upstream stream ended before producing any data frame (no tokens) - nothing was charged", 502);
     res.end();
   } finally {
     clearTimeout(timer);
@@ -2055,6 +2168,7 @@ async function embeddingsHandler(input, req) {
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
+  assertUpstreamBody(data);
   // Full OpenAI wire shape passes through untouched (object, data[], model,
   // usage). Store unless the buyer opted out; oversized batches are skipped
   // by the store's own per-entry byte cap. FR4-01 class: defer the write to
@@ -2150,6 +2264,7 @@ async function rerankHandler(input, req) {
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
+  assertUpstreamBody(data);
   if (!Array.isArray(data?.results)) throw bad("Upstream returned no results", 502);
   // Billing fields are operator telemetry, never buyer-visible; search_units stays (a count, not a bill).
   if (data.usage && typeof data.usage === "object") {
@@ -2225,7 +2340,12 @@ async function imagesHandler(input, req) {
     modalities: ["image", "text"],
     max_tokens: IMAGES_MAX_TOKENS,
     provider: { max_price: IMAGES_MAX_PRICE, ...(zdr ? { zdr: true } : {}) },
+    // OpenRouter documents `usage.include` as a no-op now (full usage is always
+    // returned). KEPT anyway: our margin telemetry and the metered meter read
+    // `usage.cost`, and dropping the field on the strength of a docs line would
+    // fail silently if the always-on behaviour is partial. Harmless if ignored.
     usage: { include: true },
+
     ...(user ? { user } : {}),
   };
   // Flex first (half price on this model's endpoints, live-verified), default
@@ -2239,6 +2359,7 @@ async function imagesHandler(input, req) {
       const text = await res.text();
       let parsed;
       try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
+      assertUpstreamBody(parsed);
       const imgs = parsed?.choices?.[0]?.message?.images;
       if (!Array.isArray(imgs) || imgs.length === 0) throw bad("Upstream returned no image - retry, or rephrase the prompt", 502);
       data = parsed; servedTier = parsed.service_tier || (flex ? "flex" : "default");
@@ -2622,6 +2743,7 @@ function makeHandler(tierSlug) {
         promptTokens: usage?.prompt_tokens, completionTokens: usage?.completion_tokens, serviceTier,
         serverToolCalls: usage?.server_tool_use_details?.tool_calls_executed ?? usage?.server_tool_use?.tool_calls_executed,
         serverToolSearches: usage?.server_tool_use_details?.web_search_requests ?? usage?.server_tool_use?.web_search_requests,
+        defaulted: !!body.__defaultedModel,
       }))
       .catch(() => { /* telemetry must never fail a served response */ });
     // Flex-eligible links are tried on the flex tier first, then default (see
@@ -2699,7 +2821,7 @@ function makeHandler(tierSlug) {
           // exactly like the billing fields above - a buyer never sees our
           // upstream bill, only what they were charged. A non-number (upstream
           // did not report) deliberately means "no meter", not "free".
-          if (typeof upstreamUsd === "number") data.__meterUpstreamUsd = upstreamUsd;
+          if (typeof upstreamUsd === "number") setMeterSentinel(data, upstreamUsd);
         }
         // Routed requests disclose the decision: additive key, OpenAI wire
         // shape otherwise untouched (the standard `model` field already names
@@ -2707,6 +2829,7 @@ function makeHandler(tierSlug) {
         if (routedCategory && data && typeof data === "object") {
           data.agent402_router = { category: routedCategory, quality: routedQuality, served: data.model || model };
         }
+        if (body.__defaultedModel) data.agent402_default_model = body.__defaultedModel; // the caller sent no model; say what served
         if (input.cache === true && !TIERS[tierSlug].noCache) {
           // FR4-01 class: defer the cache write to AFTER settlement. @x402/express
           // settles after this handler, so writing now would cache an
@@ -2742,6 +2865,21 @@ function meteredQuoteFromNormalized(body, imageCount) {
   const raw = Math.max(METER_MIN_SETTLE_USD, wc.totalUsd * METER_MARKUP + METER_FLOOR_USD);
   return Math.ceil(raw * 1e6) / 1e6; // round UP to a micro-dollar: never quote below the arithmetic
 }
+/** Metered quote for an already-validated PROBE (a body shaped the way
+ *  worstCaseUpstreamCost reads it: model, max_tokens, messages, optional
+ *  system/tools/thinking). The Messages wire builds its probe in
+ *  validateMessagesRequest and prices it here, so both wires quote from the
+ *  same arithmetic, cap and rounding. */
+export function meteredQuoteForProbe(probe, imageCount = 0) {
+  const tier = TIERS["v1-chat-metered"];
+  const usd = meteredQuoteFromNormalized(probe, imageCount);
+  // rawUsd is what the body would actually cost; usd is what the 402 carries
+  // (the cap, over the cap). A handler MUST refuse an overCap body: the 402
+  // quoted the cap, not the cost (review 2026-08-27: the Messages wire served
+  // a ~$8 Opus body for $2 because it clamped here and never refused).
+  if (usd > tier.maxQuoteUsd) return { usd: tier.maxQuoteUsd, rawUsd: usd, overCap: true, model: probe?.model };
+  return { usd, rawUsd: usd, model: probe?.model };
+}
 /** The per-request price of the metered tier, from the RAW request body.
  *  Never throws: an invalid body quotes the floor (the handler's own 400
  *  refuses it, uncharged), and a body over the cap quotes the cap (same). */
@@ -2767,7 +2905,7 @@ const EXAMPLE_OUT = {
 
 const INPUT_SCHEMA = {
   properties: {
-    model: { type: "string", description: "Model id - OpenRouter form (openai/gpt-4o-mini) or bare OpenAI form (gpt-4o-mini). GET /v1/models lists the allowlist per tier." },
+    model: { type: "string", description: "Model id - OpenRouter form (openai/gpt-4o-mini) or bare OpenAI form (gpt-4o-mini). GET /v1/models lists the allowlist per tier. Optional: omit it and the tier serves its documented default (x402.defaultModel on /v1/models), named back in agent402_default_model; the price does not change" },
     messages: { type: "array", description: "OpenAI chat messages: [{role, content}] - text and image_url content blocks supported" },
     max_tokens: { type: "number", description: "Output token cap (clamped to the tier maximum)" },
     zdr: { type: "boolean", description: "Optional - true routes only to zero-data-retention providers (also accepted as provider.zdr). Same price; a model with no ZDR provider errors upstream and walks the failover chain." },
@@ -2811,9 +2949,9 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.003",
     description:
-      "OpenAI-compatible chat completions, nano tier: gpt-4.1-nano, gpt-5-nano, gemini flash-lite, small llama/ministral/qwen, deepseek-chat - $0.003 per call in USDC over x402, priced for high-frequency agent loops. Same wire format as /v1/chat/completions with loop-sized caps (12k chars in, 768 tokens out). Streaming supported (stream: true). No API key, no signup.",
+      "OpenAI-compatible chat completions, nano tier: gpt-5.6-luna, gpt-5-nano, gemini flash-lite, small llama/ministral/qwen, deepseek-chat - $0.003 per call in USDC over x402, priced for high-frequency agent loops. Same wire format as /v1/chat/completions with loop-sized caps (12k chars in, 768 tokens out). Streaming supported (stream: true). No API key, no signup.",
     tags: SHARED_TAGS,
-    discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-4.1-nano" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-4.1-nano" } } },
+    discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-5.6-luna" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-4.1-nano" } } },
     handler: makeHandler("v1-chat-nano"),
   },
   {
@@ -2846,7 +2984,7 @@ export const LLM_GATEWAY_TOOLS = [
       bodyType: "json",
       input: { messages: [{ role: "user", content: "What is the current Node.js LTS version? One line, cite the source." }], max_tokens: 120 },
       inputSchema: AUTO_INPUT_SCHEMA,
-      output: { example: { ...EXAMPLE_OUT, agent402_router: { category: "general", quality: "balanced", served: "openai/gpt-4o-mini" }, annotations_note: "message.annotations carries url_citation entries" } },
+      output: { example: { ...EXAMPLE_OUT, agent402_router: { category: "general", quality: "balanced", served: "openai/gpt-4o-mini" } } },
     },
     handler: makeHandler("v1-chat-grounded"),
   },
@@ -3036,6 +3174,11 @@ export const LLM_GATEWAY_TOOLS = [
 // enforces (that stays 200_000 - harmless groundwork for when the body
 // limit itself is raised, see that change's own commit message).
 const ADVERTISED_MAX_INPUT_CHARS = 85_000;
+// The METERED routes are the exception: server.js mounts a 1 MB parser on
+// /v1/metered (2026-08-27), so the metered tier advertises its real 200k cap -
+// an agent host (Claude Code sends ~110 KB a turn) reads this field to decide
+// whether it fits, and the clamped figure told OpenClaw's setup to refuse
+// models that serve fine.
 
 /** OpenAI-compatible GET /v1/models payload — free discovery surface. */
 export function modelsList() {
@@ -3060,9 +3203,12 @@ export function modelsList() {
         owned_by: p.split("/")[0],
         x402: {
           tier: slug, endpoint: tier.route.split(" ")[1], priceUsd: tier.price, maxTokens: tier.maxTokens,
+          ...(tier.defaultModel ? { defaultModel: tier.defaultModel } : {}),
           ...(slug.startsWith("v1-chat") && !tier.lockedModel && !tier.router && TIERS["v1-chat-metered"]
             ? {
               meteredEndpoint: TIERS["v1-chat-metered"].route.split(" ")[1], meteredFromUsd: TIERS["v1-chat-metered"].price,
+              meteredMessagesEndpoint: "/v1/metered/messages",
+              meteredResponsesEndpoint: "/v1/metered/responses",
               // The metered route validates against ITS caps, not the flat home
               // tier's: a client deriving a context window from this entry must
               // not carry the flat cap onto the metered route (agent402-openclaw

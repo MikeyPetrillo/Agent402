@@ -20,7 +20,7 @@ Full explainer with structured data: https://agent402.tools/agentic-finance
 
 ## Where Agent402 sits
 
-- **Buy** - 500+ deterministic pay-per-call tools over x402 or MPP ([[Tool Catalog]]).
+- **Buy** - 500+ pay-per-call tools over x402 or MPP ([[Tool Catalog]]).
 - **Route** - the open index and Smart Order Router that resolve a task to the best seller across the ecosystem and pay them on the agent's behalf ([[x402 Index and Smart Order Router|x402-Index-and-Router]]).
 - **Sell** - the open-source tollbooth: charge agents per request on your own site or API over both wires ([[Pay-per-crawl]]).
 - **Prove** - live transaction counts by rail and wire (external revenue underneath; our own canary/volume traffic is never counted as earnings), the on-chain seller leaderboard ([[x402 Leaderboard]]), uptime measured from outside, refunds ledgered.

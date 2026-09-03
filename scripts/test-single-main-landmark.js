@@ -26,7 +26,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const PATHS = [
   "/docs/Architecture", "/revenue", "/docs/adapters/openai", "/docs/webhooks",
   "/", "/marketplace", "/tools", "/sell", "/leaderboard", "/skills", "/what-is-x402",
-  "/status", "/pricing", "/playground", "/integrations",
+  "/status", "/pricing", "/playground", "/integrations", "/markets", "/security", "/company",
 ];
 
 for (const path of PATHS) {

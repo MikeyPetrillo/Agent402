@@ -20,7 +20,7 @@ import {
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
-  MCP_PAYMENT_REQUIRED_CODE, MCP_RECEIPT_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, challengeIdFromMeta,
+  MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, challengeIdFromMeta,
 } from "./mcp-mpp.js";
 import {
   TASKS_EXTENSION, TASK_INVALID_PARAMS, TASK_MISSING_CAPABILITY, TASK_INTERNAL_ERROR,
@@ -321,7 +321,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           title: "Search the Agent402 tool catalog",
           annotations: { title: "Search the Agent402 tool catalog", ...SAFE },
           description:
-            `BROWSE the long catalog behind the flagship set: keyword search over Agent402's 500+ deterministic pay-per-call tools (exact count ${tools.size}). Start with the listed flagships for search/answer/news/render/data/transcribe/memory; use this when you need a long-tail slug. Counterpart catalog.find resolves a task to ONE ready-to-run pick - search explores, find decides. ${freeCount} pure-CPU tools run free here (proof-of-work); the rest are payable right here over MPP (credential in _meta - mppx McpClient pays automatically) or via npx agent402-mcp with a wallet. Also an OpenAI-compatible LLM gateway at ${baseUrl}/v1 (flat per-call; wallet = account). Returns { results, workflows }; run one with catalog.call.`,
+            `BROWSE the long catalog behind the flagship set: keyword search over Agent402's 500+ pay-per-call tools (exact count ${tools.size}). Start with the listed flagships for search/answer/news/render/data/transcribe/memory; use this when you need a long-tail slug. Counterpart catalog.find resolves a task to ONE ready-to-run pick - search explores, find decides. ${freeCount} pure-CPU tools run free here (proof-of-work); the rest are payable right here over MPP (credential in _meta - mppx McpClient pays automatically) or via npx agent402-mcp with a wallet. Also an OpenAI-compatible LLM gateway at ${baseUrl}/v1 (flat per-call; wallet = account). Returns { results, workflows }; run one with catalog.call.`,
           inputSchema: {
             type: "object",
             properties: {
@@ -501,10 +501,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           return { content: [{ type: "text", text: walletRequiredText(entry.def) }], isError: true };
         }
         const problem = r.json && typeof r.json === "object" && typeof r.json.type === "string" ? r.json : undefined;
-        // mppx's wire: -32042 + {httpStatus, challenges, problem?}. A rejected
-        // credential (problem present) says why; a first ask carries only the
+        // mppx's wire: -32042 (no credential presented) / -32043 (the caller
+        // PRESENTED a credential and it was refused) + {httpStatus, challenges,
+        // problem?}. The code keys on whether a credential rode in _meta, not on
+        // the body: an unpaid 402 may carry a problem-shaped body too. A refused
+        // credential's problem says why; a first ask carries only the
         // challenges. Price rides inside each challenge's request.amount.
-        throw new McpError(MCP_PAYMENT_REQUIRED_CODE, problem?.detail || `Payment Required: ${entry.def.price} per call (pay with an MPP credential in _meta["org.paymentauth/credential"])`, { httpStatus: 402, challenges, ...(problem ? { problem } : {}) });
+        const presented = Boolean(credentialHeaderFromMeta(meta));
+        throw new McpError(presented ? MCP_PAYMENT_VERIFICATION_FAILED_CODE : MCP_PAYMENT_REQUIRED_CODE, problem?.detail || `Payment Required: ${entry.def.price} per call (pay with an MPP credential in _meta["org.paymentauth/credential"])`, { httpStatus: 402, challenges, ...(problem ? { problem } : {}) });
       }
       if (r.status >= 400) {
         onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: true, statusCode: r.status, errorMessage: String(r.json?.error || r.text || r.status).slice(0, 200), inputKeys: Object.keys(params || {}) });
@@ -730,10 +734,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             connector: "hosted free tier (authless)",
             maintainer: "Havok Holdings LLC",
             positioning: `Agent402 is the applied layer of Agentic Finance: software agents that pay and get paid on their own, per request, over the two open wires - x402 and MPP (Machine Payments Protocol) - both answered on the same 402. Definition + glossary: ${baseUrl}/agentic-finance, ${baseUrl}/glossary.`,
-            // Flagship-first positioning: tools layer beside LLM gateways,
-            // search/answer as the default job, evergreen 500+ catalog.
+            // Flagship-first positioning: search/answer as the default job,
+            // evergreen 500+ catalog, models and reports named beside the tools.
             startHere: {
-              firstJob: "Search the web and answer questions. Call web.search or web.answer directly, or catalog.find with your task. Agent402 is the deterministic tools layer beside LLM gateways, not a competing chat router: flagship tools first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call.",
+              firstJob: "Search the web and answer questions. Call web.search or web.answer directly, or catalog.find with your task. Agent402 sells three things on one key: deterministic utilities (no model in that serving path), a metered model gateway on the OpenAI and Anthropic wires (/v1/metered), and finished report products. Flagship tools first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call.",
               flagships: [...flagshipSet].map((slug) => ({
                 mcpName: mcpNameOf(slug),
                 slug,

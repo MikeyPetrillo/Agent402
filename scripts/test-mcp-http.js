@@ -3,6 +3,7 @@
 // tool, exact output) → flagship wallet-only tool by name (must refuse with
 // guidance, not execute). Run against a server started with FREE_MODE or paid
 // mode — the /mcp endpoint sits before the paywall either way.
+import { createHash } from "node:crypto";
 import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "../src/mcp-flagship.js";
 
 const BASE = process.env.TARGET_URL || "http://127.0.0.1:3000";
@@ -198,15 +199,20 @@ for (const aboutName of ["server.describe", "describe_server", "describe_agent40
   assert(!aboutText.includes("generate_hash"), `${aboutName} does not advertise removed curated utilities`);
   assert(about.result?.structuredContent?.service, `${aboutName} returns structuredContent`);
   // Regression: firstJob once named a real competitor ("Agent402 is the
-  // deterministic tools layer beside LLM gateways (e.g. BlockRun)") in this
+  // tools layer beside LLM gateways") in this
   // live, agent-served response - a direct violation of the project's own
   // "we deliberately do not name competing sellers anywhere in user-facing
   // copy" rule (src/economy.js). Found in a link/leak audit, not by any
   // existing test. Locks the whole about/describe response text, not just
   // firstJob, since any field here is equally "live positioning copy".
-  for (const name of ["BlockRun", "AgentUtility", "StableEnrich", "x402node", "Otto AI", "x402scan"]) {
-    assert(!aboutText.includes(name), `${aboutName} names no real competitor ("${name}") in its positioning copy`);
-  }
+  // The blocklist is carried as sha256(lowercased name) so the repository
+  // itself does not carry the names; every token and adjacent-token pair of
+  // the live text is hashed and compared.
+  const BLOCKED = new Set(["2730e2594becc4582df422b58e9d3359fbd1d7b82d53d1ad5636c5e3ec45b354", "01c3da860e982239f3184399b0351e6df3ee44b2ca9e3cc92d4abc2ece515121", "72ab0dc27727ed4346174222e725411b078852148334449c88cb4fd0ecdf9057", "3b052c232320e46ee0898092758e0bbb07190328a61a0ee5d2c6fd120f47c9e7", "9f102ed2e830dfd78882522cbf76d69907480812ec6ca53890f50e8242894e7a", "9ec9140c50bf098e9feea4d8d28ece7c224a260f0b8e98ebbce30f424ad931a7"]);
+  const toks = aboutText.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const grams = [...toks, ...toks.slice(0, -1).map((t, i) => `${t} ${toks[i + 1]}`)];
+  const hit = grams.find((g) => BLOCKED.has(createHash("sha256").update(g).digest("hex")));
+  assert(!hit, `${aboutName} names a third-party seller ("${hit}") in its positioning copy`);
 }
 
 // Sample listed tool: catalog.search outputSchema + structuredContent.

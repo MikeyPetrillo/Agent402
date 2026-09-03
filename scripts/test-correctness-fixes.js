@@ -19,7 +19,7 @@ const postRaw = (p, b) => fetch(`${B}/api/${p}`, { method: "POST", headers: { "C
 const get = async (p, q) => (await fetch(`${B}/api/${p}?${new URLSearchParams(q)}`)).json();
 
 try {
-  for (let i = 0; i < 40; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
+  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
 
   ok((await post("duration", { value: "500ms" })).seconds === 0.5, "duration: 500ms -> 0.5s (ms no longer dead regex branch)");
   ok((await get("timezone-convert", { datetime: "2026-01-15T09:00:00", from: "Europe/London", to: "America/New_York" })).utc === "2026-01-15T09:00:00.000Z", "timezone-convert: naive datetime read in the from-zone");

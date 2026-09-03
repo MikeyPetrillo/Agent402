@@ -23,7 +23,7 @@ Because tiers are flat-priced while upstream bills per token, every request is a
 
 | Endpoint | Price | Serves | Input cap | Output cap |
 |---|---|---|---|---|
-| `POST /v1/nano/chat/completions` | $0.003 | nano models (gpt-5.6-luna, gpt-4.1-nano, gemini flash-lite, small llama/ministral/qwen, deepseek-chat, laguna) - priced for high-frequency agent loops | 12k chars | 768 tokens |
+| `POST /v1/nano/chat/completions` | $0.003 | nano models (gpt-5.6-luna, gpt-5-nano, gemini flash-lite, small llama/ministral/qwen, deepseek-chat, laguna) - priced for high-frequency agent loops | 12k chars | 768 tokens |
 | `POST /v1/auto/chat/completions` | $0.01 | **model optional** - deterministic eval-ranked routing (see below) | 16k chars | 1,024 tokens |
 | `POST /v1/chat/completions` | $0.02 | budget/mid models (gpt-4o-mini, claude haiku, gemini flash, deepseek, llama, mistral, qwen) | 32k chars | 2,048 tokens |
 | `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-4o, gpt-4.1, claude sonnet incl. sonnet-5, gemini pro and 3.x flash, grok) | 48k chars | 4,096 tokens |
@@ -130,3 +130,5 @@ The same five tiers also speak the OpenAI Responses wire: `POST /v1/nano/respons
 ## Grounded answers (web search)
 
 `POST /v1/grounded/chat/completions` ($0.03) is the auto router plus a live Exa web search on every call (up to 5 results): the model answers from the results and the reply carries `url_citation` annotations. Omit `model` (or send `auto`) and the gateway picks the model by task type; the response adds `agent402_router`. This is the one place web search is offered - `:online` model variants are refused on the other tiers because search is billed per request on top of tokens, and here that fee is part of the flat price. Never cached.
+
+Other hosts (Claude Code, Cursor, Continue, ElizaOS, AgentCore, any OpenAI SDK): https://agent402.tools/guides/agent-hosts

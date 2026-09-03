@@ -41,7 +41,7 @@ const MAX_TXS = parseInt(process.env.MAX_TXS || "25", 10);
 const ERC_8021_MARKER = "80218021802180218021802180218021";
 const SCHEMA_2_ID = 2;
 const RPCS = (process.env.BASE_RPCS ||
-  "https://mainnet.base.org,https://base-rpc.publicnode.com,https://base.llamarpc.com,https://base.drpc.org"
+  "https://mainnet.base.org,https://base-rpc.publicnode.com,https://base.drpc.org"
 ).split(",").map((s) => s.trim()).filter(Boolean);
 const pad = (a) => "0x" + "0".repeat(24) + a.replace(/^0x/, "");
 

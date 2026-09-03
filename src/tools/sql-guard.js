@@ -83,6 +83,7 @@ export function scrubSql(sql) {
     if (c === "'" || c === '"') {
       let j = i + 1;
       let closed = false;
+      const eLiteral = c === "'" && /[eE]/.test(src[i - 1] || "") && !/[A-Za-z0-9_$]/.test(src[i - 2] || "");
       while (j < src.length) {
         if (src[j] === c) {
           if (src[j + 1] === c) { j += 2; continue; } // escaped by doubling
@@ -90,7 +91,10 @@ export function scrubSql(sql) {
           j++;
           break;
         }
-        if (src[j] === "\\" && c === "'") { j += 2; continue; } // backslash escape
+        // A backslash escapes only inside an E'...' literal (standard_conforming_strings
+        // is on by default since PostgreSQL 9.1). Treating it as an escape everywhere let
+        // SELECT '\'; DELETE FROM users; --' certify as one read statement (2026-08-28).
+        if (src[j] === "\\" && c === "'" && eLiteral) { j += 2; continue; }
         j++;
       }
       if (!closed) unterminated = unterminated || `${c === "'" ? "string" : "quoted identifier"} literal`;
@@ -137,11 +141,16 @@ export function classifyStatement(scrub) {
     : first === "SET" ? "session"
     : first === "" ? "empty" : "other";
   // WITH ... UPDATE/DELETE/INSERT is a write wearing a read's hat.
-  const cteWrite = first === "WITH" && /\b(INSERT\s+INTO|UPDATE\s|DELETE\s+FROM)\b/.test(u);
+  const cteWrite = first === "WITH" && /\b(INSERT\s+INTO|UPDATE\s|DELETE\s+FROM|MERGE\s+INTO)\b/.test(u);
+  // Writes wearing other hats (review 2026-08-28): EXPLAIN ANALYZE executes the
+  // statement; SELECT ... INTO creates a table; DO / CALL run arbitrary code.
+  const explainWrite = first === "EXPLAIN" && /\bANALYZE\b/.test(u) && /\b(INSERT|UPDATE|DELETE|MERGE|TRUNCATE|DROP|ALTER|CREATE)\b/.test(u);
+  const selectInto = first === "SELECT" && /\bINTO\s+(?:TEMP(?:ORARY)?\s+|UNLOGGED\s+)?[A-Z_"]/.test(u);
+  const procedural = first === "DO" || first === "CALL";
   return {
     verb: first || null,
     kind: cteWrite ? "dml-write" : kind,
-    mutating: cteWrite || kind === "dml-write" || kind === "ddl" || kind === "privilege" || kind === "copy",
+    mutating: cteWrite || explainWrite || selectInto || procedural || kind === "dml-write" || kind === "ddl" || kind === "privilege" || kind === "copy",
   };
 }
 

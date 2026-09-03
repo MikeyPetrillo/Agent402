@@ -83,12 +83,23 @@ export const RAIL_COMPONENTS = [
     blurb: "Real PathUSD settlement over Tempo's own MPP relay, proven daily by the paid canary.",
     staleAfterMs: DAILY,
   },
+  // Not a chain: the catalog's paid UPSTREAM (blockscout-kit pays Blockscout
+  // from our spending wallet). Its canary leg failed a third of the time in
+  // 2026-08 and paged nobody, because a tool leg is a warning: the buyer is
+  // never charged on a 5xx. The consecutive-failure rule in the canary reads
+  // this row's recent observations, so the row is what makes it pageable.
+  {
+    key: "rail_supply-chain",
+    label: "Blockscout upstream (paid)",
+    blurb: "address-profile buying its Blockscout upstream from the spending wallet, proven daily by the paid canary.",
+    staleAfterMs: DAILY,
+  },
 ];
 
 export const COMPONENTS = [
   { key: "api", label: "Tool serving", blurb: "The paid API answering requests: /health reachable and the catalog mounted.", staleAfterMs: QUARTER_HOURLY },
   { key: "catalog", label: "Catalog", blurb: "Every tool route mounted and advertised on /api/pricing.", staleAfterMs: QUARTER_HOURLY },
-  { key: "paid-call", label: "Paid call path", blurb: "A real end-to-end purchase: challenge, payment, unlock, payload.", staleAfterMs: HOURLY_OBSERVER },
+  { key: "paid-call", label: "Paid call path", blurb: "A real end-to-end purchase from our own wallet: challenge, payment, unlock, payload. A miss here means our canary could not buy, never that a customer was charged.", staleAfterMs: HOURLY_OBSERVER },
   { key: "mcp", label: "MCP connector", blurb: "The hosted /mcp endpoint agents connect through.", staleAfterMs: QUARTER_HOURLY },
   { key: "paywall", label: "Paywall engaged", blurb: "Paid tools still answer 402 when unpaid, so nothing is given away by accident.", staleAfterMs: QUARTER_HOURLY },
   { key: "rails", label: "Payment rails", blurb: "The chains advertised in a live 402 challenge.", staleAfterMs: QUARTER_HOURLY },
@@ -152,6 +163,9 @@ export function statusSnapshot({ baseUrl = "", nowMs = Date.now(), historyDays =
       blurb: c.blurb,
       observed: rows.length,
       current: stateFrom(latest.get(c.key), { nowMs, staleAfterMs: c.staleAfterMs }),
+      // Newest first, last five: lets a prober apply a consecutive-failure rule
+      // without any state of its own (the paid canary's upstream legs).
+      recentOk: rows.slice(-5).reverse().map((r) => !!r.ok),
       windows,
       daily: dailyFrom(rows, { days: historyDays, nowMs }),
     };

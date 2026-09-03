@@ -17,10 +17,11 @@
 //   4. the deadline fits under the Railway grace the deploy job sets, and the
 //      code has no timer/quiet-window path left that could reintroduce a wait.
 import { spawn } from "node:child_process";
+import { getFreePort } from "./lib/free-port.js";
 import http from "node:http";
 import { readFileSync } from "node:fs";
 
-const PORT = 3830 + (process.pid % 120);
+const PORT = await getFreePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };

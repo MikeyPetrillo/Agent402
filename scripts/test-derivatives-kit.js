@@ -141,8 +141,8 @@ globalThis.fetch = async (url, opts = {}) => {
 // Catalog envelope
 // ----------------------------------------------------------------------------
 const EXPECTED = {
-  "perp-markets": "$0.003", "perp-funding": "$0.003", "perp-funding-screener": "$0.003", "perp-open-interest": "$0.002",
-  "perp-klines": "$0.003", "perp-orderbook": "$0.002", "perp-basis": "$0.003",
+  "perp-markets": "$0.003", "perp-funding": "$0.003", "perp-funding-screener": "$0.003", "perp-open-interest": "$0.001",
+  "perp-klines": "$0.001", "perp-orderbook": "$0.002", "perp-basis": "$0.003",
   "options-summary": "$0.005", "crypto-options-chain": "$0.004", "options-ticker": "$0.002", "options-volume": "$0.002",
 };
 ok(DERIVATIVES_TOOLS.length === Object.keys(EXPECTED).length, `${Object.keys(EXPECTED).length} tools exported (got ${DERIVATIVES_TOOLS.length})`);

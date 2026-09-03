@@ -71,6 +71,35 @@ const PAY_NETWORK = (process.env.PAY_NETWORK || "base").toLowerCase();
 // audio / code-run proxies bill real upstream credit per call — registering
 // them isn't worth actual money burn; they stay findable via the live 402.
 const MAX_PRICE_USD = Number(process.env.MAX_PRICE_USD || (MODE === "sweep" ? "0.05" : "Infinity"));
+// UPSTREAM_FREE_ONLY=1 sweeps only routes that cost us nothing per call at a
+// third party, so the pass can run daily instead of weekly. The price ceiling
+// is only a PROXY for upstream cost (a $0.002 Blockscout call bills us $0.002
+// upstream); this is the real question, asked of the server. Memory tools are
+// admitted by name: they are wallet-keyed rather than compute-payable, and the
+// only resource they consume is our own Railway volume.
+const UPSTREAM_FREE_ONLY = /^(1|true|yes)$/i.test(process.env.UPSTREAM_FREE_ONLY || "");
+// The inverse, for the priced pass: skip what the daily zero-upstream pass has
+// already settled today, so the weekly one is not re-buying 177 routes that are
+// already well inside the 30-day window. Each skipped route is one fewer
+// facilitator settlement against CDP's 1,000/month free tier.
+const SKIP_UPSTREAM_FREE = /^(1|true|yes)$/i.test(process.env.SKIP_UPSTREAM_FREE || "");
+// Floor, so the expensive tail can be swept on its own cadence without the
+// cheap routes riding along.
+const MIN_PRICE_USD = Number(process.env.MIN_PRICE_USD || "0");
+// Group selector, so a natural family (the skill packs are all "skill-") can be
+// given its own cadence without pasting sixty-odd slugs into a dispatch input.
+const SLUG_PREFIX = (process.env.SLUG_PREFIX || "").trim();
+// Only pay for what is about to be culled. A listing's 30-day clock is reset by
+// ANY settlement, ours or a customer's, so a route that is actually selling
+// needs nothing from us - and measured 2026-08-31, 371 of our 452 listings had
+// exactly one payer (the burner) while 62 had a real outside buyer. Paying for
+// all of them every day buys advertisement we already have. STALE_DAYS sweeps
+// only listings whose lastCalledAt is older than N days, plus anything not
+// listed at all. Unset = the old behaviour, sweep everything selected.
+const STALE_DAYS = Number(process.env.STALE_DAYS || "0");
+const UPSTREAM_FREE_EXTRA = new Set((process.env.UPSTREAM_FREE_EXTRA || "memory-").split(",").map((x) => x.trim()).filter(Boolean));
+const costsNothingUpstream = (t) =>
+  t.computePayable || [...UPSTREAM_FREE_EXTRA].some((p) => t.slug === p || t.slug.startsWith(p));
 const SLUGS_FILTER = process.env.SLUGS ? new Set(process.env.SLUGS.split(",").map(s => s.trim())) : null;
 // Deterministic batching for large sweeps: split the (sorted) work list into
 // BATCH_COUNT interleaved groups and run only BATCH_INDEX. Lets a big settlement
@@ -105,9 +134,24 @@ async function pageBazaar(filter) {
 }
 
 async function loadStaleRoutes() {
+  // serviceName is PER TOOL since 2026-08-31 ("Extract article", not
+  // "Agent402.tools"), because 168 identical rows in a 14,000-row index answer
+  // no query an agent would type. So "stale" can no longer mean "differs from
+  // one constant" - that would flag every listing we have. It means the name
+  // the Bazaar holds differs from the name the catalog declares for that route
+  // right now. EXPECT_NAME stays as the fallback for routes the catalog no
+  // longer carries.
+  const expected = new Map();
+  try {
+    const r = await fetch(`${TARGET}/api/pricing`);
+    if (r.ok) for (const e of ((await r.json()).endpoints || [])) if (e?.path) expected.set(e.path, e.name || EXPECT_NAME);
+  } catch { /* fall back to the constant below */ }
   const { matches, total } = await pageBazaar((it) => {
     const r = it.resource || "";
-    return r.includes(HOST) && it.serviceName !== EXPECT_NAME;
+    if (!r.includes(HOST)) return false;
+    let want = EXPECT_NAME;
+    try { want = expected.get(new URL(r).pathname) ?? EXPECT_NAME; } catch { /* keep the fallback */ }
+    return it.serviceName !== want;
   });
   console.log(`Scanned ${total} Bazaar resources; ${matches.length} stale on ${HOST}.`);
   // Normalise to { slug, route, serviceName }
@@ -146,6 +190,13 @@ async function loadCatalog() {
     path: t.path,
     price: t.price,
     priceUsd: priceToUsd(t.price),
+    // The server's own PoW-eligibility flag. A tool is compute-payable only
+    // when it makes NO external call - scripts/test-free-tier-egress.js drives
+    // every one of them under an egress-recording preload and requires zero
+    // attributed egress, refusing to report a clean run unless a planted
+    // control proves the probe can still see a leak. So this is a MEASURED
+    // "costs nothing upstream", not a hand-kept list that drifts.
+    computePayable: t.computePayable === true,
   }));
 }
 
@@ -156,6 +207,22 @@ async function loadRegisteredPaths() {
     try { reg.add(new URL(it.resource).pathname); } catch {}
   }
   return reg;
+}
+
+// path -> ms since CDP last observed a settlement for it. A path absent here is
+// not listed at all, which is always worth a settlement.
+async function loadFreshness() {
+  const fresh = new Map();
+  const { matches } = await pageBazaar((it) => (it.resource || "").includes(HOST));
+  for (const it of matches) {
+    const at = it.quality?.lastCalledAt;
+    if (!at) continue;
+    const t = Date.parse(at);
+    if (Number.isFinite(t)) {
+      try { fresh.set(new URL(it.resource).pathname, Date.now() - t); } catch {}
+    }
+  }
+  return fresh;
 }
 
 async function loadOpenapiExamples() {
@@ -186,11 +253,21 @@ async function loadOpenapiExamples() {
 }
 
 async function runMissingMode({ sweep = false } = {}) {
-  const [catalog, registered, examples] = await Promise.all([
+  const [catalog, registered, examples, freshness] = await Promise.all([
     loadCatalog(),
     sweep ? Promise.resolve(new Set()) : loadRegisteredPaths(),
     loadOpenapiExamples(),
+    STALE_DAYS > 0 ? loadFreshness() : Promise.resolve(new Map()),
   ]);
+  // A path we have never listed has no freshness reading, and that is exactly
+  // the case that needs a settlement - so an unknown path is treated as stale,
+  // never as fresh. Same rule as the rest of this repo: a missing measurement
+  // is not a passing one.
+  const isStale = (t) => {
+    if (!(STALE_DAYS > 0)) return true;
+    const age = freshness.get(t.path);
+    return age === undefined || age >= STALE_DAYS * 86400000;
+  };
   // sweep = pay EVERY affordable route once (settlement-driven registration on
   // the PAY_NETWORK chain + re-observe of the multi-chain accepts), cheapest
   // first so a timeout loses the least coverage. missing = only routes the
@@ -200,6 +277,11 @@ async function runMissingMode({ sweep = false } = {}) {
     .filter((t) => sweep || !registered.has(t.path))
     .filter((t) => !SLUGS_FILTER || SLUGS_FILTER.has(t.slug))
     .filter((t) => t.priceUsd <= MAX_PRICE_USD)
+    .filter((t) => !UPSTREAM_FREE_ONLY || costsNothingUpstream(t))
+    .filter((t) => !SKIP_UPSTREAM_FREE || !costsNothingUpstream(t))
+    .filter((t) => t.priceUsd > MIN_PRICE_USD)
+    .filter((t) => !SLUG_PREFIX || t.slug.startsWith(SLUG_PREFIX))
+    .filter((t) => isStale(t))
     .sort((a, b) => (sweep ? a.priceUsd - b.priceUsd : b.priceUsd - a.priceUsd))
     // Batch stride (applied after sort so each batch is a price-balanced slice).
     .filter((_, i) => i % BATCH_COUNT === BATCH_INDEX);
@@ -338,9 +420,27 @@ export function missingModeVerdict({ failCount, okCount, stillMissingPaths, boug
         `harvester, which is asynchronous and outside our control. Treating as success — re-count in a few hours to confirm ingestion.`,
     };
   }
+  // A route left unpaid by our OWN caps is the caps working, not a failure.
+  // This exited 1 whenever anything was left over, and something is always left
+  // over - the spend cap, the price cap and the batch stride all exist to leave
+  // routes for a later pass. Measured 2026-08-31: 4 of the last 7 red "Deploy to
+  // Railway" runs were this job reporting "5 ok, 0 failed" and then exiting 1,
+  // which trains everyone to ignore the deploy failure mail - and that mail is
+  // how a REAL failure gets noticed.
+  //
+  // A failed BUY still fails the job; leftovers only report.
+  if (failCount === 0) {
+    return {
+      exitCode: 0,
+      message:
+        `${okCount} route(s) settled successfully. ${unpaid.length} route(s) were left for a later pass by our own ` +
+        `spend cap, price cap or batch stride - the caps doing their job, not a failure. The keep-alive sweeps ` +
+        `whatever is still unlisted on its own schedule.`,
+    };
+  }
   return {
     exitCode: 1,
-    message: `Work remaining: ${failCount} failed buy(s), ${unpaid.length} route(s) never paid for (spend cap, price cap, or batch stride).`,
+    message: `${failCount} buy(s) FAILED (plus ${unpaid.length} route(s) left unpaid by the caps, which is expected).`,
   };
 }
 

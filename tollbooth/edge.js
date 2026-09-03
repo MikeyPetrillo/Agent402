@@ -8,6 +8,7 @@
 // See worker.js for a Cloudflare Worker entry, and the README for Next.js.
 import { makeBotMatcher, AI_BOTS } from "./bots.js";
 import { memorySink } from "./sinks.js";
+import { mintEdgeChallenge, translateEdgeCredential, isMppCredential } from "./edge-mpp.js";
 
 export { memorySink, kvStatsSink, httpStatsSink } from "./sinks.js";
 
@@ -135,6 +136,17 @@ export function createEdgeTollbooth(config = {}) {
     // payment, which is why the accepts block below is withheld when it is
     // absent - see the note there.
     verifyX402 = null,
+    // MPP (the "Payment" HTTP auth scheme) on the same verifier: default ON
+    // whenever the USDC quote is live (payTo + verifyX402 + secret). The 402
+    // gains a WWW-Authenticate: Payment challenge and an Authorization: Payment
+    // credential is translated to PAYMENT-SIGNATURE and handed to verifyX402.
+    // See edge-mpp.js. `mppAssetAddress`/`mppAssetName` name a token the
+    // built-in USDC table does not know (the domain name is what a facilitator
+    // verifies the EIP-3009 signature under).
+    mpp = true,
+    mppAssetAddress,
+    mppAssetName,
+    mppRealm,
     botUserAgents = AI_BOTS,
     // "bots" (default, charge AI crawler UAs) | "all" (charge all but free()) |
     // "strict" (charge anything that isn't a real-browser request). An explicit
@@ -163,6 +175,7 @@ export function createEdgeTollbooth(config = {}) {
     );
   }
 
+  const mppOn = Boolean(mpp && secret && payTo && verifyX402);
   const isBot = makeBotMatcher(botUserAgents);
   const powEngine = pow ? createEdgePow({ secret, difficulty: powDifficulty, store }) : null;
   const mem = memorySink();
@@ -222,6 +235,23 @@ export function createEdgeTollbooth(config = {}) {
         paid = false;
       }
       if (paid) { incr("paid"); return null; }
+    } else if (mppOn && isMppCredential(request.headers.get("authorization"))) {
+      // MPP inbound: only a credential whose challenge id HMAC-verifies as
+      // OURS, unexpired, and minted for THIS resource (a credential for /a
+      // must not pay for /b - the challenge carries the resource it was minted
+      // for). The verifier sees the same request with PAYMENT-SIGNATURE in
+      // place of Authorization, exactly as an x402 client would have sent it.
+      let paid = false;
+      try {
+        const t = await translateEdgeCredential(request.headers.get("authorization"), { secret });
+        if (t && t.resource === resource) {
+          const headers = new Headers(request.headers);
+          headers.set("payment-signature", t.paymentSignature);
+          headers.delete("authorization");
+          paid = await verifyX402(new Request(request, { headers }), { price, network, asset, payTo, resource, accepted: t.accepted });
+        }
+      } catch { paid = false; }
+      if (paid) { incr("paid"); incr("mppPaid"); return null; }
     }
 
     const sol = request.headers.get("x-pow-solution");
@@ -242,10 +272,16 @@ export function createEdgeTollbooth(config = {}) {
       accepts: (payTo && verifyX402) ? [{ scheme: "exact", network, maxAmountRequired: String(price), asset, payTo, resource }] : [],
     };
     if (powEngine) body.proofOfWork = await powEngine.challenge(powResource);
-    return new Response(JSON.stringify(body), {
-      status: 402,
-      headers: { "content-type": "application/json", "x-tollbooth": "pay-per-crawl" },
-    });
+    const headers = { "content-type": "application/json", "x-tollbooth": "pay-per-crawl" };
+    if (mppOn) {
+      // One evm/charge challenge for the gate's quote (never a price the
+      // x402 path would not honour - both are built from the same fields).
+      try {
+        const minted = await mintEdgeChallenge({ secret, realm: mppRealm || u.host, price, network, asset, assetAddress: mppAssetAddress, assetName: mppAssetName, payTo, resource });
+        if (minted) headers["www-authenticate"] = minted.header;
+      } catch { /* a quote MPP cannot express is still a valid x402 402 */ }
+    }
+    return new Response(JSON.stringify(body), { status: 402, headers });
   }
 
   // Operator surface: in-process mirror (sync), durable snapshot (async),

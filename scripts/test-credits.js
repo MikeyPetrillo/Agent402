@@ -73,19 +73,20 @@ nexted = false; res = fakeRes();
 gate({ method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${KEY}` } }, res, () => { nexted = true; });
 res.statusCode = 502; res.emit("finish");
 ok(nexted && cr.balance(KEY).balanceUsd === 19.998 && cr.balance(KEY).heldUsd === 0, "gate: a non-200 (upstream 502) is NOT debited (hold released)");
-// client abort BEFORE the response finished: released, never charged (Node's
-// default statusCode is 200 before anything is written)
+// client abort AFTER dispatch (socket closed, finish never fires): the handler
+// still runs and the upstream is still paid, so the hold SETTLES - an abort was
+// the one way a credits buyer got an expensive handler free (2026-08-28).
 nexted = false; res = fakeRes();
 gate({ method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${KEY}` } }, res, () => { nexted = true; });
 res.statusCode = 200; res.emit("close");
-ok(cr.balance(KEY).balanceUsd === 19.998 && cr.balance(KEY).heldUsd === 0, "gate: a client abort before finish releases the hold and charges nothing");
+ok(nexted && cr.balance(KEY).balanceUsd === 19.997 && cr.balance(KEY).heldUsd === 0 && cr.balance(KEY).calls === 3, `gate: a client abort after dispatch settles the hold (the work was bought) [nexted=${nexted} bal=${cr.balance(KEY).balanceUsd} held=${cr.balance(KEY).heldUsd} calls=${cr.balance(KEY).calls}]`);
 // idempotent REPLAY of a call this key already paid for: the replay middleware
 // answers 200 with X-Idempotent-Replay: true and no handler runs, so the hold
 // is released and the balance is unchanged (a keyed retry never pays twice).
 nexted = false; res = fakeRes();
 gate({ method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${KEY}` } }, res, () => { nexted = true; });
 res.setHeader("X-Idempotent-Replay", "true"); res.statusCode = 200; res.emit("finish");
-ok(nexted && cr.balance(KEY).balanceUsd === 19.998 && cr.balance(KEY).heldUsd === 0 && cr.balance(KEY).calls === 2, "gate: an idempotent replay (X-Idempotent-Replay: true) releases the hold - a keyed retry is never debited twice");
+ok(nexted && cr.balance(KEY).balanceUsd === 19.997 && cr.balance(KEY).heldUsd === 0 && cr.balance(KEY).calls === 3, "gate: an idempotent replay (X-Idempotent-Replay: true) releases the hold - a keyed retry is never debited twice");
 // an x-pow-solution riding beside the Bearer is stripped on acceptance, so the
 // idempotency key can never bind a paid entry to that public string
 { const req = { method: "GET", path: "/api/whois", headers: { authorization: `Bearer ${KEY}`, "x-pow-solution": "public-string" } }; res = fakeRes();
@@ -94,7 +95,7 @@ ok(nexted && cr.balance(KEY).balanceUsd === 19.998 && cr.balance(KEY).heldUsd ==
 nexted = false; res = fakeRes();
 const priceFor2 = (m, p) => (p === "/v1/big" ? { priceUsd: 25, slug: "big" } : priceFor(m, p));
 cr.gate(priceFor2)({ method: "POST", path: "/v1/big", headers: { authorization: `Bearer ${KEY}` } }, res, () => { nexted = true; });
-ok(!nexted && res.statusCode === 402 && res.body.reason === "insufficient" && res.body.balanceUsd === 19.998 && /\/credits$/.test(res.body.topup), "gate: insufficient balance -> 402 with balance + top-up link, handler never runs");
+ok(!nexted && res.statusCode === 402 && res.body.reason === "insufficient" && res.body.balanceUsd === 19.997 && /\/credits$/.test(res.body.topup), "gate: insufficient balance -> 402 with balance + top-up link, handler never runs");
 nexted = false; res = fakeRes();
 gate({ method: "GET", path: "/api/whois", headers: { authorization: "Bearer a402_" + "y".repeat(32) } }, res, () => { nexted = true; });
 ok(!nexted && res.statusCode === 402 && res.body.reason === "unknown", "gate: an unknown key -> 402, handler never runs");
@@ -130,9 +131,9 @@ ok(cr.disableByPaymentIntent("pi_nope") === null, "an unknown PaymentIntent disa
 ok(cr.setDisabled(m1.keyId, true) && cr.authorize(KEY, 0.001).reason === "disabled", "operator can disable a key; it then refuses");
 cr.setDisabled(m1.keyId, false);
 const st = cr.status();
-ok(st.keys === 1 && st.loadedUsd === 20 && st.outstandingUsd === 19.997 && st.rows[0].keyId === m1.keyId && !JSON.stringify(st).includes(KEY) && !JSON.stringify(st).includes(a.hash), "operator status has totals + key ids and never the key or its hash");
+ok(st.keys === 1 && st.loadedUsd === 20 && st.outstandingUsd === 19.996 && st.rows[0].keyId === m1.keyId && !JSON.stringify(st).includes(KEY) && !JSON.stringify(st).includes(a.hash), "operator status has totals + key ids and never the key or its hash");
 cr = mk();
-ok(cr.balance(KEY).balanceUsd === 19.997 && (await cr.claim("cs_paid")).status === "claimed", "a fresh instance reads balances and the claim-once index from disk");
+ok(cr.balance(KEY).balanceUsd === 19.996 && (await cr.claim("cs_paid")).status === "claimed", "a fresh instance reads balances and the claim-once index from disk");
 
 // A $19 dossier on a $19.998 key IS covered (authorizes at balance >= price).
 nexted = false; res = fakeRes();

@@ -198,7 +198,7 @@ export const DATA_TOOLS = [
     },
   },
   {
-    route: "GET /api/weather-forecast", name: "Weather forecast (US)", slug: "weather-forecast", category: "data", price: "$0.003",
+    route: "GET /api/weather-forecast", name: "Weather forecast (US)", slug: "weather-forecast", category: "data", price: "$0.001",
     description:
       "Multi-period weather forecast for a US location from api.weather.gov (NWS, public domain). Give latitude and longitude; returns the place plus upcoming forecast periods (temp, wind, conditions). US coverage only. ?lat=40.71&lon=-74.01",
     tags: ["weather", "forecast", "nws", "noaa", "us"],

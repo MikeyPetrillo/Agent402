@@ -86,5 +86,30 @@ ok(/function\s+toggleMenu\s*\(/.test(siteChromeJs) && siteChromeJs.includes(".ml
 const revenueSrc = readFileSync(new URL("../src/revenue-live.js", import.meta.url), "utf8");
 ok(/\.rvz\{--s1:#3987e5/.test(revenueSrc), "the chart's dark series palette is the one that ships by default");
 
+
+// ---- No dark-theme text on a light-theme surface, on the same element ---------
+// Found 2026-09-02 on prod's /tools: two <pre> blocks styled
+// background:var(--paper) + color:var(--on-dark) - a leftover from the
+// dark-first day - rendered near-white text on the light page, i.e. an
+// invisible code sample (seven such blocks across /tools, /sell and
+// /what-is-x402). The light palette is the default, so a light ground token
+// paired with a dark-ground ink token on one element is always unreadable in
+// the default theme. Every page module is swept; the only legal pairing for
+// on-dark / dk-muted text is an obsidian ground (--surface, --ink-panel,
+// --obsidian-bg, --dark-border panels).
+{
+  const { readdirSync } = await import("node:fs");
+  const LIGHT_GROUND = /background(?:-color)?:\s*var\(--(?:paper|card|card-zebra|milled-bg)\)/;
+  const DARK_INK = /color:\s*var\(--(?:on-dark2?|dk-muted[23]?)\)/;
+  const offenders = [];
+  for (const f of readdirSync(new URL("../src/", import.meta.url)).filter((n) => n.endsWith(".js"))) {
+    const src = readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+    for (const m of src.matchAll(/style="([^"]*)"/g)) {
+      if (LIGHT_GROUND.test(m[1]) && DARK_INK.test(m[1])) offenders.push(`${f}: ${m[1].slice(0, 90)}`);
+    }
+  }
+  ok(offenders.length === 0, `no inline style pairs a light ground with dark-theme ink on one element (${offenders.length ? offenders.join(" | ") : "clean"})`);
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

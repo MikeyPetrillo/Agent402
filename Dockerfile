@@ -4,7 +4,7 @@
 # hinges on was VERIFIED against the live Railway deployment on 2026-07-18:
 # agent402-volume mounts at /data owned by root:root, so the non-root switch is
 # done via a root entrypoint that chowns /data then drops to node (below), NOT a
-# Dockerfile USER. See docs/security-infra-hardening.md for the full checklist.
+# Dockerfile USER. See the Security-Model wiki page for the full checklist.
 #
 # Base image pinned by DIGEST for reproducible builds and CVE traceability
 # (audit: "mutable deployment artifacts"). node:22-slim as of 2026-07-18. Re-pin
@@ -50,7 +50,7 @@ RUN npm ci --omit=dev && npx playwright install --with-deps chromium \
 # egress firewalling are the REST of the container-hardening story — Railway's
 # platform does not expose Docker security-opt / egress controls, so they are
 # NOT settable from this repo. Closing them needs the secretless worker services
-# in docs/worker-isolation-plan.md (Phases 2-3) or a platform that supports them.
+# in the Security-Model wiki page (worker isolation) or a platform that supports them.
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 
 COPY src ./src
@@ -98,7 +98,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # NOTE (--no-sandbox stays): src/tools/render.js still launches Chromium with
 # --no-sandbox because this container has no user-namespace / seccomp profile
 # for Chromium's own sandbox. Removing it REQUIRES enabling that at the platform
-# level first (see docs/security-infra-hardening.md) — dropping it here blindly
+# level first (see the Security-Model wiki page) — dropping it here blindly
 # 503s every browser tool. Non-root already removes the "escape == root" impact.
 #
 # NOTE (full isolation is a follow-up): the browser and media parsers still

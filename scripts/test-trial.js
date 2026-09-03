@@ -19,6 +19,7 @@
 //  3. The bounds hold: a second call to the same tool pays, and the catalog
 //     cannot be swept.
 import { spawn } from "node:child_process";
+import { getFreePort } from "./lib/free-port.js";
 import { createServer } from "node:http";
 
 let pass = 0, fail = 0;
@@ -33,15 +34,6 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 // before it can bind it itself); the facilitator server binds directly to 0
 // since we hold it open for the test's own lifetime. Same pattern already
 // proven in scripts/test-backup.js.
-const getFreePort = async () => {
-  const probe = createServer();
-  const port = await new Promise((resolve, reject) => {
-    probe.on("error", reject);
-    probe.listen(0, () => resolve(probe.address().port));
-  });
-  await new Promise((r) => probe.close(r));
-  return port;
-};
 const PORT = await getFreePort();
 const base = `http://127.0.0.1:${PORT}`;
 let log = "";

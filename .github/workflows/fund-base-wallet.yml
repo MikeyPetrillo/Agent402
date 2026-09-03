@@ -1,0 +1,52 @@
+name: Fund a wallet with USDC on Base (dispatch-only)
+
+# Moves USDC on Base from the CI canary burner to one address. Built to fund
+# the AgentCore Payments test instrument for the x402 buyer retest
+# (2026-08-28); the burner key lives only in Actions secrets, so any funding
+# transfer is a workflow. DRY RUN by default, like refund.yml and the Tempo
+# funder. Cap: 5 USDC per run (FUND_MAX_USD in the script).
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      address:
+        description: "Address to fund (0x...)"
+        required: true
+      amount_usd:
+        description: "USDC to send (cap is 5)"
+        required: false
+        default: "1"
+      live:
+        description: "true to actually send; anything else is a dry run"
+        required: false
+        default: "false"
+
+concurrency:
+  # One funding run at a time: two would race the same burner's nonces.
+  group: fund-base-wallet
+  cancel-in-progress: false
+
+jobs:
+  fund:
+    # Money moves out of a spending wallet on dispatch: the `spending` GitHub
+    # environment requires the operator's approval click before this job runs
+    # (write access alone used to be enough). Scheduled canaries stay ungated.
+    environment: spending
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - name: Send
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          # Every input rides an env var, never shell interpolation (N-03).
+          FUND_ADDRESS: ${{ inputs.address }}
+          FUND_USD: ${{ inputs.amount_usd }}
+          LIVE: ${{ inputs.live }}
+        run: node scripts/fund-base-wallet.js

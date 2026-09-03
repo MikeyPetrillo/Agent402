@@ -1,4 +1,4 @@
-// monitor-scheduler - Phase 2b of the recurring engine. Turns an ACTIVE
+// monitor-scheduler - the fulfilment half of the recurring engine. Turns an ACTIVE
 // monitoring subscription (src/stripe-subscriptions.js) into delivered reports:
 // a welcome report on first sight, a cheap free re-check on a cadence, a paid
 // full re-run only when the cadence says so or something actually CHANGED, and
@@ -47,6 +47,7 @@ export const MAX_FULL_PER_TICK = 10;
 export const MAX_BACKOFF_MS = DAY;
 export const LOCK_STALE_MS = 20 * 60_000;
 export const TICK_MS = 10 * 60_000;
+export const RESEARCH_RERUN_MS = 7 * DAY; // a saved question is re-researched weekly (the 30-day cap bounds a 5-week month)
 export const MAX_FULL_PER_SUB_30D = 4;   // welcome + scheduled + up to 4 change runs; beyond = alert-only.
 // Bounds a $3/month subscription against its own upstream. MEASURED cost of one
 // report is ~$0.10-0.30 (Opus synthesis p50 $0.075/call plus cheap planning), so
@@ -171,7 +172,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     const p = MONITOR_PRODUCTS[rec.product];
     if (!(await stillActive(rec))) { const e = new Error("subscription no longer active"); e.inactive = true; throw e; }
     const input = inputFor(p.kind, rec.target, st);
-    const g = await generate(p.kind, p.slug, input, { buyerKey: `sub:${rec.subId}` });
+    const g = await generate(p.kind, p.slug, input, { buyerKey: `sub:${rec.subId}`, rail: "monitor", priceUsd: Number(p.price) / 100 });
     const bundle = (g && typeof g === "object") ? g : { report: String(g ?? "") };
     if (!bundle.report) throw new Error("empty report");
     const id = newReportId();
@@ -422,6 +423,25 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     } catch (e) { fail(st, e, rec); return "error"; }
   }
 
+  // research: there is no cheap probe for "did the answer change" - the
+  // product IS the weekly re-run. Welcome report on first sight, then a fresh
+  // paid run every RESEARCH_RERUN_MS; past the 30-day cap it waits (no alert
+  // has anything to say), the cap resets as old runs age out.
+  async function processResearch(rec, st, { force, budget }) {
+    const retryPending = (st.failures || 0) > 0;
+    const first = !st.lastFullAt;
+    const due = force || retryPending || first || now() - st.lastFullAt >= RESEARCH_RERUN_MS;
+    if (!due) return "skip";
+    st.lastCheckAt = now();
+    if (!first && capReached(st)) { recovered(st); persist(); return "checked"; }
+    if (!budget.allow()) { persist(); return "skip"; }
+    try {
+      await runFull(rec, st, first ? "welcome" : "scheduled", first ? [] : ["Weekly re-run of your question from live sources"]);
+      persist();
+      return "full";
+    } catch (e) { fail(st, e, rec); return "error"; }
+  }
+
   // insider: welcome report on first sight; daily FREE probe of Form 4
   // accessions against the ticker; a new accession = paid re-run + "filing"
   // email. The seen-set advances only after a successful report.
@@ -462,6 +482,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     if (p.kind === "token") return processToken(rec, st, opts);
     if (p.kind === "recall") return processRecall(rec, st, opts);
     if (p.kind === "ipo") return processIpo(rec, st, opts);
+    if (p.kind === "research") return processResearch(rec, st, opts);
     if (p.kind === "insider") return processInsider(rec, st, opts);
     return "skip";
   }
@@ -510,7 +531,7 @@ export function createMonitorScheduler({ subs, generate, probeDomain, normDomain
     return loadStore(path).reports[reportId] || null;
   }
   function reportView(reportId) {
-    const r = store.reports[reportId] || fromDisk(reportId);
+    const r = (Object.hasOwn(store.reports, reportId) ? store.reports[reportId] : null) || fromDisk(reportId);
     if (!r) return null;
     if (!store.reports[reportId]) store.reports[reportId] = r;
     return {

@@ -18,6 +18,7 @@
 // A dead end that explains itself is the difference between a lost agent and a
 // retry that works.
 import { createHash } from "node:crypto";
+import { getFreePort } from "./lib/free-port.js";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 
@@ -30,7 +31,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 // against a paywall that is not there. Same stub-facilitator pattern as
 // scripts/test-trial.js - @x402/core refuses to BUILD a 402 for a scheme the
 // facilitator does not advertise, and nothing is ever settled here.
-const PORT = 4100 + (process.pid % 90);
+const PORT = await getFreePort();
 const FAC_PORT = PORT + 100;
 const TARGET = `http://127.0.0.1:${PORT}`;
 let log = "";

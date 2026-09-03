@@ -77,23 +77,23 @@ function bad(message, statusCode = 400) {
 const NETWORKS = {
   base: {
     chainId: 8453, usdc: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", name: "USD Coin",
-    rpcs: ["https://mainnet.base.org", "https://base-rpc.publicnode.com", "https://base.llamarpc.com", "https://base.drpc.org"],
+    rpcs: ["https://mainnet.base.org", "https://base-rpc.publicnode.com", "https://base.drpc.org"],
   },
   polygon: {
     chainId: 137, usdc: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", name: "USD Coin",
-    rpcs: ["https://polygon-rpc.com", "https://polygon-bor-rpc.publicnode.com", "https://polygon.llamarpc.com", "https://polygon.drpc.org"],
+    rpcs: ["https://polygon-rpc.com", "https://polygon-bor-rpc.publicnode.com", "https://polygon.drpc.org"],
   },
   arbitrum: {
     chainId: 42161, usdc: "0xaf88d065e77c8cc2239327c5edb3a432268e5831", name: "USD Coin",
-    rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com", "https://arbitrum.llamarpc.com", "https://arbitrum.drpc.org"],
+    rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com", "https://arbitrum.drpc.org"],
   },
   optimism: {
     chainId: 10, usdc: "0x0b2c639c533813f4aa9d7837caf62653d097ff85", name: "USD Coin",
-    rpcs: ["https://mainnet.optimism.io", "https://optimism-rpc.publicnode.com", "https://optimism.llamarpc.com", "https://optimism.drpc.org"],
+    rpcs: ["https://mainnet.optimism.io", "https://optimism-rpc.publicnode.com", "https://optimism.drpc.org"],
   },
   ethereum: {
     chainId: 1, usdc: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", name: "USD Coin",
-    rpcs: ["https://ethereum-rpc.publicnode.com", "https://eth.llamarpc.com", "https://eth.drpc.org", "https://cloudflare-eth.com"],
+    rpcs: ["https://ethereum-rpc.publicnode.com", "https://eth.drpc.org", "https://cloudflare-eth.com"],
   },
   // Monad (EVM L1, chain 143). Native Circle USDC, but the on-chain EIP-712
   // domain name is "USDC" not "USD Coin" (same fact src/payments.js's
@@ -282,7 +282,7 @@ export const X402_TOOLS = [
     },
   },
   {
-    route: "GET /api/x402-quote", name: "x402 quote", slug: "x402-quote", category: "payments", price: "$0.003",
+    route: "GET /api/x402-quote", name: "x402 quote", slug: "x402-quote", category: "payments", price: "$0.002",
     description:
       "Probe any URL and decode its HTTP 402 payment requirements (price, asset, network, pay-to) into clean JSON - what an agent needs to decide whether/how to pay. Read-only; does not pay. ?url=https://api.example.com/paid&method=GET",
     tags: ["x402", "402", "payment-required", "quote", "discovery"],
@@ -364,7 +364,7 @@ export const X402_TOOLS = [
     },
   },
   {
-    route: "GET /api/tx-status", name: "Transaction status", slug: "tx-status", category: "payments", price: "$0.003",
+    route: "GET /api/tx-status", name: "Transaction status", slug: "tx-status", category: "payments", price: "$0.001",
     description:
       "Check the confirmation status of a transaction by hash on Base/Polygon/Arbitrum/Optimism/Ethereum/Monad/Celo/Avalanche/Sei/Robinhood Chain: success / failed / pending / not found, with block, from, to, gas used. Read-only. ?hash=0x…&network=base",
     tags: ["transaction", "status", "receipt", "confirmation", "multichain", "robinhood", "usdg"],
@@ -492,7 +492,7 @@ export const X402_TOOLS = [
     },
   },
   {
-    route: "GET /api/ens-resolve", name: "ENS resolve", slug: "ens-resolve", category: "payments", price: "$0.003",
+    route: "GET /api/ens-resolve", name: "ENS resolve", slug: "ens-resolve", category: "payments", price: "$0.001",
     description:
       "Resolve an ENS name (e.g. vitalik.eth) to its Ethereum address - so an agent can turn a human-readable recipient into a payable address. Read-only on Ethereum mainnet. ?name=vitalik.eth",
     tags: ["ens", "resolve", "ethereum", "name", "address", "lookup"],

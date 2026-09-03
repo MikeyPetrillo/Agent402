@@ -19,7 +19,18 @@
 // worse failure.
 import { createClient } from "redis";
 
+// Mirror src/db-ssl.js for Redis: a plaintext redis:// URL is only acceptable
+// on Railway's private mesh; a public host must use rediss:// or the password,
+// the rate-limit counters and the cache travel in the clear. Fail loudly at
+// import so a misconfigured URL never silently runs unencrypted.
+function assertRedisTransport(url) {
+  if (!url) return;
+  let u; try { u = new URL(url); } catch { return; }
+  const internal = /\.railway\.internal$/i.test(u.hostname) || /^(localhost|127\.0\.0\.1|::1)$/i.test(u.hostname);
+  if (u.protocol === "redis:" && !internal) throw new Error(`REDIS_URL uses plaintext redis:// to a public host (${u.hostname}); use rediss:// or the private mesh`);
+}
 const REDIS_URL = process.env.REDIS_URL || "";
+assertRedisTransport(REDIS_URL);
 let client = null;
 let connecting = null;
 let unavailable = false;

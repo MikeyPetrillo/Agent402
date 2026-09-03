@@ -28,6 +28,17 @@
 //   POSTHOG_HOST      — optional, defaults to "https://us.i.posthog.com"
 //                       (use "https://eu.i.posthog.com" for the EU region)
 import { PostHog } from "posthog-node";
+// stats.js is imported LAZILY: a static import would run its /data guard in
+// every context that loads posthog.js (the funnel test boots this module in a
+// bare subprocess with NODE_ENV=production and no volume, and stats exits).
+// The server always has stats loaded, so after the first call this is sync.
+let __statsMod = null;
+function meterSpend(source, usd) {
+  try {
+    if (__statsMod) { __statsMod.recordUpstreamSpend(source, usd); return; }
+    import("./stats.js").then((m) => { __statsMod = m; m.recordUpstreamSpend(source, usd); }).catch(() => {});
+  } catch { /* metering must never break telemetry */ }
+}
 import { isPaidRail } from "./paid-rails.js";
 
 const API_KEY = process.env.POSTHOG_API_KEY || "";
@@ -36,6 +47,16 @@ const HOST = process.env.POSTHOG_HOST || "https://us.i.posthog.com";
 // "user" of this stream is the operator. A constant distinctId keeps PostHog's
 // person-count at 1 and avoids leaking any signal about the calling agent.
 const DISTINCT_ID = "agent402-server";
+// Every server event is ANONYMOUS: `$process_person_profile: false` tells
+// PostHog not to create or update a person profile for it. Measured
+// 2026-08-28: 307,424 of 311,256 events in seven days were server events on
+// this one constant id, and PostHog bills an event WITH person processing at
+// roughly five times the anonymous rate once the free allowance is spent. The
+// profile itself was worth nothing (one row, no person properties, every
+// query here reads event properties), so this is cost with no signal lost.
+// Browser events from the site keep person processing - that is web analytics
+// and its volume is a rounding error beside this stream.
+const ANON = { $process_person_profile: false };
 
 let client = null;
 let initialized = false;
@@ -57,6 +78,8 @@ export function _testEventsForTest() {
 // in the header comment is enforced by what the callers pass, and this
 // function adds nothing (no IP, no UA, no timestamps beyond PostHog's own).
 function capture(event, properties, distinctId = DISTINCT_ID) {
+  // One shape for both sinks, so the test sees exactly what PostHog would.
+  properties = { ...properties, ...ANON };
   if (TEST_MODE) {
     const e = { event, properties, distinctId };
     testEvents.push(e);
@@ -143,8 +166,29 @@ export function capturePostHogToolError({ slug, status, message, shape, syntheti
 // total volume, latency, cache hits, and success rates per slug. Errors are
 // also captured separately via capturePostHogToolError with richer detail;
 // this event is the volume/latency layer.
+// Discovery pseudo-slugs ("_find", "_route": the free /api/find + /api/route
+// resolvers) are ROLLED UP, not per-event. Measured 2026-08-25: one scanner
+// hit /api/find twice a second for twelve hours (57,277 calls, 61% cache
+// hits) and every hit was an ingested event - a single free caller became
+// 52% of the day's PostHog volume, and nothing about a discovery call is
+// per-event interesting. Real tool calls stay per-event.
+const ROLLED_UP_SLUG_RE = /^_/;
+let discoveryCallCounts = new Map(); // "slug|synthetic|cached|errored|status" -> { ..., count, latencySum }
+
 export function capturePostHogToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe, payer }) {
   if (!active()) return;
+  if (ROLLED_UP_SLUG_RE.test(String(slug || ""))) {
+    try {
+      const st = Number(status) || 200;
+      const key = `${slug}|${synthetic ? 1 : 0}|${cached ? 1 : 0}|${errored ? 1 : 0}|${st}`;
+      const cur = discoveryCallCounts.get(key) || { slug: String(slug), synthetic: !!synthetic, cached: !!cached, errored: !!errored, status: st, count: 0, latencySum: 0 };
+      cur.count++;
+      cur.latencySum += Number(latencyMs) || 0;
+      discoveryCallCounts.set(key, cur);
+      ensureFunnelTimer();
+    } catch { /* never throw from telemetry */ }
+    return;
+  }
   capture("tool_call", {
     slug,
     latencyMs: Number(latencyMs) || 0,
@@ -198,25 +242,49 @@ export function capturePostHogPackStep({ pack, slug, ok, ms }) {
 // computed as a ratio of stage totals (a PostHog formula insight), which is
 // the honest framing for an anonymous-by-design payment protocol.
 
-// Discovery is per-event (arrival timing matters) but bot sweeps against
-// /llms.txt etc. shouldn't be able to torch the event budget — cap captures
-// per rolling hour and drop the excess silently (the tool_call stream is
-// unaffected).
-const DISCOVERY_MAX_PER_HOUR = 1000;
-let discoveryWindowStart = 0;
-let discoveryWindowCount = 0;
+// Discovery is ROLLED UP per (surface, synthetic) per flush window - one
+// event carrying `count`, `sum(count)` is the exact total. It used to be
+// per-event under a 1,000/hour cap, which still let registry crawlers and
+// monitors make discovery ~26% of a month's ingestion (260k of ~990k, measured
+// 2026-08-27) while the cap silently discarded the excess on busy hours. A
+// windowed count keeps the total exact AND bounds the event volume by the
+// number of surfaces (~12), not by traffic.
+let discoveryCounts = new Map(); // "surface|synthetic" -> { surface, synthetic, count }
 
 export function capturePostHogDiscovery({ surface, synthetic }) {
   if (!active()) return;
   try {
-    const now = Date.now();
-    if (now - discoveryWindowStart > 3_600_000) {
-      discoveryWindowStart = now;
-      discoveryWindowCount = 0;
-    }
-    if (++discoveryWindowCount > DISCOVERY_MAX_PER_HOUR) return;
-    capture("discovery", { surface: String(surface || "unknown"), synthetic: !!synthetic });
+    const key = `${surface || "unknown"}|${synthetic ? 1 : 0}`;
+    const cur = discoveryCounts.get(key) || { surface: String(surface || "unknown"), synthetic: !!synthetic, count: 0 };
+    cur.count++;
+    discoveryCounts.set(key, cur);
+    ensureFunnelTimer();
   } catch { /* never throw from telemetry */ }
+}
+
+function flushDiscoveryRollup() {
+  if (!discoveryCounts.size) return;
+  const entries = [...discoveryCounts.values()];
+  discoveryCounts = new Map();
+  for (const e of entries) capture("discovery", { surface: e.surface, synthetic: e.synthetic, count: e.count });
+}
+
+function flushDiscoveryCallRollup() {
+  if (!discoveryCallCounts.size) return;
+  const entries = [...discoveryCallCounts.values()];
+  discoveryCallCounts = new Map();
+  for (const e of entries) {
+    capture("tool_call", {
+      slug: e.slug,
+      count: e.count,
+      latencyMs: Math.round(e.latencySum / e.count),
+      cached: e.cached,
+      errored: e.errored,
+      status: e.status,
+      synthetic: e.synthetic,
+      probe: false,
+    });
+  }
 }
 
 // 402s are the highest-volume stage by far — registry crawlers (Bazaar,
@@ -251,17 +319,30 @@ function ensureFunnelTimer() {
 //                   buyer that tried to pay and couldn't — the fixable leak.
 //   "pow_failed"  — an X-Pow-Solution was present but rejected (bad/expired
 //                   work). Tried the free tier and missed.
-export function capturePostHogPaywall({ slug, priceUsd, powEligible, synthetic, attempt }) {
+export function capturePostHogPaywall({ slug, priceUsd, powEligible, synthetic, attempt, reason, shape }) {
   if (!active()) return;
   try {
     const att = attempt === "usdc_failed" || attempt === "pow_failed" ? attempt : "none";
-    const key = `${slug}|${synthetic ? 1 : 0}|${att}`;
+    // WHY a present payment still bounced. Only ever one of the classifier's
+    // fixed reasons (src/payment-reject.js), so this cannot inflate the rollup
+    // key space with caller-controlled text. Absent when the payment reached
+    // the facilitator - verify_failed carries that side.
+    const rsn = att === "usdc_failed" && typeof reason === "string" && reason ? reason.slice(0, 40) : null;
+    // Key names only, bounded, and only on the unclassified bucket - never a
+    // value from a payment payload. Bounds the rollup key space too.
+    // Attached to the two buckets where it is the actual diagnosis: the shape
+    // of a refusal we could not classify, and WHICH field a mismatched payment
+    // got wrong. Key names only in both cases, never a value.
+    const shp = (rsn === "unclassified" || rsn === "requirements-mismatch") && typeof shape === "string" && shape ? shape.slice(0, 110) : null;
+    const key = `${slug}|${synthetic ? 1 : 0}|${att}|${rsn || "-"}|${shp || "-"}`;
     const cur = paywallCounts.get(key) || {
       slug: String(slug || "unknown"),
       priceUsd: Number(priceUsd) || 0,
       powEligible: !!powEligible,
       synthetic: !!synthetic,
       attempt: att,
+      ...(rsn ? { reason: rsn } : {}),
+      ...(shp ? { shape: shp } : {}),
       count: 0,
     };
     cur.count++;
@@ -276,7 +357,7 @@ function flushPaywallRollup() {
       const entries = [...paywallCounts.values()].sort((a, b) => b.count - a.count);
       paywallCounts = new Map();
       for (const e of entries.slice(0, PAYWALL_TOP_SLUGS)) {
-        capture("paywall_402", { slug: e.slug, count: e.count, priceUsd: e.priceUsd, powEligible: e.powEligible, synthetic: e.synthetic, attempt: e.attempt });
+        capture("paywall_402", { slug: e.slug, count: e.count, priceUsd: e.priceUsd, powEligible: e.powEligible, synthetic: e.synthetic, attempt: e.attempt, ...(e.reason ? { reason: e.reason } : {}), ...(e.shape ? { shape: e.shape } : {}) });
       }
       const rest = entries.slice(PAYWALL_TOP_SLUGS);
       if (rest.length) {
@@ -291,6 +372,9 @@ function flushPaywallRollup() {
       }
     }
     flushPowChallengeRollup();
+    flushDiscoveryRollup();
+    flushDiscoveryCallRollup();
+    flushToolGoneRollup();
   } catch { /* never throw from telemetry */ }
 }
 export function _flushPaywallRollupForTest() {
@@ -392,6 +476,57 @@ export function capturePostHogChargedFailure({ slug, status, network, priceUsd, 
 // log in payments.js, a rejection's only trace was a spurious
 // charged_but_failed (the 2026-07-16 Robinhood canary false alarm).
 // errorReason comes from the decoded failure receipt. Low-volume; no rate cap.
+// A payment header that fails VERIFY never reaches settle_failed, and until
+// 2026-08-28 the only trace was the paywall_402 "usdc_failed" rollup: ~10,000
+// failed paid attempts in 14 days with no reason anywhere once the container
+// log rolled. Reason + network + resource path, never the payer; bounded per
+// hour because one client's retry loop produced 1,500 an hour.
+const VERIFY_FAILED_HOURLY_CAP = 300;
+let _vfWindow = 0, _vfCount = 0;
+export function capturePostHogVerifyFailed({ network, scheme, resource, errorReason, synthetic, payerBalanceBucket, payerKey }) {
+  if (!active()) return;
+  const hour = Math.floor(Date.now() / 3_600_000);
+  if (hour !== _vfWindow) { _vfWindow = hour; _vfCount = 0; }
+  if (++_vfCount > VERIFY_FAILED_HOURLY_CAP) return;
+  let path = null;
+  try { path = resource ? new URL(String(resource)).pathname.slice(0, 120) : null; } catch { path = String(resource || "").slice(0, 120) || null; }
+  capture("verify_failed", {
+    network: network ? String(network) : null,
+    scheme: scheme ? String(scheme) : null,
+    ...(path ? { path } : {}),
+    synthetic: !!synthetic,
+    ...(errorReason ? { errorReason: String(errorReason).slice(0, 200) } : {}),
+    ...(payerBalanceBucket ? { payerBalanceBucket: String(payerBalanceBucket) } : {}),
+    // A DERIVED, non-reversible id for the failing payer, never the address.
+    // Added 2026-08-30: seven CDP connect timeouts on Solana in a day could not
+    // be told apart as "one flaky client retrying" or "several clients hitting a
+    // real fault", and that distinction decides whether anyone should act. Three
+    // of them fell inside thirty seconds, which HINTS at one retrying caller,
+    // but the event carried nothing to confirm it. Same construction as the
+    // gateway's upstream user id (sha256, 32 hex) so the two can be compared
+    // without either carrying an address.
+    ...(payerKey ? { payerKey: String(payerKey).slice(0, 40) } : {}),
+  });
+}
+
+// A request to a real catalog path with the wrong HTTP method: the exact
+// dead end that stopped a paying buyer's catalog walk (2026-08-28) and that no
+// event had ever counted. Path + method + UA family only; capped per hour.
+const WRONG_METHOD_HOURLY_CAP = 300;
+let _wmWindow = 0, _wmCount = 0;
+export function capturePostHogWrongMethod({ path, method, allow, ua }) {
+  if (!active()) return;
+  const hour = Math.floor(Date.now() / 3_600_000);
+  if (hour !== _wmWindow) { _wmWindow = hour; _wmCount = 0; }
+  if (++_wmCount > WRONG_METHOD_HOURLY_CAP) return;
+  capture("wrong_method", {
+    path: String(path || "").slice(0, 120),
+    method: String(method || ""),
+    allow: Array.isArray(allow) ? allow.join(",") : String(allow || ""),
+    uaFamily: String(ua || "").split("/")[0].slice(0, 40) || "(none)",
+  });
+}
+
 export function capturePostHogSettleFailed({ slug, status, network, priceUsd, synthetic, payer, errorReason }) {
   if (!active()) return;
   capture("settle_failed", {
@@ -410,24 +545,39 @@ export function capturePostHogSettleFailed({ slug, status, network, priceUsd, sy
 // prompt still cites it), and without an event that demand is invisible.
 // Properties are the route path (matched against a [a-z0-9-] regex before the
 // handler runs — unit ids only, never caller input) and the taught
-// replacement. Retired routes are also crawler fodder, so captures are
-// capped per rolling hour like discovery; the 410 response itself is never
-// affected.
-const TOOL_GONE_MAX_PER_HOUR = 500;
-let toolGoneWindowStart = 0;
-let toolGoneWindowCount = 0;
+// replacement. ROLLED UP per route per flush window (top routes + "_other",
+// `sum(count)` exact). It used to be per-event under a 500/hour cap, and the
+// cap was the volume: four scanners re-walk all ~970 retired routes every day,
+// so tool_gone sat at exactly 500 x 24 = 10-12k events/day, 38% of a month's
+// ingestion (374k of ~990k, measured 2026-08-27) - and the question it exists
+// to answer ("does anyone still cite these?") is answered: scanners, not
+// buyers. The 410 response itself is never affected.
+const TOOL_GONE_TOP_ROUTES = 50;
+const TOOL_GONE_MAX_KEYS = 5_000;   // attacker-chosen paths cannot grow the map past this (review 2026-08-28)
+const TOOL_GONE_MAX_ROUTE_CHARS = 120;
+let toolGoneCounts = new Map(); // route -> { route, replacement, count }
 
 export function capturePostHogToolGone({ route, replacement }) {
   if (!active()) return;
   try {
-    const now = Date.now();
-    if (now - toolGoneWindowStart > 3_600_000) {
-      toolGoneWindowStart = now;
-      toolGoneWindowCount = 0;
-    }
-    if (++toolGoneWindowCount > TOOL_GONE_MAX_PER_HOUR) return;
-    capture("tool_gone", { route: String(route || "unknown"), replacement: String(replacement || "") });
+    let r = String(route || "unknown").slice(0, TOOL_GONE_MAX_ROUTE_CHARS);
+    if (!toolGoneCounts.has(r) && toolGoneCounts.size >= TOOL_GONE_MAX_KEYS) r = "_overflow";
+    const cur = toolGoneCounts.get(r) || { route: r, replacement: String(replacement || ""), count: 0 };
+    cur.count++;
+    toolGoneCounts.set(r, cur);
+    ensureFunnelTimer();
   } catch { /* never throw from telemetry */ }
+}
+
+function flushToolGoneRollup() {
+  if (!toolGoneCounts.size) return;
+  const entries = [...toolGoneCounts.values()].sort((a, b) => b.count - a.count);
+  toolGoneCounts = new Map();
+  for (const e of entries.slice(0, TOOL_GONE_TOP_ROUTES)) capture("tool_gone", { route: e.route, replacement: e.replacement, count: e.count });
+  const rest = entries.slice(TOOL_GONE_TOP_ROUTES);
+  if (rest.length) {
+    capture("tool_gone", { route: "_other", replacement: rest[0].replacement, count: rest.reduce((s, e) => s + e.count, 0), routes: rest.length });
+  }
 }
 
 // Per-call gateway margin accounting. OpenRouter reports the exact upstream
@@ -439,24 +589,60 @@ export function capturePostHogToolGone({ route, replacement }) {
 /** One event per composite report run (research/dossier/fund/domain/token-risk): the
  *  upstream we spent vs the price - these are the largest single upstream calls we
  *  make and were invisible to margin telemetry before 2026-08-22. */
-export function capturePostHogCompositeUsage({ slug, upstreamUsd, ok, priceUsd }) {
-  if (!posthogEnabled()) return;
+/** The human (card) funnel, one event per step so a conversion funnel is an
+ *  insight, not a ledger grep: checkout_started -> paid (report delivered) |
+ *  failed (refunded) | report_opened; monitor_checkout_started -> monitor_paid.
+ *  Product + price only - never the buyer's input, email or session id. */
+export function capturePostHogHumanFunnel({ step, product, kind, priceUsd, reason }) {
+  if (!active()) return;
   try {
-    client.capture({
-      distinctId: "agent402-server",
-      event: "composite_usage",
-      properties: { slug, upstreamUsd, ok, priceUsd, marginUsd: priceUsd != null ? Math.round((priceUsd - upstreamUsd) * 1e4) / 1e4 : null },
+    capture("human_funnel", {
+      step: String(step || ""),
+      product: product ? String(product) : null,
+      kind: kind ? String(kind) : null,
+      priceUsd: priceUsd != null && Number.isFinite(Number(priceUsd)) ? Number(priceUsd) : null,
+      reason: reason ? String(reason).slice(0, 120) : null,
+    });
+  } catch { /* never throw from telemetry */ }
+}
+
+export function capturePostHogCompositeUsage({ slug, upstreamUsd, ok, priceUsd, rail, capUsd, overCap }) {
+  // Same rule as the gateway meter above. NB a composite's upstreamUsd can
+  // OVERLAP the gateway source when a report invokes a /v1 handler
+  // in-process (linkedin-article's image legs) - the margin view says so.
+  meterSpend("composite", upstreamUsd);
+  if (!active()) return;
+  try {
+    const price = priceUsd != null && Number.isFinite(Number(priceUsd)) ? Number(priceUsd) : null;
+    capture("composite_usage", {
+      slug,
+      upstreamUsd,
+      ok: !!ok,
+      priceUsd: price,
+      marginUsd: price != null ? Math.round((price - upstreamUsd) * 1e4) / 1e4 : null,
+      // Which door sold it (agent = x402/MPP route, card = Stripe checkout,
+      // monitor = subscription run) and the cap verdict, so margin per door and
+      // cap breaches are PostHog insights instead of a log grep.
+      rail: String(rail || "agent"),
+      capUsd: capUsd != null ? Number(capUsd) : null,
+      overCap: !!overCap,
     });
   } catch { /* never throw */ }
 }
 
-export function capturePostHogGatewayUsage({ tier, model, priceUsd, upstreamUsd, promptTokens, completionTokens, serviceTier, serverToolCalls, serverToolSearches }) {
+export function capturePostHogGatewayUsage({ tier, model, priceUsd, upstreamUsd, promptTokens, completionTokens, serviceTier, serverToolCalls, serverToolSearches, defaulted }) {
+  // Server-side spend meter runs BEFORE the PostHog gate: cost must be
+  // recorded even when telemetry is off (see recordUpstreamSpend's header).
+  if (upstreamUsd != null) meterSpend("gateway", upstreamUsd);
   if (!active()) return;
   const price = Number(priceUsd) || 0;
   const upstream = Number(upstreamUsd) || 0;
   capture("gateway_usage", {
     tier: String(tier || "unknown"),
     model: String(model || ""),
+    // The caller named no model and the tier's default served (2026-08-28) -
+    // the measure of whether defaulting recovers real calls or only probes.
+    defaulted: !!defaulted,
     // Which OpenRouter service tier actually served ("flex" = the 50% tier,
     // "default" otherwise) - the measurement behind the flex-first policy.
     serviceTier: String(serviceTier || "default"),

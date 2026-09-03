@@ -17,152 +17,112 @@ import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chr
 import { RAILS_SHORT } from "./rails.js";
 
 export const PACK_PRICES = {
-  // Premium (~8x sum-of-tools)
-  "market-brief":         0.05,  // 3-tool bundle (crypto-price $0.01 + crypto-trending $0.008 + crypto-global $0.008 = $0.026); priced at premium for the convenience
-  "financial-analysis":   0.08,  // 3-tool bundle (stock-quote $0.01 + company-financials $0.02 + earnings-calendar $0.015 = $0.045); smaller discount but still below 2x à la carte
-  "financial-research":   1.50,
-  "sec-filings-deep-dive": 0.85,
-  "macro-context":         0.75,
-  "crypto-research":       0.70,
-  "regulatory-watch":      0.70,
-  "search-and-cite":       0.65,
-  "macro-economics":       0.65,
-  // Conversion-priced BELOW sum-of-tools ($0.143 a la carte) ON PURPOSE - the
-  // one deliberate exception to the premium-multiple rule: this is a RECURRING
-  // dashboard refresh, not one-off research. The customer evidence is a
-  // production buyer that repeatedly bought this exact 14-tool basket
-  // individually; every upstream is keyless/free (FRED, Treasury,
-  // CoinGecko, public RPC), so $0.10 is still ~full margin.
-  "macro-dashboard":       0.10,
-  // Standard (~5x)
-  "content-extraction":    0.30,
-  "media-pipeline":        0.25,
-  "document-intel":        0.20,
-  // Light 3-step bundle (pdf-info $0.002 + pdf-summarize $0.03 + pdf-extract-pages
-  // $0.003 = $0.035 a la carte). pdf-summarize's real upstream LLM cost is
-  // already most of the value here, so this isn't priced like a multi-source
-  // premium fanout - a modest ~1.4x convenience premium, same tier as
-  // wallet-readiness/cheapest-rail.
-  "document-brief":        0.05,
-  "trend-analysis":        0.20,
-  "any-to-markdown":       0.20,
-  "structured-scrape":     0.20,
-  "forecasting-bake-off":  0.20,
-  "fraud-signals":         0.15,
-  "security-audit":        0.12,
-  "link-preview":          0.12,
-  "api-investigation":     0.10,
-  "email-deliverability":  0.10,
-  "location-intel":        0.10,
-  "dns-network-ops":       0.08,
-  "status-snapshot":       0.07,
-  "schema-evolution":      0.06,
-  // Strategy additions (2026-07): premium agent jobs on the newest kits —
-  // priced by the same sum-of-tools × tier rule as the rest of the registry.
-  // Repriced 2026-07-30 from $0.50 (6.8x the $0.073 parts sum). The pack pages
-  // now show the bundle price beside every member and its route, so the parts
-  // are one comparison away: a multiple the member list cannot justify asks a
-  // buyer to pay for not checking. Rule applied here: parts sum plus $0.01 per
-  // settlement avoided (5 tools = 4 avoided), which prices the real saving -
-  // one signature and one settlement instead of five - and still clears cost.
-  "company-dossier":       0.12, // 5-tool chain: quote + financials + EDGAR + insider + search
-  // Was $0.25 against a $0.023 parts sum (10.9x), the widest gap in the catalog.
-  "domain-intel":          0.075, // 6-tool fanout: whois + dns + tls + headers + tech + CT
-  // Was $0.30 against a $0.071 parts sum (4.2x).
-  "crypto-dossier":        0.12, // 6-tool chain: price + history + trending + global + search
-  "onchain-analyst":       0.20, // onchain-sql is $0.02 upstream-billed CDP SQL
-  "seo-audit":             0.07, // six network reads (~$0.014 × 5)
-  "wallet-readiness":      0.05, // CDP-indexed balance reads + onramp session
-  "cheapest-rail":         0.05, // four live chain reads
-  // Premium skill packs (2026-07): high-value multi-tool bundles
-  "earnings-watch":        0.10, // 3-tool fanout: earnings-calendar + stock-quote + search
-  "insider-alert":         0.15, // 3-tool fanout: edgar-insider-trades + stock-quote + edgar-filings
-  "ipo-watch":             0.15, // 2-tool fanout: edgar-recent-ipos + search
-  "yield-dashboard":       0.10, // 3-tool fanout: treasury-yield-curve + yield-curve-spread + treasury-avg-rates
-  "inflation-check":       0.10, // 4-tool fanout: cpi-yoy + fed-funds + unemployment-rate + sahm-rule
-  "fx-monitor":            0.15, // 4-tool fanout: fx-rate ×3 + fx-dashboard
-  "defi-dashboard":        0.15, // 4-tool fanout: defi-tvl + crypto-price + gas-snapshot + crypto-global
-  "nft-portfolio":         0.15, // 3-tool fanout: nft-holdings + wallet-balance + crypto-price
-  "wallet-audit":          0.15, // 3-tool fanout: wallet-balance + wallet-transactions + token-metadata
-  "gas-optimizer":         0.10, // 4-tool fanout: gas-snapshot ×2 + gas-estimate + crypto-price
-  "ssl-audit":             0.10, // 3-tool fanout: tls-cert + http-headers + dns-lookup
-  "email-security":        0.10, // 4-tool fanout: spf-check + dmarc-check + dkim-lookup + email-deliverability
-  "brand-protection":      0.20, // 4-tool fanout: whois + dns-lookup + search + http-headers
-  "competitor-scan":       0.15, // 4-tool fanout: tech-stack + http-headers + whois + meta
-  "page-audit":            0.12, // 5-tool fanout: extract + meta + http-headers + robots-check + sitemap
-  // Standard-tier batch 2 (2026-07): mid-value bundles ($0.05–$0.12)
-  "article-digest":        0.10, // 2-tool fanout: search + answer. Upstream is ~$0.066
-  // measured (search $0.005 + answer ~$0.061 — the 2026-07-22 Brave reconciliation);
-  // the old $0.08 left ~17% margin after the answer-cost correction, $0.10 clears ~34%
-  // and still matches the $0.10 sum of buying the two tools individually.
-  "pdf-pipeline":          0.06, // 3-tool fanout: pdf-info + pdf-to-markdown + pdf-extract-pages
-  "url-inspector":         0.06, // 3-tool fanout: url-parse + http-check + meta
-  "content-grade":         0.08, // 2-tool chain: extract + keywords (keywords needs extracted text)
-  "openapi-audit":         0.06, // 2-tool fanout: openapi-lint + openapi-validate-payload
-  "json-pipeline":         0.05, // 3-tool fanout: json-validate + json-format + json-to-csv
-  "data-convert":          0.05, // 2-tool chain: csv-to-json + json-to-yaml
-  "api-health":            0.06, // 3-tool fanout: http-check + http-headers + tls-cert
-  "world-data":            0.08, // 2-tool fanout: world-bank-indicator ×2 (GDP + population)
-  "fred-snapshot":         0.10, // 3-tool fanout: fred-series ×3 (FEDFUNDS + UNRATE + CPIAUCSL)
-  "contact-verify":        0.06, // 2-tool fanout: email-validate + dns-lookup (MX)
-  "domain-age":            0.06, // 3-tool fanout: whois + dns-lookup + tls-cert
-  "hash-verify":           0.05, // 3-tool fanout: hash ×3 (sha256 + sha512 + md5)
-  "encoding-suite":        0.05, // 3-tool fanout: base64 + hex + url-code
-  "jwt-toolkit":           0.05, // 2-tool fanout: jwt-decode + jwt-verify
-  "timezone-planner":      0.05, // 3-tool fanout: time-convert + business-days + cron-next
-  "text-analyze":          0.05, // 3-tool fanout: text-stats + keywords + token-count
-  "content-clean":         0.05, // 3-tool fanout: redact + dedupe-lines + sort-lines
-  "weather-brief":         0.06, // 3-tool fanout: weather-current + weather-daily + weather-air-quality
-  "price-monitor":         0.08, // 5-tool fanout: stock-quote + stock-history + crypto-price + crypto-history + date-format
-  "content-quality":       0.05, // 3-tool fanout: readability-score + word-frequency + slug-generate (pure-CPU)
-  // Light ($0.05 floor — pure-CPU bundles, PoW-eligible)
-  "text-hygiene":          0.05,
-  "decode-blob":           0.05,
-  "csv-profile":           0.05,
-  "meeting-scheduler":     0.05,
-  "jwt-forensics":         0.05,
-  "user-onboarding":       0.05,
-  "data-interchange":      0.05,
-  "rag-prep":              0.05,
-  "webhook-debug":         0.05,
-  "webhook-intake":        0.05, // 5-tool chain: webhook-verify + json-validate + hash + time-convert + redact (pure CPU)
-  "a11y-audit":            0.05,
-  "trip-planner":          0.05,
-  "identity-mint":         0.05,
-  "loan-comparison":       0.05,
-  "investment-decision":   0.05,
-  "retirement-planning":   0.05,
-  "savings-goal":          0.05,
-  // Light tier — batch 2 (2026-07)
-  "color-palette":         0.05,
-  "password-audit":        0.05,
-  "uuid-suite":            0.05,
-  "regex-test":            0.05,
-  "math-suite":            0.05,
-  "date-math":             0.05,
-  "semver-check":          0.05,
-  "lorem-gen":             0.05,
-  "qr-gen":                0.05,
-  "number-crunch":         0.05,
-  "finance-calc":          0.05,
-  "text-transform":        0.05,
-  "markdown-convert":      0.05,
-  "xml-json":              0.05,
-  "checksum-suite":        0.05,
-  "validator-suite":       0.05,
-  // "The 500" phase-2 packs (2026-07): whole-agent jobs on the new
-  // contract / finance / enrich / web / conversion tools. Priced per the
-  // additions shortlist (sum-of-tools × tier rule).
-  "contract-audit":        0.15, // 5-tool chain: contract-source + solidity-scan + selector-lookup + address-label + tx-simulate
-  "tx-forensics":          0.10, // 5-tool chain: tx-status + evm-rpc + calldata-decode + selector-lookup + address-label
-  "market-open":           0.12, // 5-tool fanout: stock-quote + premarket-quote + options-chain + stock-dividends + earnings-calendar
-  "entity-enrich":         0.15, // 6-tool fanout: wikidata-entity + lei-lookup + edgar-company-lookup + whois + tech-stack + favicon-grab
-  "feed-watch":            0.08, // 4-tool chain: feed-parse + extract + keywords + text-diff
-  "schema-guard":          0.05, // 4-tool chain: json-validate + json-schema-infer + json-diff + json-format (pure CPU)
-  "subtitle-pipeline":     0.10, // 3-tool chain: transcribe + srt-convert + text-stats
-  "locale-brief":          0.05, // 4-tool chain: country-info + public-holidays + business-days + timezone-convert
+  // GENERATED by scripts/pack-prices.js --write from the live catalog: sum of the
+  // advertised tools' prices minus the 10% bundle discount, rounded up to $0.001,
+  // never below $0.001. CI recomputes it (pack-prices.js in check mode) and fails
+  // on drift, so do not hand-edit a number here - reprice the tool, then --write.
+  "earnings-deep-dive": 0.064, // 5 tools, parts $0.071
+  "options-analytics": 0.035, // 4 tools, parts $0.038
+  "fixed-income-desk": 0.039, // 5 tools, parts $0.043
+  "defi-protocol-scanner": 0.042, // 4 tools, parts $0.046
+  "security-audit": 0.019, // 7 tools, parts $0.021
+  "email-deliverability": 0.016, // 6 tools, parts $0.017
+  "market-brief": 0.024, // 3 tools, parts $0.026
+  "financial-analysis": 0.033, // 3 tools, parts $0.036
+  "financial-research": 0.168, // 7 tools, parts $0.186
+  "macro-economics": 0.072, // 7 tools, parts $0.08
+  "macro-dashboard": 0.129, // 14 tools, parts $0.143
+  "dns-network-ops": 0.018, // 6 tools, parts $0.02
+  "crypto-research": 0.078, // 7 tools, parts $0.086
+  "content-extraction": 0.05, // 6 tools, parts $0.055
+  "sec-filings-deep-dive": 0.104, // 7 tools, parts $0.115
+  "structured-scrape": 0.032, // 7 tools, parts $0.035
+  "decode-blob": 0.007, // 7 tools, parts $0.007
+  "trend-analysis": 0.033, // 8 tools, parts $0.036
+  "forecasting-bake-off": 0.032, // 7 tools, parts $0.035
+  "document-intel": 0.033, // 7 tools, parts $0.036
+  "document-brief": 0.032, // 3 tools, parts $0.035
+  "fraud-signals": 0.031, // 7 tools, parts $0.034
+  "api-investigation": 0.018, // 7 tools, parts $0.02
+  "location-intel": 0.014, // 6 tools, parts $0.015
+  "user-onboarding": 0.009, // 7 tools, parts $0.009
+  "trip-planner": 0.008, // 6 tools, parts $0.008
+  "macro-context": 0.086, // 8 tools, parts $0.095
+  "regulatory-watch": 0.077, // 5 tools, parts $0.085
+  "search-and-cite": 0.119, // 5 tools, parts $0.132
+  "media-pipeline": 0.039, // 6 tools, parts $0.043
+  "schema-evolution": 0.011, // 6 tools, parts $0.012
+  "link-preview": 0.022, // 5 tools, parts $0.024
+  "any-to-markdown": 0.033, // 6 tools, parts $0.036
+  "status-snapshot": 0.012, // 5 tools, parts $0.013
+  "weather-brief": 0.009, // 3 tools, parts $0.009
+  "price-monitor": 0.038, // 5 tools, parts $0.042
+  "wallet-readiness": 0.008, // 3 tools, parts $0.008
+  "onchain-analyst": 0.021, // 3 tools, parts $0.023
+  "seo-audit": 0.012, // 6 tools, parts $0.013
+  "cheapest-rail": 0.018, // 4 tools, parts $0.019
+  "company-dossier": 0.064, // 5 tools, parts $0.071
+  "domain-intel": 0.018, // 6 tools, parts $0.02
+  "crypto-dossier": 0.064, // 6 tools, parts $0.071
+  "earnings-watch": 0.033, // 3 tools, parts $0.036
+  "insider-alert": 0.028, // 3 tools, parts $0.031
+  "ipo-watch": 0.05, // 3 tools, parts $0.055
+  "yield-dashboard": 0.032, // 3 tools, parts $0.035
+  "inflation-check": 0.045, // 4 tools, parts $0.05
+  "fx-monitor": 0.019, // 3 tools, parts $0.021
+  "defi-dashboard": 0.022, // 4 tools, parts $0.024
+  "nft-portfolio": 0.013, // 3 tools, parts $0.014
+  "wallet-audit": 0.005, // 3 tools, parts $0.005
+  "gas-optimizer": 0.016, // 3 tools, parts $0.017
+  "ssl-audit": 0.009, // 3 tools, parts $0.009
+  "email-security": 0.009, // 4 tools, parts $0.01
+  "brand-protection": 0.03, // 4 tools, parts $0.033
+  "competitor-scan": 0.014, // 4 tools, parts $0.015
+  "page-audit": 0.018, // 5 tools, parts $0.019
+  "article-digest": 0.108, // 3 tools, parts $0.12
+  "pdf-pipeline": 0.014, // 3 tools, parts $0.015
+  "url-inspector": 0.006, // 3 tools, parts $0.006
+  "content-grade": 0.012, // 3 tools, parts $0.013
+  "api-health": 0.007, // 3 tools, parts $0.007
+  "world-data": 0.009, // 1 tools, parts $0.01
+  "fred-snapshot": 0.014, // 1 tools, parts $0.015
+  "contact-verify": 0.008, // 3 tools, parts $0.008
+  "domain-age": 0.01, // 3 tools, parts $0.011
+  "contract-audit": 0.022, // 5 tools, parts $0.024
+  "tx-forensics": 0.011, // 5 tools, parts $0.012
+  "market-open": 0.025, // 5 tools, parts $0.027
+  "entity-enrich": 0.03, // 6 tools, parts $0.033
+  "feed-watch": 0.017, // 4 tools, parts $0.018
+  "subtitle-pipeline": 0.03, // 3 tools, parts $0.033
+  "locale-brief": 0.006, // 4 tools, parts $0.006
+  "jwt-toolkit": 0.004, // 3 tools, parts $0.004
+  "text-analyze": 0.004, // 3 tools, parts $0.004
+  "schema-guard": 0.006, // 4 tools, parts $0.006
+  "number-crunch": 0.003, // 3 tools, parts $0.003
+  "json-pipeline": 0.005, // 3 tools, parts $0.005
+  "openapi-audit": 0.006, // 3 tools, parts $0.006
+  "text-hygiene": 0.01, // 7 tools, parts $0.011
+  "loan-comparison": 0.006, // 5 tools, parts $0.006
+  "timezone-planner": 0.004, // 3 tools, parts $0.004
+  "webhook-intake": 0.007, // 5 tools, parts $0.007
+  "markdown-convert": 0.006, // 3 tools, parts $0.006
 };
+// Derived once from the table: the honest range for every surface that quotes it.
+const fmtPackUsd = (n) => n.toFixed(3).replace(/0+$/, "").replace(/\.$/, ""); // whole milli-dollars, never rounded away
+export const PACK_PRICE_RANGE = (() => { const v = Object.values(PACK_PRICES); return { min: Math.min(...v), max: Math.max(...v), text: `$${fmtPackUsd(Math.min(...v))} to $${fmtPackUsd(Math.max(...v))}` }; })();
 
+
+
+// Sample fixtures for the three packs whose input is a user-supplied artifact.
+// Served by GET /fixtures/:file (src/server.js).
+//
+// Deliberately the PUBLIC url and not derived from BASE_URL: safeFetch's SSRF
+// guard refuses a loopback address, correctly, so a self-referential example
+// would fail in CI and there is no bypass worth adding to a guard like that.
+// The cost is that the example sweep fetches production, which is the same
+// self-targeting shape a2a-card-fetch / x402-quote / x402-audit already have,
+// with the same known failure mode: a deploy landing mid-run.
+const FIXTURE_BASE = "https://agent402.tools";
 
 export const SKILL_PACKS = [
   {
@@ -513,7 +473,9 @@ export const SKILL_PACKS = [
     useCase:
       "Building a RAG corpus, a daily newsletter from a list of source URLs, or extracting a table from a scanned PDF.",
     promptArgs: [
-      { name: "urls", description: "Newline- or comma-separated list of URLs / PDF links to ingest", required: false, substitute: "these 10 URLs" },
+      // The substitute was the prose "these 10 URLs", which is not a URL, so
+      // every step failed on the example we publish.
+      { name: "urls", description: "Newline- or comma-separated list of URLs / PDF links to ingest", required: false, substitute: `${FIXTURE_BASE}/` },
     ],
     toolSlugs: [
       "extract",
@@ -532,7 +494,7 @@ export const SKILL_PACKS = [
       "Pipeline: render → extract → embed for a robust ingest path that handles client-rendered sites without breaking.",
     ],
     claudePrompt:
-      "Ingest these 10 URLs into clean markdown using Agent402. For each: try extract first; if it returns no body, fall back to render→extract; for any PDF URL, use pdf-to-markdown. Return one markdown blob per URL with the source URL as the H1.",
+      "Ingest https://agent402.tools/ (and any other URLs you have) into clean markdown using Agent402. For each: try extract first; if it returns no body, fall back to render→extract; for any PDF URL, use pdf-to-markdown. Return one markdown blob per URL with the source URL as the H1.",
   },
   {
     slug: "sec-filings-deep-dive",
@@ -577,7 +539,9 @@ export const SKILL_PACKS = [
     useCase:
       "Extracting a product price, a sports stats table, a roster, a pricing tier, an outlink list - anything where the page has the data but no public API exposes it, and you need a repeatable deterministic answer instead of an LLM guess.",
     promptArgs: [
-      { name: "url", description: "Page to scrape (e.g. https://example.com/product/42)", required: true, substitute: "https://example.com/product/42" },
+      { name: "url", description: "Page to scrape (e.g. https://example.com/product/42)", required: true, // example.com serves no /product/42, so the first step 404'd on the
+        // example we publish. Our own pricing page is public and stable.
+        substitute: `${FIXTURE_BASE}/leaderboard` },
       { name: "target", description: "What to extract - a price, a table, a list, a paragraph, etc.", required: true, substitute: "the price and SKU" },
     ],
     // Ordered as a real decision tree: try the cheapest fetch first (extract
@@ -603,7 +567,7 @@ export const SKILL_PACKS = [
       "If you already have the rendered HTML and just want the metadata (title, description, OpenGraph, Twitter, canonical, JSON-LD), use html-meta on the string - avoids paying for a second fetch from /api/meta.",
     ],
     claudePrompt:
-      "Scrape the price and SKU from https://example.com/product/42 using Agent402. (1) Try extract first; if the price isn't in the article body, (2) call render to get the post-JS HTML. (3) Use html-select with a precise CSS selector to pull the price element - fall back to a broader selector if the first returns 0 matches. (4) Use html-select again with attr=\"data-sku\" or similar to read the SKU. Return a single JSON object {price, sku, url, source} where source = \"extract\" or \"render\" depending on which path worked.",
+      "Scrape the price and SKU from https://agent402.tools/leaderboard using Agent402. (1) Try extract first; if the price isn't in the article body, (2) call render to get the post-JS HTML. (3) Use html-select with a precise CSS selector to pull the price element - fall back to a broader selector if the first returns 0 matches. (4) Use html-select again with attr=\"data-sku\" or similar to read the SKU. Return a single JSON object {price, sku, url, source} where source = \"extract\" or \"render\" depending on which path worked.",
   },
   {
     slug: "decode-blob",
@@ -756,7 +720,8 @@ export const SKILL_PACKS = [
         name: "url",
         description: "PDF or image URL to process (e.g. https://example.com/invoice.pdf)",
         required: true,
-        substitute: "https://example.com/invoice.pdf",
+        // example.com serves no invoice.pdf, so this 404'd on every call.
+        substitute: `${FIXTURE_BASE}/fixtures/sample-invoice.pdf`,
       },
     ],
     // Ordered by realistic-agent decision tree: cheapest inspection first
@@ -785,7 +750,7 @@ export const SKILL_PACKS = [
       "Use images-to-pdf when the source material was a set of phone photos (receipts, whiteboard captures, scanned pages handed to you out-of-order) and you need to wrap them into one shareable PDF - either as the final deliverable or as the input to a re-run of this same pipeline at higher quality.",
     ],
     claudePrompt:
-      "Process this invoice with Agent402: https://example.com/invoice.pdf. (1) Run pdf-info to confirm it's a PDF, get the page count, check the `encrypted` flag. (2) If not encrypted, call pdf-to-markdown with the URL. (3) Inspect the returned markdown - if it has <50 chars of text, the PDF is scanned: call pdf-extract-pages to get each page as an image, then run image-ocr on each. (4) If you still can't find a tracking number after parsing the OCR text, run barcode-decode on page 1 to surface an embedded QR / barcode payload. (5) Return a single JSON object: {invoiceNumber, totalAmount, vendor, lineItems, trackingNumber, source: \"pdf-to-markdown\" | \"image-ocr\" | \"barcode-decode\"} - populate `source` based on which extraction path actually produced the data. Budget ≤ $0.05 per document; all of these tools are wallet-only (paid per call).",
+      "Process this invoice with Agent402: https://agent402.tools/fixtures/sample-invoice.pdf. (1) Run pdf-info to confirm it's a PDF, get the page count, check the `encrypted` flag. (2) If not encrypted, call pdf-to-markdown with the URL. (3) Inspect the returned markdown - if it has <50 chars of text, the PDF is scanned: call pdf-extract-pages to get each page as an image, then run image-ocr on each. (4) If you still can't find a tracking number after parsing the OCR text, run barcode-decode on page 1 to surface an embedded QR / barcode payload. (5) Return a single JSON object: {invoiceNumber, totalAmount, vendor, lineItems, trackingNumber, source: \"pdf-to-markdown\" | \"image-ocr\" | \"barcode-decode\"} - populate `source` based on which extraction path actually produced the data. Budget ≤ $0.05 per document; all of these tools are wallet-only (paid per call).",
   },
   {
     slug: "document-brief",
@@ -869,7 +834,9 @@ export const SKILL_PACKS = [
         name: "endpoint",
         description: "API URL to investigate (e.g. https://api.example.com/v1/users)",
         required: true,
-        substitute: "https://api.example.com/v1/users",
+        // api.example.com does not resolve, so every step failed on the
+        // example we publish. Our own pricing API is public, free and JSON.
+        substitute: `${FIXTURE_BASE}/api/pricing`,
       },
     ],
     // Seven tools, ordered as the real recon-before-code flow: decompose
@@ -898,7 +865,7 @@ export const SKILL_PACKS = [
       "Drill into specific fields with json-query - JSONPath ($.data[*].id) is the deterministic way to verify 'does this response actually contain the field I'm going to depend on?' Use it to validate assumptions before writing integration code: confirm the pagination cursor is at $.meta.next_cursor not $.next_page; confirm the array of items is at $.data not $.results; confirm error envelopes are at $.errors[*].detail not $.error.message. Wrong assumption here = the entire integration breaks later when the second-page response shape differs from the first.",
     ],
     claudePrompt:
-      "Investigate this API endpoint using Agent402: https://api.example.com/v1/users. (1) url-parse the URL: scheme=https, host=api.example.com, path=/v1/users - flag that this is a versioned, multi-tenant-ish path. (2) http-check it (unauthenticated). Expect a 401 - record the response time and confirm the host resolves. If you get 404 or connection-refused, stop and ask the user for the correct URL. (3) http-headers - record Content-Type, WWW-Authenticate scheme, all X-RateLimit-* values, any X-API-Version header, and any vendor-prefixed (X-*) hints. (4) extract https://docs.example.com (or /docs, /api, /reference - try in that order until one returns a real article body). Skim for auth + rate-limit + versioning sections. (5) feed the docs HTML to html-links and filter for hrefs matching /openapi|swagger|schema|\\.json$|\\.yaml$/. If found, that's the spec URL - note it. If not found, try probing /openapi.json directly via http-check. (6) Once you have any sample JSON response from the API (provided by the user or fetched via http-check on an OPTIONS endpoint), json-format it for easy reading. (7) Use json-query to verify the expected fields are where you think they are: $.data[*].id for resource IDs, $.meta.next_cursor for pagination, $.errors[*] for error envelope. Return: {baseUrl, authScheme, contentType, version, rateLimit: {requests, window}, openApiSpecUrl, sampleResponseStructure: {pagination, dataLocation, errorEnvelope}, integrationNotes}.",
+      "Investigate this API endpoint using Agent402: https://agent402.tools/api/pricing. (1) url-parse the URL: scheme=https, host=api.example.com, path=/v1/users - flag that this is a versioned, multi-tenant-ish path. (2) http-check it (unauthenticated). Expect a 401 - record the response time and confirm the host resolves. If you get 404 or connection-refused, stop and ask the user for the correct URL. (3) http-headers - record Content-Type, WWW-Authenticate scheme, all X-RateLimit-* values, any X-API-Version header, and any vendor-prefixed (X-*) hints. (4) extract https://docs.example.com (or /docs, /api, /reference - try in that order until one returns a real article body). Skim for auth + rate-limit + versioning sections. (5) feed the docs HTML to html-links and filter for hrefs matching /openapi|swagger|schema|\\.json$|\\.yaml$/. If found, that's the spec URL - note it. If not found, try probing /openapi.json directly via http-check. (6) Once you have any sample JSON response from the API (provided by the user or fetched via http-check on an OPTIONS endpoint), json-format it for easy reading. (7) Use json-query to verify the expected fields are where you think they are: $.data[*].id for resource IDs, $.meta.next_cursor for pagination, $.errors[*] for error envelope. Return: {baseUrl, authScheme, contentType, version, rateLimit: {requests, window}, openApiSpecUrl, sampleResponseStructure: {pagination, dataLocation, errorEnvelope}, integrationNotes}.",
   },
 
 
@@ -1177,13 +1144,14 @@ export const SKILL_PACKS = [
       "Normalize audio loudness with audio-normalize. Only runs if the file probed as audio in step 1 (skip for images). Applies EBU R128 loudness normalization to -23 LUFS (broadcast standard) or -16 LUFS (podcast/voice standard). This is the difference between 'every uploaded voice-memo plays at the same volume' and 'half the user's library hits the volume limiter and the other half is whispers'. Critical: this changes loudness, not peak - the dynamic range of the original is preserved, just shifted into a predictable absolute range. After this step, the artifact is canonical and ready to store. Pack returns: {storedKey, dimensions, format, sizeBytes, thumbnailKey, barcodePayload|null, audioLufs|null, processingTimeMs}.",
     ],
     claudePrompt:
-      "Normalize this user upload using Agent402.\n\nInput: uploaded file at temp path /tmp/upload-abc123 (1 file per invocation).\nMax stored long-edge: 2000px.\nThumbnail size: 200x200.\nTarget image format: WebP quality 82.\nAudio target: -16 LUFS (voice-memo standard).\n\n(1) media-info - return {kind: 'image'|'audio'|'video'|'other', format, codec, width, height, durationSec, bitrate, sampleRate, colorSpace, exifOrientation, declaredMime, detectedMime}. If declaredMime ≠ detectedMime, log 'mime mismatch' and trust detectedMime. Branch on kind: 'image' → steps 2-5, 'audio' → step 6 only, 'video' → return as-is with kind=video and stop (out of scope), 'other' → reject. (2) barcode-decode on the image bytes - return {payload: '<decoded text>'|null, symbology: 'qr'|'ean13'|'upc'|...|null}. Pure-CPU. Null = no decodable barcode, that's fine. (3) image-resize with maxLongEdge=2000, preserveAspect=true, applyExifRotation=true, stripExifGps=true - return {bytes: <resized>, width, height}. (4) image-thumbnail with size=200, mode='cover' - return {bytes: <thumb>}. (5) image-convert on both step-3 output and step-4 output, format='webp', quality=82, skipIfAlreadyTarget=true - return {primary: {bytes, sizeBytes}, thumb: {bytes, sizeBytes}}. (6) audio-normalize with targetLufs=-16, format='mp3' - return {bytes, lufsBefore, lufsAfter, peakDbfs}. ONLY if step 1 said kind='audio'. Final return: {kind, normalized: {primaryBytes: <ref>, primarySize, thumbBytes: <ref>, thumbSize, width, height, format} | audio: {bytes: <ref>, durationSec, lufsAfter, format}, metadata: {barcodePayload, originalSizeBytes, sizeSavingsPct, exifOrientation, declaredVsDetectedMime}, oneLineSummary: 'image normalized: 4032x3024 HEIC → 2000x1500 WebP (847KB → 162KB, 81% smaller), 1 QR decoded (https://example.com/menu/42), thumb 200x200 → 8KB' | 'audio normalized: 6m 12s, -23.4 LUFS → -16.0 LUFS, peak -1.2 dBFS'}. media-info + barcode-decode + image-* + audio-normalize all involve ffmpeg/ffprobe/imagemagick under the hood - egress is 0, but CPU is meaningful, so this is a wallet/paid pack, not PoW. Budget ~$0.06 per upload.",
+      "Normalize this user upload using Agent402.\n\nInput: the uploaded file at https://agent402.tools/fixtures/sample-image.png (1 file per invocation).\nMax stored long-edge: 2000px.\nThumbnail size: 200x200.\nTarget image format: WebP quality 82.\nAudio target: -16 LUFS (voice-memo standard).\n\n(1) media-info - return {kind: 'image'|'audio'|'video'|'other', format, codec, width, height, durationSec, bitrate, sampleRate, colorSpace, exifOrientation, declaredMime, detectedMime}. If declaredMime ≠ detectedMime, log 'mime mismatch' and trust detectedMime. Branch on kind: 'image' → steps 2-5, 'audio' → step 6 only, 'video' → return as-is with kind=video and stop (out of scope), 'other' → reject. (2) barcode-decode on the image bytes - return {payload: '<decoded text>'|null, symbology: 'qr'|'ean13'|'upc'|...|null}. Pure-CPU. Null = no decodable barcode, that's fine. (3) image-resize with maxLongEdge=2000, preserveAspect=true, applyExifRotation=true, stripExifGps=true - return {bytes: <resized>, width, height}. (4) image-thumbnail with size=200, mode='cover' - return {bytes: <thumb>}. (5) image-convert on both step-3 output and step-4 output, format='webp', quality=82, skipIfAlreadyTarget=true - return {primary: {bytes, sizeBytes}, thumb: {bytes, sizeBytes}}. (6) audio-normalize with targetLufs=-16, format='mp3' - return {bytes, lufsBefore, lufsAfter, peakDbfs}. ONLY if step 1 said kind='audio'. Final return: {kind, normalized: {primaryBytes: <ref>, primarySize, thumbBytes: <ref>, thumbSize, width, height, format} | audio: {bytes: <ref>, durationSec, lufsAfter, format}, metadata: {barcodePayload, originalSizeBytes, sizeSavingsPct, exifOrientation, declaredVsDetectedMime}, oneLineSummary: 'image normalized: 4032x3024 HEIC → 2000x1500 WebP (847KB → 162KB, 81% smaller), 1 QR decoded (https://example.com/menu/42), thumb 200x200 → 8KB' | 'audio normalized: 6m 12s, -23.4 LUFS → -16.0 LUFS, peak -1.2 dBFS'}. media-info + barcode-decode + image-* + audio-normalize all involve ffmpeg/ffprobe/imagemagick under the hood - egress is 0, but CPU is meaningful, so this is a wallet/paid pack, not PoW. Budget ~$0.06 per upload.",
     promptArgs: [
       {
         name: "uploadPath",
         description: "the temp path or URL of the uploaded file (e.g. '/tmp/upload-abc123')",
         required: true,
-        substitute: "/tmp/upload-abc123",
+        // A local temp path is not fetchable; every step here takes a URL.
+        substitute: `${FIXTURE_BASE}/fixtures/sample-image.png`,
       },
     ],
   },
@@ -1212,19 +1180,25 @@ export const SKILL_PACKS = [
       "Diff security schemes with openapi-security-summary on both specs. Auth changes are usually filed under 'breaking' but spec-diff tools often surface them as just-another-field-change rather than the migration project they actually are. This step bubbles them to the top: 'apiKey moved from header to query', 'oauth2 scope renamed', 'new scope required for endpoint X'. Security-scheme drift is the most expensive kind of breakage because it requires credential rotation, not just a code patch - flag prominently. Final return is a single 'breaking | additive | clean' verdict plus a per-endpoint impact table the integration team can prioritize from.",
     ],
     claudePrompt:
-      "Check if this OpenAPI contract drifted in a breaking way, using Agent402.\n\nInputs:\n  oldSpec: <yesterday's snapshot, JSON or YAML>\n  newSpec: <today's snapshot, JSON or YAML>\n  knownGoodPayload: { endpoint: 'POST /v1/orders', body: {customerId: 'cust_abc', items: [{sku: 'SKU-42', qty: 1}], currency: 'USD'} }\n\n(1) openapi-diff with oldSpec + newSpec - return {added: {endpoints: [], params: [], schemas: []}, removed: {endpoints: [], params: [], schemas: []}, changed: {endpoints: [{path, what: 'response-schema|request-schema|param-required|param-removed|...'}, ...]}}. Bucket every change as breaking|additive in the writeup. (2) openapi-lint on newSpec - return {score, regressions: [{severity, what}], comparisonToPriorLint: 'manual - note if score dropped'}. Note: this pack doesn't store prior lint scores; surface the current score and ask the integration team whether it dropped. (3) openapi-extract on newSpec - return {endpoints: [{path, method, operationId, summary}, ...]}. Compare in the writeup against the diff from step 1 to confirm no endpoint your client calls is missing. (4) openapi-required-params on BOTH specs separately - return {old: [{endpoint, requiredParams: []}, ...], new: [{endpoint, requiredParams: []}, ...], newlyRequired: [{endpoint, paramName}, ...]}. Every entry in newlyRequired is a guaranteed 400 for existing clients. (5) openapi-validate-payload with spec=newSpec, endpoint='POST /v1/orders', body=knownGoodPayload.body - return {valid: true|false, errors: [...]}. This is the decisive check. (6) openapi-security-summary on BOTH specs - return {old: {schemes: [...], requirements: [...]}, new: {schemes, requirements}, drift: [{endpoint, change: 'scope-added|scheme-changed|location-moved|...'}]}. Final return: {verdict: 'breaking'|'additive'|'clean', breakingItems: [...], additiveItems: [...], requiredClientChanges: [{file: '<guess based on operationId>', change: '<what to patch>'}], knownGoodPayloadStillValid: true|false, securityDrift: [...], lintScoreNow: <number>, oneLineSummary: 'BREAKING: POST /v1/orders now requires currencyOverride; 2 endpoints removed (/v1/legacy/quote, /v1/legacy/refund); auth unchanged; existing fixture fails validation - patch client before next deploy.'}. All six tools are pure-CPU schema operations (no egress to the API itself). Budget ~$0.015 paid; PoW-eligible.",
+      "Check if this OpenAPI contract drifted in a breaking way, using Agent402.\n\nInputs:\n  oldSpec: {\"openapi\":\"3.0.3\",\"info\":{\"title\":\"Orders API\",\"version\":\"1.0.0\"},\"paths\":{\"/v1/orders\":{\"post\":{\"operationId\":\"createOrder\",\"requestBody\":{\"required\":true,\"content\":{\"application/json\":{\"schema\":{\"type\":\"object\",\"required\":[\"customerId\"],\"properties\":{\"customerId\":{\"type\":\"string\"},\"currency\":{\"type\":\"string\"}}}}}},\"responses\":{\"201\":{\"description\":\"created\"}}}}}}\n  newSpec: {\"openapi\":\"3.0.3\",\"info\":{\"title\":\"Orders API\",\"version\":\"1.1.0\"},\"paths\":{\"/v1/orders\":{\"post\":{\"operationId\":\"createOrder\",\"requestBody\":{\"required\":true,\"content\":{\"application/json\":{\"schema\":{\"type\":\"object\",\"required\":[\"customerId\",\"currency\"],\"properties\":{\"customerId\":{\"type\":\"string\"},\"currency\":{\"type\":\"string\"}}}}}},\"responses\":{\"201\":{\"description\":\"created\"}}}}}}\n  knownGoodPayload: { endpoint: 'POST /v1/orders', body: {customerId: 'cust_abc', items: [{sku: 'SKU-42', qty: 1}], currency: 'USD'} }\n\n(1) openapi-diff with oldSpec + newSpec - return {added: {endpoints: [], params: [], schemas: []}, removed: {endpoints: [], params: [], schemas: []}, changed: {endpoints: [{path, what: 'response-schema|request-schema|param-required|param-removed|...'}, ...]}}. Bucket every change as breaking|additive in the writeup. (2) openapi-lint on newSpec - return {score, regressions: [{severity, what}], comparisonToPriorLint: 'manual - note if score dropped'}. Note: this pack doesn't store prior lint scores; surface the current score and ask the integration team whether it dropped. (3) openapi-extract on newSpec - return {endpoints: [{path, method, operationId, summary}, ...]}. Compare in the writeup against the diff from step 1 to confirm no endpoint your client calls is missing. (4) openapi-required-params on BOTH specs separately - return {old: [{endpoint, requiredParams: []}, ...], new: [{endpoint, requiredParams: []}, ...], newlyRequired: [{endpoint, paramName}, ...]}. Every entry in newlyRequired is a guaranteed 400 for existing clients. (5) openapi-validate-payload with spec=newSpec, endpoint='POST /v1/orders', body=knownGoodPayload.body - return {valid: true|false, errors: [...]}. This is the decisive check. (6) openapi-security-summary on BOTH specs - return {old: {schemes: [...], requirements: [...]}, new: {schemes, requirements}, drift: [{endpoint, change: 'scope-added|scheme-changed|location-moved|...'}]}. Final return: {verdict: 'breaking'|'additive'|'clean', breakingItems: [...], additiveItems: [...], requiredClientChanges: [{file: '<guess based on operationId>', change: '<what to patch>'}], knownGoodPayloadStillValid: true|false, securityDrift: [...], lintScoreNow: <number>, oneLineSummary: 'BREAKING: POST /v1/orders now requires currencyOverride; 2 endpoints removed (/v1/legacy/quote, /v1/legacy/refund); auth unchanged; existing fixture fails validation - patch client before next deploy.'}. All six tools are pure-CPU schema operations (no egress to the API itself). Budget ~$0.015 paid; PoW-eligible.",
     promptArgs: [
       {
         name: "oldSpec",
-        description: "the prior OpenAPI snapshot as JSON or YAML",
+        description: "the prior OpenAPI snapshot as a JSON document (object or JSON string)",
         required: true,
-        substitute: "yesterday's snapshot",
+        // A REAL spec, not prose. The substitute is the pack's published
+        // example, and "yesterday's snapshot" is not something any tool can
+        // parse - every step failed on it, which the partial-success envelope
+        // hid behind a 200 until packs stopped returning one.
+        substitute: "{\"openapi\":\"3.0.3\",\"info\":{\"title\":\"Orders API\",\"version\":\"1.0.0\"},\"paths\":{\"/v1/orders\":{\"post\":{\"operationId\":\"createOrder\",\"requestBody\":{\"required\":true,\"content\":{\"application/json\":{\"schema\":{\"type\":\"object\",\"required\":[\"customerId\"],\"properties\":{\"customerId\":{\"type\":\"string\"},\"currency\":{\"type\":\"string\"}}}}}},\"responses\":{\"201\":{\"description\":\"created\"}}}}}}",
       },
       {
         name: "newSpec",
-        description: "the current OpenAPI snapshot as JSON or YAML",
+        description: "the current OpenAPI snapshot as a JSON document (object or JSON string)",
         required: true,
-        substitute: "today's snapshot",
+        // Same spec with `currency` newly REQUIRED: the breaking drift this
+        // pack exists to catch, so the example demonstrates a real finding.
+        substitute: "{\"openapi\":\"3.0.3\",\"info\":{\"title\":\"Orders API\",\"version\":\"1.1.0\"},\"paths\":{\"/v1/orders\":{\"post\":{\"operationId\":\"createOrder\",\"requestBody\":{\"required\":true,\"content\":{\"application/json\":{\"schema\":{\"type\":\"object\",\"required\":[\"customerId\",\"currency\"],\"properties\":{\"customerId\":{\"type\":\"string\"},\"currency\":{\"type\":\"string\"}}}}}},\"responses\":{\"201\":{\"description\":\"created\"}}}}}}",
       },
     ],
   },
@@ -2221,7 +2195,10 @@ export const SKILL_PACKS = [
     useCase:
       "An agent (or its owner) is staring at a transaction hash and needs the plain-English story - did it confirm, which function was called, with what arguments, and is the counterparty a known contract or an unknown address.",
     promptArgs: [
-      { name: "hash", description: "0x-prefixed 32-byte transaction hash", required: true, substitute: "0x0000000000000000000000000000000000000000000000000000000000000000" },
+      { name: "hash", description: "0x-prefixed 32-byte transaction hash", required: true, // An all-zero hash exists on no chain, so evm-rpc returned nothing and
+        // calldata-decode / selector-lookup both failed on every call. A real
+        // Base transaction, immutable and public, with real calldata.
+        substitute: "0x1c0592f73d1f9182ee9bd40eb34d9b6c70b3196814b111589b82df4e79e7fb59" },
       { name: "network", description: "EVM network (ethereum / base / polygon / arbitrum / optimism, default base)", required: false, substitute: "base" },
     ],
     toolSlugs: ["tx-status", "evm-rpc", "calldata-decode", "selector-lookup", "address-label"],
@@ -2233,7 +2210,7 @@ export const SKILL_PACKS = [
       "Label the counterparty with address-label - known token contract, DEX router, bridge, exchange wallet, or unknown.",
     ],
     claudePrompt:
-      "Explain what transaction 0x0000000000000000000000000000000000000000000000000000000000000000 on base actually did, using Agent402's tx-forensics skill pack. (1) Check its confirmation status, (2) fetch the raw transaction via eth_getTransactionByHash, (3) decode the calldata into the function and arguments, (4) resolve the selector against the signature databases, (5) label the destination address. Summarize as a plain-English story: what was called, with what arguments, by whom, to whom, and whether it succeeded.",
+      "Explain what transaction 0x1c0592f73d1f9182ee9bd40eb34d9b6c70b3196814b111589b82df4e79e7fb59 on base actually did, using Agent402's tx-forensics skill pack. (1) Check its confirmation status, (2) fetch the raw transaction via eth_getTransactionByHash, (3) decode the calldata into the function and arguments, (4) resolve the selector against the signature databases, (5) label the destination address. Summarize as a plain-English story: what was called, with what arguments, by whom, to whom, and whether it succeeded.",
   },
   {
     slug: "market-open",
@@ -2342,6 +2319,309 @@ export const SKILL_PACKS = [
     claudePrompt:
       "Tell me whether I can realistically reach a counterparty in Japan this week, using Agent402's locale-brief skill pack. (1) Get the country facts (currency, languages, timezone), (2) pull this year's public holidays and flag any in the next 7 days, (3) count the business days remaining this week, (4) convert the current time to the local timezone. Answer: local time now, holidays in the window, working days available, and the best contact window in my timezone.",
   },
+
+  // Restored 2026-08-30. These eleven were retired on 08-25 under a rule of
+  // "zero external use in 30 days", but that measurement was read off a
+  // LIMIT-20 list (src/sales-ledger.js) rather than a distinct count, so it
+  // could never report more than 20 tools however many actually sold. Each of
+  // these had real outside buyers inside the window, across Base, Solana and
+  // Algorand - the most recent six days before the cut.
+  {
+    slug: "jwt-toolkit",
+    title: "JWT toolkit",
+    tagline:
+      "Decode and verify a JWT in one pass - see the payload and check the signature.",
+    useCase:
+      "An agent debugging authentication needs to both decode a JWT (see claims, expiry, issuer) and verify the signature. Two operations that always go together, bundled into one payment.",
+    promptArgs: [
+      { name: "token", description: "JWT token string", required: true, substitute: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.xxx" },
+    ],
+    toolSlugs: ["jwt-decode", "jwt-verify", "jwt-sign"],
+    workflow: [
+      "Call jwt-decode to extract the header (algorithm, type) and payload (claims, expiry) without verification.",
+      "Call jwt-verify with the token and secret='test' to check whether the signature is valid.",
+      "Call jwt-sign with the decoded claims and secret='test' to re-issue a fresh token - the round-trip you need when rotating a signing secret, reproducing a token in a test fixture, or confirming the decode captured every claim.",
+    ],
+    claudePrompt:
+      "Analyze this JWT using Agent402's jwt-toolkit skill pack: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.xxx. (1) Decode it to see the claims, (2) verify the signature with secret='test', (3) re-sign the claims with jwt-sign (secret='test'). Report the payload, verification result, and the re-issued token.",
+  },
+  {
+    slug: "text-analyze",
+    title: "Text analysis",
+    tagline:
+      "Full text analysis - word/sentence stats, keyword extraction, and token count in one pass.",
+    useCase:
+      "An agent evaluating text content needs the complete picture: how long is it (words, sentences, paragraphs), what are the key topics (keyword extraction), and how many LLM tokens would it consume? Useful for content pipelines, RAG prep, and prompt budgeting.",
+    promptArgs: [
+      { name: "text", description: "Text to analyze", required: true, substitute: "The x402 protocol enables pay-per-call API payments using USDC stablecoins on Base and other chains." },
+    ],
+    toolSlugs: ["text-stats", "keywords", "token-count"],
+    workflow: [
+      "Call text-stats to get word count, sentence count, paragraph count, and reading time.",
+      "Call keywords to extract the top terms and their frequency.",
+      "Call token-count to estimate the LLM token consumption (useful for prompt budgeting).",
+    ],
+    claudePrompt:
+      "Analyze this text using Agent402's text-analyze skill pack: 'The x402 protocol enables pay-per-call API payments using USDC stablecoins on Base and other chains.' (1) Text stats, (2) keywords, (3) token count. Report the full analysis.",
+  },
+  {
+    slug: "schema-guard",
+    title: "Schema guard",
+    tagline:
+      "Contract-test a JSON payload in one call: validate it against your schema, infer the schema the payload actually implies, diff the two to expose drift, and return a normalized pretty-print.",
+    useCase:
+      "An agent consuming a third-party API or another agent's structured output needs to know - before trusting the data - whether the payload still matches the agreed contract, and if not, exactly which fields drifted.",
+    promptArgs: [
+      { name: "payload", description: "The JSON payload to check (as a JSON string)", required: true, substitute: '{"id":1,"name":"Ada"}' },
+      { name: "schema", description: "The expected JSON Schema (as a JSON string; defaults to none)", required: false, substitute: '{"type":"object","required":["id"]}' },
+    ],
+    toolSlugs: ["json-validate", "json-schema-infer", "json-diff", "json-format"],
+    workflow: [
+      "Validate the payload against the expected schema with json-validate - the pass/fail verdict with the exact violation list.",
+      "Infer the schema the payload actually implies with json-schema-infer - types, required keys, formats.",
+      "Diff the expected schema against the inferred one with json-diff - the drift report: added fields, changed types, dropped keys.",
+      "Normalize the payload with json-format for a canonical pretty-printed copy to log or store.",
+    ],
+    claudePrompt:
+      'Contract-test this JSON payload using Agent402\'s schema-guard skill pack: {"id":1,"name":"Ada"} against the expected schema {"type":"object","required":["id"]}. (1) Validate the payload against the schema, (2) infer the schema the payload actually implies, (3) diff expected vs inferred to expose drift, (4) return the normalized pretty-print. Report: valid or not (with violations), and every drifted field with its old vs new type.',
+  },
+  {
+    slug: "number-crunch",
+    title: "Number crunch",
+    tagline:
+      "Statistical analysis suite: descriptive statistics, correlation analysis, and outlier detection on a single dataset.",
+    useCase:
+      "An agent has a series of numbers (prices, scores, measurements) and needs the full statistical picture in one call: central tendency, spread, whether any values are anomalous, and the trend direction.",
+    promptArgs: [
+      { name: "values", description: "Comma-separated numbers (e.g. 10,12,15,11,50,13,14)", required: true, substitute: "10,12,15,11,50,13,14" },
+    ],
+    toolSlugs: ["stats-summary", "correlation", "outliers"],
+    workflow: [
+      "Compute descriptive statistics with stats-summary - count, mean, median, stddev, quartiles, min, max.",
+      "Run correlation of the values against their indices (position trend) - r near +1/-1 means a clear upward/downward trend over the series.",
+      "Detect outliers - IQR fence + z-score methods flag anomalous values the agent should investigate or exclude.",
+    ],
+    claudePrompt:
+      "Analyze the dataset [10,12,15,11,50,13,14] using Agent402: (1) stats-summary - descriptive stats. (2) correlation with x=values, y=indices - trend detection. (3) outliers - flag anomalies. Return {stats, trend, outliers}.",
+  },
+  {
+    slug: "json-pipeline",
+    title: "JSON pipeline",
+    tagline:
+      "Validate, pretty-print, and convert JSON to CSV in one pass - the complete JSON processing workflow.",
+    useCase:
+      "An agent receives raw JSON (from an API response, a webhook body, or user input) and needs to validate it's well-formed, format it for readability, and convert it to CSV for a spreadsheet or data pipeline. Three tools in one payment.",
+    promptArgs: [
+      { name: "json", description: "JSON string to process", required: true, substitute: "[{\"name\":\"Alice\",\"age\":30}]" },
+    ],
+    toolSlugs: ["json-validate", "json-format", "json-to-csv"],
+    workflow: [
+      "Call json-validate to confirm the input is well-formed JSON (catches syntax errors, trailing commas, etc.).",
+      "Call json-format to pretty-print with consistent indentation.",
+      "Call json-to-csv to convert the JSON array to a CSV string for spreadsheet import.",
+    ],
+    claudePrompt:
+      "Process this JSON using Agent402's json-pipeline skill pack: [{\"name\":\"Alice\",\"age\":30}]. (1) Validate it, (2) pretty-print it, (3) convert to CSV. Report any validation issues and provide the formatted output.",
+  },
+  {
+    slug: "openapi-audit",
+    title: "OpenAPI spec audit",
+    tagline:
+      "Lint an OpenAPI spec and validate a sample payload against it - catch schema errors in one pass.",
+    useCase:
+      "A developer has an OpenAPI spec URL and wants a quick quality check: does it lint cleanly (missing descriptions, unused schemas, invalid refs) and does a sample payload pass validation? Useful before publishing to a marketplace or generating client SDKs.",
+    promptArgs: [
+      { name: "url", description: "URL of the OpenAPI spec (JSON or YAML)", required: true, substitute: "https://petstore3.swagger.io/api/v3/openapi.json" },
+    ],
+    toolSlugs: ["openapi-lint", "openapi-validate-payload", "openapi-security-summary"],
+    workflow: [
+      "Call openapi-lint with the spec URL to get lint warnings and errors - missing descriptions, unused schemas, invalid references.",
+      "Call openapi-validate-payload with an empty payload to surface required-field violations and schema mismatches.",
+      "Call openapi-security-summary to map the spec's auth posture - which security schemes are declared, which operations require them, and which are left unprotected. A clean lint on an endpoint that forgot its auth requirement is the audit finding that matters most.",
+    ],
+    claudePrompt:
+      "Audit the OpenAPI spec at https://petstore3.swagger.io/api/v3/openapi.json using Agent402's openapi-audit skill pack: (1) lint it for warnings and errors, (2) validate an empty payload against the first endpoint, (3) summarize the security posture with openapi-security-summary. Report lint issues, validation failures, and any unprotected operations.",
+  },
+  {
+    slug: "text-hygiene",
+    title: "Text hygiene",
+    tagline:
+      "Turn a wall of dirty text - chat logs, scraped pages, user-generated content, log dumps - into something safe to store, search, and pipe into the next step. Measure first, redact PII before anything else touches the data, then dedupe, sort, extract entities, surface keywords, and grade the readability of what's left.",
+    useCase:
+      "You inherited a text dump (support tickets, exported chat history, scraped reviews, log files) and need to prepare it for analysis or storage. The pack enforces the one ordering that matters: redact PII before any other step caches an intermediate result. Every step after redact is allowed to be sloppy with retention because the secrets are already gone. Output: a cleaned, deduped, sorted stream plus an entity index and a readability score telling you whether the cleaned text is still human-grade.",
+    promptArgs: [
+      { name: "text", description: "The raw text dump to clean (max 500KB)", required: true, substitute: "support log dump" },
+    ],
+    // Seven tools, ordered to enforce a single security-relevant invariant:
+    // measure → REDACT FIRST → mutate freely. text-stats measures the
+    // baseline so you can report what got dropped; redact strips PII before
+    // any cache, log, or intermediate result can capture it; dedupe + sort
+    // normalize the cleaned stream; extract-entities indexes what survived;
+    // keywords gives a routing/tagging signal; readability grades whether
+    // the cleaned output is still human-grade. Composes kit (text-stats,
+    // keywords) + kit2 (redact, dedupe-lines, sort-lines, extract-entities,
+    // readability). All seven tools are pure-CPU and PoW-eligible.
+    toolSlugs: [
+      "text-stats",
+      "redact",
+      "dedupe-lines",
+      "sort-lines",
+      "extract-entities",
+      "keywords",
+      "readability",
+    ],
+    workflow: [
+      "Measure the baseline with text-stats. Get the raw counts (characters, words, sentences, paragraphs, estimated LLM tokens) before any mutation. This is what you'll compare against at the end to report how much noise was actually removed - 'started at 50k tokens, deduped + cleaned to 12k tokens' is a much better summary than 'cleaned the text'. It also catches the silly case where the input is too small to bother with the rest of the pipeline.",
+      "Redact PII with redact - this MUST run before any other step. The redact tool strips emails, phone numbers, credit-card-shaped digits, SSNs, and IPv4 addresses, replacing them with [EMAIL] / [PHONE] / [CARD] / [SSN] / [IP] markers and returning a count by type. Doing this first is the only safe ordering: if you dedupe + sort + extract first, intermediate results have already cached the PII in your logs, retry buffers, and downstream queues. Get the secrets out of the data while you're still inside the pack, not after.",
+      "Dedupe-lines on the redacted text. Chat logs and scraped pages are full of exact-duplicate lines (timestamps stripped, boilerplate footers, repeated error messages). Removing them tightens the signal-to-noise ratio without losing anything. Note: dedupe runs after redact deliberately, so two messages that differed only by phone number now collapse to one - a tiny privacy-positive side effect.",
+      "Sort-lines to normalize ordering. Once duplicates are gone, sort gives you a stable canonical form - diffable across runs, mergeable across sources, and friendly to downstream chunking. Optional, skip if order is semantically meaningful (timeline data) - but for tickets / reviews / unstructured comments, sort is almost always the right call.",
+      "Index entities with extract-entities. Pulls deduped lists of emails, URLs, IPv4s, @mentions, and #hashtags out of what survived redaction. The interesting outputs here are URLs (where users were linking) and mentions/hashtags (who/what users were talking about) - emails and IPs should be mostly empty if redact did its job, and a non-zero count is a useful audit signal that redact missed something (custom email formats, IPv6, weird Unicode).",
+      "Surface topics with keywords. Returns top words and two-word phrases by frequency with stopwords removed - cheap, deterministic, no model required. Use the top-N as routing tags (route to the right support queue, the right analyst, the right downstream pipeline) or as a quick gist for human triage. Two-word phrases catch domain language that single-word frequency misses ('refund request', 'login failed', 'card declined').",
+      "Grade the cleaned output with readability. Returns Flesch Reading Ease and Flesch–Kincaid grade level. The score tells you whether the cleaned text is still human-grade or whether dedupe + sort destroyed enough context that the result is now incoherent. A grade level that jumped from 9 (high school) to 22 (post-doc) is a sign that sentence boundaries got mangled by sort; a reading-ease that dropped to single digits means the surviving content is dense terminology you should hand to a domain expert. This is the closing audit step.",
+    ],
+    claudePrompt:
+      "Clean this support log dump using Agent402. (1) text-stats on the raw input - record characters / words / sentences / estimatedTokens as the baseline. If words < 100, stop and tell the user the input is too small to be worth running the full pipeline. (2) redact the text. Save the result; also record counts.email / counts.phone / counts.card / counts.ssn / counts.ip - these are the headline 'how much PII did we strip' numbers. From here forward, work only on the redacted text - never reference the raw input again. (3) dedupe-lines on the redacted output. Record before/after line counts. (4) sort-lines on the deduped output - skip this step only if the user said the order matters semantically. (5) extract-entities on the final cleaned text. Surface emails / urls / ipv4 - if emails or ipv4 are non-empty, that's a signal redact missed something (alert the user, don't fail silently). Report URL count and the top 10 by frequency, plus all @mentions and #hashtags. (6) keywords on the cleaned text - return top 15 unigrams and top 10 bigrams as a tagging signal. (7) readability on the cleaned text - return readingEase + gradeLevel. Compare to a reasonable benchmark (gradeLevel between 7 and 14 = normal human prose). Final return: {baseline: {words, tokens}, redactionCounts: {email, phone, card, ssn, ip}, beforeLines, afterLines, residualEntities: {emails, urls, ipv4}, topKeywords, topBigrams, readingEase, gradeLevel, cleanedText, oneLineSummary: 'Started at X tokens, removed Y PII items, deduped to Z lines, grade level G.'}. All seven tools are pure-CPU (PoW-eligible / free tier). Budget ≤ $0.012 even paid.",
+  },
+  {
+    slug: "loan-comparison",
+    title: "Loan comparison",
+    tagline:
+      "Compare two or more loan offers - different rates, terms, fees, prepayment structures - on the metrics that actually matter (monthly payment, total interest, year-1 equity build, NPV at your discount rate, effective rate). Apples-to-apples math without opening a spreadsheet.",
+    useCase:
+      "You're choosing between two mortgage offers, a fixed vs. variable auto loan, a student-loan refinance, or a 15-year vs. 30-year structure. Raw totals lie (you can't compare $300k of 15-year payments to $300k of 30-year payments on total dollars - the 30-year wins on total cost only because you held the money longer). Compare on present-value terms and opportunity cost. All deterministic, all free over PoW.",
+    promptArgs: [
+      {
+        name: "loanA",
+        description: "First loan offer (e.g. \"$300,000 at 6.5% for 30 years\")",
+        required: true,
+        substitute: "$300,000 at 6.5% for 30 years",
+      },
+      {
+        name: "loanB",
+        description: "Second loan offer (e.g. \"$300,000 at 6.0% for 15 years\")",
+        required: true,
+        substitute: "$300,000 at 6.0% for 15 years",
+      },
+    ],
+    // Five tools, one per analytical layer. Ordered cheapest-first: payment
+    // alone decides ~60% of comparisons; the deeper layers (amortization,
+    // opportunity cost, NPV, IRR) only matter when offers are close or when
+    // the loan structures are genuinely different. Composes the finance-math
+    // kit shipped in src/tools/finance-math-kit.js.
+    toolSlugs: [
+      "loan-payment",
+      "amortization",
+      "compound-interest",
+      "npv",
+      "irr",
+    ],
+    workflow: [
+      "Call loan-payment on each offer to get the monthly payment, total paid over the term, and total interest. For most plain fixed-rate comparisons (same principal, same term, just different rates), this single comparison settles it - pick the lower payment. Only keep going when the comparison is non-trivial (different terms, points, balloon payments, etc.).",
+      "Call amortization on each loan with maxRows=12 (or paymentsPerYear, whichever you'd rather inspect). Report the year-1 ending balance to surface equity-build differences - a 15-year loan pays off ~$13k of principal in year 1 on a $300k mortgage where a 30-year pays off ~$3k. That's the 'why pay more per month?' answer, and it's invisible from the payment number alone.",
+      "Compute opportunity cost with compound-interest. Take the per-period payment difference (Loan A monthly minus Loan B monthly) and ask: if I invested the savings instead, what would I have at the end of the term? Use the longer term and your assumed market return (default 7-8% for stocks, 4-5% for bonds). This is the layer that flips most 'obvious' comparisons - a higher-payment 15-year loan often loses to a 30-year + invest-the-difference once you price the opportunity cost honestly.",
+      "Run npv on each loan's full cashflow stream using your personal discount rate (default 5%). Build the stream as: [principal, -payment, -payment, ...] over the loan's periods. The loan with the less-negative NPV is cheaper in present-value terms. This is the right comparison metric when the terms differ - comparing raw total-paid on a 15y vs. 30y is dishonest because the dollars in year 30 are worth less than the dollars in year 1.",
+      "Use irr only for non-standard structures: loans with discount points (you pay $X upfront for a lower rate), balloon payments (low monthly + a giant final payment), prepayment penalties, or fees rolled into the loan. Build the actual cashflow stream and call irr - that's the all-in effective rate the loan is really costing you, comparable across structures. Plain fixed-rate loans don't need this step; their irr equals their stated rate.",
+    ],
+    claudePrompt:
+      "Compare these two mortgage offers using Agent402: A) $300,000 at 6.5% for 30 years, B) $300,000 at 6.0% for 15 years. (1) Call loan-payment on each - record monthly payment + totalInterest. Expect A ≈ $1896/mo and B ≈ $2531/mo. (2) Call amortization with maxRows=12 on each; report each loan's balance after 12 payments to show equity build (B's year-1 principal paydown should be ~4x A's). (3) Compute opportunity cost: the monthly payment differential is ~$635 (B - A). Call compound-interest with principal=0, but instead approximate by treating the differential as an annuity: take the differential × 12 months × 30 years and run compound-interest on that as if invested at 7%/yr to get the upper-bound forgone investment. (4) Build cashflow streams for npv: A = [300000, -1896, -1896, ... (360 times)], B = [300000, -2531, -2531, ... (180 times)], call npv on each at discountRate=0.05 - compare the (negative) NPVs. (5) Skip irr because both are plain fixed-rate loans with no points / balloon / fees. (6) Return: {a: {monthly, totalInterest, year1Balance, npvAt5pct}, b: {monthly, totalInterest, year1Balance, npvAt5pct}, recommendation: \"A\" | \"B\", reasoning: \"...one sentence explaining which layer was decisive.\"}. All five tools are free over PoW - only pay if you also fetch live rate data via finance-kit.",
+  },
+  {
+    slug: "timezone-planner",
+    title: "Timezone planner",
+    tagline:
+      "Time zone conversion, business day calculation, and cron schedule preview - scheduling in one pass.",
+    useCase:
+      "An agent coordinating across time zones needs to convert a time, count business days between dates, and preview when a cron job will fire. Three scheduling primitives bundled together for meeting planners, deployment schedulers, and coordination agents.",
+    promptArgs: [
+      { name: "time", description: "ISO datetime to convert (e.g. 2026-06-11T10:00:00)", required: true, substitute: "2026-06-11T10:00:00" },
+      { name: "from", description: "Source timezone (e.g. America/New_York)", required: false, substitute: "America/New_York" },
+      { name: "to", description: "Target timezone (e.g. Asia/Tokyo)", required: false, substitute: "Asia/Tokyo" },
+    ],
+    toolSlugs: ["time-convert", "business-days", "cron-next"],
+    workflow: [
+      "Call time-convert with the time, from timezone, and to timezone to get the converted time.",
+      "Call business-days with start and end dates to count working days in the range.",
+      "Call cron-next with a sample expression to preview upcoming schedule occurrences.",
+    ],
+    claudePrompt:
+      "Plan a meeting using Agent402's timezone-planner skill pack: Convert 2026-06-11T10:00:00 from America/New_York to Asia/Tokyo. Also check how many business days are between now and that date, and preview the next 5 occurrences of a weekly Monday 10am cron.",
+  },
+  {
+    slug: "webhook-intake",
+    title: "Webhook secure intake",
+    tagline:
+      "The production ingest path for every incoming webhook: verify the provider signature (GitHub / Stripe / Shopify / Slack, constant-time, replay-window enforced), schema-validate the now-trusted body against the provider envelope, fingerprint the raw bytes for redelivery dedup, normalize the event timestamp to UTC + epoch, and redact PII before anything hits a log. Five pure-CPU tools - the accept-or-reject gate, run on every event.",
+    useCase:
+      "webhook-debug answers 'why is my signature failing?' - this pack is what runs after that's solved: the gate an agent executes on EVERY incoming webhook in production. Step 1 is the security decision (reject on an invalid signature; Stripe and Slack timestamps get replay-window enforcement), and only then is the body treated as trusted: an envelope schema check catches provider API-version drift before it breaks your handler three layers down, a sha256 content fingerprint gives you the dedup key for provider redeliveries (or an Idempotency-Key for downstream calls), the event time is normalized to UTC ISO + epoch for storage, and PII is redacted so the audit log stays clean. One deterministic pass from raw bytes to a storable, loggable, deduplicated event.",
+    toolSlugs: [
+      "webhook-verify",
+      "json-validate",
+      "hash",
+      "time-convert",
+      "redact",
+    ],
+    workflow: [
+      "Verify the signature with webhook-verify - the accept/reject gate, and the reason this pack exists. Pass provider ('github' | 'stripe' | 'shopify' | 'slack'), the RAW body string exactly as received (signatures are over the raw bytes - a parsed-then-restringified body will not match), the signing secret, and the signature header value (scheme prefixes like 'sha256=' / 'v0=' / 't=…,v1=…' are handled). The tool recomputes the correct per-provider HMAC scheme and compares in constant time; for Stripe and Slack it also enforces the ±300s replay window when the timestamp is supplied (Stripe's can ride inside the signature's t= element). If valid=false: stop, return 401 to the sender, and log nothing but the fingerprint from step 3 - an unverified body is attacker-controlled input.",
+      "Schema-validate the now-trusted body with json-validate against a minimal provider envelope schema (GitHub push events carry repository/ref; Stripe events carry id/type/created; Slack carries type/event_time). The signature proves the bytes came from the provider - the schema proves they're the SHAPE your handler was written against. A schema failure on a validly-signed body is the API-version-drift signal (providers add, rename, and sunset fields on a schedule): alert loudly and route to a quarantine queue instead of silently dropping fields. Swap in your own event-specific schema per webhook topic in production.",
+      "Fingerprint the raw bytes with hash (sha256). Providers redeliver on timeout and at-least-once delivery is the contract - the same event can arrive three times with three different delivery ids. The content hash is the dedup key that survives redelivery: check it against your processed-events store before doing any work, or reuse it directly as the Idempotency-Key header on downstream paid calls. Hashing the RAW body (not the parsed object) keeps the fingerprint byte-stable and lets you log it safely even for rejected events - it reveals nothing about the payload.",
+      "Normalize the event timestamp with time-convert. Every provider ships a different clock format: Stripe created is epoch seconds, Slack event_time is epoch seconds, Shopify created_at is RFC 3339 with offset, GitHub commits carry ISO 8601. time-convert returns UTC ISO + epochSeconds + epochMillis in one call - store the epoch (sortable, timezone-proof), render the ISO. This is also where event-ordering bugs die: comparing a provider's local-offset string against your stored UTC string sorts wrong twice a year; comparing epochs never does.",
+      "Redact the body with redact before it touches any log or trace. Webhook payloads routinely carry emails, IPs, phone numbers, and card fragments; the redacted string replaces each with a typed placeholder and the response counts each kind so you can emit 'redacted 1 email, 0 cards' as a metric. Persist ONLY the redacted string in logs - the redact-before-log ordering is the difference between a clean audit and a reportable incident. (The full raw body, if you must keep it, belongs encrypted in your event store keyed by the step-3 fingerprint, not in the log pipeline.)",
+    ],
+    claudePrompt:
+      "Securely ingest this incoming webhook using Agent402's webhook-intake skill pack.\n\nProvider: github\nRaw body (byte-for-byte as received on the wire - never re-serialize before verifying):\n{\"ref\":\"refs/heads/main\",\"before\":\"6113728f27ae82c7b1a177c8d03f9e96e0adf246\",\"after\":\"d6fde92930d4715a2b49857d24b940956b26d2d3\",\"repository\":{\"full_name\":\"acme/checkout-service\"},\"pusher\":{\"name\":\"alice\",\"email\":\"alice@example.com\"},\"head_commit\":{\"id\":\"d6fde92930d4715a2b49857d24b940956b26d2d3\",\"message\":\"fix: retry payment capture on 5xx\",\"timestamp\":\"2026-07-01T15:04:05Z\"}}\n\nSignature header value: sha256=45f74caa8f537323fd4fa022357ebc620cbcfb28a6dcd65b0f1da3646edf5c4a\nSigning secret: gh_hook_secret_demo_only\n\n(1) webhook-verify with provider, payload=the RAW body string, secret, signature (scheme prefix ok). This is the accept/reject gate: if valid=false, STOP - return 401 to the sender and log only the step-3 fingerprint, never the body. For stripe/slack also pass the provider timestamp so the ±300s replay window is enforced (stripe's t= element inside the signature works too). (2) json-validate the parsed body against the provider envelope schema - for GitHub push events {type:'object', required:['repository']}; for Stripe require id/type/created. A schema failure on a VALID signature = provider API-version drift: alert loudly, quarantine, don't silently drop fields. (3) hash the raw body with algo='sha256' - the content fingerprint. Dedup redeliveries on it (at-least-once delivery means the same event arrives more than once) or reuse it as the Idempotency-Key for downstream calls. (4) time-convert the event timestamp (GitHub head_commit.timestamp ISO; Stripe created / Slack event_time epoch seconds; Shopify created_at RFC 3339) → UTC ISO + epochSeconds. Store the epoch, render the ISO. (5) redact the body before it touches any log. Persist ONLY the redacted string; report per-kind counts as metrics. Final return: {accepted: <signature valid AND schema valid>, verify: {valid, scheme, reason}, schemaValid: bool, schemaErrors: [], fingerprint: <sha256 hex>, eventTimeUtc, eventEpochSeconds, redactedBody, redactionCounts, oneLineSummary: 'webhook accepted: signature ok, envelope ok, deduped by fingerprint, 1 email redacted, safe to process'}. All five tools are pure-CPU and PoW-eligible - the whole gate runs on the free tier. Budget ≤ $0.01 even paid.",
+    promptArgs: [
+      {
+        name: "rawBody",
+        description: "the raw webhook body exactly as received on the wire (signatures are over the raw bytes)",
+        required: true,
+        substitute:
+          "{\"ref\":\"refs/heads/main\",\"before\":\"6113728f27ae82c7b1a177c8d03f9e96e0adf246\",\"after\":\"d6fde92930d4715a2b49857d24b940956b26d2d3\",\"repository\":{\"full_name\":\"acme/checkout-service\"},\"pusher\":{\"name\":\"alice\",\"email\":\"alice@example.com\"},\"head_commit\":{\"id\":\"d6fde92930d4715a2b49857d24b940956b26d2d3\",\"message\":\"fix: retry payment capture on 5xx\",\"timestamp\":\"2026-07-01T15:04:05Z\"}}",
+      },
+      {
+        name: "provider",
+        description: "which provider signed the webhook: github | stripe | shopify | slack",
+        required: true,
+        substitute: "github",
+      },
+      {
+        name: "secret",
+        description: "the webhook signing secret from the provider dashboard (never echoed back)",
+        required: true,
+        substitute: "gh_hook_secret_demo_only",
+      },
+      {
+        name: "signature",
+        description: "the signature header value, with or without its scheme prefix (sha256= / v0= / t=...,v1=...)",
+        required: true,
+        substitute: "sha256=45f74caa8f537323fd4fa022357ebc620cbcfb28a6dcd65b0f1da3646edf5c4a",
+      },
+      {
+        name: "timestamp",
+        description: "the provider timestamp header - required for stripe/slack replay protection (stripe's may ride in the signature's t= element)",
+        required: false,
+      },
+    ],
+  },
+  {
+    slug: "markdown-convert",
+    title: "Markdown to HTML round-trip",
+    tagline:
+      "Markdown to HTML and back - a round-trip conversion that proves fidelity and gives you both formats from one input.",
+    useCase:
+      "An agent has markdown content and needs HTML output (for email, CMS, or rendering), plus wants to verify the round-trip fidelity by converting back. Useful for content pipelines and format migration.",
+    promptArgs: [
+      { name: "markdown", description: "Markdown text to convert", required: true, substitute: "# Hello\\n\\nThis is **bold** and _italic_." },
+    ],
+    toolSlugs: ["markdown-to-html", "html-to-markdown", "text-diff"],
+    workflow: [
+      "Convert markdown to HTML with markdown-to-html - produces clean semantic HTML.",
+      "Convert the HTML back to markdown with html-to-markdown - verifies round-trip fidelity. Differences indicate formatting that doesn't survive the conversion.",
+      "Diff the original markdown against the round-tripped markdown with text-diff - the diff IS the fidelity report: an empty diff means lossless, and every hunk is exactly the formatting that didn't survive the HTML round-trip.",
+    ],
+    claudePrompt:
+      "Round-trip markdown using Agent402: (1) markdown-to-html {markdown:\"# Hello\\n\\nThis is **bold** and _italic_.\"} - get HTML. (2) html-to-markdown on the result - verify round-trip. (3) text-diff {a:<original>, b:<round-tripped>} - quantify what changed. Return {html, roundTripped, diff}.",
+  },
+
 ];
 
 // HTML escape — copied from guides.js/pages.js to keep skills self-contained.
@@ -2434,7 +2714,7 @@ const ILLUSTRATIVE_RUN = [
 const SKILLS_FAQS = [
   { q: "What is a skill pack?", a: "A multi-tool workflow that runs server-side in a single request. Instead of your agent calling seven tools in sequence - seven payments, seven round trips, seven things to handle when one fails - you make one call to POST /api/skill/{slug}, pay once, and get every step back in one response." },
   { q: "What happens if one step fails?", a: "You get a partial-success envelope rather than an error. Every step that succeeded returns its result, the failed step is marked with its reason, and the response is still usable. That is the real difference from orchestrating the sequence yourself, where a failure mid-chain leaves you holding partial state you have already paid for and have to reconcile." },
-  { q: "Why does a pack cost more than a single tool?", a: "Because it runs several. A pack is $0.05 to $1.50 depending on how much work it does, against a $0.001 floor for one deterministic tool. The comparison that matters is against calling those tools yourself: one payment instead of several, and no orchestration code to write or maintain." },
+  { q: "How is a pack priced?", a: `Below its parts. A pack costs the sum of the tools it runs minus a 10% bundle discount, rounded up to the $0.001 settlement floor - ${PACK_PRICE_RANGE.text} today, recomputed from the live catalog whenever a tool is repriced. One payment instead of several, cheaper than assembling the steps yourself, and no orchestration code to write or maintain.` },
   { q: "Can I see which tools a pack will run before paying?", a: "Yes. Every pack publishes its tool sequence up front, on its own page and in /api/skill-packs.json. Packs are fixed sequences, not an agent improvising - the same inputs run the same steps in the same order every time." },
   { q: "Which chains can I pay a pack on?", a: `The same rails as any other call: ${RAILS_SHORT}. Gas is sponsored on EVM chains, so you need only the stablecoin, or run free over proof-of-work where a pack is pure-CPU.` },
 ];
@@ -2486,7 +2766,7 @@ export function skillsIndex(baseUrl) {
       <div>
         <h1 style="font-weight:800;font-size:56px;line-height:.96;letter-spacing:-.035em;margin:0 0 20px;color:var(--ink);">Seven tools.<br>One <span style="color:var(--accent);">payment</span>.</h1>
         <p style="font-size:18px;line-height:1.55;color:var(--muted);margin:0 0 16px;">A real job is never one call. Auditing a domain takes seven tools; parsing a document takes seven more. Orchestrate that yourself and you are running seven payments, seven round trips and seven failure modes - and writing the code that holds it together.</p>
-        <p style="font-size:16px;line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount}+ packs, $0.05 to $1.50.</strong></p>
+        <p style="font-size:16px;line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount}+ packs, ${PACK_PRICE_RANGE.text}, every one priced below the sum of its tools.</strong></p>
         <div style="display:flex;flex-wrap:wrap;gap:11px;">
           <a class="ml-cta" href="#packs" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:14px 22px;">Browse the packs →</a>
           <a class="ml-cta" href="/api/skill-packs.json" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 22px;">skill-packs.json</a>
@@ -2888,7 +3168,7 @@ export function rankSkillPacks(query, { k = 2, baseUrl = "", minScore = 4, toolP
 
   return scored.slice(0, Math.min(Math.max(k, 1), SKILL_PACKS.length)).map(([score, p]) => {
     const price = PACK_PRICES[p.slug] ?? 0.05;
-    const priceLabel = `$${price.toFixed(price < 0.1 ? 3 : 2)}`;
+    const priceLabel = `$${fmtPackUsd(price)}`; // whole milli-dollars: the derived price is charged as derived, never rounded to a cent
     // Only claim an a la carte total when EVERY step resolves to a real price.
     // A partial sum would understate the alternative and quietly flatter the
     // bundle, which is the one thing this comparison exists to prevent.

@@ -99,6 +99,10 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
 //    Underestimating = the margin clamp lets too many tokens through.
 const under = [];
 for (const m of models) {
+  // ":batch" (async) and ":online" (per-request web billing) are refused by
+  // refuseCostVariants on every wire, so their live prices bound nothing we
+  // serve (qwen3.8-2.4t-a95b:batch listed ABOVE its own base model, 2026-08-28).
+  if (/:(batch|online)$/.test(m.id)) continue;
   const slug = tierFor(m.id);
   if (!slug) continue;
   const tier = TIERS[slug];

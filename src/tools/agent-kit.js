@@ -2,7 +2,7 @@
 // most: exact token counting, RAG-style chunking, JSON-Schema validation, and
 // JSONL <-> array conversion. All pure-CPU (proof-of-work eligible), no network,
 // no LLM in the serving path. Covered by scripts/test-agent-kit.js.
-import { compileUserRegex } from "./safe-regex.js";
+import { compileUserRegex, testUserRegex } from "./safe-regex.js";
 import { validateAgentCard, SAMPLE_AGENT_CARD } from "./a2a-card.js";
 
 function bad(message) {
@@ -84,7 +84,7 @@ function validateNode(data, schema, path, errors) {
   if (t === "string") {
     if (schema.minLength != null && data.length < schema.minLength) errors.push(`${at}: shorter than minLength ${schema.minLength}`);
     if (schema.maxLength != null && data.length > schema.maxLength) errors.push(`${at}: longer than maxLength ${schema.maxLength}`);
-    if (schema.pattern && !compileUserRegex(schema.pattern).test(data)) errors.push(`${at}: does not match pattern`);
+    if (schema.pattern && !testUserRegex(compileUserRegex(schema.pattern), data)) errors.push(`${at}: does not match pattern`);
     if (schema.format && FORMATS[schema.format] && !FORMATS[schema.format].test(data)) errors.push(`${at}: invalid ${schema.format}`);
   }
   if (t === "number" || t === "integer") {
@@ -152,10 +152,10 @@ export const AGENT_TOOLS = [
     tags: ["chunk", "rag", "split", "embeddings", "tokens"],
     discovery: {
       bodyType: "json",
-      input: { text: "long document …", size: 800, overlap: 100, unit: "chars" },
+      input: { text: "The x402 protocol lets an agent pay for a single request. A server answers with payment terms, the agent signs a stablecoin authorization, and the request is retried with the payment attached. Payment settles on chain, so the server needs no account and the agent needs no subscription. The x402 protocol prices each request on its own, and payment terms travel with the request itself.", size: 120, overlap: 20, unit: "chars" },
       inputSchema: {
         properties: {
-          text: { type: "string" },
+          text: { type: "string", description: "Text to split into chunks (max 500KB)" },
           size: { type: "number", description: "chunk size (default 800)" },
           overlap: { type: "number", description: "overlap between chunks (default 0)" },
           unit: { type: "string", description: "chars (default) | tokens" },
@@ -163,7 +163,7 @@ export const AGENT_TOOLS = [
         },
         required: ["text"],
       },
-      output: { example: { unit: "chars", size: 800, overlap: 100, count: 2, chunks: ["…", "…"] } },
+      output: { example: { unit: "chars", size: 120, overlap: 20, count: 4, chunks: ["The x402 protocol lets an agent pay for a single request. A server answers with payment terms, the agent signs a stablec", "gent signs a stablecoin authorization, and the request is retried with the payment attached. Payment settles on chain, s"] } },
     },
     handler: async (i) => {
       const text = cap(need(i, "text"));

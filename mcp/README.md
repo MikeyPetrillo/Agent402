@@ -10,7 +10,7 @@ Your agent gets browser rendering, screenshots, PDF text extraction, URL→markd
 MCP server - e.g. claude.ai → Settings → Connectors → Add custom connector. The
 pure-CPU tools run free there (rate-limited), and the paid tools are payable
 right on the connector over [MPP](https://agent402.tools/what-is-mpp): a paid
-call answers JSON-RPC error `-32042` with the challenges, and an MCP client
+call answers JSON-RPC error `-32042` with the challenges (`-32043` if a presented credential was refused), and an MCP client
 wrapped with `mppx`'s `McpClient.wrap()` (USDC on Base/Celo, or native Tempo)
 pays and retries on its own, receipt in `_meta`. For no rate limit, or to pay
 over x402 or by card instead, run this package locally:

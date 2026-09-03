@@ -1,32 +1,17 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
+// Real, free-to-read outputs of the product (assets/samples), never placeholders.
 const SHOWCASE_PROJECTS = [
-  {
-    title: "Research Agent",
-    description: "Overnight batch analysis of SEC filings, earnings, and market data for 50+ companies.",
-    badge: "Coming soon",
-  },
-  {
-    title: "Security Scanner",
-    description: "Automated domain security audits: DNS, TLS, WHOIS, SPF/DKIM, and HTTP headers in one pass.",
-    badge: "Coming soon",
-  },
-  {
-    title: "Data Pipeline",
-    description: "Extract, transform, and validate structured data from hundreds of PDFs and web pages.",
-    badge: "Coming soon",
-  },
-  {
-    title: "Content Monitor",
-    description: "Daily price and content tracking across competitor sites with change-detection alerts.",
-    badge: "Coming soon",
-  },
+  { title: "Company due-diligence dossier: NVDA", description: "Filings, financial trend, insider and institutional activity, litigation and risk themes, 20 cited sources. Read the real report at /reports/sample/dossier.", badge: "Live sample", href: "/reports/sample/dossier" },
+  { title: "Insider flow report: NVDA", description: "Every Form 4 in the window parsed and explained: open-market buys and sales against awards and exercises, per insider. /reports/sample/insider-report.", badge: "Live sample", href: "/reports/sample/insider-report" },
+  { title: "Domain security audit: github.com", description: "Email authentication, TLS, headers and DNS posture graded A to F with the evidence. /reports/sample/domain-audit.", badge: "Live sample", href: "/reports/sample/domain-audit" },
+  { title: "Deep research: airline jet-fuel hedging", description: "A cited answer to a real question, built from live sources with the full-text pages read. /reports/sample/research.", badge: "Live sample", href: "/reports/sample/research" },
 ];
 
 export function communityPage(baseUrl) {
   const canonical = `${baseUrl}/community`;
   const pageTitle = "Community - Agent402 ecosystem";
-  const pageDesc = "Join the Agent402 community: contribute tool kits, write guides, and build autonomous agents with 500+ deterministic web tools on the x402 protocol.";
+  const pageDesc = "Join the Agent402 community: contribute tool kits, write guides, and build autonomous agents with 500+ web tools on the x402 protocol.";
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -108,7 +93,7 @@ export function communityPage(baseUrl) {
   const showcaseHtml = SHOWCASE_PROJECTS.map((p) => `
       <div class="cm-card cm-showcase">
         <span class="cm-badge">${esc(p.badge)}</span>
-        <h3>${esc(p.title)}</h3>
+        <h3>${p.href ? `<a href="${esc(p.href)}" style="color:inherit;text-decoration:none;">${esc(p.title)} →</a>` : esc(p.title)}</h3>
         <p class="cm-card-desc">${esc(p.description)}</p>
       </div>`).join("\n");
 

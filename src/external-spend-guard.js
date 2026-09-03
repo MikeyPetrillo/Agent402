@@ -120,6 +120,31 @@ export function noteSpend(payer, usd, now = Date.now()) {
 }
 
 /**
+ * Correct a recorded spend to what was ACTUALLY paid, once that is known.
+ *
+ * The authorize-and-book step runs BEFORE the seller quotes, so it has to book
+ * the worst case the call could cost (the tier cap). Booking the seller's
+ * DECLARED price instead would let one document set our own debt ceiling: since
+ * 2026-08-29 a route's resolved price comes from the origin's own current
+ * declaration, so a seller declaring $0.0001 while quoting $0.005 on the live
+ * 402 would have each call count as a fiftieth of its real exposure. The per-
+ * call spend is bounded either way (payExternal re-checks maxAtomic against the
+ * accept it signs), but the CEILING is what stops a run of them.
+ *
+ * Only ever lowers: the booked figure is the cap, and nothing may exceed it.
+ */
+export function adjustSpend(handle, usd) {
+  if (!handle?.payer) return;
+  const rows = ledger.get(handle.payer);
+  if (!rows) return;
+  const row = rows.find((r) => r.id === handle.id);
+  if (!row) return;
+  const actual = Number(usd);
+  if (!Number.isFinite(actual) || actual < 0) return;
+  if (actual < row.usd) row.usd = actual;
+}
+
+/**
  * Resolve a recorded spend once the FINAL response is known.
  *
  * `settled` must come from the post-settlement status (res.on("finish") with

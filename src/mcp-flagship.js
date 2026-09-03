@@ -1,7 +1,7 @@
 // Flagship MCP surface — the small default tools/list agents see first.
 //
-// Product intent: Agent402 is the deterministic tools layer beside LLM
-// gateways, not a competing chat router. Default MCP exposure is a tight
+// Product intent: Agent402 is a tools and models layer for agents -
+// deterministic utilities, a metered model gateway, finished reports. Default MCP exposure is a tight
 // flagship set; the long catalog stays callable via find_tool /
 // search_tools / call_tool. Keep this list aligned with mcp/index.js
 // DEFAULT_CURATED (stdio package cannot import this file when published).
@@ -95,7 +95,7 @@ export const FLAGSHIP_WRITERS = new Set(["memory-write"]);
 
 /** initialize.serverInfo description (MCP Implementation.description). */
 export const MCP_SERVER_DESCRIPTION =
-  "Agent402 - deterministic pay-per-call tools for AI agents: live web search and cited answers, news, browser render, market data, speech-to-text, wallet-keyed memory, plus 500+ long-tail tools via catalog.find. Settle in USDC via x402 or MPP (Machine Payments Protocol) on the same 402, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.";
+  "Agent402 - pay-per-call tools and models for AI agents: live web search and cited answers, news, browser render, market data, speech-to-text, wallet-keyed memory, plus 500+ long-tail tools via catalog.find. Settle in USDC via x402 or MPP (Machine Payments Protocol) on the same 402, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.";
 
 /** initialize.serverInfo.websiteUrl */
 export const MCP_SERVER_WEBSITE = "https://agent402.tools";
@@ -503,7 +503,7 @@ export function mcpInitializeInstructions(baseUrl) {
   const install = mcpInstallHints(baseUrl);
   const hosted = install.hostedUrl;
   return [
-    "Agent402 is a deterministic tools layer for AI agents (Havok Holdings LLC) - the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP, or free via proof-of-work.",
+    "Agent402 is a tools and models layer for AI agents (Havok Holdings LLC) - the applied layer of Agentic Finance: deterministic utilities, a metered model gateway and finished reports, paid per request over x402 or MPP, or free via proof-of-work on the pure-CPU tools.",
     "Front door: call web.search or web.answer for live web search and cited answers.",
     "Also listed: web.news, browser.render, market.quote, audio.transcribe, memory.read, memory.write.",
     "Long catalog (500+ tools): call catalog.find with your task, or catalog.search then catalog.call.",

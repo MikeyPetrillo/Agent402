@@ -11,6 +11,13 @@ name: Verify the PUBLISHED npm packages against live prod
 # Read-only and free: it lists tools, resolves the catalog and reads public
 # surfaces. It never buys, so it can run on a schedule without spending. The
 # paid path stays the paid canary's job.
+# Least privilege: the default token on this repo is read-only, so a job that
+# opens an issue on failure needs issues: write spelled out (two alarms could
+# not page before 2026-08-28).
+permissions:
+  contents: read
+  issues: write
+
 on:
   workflow_dispatch:
   schedule:

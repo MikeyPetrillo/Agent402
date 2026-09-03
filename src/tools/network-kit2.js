@@ -184,35 +184,62 @@ const SECURITY_HEADERS = [
   { key: "x-content-type-options",     short: "XCTO", weight: 10 },
   { key: "referrer-policy",            short: "RP",   weight: 10 },
   { key: "permissions-policy",         short: "PP",   weight: 10 },
-  { key: "cross-origin-opener-policy", short: "COOP", weight: 5 },
-  { key: "cross-origin-resource-policy", short: "CORP", weight: 5 },
-  { key: "cross-origin-embedder-policy", short: "COEP", weight: 5 },
+  // The three cross-origin isolation headers are ADVISORY: COEP require-corp
+  // breaks third-party assets (Google Fonts included) and only matters for a
+  // site that needs cross-origin isolation, so their absence is a design
+  // choice, not a miss. Reported, never scored (score = the six above, scaled).
+  { key: "cross-origin-opener-policy", short: "COOP", weight: 0, advisory: true },
+  { key: "cross-origin-resource-policy", short: "CORP", weight: 0, advisory: true },
+  { key: "cross-origin-embedder-policy", short: "COEP", weight: 0, advisory: true },
 ];
+const SCORED_WEIGHT = SECURITY_HEADERS.reduce((a, d) => a + d.weight, 0);
+// A CSP that allows inline script protects against very little; scored as a
+// weak header (half its weight) and named in the warnings. Exported for tests.
+export function cspQuality(value) {
+  const v = String(value || "");
+  if (!v) return null;
+  const script = /script-src\s+([^;]+)/i.exec(v)?.[1] || /default-src\s+([^;]+)/i.exec(v)?.[1] || "";
+  const unsafeInline = /'unsafe-inline'/i.test(script) && !/'nonce-|'sha(256|384|512)-|'strict-dynamic'/i.test(script);
+  const unsafeEval = /'unsafe-eval'/i.test(script);
+  const wildcard = /(^|\s)\*(\s|$)/.test(script) || /https?:(\s|$)/i.test(script);
+  return { strict: !unsafeInline && !wildcard, unsafeInline, unsafeEval, wildcard, reportOnly: false };
+}
 
-function analyzeSecurity(headers) {
+export function analyzeSecurity(headers) {
   const findings = [];
   let score = 0;
+  const warnings = [];
   for (const def of SECURITY_HEADERS) {
     const v = headers[def.key];
     if (v) {
-      score += def.weight;
-      findings.push({ header: def.short, present: true, value: v });
+      let w = def.weight;
+      if (def.key === "content-security-policy") {
+        const q = cspQuality(v);
+        if (q && !q.strict) { w = Math.round(def.weight / 2); warnings.push(`CSP is present but ${q.unsafeInline ? "allows 'unsafe-inline' script" : "allows scripts from any host"}${q.unsafeEval ? " and 'unsafe-eval'" : ""} - it blocks little; use nonces or hashes (scored at half weight)`); }
+      }
+      score += w;
+      findings.push({ header: def.short, present: true, value: v, ...(def.advisory ? { advisory: true } : {}) });
     } else {
-      findings.push({ header: def.short, present: false, value: null });
+      findings.push({ header: def.short, present: false, value: null, ...(def.advisory ? { advisory: true, note: "advisory: only needed for cross-origin isolation; not scored" } : {}) });
     }
   }
+  if (!headers["content-security-policy"] && headers["content-security-policy-report-only"]) warnings.push("CSP is report-only (not enforced) - a fine first step; switch to Content-Security-Policy once the reports are clean");
+  score = Math.round((score / SCORED_WEIGHT) * 100);
   // Penalize a weak HSTS — under 6 months is widely considered too short to
   // protect against an active downgrade attack.
   const hsts = headers["strict-transport-security"];
-  const warnings = [];
   if (hsts) {
     const m = hsts.match(/max-age\s*=\s*(\d+)/i);
     const seconds = m ? parseInt(m[1], 10) : 0;
     if (seconds < 15552000) warnings.push("HSTS max-age is below 180 days (recommended ≥6mo)");
     if (!/includeSubDomains/i.test(hsts)) warnings.push("HSTS does not includeSubDomains");
   }
-  if (headers["server"]) warnings.push(`Server header leaks identity: ${headers["server"]}`);
-  if (headers["x-powered-by"]) warnings.push(`X-Powered-By leaks identity: ${headers["x-powered-by"]}`);
+  // Informational, not a finding: the platform is equally visible from the
+  // CNAME target and IP range, and an edge-injected Server header cannot be
+  // removed from app config anyway. X-Powered-By names the framework and
+  // version, which the app CAN remove.
+  if (headers["server"]) warnings.push(`info: Server header names the platform (${headers["server"]}); also visible from DNS, low value to hide`);
+  if (headers["x-powered-by"]) warnings.push(`X-Powered-By names the framework: ${headers["x-powered-by"]} (remove it in the app)`);
   return { score: Math.min(100, score), findings, warnings };
 }
 
@@ -327,7 +354,9 @@ const TECH_SIGNATURES = [
 ];
 
 function extractGenerator(html) {
-  const m = html.match(/<meta\s+[^>]*name=["']generator["'][^>]*content=["']([^"']+)["']/i);
+  // Two unbounded [^>]* runs backtrack against each other on a page with no
+  // closing ">" (1.7 s per 272 KB measured; the page is caller-chosen, 2 MB).
+  const m = html.match(/<meta\s+[^>]{0,1500}name=["']generator["'][^>]{0,1500}content=["']([^"']{1,300})["']/i);
   return m ? m[1].toLowerCase() : "";
 }
 
@@ -592,6 +621,7 @@ export const NETWORK_TOOLS2 = [
     route: "POST /api/asn-info",
     name: "ASN + IP geolocation",
     slug: "asn-info",
+    aliases: ["ip-geolocation", "geoip", "ip-lookup"],
     category: "network",
     price: "$0.003",
     description:

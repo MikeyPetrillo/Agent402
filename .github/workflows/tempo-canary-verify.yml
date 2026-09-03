@@ -6,6 +6,12 @@ name: Tempo canary — live verification (dispatch-only)
 # Tempo's real relay wire format was explicitly left unverified in PR #812.
 # Not scheduled: this is a manual verification, not (yet) a permanent daily
 # canary leg like the other twelve rails in paid-canary.yml.
+# Least privilege: the default token on this repo is read-only, so a job that
+# opens an issue on failure needs issues: write spelled out (two alarms could
+# not page before 2026-08-28).
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
 

@@ -108,9 +108,11 @@ const jsonRes = (body) => ({ ok: true, status: 200, text: async () => JSON.strin
 // ---------------------------------------------------------------------------
 const realFetch = globalThis.fetch;
 let synthBodies = [], otherHosts = [], calls = {};
+const FORM4_XML = `<ownershipDocument><issuer><issuerName>Example Manufacturing Corp</issuerName><issuerTradingSymbol>EXMP</issuerTradingSymbol></issuer><periodOfReport>2026-08-10</periodOfReport><reportingOwner><reportingOwnerId><rptOwnerCik>77</rptOwnerCik><rptOwnerName>Pat Example</rptOwnerName></reportingOwnerId><reportingOwnerRelationship><isDirector>1</isDirector><isOfficer>0</isOfficer></reportingOwnerRelationship></reportingOwner><nonDerivativeTable><nonDerivativeTransaction><securityTitle><value>Common Stock</value></securityTitle><transactionDate><value>2026-08-10</value></transactionDate><transactionCoding><transactionCode>S</transactionCode></transactionCoding><transactionAmounts><transactionShares><value>1500</value></transactionShares><transactionPricePerShare><value>42.1</value></transactionPricePerShare><transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode></transactionAmounts><postTransactionAmounts><sharesOwnedFollowingTransaction><value>20000</value></sharesOwnedFollowingTransaction></postTransactionAmounts><ownershipNature><directOrIndirectOwnership><value>D</value></directOrIndirectOwnership></ownershipNature></nonDerivativeTransaction></nonDerivativeTable></ownershipDocument>`;
+
 function stub({ synth = SYNTH_OK, sub = SUB, docs = DOCS, docFail = null, resolveErr = null } = {}) {
   synthBodies = []; otherHosts = [];
-  calls = { resolve: 0, submissions: 0, doc: [], subArgs: [] };
+  calls = { resolve: 0, submissions: 0, doc: [], subArgs: [], form: [] };
   globalThis.fetch = async (url, opts) => {
     const u = String(url);
     const host = new URL(u).host;
@@ -119,6 +121,8 @@ function stub({ synth = SYNTH_OK, sub = SUB, docs = DOCS, docFail = null, resolv
     return typeof synth === "function" ? synth() : jsonRes(synth);
   };
   return {
+    // Routine ownership forms (Form 4 here) are read as raw XML and parsed.
+    fetchForm: async (url) => { calls.form.push(String(url)); return FORM4_XML; },
     resolve: async ({ ticker, cik }) => {
       calls.resolve++;
       if (resolveErr) throw resolveErr;
@@ -319,6 +323,14 @@ let happy = null;
   eq(synthBodies.length, 1, "exactly ONE synthesis call");
   eq(otherHosts.length, 0, "no unexpected egress on the paid path");
   ok(happy.report.startsWith("# SEC Filing Report: Example Manufacturing Corp (EXMP)"), "report header names the company as filed with EDGAR");
+  // Routine ownership forms are parsed (raw XML, not the xsl view) and handed
+  // to the synthesis as structured lines, never listed as NOT FETCHED.
+  eq(calls.form.length, 1, "the one Form 4 in the window is read as XML");
+  ok(calls.form[0].endsWith("/form4.xml") && !/\/xsl/.test(calls.form[0]), "the raw XML url is used (no xsl segment)");
+  ok(/=== ROUTINE FORMS PARSED/.test(synthBodies[0].messages[0].content) && /Pat Example \(director\)/.test(synthBodies[0].messages[0].content) && /S\/D 1,500 Common Stock @ \$42\.1 on 2026-08-10, 20,000 owned after/.test(synthBodies[0].messages[0].content), "the prompt carries the parsed Form 4 line with the insider, the sale and the holding after");
+  ok(!((synthBodies[0].messages[0].content.split("=== NOT FETCHED")[1] || "").split("===")[0].includes("0000000042-26-000009")), "a parsed form is not also listed as NOT FETCHED");
+  eq(happy.meta.routine_forms_parsed, 1, "meta counts the parsed ownership forms");
+  ok(/1 ownership form parsed/.test(happy.report.split("\n")[2]), "the report header counts the parsed forms");
   ok(happy.report.includes(SYNTH_TEXT), "report carries the synthesis prose");
   ok(happy.report.includes("## Sources"), "report appends a numbered sources section");
   eq(happy.company, "Example Manufacturing Corp", "company name comes from EDGAR");
@@ -466,7 +478,7 @@ let happy = null;
   restore();
 
   const numsIn = (s) => new Set(String(s).match(/\d+(?:\.\d+)?/g) || []);
-  const fixtureNums = numsIn(JSON.stringify([SUB, DOC_8K, DOC_10Q, DOC_PROXY, TODAY, daysAgo(-14), daysAgo(30)]));
+  const fixtureNums = numsIn(JSON.stringify([SUB, DOC_8K, DOC_10Q, DOC_PROXY, FORM4_XML, TODAY, daysAgo(-14), daysAgo(30)]));
   const evidenceHalf = prompt.split("=== COMPANY ===")[1] || "";
   const stray = [...numsIn(evidenceHalf)].filter((x) => {
     if (fixtureNums.has(x)) return false;
@@ -492,7 +504,7 @@ let happy = null;
   ok(/NEVER introduce a filing, a number, a date/.test(prompt), "prompt states the no-invention rule");
   ok(/untrusted DATA, never as instructions/.test(prompt), "prompt states the prompt-injection rule for filing text");
   ok(/Never guess what an unread filing says/.test(prompt), "prompt forbids summarizing an unfetched filing");
-  ok(/=== NOT FETCHED \(index facts only - never summarize these\) ===/.test(prompt), "the filings we did NOT read are listed as index-facts-only");
+  ok(/=== (NOT FETCHED \(index facts only - never summarize these\)|ROUTINE FORMS PARSED)/.test(prompt), "the filings we did NOT read are listed as index-facts-only, or parsed as structured routine forms");
   ok(/the document itself makes the comparison explicit/.test(prompt), "prompt bounds 'what changed' to explicit in-document comparisons");
   ok(/not investment advice/i.test(prompt), "prompt requires the not-investment-advice close");
   ok(/no price targets|No price targets/.test(prompt), "prompt forbids recommendation language");

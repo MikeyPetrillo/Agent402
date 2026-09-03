@@ -193,6 +193,18 @@ export function isMeterable(req) {
  *
  * @returns {number|null} the metered USD amount, or null when not metered.
  */
+/** Put the upstream cost on a result for the route binder WITHOUT making it
+ *  serializable: non-enumerable, so `res.json` / `JSON.stringify` never emit
+ *  it - including when an in-process caller (route-execute, a skill pack, the
+ *  MCP loopback) nests the object inside its own response, which is where the
+ *  enumerable form leaked our exact OpenRouter bill (review 2026-08-27). Still
+ *  configurable, so applyMeteredSettlement's delete works unchanged. */
+export function setMeterSentinel(result, upstreamUsd) {
+  if (!result || typeof result !== "object" || typeof upstreamUsd !== "number") return result;
+  Object.defineProperty(result, "__meterUpstreamUsd", { value: upstreamUsd, enumerable: false, configurable: true, writable: true });
+  return result;
+}
+
 export function applyMeteredSettlement({ result, req, tool, res, enabled, setOverrides, log = console.warn }) {
   if (!result || typeof result !== "object" || typeof result.__meterUpstreamUsd === "undefined") return null;
   const upstream = result.__meterUpstreamUsd;

@@ -54,7 +54,7 @@ jobs:
         # step), and --ignore-scripts blocks dependency lifecycle scripts
         # entirely (audit R-07). @x402/* pinned to the server's protocol version
         # (src/payments.js runs 2.16), same posture as scripts/paid-canary.js.
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.16.0 @x402/avm@2.16.0
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.22.0 @x402/avm@2.22.0
 
       - name: Sweep the catalog on the Algorand rail
         id: sweep

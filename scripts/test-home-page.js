@@ -29,7 +29,7 @@ const catalog = {
   };
   const board = [
     { name: "Agent402.Tools", totalUsd: 900.5, callsSettled: 30000, uniqueBuyers: 300 },
-    { name: "BlockRun.AI", totalUsd: 21422.22932, callsSettled: 1127246, uniqueBuyers: 166 },
+    { name: "Seller-One.example", totalUsd: 21422.22932, callsSettled: 1127246, uniqueBuyers: 166 },
     { name: "agents.chain.link", totalUsd: 103.432, callsSettled: 9711, uniqueBuyers: 2 },
   ];
   const leaderboardSnapshot = { leaderboard: board, windowLabel: "7d", totalSellers: 824 };
@@ -42,7 +42,7 @@ const catalog = {
   ok(html.includes(">·<"), "a rail with zero recorded settlements renders as a dash placeholder, never a fabricated 0");
   ok(html.includes("69") && html.includes("settled over the MPP wire"), "MPP wire count renders");
   ok(html.includes(">41</strong> of 40,233 paid calls"), "router-share disclosure renders the real viaRouter/viaUSDC numbers");
-  ok(html.includes("BlockRun.AI") && html.includes("agents.chain.link"), "external leaderboard rows render");
+  ok(html.includes("Seller-One.example") && html.includes("agents.chain.link"), "external leaderboard rows render");
   ok(!html.slice(html.indexOf('$ GET /api/leaderboard'), html.indexOf('$ GET /api/bestsellers')).includes(">Agent402.Tools<"), "Agent402's own row is excluded from the index/leaderboard section");
 }
 
@@ -103,6 +103,7 @@ const catalog = {
   // stronger invariant now is its absence.
   ok(!/<script src="https?:\/\//.test(html), "homepage loads no third-party script (no CDN tags)");
   ok(html.includes('<script src="/js/home-hero.js">'), "homepage behavior script is first-party");
+  ok(html.includes("No account. No API key. No card on file.") && html.includes("Pay for any API call"), "hero leads with the one sentence: pay for any API call without an account, key or card on file");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

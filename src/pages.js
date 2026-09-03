@@ -1,6 +1,7 @@
 // Server-rendered catalogue pages and the OpenAPI spec — all generated from
 // the tool catalog so they never drift from what the API actually serves.
 import { isComputePayable } from "./pow.js";
+import { responseSchemaFor } from "./openapi-schema.js";
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chrome.js";
 import { SKILL_PACKS } from "./skills.js";
@@ -459,8 +460,8 @@ ${ledgerFooterCompact()}`;
 // contain simple inline HTML (links) — allowed in FAQPage and rendered as-is.
 const FAQ_ITEMS = [
   { q: "Do I need an account or API key?", a: 'No. Nothing here has a signup. Payment - USDC, proof-of-work, or a prepaid card-credits key you bought at <a href="/credits">/credits</a> - is the only credential, charged per call.' },
-  { q: "Can I pay by card instead of crypto?", a: 'Yes, three ways: buy a finished report at <a href="/reports">/reports</a> ($1, or $2 for the deepest three, refunded if it fails), subscribe to a monitor at <a href="/monitors">/monitors</a> ($3 a month, cancel anytime), or buy prepaid credits at <a href="/credits">/credits</a> and call any tool with <code>Authorization: Bearer a402_…</code> - debited only when a call succeeds. The card price includes payment processing; an agent paying per call over x402 or MPP pays the lower tool price for the same report.' },
-  { q: "What does it cost?", a: 'Flat per-call prices from $0.001. Most tools are $0.001–$0.02; premium AI and media tiers and multi-tool skill packs run higher, up to $1.50; finished report products are $0.20 to $1.10 per report ($1 to $2 by card at <a href="/reports">/reports</a>, where the price includes payment processing). Every price is published in <a href="/api/pricing">/api/pricing</a> and quoted exactly in every HTTP 402 response. No subscriptions, and nothing is token-metered.' },
+  { q: "Can I pay by card instead of crypto?", a: 'Yes, three ways: buy a finished report at <a href="/reports">/reports</a> ($2 to $5 by card, refunded if it fails), subscribe to a monitor at <a href="/monitors">/monitors</a> ($5 a month, cancel anytime), or buy prepaid credits at <a href="/credits">/credits</a> and call any tool with <code>Authorization: Bearer a402_…</code> - debited only when a call succeeds. The card price includes payment processing; an agent paying per call over x402 or MPP pays the lower tool price for the same report.' },
+  { q: "What does it cost?", a: 'Flat per-call prices from $0.001. Most tools are $0.001 to $0.02; premium AI and media tiers and multi-tool skill packs run higher, up to $1.50; finished report products are $0.60 to $2.00 per call for an agent per report ($1 to $2 by card at <a href="/reports">/reports</a>, where the price includes payment processing). Every price is published in <a href="/api/pricing">/api/pricing</a> and quoted exactly in every HTTP 402 response. No subscriptions. The metered model route (<code>/v1/metered</code>) quotes each request from its body before payment and settles what the call used, under that quote.' },
   { q: "Can I use it without any money or a wallet?", a: "Yes. Most pure-CPU tools accept proof-of-work - a sub-second sha256 puzzle solved by your own CPU - and the hosted MCP connector runs that same set for free (rate-limited)." },
   { q: "What is x402?", a: 'An open HTTP payment standard built on the 402 Payment Required status code, for machine-to-machine pay-per-call payments in stablecoins, with settlement infrastructure from Coinbase. Plain-English explainer: <a href="/what-is-x402">/what-is-x402</a>.' },
   { q: "What is MPP, and does Agent402 support it?", a: 'Yes - every paid endpoint is dual-stack, and now natively via Tempo too. MPP (Machine Payments Protocol, the IETF-track Payment HTTP authentication scheme) carries the pay-per-call handshake through the web&rsquo;s standard auth headers: the 402 carries a <code>WWW-Authenticate: Payment</code> challenge, the client pays via <code>Authorization: Payment</code>, and settled responses return a signed <code>Payment-Receipt</code>. Same URL, same price either way - MPP&rsquo;s evm method settles identically to x402 (same on-chain USDC settlement), while its tempo method settles natively via Tempo&rsquo;s own relay, a genuinely separate mechanism. How the two compare: <a href="/what-is-x402">/what-is-x402</a>; the full MPP explainer: <a href="/what-is-mpp">/what-is-mpp</a>.' },
@@ -551,7 +552,7 @@ export function openapiSpec(baseUrl, catalog) {
             [tool.mimeType ?? "application/json"]:
               tool.mimeType && tool.mimeType !== "application/json"
                 ? { schema: { type: "string", format: "binary" } }
-                : { schema: { type: "object" }, example: discovery?.output?.example ?? {} },
+                : { schema: responseSchemaFor(path, discovery?.output?.example), example: discovery?.output?.example ?? {} },
           },
         },
         402: { description: "Payment Required - x402 payment requirements in the response body/headers" },

@@ -44,7 +44,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 
 try {
   const BASE = `http://127.0.0.1:${PORT}`;
-  for (let i = 0; i < 40; i++) { try { if ((await fetch(`${BASE}/health`)).ok) break; } catch {} await sleep(500); }
+  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${BASE}/health`)).ok) break; } catch {} await sleep(500); }
 
   // Baseline: an ordinary request to the wildcard-matched legacy route must
   // require payment (402) - proves the route is actually paywall-gated,

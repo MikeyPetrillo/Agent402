@@ -1,0 +1,170 @@
+# Keep every catalog route listed in the settlement-driven indexes.
+#
+# CDP's own seller docs: "Resources that go 30 days without a settlement are
+# removed." That is not a registration failure, it is a cull, and it explains
+# what looked all night like a broken harvester: our oldest surviving listing
+# is dated exactly 30 days back, and 405 of 573 routes had simply aged out
+# because nothing had paid them inside the window. Fewer listings means less
+# discovery, which means fewer buyers, which means fewer settlements - the loop
+# tightens on itself.
+#
+# scripts/refresh-bazaar.js already had the remedy (MODE=sweep, "pay one tiny
+# settlement against every cheap route so settlement-driven indexes observe
+# them"). It was wired to workflow_dispatch only and had never run on a
+# schedule. This is that schedule; the script is unchanged.
+#
+# WEEKLY, not monthly, against a 30-day rule: four missed runs in a row still
+# leave the listings alive, so a broken week is not a cull.
+#
+# The money is close to circular - the CI burner pays OUR payTo, so face value
+# moves between our own wallets and the real cost is the facilitator's
+# settlement fee (CDP: 1,000/month free, then $0.001) plus sponsored gas.
+#
+# NOT entirely circular, and this is what sets the cadence. The ceiling is a
+# PROXY for upstream cost, never an exclusion: at $0.05 the pass also buys the
+# routes that bill a third party per call - the LLM tiers, images, tts,
+# transcribe, code-run (E2B), Brave-backed search, Blockscout (which we pay
+# $0.002 a call upstream), Alchemy, Neynar, and 12 skill packs whose STEPS
+# reach Brave even though the pack's own slug is not metered. Measured
+# 2026-08-31: 97 of the 472 swept routes touch a metered upstream. That spend
+# is real and it is why this runs WEEKLY rather than daily - the rule being
+# defended is 30 days without a settlement, so weekly already carries 4x
+# headroom and daily would buy nothing but 7x the upstream burn.
+#
+# Routes above the ceiling (101 of 573) stay unlisted on purpose: they are the
+# report products and premium tiers, where one sweep of a single $2 pack can
+# burn ~$1.20 upstream. They remain findable via the live 402.
+name: Bazaar keep-alive
+
+on:
+  schedule:
+    # TUESDAY 04:17 UTC, and only the PRICED routes the daily pass does not
+    # already cover (SKIP_UPSTREAM_FREE): 296 routes, ~$2.51 of face value.
+    # Re-buying the 177 free ones here would spend ~700 extra facilitator
+    # settlements a month against CDP's 1,000/month free tier for nothing.
+    # GitHub throttles schedules on a busy repo (measured 2026-08-30: a
+    # 15-minute cron delivered one run in 9.8 hours), which is exactly why the
+    # cadence keeps 4x headroom against the 30-day rule.
+    - cron: "17 4 * * 2"
+    # DAILY, zero-upstream only. The weekly pass above is bounded by PRICE,
+    # which is only a proxy for what a route costs us: 97 of its 472 routes
+    # bill a third party per call. This one is bounded by that actual question
+    # (UPSTREAM_FREE_ONLY), so it can run every day - 177 routes whose only
+    # cost is face value moving between our own wallets plus our own Railway
+    # volume for the memory tools. It keeps the majority of the catalog well
+    # inside the 30-day cull with no upstream burn at all.
+    - cron: "37 5 * * *"
+  workflow_dispatch:
+    inputs:
+      max_price_usd:
+        description: "Per-route ceiling. 0.01 covers 405 routes (~$1.18); 0.05 covers 472 (~$3.31)."
+        default: "0.05"
+      batches:
+        description: "Split the pass into N batches so no single run times out."
+        default: "4"
+      upstream_free_only:
+        description: "1 = only routes that cost nothing at a third party (177 routes, ~$0.86 face). The daily schedule sets this."
+        default: ""
+      skip_upstream_free:
+        description: "1 = skip what the daily pass already covers (296 priced routes). The Tuesday schedule sets this."
+        default: ""
+      min_price_usd:
+        description: "Price FLOOR. Set 0.05 with max_price_usd 999 to sweep only the expensive tail (101 routes, ~$35.45 face, ~$15-20 real upstream)."
+        default: "0"
+      stale_days:
+        description: "Only pay for listings older than N days (any settlement resets the clock, ours or a buyer's). Schedules use 21. 0 = sweep everything selected."
+        default: "21"
+      slug_prefix:
+        description: "Only slugs starting with this. 'skill-' with min_price_usd 0.05 sweeps the 63 packs (~$12.55 face)."
+        default: ""
+      max_spend_usd:
+        description: "PER-BATCH spend cap. Tail pass at 4 batches needs ~9."
+        default: "1"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: bazaar-keepalive
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      # Sequential: the batches share one burner wallet, and concurrent buys
+      # from one address race their own nonces.
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        batch: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+      - name: Install the x402 client
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.22.0 @x402/core@2.22.0 @x402/evm@2.22.0 viem@2.52.2
+      - name: Refresh settlements
+        env:
+          TARGET_URL: https://agent402.tools
+          MODE: sweep
+          PAY_NETWORK: base
+          MAX_PRICE_USD: ${{ inputs.max_price_usd || '0.05' }}
+          # The daily cron sweeps only what costs nothing upstream; the weekly
+          # one leaves this empty and sweeps everything under the ceiling.
+          UPSTREAM_FREE_ONLY: ${{ github.event.schedule == '37 5 * * *' && '1' || inputs.upstream_free_only }}
+          SKIP_UPSTREAM_FREE: ${{ github.event.schedule == '17 4 * * 2' && '1' || inputs.skip_upstream_free }}
+          MIN_PRICE_USD: ${{ inputs.min_price_usd || '0' }}
+          SLUG_PREFIX: ${{ inputs.slug_prefix }}
+          # 21 days against a 30-day cull: nine days of headroom, and a route a
+          # customer is actually buying costs us nothing to keep listed.
+          STALE_DAYS: ${{ inputs.stale_days || '21' }}
+          # PER BATCH, not per pass: the estimate is checked inside each batch,
+          # so a 4-batch tail pass needs roughly a quarter of its total here.
+          MAX_SPEND_USD: ${{ inputs.max_spend_usd || '1' }}
+          BATCH_COUNT: ${{ inputs.batches || '4' }}
+          BATCH_INDEX: ${{ matrix.batch }}
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY is not set - the keep-alive cannot pay, and listings will age out in 30 days"; exit 1; }
+          echo "::add-mask::$BURNER_KEY"
+          node scripts/refresh-bazaar.js
+
+  report:
+    needs: sweep
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Count our listings, and page if the sweep failed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SWEEP: ${{ needs.sweep.result }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          LISTED=$(node -e "
+            (async () => {
+              let n=0, offset=0;
+              for (let p=0;p<20;p++){
+                const r=await fetch(\`https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=1000&offset=\${offset}\`).catch(()=>null);
+                if(!r||!r.ok) break; const d=await r.json(); const items=d.items||d.resources||[]; if(!items.length) break;
+                n+=items.filter(i=>String(i.resource||'').includes('agent402.tools')).length;
+                if(items.length<1000) break; offset+=items.length;
+              }
+              console.log(n);
+            })()" 2>/dev/null || echo "?")
+          echo "agent402.tools listings after the sweep: $LISTED"
+          TITLE="Bazaar keep-alive FAILED - listings will age out"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "$SWEEP" != "success" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A Bazaar keep-alive pass did not complete (result: $SWEEP, trigger: ${GITHUB_EVENT_NAME}${SCHEDULE:+ $SCHEDULE}). CDP removes a resource after 30 days without a settlement, so a sustained failure silently delists the catalog - which is how 405 of 573 routes disappeared before 2026-08-31. Currently listed: $LISTED. Re-run: \`gh workflow run bazaar-keepalive.yml --ref main\`."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ). Listed: $LISTED."
+            fi
+          elif [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Keep-alive completed at $(date -u +%FT%TZ). Listed: $LISTED."
+          fi

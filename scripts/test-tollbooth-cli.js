@@ -103,10 +103,17 @@ ok(CLI_NETWORKS.base === "eip155:8453" && CLI_NETWORKS.polygon === "eip155:137" 
 }
 
 // ---- 2. the REAL CLI process, env only, no upstream ----
-const PORT = 40000 + Math.floor(Math.random() * 20000);
+// PORT=0: the OS picks a free port and the CLI's banner names it. The test used
+// to pick 40000-59999 at random, which sits INSIDE Linux's ephemeral range
+// (32768-60999), so any outbound socket on the runner could already hold the
+// number - the FIFTH occurrence (2026-08-27, run 33098814847) finally said so:
+// "http server error: EADDRINUSE listen EADDRINUSE: address already in use
+// :::42828", then "event loop drained ... listening=false". A bound listener
+// cannot drain the loop; a listener that never bound can, which is the shape
+// every earlier occurrence had and no earlier run recorded.
 child = spawn(process.execPath, ["--trace-exit", join(ROOT, "tollbooth/index.js")], {
   cwd: ROOT,
-  env: { PATH: process.env.PATH, PORT: String(PORT), TOLLBOOTH_PAYTO: PAYTO, TOLLBOOTH_FACILITATOR_URL: FAC, TOLLBOOTH_SECRET: SECRET, TOLLBOOTH_MODE: "all", TOLLBOOTH_PRICE: "$0.001", TOLLBOOTH_ADMIN_TOKEN: "t" },
+  env: { PATH: process.env.PATH, PORT: "0", TOLLBOOTH_PAYTO: PAYTO, TOLLBOOTH_FACILITATOR_URL: FAC, TOLLBOOTH_SECRET: SECRET, TOLLBOOTH_MODE: "all", TOLLBOOTH_PRICE: "$0.001", TOLLBOOTH_ADMIN_TOKEN: "t" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let cliLog = "";
@@ -120,10 +127,17 @@ child.on("exit", (code, signal) => { childExit = { code, signal }; });
 // at `exit`. Evidence is read at `close` now, so a fourth occurrence explains
 // itself: an explicit process.exit() prints its stack, a drained loop prints
 // nothing, and the two are finally distinguishable.
+// FOURTH occurrence 2026-08-27 (run 33095727469): banner printed, exit 0, no
+// signal, stdio drained, NO trace line - so it was a drained loop, not a
+// process.exit(). The CLI now logs on `beforeExit` (the hook that fires exactly
+// when the loop drains) with server.listening, its address and the live
+// resource list, and on the server's own `close`/`error` events, so a fifth
+// occurrence names which handle went away.
 let childClosed = false;
 child.on("close", () => { childClosed = true; });
 const drained = async (ms = 3000) => { const t = Date.now() + ms; while (!childClosed && Date.now() < t) await new Promise((r) => setTimeout(r, 50)); };
-const B = `http://127.0.0.1:${PORT}`;
+let PORT = 0; // learned from the banner below
+let B = "";
 // SECOND OCCURRENCE 2026-08-22 (CI only, never locally): the child printed its
 // boot banner - so `app.listen` had already called back - and then EXITED code=0
 // with no signal, before the first stats fetch landed. A listening server keeps
@@ -140,6 +154,11 @@ const B = `http://127.0.0.1:${PORT}`;
 let ready = false;
 const deadline = Date.now() + 30_000;
 while (Date.now() < deadline && !childExit) {
+  if (!PORT) {
+    const m = cliLog.match(/listening on :(\d+)/);
+    if (m) { PORT = Number(m[1]); B = `http://127.0.0.1:${PORT}`; }
+    else { await new Promise((r) => setTimeout(r, 100)); continue; }
+  }
   try { await fetch(`${B}/__tollbooth/stats`); ready = true; break; } catch { await new Promise((r) => setTimeout(r, 100)); }
 }
 if (childExit) await drained();

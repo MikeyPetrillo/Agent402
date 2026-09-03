@@ -28,7 +28,7 @@ import { IMAGE_TOOLS } from "../src/tools/image-kit.js";
 import { KIT2 } from "../src/tools/kit2.js";
 import { DATA_TOOLS } from "../src/tools/data-kit.js";
 import { CHAIN_TOOLS } from "../src/tools/chain-kit.js";
-import { TOOLS as CANARY_LEGS } from "./paid-canary.js";
+import { TOOLS as CANARY_LEGS, shouldPageUpstreamLeg } from "./paid-canary.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -118,13 +118,12 @@ if (oc) {
 // our `provider.max_price` bound admits a $0-priced endpoint (if it refused the
 // bound, every call would 502), and that the stealth model is still listed at
 // all. When the preview ends, this leg is the alarm.
-const ox = legFor("/v1/ox/chat/completions");
-ok(!!ox, "canary has an Ox Alpha leg (a real buy on the free-upstream tier)");
-if (ox) {
-  ok(ox.priceUsd === 0.002, `ox leg priceUsd (${ox.priceUsd}) matches the advertised $0.002`);
-  ok(!("model" in (ox.body || {})), "ox leg sends NO model: the route locks it, and sending one is a 400");
-  ok((ox.body?.max_tokens || 0) >= 1024, `ox leg budget (${ox.body?.max_tokens}) clears the reasoning floor, so an empty answer means a real failure`);
-}
+// Ox Alpha: the stealth upstream model left OpenRouter's catalog (the route
+// answers 503 "no longer served" and drops from /v1/models), so the canary
+// carries NO leg for it any more - a leg that can only warn is noise, and
+// its 2026-08-27 warning was one of five nobody read. Retiring the route
+// itself (OX_ALPHA_ENABLED=off) is a Railway variable, Mike's call.
+ok(!legFor("/v1/ox/chat/completions"), "no Ox Alpha leg while the stealth model is gone upstream");
 
 // The render leg is the only one that exercises the secretless browser/media
 // worker (F02/F04/F06) on the paid path — lock it so it can't silently drop.
@@ -152,6 +151,20 @@ if (rn) {
     const q = meteredQuoteUsd(leg.body);
     ok(!q.invalid && q.usd === leg.priceUsd, `llm-metered leg priceUsd ($${leg.priceUsd}) equals the kit's quote for its own body ($${q.usd})`);
     ok(leg.priceUsd > TIERS["v1-chat-metered"].price, "the leg's body quotes ABOVE the floor, so a quote collapsing to the floor is visible as a price change");
+  }
+  const { meteredMessagesQuoteUsd } = await import("../src/tools/llm-messages-kit.js");
+  const mleg = CANARY_LEGS.find((l) => l.kit === "llm-metered-messages");
+  ok(!!mleg && mleg.path === "/v1/metered/messages", "canary has an llm-metered-messages leg on the metered Messages route");
+  if (mleg) {
+    const q = meteredMessagesQuoteUsd(mleg.body);
+    ok(!q.invalid && q.usd === mleg.priceUsd && mleg.priceUsd > TIERS["v1-chat-metered"].price, `llm-metered-messages leg priceUsd ($${mleg.priceUsd}) equals the Messages quote for its body ($${q.usd}) and sits above the floor`);
+  }
+  const { meteredResponsesQuoteUsd } = await import("../src/tools/llm-responses-kit.js");
+  const rleg = CANARY_LEGS.find((l) => l.kit === "llm-metered-responses");
+  ok(!!rleg && rleg.path === "/v1/metered/responses", "canary has an llm-metered-responses leg on the metered Responses route");
+  if (rleg) {
+    const q = meteredResponsesQuoteUsd(rleg.body);
+    ok(!q.invalid && q.usd === rleg.priceUsd && rleg.priceUsd > TIERS["v1-chat-metered"].price, `llm-metered-responses leg priceUsd ($${rleg.priceUsd}) equals the Responses quote for its body ($${q.usd}) and sits above the floor`);
   }
 }
 
@@ -275,6 +288,23 @@ if (rn) {
   const partialBlock = wf.match(/partial-rail\)[\s\S]*?;;/);
   ok(partialBlock && !/could not complete a real USDC purchase/.test(partialBlock[0]),
     "partial-rail detail must not claim buying could not complete a USDC purchase");
+}
+
+// Supply-chain (Blockscout upstream) leg: a consecutive-failure rule, so a
+// third of runs failing (2026-08) pages while a single blip still does not.
+{
+  ok(shouldPageUpstreamLeg({ ok: true, recentOk: [false, false, false] }) === false, "a run that settled never pages, whatever came before");
+  ok(shouldPageUpstreamLeg({ ok: false, recentOk: [false, false, true] }) === true, "this run + two prior failures = three consecutive -> page");
+  ok(shouldPageUpstreamLeg({ ok: false, recentOk: [false, true, false] }) === false, "a success inside the window breaks the streak");
+  ok(shouldPageUpstreamLeg({ ok: false, recentOk: [false] }) === false, "too few prior observations never page (missing evidence is not evidence)");
+  ok(shouldPageUpstreamLeg({ ok: false, recentOk: null }) === false, "status unreachable never pages");
+  ok(shouldPageUpstreamLeg({ ok: false, recentOk: [], pageAfter: 1 }) === true, "pageAfter=1 pages on this run alone");
+  const canarySrc2 = readFileSync(join(ROOT, "scripts", "paid-canary.js"), "utf8");
+  ok(/noteRail\("supply-chain"/.test(canarySrc2) && /railFail\("supply-chain"/.test(canarySrc2) && /rail_supply-chain/.test(canarySrc2),
+    "the canary records the supply-chain leg on /status and pages it through railFail");
+  const statusSrc = readFileSync(join(ROOT, "src", "status.js"), "utf8");
+  ok(/key: "rail_supply-chain"/.test(statusSrc) && /recentOk/.test(statusSrc),
+    "status.js carries the rail_supply-chain component and exposes recentOk for the rule");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

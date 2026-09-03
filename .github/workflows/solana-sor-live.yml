@@ -1,0 +1,58 @@
+name: Solana SOR live proof
+
+# Proves the Solana spending wallet end to end with real money: the canary
+# burner pays production on Solana for a task that resolves to an external
+# Solana seller, and route-and-execute pays that seller from
+# SOLANA_UPSTREAM_BUYER_KEY's wallet. Dispatch-only.
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "Task text (default: api v1 exa search - ranks blockrun's Solana exa route)"
+        required: false
+        default: ""
+      expect_text:
+        description: "Substring the delivered payload must contain (default: results)"
+        required: false
+        default: ""
+      params:
+        description: "JSON params forwarded to the resolved seller (default: {\"query\":\"bitcoin\"})"
+        required: false
+        default: ""
+      route:
+        description: "/api/route/execute (cap $0.005) or /api/route/execute-plus (cap $0.04, the default)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v5.0.0
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - name: Pay production on Solana for an externally-routed task
+        env:
+          SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+          TASK: ${{ github.event.inputs.task }}
+          EXPECT_TEXT: ${{ github.event.inputs.expect_text }}
+          PARAMS: ${{ github.event.inputs.params }}
+          ROUTE: ${{ github.event.inputs.route }}
+        run: |
+          [ -n "$SOLANA_BURNER_KEY" ] || { echo "::error::SOLANA_BURNER_KEY secret missing"; exit 1; }
+          echo "::add-mask::$SOLANA_BURNER_KEY"; [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
+          node scripts/solana-sor-live.js
+      - name: Keep the real response for the announcement card
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: solana-sor-response
+          path: solana-sor-response.json
+          if-no-files-found: ignore

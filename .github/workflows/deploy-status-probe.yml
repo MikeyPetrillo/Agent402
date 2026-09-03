@@ -1,0 +1,159 @@
+# Deploy the Cloudflare status Worker, and notice when nobody has.
+#
+# The Worker is the independent observer /status is built from - it runs on
+# separate infra precisely so it does not share a failure mode with production
+# or with GitHub Actions. But nothing ever DEPLOYED it: CI tested
+# workers/status-probe on every push and no step shipped it, so on 2026-08-30
+# the live code was from 2026-07-29 with three merged commits sitting behind
+# it, including the credential narrowing that was the point of the work. Same
+# class as the five undeployed PRs of 2026-08-11: merged is not deployed.
+#
+# Deliberately its own workflow rather than another job in deploy.yml. That
+# file's lanes are named in the "protect main" ruleset as required checks, and
+# a Worker deploy has no business gating a merge of unrelated code.
+name: Deploy status probe worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "workers/status-probe/**"
+      - ".github/workflows/deploy-status-probe.yml"
+  workflow_dispatch:
+  schedule:
+    # Daily drift check: ask the RUNNING Worker what build it is and compare
+    # with the newest commit that touched it. A deploy trigger fixes the
+    # instance; this catches the class (a path filter that quietly stops
+    # matching, a failed deploy nobody read, a hand-edit in the dashboard).
+    - cron: "41 6 * * *"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: status-probe-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+
+      # No token, no silent pass. A deploy that quietly does nothing is exactly
+      # how the Worker fell a month behind in the first place.
+      - name: Refuse to pretend without a token
+        env:
+          CF: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CF" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not set - the status Worker CANNOT be deployed."
+            echo "Mint one at https://dash.cloudflare.com/profile/api-tokens with Account -> Workers Scripts: Edit,"
+            echo "then: gh secret set CLOUDFLARE_API_TOKEN --repo \$GITHUB_REPOSITORY"
+            exit 1
+          fi
+
+      - name: Deploy
+        working-directory: workers/status-probe
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # Pinned so the API token needs ONE permission (Workers Scripts:
+          # Edit) and not also Account Settings: Read. wrangler.toml carries no
+          # account_id, so without this wrangler resolves the account by
+          # LISTING accounts, which is a second permission on the credential
+          # purely to answer a question we already know the answer to.
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        # --var MERGES with the [vars] block (verified against wrangler 4.127.1,
+        # dry-run: PROD survives alongside BUILD_SHA), so the injected sha does
+        # not clobber the configured PROD origin.
+        run: npx --yes wrangler@4 deploy --var BUILD_SHA:"$GITHUB_SHA"
+
+      # Prove the deploy with the running system, not with the deploy's own exit
+      # code: drive the real Worker against real production and require that the
+      # observation actually landed. This is the only step that can tell a
+      # successful upload from a working observer.
+      - name: Verify the deployed Worker against live production
+        env:
+          PROBE: ${{ secrets.STATUS_PROBE_TOKEN }}
+          WORKER: ${{ vars.STATUS_PROBE_WORKER_URL }}
+        run: |
+          [ -n "$WORKER" ] || { echo "::error::repo variable STATUS_PROBE_WORKER_URL is not set"; exit 1; }
+          [ -n "$PROBE" ] || { echo "::error::secret STATUS_PROBE_TOKEN is not set"; exit 1; }
+          # Cloudflare propagates a new version to the edge with a short lag, so
+          # a single read right after `wrangler deploy` can still be answered by
+          # the previous one. Measured on the first real run of this workflow:
+          # the check read the prior build 0.2s after a successful deploy and
+          # failed the run. Poll instead - and keep failing if it never arrives,
+          # because "deployed but not serving" is exactly what this exists to catch.
+          BUILD=""
+          for i in $(seq 1 20); do
+            BUILD=$(curl -sf --max-time 20 "$WORKER/version" | jq -r '.build // "unknown"' || echo unreadable)
+            [ "$BUILD" = "$GITHUB_SHA" ] && break
+            echo "  edge still serving $BUILD, waiting (${i}/20)"
+            sleep 6
+          done
+          echo "deployed build: $BUILD (expected ${GITHUB_SHA})"
+          [ "$BUILD" = "$GITHUB_SHA" ] || { echo "::error::after 2 minutes the Worker still reports build $BUILD, not $GITHUB_SHA"; exit 1; }
+          OUT=$(curl -sf --max-time 90 -X POST -H "X-Operator-Token: $PROBE" "$WORKER/run")
+          echo "$OUT" | jq -e '.ok == true and .recorded == true' >/dev/null \
+            || { echo "::error::the deployed Worker did not record an observation: $OUT"; exit 1; }
+          echo "verified: it probed production and the observation landed"
+
+  drift:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Is the deployed Worker the code on main?
+        id: check
+        env:
+          WORKER: ${{ vars.STATUS_PROBE_WORKER_URL }}
+        run: |
+          [ -n "$WORKER" ] || { echo "state=unknown" >> "$GITHUB_OUTPUT"; echo "no worker URL configured"; exit 0; }
+          BUILD=$(curl -sf --max-time 20 "$WORKER/version" | jq -r '.build // "unknown"' || echo unreadable)
+          WANT=$(git log -1 --format=%H -- workers/status-probe/)
+          echo "deployed=$BUILD want=$WANT"
+          # An unreadable Worker is the /status observer being down, which the
+          # heartbeat already covers; it is not deploy drift, so say unknown.
+          if [ "$BUILD" = "unknown" ] || [ "$BUILD" = "unreadable" ] || [ -z "$BUILD" ]; then
+            echo "state=unknown" >> "$GITHUB_OUTPUT"
+          elif git merge-base --is-ancestor "$WANT" "$BUILD" 2>/dev/null; then
+            echo "state=current" >> "$GITHUB_OUTPUT"
+          else
+            echo "state=stale" >> "$GITHUB_OUTPUT"
+            { echo "deployed=$BUILD"; echo "want=$WANT"; } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Page on drift
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE: ${{ steps.check.outputs.state }}
+          DEPLOYED: ${{ steps.check.outputs.deployed }}
+          WANT: ${{ steps.check.outputs.want }}
+        run: |
+          TITLE="Status probe Worker is NOT the code on main"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "$STATE" = "stale" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Cloudflare status Worker is serving build \`$DEPLOYED\`, which does not contain \`$WANT\` - the newest commit touching \`workers/status-probe/\`.
+
+          That Worker is the independent observer /status is built from, and it holds the probe credential. A stale one keeps reporting cheerfully, so this drift is silent by nature: it went unnoticed from 2026-07-29 to 2026-08-30.
+
+          Fix: \`gh workflow run deploy-status-probe.yml --ref main\`, or from a checkout with wrangler logged in, \`cd workers/status-probe && npx wrangler deploy\`. Then check why the push trigger did not fire - the \`paths:\` filter on this workflow is the usual suspect."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still stale at $(date -u +%FT%TZ): deployed $DEPLOYED, want $WANT."
+            fi
+          elif [ "$STATE" = "current" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Deployed Worker now contains the newest commit at $(date -u +%FT%TZ)."
+          fi

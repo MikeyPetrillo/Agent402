@@ -105,7 +105,7 @@ const TOPN = [
 // intent-pack out of the top slot.
 const PACK_TOP1 = [
   ["scrape a website",              "structured-scrape"],
-  ["decode a JWT",                  "decode-blob"],
+  ["decode a JWT",                  "jwt-toolkit"],
   ["convert anything to markdown",  "any-to-markdown"],
   ["trip planning",                 "trip-planner"],
   ["investment decision",           "macro-context"],

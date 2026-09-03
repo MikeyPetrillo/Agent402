@@ -8,6 +8,12 @@ name: Fund the Tempo subscription gas sponsor (dispatch-only)
 # real to budget and the send fails before it is even built.
 #
 # DRY RUN by default, like refund.yml. Set live=true to actually send.
+# Least privilege: the default token on this repo is read-only, so a job that
+# opens an issue on failure needs issues: write spelled out (two alarms could
+# not page before 2026-08-28).
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:
@@ -34,6 +40,10 @@ concurrency:
 
 jobs:
   fund:
+    # Money moves out of a spending wallet on dispatch: the `spending` GitHub
+    # environment requires the operator's approval click before this job runs
+    # (write access alone used to be enough). Scheduled canaries stay ungated.
+    environment: spending
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

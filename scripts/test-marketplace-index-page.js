@@ -63,13 +63,13 @@ function chainCard(html, slug) {
 
 // --- no hardcoded third-party company descriptions --------------------------
 // The design source's own JS hand-authored blurbs for 6 named companies
-// (BlockRun.AI, StableEnrich, etc.) - contradicts its own "Crawled, not
+// (real third-party sellers) - contradicts its own "Crawled, not
 // curated" copy, and no such field exists in the real crawled seller data.
 // Lock that none of those names ever appear (a symptom of the hardcoded
 // table leaking back in) unless a fixture seller happens to share the name.
 {
   const html = marketPage(null, BASE_URL, { snapshot: { sellers: [LOCAL] }, leaderboardSnap: { leaderboard: [] } });
-  ok(!html.includes("Routing and payment layer for AI"), "no hardcoded third-party seller blurb (BlockRun.AI's design copy) leaked in");
+  ok(!html.includes("Routing and payment layer for AI"), "no hardcoded third-party seller blurb (a real seller's design copy) leaked in");
   ok(!html.includes("Company and contact enrichment for agents"), "no hardcoded third-party seller blurb (StableEnrich's design copy) leaked in");
   ok(html.includes("Crawled, not curated"), "the methodology section states the real discovery model");
 }
@@ -128,6 +128,49 @@ function chainCard(html, slug) {
 {
   const html = marketPage(null, BASE_URL, { snapshot: { sellers: [LOCAL] }, leaderboardSnap: { leaderboard: [] } });
   ok(!html.includes("—"), "no em dashes anywhere in the new page copy");
+}
+
+
+// --- the host's own entry (2026-08-28): a labelled card outside the roster, never counted ---
+{
+  const sellers = [
+    { origin: "https://agent402.tools", local: true, displayName: "Agent402", homepage: BASE_URL, toolCount: 560, networks: [], tools: [] },
+    { origin: "https://a.example", displayName: "A", homepage: "https://a.example", toolCount: 3, networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": "0xaaa" }, routable: true },
+  ];
+  const HOSTF = { baseUrl: BASE_URL, toolCount: 560, recordingSince: "2026-06-15T00:00:00.000Z", external30d: { settlements: 109, buyers: 7, tools: 21 }, externalAllTime: { settlements: 3945, buyers: 250, tools: 105 } };
+  const without = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] } });
+  const withHost = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] }, host: HOSTF });
+  ok(!without.includes("data-host-card") && withHost.includes("data-host-card"), "host card renders only when host figures are supplied");
+  ok(withHost.includes("NOT RANKED, NOT COUNTED") && withHost.includes(">109<") && withHost.includes(">250<"), "host card carries the external-only 30d and all-time figures");
+  ok(withHost.includes("canary and volume runs are excluded"), "host card states that our own runs are excluded");
+  const count = (h) => (h.match(/SELLERS LISTED<\/div><div[^>]*>([0-9,]+)/) || [])[1];
+  ok(count(without) === count(withHost), `the SELLERS LISTED count is identical with and without the host card (${count(without)} vs ${count(withHost)})`);
+  ok(withHost.indexOf("data-host-card") < withHost.indexOf('class="mfb"'), "host card sits above the roster filter bar and rows, not inside them");
+  // per-rail card on a chain page (2026-08-28): the same card, that rail's outside buyers only
+  const HOSTB = { ...HOSTF, network: "base", networkLabel: "Base", external30d: { settlements: 41, buyers: 5, tools: null }, externalAllTime: { settlements: 900, buyers: 90, tools: null } };
+  const chainWith = marketPage("base", BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] }, host: HOSTB });
+  const chainWithout = marketPage("base", BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] } });
+  ok(chainWith.includes("data-host-card") && chainWith.includes("outside buyers on Base only") && chainWith.includes(">41<") && chainWith.includes(">900<"), "a chain page carries the host card with THAT rail's outside-buyer figures");
+  ok(!chainWithout.includes("data-host-card"), "a chain page without host figures renders no card");
+  ok(count(chainWithout) === count(chainWith), "the chain page's seller count is unchanged by the host card");
+}
+
+// --- dispatch legend + badge (2026-09-02) ------------------------------------
+{
+  const sellers = [
+    LOCAL,
+    { origin: "https://a.example", displayName: "Eligible Co", homepage: "https://a.example", local: false, toolCount: 5, routable: true, networks: ["eip155:8453"], routerDispatchEligible: true, routerDispatchReason: "eligible" },
+    { origin: "https://b.example", displayName: "NoNet Co", homepage: "https://b.example", local: false, toolCount: 3, routable: true, networks: [], routerDispatchEligible: false, routerDispatchReason: "network_unknown" },
+    { origin: "https://c.example", displayName: "Unlabelled Co", homepage: "https://c.example", local: false, toolCount: 2, routable: true, networks: ["eip155:8453"] },
+  ];
+  const html = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] } });
+  ok(/mfb-legend/.test(html) && /the last crawl of the origin succeeded, nothing more/.test(html) && /routerDispatchReason/.test(html), "the roster carries a legend saying healthy is crawl readiness and naming the API field");
+  ok(/Eligible Co[\s\S]{0,600}class="mlr-dispatch" title="the router will pay/.test(html), "an eligible seller shows the dispatch badge");
+  ok(/NoNet Co[\s\S]{0,600}class="mlr-dispatch off"[^>]*>no dispatch &middot; network unknown</.test(html), "a non-eligible seller shows the reason in words");
+  const unl = html.slice(html.indexOf("Unlabelled Co"), html.indexOf("Unlabelled Co") + 900);
+  ok(!/mlr-dispatch/.test(unl), "a seller the handler did not label gets NO badge (never a guessed one)");
+  const loc = html.slice(html.indexOf("THIS HOST") - 400, html.indexOf("THIS HOST") + 400);
+  ok(!/mlr-dispatch/.test(loc), "the host's own row carries no dispatch badge");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 // The thing that totals up what we spend must be cheap, safe and honest.
 //
 //   node scripts/test-egress-meter.js          (offline)
@@ -174,5 +175,13 @@ export async function fetchAtDepth(url, depth) {
     `names the package when no app frame exists (got ${orphan ? orphan.callers.join(",") : "no row"})`);
 }
 
+
+// The two global fetch wrappers are plumbing, not callers (2026-09-02: the
+// Alchemy row read "drain-abort.js" within an hour of that wrapper shipping).
+{
+  const src = readFileSync(new URL("../src/egress-meter.js", import.meta.url), "utf8");
+  const line = src.split("\n").find((l) => l.startsWith("const PLUMBING = /")) || "";
+  ok(line.includes("drain-abort") && line.includes("facilitator-diagnostics"), "PLUMBING skips the drain-aware and facilitator-diagnostics fetch wrappers");
+}
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

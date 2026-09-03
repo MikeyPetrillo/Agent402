@@ -21,13 +21,13 @@ const CHAINS = {
   polygon: {
     chainId: 137,
     usdc: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
-    rpcs: ["https://polygon-rpc.com", "https://polygon.llamarpc.com", "https://polygon.drpc.org"],
+    rpcs: ["https://polygon-rpc.com", "https://polygon.drpc.org"],
     caip2: "eip155:137",
   },
   arbitrum: {
     chainId: 42161,
     usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-    rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum.llamarpc.com", "https://arbitrum.drpc.org"],
+    rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum.drpc.org"],
     caip2: "eip155:42161",
   },
 };

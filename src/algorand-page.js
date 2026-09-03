@@ -11,6 +11,6 @@ export const algorandSellers = (snapshot) => marketSellers("algorand", snapshot)
 export const algorandTools = (snapshot) => marketTools("algorand", snapshot);
 export const algorandActivityHtml = (activity, selected) => marketActivityHtml("algorand", activity, selected);
 
-export function algorandPage(baseUrl, { snapshot, rail, activity, selectedSeller, algorandWallet } = {}) {
-  return marketPage("algorand", baseUrl, { snapshot, rail, activity, selectedSeller, wallet: algorandWallet });
+export function algorandPage(baseUrl, { snapshot, rail, activity, selectedSeller, algorandWallet, host = null } = {}) {
+  return marketPage("algorand", baseUrl, { snapshot, rail, activity, selectedSeller, wallet: algorandWallet, host });
 }

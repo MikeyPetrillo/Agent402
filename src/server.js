@@ -10,6 +10,13 @@ import { createGzip } from "node:zlib";
 import { setGlobalDispatcher, Agent as UndiciAgent } from "undici";
 dns.setDefaultResultOrder("ipv4first");
 setGlobalDispatcher(new UndiciAgent({ connect: { family: 4 } }));
+// The event loop is watched for the life of the process (started in
+// boot-profile.js, the first import, because ES imports hoist and a monitor
+// started here cannot see the boot it is meant to measure). A CONNECT timeout
+// is a TIMER firing, so a blocked loop is indistinguishable from an unreachable
+// upstream - which is what seven CDP verify failures looked like on 2026-08-30
+// while CDP answered from outside in 15-37 ms. See src/loop-lag.js.
+import { loopLagStatus } from "./loop-lag.js";
 import express from "express";
 import compression from "compression";
 import { readFileSync } from "node:fs";
@@ -25,15 +32,26 @@ import {
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
 import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf, paymentIdentifierOf } from "./payer.js";
-import { compositeGuardBlocked, compositeGuardGlobalPaused, recordCompositeSpendFailure, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, _compositeGuardState, compositeUsageSnapshot } from "./composite-spend-guard.js";
+import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort } from "./drain-abort.js";
+import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot } from "./solana-leaderboard.js";
+import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
+import { compositeGuardBlocked, compositeGuardGlobalPaused, recordCompositeSpendFailure, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
 // Single-upstream-call routes that run long (40 s+): EVM exact only, like the
 // composites (settle-after on SVM/AVM/Tempo is work done, never charged), but
 // not composite-spend-guarded (one bounded upstream price).
 import Stripe from "stripe";
-import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS } from "./human-checkout.js";
+import { REPORT_TIERS } from "./report-tiers.js";
+import { verifyHintMiddleware } from "./verify-hint.js";
+import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accepts.js";
+import { mountShortlinks } from "./shortlinks.js";
+import { withHouseStyle } from "./house-style.js";
+import { createHumanCheckout, humanCheckoutEnabled, HUMAN_PRODUCTS, reportHeadline, readPublicReport } from "./human-checkout.js";
 import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
 import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
+import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
+import { backfillBrokenPackRefunds } from "./refund-backfill.js";
+import { mppFallbackStatus } from "./mpp-fallback.js";
 import { meteredUsd, isMeterable, applyMeteredSettlement } from "./gateway-meter.js";
 import { handlerInputOf } from "./handler-input.js";
 import { setSettlementOverrides } from "@x402/express";
@@ -55,7 +73,7 @@ function quotedPriceUsd(def, req) {
   if (Number.isFinite(req.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0) return req.__meteredQuoteUsd;
   try {
     // Quote the object the handler will be SERVED, never the raw body.
-    const q = Number(def.quote(handlerInputOf(req)));
+    const q = Number(def.quote(handlerInputOf(req, def)));
     if (Number.isFinite(q) && q > 0) { req.__meteredQuoteUsd = q; return q; }
     return flat;
   } catch { return flat; }
@@ -109,7 +127,7 @@ import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { baseNotificationsEnabled } from "./base-notifications.js";
 import { initSentry, captureToolError, sentryEnabled } from "./sentry.js";
-import { initPostHog, capturePostHogToolError, capturePostHogToolCall, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, shutdownPostHog, posthogEnabled } from "./posthog.js";
+import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage, operatorLoginPage } from "./operator.js";
 import { privacyPage } from "./privacy.js";
@@ -121,6 +139,23 @@ import { whatIsX402Page } from "./what-is-x402.js";
 import { whatIsMppPage } from "./what-is-mpp.js";
 import { agenticFinancePage } from "./agentic-finance.js";
 import { whyPage } from "./why.js";
+import { securityPage } from "./security-page.js";
+import { companyPage } from "./company.js";
+import { sampleJson, sampleMeta, SAMPLE_PRODUCTS } from "./sample-reports.js";
+import { createFreeAlerts, alertFormHtml, ALERT_KIND_FOR_REPORT_KIND } from "./free-alerts.js";
+import { createWalletDigest } from "./wallet-digest.js";
+import { digestPage } from "./digest-page.js";
+import { createFollowups } from "./followups.js";
+import { monitorForKind as fuMonitorForKind } from "./report-upgrade.js";
+import { SAMPLES as fuSamples } from "./sample-reports.js";
+import { probeInsiderFilings as faProbeInsider } from "./tools/insider-flow-kit.js";
+import { probeCompanyFilings as faProbeFilings } from "./tools/filing-watch-kit.js";
+import { latest13fFiling as faLatest13f, resolveManager as faResolveManager } from "./tools/edgar-kit.js";
+import { probeDomain as faProbeDomain } from "./tools/domain-audit-kit.js";
+import { probeRecalls as faProbeRecalls } from "./tools/recall-report-kit.js";
+import { sendEmail as faSendEmail } from "./email.js";
+import { marketsPage } from "./markets.js";
+import { proofPage } from "./proof.js";
 import { glossaryPage } from "./glossary.js";
 import { x402101Page } from "./x402-101.js";
 import { aifiCardSvg } from "./aifi-card.js";
@@ -140,7 +175,7 @@ import { tempoSelfRecipient } from "./mpp-tempo.js";
 import { mppMarketPage } from "./mpp-market-page.js";
 import { indexToolsPage, INDEX_TOOLS_PAGE_SIZE } from "./index-tools-page.js";
 import { getLeaderboardSnapshot, startLeaderboardRefresh, leaderboardPage, rankBy } from "./leaderboard.js";
-import { buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, facilitatorSupportReport } from "./payments.js";
+import { buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, facilitatorSupportReport, setComputePayablePaths } from "./payments.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader } from "./mpp-tempo.js";
 import { createStripeChallengeAppender, createStripeGate, stripeTxFromReceiptHeader } from "./mpp-stripe.js";
@@ -218,9 +253,9 @@ import { VALIDATION_TOOLS } from "./tools/validation-kit.js";
 import { CRYPTO_HASH_TOOLS } from "./tools/crypto-hash-kit.js";
 import { CALENDAR_TOOLS } from "./tools/calendar-kit.js";
 import { LLM_TOOLS } from "./tools/llm-kit.js";
-import { LLM_MESSAGES_TOOLS } from "./tools/llm-messages-kit.js";
+import { LLM_MESSAGES_TOOLS, MESSAGES_PATH_BY_TIER } from "./tools/llm-messages-kit.js";
 import { LLM_RESPONSES_TOOLS } from "./tools/llm-responses-kit.js";
-import { LLM_GATEWAY_TOOLS, modelsList, promptCacheKey, promptCacheGet, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree } from "./tools/llm-gateway-kit.js";
+import { LLM_GATEWAY_TOOLS, TIERS, modelsList, promptCacheKey, promptCacheGet, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree } from "./tools/llm-gateway-kit.js";
 // /v1/audio/speech stays behind OPENROUTER_TTS_ENABLED as a rollout gate:
 // @x402/express (v2.16) runs the handler first and settles only a <400
 // response, so a 502 is never charged — but an UNLISTED route returns no 402
@@ -292,7 +327,7 @@ import { workflowsPage } from "./workflows.js";
 import { badgesPage, badgeSvg } from "./badges.js";
 import { adapterDocsIndex, adapterDocPage, ADAPTERS } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
-import { setOgImageVersion, setNavIndexProvider, ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
+import { setOgImageVersion, setNavIndexProvider, ledgerShell, ledgerFooterCompact, esc as escHtml } from "./ledger-chrome.js";
 import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
@@ -302,21 +337,28 @@ import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml } from "./market-page.js";
 import { sellPage } from "./sell.js";
 import { startRevenueLedger, ledgerSummary, ledgerDaily, ledgerBuyersDaily, ledgerBuyerConcentration, ledgerSyncState } from "./revenue-ledger.js";
-import { x402EconomySnapshot, economySnapshotCached } from "./x402-economy.js";
+import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate } from "./settlement-proof.js";
+import { dispatchEligibility, dispatchLegend } from "./dispatch-eligibility.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { recordSale, salesSummary, mppSales, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince } from "./sales-ledger.js";
+import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
+import { hostFigures, hostIndexEntry, isSelfSellerQuery } from "./host-entry.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
 
 const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...RESEARCH_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...BLOCKSCOUT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS];
+// House style on every report tier's output (agents, card buyers, monitors
+// all reach the same handler object): no em or en dashes in what a person
+// reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
+for (const def of ALL_KIT) if (Object.hasOwn(REPORT_TIERS, def.slug) && typeof def.handler === "function" && !def.handler.__houseStyled) { def.handler = withHouseStyle(def.handler); def.handler.__houseStyled = true; }
 import { buildSkillTools } from "./tools/skill-runner.js";
 import { buildRouteExecuteTool, EXEC_TIERS } from "./tools/route-execute.js";
 import { buildSellerTrustTool } from "./tools/seller-trust.js";
 import { payX402, avmBuyerConfigured, avmBuyerStatus } from "./x402-buyer.js";
+import { svmBuyerConfigured, svmBuyerStatus, SOLANA_NETWORK_LABELS } from "./solana-buyer.js";
 import { payTempo, tempoBuyerConfigured, tempoBuyerStatus } from "./tempo-buyer.js";
 import { issueChallenge, verifySolution, isComputePayable, powInfo, POW_DIFFICULTY, WALLET_ONLY_SLUGS, verifyHeartbeatToken } from "./pow.js";
 import { createLimiter as createRateLimiter, LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
@@ -373,7 +415,7 @@ function trialClientKey(ip) {
 const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP_HOUR} per hour per client`;
 const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY} per day per client (free while the model's upstream is free)`;
 import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, refundTotals } from "./refund-ledger.js";
-import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations } from "./stats.js";
+import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
 const PORT = process.env.PORT || 3000;
@@ -819,7 +861,7 @@ const SOR_EXTERNAL_ENABLED = /^(1|true|yes|on)$/i.test((process.env.SOR_EXTERNAL
 //      probe then 404s the paid call). So we route ONLY to sellers with proven
 //      settled volume: the leaderboard's callsSettled is real completed paid
 //      deliveries (buyers kept paying because they got results). MIN_SETTLED
-//      gates out the unproven long tail. This is the moat — "route to any
+//      gates out the unproven long tail. This is the safety gate — "route to any
 //      seller THAT ACTUALLY WORKS", not just any seller.
 //   2. LIVENESS — even a proven seller's crawled (method, route) can drift, so
 //      probe the live endpoint for a 402 before committing. Bare status read,
@@ -866,6 +908,16 @@ const norm = (u) => String(u || "").replace(/\/+$/, "").toLowerCase();
 // exposes uniqueBuyers per operator, and the chain join carries payers per
 // merchant address. An origin absent from both has no payer evidence, which is
 // different from having zero payers.
+// NOT folded here: the Solana SPL leaderboard's evidence (solanaEvidenceByOrigin).
+// It attributes a payTo's on-chain credits to every origin whose crawled tools
+// ADVERTISE that payTo - a claim the seller writes into its own manifest, with
+// no ownership check - and these maps feed the BASE router gate, whose only
+// belt against "name a heavily-settled wallet, inherit its history, get paid
+// somewhere else" is provenPayToMatches on a BASE address. A cross-chain
+// address can never satisfy that binding, so Solana counts folded here let a
+// fresh origin clear the Base floor by naming someone else's Solana payTo
+// (security review 2026-09-02). Solana proven-ness is read from the chain at
+// pay time against the accept's own payTo; the board only primes that read.
 function buildPayersByOrigin() {
   const m = new Map();
   for (const row of (getLeaderboardSnapshot()?.leaderboard || [])) {
@@ -905,6 +957,7 @@ function buildProvenPayToByOrigin() {
 
 function buildSettledByOrigin() {
   const m = new Map();
+  // Solana credits are deliberately NOT folded here - see buildPayersByOrigin.
   for (const [o, c] of Object.entries(SOR_SEED_ORIGINS)) m.set(norm(o), Number(c) || 0);
   for (const row of (getLeaderboardSnapshot()?.leaderboard || [])) {
     for (const o of (Array.isArray(row.origins) ? row.origins : [row.homepage])) {
@@ -929,12 +982,84 @@ function buildSettledByOrigin() {
   } catch { /* evidence is additive; never break routing when a source is down */ }
   return m;
 }
-async function resolveExternalSeller(task, { cap, chain = "base" }) {
+// Dispatch labelling for the public surfaces (src/dispatch-eligibility.js):
+// the SAME function the resolver's Base gate runs, applied to /api/index
+// sellers, /api/route rows and the marketplace roster, so "routable" can no
+// longer be read as "the router will pay this seller". The settlement
+// evidence maps are the resolver's own builders, memoized for a minute: they
+// walk the leaderboard, the Bazaar feed and the economy snapshot, which is
+// fine once per resolve and not fine once per crawler-hit page render.
+const DISPATCH_EVIDENCE_TTL_MS = 60_000;
+let dispatchEvidenceCache = null;
+function dispatchEvidence() {
+  if (dispatchEvidenceCache && Date.now() - dispatchEvidenceCache.at < DISPATCH_EVIDENCE_TTL_MS) return dispatchEvidenceCache;
+  let settled = new Map(), payers = new Map();
+  try { settled = buildSettledByOrigin(); payers = buildPayersByOrigin(); } catch { /* evidence is additive; an unreadable source labels nothing eligible on Base */ }
+  dispatchEvidenceCache = { at: Date.now(), settled, payers };
+  return dispatchEvidenceCache;
+}
+function spendChainsConfigured() {
+  return ["base", ...(avmBuyerConfigured() ? ["algorand"] : []), ...(tempoBuyerConfigured() ? ["tempo"] : []), ...(svmBuyerConfigured() ? ["solana"] : [])];
+}
+// Row-level decoration: seller-level fields (index) or route-row fields
+// (price + template known). `networks` is ALWAYS an array on the way out and
+// `paymentNetworksKnown` says whether it was learned, so a buyer agent never
+// has to infer "unknown" from a missing key.
+function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
+  if (!row || typeof row !== "object") return row;
+  const ev = dispatchEvidence();
+  const origin = norm(row.seller || row.origin || "");
+  const networks = Array.isArray(row.networks) ? row.networks : [];
+  const verdict = dispatchEligibility({
+    local,
+    routable: local ? true : (row.routable !== undefined ? !!row.routable : true),
+    networks,
+    settled: ev.settled.get(origin) || 0,
+    payers: ev.payers.get(origin),
+    ...(rowLevel ? { priceUsd: row.priceUsd ?? null, urlTemplate: !!row.urlTemplate } : {}),
+    spendChains: spendChainsConfigured(),
+    minSettled: SOR_MIN_SETTLED_TX,
+    minPayers: SOR_MIN_DISTINCT_PAYERS,
+  });
+  // `executeVia` names the route-execute tier that covers this row's price. On
+  // a row the router will NOT pay right now it read as a callable affordance
+  // (outside buyer-agent readout, 2026-09-02, second pass), so it is only
+  // present when the verdict is eligible; otherwise the tier moves to
+  // `executeViaWhenEligible` and `executeViaCallableNow` says false in so many
+  // words. The tier is still useful (it is what the buyer would pay once the
+  // seller proves out), it just must not look like a button.
+  const { executeVia, ...rest } = row;
+  const affordance = executeVia === undefined ? {} : (verdict.eligible
+    ? { executeVia, executeViaCallableNow: true }
+    : { executeViaWhenEligible: executeVia, executeViaCallableNow: false });
+  return {
+    ...rest,
+    networks,
+    paymentNetworksKnown: local ? true : networks.length > 0,
+    routerDispatchEligible: verdict.eligible,
+    routerDispatchReason: verdict.reason,
+    ...(Object.keys(verdict.chains || {}).length ? { routerDispatchByChain: verdict.chains } : {}),
+    ...affordance,
+  };
+}
+function withDispatchSnapshot(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.sellers)) return snapshot;
+  return { ...snapshot, sellers: snapshot.sellers.map((sel) => (sel?.local ? sel : withDispatchFields(sel))) };
+}
+async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wantModel = null } = {}) {
   // F4: never route to ourselves (paying our own endpoint over x402 = fee loss
   // / accidental self-recursion) — exclude our own host from candidates.
   const ourHost = (() => { try { return new URL(BASE_URL).host.toLowerCase(); } catch { return ""; } })();
   const hostOf = (u) => { try { return new URL(u).host.toLowerCase(); } catch { return ""; } };
   let candidates;
+  // Proven-payTo evidence is an x402/Base construct (advertised payTo vs the
+  // address that actually received USDC on Base). It is EMPTY for the Tempo
+  // and Algorand legs, whose proof is the leaderboard / registry gate. It was
+  // declared with `var` inside the Base branch only, so on Tempo and Algorand
+  // the post-probe read threw inside the try, the catch marked every candidate
+  // not-live, and both legs resolved nothing - found by the first live Tempo
+  // SOR buy (2026-08-27). Declared here, for every chain.
+  let provenPayToByOrigin = new Map();
   if (chain === "tempo") {
     // MPP sellers on Tempo come from OUR OWN live-verified MPP index (the
     // mpp.dev registry, independently probed) - src/tempo-sellers.js. Proven-
@@ -974,24 +1099,67 @@ async function resolveExternalSeller(task, { cap, chain = "base" }) {
         price: `$${r.priceUsd}`, priceUsd: r.priceUsd,
         networks: ["algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="], settled: r.verifs,
       }));
+  } else if (chain === "solana") {
+    // Solana sellers come from the SAME crawled index as Base ones - their
+    // accepts advertise a solana network label - but the Base settled/payers
+    // evidence says nothing about them, so the router gate here is
+    // match+liveness only and PROVEN-NESS is enforced at pay time by
+    // solana-buyer's chain read (recent inbound USDC to the accept's own
+    // payTo, fail closed). Mainnet labels only: a devnet accept never routes.
+    // Ask the ranker for SOLANA rows only (strict: a row must advertise the
+    // chain). The unfiltered top 20 is Base-dominated - dozens of sellers tie
+    // on score for "chat completions" or "web search" - so the Solana rows
+    // that survived the post-filter were whichever one or two happened to
+    // win a tie-break, and a Solana seller with the best-matching name could
+    // sit at position 40 and never be tried (2026-09-02).
+    const { results } = routeQuery({ query: task, top: 25, include: "external", networkFilter: "solana", strictNetwork: true, ...indexCtx() });
+    candidates = (results || [])
+      .filter((r) => r.seller && r.url && r.priceUsd > 0 && r.priceUsd <= cap && Array.isArray(r.networks)
+        && r.networks.some((n) => SOLANA_NETWORK_LABELS.has(String(n || "").toLowerCase())))
+      .filter((r) => !r.urlTemplate)
+      .filter((r) => hostOf(r.url) && hostOf(r.url) !== ourHost)
+      .slice(0, 5)
+      .map((r) => ({ ...r, networks: r.networks, wire: "x402" }));
   } else {
     const { results } = routeQuery({ query: task, top: 20, include: "external", ...indexCtx() });
     const settledByOrigin = buildSettledByOrigin();
     const payersByOrigin = buildPayersByOrigin();
-    var provenPayToByOrigin = buildProvenPayToByOrigin();
+    provenPayToByOrigin = buildProvenPayToByOrigin();
     candidates = (results || [])
       .filter((r) => r.seller && r.url && r.priceUsd > 0 && r.priceUsd <= cap && Array.isArray(r.networks) && r.networks.includes("eip155:8453"))
+      // Never SPEND against an unsubstituted OpenAPI path template
+      // ("/stock/{symbol}"): the request cannot succeed and the money is at
+      // risk for nothing. /api/route still SHOWS these rows, flagged
+      // `urlTemplate`, because an agent that knows the parameter can use them.
+      .filter((r) => !r.urlTemplate)
       .filter((r) => hostOf(r.url) && hostOf(r.url) !== ourHost)
       .map((r) => ({ ...r, settled: settledByOrigin.get(norm(r.seller)) || 0, payers: payersByOrigin.get(norm(r.seller)) }))
       // Count AND breadth. One implementation, shared with the test, so the
       // rule cannot drift from what is asserted about it.
-      .filter((r) => meetsRouterGate({ settled: r.settled, payers: r.payers, minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS }).ok)
+      // The SAME function that labels every public row (dispatch-eligibility.js),
+      // asked for its Base verdict, so the label and the decision cannot drift.
+      .filter((r) => dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: ["base"], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS }).chains.base?.eligible === true)
       .sort((a, b) => b.settled - a.settled)
       .slice(0, 5);
   }
   const { assertPublicUrl, ssrfDispatcher } = await import("./tools/fetch-guard.js");
+  const resolved = [];
+  const { sellerRefusedRecently, sellerServesModel } = await import("./x402-buyer.js");
   for (const r of candidates) {
     let live = false;
+    // A seller that refused our payment on this chain (paid retry 402/401,
+    // chain showed no debit) is skipped until its memo expires - otherwise it
+    // keeps ranking first and every call burns a full round trip on it.
+    const refusal = sellerRefusedRecently(r.seller, chain);
+    if (refusal) { console.log(`[sor] skipping ${chain} candidate ${r.seller}: refused a payment ${Math.round((Date.now() - refusal.at) / 60000)} min ago (HTTP ${refusal.status})`); continue; }
+    // An LLM task names a model, and the model namespace is the seller's own:
+    // a chat seller whose published model list is readable and does not carry
+    // it is skipped BEFORE the probe (api.xfuel.app settled and then 400'd
+    // model_not_found, keeping the $0.01, 2026-09-02). Unknown never skips.
+    if (wantModel) {
+      const served = await sellerServesModel(r.url, wantModel);
+      if (served.verdict === "not-served") { console.log(`[sor] skipping ${chain} candidate ${r.seller}: its model list (${served.ids} ids at ${served.modelsUrl}) does not carry "${wantModel}"`); continue; }
+    }
     try {
       // SSRF: the seller URL is external, crawled data — a proven seller's
       // registered origin could still DNS-rebind to a private address between
@@ -1021,6 +1189,33 @@ async function resolveExternalSeller(task, { cap, chain = "base" }) {
           live = false;
         } else {
           r.price = `$${liveUsd}`; r.priceUsd = liveUsd;
+        }
+      }
+      if (live && chain === "solana") {
+        // Resolve-time proven-seller check so an unproven candidate is
+        // SKIPPED (next one tried) instead of aborting the whole call at pay
+        // time. Reads the probe's own 402; the pay-time gate in payX402
+        // stays as the belt against a seller serving the probe a clean
+        // address and the payer a different one.
+        let probeBody = "";
+        try { probeBody = (await probe.text()).slice(0, 4000); } catch { /* header-only */ }
+        const { passesSolanaResolveGate } = await import("./solana-buyer.js");
+        const gate = await passesSolanaResolveGate({ header: probe.headers.get("payment-required"), body: probeBody });
+        if (!gate.ok) {
+          // UNPROVEN TIER: the chain was readable (gate.inbound is a number)
+          // and only the count is short. Keep the candidate, marked, when its
+          // quote is within the unproven allowance; it is ordered AFTER every
+          // proven candidate below and paid only if those are exhausted.
+          // Unreadable chain / unreadable accept stay skipped.
+          const { svmUnprovenAllowanceAtomic } = await import("./solana-buyer.js");
+          const allowance = Number(svmUnprovenAllowanceAtomic()) / 1e6;
+          if (Number.isFinite(gate.inbound) && allowance > 0 && r.priceUsd > 0 && r.priceUsd <= allowance) {
+            r.unproven = true; r.settled = gate.inbound;
+            console.log(`[sor] admitting solana candidate ${r.seller} as UNPROVEN (${gate.reason}; ${r.priceUsd} is within the ${allowance} unproven allowance) - tried after proven sellers`);
+          } else {
+            console.log(`[sor] skipping solana candidate ${r.seller}: ${gate.reason}`);
+            live = false;
+          }
         }
       }
       if (live) {
@@ -1056,9 +1251,26 @@ async function resolveExternalSeller(task, { cap, chain = "base" }) {
     // seller's own declared contract against what actually arrives. Both come
     // from the row we already resolved; without them the observer has nothing
     // to check and nothing to key by.
-    if (live) return { seller: r.seller, slug: r.slug, url: r.url, method: r.method, price: r.price, networks: r.networks, settled: r.settled, provenPayTo: provenPayToByOrigin?.get(norm(r.seller)) || null, route: r.route || null, guaranteedPaths: r.responseContract?.guaranteedPaths || [] };
+    // `wire` rides through: a Tempo candidate settles over MPP and its receipt
+    // must say so (the first live Tempo SOR buy labelled it x402, 2026-08-27).
+    if (live) {
+      resolved.push({ seller: r.seller, slug: r.slug, url: r.url, method: r.method, price: r.price, priceUsd: r.priceUsd, networks: r.networks, settled: r.settled, wire: r.wire || "x402", provenPayTo: provenPayToByOrigin?.get(norm(r.seller)) || null, route: r.route || null, guaranteedPaths: r.responseContract?.guaranteedPaths || [], ...(r.unproven ? { unproven: true } : {}) });
+      // Only PROVEN candidates count toward the limit: an unproven one must
+      // never crowd out a proven seller ranked below it.
+      if (resolved.filter((x) => !x.unproven).length >= Math.max(1, limit)) break;
+    }
   }
-  return null;
+  // Proven first, unproven last (stable: rank order kept within each tier),
+  // then the limit.
+  resolved.sort((a, b) => (a.unproven ? 1 : 0) - (b.unproven ? 1 : 0));
+  resolved.splice(Math.max(1, limit));
+  // limit === 1 (the default, every existing caller) returns the single object
+  // or null, unchanged. A caller asking for more gets the ranked live list, so
+  // route-execute can fall through to the next seller when one 5xxs on the paid
+  // leg (its own upstream down) instead of failing a route another seller could
+  // serve. Order is preserved: settled-desc from the ranker.
+  if (Math.max(1, limit) === 1) return resolved[0] || null;
+  return resolved;
 }
 // Operator-only diagnostic: run the SAME resolve pipeline as resolveExternalSeller
 // but report why each candidate is kept or dropped (settled count, cap, base,
@@ -1110,7 +1322,7 @@ for (const tier of EXEC_TIERS) {
     // Chains external routing can SETTLE on: Base always (the proven path);
     // Algorand only once the dedicated AVM spending wallet is configured;
     // Tempo (MPP sellers) only once the dedicated Tempo spending wallet is.
-    externalChains: () => ["base", ...(avmBuyerConfigured() ? ["algorand"] : []), ...(tempoBuyerConfigured() ? ["tempo"] : [])],
+    externalChains: () => ["base", ...(avmBuyerConfigured() ? ["algorand"] : []), ...(tempoBuyerConfigured() ? ["tempo"] : []), ...(svmBuyerConfigured() ? ["solana"] : [])],
   });
   if (CATALOG[tool.route]) throw new Error(`Duplicate route: ${tool.route}`);
   CATALOG[tool.route] = tool;
@@ -1177,9 +1389,19 @@ const POW_SLUGS = new Set();
 for (const [route, def] of Object.entries(CATALOG)) {
   if (isComputePayable(def)) {
     POW_ROUTES.set(route, def.slug);
-    POW_SLUGS.add(def.slug);
+      POW_SLUGS.add(def.slug);
+    }
   }
-}
+
+  // Hand payments.js the routes that cost us nothing to serve. It uses this to
+  // decide whether a verify rescued from an unreachable facilitator is worth
+  // taking: a free route can run its handler and lose nothing if settle then
+  // fails, a metered one would spend real money it could not bill for.
+  try {
+    const freePaths = new Set();
+    for (const [route, def] of Object.entries(CATALOG)) if (POW_SLUGS.has(def.slug)) freePaths.add(String(route).replace(/^[A-Z]+\s+/, ""));
+    setComputePayablePaths(freePaths);
+  } catch (e) { console.warn(`[payments] could not publish compute-payable paths: ${String(e?.message || e).slice(0, 120)}`); }
 
 // Count every outbound request by host, from boot onward. Cheap (one Map
 // increment), host-only (never a URL, so no buyer input is retained), and
@@ -1187,6 +1409,8 @@ for (const [route, def] of Object.entries(CATALOG)) {
 // by an invoice: they all looked like ordinary traffic until someone totalled
 // it up, and nothing was totalling it up.
 installEgressMeter();
+// Composite runs inherit the drain signal on every outbound fetch (src/drain-abort.js).
+installDrainAwareFetch();
 
 const app = express();
 // Drop the Express fingerprint header (security audit A402-13): no reason to
@@ -1197,6 +1421,23 @@ app.disable("x-powered-by");
 // attacker-supplied XFF value. This is what the per-IP rate limiters key on,
 // so spoofing it must not mint a fresh bucket. Tune for other topologies.
 app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 1);
+// Canonical host: www.<host> answers a 301 to the apex (path + query kept),
+// so a www record on the domain never becomes a second indexed copy of the
+// site. The audit found www.agent402.tools unresolvable (2026-08-28); the
+// fix is a www record on the domain AND this redirect. Never for API calls
+// with a payment attached: a 301 would drop the payment header on retry, so
+// those are answered on the host they arrived on.
+// Only OUR www: the target is the configured canonical host, never whatever
+// the Host header said (an attacker-chosen Host would otherwise make us a
+// 301 open redirect - review 2026-08-28).
+const CANONICAL_HOST = (() => { try { return new URL(BASE_URL).host.toLowerCase(); } catch { return ""; } })();
+app.use((req, res, next) => {
+  const host = String(req.hostname || "").toLowerCase();
+  if (CANONICAL_HOST && host === `www.${CANONICAL_HOST}` && !req.headers["payment-signature"] && !req.headers["x-payment"] && !req.headers.authorization) {
+    return res.redirect(301, `${BASE_URL.replace(/\/$/, "")}${req.originalUrl}`);
+  }
+  next();
+});
 
 // PostHog reverse proxy: serve posthog-js AND ingest its events first-party
 // through agent402.tools/e, so the browser never talks to a third-party host.
@@ -1226,14 +1467,26 @@ const phProxyLimiter = createRateLimiter("posthog-proxy", { perMin: PH_MAX_PER_M
 // Per-IP limiter for the unauthenticated Stripe-session-creating endpoints
 // (/api/buy, /api/subscribe) - each makes an outbound Stripe API call, so cap
 // the amplification a spammer can drive.
-const checkoutLimiter = createRateLimiter("checkout", { perMin: 20, perHour: 120 });
+// 6/min was measured, not guessed: a real buyer clicks Buy once, and a handful
+// of times if they compare products. On 2026-08-29 an Acunetix-class scanner
+// (one IP, spoofed Chrome UA) put 170 requests into /api/buy in ~25 s and got 86
+// of them served a 400 before the old 20/min ceiling bit. Every payload was
+// refused by the allowlist lookup, but 86 free swings at a Stripe-session
+// endpoint is more than this door ever needs to open.
+const checkoutLimiter = createRateLimiter("checkout", { perMin: 6, perHour: 40 });
+// The paths that limiter guards. Named here because the check has to run BEFORE
+// express.json() (mounted globally further down): a malformed body 400s at the
+// parser, so those requests never reached the in-route check at all - which is
+// why the scanner's 170 requests only produced 43 refusals in telemetry. Half of
+// them were never counted against anything.
+const CHECKOUT_RATE_PATHS = ["/api/buy", "/api/subscribe", "/api/credits/checkout", "/api/mpp/monitors/subscribe"];
 // Per-IP limiter for the unauthenticated Stripe-READING routes (/api/r/:id poll,
 // /api/monitors/confirm, /monitors/manage): an unknown id costs a Stripe
 // retrieve (and manage a portal write), so a scanner could push our key into
 // Stripe's rate limit. A legitimate report poll is ~20/min.
 const sessionReadLimiter = createRateLimiter("session-read", { perMin: 90, perHour: 1500 });
 const clientIp = (req) => (req.ip || req.socket?.remoteAddress || "?").trim();
-// Recurring subscriptions engine (Phase 2). Initialized EARLY so the Stripe
+// Recurring subscriptions engine. Initialized EARLY so the Stripe
 // webhook route can mount with a RAW body parser BEFORE the global express.json()
 // below - webhook signature verification needs the unparsed body.
 // Validate targets BEFORE the recurring charge: a domain must parse; a fund
@@ -1243,23 +1496,184 @@ const clientIp = (req) => (req.ip || req.socket?.remoteAddress || "?").trim();
 // subscribe routes only relay `buyerSafe` messages. Shared by BOTH recurring
 // engines (card and wallet) so a target can never be watchable on one rail and
 // not the other.
+const _fundResolveCache = new Map();
+const _fundResolveLimiter = createRateLimiter("fund-resolve", { perMin: 20, perHour: 300 });
 const _monitorTargetValidators = {
   domain: (t) => normDomain({ domain: t }),
-  fund: async (t) => { const r = /^\d{1,10}$/.test(t) ? await edgarResolveManager({ cik: t }) : await edgarResolveManager({ name: t }); return r?.name || t; },
+  // One EDGAR full-text search per unique name, reachable unauthenticated
+  // from /api/subscribe and /api/alerts: cache resolutions and bound the
+  // shared upstream globally so a spray cannot drive our egress into SEC's
+  // rate ban (the class the programmatic pages closed for off-list slugs).
+  fund: async (t) => {
+    const key = String(t).trim().toLowerCase().slice(0, 200);
+    const hit = _fundResolveCache.get(key);
+    if (hit && Date.now() - hit.at < 60 * 60_000) { if (hit.err) throw hit.err; return hit.name; }
+    if (_fundResolveLimiter.check("global").limited) { const e = new Error("Fund lookups are busy right now. Enter the manager's SEC CIK number, or try again in a minute."); e.statusCode = 429; e.buyerSafe = true; throw e; }
+    try {
+      const r = /^\d{1,10}$/.test(t) ? await edgarResolveManager({ cik: t }) : await edgarResolveManager({ name: t });
+      const name = r?.name || t;
+      if (_fundResolveCache.size > 2000) _fundResolveCache.clear();
+      _fundResolveCache.set(key, { at: Date.now(), name });
+      return name;
+    } catch (e) { if (e?.buyerSafe) { if (_fundResolveCache.size > 2000) _fundResolveCache.clear(); _fundResolveCache.set(key, { at: Date.now(), err: e }); } throw e; }
+  },
   recall: (t) => normRecallQuery(t),
   ipo: (t) => normIpoKeyword(t) || "all",
+  research: (t) => { const q = String(t ?? "").trim().replace(/\s+/g, " "); if (q.length < 12 || q.length > 300) { const e = new Error("Enter a research question of 12 to 300 characters."); e.statusCode = 400; e.buyerSafe = true; throw e; } return q; },
   filing: (t) => { const k = String(t).trim().toUpperCase(); if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(k)) { const e = new Error(`"${t}" is not a valid US ticker`); e.statusCode = 400; e.buyerSafe = true; throw e; } return k; },
   // Validates base58 AND that the mint actually resolves upstream, so a
   // recurring charge never starts against a target we cannot watch.
   token: async (t) => (await probeTokenBrief(String(t).trim())).mint,
   insider: (t) => { const k = String(t).trim().toUpperCase(); if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(k)) { const e = new Error(`"${t}" is not a valid US ticker`); e.statusCode = 400; e.buyerSafe = true; throw e; } return k; },
 };
+
+// Free email alerts (src/free-alerts.js): the lead magnet on the free report
+// pages. Same target validators as the monitors, the same free daily probes,
+// double opt-in, signed unsubscribe. Secret = the first of FREE_ALERTS_SECRET,
+// POW_SECRET, MPP_SECRET_KEY (unset = signup 503s: links must be unforgeable).
+const _freeAlerts = createFreeAlerts({
+  secret: (process.env.FREE_ALERTS_SECRET || process.env.POW_SECRET || process.env.MPP_SECRET_KEY || "").trim(),
+  baseUrl: BASE_URL,
+  sendEmail: faSendEmail,
+  validators: _monitorTargetValidators,
+  probes: {
+    insider: async (t) => { const r = await faProbeInsider({ ticker: t, days: 90, limit: 40 }); return { ids: r.ids, items: (r.filings || []).map((f) => ({ id: f.accessionNumber, label: `${(f.displayNames || []).join(", ") || "Form 4"} · filed ${f.filedDate}`, url: f.url })) }; },
+    filing: async (t) => { const r = await faProbeFilings(t); return { ids: r.keys || r.ids, items: (r.filings || []).map((f) => ({ id: f.key || `${f.accessionNumber}|${f.form}`, label: `${f.form} · filed ${f.filedDate}`, url: f.url })) }; },
+    fund: async (t) => { const m = /^\d{1,10}$/.test(t) ? await faResolveManager({ cik: t }) : await faResolveManager({ name: t }); const l = m?.cik ? await faLatest13f({ cik: m.cik }) : null; return { ids: l?.accessionNumber ? [l.accessionNumber] : [], items: l ? [{ id: l.accessionNumber, label: `13F for the period ended ${l.reportDate} · filed ${l.filedDate}` }] : [] }; },
+    domain: async (t) => { const r = await faProbeDomain(t); return { ids: [r.fingerprint], items: [{ id: r.fingerprint, label: `Security posture changed on ${t}` }] }; },
+    recall: async (t) => { const r = await faProbeRecalls(t); return { ids: r.ids, items: (r.items || []).map((x) => ({ id: x.recallNumber, label: `${x.classification || "Recall"} · ${String(x.product || "").slice(0, 90)}` })) }; },
+  },
+  onEvent: ({ step, kind }) => { try { capturePostHogHumanFunnel({ step, kind }); } catch { /* telemetry never breaks the engine */ } },
+});
+if (process.env.FREE_ALERTS !== "off") _freeAlerts.start();
+// Weekly spend digest (src/wallet-digest.js): the one place the site asks a
+// buyer for an inbox. Keyed to the identity they already pay with (an EVM
+// wallet proved by signature, or a credits key), double opt-in, signed
+// unsubscribe, nothing sent for a quiet week. Same secret rule as the alerts.
+// Created BEFORE the credits engine so a new key's claim email can carry its
+// own signed confirm link; the credits accessors are read lazily.
+const _walletDigest = createWalletDigest({
+  secret: (process.env.FREE_ALERTS_SECRET || process.env.POW_SECRET || process.env.MPP_SECRET_KEY || "").trim(),
+  baseUrl: BASE_URL,
+  sendEmail: faSendEmail,
+  usage: (payer, opts) => payerUsage(payer, opts),
+  creditsBalance: (keyId) => (_credits && typeof _credits.balanceById === "function" ? _credits.balanceById(keyId) : null),
+  creditsKeyId: (key) => (_credits && typeof _credits.keyIdOf === "function" ? _credits.keyIdOf(key) : null),
+  verifySignature: async ({ address, message, signature }) => {
+    const { verifyMessage } = await import("viem");
+    return verifyMessage({ address, message, signature });
+  },
+  onEvent: ({ step, kind }) => { try { capturePostHogHumanFunnel({ step, kind }); } catch { /* telemetry never breaks the engine */ } },
+});
+if (process.env.WALLET_DIGEST !== "off") _walletDigest.start();
+// Post-purchase follow-ups (src/followups.js): two emails at most per card
+// purchase, stoppable, plus the immediate failure notice. Same secret rule.
+const _followups = createFollowups({
+  secret: (process.env.FREE_ALERTS_SECRET || process.env.POW_SECRET || process.env.MPP_SECRET_KEY || "").trim(),
+  baseUrl: BASE_URL, sendEmail: faSendEmail,
+  monitorFor: (kind) => { const m = fuMonitorForKind(kind); return m ? { product: m.product, label: m.label, priceUsd: m.priceUsd } : null; },
+  samples: () => Object.values(fuSamples).map((s) => ({ product: s.product, label: s.label, url: `${BASE_URL}/reports/sample/${s.product}` })),
+  onEvent: ({ step, kind }) => { try { capturePostHogHumanFunnel({ step, kind }); } catch { /* telemetry never breaks the engine */ } },
+});
+if (process.env.FOLLOWUPS !== "off") _followups.start();
+app.get("/followups/stop", (req, res) => {
+  const r = _followups.stop(String(req.query.id || ""), String(req.query.k || ""));
+  res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
+  if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The link is invalid. <a href="/contact">Contact us</a> and we will stop the emails by hand.</p>`));
+  res.send(alertPage("Done", `<p>No more follow-up emails about that purchase. Your report link keeps working.</p><p><a href="/reports">Back to reports</a></p>`));
+});
+app.post("/followups/stop", (req, res) => { const r = _followups.stop(String(req.query.id || ""), String(req.query.k || "")); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
+app.get("/__operator/followups.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "no-store").json(_followups.stats());
+});
+const alertsSignupLimiter = createRateLimiter("alerts-signup", { perMin: 6, perHour: 40 });
+// A second bound keyed on the ADDRESS (hashed), so a distributed source cannot
+// flood one victim's inbox with confirmations by rotating IPs.
+const alertsEmailLimiter = createRateLimiter("alerts-email", { perMin: 2, perHour: 5 });
+const alertPage = (title, body) => ledgerShell({ title: `${title} - Agent402`, description: "Free email alerts from Agent402.", canonical: `${BASE_URL}/reports`, baseUrl: BASE_URL, activePath: "/reports", robots: "noindex, nofollow", body: `<div class="wrap" style="padding:40px 30px;max-width:640px;"><h1 style="font-size:26px;margin:0 0 12px;">${title}</h1>${body}</div>${ledgerFooterCompact()}` });
+app.post("/api/alerts", express.json({ limit: "4kb" }), async (req, res) => {
+  if (alertsSignupLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many signups from this address. Try again in a few minutes." });
+  const b = req.body || {};
+  if (typeof b.website === "string" && b.website) return res.json({ ok: true, status: "pending" }); // honeypot: bots see success, nothing is stored
+  const emailKey = createHash("sha256").update(String(b.email || "").trim().toLowerCase()).digest("hex").slice(0, 32);
+  if (alertsEmailLimiter.check(`e:${emailKey}`).limited) return res.json({ ok: true, status: "pending" }); // same shape: never confirms whether an address is known
+  try { res.json(await _freeAlerts.signup({ email: b.email, kind: b.kind, target: b.target, source: b.source })); }
+  catch (e) {
+    if (e?.buyerSafe && e.statusCode) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
+    console.warn("[free-alerts] signup failed:", String(e?.message || e).slice(0, 160));
+    res.status(500).json({ error: "Could not sign you up. Please try again." });
+  }
+});
+app.get("/alerts/confirm", (req, res) => {
+  const r = _freeAlerts.confirm(String(req.query.id || ""), String(req.query.k || ""));
+  res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
+  if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The confirmation link is invalid or the alert was unsubscribed. <a href="/reports">Back to reports</a>.</p>`));
+  res.send(alertPage("Alert confirmed", `<p>You will get an email when there are new ${escHtml(ALERT_KIND_LABEL(r.kind, r.target))}. One a day at most, only when something changes.</p><p><a href="/monitors?product=${encodeURIComponent(r.product)}&target=${encodeURIComponent(r.target)}">Want the full report re-run and emailed automatically?</a></p><p><a href="/reports">Back to reports</a></p>`));
+});
+app.get("/alerts/unsubscribe", (req, res) => {
+  const r = _freeAlerts.unsubscribe(String(req.query.id || ""), String(req.query.k || ""));
+  res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
+  if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The unsubscribe link is invalid. <a href="/contact">Contact us</a> and we will remove you by hand.</p>`));
+  res.send(alertPage("Unsubscribed", `<p>No more emails about ${escHtml(r.target)}. <a href="/reports">Back to reports</a></p>`));
+});
+// One-click unsubscribe (RFC 8058): mail clients POST the List-Unsubscribe URL.
+app.post("/alerts/unsubscribe", (req, res) => { const r = _freeAlerts.unsubscribe(String(req.query.id || ""), String(req.query.k || "")); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
+// ---- weekly digest routes (src/wallet-digest.js) ----
+app.get("/digest", (_req, res) => htmlCache(res, 300, 900).send(digestPage(BASE_URL)));
+app.post("/api/digest", express.json({ limit: "8kb" }), async (req, res) => {
+  if (alertsSignupLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many signups from this address. Try again in a few minutes." });
+  const b = req.body || {};
+  if (typeof b.website === "string" && b.website) return res.json({ ok: true, status: "pending" }); // honeypot
+  const emailKey = createHash("sha256").update(String(b.email || "").trim().toLowerCase()).digest("hex").slice(0, 32);
+  if (alertsEmailLimiter.check(`e:${emailKey}`).limited) return res.json({ ok: true, status: "pending" });
+  try { res.json(await _walletDigest.signup({ email: b.email, wallet: b.wallet, message: b.message, signature: b.signature, creditsKey: b.creditsKey, source: b.source })); }
+  catch (e) {
+    if (e?.buyerSafe && e.statusCode) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
+    console.warn("[wallet-digest] signup failed:", String(e?.message || e).slice(0, 160));
+    res.status(500).json({ error: "Could not subscribe. Please try again." });
+  }
+});
+app.get("/digest/confirm", (req, res) => {
+  const r = _walletDigest.confirm(String(req.query.id || ""), String(req.query.k || ""));
+  res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
+  if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The confirmation link is invalid or the digest was unsubscribed. <a href="/digest">Subscribe again</a>.</p>`));
+  res.send(alertPage("Digest confirmed", `<p>Your first digest arrives within the hour, then one a week. Nothing is sent for a quiet week. <a href="/tools/my-usage">See the full history now</a>.</p>`));
+});
+app.get("/digest/unsubscribe", (req, res) => {
+  const r = _walletDigest.unsubscribe(String(req.query.id || ""), String(req.query.k || ""));
+  res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html");
+  if (!r.ok) return res.status(400).send(alertPage("That link did not work", `<p>The unsubscribe link is invalid. <a href="/contact">Contact us</a> and we will remove you by hand.</p>`));
+  res.send(alertPage("Unsubscribed", `<p>No more digests. Your address has been removed. <a href="/digest">Subscribe again</a> any time.</p>`));
+});
+app.post("/digest/unsubscribe", (req, res) => { const r = _walletDigest.unsubscribe(String(req.query.id || ""), String(req.query.k || "")); res.status(r.ok ? 200 : 400).json({ ok: r.ok }); });
+app.get("/__operator/digest.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "no-store").json(_walletDigest.stats());
+});
+app.post("/__operator/digest/run", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "no-store").json(await _walletDigest.tick({ force: req.query.force === "1" }));
+});
+app.get("/__operator/alerts.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "no-store").json(_freeAlerts.stats());
+});
+app.post("/__operator/alerts/run", async (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "no-store").json(await _freeAlerts.tick({ force: req.query.force === "1" }));
+});
+const ALERT_KIND_LABEL = (kind, t) => ({ insider: `Form 4 insider filings for ${t}`, filing: `SEC filings from ${t}`, fund: `13F filings from ${t}`, domain: `security changes on ${t}`, recall: `FDA recalls naming ${t}` }[kind] || `changes for ${t}`);
+
 let _subs = null;
 try {
   _subs = subscriptionsEnabled() ? createStripeSubscriptions({
     stripe: new Stripe(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
     validateTarget: _monitorTargetValidators,
-    onInvoicePaid: ({ invoiceId, product, amountUsd }) => recordSale({ slug: product || "monitor", priceUsd: amountUsd, rail: "card", network: "stripe", payer: null, tx: invoiceId, wire: "stripe-subscription" }),
+    onInvoicePaid: ({ invoiceId, product, amountUsd }) => {
+      recordSale({ slug: product || "monitor", priceUsd: amountUsd, rail: "card", network: "stripe", payer: null, tx: invoiceId, wire: "stripe-subscription" });
+      try { capturePostHogHumanFunnel({ step: "monitor_paid", product: product || "monitor", priceUsd: amountUsd }); } catch { /* telemetry never breaks the request */ }
+    },
     // Credit-pack sessions: mint + email the key from the webhook too (claim is
     // idempotent; the thanks page then shows "claimed"). _credits is wired below.
     onPaymentSession: (session) => (session?.metadata?.credits_pack && _credits ? _credits.claim(session.id) : null),
@@ -1297,16 +1711,22 @@ try {
     // the money once - when it is spent (rail "credits" below).
     onLoad: ({ pack, priceUsd, keyId, paymentIntent }) => recordSale({ slug: `credits:${pack}`, priceUsd, rail: "card-prepaid", network: "stripe", payer: keyId, tx: paymentIntent, wire: "stripe-checkout" }),
     onDebit: ({ slug, priceUsd, keyId }) => recordSale({ slug, priceUsd, rail: "credits", network: "stripe", payer: keyId, tx: null, wire: "credits" }),
+    digestLinkFor: ({ keyId, email }) => _walletDigest.preEnrolCredits({ keyId, email }),
   }) : null;
 } catch (e) { console.warn("[credits] init failed:", String(e?.message || e).slice(0, 200)); _credits = null; }
 // Manage/cancel bearer for monitor subscribers: a keyed token over the report
 // id, carried ONLY in the subscriber's email - never in the report JSON or on
 // the report page, which subscribers are told to share. Derived from the
 // Stripe key so it needs no new secret; rotating the key invalidates links.
-const _manageToken = (reportId) => createHmac("sha256", `${(process.env.STRIPE_SECRET_KEY || "").trim()}:monitor-manage`).update(String(reportId)).digest("base64url").slice(0, 32);
+// Dedicated secret (MONITOR_MANAGE_SECRET) so a Stripe key roll no longer
+// invalidates every subscriber's cancel link; the Stripe-derived key stays as
+// a VERIFY-ONLY fallback for links emailed before the secret was set.
+const _manageKeys = () => [...(process.env.MONITOR_MANAGE_SECRET ? [`${process.env.MONITOR_MANAGE_SECRET.trim()}:monitor-manage`] : []), `${(process.env.STRIPE_SECRET_KEY || "").trim()}:monitor-manage`];
+const _manageTokenWith = (key, reportId) => createHmac("sha256", key).update(String(reportId)).digest("base64url").slice(0, 32);
+const _manageToken = (reportId) => _manageTokenWith(_manageKeys()[0], reportId);
 const _manageTokenOk = (reportId, k) => {
-  const want = Buffer.from(_manageToken(reportId)), got = Buffer.from(String(k || ""));
-  return want.length === got.length && timingSafeEqual(want, got);
+  const got = Buffer.from(String(k || ""));
+  return _manageKeys().some((key) => { const want = Buffer.from(_manageTokenWith(key, reportId)); return want.length === got.length && timingSafeEqual(want, got); });
 };
 if (_subs) {
   app.post("/api/stripe/webhook", express.raw({ type: "application/json", limit: "1mb" }), async (req, res) => {
@@ -1387,6 +1807,66 @@ app.use(compression({
     return compression.filter(req, res);
   },
 }));
+// Anthropic-SDK base-URL convention: every Anthropic client (the SDK, Claude
+// Code, the Agent SDK) appends `/v1/messages` to ANTHROPIC_BASE_URL, so a
+// buyer pointing one at a TIER (`https://agent402.tools/v1/metered`) posts to
+// `/v1/metered/v1/messages`. Rewrite that to the tier's real Messages route
+// before any gate or parser runs - the paywall, the metered quote and the
+// idempotency cache all key on req.path, so the alias is invisible past here.
+// Query strings survive the rewrite (Claude Code sends `?beta=true`).
+// Measured 2026-08-27 with claude-cli 2.1.250 against a catch server.
+const MESSAGES_SDK_ALIASES = new Map(Object.values(MESSAGES_PATH_BY_TIER).map((p) => [p.replace(/\/messages$/, "") + "/v1/messages", p]));
+app.use((req, _res, next) => {
+  const target = MESSAGES_SDK_ALIASES.get(req.path);
+  if (target) {
+    const q = req.url.indexOf("?");
+    req.url = target + (q >= 0 ? req.url.slice(q) : "");
+  }
+  next();
+});
+// The metered tier prices every request from its body, so a big body is a big
+// quote, never an unpriced cost - it can take real agent-host turns. A Claude
+// Code turn is ~110 KB (system prompt + 22 tool schemas, measured 2026-08-27)
+// and the global 100 KB parser answered it with an opaque 413 before the
+// tier's own 200k-char cap could speak. body-parser skips a body that is
+// already parsed, so this route-scoped parser wins over the global one below.
+app.use("/v1/metered", express.json({ limit: "1mb" }));
+// An unpaid POST here tokenizes the body for its 402 quote (measured 28 ms
+// per 190k CJK chars): bound unauthenticated quote requests per IP so the
+// quoter cannot be used as free CPU. Paid retries carry a credential and pass.
+const meteredQuoteLimiter = createRateLimiter("metered-quote", { perMin: 60, perHour: 1200 });
+app.use("/v1/metered", (req, res, next) => {
+  // GET/HEAD too: the method alias below turns them into the POST quote path
+  // (review 2026-08-28: 70 HEADs with a 180 KB body reached the quoter past
+  // the limiter).
+  if (!["POST", "GET", "HEAD"].includes(req.method)) return next();
+  // "Paid" must mean a PLAUSIBLE credential, not merely a header: measured
+  // 2026-08-28, `Authorization: Bearer garbage` took 80 of 80 requests past
+  // this limiter while the same 80 unauthenticated ones were throttled at 44.
+  // The gates still decide whether it is really valid; this only decides
+  // whether the request is worth a free tokenizer run.
+  const looksPaid = (h) => {
+    const a = String(req.headers.authorization || "");
+    if (/^Bearer\s+a402_[A-Za-z0-9_-]{8,}/.test(a) || /^Payment\s+\S{16,}/i.test(a)) return true;
+    for (const k of ["payment-signature", "x-payment"]) {
+      const v = req.headers[k];
+      if (typeof v === "string" && v.length >= 32) return true;
+    }
+    return false;
+  };
+  const paid = looksPaid();
+  if (!paid && meteredQuoteLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many unpaid quote requests from this address; send the paid retry, or slow down." });
+  next();
+});
+// Rate-check the Stripe-session endpoints BEFORE the body parser, so a request
+// with an unparseable body is counted like any other. Sets a flag rather than
+// letting the in-route checks run again - one request must consume one token.
+app.use(CHECKOUT_RATE_PATHS, (req, res, next) => {
+  if (req.method !== "POST") return next();
+  if (checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
+  req.__checkoutRateChecked = true;
+  next();
+});
 app.use(express.json({ limit: "100kb" }));
 
 // Funnel stage 1 — discovery. An agent fetching any of these machine-readable
@@ -1461,7 +1941,12 @@ const COMPOSITE_METHOD_PATHS = new Set(
   Object.entries(CATALOG).filter(([, d]) => EXPENSIVE_COMPOSITE_SLUGS.has(d.slug)).map(([route]) => route)
 );
 app.use((req, res, next) => {
-  if (!draining || !COMPOSITE_METHOD_PATHS.has(`${req.method} ${req.path}`)) return next();
+  if (!draining) return next();
+  // The method alias (mounted later) turns GET/HEAD into POST and POST into
+  // GET on single-method tools, so check the twin too.
+  const m = req.method === "HEAD" ? "GET" : req.method;
+  const twin = m === "GET" ? "POST" : m === "POST" ? "GET" : null;
+  if (!COMPOSITE_METHOD_PATHS.has(`${m} ${req.path}`) && !(twin && COMPOSITE_METHOD_PATHS.has(`${twin} ${req.path}`))) return next();
   res.set("Cache-Control", "no-store").set("Retry-After", "60");
   return res.status(503).json({ error: "This server is redeploying; premium report generation restarts on the new build in about a minute. Not charged - please retry." });
 });
@@ -1470,7 +1955,7 @@ app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains");
+  res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
   // Disable browser features we never use — defense-in-depth against any future
   // XSS or third-party script accidentally probing for them.
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()");
@@ -1498,7 +1983,7 @@ app.use((_req, res, next) => {
     // browser before it ever executes). connect-src's existing 'https:'
     // already covers the map's runtime fetch of the world-atlas geometry
     // from jsdelivr, so no change needed there.
-    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self' https://unpkg.com; connect-src 'self' https:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self' https:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
   );
   next();
 });
@@ -1507,11 +1992,27 @@ app.use((_req, res, next) => {
 // Sets browser/CDN cache headers for static-ish HTML pages so clicking around
 // the top nav doesn't re-render the world every time. stale-while-revalidate
 // gives instant back/forward while a background refresh keeps content fresh.
+// A branded 404 for a missing item inside a section (tool, guide, sample,
+// public report...): the same shell as the catch-all, with the section's own
+// link as the way back. Bare "<p>Not found</p>" fragments used to leave the
+// design system on seven routes (review 2026-08-28).
+function notFoundPage(res, { what = "Page", href = "/", label = "Home" } = {}) {
+  const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
+      <div style="font-family:var(--font-mono);font-weight:500;font-size:72px;line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">404</div>
+      <h1 style="font-weight:500;font-size:26px;letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${escHtml(what)} not found</h1>
+      <p style="color:var(--muted);margin:0 0 28px;font-weight:300;">There is nothing at this address.</p>
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+        <a href="${escHtml(href)}" style="display:inline-block;padding:11px 18px;background:var(--btn-bg);color:var(--btn-fg);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">${escHtml(label)}</a>
+        <a href="/" style="display:inline-block;padding:10px 18px;border:1px solid var(--dash);color:var(--ink);border-radius:999px;text-decoration:none;font-weight:500;font-size:14px;">Home</a>
+      </div>
+    </div>${ledgerFooterCompact()}`;
+  return res.status(404).type("html").send(ledgerShell({ title: `${what} not found - Agent402`, description: `${what} not found`, canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
+}
 const htmlCache = (res, maxAge, swr) =>
   res.set("Cache-Control", `public, max-age=${maxAge}, stale-while-revalidate=${swr}`).type("html");
 app.get("/", (_req, res) => {
   htmlCache(res, 60, 300).send(
-    ledgerHomePage(BASE_URL, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), getLeaderboardSnapshot(), SKILL_PACKS)
+    ledgerHomePage(BASE_URL, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), getLeaderboardSnapshot(), SKILL_PACKS, { settledOnChain: settledOnChainCount() })
   );
 });
 // /marketplaces — legacy surface, merged into /marketplace (301 keeps SEO equity).
@@ -1601,7 +2102,7 @@ app.get("/.well-known/security.txt", (_req, res) => {
     `Expires: ${expires}`,
     "Preferred-Languages: en",
     `Canonical: ${BASE_URL}/.well-known/security.txt`,
-    `Policy: ${BASE_URL}/terms`,
+    `Policy: ${BASE_URL}/security`,
     "",
   ].join("\n");
   res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(body);
@@ -1624,10 +2125,10 @@ app.get("/api/gateway-status", async (_req, res) => {
   // Top-level fields stay the OpenRouter gateway status (heartbeat reads
   // .status); upstreamBuyer adds the x402 spending wallet's bucketed status
   // (blockscout-kit) — same alarm pattern, same numbers-never-leave rule.
-  const [gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, subscriptionFeePayer, databases] = await Promise.all([gatewayCreditsStatus(), upstreamBuyerStatus(), avmBuyerStatus(), tempoBuyerStatus(), subscriptionFeePayerStatus(), databasesStatus().catch(() => null)]);
+  const [gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, upstreamBuyerSvm, subscriptionFeePayer, stellarFacilitator, databases] = await Promise.all([gatewayCreditsStatus(), upstreamBuyerStatus(), avmBuyerStatus(), tempoBuyerStatus(), svmBuyerStatus().catch(() => ({ status: "unknown", asset: "USDC", chain: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" })), subscriptionFeePayerStatus(), stellarFacilitatorStatus().catch(() => ({ status: "unknown", asset: "XLM", chain: "stellar:pubnet" })), databasesStatus().catch(() => null)]);
   // `databases`: leads/analytics Postgres reachability, status words only
   // (src/db-status.js) - the heartbeat pages on "unreachable".
-  res.set("Cache-Control", "public, max-age=60").json({ ...gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, subscriptionFeePayer, databases });
+  res.set("Cache-Control", "public, max-age=60").json({ ...gateway, upstreamBuyer, upstreamBuyerAvm, upstreamBuyerTempo, upstreamBuyerSvm, subscriptionFeePayer, stellarFacilitator, databases, operatorAuth: operatorAuthStatus(), mppEvmDomainFallback: mppFallbackStatus(), loopLag: loopLagStatus() });
 });
 // Static SAMPLE A2A Agent Card — the self-answering example target for the
 // a2a-card-fetch tool. Explicitly a sample (fictional weather agent), NOT an
@@ -1674,6 +2175,69 @@ app.get("/aifi", (_req, res) => res.redirect(301, "/agentic-finance"));
 // /why - the seven first-party differences, every claim linked to its proof surface
 // (src/why.js); llms.txt, the MCP instructions and the package READMEs point here.
 app.get("/why", (_req, res) => htmlCache(res, 300, 900).send(whyPage(BASE_URL)));
+// Dev shortlinks (agent402.sh/<word> redirects here path-preserved) + the install script.
+mountShortlinks(app, BASE_URL);
+app.get("/security", (_req, res) => htmlCache(res, 300, 900).send(securityPage(BASE_URL)));
+app.get("/company", (_req, res) => htmlCache(res, 300, 900).send(companyPage(BASE_URL)));
+// Real sample reports (assets/samples, src/sample-reports.js): the finished
+// artifact a buyer gets, readable before paying, indexable, with a buy box.
+// Served with or without Stripe: the fixtures are static and the buy box
+// simply 503s on a server with no checkout.
+// Content negotiation for the report pages: a client that asks for JSON and
+// not HTML (an agent) is served the bundle from the matching /api route.
+const wantsJson = (req) => { const a = String(req.headers?.accept || "").toLowerCase(); return a.includes("application/json") && !a.includes("text/html"); };
+app.get("/reports/sample/:product", (req, res) => {
+  const product = String(req.params.product || "");
+  const meta = sampleMeta(product, BASE_URL);
+  if (!meta) return notFoundPage(res, { what: "Sample report", href: "/reports", label: "All reports" });
+  htmlCache(res, 300, 900).send(reportDeliveryPage(product, {
+    api: "/api/reports/sample/", baseUrl: BASE_URL, robots: "index, follow, max-image-preview:large",
+    waitCopy: "Loading the sample report.", note: "",
+    title: meta.title, description: meta.description, canonical: meta.canonical, jsonLd: meta.jsonLd,
+    // The free alert for the sample's own target (dossier -> filing watch, etc.)
+    extraHtml: alertFormHtml({ kind: ALERT_KIND_FOR_REPORT_KIND[sampleJson(product)?.kind], target: sampleJson(product)?.input, source: `/reports/sample/${product}` }),
+    extraScripts: '<script src="/js/alert-signup.js"></script>',
+  }));
+});
+// Public reports (buyer's choice, src/human-checkout.js readPublicReport):
+// the same viewer, indexable, own title/preview/JSON-LD, buy box for the
+// reader's own subject. Served with or without Stripe (files on the volume).
+app.get("/reports/public/:publicId", (req, res, next) => {
+  if (wantsJson(req)) { req.url = `/api/reports/public/${encodeURIComponent(String(req.params.publicId || ""))}`; return next(); }
+  if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).type("html").send("<p>Too many requests, please slow down.</p>");
+  res.set("Link", `</api/reports/public/${encodeURIComponent(String(req.params.publicId || ""))}>; rel="alternate"; type="application/json"`);
+  const r = readPublicReport(String(req.params.publicId || ""));
+  if (!r) return notFoundPage(res, { what: "Public report", href: "/reports", label: "All reports" });
+  const canonical = `${BASE_URL}/reports/public/${r.publicId}`;
+  const label = HUMAN_PRODUCTS[r.product]?.label || "report";
+  const headline = reportHeadline(r, label);
+  const description = `A ${label.toLowerCase()} on "${r.input}" from Agent402, shared by its buyer: ${r.sources.length} cited sources, ${r.tables.length} data tables. Read it free, then get one for your own subject.`;
+  htmlCache(res, 300, 900).send(reportDeliveryPage(r.publicId, {
+    api: "/api/reports/public/", baseUrl: BASE_URL, robots: "index, follow, max-image-preview:large", waitCopy: "Loading the report.", note: "",
+    title: headline, description, canonical,
+    jsonLd: [
+      { "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "Agent402", item: `${BASE_URL}/` }, { "@type": "ListItem", position: 2, name: "Reports", item: `${BASE_URL}/reports` }, { "@type": "ListItem", position: 3, name: headline, item: canonical }] },
+      { "@type": "Report", "@id": `${canonical}#report`, headline, name: headline, about: r.input, isAccessibleForFree: true, ...(r.at ? { datePublished: r.at } : {}), author: { "@type": "Organization", name: "Agent402", url: BASE_URL }, publisher: { "@type": "Organization", name: "Agent402", url: BASE_URL }, mainEntityOfPage: canonical, description: description.slice(0, 300) },
+    ],
+  }));
+});
+app.get("/api/reports/public/:publicId", (req, res) => {
+  if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
+  const r = readPublicReport(String(req.params.publicId || ""));
+  if (!r) return res.status(404).json({ status: "not_found" });
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=900").json(r);
+});
+app.get("/api/reports/sample/:product", (req, res) => {
+  const j = sampleJson(String(req.params.product || ""));
+  if (!j) return res.status(404).json({ status: "not_found" });
+  res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=900").json(j);
+});
+// /markets - one-call front door for the keyless market-data tools (prices read from CATALOG).
+app.get("/markets", (_req, res) => htmlCache(res, 300, 900).send(marketsPage(BASE_URL, CATALOG)));
+// Receipts: the metered tier's settled-under-quote proof, aggregates + one
+// latest external and one latest internal row with settle tx (no payer).
+app.get("/api/proof", (_req, res) => { res.set("Cache-Control", "public, max-age=60"); res.json(proofFeed()); });
+app.get("/proof", (_req, res) => htmlCache(res, 60, 300).send(proofPage(BASE_URL, proofFeed())));
 app.get("/glossary", (_req, res) => htmlCache(res, 300, 900).send(glossaryPage(BASE_URL)));
 // x402 & MPP 101 - the presenter-mode walkthrough with the live demo (src/x402-101.js).
 app.get("/101", (_req, res) => htmlCache(res, 300, 900).send(x402101Page(BASE_URL)));
@@ -1813,7 +2377,7 @@ app.get("/api/revenue/mpp", (req, res) => {
 app.get("/revenue", async (_req, res) => {
   try {
     const snap = await revenueSnapshot(revenueWallets());
-    res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, { ...snap, allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }), agents: ledgerBuyerConcentration(revenueWallets()) }));
+    res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, { ...snap, allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }), card: cardSales({ days: 30 }), agents: ledgerBuyerConcentration(revenueWallets()) }));
   } catch (e) {
     if (e?.snapshotWarming) {
       res.status(200).type("html").send('<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body style="font-family:system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 24px;color:#14201b"><h2 style="font-weight:500">Warming up…</h2><p style="color:#5d675f">The live on-chain transaction view is loading for the first time since a deploy. It refreshes here automatically in a few seconds.</p><p><a href="/" style="color:#15654a">Home</a></p></body>');
@@ -1844,7 +2408,9 @@ const _humanGenerate = async (kind, slug, input, ctx = {}) => {
     // of every card buyer sharing one anonymous bucket.
     const key = String(ctx?.buyerKey || "human:anonymous");
     const pseudoReq = { header: (n) => (String(n).toLowerCase() === "authorization" ? key : undefined), headers: { authorization: key } };
-    const out = await h(arg, pseudoReq);
+    // Margin telemetry sees the door and the price it sold for (card/monitor),
+    // not the kit's agent-tier price - see withCompositeContext.
+    const out = await runInAbortableScope(() => withCompositeContext({ rail: ctx?.rail || "card", priceUsd: ctx?.priceUsd }, () => h(arg, pseudoReq)));
     const report = out?.dossier || out?.report;
     if (!report) throw new Error("empty report");
     // Deliver a BUNDLE, not just prose: the report plus the structured data
@@ -1956,7 +2522,7 @@ app.get("/credits", (_req, res) => res.set("Cache-Control", "public, max-age=120
 app.get("/credits/thanks", (req, res) => res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(creditsThanksPage(String(req.query.session || ""), BASE_URL)));
 if (_credits) {
   app.post("/api/credits/checkout", async (req, res) => {
-    if (checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
+    if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
     try { res.json({ url: (await _credits.createCheckout(req.body?.pack)).url }); }
     catch (e) {
       if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
@@ -2001,7 +2567,14 @@ if (humanCheckoutEnabled()) {
       // Card sales land in the SAME sales ledger as x402 settlements (rail
       // "card", network "stripe", the PaymentIntent as tx) so /revenue and the
       // operator surfaces see the human front door.
-      onSale: ({ product, priceUsd, paymentIntent }) => recordSale({ slug: product, priceUsd, rail: "card", network: "stripe", payer: null, tx: paymentIntent, wire: "stripe-checkout" }),
+      onSale: ({ product, priceUsd, paymentIntent }) => {
+        recordSale({ slug: product, priceUsd, rail: "card", network: "stripe", payer: null, tx: paymentIntent, wire: "stripe-checkout" });
+        try { capturePostHogHumanFunnel({ step: "paid", product, priceUsd }); } catch { /* telemetry never breaks the request */ }
+      },
+      // A returning buyer's older sequence stops (never re-sold what they already
+      // buy); the new purchase starts its own two-step sequence.
+      onDelivered: ({ sessionId, email, product, kind, label, input }) => { _followups.markRepeat(email); _followups.enqueue({ sessionId, email, product, kind, label, input }); },
+      onFailed: ({ email, label, refunded }) => { _followups.sendFailed({ email, label, refunded }).catch(() => {}); },
     });
   } catch (e) { console.warn("[human-checkout] init failed:", String(e?.message || e).slice(0, 200)); _humanCheckout = null; }
   if (_humanCheckout) {
@@ -2014,9 +2587,15 @@ if (humanCheckoutEnabled()) {
       res.set("Cache-Control", "no-store").json({ ...(_humanCheckout.listIssues()), compositeUsage: compositeUsageSnapshot(), compositeGuard: _compositeGuardState(), stripeWebhooks: _subs?.webhookStats?.() || null });
     });
     app.post("/api/buy", async (req, res) => {
-      if (checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
-      try { res.json({ url: (await _humanCheckout.createSession(req.body?.product, req.body?.input)).url }); }
+      if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
+      const product = typeof req.body?.product === "string" ? req.body.product.slice(0, 40) : null;
+      try {
+        const url = (await _humanCheckout.createSession(req.body?.product, req.body?.input)).url;
+        try { capturePostHogHumanFunnel({ step: "checkout_started", product, kind: HUMAN_PRODUCTS[product]?.kind, priceUsd: HUMAN_PRODUCTS[product] ? HUMAN_PRODUCTS[product].price / 100 : null }); } catch { /* telemetry never breaks the request */ }
+        res.json({ url });
+      }
       catch (e) {
+        try { capturePostHogHumanFunnel({ step: "checkout_refused", product, reason: e?.statusCode && e.statusCode < 500 ? String(e.message).slice(0, 80) : "server" }); } catch { /* telemetry never breaks the request */ }
         // Our own 4xx messages are safe to show; a Stripe/SDK error is logged
         // and answered generically (its text can echo key mode/request detail).
         if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
@@ -2024,7 +2603,22 @@ if (humanCheckoutEnabled()) {
         res.status(500).json({ error: "Could not start checkout. Please try again in a moment." });
       }
     });
-    app.get("/r/:sessionId", (req, res) => res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(reportDeliveryPage(String(req.params.sessionId || ""), { baseUrl: BASE_URL, robots: "noindex, nofollow" })));
+    app.get("/r/:sessionId", (req, res, next) => {
+      // An agent reading the report link gets the JSON bundle on the same URL
+      // (Accept: application/json); a browser gets the page, with a Link to it.
+      if (wantsJson(req)) { req.url = `/api/r/${encodeURIComponent(String(req.params.sessionId || ""))}`; return next(); }
+      res.set("Link", `</api/r/${encodeURIComponent(String(req.params.sessionId || ""))}>; rel="alternate"; type="application/json"`);
+      try { capturePostHogHumanFunnel({ step: "report_opened" }); } catch { /* telemetry never breaks the request */ }
+      res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(reportDeliveryPage(String(req.params.sessionId || ""), { baseUrl: BASE_URL, robots: "noindex, nofollow" }));
+    });
+    // The session id is the bearer: only its holder can publish or unpublish.
+    app.post("/api/r/:sessionId/public", express.json({ limit: "2kb" }), (req, res) => {
+      if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
+      const r = _humanCheckout.setPublic(String(req.params.sessionId || ""), req.body?.public === true);
+      if (r.status !== "done") return res.status(r.status === "invalid" ? 400 : 404).json(r);
+      try { capturePostHogHumanFunnel({ step: r.public ? "report_published" : "report_unpublished" }); } catch { /* telemetry never breaks the request */ }
+      res.set("Cache-Control", "no-store").json({ ...r, url: r.public ? `${BASE_URL}/reports/public/${r.publicId}` : null });
+    });
     app.get("/api/r/:sessionId", async (req, res) => {
       if (sessionReadLimiter.check(clientIp(req)).limited) return res.status(429).json({ status: "error", error: "Too many requests, please slow down." });
       try { res.set("Cache-Control", "no-store").json(await _humanCheckout.fulfill(String(req.params.sessionId || ""))); }
@@ -2032,14 +2626,18 @@ if (humanCheckoutEnabled()) {
     });
   }
 }
-// Monitoring subscriptions (Phase 2) - JSON routes + pages. The webhook is
+// Monitoring subscriptions - JSON routes + pages. The webhook is
 // mounted EARLY (raw body) above. Provisioning is belt-and-suspenders: the
 // confirm route records the sub from the paid session; the webhook keeps the
 // lifecycle (renewals/cancellations) in sync.
 if (_subs) {
   app.post("/api/subscribe", async (req, res) => {
-    if (checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
-    try { res.json({ url: (await _subs.createCheckout(req.body?.product, req.body?.target)).url }); }
+    if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
+    try {
+      const url = (await _subs.createCheckout(req.body?.product, req.body?.target)).url;
+      try { capturePostHogHumanFunnel({ step: "monitor_checkout_started", product: typeof req.body?.product === "string" ? req.body.product.slice(0, 40) : null }); } catch { /* telemetry never breaks the request */ }
+      res.json({ url });
+    }
     catch (e) {
       if (e?.statusCode && e.statusCode < 500 && !e.type && !e.raw) return res.status(e.statusCode).json({ error: String(e.message).slice(0, 200) });
       console.warn("[monitors] createCheckout failed:", String(e?.message || e).slice(0, 200));
@@ -2105,7 +2703,7 @@ if (_mppSubs) {
   // tempo/subscription challenge; the signed credential -> the first period
   // settles and the subscription exists.
   app.post("/api/mpp/monitors/subscribe", async (req, res) => {
-    if (checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
+    if (!req.__checkoutRateChecked && checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
     res.set("Cache-Control", "no-store");
     const auth = req.headers.authorization;
     // The rail canary's own product is mintable ONLY for a caller that carries a
@@ -2177,7 +2775,7 @@ if (_mppSubs) {
     }
   });
 }
-// Monitor scheduler (Phase 2b): the recurring fulfilment engine. Runs only when
+// Monitor scheduler: the recurring fulfilment engine. Runs only when
 // subscriptions are enabled (Stripe key) - it reuses the premium pipeline.
 let _monitors = null;
 // One fulfilment engine, two subscriber sources. The scheduler asks for exactly
@@ -2277,6 +2875,56 @@ app.get("/__operator/sales.json", (req, res) => {
   }
 });
 
+// Operator-only margin view: external revenue vs recorded upstream spend,
+// per UTC day. Deliberately NOT public - net margin is competitive
+// information (the operator, 2026-09-01). Revenue = the sales ledger's
+// external rows on money rails; spend = the server-side daily_upstream_spend
+// meter (gateway = OpenRouter cost measured per call, composite = report
+// pipelines' own accounting, x402-buyer / tempo-buyer = settled quotes our
+// spending wallets paid external sellers). Two honesty notes carried in the
+// payload: composite can overlap gateway when a report invokes a /v1 handler
+// in-process, and the meter only sees THIS process - local audit boots and
+// card/Stripe fees are not in it.
+app.get("/__operator/margin.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "no-store");
+  try {
+    const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 60));
+    const revenue = externalDailyRevenue({ days });
+    const spendRows = getDailyUpstreamSpend();
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+    const byDay = new Map();
+    for (const r of revenue) byDay.set(r.day, { day: r.day, revenueUsd: r.revenueUsd, sales: r.sales, upstream: {}, upstreamUsd: 0 });
+    for (const r of spendRows) {
+      if (r.day < cutoff) continue;
+      const row = byDay.get(r.day) || { day: r.day, revenueUsd: 0, sales: 0, upstream: {}, upstreamUsd: 0 };
+      const usd = r.usd_micro / 1e6;
+      row.upstream[r.source] = +( (row.upstream[r.source] || 0) + usd ).toFixed(6);
+      row.upstreamUsd = +(row.upstreamUsd + usd).toFixed(6);
+      byDay.set(r.day, row);
+    }
+    const daysOut = [...byDay.values()].sort((a, b) => (a.day < b.day ? -1 : 1))
+      .map((r) => ({ ...r, netUsd: +(r.revenueUsd - r.upstreamUsd).toFixed(6) }));
+    const totals = daysOut.reduce((t, r) => ({
+      revenueUsd: +(t.revenueUsd + r.revenueUsd).toFixed(6),
+      upstreamUsd: +(t.upstreamUsd + r.upstreamUsd).toFixed(6),
+      sales: t.sales + r.sales,
+    }), { revenueUsd: 0, upstreamUsd: 0, sales: 0 });
+    res.json({
+      days,
+      totals: { ...totals, netUsd: +(totals.revenueUsd - totals.upstreamUsd).toFixed(6) },
+      byDay: daysOut,
+      notes: [
+        "composite spend can overlap gateway spend when a report runs a /v1 handler in-process (linkedin-article image legs)",
+        "spend is metered in THIS process only: local audit boots, Stripe card fees and gas are not included",
+        "spend recording started 2026-09-01 - earlier days show revenue with no spend, which is a recording gap, not free serving",
+      ],
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // x402 Economy Observatory — chain-wide settlement analytics (30-min cache
 // inside the snapshot; per-query error resilience; env-gated on CDP keys).
 app.get("/api/x402-economy", async (_req, res) => {
@@ -2304,7 +2952,7 @@ app.get("/blog", (_req, res) => htmlCache(res, 300, 900).send(blogIndex(BASE_URL
 // The catalog-milestone post was renamed 2026-08-18 (its old slug carried an
 // exact tool count the evergreen rule forbids on served pages); keep the URL.
 app.get("/blog/1000-tools-milestone", (_req, res) => res.redirect(301, "/blog/catalog-milestone"));
-app.get("/blog/:slug", (req, res) => { const html = blogPost(BASE_URL, req.params.slug); if (!html) return res.status(404).type("html").send('<p>Post not found. <a href="/blog">All posts</a></p>'); htmlCache(res, 300, 900).send(html); });
+app.get("/blog/:slug", (req, res) => { const html = blogPost(BASE_URL, req.params.slug); if (!html) return notFoundPage(res, { what: "Post", href: "/blog", label: "All posts" }); htmlCache(res, 300, 900).send(html); });
 app.get("/compare", (_req, res) => htmlCache(res, 300, 900).send(comparePage(BASE_URL)));
 app.get("/community", (_req, res) => htmlCache(res, 300, 900).send(communityPage(BASE_URL)));
 app.get("/contribute", (_req, res) => htmlCache(res, 300, 900).send(contributePage(BASE_URL)));
@@ -2321,7 +2969,7 @@ app.get("/badges", (_req, res) => htmlCache(res, 300, 900).send(badgesPage(BASE_
 app.get("/badges/:style.svg", (req, res) => { const svg = badgeSvg(req.params.style); if (!svg) return res.status(404).json({ error: "unknown badge style" }); res.setHeader("Cache-Control", "public, max-age=3600").type("image/svg+xml").send(svg); });
 app.get("/docs/adapters", (_req, res) => htmlCache(res, 300, 900).send(adapterDocsIndex(BASE_URL)));
 app.get("/docs/webhooks", (_req, res) => htmlCache(res, 300, 900).send(webhooksPage(BASE_URL)));
-app.get("/docs/adapters/:slug", (req, res) => { const html = adapterDocPage(BASE_URL, req.params.slug); if (!html) return res.status(404).type("html").send('<p>Adapter not found. <a href="/docs/adapters">All adapters</a></p>'); htmlCache(res, 300, 900).send(html); });
+app.get("/docs/adapters/:slug", (req, res) => { const html = adapterDocPage(BASE_URL, req.params.slug); if (!html) return notFoundPage(res, { what: "Adapter", href: "/docs/adapters", label: "All adapters" }); htmlCache(res, 300, 900).send(html); });
 app.get("/changelog.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=600"); res.type("application/rss+xml").send(changelogRss(BASE_URL)); });
 app.get("/sitemapindex.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapIndex(BASE_URL)); });
 app.get("/sitemap-pages.xml", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=3600"); res.type("application/xml").send(sitemapPages(BASE_URL, CATALOG)); });
@@ -2349,10 +2997,13 @@ app.get("/status", async (_req, res) => {
 app.get("/api/status", async (_req, res) => {
   res.set("Cache-Control", "public, max-age=60").json(statusSnapshot({ baseUrl: BASE_URL, live: await statusLive() }));
 });
-// Probe intake. Operator-authed because it writes the record that /status is
+// Probe intake. Authenticated because it writes the record that /status is
 // built from — an open endpoint would let anyone forge our uptime history.
+// Accepts the probe-only STATUS_PROBE_TOKEN (see statusProbeAuthed) as well as
+// the operator token, so an observer on another platform need not hold a
+// credential that also reaches /__operator/refunds/update and friends.
 app.post("/api/status/probe", express.json({ limit: "256kb" }), (req, res) => {
-  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (!statusProbeAuthed(req)) return res.status(404).json({ error: "Not found" });
   const body = req.body || {};
   const rows = [];
   const push = (component, ok, detail, ts, url) => {
@@ -2489,6 +3140,46 @@ function readCookie(req, name) {
 }
 // Raw operator token, presented via a header for curl/API access only. The
 // browser NEVER carries the root token (see the session cookie below).
+// A probe-only credential, so an observer outside production does not have to
+// hold the root operator token to write one record.
+//
+// Until 2026-08-30 both observers (the GitHub heartbeat and the Cloudflare
+// Worker) carried AGENT402_OPERATOR_TOKEN just to POST /api/status/probe. That
+// token also reaches /__operator/refunds/update, /credits/disable,
+// /well-known (publishes a document at our own domain), /leads, /backup/run,
+// /monitors/run, /alerts/run, /stats and /wishes - so a second platform was
+// holding a master key to use exactly one door.
+//
+// STATUS_PROBE_TOKEN opens that one door and nothing else: it is read here and
+// nowhere else in the tree. Unset, behaviour is byte-identical to before (the
+// operator token still works), which is what lets the two be rotated
+// independently without an observer going dark mid-rotation.
+const STATUS_PROBE_TOKEN = process.env.STATUS_PROBE_TOKEN || "";
+const statusProbeTokenOk = (t) => {
+  if (!STATUS_PROBE_TOKEN || typeof t !== "string" || !t) return false;
+  const a = Buffer.from(t);
+  const b = Buffer.from(STATUS_PROBE_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+};
+if (STATUS_PROBE_TOKEN) {
+  if (OPERATOR_TOKEN && STATUS_PROBE_TOKEN === OPERATOR_TOKEN) {
+    console.warn("[status-probe] STATUS_PROBE_TOKEN is the SAME VALUE as AGENT402_OPERATOR_TOKEN - that defeats the entire point of it; mint a distinct random value");
+  } else if (STATUS_PROBE_TOKEN.length < 24) {
+    console.warn(`[status-probe] STATUS_PROBE_TOKEN is only ${STATUS_PROBE_TOKEN.length} characters and gates a public endpoint - use 32+ random characters`);
+  }
+}
+// Function declaration, not a const: the route that calls it is registered
+// EARLIER in this file, and only a declaration hoists (same hazard the comment
+// above getOperatorToken's first use names).
+function statusProbeAuthed(req) {
+  // The narrow credential first, so an observer carrying only it never touches
+  // the operator limiter or the guessing counter.
+  const presented = getOperatorToken(req);
+  if (presented && statusProbeTokenOk(presented)) return true;
+  // Otherwise the operator token still works, and a WRONG credential is
+  // rate-limited and counted exactly as it was before.
+  return operatorAuthed(req);
+}
 const getOperatorToken = (req) => {
   const auth = req.headers["authorization"];
   if (typeof auth === "string" && auth.startsWith("Bearer ")) return auth.slice(7);
@@ -2550,6 +3241,29 @@ setInterval(() => {
 const operatorAttemptLimiter = createRateLimiter("operator-attempt", { perMin: 10, perHour: 60 });
 const operatorAttemptIp = (req) => req.ip || req.socket?.remoteAddress || "unknown";
 
+// Global wrong-credential counter for the operator surfaces (rolling hour).
+// The per-IP limiter caps one source; a distributed guess never crossed a
+// threshold anyone watched (review 2026-08-28). Exposed as a STATUS WORD on
+// /api/gateway-status (`operatorAuth`), and the heartbeat pages on "elevated".
+const OPERATOR_AUTH_FAIL_ALERT = Math.max(10, parseInt(process.env.OPERATOR_AUTH_FAIL_ALERT || "100", 10) || 100);
+const _opAuthFails = [];
+let _opAuthAlertedAt = 0;
+function noteOperatorAuthFailure() {
+  const now = Date.now();
+  _opAuthFails.push(now);
+  while (_opAuthFails.length && now - _opAuthFails[0] > 3_600_000) _opAuthFails.shift();
+  if (_opAuthFails.length > 5000) _opAuthFails.splice(0, _opAuthFails.length - 5000);
+  if (_opAuthFails.length >= OPERATOR_AUTH_FAIL_ALERT && now - _opAuthAlertedAt > 600_000) {
+    _opAuthAlertedAt = now;
+    console.warn(`[operator-auth] ${_opAuthFails.length} wrong operator credentials in the last hour (threshold ${OPERATOR_AUTH_FAIL_ALERT}) - token guessing in progress; rotate AGENT402_OPERATOR_TOKEN if this persists`);
+  }
+}
+export function operatorAuthStatus() {
+  const now = Date.now();
+  while (_opAuthFails.length && now - _opAuthFails[0] > 3_600_000) _opAuthFails.shift();
+  const n = _opAuthFails.length;
+  return { status: n >= OPERATOR_AUTH_FAIL_ALERT ? "elevated" : "ok", failures1h: n, threshold: OPERATOR_AUTH_FAIL_ALERT };
+}
 function operatorAuthed(req) {
   const presented = Boolean(getOperatorToken(req)) || Boolean(readCookie(req, OPERATOR_COOKIE));
   if (!presented) return false;  // anonymous: nothing to brute-force, nothing to count
@@ -2560,6 +3274,7 @@ function operatorAuthed(req) {
   if (operatorSessionValid(readCookie(req, OPERATOR_COOKIE))) return true; // browser session
   // Only a WRONG credential consumes budget.
   operatorAttemptLimiter.check(ip);
+  noteOperatorAuthFailure();
   return false;
 }
 const reqIsHttps = (req) =>
@@ -2591,7 +3306,7 @@ app.post("/__operator/login", (req, res) => {
   const ip = (req.ip || req.socket.remoteAddress || "?").trim();
   if (operatorLoginLimiter.check(ip).limited) return res.status(429).json({ ok: false, error: "too many attempts, slow down" });
   const token = typeof req.body?.token === "string" ? req.body.token : "";
-  if (!operatorTokenOk(token)) return res.status(401).json({ ok: false, error: "invalid token" });
+  if (!operatorTokenOk(token)) { noteOperatorAuthFailure(); return res.status(401).json({ ok: false, error: "invalid token" }); }
   // A correct root token supersedes whatever failures this IP has accumulated.
   // Without this the operator can lock themselves out with no way back: an
   // EXPIRED session cookie is indistinguishable from a guessed one, so a browser
@@ -2752,6 +3467,21 @@ app.get("/__operator/backup.json", (req, res) => {
 // Manual backup run - fans out to the bucket (third-party writes), so it
 // takes the heavy-route limiter like the other upstream-reaching
 // diagnostics. Fire-and-report: the run can take minutes on a cold day.
+// Mint refund debts for buyers the charged-failure detector could not see: it
+// mints only on a NON-200, and the packs that shipped broken all answered 200
+// with an empty envelope. RECORDS ONLY - this sends nothing, and refund-run.js
+// remains the sole payer (dry-run by default, capped, and it re-derives the
+// inbound payment from the chain before every send). Dry by default here too:
+// ?write=1 is what actually mints.
+app.post("/__operator/refunds/backfill", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  if (operatorHeavyLimited(req, res)) return;
+  try {
+    res.json(backfillBrokenPackRefunds({ write: String(req.query.write || "") === "1" }));
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
 app.post("/__operator/backup/run", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   if (operatorHeavyLimited(req, res)) return;
@@ -2906,7 +3636,7 @@ for (const alias of ["/router", "/sor", "/smart-order-router"]) {
 app.get("/guides", (_req, res) => htmlCache(res, 300, 900).send(guidesIndex(BASE_URL)));
 app.get("/guides/:slug", (req, res) => {
   const html = guidePage(BASE_URL, req.params.slug);
-  if (!html) return res.status(404).type("html").send('<p>Guide not found. <a href="/guides">All guides</a></p>');
+  if (!html) return notFoundPage(res, { what: "Guide", href: "/guides", label: "All guides" });
   htmlCache(res, 300, 900).send(html);
 });
 // /skills — curated multi-tool workflows. Index + per-pack detail pages, both
@@ -2915,7 +3645,7 @@ app.get("/guides/:slug", (req, res) => {
 app.get("/skills", (_req, res) => htmlCache(res, 300, 900).send(skillsIndex(BASE_URL)));
 app.get("/skills/:slug", (req, res) => {
   const html = skillPackPage(BASE_URL, req.params.slug, CATALOG);
-  if (!html) return res.status(404).type("html").send('<p>Skill pack not found. <a href="/skills">All skill packs</a></p>');
+  if (!html) return notFoundPage(res, { what: "Skill pack", href: "/skills", label: "All skill packs" });
   htmlCache(res, 300, 900).send(html);
 });
 // Machine-readable skill packs — the canonical source for the `agent402-mcp`
@@ -2949,7 +3679,7 @@ app.get("/docs", (_req, res) => htmlCache(res, 300, 900).send(ledgerDocsPage(BAS
 app.get("/docs/api", (_req, res) => htmlCache(res, 300, 900).send(docsApi(BASE_URL, Object.values(CATALOG))));
 app.get("/docs/:slug", (req, res) => {
   const html = docsPage(BASE_URL, req.params.slug);
-  if (!html) return res.status(404).type("html").send('<p>Doc not found. <a href="/docs">All docs</a></p>');
+  if (!html) return notFoundPage(res, { what: "Doc", href: "/docs", label: "All docs" });
   htmlCache(res, 300, 900).send(html);
 });
 // Top-level machine-readable service manifest — one fetch tells a discovery
@@ -3019,6 +3749,16 @@ function getPerformance24h() {
 // MANIFEST is built once; we only enrich with the live performance24h block
 // on each request when analytics is enabled. Failing-open: if the analytics
 // query stalls, we serve the static manifest instead of blocking the call.
+const serveManifest = (_req, res) => {
+  const perf = getPerformance24h();
+  if (perf) res.json({ ...MANIFEST, performance24h: perf });
+  else res.json(MANIFEST);
+};
+// Indexers guess these names for the manifest (sentinel402, mpp32-indexer,
+// bare "node" crawlers - 2026-08-28 HTTP log); a 404 there reads as "no
+// manifest". Same document, same cache.
+app.get("/.well-known/x402.json", serveManifest);
+app.get("/.well-known/x402-services.json", serveManifest);
 app.get("/.well-known/x402", (_req, res) => {
   const perf = getPerformance24h();
   if (perf) res.json({ ...MANIFEST, performance24h: perf });
@@ -3050,9 +3790,10 @@ app.get("/api/rails", (_req, res) => {
     rails,
   });
 });
-app.get("/api/reliability", (_req, res) =>
+app.get("/api/reliability", async (_req, res) =>
   res.json(reliabilityReport({
     baseUrl: BASE_URL, network: NETWORK, wallet: WALLET_ADDRESS,
+    observedStatus: await (async () => { try { return statusSnapshot({ baseUrl: BASE_URL, live: await statusLive() }).overall; } catch { return null; } })(),
     stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }),
   }))
 );
@@ -3452,7 +4193,7 @@ app.get("/stellar", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot, rail, activity, selectedSeller, stellarWallet: selfWallet || undefined }));
+    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot, rail, activity, selectedSeller, stellarWallet: selfWallet || undefined, host: hostEntryFigures("stellar") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -3531,7 +4272,7 @@ app.get("/algorand", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot, rail, activity, selectedSeller, algorandWallet: selfWallet || undefined }));
+    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot, rail, activity, selectedSeller, algorandWallet: selfWallet || undefined, host: hostEntryFigures("algorand") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -3723,7 +4464,7 @@ for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
         scanWallet ? getActivityForChain(chainKey, scanWallet) : Promise.resolve(null),
       ]);
       const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
-      htmlCache(res, 120, 600).send(marketPage(chainKey, BASE_URL, { snapshot, rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all: req.query.all === "1" }));
+      htmlCache(res, 120, 600).send(marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all: req.query.all === "1" , host: hostEntryFigures(chainKey) }));
     } catch (e) {
       res.status(500).type("text/plain").send("temporarily unavailable");
     }
@@ -3832,13 +4573,36 @@ app.get("/marketplace", async (req, res) => {
   try { leaderboardSnap = getLeaderboardSnapshot(); } catch { /* directory still renders */ }
   let economySnap = null;
   try { economySnap = await x402EconomySnapshot(); } catch { /* strip omitted */ }
-  htmlCache(res, 120, 600).send(marketPage(null, BASE_URL, { snapshot, leaderboardSnap, economySnap, all: req.query.all === "1", wallet: WALLET_ADDRESS }));
+  htmlCache(res, 120, 600).send(marketPage(null, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), leaderboardSnap, economySnap, all: req.query.all === "1", wallet: WALLET_ADDRESS, host: hostEntryFigures() }));
 });
+// The host's own entry for the discovery surfaces: external-only ledger
+// figures, rendered outside every ranking and count (src/host-entry.js).
+// CACHED, because these are synchronous better-sqlite3 aggregates and one of
+// them scans ALL TIME: measured 2026-08-28 at ~215 ms of BLOCKED event loop
+// per render on a 120k-row ledger, on public crawler-hit pages, on a single
+// replica. htmlCache() is a browser hint and there is no CDN, so without this
+// every crawl of /marketplace and the twelve chain pages paid it again. Same
+// doctrine as the economy snapshot: serve the cached value, rebuild past the
+// window, never block a visitor on the ledger.
+const HOST_FIGURES_TTL_MS = Number(process.env.HOST_FIGURES_TTL_MS) || 60_000;
+const hostFiguresCache = new Map(); // chainKey|"" -> { at, value }
+function hostEntryFigures(chainKey = null) {
+  const key = chainKey || "";
+  const hit = hostFiguresCache.get(key);
+  if (hit && Date.now() - hit.at < HOST_FIGURES_TTL_MS) return hit.value;
+  let value = null;
+  try {
+    value = hostFigures({ summaryFn: salesSummary, byNetworkFn: externalByNetwork, network: chainKey || null, networkLabel: chainKey ? (SNAPSHOT_RAIL_LABEL[chainKey] || chainKey.charAt(0).toUpperCase() + chainKey.slice(1)) : null, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL });
+  } catch { value = hit ? hit.value : null; } // a failed rebuild keeps the last good figures
+  hostFiguresCache.set(key, { at: Date.now(), value });
+  return value;
+}
+export const _hostFiguresCacheForTest = hostFiguresCache;
 // The MPP marketplace - independent directory, synchronous snapshot (no
 // on-chain join, unlike /marketplace above), same cache window.
 app.get("/mpp-marketplace", (_req, res) => {
   try {
-    htmlCache(res, 120, 600).send(mppMarketPage(BASE_URL, mppIndexSnapshot(), mppLeaderboardSnapshot()));
+    htmlCache(res, 120, 600).send(mppMarketPage(BASE_URL, mppIndexSnapshot(), mppLeaderboardSnapshot(), { host: hostEntryFigures() }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -3850,6 +4614,14 @@ app.get("/api/mpp-index", (_req, res) => {
   const snap = mppIndexSnapshot();
   res.set("Cache-Control", "public, max-age=120");
   res.json({ ...snap, generatedAt: new Date(snap.generatedAt).toISOString() });
+});
+// Solana SPL leaderboard: inbound USDC credits per seller payTo, hour-fresh,
+// counts only (never a per-transaction feed). The host's own payTo is the
+// flagged `self` row, ranked like everyone else.
+app.get("/api/solana-leaderboard", (req, res) => {
+  const snap = getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null });
+  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), operatorAuthed(req) ? 1000 : 200);
+  res.set("Cache-Control", "public, max-age=120, stale-while-revalidate=600").json({ ...snap, top, rows: snap.rows.slice(0, top), truncatedList: snap.rows.length > top });
 });
 app.get("/api/mpp-leaderboard", (_req, res) => {
   const lb = mppLeaderboardSnapshot();
@@ -3880,9 +4652,16 @@ app.get("/api/index", (req, res) => {
   // ?seller=<origin or host> — the per-seller drill-down (full tool list, paid
   // flags) so a seller can self-diagnose exactly what we hold for them.
   if (req.query.seller) {
+    // The host itself: never in the crawl cache, the submitted seeds or the
+    // external pool (isSelfOrigin keeps it out), so answer the labelled
+    // external-only summary instead of "not found" (2026-08-28).
+    if (isSelfSellerQuery(String(req.query.seller), BASE_URL)) {
+      const me = hostIndexEntry(hostEntryFigures());
+      if (me) return res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json(me);
+    }
     const detail = sellerDetail(String(req.query.seller));
     if (!detail) return res.status(404).json({ error: "seller not found in the index", seller: String(req.query.seller).slice(0, 253) });
-    return res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json(detail);
+    return res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json({ ...withDispatchFields(detail), legend: dispatchLegend() });
   }
   // The full snapshot is ~1.4MB: every crawled origin with its health score,
   // its re-crawl history and its whole tool list. The per-origin HEALTH and
@@ -3902,7 +4681,7 @@ app.get("/api/index", (req, res) => {
   const sellers = Array.isArray(snap.sellers) ? snap.sellers : [];
   const perPage = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 250);
   const page = Math.max(parseInt(req.query.page, 10) || 0, 0);
-  const slice = sellers.slice(page * perPage, page * perPage + perPage).map(({ history, ...rest }) => rest);
+  const slice = sellers.slice(page * perPage, page * perPage + perPage).map(({ history, ...rest }) => (rest.local ? rest : withDispatchFields(rest)));
   res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json({
     ...snap,
     sellers: slice,
@@ -3911,6 +4690,7 @@ app.get("/api/index", (req, res) => {
     sellerCount: sellers.length,
     pages: Math.ceil(sellers.length / perPage),
     note: `Paginated: ${slice.length} of ${sellers.length} sellers. Use ?page=N&limit=<=250, or ?seller=<host> for one origin with its full detail.`,
+    legend: dispatchLegend(),
   });
 });
 // Self-serve listing: validate + rate-limit here; ALL probing happens inside
@@ -3922,6 +4702,13 @@ app.get("/api/index", (req, res) => {
 const REG_WINDOW_MS = 3600_000;
 const regByIp = new Map(); // ip -> [timestamps]; global cap is regGlobal below
 let regGlobal = [];
+// The backstop, not the fairness rule: per-IP (5/hour) is what stops one actor,
+// and this exists only so the endpoint cannot become a fetch amplifier at
+// scale. It was 30/hour, low enough that ordinary adoption hit it - each new
+// seller costs us one crawl, which the 30-minute cycle already absorbs.
+// Env-overridable so it can be raised without a deploy.
+const REG_GLOBAL_MAX = Math.max(30, Number(process.env.INDEX_REGISTER_GLOBAL_MAX || 300));
+let regGlobalTripped = 0;
 // F21: evict stale keys from the one-time-IP rate maps so distributed input
 // can't grow them without bound (the per-IP prune only fires when the SAME IP
 // returns). Mirrors the powChallengeHits / operatorSessions sweeps; the inline
@@ -3940,7 +4727,21 @@ app.post("/api/index/register", async (req, res) => {
   const v = validateOriginInput(req.body?.origin, { selfOrigin: BASE_URL });
   if (v.error) return res.status(400).json({ error: v.error });
   regGlobal = regGlobal.filter((t) => now - t < REG_WINDOW_MS);
-  if (regGlobal.length >= 30) return res.status(429).json({ error: "rate limit: registration is busy, try again later" });
+  if (regGlobal.length >= REG_GLOBAL_MAX) {
+    // A global cap is a backstop, not the fairness mechanism - the per-IP cap
+    // above is. At 30/hour it did the second job badly: one actor spending 5
+    // from each of six addresses exhausted the budget for every seller on earth
+    // for the rest of the hour, and a first-time seller got "registration is
+    // busy" with nothing they could do. Measured 2026-08-31 from the mailbox:
+    // three sellers hit this in one week and two gave up and emailed instead -
+    // the growth funnel refusing the people it exists to serve. Re-registering a
+    // KNOWN origin short-circuits before this cap, so only new sellers were hit.
+    if (!regGlobalTripped || now - regGlobalTripped > 600_000) {
+      console.warn(`[index-register] GLOBAL cap hit (${regGlobal.length}/${REG_GLOBAL_MAX} in the last hour) - NEW sellers are being refused`);
+      regGlobalTripped = now;
+    }
+    return res.status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
+  }
   mine.push(now); regByIp.set(ip, mine); regGlobal.push(now);
   const result = await registerOrigin(v.origin);
   res.json(result);
@@ -3962,14 +4763,21 @@ app.post("/api/mpp-index/register", async (req, res) => {
   const v = validateMppOriginInput(req.body?.origin, { selfOrigin: BASE_URL });
   if (v.error) return res.status(400).json({ error: v.error });
   mppRegGlobal = mppRegGlobal.filter((t) => now - t < REG_WINDOW_MS);
-  if (mppRegGlobal.length >= 30) return res.status(429).json({ error: "rate limit: registration is busy, try again later" });
+  if (mppRegGlobal.length >= REG_GLOBAL_MAX) return res.status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
   mine.push(now); mppRegByIp.set(ip, mine); mppRegGlobal.push(now);
   // Optional probe hint: the priced path (and GET/POST) the seller's 402 lives
   // on, for sellers not yet in the registry (validated in registerMppOrigin).
   const result = await registerMppOrigin(v.origin, { path: req.body?.path, method: req.body?.method });
   res.json(result);
 });
-const computeRoute = (q, k, include, net) => routeQuery({ query: q, top: k, include, networkFilter: net, ...indexCtx() });
+const computeRoute = (q, k, include, net) => {
+  const out = routeQuery({ query: q, top: k, include, networkFilter: net, ...indexCtx() });
+  // Every row says whether the router would pay it and why (the readout's
+  // finding: executeVia with no networks in the row read as "dispatchable").
+  out.results = (out.results || []).map((r) => withDispatchFields(r, { local: r.seller === "self", rowLevel: true }));
+  out.dispatchLegend = dispatchLegend();
+  return out;
+};
 const routeCachePath = "/api/route";
 const routeCachePolicy = CACHEABLE_ROUTES[routeCachePath];
 app.get("/api/route", (req, res) => {
@@ -4022,7 +4830,9 @@ app.get("/api/leaderboard", (req, res) => {
   // nobody choosing a seller needs rank 400. The operator token lifts it for
   // our own tooling.
   const topCeiling = operatorAuthed(req) ? 500 : 50;
-  const top = Math.min(Math.max(parseInt(req.query.top, 10) || 25, 1), topCeiling);
+  const requestedTop = parseInt(req.query.top, 10) || 25;
+  const top = Math.min(Math.max(requestedTop, 1), topCeiling);
+  const topTruncated = requestedTop > topCeiling; // say it, never clamp silently
   const include = req.query.include === "external" ? "external" : "all";
   const self = (req.query.self || WALLET_ADDRESS || "").toLowerCase();
   const requested = String(req.query.window || "").toLowerCase();
@@ -4043,11 +4853,13 @@ app.get("/api/leaderboard", (req, res) => {
     windowServed: snap.windowLabel || "24h",
     leaderboard: board.slice(0, top),
     totalSellers: (snap.leaderboard || []).length,
+    top,
+    ...(topTruncated ? { topRequested: requestedTop, truncated: true, truncatedReason: `?top is capped at ${topCeiling} on this endpoint` } : {}),
   });
 });
 // Human-readable companion to /api/leaderboard. Same cached snapshot, rendered
 // as a dashboard so visitors (and the site nav) have something to land on.
-app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(ledgerLeaderboardPage(BASE_URL, getLeaderboardSnapshot(), { stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), walletAddress: WALLET_ADDRESS })));
+app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(ledgerLeaderboardPage(BASE_URL, getLeaderboardSnapshot(), { stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), walletAddress: WALLET_ADDRESS, host: hostEntryFigures() })));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(robotsTxt(BASE_URL)));
 // IndexNow ownership key file (env-gated no-op like the other integrations).
 // The protocol verifies a submitted key by fetching /{key}.txt from the host;
@@ -4091,6 +4903,33 @@ app.get("/fonts/:file", (req, res) => {
   catch { return res.status(404).end(); }
   res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
   res.type("font/woff2").send(buf);
+});
+// Sample fixtures for the skill packs whose input is a user-supplied
+// artifact - a PDF to read, an image to transform. Those packs shipped with
+// placeholder prose or a 404ing URL as their published example
+// ("/tmp/upload-abc123", "https://example.com/invoice.pdf"), so every step
+// failed on the example we tell agents to copy, and the partial-success
+// envelope hid it behind a 200 until 2026-08-31.
+//
+// Hosted here rather than pointed at a third party on purpose: an example in
+// our own catalog should not break because someone else moved a file, and CI
+// runs these examples on every push. Both files are GENERATED, not vendored
+// (see scripts/build-fixtures.js) - the repo carries no binary blob whose
+// provenance we cannot state. Same safety shape as /fonts/:file: a strict
+// filename allowlist, no path traversal, no directory listing.
+const FIXTURE_FILES = {
+  "sample-invoice.pdf": "application/pdf",
+  "sample-image.png": "image/png",
+};
+app.get("/fixtures/:file", (req, res) => {
+  const file = String(req.params.file || "");
+  const type = Object.hasOwn(FIXTURE_FILES, file) ? FIXTURE_FILES[file] : null;
+  if (!type) return res.status(404).end();
+  let buf;
+  try { buf = readFileSync(new URL(`../assets/fixtures/${file}`, import.meta.url)); }
+  catch { return res.status(404).end(); }
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  res.type(type).send(buf);
 });
 // Self-hosted static JS (assets/js/), replacing what used to be inline
 // <script> content site-wide - the CSP hardening that dropped 'unsafe-inline'
@@ -4283,6 +5122,21 @@ app.get("/card-1280.png", async (_req, res) => {
     res.redirect(302, "/card.svg");
   }
 });
+// Verifiers look for the spec at the conventional names too (Dexter-Verifier
+// asked /swagger.json and /api-docs/openapi.json, 2026-08-28).
+for (const alias of ["/swagger.json", "/api-docs/openapi.json", "/api/openapi.json"]) app.get(alias, (_req, res) => res.redirect(301, "/openapi.json"));
+// A GET on the gateway base (a human or an agent probing "/v1", "/v1/info",
+// "/v1/metered") answers a small index instead of a 404.
+const gatewayIndex = (_req, res) => res.set("Cache-Control", "public, max-age=600").json({
+  ok: true,
+  service: "Agent402 model gateway",
+  models: `${BASE_URL}/v1/models`,
+  metered: { chat: `${BASE_URL}/v1/metered/chat/completions`, messages: `${BASE_URL}/v1/metered/messages`, responses: `${BASE_URL}/v1/metered/responses`, pricing: "quoted per request from the body, settled at actual usage for credits and upto buyers" },
+  flat: Object.values(TIERS).filter((t) => t.route && !t.metered).map((t) => ({ route: t.route, priceUsd: t.price })),
+  pay: { x402: "PAYMENT-SIGNATURE (USDC)", mpp: "Authorization: Payment", credits: "Authorization: Bearer a402_... (buy at /credits)" },
+  docs: `${BASE_URL}/guides/agent-hosts`,
+});
+for (const p of ["/v1", "/v1/info", "/v1/metered"]) app.get(p, gatewayIndex);
 app.get("/openapi.json", (_req, res) => res.set("Cache-Control", "public, max-age=3600").json(openapiSpec(BASE_URL, CATALOG)));
 app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(ledgerCatalogPage(BASE_URL, CATALOG, SKILL_PACKS)));
 app.get("/shop", (_req, res) => htmlCache(res, 300, 900).send(shopPage(BASE_URL, CATALOG)));
@@ -4426,13 +5280,13 @@ app.get(/^\/tools\/convert-[a-z0-9-]+-to-[a-z0-9-]+$/, (_req, res) => res.redire
 app.get("/tools/category/convert", (_req, res) => res.redirect(301, "/tools/unit-convert"));
 app.get("/tools/category/:cat", (req, res) => {
   const html = categoryPage(BASE_URL, CATALOG, req.params.cat);
-  if (!html) return res.status(404).type("html").send('<p>Category not found. <a href="/tools">All tools</a></p>');
+  if (!html) return notFoundPage(res, { what: "Category", href: "/tools", label: "All tools" });
   htmlCache(res, 300, 900).send(html);
 });
 app.get("/tools/:slug", (req, res) => {
   const tools = toolList(CATALOG);
   const tool = tools.find((t) => t.slug === req.params.slug);
-  if (!tool) return res.status(404).type("html").send('<p>Tool not found. <a href="/tools">All tools</a></p>');
+  if (!tool) return notFoundPage(res, { what: "Tool", href: "/tools", label: "All tools" });
   const related = tools.filter((t) => t.category === tool.category && t.slug !== tool.slug).slice(0, 3);
   const cachePolicy = tool.method === "GET" ? CACHEABLE_ROUTES[tool.path] : null;
   htmlCache(res, 300, 900).send(toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null }));
@@ -4498,10 +5352,29 @@ app.get("/api/pow/challenge", (req, res) => {
 // tool_calls table. Lets agents shopping the catalog see real performance
 // without navigating to /analytics. Falls back to omitting the field if the
 // query fails / DB is unset, so /api/stats never breaks on a slow Postgres.
+// The one settled-transaction count every public surface shows (the operator,
+// 2026-09-01): derived from the SAME two ledger reads /revenue uses
+// (revenue-ledger allTimeInboundCount + the Tempo MPP feed count), so the
+// homepage counter and the /revenue hero can never disagree again. The
+// in-process viaUSDC tally stays for ops - it can only count what this
+// process witnessed, and the chain is the ground truth. 60s memo because
+// homepage traffic must never pay a sqlite aggregate per render.
+let __settledMemo = { at: 0, n: 0 };
+function settledOnChainCount() {
+  if (Date.now() - __settledMemo.at < 60_000) return __settledMemo.n;
+  try {
+    const n = Number(ledgerSummary(revenueWallets())?.allTimeInboundCount || 0)
+      + Number(mppSales({ detailed: false })?.rails?.tempo?.count || 0);
+    if (n > 0) __settledMemo = { at: Date.now(), n };
+  } catch { /* keep serving the last good count */ }
+  return __settledMemo.n;
+}
+
 app.get("/api/stats", (_req, res) => {
   const base = getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES });
   const perf = getPerformance24h();
   if (perf) base.performance24h = perf;
+  base.settledOnChain = settledOnChainCount();
   res.json(base);
 });
 
@@ -4534,6 +5407,12 @@ app.get("/api/analytics", async (req, res) => {
   res.json(redactAnalytics(data, operatorAuthed(req)));
 });
 
+let __analyticsSlugSet = null;
+function analyticsKnownSlugs() {
+  if (!__analyticsSlugSet) __analyticsSlugSet = new Set(Object.values(CATALOG).map((t) => t.slug));
+  return __analyticsSlugSet;
+}
+
 // Human-readable analytics dashboard. Same data as /api/analytics, rendered as
 // HTML with stat cards, a sparkline, and the top-tools table. When no DB is
 // wired, the page shows a clean "not enabled" panel — server still boots.
@@ -4545,7 +5424,12 @@ app.get("/analytics", async (req, res) => {
   // have been cosmetic: this page renders topTools and errorTools as tables, so
   // the identical ranking stayed one HTML request away.
   const data = await getAnalytics({ windowHours, top: 25, includeSynthetic, includeProbes });
-  htmlCache(res, 30, 60).send(analyticsPage(redactAnalytics(data, operatorAuthed(req)), { baseUrl: BASE_URL }));
+  htmlCache(res, 30, 60).send(analyticsPage(redactAnalytics(data, operatorAuthed(req)), {
+    baseUrl: BASE_URL,
+    // Link a slug only when the live catalog carries it - to its tool page,
+    // which exists for every real slug regardless of route shape.
+    toolHrefFor: (slug) => (analyticsKnownSlugs().has(slug) ? `/tools/${slug}` : null),
+  }));
 });
 
 // Remote MCP connector (streamable HTTP, authless free tier): paste
@@ -4618,7 +5502,13 @@ app.get("/api/pricing", (_req, res) => {
     // credits for every tool, and the human report/monitor products. Stripe-
     // gated - absent rather than advertised when card checkout is off.
     ...(humanCheckoutEnabled() ? {
-      credits: { how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(CREDIT_PACKS).map((p) => p.cents / 100), balance: `${BASE_URL}/api/credits/balance` },
+      credits: { how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(CREDIT_PACKS).map((p) => p.cents / 100),
+        // The IDS, not just the dollar amounts: POST /api/credits/checkout takes
+        // {"pack":"credits-20"} and an agent cannot guess that from a bare 20
+        // (an outside reviewer brute-forced it, 2026-08-28).
+        packs: Object.entries(CREDIT_PACKS).map(([id, p]) => ({ pack: id, label: p.label, priceUsd: p.cents / 100 })),
+        checkout: { method: "POST", url: `${BASE_URL}/api/credits/checkout`, body: { pack: Object.keys(CREDIT_PACKS)[0] } },
+        balance: `${BASE_URL}/api/credits/balance` },
       humanProducts: {
         reports: Object.entries(HUMAN_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsd: p.price / 100, slug: p.slug, buy: `${BASE_URL}/reports` })),
         monitors: Object.entries(MONITOR_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsdPerMonth: p.price / 100, slug: p.slug, subscribe: `${BASE_URL}/monitors` })),
@@ -4765,6 +5655,10 @@ if (!FREE_MODE) {
   });
   if (stripeAppender) app.use(stripeAppender);
 
+  // A 402 answered to a request that carried a payment header says WHY in the
+  // buyer's terms (balance short vs stale authorization) - src/verify-hint.js.
+  app.use(verifyHintMiddleware());
+
   const mppShim = createMppShim({
     secretKey: process.env.MPP_SECRET_KEY || "",
     realm: new URL(BASE_URL).host,
@@ -4773,7 +5667,6 @@ if (!FREE_MODE) {
     app.use(mppShim);
     console.log("MPP dual-stack shim enabled (WWW-Authenticate/Authorization Payment ↔ x402 headers)");
   }
-
   // Dedicated replay guard for Tempo credentials — never shared with the
   // x402 one instantiated later (identity spaces never collide, and this
   // gate mounts well before that one exists in this file). See
@@ -4952,7 +5845,7 @@ app.use((req, res, next) => {
     // dev/test only, so it keeps caching.)
     if (res.getHeader("X-Trial-Accepted") === "true") return;
     const powVerified = res.getHeader("X-Pow-Accepted") === "true";
-    const paid = Boolean(paymentHeaderOf(req)) || req.creditsSettled === true;
+    const paid = Boolean(paymentHeaderOf(req)) || req.creditsSettled === true || req.tempoSettled === true;
     if (!FREE_MODE && !paid && !powVerified) return;
     let bytes = 0;
     try { bytes = Buffer.byteLength(JSON.stringify(captured), "utf8"); } catch { bytes = 0; }
@@ -4975,6 +5868,41 @@ app.use((req, res, next) => {
 });
 
 // x402 paywall for the catalog routes
+// POST on a GET-only tool is served, not 405'd (2026-08-28): agents POST
+// JSON to every route they discover - a buyer that had just paid for one
+// tool walked the catalog POSTing and got 405 on search, search-news,
+// search-images, search-videos, search-suggest, ip-info, card-validate ...
+// and stopped. The method is rewritten to GET for the IDENTICAL gate chain
+// (funnel, PoW, replay guard, x402 paywall keyed "GET /path"), the parsed
+// JSON body is the input (handlerInputOf merges query + body, and the GET
+// cache keys on that merged input), and Allow/405 remain for a GET sent to
+// a POST-only tool (a GET cannot carry the body those handlers need).
+app.use((req, res, next) => {
+  if (req.method === "POST" && !CATALOG[`POST ${req.path}`] && CATALOG[`GET ${req.path}`]) {
+    req.__methodAliased = "POST";
+    req.method = "GET";
+  } else if ((req.method === "GET" || req.method === "HEAD") && !CATALOG[`GET ${req.path}`] && CATALOG[`POST ${req.path}`]) {
+    // The other direction (2026-08-28 sweep): trust and uptime indexers send
+    // GET or HEAD to POST-only tools and skill packs and were answered 405,
+    // which reads as "not payable" / "down" in their listings. Run the POST
+    // gate chain instead: unpaid -> the 402 with its challenges (the paywall
+    // is visible); paid or free -> the handler sees an empty body and answers
+    // its own 400 naming the field it needs. A HEAD gets the same headers
+    // and no body (RFC 9110), like the HEAD-on-GET rewrite below.
+    if (req.method === "HEAD") {
+      const origEnd = res.end;
+      res.end = function headEnd(chunk, encoding, cb) {
+        if (typeof chunk === "function") { cb = chunk; chunk = null; }
+        else if (typeof encoding === "function") { cb = encoding; encoding = undefined; }
+        return origEnd.call(this, null, cb);
+      };
+    }
+    req.__methodAliased = req.method;
+    req.method = "POST";
+    if (!req.body || typeof req.body !== "object") req.body = {};
+  }
+  next();
+});
 if (FREE_MODE) {
   console.warn("FREE_MODE=true - payments are DISABLED. Do not run this in production.");
 } else {
@@ -5122,6 +6050,10 @@ if (FREE_MODE) {
             powEligible: POW_SLUGS.has(def.slug),
             synthetic: isSyntheticRequest(req),
             attempt,
+            // Set by verifyHintMiddleware when it could name the fault, or
+            // "unclassified" plus a key-names-only shape when it could not.
+            reason: req.__paymentRejectReason,
+            shape: req.__paymentRejectShape,
           });
         }
       });
@@ -5401,6 +6333,33 @@ if (FREE_MODE) {
       res.on("finish", finishGuard);
       res.on("close", finishGuard); // client aborted before the response finished
     }
+    // A v1-era client still names the price `maxAmountRequired` in the echoed
+    // `accepted` block; x402 v2 calls it `amount` and deep-equals the block, so
+    // that one rename made an otherwise-correct payment unmatchable and it
+    // failed before the facilitator with a bare 402 (measured: one buyer, ~9
+    // attempts/min for 21 hours). Translated here, immediately before the
+    // paywall, and ONLY when the v2 key is absent - a shape that is refused
+    // 100% of the time today, so this can never change a working payment.
+    // The signature covers the authorization, not this block.
+    if (v1AcceptsTranslationEnabled()) {
+      // BOTH header names. A stock @x402 2.22 client sends PAYMENT-SIGNATURE;
+      // x-payment is the older spelling and what the MPP shim writes. Reading
+      // only x-payment meant this never fired for a modern client at all -
+      // found because the end-to-end test captured the header the SDK really
+      // sends instead of the one assumed.
+      for (const name of ["payment-signature", "x-payment"]) {
+        const raw = req.headers[name];
+        if (typeof raw !== "string" || !raw) continue;
+        try {
+          const decoded = JSON.parse(Buffer.from(raw, "base64").toString("utf8"));
+          const t = translateV1Accepts(decoded);
+          if (t) {
+            req.headers[name] = Buffer.from(JSON.stringify(t.payload), "utf8").toString("base64");
+            req.__x402V1Translated = t.translated.join(",");
+          }
+        } catch { /* unreadable header: leave it exactly as sent */ }
+      }
+    }
     return x402mw(req, res, next);
   });
   console.log(`x402 payments enabled: ${NETWORK} -> ${WALLET_ADDRESS}; proof-of-work tier on ${POW_SLUGS.size} tools (difficulty ${POW_DIFFICULTY} bits)`);
@@ -5515,6 +6474,9 @@ app.use((req, res, next) => {
             tx: settleTx,
             synthetic,
             wire: rail === "usdc" ? wireFor() : null,
+            // The quoted ceiling on a metered route, so the ledger can prove the
+            // settled amount sat under it (GET /api/proof).
+            quoteUsd: typeof def?.quote === "function" && Number.isFinite(req?.__meteredQuoteUsd) ? req.__meteredQuoteUsd : null,
           });
           // Stripe SHADOW ledger - a read-only mirror of this on-chain settlement
           // into Stripe, so card and crypto revenue can eventually be read from
@@ -5765,7 +6727,7 @@ for (const tool of ALL_KIT) {
       // query merged, MCP-style {params|input|args} envelopes unwrapped once,
       // so every tool accepts the flat AND the wrapped shape and a metered
       // price can never be computed from a different body than is served.
-      const input = { ...handlerInputOf(req) };
+      const input = { ...handlerInputOf(req, tool) };
 
       // Composite-abuse guard: research/dossier run ~90s of expensive upstream
       // work BEFORE settlement, and a non-200 releases the (reusable) EIP-3009
@@ -5829,7 +6791,12 @@ for (const tool of ALL_KIT) {
       // explains the fix. Fail-open: non-AVM and unreadable payments pass.
       await assertAvmValidityCovers(req, tool.slug);
 
-      const result = await tool.handler(input, req);
+      // A composite runs in an abortable scope: on SIGTERM every upstream call
+      // it is waiting on is cut off (503, never charged) instead of running to
+      // the drain deadline with the money already spent - src/drain-abort.js.
+      const result = EXPENSIVE_COMPOSITE_SLUGS.has(tool.slug)
+        ? await runInAbortableScope(() => tool.handler(input, req))
+        : await tool.handler(input, req);
 
       // A handler that spent real money upstream (external route-execute) leaves
       // a handle on the request. Resolve it against the FINAL response, not the
@@ -5888,6 +6855,9 @@ for (const tool of ALL_KIT) {
     } catch (err) {
       errored = true;
       status = err.statusCode || 500;
+      // A composite cut off by the drain is a 503 with the reason, whatever
+      // shape the aborted upstream call surfaced it in (>= 400: not charged).
+      if (isDrainAbort(err)) { status = 503; err = Object.assign(new Error("This host is redeploying and stopped the run before it finished; nothing was charged. Retry in a minute."), { statusCode: 503 }); }
       if (res.headersSent) { try { res.end(); } catch { /* stream already gone */ } return; }
       // Probe detection: a 4xx with zero meaningful input keys is a scanning/
       // discovery call (agent probing endpoints without arguments), not a real
@@ -5955,6 +6925,7 @@ app.use((req, res, next) => {
   if (!methods || methods.has(req.method)) return next();
   const allow = [...methods].sort().join(", ");
   res.set("Allow", allow);
+  try { capturePostHogWrongMethod({ path: req.path, method: req.method, allow: [...methods].sort(), ua: req.headers["user-agent"] }); } catch { /* telemetry never breaks a response */ }
   res.status(405).json({
     error: `Method ${req.method} not allowed on ${req.path}`,
     allow: [...methods].sort(),
@@ -5971,8 +6942,22 @@ app.use((req, res, next) => {
 // and before the error handler. Status stays 404 so route-existence probes
 // (test-mcp-self-consistency's live GET oracle) are unaffected.
 app.use((req, res) => {
-  const wantsJson = req.path.startsWith("/api") || req.path.startsWith("/__operator") || req.accepts(["html", "json"]) === "json";
-  if (wantsJson) return res.status(404).json({ ok: false, error: "not-found" });
+  const wantsJson = req.path.startsWith("/api") || req.path.startsWith("/v1") || req.path.startsWith("/mcp") || req.path.startsWith("/__operator") || req.accepts(["html", "json"]) === "json";
+  if (wantsJson) {
+    // An unknown /api path is almost always a retired tool or a guessed slug
+    // (four indexers probed soundex, string-similarity, uuid-v5 and ~25 old
+    // skill packs in one morning, 2026-08-28): answer with the closest live
+    // tools and the find route, and count it (tool_gone) so residual demand
+    // for a retired route is visible. Status stays 404 for the route oracle.
+    if (req.path.startsWith("/api/") && !req.path.startsWith("/api/convert/")) {
+      const slug = req.path.replace(/^\/api\/(skill\/)?/, "").split("/")[0].replace(/[-_]+/g, " ").slice(0, 80);
+      let suggestions = [];
+      try { suggestions = (findTools(CATALOG, slug, { k: 3, baseUrl: BASE_URL, powSlugs: POW_SLUGS }).results || []).map((r) => ({ slug: r.slug, route: r.route, price: r.price, name: r.name })); } catch { suggestions = []; }
+      try { capturePostHogToolGone({ route: req.path, replacement: "GET /api/find" }); } catch { /* telemetry never breaks a response */ }
+      return res.status(404).json({ ok: false, error: "not-found", hint: `No tool lives at ${req.path}. It may have been retired; the closest live tools are listed, or ask /api/find?q=<task>.`, find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions });
+    }
+    return res.status(404).json({ ok: false, error: "not-found" });
+  }
   const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
       <div style="font-family:var(--font-mono);font-weight:500;font-size:72px;line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">404</div>
       <h1 style="font-weight:500;font-size:26px;letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">Page not found</h1>
@@ -6000,9 +6985,12 @@ app.use((err, req, res, _next) => {
     console.error(`[unhandled-5xx] ${req.method} ${req.path} → ${status}: ${err?.message || err}`);
     if (err?.stack) console.error(String(err.stack).split("\n").slice(0, 6).join("\n"));
   }
-  const wantsJson = req.path.startsWith("/api") || req.path.startsWith("/__operator") || req.accepts(["html", "json"]) === "json";
+  const wantsJson = req.path.startsWith("/api") || req.path.startsWith("/v1") || req.path.startsWith("/mcp") || req.path.startsWith("/__operator") || req.accepts(["html", "json"]) === "json";
   if (wantsJson) {
-    res.status(status).json({ ok: false, error: status === 400 ? "bad-request" : status === 413 ? "payload-too-large" : status === 429 ? "rate-limited" : "internal" });
+    // A 413 on a flat LLM tier is an agent with a big prompt (one client hit
+    // it five times in 30 minutes, 2026-08-28): say where big bodies go.
+    const tooLarge = status === 413 ? { hint: `Body over the ${req.path.startsWith("/v1/") ? "100 KB" : "size"} limit for ${req.path}. ${req.path.startsWith("/v1/") && !req.path.startsWith("/v1/metered") ? "The metered tier accepts 1 MB and prices from the body: POST /v1/metered/chat/completions (or /messages, /responses)." : "Split the input or use the route's documented size cap."}`, ...(req.path.startsWith("/v1/") && !req.path.startsWith("/v1/metered") ? { metered: `${BASE_URL}/v1/metered/chat/completions` } : {}) } : {};
+    res.status(status).json({ ok: false, error: status === 400 ? "bad-request" : status === 413 ? "payload-too-large" : status === 429 ? "rate-limited" : "internal", ...tooLarge });
   } else {
     const is404 = status === 404;
     const t = is404 ? "Page not found" : `Error ${status}`;
@@ -6112,6 +7100,15 @@ if (String(process.env.MPP_INDEX_CRAWL || "").toLowerCase() === "off") {
     console.log("[mpp-leaderboard] disabled (MPP_LEADERBOARD=off)");
   } else {
     startMppLeaderboard({ self: tempoSelfRecipient() });
+    // Solana SPL leaderboard: hourly batched credits scan over every Solana
+    // payTo the index knows, primed into the pay-time gate (src/solana-leaderboard.js).
+    startSolanaLeaderboard({
+      listPayTos: async () => (await import("./x402-index.js")).allSolanaPayToOrigins(),
+      rpc: (method, params) => import("./solana-buyer.js").then((m) => m.solanaRpc(method, params)),
+      creditFromTx: (meta, payTo) => solanaCreditFromTx(meta, payTo),
+      prime: (payTo, count) => import("./solana-buyer.js").then((m) => m.primeSvmInboundCount(payTo, count)),
+      windowHours: Number(process.env.SOR_SVM_WINDOW_HOURS) || 168,
+    });
   }
 }
 
@@ -6166,6 +7163,9 @@ bootStep("revenueSnapshot", () => revenueSnapshot(revenueWallets()).catch(() => 
 // shouldn't make /api/leaderboard return nothing. Fire-and-forget so a slow
 // Bazaar walk can't delay boot or /health.
 bootStep("startLeaderboardRefresh", () => startLeaderboardRefresh());
+// Warm the on-chain economy snapshot once, off the boot path: the cache is
+// cold exactly once per deploy and only a cold cache blocks a visitor.
+bootStep("warmEconomySnapshot", () => warmEconomySnapshot());
 
 // Graceful shutdown: a Railway redeploy sends SIGTERM. Close the listener at
 // once and let in-flight (already paid-for) requests finish before exiting -
@@ -6210,6 +7210,12 @@ function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   // PostHog is disabled); the drain deadline below still governs exit.
   shutdownPostHog().catch(() => {});
   console.log(`${signal} received - closing listener, draining in-flight requests (exit ${code})`);
+  // Cut off every composite in flight NOW: its upstream calls reject, the
+  // handler throws, the buyer sees a 503 (never charged) and the replacement
+  // container takes the retry - instead of the run finishing the deploy
+  // deadline with the money spent and nobody to receive the answer.
+  const cut = abortInFlightComposites(signal);
+  if (cut) console.log(`[drain] aborted ${cut} in-flight composite run(s) - upstream calls cut, nobody charged`);
   httpServer.close(() => process.exit(code));
   // server.close() waits for ALL connections, including idle keep-alive
   // sockets agents hold open between calls. Sweep those now and every few

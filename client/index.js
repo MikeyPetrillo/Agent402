@@ -2,8 +2,13 @@
 // instance). Resolve a task to a tool, then call it with payment handled for you:
 //   - free pure-CPU tools settle with a built-in proof-of-work (no wallet, zero deps),
 //   - wallet-only tools settle via an x402-wrapped fetch you provide (@x402/fetch),
-// results are cached (tools are deterministic), and retries reuse an
-// Idempotency-Key so a lost response never double-charges.
+// results are cached (tools are deterministic), and every send carries an
+// Idempotency-Key that is stable per client instance and per operation while
+// caching is on, so a retry of a lost response (inside call() or by the caller
+// invoking call() again) replays the paid answer on the credits and PoW paths
+// instead of paying twice. A wallet buyer's fresh call() signs a fresh
+// authorization, which the server treats as a new payment by design - see
+// README "Retries and double charges".
 //
 //   import { Agent402 } from "agent402-client";
 //   const a = new Agent402();                       // free tier, proof-of-work
@@ -12,13 +17,13 @@
 //
 //   // paid tools: pass an x402-wrapped fetch (your wallet signs)
 //   const a = new Agent402({ fetch: payFetch });
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 // Keep in lockstep with package.json. Every request the SDK issues carries
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.7.0";
+const VERSION = "0.8.3";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // 32MB: about a hundred times any realistic response from this catalog (the
 // largest is a base64 image at a few MB), so it cannot break a legitimate
@@ -42,10 +47,13 @@ export class Agent402 {
    *                                         pays wallet-only tools by card when no payFetch is given
    * @param {number|null} [opts.maxResponseBytes=33554432]
    *        Hard ceiling on a response body, enforced BEFORE it is parsed. null disables it.
+   * @param {{id:string, validate:function}} [opts.outputValidator]
+   *        Optional buyer-owned result validator. `id` namespaces cache entries;
+   *        `validate` may return false or throw to reject delivery.
    */
   constructor({ baseUrl = "https://agent402.tools", fetch: payFetch, cache = true, fetchImpl = globalThis.fetch,
     maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null,
-    maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES } = {}) {
+    maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null } = {}) {
     this.creditsKey = typeof creditsKey === "string" && /^a402_[A-Za-z0-9_-]{32,64}$/.test(creditsKey) ? creditsKey : null;
     if (typeof fetchImpl !== "function") throw new Error("No fetch available - pass { fetchImpl } on Node < 18");
     this.baseUrl = String(baseUrl).replace(/\/$/, "");
@@ -55,6 +63,14 @@ export class Agent402 {
     this.f = (url, init = {}) => fetchImpl(url, { ...init, headers: { "User-Agent": USER_AGENT, ...(init.headers || {}) } });
     this._catalog = null;
     this._cache = cache ? new Map() : null;
+    // Salt for the default Idempotency-Key: one per client instance, so the key
+    // for (slug, params) is stable across call() invocations on THIS client
+    // (an agent framework retrying a lost response gets the replay) and still
+    // distinct between sessions (two processes buying the same thing are two
+    // purchases). Issue #1126: the old default mixed Date.now() + Math.random()
+    // per invocation, which protected retries inside one call() and nothing
+    // the header promised beyond it.
+    this._idemSalt = randomBytes(12).toString("hex");
     // Spending policy (defends the x402 "wallet drain via uncapped spending"
     // failure mode): optional hard ceilings enforced BEFORE any payment is
     // signed. A malicious or misconfigured 402 that quotes an inflated price is
@@ -69,6 +85,9 @@ export class Agent402 {
     };
     // A response-size ceiling, enforced before parsing. See _readJson.
     this.maxResponseBytes = maxResponseBytes === null ? null : (numOrNull(maxResponseBytes) ?? DEFAULT_MAX_RESPONSE_BYTES);
+    // Buyer-owned delivery policy. The callback stays entirely local and may
+    // use Ajv, Zod, agent-payment-policy, or ordinary application code.
+    this.outputValidator = normalizeOutputValidator(outputValidator, "constructor");
   }
 
   /**
@@ -266,15 +285,41 @@ export class Agent402 {
    * Call a tool by slug; pays automatically (PoW for free tools, x402 for
    * wallet-only) and returns the parsed JSON result.
    */
-  async call(slug, params = {}, { idempotencyKey, cache = true, maxResponseBytes } = {}) {
+  async call(slug, params = {}, { idempotencyKey, cache = true, maxResponseBytes, outputValidator } = {}) {
+    // Resolve and validate the buyer-owned contract before catalog fetch,
+    // credential access, payment preflight, or any other network action.
+    const validator = outputValidator == null
+      ? this.outputValidator
+      : normalizeOutputValidator(outputValidator, "call");
     const cat = await this._loadCatalog();
     const tool = cat.get(slug);
     if (!tool) throw new Error(`unknown tool "${slug}" - use client.find(task) to discover one`);
 
-    const cacheKey = `${slug}:${JSON.stringify(params)}`;
-    if (this._cache && cache && this._cache.has(cacheKey)) return this._cache.get(cacheKey);
+    const cacheKey = resultCacheKey(slug, params, validator);
+    if (this._cache && cache && this._cache.has(cacheKey)) {
+      const stored = this._cache.get(cacheKey);
+      // Callers receive the stored object by reference and may mutate it.
+      // Revalidate contracted hits so a now-invalid object cannot pass merely
+      // because it was valid before the caller changed it.
+      try {
+        await this._assertOutput(slug, stored, validator, { paid: false, cacheHit: true });
+      } catch (error) {
+        this._cache.delete(cacheKey);
+        throw error;
+      }
+      return stored;
+    }
 
-    const idem = idempotencyKey || `a402-${createHash("sha256").update(`${cacheKey}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`;
+    // Default key = stable per (client instance, slug, params, validator) while
+    // caching is on: the SDK already treats that tuple as one operation (a
+    // second identical call is served from cache without payment), so the
+    // idempotency key agrees with the cache key instead of contradicting it.
+    // With { cache: false } the caller has said identical calls are distinct
+    // purchases, so the key is fresh per invocation, as before. An explicit
+    // idempotencyKey always wins.
+    const idem = idempotencyKey || (cache
+      ? `a402-${createHash("sha256").update(`${this._idemSalt}:${cacheKey}`).digest("hex").slice(0, 24)}`
+      : `a402-${createHash("sha256").update(`${cacheKey}:${Date.now()}:${Math.random()}`).digest("hex").slice(0, 24)}`);
     const send = (extraHeaders = {}, useFetch = this.f) => {
       // UA set here too (not only in the this.f wrapper) so the x402 payFetch
       // path - the one that settles real payments - always carries it.
@@ -317,13 +362,17 @@ export class Agent402 {
         // can't each observe the pre-commit total and collectively blow a rolling
         // cap; release the reservation if the call doesn't settle.
         const reservation = this._spendReserve(host, usd, slug);
+        let settled = false;
         try {
           const r = await send({}, this.payFetch);
           if (!r.ok) throw new Error(`call "${slug}" failed: HTTP ${r.status}`);
           this._spendSettle(reservation); // confirm the reservation as settled spend
-          return this._store(cacheKey, await this._readJson(r, { maxBytes: maxResponseBytes, slug, paid: true }), cache);
+          settled = true;
+          return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
         } catch (e) {
-          this._spendRelease(reservation); // roll back - nothing settled
+          // An invalid or oversized paid HTTP-success body is failed delivery,
+          // not a rollback of money that already moved.
+          if (!settled) this._spendRelease(reservation);
           throw e;
         }
       }
@@ -334,6 +383,7 @@ export class Agent402 {
         const host = hostOf(this.baseUrl);
         const usd = parseUsd(tool.price);
         const reservation = this._spendReserve(host, usd, slug);
+        let settled = false;
         try {
           const r = await send({ Authorization: `Bearer ${this.creditsKey}` });
           if (r.status === 402) {
@@ -342,11 +392,12 @@ export class Agent402 {
           }
           if (!r.ok) throw new Error(`call "${slug}" failed: HTTP ${r.status}`);
           this._spendSettle(reservation);
-          return this._store(cacheKey, await this._readJson(r, { maxBytes: maxResponseBytes, slug, paid: true }), cache);
-        } catch (e) { this._spendRelease(reservation); throw e; }
+          settled = true;
+          return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
+        } catch (e) { if (!settled) this._spendRelease(reservation); throw e; }
       }
       const r = await send(); // no wallet - succeeds only on a FREE_MODE instance
-      if (r.ok) return this._store(cacheKey, await this._readJson(r, { maxBytes: maxResponseBytes, slug, paid: false }), cache);
+      if (r.ok) return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
       throw new Error(`call "${slug}" failed: HTTP ${r.status} - wallet-only tool; construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch) or { creditsKey } (prepaid card credits from ${this.baseUrl}/credits)`);
     }
 
@@ -359,7 +410,30 @@ export class Agent402 {
       r = await send({ "X-Pow-Solution": Agent402.solvePow(chal) });
     }
     if (!r.ok) throw new Error(`call "${slug}" failed after proof-of-work: HTTP ${r.status}`);
-    return this._store(cacheKey, await this._readJson(r, { maxBytes: maxResponseBytes, slug, paid: false }), cache);
+    return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
+  }
+
+  async _assertOutput(slug, body, validator, { paid = false, cacheHit = false } = {}) {
+    if (!validator) return body;
+    try {
+      // BOUNDED. The validator is caller-owned code we await inside call(), so
+      // one that never settles hangs the buyer's call forever - and on a paid
+      // route the money has already moved by the time it runs, which makes an
+      // indefinite hang the worst possible place to have one. A timeout is a
+      // REJECTION, not a pass: an unfinished contract has not been satisfied.
+      const result = await withValidatorTimeout(validator.validate(body), validator.timeoutMs ?? OUTPUT_VALIDATOR_TIMEOUT_MS, validator.id);
+      if (result === false) throw new Error("validator returned false");
+      return body;
+    } catch (cause) {
+      throw new OutputValidationError(`output for "${slug}" failed buyer validator "${validator.id}"${paid ? "; this call WAS paid" : ""}`,
+        { slug, contractId: validator.id, paid, cacheHit, cause });
+    }
+  }
+
+  async _deliverResponse(slug, response, cacheKey, cache, validator, { maxResponseBytes, paid } = {}) {
+    const body = await this._readJson(response, { maxBytes: maxResponseBytes, slug, paid });
+    await this._assertOutput(slug, body, validator, { paid });
+    return this._store(cacheKey, body, cache);
   }
 
   async _powChallenge(slug) {
@@ -458,6 +532,16 @@ export class ResponseTooLargeError extends Error {
   }
 }
 
+/** A buyer-owned validator rejected the delivered body. `paid` records whether
+ * this invocation had already settled before validation ran. */
+export class OutputValidationError extends Error {
+  constructor(message, { slug, contractId, paid, cacheHit, cause } = {}) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "OutputValidationError";
+    Object.assign(this, { slug, contractId, paid: Boolean(paid), cacheHit: Boolean(cacheHit) });
+  }
+}
+
 export class SpendingLimitError extends Error {
   constructor(message, details = {}) {
     super(message);
@@ -492,6 +576,56 @@ function parseUsd(price) {
   return Number.isFinite(n) ? n : 0;
 }
 function hostOf(url) { try { return new URL(url).host; } catch { return String(url); } }
+
+const OUTPUT_VALIDATOR_ID_MAX_CHARS = 256;
+// How long a buyer-owned validator may take before delivery is refused.
+const OUTPUT_VALIDATOR_TIMEOUT_MS = 5_000;
+
+function normalizeOutputValidator(value, where) {
+  if (value == null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${where} outputValidator must be null or { id, validate }`);
+  }
+  const id = value.id;
+  if (typeof id !== "string" || id.trim() !== id || id.length < 1 || id.length > OUTPUT_VALIDATOR_ID_MAX_CHARS) {
+    throw new TypeError(`${where} outputValidator.id must be a nonempty trimmed string of at most ${OUTPUT_VALIDATOR_ID_MAX_CHARS} characters`);
+  }
+  if (typeof value.validate !== "function") {
+    throw new TypeError(`${where} outputValidator.validate must be a function`);
+  }
+  // Opt-in per-validator override; anything unusable falls back to the default
+  // rather than silently disabling the bound.
+  const t = Number(value.timeoutMs);
+  const timeoutMs = Number.isFinite(t) && t > 0 ? t : OUTPUT_VALIDATOR_TIMEOUT_MS;
+  return Object.freeze({ id, validate: value.validate, timeoutMs });
+}
+
+/** Reject if the caller's validator has not settled in `ms`. The timer is
+ *  cleared on both paths so a fast validator leaves nothing pending (an
+ *  un-cleared timer would hold the event loop open on a short-lived script). */
+function withValidatorTimeout(promise, ms, id) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      // NOT unref'd: an unref'd timer lets a short-lived script exit before the
+      // rejection fires, so the buyer gets a silent process exit instead of an
+      // OutputValidationError - which is the failure this bound exists to
+      // prevent. clearTimeout in finally() is what stops it lingering.
+      timer = setTimeout(() => reject(new Error(`validator ${JSON.stringify(id)} did not settle within ${ms}ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+function resultCacheKey(slug, params, validator) {
+  const requestKey = `${slug}:${JSON.stringify(params)}`;
+  if (!validator) return requestKey;
+  // The caller supplies a stable semantic identity because function source is
+  // neither stable nor meaningful. Hashing keeps arbitrary labels out of map
+  // keys and avoids an unbounded readable cache-key surface.
+  const digest = createHash("sha256").update(validator.id, "utf8").digest("hex");
+  return `${requestKey}#output-validator/v1/${digest}`;
+}
 
 /**
  * Restrict + order which chains an @x402 client will pay on (duck-typed - any

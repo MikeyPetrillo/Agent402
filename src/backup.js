@@ -37,8 +37,9 @@
 //   BACKUP_MAX_TOTAL_GB  default 20  (stored, bill guard)
 
 import { createHash, createHmac } from "node:crypto";
-import { createReadStream, createWriteStream, statSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
-import { createGzip } from "node:zlib";
+import { createReadStream, createWriteStream, statSync, readdirSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { createGzip, gunzipSync } from "node:zlib";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
@@ -49,6 +50,7 @@ const cfg = () => ({
   keyId: (process.env.BACKUP_S3_KEY_ID || "").trim(),
   secret: (process.env.BACKUP_S3_SECRET || "").trim(),
   region: (process.env.BACKUP_S3_REGION || "auto").trim(),
+  encKey: parseEncKey(process.env.BACKUP_ENCRYPTION_KEY),
   dataDir: (process.env.BACKUP_DATA_DIR || "/data").trim(),
   utcHour: clampInt(process.env.BACKUP_UTC_HOUR, 4, 0, 23),
   keepDays: clampInt(process.env.BACKUP_KEEP_DAYS, 14, 2, 90),
@@ -60,6 +62,34 @@ function clampInt(v, dflt, lo, hi) {
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
 }
 
+// Client-side encryption (AES-256-GCM) of every object before upload: the
+// bundles carry customer emails, paid reports and access-key material, and
+// the bucket's own encryption is one layer under someone else's control.
+// BACKUP_ENCRYPTION_KEY = 32 bytes as 64 hex chars or base64; without it the
+// run still uploads (a plaintext backup beats none) but reports
+// `encrypted:false` and the boot log says so. Format: "A402ENC1" + 12-byte
+// IV + ciphertext + 16-byte GCM tag. Decrypt: scripts/backup-restore.js.
+const ENC_MAGIC = Buffer.from("A402ENC1");
+export function parseEncKey(raw) {
+  const v = String(raw || "").trim();
+  if (!v) return null;
+  const buf = /^[0-9a-f]{64}$/i.test(v) ? Buffer.from(v, "hex") : Buffer.from(v, "base64");
+  return buf.length === 32 ? buf : null;
+}
+export function encryptBackupBuffer(plain, key) {
+  const iv = randomBytes(12);
+  const c = createCipheriv("aes-256-gcm", key, iv);
+  const body = Buffer.concat([c.update(plain), c.final()]);
+  return Buffer.concat([ENC_MAGIC, iv, body, c.getAuthTag()]);
+}
+export function decryptBackupBuffer(buf, key) {
+  if (buf.length < ENC_MAGIC.length + 12 + 16 || !buf.subarray(0, ENC_MAGIC.length).equals(ENC_MAGIC)) throw new Error("not an A402ENC1 object");
+  const iv = buf.subarray(8, 20), tag = buf.subarray(buf.length - 16), body = buf.subarray(20, buf.length - 16);
+  const d = createDecipheriv("aes-256-gcm", key, iv); d.setAuthTag(tag);
+  return Buffer.concat([d.update(body), d.final()]);
+}
+export const backupEncrypted = () => Boolean(cfg().encKey);
+
 export const backupConfigured = () => {
   const c = cfg();
   return Boolean(c.endpoint && c.bucket && c.keyId && c.secret);
@@ -68,7 +98,16 @@ export const backupConfigured = () => {
 // Known-critical files upload FIRST so a tight budget always covers the
 // ledger before bulk. Everything else follows smallest-first (most files
 // safe beats one big file safe).
-const PRIORITY = ["agent402-refunds.db", "stats.db", "status.db", "leads.db", "analytics.db"];
+// Real store names (the old list named files that never existed, so priority
+// ordering was dead): the refund debt ledger, the sales ledger, the two
+// customer directories (prepaid credit balances, delivered paid reports), then
+// the subscriber/alert stores. Everything else follows smallest-first.
+const PRIORITY = ["agent402-refunds.db", "agent402-sales.db", "credits", "human-checkout", "stripe-subscriptions.json", "mpp-subscriptions.json", "free-alerts.json", "followups.json", "monitor-runs.json", "agent402-stats.db", "status.db"];
+// Directory-shaped stores (one JSON file per record) are bundled into one
+// gzip'd NDJSON object each: {"path","body"} per file. Until 2026-08-28 the
+// plan skipped every directory, so prepaid credit balances and every purchased
+// report had NO offsite copy while the module said the volume was covered.
+const DIR_BUNDLE_MAX_FILES = 50_000;
 const EXCLUDE = [/cache/i, /\btmp\b|\.tmp$/i, /-wal$/, /-shm$/, /\.log$/i];
 
 /** Inventory of /data: what a run would consider, with sizes and the
@@ -81,8 +120,20 @@ export function backupPlan() {
   for (const name of names) {
     let st;
     try { st = statSync(join(c.dataDir, name)); } catch { continue; }
-    if (!st.isFile()) continue;
     const excluded = EXCLUDE.some((re) => re.test(name));
+    if (st.isDirectory()) {
+      let bytes = 0, count = 0;
+      try {
+        for (const f of readdirSync(join(c.dataDir, name))) {
+          if (EXCLUDE.some((re) => re.test(f))) continue;
+          try { const fs = statSync(join(c.dataDir, name, f)); if (fs.isFile()) { bytes += fs.size; count++; } } catch { /* raced */ }
+        }
+      } catch { continue; }
+      if (!count) continue; // an empty directory is not a store
+      files.push({ name, bytes, excluded, dir: true, count });
+      continue;
+    }
+    if (!st.isFile()) continue;
     files.push({ name, bytes: st.size, excluded });
   }
   const included = files.filter((f) => !f.excluded);
@@ -203,25 +254,35 @@ export async function runBackup({ log = console.log } = {}) {
     const uploaded = [], held = [];
     for (const f of candidates) {
       const src = join(c.dataDir, f.name);
-      const gz = join(tmp, f.name + ".gz");
+      const objName = f.dir ? `${f.name}.ndjson` : f.name;
+      const gz = join(tmp, objName + ".gz");
       try {
-        await stageCopy(src, f.name, gz, tmp);
+        if (f.dir) await stageDir(src, f.name, gz);
+        else await stageCopy(src, f.name, gz, tmp);
       } catch (e) {
         held.push({ name: f.name, reason: `stage failed: ${e.message}` });
         continue;
       }
-      const bytes = statSync(gz).size;
+      // Encrypt in place when a key is set; the object name says which it is.
+      let up = gz, suffix = ".gz";
+      if (c.encKey) {
+        const enc = gz + ".enc";
+        writeFileSync(enc, encryptBackupBuffer(readFileSync(gz), c.encKey));
+        rmSync(gz, { force: true });
+        up = enc; suffix = ".gz.enc";
+      }
+      const bytes = statSync(up).size;
       if (bytes > budget) {
         held.push({ name: f.name, reason: `over budget (${(bytes / 1e6).toFixed(1)}MB compressed, ${(budget / 1e6).toFixed(1)}MB left)` });
-        rmSync(gz, { force: true });
+        rmSync(up, { force: true });
         continue;
       }
-      const key = `backups/${day}/${f.name}.gz`;
-      const res = await s3("PUT", key, { body: createReadStream(gz), contentLength: bytes });
+      const key = `backups/${day}/${objName}${suffix}`;
+      const res = await s3("PUT", key, { body: createReadStream(up), contentLength: bytes });
       if (!res.ok) throw new Error(`upload ${key} failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
       budget -= bytes;
-      uploaded.push({ name: f.name, gzBytes: bytes });
-      rmSync(gz, { force: true });
+      uploaded.push({ name: f.name, gzBytes: bytes, encrypted: Boolean(c.encKey) });
+      rmSync(up, { force: true });
     }
 
     // Retention: delete whole date prefixes older than keepDays. Dates sort
@@ -241,6 +302,7 @@ export async function runBackup({ log = console.log } = {}) {
     status.lastSuccess = new Date().toISOString();
     status.lastError = null;
     status.lastUploaded = uploaded;
+    status.encrypted = Boolean(c.encKey);
     status.lastHeld = held;
     status.lastPruned = pruned;
     log(`[backup] OK day=${day} uploaded=${uploaded.length} (${(uploaded.reduce((a, u) => a + u.gzBytes, 0) / 1e6).toFixed(1)}MB gz) held=${held.length} pruned=${pruned} stored=${(storedBytes / 1e6).toFixed(0)}MB`);
@@ -253,6 +315,24 @@ export async function runBackup({ log = console.log } = {}) {
     rmSync(tmp, { recursive: true, force: true });
     running = false;
   }
+}
+
+/** Stage a directory store as one gzip'd NDJSON bundle: {"path","body"} per
+ *  regular file (JSON records are read as text; a file that changes under us
+ *  is skipped, never half-read). Restore: scripts/backup-restore.js. */
+async function stageDir(srcDir, name, gzPath) {
+  const out = createGzip({ level: 6 });
+  const done = pipeline(out, createWriteStream(gzPath));
+  let n = 0;
+  for (const f of readdirSync(srcDir)) {
+    if (EXCLUDE.some((re) => re.test(f))) continue;
+    if (++n > DIR_BUNDLE_MAX_FILES) break;
+    let body;
+    try { const st = statSync(join(srcDir, f)); if (!st.isFile()) continue; body = readFileSync(join(srcDir, f), "utf8"); } catch { continue; }
+    if (!out.write(JSON.stringify({ path: `${name}/${f}`, body }) + "\n")) await new Promise((r) => out.once("drain", r));
+  }
+  out.end();
+  await done;
 }
 
 /** Stage one file into the temp dir as gzip. SQLite files go through the
@@ -290,6 +370,6 @@ export function startBackupScheduler({ log = console.log } = {}) {
     }
   }, 10 * 60 * 1000);
   timer.unref?.(); // never keep the process alive for the backup timer
-  log(`[backup] nightly scheduler armed (UTC hour ${cfg().utcHour}, keep ${cfg().keepDays} days, run cap ${cfg().maxRunMb}MB, bill guard ${cfg().maxTotalGb}GB)`);
+  log(`[backup] nightly scheduler armed (UTC hour ${cfg().utcHour}, keep ${cfg().keepDays} days, run cap ${cfg().maxRunMb}MB, bill guard ${cfg().maxTotalGb}GB, ${cfg().encKey ? "AES-256-GCM client-side encryption ON" : "WARNING: BACKUP_ENCRYPTION_KEY unset - objects upload as plain gzip"})`);
   return timer;
 }

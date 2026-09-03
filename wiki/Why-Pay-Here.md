@@ -13,14 +13,14 @@ On the metered gateway every 402 quotes this exact request from its own body. A 
 
 ## 02 / Failure - A failed call is not charged, and the response proves it.
 
-Settlement runs after the handler answers and an error status cancels it, so a response with no payment receipt, or a receipt marked success:false, moved no money. A retry that carries an idempotency key replays the paid answer instead of paying again. The one residual case, a settled receipt on an error response, is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.
+Settlement runs after the handler answers and an error status cancels it, so a response with no payment receipt, or a receipt marked success:false, moved no money. A retry that carries the same idempotency key and the same payment credential replays the paid answer instead of paying again. The one residual case, a settled receipt on an error response, is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.
 
 - Uptime measured from outside: https://agent402.tools/status
 - How the paywall settles: https://agent402.tools/guides/x402-and-mpp
 
 ## 03 / One key - One key buys everything.
 
-The same wallet or credits key pays for five LLM tiers on three wires (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ deterministic tools, wallet-keyed memory and finished reports. One paywall, one key.
+The same wallet or credits key pays for five LLM tiers on three wires (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools, wallet-keyed memory and finished reports. One paywall, one key.
 
 - The catalog: https://agent402.tools/tools
 - Gateway models: https://agent402.tools/v1/models
@@ -63,3 +63,4 @@ Add the hosted MCP connector, buy prepaid credits by card, or pay per call in US
 - Prepaid credits: https://agent402.tools/credits
 - Get a report: https://agent402.tools/reports
 - Sell your API: https://agent402.tools/sell
+- Receipts (settled under the quoted ceiling, with the settle tx): https://agent402.tools/proof

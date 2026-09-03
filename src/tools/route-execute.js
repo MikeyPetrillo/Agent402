@@ -18,7 +18,7 @@
 // price instead.
 import { createHash } from "node:crypto";
 import { paymentHeaderOf, payerFromRequest } from "../payer.js";
-import { maySpend, noteSpend, resolveSpend } from "../external-spend-guard.js";
+import { maySpend, noteSpend, adjustSpend, resolveSpend } from "../external-spend-guard.js";
 import { findTools } from "../find.js";
 import { observeDelivery } from "../response-observation.js";
 import { isIdentityBoundRoute } from "../payments.js";
@@ -137,6 +137,11 @@ function dispatchable(def) {
   }
   const bodyType = def.discovery?.bodyType;
   if (bodyType && bodyType !== "json") return { ok: false, why: `bodyType "${bodyType}" is not dispatchable through the JSON params envelope` };
+  // Per-request-priced tools (the metered gateway routes): their price is a
+  // quote of the body, which no flat routing fee can cover, and the executor
+  // invokes handlers with no request, so the quote/belt never run (review
+  // 2026-08-27: $0.01 bought an uncapped Opus call through here).
+  if (typeof def.quote === "function") return { ok: false, why: "per-request-priced tools are quoted from the body - call them directly so the 402 carries their real price" };
   return { ok: true };
 }
 
@@ -147,6 +152,9 @@ function dispatchable(def) {
 export const EXTERNAL_CHAIN_BY_NETWORK = {
   "eip155:8453": "base",
   "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=": "algorand",
+  // Solana buyers fund the SVM spending wallet, which pays Solana sellers
+  // (src/solana-buyer.js). Mainnet genesis only - devnet never maps.
+  "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": "solana",
   // MPP/tempo buyers (Authorization: Payment, tempo/charge) fund the Tempo
   // spending wallet, which pays MPP sellers on Tempo (src/tempo-buyer.js).
   "eip155:4217": "tempo",
@@ -264,19 +272,59 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           }
           // First chain that resolves a candidate wins: the buyer's own chain,
           // then (opt-in) Tempo/MPP sellers for Base buyers.
-          let ext = null; let chain = chains[0];
+          // TEMPO TIME BUDGET. A Tempo buyer's credential is a signed tx the
+          // CLIENT bounded in time (mppx signs validBefore = now + ~25s), and
+          // our settlement broadcasts AFTER the handler. An external buy that
+          // outlives that window is work done and an upstream seller paid,
+          // then a refused settle: the buyer sees 402 and we ate the seller's
+          // price (measured 2026-08-27: a 69s Firecrawl scrape, $0.002 gone,
+          // vs a 23s one that settled). So on Tempo the external leg runs
+          // under a budget: refuse BEFORE spending when resolution ate it,
+          // and hand the seller call a timeout that keeps the whole handler
+          // inside the window. A 504 cancels settlement; the only loss is the
+          // bounded seller price on a seller that answered too slowly.
+          const tempoBudgetMs = req?.mppTempoCredential ? (Number(process.env.SOR_TEMPO_BUDGET_MS) || 16000) : null;
+          const startedAt = Date.now();
+          const remainingMs = () => (tempoBudgetMs == null ? null : tempoBudgetMs - (Date.now() - startedAt));
+          // FALLTHROUGH ON A SELLER 5xx. Resolve up to SOR_MAX_CANDIDATES live
+          // sellers (ranked, settled-desc) for the first chain that has any, so
+          // a seller whose OWN upstream is down (sol.blockrun's Pyth feed,
+          // 2026-09-01) does not fail a route another seller can serve. Only a
+          // 5xx from the PAID leg advances - a 4xx cancels settlement and means
+          // our request is wrong, and a receipt means we already paid.
+          const MAX_CANDIDATES = Math.max(1, Number(process.env.SOR_MAX_CANDIDATES || "3"));
+          // The requested model rides into resolution so a chat seller that
+          // publishes a model list without it is skipped before anything is
+          // probed or paid (a seller can charge on the 400 it answers).
+          const wantModel = typeof input.params?.model === "string" && input.params.model.trim() ? input.params.model.trim() : null;
+          let candidateList = []; let chain = chains[0];
           for (const c of chains) {
-            const found = await resolveExternal(input.task, { cap, baseUrl, chain: c });
-            if (found) { ext = found; chain = c; break; }
+            const found = await resolveExternal(input.task, { cap, baseUrl, chain: c, limit: MAX_CANDIDATES, wantModel });
+            const list = Array.isArray(found) ? found : (found ? [found] : []);
+            if (list.length) { candidateList = list; chain = c; break; }
+          }
+          if (tempoBudgetMs != null && remainingMs() < 4000) {
+            throw bad(`Resolving an external seller used the Tempo time budget (${tempoBudgetMs}ms); nothing was spent and nothing is charged. Tempo credentials expire about 25s after signing, so retry with a fresh credential or pay this route over an EVM rail.`, 504);
           }
           const chainCaip2 = EXTERNAL_CHAIN_CAIP2[chain];
-          if (!ext) throw bad(`No external ${chains.includes("tempo") && chains.length > 1 ? "x402 or MPP" : chains[0] === "tempo" ? "MPP" : "x402"} seller matched that task${chains[0] !== "base" || chains.length > 1 ? ` on ${chains.join("/")}` : ""}. Explore /api/route?q=<task>&include=external.`, 404);
+          if (!candidateList.length) throw bad(`No external ${chains.includes("tempo") && chains.length > 1 ? "x402 or MPP" : chains[0] === "tempo" ? "MPP" : "x402"} seller matched that task${chains[0] !== "base" || chains.length > 1 ? ` on ${chains.join("/")}` : ""}. Explore /api/route?q=<task>&include=external.`, 404);
+          // Try candidates in order; keep the last error so an all-fail run
+          // reports something real. A 5xx from a seller's paid leg -> next
+          // candidate; anything else stops (return on success, throw otherwise).
+          let lastErr = null;
+          for (let __i = 0; __i < candidateList.length; __i++) {
+          const ext = candidateList[__i];
+          const hasNext = __i < candidateList.length - 1;
           const extUsd = toUsd(ext.price);
           if (!(extUsd > 0 && extUsd <= cap)) {
             const up = routeExecuteHint(extUsd);
-            throw bad(`Best external match "${ext.slug}" is ${ext.price} - over this tier's $${cap} cap.${up && up.tool !== tier.slug ? ` Use ${up.tool} (${up.price}).` : " No tier covers that price - call the seller directly."}`, 409);
+            lastErr = bad(`Best external match "${ext.slug}" is ${ext.price} - over this tier's $${cap} cap.${up && up.tool !== tier.slug ? ` Use ${up.tool} (${up.price}).` : " No tier covers that price - call the seller directly."}`, 409);
+            if (hasNext) continue; throw lastErr;
           }
-          if (!(ext.url && Array.isArray(ext.networks) && ext.networks.includes(chainCaip2))) throw bad(`External seller "${ext.seller}" does not offer ${chain} settlement - cannot pay it from the ${chain} spending wallet.`, 409);
+          if (!(ext.url && Array.isArray(ext.networks) && ext.networks.includes(chainCaip2))) {
+            lastErr = bad(`External seller "${ext.seller}" does not offer ${chain} settlement - cannot pay it from the ${chain} spending wallet.`, 409);
+            if (hasNext) continue; throw lastErr;
+          }
           const extWire = ext.wire || "x402";
           // GET sellers take their input as query params — an HTTP GET cannot
           // carry a body (undici refuses it outright). Only primitives can ride
@@ -306,10 +354,23 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // every drained dollar returns to the attacker, bounded per call only
           // by `cap`. A 4xx here cancels the buyer's settlement, so refusing
           // costs an honest buyer nothing.
-          const spendPayer = payerFromRequest(req);
-          const allowed = maySpend(spendPayer, extUsd);
+          // Keyed like the composite guard (server.js): the signed x402 payer
+          // first, else the Tempo credential's payer (the tempo gate strips
+          // the x402 headers on acceptance, so payerFromRequest is null for an
+          // MPP/Tempo buyer and an unkeyed payer was exempt from the ceiling -
+          // found in the 2026-08-27 review, the first day the Tempo leg
+          // resolved anything), else the client IP so nobody is unkeyed.
+          const spendPayer = payerFromRequest(req)
+            || (req?.mppTempoPayer ? `tempo:${req.mppTempoPayer}` : null)
+            || (req?.ip ? `ip:${req.ip}` : null);
+          // Book the WORST CASE this call could cost, not the seller's declared
+          // price. `cap` is what payExternal will refuse to exceed, so it is the
+          // real exposure; the declared price is one seller-controlled document
+          // and would otherwise let them set our own debt ceiling (see
+          // adjustSpend). Corrected down to the actual quote below.
+          const allowed = maySpend(spendPayer, cap);
           if (!allowed.ok) throw bad(`External routing is paused for this wallet: ${allowed.reason}`, 429);
-          const spendHandle = noteSpend(spendPayer, extUsd);
+          const spendHandle = noteSpend(spendPayer, cap);
           // Handed to server.js on the REQUEST, because a tool handler is called
           // as handler(input, req) and never receives `res`. The first draft
           // registered res.on("finish") here, where `res` is undefined - a guard
@@ -325,7 +386,8 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // and the seller answers both, so the check has to happen again
             // against the accept actually signed. Null = no chain-derived
             // address on record, which is not a failure - see provenPayToMatches.
-            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null });
+            if (ext.unproven) console.warn(`[sor] paying UNPROVEN ${chain} seller ${ext.seller} (${ext.price}) - every proven candidate was exhausted; loss bounded by the unproven allowance`);
+            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, allowUnproven: ext.unproven === true, ...(tempoBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : {}) });
           } catch (e) {
             // The exposure DELIBERATELY stands. It is tempting to clear it here
             // ("the buy failed, so we never spent"), but payExternal can throw
@@ -335,7 +397,37 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // the stale window, so an honest buyer caught by a seller outage
             // waits, while a spend we cannot account for keeps counting.
             const sc = e?.statusCode && e.statusCode >= 400 && e.statusCode < 600 ? e.statusCode : 502;
-            throw bad(`External seller "${ext.seller}" failed: ${String(e?.message || e).slice(0, 200)}`, sc);
+            lastErr = bad(`External seller "${ext.seller}" failed: ${String(e?.message || e).slice(0, 200)}`, sc);
+            // FALL THROUGH TO THE NEXT SELLER only on a 5xx (their own upstream
+            // or gateway failed), and only when the error carries NO settle
+            // receipt - a payExternal throw that includes a receipt means the
+            // authorization went out and we may have paid, so retrying another
+            // seller would be a second, uncorrelated spend. A 4xx never falls
+            // through: it cancels the buyer's settlement and means our request
+            // was wrong, which the next seller would reject the same way. Tempo
+            // buyers never fall through (their credential is single-use and
+            // time-boxed - a second seller needs a fresh one).
+            // FALL THROUGH ONLY WHEN THE AUTHORIZATION WAS NEVER SENT.
+            // payX402 stamps `committed:true` on every throw AFTER it has
+            // signed and sent the payment header - at which point we cannot
+            // prove we were not charged, so retrying another seller would risk
+            // a second, uncorrelated spend. A PRE-commit failure (seller
+            // unreachable, unparseable 402, no payable accept, quote over cap)
+            // provably spent nothing, so it is safe to try the next candidate.
+            // The seller's HTTP status is NOT a safe signal here: a seller can
+            // settle our transfer and THEN return 5xx, so "5xx = not charged"
+            // is a false assumption the seller controls. `committed` is set by
+            // OUR buyer code from whether the header was sent, which the seller
+            // cannot influence. Tempo never falls through either way (single-
+            // use, time-boxed credential).
+            const spentMaybe = e?.committed === true;
+            if (hasNext && !spentMaybe && chain !== "tempo") {
+              console.warn(e?.refused
+                ? `[sor] seller ${ext.seller} refused the payment and the chain shows no debit - trying next candidate, nothing spent`
+                : `[sor] seller ${ext.seller} failed pre-payment (${sc}) - trying next candidate, nothing spent`);
+              continue;
+            }
+            throw lastErr;
           }
           const ts = new Date().toISOString();
           // RUNTIME VERIFICATION. The seller's OpenAPI told us what a success
@@ -357,6 +449,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             });
           }
           const underlyingUsd = paid.quote ? paid.quote.usd : extUsd;
+          // Now the real figure is known, so the ceiling stops counting the
+          // worst case against this payer.
+          adjustSpend(spendHandle, underlyingUsd);
           return {
             receipt: {
               slug: ext.slug,
@@ -370,12 +465,18 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
               settleNetwork: chainCaip2,
               wire: extWire,
               resolvedBy: "task-external",
+              // A buyer should know when the seller that served them had no
+              // settlement history on this chain when we paid it.
+              ...(ext.unproven ? { sellerProof: "unproven" } : {}),
               ts,
               ...(callRefFrom(req, ext.slug, ts) ? { callRef: callRefFrom(req, ext.slug, ts) } : {}),
             },
             // External result is attacker-influenceable content — mark it.
             result: (paid.result && typeof paid.result === "object" && !Array.isArray(paid.result)) ? { ...paid.result, untrustedContent: true } : paid.result,
           };
+          } // end candidate loop
+          // Every candidate failed with a fall-through-eligible error.
+          throw lastErr || bad("No external seller could serve that task.", 502);
         }
 
         // Default: resolve the best in-budget tool from THIS host's catalog.
@@ -405,6 +506,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
       let result;
       try {
         result = await def.handler(params);
+        // Never relay an inner handler's meter sentinel (non-enumerable now,
+        // but belt and braces: this object is nested into our own response).
+        if (result && typeof result === "object") { try { delete result.__meterUpstreamUsd; } catch { /* frozen */ } }
       } catch (e) {
         // Surface the underlying tool's own error semantics — the buyer paid
         // for a routed execution, and the tool's 4xx is the honest answer.

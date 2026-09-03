@@ -46,7 +46,7 @@ jobs:
         # @stellar/stellar-sdk pinned to the repo lock (no floating installs);
         # @x402/avm + algosdk come from package.json via `npm ci`. Keep in
         # lockstep with the canary — version skew causes SVM/AVM settle failures.
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 @x402/core@2.16.0 @x402/evm@2.16.0 @x402/svm@2.16.0 @x402/stellar@2.21.0 @stellar/stellar-sdk@16.0.1 @solana/kit@5.5.1 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.22.0 @x402/core@2.22.0 @x402/evm@2.22.0 @x402/svm@2.22.0 @x402/stellar@2.21.0 @stellar/stellar-sdk@16.0.1 @solana/kit@5.5.1 viem@2.52.2
       - name: Run the cross-chain tool matrix
         # Wallet/pow secrets scoped to THIS step only (audit R-07).
         env:

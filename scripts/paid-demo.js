@@ -139,7 +139,15 @@ const payHeaders = http.encodePaymentSignatureHeader(payload);
 // Header-name compatibility: @x402/core v2.16 emits only PAYMENT-SIGNATURE,
 // but some sellers (Stelar: error "X-PAYMENT header required", 2026-07-23)
 // read only the X-PAYMENT name. Mirror the same value under both.
-if (payHeaders["PAYMENT-SIGNATURE"] && !payHeaders["X-PAYMENT"]) payHeaders["X-PAYMENT"] = payHeaders["PAYMENT-SIGNATURE"];
+// PAID_DEMO_MIRROR=off sends ONLY PAYMENT-SIGNATURE - the pure stock-client
+// shape - so a seller that reads X-PAYMENT first (and takes the v1 path on it)
+// can be told apart from one that refuses the payment itself (2026-09-02).
+// Default: mirror only on a v1 challenge (a v2 seller reading X-PAYMENT first
+// takes its v1 path; xfuel's has no Solana branch). PAID_DEMO_MIRROR=on forces
+// the mirror, =off never mirrors.
+// Default: no mirror (the stock client shape). PAID_DEMO_MIRROR=on forces it.
+const shouldMirror = process.env.PAID_DEMO_MIRROR === "on";
+if (shouldMirror && payHeaders["PAYMENT-SIGNATURE"] && !payHeaders["X-PAYMENT"]) payHeaders["X-PAYMENT"] = payHeaders["PAYMENT-SIGNATURE"];
 const paid = await fetch(url, {
   ...reqInit,
   headers: { ...reqInit.headers, ...payHeaders, "Access-Control-Expose-Headers": "PAYMENT-RESPONSE,X-PAYMENT-RESPONSE" },

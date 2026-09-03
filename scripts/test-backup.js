@@ -13,7 +13,7 @@
 //
 //   node scripts/test-backup.js
 import { createServer } from "node:http";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -71,16 +71,22 @@ process.env.BACKUP_S3_SECRET = "test-secret";
 process.env.BACKUP_DATA_DIR = dataDir;
 process.env.BACKUP_KEEP_DAYS = "14";
 
-const { backupPlan, runBackup, backupStatus, backupConfigured } = await import("../src/backup.js");
+process.env.BACKUP_ENCRYPTION_KEY = "ab".repeat(32); // 32-byte test key built at runtime (no key-shaped literal in the tree for the secret scanner)
+const { backupPlan, runBackup, backupStatus, backupConfigured, decryptBackupBuffer, parseEncKey } = await import("../src/backup.js");
 
 // --- plan ------------------------------------------------------------------
+mkdirSync(join(dataDir, "credits"), { recursive: true });
+writeFileSync(join(dataDir, "credits", "k_aaa.json"), JSON.stringify({ balanceMicro: 5_000_000 }));
+writeFileSync(join(dataDir, "credits", "k_bbb.json"), JSON.stringify({ balanceMicro: 250_000 }));
+writeFileSync(join(dataDir, "credits", "k_ccc.json.tmp"), "half-written"); // excluded
 const plan = backupPlan();
 ok(plan.configured === true && backupConfigured(), "configured with all four creds");
 const byName = Object.fromEntries(plan.files.map((f) => [f.name, f]));
 ok(byName["x402-index-cache.json"]?.excluded === true, "cache file excluded from the plan");
 ok(byName["stats.db-wal"]?.excluded === true, "wal sidecar excluded");
 ok(byName["agent402-refunds.db"]?.excluded === false, "refund ledger included");
-ok(plan.includedCount === 3, `plan includes exactly the 3 real files (got ${plan.includedCount})`);
+ok(plan.includedCount === 4, `plan includes the 3 real files plus the directory store (got ${plan.includedCount})`);
+ok(byName.credits?.dir === true && byName.credits.count === 2 && byName.credits.excluded === false, "a directory store (credits/) is a bundled entry with its file count");
 
 // --- retention seed: plant old + recent + foreign objects ------------------
 const oldDay = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
@@ -93,8 +99,24 @@ objects.set("unrelated/keep.txt", Buffer.from("foreign"));
 const run1 = await runBackup({ log: () => {} });
 ok(run1.ok === true, `run succeeds (${JSON.stringify(run1).slice(0, 80)})`);
 const day = run1.day;
-ok(objects.has(`backups/${day}/agent402-refunds.db.gz`), "refund ledger uploaded under today's date key");
-ok(objects.has(`backups/${day}/notes.json.gz`), "plain file uploaded");
+ok(objects.has(`backups/${day}/agent402-refunds.db.gz.enc`) && !objects.has(`backups/${day}/agent402-refunds.db.gz`), "refund ledger uploaded ENCRYPTED under today's date key (.gz.enc, never plain)");
+{
+  const { gunzipSync } = await import("node:zlib");
+  const enc = objects.get(`backups/${day}/agent402-refunds.db.gz.enc`);
+  ok(enc.subarray(0, 8).toString() === "A402ENC1" && !enc.includes(Buffer.from("SQLite format 3")), "the object is an A402ENC1 blob and carries no plaintext SQLite header");
+  const plain = gunzipSync(decryptBackupBuffer(enc, parseEncKey(process.env.BACKUP_ENCRYPTION_KEY)));
+  ok(plain.subarray(0, 15).toString() === "SQLite format 3", "decrypt + gunzip yields the SQLite file (restore path works)");
+  let tampered = null; try { const t = Buffer.from(enc); t[t.length - 1] ^= 1; decryptBackupBuffer(t, parseEncKey(process.env.BACKUP_ENCRYPTION_KEY)); } catch (e) { tampered = e; }
+  ok(tampered, "a tampered object fails authentication instead of decrypting to garbage");
+  ok(parseEncKey("short") === null && parseEncKey("") === null, "a malformed key is refused (no silent weak encryption)");
+}
+{
+  const bundleEnc = objects.get(`backups/${day}/credits.ndjson.gz.enc`);
+  const { gunzipSync } = await import("node:zlib");
+  const lines = bundleEnc ? gunzipSync(decryptBackupBuffer(bundleEnc, parseEncKey(process.env.BACKUP_ENCRYPTION_KEY))).toString("utf8").trim().split("\n").map((l) => JSON.parse(l)) : [];
+  ok(lines.length === 2 && lines.some((l) => l.path === "credits/k_aaa.json" && JSON.parse(l.body).balanceMicro === 5_000_000) && !lines.some((l) => l.path.endsWith(".tmp")), "the directory store is uploaded as one NDJSON bundle carrying every record and no tmp file");
+}
+ok(objects.has(`backups/${day}/notes.json.gz.enc`), "plain file uploaded (encrypted)");
 ok(!requests.some((r) => r.key.includes("x402-index-cache")), "excluded cache never uploaded");
 ok(!objects.has(`backups/${oldDay}/stale.db.gz`), `retention pruned the ${oldDay} prefix`);
 ok(objects.has(`backups/${recentDay}/fresh.db.gz`), "recent prefix survives retention");
@@ -103,7 +125,7 @@ ok(run1.pruned === 1, `exactly one object pruned (got ${run1.pruned})`);
 
 // Consistency: the uploaded sqlite snapshot is a valid, row-complete db.
 {
-  const raw = gunzipSync(objects.get(`backups/${day}/agent402-refunds.db.gz`));
+  const raw = gunzipSync(decryptBackupBuffer(objects.get(`backups/${day}/agent402-refunds.db.gz.enc`), parseEncKey(process.env.BACKUP_ENCRYPTION_KEY)));
   const tmpDb = join(tmpdir(), "a402-restored-check.db"); // OUTSIDE dataDir - anything inside would be backed up by later runs
   writeFileSync(tmpDb, raw);
   const restored = new Database(tmpDb, { readonly: true });

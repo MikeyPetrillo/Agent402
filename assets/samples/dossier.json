@@ -1,0 +1,342 @@
+{
+ "product": "dossier",
+ "input": "NVDA",
+ "title": "NVIDIA CORP (NVDA): Company Due-Diligence Dossier",
+ "report": "# NVIDIA CORP (NVDA) — Company Due-Diligence Dossier\n\n## SNAPSHOT\n\nNVIDIA Corporation is a Santa Clara, California–based accelerated-computing company [13] whose economics are now overwhelmingly driven by AI data center infrastructure — GPUs, CPUs, networking and the CUDA software stack sold into hyperscalers, cloud partners, enterprises and governments [13][14][17].\n\nThe live quote shows a last price of 227.98 USD, a day range of 220.90–230.47, a 52-week range of 164.07–236.54 and a previous close of 209.66 (the change field was not supplied). The last price therefore sits near the top of its 52-week band and roughly 8.7% above the prior close.\n\n**Bottom line:** On the reported numbers, NVIDIA is one of the most financially extreme businesses in public markets. The latest annual figures (FY 2026, 10-K filed 2026-02-25) show revenue of $215.94B and net income of $120.07B — a ~55.6% net margin — and the most recent quarter (period ending 2026-07-26, 10-Q) alone produced $96.22B of revenue and $59.69B of net income. Growth is corroborated externally: Q2 FY2027 revenue was up 106% year over year with Data Center revenue of $89.0B, up 117% [13][17]. The diligence question is not whether the business is performing; it is whether the *structure* now being built around that performance — enormous memory procurement commitments, guarantees supporting AI cloud partners' data center leases, a ballooning non-marketable equity portfolio, and guidance that explicitly excludes China Data Center compute — is durable and transparent enough to underwrite. Legacy securities and derivative litigation, and an export-control-related indictment in Taiwan touching an NVIDIA senior manager, are live overhangs [18][19][20].\n\n---\n\n## BUSINESS & RECENT FILINGS\n\nThe disclosure record supplied is dense and current. Three consecutive 10-Ks are on file — filed 2026-02-25 (period 2026-01-25) [1], 2025-02-26 (period 2025-01-26) [2] and 2024-02-21 (period 2024-01-28) [3] — plus three 10-Qs: the newest filed 2026-08-26 for the period ending 2026-07-26 [4], one filed 2026-05-20 for the period ending 2026-04-26 [5], and one filed 2025-11-19 for the period ending 2025-10-26 [6]. Six 8-Ks were filed between 2026-05-20 and 2026-08-26 [7][8][9][10][11][12], including the 8-K dated 2026-08-26 that carries the Q2 FY2027 earnings release [7][13]. That cadence of current reports — five 8-Ks in roughly three months ahead of the earnings 8-K — indicates an active corporate-events calendar; the material provided here does not describe the subject matter of the individual 8-Ks [8][9][10][11][12].\n\nThe Q2 FY2027 10-Q's own words are informative on several fronts:\n\n- **Capital returns are running at scale.** The equity statement shows shares repurchased of 94 million shares in the quarter, with $19,522 million charged to retained earnings and a $19,674 million total effect, alongside cash dividends declared and paid of $0.25 per common share totalling $6,047 million; for the six-month period, repurchases were 203 million shares for $39,845 million total, with dividends of $0.26 per share totalling $6,290 million [4]. Share count fell to 24,147 million from 24,477 million at Jan 26, 2025 [4]. The press release frames the quarter as approximately $26.0 billion returned via buybacks and dividends, with roughly $99.0 billion remaining under the repurchase authorization, and the next $0.25 quarterly dividend payable October 1, 2026 to holders of record September 10, 2026 [13].\n- **Debt is modest and laddered.** The 10-Q's debt note lists 3.20% Notes Due 2026 ($1,000M), 4.25% Notes Due 2028 ($3,500M, newly shown versus Jan 25, 2026), 1.55% Notes Due 2028 ($1,250M), 4.35% Notes Due 2029 ($3,500M) and 2.85% Notes Due 2030, with effective rates disclosed alongside [4].\n- **Off-balance-sheet partner support.** The filing describes exposure under agreements that is \"reduced as the partners make payments to the lessors over terms ranging from five to seven years,\" with partners having placed $712 million in escrow to partially mitigate potential exposure, \"which is not reflected in the notional value\" [4]. Web research adds that NVIDIA has guaranteed land, power and shell obligations for certain AI cloud partners' data center leases with maximum gross exposure of $3.5 billion across all agreements, and separately describes an approximately 4.25 GW arrangement at SB Energy's PORTS-Pike Technology Campus in Ohio for OpenAI under 20-year leases with guarantee obligations capped at $105 billion in total. Those larger figures come from the web research rather than the excerpts provided, and a diligence buyer should verify them against the filing text directly.\n- **Investment portfolio has exploded in size.** Non-marketable equity securities — \"primarily in privately-held companies carried at cost less impairment, and adjusted for observable price changes\" — grew from a $22,251 million balance at the start of the six-month period to $47,898 million at July 26, 2026, driven by net additions of $31,005 million and unrealized gains of $7,504 million, net of $12,712 million of reclassifications (primarily securities that began public trading) and $150 million of impairments and unrealized losses [4]. A year earlier the same balance was $3,799 million [4]. Separately, net unrealized gains on publicly held equity securities held at period end were $1.5 billion for the quarter and $12.5 billion for the first half of FY2027, versus $1.9 billion and $1.7 billion in the comparable prior-year periods, and a $5.0 billion holding subject to lock-up restrictions through December 2027 sat in Other assets [4].\n- **Working-capital and deferred items are shifting.** Accrued and other current liabilities rose to $26,960M from $21,352M, with customer program accruals of $7,391M (from $5,318M), taxes payable of $5,206M (from $2,669M) and deferred revenue of $4,616M (from $1,379M) — the latter including $2.8 billion of customer advances at July 26, 2026 versus $160 million at January 25, 2026 [4]. Excess inventory purchase obligations of $2,138M and product warranty of $2,938M are also carried there [4].\n\n---\n\n## FINANCIAL POSTURE\n\nAnnual FY 2026 (10-K filed 2026-02-25): revenue $215.94B, operating income $130.39B (60.4% operating margin), non-operating income of $11.06B, pre-tax income $141.45B, tax expense $21.38B (~15.1% effective rate), net income $120.07B, basic EPS 4.93.\n\nMost recent quarter (period ending 2026-07-26): revenue $96.22B, operating income $63.73B (66.2% operating margin), non-operating income $7.77B, pre-tax income $71.51B, tax expense $11.82B (~16.5%), net income $59.69B, basic EPS 2.47. Note that net income *exceeds* operating income; the operating-to-net bridge accounts for this — the $7.77B of non-operating income more than offsets tax. The 10-Q identifies the mechanism: unrealized gains, losses and impairments on non-marketable equity securities are recognized in Other income, net [4], and the period carried $4,900 million of unrealized gains on those securities in the quarter plus large unrealized gains on publicly held equities [4]. That is a real but non-cash, mark-driven earnings contributor and should be excluded from any run-rate quality-of-earnings view.\n\nThe balance sheet has re-based dramatically in six months: total assets $320.27B (from $206.80B at FY 2026 year-end), total liabilities $91.29B (from $49.51B), stockholders' equity $228.98B (from $157.29B), cash and equivalents $22.44B (from $10.61B). Equity of $228,984 million at Jul 26, 2026 versus $79,327 million at Jan 26, 2025 is confirmed verbatim in the filing [4]. Leverage remains low — liabilities are roughly 28% of assets — even after the liability side nearly doubled. Six-month net income per the filing was $118,010 million with total comprehensive income of $117,807 million, the small difference reflecting modest available-for-sale and cash-flow-hedge marks [4]. Reported gross margin was 75.0% on both GAAP and non-GAAP bases [13].\n\nThe one genuine capital-intensity signal in the material is supply commitment: web research states memory procurement commitments rose from $119 billion in the prior quarter to $279 billion. That figure is not in the numbered snippets and should be confirmed in the filing before it is relied upon.\n\n---\n\n## RECENT DEVELOPMENTS\n\n- **Q2 FY2027 results (Aug 26, 2026).** Revenue $96.2B, up 18% sequentially and 106% year over year; Data Center $89.0B, up 18% sequentially and 117% year over year, representing more than 92% of total revenue [13][15][17]. GAAP diluted EPS $2.46; non-GAAP diluted EPS $2.22 [13]. Web research reports the revenue beat a $92.3 billion consensus and that non-GAAP EPS beat a $2.09 estimate.\n- **Guidance.** Web research puts Q3 FY2027 revenue guidance at $108.0 billion ±2%, described as stronger than expected, and states explicitly that the outlook includes **no** Data Center compute revenue from China. Vera Rubin is described as moving into production [17].\n- **AWS expansion (Aug 26, 2026).** AWS and NVIDIA announced \"a major expansion of their strategic collaboration to meet surging global demand for AI infrastructure\" [14]; web research details an additional 2 million GPUs (Blackwell Ultra, Rubin, Rubin Ultra) across AWS infrastructure in 2027–2028, NVIDIA Vera CPU-based infrastructure on AWS, and intent to build U.S. government AI factories including 100,000 GPUs supporting workloads at Impact Level 6 and above.\n- **Financing ecosystem.** Web research describes partnerships with Apollo, BlackRock, Blackstone, Brookfield, Goldman Sachs and KKR to mobilize over $500 billion — the snippet is truncated, so treat the scope as directional only.\n- **Full-stack posture.** CFO Colette Kress is quoted noting NVIDIA \"continues making strategic commitments across our supply, infrastructure, and partner ecosystems,\" and that as a full-stack supplier NVIDIA \"has to get increasingly involved with its customers' business and do what it can to ensure their health\" [16]. That is the cleanest management-sourced statement of why guarantees, prepayments and equity stakes are proliferating.\n- **Competitive position.** Web research cites Jon Peddie Research at 90% of discrete add-in-board GPU shipments in Q1 2026 (AMD 8%, Intel 1%), down from 94% in Q4 2025; ~87.4% of combined NVIDIA/AMD/Intel merchant data center revenue in Q1 FY2027 on $75.2B; third-party estimates of ~80–88% of the broader AI accelerator market mid-2026; >90% share in training versus 60–75% in inference; ~72% of active gaming GPUs per the June 2026 Steam survey; and roughly 60% of TSMC CoWoS capacity for 2026.\n\n---\n\n## INSIDER ACTIVITY\n\nForm 4 filings in the 120-day window are numerous and cluster on three dates. On 2026-06-23, filings were made by Timothy S. Teter, Colette Kress, Ajay K. Puri, Debora Shoquist and Mark A. Stevens. On 2026-06-29, a large group filed: John Dabiri, Stephen C. Neal, Aarti S. Shah, Melissa Lora, Dawn E. Hudson, Mark A. Stevens, A. Brooke Seawell, Harvey C. Jones and Tench Coxe. Tench Coxe filed again on 2026-07-06 and 2026-08-07; Suzanne M. Nora Johnson filed on 2026-08-12; and Ajay K. Puri filed on 2026-08-24.\n\nThis data is **filing metadata only** — it contains no transaction direction, share counts or prices — so no inference about buying or selling, or about amounts, can be drawn. What is observable is that the filings span both named executive officers (CFO, general counsel, sales and operations leadership) and a broad slate of directors, and that the June 29 cluster is consistent with a single board-wide event date. A buyer wanting direction and size must pull the underlying Form 4 documents from EDGAR.\n\n---\n\n## RISKS & RED FLAGS\n\n1. **Concentration.** Data Center is more than 92% of revenue [17]. Any deceleration in hyperscaler and AI-cloud capex transmits almost undiluted to the top line.\n2. **China exclusion.** Web research states the Q3 FY2027 outlook contains no China Data Center compute revenue — a de facto acknowledgment that a major market is not being underwritten. That is prudent guidance but also a structural revenue risk.\n3. **Export-control exposure.** Taiwan has indicted nine people, reportedly including an NVIDIA senior manager and two Taiwan-based Supermicro employees, over allegedly forged documents used to conceal illegal exports of high-end AI servers to China in violation of U.S. export controls [20]. The material provided does not describe any company-level charge or NVIDIA response; it is nonetheless a compliance-diligence item to pursue.\n4. **Circularity of the ecosystem.** NVIDIA is simultaneously supplier to, guarantor of, and equity investor in its customers' build-outs — lease guarantees with escrow only partially mitigating exposure [4], and a non-marketable equity book that grew to $47,898 million with $31,005 million of net additions in six months [4]. Kress's own framing supports the read that this is deliberate [16]. It concentrates counterparty and mark-to-market risk on the same demand cycle that drives revenue.\n5. **Earnings quality.** A meaningful slice of pre-tax income is non-operating investment marks recognized in Other income, net [4]. Marks reverse.\n6. **Legacy litigation.** The 2018 securities class action (In Re NVIDIA Corporation Securities Litigation, N.D. Cal. 4:18-cv-07669-HSG) alleging misleading statements on channel inventory and crypto-driven GPU demand was dismissed in 2021, partially revived by the Ninth Circuit in 2023, taken to the Supreme Court which dismissed the writ as improvidently granted in December 2024, and remanded to the district court in February 2025 [18]. Related derivative actions — the consolidated derivative litigation, and Lipchitz v. Huang and Nelson v. Huang in Delaware — were stayed pending resolution of the securities case [18][19].\n7. **Share-share dilution offset.** Stock-based compensation of $2,027 million in the quarter and $3,955 million in the half, plus $4,531 million of tax withholding on stock in the half [4], means buybacks are partly absorbing equity issuance rather than being purely incremental.\n\n---\n\n## DILIGENCE READ\n\nNVIDIA's reported financial position is exceptionally strong and internally consistent across the SEC data, the filing's own words and independent coverage: triple-digit Data Center growth [13][17], 75.0% gross margin [13], ~66% quarterly operating margin, equity of $228.98B against $91.29B of total liabilities, and a modest, laddered note stack [4]. Disclosure hygiene appears good — timely 10-Qs, an earnings 8-K, and detailed notes on guarantees, escrow, deferred revenue and investment marks [4].\n\nThe risk is not the P&L; it is what sits around it. The company is increasingly financing and underwriting its own demand — lease guarantees, escrowed partner obligations, very large supply commitments, and a private-equity portfolio that grew more than twelve-fold year over year [4][16]. That structure amplifies both upside and drawdown, and it means a portion of reported earnings is mark-driven rather than operational. With the stock near the top of its 52-week range at 227.98, an investor is paying for continuation of a cycle whose guidance already excludes China. For a partner or counterparty, credit quality is not in question. For an investor, the diligence work that matters next is verifying the guarantee and memory-commitment magnitudes directly in the 10-K/10-Q text, tracking the securities-litigation remand [18], and monitoring the export-control matter [20] — none of which the material provided here resolves.\n\n## Sources\n[1] 10-K filed 2026-02-25 (period 2026-01-25) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm\n[2] 10-K filed 2025-02-26 (period 2025-01-26) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1045810/000104581025000023/nvda-20250126.htm\n[3] 10-K filed 2024-02-21 (period 2024-01-28) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1045810/000104581024000029/nvda-20240128.htm\n[4] 10-Q filed 2026-08-26 (period 2026-07-26) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1045810/000104581026000075/nvda-20260726.htm\n[5] 10-Q filed 2026-05-20 (period 2026-04-26) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1045810/000104581026000052/nvda-20260426.htm\n[6] 10-Q filed 2025-11-19 (period 2025-10-26) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1045810/000104581025000230/nvda-20251026.htm\n[7] 8-K filed 2026-08-26 (period 2026-08-26) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1045810/000104581026000073/nvda-20260826.htm\n[8] 8-K filed 2026-08-17 (period 2026-08-17) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1045810/000104581026000069/nvda-20260817.htm\n[9] 8-K filed 2026-07-02 (period 2026-06-28) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1045810/000104581026000060/nvda-20260628.htm\n[10] 8-K filed 2026-06-30 (period 2026-06-24) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1045810/000104581026000056/nvda-20260624.htm\n[11] 8-K filed 2026-06-18 (period 2026-06-15) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1045810/000119312526275783/d48176d8k.htm\n[12] 8-K filed 2026-05-20 (period 2026-05-20) - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1045810/000104581026000051/nvda-20260520.htm\n[13] Document - https://www.sec.gov/Archives/edgar/data/1045810/000104581026000073/q2fy27pr.htm\n[14] NVIDIA Corporation - AWS and NVIDIA to Deliver 2 Million Additional GPUs and Next-Generation Infrastructure for Agentic and Physical AI - https://investor.nvidia.com/news/press-release-details/2026/AWS-and-NVIDIA-to-Deliver-2-Million-Additional-GPUs-and-Next-Generation-Infrastructure-for-Agentic-and-Physical-AI/default.aspx\n[15] NVIDIA Announces Financial Results for Second Quarter Fiscal 2027 | Markets Insider - https://markets.businessinsider.com/news/stocks/nvidia-announces-financial-results-for-second-quarter-fiscal-2027-1036495427\n[16] Nvidia financial results for Q2’26–FY’27 – Jon Peddie Research - https://www.jonpeddie.com/news/nvidia-financial-results-for-q226-fy27/\n[17] NVIDIA Data Center Revenue Hits $89B as Vera Rubin Moves Into Production - Converge Digest - https://convergedigest.com/nvidia-q2-fy2027-data-center-vera-rubin-ai-infrastructure/\n[18] Nvidia (NVDA) Lawsuits & Legal Proceedings (2016-2026 10-K) | edgar.tools - https://app.edgar.tools/companies/NVDA/disclosures/commitments-contingencies\n[19] R17.htm - https://www.sec.gov/Archives/edgar/data/1045810/000104581026000052/R17.htm\n[20] Nvidia senior manager linked to Supermicro scheme smuggling AI servers to China - Ars Technica - https://arstechnica.com/tech-policy/2026/08/nvidia-senior-manager-linked-to-supermicro-scheme-smuggling-ai-servers-to-china/",
+ "sources": [
+  {
+   "n": 1,
+   "title": "10-K filed 2026-02-25 (period 2026-01-25) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm"
+  },
+  {
+   "n": 2,
+   "title": "10-K filed 2025-02-26 (period 2025-01-26) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581025000023/nvda-20250126.htm"
+  },
+  {
+   "n": 3,
+   "title": "10-K filed 2024-02-21 (period 2024-01-28) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581024000029/nvda-20240128.htm"
+  },
+  {
+   "n": 4,
+   "title": "10-Q filed 2026-08-26 (period 2026-07-26) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000075/nvda-20260726.htm"
+  },
+  {
+   "n": 5,
+   "title": "10-Q filed 2026-05-20 (period 2026-04-26) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000052/nvda-20260426.htm"
+  },
+  {
+   "n": 6,
+   "title": "10-Q filed 2025-11-19 (period 2025-10-26) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581025000230/nvda-20251026.htm"
+  },
+  {
+   "n": 7,
+   "title": "8-K filed 2026-08-26 (period 2026-08-26) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000073/nvda-20260826.htm"
+  },
+  {
+   "n": 8,
+   "title": "8-K filed 2026-08-17 (period 2026-08-17) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000069/nvda-20260817.htm"
+  },
+  {
+   "n": 9,
+   "title": "8-K filed 2026-07-02 (period 2026-06-28) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000060/nvda-20260628.htm"
+  },
+  {
+   "n": 10,
+   "title": "8-K filed 2026-06-30 (period 2026-06-24) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000056/nvda-20260624.htm"
+  },
+  {
+   "n": 11,
+   "title": "8-K filed 2026-06-18 (period 2026-06-15) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000119312526275783/d48176d8k.htm"
+  },
+  {
+   "n": 12,
+   "title": "8-K filed 2026-05-20 (period 2026-05-20) - SEC EDGAR",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000051/nvda-20260520.htm"
+  },
+  {
+   "n": 13,
+   "title": "Document",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000073/q2fy27pr.htm",
+   "snippet": "NVIDIA Announces Financial Results for Second Quarter Fiscal 2027\n\n•Revenue of $96.2 billion, up 106% from a year ago\n\n•Data Center revenue of $89.0 billion, up 117% from a year ago\n\n...\n\nSANTA CLARA, Calif.—Aug. 26, 2026―NVIDIA (NASDAQ: NVDA) today reported revenue for the second quarter ended July 26, 2026, of $96.2 billion, up 18% from the previous quarter and up 106% from a year ago. For the quarter, GAAP and non-GAAP gross margins were both 75.0%. GAAP and non-GAAP earnings per diluted shar"
+  },
+  {
+   "n": 14,
+   "title": "NVIDIA Corporation - AWS and NVIDIA to Deliver 2 Million Additional GPUs and Next-Generation Infrastructure for Agentic and Physical AI",
+   "url": "https://investor.nvidia.com/news/press-release-details/2026/AWS-and-NVIDIA-to-Deliver-2-Million-Additional-GPUs-and-Next-Generation-Infrastructure-for-Agentic-and-Physical-AI/default.aspx",
+   "snippet": "SEATTLE and SANTA CLARA, Calif., Aug. 26, 2026 (GLOBE NEWSWIRE) -- Amazon Web Services (AWS), an Amazon.com, Inc. company (NASDAQ: AMZN), and NVIDIA (NASDAQ: NVDA) today announced a major expansion of their strategic collaboration to meet surging global demand for AI infrastructure as demand continues to accelerate. Building on already-rapid customer adoption of NVIDIA-accelerated compute on AWS, the companies plan to deploy 2 million additional NVIDIA GPUs across AWS’s global infrastructure and"
+  },
+  {
+   "n": 15,
+   "title": "NVIDIA Announces Financial Results for Second Quarter Fiscal 2027 | Markets Insider",
+   "url": "https://markets.businessinsider.com/news/stocks/nvidia-announces-financial-results-for-second-quarter-fiscal-2027-1036495427",
+   "snippet": "TA CLARA, Calif., Aug. 26, 2026 (GLOBE NEWSWIRE) -- NVIDIA (NASDAQ: NVDA) today reported revenue for the second quarter ended July 26, 2026, of $96.2 billion, up 18% from the previous quarter and up 106% from a year ago. For the quarter, GAAP and non-GAAP"
+  },
+  {
+   "n": 16,
+   "title": "Nvidia financial results for Q2’26–FY’27 – Jon Peddie Research",
+   "url": "https://www.jonpeddie.com/news/nvidia-financial-results-for-q226-fy27/",
+   "snippet": "As part of being a full-stack supplier, Nvidia has to get increasingly involved with its customers’ business and do what it can to ensure their health. Said Colette Kress, Nvidia EVP and CFO, “Nvidia continues making strategic commitments across our supply, infrastructure, and partner ecosystems to capitalize on the substantial growth ahead of us. We’ve partnered with our extensive supplier network to secure critical components needed to meet demand for the next several years. Our commitments in"
+  },
+  {
+   "n": 17,
+   "title": "NVIDIA Data Center Revenue Hits $89B as Vera Rubin Moves Into Production - Converge Digest",
+   "url": "https://convergedigest.com/nvidia-q2-fy2027-data-center-vera-rubin-ai-infrastructure/",
+   "snippet": "-quarter 2027 revenue reaching $96.2 billion, up 18% sequentially and 106% from a year earlier. Data Center revenue reached $89.0 billion, up 18% quarter over quarter and 117% year over year, meaning the Data Center business accounted for more than 92% of"
+  },
+  {
+   "n": 18,
+   "title": "Nvidia (NVDA) Lawsuits & Legal Proceedings (2016-2026 10-K) | edgar.tools",
+   "url": "https://app.edgar.tools/companies/NVDA/disclosures/commitments-contingencies",
+   "snippet": "The plaintiffs in the putative securities class action lawsuit, captioned 4:18-cv-07669-HSG, initially filed on December 21, 2018 in the United States District Court for the Northern District of California, and titled In Re NVIDIA Corporation Securities Litigation, filed an amended complaint on May 13, 2020. The amended complaint asserted that NVIDIA and certain NVIDIA executives violated Section 10(b) of the Securities Exchange Act of 1934, as amended, or the Exchange Act, and SEC Rule 10b-5, b"
+  },
+  {
+   "n": 19,
+   "title": "R17.htm",
+   "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000052/R17.htm",
+   "snippet": "filed September 24, 2019 and pending in the United States District Court for the District of Delaware, Lipchitz v. Huang, et al. (Case No. 1:19-cv-01795-MN) and Nelson v. Huang, et. al. (Case No. 1:19- cv-01798-MN), were stayed pending resolution of the"
+  },
+  {
+   "n": 20,
+   "title": "Nvidia senior manager linked to Supermicro scheme smuggling AI servers to China - Ars Technica",
+   "url": "https://arstechnica.com/tech-policy/2026/08/nvidia-senior-manager-linked-to-supermicro-scheme-smuggling-ai-servers-to-china/",
+   "snippet": "Taiwan has indicted nine people— reportedly including an Nvidia senior manager and two Supermicro employees based in the country—who allegedly helped forge documents to cover up illegal exports of high-end AI servers to China in violation of US export controls.\n\nOn Monday, Reuters reported that prosecutors in Keelung did not release any names but confirmed that the suspects were “charged with breach of trust and document forgery.” One suspect linked to a related case remains at large, accused of"
+  }
+ ],
+ "tables": [
+  {
+   "name": "insider-filings",
+   "label": "Form 4 insider filings",
+   "columns": [
+    "Insider",
+    "Form",
+    "Filed",
+    "Filing URL"
+   ],
+   "rows": [
+    [
+     "Puri Ajay K; NVIDIA CORP",
+     "4",
+     "2026-08-24",
+     "https://www.sec.gov/Archives/edgar/data/1347842/000134784226000015/wk-form4_1787607122.xml"
+    ],
+    [
+     "NORA JOHNSON SUZANNE M; NVIDIA CORP",
+     "4",
+     "2026-08-12",
+     "https://www.sec.gov/Archives/edgar/data/1310264/000131026426000008/wk-form4_1786569187.xml"
+    ],
+    [
+     "COXE TENCH; NVIDIA CORP",
+     "4",
+     "2026-08-07",
+     "https://www.sec.gov/Archives/edgar/data/1197647/000119764726000007/wk-form4_1786135642.xml"
+    ],
+    [
+     "COXE TENCH; NVIDIA CORP",
+     "4",
+     "2026-07-06",
+     "https://www.sec.gov/Archives/edgar/data/1197647/000119764726000005/wk-form4_1783371701.xml"
+    ],
+    [
+     "Dabiri John; NVIDIA CORP",
+     "4",
+     "2026-06-29",
+     "https://www.sec.gov/Archives/edgar/data/1818224/000181822426000006/wk-form4_1782766926.xml"
+    ],
+    [
+     "Neal Stephen C; NVIDIA CORP",
+     "4",
+     "2026-06-29",
+     "https://www.sec.gov/Archives/edgar/data/1768670/000176867026000004/wk-form4_1782767093.xml"
+    ],
+    [
+     "Shah Aarti S.; NVIDIA CORP",
+     "4",
+     "2026-06-29",
+     "https://www.sec.gov/Archives/edgar/data/1725292/000172529226000004/wk-form4_1782767179.xml"
+    ],
+    [
+     "LORA MELISSA; NVIDIA CORP",
+     "4",
+     "2026-06-29",
+     "https://www.sec.gov/Archives/edgar/data/1284116/000128411626000004/wk-form4_1782767057.xml"
+    ],
+    [
+     "HUDSON DAWN E; NVIDIA CORP",
+     "4",
+     "2026-06-29",
+     "https://www.sec.gov/Archives/edgar/data/1219888/000121988826000002/wk-form4_1782766973.xml"
+    ],
+    [
+     "STEVENS MARK A; NVIDIA CORP",
+     "4",
+     "2026-06-29",
+     "https://www.sec.gov/Archives/edgar/data/1199039/000119903926000009/wk-form4_1782767219.xml"
+    ],
+    [
+     "SEAWELL A BROOKE; NVIDIA CORP",
+     "4",
+     "2026-06-29",
+     "https://www.sec.gov/Archives/edgar/data/1197652/000119765226000007/wk-form4_1782767137.xml"
+    ],
+    [
+     "JONES HARVEY C; NVIDIA CORP",
+     "4",
+     "2026-06-29",
+     "https://www.sec.gov/Archives/edgar/data/1197650/000119765026000002/wk-form4_1782767025.xml"
+    ],
+    [
+     "COXE TENCH; NVIDIA CORP",
+     "4",
+     "2026-06-29",
+     "https://www.sec.gov/Archives/edgar/data/1197647/000119764726000003/wk-form4_1782766872.xml"
+    ],
+    [
+     "Teter Timothy S.; NVIDIA CORP",
+     "4",
+     "2026-06-23",
+     "https://www.sec.gov/Archives/edgar/data/1696841/000169684126000008/wk-form4_1782209038.xml"
+    ],
+    [
+     "Kress Colette; NVIDIA CORP",
+     "4",
+     "2026-06-23",
+     "https://www.sec.gov/Archives/edgar/data/1588670/000158867026000012/wk-form4_1782208938.xml"
+    ],
+    [
+     "Puri Ajay K; NVIDIA CORP",
+     "4",
+     "2026-06-23",
+     "https://www.sec.gov/Archives/edgar/data/1347842/000134784226000013/wk-form4_1782208887.xml"
+    ],
+    [
+     "Shoquist Debora; NVIDIA CORP",
+     "4",
+     "2026-06-23",
+     "https://www.sec.gov/Archives/edgar/data/1283854/000128385426000008/wk-form4_1782208976.xml"
+    ],
+    [
+     "STEVENS MARK A; NVIDIA CORP",
+     "4",
+     "2026-06-23",
+     "https://www.sec.gov/Archives/edgar/data/1199039/000119903926000007/wk-form4_1782247316.xml"
+    ]
+   ]
+  },
+  {
+   "name": "financials",
+   "label": "SEC XBRL financials",
+   "columns": [
+    "Metric",
+    "Latest annual",
+    "Annual period",
+    "Most recent",
+    "Recent period"
+   ],
+   "rows": [
+    [
+     "Total revenue",
+     "$215.94B",
+     "FY 2026 10-K filed 2026-02-25",
+     "$96.22B",
+     "2026-07-26 (10-Q)"
+    ],
+    [
+     "Net income",
+     "$120.07B",
+     "FY 2026 10-K filed 2026-02-25",
+     "$59.69B",
+     "2026-07-26 (10-Q)"
+    ],
+    [
+     "Operating income",
+     "$130.39B",
+     "FY 2026 10-K filed 2026-02-25",
+     "$63.73B",
+     "2026-07-26 (10-Q)"
+    ],
+    [
+     "Non-operating income (expense)",
+     "$11.06B",
+     "FY 2026 10-K filed 2026-02-25",
+     "$7.77B",
+     "2026-07-26 (10-Q)"
+    ],
+    [
+     "Pre-tax income",
+     "$141.45B",
+     "FY 2026 10-K filed 2026-02-25",
+     "$71.51B",
+     "2026-07-26 (10-Q)"
+    ],
+    [
+     "Income tax expense (benefit)",
+     "$21.38B",
+     "FY 2026 10-K filed 2026-02-25",
+     "$11.82B",
+     "2026-07-26 (10-Q)"
+    ],
+    [
+     "Total assets",
+     "$206.80B",
+     "FY 2026 10-K filed 2026-02-25",
+     "$320.27B",
+     "2026-07-26 (10-Q)"
+    ],
+    [
+     "Total liabilities",
+     "$49.51B",
+     "FY 2026 10-K filed 2026-02-25",
+     "$91.29B",
+     "2026-07-26 (10-Q)"
+    ],
+    [
+     "Stockholders' equity",
+     "$157.29B",
+     "FY 2026 10-K filed 2026-02-25",
+     "$228.98B",
+     "2026-07-26 (10-Q)"
+    ],
+    [
+     "Cash & equivalents",
+     "$10.61B",
+     "FY 2026 10-K filed 2026-02-25",
+     "$22.44B",
+     "2026-07-26 (10-Q)"
+    ],
+    [
+     "EPS (basic)",
+     "4.93",
+     "FY 2026 10-K filed 2026-02-25",
+     "2.47",
+     "2026-07-26 (10-Q)"
+    ]
+   ]
+  }
+ ],
+ "meta": {
+  "tier": "dossier",
+  "company": "NVIDIA CORP",
+  "ticker": "NVDA",
+  "filings_10k": 3,
+  "filings_10q": 3,
+  "filings_8k": 6,
+  "insider_filings": 18,
+  "web_angles": 4,
+  "sources_cited": 20,
+  "synthesis_model": "anthropic/claude-opus-5"
+ },
+ "at": "2026-08-28T01:46:57.973Z",
+ "generatedWith": "the production handler, FREE_MODE local run"
+}

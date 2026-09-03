@@ -182,7 +182,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -212,7 +212,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.22.0 viem@2.52.2
 
       # Run FIRST (before the slow faucet-funding E2E) for fast iteration. Live
       # proof of the agent402-client 402-inspection preflight (v0.6.0): a real Base
@@ -484,7 +484,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 @x402/core@2.16.0 @x402/evm@2.16.0 @x402/svm@2.16.0 @solana/kit@5.5.1 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.22.0 @x402/core@2.22.0 @x402/evm@2.22.0 @x402/svm@2.22.0 @solana/kit@5.5.1 viem@2.52.2
       - name: Sweep the catalog via Solana settlement
         env:
           SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
@@ -509,7 +509,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 @x402/core@2.16.0 @x402/evm@2.16.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.22.0 @x402/core@2.22.0 @x402/evm@2.22.0 viem@2.52.2
       - name: Refresh stale Bazaar listings
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -548,7 +548,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 @x402/core@2.16.0 @x402/evm@2.16.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.22.0 @x402/core@2.22.0 @x402/evm@2.22.0 viem@2.52.2
       - name: Register missing Bazaar routes
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -583,7 +583,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 @x402/core@2.16.0 @x402/evm@2.16.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.22.0 @x402/core@2.22.0 @x402/evm@2.22.0 viem@2.52.2
       - name: Sweep the catalog via Base settlement (4 batches)
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -608,7 +608,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 @x402/core@2.16.0 @x402/evm@2.16.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.22.0 @x402/core@2.22.0 @x402/evm@2.22.0 viem@2.52.2
       - name: Drain the burner into the revenue wallet via paid tool calls
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -713,7 +713,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.16.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.22.0 viem@2.52.2
       - name: Run the demo (real paid buys from the burner)
         env:
           AGENT_KEY: ${{ secrets.BURNER_KEY }}
@@ -822,7 +822,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -870,7 +870,8 @@ jobs:
       # (configSchema) and the auto-primary context overflow that 0.1.0-0.2.0
       # shipped with. npm registry only; no money moves.
       - name: OpenClaw provider plugin against a REAL OpenClaw install
-        # Unpinned third-party install with lifecycle scripts + its binary run
+        # Third-party install (PINNED in the test; openclaw-latest.yml tracks
+        # @latest on a schedule) with lifecycle scripts + its binary run
         # with network access: shadow the job's metered keys (same class as the
         # F07 npm ci step); the test also spawns with an allowlisted env.
         env:
@@ -999,7 +1000,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -1125,7 +1126,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -1227,6 +1228,27 @@ jobs:
 
       - name: Discovery note (a seller must be able to see the gap)
         run: X402_INDEX_CRAWL=off node scripts/test-discovery-note.js
+      # Targets PROD on purpose. The CI server boots FREE_MODE and answers no
+      # 402 anywhere, so a local run measures nothing and skips; and the size
+      # that matters is the one a buyer actually receives, with all 13 rails in
+      # the accepts. Unpaid 402s are free. Note the one-run lag this shares
+      # with the SEO gate: the test job runs BEFORE the deploy, so a change
+      # that grows the challenge is caught on the run AFTER the one that ships
+      # it.
+      - name: 402 challenge header stays payable (a buyer echoes it back)
+        run: TARGET_URL=https://agent402.tools node scripts/test-challenge-size.js
+      - name: Router aliases + short-term token rule (offline)
+        run: X402_INDEX_CRAWL=off node scripts/test-route-aliases.js
+      # ?network= was echoed and never applied; the Solana SOR branch ranks strictly on-chain rows (offline, mutation-tested)
+      - name: Router network filter + strict chain mode (offline)
+        run: X402_INDEX_CRAWL=off node scripts/test-route-network-filter.js
+      # A documented path is not a callable URL: brace, colon and percent-encoded
+      # templates all reached buyers as priced routes (offline, mutation-tested)
+      - name: URL templates are never published as payable (offline)
+        run: X402_INDEX_CRAWL=off node scripts/test-url-templates.js
+      # Input aliases may never change the MEANING of a call (offline, mutation-tested)
+      - name: Input parameter aliases (offline)
+        run: node scripts/test-input-aliases.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
@@ -1245,8 +1267,11 @@ jobs:
           t node scripts/test-cache-hygiene.js
           # "SOR external leg for MPP sellers on Tempo (catalog from the verified MPP index, asset pin, live-quote cap, proven-seller gate fail-closed, chain mapping — offline)"
           t node scripts/test-tempo-router.js
+          t node scripts/test-sor-resolver-scope.js
           # "External spend guard (per-payer debt ceiling: an UNSETTLED upstream spend keeps counting, so verify-then-fail-to-settle cannot drain the wallet — offline)"
           t node scripts/test-external-spend-guard.js
+          # A paid seller's rejection is logged with its reason, and none of their body reaches our buyer (source assertions, offline)
+          t node scripts/test-buyer-rejection-diagnostics.js
 
   test-unit-a4:
     # The second half of test-unit-a2 (2026-08-25, split by the seconds each item
@@ -1298,7 +1323,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -1365,6 +1390,8 @@ jobs:
           t node scripts/test-server-tools.js
           # Algorand external router (chain-matched settlement, accept pinning, catalog ranking, AVM buyer gating — offline)
           t node scripts/test-algorand-router.js
+          # Solana external routing: accept pinning (devnet never matches), env gate, pay-time proven-seller gate fails closed, offline e2e signed buy vs stub seller + stub RPC
+          t node scripts/test-solana-router.js
           # Tool resolver (/api/find ranking, guards)
           t node scripts/test-find.js
           # Revenue ledger unit tests (all-time external accounting, idempotent rescans, CI self-gate)
@@ -1544,7 +1571,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -1705,7 +1732,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -1768,6 +1795,8 @@ jobs:
           t node scripts/test-static-pages.js
           # Operator auth (A402-07 no ?token= query; session cookie + header; hardened cookie flags — spawns child)
           t node scripts/test-operator-auth.js
+          # Probe-only credential: STATUS_PROBE_TOKEN opens POST /api/status/probe and NOTHING else, the operator token still works there, and the narrow gate is wired to one route (boots a real server, offline)
+          t node scripts/test-status-probe-token.js
           # /openapi.json header parameters (Idempotency-Key on every op, X-Pow-Solution only where PoW-eligible)
           t node scripts/test-openapi-header-params.js
           # Process lifecycle (A402-10 SIGTERM drains + exits 0; uncaught exception is fatal + exits non-zero — spawns child)
@@ -1776,6 +1805,8 @@ jobs:
           t node scripts/test-drain-on-sigterm.js
           t node scripts/test-db-status.js
           t node scripts/test-db-init-retry.js
+          # The Stellar facilitator's fee account is a spending wallet; its low-water alarm must never report "ok" off an unreadable balance or a stranger's /health
+          t node scripts/test-stellar-facilitator-status.js
           # Facilitator gate scoping stays honest (its tests import nothing outside facilitator/)
           t node scripts/test-ci-facilitator-scope.js
           # A composite report is refused (503, not charged) while draining - a late request on a busy keep-alive socket must not start a 4-minute run into the deadline
@@ -1828,7 +1859,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -1951,7 +1982,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -1985,7 +2016,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (9 scripts, one process each)
+      - name: Offline suites (10 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2007,6 +2038,14 @@ jobs:
           t node scripts/test-price-prose.js
           # "Live 402 quote (a priceless row learns its price from the challenge; unpriceable never becomes $0; PUT/PATCH/DELETE never probed — offline)"
           t node scripts/test-x402-live-quote.js
+          # Paid smoke buyer preflight (external targets require an outcome assertion before key/client/network work)
+          t node scripts/test-smoke-buy.js
+          # "Every paid route's PAYMENT-REQUIRED document parses under the OFFICIAL @x402/core
+          #  schemas. Our live challenges did not: 557 of 560 published more than the protocol's
+          #  five-tag maximum, so a buyer validating before paying got an invalid document
+          #  (verified first-party against prod, 2026-08-29). Boots the real server against a
+          #  local /supported stub; no payment is made."
+          t node scripts/test-bazaar-contracts.js
 
       - name: "Redis integration (the REAL client against a REAL server — cap-of-1, refund, cache round trip; the gap that made a redis major bump undecidable)"
         env:
@@ -2055,12 +2094,17 @@ jobs:
           t node scripts/test-discovery-filter.js
           # Index warm-start (crawl cache survives a redeploy; no half-crawled marketplace — offline)
           t node scripts/test-index-warmstart.js
+          # Crawl load is per operator, not per origin; the register global cap is a backstop (offline)
+          t node scripts/test-crawl-politeness.js
           # Index warm-start is incremental (NDJSON twin parsed a batch per turn; no event-loop hold; legacy fallback — offline)
           t node scripts/test-index-ndjson-warmstart.js
           # Crawl cadence copy is derived (served pages cannot advertise a cadence we do not run — offline)
           t node scripts/test-crawl-cadence.js
           # CI lane gating (every test lane blocks deploy/publish; Chromium only where a script needs it — offline)
           t node scripts/test-ci-gating.js
+          t node scripts/test-port-hygiene.js
+          # Licensing split stays legible: server AGPL, every published package MIT with its own LICENSE + repository.directory (offline)
+          t node scripts/test-package-licenses.js
           # Owner-only workflows skip without red CI when declared prerequisites are missing (token / wiki remote / issues) — offline
           t node scripts/test-owner-workflow-prereqs.js
           # CI tree gate (a merge may skip the suite ONLY on a tree that already passed it — offline)
@@ -2131,7 +2175,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -2191,6 +2235,7 @@ jobs:
           t node scripts/test-mpp-stripe.js
           # Composite cap enforcement (maxUpstreamUsd is checked at the shared chokepoint, not merely declared - offline)
           t node scripts/test-composite-cap-enforcement.js
+          t node scripts/test-composite-context.js
           # Agentic Finance glossary (one DefinedTermSet, anchors unique, category term aliased, explainer bodies link it, post + sitemap + llms - offline)
           t node scripts/test-glossary.js
           # x402 Leaderboard pure helpers (offline; Bazaar parsing + ranking)
@@ -2273,6 +2318,12 @@ jobs:
           t node scripts/test-seller-trust.js
           # Package integrity (files allowlist covers every import; no sibling dep range excludes what we ship — offline)
           t node scripts/test-package-integrity.js
+          # Every SOLD skill pack has a real step config (a pack without one answers 200 with 0/N steps and still charges — offline)
+          t node scripts/test-skill-pack-steps.js
+          # Refund backfill decides who is OWED money: who is in, who is out, idempotent (offline, temp ledgers)
+          t node scripts/test-refund-backfill.js
+          # Upstream-spend meter records with PostHog OFF (the $11-vs-$0.03 shape) and in exact micro-dollars (offline)
+          t node scripts/test-upstream-spend.js
           # Analytics redaction (per-tool table never reaches an unauthenticated caller - seeded, DB not required)
           t node scripts/test-analytics-redaction.js
           # Reveal-on-scroll no hero flash (the hero must never hide behind opacity:0 waiting on the observer)
@@ -2297,6 +2348,9 @@ jobs:
           t node scripts/test-safe-regex.js
           # Sales ledger unit tests (named sales, internal/external classification, revenue math — offline)
           t node scripts/test-sales-ledger.js
+          # Repo-wide: no count-named field is the length of a LIMITed query result (source scan, offline)
+          t node scripts/test-capped-counts.js
+          t node scripts/test-proof.js
           # Tempo relay verdicts are visible (non-2xx relay status + body reach the rejection log, per-request — offline)
           t node scripts/test-mpp-tempo-relay-errors.js
           # workflow_run references name a workflow that exists (GitHub matches on name:, a mismatch never fires - offline)
@@ -2545,7 +2599,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -2607,6 +2661,7 @@ jobs:
         run: |
           set -e
           node scripts/test-a2a-card.js
+          node scripts/test-proof-card.js
           node scripts/test-api-kit.js
           node scripts/test-captcha-kit.js
           node scripts/test-chain-logos.js
@@ -2660,6 +2715,8 @@ jobs:
 
       - name: Docs truth (every documented route, slug and price matches the served catalog)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-docs-truth.js
+      - name: Skill-pack pricing rule (every pack = sum of its tools minus 10%, recomputed from the live catalog)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-pack-pricing-rule.js
 
       - name: Public-surface leak gate (no buyer addresses, no per-tool revenue, operator feeds stay 404)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-public-surface-leak.js
@@ -2745,7 +2802,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -2799,6 +2856,7 @@ jobs:
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/strands/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/google-adk/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/agentkit/test.js
+          AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/eliza/test.js
           # Python adapter (agent402-langchain): requests-only keeps CI lean; the
           # test skips the langchain-native path gracefully without langchain-core,
           # so this locks the spec + free proof-of-work call behavior.
@@ -2991,7 +3049,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -3071,7 +3129,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -3096,7 +3154,7 @@ jobs:
       # here measures.
       - name: Cache Playwright Chromium
         id: pw-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('node_modules/playwright-core/package.json') }}
@@ -3166,6 +3224,38 @@ jobs:
       - name: Non-metered paid examples (strict — 502/503/504 fail; NETWORK leniency hole)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-non-metered-examples.js
 
+      # Every skill pack must WORK on its own published example, not merely
+      # return a well-shaped envelope. Nine packs sold for two months answering
+      # "0/N steps succeeded" because every guard asserted SHAPE and none
+      # asserted OUTCOME.
+      #
+      # Booted WITHOUT the paid keys on purpose. The keys live on the SERVER, so
+      # a keyed boot would make this sweep buy a live Brave query on every push -
+      # the CI-spend leak that has recurred three times. With them shadowed,
+      # every keyed pack reports "not configured" and is skipped as not-ours,
+      # every keyless pack is fully verified, and there is no skip list to drift.
+      # The keyed subset is covered by running this against a keyed server by
+      # hand; that is a real gap and it is written down rather than hidden.
+      - name: Skill packs answer their own published example (keyless boot - no upstream spend)
+        env:
+          BRAVE_API_KEY: ""
+          BRAVE_ANSWERS_API_KEY: ""
+          BRAVE_SUGGEST_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+        run: |
+          X402_SYNC_ON_START=false X402_INDEX_CRAWL=off FREE_MODE=true PORT=3097 node src/server.js > /tmp/a402-packs.log 2>&1 &
+          PACK_PID=$!
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:3097/health >/dev/null && break || sleep 1; done
+          curl -sf http://127.0.0.1:3097/health >/dev/null || { echo "keyless server failed to boot"; cat /tmp/a402-packs.log; kill $PACK_PID; exit 1; }
+          TARGET_URL=http://127.0.0.1:3097 node scripts/test-pack-examples.js; rc=$?
+          kill $PACK_PID 2>/dev/null || true
+          exit $rc
+
       - name: Every tool responds to its own example (all ~1070 endpoints)
         run: TEST_ALL_SKIP_STRICT_COVERED=1 TARGET_URL=http://127.0.0.1:3000 node scripts/test-all.js
 
@@ -3217,7 +3307,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -3242,7 +3332,7 @@ jobs:
       # here measures.
       - name: Cache Playwright Chromium
         id: pw-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('node_modules/playwright-core/package.json') }}
@@ -3474,7 +3564,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -3507,8 +3597,50 @@ jobs:
           t node scripts/test-macro-kit.js
           # MPP dual-stack shim (real mppx client buys over WWW-Authenticate/Authorization wire; single settle; x402 pass-through; HMAC tamper — offline)
           t node scripts/test-mpp-shim.js
+          # MPP evm EIP-712 domain fallback (a wrong-domain credential is refused locally, its 402 carries no challenge so the client takes x402, healthy clients untouched — boots a paid server, offline)
+          t node scripts/test-mpp-evm-domain.js
+          # Report products' free probe stage + the pure handler helpers it feeds (the 147 metered slugs both catalog sweeps skip; live keyless APIs, no paid key, no spend; a planted defect is caught before a clean run is believed)
+          t node scripts/test-report-probes.js
+          # Checkout rate limit runs BEFORE the body parser (a malformed body used to 400 at the parser and be counted against nothing) — boots a server, offline
+          t node scripts/test-checkout-limiter.js
+          # A refused payment says WHY on the 402 (the vendor answers a bare {} and drops the reason; one client looped ~9/min for 12h) — boots a paid server, offline
+          t node scripts/test-payment-reject.js
+          # A v1-era client names the price maxAmountRequired; x402 v2 deep-equals the echoed accepts block, so that one rename made a correct payment unmatchable — boots a paid server, offline
+          t node scripts/test-x402-v1-accepts.js
           # HEAD paywall bypass closed (HEAD on paid GET routes 402s with challenges + empty body; free surfaces untouched — offline)
           t node scripts/test-head-paywall.js
+          # Anthropic SDK base-URL alias (/v1/<tier>/v1/messages) + 1 MB body limit on the metered routes (boots a paid server, offline)
+          t node scripts/test-messages-sdk-alias.js
+          # Real sample reports: fixtures are finished reports, pages indexable with own title/JSON-LD, /reports links them, sitemap carries them (boots FREE_MODE, offline)
+          t node scripts/test-sample-reports.js
+          # openFDA 404 = no matches, an empty result: recall-report must not 502 on it (offline)
+          t node scripts/test-recall-nomatch.js
+          # Free email alerts engine: double opt-in, signed links, change-only daily email, caps (offline)
+          t node scripts/test-free-alerts.js
+          t node scripts/test-wallet-digest.js
+          # Alert routes end to end on a booted server: confirm / unsubscribe / stop pages render (the engine test could not see a 500 here)
+          t node scripts/test-alerts-routes.js
+          # Post-purchase follow-ups: two emails at most, stoppable, failure notice (offline)
+          t node scripts/test-followups.js
+          # Public reports: buyer toggle by session id, unguessable public id, indexable page, revocable (boots FREE_MODE)
+          t node scripts/test-public-reports.js
+          # House style on every report tier: no em/en dashes in delivered copy (offline)
+          t node scripts/test-house-style.js
+          # Domain audit inputs round 2: DKIM by MX provider, DNS-host feasibility, advisory cross-origin headers, www twin (offline)
+          t node scripts/test-domain-audit-inputs.js
+          # Dev shortlinks (/claude, /cursor, ...) + the /install script (boots a free server)
+          t node scripts/test-shortlinks.js
+          # A rejected payment is answered in the buyer's terms (balance vs stale authorization) on the 402 (offline)
+          t node scripts/test-verify-hint.js
+          t node scripts/test-verify-hint-live.js
+          # Router dispatch eligibility, labelled: one function for the resolver's Base gate and every public row (offline)
+          t node scripts/test-dispatch-eligibility.js
+          # In-flight composites are cut off on SIGTERM: scope wrapper + fetch signal + shutdown seam (offline)
+          t node scripts/test-drain-abort.js
+          # Solana SPL leaderboard: batched credits scan, primed gate, payTo list, ranking, persistence (offline stub RPC)
+          t node scripts/test-solana-leaderboard.js
+          # accepts[0].outputSchema on the 402: pure header rewrite + mount order (offline)
+          t node scripts/test-accept-output-schema.js
           # OWN LANE on purpose. This single step ran 254s - 42% of the unit-a
           # lane, and unit-a was the slowest of the three, so it was 42% of the
           # critical path. It rebuilds a max-size dense-CJK body and BPE-tokenizes
@@ -3582,7 +3714,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -3707,7 +3839,7 @@ jobs:
       # modules (better-sqlite3) ship prebuilt per Node ABI, hence node22 in the key.
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
@@ -3743,6 +3875,14 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Boot /supported guard (a dead facilitator costs ONE rail, not every paid route — the 2026-08-01 Celo outage; probe-driven drop, fail-open on total blindness, escape hatch — offline)
           t node scripts/test-supported-guard.js
+          # Verify falls over to another facilitator when the first is UNREACHABLE, and never when it answers (offline, stub facilitators)
+          t node scripts/test-verify-failover.js
+          # The Bazaar keep-alive is actually scheduled, fails loudly without a key, and pages (CDP removes a resource after 30 days without a settlement)
+          t node scripts/test-bazaar-keepalive.js
+          # verify_failed carries a DERIVED payer id (never an address), so a retry loop can be told from many clients (offline)
+          t node scripts/test-verify-failed-payer-key.js
+          # Event-loop lag monitor measures a real block and stays cheap enough to leave on (offline)
+          t node scripts/test-loop-lag.js
           # Tempo MPP settlement (native tempo/charge via Tempo's relay — challenge wiring + settlement-ordering proof — offline)
           t node scripts/test-mpp-tempo-shim.js
 
@@ -4044,6 +4184,39 @@ jobs:
             echo "published agent402-openclaw@$VERSION → https://www.npmjs.com/package/agent402-openclaw"
           fi
 
+      # ClawHub is OpenClaw's discovery surface (`openclaw plugins install
+      # clawhub:agent402-openclaw`); their docs keep no static third-party
+      # catalog, so this release is the listing. Token-authenticated (repo secret
+      # CLAWHUB_TOKEN, a ClawHub CLI token on the publisher account; the CLI reads
+      # it from its config file, written under a job-scoped path so nothing lands
+      # in the runner home). Idempotent: an already-published version is skipped,
+      # never re-uploaded. A missing token skips loudly instead of failing the
+      # npm publish that already happened.
+      - name: Publish agent402-openclaw to ClawHub
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+          CLAWHUB_CONFIG_PATH: ${{ runner.temp }}/clawhub-config.json
+        run: |
+          if [ -z "$CLAWHUB_TOKEN" ]; then echo "::warning::CLAWHUB_TOKEN not set - ClawHub release skipped"; exit 0; fi
+          VERSION=$(node -p "require('./openclaw/package.json').version")
+          npx -y clawhub@0.23.3 login --token "$CLAWHUB_TOKEN" --no-browser --label "github-actions deploy.yml" >/dev/null
+          if npx -y clawhub@0.23.3 package inspect agent402-openclaw --version "$VERSION" >/dev/null 2>&1; then
+            echo "agent402-openclaw@$VERSION is already on ClawHub — nothing to do"
+          else
+            # --manual-override-reason: the package carries a trusted-publisher config
+            # (set 2026-08-27), which makes a token publish a "manual" one that
+            # ClawHub refuses without a stated reason. OIDC publishing needs
+            # ClawHub's reusable workflow, whose actions are tag-pinned, and this
+            # repository requires full-SHA pinning for every action - so the token
+            # path stays until ClawHub pins its workflow.
+            npx -y clawhub@0.23.3 package publish ./openclaw \
+              --manual-override-reason "repository policy requires SHA-pinned actions; ClawHub's reusable OIDC workflow is tag-pinned" \
+              --source-repo "$GITHUB_REPOSITORY" --source-commit "$GITHUB_SHA" --source-ref "$GITHUB_REF_NAME" --source-path openclaw \
+              --changelog "agent402-openclaw $VERSION (see the package README and CHANGELOG at https://agent402.tools/changelog)"
+            echo "published agent402-openclaw@$VERSION → https://clawhub.ai/plugins/agent402-openclaw (hidden until ClawHub review completes)"
+          fi
+          rm -f "$CLAWHUB_CONFIG_PATH"
+
       - name: Boot FREE_MODE server for adapter tests
         run: |
           FREE_MODE=true PORT=3090 node src/server.js > /tmp/a402-adapter.log 2>&1 &
@@ -4187,6 +4360,25 @@ jobs:
           else
             npm publish --provenance --access public
             echo "published agent402-agentkit@$VERSION -> https://www.npmjs.com/package/agent402-agentkit"
+          fi
+
+      - name: Gate elizaos-plugin-agent402 (tests run with NO npm token in env)
+        run: |
+          # Self-bootstraps agent402-client; no @elizaos/core at runtime (types only).
+          AGENT402_BASE_URL=http://127.0.0.1:3090 node adapters/eliza/test.js
+
+      - name: Publish elizaos-plugin-agent402 to npm
+        run: |
+          cd adapters/eliza
+          VERSION=$(node -p "require('./package.json').version")
+          # Idempotent. The FIRST version is published from a maintainer login
+          # (OIDC cannot create a package that does not exist yet); the trusted
+          # publisher on npmjs.com carries every version after it.
+          if npm view "elizaos-plugin-agent402@$VERSION" version >/dev/null 2>&1; then
+            echo "elizaos-plugin-agent402@$VERSION is already on npm - nothing to do"
+          else
+            npm publish --provenance --access public
+            echo "published elizaos-plugin-agent402@$VERSION -> https://www.npmjs.com/package/elizaos-plugin-agent402"
           fi
 
       - name: Gate agent402-google-adk (tests run with NO npm token in env)

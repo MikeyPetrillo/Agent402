@@ -11,6 +11,17 @@
 
 The payer needs **only USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, or Algorand** - no ETH, no account, no API key. (Sellers can also settle **USDG on Robinhood Chain** when the operator enables it.)
 
+## What the 402 carries
+
+The payment requirements ride in the `PAYMENT-REQUIRED` response header (base64 JSON);
+the body is `{}` by design, so read the header, never the body. Every route's challenge is
+valid under `@x402/core`'s own schemas (CI runs all 500+ routes through the official parser),
+and it carries a typed output schema twice: inside the `bazaar` discovery extension (with the
+input schema and an example) and as `accepts[0].outputSchema` on the first accept, so a client
+that reads the spec's field knows the response shape before it pays. The schema sits on the
+first accept only: a buyer echoes its chosen accept back in the payment, so one copy is what
+keeps the challenge under the header ceiling.
+
 ## JavaScript (x402 v2 SDKs)
 
 ```js

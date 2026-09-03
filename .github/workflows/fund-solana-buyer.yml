@@ -1,0 +1,48 @@
+name: Fund Solana spending wallet (one-time)
+
+# Moves a small amount of USDC on Solana from the CI canary burner to the
+# DEDICATED SVM spending wallet behind Solana external routing
+# (src/solana-buyer.js). The destination is COMPILED into the script - there
+# is no address input at all - and the amount is hard-capped at $5 in code.
+# Dispatch-only and DRY by default: `send: true` is the only thing that
+# broadcasts. The refund-approval environment gate means every run, including
+# one dispatched from a modified branch, waits for the operator's click.
+on:
+  workflow_dispatch:
+    inputs:
+      usd:
+        description: "USDC to send (script refuses anything over $5)"
+        required: true
+        default: "3"
+      send:
+        description: "Actually broadcast (false = dry run, just checks)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency: fund-solana-buyer
+
+jobs:
+  fund:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: refund-approval
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v5.0.0
+        with:
+          node-version: "22"
+      - name: Install the Solana client (pinned to the versions the repo tree proves)
+        run: npm install --no-save --ignore-scripts @solana/kit@5.5.1 @solana-program/token@0.9.0
+      - name: Fund
+        env:
+          SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
+          USD: ${{ inputs.usd }}
+          SEND: ${{ inputs.send }}
+        run: |
+          if [ -z "$SOLANA_BURNER_KEY" ]; then echo "SOLANA_BURNER_KEY is not set"; exit 1; fi
+          echo "::add-mask::$SOLANA_BURNER_KEY"
+          node scripts/fund-solana-buyer.js

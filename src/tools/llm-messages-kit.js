@@ -32,8 +32,10 @@ import {
   TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor,
   clampToMargin, flexAttempts, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
-  refuseCostVariants, checkBlockCacheControl,
+  refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, costFor,
+  assertUpstreamBody,
 } from "./llm-gateway-kit.js";
+import { METER_MARKUP, METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 
 const OPENROUTER_MESSAGES_URL = "https://openrouter.ai/api/v1/messages";
 const IMAGE_TOKENS = 1600; // same flat per-image estimate as the chat wire
@@ -48,7 +50,24 @@ export const MESSAGES_PATH_BY_TIER = {
   "v1-chat": "/v1/messages",
   "v1-chat-pro": "/v1/pro/messages",
   "v1-chat-premium": "/v1/premium/messages",
+  // Metered LAST (same ordering rule as TIERS): the 402 price is a per-request
+  // quote from the body, settled at actual usage over upto / credits / card.
+  "v1-chat-metered": "/v1/metered/messages",
 };
+
+/** Per-request price of the metered Messages route, from the RAW body. Never
+ *  throws: an invalid body quotes the floor (the handler's own 400 refuses it,
+ *  uncharged); an over-cap body quotes the cap (same). Mirrors meteredQuoteUsd
+ *  on the chat wire, priced from the Messages probe. */
+export function meteredMessagesQuoteUsd(input) {
+  const tier = TIERS["v1-chat-metered"];
+  try {
+    const { probe, imageCount } = validateMessagesRequest(input, "v1-chat-metered");
+    return meteredQuoteForProbe(probe, imageCount);
+  } catch (e) {
+    return { usd: tier.price, invalid: true, reason: String(e?.message || e).slice(0, 160) };
+  }
+}
 export const MESSAGES_TIER_BY_PATH = Object.fromEntries(Object.entries(MESSAGES_PATH_BY_TIER).map(([t, p]) => [p, t]));
 
 function textOfBlocks(content) {
@@ -117,8 +136,13 @@ export function validateMessagesRequest(input, tierSlug) {
   // model: required unless the tier routes; allowlisted per tier like the chat wire
   const isRouted = tier.router === true && (!canonicalModel(input.model) || canonicalModel(input.model) === "auto");
   let model = canonicalModel(input.model);
+  let defaultedModel = null;
   if (!isRouted) {
     refuseCostVariants(model);
+    // No model named: serve the tier's default instead of refusing (30 days of
+    // real callers: 82 refusals for a missing "model" across the LLM wires -
+    // agents posting to a tier route expect that tier's model, 2026-08-28).
+    if (!model && tier.defaultModel) { model = tier.defaultModel; defaultedModel = model; }
     if (!model) throw bad(`"model" is required (e.g. anthropic/claude-sonnet-5). This tier serves: ${tier.prefixes?.slice(0, 6).join(", ") || "see /v1/models"}`);
     if (!tierAllows(tierSlug, model)) {
       const home = tierFor(model);
@@ -132,9 +156,20 @@ export function validateMessagesRequest(input, tierSlug) {
   }
   if (!Array.isArray(input.messages) || input.messages.length === 0) throw bad('"messages" must be a non-empty array');
   const acc = { chars: 0, images: 0 };
-  const probeMessages = input.messages.map((m, i) => {
+  // Mid-conversation system messages (Anthropic's mid-conversation-system beta;
+  // Claude Code sends one per turn, measured 2026-08-27) are folded into a user
+  // turn - the pre-beta shape every upstream accepts. Consecutive user turns are
+  // legal on the Messages wire; the text reaches the model in the same position.
+  const messages = input.messages.map((m, i) => {
     if (!m || typeof m !== "object") throw bad(`messages[${i}] must be an object`);
-    if (m.role !== "user" && m.role !== "assistant") throw bad(`messages[${i}].role must be "user" or "assistant" (system goes in the top-level "system" field)`);
+    if (m.role === "system") {
+      const content = typeof m.content === "string" ? [{ type: "text", text: m.content }] : m.content;
+      return { role: "user", content };
+    }
+    return m;
+  });
+  const probeMessages = messages.map((m, i) => {
+    if (m.role !== "user" && m.role !== "assistant") throw bad(`messages[${i}].role must be "user", "assistant" or "system"`);
     return { role: m.role, content: probeContent(m.content, `messages[${i}]`, acc) };
   });
   let system;
@@ -150,8 +185,21 @@ export function validateMessagesRequest(input, tierSlug) {
   if (!Number.isFinite(maxTokens) || maxTokens < 1) throw bad('"max_tokens" (positive integer) is required by the Messages API');
   if (maxTokens > tier.maxTokens) maxTokens = tier.maxTokens;
 
-  const body = { model: isRouted ? undefined : model, max_tokens: maxTokens, messages: input.messages };
+  const body = { model: isRouted ? undefined : model, max_tokens: maxTokens, messages };
   if (system !== undefined) body.system = input.system;
+  // Sampling params on the Messages wire (live docs, read 2026-08-28): models
+  // released after Claude Opus 4.6 REFUSE `top_k` at any value, `temperature`
+  // other than 1, and `top_p` under 0.99 - a 400 from Anthropic, relayed to
+  // the buyer as an upstream error with no explanation. Say it ourselves, and
+  // only for the models it applies to; older models keep the old freedom.
+  // Only the models released AFTER Opus 4.6 (opus-4.7/4.8/5, sonnet-5).
+  // Haiku 4.5 and everything older keep the old freedom.
+  const strictSampling = /^anthropic\/claude-(opus-(5|4\.[78])|sonnet-5)/.test(String(model || ""));
+  if (strictSampling) {
+    if (input.top_k !== undefined) throw bad('"top_k" is not supported by this model (Anthropic removed it for models after Claude Opus 4.6); omit it');
+    if (input.temperature !== undefined && Number(input.temperature) !== 1) throw bad('"temperature" must be 1 for this model (Anthropic removed other values for models after Claude Opus 4.6)');
+    if (input.top_p !== undefined && Number(input.top_p) < 0.99) throw bad('"top_p" must be at least 0.99 for this model (Anthropic removed lower values for models after Claude Opus 4.6)');
+  }
   for (const k of ["temperature", "top_p", "top_k", "metadata", "tool_choice"]) if (input[k] !== undefined) body[k] = input[k];
   // tool_choice mirrors the tools guard (client tools only): Anthropic wire is
   // {type:"auto"|"any"|"none"} or {type:"tool", name}; anything else refused.
@@ -164,8 +212,10 @@ export function validateMessagesRequest(input, tierSlug) {
     if (!Array.isArray(input.stop_sequences) || input.stop_sequences.length > MAX_STOP_SEQUENCES || !input.stop_sequences.every((x) => typeof x === "string")) throw bad(`"stop_sequences" must be an array of up to ${MAX_STOP_SEQUENCES} strings`);
     body.stop_sequences = input.stop_sequences;
   }
-  if (input.tools !== undefined) {
-    if (!Array.isArray(input.tools) || input.tools.length === 0 || input.tools.length > MAX_TOOLS) throw bad(`"tools" must be a non-empty array of up to ${MAX_TOOLS} tool definitions`);
+  // `tools: []` is what an Anthropic client sends when it has no tools this
+  // turn (Claude Code's session-naming call, measured 2026-08-27): no tools.
+  if (input.tools !== undefined && !(Array.isArray(input.tools) && input.tools.length === 0)) {
+    if (!Array.isArray(input.tools) || input.tools.length > MAX_TOOLS) throw bad(`"tools" must be an array of up to ${MAX_TOOLS} tool definitions`);
     for (const [i, t] of input.tools.entries()) {
       // Anthropic client tools only: {name, description?, input_schema}. Server
       // tools (web_search_20250305, computer use, text editor...) create spend
@@ -196,7 +246,7 @@ export function validateMessagesRequest(input, tierSlug) {
   const routedQuality = isRouted ? (input.quality === undefined ? "balanced" : String(input.quality)) : null;
   if (isRouted && !AUTO_RANKINGS[routedQuality]) throw bad('"quality" must be "fast", "balanced", or "best"');
   const chain = isRouted ? [...AUTO_RANKINGS[routedQuality][routedCategory]] : [model, ...(tier.fallbacks || []).filter((m) => m !== model)];
-  return { body, probe, imageCount: acc.images, isRouted, routedCategory, routedQuality, chain };
+  return { body, probe, imageCount: acc.images, isRouted, routedCategory, routedQuality, chain, defaultedModel };
 }
 
 /** stop_reason max_tokens with nothing said = the cap was spent (thinking ate
@@ -217,9 +267,31 @@ function stripBilling(usage) {
 export function makeMessagesHandler(tierSlug) {
   return async function messagesHandler(input, req) {
     const tier = TIERS[tierSlug];
-    const { body, probe, imageCount, isRouted, routedCategory, routedQuality, chain } = validateMessagesRequest(input, tierSlug);
+    const { body, probe, imageCount, isRouted, routedCategory, routedQuality, chain, defaultedModel } = validateMessagesRequest(input, tierSlug);
+    // Metered belt (same as the chat wire): the price this request was gated
+    // at must cover the body actually being served; a mismatch is refused 400
+    // (settlement cancelled, hold released, nothing spent).
+    // Cap, pre-spend and independent of how the call arrived (HTTP with a
+    // stashed quote, or an in-process caller with no request): the chat wire
+    // refuses this in validateRequest; the Messages wire clamped the quote to
+    // the cap and served the full body (review 2026-08-27).
+    if (tier.metered) {
+      const q = meteredQuoteForProbe(probe, imageCount);
+      if (q.overCap) throw bad(`This request would cost $${q.rawUsd.toFixed(4)} metered, above the $${tier.maxQuoteUsd} per-call cap of ${MESSAGES_PATH_BY_TIER[tierSlug]} - lower max_tokens or the input, or use a flat tier (GET /v1/models).`);
+    }
+    if (tier.metered && Number.isFinite(req?.__meteredQuoteUsd)) {
+      const q = meteredMessagesQuoteUsd(input);
+      if (q.invalid || q.overCap || q.usd > req.__meteredQuoteUsd * (1 + 1e-6) + 1e-9) {
+        throw bad(`This request was quoted at $${req.__meteredQuoteUsd} but the body being served quotes $${q.usd}${q.invalid ? ` (${q.reason})` : ""}. Nothing was charged; resend the request exactly as it should be served (no query-string or wrapped fields).`, 400);
+      }
+    }
+    // Metered: the quote priced THIS model at its MODEL_COST row, so the
+    // upstream bound is that row, never the tier-wide cap (audit 2026-08-26).
+    const meteredBound = tier.metered ? costFor(body.model) : null;
+    const quotedUsd = tier.metered && Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0 ? req.__meteredQuoteUsd : null;
     const providerPrefs = {
-      ...(tier.maxPrice ? { max_price: tier.maxPrice } : {}),
+      ...(meteredBound ? { max_price: { prompt: meteredBound.prompt, completion: meteredBound.completion } }
+        : tier.maxPrice ? { max_price: tier.maxPrice } : {}),
       ...(body.zdr === true ? { zdr: true } : {}),
       ...(tier.priceSort === true && PROVIDER_SORT_ENABLED() ? { sort: "price" } : {}),
     };
@@ -240,8 +312,8 @@ export function makeMessagesHandler(tierSlug) {
     };
     const recordUsage = (usage, upstreamUsd, served, serviceTier) => import("../posthog.js")
       .then(({ capturePostHogGatewayUsage }) => capturePostHogGatewayUsage({
-        tier: `${tierSlug}:messages`, model: served, priceUsd: tier.price, upstreamUsd,
-        promptTokens: usage?.input_tokens, completionTokens: usage?.output_tokens, serviceTier,
+        tier: `${tierSlug}:messages`, model: served, priceUsd: quotedUsd ?? tier.price, upstreamUsd,
+        promptTokens: usage?.input_tokens, completionTokens: usage?.output_tokens, serviceTier, defaulted: !!defaultedModel,
       })).catch(() => {});
     const attempts = flexAttempts(chain);
     const routerNote = isRouted ? { category: routedCategory, quality: routedQuality } : null;
@@ -280,6 +352,7 @@ export function makeMessagesHandler(tierSlug) {
         const text = await res.text();
         let data;
         try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
+        assertUpstreamBody(data);
         if (data?.stop_reason === "refusal" && isEmptyMaxTokens({ ...data, stop_reason: "max_tokens" })) {
           lastErr = bad("Upstream declined the request (safety filter) - rephrase the prompt, or pick a different model", 502);
           refusedModel = model;
@@ -293,6 +366,11 @@ export function makeMessagesHandler(tierSlug) {
         const upstreamUsd = stripBilling(data.usage);
         await recordUsage(data.usage, upstreamUsd, data.model || model, data.usage?.service_tier || (flex ? "flex" : "default"));
         if (routerNote) data.agent402_router = { ...routerNote, served: data.model || model };
+        if (defaultedModel) data.agent402_default_model = defaultedModel; // the caller sent no model; say what served
+        // Metered settlement sentinel (chat-wire parity): the route binder
+        // settles actual x markup for upto/credits buyers and strips this
+        // before the body leaves. A non-number means "no meter", never "free".
+        if (typeof upstreamUsd === "number") setMeterSentinel(data, upstreamUsd);
         return data;
       } catch (e) {
         if (![502, 503, 504].includes(e?.statusCode)) throw e;
@@ -322,24 +400,29 @@ const INPUT_SCHEMA = {
 
 function describe(tierSlug) {
   const t = TIERS[tierSlug];
+  const dflt = t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel} (named back in agent402_default_model); the price does not change.` : "";
   const price = priceString(tierSlug);
+  if (tierSlug === "v1-chat-metered") {
+    return `Anthropic Messages API billed per request from what the call costs: the 402 quotes exact-BPE input (system + messages + tools) plus your max_tokens at the model's list price, times ${METER_MARKUP}, from ${price} up to a $${t.maxQuoteUsd} per-call cap. Point the Anthropic SDK (or any Messages-format client) at base_url https://agent402.tools/v1/metered. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto, credits or card and settle actual usage. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
+  }
   const base = `Anthropic Messages API over x402 - point the Anthropic SDK (or Claude Code / the Agent SDK) at base_url https://agent402.tools${MESSAGES_PATH_BY_TIER[tierSlug].replace(/\/messages$/, "")} and pay ${price} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Messages wire (Claude natively, others translated). Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
   return tierSlug === "v1-chat-auto"
     ? `${base} Omit "model" and the gateway routes the prompt to the top-ranked model for its task type; the response adds agent402_router {category, quality, served}.`
-    : base;
+    : base + dflt;
 }
 
 // Example model per tier: a LIVE id (the "answers its own example" CI check
 // calls upstream with it; a bare allowlist prefix would 400 there) - Claude
 // where the tier serves Claude, the tier's cheapest chat example otherwise.
 const EXAMPLE_MODEL_BY_TIER = {
+  "v1-chat-metered": "anthropic/claude-haiku-4.5",
   "v1-chat-nano": "google/gemini-2.5-flash-lite",
   "v1-chat": "anthropic/claude-haiku-4.5",
   "v1-chat-pro": "anthropic/claude-sonnet-5",
   "v1-chat-premium": "anthropic/claude-opus-5",
 };
-const TIER_LABEL = { "v1-chat-nano": "nano", "v1-chat-auto": "auto", "v1-chat": "base", "v1-chat-pro": "pro", "v1-chat-premium": "premium" };
-const priceString = (tierSlug) => (tierSlug === "v1-chat-nano" ? "$0.003" : `$${TIERS[tierSlug].price.toFixed(2)}`);
+const TIER_LABEL = { "v1-chat-nano": "nano", "v1-chat-auto": "auto", "v1-chat": "base", "v1-chat-pro": "pro", "v1-chat-premium": "premium", "v1-chat-metered": "metered" };
+const priceString = (tierSlug) => (tierSlug === "v1-chat-nano" ? "$0.003" : tierSlug === "v1-chat-metered" ? `$${METER_MIN_SETTLE_USD}` : `$${TIERS[tierSlug].price.toFixed(2)}`);
 
 export const LLM_MESSAGES_TOOLS = Object.entries(MESSAGES_PATH_BY_TIER).map(([tierSlug, path]) => ({
   route: `POST ${path}`,
@@ -347,8 +430,10 @@ export const LLM_MESSAGES_TOOLS = Object.entries(MESSAGES_PATH_BY_TIER).map(([ti
   slug: `${tierSlug}-messages`,
   category: "llm",
   price: priceString(tierSlug),
+  // payments.js: a `quote` makes the x402 price a per-request function of the body.
+  ...(tierSlug === "v1-chat-metered" ? { quote: (body) => meteredMessagesQuoteUsd(body).usd } : {}),
   description: describe(tierSlug),
-  tags: TAGS,
+  tags: tierSlug === "v1-chat-metered" ? [...TAGS, "metered", "pay-per-token"] : TAGS,
   discovery: {
     bodyType: "json",
     input: tierSlug === "v1-chat-auto" ? { max_tokens: 256, messages: EXAMPLE_IN.messages } : { ...EXAMPLE_IN, model: EXAMPLE_MODEL_BY_TIER[tierSlug] },

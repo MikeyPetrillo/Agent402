@@ -12,7 +12,7 @@
 # The fix is more observations per run, not a looser alarm. Sourced, never
 # executed: it defines probe() and record_observation() and does nothing else.
 #
-# Required env: PROD, OP_TOKEN, RUN_URL. Optional: POW_SECRET,
+# Required env: PROD, RUN_URL, and PROBE_TOKEN (or OP_TOKEN as the fallback). Optional: POW_SECRET,
 # ROBINHOOD_FACILITATOR_URL (presence = the operator intends the Robinhood rail).
 #
 # probe() sets the global FAILS to a space-separated list of what failed and
@@ -101,7 +101,13 @@ probe_once() {
 # $1 = "up" | "down", $2 = the FAILS string from that probe.
 record_observation() {
   local STATUS="$1" FAILS="$2"
-  [ -n "$OP_TOKEN" ] || { echo "no operator token - skipping status record"; return 0; }
+  # PROBE_TOKEN is the narrow credential: it opens POST /api/status/probe and
+  # nothing else. OP_TOKEN is the ROOT operator token, which also reaches
+  # /__operator/refunds/update, /credits/disable, /well-known and the rest, and
+  # is only still accepted so the two can be rotated without an observer going
+  # dark. Prefer the narrow one wherever it is configured.
+  local TOKEN="${PROBE_TOKEN:-$OP_TOKEN}"
+  [ -n "$TOKEN" ] || { echo "no probe token - skipping status record"; return 0; }
   # A component is false only when the probe named it in FAILS, so a check that
   # passed is never marked down by another check's failure.
   has() { case "$FAILS" in *"$1"*) echo false;; *) echo true;; esac; }
@@ -124,6 +130,6 @@ record_observation() {
        "rails":{ok:$r, detail:(if $r then null else $d end)},
        "paid-call":{ok:$p, detail:(if $p then null else $d end)}}}')
   curl -sf --max-time 20 -X POST "$PROD/api/status/probe" \
-    -H "Content-Type: application/json" -H "X-Operator-Token: $OP_TOKEN" \
+    -H "Content-Type: application/json" -H "X-Operator-Token: $TOKEN" \
     -d "$BODY" >/dev/null && echo "probe recorded" || echo "probe not recorded (prod unreachable - the gap is the signal)"
 }

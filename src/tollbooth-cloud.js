@@ -302,9 +302,9 @@ export function tollboothCloudPage(baseUrl) {
   <dd>The default <code>bots</code> mode targets 25 AI/LLM crawler user-agents (GPTBot, ClaudeBot, PerplexityBot, CCBot, Google-Extended, Bytespider, …). Classic search indexers (Googlebot, Bingbot) are <b>deliberately not</b> on the list - you almost always want classic SEO indexing to stay free.</dd>
 
   <dt>What if AI vendors haven't shipped buyer-side x402 yet?</dt>
-  <dd>Right now Tollbooth's main job for most sites is to <b>deter</b> AI training crawl (with proof-of-work or an outright block), not to <b>monetize</b> it. The USDC rail is fully wired and ready for the moment buyer-side x402 lands at OpenAI / Anthropic / Perplexity. Most operators run <code>observe</code> mode for 1-2 weeks first to size the traffic.</dd>
+  <dd>Right now Tollbooth's main job for most sites is to <b>deter</b> AI training crawl (with proof-of-work or an outright block), not to <b>monetize</b> it. The USDC rail is fully wired and ready for the moment buyer-side payments ship in the large AI vendors' crawlers. Most operators run <code>observe</code> mode for 1-2 weeks first to size the traffic.</dd>
 
-  <dt>How is this different from Cloudflare AI Crawl Toll?</dt>
+  <dt>Why run the gate on my own origin?</dt>
   <dd>Open source, portable across hosts (not locked to Cloudflare), non-custodial (USDC settles to your wallet, not a vendor's books), single-product price (not bundled into a CDN plan), and ships with a free proof-of-work rail that doesn't need any AI vendor to integrate buyer-side rails first.</dd>
 </dl>
 

@@ -45,7 +45,6 @@ const SECONDS_PER_BASE_BLOCK = 2;
 const DEFAULT_BASE_RPCS = [
   "https://mainnet.base.org",
   "https://base-rpc.publicnode.com",
-  "https://base.llamarpc.com",
   "https://base.drpc.org",
 ];
 const DEFAULTS = {

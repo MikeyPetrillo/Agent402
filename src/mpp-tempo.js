@@ -24,6 +24,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { mppProblem, markMppProblem, sendMppProblem } from "./mpp-problem.js";
 import { Challenge, Credential, Method, Receipt } from "mppx";
 import { tempo } from "mppx/server";
+import { mppChallengesSuppressed } from "./mpp-fallback.js";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
 
@@ -425,7 +426,11 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
     const origWriteHead = res.writeHead;
     res.writeHead = function tempoWriteHead(...args) {
       try {
-        if (res.statusCode === 402) {
+        // A client that has proven it signs EIP-3009 under the wrong token
+        // domain is being steered to our x402 path, and that only works if
+        // the 402 carries NO Payment challenge at all - so the tempo half is
+        // withheld too, not just the evm one. See src/mpp-fallback.js.
+        if (res.statusCode === 402 && !mppChallengesSuppressed(req)) {
           const item = priceFor(req.method, req.path, req);
           // Identity-bound routes (wallet-keyed memory, my-usage) are paid
           // with the payer AS the identity; a tempo credential carries no

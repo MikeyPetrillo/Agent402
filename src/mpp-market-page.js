@@ -9,6 +9,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { mppChallengeRails } from "./mpp-shim.js";
 import { tempoEnabled } from "./mpp-tempo.js";
 import { mppCrawlIntervalLabel } from "./mpp-index.js";
+import { hostRowHtml } from "./host-entry.js";
 
 // Crawled seller data is third-party input: only http(s) may become an href,
 // same rule market-page.js uses for the exact same reason.
@@ -53,7 +54,7 @@ const fmtUsd = (n) => (Number(n) >= 100 ? `$${Math.round(Number(n)).toLocaleStri
  *  on Tempo to the recipient their LIVE challenge names (src/mpp-leaderboard.js).
  *  A window, not lifetime, and a proxy (any inbound transfer), both said in the
  *  copy. Rows with zero transfers are counted, never listed. */
-function leaderboardHtml(lb) {
+function leaderboardHtml(lb, host = null) {
   const rows = Array.isArray(lb?.rows) ? lb.rows : [];
   const active = rows.filter((r) => r.transfers > 0 || (r.d30?.transfers || 0) > 0);
   const hours = lb?.window?.approxHours;
@@ -97,6 +98,7 @@ function leaderboardHtml(lb) {
   <h2 id="leaderboard" style="font-size:21px;font-weight:800;margin:40px 0 6px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">MPP leaderboard &middot; settled on Tempo${staleNote}</h2>
   <p style="font-size:13px;color:var(--faint);margin:0 0 12px;max-width:820px;">Verified sellers ranked by inbound USDC.e transfers on Tempo (chain 4217) to the recipient address their <em>live</em> MPP challenge names, ${windowSource}. A window, not lifetime; an inbound transfer is the same proxy the <a href="/guides/smart-order-router" style="color:var(--muted);">router</a> requires before it spends (floor ${lb?.provenFloor ?? "-"} in the window = <span class="mpr-proven" style="margin:0;">routable</span>).${histNote} Ranked by 7d, then window. Machine-readable: <a href="/api/mpp-leaderboard" style="color:var(--muted);">/api/mpp-leaderboard</a>.</p>
   ${table}
+  ${hostRowHtml(host)}
   ${zero > 0 ? `<p style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);margin-top:10px;">${zero.toLocaleString("en-US")} more verified recipient${zero === 1 ? "" : "s"} with no inbound transfer observed (listed below, not ranked).</p>` : ""}`;
 }
 
@@ -134,7 +136,7 @@ function sellerRowHtml(s, lbByRecipient) {
 
 /** @param baseUrl canonical origin
  *  @param snapshot mppIndexSnapshot() result */
-export function mppMarketPage(baseUrl, snapshot, leaderboard = null) {
+export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = null } = {}) {
   const sellers = Array.isArray(snapshot?.sellers) ? snapshot.sellers : [];
   const lbByRecipient = new Map((leaderboard?.rows || []).map((r) => [r.recipient, r]));
   const verifiedCount = snapshot?.verifiedSellers || 0;
@@ -281,7 +283,7 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null) {
   const body = `
 <div style="max-width:1080px;margin:0 auto;padding:36px 24px;">
   <section>${headerHtml}</section>
-  <section>${leaderboardHtml(leaderboard)}</section>
+  <section>${leaderboardHtml(leaderboard, host)}</section>
   <section>${rosterHtml}</section>
   <section>${methodSection}</section>
   <section>${faqSection}</section>

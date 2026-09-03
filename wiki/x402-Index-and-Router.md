@@ -133,6 +133,10 @@ Returns an **object**, not a bare array. The matches are in `results`:
       "score": 13,
       "health": 1,
       "networks": ["eip155:8453"],
+      "paymentNetworksKnown": true,
+      "routerDispatchEligible": true,
+      "routerDispatchReason": "eligible",
+      "executeViaCallableNow": true,
       "executeVia": {
         "tool": "route-execute",
         "price": "$0.01",
@@ -151,8 +155,18 @@ Returns an **object**, not a bare array. The matches are in `results`:
   callable endpoint.
 - `price` is whatever the seller published (a number or a string); **`priceUsd`
   is the normalized number** to compare on.
+- `routerDispatchEligible` / `routerDispatchReason` say whether this host's
+  router will pay the seller on your behalf right now and why not otherwise
+  (`crawl_failed`, `network_unknown`, `no_supported_route`, `url_template`,
+  `price_unknown`, `settlement_required`, `settlement_checked_at_pay_time`,
+  `eligible`, `local_catalog`); `routable` and `health` are crawl readiness,
+  never a promise to pay. The response's `dispatchLegend` spells each out.
 - `executeVia` names the cheapest execution rung that covers this result (see
-  the ladder above).
+  the ladder above) and appears **only on a row the router will pay now**
+  (`executeViaCallableNow: true`). A row that is not dispatch-eligible carries
+  `executeViaWhenEligible` with `executeViaCallableNow: false` instead, so a
+  tier name never reads as a callable action. `networksInferred: true` marks a
+  row whose chains were inherited from its seller rather than read on its own 402.
 - `count` is the number of results returned; `sellers` is how many distinct
   sellers they came from.
 - The response echoes back the resolved `include` value (invalid values fall

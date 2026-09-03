@@ -554,7 +554,7 @@ export const DERIVATIVES_TOOLS = [
     name: "Perp open interest",
     slug: "perp-open-interest",
     category: "crypto",
-    price: "$0.002",
+    price: "$0.001",
     description:
       "Open interest for perpetuals in coins and USD notional. Pass coin for one market (with its share of total open interest) or omit it for the top N markets ranked by USD open interest plus the venue total. Hyperliquid public data, no key.",
     tags: ["crypto", "derivatives", "perpetuals", "open-interest", "hyperliquid"],
@@ -608,7 +608,7 @@ export const DERIVATIVES_TOOLS = [
     name: "Perp candles (OHLCV)",
     slug: "perp-klines",
     category: "crypto",
-    price: "$0.003",
+    price: "$0.001",
     description:
       "OHLCV candles for one perpetual at intervals from 1m to 1M (1m 3m 5m 15m 30m 1h 2h 4h 8h 12h 1d 3d 1w 1M), newest last, with a window summary (open, close, change %, high, low, volume). limit = number of candles (default 100, max 500). Hyperliquid public data, no key.",
     tags: ["crypto", "derivatives", "perpetuals", "candles", "ohlcv", "klines", "hyperliquid"],

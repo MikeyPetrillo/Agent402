@@ -99,5 +99,32 @@ const withCatalogue = { ...MANIFEST, tools: [{ resource: `${ORIGIN}/a`, price: "
 ok(normaliseManifestTools(withCatalogue, ORIGIN).length === 2,
   "a manifest with a real catalogue fell back to the single-resource reader");
 
+
+// --- verb-less manifest entries beside observed verbs (2026-09-02) ---------
+// A manifest entry that names no verb publishes GET, the wire default, and
+// now SAYS it was inferred - so the live-402 probe tries both verbs for it
+// (probeMethodsFor already reads the flag) and a remembered quote may correct
+// it, while a declared verb is never overwritten. Same-path entries collapse
+// to one at this stage (byKey), so the merge only ever ENRICHES the rows an
+// OpenAPI observed, and both of its verbs survive.
+{
+  const entries = normaliseManifestTools({ x402Version: 2, resources: [
+    { id: "x402_ip_geo_get", name: "x402_ip_geo_get", description: "ip geo", price: "$0.5", url: `${ORIGIN}/x402/ip-geo` },
+    { id: "x402_ip_geo_post", name: "x402_ip_geo_post", description: "ip geo", price: "$0.5", url: `${ORIGIN}/x402/ip-geo` },
+  ] }, ORIGIN);
+  ok(entries.length === 1 && entries[0].method === "GET" && entries[0].methodInferred === true, "a manifest entry naming no verb publishes GET and says it was inferred");
+  const observed = [
+    { seller: ORIGIN, method: "GET", route: "/x402/ip-geo", slug: "x402_ip_geo_get", name: "ip geo", description: "", price: null },
+    { seller: ORIGIN, method: "POST", route: "/x402/ip-geo", slug: "x402_ip_geo_post", name: "ip geo", description: "", price: null },
+  ];
+  const out = mergeManifestIntoTools(entries, observed).filter((r) => r.route === "/x402/ip-geo");
+  ok(out.length === 2 && out.map((r) => r.method).sort().join(",") === "GET,POST", "beside observed GET+POST rows, both verbs survive the merge (the manifest enriches, it does not replace)");
+  ok(out.every((r) => r.price === "$0.5") && out.every((r) => r.methodInferred === undefined), "the manifest's price reaches both rows and neither carries the inferred flag (their verbs were observed)");
+  const declared = normaliseManifestTools({ x402Version: 2, resources: [
+    { id: "a", name: "a", method: "POST", price: "$0.5", url: `${ORIGIN}/x402/other` },
+  ] }, ORIGIN);
+  ok(declared[0].method === "POST" && declared[0].methodInferred === undefined, "a declared verb is not flagged inferred");
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

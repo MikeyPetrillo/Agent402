@@ -10,6 +10,43 @@ import { CHAIN_PAGES } from "./market-page.js";
 import { EXEC_TIERS } from "./tools/route-execute.js";
 import { stripeEnabled } from "./mpp-stripe.js";
 import { seededProgrammaticPaths } from "./programmatic-seeds.js";
+import { HUMAN_PRODUCTS } from "./human-checkout.js";
+import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
+import { priceUsdFor } from "./report-tiers.js";
+import { samplePaths } from "./sample-reports.js";
+import { listPublicReports } from "./human-checkout.js";
+
+/** The llms.txt "finished reports" paragraph, DERIVED from the live catalog
+ *  (route + price per slug) and the product tables (card + monitor prices),
+ *  so it cannot quote a ladder that has since moved: a hand-written copy sat a
+ *  full price change behind the code for four days (2026-08-23..27) on the one
+ *  surface every LLM crawler reads. Guarded by scripts/test-price-prose.js. */
+export function reportsParagraph(baseUrl, tools) {
+  const bySlug = new Map((tools || []).map((t) => [t.slug, t]));
+  const item = (slug) => { const t = bySlug.get(slug); return t ? `${t.route} (${t.price})` : null; };
+  const list = (...slugs) => slugs.map(item).filter(Boolean).join(", ");
+  const groups = [
+    ["Deep research", list("research", "research-pro", "research-max")],
+    ["Company due-diligence dossier", list("dossier", "dossier-max")],
+    ["Ticker pack, three reports in one run", list("ticker-pack")],
+    ["Fund 13F report", list("fund-report", "fund-report-max")],
+    ["SEC filing report", list("filing-report")],
+    ["Domain security audit", list("domain-audit", "domain-audit-pro")],
+    ["FDA recall report", list("recall-report")],
+    ["Insider flow report", list("insider-report")],
+    ["Market / competitor brief", list("market-brief")],
+    ["Solana token brief", list("token-brief")],
+    ["Token risk", list("token-risk", "token-risk-pro")],
+    ["LinkedIn article, ready to publish", list("linkedin-article")],
+    ["IPO pipeline digest, deterministic", list("ipo-report")],
+  ].filter(([, v]) => v);
+  const agent = Object.values(HUMAN_PRODUCTS).map((p) => priceUsdFor(p.slug)).filter((n) => Number.isFinite(n));
+  const card = Object.values(HUMAN_PRODUCTS).map((p) => p.price / 100);
+  const monitor = Math.min(...Object.values(MONITOR_PRODUCTS).map((m) => m.price / 100));
+  const usd = (n) => `$${n.toFixed(2)}`;
+  const range = (xs) => (xs.length ? (Math.min(...xs) === Math.max(...xs) ? usd(xs[0]) : `${usd(Math.min(...xs))} to ${usd(Math.max(...xs))}`) : "");
+  return `**Finished reports, for agents and people.** Cited, grounded report products with a data appendix - the same endpoint over x402/MPP or by card. An agent pays the tool price per call, ${range(agent)}. ${groups.map(([k, v]) => `${k}: ${v}.`).join(" ")} People buy the same reports by card at ${baseUrl}/reports for ${range(card)}: the card price includes payment processing, so an agent paying per call pays the lower tool price for the same report. Monitors (${usd(monitor)}/month by card at ${baseUrl}/monitors, or over MPP on Tempo) re-run a report on change and email the diff - domain security, SEC filings, Solana token safety, fund 13F, FDA recall, insider flow, IPO pipeline.`;
+}
 
 // Computed ONCE when this module loads (i.e. once per deploy, since Railway
 // restarts the process), not per-request. Every sitemap lastmod below reuses
@@ -24,12 +61,13 @@ const BOOT_DATE = new Date().toISOString().slice(0, 10);
 // resolves on EDGAR, but a sitemap that enumerated an open URL space would
 // invite crawlers to mint upstream requests forever. The hub pages get a
 // higher priority than the entity pages that hang off them.
-const programmaticUrls = (baseUrl) => seededProgrammaticPaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: p.split("/").length === 3 ? "0.8" : "0.6" }));
+const publicReportUrls = (baseUrl) => { try { return listPublicReports().map((r) => ({ loc: `${baseUrl}/reports/public/${r.publicId}`, priority: "0.6" })); } catch { return []; } };
+const programmaticUrls = (baseUrl) => [...samplePaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: "0.8" })), ...publicReportUrls(baseUrl), ...seededProgrammaticPaths().map((p) => ({ loc: `${baseUrl}${p}`, priority: p.split("/").length === 3 ? "0.8" : "0.6" }))];
 
 export function robotsTxt(baseUrl) {
   // Explicitly welcome AI/agent crawlers and search engines; point them at the
   // machine-readable surfaces. Disallow the wallet-scoped memory endpoints and
-  // the token-gated operator dashboard (already 404 without the token — this
+  // the token-gated operator dashboard (already 404 without the token - this
   // just keeps well-behaved crawlers from probing the path at all).
   const agents = [
     "GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot", "Claude-Web", "anthropic-ai",
@@ -44,16 +82,23 @@ export function robotsTxt(baseUrl) {
   // on-chain activity scan, and on Base that scan is a PAID CDP SQL query -
   // two of them per distinct wallet. With ~2,300 indexed sellers, one crawler
   // walking the seller roster costs ~4,600 billed queries, and every crawler
-  // above is explicitly welcomed. July 2026 billed 29,589 SQL queries
-  // ($245.59) against roughly $50 of revenue in the same month; the seller
+  // above is explicitly welcomed. One month's crawler traffic billed tens of
+  // thousands of SQL queries, far above what the roster earned; the seller
   // roster is the only surface that multiplies a page view by a paid query.
   //
   // The pages themselves stay indexable - only the seller-SCOPED variants are
   // disallowed, so /base, /solana and /marketplace keep all their SEO value
   // while the parameter that costs money per crawl does not.
+  // CRAWL BUDGET, third reason (2026-09-01, read off Search Console): the
+  // retired /api/convert/* namespace (~970 routes cut 2026-08-25) was 1,053
+  // of the 2,630 not-indexed URLs - Googlebot spent its budget on 4xx API
+  // endpoints while 743 real pages sat "Discovered - currently not indexed".
+  // Scanners also re-walk the same dead routes daily (38% of telemetry
+  // volume). Nothing lives there; nobody loses by being told so.
   const costly = [
     "Disallow: /*?seller=",
     "Disallow: /api/market/",
+    "Disallow: /api/convert/",
   ].join("\n");
   const blocks = agents.map((a) => `User-agent: ${a}\nAllow: /\n${costly}`).join("\n\n");
   return `${blocks}
@@ -70,7 +115,9 @@ Disallow: /credits/thanks
 Disallow: /api/r/
 Disallow: /api/m/
 Disallow: /api/credits/
+Disallow: /api/convert/
 Disallow: /api/monitors/
+Disallow: /api/pow/
 Disallow: /api/buy
 ${costly}
 
@@ -91,7 +138,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/monitors`, priority: "0.8" },
     { loc: `${baseUrl}/credits`, priority: "0.8" },
     { loc: `${baseUrl}/shop`, priority: "0.9" },
-    // Every x402 marketplace page (one per CHAIN_PAGES entry) — new chain
+    // Every x402 marketplace page (one per CHAIN_PAGES entry) - new chain
     // page = new sitemap entry, zero edits here.
     ...Object.keys(CHAIN_PAGES).map((key) => ({ loc: `${baseUrl}/${key}`, priority: "0.8" })),
     { loc: `${baseUrl}/faq`, priority: "0.8" },
@@ -103,7 +150,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/.well-known/x402`, priority: "0.7" },
     { loc: `${baseUrl}/api/reliability`, priority: "0.6" },
     { loc: `${baseUrl}/api/stats`, priority: "0.6" },
-    // Unified marketplace surface (the old /index and /marketplaces 301 here —
+    // Unified marketplace surface (the old /index and /marketplaces 301 here -
     // a sitemap must never list URLs that redirect).
     { loc: `${baseUrl}/marketplace`, priority: "0.9" },
     { loc: `${baseUrl}/mpp-marketplace`, priority: "0.9" },
@@ -131,6 +178,13 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
     { loc: `${baseUrl}/agentic-finance`, priority: "0.9" },
     { loc: `${baseUrl}/why`, priority: "0.8" },
+    { loc: `${baseUrl}/markets`, priority: "0.8" },
+    { loc: `${baseUrl}/digest`, priority: "0.6" },
+    { loc: `${baseUrl}/security`, priority: "0.7" },
+    { loc: `${baseUrl}/company`, priority: "0.7" },
+    { loc: `${baseUrl}/proof`, priority: "0.7" },
+    { loc: `${baseUrl}/terms`, priority: "0.3" },
+    { loc: `${baseUrl}/privacy`, priority: "0.3" },
     { loc: `${baseUrl}/glossary`, priority: "0.8" },
     { loc: `${baseUrl}/101`, priority: "0.9" },
     { loc: `${baseUrl}/revenue`, priority: "0.6" },
@@ -168,7 +222,7 @@ ${entries}
 `;
 }
 
-// Sitemap index — splits the single sitemap into sub-sitemaps so crawlers
+// Sitemap index - splits the single sitemap into sub-sitemaps so crawlers
 // don't have to parse 1,400+ URLs in one file. /sitemap.xml stays as the
 // monolith for backwards compat; /sitemapindex.xml points to the splits.
 function subSitemap(urls, lastmod) {
@@ -194,6 +248,10 @@ export function sitemapPages(baseUrl, catalog) {
     { loc: `${baseUrl}/what-is-mpp`, priority: "0.9" },
     { loc: `${baseUrl}/agentic-finance`, priority: "0.9" },
     { loc: `${baseUrl}/why`, priority: "0.8" },
+    { loc: `${baseUrl}/markets`, priority: "0.8" },
+    { loc: `${baseUrl}/digest`, priority: "0.6" },
+    { loc: `${baseUrl}/security`, priority: "0.7" },
+    { loc: `${baseUrl}/company`, priority: "0.7" },
     { loc: `${baseUrl}/glossary`, priority: "0.8" },
     { loc: `${baseUrl}/101`, priority: "0.9" },
     { loc: `${baseUrl}/pricing`, priority: "0.8" },
@@ -324,11 +382,11 @@ export function llmsTxt(baseUrl, catalog) {
 
   return `# Agent402.Tools
 
-> Pay-per-call web tools for AI agents, payable over **x402 or MPP** - the applied layer of Agentic Finance: agents that pay and get paid on their own (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) — then the long catalog of 500+ deterministic tools via \`/api/find\`. Call an endpoint, receive an HTTP 402 carrying both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment), and settle from your own wallet - USDC via x402, or MPP on Base/Celo (USDC) or Tempo (USDC.e or PathUSD, native)${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (Stripe Shared Payment Token over MPP stripe/charge - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity (optional: a prepaid card-credits key, see below). Flat per-call prices from $0.001 - most tools $0.001–$0.02, with premium AI, media and multi-tool packs higher (up to $1.50); every price is in /api/pricing and quoted in the 402.
+> Pay-per-call web tools for AI agents, payable over **x402 or MPP** - the applied layer of Agentic Finance: agents that pay and get paid on their own (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) - then the long catalog of 500+ tools via \`/api/find\`: deterministic utilities, a metered model gateway on the OpenAI and Anthropic wires (\`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment), and settle from your own wallet - USDC via x402, or MPP on Base/Celo (USDC) or Tempo (USDC.e or PathUSD, native)${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (Stripe Shared Payment Token over MPP stripe/charge - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity (optional: a prepaid card-credits key, see below). Flat per-call prices from $0.001 - most tools $0.001–$0.02, with premium AI, media and multi-tool packs higher (up to $1.50); every price is in /api/pricing and quoted in the 402.
 
 Base URL: ${baseUrl}
 
-**Open source and two-sided.** Agent402 is the open-source, self-hostable applied layer of Agentic Finance (agents paying and getting paid on their own) for x402 and MPP (+ MCP server): 500+ deterministic pay-per-call tools for agents to buy (live web search + cited answers, browser rendering, PDFs, OCR, images, live financial / crypto / macro data, SEC EDGAR, wallet-keyed memory), a neutral cross-seller index and on-chain leaderboard for the whole x402 ecosystem, and \`agent402-tollbooth\` for API sellers to charge AI crawlers per request. Positioned as the tools layer beside LLM gateways - not a competing chat router. Maintainer: Havok Holdings LLC. Read every line and run it yourself: https://github.com/MikeyPetrillo/Agent402
+**Open source and two-sided.** Agent402 is the open-source, self-hostable applied layer of Agentic Finance (agents paying and getting paid on their own) for x402 and MPP (+ MCP server): 500+ pay-per-call tools for agents to buy (live web search + cited answers, browser rendering, PDFs, OCR, images, live financial / crypto / macro data, SEC EDGAR, wallet-keyed memory, a metered model gateway, finished reports), a neutral cross-seller index and on-chain leaderboard for the whole x402 ecosystem, and \`agent402-tollbooth\` for API sellers to charge AI crawlers per request. Maintainer: Havok Holdings LLC. Read every line and run it yourself: https://github.com/MikeyPetrillo/Agent402
 
 **Why pay here (seven first-party differences, each proven on a live surface - full page: /why).** ${whyPointsPlain().map((line, i) => `(${i + 1}) ${line}`).join(" ")} Metered usage pricing: \`POST /v1/metered/chat/completions\` quotes each request from its body; prepaid card credits: /credits; finished reports and monitors: /reports and /monitors; buying on your behalf: \`POST /api/route/execute\`; proof: /status and /revenue.
 
@@ -336,13 +394,13 @@ Base URL: ${baseUrl}
 
 **Why agents use this instead of building it themselves.** You cannot sign up for anything: the useful web hides behind signups, captchas, API keys, and credit cards, none of which an autonomous agent can obtain - every capability here needs only the credential an agent already holds (its wallet, or its CPU). Capabilities your sandbox lacks (a headless browser, network egress, durable disk) are here because agents cannot self-host them mid-task. State survives the session and even crosses owners via wallet-keyed \`/api/memory\`. One x402-wrapped fetch (or the MCP server) covers the whole catalog - deterministic outputs, flat per-call prices, tested before every deploy, billed verifiably on-chain.
 
-**No wallet? Pay with compute (proof-of-work).** ${powCount} of the ${tools.length} tools accept a sha256 proof-of-work puzzle (a fraction of a second of CPU) instead of USDC - no money and no AI tokens (there is no LLM in the serving path). Get a challenge at \`${baseUrl}/api/pow/challenge?slug=hash\`, find an integer nonce so that \`sha256(challenge + ":" + nonce)\` has at least ${POW_DIFFICULTY} leading zero bits, then resend the request with header \`X-Pow-Solution: <token>:<nonce>\`. **The response has two different fields and you use both: hash the \`challenge\` (32 hex chars), submit the \`token\` (the longer signed string).** Submitting the challenge you just hashed returns a 402 that looks exactly like an unpaid request, so this is the one step worth reading twice. The network / browser / storage tools that need wallet-bound identity or live egress stay wallet-only.
+**No wallet? Pay with compute (proof-of-work).** ${powCount} of the ${tools.length} tools accept a sha256 proof-of-work puzzle (a fraction of a second of CPU) instead of USDC - no money and no AI tokens (no model in the serving path of these tools). Get a challenge at \`${baseUrl}/api/pow/challenge?slug=hash\`, find an integer nonce so that \`sha256(challenge + ":" + nonce)\` has at least ${POW_DIFFICULTY} leading zero bits, then resend the request with header \`X-Pow-Solution: <token>:<nonce>\`. **The response has two different fields and you use both: hash the \`challenge\` (32 hex chars), submit the \`token\` (the longer signed string).** Submitting the challenge you just hashed returns a 402 that looks exactly like an unpaid request, so this is the one step worth reading twice. The network / browser / storage tools that need wallet-bound identity or live egress stay wallet-only.
 
 **Pay with USDC (x402).** Wrap fetch with \`@x402/fetch\`, register the exact EVM scheme with your signer, and call normally - the 402 is decoded, paid, and the result returned. Settlement uses ${RAILS_OR}; gas is sponsored by the facilitator on EVM chains, so callers need only hold the stablecoin. Send an \`Idempotency-Key\` header for safe retries: replaying the same key with the same payment/PoW credential returns the original result without paying again.
 
 **No wallet, need the paid tools? Pay with prepaid card credits.** Buy $20, $50 or $100 at ${baseUrl}/credits (card, no account), get an a402_ key once, and send it as \`Authorization: Bearer a402_...\` on any paid tool - the list price is held before the call and debited only on a successful (200) response; \`X-Credits-Balance\` rides on every answer and \`GET ${baseUrl}/api/credits/balance\` reports the key. agent402-mcp (AGENT402_CREDITS_KEY) and agent402-client ({ creditsKey }) support it. Identity-bound tools (memory, my-usage) still need an x402 wallet - the payment is the identity there.
 
-**Finished reports, for agents and people.** Cited, grounded report products with a data appendix - the same endpoint over x402/MPP or by card. An agent pays the tool price per call, $0.20 to $1.10. Deep research: POST /v1/research ($0.35), POST /v1/research/pro ($0.65), POST /v1/research/max ($1.10). Company due-diligence dossier: POST /v1/dossier ($0.55), POST /v1/dossier/max ($0.95). Ticker pack, three reports in one run: POST /v1/ticker-pack ($0.75). Fund 13F report: POST /v1/fund ($0.25), POST /v1/fund/max ($0.50). SEC filing report: POST /v1/filing-report ($0.25). Domain security audit: POST /v1/domain-audit ($0.20), POST /v1/domain-audit/pro ($0.30). FDA recall report: POST /v1/recall-report ($0.20). Insider flow report: POST /v1/insider-report ($0.25). Market / competitor brief: POST /v1/research/market-brief ($0.35). Solana token brief: POST /v1/token-brief ($0.35). Token risk: POST /v1/token-risk ($0.30), POST /v1/token-risk/pro ($0.60). IPO pipeline digest, deterministic: POST /v1/ipo-report ($0.05). People buy the same reports by card at ${baseUrl}/reports for $1, or $2 for research max, dossier max and the ticker pack: the card price includes payment processing (Stripe takes 2.9% + $0.30 a charge, more than the report under about a dollar), so an agent paying per call pays the lower tool price for the same report. Monitors ($3/month by card at ${baseUrl}/monitors) re-run a report on change and email the diff - domain security, SEC filings, Solana token safety, fund 13F, FDA recall, insider flow, IPO pipeline.
+${reportsParagraph(baseUrl, tools)}
 
 **Crypto derivatives, DeFi and Solana intel.** Live perpetuals and options, no exchange account: \`POST /api/perp-markets\` ($0.003) snapshots every listed perp, \`POST /api/perp-funding\` ($0.003) and \`POST /api/perp-funding-screener\` ($0.003) read funding rates now and across the book, and \`POST /api/perp-basis\` ($0.003), \`POST /api/perp-open-interest\` ($0.002), \`POST /api/perp-klines\` ($0.003) and \`POST /api/perp-orderbook\` ($0.002) cover premium, OI, candles and depth; the options book is \`POST /api/options-summary\` ($0.005), \`POST /api/crypto-options-chain\` ($0.004), \`POST /api/options-ticker\` ($0.002) and \`POST /api/options-volume\` ($0.002). DeFi: \`POST /api/defi-yields\` ($0.003) screens pools by chain, project and TVL, with \`POST /api/defi-protocols\` ($0.003), \`POST /api/defi-protocol\` ($0.002), \`POST /api/defi-chains\` ($0.002), \`POST /api/defi-fees\` ($0.003), \`POST /api/defi-dex-volume\` ($0.003), \`POST /api/stablecoins\` ($0.003) and history siblings for pools, chains and stablecoin supply. Solana: \`POST /api/sol-token-safety\` ($0.005) grades a mint (authorities, liquidity, holder concentration), \`POST /api/sol-token-report\` ($0.010) is the full risk write-up, and \`POST /api/sol-token-holders\` ($0.005), \`POST /api/sol-token-pairs\` ($0.003), \`POST /api/sol-trending\` ($0.003), \`POST /api/sol-price\` ($0.002), \`POST /api/sol-swap-quote\` ($0.003) and \`POST /api/sol-token-lookup\` ($0.002) cover concentration, pairs, trending, prices and routing. Market context: \`POST /api/crypto-news\` ($0.004), \`POST /api/crypto-indicators\` ($0.005), \`POST /api/crypto-market-pulse\` ($0.004), \`GET /api/coin-profile\` ($0.008), \`GET /api/coin-price-by-contract\` ($0.005) and \`GET /api/coin-ohlc\` ($0.008). Raw chain reads: \`POST /api/asset-transfers\` ($0.003), \`POST /api/token-balances\` ($0.002), \`POST /api/tx-receipt\` ($0.003) and \`POST /api/token-price-history\` ($0.004). Whole-site structure on demand: \`POST /api/site-map\` ($0.005) and \`POST /api/site-crawl\` ($0.02).
 
@@ -390,6 +448,7 @@ We state it this way deliberately: the honest guarantee is "settlement ordering 
   - Claude Code: \`claude mcp add --transport http agent402 ${baseUrl}/mcp\`
   - Cursor: add to \`~/.cursor/mcp.json\` → \`{"mcpServers":{"agent402":{"url":"${baseUrl}/mcp"}}}\`
   - Smithery: listed at https://smithery.ai/servers/mike-kq9d/agent402 (paste \`${baseUrl}/mcp\` at https://smithery.ai/new)
+  - Every host, verified config blocks (Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, OpenAI Codex CLI, Gemini CLI, Continue, ElizaOS, Bedrock AgentCore, any OpenAI or Anthropic SDK): [/guides/agent-hosts](${baseUrl}/guides/agent-hosts). Shortlinks: agent402.sh/claude, /cursor, /vscode, /windsurf, /cline, /roo, /codex, /gemini. Install script: \`curl -fsSL agent402.sh/install | sh\`
 - [agent402-mcp](https://www.npmjs.com/package/agent402-mcp): npm MCP server with payment underneath (\`npx -y agent402-mcp\`, optional \`AGENT_KEY\` for USDC via x402 or \`AGENT402_CREDITS_KEY\` for prepaid card credits). Claude Code: \`claude mcp add agent402 -s user -- npx -y agent402-mcp@latest\`
 
 ## Framework adapters (zero-dependency npm)
@@ -415,6 +474,10 @@ ${toolSections}
 - [agent402-tollbooth](${baseUrl}/tollbooth): open-source, self-hostable x402 pay-per-crawl gate for your own site
 - [Skill packs JSON](${baseUrl}/api/skill-packs.json): machine-readable pack index
 - [Tool docs](${baseUrl}/tools): human-readable documentation per tool
+- [Security](${baseUrl}/security): disclosure policy with safe harbor, what data is held, key handling, controls in the serving path and on the code
+- [Company](${baseUrl}/company): Havok Holdings LLC, what it sells, where the proof is, role mailboxes
+- [Weekly digest](${baseUrl}/digest): one email a week with what a wallet or credits key spent here (calls, dollars, tools, chains); double opt-in, signed unsubscribe
+- [Markets](${baseUrl}/markets): the keyless crypto market-data calls (market pulse, perps, options, DeFi, stablecoins, news, indicators) with one curl to copy
 - [Prepaid card credits](${baseUrl}/credits): no wallet? buy $20-$100 of credits by card, then call any paid tool with the header "Authorization: Bearer a402_..." (debited per call on success; balance at GET /api/credits/balance)
 - [Agentic Finance](${baseUrl}/agentic-finance): what the category is and where Agent402 sits in it
 - [x402 & MPP 101](${baseUrl}/101): the ten-minute walkthrough for people new to the space - plain language, speaker notes, and a live demo (402 quote decoded, pay with a puzzle, real receipts)

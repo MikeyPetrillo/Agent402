@@ -53,7 +53,8 @@ export const WALLET_ONLY_SLUGS = new Set([
   "v1-images-fast", "v1-images-pro", "v1-videos",  // llm-images-fast-kit.js (OpenRouter spend)
   "asset-transfers", "token-balances", "token-allowance", "tx-receipt", "block-receipts", "token-price-history",  // alchemy-data-kit.js (egress)
   "fc-cast-search", "fc-channel-feed", "fc-trending", "fc-user-casts", "fc-cast", "fc-cast-replies", "fc-channel", "fc-user-search", "fc-cast-metrics",  // farcaster-social-kit.js (egress)
-  "coin-price-by-contract", "coin-profile", "coin-history", "coin-ohlc", "coin-market-chart-range", "coin-categories", "global-defi", "exchanges", "exchange-tickers", "exchange-rates", "coin-search", "coins-list",  // crypto-markets-kit.js (egress)
+  "coin-price-by-contract", "coin-profile", "coin-history", "coin-ohlc", "coin-market-chart-range", "coin-categories", "global-defi", "exchanges", "exchange-tickers", "exchange-rates", "coin-search", "coins-list",
+  "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer",  // crypto-markets-kit.js (egress)
   "defi-yields", "defi-yield-history", "defi-protocols", "defi-protocol", "defi-chains", "defi-chain-tvl-history", "stablecoins", "stablecoin-supply-history", "defi-fees", "defi-dex-volume",  // defi-kit.js (egress)
   "crypto-news", "crypto-indicators", "crypto-market-pulse",  // crypto-signals-kit.js (egress)
   "site-map", "site-crawl",  // crawl-kit.js (egress)
@@ -227,6 +228,13 @@ export const WALLET_ONLY_SLUGS = new Set([
   "skill-macro-economics", "skill-macro-dashboard",
   "skill-content-extraction", "skill-media-pipeline", "skill-document-intel",
   "skill-trend-analysis", "skill-any-to-markdown", "skill-structured-scrape",
+  // openapi-audit was pure-CPU and PoW-eligible only because it never actually
+  // fetched anything: every step handed the caller's URL to a tool that wanted
+  // the document, so the pack was inert. Fixing it gave the pack a real
+  // caller-supplied fetch (safeFetch, SSRF-guarded, 5MB), and a free tier that
+  // fetches arbitrary URLs on demand is what this list exists to prevent. Our
+  // own free-tier egress probe caught this on the first CI run after the fix.
+  "skill-openapi-audit",
   "skill-forecasting-bake-off", "skill-fraud-signals", "skill-security-audit",
   "skill-link-preview", "skill-api-investigation", "skill-email-deliverability",
   "skill-location-intel", "skill-dns-network-ops", "skill-status-snapshot",
@@ -274,8 +282,8 @@ export const WALLET_ONLY_SLUGS = new Set([
   "llm", "llm-pro", "llm-premium",
   // OpenAI-compatible gateway (OpenRouter upstream) — same reasoning.
   "v1-chat-nano", "v1-chat-auto", "v1-chat-grounded", "v1-chat-ox", "v1-chat", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered", "v1-embeddings", "v1-rerank", "v1-images", "v1-audio-speech",
-  "v1-chat-nano-messages", "v1-chat-auto-messages", "v1-chat-messages", "v1-chat-pro-messages", "v1-chat-premium-messages",
-  "v1-chat-nano-responses", "v1-chat-auto-responses", "v1-chat-responses", "v1-chat-pro-responses", "v1-chat-premium-responses",
+  "v1-chat-nano-messages", "v1-chat-auto-messages", "v1-chat-messages", "v1-chat-pro-messages", "v1-chat-premium-messages", "v1-chat-metered-messages",
+  "v1-chat-nano-responses", "v1-chat-auto-responses", "v1-chat-responses", "v1-chat-pro-responses", "v1-chat-premium-responses", "v1-chat-metered-responses",
   // research-deep composites (src/tools/research-deep-kit.js) — each fans out
   // to multiple metered gateway calls (grounded search + rerank + synthesis),
   // so they cost real upstream money and are never free-tier/PoW-eligible.

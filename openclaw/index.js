@@ -5,12 +5,25 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { buildProvider, setActiveProxy, setCachedRoutes, DEFAULT_PORT, PROVIDER_ID } from "./provider.js";
+import { buildProvider, setActiveProxy, setCachedRoutes, DEFAULT_PORT, PLUGIN_ID } from "./provider.js";
 import { startProxy, loadRoutes, DEFAULT_UPSTREAM } from "./proxy.js";
 import { stripTrailingSlashes } from "./models.js";
 
 export const STATE_DIR = () => join(process.env.AGENT402_OPENCLAW_HOME || join(homedir(), ".openclaw"), "agent402");
 export const CREDITS_KEY_FILE = () => join(STATE_DIR(), "credits.key");
+export const WALLET_KEY_FILE = () => join(STATE_DIR(), "wallet.key");
+
+/** Wallet key precedence: plugin config > env > ~/.openclaw/agent402/wallet.key
+ *  (the wallet `setup` generates when no payment method exists yet). Only a
+ *  well-formed 0x + 64 hex key counts; anything else is "no wallet". */
+export function resolveWalletKey(pluginConfig = {}) {
+  const cands = [
+    typeof pluginConfig.walletKey === "string" ? pluginConfig.walletKey.trim() : "",
+    (process.env.AGENT402_WALLET_KEY || "").trim(),
+  ];
+  try { if (existsSync(WALLET_KEY_FILE())) cands.push(readFileSync(WALLET_KEY_FILE(), "utf8").trim()); } catch { /* unreadable */ }
+  return cands.find((k) => /^0x[0-9a-fA-F]{64}$/.test(k)) || null;
+}
 
 /** Credits key precedence: plugin config > env > ~/.openclaw/agent402/credits.key. */
 export function resolveCreditsKey(pluginConfig = {}) {
@@ -42,8 +55,8 @@ export function selectAccept(accepts, { preferUpto = true } = {}) {
 export const uptoReady = (allowance) => { try { return BigInt(allowance ?? 0) >= PERMIT2_READY_MIN; } catch { return false; } };
 
 export async function resolvePayFetch(pluginConfig = {}, log = () => {}) {
-  const pk = (pluginConfig.walletKey || process.env.AGENT402_WALLET_KEY || "").trim();
-  if (!/^0x[0-9a-fA-F]{64}$/.test(pk)) return null;
+  const pk = resolveWalletKey(pluginConfig);
+  if (!pk) return null;
   try {
     const [{ wrapFetchWithPayment, x402Client }, { privateKeyToAccount }, { toClientEvmSigner }, { registerExactEvmScheme }] = await Promise.all([
       import("@x402/fetch"), import("viem/accounts"), import("@x402/evm"), import("@x402/evm/exact/client"),
@@ -81,7 +94,7 @@ let started = null;
 let registeredOnce = false;
 
 const plugin = {
-  id: PROVIDER_ID,
+  id: PLUGIN_ID,
   name: "Agent402",
   description: "Agent402 model provider: routed + explicit models at a flat per-call price, paid by card or USDC.",
   register(api) {

@@ -41,6 +41,20 @@ addTool({
   handler: async () => { throw Object.assign(new Error("upstream said no"), { statusCode: 422 }); },
 });
 
+addTool({
+  route: "POST /v1/metered/quoted", slug: "quoted-tool", name: "Quoted", category: "llm", price: "$0.001",
+  description: "per-request priced model call", tags: ["metered"],
+  discovery: { bodyType: "json", input: { model: "x", messages: [] } },
+  quote: () => 0.5,
+  handler: async () => ({ text: "should never run through the router" }),
+});
+addTool({
+  route: "POST /api/leaky-tool", slug: "leaky-tool", name: "Leaky", category: "misc", price: "$0.001",
+  description: "returns an enumerable meter sentinel the way a pre-fix gateway handler did", tags: ["leaky"],
+  discovery: { bodyType: "json", input: {} },
+  handler: async () => ({ answer: 42, __meterUpstreamUsd: 0.123 }),
+});
+
 const tool = buildRouteExecuteTool({ getCatalog: () => CATALOG, baseUrl: "https://agent402.tools" });
 CATALOG[tool.route] = tool;
 
@@ -78,6 +92,14 @@ await expectErr({ slug: "screenshot", params: {} }, 409, "over-cap 409 names the
 await expectErr({ slug: "memory-write", params: {} }, 409, "memory tools refused", "wallet-keyed");
 await expectErr({ slug: "images-to-pdf", params: {} }, 409, "non-JSON bodyType refused", "not dispatchable");
 await expectErr({ slug: "route-execute", params: {} }, 409, "self-dispatch refused", "another route-execute tier");
+// A per-request-priced tool (quote(body)) is refused even though its CATALOG
+// price sits under the cap: the flat routing fee cannot cover a quote, and the
+// executor's no-request dispatch would skip the quote and the belt entirely.
+await expectErr({ slug: "quoted-tool", params: { model: "x", messages: [] } }, 409, "per-request-priced (quoted) tool refused", "call them directly");
+{
+  const r = await tool.handler({ slug: "leaky-tool", params: {} });
+  ok(r.result.answer === 42 && !("__meterUpstreamUsd" in r.result) && !JSON.stringify(r).includes("__meterUpstreamUsd"), "an inner handler's meter sentinel never rides the nested router result");
+}
 await expectErr({ slug: "nope-nope", params: {} }, 404, "unknown slug is a 404", "Unknown slug");
 await expectErr({}, 400, "missing task and slug is a 400", "Provide");
 await expectErr({ task: "screenshot a web page in a headless browser" }, 404, "task resolving only to over-cap tools is a 404", "top hit");
@@ -167,6 +189,18 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   ok(r.receipt.seller === EXT.seller && r.receipt.external === true && r.receipt.settleTx === "0xTX", "external receipt carries seller + external flag + settle tx");
   ok(r.receipt.underlyingPriceUsd === 0.12 && r.receipt.paidUsd === 0.55, "external receipt shows underlying (from live quote) vs paid tier");
   ok(r.result.proof === "0xabc" && r.result.untrustedContent === true, "external result relayed + marked untrustedContent");
+
+  // The requested model reaches the resolver (it skips chat sellers whose
+  // published model list lacks it); absent or blank, nothing is passed.
+  {
+    const seen = [];
+    const spy = buildRouteExecuteTool({ getCatalog: () => CATALOG, tier: { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 },
+      resolveExternal: async (task, opts) => { seen.push(opts.wantModel); return EXT; }, payExternal, externalEnabled: () => true });
+    await spy.handler({ task: "chat completions", include: "external", params: { model: " gpt-4o-mini ", messages: [] } }, {});
+    await spy.handler({ task: "chat completions", include: "external", params: { messages: [] } }, {});
+    await spy.handler({ task: "chat completions", include: "external", params: { model: "" } }, {});
+    ok(seen[0] === "gpt-4o-mini" && seen[1] === null && seen[2] === null, "resolver receives the trimmed params.model, null when absent or blank");
+  }
 
   // THE CALLER PATH for the payTo binding. payX402's own tests hand it a
   // provenPayTo directly, which proves the comparison and says nothing about
@@ -265,6 +299,79 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
       ok(WALLET_ONLY_SLUGS.has(t.slug),
         `${t.slug} can spend up to $${t.underlyingMaxUsd} of our upstream wallet, so it MUST be wallet-only (unattributable free/PoW callers get no cumulative spend cap at all)`);
     }
+  }
+}
+
+// --- fallthrough on a seller 5xx (2026-09-01) -------------------------------
+// A seller whose own upstream is down (5xx) must not fail a route another
+// resolved seller can serve - but the money-safety rules are strict: only a
+// 5xx falls through, never a 4xx (cancels settlement, our request is wrong),
+// and never an error carrying a settle receipt (we may have paid).
+{
+  const A = { seller: "https://a.example", slug: "svc-a", url: "https://a.example/x", method: "POST", price: "$0.01", networks: ["eip155:8453"] };
+  const B = { seller: "https://b.example", slug: "svc-b", url: "https://b.example/y", method: "POST", price: "$0.01", networks: ["eip155:8453"] };
+  const good = { result: { ok: true }, quote: { usd: 0.01, network: "eip155:8453" }, receipt: { transaction: "0xTX" } };
+  const mk = (payExternal, resolveExternal) => buildRouteExecuteTool({
+    getCatalog: () => CATALOG, tier: { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 },
+    resolveExternal, payExternal, externalEnabled: () => true,
+  });
+  const err = (msg, sc, extra = {}) => Object.assign(new Error(msg), { statusCode: sc, ...extra });
+
+  // A fails PRE-COMMIT (unreachable, no payable accept - payX402 never sent the
+  // authorization, so nothing was spent), B serves -> B's result, A skipped.
+  {
+    let calls = [];
+    const pay = async (url) => { calls.push(url); if (url === A.url) throw err("Seller unreachable", 502); return good; };
+    const r = await mk(pay, async () => [A, B]).handler({ task: "t", include: "external" }, {});
+    ok(calls.length === 2 && calls[0] === A.url && calls[1] === B.url && r.receipt.seller === B.seller,
+      "a PRE-commit failure (nothing spent) falls through to the next candidate, which serves");
+  }
+  // A fails POST-COMMIT (committed:true - the authorization went out, we may
+  // have paid) -> STOP, never try B. This is the double-spend hinge: the
+  // seller's HTTP status is irrelevant, only whether OUR code sent the header.
+  {
+    let calls = [];
+    const pay = async (url) => { calls.push(url); if (url === A.url) throw err("Seller rejected the paid retry (HTTP 502)", 502, { committed: true }); return good; };
+    let threw = null;
+    try { await mk(pay, async () => [A, B]).handler({ task: "t", include: "external" }, {}); } catch (e) { threw = e; }
+    ok(calls.length === 1 && threw && threw.statusCode === 502, "a POST-commit 5xx (committed:true) does NOT fall through - we may have paid, so no second spend");
+  }
+  // A 400s (pre-commit, but our request is wrong) -> B would reject it the same,
+  // yet it IS pre-commit so it is safe to try; assert it advances and B serves.
+  {
+    let calls = [];
+    const pay = async (url) => { calls.push(url); if (url === A.url) throw err("bad input", 400); return good; };
+    const r = await mk(pay, async () => [A, B]).handler({ task: "t", include: "external" }, {});
+    ok(calls.length === 2 && r.receipt.seller === B.seller, "a pre-commit 4xx (nothing spent) falls through - the next seller may accept the same params");
+  }
+  // A REFUSES the payment and the buyer proved on chain it was not charged
+  // (committed:false + refused) -> falls through; B was admitted UNPROVEN, so
+  // the buyer is told to allow it and the receipt says so (2026-09-02).
+  {
+    const U = { ...B, unproven: true };
+    let calls = [], opts = [];
+    const pay = async (url, o) => { calls.push(url); opts.push(o); if (url === A.url) throw err("Seller refused the payment (HTTP 402); chain shows no debit, nothing charged", 502, { committed: false, refused: true }); return good; };
+    const r = await mk(pay, async () => [A, U]).handler({ task: "t", include: "external" }, {});
+    ok(calls.length === 2 && r.receipt.seller === B.seller, "a chain-verified refusal (committed:false) falls through to the next candidate");
+    ok(opts[0].allowUnproven === false && opts[1].allowUnproven === true, "allowUnproven rides to the buyer ONLY for the candidate the resolver admitted unproven");
+    ok(r.receipt.sellerProof === "unproven", "the receipt says the serving seller was unproven");
+    const r2 = await mk(async () => good, async () => [A]).handler({ task: "t", include: "external" }, {});
+    ok(!("sellerProof" in r2.receipt), "a proven seller's receipt carries no such flag");
+  }
+  // Every candidate fails PRE-commit -> throw the last error, both attempted.
+  {
+    let calls = [];
+    const pay = async (url) => { calls.push(url); throw err("down", 503); };
+    let threw = null;
+    try { await mk(pay, async () => [A, B]).handler({ task: "t", include: "external" }, {}); } catch (e) { threw = e; }
+    ok(calls.length === 2 && threw && threw.statusCode === 503, "all candidates fail pre-commit: both tried, last error thrown");
+  }
+  // Single candidate (limit-1 legacy shape: resolver returns an object) still works.
+  {
+    let calls = [];
+    const pay = async (url) => { calls.push(url); return good; };
+    const r = await mk(pay, async () => A).handler({ task: "t", include: "external" }, {});
+    ok(calls.length === 1 && r.receipt.seller === A.seller, "a single resolved object (legacy shape) is paid normally");
   }
 }
 

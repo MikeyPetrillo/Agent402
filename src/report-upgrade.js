@@ -24,7 +24,8 @@ import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 // A report kind with no monitor of its own but an obvious recurring cousin on
 // the SAME input. The ticker pack is the highest-value one-shot we sell and had
 // no follow-on at all; its insider leg is exactly what a holder wants watched.
-const KIND_ALIAS = { ticker: "insider" };
+// dossier: a company dossier reader is best served by the filing watch (2026-08-28)
+const KIND_ALIAS = { ticker: "insider", dossier: "filing" };
 
 export function monitorForKind(kind) {
   const k0 = String(kind ?? "").trim();
@@ -79,5 +80,8 @@ export function monitorMapJson() {
   for (const [product, p] of Object.entries(MONITOR_PRODUCTS)) {
     if (!Object.hasOwn(out, p.kind)) out[p.kind] = { product, label: p.label, priceUsd: priceUsd(p.price) };
   }
+  // Aliased report kinds (ticker -> insider, dossier -> filing) get the same
+  // entry, so the viewer offers what the email offers.
+  for (const [alias, kind] of Object.entries(KIND_ALIAS)) if (out[kind] && !Object.hasOwn(out, alias)) out[alias] = out[kind];
   return JSON.stringify(out);
 }

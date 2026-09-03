@@ -4,7 +4,7 @@
 //
 // The invariants that matter:
 //   * the kind -> monitor mapping is DERIVED from MONITOR_PRODUCTS, so a report
-//     kind with no monitor (research, dossier, and therefore market-brief)
+//     kind with no monitor (linkedin; research/market-brief -> research watch, dossier -> filing watch since 2026-08-28)
 //     offers NOTHING rather than a broken link
 //   * label and price on every surface come from the product table - never a
 //     hardcoded "$5 a month" that drifts the day pricing changes
@@ -38,8 +38,8 @@ const EXPECTED = {
   recall: "recall-monitor",
   insider: "insider-monitor",
   token: "token-monitor",
-  research: null,
-  dossier: null,
+  research: "research-monitor", // 2026-08-28: the saved-question weekly re-run
+  dossier: "filing-monitor", // aliased 2026-08-28: a dossier reader is served by the filing watch
 };
 for (const [kind, product] of Object.entries(EXPECTED)) {
   const m = monitorForKind(kind);
@@ -48,8 +48,8 @@ for (const [kind, product] of Object.entries(EXPECTED)) {
 // Every one-shot product resolves through its kind (market-brief is kind
 // "research", so it must offer nothing - the three no-monitor products).
 const noMonitor = Object.entries(HUMAN_PRODUCTS).filter(([, p]) => !monitorForKind(p.kind)).map(([k]) => k);
-ok(noMonitor.includes("research") && noMonitor.includes("dossier") && noMonitor.includes("market-brief"),
-  "research, dossier and market-brief have NO monitor (nothing is offered for them)");
+ok(!noMonitor.includes("research") && !noMonitor.includes("dossier") && !noMonitor.includes("market-brief") && noMonitor.length === 1 && noMonitor[0] === "linkedin-article",
+  "every report product has a monitor to offer except the LinkedIn article (research/market-brief -> research watch, dossier -> filing watch)");
 ok(Object.entries(HUMAN_PRODUCTS).every(([, p]) => monitorForKind(p.kind) === null || Object.hasOwn(MONITOR_PRODUCTS, monitorForKind(p.kind).product)),
   "every mapped monitor product exists in MONITOR_PRODUCTS");
 ok(monitorForKind("") === null && monitorForKind(null) === null && monitorForKind("nope") === null, "an unknown or empty kind maps to nothing");
@@ -69,7 +69,7 @@ ok(new URL(url).searchParams.get("target") === HOSTILE.slice(0, 200) && new URL(
   "the URL round-trips product + target exactly");
 const off = upgradeOffer("insider", "AAPL", "https://agent402.tools");
 ok(off.product === "insider-monitor" && off.url === "https://agent402.tools/monitors?product=insider-monitor&target=AAPL", "upgradeOffer builds the deep link");
-ok(upgradeOffer("research", "anything", "https://agent402.tools") === null, "upgradeOffer returns null for a kind with no monitor");
+ok(upgradeOffer("linkedin", "anything", "https://agent402.tools") === null, "upgradeOffer returns null for a kind with no monitor (linkedin)");
 
 // --------------------------------------------- 3. the prefilled storefront page
 const plain = monitorsPage("https://agent402.tools");
@@ -113,7 +113,8 @@ function inlineViewer(html) {
 const pageHtml = reportDeliveryPage("cs_test", { baseUrl: "https://agent402.tools" });
 ok(/data-monitors="/.test(pageHtml), "the delivery page carries the kind -> monitor map as data");
 const mapAttr = JSON.parse(pageHtml.match(/data-monitors="([^"]*)"/)[1].replace(/&(quot|amp|lt|gt|#39);/g, (_, e) => ({ quot: '"', amp: "&", lt: "<", gt: ">", "#39": "'" }[e])));
-ok(Object.keys(mapAttr).length === new Set(Object.values(MONITOR_PRODUCTS).map((p) => p.kind)).size, "every monitor kind is in the delivered map");
+const monitorKinds = new Set(Object.values(MONITOR_PRODUCTS).map((p) => p.kind));
+ok([...monitorKinds].every((k) => mapAttr[k]) && mapAttr.dossier?.product === "filing-monitor" && mapAttr.ticker?.product === "insider-monitor", "every monitor kind is in the delivered map, and the aliased kinds (dossier, ticker) resolve to their monitor");
 ok(mapAttr.domain.product === "domain-monitor" && mapAttr.domain.priceUsd === priceUsd(MONITOR_PRODUCTS["domain-monitor"].price) && mapAttr.domain.label === MONITOR_PRODUCTS["domain-monitor"].label,
   "the delivered map carries the table's product key, label and price");
 ok(JSON.parse(monitorMapJson()).insider.product === "insider-monitor", "monitorMapJson keys by kind");
@@ -165,9 +166,11 @@ ok(!/["'<>]/.test(href) && decodeURIComponent(href.split("target=")[1]) === HOST
 
 // kinds with no monitor, and a monitor delivery, offer nothing
 r = await renderReport({ ...doneDomain, kind: "research", slug: "research", input: "how do agents pay" });
-ok(!r.doc.getElementById("upsell"), "a research report offers no monitor");
+box = r.doc.getElementById("upsell");
+ok(box && box.getAttribute("data-product") === "research-monitor", "a research report offers the research watch (weekly re-run of the question)");
 r = await renderReport({ ...doneDomain, kind: "dossier", slug: "dossier", input: "AAPL" });
-ok(!r.doc.getElementById("upsell"), "a dossier offers no monitor");
+box = r.doc.getElementById("upsell");
+ok(box && box.getAttribute("data-product") === "filing-monitor" && box.getAttribute("data-target") === "AAPL", "a dossier offers the filing watch for its ticker");
 r = await renderReport({ ...doneDomain, monitor: { label: "Domain security monitor", target: "example.com", reason: "change", changes: [] } });
 ok(!r.doc.getElementById("upsell"), "a monitor delivery never up-sells the monitor the reader already pays for");
 
@@ -177,7 +180,7 @@ ok(em.html.includes("https://agent402.tools/monitors?product=domain-monitor&amp;
 ok(em.text.includes("https://agent402.tools/monitors?product=domain-monitor&target=example.com"), "the plain-text email carries the same deep link");
 ok(em.html.includes(MONITOR_PRODUCTS["domain-monitor"].label) && em.html.includes(`${priceUsd(MONITOR_PRODUCTS["domain-monitor"].price)} a month`), "the email's label and price come from MONITOR_PRODUCTS");
 const emNone = buildReportReadyEmail({ reportUrl: "https://agent402.tools/r/cs_2", productLabel: "Deep research report", subjectOf: "anything", kind: "research", baseUrl: "https://agent402.tools" });
-ok(!/monitors\?product=/.test(emNone.html) && !/monitors\?product=/.test(emNone.text), "a research delivery email offers no monitor");
+ok(/monitors\?product=research-monitor/.test(emNone.html) && /monitors\?product=research-monitor/.test(emNone.text), "a research delivery email offers the research watch");
 const emHostile = buildReportReadyEmail({ reportUrl: "https://agent402.tools/r/cs_3", productLabel: "Domain security audit", subjectOf: HOSTILE, kind: "domain", baseUrl: "https://agent402.tools" });
 ok(!emHostile.html.includes("<script>alert(1)</script>") && emHostile.html.includes("&lt;script&gt;"), "a hostile target is HTML-escaped in the email body");
 ok(!/href="[^"]*<|href="[^"]*"[^>]*onerror/.test(emHostile.html), "a hostile target cannot break out of the email's href");

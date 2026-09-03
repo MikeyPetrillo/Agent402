@@ -32,7 +32,7 @@ const COSTS = [
 
 // Lane-level only. Per-tool slugs and purchase counts are the paid
 // /api/bestsellers product and are deliberately never rendered here — they
-// are the one demand signal no competitor can reconstruct on-chain.
+// are the one demand signal nobody can reconstruct from the chain alone.
 const LANES = [
   ["Hashing & encoding", "sha256/sha512 digests, HMAC, base64, JWT decoding: called dozens of times inside a single job."],
   ["Market & financial data", "Live quotes, historical series, Treasury yield curves, SEC company lookups."],
@@ -199,7 +199,7 @@ table{border-collapse:collapse;width:100%}
     </div>
     <div style="padding:24px;background:var(--footer-bg);">
       <h3 style="font-family:var(--font-mono);font-weight:700;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 12px;">What sells here</h3>
-      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0;">Not novelty. The heaviest lanes are dull, deterministic and cheap - the calls an agent makes dozens of times inside a single job, where a wrong answer breaks the whole chain. You do not need a moat to sell into that. You need to be callable, correctly priced, and reachable when the router asks.</p>
+      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0;">Not novelty. The heaviest lanes are dull, deterministic and cheap - the calls an agent makes dozens of times inside a single job, where a wrong answer breaks the whole chain. You do not need novelty to sell into that. You need to be callable, correctly priced, and reachable when the router asks.</p>
     </div>
   </div>
 </section>
@@ -214,7 +214,7 @@ table{border-collapse:collapse;width:100%}
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:16px;">01 / YOU HAVE AN API</div>
       <h3 style="font-weight:800;font-size:23px;margin:0 0 12px;color:var(--ink);">List it and get routed</h3>
       <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Return a 402 with your price, asset, network and payTo on the endpoints you want to charge for. Register the origin and the crawler reads your manifest on its next hourly pass. From then on the Smart Order Router can send you work, ranked against our own tools on the same terms.</p>
-      <pre style="margin:0 0 18px;background:var(--paper);border:1px solid var(--hairline);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># what a buyer's agent sees
+      <pre style="margin:0 0 18px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># what a buyer's agent sees
 </span>HTTP/1.1 402 Payment Required
 x402-price: 0.004
 x402-asset: USDC
@@ -226,7 +226,7 @@ x402-pay-to: 0xYourWallet&hellip;</pre>
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:16px;">02 / YOU HAVE A SITE</div>
       <h3 style="font-weight:800;font-size:23px;margin:0 0 12px;color:var(--ink);">Charge the crawlers instead</h3>
       <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">If AI crawlers are already taking your content for free, tollbooth is the open answer. Humans browse normally; known bots get a 402 and either pay in USDC or solve a proof-of-work. MIT licensed, one middleware, no CDN lock-in and no merchant of record standing between you and the money.</p>
-      <pre style="margin:0 0 18px;background:var(--paper);border:1px solid var(--hairline);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># express · next.js · cloudflare · proxy · wordpress
+      <pre style="margin:0 0 18px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># express · next.js · cloudflare · proxy · wordpress
 </span>npm i agent402-tollbooth</pre>
       <a href="/guides/coinbase-business-get-paid-by-agents" style="font-family:var(--font-mono);font-size:13px;color:var(--muted);text-decoration:none;margin-right:14px;">Coinbase Business account? →</a><a href="/tollbooth" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:13px;text-decoration:none;padding:11px 18px;align-self:flex-start;">Gate your crawlers →</a>
     </div>
@@ -241,7 +241,7 @@ x402-pay-to: 0xYourWallet&hellip;</pre>
     <ol style="margin:0;padding:0;list-style:none;background:var(--card);">${registerStepsHtml}</ol>
     <div style="background:var(--footer-bg);padding:22px;">
       <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:12px;">One-liner (same thing, from a shell)</div>
-      <pre style="margin:0 0 18px;background:var(--paper);border:1px solid var(--hairline);color:var(--on-dark);padding:15px;font-family:var(--font-mono);font-size:11.5px;line-height:1.8;white-space:pre-wrap;word-break:break-word;">curl -X POST \\
+      <pre style="margin:0 0 18px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:15px;font-family:var(--font-mono);font-size:11.5px;line-height:1.8;white-space:pre-wrap;word-break:break-word;">curl -X POST \\
   https://agent402.tools/api/index/register \\
   -H 'content-type: application/json' \\
   -d '{"origin":"https://api.you.com"}'</pre>

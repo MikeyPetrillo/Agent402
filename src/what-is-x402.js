@@ -275,7 +275,7 @@ Payment-Receipt: 0x8f2a&hellip;c41d
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:16px;">SELL</div>
       <h3 style="font-weight:800;font-size:21px;margin:0 0 12px;color:var(--ink);">Charge agents for your API</h3>
       <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Put an x402 paywall in front of your endpoint, then register the origin so buyers and routers can find you. Free to list, no signup, and nothing deducted from your price: buyers pay straight into your wallet.</p>
-      <pre style="margin:0 0 18px;background:var(--paper);border:1px solid var(--hairline);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># we probe, you appear
+      <pre style="margin:0 0 18px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># we probe, you appear
 </span>curl -X POST https://agent402.tools/api/index/register \
   -H 'content-type: application/json' \
   -d '{"origin":"https://api.you.com"}'</pre>
@@ -285,7 +285,7 @@ Payment-Receipt: 0x8f2a&hellip;c41d
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:16px;">BUY</div>
       <h3 style="font-weight:800;font-size:21px;margin:0 0 12px;color:var(--ink);">Let your agent pay for tools</h3>
       <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Paste one MCP URL into Claude, Cursor, or any streamable-HTTP client and your agent can buy from 500+ tools. Pure-CPU tools run free over proof-of-work, so you can try it without a wallet.</p>
-      <pre style="margin:0 0 18px;background:var(--paper);border:1px solid var(--hairline);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># zero install
+      <pre style="margin:0 0 18px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># zero install
 </span>claude mcp add --transport http \
   agent402 https://agent402.tools/mcp</pre>
       <a href="/docs#add" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:13px;text-decoration:none;padding:11px 18px;align-self:flex-start;">Add to your agent →</a>

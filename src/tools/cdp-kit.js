@@ -282,7 +282,7 @@ export const CDP_TOOLS = [
     category: "wallet",
     price: "$0.001",
     description:
-      "Generate a single-use Coinbase Onramp URL that lets a human fund any wallet with a card or Apple Pay - the fastest way to put real USDC into an agent's wallet. Returns the ready-to-open URL plus a fee-inclusive quote. Networks: base, ethereum, polygon, arbitrum, optimism, solana.",
+      "Generate a single-use Coinbase Onramp URL that lets a human fund any wallet with a card or Apple Pay - the fastest way to put real USDC into an agent's wallet. Returns the ready-to-open URL, and a fee-inclusive quote when Coinbase provides one. Networks: base, ethereum, polygon, arbitrum, optimism, solana.",
     tags: [...SHARED_TAGS, "onramp", "fiat", "usdc", "fund-wallet", "apple-pay"],
     discovery: {
       bodyType: "json",
@@ -303,8 +303,12 @@ export const CDP_TOOLS = [
         example: {
           onrampUrl: "https://pay.coinbase.com/…single-use…",
           singleUse: true,
-          quote: { paymentTotal: "10.42", paymentCurrency: "USD", purchaseAmount: "10", purchaseCurrency: "USDC", destinationNetwork: "base" },
+          note: "Open the URL in a browser to complete the purchase - it is single-use and expires after first visit.",
         },
+        // `quote` ({paymentTotal, paymentSubtotal, paymentCurrency, purchaseAmount,
+        // purchaseCurrency, destinationNetwork, exchangeRate}) rides alongside
+        // WHEN Coinbase returns one. It is deliberately not in the example: it
+        // is not always there, and an example is read as a promise.
       },
     },
     handler: async (input) => {
@@ -369,7 +373,7 @@ export const CDP_TOOLS = [
         required: ["sql"],
       },
       output: {
-        example: { rows: [{ txs: 123456 }], rowCount: 1, note: "Result rows exactly as returned by the SQL engine." },
+        example: { rows: [{ txs: 123456 }], rowCount: 1 },
       },
     },
     handler: async (input) => {

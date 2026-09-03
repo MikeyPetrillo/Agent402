@@ -2,9 +2,16 @@
 // Machine surfaces (llms.txt, OpenAPI) serve agents; these serve the humans
 // googling "x402 example" or "AI agent payments" before their agents do.
 import { marked } from "marked";
+// Headings carry ids (GitHub-style slugs) so the dev shortlinks (/claude ->
+// /guides/agent-hosts#claude-code) and readers can deep-link a section.
+// The id is computed from the heading's PLAIN TEXT (the tokens' text, never
+// the rendered html), so no markup is ever part of the id.
+export const headingId = (text) => String(text || "").toLowerCase().replace(/[^a-z0-9\s-]/g, "").trim().replace(/\s+/g, "-");
+const tokenText = (tokens) => (tokens || []).map((t) => (t.tokens ? tokenText(t.tokens) : (t.text ?? ""))).join("");
+marked.use({ renderer: { heading({ tokens, depth }) { const html = this.parser.parseInline(tokens); return `<h${depth} id="${headingId(tokenText(tokens))}">${html}</h${depth}>\n`; } } });
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { RAILS_OR, RAILS_AMP } from "./rails.js";
-import { TIERS, METERED_MAX_QUOTE_USD } from "./tools/llm-gateway-kit.js";
+import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE } from "./tools/llm-gateway-kit.js";
 // Derived at module load from the live tier table so the guide can never say a
 // price the gateway does not charge (the first version typed these).
 const FLAT_TIER_ROWS = Object.entries(TIERS)
@@ -573,7 +580,7 @@ the routing fee, stated, never hidden.
 ## External dispatch (the marketable half)
 
 Add \`"include":"external"\` and the router deliberately looks OUTSIDE its own
-catalog. Selection is the moat, and it is intentionally boring:
+catalog. Selection is deliberate, and it is intentionally boring:
 
 1. **Proven deliverers only.** Candidates need real settled volume - on Base
    that means on-chain settlement counts from the public leaderboard; on
@@ -698,6 +705,30 @@ Sign against that challenge the way your MPP client already knows how to,
 retry with \`Authorization: Payment ...\`, and you get back \`200\` plus a
 \`Payment-Receipt\` header - not a custom Agent402 format, the receipt shape
 MPP itself defines.
+
+## One thing to get right: the EIP-712 domain name
+
+An \`evm\`/\`charge\` credential is an EIP-3009 \`TransferWithAuthorization\`
+signed under the **token's own EIP-712 domain**, and that domain's \`name\` is
+not the same on every chain. Base USDC is \`"USD Coin"\`. Celo, Monad and Sei
+USDC each report \`"USDC"\`. A client that hardcodes one of them signs a digest
+that no facilitator and no contract will accept on the chains that use the
+other, and the failure is quiet: the signature is well-formed, so it looks like
+a rejected payment rather than a wrong one.
+
+You never have to guess. The challenge carries the exact x402 accepts entry it
+was minted from, and that entry's \`extra.name\` and \`extra.version\` are the
+domain to sign under, read from the token on chain.
+
+If a credential does arrive signed under a different known name, we recover the
+signer and recognise it before spending a facilitator round trip on it. You get
+a \`402\` with an RFC 9457 \`application/problem+json\` body naming both the name
+you signed under and the one the token uses, so the mistake is readable instead
+of looking like an outage. That response also carries no \`WWW-Authenticate\`
+header, on purpose: a client whose manager prefers MPP has nothing to select and
+falls through to the x402 offer sitting in the same \`402\`, which the same wallet
+can pay today. It is a short, self-clearing hold, and any request that presents a
+credential is never held.
 
 ## Why bother running two protocols
 
@@ -1007,6 +1038,390 @@ its normal schedule.
 `,
   },
   {
+    slug: "agent-hosts",
+    title: "Use Agent402 from Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Continue, ElizaOS, AgentCore and any OpenAI SDK",
+    description:
+      "Two doors into Agent402 from the agent host you already run: models through an OpenAI-compatible base URL with a prepaid credits key (metered, from $" + TIERS["v1-chat-metered"].price + " a call), and 500+ tools through MCP. Copy the block for your host.",
+    md: `
+Agent402 opens two doors to an agent host, and both are paid with the same
+key:
+
+- **Models**: an OpenAI-compatible gateway. Point any client that accepts a
+  base URL at \`https://agent402.tools/v1/metered\` with a credits key as the API
+  key. Each request is quoted from its own body (input plus your \`max_tokens\`
+  at the model's list price, x1.15) and a card or credits buyer settles what
+  the call actually used, from $${TIERS["v1-chat-metered"].price} a call.
+  \`GET https://agent402.tools/v1/models\` lists every id with its price and
+  input cap; \`auto\` (routed per prompt, flat
+  $${TIERS["v1-chat-auto"].price}) lives at \`https://agent402.tools/v1/auto\`.
+- **Tools**: the hosted MCP connector at \`https://agent402.tools/mcp\`
+  (discovery and the free tier need no key at all), or the
+  [\`agent402-mcp\`](https://www.npmjs.com/package/agent402-mcp) stdio server,
+  which pays wallet-only tools by card when \`AGENT402_CREDITS_KEY\` is set.
+
+Get the key once: buy a pack by card at
+[agent402.tools/credits](https://agent402.tools/credits); the key (\`a402_…\`)
+is shown once and emailed. \`GET /api/credits/balance\` (Bearer) reports what
+is left. Prefer a wallet? Every route also answers a stock x402 \`402\`
+(${RAILS_OR}) and an MPP challenge, so any x402 client pays per call with no key.
+
+## Claude Code
+
+Claude Code as an LLM client, billed per request under a quoted ceiling. Point
+it at the metered tier with your credits key as the auth token (Bearer), keep
+your usual model names - dated ids like \`claude-haiku-4-5-20251001\` resolve
+to the live model:
+
+\`\`\`bash
+export ANTHROPIC_BASE_URL=https://agent402.tools/v1/metered
+export ANTHROPIC_AUTH_TOKEN=a402_...
+claude --model claude-sonnet-5
+\`\`\`
+
+Verified 2026-08-27 with claude-cli 2.1.250: a full turn (110 KB system
+prompt + 22 tool schemas, adaptive thinking, streaming) and a tool-use round
+trip both complete; each turn is quoted from its own body (\`/v1/metered\`
+accepts bodies to 1 MB / 200k input chars) and settles at actual usage, so an
+idle turn costs cents, never the ceiling. Not carried on this wire:
+\`output_config\`, \`context_management\` (dropped, the model default applies)
+and server-side tools (web search, computer use) - Claude Code's own tools are
+client tools and work as usual.
+
+Tools over the hosted connector (free tier and discovery, no key):
+
+\`\`\`bash
+claude mcp add --transport http agent402 https://agent402.tools/mcp
+\`\`\`
+
+Paid tools by card, through the stdio server:
+
+\`\`\`bash
+claude mcp add agent402 -e AGENT402_CREDITS_KEY=a402_... -- npx -y agent402-mcp
+\`\`\`
+
+Or in \`.mcp.json\` at the project root:
+
+\`\`\`json
+{
+  "mcpServers": {
+    "agent402": {
+      "command": "npx",
+      "args": ["-y", "agent402-mcp"],
+      "env": { "AGENT402_CREDITS_KEY": "\${AGENT402_CREDITS_KEY}" }
+    }
+  }
+}
+\`\`\`
+
+## Cursor
+
+\`.cursor/mcp.json\` in the project (or \`~/.cursor/mcp.json\` for every
+project). Remote, no key:
+
+\`\`\`json
+{ "mcpServers": { "agent402": { "url": "https://agent402.tools/mcp" } } }
+\`\`\`
+
+Paid tools by card:
+
+\`\`\`json
+{
+  "mcpServers": {
+    "agent402": {
+      "command": "npx",
+      "args": ["-y", "agent402-mcp"],
+      "env": { "AGENT402_CREDITS_KEY": "a402_..." }
+    }
+  }
+}
+\`\`\`
+
+## Continue
+
+\`config.yaml\`. A model entry for chat, plus the connector for agent mode:
+
+\`\`\`yaml
+models:
+  - name: Agent402 (metered)
+    provider: openai
+    apiBase: https://agent402.tools/v1/metered
+    apiKey: a402_...
+    model: openai/gpt-4o-mini
+    roles:
+      - chat
+mcpServers:
+  - name: Agent402
+    type: streamable-http
+    url: https://agent402.tools/mcp
+\`\`\`
+
+Any id from \`/v1/models\` works as \`model\`; the metered route takes up to
+85,000 characters of input per request.
+
+## ElizaOS
+
+Tools: the [\`elizaos-plugin-agent402\`](https://www.npmjs.com/package/elizaos-plugin-agent402)
+plugin adds \`AGENT402_FIND\` / \`AGENT402_CALL\` / \`AGENT402_ABOUT\` actions
+(\`"plugins": ["elizaos-plugin-agent402"]\`, setting \`AGENT402_CREDITS_KEY\`).
+Models: the OpenAI plugin reads its base URL from the environment, so no code changes:
+
+\`\`\`bash
+OPENAI_BASE_URL=https://agent402.tools/v1/metered
+OPENAI_API_KEY=a402_...
+OPENAI_LARGE_MODEL=anthropic/claude-sonnet-5
+OPENAI_MEDIUM_MODEL=openai/gpt-4o-mini
+# embeddings live at /v1/embeddings ($${EMBEDDINGS_PRICE} a call), off the metered path
+OPENAI_EMBEDDING_URL=https://agent402.tools/v1
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+\`\`\`
+
+## Any OpenAI SDK
+
+\`\`\`python
+from openai import OpenAI
+client = OpenAI(base_url="https://agent402.tools/v1/metered", api_key="a402_...")
+r = client.chat.completions.create(model="openai/gpt-4o-mini",
+    messages=[{"role": "user", "content": "One sentence on x402."}], max_tokens=60)
+print(r.choices[0].message.content)
+\`\`\`
+
+\`\`\`js
+import OpenAI from "openai";
+const client = new OpenAI({ baseURL: "https://agent402.tools/v1/metered", apiKey: "a402_..." });
+const r = await client.chat.completions.create({ model: "openai/gpt-4o-mini",
+  messages: [{ role: "user", content: "One sentence on x402." }], max_tokens: 60 });
+console.log(r.choices[0].message.content);
+\`\`\`
+
+Send an \`Idempotency-Key\` header on retries and a retried call replays the
+paid answer instead of paying again.
+
+The same metered pricing is on the Responses wire too, for the OpenAI Agents
+SDK and \`responses.create()\`: base URL \`https://agent402.tools/v1/metered\`
+(route \`/v1/metered/responses\`), function tools only, \`store\` always false.
+
+## Any Anthropic SDK (Messages wire)
+
+The same metered pricing on the Anthropic Messages wire, at
+\`https://agent402.tools/v1/metered\` (route \`/v1/metered/messages\`). Pass the
+credits key as the SDK's \`auth_token\` (sent as \`Authorization: Bearer\`, which
+the credits gate reads), not \`api_key\` (sent as \`x-api-key\`):
+
+\`\`\`python
+from anthropic import Anthropic
+client = Anthropic(base_url="https://agent402.tools/v1/metered", auth_token="a402_...")
+m = client.messages.create(model="anthropic/claude-haiku-4.5", max_tokens=60,
+    messages=[{"role": "user", "content": "One sentence on x402."}])
+print(m.content[0].text)
+\`\`\`
+
+\`\`\`js
+import Anthropic from "@anthropic-ai/sdk";
+const client = new Anthropic({ baseURL: "https://agent402.tools/v1/metered", authToken: "a402_..." });
+const m = await client.messages.create({ model: "anthropic/claude-haiku-4.5", max_tokens: 60,
+  messages: [{ role: "user", content: "One sentence on x402." }] });
+console.log(m.content[0].text);
+\`\`\`
+
+## Amazon Bedrock AgentCore
+
+An AgentCore Gateway turns \`https://agent402.tools/openapi.json\` into MCP
+tools with an OpenAPI target (\`agentcore add gateway-target --type
+open-api-schema --schema <path to openapi.json>\`), or aggregates the hosted
+connector as an MCP server target. Paid calls ride
+[AgentCore Payments](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/payments-concepts.html):
+the agent forwards our \`402\` payload, AgentCore signs it from its managed
+wallet, and the retry carries the proof in \`X-PAYMENT\`; every Agent402 route
+answers a stock x402 v2 challenge, so nothing on our side needs configuring.
+
+## VS Code
+
+GitHub Copilot's agent mode reads \`.vscode/mcp.json\` in the workspace (or
+the user profile via the \`MCP: Open User Configuration\` command; \`MCP: Add
+Server\` in the palette writes either). Remote, free tier, no key:
+
+\`\`\`json
+{ "servers": { "agent402": { "type": "http", "url": "https://agent402.tools/mcp" } } }
+\`\`\`
+
+Paid tools by card, through the stdio server with a credits key held in a
+prompted input (VS Code stores it, the file never carries it):
+
+\`\`\`json
+{
+  "inputs": [{ "type": "promptString", "id": "agent402-key", "description": "Agent402 credits key (a402_...)", "password": true }],
+  "servers": {
+    "agent402": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "agent402-mcp"],
+      "env": { "AGENT402_CREDITS_KEY": "\${input:agent402-key}" }
+    }
+  }
+}
+\`\`\`
+
+## Windsurf
+
+Cascade reads \`~/.codeium/windsurf/mcp_config.json\` (Streamable HTTP, SSE
+and stdio are all supported; note Cascade caps the tools it can see at 100 in
+total across servers, and this connector lists a small fixed set, not the
+whole catalog). Remote, free tier:
+
+\`\`\`json
+{ "mcpServers": { "agent402": { "serverUrl": "https://agent402.tools/mcp" } } }
+\`\`\`
+
+Paid tools by card, with the key read from the environment (\`\${env:VAR}\`
+interpolation is Windsurf's own):
+
+\`\`\`json
+{
+  "mcpServers": {
+    "agent402": {
+      "command": "npx",
+      "args": ["-y", "agent402-mcp"],
+      "env": { "AGENT402_CREDITS_KEY": "\${env:AGENT402_CREDITS_KEY}" }
+    }
+  }
+}
+\`\`\`
+
+## Cline
+
+MCP Servers icon in the top toolbar, Configure tab, then Configure MCP
+Servers (the CLI reads \`~/.cline/mcp.json\`). Remote, free tier:
+
+\`\`\`json
+{
+  "mcpServers": {
+    "agent402": { "type": "streamableHttp", "url": "https://agent402.tools/mcp", "disabled": false, "autoApprove": [] }
+  }
+}
+\`\`\`
+
+Paid tools by card:
+
+\`\`\`json
+{
+  "mcpServers": {
+    "agent402": {
+      "command": "npx",
+      "args": ["-y", "agent402-mcp"],
+      "env": { "AGENT402_CREDITS_KEY": "a402_..." },
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
+\`\`\`
+
+Cline's own "OpenAI Compatible" provider also accepts a base URL, so the
+models door works too: base URL \`https://agent402.tools/v1/metered\`, the
+credits key as the API key, and a model id from \`/v1/models\`.
+
+## Roo Code
+
+Settings icon in the Roo pane, then Edit Global MCP (\`mcp_settings.json\`) or
+Edit Project MCP (\`.roo/mcp.json\`, which wins on a name clash). Remote,
+free tier:
+
+\`\`\`json
+{
+  "mcpServers": {
+    "agent402": { "type": "streamable-http", "url": "https://agent402.tools/mcp", "alwaysAllow": [], "disabled": false }
+  }
+}
+\`\`\`
+
+Paid tools by card:
+
+\`\`\`json
+{
+  "mcpServers": {
+    "agent402": {
+      "command": "npx",
+      "args": ["-y", "agent402-mcp"],
+      "env": { "AGENT402_CREDITS_KEY": "a402_..." },
+      "alwaysAllow": [],
+      "disabled": false
+    }
+  }
+}
+\`\`\`
+
+## OpenAI Codex CLI
+
+One command for the free tier:
+
+\`\`\`bash
+codex mcp add agent402 --url https://agent402.tools/mcp
+\`\`\`
+
+Or in \`~/.codex/config.toml\`, paid tools by card through the stdio server:
+
+\`\`\`toml
+[mcp_servers.agent402]
+command = "npx"
+args = ["-y", "agent402-mcp"]
+env = { AGENT402_CREDITS_KEY = "a402_..." }
+\`\`\`
+
+Codex as a model host: its \`model_providers\` speak the Responses wire, and
+the metered tier serves it at \`/v1/metered/responses\` (quoted per request
+from the body, settled at actual usage for a credits key). In
+\`~/.codex/config.toml\`:
+
+\`\`\`toml
+model_provider = "agent402"
+model = "anthropic/claude-haiku-4.5"
+
+[model_providers.agent402]
+name = "Agent402 (metered)"
+base_url = "https://agent402.tools/v1/metered"
+env_key = "AGENT402_CREDITS_KEY"
+wire_api = "responses"
+\`\`\`
+
+Then \`export AGENT402_CREDITS_KEY=a402_...\` and run \`codex\`. The route is
+proven daily by the paid canary; a full Codex session against it has not yet
+been run end to end, so if a turn is refused, the 400 body says exactly which
+field (server tools and \`previous_response_id\` are not served).
+
+## Gemini CLI
+
+One command for the free tier:
+
+\`\`\`bash
+gemini mcp add --transport http agent402 https://agent402.tools/mcp
+\`\`\`
+
+Or in \`~/.gemini/settings.json\` (\`httpUrl\` is the Streamable HTTP key;
+\`url\` means SSE), paid tools by card through the stdio server:
+
+\`\`\`json
+{
+  "mcpServers": {
+    "agent402": {
+      "command": "npx",
+      "args": ["-y", "agent402-mcp"],
+      "env": { "AGENT402_CREDITS_KEY": "a402_..." }
+    }
+  }
+}
+\`\`\`
+
+## What the same key buys
+
+The credits key that pays for chat pays for the rest: three wires on every
+tier (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank,
+images, speech and transcription, 500+ tools, finished reports
+and monitors, and a router that buys from other proven sellers on your
+agent's behalf. Why pay here, with the proof links:
+[agent402.tools/why](https://agent402.tools/why).
+`,
+  },
+  {
     slug: "openclaw-model-provider",
     title: "Use Agent402 as your OpenClaw model provider - pay by card, no wallet",
     description:
@@ -1104,12 +1519,17 @@ $${TIERS["v1-chat-metered"].price}); \`--flat\` keeps the flat tiers:
 
 \`\`\`bash
 openclaw plugins install agent402-openclaw
-npx agent402-openclaw setup --credits-key a402_... --write   # or set AGENT402_WALLET_KEY for x402
+npx agent402-openclaw setup --write        # no key? it mints a wallet and prints the address to fund
 openclaw gateway restart
 \`\`\`
 
-Every forwarded call carries an \`Idempotency-Key\`, so a retry replays the paid
-answer instead of paying twice. The plain config block above needs no plugin and
+With no credits key and no \`AGENT402_WALLET_KEY\`, \`setup\` generates a wallet
+into \`~/.openclaw/agent402/wallet.key\` (0600, never printed) and tells you the
+address: send it USDC on Base and every call is paid from it over x402, from
+$${TIERS["v1-chat-metered"].price} a call. \`agent402-openclaw wallet\` shows the
+balance; \`--credits-key a402_...\` is the card path instead. Every forwarded
+call carries an \`Idempotency-Key\`, so a retry replays the paid answer instead
+of paying twice. The plain config block above needs no plugin and
 stays the simplest path for a credits key.
 
 ## What you get that a plain router does not
@@ -1129,7 +1549,7 @@ receipt shape:
 - **Three wires on every tier**: OpenAI chat, OpenAI Responses and Anthropic
   Messages, plus streaming, embeddings, rerank, images, video, speech and
   transcription, and a grounded tier that cites the web on every answer.
-- **500+ deterministic tools** over MCP or HTTP: web search, news, cited
+- **500+ tools** over MCP or HTTP: web search, news, cited
   answers, browser render, market quotes, SEC filings, crypto and DeFi data,
   PDFs, OCR, DNS and TLS checks, a code sandbox, wallet-keyed memory.
 - **Finished reports and monitors**: dossiers, insider flow, 13F holdings,

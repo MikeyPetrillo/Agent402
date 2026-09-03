@@ -1,0 +1,96 @@
+name: Solana refund send (one-time)
+
+# Sends an SPL USDC refund on Solana, which scripts/refund-run.js cannot do:
+# senders.solana is hardcoded false there (no SVM spending wallet), so debts on
+# that chain are recorded and HELD. This pays one deliberately.
+#
+# Uses the CI canary burner, the same wallet that already pays on Solana daily.
+# Dispatch-only and DRY by default: `send: true` is the only thing that
+# broadcasts.
+#
+# The destination is a free-text input, so the control that matters is not the
+# ceiling (an input bounds nothing against whoever sets the inputs) - it is
+# that the destination must be PROVEN on-chain to have paid us. `evidence` is a
+# settlement signature, re-derived from the chain against our payTo, which is
+# read from our own live 402 rather than hardcoded. An address that never paid
+# us cannot be refunded, whoever dispatches this. There is also a hard $25
+# ceiling compiled into the script that no input can raise, and every guard
+# runs BEFORE the signing key is read.
+on:
+  workflow_dispatch:
+    inputs:
+      to:
+        description: "Destination Solana address (the payer being refunded)"
+        required: true
+      usd:
+        description: "USDC to send, e.g. 1.60"
+        required: true
+      evidence:
+        description: "Settlement tx signature proving this address paid us (required; re-derived on-chain)"
+        required: true
+      memo:
+        description: "On-chain note attached to the transfer (PUBLIC and permanent)"
+        required: false
+        default: ""
+      max_usd:
+        description: "Ceiling for this run (the script refuses anything over $2 regardless)"
+        required: false
+        default: "2"
+      reclaim_sending:
+        description: "Include rows a PRIOR run claimed then failed to pay (ONLY after verifying on-chain that nothing moved)"
+        required: false
+        type: boolean
+        default: false
+      send:
+        description: "Actually broadcast (false = dry run, just checks)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency: solana-refund-send
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Same refund-approval gate as refund.yml: a required-reviewer click per
+    # run. The in-script gates bound the AS-SHIPPED code, but a workflow can be
+    # dispatched from any branch someone with write access pushes, and a
+    # modified script bypasses scripts entirely - the environment gate is what
+    # still stands in that case. Solo-maintainer repo, so self-approval is the
+    # design: the gate is against a compromised session, not a second person.
+    environment: refund-approval
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v5.0.0
+        with:
+          node-version: "22"
+      - name: Install the Solana client (pinned to the versions the repo tree proves)
+        # Unpinned, this pulled latest @solana/kit, which conflicts with
+        # @solana-program/token's peer range and failed the run before any
+        # script code executed. Pinned to the exact versions in the repo's own
+        # node_modules - the ones every local verification of this script ran
+        # against - same doctrine as the canary's lock-pinned client installs.
+        run: npm install --no-save --ignore-scripts @solana/kit@5.5.1 @solana-program/token@0.9.0
+      - name: Send
+        env:
+          SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
+          AGENT402_OPERATOR_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+          TO: ${{ inputs.to }}
+          USD: ${{ inputs.usd }}
+          MAX: ${{ inputs.max_usd }}
+          MEMO: ${{ inputs.memo }}
+          EVIDENCE: ${{ inputs.evidence }}
+        run: |
+          if [ -z "$SOLANA_BURNER_KEY" ]; then echo "SOLANA_BURNER_KEY is not set"; exit 1; fi
+          echo "::add-mask::$SOLANA_BURNER_KEY"
+          [ -n "$AGENT402_OPERATOR_TOKEN" ] && echo "::add-mask::$AGENT402_OPERATOR_TOKEN"
+          # Inputs ride as env vars and are passed as argv, never interpolated
+          # into the shell line (N-03).
+          ARGS=(--to "$TO" --usd "$USD" --max "$MAX" --evidence "$EVIDENCE")
+          ${{ inputs.reclaim_sending }} && ARGS+=(--reclaim-sending) || true
+          [ -n "$MEMO" ] && ARGS+=(--memo "$MEMO")
+          node scripts/solana-refund-send.js "${ARGS[@]}" ${{ inputs.send && '--send' || '' }}

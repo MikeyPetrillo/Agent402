@@ -37,6 +37,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
   ];
 
   const gatewayRows = [
+    ["/v1/metered/chat/completions - quoted per request, settles actual usage under the quote", "from $0.001"],
     ["/v1/embeddings - default-on cache, free repeat", "$0.002"],
     ["/v1/nano/chat/completions - high-frequency agent loops", "$0.003"],
     ["/v1/auto/chat/completions - model optional, eval-ranked routing", "$0.01"],
@@ -124,7 +125,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">// POST /v1/*</div>
     <h2 style="font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 12px;">The /v1 LLM gateway.</h2>
-    <p style="font-size:15px;line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 22px;">Point any OpenAI SDK at <code>base_url https://agent402.tools/v1</code> - same wallet-is-the-identity model as every other tool, no API key, no signup. Omit the model on the auto tier and the gateway picks one for the prompt.</p>
+    <p style="font-size:15px;line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 22px;">Point any OpenAI SDK at <code>base_url https://agent402.tools/v1/metered</code> and every request is quoted from its own body before payment, then settled at what the call actually used, under that quote. Same wallet-is-the-identity model as every other tool, or a prepaid credits key as the API key. The flat tiers below stay for callers that want one fixed price; omit the model on the auto tier and the gateway picks one for the prompt.</p>
     <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:14px;">
       ${gatewayRows.map((r, i) => receiptRow(r[0], r[1], i === gatewayRows.length - 1)).join("\n      ")}
     </div>

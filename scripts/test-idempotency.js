@@ -22,7 +22,7 @@ const proc = spawn("node", ["src/server.js"], {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 try {
-  for (let i = 0; i < 40; i++) { try { if ((await fetch(`${B}/api/pow`)).ok) break; } catch {} await sleep(500); }
+  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/api/pow`)).ok) break; } catch {} await sleep(500); }
 
   const powFor = async () => { const c = await (await fetch(`${B}/api/pow/challenge?slug=hash`)).json(); return `${c.token}:${solve(c)}`; };
   const hash = (sol, idem) => fetch(`${B}/api/hash`, {

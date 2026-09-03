@@ -985,4 +985,228 @@ export const CRYPTO_MARKETS_TOOLS = [
   },
 ];
 
-export const __test = { takeId, takeCurrency, takeInt, takeBool, takeIdList, takeContracts, takeTime, takeLookback, cgGet, TTL, MAX_ENTRIES, MAX_HISTORY_DAYS };
+// --- Real-world assets (tokenized stocks, ETFs, commodities) ------------------
+// CoinGecko's /rwas endpoints (announced 2026-08-31). Live-verified on the Demo
+// plan 2026-09-02: /rwas/list (649 assets: 461 stocks, 186 ETFs, 2
+// commodities; ignores paging and returns the whole list), /rwas/markets
+// (vs_currency, ids, asset_type, order, per_page, page - the market block is
+// `tokenized_market_data`, i.e. the ONCHAIN wrapper's price and cap, not the
+// underlying's), /rwas/{id} (metadata only - image, web slug, last updated; no
+// market block on this plan whatever the query says, so rwa-asset joins it with
+// its /rwas/markets row), /rwas/issuers/list (33 issuers) and
+// /rwas/issuers/{id} (aggregate cap/volume + the tokens with their contract
+// per platform). /rwas/{id}/tickers is paid-plan only and is not offered.
+const RWA_TYPES = new Set(["stock", "etf", "commodity"]);
+const RWA_ORDERS = new Set(["market_cap_desc", "market_cap_asc", "volume_desc", "volume_asc"]);
+function takeRwaType(raw) {
+  if (raw == null || raw === "") return null;
+  const s = String(raw).trim().toLowerCase();
+  if (!RWA_TYPES.has(s)) throw bad('"type" must be one of stock, etf, commodity');
+  return s;
+}
+function shapeRwaMarket(r, currency) {
+  const m = r?.tokenized_market_data || {};
+  return {
+    id: r?.id ?? null, symbol: typeof r?.symbol === "string" ? r.symbol.toUpperCase() : null, name: r?.name ?? null,
+    type: r?.asset_type ?? null, image: typeof r?.image === "string" ? r.image : (r?.image?.large ?? null),
+    currency,
+    price: num(m.current_price), marketCap: num(m.market_cap), volume24h: num(m.total_volume),
+    high24h: num(m.high_24h), low24h: num(m.low_24h),
+    change24h: num(m.price_change_24h), change24hPct: num(m.price_change_percentage_24h),
+    marketCapChange24h: num(m.market_cap_change_24h), marketCapChange24hPct: num(m.market_cap_change_percentage_24h),
+    lastUpdated: m.last_updated ?? null,
+  };
+}
+const RWA_TOOLS = [
+  {
+    route: "GET /api/rwa-list",
+    name: "Tokenized assets list",
+    slug: "rwa-list",
+    category: "crypto",
+    price: "$0.003",
+    description:
+      "Every real-world asset with a tokenized onchain version that CoinGecko tracks: stocks, ETFs and commodities, with id, symbol, name and type. Filter by type or a name/symbol substring; ids feed rwa-markets and rwa-asset. Counts by type ride along. Cached in-process for 10 minutes.",
+    tags: ["crypto", "rwa", "tokenized", "stocks", "etf", "commodities", "list"],
+    discovery: {
+      input: { type: "commodity" },
+      inputSchema: {
+        properties: {
+          type: { type: "string", description: "stock | etf | commodity (default: all)." },
+          q: { type: "string", description: "Case-insensitive substring on name or symbol (e.g. nvidia, gold, spy)." },
+          limit: { type: "integer", description: "Max rows (1-700, default 200)." },
+        },
+      },
+      output: {
+        example: {
+          source: "coingecko", fetchedAt: "2026-09-02T18:50:00.000Z", cached: false,
+          total: 649, byType: { stock: 461, etf: 186, commodity: 2 }, filters: { type: "commodity", q: null }, count: 2,
+          assets: [{ id: "gold", symbol: "XAU", name: "Gold", type: "commodity" }, { id: "silver", symbol: "XAG", name: "Silver", type: "commodity" }],
+        },
+      },
+    },
+    handler: async (i) => {
+      const type = takeRwaType(i.type);
+      const q = i.q == null || i.q === "" ? null : String(i.q).trim().toLowerCase().slice(0, 60);
+      const limit = takeInt(i.limit, "limit", { min: 1, max: 700, dflt: 200 });
+      const { data, fetchedAt, cached } = await cgGet("/rwas/list", {}, TTL.coinList);
+      const all = Array.isArray(data) ? data : [];
+      const byType = {};
+      for (const a of all) byType[a?.asset_type ?? "unknown"] = (byType[a?.asset_type ?? "unknown"] || 0) + 1;
+      const assets = all
+        .filter((a) => (!type || a?.asset_type === type) && (!q || String(a?.name || "").toLowerCase().includes(q) || String(a?.symbol || "").toLowerCase().includes(q)))
+        .slice(0, limit)
+        .map((a) => ({ id: a.id ?? null, symbol: typeof a.symbol === "string" ? a.symbol.toUpperCase() : null, name: a.name ?? null, type: a.asset_type ?? null }));
+      return { source: SOURCE, fetchedAt, cached, total: all.length, byType, filters: { type, q }, count: assets.length, assets };
+    },
+  },
+  {
+    route: "GET /api/rwa-markets",
+    name: "Tokenized asset markets",
+    slug: "rwa-markets",
+    category: "crypto",
+    price: "$0.006",
+    description:
+      "Market data for tokenized real-world assets - tokenized stocks (Nvidia, Tesla, pre-IPO names), ETFs and commodities like gold - ranked by market cap or volume: price, market cap, 24h volume, 24h high/low and change, in your currency. Filter by type or a list of ids. Note these are the ONCHAIN wrappers' figures (what is tokenized and trading), not the underlying's exchange listing. Cached in-process for 60 seconds.",
+    tags: ["crypto", "rwa", "tokenized", "stocks", "etf", "commodities", "market-data", "price"],
+    discovery: {
+      input: { type: "stock", order: "market_cap_desc", perPage: 10 },
+      inputSchema: {
+        properties: {
+          currency: { type: "string", description: "vs currency (default usd)." },
+          type: { type: "string", description: "stock | etf | commodity (default: all)." },
+          ids: { type: "string", description: "Comma-separated asset ids to fetch instead of a ranked page (max 50), e.g. gold,nvidia." },
+          order: { type: "string", description: "market_cap_desc (default) | market_cap_asc | volume_desc | volume_asc." },
+          perPage: { type: "integer", description: "Rows per page (1-100, default 25)." },
+          page: { type: "integer", description: "Page number (default 1)." },
+        },
+      },
+      output: {
+        example: {
+          source: "coingecko", fetchedAt: "2026-09-02T18:50:00.000Z", cached: false,
+          currency: "usd", type: "stock", order: "market_cap_desc", page: 1, perPage: 10, count: 1,
+          markets: [{ id: "circle-internet-group", symbol: "CRCL", name: "Circle Internet Group", type: "stock", image: "https://coin-images.coingecko.com/coins/images/68595/large/crclon_160x160.png", currency: "usd", price: 89.14, marketCap: 274735360, volume24h: 32316372, high24h: 90.12, low24h: 86.22, change24h: 0.3088, change24hPct: 0.34762, marketCapChange24h: 3496406, marketCapChange24hPct: 1.28905, lastUpdated: "2026-09-02T18:49:30Z" }],
+        },
+      },
+    },
+    handler: async (i) => {
+      const currency = takeCurrency(i.currency);
+      const type = takeRwaType(i.type);
+      const ids = i.ids == null || i.ids === "" ? null : takeIdList(i.ids, "ids", 50);
+      const order = i.order == null || i.order === "" ? "market_cap_desc" : String(i.order).trim().toLowerCase();
+      if (!RWA_ORDERS.has(order)) throw bad('"order" must be one of market_cap_desc, market_cap_asc, volume_desc, volume_asc');
+      const perPage = takeInt(i.perPage ?? i.per_page, "perPage", { min: 1, max: 100, dflt: 25 });
+      const page = takeInt(i.page, "page", { min: 1, max: 100, dflt: 1 });
+      const { data, fetchedAt, cached } = await cgGet("/rwas/markets", {
+        vs_currency: currency, asset_type: type || undefined, ids: ids ? ids.join(",") : undefined, order, per_page: perPage, page,
+      }, TTL.price);
+      const rows = Array.isArray(data) ? data : [];
+      return { source: SOURCE, fetchedAt, cached, currency, type, ids, order, page, perPage, count: rows.length, markets: rows.map((r) => shapeRwaMarket(r, currency)) };
+    },
+  },
+  {
+    route: "GET /api/rwa-asset",
+    name: "Tokenized asset",
+    slug: "rwa-asset",
+    category: "crypto",
+    price: "$0.006",
+    description:
+      "One tokenized real-world asset by id (gold, nvidia, tesla, spy ...): identity, type, image and web slug joined with its onchain market row - price, market cap, 24h volume and change in your currency. Two cached upstream reads, one answer. Use rwa-list to find the id.",
+    tags: ["crypto", "rwa", "tokenized", "stock", "commodity", "market-data", "profile"],
+    discovery: {
+      input: { id: "gold", currency: "usd" },
+      inputSchema: {
+        properties: {
+          id: { type: "string", description: "Asset id from rwa-list (gold, nvidia, tesla, ...)." },
+          currency: { type: "string", description: "vs currency for the market block (default usd)." },
+        },
+        required: ["id"],
+      },
+      output: {
+        example: {
+          source: "coingecko", fetchedAt: "2026-09-02T18:50:00.000Z", cached: false,
+          id: "gold", symbol: "XAU", name: "Gold", type: "commodity", image: "https://coin-images.coingecko.com/coins/images/10481/large/logo.png", webSlug: "gold", lastUpdated: "2026-09-02T18:49:00Z",
+          market: { id: "gold", symbol: "XAU", name: "Gold", type: "commodity", image: "https://coin-images.coingecko.com/coins/images/10481/large/logo.png", currency: "usd", price: 4376.6, marketCap: 5219552133, volume24h: 557496353, high24h: 4394.94, low24h: 4289.36, change24h: 42.77, change24hPct: 0.98698, marketCapChange24h: 44135859, marketCapChange24hPct: 0.8528, lastUpdated: "2026-09-02T18:49:00Z" },
+        },
+      },
+    },
+    handler: async (i) => {
+      const id = takeId(i.id, "id");
+      const currency = takeCurrency(i.currency);
+      const meta = await cgGet(`/rwas/${encodeURIComponent(id)}`, {}, TTL.list);
+      const mk = await cgGet("/rwas/markets", { vs_currency: currency, ids: id, per_page: 1, page: 1 }, TTL.price);
+      const d = meta.data || {};
+      const row = Array.isArray(mk.data) ? mk.data.find((r) => r?.id === id) || mk.data[0] : null;
+      return {
+        source: SOURCE, fetchedAt: mk.fetchedAt, cached: meta.cached && mk.cached,
+        id: d.id ?? id, symbol: typeof d.symbol === "string" ? d.symbol.toUpperCase() : null, name: d.name ?? null, type: d.asset_type ?? null,
+        image: d.image?.large ?? d.image?.small ?? (typeof d.image === "string" ? d.image : null), webSlug: d.web_slug ?? null, lastUpdated: d.last_updated ?? null,
+        market: row ? shapeRwaMarket(row, currency) : null,
+      };
+    },
+  },
+  {
+    route: "GET /api/rwa-issuers",
+    name: "Tokenized asset issuers",
+    slug: "rwa-issuers",
+    category: "crypto",
+    price: "$0.003",
+    description:
+      "The issuers behind tokenized real-world assets (Coinbase, Backpack Securities, Ondo, xStocks and the rest): id and name, for rwa-issuer. Cached in-process for 5 minutes.",
+    tags: ["crypto", "rwa", "tokenized", "issuers", "list"],
+    discovery: {
+      input: {},
+      inputSchema: { properties: {} },
+      output: {
+        example: {
+          source: "coingecko", fetchedAt: "2026-09-02T18:50:00.000Z", cached: false, count: 33,
+          issuers: [{ id: "coinbase-ecosystem", name: "Coinbase" }, { id: "backpack-securities-ecosystem", name: "Backpack Securities" }],
+        },
+      },
+    },
+    handler: async () => {
+      const { data, fetchedAt, cached } = await cgGet("/rwas/issuers/list", {}, TTL.list);
+      const issuers = (Array.isArray(data) ? data : []).map((x) => ({ id: x?.id ?? null, name: x?.name ?? null }));
+      return { source: SOURCE, fetchedAt, cached, count: issuers.length, issuers };
+    },
+  },
+  {
+    route: "GET /api/rwa-issuer",
+    name: "Tokenized asset issuer",
+    slug: "rwa-issuer",
+    category: "crypto",
+    price: "$0.006",
+    description:
+      "One issuer of tokenized real-world assets by id: aggregate tokenized market cap, 24h cap change and 24h volume, plus every token it issues with symbol, name and contract address per platform (e.g. Coinbase's Base-chain tokenized Apple, Nvidia, Meta, Alphabet). Use rwa-issuers for ids. Cached in-process for 5 minutes.",
+    tags: ["crypto", "rwa", "tokenized", "issuer", "contracts", "market-data"],
+    discovery: {
+      input: { id: "coinbase-ecosystem" },
+      inputSchema: {
+        properties: { id: { type: "string", description: "Issuer id from rwa-issuers (coinbase-ecosystem, ...)." } },
+        required: ["id"],
+      },
+      output: {
+        example: {
+          source: "coingecko", fetchedAt: "2026-09-02T18:50:00.000Z", cached: false,
+          id: "coinbase-ecosystem", name: "Coinbase", marketCap: 9982908.56, marketCapChange24h: 100918.35, volume24h: 20001148.07, updatedAt: "2026-09-02T17:00:00Z", count: 4,
+          tokens: [{ id: "nvidia-coinbase-tokenized-stock", symbol: "NVDAC", name: "NVIDIA (Coinbase Tokenized Stock)", platforms: { base: "0xb20000000000000000000078ee7ce2fe4908108c" } }],
+        },
+      },
+    },
+    handler: async (i) => {
+      const id = takeId(i.id, "id");
+      const { data: d, fetchedAt, cached } = await cgGet(`/rwas/issuers/${encodeURIComponent(id)}`, {}, TTL.list);
+      const tokens = (Array.isArray(d?.tokens) ? d.tokens : []).map((t) => ({
+        id: t?.id ?? null, symbol: typeof t?.symbol === "string" ? t.symbol.toUpperCase() : null, name: t?.name ?? null,
+        platforms: Object.fromEntries(Object.entries(t?.platforms || {}).filter(([k, v]) => k && typeof v === "string" && v)),
+      }));
+      return {
+        source: SOURCE, fetchedAt, cached, id: d?.id ?? id, name: d?.name ?? null,
+        marketCap: num(d?.market_cap), marketCapChange24h: num(d?.market_cap_change_24h), volume24h: num(d?.volume_24h), updatedAt: d?.updated_at ?? null,
+        count: tokens.length, tokens,
+      };
+    },
+  },
+];
+CRYPTO_MARKETS_TOOLS.push(...RWA_TOOLS);
+
+export const __test = { takeId, takeCurrency, takeInt, takeBool, takeIdList, takeContracts, takeTime, takeLookback, cgGet, TTL, MAX_ENTRIES, MAX_HISTORY_DAYS, takeRwaType, shapeRwaMarket };

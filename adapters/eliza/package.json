@@ -1,0 +1,99 @@
+{
+  "name": "elizaos-plugin-agent402",
+  "version": "0.1.0",
+  "description": "elizaOS plugin for Agent402: find and call 500+ pay-per-call web tools (search, render, PDFs, market and SEC data) over x402 or MPP, paid in USDC or by prepaid card credits; Agentic Finance for elizaOS agents. Actions: AGENT402_FIND, AGENT402_CALL, AGENT402_ABOUT.",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node test.js"
+  },
+  "keywords": [
+    "elizaos",
+    "elizaos-plugin",
+    "agent402",
+    "x402",
+    "mpp",
+    "aifi",
+    "agentic-finance",
+    "tools",
+    "usdc",
+    "mcp"
+  ],
+  "license": "MIT",
+  "author": "Havok Holdings LLC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MikeyPetrillo/Agent402.git",
+    "directory": "adapters/eliza"
+  },
+  "homepage": "https://agent402.tools/guides/agent-hosts",
+  "dependencies": {
+    "agent402-client": "^0.8.2"
+  },
+  "peerDependencies": {
+    "@elizaos/core": ">=1.0.0",
+    "@x402/evm": ">=2.0.0",
+    "@x402/fetch": ">=2.0.0",
+    "viem": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@elizaos/core": {
+      "optional": true
+    },
+    "@x402/evm": {
+      "optional": true
+    },
+    "@x402/fetch": {
+      "optional": true
+    },
+    "viem": {
+      "optional": true
+    }
+  },
+  "agentConfig": {
+    "pluginType": "elizaos:plugin:1.0.0",
+    "pluginParameters": {
+      "AGENT402_CREDITS_KEY": {
+        "type": "string",
+        "required": false,
+        "sensitive": true,
+        "description": "Prepaid card-credits key (a402_...) from https://agent402.tools/credits. Pays wallet-only tools by card."
+      },
+      "AGENT402_WALLET_KEY": {
+        "type": "string",
+        "required": false,
+        "sensitive": true,
+        "description": "EVM private key holding USDC on Base; pays wallet-only tools over x402 (needs @x402/fetch, @x402/evm, viem installed)."
+      },
+      "AGENT402_BASE_URL": {
+        "type": "string",
+        "required": false,
+        "default": "https://agent402.tools",
+        "description": "Gateway base URL (self-hosters point this at their own instance)."
+      },
+      "AGENT402_MAX_PER_CALL_USD": {
+        "type": "string",
+        "required": false,
+        "default": "1",
+        "description": "Ceiling on a single paid call in USD; a call priced above it is refused before paying."
+      },
+      "AGENT402_DAILY_LIMIT_USD": {
+        "type": "string",
+        "required": false,
+        "description": "Ceiling on rolling 24-hour paid spend in USD."
+      }
+    }
+  }
+}

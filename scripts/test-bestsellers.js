@@ -117,7 +117,7 @@ const NOW = Date.parse("2026-07-16T00:00:00Z");
 // --- externalSlugWindow: the data feed's filtering (throwaway DB) ---------------------
 {
   ok(firstRecordedTs() === null, "fresh ledger → firstRecordedTs null");
-  const BUYER_A = "0x07fbca218b0a0a35244e0025a036fa85a6dc97dc";
+  const BUYER_A = "0xdeadbeef00000000000000000000000000000001";
   const BUYER_B = "0x1111111111111111111111111111111111111111";
   recordSale({ slug: "vin-decode", priceUsd: 0.004, rail: "usdc", network: "base", payer: BUYER_A, tx: "0x1" });
   recordSale({ slug: "vin-decode", priceUsd: 0.004, rail: "usdc", network: "base", payer: BUYER_A, tx: "0x2" });

@@ -38,7 +38,6 @@ const BASE_RPCS = [
   ...(process.env.ALCHEMY_API_KEY ? [`https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`] : []),
   "https://mainnet.base.org",
   "https://base-rpc.publicnode.com",
-  "https://base.llamarpc.com",
 ];
 
 function bad(message, statusCode = 400) {

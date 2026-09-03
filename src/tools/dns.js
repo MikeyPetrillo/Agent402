@@ -10,6 +10,11 @@ export async function dnsLookup(name, type = "A") {
     err.statusCode = 400;
     throw err;
   }
+  if (/(^|\.)(internal|local|localhost|localdomain)$/i.test(String(name))) {
+    const err = new Error("Private or link-local zones are not resolvable here");
+    err.statusCode = 400;
+    throw err;
+  }
   if (!/^[a-zA-Z0-9._-]{1,253}$/.test(name)) {
     const err = new Error("Invalid domain name");
     err.statusCode = 400;

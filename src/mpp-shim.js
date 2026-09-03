@@ -35,6 +35,9 @@
 import { Challenge, Credential, PaymentRequest, Receipt, x402, evm } from "mppx";
 import { mppProblem, markMppProblem } from "./mpp-problem.js";
 import { RAILS } from "./rails.js";
+import { diagnoseEvmAuthorizationDomain, domainMismatchDetail } from "./mpp-evm-domain.js";
+import { evmDomainFallbackEnabled, noteWrongDomainSigner, mppChallengesSuppressed } from "./mpp-fallback.js";
+import { capturePostHogVerifyFailed } from "./posthog.js";
 
 /** Replay of the paywall's own header names (see @x402/core http). */
 const PAYMENT_REQUIRED_HEADER = "PAYMENT-REQUIRED";
@@ -106,40 +109,18 @@ export function createMppShim({ secretKey, realm }) {
   if (!secretKey) return null;
 
   return function mppShim(req, res, next) {
-    // ---- INBOUND: Authorization: Payment → PAYMENT-SIGNATURE ----
-    // Never touch a request that already speaks x402 (incl. mppx clients using
-    // their bare-x402 protocol path) — pass-through is the no-regression rule.
-    const auth = req.headers.authorization;
-    if (
-      typeof auth === "string" &&
-      /^payment\s/i.test(auth) &&
-      !req.headers[PAYMENT_SIGNATURE_HEADER] &&
-      !req.headers["x-payment"]
-    ) {
-      const t = translateCredentialDetailed(auth, { secretKey });
-      if (t.paymentSignature) {
-        req.headers[PAYMENT_SIGNATURE_HEADER] = t.paymentSignature;
-        // The scheme is consumed; leaving it would only invite double-reads.
-        delete req.headers.authorization;
-        req.mppCredential = true;
-      } else if (t.reject && t.reject.kind !== "method-unsupported") {
-        // Invalid evm credential: fall through untranslated - the paywall
-        // re-issues a 402 whose outbound hook below mints fresh MPP
-        // challenges - and that 402's body becomes RFC 9457 problem+json
-        // naming WHY (spec shape; mppx's own server does the same).
-        // "method-unsupported" here means "not evm/charge" - most likely a
-        // tempo credential the tempo gate (mounted after us) will judge, so
-        // we leave the verdict to it.
-        markMppProblem(req, res, mppProblem(t.reject.kind, t.reject.detail));
-      }
-    }
-
     // ---- OUTBOUND: append WWW-Authenticate on 402s, Payment-Receipt on 200s ----
+    // Installed first so it is in place however the inbound half below
+    // resolves (it reads req at writeHead time, long after either path).
     const origWriteHead = res.writeHead;
     res.writeHead = function mppWriteHead(...args) {
       try {
         if (res.statusCode === 402 && !res.getHeader("WWW-Authenticate")) {
-          const pr = res.getHeader(PAYMENT_REQUIRED_HEADER);
+          // A client that has proven it signs EIP-3009 under the wrong token
+          // domain gets NO challenge: its MPP path cannot settle here, and a
+          // manager that prefers MPP only falls back to x402 when there is
+          // nothing to select. See src/mpp-fallback.js.
+          const pr = mppChallengesSuppressed(req) ? null : res.getHeader(PAYMENT_REQUIRED_HEADER);
           if (pr) {
             const header = challengeHeaderFromPaymentRequired(String(pr), { secretKey, realm });
             if (header) res.setHeader("WWW-Authenticate", header);
@@ -157,7 +138,82 @@ export function createMppShim({ secretKey, realm }) {
       return origWriteHead.apply(this, args);
     };
 
-    next();
+    // ---- INBOUND: Authorization: Payment → PAYMENT-SIGNATURE ----
+    // Never touch a request that already speaks x402 (incl. mppx clients using
+    // their bare-x402 protocol path) — pass-through is the no-regression rule.
+    const auth = req.headers.authorization;
+    if (
+      !(
+        typeof auth === "string" &&
+        /^payment\s/i.test(auth) &&
+        !req.headers[PAYMENT_SIGNATURE_HEADER] &&
+        !req.headers["x-payment"]
+      )
+    ) {
+      return next();
+    }
+
+    const t = translateCredentialDetailed(auth, { secretKey });
+    if (!t.paymentSignature) {
+      if (t.reject && t.reject.kind !== "method-unsupported") {
+        // Invalid evm credential: fall through untranslated - the paywall
+        // re-issues a 402 whose outbound hook above mints fresh MPP
+        // challenges - and that 402's body becomes RFC 9457 problem+json
+        // naming WHY (spec shape; mppx's own server does the same).
+        // "method-unsupported" here means "not evm/charge" - most likely a
+        // tempo credential the tempo gate (mounted after us) will judge, so
+        // we leave the verdict to it.
+        markMppProblem(req, res, mppProblem(t.reject.kind, t.reject.detail));
+      }
+      return next();
+    }
+
+    // The credential is ours, unexpired and well-shaped. One last LOCAL check
+    // before the paywall spends a facilitator round trip on it: was it signed
+    // under this token's own EIP-712 domain name? A credential signed under a
+    // different known name can never verify here or on chain, and the client
+    // that does it has a working x402 path we can steer it to instead.
+    const accept = () => {
+      req.headers[PAYMENT_SIGNATURE_HEADER] = t.paymentSignature;
+      // The scheme is consumed; leaving it would only invite double-reads.
+      delete req.headers.authorization;
+      req.mppCredential = true;
+    };
+    if (!evmDomainFallbackEnabled()) {
+      accept();
+      return next();
+    }
+    diagnoseEvmAuthorizationDomain({ accepted: t.accepted, authorization: t.authorization, signature: t.signature })
+      .then((d) => {
+        if (d.verdict !== "domain-mismatch") {
+          // "matches" is the healthy path; "unknown" is an ordinary bad
+          // signature, and the facilitator is the settlement authority that
+          // gets to say so - not us.
+          accept();
+          return;
+        }
+        noteWrongDomainSigner(req);
+        markMppProblem(req, res, mppProblem("verification-failed", domainMismatchDetail(d)));
+        try {
+          capturePostHogVerifyFailed({
+            network: `eip155:${d.chainId}`,
+            scheme: "mpp-evm",
+            // req.path, never originalUrl: a relative originalUrl keeps its
+            // query string through posthog's URL parse, and tool inputs ride
+            // there. The route is all this event needs.
+            resource: req.path || req.url,
+            errorReason: `mpp_evm_domain_mismatch signed=${d.signedName} expected=${d.expectedName}`,
+          });
+        } catch {
+          // Telemetry is never load-bearing for a payment path.
+        }
+      })
+      .catch(() => {
+        // Fail OPEN: an unreadable diagnosis must never cost a good buyer
+        // their purchase. Hand it to the facilitator exactly as before.
+        accept();
+      })
+      .finally(() => next());
   };
 }
 
@@ -268,15 +324,29 @@ export function translateCredentialDetailed(authorizationHeader, { secretKey }) 
   const payload = evm.AuthorizationPayloadSchema.safeParse(credential.payload);
   if (!payload.success) return reject("invalid-payload", "Credential payload does not match the evm/charge schema (from, to, value, validAfter, validBefore, nonce, signature).");
   const { from, to, value, validAfter, validBefore, nonce, signature } = payload.data;
+  const authorization = { from, to, value, validAfter, validBefore, nonce };
+  // mppx's encoder runs the payload through ITS zod schema, which STRIPS every
+  // field its eip155-typed PaymentRequirements does not declare - and our
+  // first accept declares `outputSchema` (src/accept-output-schema.js), which
+  // the paywall deep-equals against the echoed `accepted`. So: validate the
+  // shape through mppx exactly as before (a malformed payload still throws
+  // here), then emit the same base64-JSON wire with the accept RAW - the
+  // HMAC-bound bytes the client echoed, byte-exact what the paywall
+  // advertised. Found 2026-09-02 by test-mpp-shim's native buy: the schema
+  // strip turned every MPP payment into "no matching requirements".
+  const validated = x402.Header.encodePaymentSignature({
+    x402Version: 2,
+    accepted,
+    payload: { authorization, signature },
+  });
+  const canonical = JSON.parse(Buffer.from(validated, "base64").toString("utf8"));
   return {
-    paymentSignature: x402.Header.encodePaymentSignature({
-      x402Version: 2,
-      accepted,
-      payload: {
-        authorization: { from, to, value, validAfter, validBefore, nonce },
-        signature,
-      },
-    }),
+    paymentSignature: Buffer.from(JSON.stringify({ ...canonical, accepted }), "utf8").toString("base64"),
+    // Returned so the caller can run the EIP-712 domain diagnosis without
+    // decoding the credential a second time (src/mpp-evm-domain.js).
+    accepted,
+    authorization,
+    signature,
   };
 }
 

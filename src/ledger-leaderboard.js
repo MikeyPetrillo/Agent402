@@ -19,6 +19,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { rankBy } from "./leaderboard.js";
 import { RAILS } from "./rails.js";
 import { CAIP2_NAMES } from "./stats.js";
+import { hostRowHtml, HOST_EXCLUSION_NOTE } from "./host-entry.js";
 
 const HTML_ROWS = 12;
 
@@ -79,7 +80,7 @@ function railsWithTraffic(stats) {
   return `${n} of ${RAILS.length}`;
 }
 
-export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress } = {}) {
+export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress, host = null } = {}) {
   const board = Array.isArray(snapshot?.leaderboard) ? snapshot.leaderboard : [];
   const hasData = board.length > 0;
   const windowLabel = snapshot?.windowLabel || "24h";
@@ -200,6 +201,7 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress 
       <span>organic = distinct buyers per 100 calls. higher means demand is spread across more wallets.</span>
       <a href="/api/leaderboard?include=external" style="color:var(--accent);text-decoration:none;">raw JSON →</a>
     </div>
+    ${hostRowHtml(host, { dark: false })}
   </section>
 
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
@@ -212,8 +214,12 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress 
           <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">calls paid in stablecoin</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfPaid)}</td></tr>
           <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">free over proof-of-work</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfPow)}</td></tr>
           <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">rails with settled traffic</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfRails)}</td></tr>
+          ${host ? `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">settlements from outside buyers, 30 days</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-ext-30d>${esc(fmtNum(host.external30d.settlements))}</td></tr>
+          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">distinct outside buyers, 30 days</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-buyers-30d>${esc(fmtNum(host.external30d.buyers))}</td></tr>
+          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">settlements from outside buyers, all time</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-ext-all>${esc(fmtNum(host.externalAllTime.settlements))}</td></tr>` : ""}
           <tr><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">settled over the MPP wire</th><td style="padding:11px 14px;text-align:right;color:var(--accent);">${esc(selfMpp)}</td></tr>
         </tbody></table>
+        ${host ? `<p style="font-family:var(--font-mono);font-size:11.5px;line-height:1.6;color:var(--faint);margin:14px 0 0;">${esc(HOST_EXCLUSION_NOTE)}</p>` : ""}
         <p style="font-family:var(--font-mono);font-size:11.5px;line-height:1.6;color:var(--faint);margin:14px 0 0;">Most sellers here settle on Base alone. Twelve rails is the difference, and it is checkable on chain.</p>
       </div>
       <div style="padding:28px;background:var(--card);">

@@ -227,11 +227,23 @@ const openapiTools = [
 }
 
 // ---- 3d. Same-route price disagreement stays observable ----
+// The ORIGIN'S OWN CURRENT DECLARATION wins, both directions (changed
+// 2026-08-29, issue #1043). This supersedes the earlier max() rule, and
+// deliberately: max() could only ever ratchet a price UP, so a seller's cut
+// was invisible forever (measured: a 10x overquote standing nine days, and a
+// second seller with 21 routes overquoted 2x-10x). Preferring the origin
+// STRICTLY DOMINATES max() - in the raised-price case below the origin is
+// also the higher figure, so that protection is unchanged. Neither direction
+// risks money: this price ranks and displays, and the router re-quotes from
+// the seller's LIVE 402 before it spends. Where the two disagree by >=2x the
+// crawler now re-probes that 402, so ground truth arrives within a crawl
+// instead of never.
 {
   const documented = [{ ...openapiTools[0], method: "GET", price: "0.003" }];
   const observed = [{ ...bazaarTools[0], method: "GET", price: 0.009 }];
   const [merged] = mergeOpenapiIntoBazaar(documented, observed);
-  ok(merged.price === 0.009, "higher observation wins the routing price when bazaar is higher");
+  ok(merged.price === 0.003, `a price CUT propagates: the origin's own 0.003 beats a stale settled 0.009 (got ${merged.price})`);
+  ok(merged.originDeclaredPrice === 0.003 && merged.priceResolvedFrom === "origin", "the row says which side won and what the origin declared");
   ok(merged.priceConflict === true, "a differing current origin price is visible as a conflict");
   ok(merged.priceObservations?.bazaar === 0.009, "price conflict preserves the Bazaar observation as a number");
   ok(merged.priceObservations?.origin === 0.003, "price conflict preserves the origin observation as a number");
@@ -510,7 +522,7 @@ seed("https://md.example", mergeOpenapiIntoBazaar(openapiTools, bazaarTools));
   ok(tool?.priceConflict === true, "seller detail exposes a price conflict");
   ok(tool?.priceObservations?.bazaar === 0.009, "seller detail exposes the registry observation");
   ok(tool?.priceObservations?.origin === 0.003, "seller detail exposes the origin observation as a number");
-  ok(tool?.price === 0.009, "seller detail routing price is the higher observation");
+  ok(tool?.price === 0.003, `seller detail routing price is the ORIGIN's own declaration, so a cut propagates (got ${tool?.price})`);
 
   const routed = routeQuery({ query: "url to markdown", top: 5, include: "external", ...ctx });
   const row = routed.results.find((x) => x.seller === "https://price-conflict.example" && x.route === "/md");
@@ -518,7 +530,7 @@ seed("https://md.example", mergeOpenapiIntoBazaar(openapiTools, bazaarTools));
   ok(row?.priceConflict === true, "routeQuery exposes a price conflict");
   ok(row?.priceObservations?.bazaar === 0.009 && row?.priceObservations?.origin === 0.003,
     "routeQuery exposes both normalized observations");
-  ok(row?.priceUsd === 0.009, "routeQuery priceUsd matches the higher observation");
+  ok(row?.priceUsd === 0.003, "routeQuery priceUsd is the origin\'s own declaration, so a cut reaches the router");
 
   _resetFlatCacheForTest();
   const listed = allIndexedTools({ excludeOrigin: "https://agent402.tools", limit: 500 });

@@ -21,7 +21,9 @@
   function pollStats() {
     fetch('/api/stats', { headers: { accept: 'application/json' } }).then(function(r) { return r.ok ? r.json() : null; }).then(function(j) {
       if (!j || !j.toolCallsServed) return;
-      var paid = Number(j.toolCallsServed.viaUSDC) || 0;
+      // Prefer the chain-derived settled count (same source as /revenue);
+      // the in-process tally is the fallback for servers that predate it.
+      var paid = Number(j.settledOnChain) || Number(j.toolCallsServed.viaUSDC) || 0;
       var pow = Number(j.toolCallsServed.viaProofOfWork) || 0;
       if (freePowEl) freePowEl.textContent = pow.toLocaleString('en-US');
       if (paid && paid !== shownN) { animateTo(paid, shownN ? 1000 : 1500); shownN = paid; }

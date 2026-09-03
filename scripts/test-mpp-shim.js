@@ -71,7 +71,7 @@ proc = spawn("node", ["src/server.js"], {
 });
 
 try {
-  for (let i = 0; i < 40; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
+  for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
 
   // ---- 1. The 402 carries BOTH wires, and the MPP challenge is spec-sound ----
   const r402 = await fetch(`${B}/api/uuid`);

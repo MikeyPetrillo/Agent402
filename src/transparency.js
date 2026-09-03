@@ -83,7 +83,8 @@ export function transparencyPage(baseUrl, traffic = null) {
 <div class="tp-wrap">
 <section>
 <div class="tp-eyebrow">$ GET /transparency</div>
-<h1 class="tp-h1">Transparency</h1>
+<h1 class="tp-h1">Disclosures</h1>
+<p style="font-size:15px;color:var(--muted);max-width:70ch;">What the company publishes about itself, in one place: uptime from two outside observers at <a href="/status">/status</a>, every settled transaction by rail at <a href="/revenue">/revenue</a>, metered receipts against their quotes at <a href="/proof">/proof</a>, and how the service is secured at <a href="/security">/security</a>. The material disclosures below are kept verbatim, with on-chain receipts.</p>
 <p class="tp-updated">Agent402 (agent402.tools) · last updated 2026-07-29.</p>
 </section>
 
@@ -171,7 +172,7 @@ and these are the receipts:</p>
   <li>Why this page exists. We publish this to support and protect our users: to make what
   happened independently verifiable, and to leave no room for impersonation or misinformation.</li>
   <li>Our focus is unchanged. The project remains about the x402 payment protocol and building
-  curated, deterministic tools that serve agents.</li>
+  curated tools that serve agents.</li>
 </ul>
 </details>
 

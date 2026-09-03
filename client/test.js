@@ -3,9 +3,10 @@
 // is never contacted (X402_SYNC_ON_START=false); PoW bypasses settlement.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { Agent402, withNetworkPreference, withPayeeAllowlist, NETWORK_CAIP2 } from "./index.js";
+import { Agent402, OutputValidationError, withNetworkPreference, withPayeeAllowlist, NETWORK_CAIP2 } from "./index.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 3081;
@@ -124,6 +125,176 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
     let failed = false; try { await c.call("cheap"); } catch { failed = true; }
     ok(failed && paid === 1, "a failed paid call throws");
     ok(c.spendingSummary().dailyUsd === 0, "a failed paid call does not count against the budget");
+  }
+}
+
+// Offline: caller-supplied output validators bind buyer intent without a peer
+// dependency. Validation happens before cache admission, contracted cache hits
+// are revalidated, and settled spend survives invalid delivery.
+{
+  const bodyResponse = (body) => ({ ok: true, status: 200, json: async () => body });
+  const paidClient = ({ outputValidator, creditsKey } = {}) => {
+    let paid = 0;
+    const c = new Agent402({
+      baseUrl: "https://seller.example",
+      outputValidator,
+      creditsKey,
+      fetch: creditsKey ? undefined : async () => { paid++; return bodyResponse({ value: 42 }); },
+      fetchImpl: async () => { paid++; return bodyResponse({ value: 42 }); },
+    });
+    c._catalog = new Map([["answer", { method: "POST", path: "/answer", computePayable: false, price: "$0.01" }]]);
+    return { c, paid: () => paid };
+  };
+
+  // Invalid controls fail before catalog/network work.
+  {
+    let touched = 0;
+    const c = new Agent402({ fetchImpl: async () => { touched++; return bodyResponse({}); } });
+    let err = null;
+    try { await c.call("answer", {}, { outputValidator: { id: "", validate: () => true } }); } catch (e) { err = e; }
+    ok(err instanceof TypeError && touched === 0 && c._catalog === null,
+      "invalid per-call outputValidator fails before catalog or network access");
+  }
+
+  // A buyer-owned validator is caller code we AWAIT inside call(), and on a paid
+  // route the money has already moved by the time it runs - so one that never
+  // settles would hang the call forever holding a paid-but-undelivered result.
+  // Bounded, and a timeout REJECTS: an unfinished contract is not a satisfied one.
+  {
+    const c = new Agent402({ fetchImpl: async () => ({}) });
+    const started = Date.now();
+    let err = null;
+    try { await c._assertOutput("slow", { a: 1 }, { id: "hangs/v1", validate: () => new Promise(() => {}), timeoutMs: 200 }, { paid: true }); } catch (e) { err = e; }
+    ok(err?.name === "OutputValidationError", `a validator that never settles rejects rather than hanging (got ${err?.name})`);
+    ok(err?.paid === true, "and still reports the call WAS paid, so the buyer knows money moved");
+    ok(Date.now() - started < 2000, `it gives up promptly (${Date.now() - started}ms)`);
+    ok(!!(await c._assertOutput("ok", { a: 1 }, { id: "fine/v1", validate: () => true })), "a normal validator is unaffected");
+    ok(!!(await c._assertOutput("ok", { a: 1 }, { id: "slowish/v1", validate: () => new Promise((r) => setTimeout(() => r(true), 30)) })),
+      "a slow but finishing validator still passes - the bound is a ceiling, not a race");
+  }
+
+  // A valid paid result is admitted and namespaced by its semantic id.
+  {
+    const { c, paid } = paidClient({ outputValidator: { id: "answer-number/v1", validate: (v) => v.value === 42 } });
+    const first = await c.call("answer");
+    const second = await c.call("answer");
+    ok(first === second && paid() === 1, "valid contracted paid result is cached under its contract identity");
+  }
+
+  // A different id never consumes the first contract's cache entry.
+  {
+    const { c, paid } = paidClient();
+    await c.call("answer", {}, { outputValidator: { id: "answer/v1", validate: () => true } });
+    await c.call("answer", {}, { outputValidator: { id: "answer/v2", validate: () => true } });
+    ok(paid() === 2 && c._cache.size === 2, "different validator ids have disjoint cache entries");
+  }
+
+  // Mutating a returned object cannot turn a cache hit into invalid success.
+  {
+    const validator = { id: "answer-number/v1", validate: (v) => v.value === 42 };
+    const { c, paid } = paidClient({ outputValidator: validator });
+    const first = await c.call("answer");
+    first.value = "wrong";
+    let err = null;
+    try { await c.call("answer"); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.cacheHit && !err.paid,
+      "mutated contracted cache hit is rejected and labelled as an unpaid cache hit");
+    ok(paid() === 1 && c._cache.size === 0, "invalid cache hit is evicted without another payment");
+  }
+
+  // Validation failure occurs after HTTP success and must not erase settled spend.
+  {
+    const { c, paid } = paidClient({ outputValidator: { id: "answer-impossible/v1", validate: () => false } });
+    let err = null;
+    try { await c.call("answer"); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.paid && err.contractId === "answer-impossible/v1",
+      "false validator result is failed paid delivery with contract identity");
+    ok(paid() === 1 && c.spendingSummary().dailyUsd === 0.01,
+      "invalid paid delivery remains in settled-spend accounting");
+    ok(c._cache.size === 0, "invalid paid delivery is never cached");
+  }
+
+  // Async callbacks and thrown validation errors have the same fail-closed path.
+  {
+    const { c } = paidClient({ outputValidator: { id: "async/v1", validate: async () => { throw new Error("bad shape"); } } });
+    let err = null;
+    try { await c.call("answer"); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.cause?.message === "bad shape" && err.paid,
+      "async validator exceptions are wrapped without losing paid-delivery state");
+  }
+
+  // Credits are another settled paid path and retain spend on invalid output.
+  {
+    const creditsKey = `a402_${"A".repeat(32)}`;
+    const { c } = paidClient({ creditsKey, outputValidator: { id: "credits/v1", validate: () => false } });
+    let err = null;
+    try { await c.call("answer"); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.paid && c.spendingSummary().dailyUsd === 0.01,
+      "credits-paid invalid delivery retains settled spend and fails closed");
+  }
+
+  // Null cannot silently weaken an inherited constructor validator.
+  {
+    const { c } = paidClient({ outputValidator: { id: "deny/v1", validate: () => false } });
+    let err = null;
+    try { await c.call("answer", {}, { outputValidator: null }); } catch (e) { err = e; }
+    ok(err instanceof OutputValidationError && err.paid,
+      "per-call null preserves the inherited constructor validator");
+  }
+}
+
+// Offline (#1126): the default Idempotency-Key survives an AGENT-LEVEL retry.
+// A lost response is retried one level up - the framework calls call() again -
+// so the key must be stable across call() invocations on one client, fresh per
+// invocation only when the caller opted out of caching, and distinct between
+// client instances. Driven on the credits path, where the server binds the key
+// to the credits key hash and replays the paid answer (the wallet path signs a
+// fresh authorization per call() and is documented as a new payment).
+{
+  const creditsKey = `a402_${"B".repeat(32)}`;
+  const mk = () => {
+    const keys = [];
+    let n = 0;
+    const c = new Agent402({
+      baseUrl: "https://seller.example",
+      creditsKey,
+      fetchImpl: async (url, init) => {
+        keys.push(init.headers["Idempotency-Key"]);
+        // First send: the response is LOST after the server has charged.
+        if (++n === 1) throw new Error("socket hang up");
+        return { ok: true, status: 200, json: async () => ({ value: 7 }) };
+      },
+    });
+    c._catalog = new Map([["answer", { method: "POST", path: "/answer", computePayable: false, price: "$0.01" }]]);
+    return { c, keys };
+  };
+  {
+    const { c, keys } = mk();
+    let lost = false;
+    try { await c.call("answer", { q: 1 }); } catch { lost = true; }
+    const out = await c.call("answer", { q: 1 }); // the framework's retry
+    ok(lost && out.value === 7 && keys.length === 2 && keys[0] === keys[1] && /^a402-[0-9a-f]{24}$/.test(keys[0]),
+      "a retried call() after a lost response reuses the same default Idempotency-Key");
+    const other = await c.call("answer", { q: 2 });
+    ok(other.value === 7 && keys[2] !== keys[0], "different params on the same client get a different key");
+  }
+  {
+    const { c, keys } = mk();
+    try { await c.call("answer", { q: 1 }, { cache: false }); } catch { /* lost */ }
+    await c.call("answer", { q: 1 }, { cache: false });
+    ok(keys[0] !== keys[1], "{ cache: false } means distinct purchases: a fresh key per invocation");
+  }
+  {
+    const { c, keys } = mk();
+    try { await c.call("answer", { q: 1 }, { idempotencyKey: "mine-1" }); } catch { /* lost */ }
+    await c.call("answer", { q: 1 }, { idempotencyKey: "mine-1" });
+    ok(keys[0] === "mine-1" && keys[1] === "mine-1", "an explicit idempotencyKey always wins");
+  }
+  {
+    const a = mk(), b = mk();
+    try { await a.c.call("answer", { q: 1 }); } catch { /* lost */ }
+    try { await b.c.call("answer", { q: 1 }); } catch { /* lost */ }
+    ok(a.keys[0] !== b.keys[0], "two client instances buying the same thing are two purchases (per-client salt)");
   }
 }
 
@@ -250,12 +421,14 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
 {
   const uas = [];
   const grab = async (_url, init) => { uas.push(init?.headers?.["User-Agent"] ?? null); return { ok: true, json: async () => ({ endpoints: [] }) }; };
+  const packageVersion = JSON.parse(readFileSync(join(ROOT, "client/package.json"), "utf8")).version;
+  const expectedUa = `agent402-client/${packageVersion}`;
   const c = new Agent402({ baseUrl: "https://seller.example", cache: false, fetch: grab, fetchImpl: grab });
   await c._loadCatalog(); // plain fetch path
   c._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.01" }]]);
   await c.call("cheap"); // payFetch path
-  ok(uas.length >= 2 && uas.every((u) => /^agent402-client\/\d+\.\d+\.\d+$/.test(u || "")),
-    `every request carries the agent402-client UA product token (got ${JSON.stringify(uas)})`);
+  ok(uas.length >= 2 && uas.every((u) => u === expectedUa),
+    `every request carries the current ${expectedUa} product token (got ${JSON.stringify(uas)})`);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

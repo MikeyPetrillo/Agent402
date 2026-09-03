@@ -133,3 +133,12 @@ whole point of this package.
 ## License
 
 MIT
+
+
+## Reliability bounds (what keeps a slow node from costing a settlement)
+
+- **Per-request RPC timeout** (`FACILITATOR_RPC_TIMEOUT_MS`, 10 s): a stalled node rejects instead of hanging.
+- **Failover** (`FACILITATOR_RPC_FALLBACK_URLS`, defaults to two public Soroban RPCs): a transport failure is retried once on each fallback; a JSON-RPC error is an answer and is never retried.
+- **Hedged reads** (`FACILITATOR_RPC_HEDGE_MS`, 3 s; `0` disables): a read still silent after the delay is also sent to the first fallback and the first answer wins. A node that answers slowly never trips the timeout, and a settlement is a chain of six to ten reads before submission, so without this a slow node burned the whole settle budget with no error anywhere (2026-08-28). `sendTransaction` is never hedged.
+- **Confirmation poll cap** (`FACILITATOR_MAX_POLL_ATTEMPTS`, 8): the vendor polls `getTransaction` once per `maxTimeoutSeconds` (the x402 server advertises 300); Stellar closes a ledger every ~5 s, so a submitted transaction is in the next two ledgers or it is not coming. Each poll is logged with the hash and elapsed time.
+- **Settle bound** (`FACILITATOR_SETTLE_TIMEOUT_MS`, 25 s): under the caller's 30 s, so a slow settlement reaches the caller as a real body carrying `payer` and, when something was submitted, `transaction`, which the caller's on-chain confirmation then checks.

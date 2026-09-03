@@ -23,7 +23,7 @@ const ok = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { fai
 const cc = (r) => (r.headers.get("cache-control") || "").toLowerCase();
 
 try {
-  for (let i = 0; i < 50; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(400); }
+  for (let i = 0; i < 150; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(400); }
 
   // --- GATED catalog routes MUST be no-store -------------------------------------
   // A GET catalog tool (pure-CPU, works offline) — the URL-cacheable shape

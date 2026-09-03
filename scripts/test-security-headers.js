@@ -3,12 +3,13 @@
 // security.txt is served, /health hides its internal wiring from the public,
 // and the /mcp CORS stays wildcard-but-credential-free.
 import { spawn } from "node:child_process";
+import { getFreePort } from "./lib/free-port.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const PORT = 3520 + (process.pid % 300);
+const PORT = await getFreePort();
 const base = `http://127.0.0.1:${PORT}`;
 // stdio was "ignore", so a boot failure printed "FAIL - server booted" and
 // nothing else - no exit code, no stack, no port. This failed once in CI and
@@ -48,10 +49,34 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
       const r = await fetch(`${base}/health`);
       if (r.ok) { up = true; break; }
       last = `HTTP ${r.status} ${(await r.text()).slice(0, 200)}`;
-    } catch (e) { last = `fetch error: ${String(e?.cause?.code || e?.message || e).slice(0, 120)}`; }
+    } catch (e) {
+      // The WHOLE cause, not just its code: CI run 33100641970 failed here with
+      // "fetch failed" and no code at all while the child had logged
+      // "listening on :3659" and no [boot] stall - so the code alone said
+      // nothing. undici wraps the real error in `cause`; name/message/errno/
+      // syscall/address/port are what distinguish refused vs reset vs a
+      // hung handshake.
+      const c = e?.cause;
+      const detail = c ? `${c.name || ""} ${c.code || ""} ${c.errno ?? ""} ${c.syscall || ""} ${c.address || ""}:${c.port ?? ""} ${c.message || ""}` : "";
+      last = `fetch error: ${String(e?.message || e).slice(0, 80)} cause=[${detail.trim().slice(0, 200)}]`;
+    }
     await wait(250);
   }
-  if (!up) console.error(`--- last /health outcome after ${Math.round((Date.now() - t0) / 1000)}s: ${last} ---`);
+  if (!up) {
+    console.error(`--- last /health outcome after ${Math.round((Date.now() - t0) / 1000)}s: ${last} ---`);
+    // Raw TCP: does the port accept a connection at all? Separates "nothing is
+    // listening where the log says" from "listening, but HTTP never answers".
+    try {
+      const net = await import("node:net");
+      const tcp = await new Promise((resolve) => {
+        const sock = net.createConnection({ host: "127.0.0.1", port: PORT });
+        const t = setTimeout(() => { sock.destroy(); resolve("timeout after 3s"); }, 3000);
+        sock.on("connect", () => { clearTimeout(t); sock.destroy(); resolve("connected"); });
+        sock.on("error", (err) => { clearTimeout(t); resolve(`error ${err.code || err.message}`); });
+      });
+      console.error(`--- raw TCP connect to 127.0.0.1:${PORT}: ${tcp} ---`);
+    } catch (err) { console.error(`--- raw TCP probe failed: ${err?.message || err} ---`); }
+  }
   ok(up, `server booted${up ? "" : ` on :${PORT}`}`);
   if (!up) {
     console.error(`--- server never answered /health on :${PORT} (${exited || "still running"}) ---`);

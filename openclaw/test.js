@@ -3,7 +3,7 @@
 // the real proxy is started against it, and the plugin's register() is driven
 // with a fake OpenClaw api. No network, no keys, no money.
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, mkdirSync, chmodSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, mkdirSync, chmodSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -19,7 +19,7 @@ const run = (cliArgs, env) => new Promise((resolve) => {
 });
 import { startProxy } from "./proxy.js";
 import { routesFromCatalog, openclawModels, AUTO_ID, defaultPrimary, METERED_MAX_INPUT_CHARS, METERED_MAX_TOKENS } from "./models.js";
-import plugin, { resolveCreditsKey, selectAccept, uptoReady, PERMIT2_READY_MIN } from "./index.js";
+import plugin, { resolveCreditsKey, resolveWalletKey, selectAccept, uptoReady, PERMIT2_READY_MIN } from "./index.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
@@ -247,6 +247,35 @@ await p.close();
   const viaSpace = await run([copy, "help"], { ...process.env, AGENT402_OPENCLAW_HOME: home });
   ok(viaSpace.status === 0 && /setup/.test(viaSpace.stdout), "the CLI runs from a path containing a space");
   rmSync(home, { recursive: true, force: true });
+}
+
+// ---- setup with NO payment method mints a wallet ------------------------------
+{
+  const home = mkdtempSync(join(tmpdir(), "a402-oc-w-"));
+  const env = { ...process.env, AGENT402_OPENCLAW_HOME: home, AGENT402_UPSTREAM: upstream };
+  delete env.AGENT402_CREDITS_KEY; delete env.AGENT402_WALLET_KEY;
+  const r = await run(["cli.js", "setup"], env);
+  const addr = (r.stdout.match(/address: (0x[0-9a-fA-F]{40})/) || [])[1];
+  ok(r.status === 0 && addr && /fund it with USDC on Base/.test(r.stdout), `setup with no credits key generates a wallet and prints its address (got ${addr})`);
+  const keyFile = join(home, "agent402", "wallet.key");
+  const pk = readFileSync(keyFile, "utf8").trim();
+  ok(/^0x[0-9a-fA-F]{64}$/.test(pk) && (statSync(keyFile).mode & 0o777) === 0o600, "the private key lands in ~/.openclaw/agent402/wallet.key at 0600");
+  ok(!r.stdout.includes(pk) && !r.stderr.includes(pk), "the private key is never printed");
+  const again = await run(["cli.js", "setup"], env);
+  const addr2 = (again.stdout.match(/address: (0x[0-9a-fA-F]{40})/) || [])[1];
+  ok(again.status === 0 && readFileSync(keyFile, "utf8").trim() === pk && (addr2 === undefined || addr2 === addr), "a second setup never overwrites or rotates the wallet");
+  const prev = process.env.AGENT402_OPENCLAW_HOME; process.env.AGENT402_OPENCLAW_HOME = home; delete process.env.AGENT402_WALLET_KEY;
+  ok(resolveWalletKey() === pk, "resolveWalletKey reads the generated key file (proxy + doctor + permit2-approve see it)");
+  ok(resolveWalletKey({ walletKey: "0x" + "ab".repeat(32) }) === "0x" + "ab".repeat(32), "plugin config walletKey takes precedence over the file");
+  process.env.AGENT402_WALLET_KEY = "0x" + "cd".repeat(32);
+  ok(resolveWalletKey() === "0x" + "cd".repeat(32), "AGENT402_WALLET_KEY takes precedence over the file");
+  delete process.env.AGENT402_WALLET_KEY;
+  if (prev == null) delete process.env.AGENT402_OPENCLAW_HOME; else process.env.AGENT402_OPENCLAW_HOME = prev;
+  const home2 = mkdtempSync(join(tmpdir(), "a402-oc-nw-"));
+  const nw = await run(["cli.js", "setup", "--no-wallet"], { ...env, AGENT402_OPENCLAW_HOME: home2 });
+  ok(nw.status === 0 && !existsSync(join(home2, "agent402", "wallet.key")) && /no payment method yet/.test(nw.stdout), "--no-wallet keeps the old behaviour (no key generated)");
+  const withKey = await run(["cli.js", "setup", "--credits-key", key], { ...env, AGENT402_OPENCLAW_HOME: mkdtempSync(join(tmpdir(), "a402-oc-ck-")) });
+  ok(withKey.status === 0 && !/address: 0x/.test(withKey.stdout), "a credits key on the command line means no wallet is generated");
 }
 
 // ---- setup: key by env, config mode preserved ---------------------------------

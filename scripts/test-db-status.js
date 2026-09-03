@@ -25,6 +25,23 @@ const t0 = Date.now();
 r = await databasesStatus({ pings: { leads: never, analytics: never }, timeoutMs: 150, cacheMs: 0 });
 ok(r.leads.status === "unreachable" && Date.now() - t0 < 1000, "hung ping -> unreachable within timeout");
 
+// (2b) a FAILED reading is not held for the long cache: the observers'
+// second reading 20-30 s later must be a fresh ping (2026-09-02: five pages,
+// each a single failed ping read twice against the 60 s cache).
+{
+  resetDatabasesStatusCache();
+  let n = 0; let now2 = 5_000_000; const logs = [];
+  const flaky = { leads: async () => { n++; if (n === 1) throw new Error("timeout"); return true; }, analytics: async () => true };
+  const first = await databasesStatus({ pings: flaky, now: () => now2, timeoutMs: 200, cacheMs: 60_000, failureCacheMs: 5_000, log: (l) => logs.push(l) });
+  ok(first.leads.status === "unreachable", "first reading: the failed ping reads unreachable");
+  ok(logs.length === 1 && /\[db-status\] leads ping failed after \d+ms: timeout/.test(logs[0]), `a failed ping leaves a redacted server-log line (${logs[0]})`);
+  const second = await databasesStatus({ pings: flaky, now: () => now2 + 20_000, timeoutMs: 200, cacheMs: 60_000, failureCacheMs: 5_000, log: () => {} });
+  ok(second.leads.status === "ok" && n === 2, "a reading 20 s later re-pings and clears (a failure is cached 5 s, never 60 s)");
+  const third = await databasesStatus({ pings: flaky, now: () => now2 + 30_000, timeoutMs: 200, cacheMs: 60_000, failureCacheMs: 5_000, log: () => {} });
+  ok(third.leads.status === "ok" && n === 2, "a SUCCESS keeps the 60 s cache (no connection storm)");
+  resetDatabasesStatusCache();
+}
+
 // (3) cache: a second call inside the window does not ping again
 resetDatabasesStatusCache();
 let calls = 0;
@@ -57,5 +74,15 @@ ok(/export async function pingLeadsDb/.test(leads), "leads-db exports pingLeadsD
 const hb = await import("node:fs").then((fs) => fs.readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"));
 ok(/\.databases\.leads\.status/.test(hb) && /\.databases\.analytics\.status/.test(hb), "heartbeat reads databases.{leads,analytics}.status");
 ok(/Postgres UNREACHABLE/.test(hb), "heartbeat opens the Postgres UNREACHABLE issue");
+// SINGLE RETRY, like every other probe in that file. Without it the leg paged
+// on 2026-08-29 during our OWN deploy: the service is volume-backed, so every
+// deploy has a no-container window and the pools re-init behind the boot stall
+// after it. The boot log said "[leads-db] ready" three minutes before the issue
+// was filed. An alarm that fires on a state which heals itself trains everyone
+// to ignore it.
+const pgLeg = hb.slice(hb.indexOf("Postgres reachability check"), hb.indexOf("Upstream buyer wallet trend"));
+ok(/probe_db\(\)/.test(pgLeg), "the Postgres leg factors its read into a re-runnable probe");
+ok(/sleep 30[\s\S]*probe_db/.test(pgLeg), "an unreachable first read is re-probed after a delay before paging");
+ok(pgLeg.indexOf("gh issue create") > pgLeg.indexOf("sleep 30"), "the issue is only filed AFTER the second read");
 
 console.log(`db-status: ${passed} passed, 0 failed`);

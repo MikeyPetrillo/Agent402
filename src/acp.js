@@ -62,7 +62,7 @@ export function acpManifest({ baseUrl, network, networks, wallet, toolCount, pow
     },
     service: {
       type: "api",
-      description: `${toolCount} deterministic pay-per-call tools for AI agents. No LLM in the serving path - same input, same output.`,
+      description: `${toolCount} pay-per-call tools for AI agents: deterministic utilities (no model in that serving path - same input, same output), a metered model gateway on the OpenAI and Anthropic wires, and finished report products.`,
       catalog_url: `${baseUrl}/acp/feed`,
       openapi_url: `${baseUrl}/openapi.json`,
       pricing_url: `${baseUrl}/api/pricing`,

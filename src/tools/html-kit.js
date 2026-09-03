@@ -10,7 +10,7 @@
 // All pure-CPU, no network, no LLM → proof-of-work eligible (free tier).
 // Covered by scripts/test-html-kit.js.
 import { JSDOM } from "jsdom";
-import { compileUserRegex } from "./safe-regex.js";
+import { compileUserRegex, testUserRegex } from "./safe-regex.js";
 
 function bad(message) {
   const err = new Error(message);
@@ -265,7 +265,7 @@ export const HTML_TOOLS = [
       for (const a of doc.querySelectorAll("a[href]")) {
         const raw = a.getAttribute("href") || "";
         const href = resolveHref(raw, base);
-        if (filterRe && !filterRe.test(href)) continue;
+        if (filterRe && !testUserRegex(filterRe, href)) continue;
         if (unique && seen.has(href)) continue;
         seen.add(href);
         out.push({

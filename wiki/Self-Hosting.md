@@ -94,6 +94,7 @@ Set these on your host. None are committed to the repo.
 | `GLAMA_MAINTAINER_EMAIL` | No | Email returned at `/.well-known/glama.json` |
 | `MPP_SECRET_KEY` | For MPP | HMAC secret binding MPP challenges; presence mounts the MPP dual-stack shim (`WWW-Authenticate: Payment` on every 402, `evm` method settled through your x402 facilitator). Unset = pure x402 |
 | `MPP_CHALLENGE_NETWORKS` | No | `all` or a CSV of chain ids that get MPP `evm` challenges (default Base + Celo) |
+| `MPP_EVM_DOMAIN_FALLBACK` | No | `off` disarms the wrong-EIP-712-domain detection. On by default: a credential signed under a different known token-domain name than the one your accepts entry advertises is refused locally with an RFC 9457 problem, and MPP challenges are withheld from that client briefly so an MPP-preferring wallet falls through to your x402 offer instead of looping. `MPP_EVM_DOMAIN_FALLBACK_TTL_MS` (30 min) and `MPP_EVM_DOMAIN_FALLBACK_MAX_RESPONSES` (5) bound the hold |
 | `TEMPO_API_KEY` | For native Tempo | Tempo MPP relay key (needs the `mpp:write` scope); with a recipient it offers `tempo/charge` challenges settled natively on Tempo |
 | `TEMPO_RECIPIENT_ADDRESS` | No | Tempo payTo (defaults to `WALLET_ADDRESS`) |
 | `TEMPO_CURRENCY` | No | CSV of TIP-20 token addresses to offer (first = preferred; default PathUSD, the hosted instance offers USDC.e then PathUSD) |

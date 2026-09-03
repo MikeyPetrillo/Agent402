@@ -143,6 +143,81 @@ export const CHALLENGE_TTL_MS = 10 * 60_000;
 export const PAST_DUE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 export const CHARGE_BACKOFF_MS = 60 * 60_000;
 export const MAX_CHARGE_BACKOFF_MS = 24 * 60 * 60_000;
+// A TRANSIENT charge failure retries in minutes, not an hour. Measured
+// 2026-09-02 (tempo-subscription-canary run 33657453172): the renewal's
+// transferWithMemo reached rpc.tempo.xyz's eth_estimateGas with its
+// `validBefore` two seconds in the past - viem's Tempo chain config stamps
+// validBefore = now + 25 s on every request, and that minute our own
+// tempo-volume run had the RPC answering in 7-20 s. The transfer never
+// existed on chain, nobody was charged, and the next attempt an hour later
+// would have succeeded - but an hour of past_due for a slow RPC is the wrong
+// price, and for the canary it read as "the pull half of the rail is broken".
+// A refused transfer (insufficient funds, revoked key) keeps the hour.
+export const TRANSIENT_CHARGE_BACKOFF_MS = 2 * 60_000;
+const TRANSIENT_CHARGE_RE = /transaction expired|validBefore|timed? ?out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|fetch failed|socket hang up|\b(?:429|502|503|504)\b|rate.?limit|temporarily unavailable|UND_ERR/i;
+/** True when the failed charge looks like RPC/network trouble rather than a refused transfer. */
+export function isTransientChargeError(err) {
+  const seen = new Set();
+  for (let e = err, depth = 0; e && depth < 6; e = e.cause, depth++) {
+    if (typeof e !== "object" || seen.has(e)) break;
+    seen.add(e);
+    for (const k of ["details", "shortMessage", "message", "code", "name"]) {
+      const v = e[k];
+      if (v !== undefined && v !== null && TRANSIENT_CHARGE_RE.test(String(v))) return true;
+    }
+  }
+  return typeof err === "string" && TRANSIENT_CHARGE_RE.test(err);
+}
+
+// A SEND-PHASE ambiguity is the one failure that can have moved money: the
+// renewal's transferWithMemo was handed to the RPC (`eth_sendRawTransactionSync`
+// waits for inclusion) and the answer never came back. Measured 2026-09-02
+// (canary run 33659899394): "TimeoutError ... eth_sendRawTransactionSync" -
+// the chain showed it never landed that time, but nothing in the path could
+// know that, and mppx renews with Tempo's EXPIRING nonce (validBefore = now +
+// 25 s), so a retry is a NEW transaction that would land beside an earlier one
+// that did. Such a failure is remembered as `unconfirmedCharge` and the next
+// pull first asks the CHAIN whether that period already settled
+// (findRenewalOnChain) - exact, because every mppx renewal carries a memo
+// bound to `renewal:<subscriptionId>:<period>` - before it signs anything.
+const SEND_PHASE_RE = /sendRawTransactionSync|sendTransactionSync|eth_sendRawTransaction|waitForTransactionReceipt/i;
+/** True when a failed charge may have been broadcast: the error names the send call and is network/timeout shaped. */
+export function isSendPhaseAmbiguity(err) {
+  if (!isTransientChargeError(err)) return false;
+  const seen = new Set();
+  for (let e = err, depth = 0; e && depth < 6; e = e.cause, depth++) {
+    if (typeof e !== "object" || seen.has(e)) break;
+    seen.add(e);
+    for (const k of ["details", "shortMessage", "message", "metaMessages"]) {
+      const v = e[k];
+      if (v !== undefined && v !== null && SEND_PHASE_RE.test(Array.isArray(v) ? v.join("\n") : String(v))) return true;
+    }
+  }
+  return false;
+}
+/** How far back the chain is read for an unconfirmed renewal: the expiring nonce means a sent transaction can only land within ~25 s, so a minute either side is generous. */
+export const UNCONFIRMED_LOOKBACK_MS = 60_000;
+/** viem's default request timeout is 10 s; a sync send waits for inclusion and the RPC was answering in 7-20 s on 2026-09-02. */
+export const TEMPO_RPC_TIMEOUT_MS = Number(process.env.TEMPO_SUBSCRIPTION_RPC_TIMEOUT_MS) > 0 ? Number(process.env.TEMPO_SUBSCRIPTION_RPC_TIMEOUT_MS) : 30_000;
+
+/**
+ * The bytes32 memo mppx stamps on a renewal transfer (tempo/Attribution.js,
+ * reproduced here because the package does not export it): keccak("mpp")[0..4]
+ * + version 0x01 + keccak(lookupKey)[0..10] + 10 zero bytes (no clientId) +
+ * keccak(`renewal:<subscriptionId>:<period>`)[0..7]. Matching the whole memo
+ * is what makes the chain check EXACT: an activation, a different period or a
+ * different subscription from the same buyer for the same amount never matches.
+ */
+export async function expectedRenewalMemo({ lookupKey, subscriptionId, periodIndex }) {
+  const { keccak256, stringToBytes, hexToBytes, bytesToHex } = await import("viem");
+  const k = (str, n) => hexToBytes(keccak256(stringToBytes(String(str)))).slice(0, n);
+  const buf = new Uint8Array(32);
+  buf.set(k("mpp", 4), 0);
+  buf[4] = 0x01;
+  buf.set(k(lookupKey, 10), 5);
+  buf.set(k(`renewal:${subscriptionId}:${periodIndex}`, 7), 25);
+  return bytesToHex(buf);
+}
 // Every unpaid 402 mints and PERSISTS a server-owned access key, so an
 // unauthenticated caller can write to the shared /data volume by asking for
 // offers it never pays. Bounded two ways: unclaimed offers are swept once their
@@ -499,6 +574,7 @@ function diagnoseError(err, max = 1200) {
 export function createMppSubscriptions({
   secretKey, realm, storePath, validateTarget = {}, onCharge,
   activate: injectedActivate = null, chargePeriod: injectedChargePeriod = null,
+  findRenewalOnChain: injectedFindRenewal = null,
   now = () => Date.now(), log = console.log,
 } = {}) {
   // Fail closed on the inputs the binding rests on. A subscription engine that
@@ -533,10 +609,47 @@ export function createMppSubscriptions({
     if (_client) return _client;
     const { createClient, http } = await import("viem");
     const { tempo: tempoChain } = await import("viem/tempo/chains");
-    _client = createClient({ chain: tempoChain, transport: http(process.env.TEMPO_RPC_URL) });
+    // Always OUR client, never mppx's default: the default is viem's 10 s
+    // request timeout, and a sync send that waits for inclusion outlived it on
+    // a slow day (canary run 33659899394).
+    _client = createClient({ chain: tempoChain, transport: http(process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz", { timeout: TEMPO_RPC_TIMEOUT_MS }) });
     return _client;
   }
-  const clientOverride = () => (process.env.TEMPO_RPC_URL ? { getClient: () => tempoClient() } : {});
+  const clientOverride = () => ({ getClient: () => tempoClient() });
+
+  /**
+   * Default chain reader for an unconfirmed renewal: Transfer logs on the
+   * subscription's currency from the payer to our recipient since the
+   * attempt, value equal to the period amount, and the transaction's memo
+   * equal to mppx's attribution for THIS subscription and period. Returns
+   * {found:true, tx} | {found:false}; null when the chain could not be read
+   * (the caller then waits rather than charging - an unreadable chain must
+   * never become a second transfer).
+   */
+  async function defaultFindRenewalOnChain({ rec, mppxRec, periodIndex, sinceMs }) {
+    try {
+      const client = await tempoClient();
+      const { getBlockNumber, getLogs, getTransaction, decodeFunctionData, parseAbi, parseUnits } = await import("viem");
+      const head = await getBlockNumber(client);
+      const secondsBack = Math.ceil((now() - sinceMs) / 1000) + 120; // Tempo blocks are ~1 s
+      const fromBlock = head > BigInt(Math.min(secondsBack, 5000)) ? head - BigInt(Math.min(secondsBack, 5000)) : 0n;
+      const amount = parseUnits(String(mppxRec?.amount ?? rec.priceUsd), Number(mppxRec?.decimals ?? decimals));
+      const abi = parseAbi(["event Transfer(address indexed from, address indexed to, uint256 value)", "function transferWithMemo(address to, uint256 amount, bytes32 memo)"]);
+      const logs = await getLogs(client, { address: rec.currency, event: abi[0], args: { from: rec.payer, to: recipient }, fromBlock, toBlock: "latest" });
+      const memo = await expectedRenewalMemo({ lookupKey: mppxRec?.lookupKey, subscriptionId: rec.mppxSubscriptionId, periodIndex });
+      for (const l of logs) {
+        if (l.args?.value !== amount) continue;
+        const tx = await getTransaction(client, { hash: l.transactionHash });
+        let decoded = null;
+        try { decoded = decodeFunctionData({ abi, data: tx.input }); } catch { decoded = null; }
+        if (decoded?.functionName === "transferWithMemo" && String(decoded.args?.[2]).toLowerCase() === memo.toLowerCase()) return { found: true, tx: l.transactionHash };
+      }
+      return { found: false };
+    } catch (err) {
+      log(`[mpp-subs] chain read for an unconfirmed renewal failed (will wait, not re-charge): ${diagnoseError(err, 300)}`);
+      return null;
+    }
+  }
 
   // Resolved once at construction: the engine is only ever created when the
   // rollout switch passed, and that switch already requires this account.
@@ -894,7 +1007,7 @@ export function createMppSubscriptions({
    * Returns "active" | "past_due" | "canceled" | "expired", or null for unknown.
    */
   async function refreshStatus(subId) {
-    const rec = await readRec(subId);
+    let rec = await readRec(subId);
     if (!rec) return null;
     const at = now();
     if (rec.status === "canceled" || rec.status === "expired") return rec.status;
@@ -919,6 +1032,36 @@ export function createMppSubscriptions({
 
     inFlight.add(subId);
     try {
+      // CHAIN TRUTH FIRST. A previous pull for this period died in the send
+      // phase; whether it landed is a fact on the chain, and only that fact
+      // decides between "record it" and "sign again".
+      if (rec.unconfirmedCharge && rec.unconfirmedCharge.periodIndex === due) {
+        const mppxRec = await subStore.get(rec.mppxSubscriptionId);
+        const find = injectedFindRenewal || defaultFindRenewalOnChain;
+        const verdict = await find({ rec, mppxRec, periodIndex: due, sinceMs: Date.parse(rec.unconfirmedCharge.at) - UNCONFIRMED_LOOKBACK_MS });
+        if (verdict === null) {
+          const next = { ...rec, status: rec.status === "active" ? "past_due" : rec.status, nextChargeAttemptAt: new Date(at + TRANSIENT_CHARGE_BACKOFF_MS).toISOString() };
+          await writeRec(next);
+          log(`[mpp-subs] ${subId}: unconfirmed period ${due} and the chain is unreadable - waiting, not re-charging`);
+          return next.status;
+        }
+        if (verdict.found) {
+          if (mppxRec && (mppxRec.lastChargedPeriod ?? 0) < due) {
+            await subStore.put({ ...mppxRec, lastChargedPeriod: due, reference: verdict.tx, timestamp: new Date(at).toISOString(), inFlightPeriod: undefined, inFlightAttempt: undefined, inFlightReference: undefined, inFlightStartedAt: undefined });
+          }
+          const next = {
+            ...rec, status: "active", lastChargedPeriod: due, lastChargeTx: verdict.tx, lastChargeAt: new Date(at).toISOString(),
+            chargeFailures: 0, firstFailedAt: null, nextChargeAttemptAt: null, lastChargeError: null, unconfirmedCharge: null,
+          };
+          await writeRec(next);
+          bookCharge(next, due, verdict.tx);
+          log(`[mpp-subs] reconciled ${subId} period ${due} from the chain: the send that timed out had landed, tx=${verdict.tx} - not charged twice`);
+          return "active";
+        }
+        rec = { ...rec, unconfirmedCharge: null };
+        await writeRec(rec);
+        log(`[mpp-subs] ${subId}: the send that timed out for period ${due} never landed - charging now`);
+      }
       const charge = injectedChargePeriod || defaultChargePeriod;
       const result = await charge(rec, { periodIndex: due });
       // mppx owns the counter; re-read rather than assume, so a partial success
@@ -931,7 +1074,7 @@ export function createMppSubscriptions({
         billingAnchor: mppxRec?.billingAnchor || rec.billingAnchor,
         lastChargeTx: result?.reference || mppxRec?.reference || null,
         lastChargeAt: new Date(at).toISOString(),
-        chargeFailures: 0, firstFailedAt: null, nextChargeAttemptAt: null, lastChargeError: null,
+        chargeFailures: 0, firstFailedAt: null, nextChargeAttemptAt: null, lastChargeError: null, unconfirmedCharge: null,
       };
       await writeRec(next);
       bookCharge(next, charged, next.lastChargeTx);
@@ -943,17 +1086,22 @@ export function createMppSubscriptions({
       // status alone. The buyer's message never carries the upstream body.
       const failures = (rec.chargeFailures || 0) + 1;
       const firstFailedAt = rec.firstFailedAt || new Date(at).toISOString();
-      const backoff = Math.min(CHARGE_BACKOFF_MS * 2 ** (failures - 1), MAX_CHARGE_BACKOFF_MS);
+      const transient = isTransientChargeError(err);
+      const backoff = transient
+        ? Math.min(TRANSIENT_CHARGE_BACKOFF_MS * failures, CHARGE_BACKOFF_MS)
+        : Math.min(CHARGE_BACKOFF_MS * 2 ** (failures - 1), MAX_CHARGE_BACKOFF_MS);
       const givenUp = at - Date.parse(firstFailedAt) >= PAST_DUE_GRACE_MS;
+      const ambiguous = isSendPhaseAmbiguity(err);
       const next = {
         ...rec, chargeFailures: failures, firstFailedAt,
         nextChargeAttemptAt: new Date(at + backoff).toISOString(),
         lastChargeError: String(err?.message || err).slice(0, 200),
+        ...(ambiguous ? { unconfirmedCharge: { at: new Date(at).toISOString(), periodIndex: due } } : {}),
         status: givenUp ? "canceled" : "past_due",
         ...(givenUp ? { canceledAt: new Date(at).toISOString(), canceledReason: "unpaid" } : {}),
       };
       await writeRec(next);
-      log(`[mpp-subs] period charge failed for ${subId} (attempt ${failures}${givenUp ? ", giving up: past the grace window" : `, retry in ${Math.round(backoff / 60000)}m`}): ${diagnoseError(err)}`);
+      log(`[mpp-subs] period charge failed for ${subId} (attempt ${failures}${givenUp ? ", giving up: past the grace window" : `, retry in ${Math.round(backoff / 60000)}m${transient ? " (transient)" : ""}${ambiguous ? ", chain checked before any retry" : ""}`}): ${diagnoseError(err)}`);
       return next.status;
     } finally { inFlight.delete(subId); }
   }

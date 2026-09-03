@@ -174,6 +174,35 @@ function isJsonish(contentType) {
  * break settlement outright, which is exactly the kind of cure that is worse
  * than the disease. Every failure path is swallowed.
  */
+// Socket-level failures that mean "the request never reached the far side, or
+// the far side dropped the connection before answering". A response with a
+// status is NOT one of these - that path is diagnosed below, never retried.
+const SOCKET_ERROR_CODES = new Set(["UND_ERR_SOCKET", "ECONNRESET", "EPIPE", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT"]);
+export function socketErrorCode(err) {
+  for (const e of [err, err?.cause, err?.cause?.cause]) {
+    const code = e?.code;
+    if (typeof code === "string" && SOCKET_ERROR_CODES.has(code)) return code;
+  }
+  return null;
+}
+// Only a facilitator host, only a read (POST /verify or GET /supported), only a
+// body that can be sent twice (a string/Buffer/none - never a stream), only a
+// socket-class error. Everything else propagates untouched.
+export function isRetryableFacilitatorRead(url, init, err, hosts) {
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  if (!hosts?.has?.(u.host)) return false;
+  if (!socketErrorCode(err)) return false;
+  const method = String(init?.method || "GET").toUpperCase();
+  const path = u.pathname.replace(/\/+$/, "");
+  const isVerify = method === "POST" && /\/verify$/.test(path);
+  const isSupported = method === "GET" && /\/supported$/.test(path);
+  if (!isVerify && !isSupported) return false;
+  const body = init?.body;
+  if (body != null && typeof body !== "string" && !(body instanceof Uint8Array)) return false;
+  return true;
+}
+
 export function installFacilitatorDiagnostics(urls = [], { log = console.error, fetchImpl } = {}) {
   // Hosts live OUTSIDE the wrapper so callers can keep adding them after the
   // first install. Facilitators register one at a time, and an
@@ -189,7 +218,29 @@ export function installFacilitatorDiagnostics(urls = [], { log = console.error, 
   if (!target || target.__a402FacilitatorDiag) return target || null;
 
   const wrapped = async function facilitatorDiagnosticFetch(input, init) {
-    const res = await target(input, init);
+    let res;
+    try {
+      res = await target(input, init);
+    } catch (err) {
+      // ONE retry of a facilitator VERIFY (or the GET /supported probe) that
+      // died at the socket level before any response - never a settle.
+      //
+      // Measured twice in CI (2026-09-01 and 09-02, test-verify-hint-live):
+      // the post-listen event-loop stall ran 5.4 s, the stub facilitator
+      // closed the idle keep-alive socket our boot-time /supported probe had
+      // opened (Node's default idle timeout is 5 s), and the first verify was
+      // written to that dead pooled socket - `fetch failed [UND_ERR_SOCKET]`
+      // with the facilitator having seen nothing. The buyer got a 402 for a
+      // payment nobody examined. undici retries idempotent requests on a
+      // stale socket by itself; a POST is not idempotent to undici, but a
+      // verify IS to us: it moves no money and reads nothing that a second
+      // ask would change. A settle can move money, so it is never resent
+      // from here - the settle path has its own chain-truth confirmers.
+      const url = typeof input === "string" ? input : (input?.url || String(input));
+      if (!isRetryableFacilitatorRead(url, init, err, hosts)) throw err;
+      log(`[facilitator-diag] ${new URL(url).pathname} died before a response (${socketErrorCode(err)}) - retrying once`);
+      res = await target(input, init);
+    }
     try {
       if (!res || res.ok) return res;
       const url = typeof input === "string" ? input : (input?.url || String(input));

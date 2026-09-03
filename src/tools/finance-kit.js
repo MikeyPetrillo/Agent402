@@ -247,7 +247,7 @@ export const FINANCE_TOOLS = [
     // $0.010 → $0.003 (2026-07-13): our broadest-organic-demand tool (35
     // distinct paying wallets/14d) was priced 3.3× the market leader's
     // identical product. Match the market; watch volume.
-    price: "$0.003",
+    price: "$0.001",
     description:
       "Live stock/index/FX/crypto quote: last price, day range, 52-week range, previous close, currency, exchange, and a relative change vs. previous close, as clean JSON. The single-symbol NOW read - for OHLC time series use stock-history, for pre/post-market use premarket-quote, and for crypto pairs crypto-price returns richer market fields. Backed by Yahoo Finance's public chart endpoint - keyless, no rate limits in practice. Symbols: equities (AAPL), indices (^GSPC), FX (EURUSD=X), crypto (BTC-USD).",
     tags: ["finance", "stocks", "quote", "market-data", "price"],

@@ -167,6 +167,23 @@ for (let attempt = 1; attempt <= 3; attempt++) {
   // failure, both look like "not yet" for a few seconds.
   if (attempt < 3) await sleep(12_000);
 }
+// A first pull that failed on a slow RPC is retried by the server after its
+// TRANSIENT backoff (2 min, src/mpp-subscriptions.js) - and, if the send was
+// the ambiguous step, only after the chain has been read. Give that one
+// retry its window before calling the rail broken.
+if (after && after.lastChargedPeriod <= 0 && after.status === "past_due") {
+  console.log("first pull did not land; waiting 135s for the server's transient retry (chain checked first if the send was ambiguous)...");
+  await sleep(135_000);
+  for (let attempt = 4; attempt <= 5; attempt++) {
+    const r = await fetch(manageUrl("&refresh=1"), { headers: { "X-Heartbeat-Token": hb() } });
+    if (!r.ok) { await cleanup(); fail(`manage read returned ${r.status}, expected 200`); }
+    after = await r.json().catch(() => null);
+    if (!after) { await cleanup(); fail("manage read body is not valid JSON"); }
+    console.log(`attempt ${attempt}: status=${after.status} lastChargedPeriod=${after.lastChargedPeriod} tx=${after.lastChargeTx || "(none)"}`);
+    if (after.lastChargedPeriod > 0) break;
+    if (attempt < 5) await sleep(15_000);
+  }
+}
 
 await cleanup();
 

@@ -10,9 +10,10 @@
 // Proven on a real keep-alive socket against a real server: warm the socket,
 // SIGTERM, send a composite POST down the same connection, expect the 503.
 import { spawn } from "node:child_process";
+import { getFreePorts } from "./lib/free-port.js";
 import http from "node:http";
 
-const PORT = 3960 + (process.pid % 100);
+const [PORT, PORT2] = await getFreePorts(2);
 const BASE = `http://127.0.0.1:${PORT}`;
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };
@@ -78,13 +79,13 @@ agent.destroy();
 srv.kill("SIGKILL");
 await sleep(300);
 const srv2 = spawn("node", ["src/server.js"], {
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT + 1), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" },
+  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT2), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let up2 = false;
-for (let i = 0; i < 90; i++) { try { if ((await fetch(`http://127.0.0.1:${PORT + 1}/health`)).status === 200) { up2 = true; break; } } catch {} await sleep(500); }
+for (let i = 0; i < 90; i++) { try { if ((await fetch(`http://127.0.0.1:${PORT2}/health`)).status === 200) { up2 = true; break; } } catch {} await sleep(500); }
 if (up2) {
-  const c = await fetch(`http://127.0.0.1:${PORT + 1}${ep.path}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}", signal: AbortSignal.timeout(8000) }).then(async (x) => ({ status: x.status, data: await x.text() })).catch((e) => ({ status: 0, data: String(e) }));
+  const c = await fetch(`http://127.0.0.1:${PORT2}${ep.path}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}", signal: AbortSignal.timeout(8000) }).then(async (x) => ({ status: x.status, data: await x.text() })).catch((e) => ({ status: 0, data: String(e) }));
   ok(!/redeploying/i.test(c.data), `control: a live server does not give the drain refusal (got ${c.status})`);
 } else ok(false, "control server did not boot");
 srv2.kill("SIGKILL");

@@ -7,10 +7,10 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, statSync
 import { pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { STATE_DIR, CREDITS_KEY_FILE, resolveCreditsKey, resolvePayFetch, USDC_BASE, DEFAULT_BASE_RPC, uptoReady } from "./index.js";
+import { STATE_DIR, CREDITS_KEY_FILE, WALLET_KEY_FILE, resolveCreditsKey, resolveWalletKey, resolvePayFetch, USDC_BASE, DEFAULT_BASE_RPC, uptoReady } from "./index.js";
 import { startProxy, loadRoutes, DEFAULT_UPSTREAM } from "./proxy.js";
 import { providerModelsConfig, stripTrailingSlashes, defaultPrimary, AUTO_ID, OPENCLAW_MIN_INPUT_CHARS } from "./models.js";
-import { DEFAULT_PORT, PROVIDER_ID } from "./provider.js";
+import { DEFAULT_PORT, PLUGIN_ID, PROVIDER_ID } from "./provider.js";
 
 const args = process.argv.slice(2);
 const cmd = args[0] || "help";
@@ -38,14 +38,32 @@ function mergeInto(target, block, { port = DEFAULT_PORT } = {}) {
   // on 8412 and OpenClaw dialing a port nobody listened on (real-install test).
   if (port !== DEFAULT_PORT) {
     t.plugins = t.plugins || {}; t.plugins.entries = t.plugins.entries || {};
-    t.plugins.entries[PROVIDER_ID] = { ...(t.plugins.entries[PROVIDER_ID] || {}), config: { ...(t.plugins.entries[PROVIDER_ID]?.config || {}), port } };
+    t.plugins.entries[PLUGIN_ID] = { ...(t.plugins.entries[PLUGIN_ID] || {}), config: { ...(t.plugins.entries[PLUGIN_ID]?.config || {}), port } };
   }
   return t;
 }
 
+// Mint a fresh EVM wallet into WALLET_KEY_FILE (0600). Needs viem (an optional
+// peer, same as x402 payment itself); returns null when it is not installed so
+// setup can fall back to the card path instead of failing.
+async function generateWallet() {
+  try {
+    const [{ generatePrivateKey, privateKeyToAccount }] = await Promise.all([import("viem/accounts")]);
+    const pk = generatePrivateKey();
+    const account = privateKeyToAccount(pk);
+    mkdirSync(STATE_DIR(), { recursive: true });
+    writeFileSync(WALLET_KEY_FILE(), pk + "\n", { mode: 0o600, flag: "wx" }); // never overwrite an existing key
+    try { chmodSync(WALLET_KEY_FILE(), 0o600); } catch { /* best effort */ }
+    return { address: account.address };
+  } catch (e) {
+    if (e?.code === "EEXIST") { try { return { address: (await import("viem/accounts")).privateKeyToAccount(readFileSync(WALLET_KEY_FILE(), "utf8").trim()).address }; } catch { return null; } }
+    return null;
+  }
+}
+
 async function main() {
   if (cmd === "help" || has("--help")) {
-    out("agent402-openclaw setup [--credits-key a402_...|-] [--write] [--flat] | proxy [--port N] [--upstream URL] [--flat] | doctor | permit2-approve [--rpc URL]");
+    out("agent402-openclaw setup [--credits-key a402_...|-] [--no-wallet] [--write] [--flat] | proxy [--port N] [--upstream URL] [--flat] | wallet [--rpc URL] | doctor | permit2-approve [--rpc URL]");
     return 0;
   }
   const upstream = stripTrailingSlashes(opt("--upstream") || process.env.AGENT402_UPSTREAM || DEFAULT_UPSTREAM);
@@ -66,8 +84,26 @@ async function main() {
       writeFileSync(CREDITS_KEY_FILE(), key + "\n", { mode: 0o600 });
       try { chmodSync(CREDITS_KEY_FILE(), 0o600); } catch { /* best effort */ }
       out(`stored credits key at ${CREDITS_KEY_FILE()} (0600)`);
-    } else if (!resolveCreditsKey()) {
-      out(`no credits key yet: buy a pack by card at ${upstream}/credits, then rerun with --credits-key a402_...`);
+    } else if (!resolveCreditsKey() && !resolveWalletKey()) {
+      // No payment method at all: mint a wallet right here, print the address,
+      // and the user funds it with USDC on Base. Same first-run shape as a
+      // per-token router that prints a wallet at install; the card path
+      // (credits key) stays available. --no-wallet keeps the old behaviour.
+      if (has("--no-wallet")) {
+        out(`no payment method yet: buy a pack by card at ${upstream}/credits and rerun with --credits-key a402_..., or set AGENT402_WALLET_KEY`);
+      } else {
+        const w = await generateWallet();
+        if (w) {
+          out(`no credits key found, so a wallet was generated for you:`);
+          out(`  address: ${w.address}`);
+          out(`  key:     ${WALLET_KEY_FILE()} (0600; back it up, it is the only copy)`);
+          out(`fund it with USDC on Base (any amount; a call costs from $0.001), then every call is paid from it over x402.`);
+          out(`optional: \`agent402-openclaw permit2-approve\` once (needs a little ETH on Base for gas) to pay actual usage instead of the per-request quote.`);
+          out(`prefer a card? buy a pack at ${upstream}/credits and rerun with --credits-key a402_...`);
+        } else {
+          out(`no payment method yet: buy a pack by card at ${upstream}/credits and rerun with --credits-key a402_..., or install viem + @x402/fetch + @x402/evm and rerun to generate a wallet`);
+        }
+      }
     }
     let routes;
     try { routes = await loadRoutes(upstream, fetch, { pricing }); } catch (e) { console.error(`could not read ${upstream}/v1/models: ${e?.message || e}`); return 2; }
@@ -111,8 +147,8 @@ async function main() {
   // One-time USDC -> Permit2 approval on Base so the wallet can pay ACTUAL
   // usage over `upto` instead of the per-request quote over `exact`.
   if (cmd === "permit2-approve") {
-    const pk = (process.env.AGENT402_WALLET_KEY || "").trim();
-    if (!/^0x[0-9a-fA-F]{64}$/.test(pk)) { console.error("AGENT402_WALLET_KEY (0x + 64 hex) is required"); return 2; }
+    const pk = resolveWalletKey();
+    if (!pk) { console.error("no wallet: set AGENT402_WALLET_KEY (0x + 64 hex) or run `agent402-openclaw setup` to generate one"); return 2; }
     try {
       const [{ createPermit2ApprovalTx, getPermit2AllowanceReadParams }, { createWalletClient, createPublicClient, http }, { privateKeyToAccount }, { base }] = await Promise.all([import("@x402/evm/upto/client"), import("viem"), import("viem/accounts"), import("viem/chains")]);
       const account = privateKeyToAccount(pk);
@@ -130,15 +166,32 @@ async function main() {
     } catch (e) { console.error(`permit2-approve failed: ${String(e?.message || e).slice(0, 300)}`); return 1; }
   }
 
+  // Address + USDC balance of the wallet the proxy pays from. Read-only.
+  if (cmd === "wallet") {
+    const pk = resolveWalletKey();
+    if (!pk) { console.error("no wallet: run `agent402-openclaw setup` to generate one, or set AGENT402_WALLET_KEY"); return 2; }
+    try {
+      const [{ createPublicClient, http, erc20Abi, formatUnits }, { privateKeyToAccount }, { base }] = await Promise.all([import("viem"), import("viem/accounts"), import("viem/chains")]);
+      const account = privateKeyToAccount(pk);
+      const pub = createPublicClient({ chain: base, transport: http((opt("--rpc") || process.env.AGENT402_BASE_RPC || DEFAULT_BASE_RPC).trim()) });
+      const bal = await pub.readContract({ address: USDC_BASE, abi: erc20Abi, functionName: "balanceOf", args: [account.address] });
+      out(`address: ${account.address}`);
+      out(`USDC on Base: $${formatUnits(bal, 6)}`);
+      if (bal === 0n) out(`fund it: send USDC on Base (eip155:8453) to ${account.address}`);
+      return 0;
+    } catch (e) { console.error(`wallet: ${String(e?.message || e).slice(0, 200)}`); return 1; }
+  }
+
   if (cmd === "doctor") {
     const key = resolveCreditsKey();
+    const walletPk = resolveWalletKey();
     out(`upstream: ${upstream}`);
     out(`credits key: ${key ? `present (${key.slice(0, 8)}…)` : "none"}`);
-    out(`wallet key: ${/^0x[0-9a-fA-F]{64}$/.test(process.env.AGENT402_WALLET_KEY || "") ? "present" : "none"}`);
-    if (/^0x[0-9a-fA-F]{64}$/.test(process.env.AGENT402_WALLET_KEY || "")) {
+    out(`wallet key: ${walletPk ? "present" : "none"}`);
+    if (walletPk) {
       try {
         const [{ getPermit2AllowanceReadParams }, { createPublicClient, http }, { privateKeyToAccount }, { base }] = await Promise.all([import("@x402/evm/upto/client"), import("viem"), import("viem/accounts"), import("viem/chains")]);
-        const account = privateKeyToAccount(process.env.AGENT402_WALLET_KEY.trim());
+        const account = privateKeyToAccount(walletPk);
         const pub = createPublicClient({ chain: base, transport: http((process.env.AGENT402_BASE_RPC || DEFAULT_BASE_RPC).trim()) });
         const allowance = await pub.readContract(getPermit2AllowanceReadParams({ tokenAddress: USDC_BASE, ownerAddress: account.address }));
         out(`wallet ${account.address}: ${uptoReady(allowance) ? "pays actual usage (upto; Permit2 approved)" : "pays the per-request quote (exact) - run permit2-approve once to pay actual usage"}`);

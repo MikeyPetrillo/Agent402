@@ -98,6 +98,8 @@ const STRIP_INBOUND = new Set([
   "host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
   "te", "trailer", "transfer-encoding", "upgrade", "content-length",
   "x-tollbooth-paid", "x-tollbooth-error", "x-pow-error", "x-forwarded-host", "forwarded",
+  // client-IP / scheme trust headers an upstream might honour (spoofable by the bot)
+  "x-real-ip", "cf-connecting-ip", "true-client-ip", "x-client-ip", "fastly-client-ip", "x-forwarded-proto", "x-forwarded-port", "via",
 ]);
 
 /**
@@ -883,11 +885,28 @@ async function startCli() {
   } else {
     app.use((_req, res) => res.json({ ok: true, note: "Bare tollbooth gate (no TOLLBOOTH_UPSTREAM set). Clients that reach here paid or solved a proof-of-work." }));
   }
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     const paidLabel = x402mw ? `x402 + MPP (${process.env.TOLLBOOTH_ASSET || "USDC"}, settling via ${process.env.TOLLBOOTH_CDP_API_KEY_ID && process.env.TOLLBOOTH_CDP_API_KEY_SECRET ? "Coinbase CDP" : process.env.TOLLBOOTH_FACILITATOR_URL})` : (process.env.TOLLBOOTH_PAYTO ? `x402 quote only (${process.env.TOLLBOOTH_ASSET || "USDC"}, NOT settling - set TOLLBOOTH_FACILITATOR_URL)` : "");
     const rails = [gate.pow ? "proof-of-work" : "", paidLabel].filter(Boolean).join(" + ");
-    console.log(`agent402-tollbooth listening on :${port} — charging AI bots via ${rails || "proof-of-work"}`);
+    // The BOUND port, so PORT=0 (let the OS pick) prints something a caller can use.
+    const bound = server.address()?.port ?? port;
+    console.log(`agent402-tollbooth listening on :${bound} — charging AI bots via ${rails || "proof-of-work"}`);
     if (upstream) console.log(`  proxying → ${upstream}`);
+  });
+  // Evidence for a process that leaves without being told to. Four times
+  // (2026-08-19, 08-22, 08-26, 08-27; CI only, never locally) the CLI printed the
+  // banner above and then exited 0 with no signal and no --trace-exit stack: the
+  // event loop drained under a LISTENING server, which should be impossible while
+  // the handle is ref'd. `beforeExit` is the one hook that fires exactly then;
+  // naming the live handles and the server's own state at that instant is the
+  // record every earlier occurrence lacked. Costs nothing in a healthy process
+  // (it never fires while the server listens).
+  server.on("close", () => console.error("[agent402-tollbooth] http server closed"));
+  server.on("error", (e) => console.error(`[agent402-tollbooth] http server error: ${e?.code || ""} ${e?.message || e}`));
+  process.on("beforeExit", (code) => {
+    let active = "?";
+    try { active = JSON.stringify(process.getActiveResourcesInfo()); } catch { /* older node */ }
+    console.error(`[agent402-tollbooth] event loop drained (exit code ${code}) while listening=${server.listening} address=${JSON.stringify(server.address())} active=${active}`);
   });
 }
 

@@ -198,7 +198,7 @@ export const GEO_TOOLS = [
     name: "Reverse geocode",
     slug: "reverse-geocode",
     category: "data",
-    price: "$0.003",
+    price: "$0.002",
     description:
       "Resolve a lat/lon to a structured postal address: road, house number, city, state, postcode, country (with ISO code). OpenStreetMap/Nominatim, no key. ?lat=38.8977&lon=-77.0365.",
     tags: ["reverse-geocoding", "address", "lat-lon", "openstreetmap", "nominatim", "maps"],

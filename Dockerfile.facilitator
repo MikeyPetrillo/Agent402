@@ -17,7 +17,7 @@ ENV NODE_ENV=production
 COPY facilitator/package.json facilitator/package-lock.json ./
 RUN npm ci --omit=dev
 
-COPY facilitator/index.js facilitator/signer.js facilitator/shape.js facilitator/queue.js facilitator/timeout.js facilitator/rpc-diagnostics.js facilitator/rpc-timeout.js facilitator/rpc-failover.js ./
+COPY facilitator/index.js facilitator/signer.js facilitator/shape.js facilitator/queue.js facilitator/timeout.js facilitator/rpc-diagnostics.js facilitator/rpc-timeout.js facilitator/rpc-failover.js facilitator/settle-poll.js facilitator/fee-bid.js ./
 
 # Strip setuid/setgid bits (same hardening as the main image).
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true

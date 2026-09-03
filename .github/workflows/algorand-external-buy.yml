@@ -30,6 +30,10 @@ permissions:
 
 jobs:
   buy:
+    # Money moves out of a spending wallet on dispatch: the `spending` GitHub
+    # environment requires the operator's approval click before this job runs
+    # (write access alone used to be enough). Scheduled canaries stay ungated.
+    environment: spending
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -42,7 +46,7 @@ jobs:
       - name: Install x402 client
         # No wallet secrets are in scope for this step (audit R-07), and
         # --ignore-scripts blocks dependency lifecycle scripts entirely.
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.16.0 @x402/avm@2.16.0
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.22.0 @x402/avm@2.22.0
 
       - name: Buy from external Algorand sellers
         # Wallet secret scoped to THIS step only (audit R-07).

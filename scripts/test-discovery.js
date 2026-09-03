@@ -71,7 +71,13 @@ const stats = {
   toolCallsServed: { total: 100, viaUSDC: 60, viaProofOfWork: 40 },
 };
 const r = reliabilityReport({ baseUrl: BASE, network: "base", wallet: WALLET, stats });
-ok(r.service === "Agent402.Tools" && r.status === "operational", "reliability identity/status");
+// `status` MIRRORS what the outside observers measured (/api/status overall),
+// it is not this endpoint's own opinion: the two surfaces contradicted each
+// other in the same minute before 2026-08-28. With no observation passed it
+// says "serving" - never "operational", which would be a claim we cannot make
+// about ourselves from inside the process.
+ok(r.service === "Agent402.Tools" && r.status === "serving" && r.statusMeasuredFrom === `${BASE}/api/status`, `reliability identity + measured status (got ${r.status})`);
+ok(reliabilityReport({ baseUrl: BASE, network: "base", wallet: WALLET, stats, observedStatus: "degraded" }).status === "degraded", "an observed degraded state is reported, never overwritten with operational");
 ok(r.processUptimeSeconds === 12345 && r.toolCallsServed.total === 100, "reliability pulls live stats");
 ok(r.onchain.revenueProof.includes(WALLET), "reliability onchain proof");
 ok(Array.isArray(r.guarantees) && r.guarantees.length >= 5, "guarantees listed");

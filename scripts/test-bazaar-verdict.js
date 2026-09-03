@@ -36,14 +36,27 @@ const check = (name, cond) => {
 {
   const v = missingModeVerdict({ failCount: 1, okCount: 2, stillMissingPaths: ["/api/a"], boughtPaths: new Set(["/api/a"]) });
   check("a failed buy exits 1 even if the missing route was also bought", v.exitCode === 1);
-  check("failure message counts the failed buys", /1 failed buy/.test(v.message));
+  check("failure message counts the failed buys", /1 buy\(s\) FAILED/.test(v.message));
 }
 
 // A route was never paid for (spend cap / price cap / batch stride).
+//
+// CHANGED 2026-08-31, deliberately. This used to require exit 1, and that is why
+// the deploy failed on almost every push that added routes: the caps and the
+// batch stride EXIST to leave routes for a later pass, so "something is left
+// over" is the normal state, not a fault. Measured over 30 Deploy to Railway
+// runs: 7 red, 4 of them this job logging "5 ok, 0 failed" and then exiting 1.
+// A failure mail that is usually noise is a failure mail nobody reads, and the
+// OpenClaw break that blocked every merge overnight arrived as one more red
+// deploy in that stream.
+//
+// The guarantee that matters is unchanged and asserted just above: a buy that
+// actually FAILED still exits 1. Leftovers now report which cap deferred them.
 {
   const v = missingModeVerdict({ failCount: 0, okCount: 1, stillMissingPaths: ["/api/a", "/api/unpaid"], boughtPaths: new Set(["/api/a"]) });
-  check("an unpaid route exits 1", v.exitCode === 1);
-  check("failure message counts the unpaid routes", /1 route\(s\) never paid for/.test(v.message));
+  check("an unpaid route is NOT a failure - the caps did their job", v.exitCode === 0);
+  check("the message still says how many were deferred", /1 route\(s\) were left for a later pass/.test(v.message));
+  check("and names the caps that deferred them", /spend cap, price cap or batch stride/.test(v.message));
 }
 
 // Mixed: some lag, some never paid — the unpaid ones decide it.
@@ -53,7 +66,18 @@ const check = (name, cond) => {
     stillMissingPaths: ["/api/a", "/api/b", "/api/never"],
     boughtPaths: new Set(["/api/a", "/api/b"]),
   });
-  check("lag plus an unpaid route still exits 1", v.exitCode === 1);
+  check("lag plus an unpaid route is still exit 0 with no failed buy", v.exitCode === 0);
+}
+
+// ...but a failed buy alongside leftovers still fails, and says both.
+{
+  const v = missingModeVerdict({
+    failCount: 2, okCount: 3,
+    stillMissingPaths: ["/api/a", "/api/never"],
+    boughtPaths: new Set(["/api/a"]),
+  });
+  check("a failed buy still decides it even with leftovers present", v.exitCode === 1);
+  check("and the message reports both", /2 buy\(s\) FAILED/.test(v.message) && /1 route\(s\) left unpaid/.test(v.message));
 }
 
 // Accepts a plain array as well as a Set (call-site convenience).

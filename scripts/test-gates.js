@@ -57,7 +57,7 @@ const GATES = [
     gate: "test-docs-truth.js",
     needsServer: true,
     file: "wiki/Skill-Packs.md",
-    from: "/skills/company-dossier) | $0.12",
+    from: "/skills/company-dossier) | $0.064",
     to: "/skills/company-dossier) | $0.99",
     defect: "a stale pack price on a /skills link (the shape that slipped past the first version)",
   },

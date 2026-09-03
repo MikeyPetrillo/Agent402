@@ -9,12 +9,18 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
 const bySlug = (slug) => LLM_RESPONSES_TOOLS.find((t) => t.slug === slug);
 const base = "v1-chat", nanoT = "v1-chat-nano";
 
-ok(LLM_RESPONSES_TOOLS.length === 5 && LLM_RESPONSES_TOOLS.every((t) => t.route === `POST ${RESPONSES_PATH_BY_TIER[t.slug.replace(/-responses$/, "")]}` && WALLET_ONLY_SLUGS.has(t.slug)), "five Responses routes on the tier paths, all wallet-only");
+ok(LLM_RESPONSES_TOOLS.length === 6 && LLM_RESPONSES_TOOLS.every((t) => t.route === `POST ${RESPONSES_PATH_BY_TIER[t.slug.replace(/-responses$/, "")]}` && WALLET_ONLY_SLUGS.has(t.slug)), "five Responses routes on the tier paths, all wallet-only");
 
 // ---- validation ----
 const v = validateResponsesRequest({ model: "openai/gpt-4o-mini", input: "hi", instructions: "terse", max_output_tokens: 99999, temperature: 0.1, text: { format: { type: "text" } } }, base);
 ok(v.body.model === "openai/gpt-4o-mini" && v.body.max_output_tokens === TIERS[base].maxTokens && v.body.store === false && v.body.instructions === "terse" && v.body.text.format.type === "text", `valid body: max_output_tokens clamped to the cap (${v.body.max_output_tokens}), store forced false, instructions/text pass`);
-ok(validateResponsesRequest({ model: "openai/gpt-4o-mini", input: "hi" }, base).body.max_output_tokens === Math.min(1024, TIERS[base].maxTokens), "max_output_tokens defaults like the chat wire");
+ok(validateResponsesRequest({ model: "openai/gpt-4o-mini", input: "hi" }, base).body.max_output_tokens === Math.min(TIERS[base].defaultMaxTokens || 1024, TIERS[base].maxTokens), "max_output_tokens defaults to the tier's own budget, like the chat wire");
+{
+  const reasoning = "v1-chat-premium";
+  const model = TIERS[reasoning].defaultModel;
+  const v = validateResponsesRequest({ model, input: "hi" }, reasoning);
+  ok(v.body.max_output_tokens === Math.min(TIERS[reasoning].defaultMaxTokens, TIERS[reasoning].maxTokens) && v.body.max_output_tokens > 1024, `a tier whose model reasons before it speaks gets its generous default (${reasoning}: ${v.body.max_output_tokens}), not a hardcoded 1024 that reasoning consumes`);
+}
 for (const [label, body] of [
   ["no input", { model: "openai/gpt-4o-mini" }],
   ["previous_response_id", { model: "openai/gpt-4o-mini", input: "hi", previous_response_id: "resp_1" }],
@@ -85,8 +91,65 @@ await baseTool.handler({ model: "openai/gpt-4o-mini", input: "hi" }, fakeReq).th
   const all = frames.join("");
   ok(res.ended && /response.created/.test(all) && /output_text.delta/.test(all) && /response.completed/.test(all) && /"input_tokens":6/.test(all) && !/cost|is_byok/.test(all), "streamed Responses events pass through end to end; nested response.usage billing scrubbed");
 }
+// ---- metered Responses route: quote from the body, belt, provider bound, meter sentinel ----
+{
+  const { meteredResponsesQuoteUsd } = await import("../src/tools/llm-responses-kit.js");
+  const { costFor, meteredQuoteForProbe } = await import("../src/tools/llm-gateway-kit.js");
+  const metered = bySlug("v1-chat-metered-responses");
+  ok(!!metered && metered.route === "POST /v1/metered/responses" && metered.price === "$0.001" && typeof metered.quote === "function" && LLM_RESPONSES_TOOLS.filter((t) => typeof t.quote === "function").length === 1, "only the metered Responses route carries a per-request quote() and the floor price");
+  ok(Object.keys(RESPONSES_PATH_BY_TIER).at(-1) === "v1-chat-metered", "the metered tier is LAST in the path map (tierFor keeps home tiers first)");
+  const small = { model: "anthropic/claude-haiku-4.5", max_output_tokens: 16, input: "hi" };
+  const bigger = { model: "anthropic/claude-opus-5", max_output_tokens: 4096, instructions: "x ".repeat(20_000), input: "y ".repeat(5_000) };
+  const qs = meteredResponsesQuoteUsd(small), qb = meteredResponsesQuoteUsd(bigger);
+  ok(!qs.invalid && !qb.invalid && qs.usd >= TIERS["v1-chat-metered"].price && qb.usd > qs.usd * 10, `quote grows with the body: small $${qs.usd}, bigger $${qb.usd}`);
+  ok(metered.quote(small) === qs.usd && metered.quote(bigger) === qb.usd, "the tool's quote() is the same function payments.js prices the 402 from");
+  const qi = meteredResponsesQuoteUsd({ max_output_tokens: 16 });
+  ok(qi.invalid && qi.usd === TIERS["v1-chat-metered"].price, "an invalid body quotes the floor and says why (the handler's 400 refuses it)");
+  seen = [];
+  globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push({ url: String(url), b }); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
+  const mo = await metered.handler(small, { ...fakeReq, __meteredQuoteUsd: qs.usd });
+  const row = costFor(small.model);
+  ok(seen[0].url.endsWith("/api/v1/responses") && seen[0].b.provider?.max_price?.prompt === row.prompt && seen[0].b.provider?.max_price?.completion === row.completion && seen[0].b.store === false, "metered: provider.max_price is the quoted model's own cost row, not the tier-wide cap; store stays false");
+  ok(mo.__meterUpstreamUsd === 0.0000021 && mo.output[0].content[0].text === "Hello there." && !("cost" in mo.usage), "metered: the meter sentinel carries the upstream cost to the route binder; billing fields stripped");
+  ok(!JSON.stringify(mo).includes("__meterUpstreamUsd") && !Object.keys(mo).includes("__meterUpstreamUsd"), "metered: the sentinel is non-enumerable");
+  {
+    const { _testEventsForTest } = await import("../src/posthog.js");
+    const ev = _testEventsForTest().filter((e) => e.event === "gateway_usage").pop();
+    ok(ev?.properties.tier === "v1-chat-metered:responses" && ev?.properties.priceUsd === qs.usd, "metered: gateway_usage.priceUsd is the quote, not the floor");
+  }
+  let belt = null;
+  try { await metered.handler(bigger, { ...fakeReq, __meteredQuoteUsd: qs.usd }); } catch (e) { belt = e; }
+  ok(belt?.statusCode === 400 && /quoted at/.test(belt.message) && seen.length === 1, "metered belt: a body quoting above the gated price is refused 400 before any upstream call");
+  const overCap = { model: "anthropic/claude-opus-4.7-fast", max_output_tokens: 8192, input: "\u4e2d".repeat(190_000) };
+  const qo = meteredResponsesQuoteUsd(overCap);
+  ok(qo.overCap === true && qo.usd === TIERS["v1-chat-metered"].maxQuoteUsd, `an over-cap body quotes the cap ($${qo.usd}) and is flagged overCap`);
+  for (const [label, r] of [["with the gate's stashed quote", { ...fakeReq, __meteredQuoteUsd: qo.usd }], ["with no request (in-process caller)", undefined]]) {
+    let err = null;
+    try { await metered.handler(overCap, r); } catch (e) { err = e; }
+    ok(err?.statusCode === 400 && /per-call cap/.test(err.message) && seen.length === 1, `over the cap ${label}: refused 400 before any upstream call`);
+  }
+  const { meteredQuoteForProbe: mq } = { meteredQuoteForProbe };
+  ok(typeof mq === "function", "probe-level quoter shared with the chat and Messages wires");
+}
+{
+  seen = [];
+  globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push({ url: String(url), b }); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
+  const out = await bySlug("v1-chat-responses").handler({ input: "hi", max_output_tokens: 16 }, fakeReq);
+  const { _testEventsForTest } = await import("../src/posthog.js");
+  const ev = _testEventsForTest().filter((e) => e.event === "gateway_usage").pop();
+  ok(seen[0].b.model === "openai/gpt-4o-mini" && out.agent402_default_model === "openai/gpt-4o-mini" && ev?.properties.defaulted === true, "a defaulted call serves the tier default, says so in the reply, and gateway_usage records defaulted:true");
+  globalThis.fetch = realFetch;
+}
 globalThis.fetch = realFetch;
 delete process.env.OPENROUTER_API_KEY;
+
+// ---- a missing model is served as the tier default (2026-08-28) ----
+{
+  const v = validateResponsesRequest({ input: "hi", max_output_tokens: 16 }, "v1-chat");
+  ok(v.body.model === "openai/gpt-4o-mini" && v.defaultedModel === "openai/gpt-4o-mini", "no model on v1-chat -> the tier default, marked defaultedModel");
+  const e = validateResponsesRequest({ model: "openai/gpt-4o-mini", ...{ input: "hi", max_output_tokens: 16 } }, "v1-chat");
+  ok(e.defaultedModel === null, "an explicit model is not marked as defaulted");
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

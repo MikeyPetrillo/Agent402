@@ -14,7 +14,11 @@ const kit = readFileSync("src/tools/llm-gateway-kit.js", "utf8");
 const server = readFileSync("src/server.js", "utf8");
 const meter = readFileSync("src/gateway-meter.js", "utf8");
 
-ok(/data\.__meterUpstreamUsd = upstreamUsd/.test(kit), "the gateway reports its real upstream cost on the response sentinel");
+// The sentinel is set through setMeterSentinel (NON-enumerable, review
+// 2026-08-27) - a plain assignment would make our upstream bill serializable
+// again wherever the result is nested by an in-process caller.
+ok(/setMeterSentinel\(data, upstreamUsd\)/.test(kit) && !/data\.__meterUpstreamUsd = upstreamUsd/.test(kit), "the gateway reports its real upstream cost through the non-enumerable sentinel helper, never a plain assignment");
+ok(/enumerable: false/.test(meter) && /export function setMeterSentinel/.test(meter), "setMeterSentinel defines the sentinel non-enumerable");
 ok(/typeof upstreamUsd === "number"/.test(kit),
   "and only when upstream actually reported a number: a missing cost must mean 'no meter', never 'free'");
 

@@ -81,7 +81,7 @@ function cardsSvg() {
     sub: "same HTTP 402, one more offer: a card in a Link wallet, paid over MPP, no crypto wallet",
     body,
     footerLeft: `first live card settlement <tspan font-weight="700" fill="${B.ink}">${DATE}</tspan> (pi_3U8VOX…) · stablecoin rails unchanged`,
-    footerRight: "500+ deterministic tools",
+    footerRight: "500+ tools",
   });
 }
 
@@ -113,7 +113,7 @@ function railsSvg() {
     sub: "the buyer picks the chain, the wire, or the card; the tool and the price are the same",
     body,
     footerLeft: `x402 v2 + MPP on the same response · <tspan font-weight="700" fill="${B.ink}">agent402.tools/marketplace</tspan>`,
-    footerRight: "500+ deterministic tools",
+    footerRight: "500+ tools",
   });
 }
 

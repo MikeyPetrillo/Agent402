@@ -23,6 +23,12 @@ import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 // this is the instance that fix did not reach, because test-price-prose only
 // reads a page's description, never its body.
 const usd = (cents) => `$${Number(cents) % 100 === 0 ? Number(cents) / 100 : (Number(cents) / 100).toFixed(2)}`;
+const cardCents = Object.values(HUMAN_PRODUCTS || {}).map((p) => Number(p?.price)).filter((n) => Number.isFinite(n) && n > 0);
+const CARD_LO = cardCents.length ? Math.min(...cardCents) / 100 : 2;
+const CARD_HI = cardCents.length ? Math.max(...cardCents) / 100 : 5;
+const monCents = Object.values(MONITOR_PRODUCTS || {}).map((p) => Number(p?.price)).filter((n) => Number.isFinite(n) && n > 0);
+const MON_USD = monCents.length ? Math.min(...monCents) / 100 : 5;
+const usd0 = (n) => `$${Number(n).toFixed(0)}`;
 function cardPrice(product) {
   const p = HUMAN_PRODUCTS?.[product]?.price;
   return Number.isFinite(p) ? usd(p) : "";
@@ -110,13 +116,17 @@ function capabilityChipsHtml(tools) {
     .join("");
 }
 
-export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, skillPacks) {
+export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, skillPacks, { settledOnChain = 0 } = {}) {
   const tools = toolList(catalog);
   const count = tools.length;
   const freeCount = tools.filter(isComputePayable).length;
   const packCount = Array.isArray(skillPacks) ? skillPacks.length : 42;
   const served = stats?.toolCallsServed || {};
   const viaUsdc = Number(served.viaUSDC) || 0;
+  // Hero counter = the chain-derived settled count (same two ledger reads as
+  // /revenue - the numbers must agree across surfaces); the in-process tally
+  // is the fallback only while the ledger is still warming after a boot.
+  const heroCount = Number(settledOnChain) || viaUsdc;
   const viaPow = Number(served.viaProofOfWork) || 0;
   const mppWire = Number(served.viaMPPWire) || 0;
   const viaRouter = Number(served.viaRouter) || 0;
@@ -132,7 +142,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
 
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", alternateName: "Agent402.Tools", url: baseUrl, knowsAbout: ["Agentic Finance", "AIFI", "x402", "Machine Payments Protocol (MPP)", "agentic payments", "AI agents"], logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, email: "mike@agent402.tools", parentOrganization: { "@type": "Organization", name: "Havok Holdings LLC" }, sameAs: ["https://github.com/MikeyPetrillo/Agent402", "https://x.com/Agent402Tools", "https://www.npmjs.com/package/agent402-mcp", "https://www.npmjs.com/package/agent402-client", "https://www.npmjs.com/package/agent402-tollbooth", "https://pypi.org/project/agent402-langchain/", "https://www.x402scan.com/server/07eb3020-932a-436d-a739-557b6e47101d"] };
   const websiteLd = { "@type": "WebSite", "@id": `${baseUrl}/#website`, name: "Agent402.Tools", alternateName: "Agent402 - applied layer of Agentic Finance", url: baseUrl, publisher: { "@id": `${baseUrl}/#organization` }, description: "The applied layer of Agentic Finance: open index, Smart Order Router and on-chain ranking for agents paying and getting paid over x402 and MPP.", about: { "@type": "DefinedTerm", name: "Agentic Finance", alternateName: "AIFI", url: `${baseUrl}/agentic-finance` }, potentialAction: { "@type": "SearchAction", target: `${baseUrl}/api/find?q={search_term_string}`, "query-input": "required name=search_term_string" } };
-  const appLd = { "@type": "SoftwareApplication", "@id": `${baseUrl}/#app`, name: "Agent402", url: baseUrl, applicationCategory: "DeveloperApplication", operatingSystem: RAILS.map((r) => r.name).join(", "), license: "https://www.gnu.org/licenses/agpl-3.0.html", description: `Open-source, self-hostable Agentic Finance server for x402 + MPP: ${fmtNum(count)} deterministic pay-per-call tools and ${packCount}+ skill packs for AI agents, plus an open index, Smart Order Router and on-chain seller leaderboard.`, offers: { "@type": "AggregateOffer", offerCount: String(count), lowPrice: "0.001", highPrice: "1.50", priceCurrency: "USD", description: "Per-call micropayments in USDC on eleven chains plus USDG on Robinhood Chain, free with proof-of-work, or by card: finished reports $1 to $2, monitors $3 a month, prepaid credits from $20" } };
+  const appLd = { "@type": "SoftwareApplication", "@id": `${baseUrl}/#app`, name: "Agent402", url: baseUrl, applicationCategory: "DeveloperApplication", operatingSystem: RAILS.map((r) => r.name).join(", "), license: "https://www.gnu.org/licenses/agpl-3.0.html", description: `Open-source, self-hostable Agentic Finance server for x402 + MPP: ${fmtNum(count)} pay-per-call tools and ${packCount}+ skill packs for AI agents, plus an open index, Smart Order Router and on-chain seller leaderboard.`, offers: { "@type": "AggregateOffer", offerCount: String(count), lowPrice: "0.001", highPrice: "1.50", priceCurrency: "USD", description: "Per-call micropayments in USDC on eleven chains plus USDG on Robinhood Chain, free with proof-of-work, or by card: finished reports ${usd0(CARD_LO)} to ${usd0(CARD_HI)}, monitors ${usd0(MON_USD)} a month, prepaid credits from $20" } };
   const datasetLd = { "@type": "Dataset", "@id": `${baseUrl}/#leaderboard`, name: "x402 seller leaderboard - Base USDC settled volume", description: "Hourly on-chain snapshot ranking every indexed x402 seller by Base USDC settled volume: calls settled, total USD, unique buyers per seller.", creator: { "@id": `${baseUrl}/#organization` }, license: "https://www.gnu.org/licenses/agpl-3.0.html", isAccessibleForFree: true, distribution: { "@type": "DataDownload", encodingFormat: "application/json", contentUrl: `${baseUrl}/api/leaderboard` } };
   const surfacesLd = { "@type": "ItemList", "@id": `${baseUrl}/#surfaces`, name: "Free x402 discovery primitives", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Find - resolve a task to the best-matching tool", url: `${baseUrl}/api/find` },
@@ -144,7 +154,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
     { q: "What is agentic finance?", a: "Agentic finance (AIFI for short) is software agents transacting on their own: discovering a service, paying per request from a non-custodial wallet over open protocols such as x402 and MPP, receiving a verifiable receipt, and earning per request in return. Agent402 is its applied layer: the tools agents buy, the index and Smart Order Router that find and pay the best seller, the tollbooth that lets any site earn from agents, and on-chain transparency for all of it. Full explainer at /agentic-finance." },
     { q: "How do I sell my API for USDC per call?", a: "Register your origin in the \"Sell into the agent economy\" section above, or read the full seller guide at /sell for pricing, routing and health details. If your site is not x402-native yet, agent402-tollbooth is an open pay-per-crawl gate you can install instead." },
     { q: "Do I need a wallet to try it?", a: "No. The pure-CPU tools are payable in compute: your own machine solves a single-use, slug-scoped sha256 proof-of-work instead of paying, which costs about a second of CPU. A wallet only matters for tools that cost real money to run, and those quote their price in the 402 challenge before anything is charged." },
-    { q: "Can I pay by card instead of crypto?", a: "Yes. Finished, cited reports at /reports ($1, or $2 for the deepest three, auto-refunded if a report fails), monitors at /monitors ($3 a month, cancel anytime), and prepaid credits at /credits: buy $20, $50 or $100 once, get a key, and call any tool with Authorization: Bearer a402_..., debited only when a call succeeds. The card price includes payment processing: Stripe charges 2.9% + $0.30 per charge, so under about a dollar the fee costs more than the report. An agent paying per call in USDC over x402 or MPP pays the lower tool price for the same report, $0.20 to $1.10." },
+    { q: "Can I pay by card instead of crypto?", a: `Yes. Finished, cited reports at /reports (${usd0(CARD_LO)} to ${usd0(CARD_HI)} by card, auto-refunded if a report fails), monitors at /monitors (${usd0(MON_USD)} a month, cancel anytime), and prepaid credits at /credits: buy $20, $50 or $100 once, get a key, and call any tool with Authorization: Bearer a402_..., debited only when a call succeeds. The card price includes payment processing: Stripe charges 2.9% + $0.30 per charge, so under about a dollar the fee costs more than the report. An agent paying per call in USDC over x402 or MPP pays the lower tool price for the same report.` },
     { q: "What is a report, and what if it fails?", a: "A report is a finished deliverable, not a chat answer: live data (SEC EDGAR, openFDA, your domain's DNS and TLS, grounded web search) composed and synthesized with every claim cited, plus a downloadable data appendix and PDF. Payment is verified before anything is generated; if generation fails after payment, the card is refunded automatically and the x402 settlement is cancelled." },
     { q: "Is it open source, and can I run my own?", a: "Yes. The server is AGPL-3.0 and self-hostable; the client SDK, MCP connector and tollbooth packages are MIT. Clone it and run FREE_MODE=true npm start for all tools as an HTTP API plus MCP, with no payments and no keys." },
   ];
@@ -208,12 +218,13 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
   <div style="max-width:1180px;margin:0 auto;padding:84px 30px 56px;position:relative;">
     <div class="hm-hero">
       <div class="ml-stagger" style="display:flex;flex-direction:column;gap:26px;">
-        <div class="ml-hero-eyebrow" style="font-family:var(--font-mono);font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);">Pay per call. Pay per report. Nothing else.</div>
-        <h1 class="ml-hero-h1" style="font-weight:500;font-size:72px;line-height:.98;letter-spacing:-.04em;margin:0;color:var(--ink);text-wrap:balance;">The web's paid door, <span style="color:var(--faint);">finally open.</span></h1>
-        <p class="hm-lede" style="font-size:19px;max-width:560px;margin:0;">HTTP reserved <span style="font-family:var(--font-mono);font-size:16px;color:var(--ink);">402 Payment Required</span> in 1997. Behind it now: 500+ deterministic tools priced in cents and finished reports priced in dollars. Agents pay USDC per call over <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">MPP</a>, no keys, no signup. People pay by card. Same pipeline, same price list, usage priced under a ceiling you see first and a receipt on every settled call - the applied layer of <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">agentic finance</a>.</p>
+        <div class="ml-hero-eyebrow" style="font-family:var(--font-mono);font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);">No account. No API key. No card on file.</div>
+        <h1 class="ml-hero-h1" style="font-weight:500;font-size:72px;line-height:.98;letter-spacing:-.04em;margin:0;color:var(--ink);text-wrap:balance;">Pay for any API call <span style="color:var(--faint);">without an account.</span></h1>
+        <p class="hm-lede" style="font-size:19px;max-width:560px;margin:0;">An agent sends a request, gets a price back in the <span style="font-family:var(--font-mono);font-size:16px;color:var(--ink);">402</span>, pays it from its own wallet over <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">MPP</a>, and the call is served: 500+ tools priced in cents, models metered under a quoted ceiling, finished reports priced in dollars. People pay the same price list by card. A receipt on every settled call, and nothing to sign up for first - the applied layer of <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">agentic finance</a>.</p>
         <div class="ml-hero-ctas" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
           <a class="hm-btn hm-btn-dark" href="/reports">Buy a report</a>
           <a class="hm-btn hm-btn-ghost" href="/docs#add" style="font-family:var(--font-mono);font-size:13.5px;">Add to Claude</a>
+          <a href="/guides/agent-hosts" style="font-family:var(--font-mono);font-size:12.5px;color:var(--muted);text-decoration:none;border-bottom:1px solid var(--hairline);">or Cursor, VS Code, Windsurf, Cline, Codex, Gemini CLI →</a>
         </div>
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;font-family:var(--font-mono);font-size:12.5px;color:var(--muted);">
           <span class="ml-dot"></span><span>${RAILS.length} rails live</span>
@@ -240,8 +251,8 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
 <span style="color:var(--accent-lit);">HTTP/2 200</span>  Payment-Receipt: …</pre>
         <div style="padding:16px 22px 18px;border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;">
           <div>
-            <div id="hm-counter" data-via-usdc="${esc(viaUsdc)}" style="font-family:var(--font-body);font-weight:500;font-size:44px;line-height:.95;letter-spacing:-.035em;color:var(--on-dark);font-variant-numeric:tabular-nums;">${viaUsdc ? fmtNum(viaUsdc) : ""}</div>
-            <div id="hm-counter-empty" style="display:${viaUsdc ? "none" : "flex"};align-items:center;gap:11px;">
+            <div id="hm-counter" data-via-usdc="${esc(heroCount)}" style="font-family:var(--font-body);font-weight:500;font-size:44px;line-height:.95;letter-spacing:-.035em;color:var(--on-dark);font-variant-numeric:tabular-nums;">${heroCount ? fmtNum(heroCount) : ""}</div>
+            <div id="hm-counter-empty" style="display:${heroCount ? "none" : "flex"};align-items:center;gap:11px;">
               <span style="width:8px;height:8px;border-radius:50%;background:var(--accent-lit);flex:none;animation:ml-pulse 1.6s ease-in-out infinite;"></span>
               <span style="font-family:var(--font-mono);font-size:15px;color:var(--on-dark2);">Listening for on-chain payments…</span>
             </div>
@@ -268,6 +279,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
         <a href="/credits" class="hm-chip" style="font-family:var(--font-body);font-size:13px;border-radius:999px;">Credits for any tool, from $20</a>
       </div>
       <a href="/reports" style="margin-top:6px;font-size:14.5px;font-weight:500;color:var(--ink);text-decoration:none;">Browse reports →</a>
+      <p style="margin:10px 0 0;font-size:13px;color:var(--muted);">Free previews from the filings: <a href="/reports/insider" style="color:var(--ink);">insider trades by ticker</a> · <a href="/reports/fund" style="color:var(--ink);">fund holdings (13F)</a> · <a href="/reports/dossier" style="color:var(--ink);">company dossiers</a></p>
     </div>
     <div class="hm-obsidian" style="padding:32px;display:flex;flex-direction:column;gap:16px;">
       <div style="font-family:var(--font-mono);font-size:11.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--dk-muted);">For agents</div>
@@ -286,7 +298,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
 
 <section style="max-width:1180px;margin:0 auto;padding:36px 30px 0;">
   <div class="hm-proof" style="padding:26px 0;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);">
-    <div style="display:flex;flex-direction:column;gap:4px;"><span style="font-family:var(--font-mono);font-size:26px;letter-spacing:-.02em;color:var(--ink);font-variant-numeric:tabular-nums;">${viaUsdc ? fmtNum(viaUsdc) : "·"}</span><span style="font-size:13px;color:var(--faint);">calls settled on chain, all rails</span></div>
+    <div style="display:flex;flex-direction:column;gap:4px;"><span style="font-family:var(--font-mono);font-size:26px;letter-spacing:-.02em;color:var(--ink);font-variant-numeric:tabular-nums;">${heroCount ? fmtNum(heroCount) : "·"}</span><span style="font-size:13px;color:var(--faint);">calls settled on chain, all rails</span></div>
     <div style="display:flex;flex-direction:column;gap:4px;"><span style="font-family:var(--font-mono);font-size:26px;letter-spacing:-.02em;color:var(--ink);font-variant-numeric:tabular-nums;">${fmtNum(count)}</span><span style="font-size:13px;color:var(--faint);">tools · ${packCount}+ skill packs</span></div>
     <div style="display:flex;flex-direction:column;gap:4px;"><span style="font-family:var(--font-mono);font-size:26px;letter-spacing:-.02em;color:var(--ink);font-variant-numeric:tabular-nums;">${RAILS.length}</span><span style="font-size:13px;color:var(--faint);">settlement rails · x402 + MPP</span></div>
     <div style="display:flex;flex-direction:column;gap:4px;"><span style="font-family:var(--font-mono);font-size:26px;letter-spacing:-.02em;color:var(--accent);">0%</span><span style="font-size:13px;color:var(--faint);">deducted from sellers · open source</span></div>

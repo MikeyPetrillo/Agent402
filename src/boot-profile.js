@@ -9,6 +9,15 @@
 // Remove once the stall is fixed.
 import { Session } from "node:inspector";
 
+// The event-loop lag monitor starts HERE, unconditionally, for the same reason
+// the CPU profile does: this module body is the first thing that runs, and ES
+// imports hoist. Started from server.js it began only AFTER every module had
+// evaluated, so it reported worstMs 0 through a boot it could not see. It is
+// one unref'd interval; unlike the profile above it stays on for the life of
+// the process, because the stall we are chasing happens hours in.
+import { startLoopLagMonitor } from "./loop-lag.js";
+startLoopLagMonitor();
+
 const on = process.env.BOOT_CPU_PROFILE !== "off" && (process.env.RAILWAY_DEPLOYMENT_ID || process.env.BOOT_CPU_PROFILE === "on");
 if (on) {
   try {

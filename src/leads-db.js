@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // Tollbooth waitlist + partner leads — minimal Postgres-backed intake.
 //
 // Storage layer for /api/tollbooth/waitlist submissions. The form on
@@ -115,8 +116,10 @@ export async function insertLead(lead) {
       org: cap(lead.org, 200),
       sites: cap(lead.sites, 1000),
       message: cap(lead.message, 4000),
-      ip: cap(lead.ip, 64),
-      ua: cap(lead.ua, 500),
+      // 2026-08-28: raw IP + browser string are not kept at rest (privacy inventory);
+      // a day-scoped hash of the IP keeps abuse triage without identifying anyone.
+      ip: lead.ip ? createHash("sha256").update(`${lead.ip}|${new Date().toISOString().slice(0, 10)}`).digest("hex").slice(0, 16) : null,
+      ua: null,
     };
     const r = await p.query(
       `INSERT INTO tollbooth_leads (kind, plan, name, email, org, sites, message, ip, ua)

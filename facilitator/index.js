@@ -19,6 +19,9 @@ import { withTimeout } from "./timeout.js";
 import { installRpcDiagnostics } from "./rpc-diagnostics.js";
 import { installRpcRequestTimeout } from "./rpc-timeout.js";
 import { installRpcFailover, resolveFallbackUrls } from "./rpc-failover.js";
+import { installPollClamp } from "./settle-poll.js";
+import { installFeeBid, resolveBidStroops, assertFeeBumpUnpatched } from "./fee-bid.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 // Must install before ExactStellarScheme ever calls getRpcClient() /
 // sendTransaction() - a patch applied after the first real request would
@@ -31,13 +34,34 @@ import { installRpcFailover, resolveFallbackUrls } from "./rpc-failover.js";
 installRpcRequestTimeout(process.env.FACILITATOR_RPC_TIMEOUT_MS === undefined ? 10_000 : Number(process.env.FACILITATOR_RPC_TIMEOUT_MS));
 installRpcDiagnostics();
 // Installed LAST so it wraps the timeout + diagnostics and sees their errors.
-installRpcFailover(resolveFallbackUrls(NETWORK, process.env.FACILITATOR_RPC_FALLBACK_URLS));
+// Reads that stay silent past FACILITATOR_RPC_HEDGE_MS (default 3 s) are also
+// sent to the first fallback; first answer wins (2026-08-28: a slow-but-
+// answering primary spent the whole settle budget without one error).
+installRpcFailover(resolveFallbackUrls(NETWORK, process.env.FACILITATOR_RPC_FALLBACK_URLS), {
+  hedgeMs: process.env.FACILITATOR_RPC_HEDGE_MS === undefined ? 3_000 : Number(process.env.FACILITATOR_RPC_HEDGE_MS),
+});
+
+// The settlement transaction's inclusion-fee bid. @x402/stellar hardcodes the
+// network minimum (100 stroops), which loses Stellar's fee auction whenever
+// the ledger is busy - measured 2026-08-31 as a 37.5% Stellar rail failure
+// rate over 30 days, in two shapes (txInsufficientFee at submission, or
+// PENDING then dropped). Stellar charges the clearing price rather than the
+// bid, so raising it is a ceiling, not a cost. See fee-bid.js.
+const FEE_BID_STROOPS = resolveBidStroops(process.env.FACILITATOR_INCLUSION_FEE_STROOPS);
+if (!installFeeBid({ bidStroops: FEE_BID_STROOPS })) {
+  console.warn(`[startup] Stellar inclusion-fee bid NOT installed (FACILITATOR_INCLUSION_FEE_STROOPS=${FEE_BID_STROOPS}) - settlements bid the network minimum and will lose the fee auction on busy ledgers.`);
+}
 
 const PORT = Number(process.env.PORT) || 4021;
 const AUTH_TOKEN = (process.env.FACILITATOR_AUTH_TOKEN || "").trim();
 const ALLOWED_PAYTO = (process.env.FACILITATOR_ALLOWED_PAYTO || "")
   .split(",").map((s) => s.trim()).filter(Boolean);
-const LOW_BALANCE_XLM = Number(process.env.FACILITATOR_LOW_BALANCE_XLM) || 5;
+// 1 XLM, not 5. A settlement's observed fee_charged is 23,501 stroops =
+// 0.00235 XLM (~$0.0007), so 1 XLM is ~425 settlements and 5 XLM was ~2,100 -
+// a threshold that pages while years of runway remain is an alarm nobody
+// reads. Raised bids do not change this much: even paying the full inclusion
+// bid every time, 1 XLM is ~136 settlements.
+const LOW_BALANCE_XLM = Number(process.env.FACILITATOR_LOW_BALANCE_XLM) || 1;
 // Found live in production (2026-08-14, first full day on mainnet): a
 // /settle call hung for 300s straight - no timeout, no error, nothing on
 // Horizon either (verified after the fact: neither the payer nor this
@@ -48,7 +72,13 @@ const LOW_BALANCE_XLM = Number(process.env.FACILITATOR_LOW_BALANCE_XLM) || 5;
 // @x402/stellar's own documented worst case is a 15-attempt x 1s poll
 // (~15s) AFTER submission - these bounds exist to fail fast and loud well
 // before that, not to fit real-world settlement time exactly.
-const SETTLE_TIMEOUT_MS = Number(process.env.FACILITATOR_SETTLE_TIMEOUT_MS) || 60_000;
+// 25 s (was 60 s): the CALLER gives up at 30 s, so a 60 s bound here meant
+// every slow settle reached the caller as a bodiless timeout with no payer
+// and no hash. Now this side answers first, with both. The post-submit poll
+// is capped separately (FACILITATOR_MAX_POLL_ATTEMPTS, settle-poll.js).
+const SETTLE_TIMEOUT_MS = Number(process.env.FACILITATOR_SETTLE_TIMEOUT_MS) || 25_000;
+const MAX_POLL_ATTEMPTS = Number(process.env.FACILITATOR_MAX_POLL_ATTEMPTS) || 8;
+const settleContext = new AsyncLocalStorage();
 const VERIFY_TIMEOUT_MS = Number(process.env.FACILITATOR_VERIFY_TIMEOUT_MS) || 30_000;
 const HEALTH_TIMEOUT_MS = Number(process.env.FACILITATOR_HEALTH_TIMEOUT_MS) || 10_000;
 
@@ -72,6 +102,15 @@ const stellarScheme = new ExactStellarScheme([signer], {
 });
 
 const facilitator = new x402Facilitator().register(NETWORK, stellarScheme);
+installPollClamp(Object.getPrototypeOf(stellarScheme), {
+  maxAttempts: MAX_POLL_ATTEMPTS,
+  onHash: (h) => { const c = settleContext.getStore(); if (c) c.txHash = String(h || ""); },
+});
+// We configure no feeBumpSigner, so build() (which the fee bid patches) makes
+// the transaction we submit. If one is ever added, the fee bump is built with
+// the vendor's own hardcoded BASE_FEE and the bid silently reverts - this says
+// so at startup rather than letting it return as a mystery failure rate.
+assertFeeBumpUnpatched(stellarScheme);
 
 // Settlement is serialized through this queue - see queue.js. Only settle()
 // touches the signer's Stellar sequence number; verify() is read-only
@@ -176,6 +215,11 @@ app.post("/verify", requireAuth, async (req, res) => {
   }
 });
 
+// withTimeout rejects outside the ALS scope, so the job's ctx is remembered
+// on the settle promise chain: the most recent ctx whose job is still the one
+// being awaited. Settles are serialized (queue.js), so "current" is exact.
+let _currentSettleCtx = null;
+const settleCtxOf = () => _currentSettleCtx;
 app.post("/settle", requireAuth, async (req, res) => {
   const { paymentPayload, paymentRequirements } = req.body ?? {};
   if (!isPlausiblePaymentPayload(paymentPayload) || !isPlausiblePaymentRequirements(paymentRequirements)) {
@@ -198,14 +242,17 @@ app.post("/settle", requireAuth, async (req, res) => {
     // codebase's usual answer applies: bound the failure, then let the
     // calling side's own chain-confirmation (src/stellar-confirm.js) catch
     // whatever lands late, the same way it already does for OpenZeppelin.
-    const result = await enqueueSettle(() => withTimeout(
-      facilitator.settle(paymentPayload, paymentRequirements),
+    const ctx = { txHash: "", startedAt: Date.now() };
+    const result = await enqueueSettle(() => settleContext.run(ctx, () => withTimeout(
+      (_currentSettleCtx = ctx, facilitator.settle(paymentPayload, paymentRequirements)),
       SETTLE_TIMEOUT_MS,
       "settle",
-    ));
+    )));
+    console.log(`[/settle] ${result?.success ? "settled" : `not settled (${result?.errorReason || "?"})`} in ${Date.now() - ctx.startedAt}ms${ctx.txHash ? ` tx ${ctx.txHash.slice(0, 12)}...` : " (nothing submitted)"}`);
     res.status(200).json(normalizeSettle(result, paymentRequirements.network));
   } catch (err) {
-    console.error("[/settle] dispatch error:", err);
+    const ctx = settleCtxOf(err);
+    console.error(`[/settle] dispatch error${ctx?.txHash ? ` (submitted ${ctx.txHash.slice(0, 12)}... before the bound)` : " (nothing submitted)"}:`, err);
     const reason = err?.code === "FACILITATOR_TIMEOUT" ? "settle_timed_out" : "facilitator_dispatch_error";
     // The underlying settle may already have submitted, or may yet submit in
     // the background (see the comment above) - either way this response is
@@ -214,7 +261,9 @@ app.post("/settle", requireAuth, async (req, res) => {
     // if this also fails, the response is no worse than it was before this
     // fix, just still missing payer.
     const payer = await bestEffortPayer(paymentPayload, paymentRequirements);
-    res.status(200).json({ ...invalidSettle(reason, paymentRequirements.network, safeMessage(err)), payer });
+    // The hash of whatever was submitted before the bound rides along, so the
+    // caller's on-chain confirmation can check that exact transaction.
+    res.status(200).json({ ...invalidSettle(reason, paymentRequirements.network, safeMessage(err)), payer, ...(ctx?.txHash ? { transaction: ctx.txHash } : {}) });
   }
 });
 

@@ -116,6 +116,18 @@ app.use(createTollbooth({ observe: true })); // or TOLLBOOTH_OBSERVE=true
 The dashboard grows a **"Would charge"** counter, and bots see a
 `X-Tollbooth-Observed: would-charge` header for log filtering.
 
+## MPP on the edge gate (0.10.0)
+
+The edge build takes MPP through the same `verifyX402` callback it already uses
+for x402: with `secret`, `payTo` and `verifyX402` set, every 402 carries a
+`WWW-Authenticate: Payment` evm/charge challenge beside the JSON `accepts`
+block, and an `Authorization: Payment` credential whose challenge id
+HMAC-verifies, is unexpired and was minted for that exact resource is
+translated to `PAYMENT-SIGNATURE` and handed to your verifier as if an x402
+client had sent it. Built-in USDC table for Base, Celo, Polygon, Arbitrum,
+Optimism, Avalanche and Sei; `mppAssetAddress` + `mppAssetName` name any other
+token; `mpp: false` turns it off. Settlement authority never moves.
+
 ## Durable stats + edge analytics
 
 By default, stats live in process memory: fine for single-instance Node,

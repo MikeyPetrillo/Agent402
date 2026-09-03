@@ -57,10 +57,47 @@ const BLOCKSCOUT_API = (process.env.BLOCKSCOUT_API_URL || "https://api.blockscou
 export const UPSTREAM_MAX_ATOMIC = 5000n; // $0.005 in 6-decimal USDC
 export const upstreamQuoteAcceptable = (amountAtomic) => quoteWithinCap(amountAtomic, UPSTREAM_MAX_ATOMIC);
 
-/** Buy one Blockscout Pro API path over x402. Returns the parsed JSON. */
+// Measured 2026-08-29 against the live upstream: the paid leg takes 7-19 s for
+// these paths (token-holders worst), so payX402's 20 s default bounded the
+// whole buy at roughly one upstream response and `contract-inspect` failed with
+// "The operation was aborted due to timeout" while the same call succeeded on
+// its own seconds later.
+const UPSTREAM_TIMEOUT_MS = Number(process.env.BLOCKSCOUT_TIMEOUT_MS) || 45_000;
+
+/** Buy one Blockscout Pro API path over x402. Returns the parsed JSON.
+ *
+ *  ONE retry on a transient upstream 5xx. Driving five of these back to back
+ *  produced three `HTTP 500` paid legs; the same five run serially answered
+ *  12/12, so the upstream sheds load under a burst. Without a retry each of
+ *  those cost us the $0.002 we had already paid AND returned the buyer a 502 -
+ *  a >= 400 cancels OUR settlement, so we ate the upstream bill and earned
+ *  nothing. The retry is a fresh buy (the first authorization is spent), which
+ *  is why it is bounded to one, only on 5xx, and never on a 4xx: a 4xx is our
+ *  request being wrong and paying twice would not fix it. Worst case is
+ *  2 x $0.002 against a $0.005-$0.010 sale.
+ */
 async function buyBlockscout(path) {
-  const { result } = await payX402(`${BLOCKSCOUT_API}${path}`, { maxAtomic: UPSTREAM_MAX_ATOMIC, trusted: true });
-  return result;
+  const url = `${BLOCKSCOUT_API}${path}`;
+  const opts = { maxAtomic: UPSTREAM_MAX_ATOMIC, trusted: true, timeoutMs: UPSTREAM_TIMEOUT_MS };
+  try {
+    const { result } = await payX402(url, opts);
+    return result;
+  } catch (err) {
+    if (!isTransientUpstream(err)) throw err;
+    console.warn(`[blockscout] transient upstream failure on ${path} (${err?.message ?? err}) - retrying once`);
+    await new Promise((r) => setTimeout(r, 750));
+    const { result } = await payX402(url, opts);
+    return result;
+  }
+}
+
+/** A 5xx from the SELLER after we paid, or a timeout - both recover on a
+ *  retry. A 4xx (bad path, quote over cap, refused payment) never does. */
+export function isTransientUpstream(err) {
+  const msg = String(err?.message ?? err ?? "");
+  if (/Seller rejected the paid retry \(HTTP 5\d\d\)/.test(msg)) return true;
+  if (/aborted due to timeout|The operation was aborted/i.test(msg)) return true;
+  return false;
 }
 
 export const BLOCKSCOUT_TOOLS = [
@@ -296,7 +333,7 @@ export const BLOCKSCOUT_TOOLS = [
 // the heartbeat alarms on "low" BEFORE that happens. Bucketed status only —
 // the balance number never leaves the server. 5-min cache; public-RPC read
 // with graceful "unknown" (an RPC flake must never page).
-const BASE_RPCS = ["https://mainnet.base.org", "https://base.llamarpc.com", "https://base.drpc.org"];
+const BASE_RPCS = ["https://mainnet.base.org", "https://base.drpc.org"];
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 // Sized against the LARGEST single spend this wallet can be asked to make, not
 // against the smallest.

@@ -68,6 +68,24 @@ const NETWORK_MATCHERS = new Map(RAILS.map((r) => {
 }));
 
 const LOCAL_SELLER = "self";
+// Unsubstituted OpenAPI path templates: "/stock/{symbol}", "/v1/x/{arg}".
+// TWO regexes on purpose: `.test()` on a /g regex is STATEFUL (it advances
+// lastIndex and alternates true/false across calls), so the predicate is
+// non-global and only the extraction is global.
+const URL_TEMPLATE_RE = /\{[^}/]+\}|%7[Bb][^/]*?%7[Dd]|\/:[A-Za-z_][A-Za-z0-9_]*(?=\/|$)/;
+const URL_TEMPLATE_RE_G = /\{([^}/]+)\}|%7[Bb](.*?)%7[Dd]|\/:([A-Za-z_][A-Za-z0-9_]*)(?=\/|$)/g;
+// THREE dialects, not one. The brace form is what OpenAPI writes, but a seller
+// documenting with Express-style ":domain", or a manifest that URL-encoded its
+// own braces into "%7Bdomain%7D", produces a path that is just as uncallable and
+// used to sail through. Reported 2026-08-30 by a seller whose row we published
+// with two placeholder routes priced at $0.02: /api/v1/hosts/:domain answers 422
+// forever, while /api/v1/hosts/allbirds.com?refresh=1 answers 402 as it should.
+// He also noted the consequence we could not see - a prober that tries the
+// documented path scores the SELLER as unpayable for a service that works.
+//
+// The colon form is anchored to a whole segment (/:name) so an ordinary path
+// containing a colon, or a scheme, is not mistaken for a template.
+const SELF_BAZAAR_ORIGIN = "https://agent402.tools"; // the origin our Bazaar listing is keyed under
 // /index used to render every crawled seller server-side (~1,477 rows → a
 // 475KB response with no compression). Cap the default render to the top N
 // by whatever metric the page is currently sorted on; ?all=1 opts back into
@@ -96,6 +114,14 @@ const DISCOVERY_INTERVAL_MS = 60 * 60 * 1000; // 1 hr — registries don't chang
  * factual claim about our own behaviour toward third parties - the same class
  * as a price quoted in prose - so it is generated, never typed.
  */
+// A seller manifest is third-party JSON: `capabilities.tools` may be a number
+// or anything else (a string reached a marketplace attribute unescaped, review
+// 2026-08-28). Only a non-negative integer counts; everything else is 0.
+function manifestToolCount(manifest) {
+  const n = Number(manifest?.capabilities?.tools);
+  return Number.isInteger(n) && n >= 0 && n < 1_000_000 ? n : 0;
+}
+
 export function crawlIntervalLabel() {
   const mins = Math.round(CRAWL_INTERVAL_MS / 60000);
   if (mins % 60 === 0 && mins >= 60) {
@@ -209,6 +235,22 @@ export function validateOriginInput(raw, { selfOrigin } = {}) {
 export async function registerOrigin(origin, { crawl } = {}) {
   const existing = cache.get(origin);
   if (existing && !existing.error) {
+    // A re-registration of a KNOWN origin used to be a pure no-op, which made
+    // "register again" useless as a seller's lever: a catalog stuck unpriced
+    // (and therefore unroutable) had no way to ask for pricing except waiting
+    // for the shared cycle budget to reach its rotation slot - measured
+    // 2026-09-01, sol.blockrun's 128 routes across four attempts. Registering
+    // is an explicit, rate-limited request (5/hour/IP), so it now re-runs the
+    // live-402 quote enrichment for THIS origin, budget-exempt and bounded by
+    // the same per-origin cap; probeDue backoffs still apply per route.
+    try {
+      await enrichLiveQuotes(existing.tools, origin, { ignoreBudget: true });
+      // The route pool memoizes DECORATED tools by entry-object identity
+      // (remotePoolMemo), so prices learned into the existing entry are
+      // invisible until the object is replaced - a fresh spread busts the
+      // memo and the pool re-decorates with what was just learned.
+      cache.set(origin, { ...existing });
+    } catch { /* listing still served */ }
     // Only a self-serve-submitted origin belongs in seller_registrations - this
     // early-return path also serves origins already known from Bazaar/registry
     // discovery, which never went through /sell and would misrepresent an
@@ -565,6 +607,23 @@ function microUsdToPrice(micro) {
 }
 
 /** Shared projection so sellerDetail / route / index-tools never drift. */
+/** Say when a published route is a documentation TEMPLATE rather than a callable
+ *  URL. Rides on every accessor that projects a route, deliberately: this file
+ *  already warns that a field present on two of three surfaces is inert on
+ *  whichever one happens to render, and that is exactly what happened here -
+ *  the flag existed only in routeQuery, so /api/index kept advertising a
+ *  seller's placeholder path at $0.02 with nothing to say it could never pay.
+ *  We still RETURN the row (the seller and the tool are real, and an agent that
+ *  knows the parameter can substitute it); we just stop implying it is payable. */
+function urlTemplateProjection(t) {
+  const route = String(t?.route || "");
+  if (!URL_TEMPLATE_RE.test(route)) return {};
+  return {
+    urlTemplate: true,
+    pathParams: [...route.matchAll(URL_TEMPLATE_RE_G)].map((m) => m[1] || m[2] || m[3]).filter(Boolean),
+  };
+}
+
 function priceConflictProjection(t) {
   if (t?.priceConflict !== true || !t.priceObservations) return {};
   const bazaar = priceToMicroUsd(t.priceObservations.bazaar);
@@ -992,6 +1051,15 @@ export function normaliseManifestTools(manifest, originUrl) {
         const row = {
           seller: originUrl,
           method: method || "GET",
+          // A manifest entry that names no verb is published as GET, the wire
+          // default - but SAY SO, so a later merge with rows that observed the
+          // real verb (OpenAPI, a live 402) can correct it instead of trusting a
+          // default as a declaration. Until 2026-09-02 minia2a.uk's two entries
+          // per path (ids x402_ip_geo_get / x402_ip_geo_post, no method) both
+          // published as GET; a seller whose POST route rejects GET would have
+          // been listed as GET, answered 405 to every buyer, and been recorded
+          // as broken by us.
+          ...(method ? {} : { methodInferred: true }),
           route,
           slug,
           name: name || u.pathname,
@@ -1011,9 +1079,25 @@ export function normaliseManifestTools(manifest, originUrl) {
     const meta = metaByPath.get(String(t.route || "").split("?")[0]);
     if (!meta) continue;
     if (!t.price && meta.price) t.price = meta.price;
+    // fall through to the stamp below
     if ((!t.name || t.name === t.route || String(t.name).startsWith("/")) && meta.name) t.name = meta.name;
     if (!t.description && meta.description) t.description = String(meta.description).slice(0, 400);
     if ((!t.slug || t.slug === t.route) && meta.slug) t.slug = meta.slug;
+  }
+  // A price in the seller's OWN manifest is an origin declaration, exactly like
+  // one in their openapi.json, and must be marked as such: `originDeclaredPrice`
+  // is what stops a stale learned quote from overriding it. Missing this was a
+  // real defect in the first cut of the #1043 fix - the reporter's own row is
+  // discovered via /.well-known/x402, not OpenAPI, so their corrected manifest
+  // price kept losing to a nine-day-old learned amount even after the "fix".
+  // Verified against their live endpoint before this line existed: still 0.5.
+  for (const t of byKey.values()) {
+    // NB the manifest price is often a display string ("$0.05"), so this must
+    // go through the same parser the rest of the index uses - a bare Number()
+    // yields NaN and silently skips the stamp (caught while verifying against
+    // the reporter's own live manifest).
+    const micro = priceToMicroUsd(t.price);
+    if (micro != null && micro > 0 && !(Number(t.originDeclaredPrice) > 0)) t.originDeclaredPrice = microUsdToPrice(micro);
   }
   return [...byKey.values()];
 }
@@ -1233,7 +1317,9 @@ export function mergeManifestIntoTools(manifestTools = [], existing = []) {
       manifestMethods.length <= 1 && observedMethods.length === 1 ? observedMethods[0] : null;
     for (const i of indices) replaced.add(i);
     for (const e of entries) {
-      append.push({ ...e, method: forceObserved || e.method || "GET" });
+      // A defaulted verb that the observed row corrects is no longer inferred.
+      const { methodInferred, ...rest } = e;
+      append.push({ ...rest, method: forceObserved || e.method || "GET", ...(methodInferred && !forceObserved ? { methodInferred: true } : {}) });
     }
   }
   const out = existing.filter((_, i) => !replaced.has(i));
@@ -1495,12 +1581,23 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     const bazaarMicro = priceToMicroUsd(b.price);
     const originMicro = priceToMicroUsd(o.price);
     const priceConflict = bazaarMicro != null && originMicro != null && bazaarMicro !== originMicro;
-    // Prefer the higher observation when they disagree so buyers never
-    // underquote a raised origin price against a stale Bazaar amount.
+    // On disagreement the ORIGIN'S OWN CURRENT DECLARATION wins. This used to
+    // take Math.max(), which protects a buyer from underquoting a RAISED price
+    // against a stale Bazaar row - but in that scenario the origin IS the
+    // higher figure, so preferring the origin handles it identically. The two
+    // rules only diverge when the origin is LOWER, i.e. a price CUT, and there
+    // max() pinned the old high amount forever: reported 2026-08-29 by a
+    // seller whose 2026-08-20 cut we were still quoting at 10x nine days and
+    // dozens of crawls later. An origin's own openapi.json, fetched this
+    // crawl, is the freshest and most authoritative statement of its price;
+    // the Bazaar amount is a third party's record and can lag arbitrarily.
     // Absent conflict: keep settlement-observed Bazaar (incl. explicit 0);
     // only fill a missing amount from OpenAPI.
     let price;
-    if (priceConflict) price = microUsdToPrice(Math.max(bazaarMicro, originMicro));
+    // Normalized, NOT passed through: `o.price` can be the string "0.003"
+    // straight from the seller's document, and a string price fails every
+    // numeric comparison downstream (caught by test-openapi-fallback).
+    if (priceConflict) price = microUsdToPrice(originMicro);
     else price = b.price == null ? o.price : b.price;
     return ({
     ...bazaar,
@@ -1520,10 +1617,15 @@ export function mergeOpenapiIntoBazaar(openapiTools = [], bazaarTools = [], { al
     ...(requestContract ? { requestContract } : {}),
     ...(responseContract ? { responseContract } : {}),
     price,
+    // What the ORIGIN itself declared this crawl, kept separately so a later
+    // stage cannot quietly overwrite the seller's own current number with an
+    // older learned one, and so a re-probe can tell drift from agreement.
+    ...(originMicro != null ? { originDeclaredPrice: microUsdToPrice(originMicro) } : {}),
     // Preserve both observations (normalized numbers) so a buyer can see the
-    // drift and fail closed — and so we can audit which side won the max().
+    // drift and fail closed - and so we can audit which side won.
     ...(priceConflict ? {
       priceConflict: true,
+      priceResolvedFrom: "origin", // the seller's own current declaration
       priceObservations: {
         bazaar: microUsdToPrice(bazaarMicro),
         origin: microUsdToPrice(originMicro),
@@ -1679,40 +1781,178 @@ let crawlCycle = 0;   // rotates the per-cycle visiting order so the budget is f
  * key would miss the row it just fixed.
  */
 export function carryForwardLearnedQuotes(tools, prev) {
-  const learned = new Map();
+  // Keyed by METHOD + route, with a route-only fallback for the price and
+  // networks. Until 2026-09-02 the map was keyed by route alone and the
+  // remembered row's VERB was stamped onto every current row on that route,
+  // so a path with GET and POST (minia2a.uk: 86 such paths in the first 500
+  // rows) came out as two GETs - the POST operation mislabelled, and a seller
+  // whose POST route rejects GET would answer 405 to every buyer we sent and
+  // be recorded as broken by us. A remembered verb may only replace a verb
+  // the current row INFERRED (a manifest or llms.txt entry that named none);
+  // a declared verb is the seller's own statement and stands.
+  const learnedExact = new Map();
+  const learnedByRoute = new Map();
   for (const t of prev?.tools || []) {
-    if (t?.quoteSource === "live-402" && typeof t.route === "string") learned.set(t.route, t);
+    if (t?.quoteSource !== "live-402" || typeof t.route !== "string") continue;
+    learnedExact.set(`${String(t.method || "GET").toUpperCase()} ${t.route}`, t);
+    if (!learnedByRoute.has(t.route)) learnedByRoute.set(t.route, t);
   }
-  if (!learned.size) return tools;
+  if (!learnedExact.size) return tools;
   for (const t of tools) {
-    const hit = learned.get(t.route);
+    const exact = learnedExact.get(`${String(t.method || "GET").toUpperCase()} ${t.route}`);
+    const hit = exact || learnedByRoute.get(t.route);
     if (!hit) continue;
-    if (!(Number(t.price) > 0) && Number(hit.price) > 0) t.price = hit.price;
+    // A carried-forward quote FILLS A GAP; it never overrides what this crawl
+    // just read from the origin. `originDeclaredPrice` is set by the OpenAPI
+    // merge above, so a route the origin priced today keeps that number even
+    // when an older live-402 learned a different one (2026-08-29: the stale
+    // amount was filling the fresh row and then being re-stamped "live-402",
+    // which made a nine-day-old price look freshly observed).
+    const originPricedThisCrawl = Number(t.originDeclaredPrice) > 0;
+    if (!(Number(t.price) > 0) && !originPricedThisCrawl && Number(hit.price) > 0) {
+      t.price = hit.price;
+      t.quoteCarriedForward = true;
+      if (hit.quoteObservedAt) t.quoteObservedAt = hit.quoteObservedAt;
+    }
     if (!(Array.isArray(t.networks) && t.networks.length) && Array.isArray(hit.networks) && hit.networks.length) {
       t.networks = [...hit.networks];
+    } else if (Number(hit.networksVerifiedAt) > 0 && Array.isArray(hit.networks) && hit.networks.length) {
+      // A VERIFIED live read outranks a manifest claim: union the chains the
+      // 402 actually offered into the freshly rebuilt (manifest-shaped) row,
+      // and carry when they were verified so the weekly re-read keeps its clock.
+      t.networks = [...new Set([...(t.networks || []), ...hit.networks])];
+      t.networksVerifiedAt = hit.networksVerifiedAt;
     }
-    if (hit.method && hit.method !== t.method) { t.method = hit.method; t.methodInferred = false; }
-    t.quoteSource = "live-402";
+    // A route-level hit may change a current row's verb in exactly two cases:
+    // the row INFERRED its verb (named none), or the hit is a recorded
+    // CORRECTION of this very verb (the probe saw it fail and the other answer).
+    // A learned verb that simply answered on its own row is not evidence about
+    // a sibling verb - that reading is what mislabelled minia2a's POST rows.
+    if (!exact && hit.method && hit.method !== t.method
+        && (t.methodInferred === true || hit.methodCorrectedFrom === String(t.method || "GET").toUpperCase())) {
+      if (hit.methodCorrectedFrom) t.methodCorrectedFrom = hit.methodCorrectedFrom;
+      t.method = hit.method; t.methodInferred = false;
+    }
+    // Only claim "live-402" for a price this crawl is actually standing behind:
+    // a row the origin priced today is origin-declared, not live-learned.
+    if (!originPricedThisCrawl) t.quoteSource = "live-402";
   }
   return tools;
 }
 
-async function enrichLiveQuotes(tools, originUrl) {
+/** Does the amount we hold disagree materially with what the origin declared
+ *  this crawl? Used to spend a live-402 probe on a route we would otherwise
+ *  skip, so a price CUT is learned instead of ratcheting. Deliberately a
+ *  RATIO test: a rounding difference is not worth a probe, a 2x is. */
+const QUOTE_DRIFT_FACTOR = Number(process.env.QUOTE_DRIFT_FACTOR) || 2;
+/** Has a learned quote gone unverified for long enough to re-ask the seller?
+ *  The drift test above only fires when the origin DECLARES a price, and most
+ *  crawled sellers publish none - for them a learned amount would otherwise
+ *  stand forever, which is the same ratchet by a quieter route. An unstamped
+ *  quote counts as stale once, so pre-existing rows get one refresh. Budgeted
+ *  and backed-off like every other probe. */
+const QUOTE_MAX_AGE_MS = Number(process.env.QUOTE_MAX_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
+export function quoteIsStale(t, now = Date.now()) {
+  if (t?.quoteSource !== "live-402") return false;
+  if (!(Number(t?.price) > 0)) return false;
+  const at = Number(t?.quoteObservedAt);
+  if (!Number.isFinite(at) || at <= 0) return true; // never stamped: refresh once
+  return now - at >= QUOTE_MAX_AGE_MS;
+}
+
+// A manifest-priced, manifest-networked row was never read live: the crawler
+// had nothing to LEARN (price and chains both present), so a seller who added
+// a rail to their 402 middleware and not to their manifest stayed listed
+// single-chain forever (angel.finereli.com, 2026-09-02: live 402 offers Base
+// AND Algorand, manifest says Base, our row said Base; reported by the seller
+// on issue #1178). One live read, then a weekly one, unions what the 402
+// actually offers into the row. Learned quotes have their own clock
+// (quoteIsStale); this is the manifest-vs-402 consistency check.
+const NETWORKS_VERIFY_AGE_MS = Number(process.env.NETWORKS_VERIFY_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
+export function networksNeedLiveVerify(t, now = Date.now()) {
+  if (!t || t.quoteSource === "live-402") return false;
+  if (!(Number(t.price) > 0)) return false;
+  if (!(Array.isArray(t.networks) && t.networks.length)) return false;
+  const at = Number(t.networksVerifiedAt);
+  if (!Number.isFinite(at) || at <= 0) return true;
+  return now - at >= NETWORKS_VERIFY_AGE_MS;
+}
+
+export function priceDisagreesWithOrigin(t) {
+  const held = Number(t?.price), declared = Number(t?.originDeclaredPrice);
+  if (!(held > 0) || !(declared > 0)) return false;
+  const ratio = held > declared ? held / declared : declared / held;
+  return ratio >= QUOTE_DRIFT_FACTOR;
+}
+
+/** Per-crawl quote-probe cap for one origin. The polite steady-state is
+ * LIVE_QUOTE_PROBES_PER_CRAWL (5) - but an origin with ZERO priced tools is
+ * wholly invisible to routing (the resolver only pays priced rows), and at 5
+ * per 30-min cycle a new 128-route seller stays unroutable for half a day
+ * (measured live 2026-09-01: sol.blockrun registered, proven on-chain, and
+ * unroutable for hours while the rotation crept). A catalog with nothing
+ * priced gets a one-time burst - the seller REGISTERED to be found, and a
+ * single burst on a new listing is what they asked for - then drops to the
+ * polite cap the moment anything is priced. Pure; exported for the test. */
+export function quoteProbeCapFor(tools) {
+  const list = Array.isArray(tools) ? tools : [];
+  const priced = list.filter((t) => Number(t?.price) > 0).length;
+  const unpriced = list.length - priced;
+  // "Zero priced" was the first predicate and it missed the live case: a
+  // registry merge had already priced a handful of sol.blockrun's 128 rows,
+  // so the burst never fired and the catalog stayed 90% invisible. The state
+  // that starves a seller is OVERWHELMINGLY unpriced, not perfectly unpriced:
+  // burst while at least 20 rows are unpriced and priced rows are under a
+  // quarter of the unpriced count, polite cap the rest of the time.
+  if (unpriced >= 20 && priced < unpriced / 4) {
+    return Math.max(LIVE_QUOTE_PROBES_PER_CRAWL, Number(process.env.NEW_CATALOG_QUOTE_BURST || "60"));
+  }
+  return LIVE_QUOTE_PROBES_PER_CRAWL;
+}
+
+async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false } = {}) {
   if (!Array.isArray(tools) || !tools.length) return tools;
   const candidates = tools.filter(
     (t) => t
       && typeof t.route === "string" && t.route.startsWith("/")
       && t.seller !== LOCAL_SELLER                      // never probe ourselves
-      && !(Number(t.price) > 0)                          // already priced: nothing to learn
-      && !(Array.isArray(t.networks) && t.networks.length) // already payable-evidenced
+      // Already priced: nothing to learn - UNLESS the amount we hold disagrees
+      // with what the origin declared this crawl. That disagreement is exactly
+      // how a price CUT used to be invisible: a priced route was never
+      // re-probed, so the live 402 that would correct it was never fetched
+      // (reported 2026-08-29, a 10x overquote standing for nine days).
+      // A row missing EITHER the price or the networks is a candidate. This
+      // was && - both had to be missing - so a probe that learned networks
+      // but could not price (the Solana isUsdc gap) LOCKED the row unpriced
+      // for the 7-day staleness window: networks known, price null, never
+      // probed again (measured 2026-09-01, sol.blockrun).
+      && ((!(Number(t.price) > 0) || !(Array.isArray(t.networks) && t.networks.length)) || priceDisagreesWithOrigin(t) || quoteIsStale(t) || networksNeedLiveVerify(t))
       && probeMethodsFor(t).length                       // never PUT/PATCH/DELETE
       && probeDue(originUrl, `quote:${t.route}`),
-  ).slice(0, Math.max(0, Math.min(LIVE_QUOTE_PROBES_PER_CRAWL, liveQuoteBudget)));
-  if (!candidates.length) return tools;
-  liveQuoteBudget -= candidates.length;
+  );
+  // NEVER-ATTEMPTED rows first. The first rotation attempt indexed a window
+  // into a list that SHRINKS as rows price, so some rows landed in skipped
+  // windows on every pass (sol.blockrun's stock routes, three passes running,
+  // 50 of 114 priced around them). Rows a probe has already touched carry
+  // quoteObservedAt - putting untouched rows ahead means each pass drains new
+  // ground before re-visiting networks-only learns, and coverage completes in
+  // ceil(candidates/cap) passes regardless of how the list shrinks.
+  // ignoreBudget = an explicit re-registration ("price my catalog now"), so
+  // clear as many still-unpriceable routes as one bounded pass allows
+  // (REPRICE_MAX_PER_CALL) rather than the polite auto-cycle cap - otherwise a
+  // 128-route seller with 45 priced drains 5/pass over a dozen passes. The
+  // automatic crawl keeps the gentle cap. Untouched rows first either way, so
+  // each pass makes new ground.
+  const repriceCap = Number(process.env.REPRICE_MAX_PER_CALL || "120");
+  const cap = ignoreBudget ? repriceCap : Math.min(quoteProbeCapFor(tools), liveQuoteBudget);
+  const rotated = [...candidates]
+    .sort((a, b) => (a.quoteObservedAt ? 1 : 0) - (b.quoteObservedAt ? 1 : 0))
+    .slice(0, Math.max(0, cap));
+  if (!rotated.length) return tools;
+  if (!ignoreBudget) liveQuoteBudget -= rotated.length;
 
   const { assertPublicUrl, ssrfDispatcher } = await import("./tools/fetch-guard.js");
-  for (const tool of candidates) {
+  for (const tool of rotated) {
     const target = `${originUrl}${tool.route}`;
     let learned = null;
     for (const method of probeMethodsFor(tool)) {
@@ -1755,8 +1995,24 @@ async function enrichLiveQuotes(tools, originUrl) {
     // honest and useful half of the answer.
     if (learned.price != null && !(Number(tool.price) > 0)) tool.price = learned.price;
     if (learned.networks?.length) tool.networks = [...new Set([...(tool.networks || []), ...learned.networks])];
-    if (learned.method && learned.method !== tool.method) { tool.method = learned.method; tool.methodInferred = false; }
+    // The live 402 was read: the row's chains are verified as of now, whatever
+    // the manifest claimed (the union above never drops a manifest chain).
+    tool.networksVerifiedAt = Date.now();
+    if (learned.method && learned.method !== tool.method) {
+      // The stated verb did not answer a quote and this one did: a CORRECTION,
+      // recorded as such so the next crawl's carry-forward can re-apply it to
+      // the freshly rebuilt row (which will state the wrong verb again) without
+      // ever touching a row whose own verb was never probed.
+      tool.methodCorrectedFrom = String(tool.method || "GET").toUpperCase();
+      tool.method = learned.method; tool.methodInferred = false;
+    }
     tool.quoteSource = "live-402";
+    // WHEN we learned it. Without this a learned price has no age, so nothing
+    // can tell a quote observed an hour ago from one observed in July - and a
+    // seller who cuts a price we learned months ago has no way to reach us
+    // (issue #1043: the only correcting signal was an origin-declared price,
+    // which ~95% of crawled sellers do not publish).
+    tool.quoteObservedAt = Date.now();
     // Say so. `quoteSource` is not serialized by the row mappers, so without
     // this line the only way to tell whether enrichment ever ran was to watch a
     // price appear and hope - which is how an inert feature hides.
@@ -1936,22 +2192,59 @@ async function robotsGroupsFor(originUrl, fetchText) {
 }
 
 /** The matched rule when this origin's robots.txt forbids us this path, else null. */
-export async function robotsForbids(originUrl, path, { fetchText } = {}) {
+const OPENAPI_PATH = "/openapi.json";
+// True when some group in this robots.txt is addressed to US by name (the
+// same substring rule robotsAllows uses to pick a group). A rule written for
+// Agent402 specifically is a deliberate refusal and is honoured everywhere.
+function robotsNamesUs(groups) {
+  const ua = ROBOTS_UA.toLowerCase();
+  return groups.some((g) => (g.agents || []).some((a) => a !== "*" && ua.includes(String(a).toLowerCase())));
+}
+
+export async function robotsForbids(originUrl, path, { fetchText, manifestPublished = false } = {}) {
+  // The x402 discovery document is EXEMPT from robots gating. robots.txt is a
+  // control on content crawling; /.well-known/x402 is a protocol endpoint
+  // (RFC 8615) a seller publishes for the sole purpose of being fetched by
+  // payment-discovery clients. An API host's blanket Disallow: / - a common
+  // default - otherwise permanently hides the very document the seller serves
+  // to be found: measured live 2026-09-01 on sol.blockrun.ai (manifest 200,
+  // robots Disallow /, entry stuck as textless registry synthesis, invisible
+  // to every route query). Everything else the crawler touches - llms.txt,
+  // homepages, tool probes - stays robots-honoured.
+  //
+  // ONE extension (2026-09-02): once a seller has published that manifest,
+  // /openapi.json at the same origin is read even under a BLANKET Disallow.
+  // The manifest is the seller's opt-in to machine discovery, and the OpenAPI
+  // is the document that NAMES the routes the manifest lists as bare
+  // "POST /api/v1/exa/search" strings. Without it, sol.blockrun.ai's 128
+  // routes carried their path as their name and could not match ordinary
+  // task text ("web search" finds nothing in "/api/v1/search"), while the
+  // seller's own OpenAPI called that route "Grok Live Search" with a
+  // description - measured 2026-09-02, the same day the Solana router was
+  // proven against them by typing the path. The exemption never ADDS routes
+  // (the merge only enriches paths the manifest or a registry already
+  // vouched for), applies only with the manifest in hand (the no-manifest
+  // fallback stays robots-honoured), and yields to a robots group that names
+  // Agent402 specifically: a blanket `User-agent: *` `Disallow: /` on an API
+  // host is a default, a rule addressed to us is a decision.
+  if (path === WELL_KNOWN_PATH) return null;
   const groups = await robotsGroupsFor(originUrl, fetchText);
   if (!groups.length) return null;
   const verdict = robotsAllows(groups, ROBOTS_UA, path);
-  return verdict.allowed ? null : (verdict.matchedRule || "Disallow");
+  if (verdict.allowed) return null;
+  if (manifestPublished && path === OPENAPI_PATH && !robotsNamesUs(groups)) return null;
+  return verdict.matchedRule || "Disallow";
 }
 export function __resetRobotsCacheForTest() { robotsCache.clear(); }
 
 /** Fetch `path` on `originUrl` unless it is backed off, recording the outcome.
  *  Every per-origin probe in the crawl goes through here so a new one cannot be
  *  added ungated the way /agents.json and /llms.txt were. */
-async function probePath(originUrl, path, opts) {
+async function probePath(originUrl, path, { manifestPublished = false, ...opts } = {}) {
   if (!probeDue(originUrl, path)) throw new Error(`probe backed off: ${path}`);
   // Every per-origin probe already funnels through here, so this is the one
   // place robots has to be checked for it to be checked everywhere.
-  const forbidden = await robotsForbids(originUrl, path);
+  const forbidden = await robotsForbids(originUrl, path, { manifestPublished });
   if (forbidden) throw Object.assign(new Error(`robots.txt forbids ${path} (${forbidden})`), { robotsBlocked: true });
   try {
     // CONDITIONAL REQUEST. We visit every seller every CRAWL_INTERVAL_MS, which
@@ -2015,7 +2308,34 @@ async function probeDoc(originUrl, path, opts, prevParsed) {
   return { parsed: JSON.parse(fresh.html), reused: false };
 }
 
+// One crawl, one fetch of a given document. crawlSeller reached for
+// /openapi.json from two independent places (tool discovery and paywall
+// classification) plus a revalidation retry, so a seller saw it two or three
+// times per 30-minute cycle where once would do. Measured from the OUTSIDE on
+// 2026-08-31 by a listed seller whose logs held 3,372 /openapi.json against 681
+// /.well-known/x402 over the same window - the manifest count matched our cycle
+// exactly, which is what proved the excess was ours and not an impersonator
+// running at a different rate.
+//
+// Per-crawl only: a fresh Map for every crawlSeller call, so nothing is cached
+// ACROSS cycles and the crawl still re-reads the world each time.
+function oncePerCrawl() {
+  const seen = new Map();
+  return (key, fn) => {
+    if (!seen.has(key)) seen.set(key, fn());
+    return seen.get(key);
+  };
+}
+
 async function crawlSeller(originUrl) {
+  const once = oncePerCrawl();
+  // `manifestPublished` is set by the well-known branch only: once the seller's
+  // manifest is in hand, robotsForbids reads /openapi.json under a blanket
+  // Disallow (see the exemption there). The no-manifest fallback below calls
+  // this without the flag and stays fully robots-honoured. `once` keys on the
+  // path, so whichever branch runs first decides - and the manifest branch
+  // runs first only when the manifest was actually fetched.
+  const fetchOpenapi = (extra = {}) => once("/openapi.json", () => probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES, ...extra }));
   const prev = cache.get(originUrl);
   try {
     // A manifest that has 404'd repeatedly is not re-probed every cycle.
@@ -2036,7 +2356,7 @@ async function crawlSeller(originUrl) {
     // small. So those are what the cache carries.
     let openapiTools = null, openapiRoutes = null;
     try {
-      const res = await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES });
+      const res = await fetchOpenapi({ manifestPublished: true });
       if (res.notModified && prev?.openapiTools) {
         openapiTools = prev.openapiTools;
         openapiRoutes = prev.openapiRoutes || [];
@@ -2128,7 +2448,7 @@ async function crawlSeller(originUrl) {
     let openapiTools = [];
     let openapiPath = null;
     try {
-      const openapiRes = await probePath(originUrl, "/openapi.json", { maxBytes: MAX_OPENAPI_BYTES });
+      const openapiRes = await fetchOpenapi();
       const parsed = JSON.parse(openapiRes.html);
       if (bazaarTools.length || openapiHasPaymentSignal(parsed)) {
         openapi = parsed;
@@ -2455,6 +2775,65 @@ async function runPool(items, limit, worker) {
   await Promise.all(workers);
 }
 
+// Registrable domain, approximately: the last two labels, plus a third for the
+// common multi-part suffixes. It does not need to be a full public-suffix list -
+// getting it wrong groups an operator slightly wider or narrower than ideal, and
+// never causes an origin to be skipped forever.
+const MULTI_PART_TLDS = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "co.jp", "com.au", "com.br", "co.nz", "co.in", "com.cn", "com.mx"]);
+
+// Suffixes where the label BELOW the suffix is a different tenant, not a
+// different host of one operator. Without these, "last two labels" made every
+// Vercel seller one operator, every Workers seller one operator, and so on -
+// they would then have shared a single per-cycle crawl budget, and an attacker
+// could have registered throwaway origins under the same suffix to starve a
+// competitor's listing until its learned quote went stale (QUOTE_MAX_AGE_MS).
+// This file already knew better in one place: railwayDeploymentOrigin exists
+// precisely because unrelated sellers publish on *.up.railway.app.
+const SHARED_HOSTING_SUFFIXES = [
+  "workers.dev", "vercel.app", "up.railway.app", "railway.app", "onrender.com",
+  "fly.dev", "pages.dev", "netlify.app", "herokuapp.com", "replit.app",
+  "repl.co", "chatgpt.site", "trycloudflare.com", "ngrok-free.app", "ngrok.app",
+  "deno.dev", "glitch.me", "surge.sh", "web.app", "firebaseapp.com",
+  "azurewebsites.net", "appspot.com", "cloudfunctions.net", "koyeb.app",
+  "vercel.sh", "netlify.com", "render.com", "streamlit.app", "hf.space",
+];
+export function operatorKey(origin) {
+  let host;
+  try { host = new URL(origin).hostname.toLowerCase(); } catch { return String(origin).toLowerCase(); }
+  const parts = host.split(".").filter(Boolean);
+  if (parts.length <= 2) return host;
+  // Multi-tenant hosting: the tenant is the whole hostname. Grouping two tenants
+  // together is not a small inaccuracy - it hands them one budget and lets either
+  // one crowd the other out.
+  for (const suffix of SHARED_HOSTING_SUFFIXES) {
+    if (host === suffix || host.endsWith(`.${suffix}`)) return host;
+  }
+  const lastTwo = parts.slice(-2).join(".");
+  return MULTI_PART_TLDS.has(lastTwo) ? parts.slice(-3).join(".") : lastTwo;
+}
+
+// How many origins of ONE operator we will crawl in a single cycle.
+const CRAWL_ORIGINS_PER_OPERATOR = Math.max(1, Number(process.env.CRAWL_ORIGINS_PER_OPERATOR || 4));
+
+/** At most `cap` origins per operator this cycle, rotating by cycle so every
+ *  origin comes up in turn instead of the same few always winning. Input order
+ *  is preserved, and anyone at or under the cap is unaffected. */
+export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_OPERATOR) {
+  const byOperator = new Map();
+  for (const o of origins) {
+    const k = operatorKey(o);
+    if (!byOperator.has(k)) byOperator.set(k, []);
+    byOperator.get(k).push(o);
+  }
+  const due = new Set();
+  for (const [, list] of byOperator) {
+    if (list.length <= cap) { for (const o of list) due.add(o); continue; }
+    const offset = (cycle * cap) % list.length;
+    for (let i = 0; i < cap; i++) due.add(list[(offset + i) % list.length]);
+  }
+  return origins.filter((o) => due.has(o));
+}
+
 async function runCrawl() {
   if (crawlInFlight) return; // overlapping runs would just rate-limit each other
   crawlInFlight = true;
@@ -2470,9 +2849,29 @@ async function runCrawl() {
     const start = seeds.length ? crawlCycle % seeds.length : 0;
     crawlCycle += 1;
     const ordered = seeds.length ? [...seeds.slice(start), ...seeds.slice(0, start)] : seeds;
-    await runPool(ordered, CRAWL_CONCURRENCY, crawlSeller);
+    // Politeness is per OPERATOR, not per origin. We key everything on origin, so
+    // an operator running 20 hosts was 20 unrelated crawl targets and felt 20x
+    // the load of a one-host seller for no reason of their own. Reported
+    // 2026-08-31 by a listed seller: ~18,200 requests/day across their 20 hosts,
+    // ~67% of all their external traffic, none carrying payment. Our own
+    // arithmetic agrees on the order of magnitude - 4 discovery docs per origin
+    // per 30-minute cycle is ~200/day/origin, ~4,000/day across 20.
+    //
+    // Each cycle now crawls at most CRAWL_ORIGINS_PER_OPERATOR origins per
+    // registrable domain, rotating by cycle. Every origin is still crawled, just
+    // less often when it shares an operator: 20 hosts at a cap of 4 means each is
+    // seen every 5th cycle (~2.5h) instead of every 30 minutes. Single-host
+    // sellers - almost all of them - are untouched.
+    const due = originsDueThisCycle(ordered, crawlCycle);
+    await runPool(due, CRAWL_CONCURRENCY, crawlSeller);
     recordSubmittedSellerObservations();
-    releaseDeadSubmissions(cycleOkFraction(ordered));
+    // `due`, not `ordered`: cycleOkFraction's own contract is that it measures
+    // THIS pass. Once the per-operator cap made the crawled set a subset, passing
+    // the full list let every origin held back this cycle contribute its previous
+    // cached verdict - diluting the denominator with stale OKs in the UNSAFE
+    // direction, so during an egress outage the fraction could stay above the
+    // 0.5 floor and slots would be released anyway.
+    releaseDeadSubmissions(cycleOkFraction(due));
   } finally {
     crawlInFlight = false;
   }
@@ -2905,6 +3304,7 @@ function buildLocalEntry({ baseUrl, catalog, prices, network, toolCount, walletN
     slug: t.slug,
     name: t.name,
     description: t.description || "",
+    ...(Array.isArray(t.aliases) && t.aliases.length ? { aliases: t.aliases } : {}),
     category: t.category,
     tags: t.tags || [],
     price: prices?.[t.slug] ?? parsePrice(t.price),
@@ -3108,6 +3508,25 @@ export function allPayToOrigins(network = "eip155:8453") {
   return out;
 }
 
+/** Solana twin of allPayToOrigins: mainnet-label payTos (base58) -> origins.
+ *  The Solana leaderboard's scan list (src/solana-leaderboard.js). */
+export const SOLANA_MAINNET_LABELS = new Set(["solana:5eykt4usfv8p8njdtrepy1vzqkqzkvdp", "solana", "solana-mainnet", "solana-mainnet-beta"]);
+export function allSolanaPayToOrigins() {
+  const out = new Map();
+  const add = (addr, origin) => {
+    if (typeof addr !== "string" || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr)) return;
+    let set = out.get(addr);
+    if (!set) { set = new Set(); out.set(addr, set); }
+    set.add(origin);
+  };
+  const fromTool = (t, origin) => {
+    for (const [net, addr] of Object.entries(t?.payToByNetwork || {})) if (SOLANA_MAINNET_LABELS.has(String(net).toLowerCase())) add(addr, origin);
+  };
+  for (const [origin, v] of cache.entries()) for (const t of v?.tools || []) fromTool(t, origin);
+  for (const [origin, arr] of bazaarToolsByOrigin.entries()) for (const t of arr || []) fromTool(t, origin);
+  return out;
+}
+
 export function routableSellerSummaries() {
   const out = [];
   for (const [origin, v] of cache.entries()) {
@@ -3127,7 +3546,7 @@ export function routableSellerSummaries() {
     out.push({
       origin,
       host,
-      toolCount: v.tools?.length || v.manifest?.capabilities?.tools || 0,
+      toolCount: v.tools?.length || manifestToolCount(v.manifest),
       // Did the origin ever answer us, or is this a registry listing about it?
       originResponded: v.originResponded !== false,
       // Rides with originResponded on ALL THREE accessors on purpose: this
@@ -3182,13 +3601,17 @@ export function sellerDetail(originOrHost) {
       origin,
       displayName: v.manifest?.name || origin.replace(/^https?:\/\//, ""),
       homepage: v.manifest?.homepage || origin,
-      toolCount: v.tools?.length || v.manifest?.capabilities?.tools || 0,
+      toolCount: v.tools?.length || manifestToolCount(v.manifest),
       ...(v.tools?.some((t) => t.paid !== undefined)
         ? { paidToolCount: v.tools.filter((t) => t.paid !== false).length }
         : {}),
       fetchedAt: v.fetchedAt ?? null,
       error: v.error || null,
       health: healthScore(v),
+      // The same two fields the snapshot carries, so the ?seller= detail can be
+      // dispatch-labelled from its own evidence (2026-09-02).
+      routable: isRoutable(v),
+      networks: [...new Set((v.tools || []).flatMap((t) => t.networks || []))],
       // Paywall liveness, measured separately from crawl health. `health` only
       // says the manifest parsed; a seller whose every paid route 500s scores a
       // perfect 1.0 on it. null = not probed yet (never assume healthy).
@@ -3226,6 +3649,7 @@ export function sellerDetail(originOrHost) {
         name: t.name || null,
         price: t.price ?? null,
         ...priceConflictProjection(t),
+        ...urlTemplateProjection(t),
         ...(t.paid !== undefined ? { paid: t.paid } : {}),
         // What the seller's own OpenAPI guarantees on success. Omitted rather
         // than nulled when there is nothing to report: most rows have no
@@ -3267,7 +3691,7 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
     displayName: v.manifest?.name || origin.replace(/^https?:\/\//, ""),
     homepage: v.manifest?.homepage || origin,
     network: v.manifest?.payment?.x402?.primaryNetwork || v.manifest?.payment?.primaryNetwork || null,
-    toolCount: v.tools?.length || v.manifest?.capabilities?.tools || 0,
+    toolCount: v.tools?.length || manifestToolCount(v.manifest),
     // Did the ORIGIN answer, or is this a registry listing about it? Read by
     // the marketplace label and by totals.respondedOrigins. Added here as well
     // as on the other accessors because /api/index and the market pages read
@@ -3469,6 +3893,24 @@ const toolStaticsMemo = new WeakMap(); // tool (local or decorated) -> { slug, n
 function decoratedRemoteTools(v) {
   let d = remotePoolMemo.get(v);
   if (d) return d;
+  // Seller-level payment networks: the union of every chain this seller's
+  // OWN crawled 402s advertise plus the Bazaar's settled view of the same
+  // origin - the same union the /api/index seller row carries. A route the
+  // seller documents in OpenAPI (priced, so a buy candidate) has no accepts
+  // of its own until a probe reaches it, and until 2026-09-02 such a row
+  // ranked with `networks: []`: api.strale.io's /x402/v2/image-to-text
+  // (3,769 settled calls that month) read as network_unknown and the router
+  // never dispatched to it, while the seller's manifest rows beside it said
+  // Base. So a row with NO observed accepts inherits its seller's known
+  // networks, flagged `networksInferred`; a row that observed its own keeps
+  // them. Money-safe: payX402 pins the accept from the LIVE 402 before it
+  // signs, so an inferred chain the route does not actually offer fails the
+  // buy with nothing spent - inference only decides who gets tried.
+  const sellerOrigin = (v.tools || [])[0]?.seller || null;
+  const sellerNets = [...new Set([
+    ...(v.tools || []).flatMap((t) => t.networks || []),
+    ...(sellerOrigin ? (bazaarToolsByOrigin.get(sellerOrigin) || []) : []).flatMap((t) => t.networks || []),
+  ])];
   d = (v.tools || [])
     // paid:false = the seller's own doc says this operation is free.
     // It lists on the marketplace, but it is never a BUY candidate —
@@ -3477,6 +3919,7 @@ function decoratedRemoteTools(v) {
     .filter((t) => t.paid !== false)
     .map((t) => ({
       ...t,
+      ...(!(Array.isArray(t.networks) && t.networks.length) && sellerNets.length ? { networks: sellerNets, networksInferred: true } : {}),
       sellerHome: v.manifest?.homepage || t.seller,
       sellerName: v.manifest?.name || t.seller,
       health: healthScore(v),
@@ -3506,12 +3949,17 @@ function toolStatics(t) {
     // scripts/test-discovery-note.js asserts no local tool trips it.
     injected: looksLikeListingInjection(hay),
     priceRank: priceRank(t.price),
+    // Curated alternate names a tool answers to, scored exactly like the slug
+    // (max over slug + aliases per term, never additive). Our asn-info IS an IP
+    // geolocation tool but its slug says neither word, so "ip geolocation"
+    // routed to a $0.05 external seller above our $0.003 one (2026-08-28).
+    aliases: Array.isArray(t.aliases) ? t.aliases.map((a) => String(a).toLowerCase()).filter(Boolean) : [],
   };
   toolStaticsMemo.set(t, st);
   return st;
 }
 
-export function routeQuery({ query, top, include, networkFilter, baseUrl, catalog, prices, network, toolCount, walletName }) {
+export function routeQuery({ query, top, include, networkFilter, strictNetwork = false, baseUrl, catalog, prices, network, toolCount, walletName }) {
   const q = String(query || "").slice(0, 500);
   const terms = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).slice(0, 32);
   const k = Math.min(Math.max(parseInt(top, 10) || 5, 1), 25);
@@ -3551,11 +3999,30 @@ export function routeQuery({ query, top, include, networkFilter, baseUrl, catalo
         .flatMap(([, v]) => decoratedRemoteTools(v));
   const all = [...localPool, ...remotePool];
 
+  // The network filter is applied HERE, before scoring, so the k slots are
+  // filled by rows that can actually settle on the wanted chain. Until
+  // 2026-09-02 `wantNet` was computed, echoed in the response and never
+  // applied: ?network=solana returned the same Base-dominated list as no
+  // filter at all, and the Solana SOR branch (which asked for the top 20 and
+  // then kept the Solana rows) found one or two survivors among twenty ties.
+  // Default semantics are the documented positive-signal ones: a row whose
+  // crawled 402 names other chains only is dropped; unknown networks (no
+  // accepts seen) and local rows are kept. `strictNetwork` keeps ONLY rows
+  // that advertise the chain - what a chain-matched spend needs, since it
+  // will pay nobody whose 402 does not offer that rail.
+  const netOk = (t) => {
+    if (!wantNet) return true;
+    const nets = Array.isArray(t.networks) ? t.networks.map((n) => String(n || "").toLowerCase()) : [];
+    if (nets.length) return nets.includes(wantNet.toLowerCase());
+    return !strictNetwork;
+  };
   const scored = [];
   for (const t of all) {
+    if (!netOk(t)) continue;
     const st = toolStatics(t);
     if (st.injected) continue;
-    const { slug, name, hay } = st;
+    const { slug, name, hay, aliases } = st;
+    const names = aliases.length ? [slug, ...aliases] : [slug];
     let score = 0;
     // Record WHERE the score came from, not just how much. A seller who loses a
     // routing decision learns nothing from silence; "matched on description
@@ -3563,10 +4030,14 @@ export function routeQuery({ query, top, include, networkFilter, baseUrl, catalo
     // checkable by anyone instead of merely stated (asked for in #645).
     const matched = { slug: 0, name: 0, text: 0 };
     for (const term of terms) {
-      if (slug === term) { score += 10; matched.slug += 10; }
-      else if (slug.includes(term)) { score += 4; matched.slug += 4; }
-      if (name.includes(term)) { score += 2; matched.name += 2; }
-      if (hay.includes(term)) { score += 1; matched.text += 1; }
+      // A term under three characters matches whole tokens only: "ip" used to
+      // substring-match gzip, gunzip and html-strip, which outranked every IP
+      // tool for "ip geolocation" (2026-08-28).
+      const hit = term.length >= 3 ? (str) => str.includes(term) : (str) => str.split(/[^a-z0-9]+/).includes(term);
+      const slugScore = Math.max(...names.map((n) => (n === term ? 10 : hit(n) ? 4 : 0)));
+      if (slugScore) { score += slugScore; matched.slug += slugScore; }
+      if (hit(name)) { score += 2; matched.name += 2; }
+      if (hit(hay)) { score += 1; matched.text += 1; }
     }
     if (score > 0) scored.push([score, t, matched, st.priceRank]);
   }
@@ -3574,14 +4045,28 @@ export function routeQuery({ query, top, include, networkFilter, baseUrl, catalo
   // price (unknown ranks last among equals — see priceRank); then shorter
   // slug. Health is the strongest tiebreak after match score because a
   // cheap-but-flaky seller is worse than a slightly pricier reliable one.
+  const selfQuality = (bazaarQualityFor(baseUrl) || bazaarQualityFor(SELF_BAZAAR_ORIGIN))?.payers30d ?? null;
   scored.sort((a, b) => {
     if (b[0] !== a[0]) return b[0] - a[0];
     if (b[1].health !== a[1].health) return b[1].health - a[1].health;
     // Coinbase-measured 30-day unique payers (Bazaar quality): a seller more
     // wallets actually paid this month ranks ahead of an equally-matched,
-    // equally-healthy one nobody has. Local rows carry none (equal).
-    const qa = bazaarQualityFor(a[1].seller)?.payers30d || 0, qb = bazaarQualityFor(b[1].seller)?.payers30d || 0;
-    if (qb !== qa) return qb - qa;
+    // equally-healthy one nobody has. A LOCAL row is measured under our own
+    // Bazaar origin when the feed carries it; when it does not, the comparison
+    // is SKIPPED for that pair (a missing measurement is not zero). Before
+    // 2026-08-28 local rows read as zero payers, so any outside seller with
+    // one Bazaar payer outranked our identical tool: json-to-csv sat 23rd on
+    // our own router for "json to csv" behind twenty-two equally scored,
+    // equally priced copies of it.
+    const aLocal = a[1].seller === LOCAL_SELLER, bLocal = b[1].seller === LOCAL_SELLER;
+    if (aLocal || bLocal) {
+      const qa = aLocal ? selfQuality : (bazaarQualityFor(a[1].seller)?.payers30d ?? null);
+      const qb = bLocal ? selfQuality : (bazaarQualityFor(b[1].seller)?.payers30d ?? null);
+      if (qa != null && qb != null && qb !== qa) return qb - qa;
+    } else {
+      const qa = bazaarQualityFor(a[1].seller)?.payers30d || 0, qb = bazaarQualityFor(b[1].seller)?.payers30d || 0;
+      if (qb !== qa) return qb - qa;
+    }
     if (a[3] !== b[3]) return a[3] - b[3];
     const slugLen = (a[1].slug || "").length - (b[1].slug || "").length;
     if (slugLen !== 0) return slugLen;
@@ -3656,6 +4141,13 @@ export function routeQuery({ query, top, include, networkFilter, baseUrl, catalo
       method: t.method,
       route: t.route,
       url: t.seller === LOCAL_SELLER ? `${baseUrl}${t.route}` : `${t.seller}${t.route}`,
+      // A crawled OpenAPI path can carry template segments the seller never
+      // substitutes ("/stock/{symbol}"). Handing an agent that URL as if it
+      // were callable wastes its money and its time - measured 2026-08-28,
+      // three of eight rows for "get a stock quote" were templates. We still
+      // RETURN the row (the seller and the tool are real, and an agent that
+      // knows the parameter can fill it), but we say so, and the SOR skips it.
+      ...urlTemplateProjection(t),
       price: t.price,
       priceUsd: parsePrice(t.price),
       ...priceConflictProjection(t),
@@ -3707,6 +4199,9 @@ export function routeQuery({ query, top, include, networkFilter, baseUrl, catalo
       score,
       health: t.health,
       ...(Array.isArray(t.networks) && t.networks.length ? { networks: t.networks } : {}),
+      // Says when those networks were inherited from the seller rather than
+      // observed on this route's own 402 (see decoratedRemoteTools).
+      ...(t.networksInferred ? { networksInferred: true } : {}),
       // Quote-guided execution: tell the buyer exactly which route-execute tier
       // runs this result and what to pay (x402 is fixed-price, so the buyer must
       // pick the tier that covers the tool's underlying price). null = above the
@@ -4093,3 +4588,14 @@ export function indexedToolCategories(excludeOrigin = "") {
 }
 
 export function _resetFlatCacheForTest() { flatCache = { at: 0, rows: [], self: "" }; }
+// KNOWN ROUTER LIMITATION (found 2026-09-01, sol.blockrun): the resolver's
+// liveness probe sends an empty `{}` and treats only HTTP 402 as "live". A
+// seller that VALIDATES the request body BEFORE issuing its 402 (returning
+// 400/422 with no challenge on an empty body) therefore fails the probe and
+// is never routed to, even though it is a perfectly good paid endpoint - its
+// GET-shaped siblings resolve fine. sol.blockrun's /chat/completions is the
+// live example (400 on {}, no payment-required header to distinguish it from
+// a genuine bad request). Fixing this needs a probe that sends a
+// shape-plausible body per the tool's input schema, or a seller convention
+// of 402-before-validate; deferred as its own change, not bolted onto the
+// Solana-rail work. Tracked here so the next reader does not re-discover it.

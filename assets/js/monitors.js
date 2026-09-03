@@ -3,6 +3,7 @@
   document.querySelectorAll("[data-sub]").forEach(function (btn) {
     btn.addEventListener("click", async function () {
       var product = btn.dataset.sub;
+      try { if (window.posthog && window.posthog.capture) window.posthog.capture("monitor_subscribe_click", { product: product }); } catch (e) { /* telemetry never blocks a subscribe */ }
       var el = document.getElementById("in-" + product);
       var input = (el && el.value || "").trim();
       var errEl = document.getElementById("err-" + product);

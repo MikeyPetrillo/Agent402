@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 // composite-spend-guard — protects the expensive composite tools (research-deep,
 // dossier) from an upstream-drain grief. Because x402 settles AFTER the ~90s
 // handler and a non-200 RELEASES the EIP-3009 nonce (the signed authorization
@@ -129,8 +130,25 @@ export function recordCompositeSpendSuccess(payer) {
  *  structural bounds (one locked model, a bounded synthMaxTokens, bounded
  *  inputs) remain the thing that stops a runaway call.
  */
+// The RAIL a report was sold on, and the price it actually sold for. Kits
+// call recordCompositeUsage with the AGENT price (their tier), which is also
+// what a card or monitor run reported until 2026-08-27 - so the composite
+// margin telemetry priced a $5 card report as $2 and could not say which door
+// it came through at all. The card door and the monitor scheduler run the
+// same handler, so the door sets a context around the call instead of every
+// kit learning about doors. Async-local: a context set around `await h()`
+// is visible from recordCompositeUsage however deep the kit calls it.
+const compositeContext = new AsyncLocalStorage();
+export function withCompositeContext(ctx, fn) {
+  return compositeContext.run({ rail: String(ctx?.rail || "agent"), priceUsd: ctx?.priceUsd }, fn);
+}
+
 export function recordCompositeUsage({ slug, upstreamUsd, ok, priceUsd }) {
   const usd = Number(upstreamUsd) || 0;
+  const ctx = compositeContext.getStore() || {};
+  const rail = ctx.rail || "agent";
+  const ctxPrice = Number(ctx.priceUsd);
+  const soldFor = ctx.priceUsd != null && Number.isFinite(ctxPrice) ? ctxPrice : (Number(priceUsd) || null);
   usage.runs++; if (ok) usage.ok++; else usage.failed++;
   usage.upstreamUsd += usd;
   const b = (usage.bySlug[slug] ||= { runs: 0, ok: 0, upstreamUsd: 0 });
@@ -153,7 +171,7 @@ export function recordCompositeUsage({ slug, upstreamUsd, ok, priceUsd }) {
     }
     try {
       const ph = await import("./posthog.js");
-      ph.capturePostHogCompositeUsage?.({ slug, upstreamUsd: usd, ok: !!ok, priceUsd: Number(priceUsd) || null, capUsd: cap, overCap });
+      ph.capturePostHogCompositeUsage?.({ slug, upstreamUsd: usd, ok: !!ok, priceUsd: soldFor, rail, capUsd: cap, overCap });
     } catch { /* telemetry never throws */ }
   })().catch(() => {});
 }

@@ -31,7 +31,8 @@ const jsonRes = (status, body, headers = {}) => ({
 // ----------------------------------------------------------------------------
 // Catalog envelope
 // ----------------------------------------------------------------------------
-const EXPECTED = { "x-search-recent": "$0.006", "x-user": "$0.005", "x-user-tweets": "$0.010", "x-tweet": "$0.005", "x-users-lookup": "$0.010" };
+// Priced 2026-08-27 against X's published pay-per-use rate card ($0.005/post read, $0.010/user read; page cap 10).
+const EXPECTED = { "x-search-recent": "$0.08", "x-user": "$0.015", "x-user-tweets": "$0.08", "x-tweet": "$0.008", "x-users-lookup": "$0.15" };
 ok(X_DATA_TOOLS.length === 5, `5 tools exported (got ${X_DATA_TOOLS.length})`);
 for (const t of X_DATA_TOOLS) {
   ok(EXPECTED[t.slug] === t.price, `${t.slug}: priced ${t.price}`);
@@ -112,9 +113,9 @@ globalThis.fetch = async (url, init) => { fetchCalls++; lastUrl = new URL(String
 
 {
   fetchCalls = 0;
-  const out = await h("x-search-recent")({ query: "x402 -is:retweet", max_results: 20, sort_order: "relevancy" });
+  const out = await h("x-search-recent")({ query: "x402 -is:retweet", max_results: 10, sort_order: "relevancy" });
   ok(lastUrl.origin + lastUrl.pathname === "https://api.x.com/2/tweets/search/recent", "search: hits /2/tweets/search/recent");
-  ok(lastUrl.searchParams.get("query") === "x402 -is:retweet" && lastUrl.searchParams.get("max_results") === "20" && lastUrl.searchParams.get("sort_order") === "relevancy", "search: query/max_results/sort_order on the wire");
+  ok(lastUrl.searchParams.get("query") === "x402 -is:retweet" && lastUrl.searchParams.get("max_results") === "10" && lastUrl.searchParams.get("sort_order") === "relevancy", "search: query/max_results/sort_order on the wire");
   ok(lastUrl.searchParams.get("expansions") === "author_id" && /public_metrics/.test(lastUrl.searchParams.get("tweet.fields")) && /username/.test(lastUrl.searchParams.get("user.fields")), "search: author expansion + tweet/user fields requested");
   ok(lastInit.headers.Authorization === "Bearer test-bearer-token-0123456789", "search: app-only bearer on the request");
   ok(lastInit.signal instanceof AbortSignal, "search: request carries an abort signal (timeout)");

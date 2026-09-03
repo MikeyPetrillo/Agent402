@@ -1,19 +1,19 @@
-// Top-level discovery & trust surfaces — the two things that make an agent (or a
+// Top-level discovery & trust surfaces - the two things that make an agent (or a
 // discovery layer) PICK this x402 seller over the thousands in the index:
 //
-//   1. serviceManifest()  → GET /.well-known/x402  — one fetch that describes the
+//   1. serviceManifest()  → GET /.well-known/x402  - one fetch that describes the
 //      whole service: identity, the open-source/self-hostable wedge, every
 //      payment option (x402 networks + proof-of-work), the capability map, the
 //      MCP connector, the machine-readable surfaces, and the trust signals.
 //      Per-resource payment terms still live in each endpoint's HTTP 402 and the
 //      x402 Bazaar; this is the convenience index that ties them together.
 //
-//   2. reliabilityReport() → GET /api/reliability — the "is this seller safe to
+//   2. reliabilityReport() → GET /api/reliability - the "is this seller safe to
 //      depend on" surface: uptime, calls served, on-chain revenue proof, and the
 //      operational guarantees (tested-before-deploy, 15-min heartbeat, daily paid
 //      canary, deterministic, non-custodial) each with a URL to verify it.
 //
-// Both are pure functions of already-computed state — no network, no secrets.
+// Both are pure functions of already-computed state - no network, no secrets.
 
 import { toolList, CATEGORIES } from "./pages.js";
 import { SKILL_PACKS } from "./skills.js";
@@ -61,7 +61,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     spec: "agent402-service-manifest/1",
     // x402scan compatibility (Merit-Systems/x402scan docs/DISCOVERY.md): its
     // /.well-known/x402 fan-out wants `version: 1` + a `resources` URL array.
-    // Additive — everything below remains the richer agent-facing manifest.
+    // Additive - everything below remains the richer agent-facing manifest.
     version: 1,
     // Dedupe by URL, not by catalog key: a handful of tools (e.g. /api/memory)
     // are registered twice in the catalog, once per HTTP method (GET read,
@@ -81,10 +81,10 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     license: "AGPL-3.0-or-later",
     maintainer: MAINTAINER,
     // Programmatic buyers get their terms notice here, in llms.txt, and on
-    // /v1/models — use of the service constitutes acceptance (see /terms).
+    // /v1/models - use of the service constitutes acceptance (see /terms).
     termsOfService: `${baseUrl}/terms`,
     privacyPolicy: `${baseUrl}/privacy`,
-    // Base ecosystem metadata — the builder code links on-chain settlements to
+    // Base ecosystem metadata - the builder code links on-chain settlements to
     // this app in the Base builder program; the app ID is our registered Base
     // MCP plugin identifier. Both are optional (env-gated / static).
     ...(process.env.BASE_BUILDER_CODE ? { builderCode: process.env.BASE_BUILDER_CODE } : {}),
@@ -103,9 +103,9 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     differentiators: [
       "Open-source and self-hostable - read every line, run it yourself (AGPL-3.0).",
       `One integration covers all 500+ tools - no per-service SDKs or signups.`,
-      "People pay too: finished, cited reports by card at /reports ($1, or $2 for the deepest three; agents pay the lower tool price, $0.20 to $1.10, per call), $3/month monitors at /monitors, and prepaid credits at /credits (an a402_ key that pays every tool by card, debited only on success).",
+      "People pay too: finished, cited reports by card at /reports ($2 to $5 by card; agents pay the lower tool price, $0.60 to $2.00 per call for an agent, per call), $5/month monitors at /monitors, and prepaid credits at /credits (an a402_ key that pays every tool by card, debited only on success).",
       "Two-sided: also ships agent402-tollbooth, an open pay-per-crawl gate for the demand side of x402.",
-      "Deterministic tool catalog - no LLM in that serving path; same input, same output, full OpenAPI schemas. (The optional /v1 gateway is a separate, opt-in LLM proxy.)",
+      "Deterministic utility tools - no LLM in that serving path; same input, same output, full OpenAPI schemas. The /v1 gateway (metered and flat tiers) and the report products are model-backed and say so.",
       "Free without a wallet via proof-of-work on the pure-CPU tools.",
       `${SKILL_PACKS.length} curated multi-tool workflows (skill packs) callable as MCP prompts - agents fetch the whole task template, not just one tool.`,
     ],
@@ -189,10 +189,10 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       // Public on-chain ranking of every x402 seller by Base USDC settled volume.
       leaderboard: `${baseUrl}/api/leaderboard`,
     },
-    // Neutral cross-seller discovery surface — same router we use ourselves,
+    // Neutral cross-seller discovery surface - same router we use ourselves,
     // exposed as a public API so any x402 buyer can find the cheapest healthy
     // tool across the whole ecosystem (not just our catalog). `include=external`
-    // explicitly excludes us from the results — we list because we trust the
+    // explicitly excludes us from the results - we list because we trust the
     // ranking, not because we'd rig it for ourselves.
     discovery: {
       spec: "x402-discovery/1",
@@ -200,7 +200,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       sellerIndex: `${baseUrl}/api/index`,
       sellerIndexHtml: `${baseUrl}/marketplace`,
       // On-chain ranking of every seller in the Bazaar by Base USDC settled
-      // volume. Same router, different sort key — closes the loop on
+      // volume. Same router, different sort key - closes the loop on
       // discovery: find a tool, route to a seller, see who's most used.
       leaderboard: `${baseUrl}/api/leaderboard`,
       leaderboardHtml: `${baseUrl}/leaderboard`,
@@ -256,13 +256,19 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
  * verify it independently. Liveness facts come from the live stats object; the
  * guarantees are operational facts about how the service is built and watched.
  */
-export function reliabilityReport({ baseUrl, network, wallet, stats }) {
+export function reliabilityReport({ baseUrl, network, wallet, stats, observedStatus = null }) {
   const explorer = network === "base-sepolia" ? "https://sepolia.basescan.org" : "https://basescan.org";
   return {
     service: "Agent402.Tools",
-    // This report is served BY the app, so a 200 here means the node is up and
-    // serving. Real-time external liveness is the heartbeat + /health below.
-    status: "operational",
+    // Serving BY the app only proves this node answered. The honest word is
+    // what the OUTSIDE observers measured, so this mirrors /api/status's
+    // `overall` rather than asserting a second opinion: the two surfaces
+    // disagreed in the same minute ("degraded" here, "operational" there) and
+    // a partner polling either one was wrong half the time (found by an
+    // outside reviewer, 2026-08-28). Falls back to "serving" - never to
+    // "operational" - when the observation store cannot be read.
+    status: observedStatus || "serving",
+    statusMeasuredFrom: `${baseUrl}/api/status`,
     asOf: new Date().toISOString(),
     servingSince: stats.servingSince,
     processUptimeSeconds: stats.processUptimeSeconds,
@@ -303,11 +309,11 @@ export function reliabilityReport({ baseUrl, network, wallet, stats }) {
         evidence: wallet ? `${explorer}/address/${wallet}#tokentxns` : null,
       },
       {
-        claim: "Deterministic: no LLM in the tool-catalog serving path - the same input always yields the same output. (The optional /v1 gateway is a separate, opt-in LLM proxy.)",
+        claim: "Deterministic utilities: no LLM in the serving path of the utility tools - the same input always yields the same output. The /v1 gateway and the report products are model-backed and priced as such.",
         verify: `${baseUrl}/openapi.json`,
       },
       {
-        claim: "Non-custodial: the agent signs payment with its own key; Agent402 never holds or moves funds.",
+        claim: "Non-custodial on the payment rails: an agent signs with its own key and settlement goes wallet to wallet, so no customer key or crypto balance is ever held. Two card paths are NOT non-custodial and are named as such: prepaid credits are a balance we hold until spent, and card report purchases are held by the payment processor.",
         verify: `${baseUrl}/llms.txt`,
       },
       {

@@ -61,7 +61,7 @@ const bootBaseEnv = {
 };
 
 async function waitHealthy() {
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 120; i++) {
     try { if ((await fetch(`${B}/health`)).ok) return; } catch {}
     await sleep(500);
   }

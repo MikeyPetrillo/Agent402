@@ -85,7 +85,13 @@ for i in $(seq 1 60); do
   MISSING=""; BAD=""
   while IFS= read -r ctx; do
     [ -n "$ctx" ] || continue
-    line=$(echo "$ROLLUP" | grep -F "$ctx=" | tail -1)
+    # `|| true` is load-bearing: a required context ABSENT from the rollup
+    # (CodeQL posts its named check a couple of minutes after the lanes) makes
+    # this pipeline exit 1, and under set -e a failing assignment-substitution
+    # kills the whole script SILENTLY - measured 2026-09-01, three runs in a
+    # row died here with no message and "worked on retry" once CodeQL had
+    # posted. Absent must mean MISSING-and-wait, which is this loop's whole job.
+    line=$(echo "$ROLLUP" | grep -F "$ctx=" | tail -1 || true)
     case "$line" in
       *=SUCCESS|*=success) ;;
       *=FAILURE*|*=failure*|*=ERROR*|*=error*|*=CANCELLED*|*=cancelled*|*=TIMED_OUT*) BAD="$BAD $ctx" ;;

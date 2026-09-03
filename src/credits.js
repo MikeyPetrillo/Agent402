@@ -49,7 +49,7 @@ export const microToUsd = (m) => Math.round(Number(m) / 100) / 10000; // 4 dp
  * @param {()=>number} [deps.now]
  * @param {(s:string)=>void} [deps.log]
  */
-export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now = () => Date.now(), log = console.log }) {
+export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now = () => Date.now(), log = console.log, digestLinkFor = null }) {
   const dir = storeDir || DEFAULT_DIR();
   try { mkdirSync(dir, { recursive: true }); } catch { /* writes fail loudly below */ }
   const SESSIONS = join(dir, "_sessions.json"); // sessionId -> key hash (claim-once)
@@ -62,7 +62,13 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
 
   async function createCheckout(packKey) {
     const p = Object.hasOwn(CREDIT_PACKS, String(packKey)) ? CREDIT_PACKS[packKey] : null;
-    if (!p) { const e = new Error("Unknown credit pack"); e.statusCode = 400; throw e; }
+    if (!p) {
+      // Self-correcting: an agent cannot guess "credits-20" from a bare 20,
+      // and /api/pricing used to publish the dollar amounts only (found by an
+      // outside reviewer 2026-08-28, who brute-forced the id).
+      const e = new Error(`Unknown credit pack. Valid packs: ${Object.keys(CREDIT_PACKS).join(", ")}`);
+      e.statusCode = 400; e.validPacks = Object.keys(CREDIT_PACKS); e.buyerSafe = true; throw e;
+    }
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       ...(String(process.env.STRIPE_AUTOMATIC_TAX || "").toLowerCase() === "true" ? { automatic_tax: { enabled: true } } : {}),
@@ -99,10 +105,16 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
     save(hash, rec);
     again[sessionId] = hash; writeJsonAtomic(SESSIONS, again);
     try { onLoad?.({ sessionId, pack: packKey, priceUsd: p.cents / 100, keyId, paymentIntent }); } catch { /* accounting never breaks minting */ }
+    // Weekly spend digest (src/wallet-digest.js): the claim email carries a
+    // signed confirm link for THIS key; the click is the consent.
+    let digestUrl = null;
+    try { digestUrl = typeof digestLinkFor === "function" && email ? digestLinkFor({ keyId, email }) : null; } catch { digestUrl = null; }
+    const digestText = digestUrl ? `\n\nWant one email a week with what this key spent (calls, dollars, tools, balance)? Confirm here: ${digestUrl}` : "";
+    const digestHtml = digestUrl ? `<p style="margin-top:18px;font-size:14px;color:#5C6963">Want one email a week with what this key spent (calls, dollars, tools, balance)? <a href="${digestUrl}">Confirm the weekly digest</a>. Nothing is sent for a quiet week.</p>` : "";
     if (email) {
       sendEmail({ to: email, subject: "Your Agent402 credits key",
-        text: `Your prepaid credits are ready: $${(p.cents / 100).toFixed(2)} loaded.\n\nYour key (keep it secret, it is shown only here and on the thanks page):\n\n${key}\n\nUse it on any paid tool:\ncurl -H "Authorization: Bearer ${key}" ${baseUrl}/api/whois?domain=example.com\n\nBalance: GET ${baseUrl}/api/credits/balance with the same header.\nTop up: ${baseUrl}/credits\n\nAgent402`,
-        html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;color:#14201b"><h2 style="font-weight:500">Your Agent402 credits key</h2><p>$${(p.cents / 100).toFixed(2)} loaded. Keep the key secret - it is shown only here and on the thanks page.</p><pre style="background:#0c0d0f;color:#e9eaec;padding:14px 16px;border-radius:10px;font-size:13px;overflow:auto">${key}</pre><p>Use it on any paid tool:</p><pre style="background:#f3f4f5;padding:12px 14px;border-radius:10px;font-size:12.5px;overflow:auto">curl -H "Authorization: Bearer ${key}" ${baseUrl}/api/whois?domain=example.com</pre><p style="color:#62696f;font-size:13px">Balance: <code>GET ${baseUrl}/api/credits/balance</code> with the same header · Top up at <a href="${baseUrl}/credits">${baseUrl}/credits</a></p></div>` }).catch(() => {});
+        text: `Your prepaid credits are ready: $${(p.cents / 100).toFixed(2)} loaded.\n\nYour key (keep it secret, it is shown only here and on the thanks page):\n\n${key}\n\nUse it on any paid tool:\ncurl -H "Authorization: Bearer ${key}" ${baseUrl}/api/whois?domain=example.com\n\nBalance: GET ${baseUrl}/api/credits/balance with the same header.\nTop up: ${baseUrl}/credits${digestText}\n\nAgent402`,
+        html: `<div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;color:#14201b"><h2 style="font-weight:500">Your Agent402 credits key</h2><p>$${(p.cents / 100).toFixed(2)} loaded. Keep the key secret - it is shown only here and on the thanks page.</p><pre style="background:#0c0d0f;color:#e9eaec;padding:14px 16px;border-radius:10px;font-size:13px;overflow:auto">${key}</pre><p>Use it on any paid tool:</p><pre style="background:#f3f4f5;padding:12px 14px;border-radius:10px;font-size:12.5px;overflow:auto">curl -H "Authorization: Bearer ${key}" ${baseUrl}/api/whois?domain=example.com</pre><p style="color:#62696f;font-size:13px">Balance: <code>GET ${baseUrl}/api/credits/balance</code> with the same header · Top up at <a href="${baseUrl}/credits">${baseUrl}/credits</a></p>${digestHtml}</div>` }).catch(() => {});
     }
     log(`[credits] minted key ${keyId} ($${(p.cents / 100).toFixed(2)}) for session ${sessionId}`);
     return { status: "minted", key, keyId, balanceUsd: microToUsd(loadedMicro) };
@@ -256,10 +268,31 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
         if (res.statusCode === 200 && !cacheHit) { const c = settle(a.hash, a.heldMicro, item.slug || req.path, Number.isFinite(metered) && metered > 0 ? metered : null); if (c) req.creditsCharged = c.chargedUsd; }
         else release(a.hash, a.heldMicro);
       });
-      res.on("close", () => { if (done) return; done = true; release(a.hash, a.heldMicro); });
+      // A client that drops the socket AFTER dispatch has bought the work: the
+      // handler still runs to completion and the upstream is still paid, and
+      // `finish` never fires on a destroyed socket - so `close` used to RELEASE
+      // the hold, making credits the one rail where an abort was a free
+      // expensive call (reproduced 2026-08-28: /v1/research ran, $0 spent).
+      // Every other rail settles after the handler regardless of the socket;
+      // credits now does the same, at the held amount (the quote ceiling on a
+      // metered route, since no usage header exists for an aborted response).
+      res.on("close", () => { if (done) return; done = true; settle(a.hash, a.heldMicro, item.slug || req.path); });
       return next();
     };
   }
 
-  return { createCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, gate, _dir: dir };
+  /** A presented key -> its id (null for an unknown key). Used by the digest signup: presenting the key is the proof. */
+  function keyIdOf(keyString) {
+    if (typeof keyString !== "string" || !KEY_RE.test(keyString)) return null;
+    const rec = load(hashKey(keyString));
+    return rec ? rec.keyId : null;
+  }
+  /** USD balance for a key id (the digest never holds the key itself). */
+  function balanceById(keyId) {
+    let files = [];
+    try { files = readdirSync(dir).filter((f) => f.startsWith("k_") && f.endsWith(".json")); } catch { return null; }
+    for (const f of files) { const r = readJson(join(dir, f)); if (r && r.keyId === keyId) return microToUsd(r.balanceMicro); }
+    return null;
+  }
+  return { createCheckout, claim, authorize, settle, release, charge, balance, status, setDisabled, disableByPaymentIntent, gate, keyIdOf, balanceById, _dir: dir };
 }

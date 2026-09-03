@@ -11,6 +11,43 @@ crons = ["*/5 * * * *"]
 [vars]
 PROD = "https://agent402.tools"
 
-# OPERATOR_TOKEN is a Worker SECRET, never a plaintext var. It must equal
-# AGENT402_OPERATOR_TOKEN on Railway (the same value /api/status/probe checks):
-#   wrangler secret put OPERATOR_TOKEN
+# STATUS_PROBE_TOKEN is a Worker SECRET, never a plaintext var. It is the
+# credential this Worker presents to POST /api/status/probe, and that is the
+# ONLY thing it opens - it is read in exactly one place in the server:
+#   wrangler secret put STATUS_PROBE_TOKEN        (must equal STATUS_PROBE_TOKEN on Railway)
+#
+# It replaces OPERATOR_TOKEN here. That one is AGENT402_OPERATOR_TOKEN, the ROOT
+# credential, which also reaches /__operator/refunds/update (mark a refund debt
+# void), /credits/disable (kill a customer's prepaid key), /well-known (publish
+# a document at our own domain), /leads, /backup/run, /monitors/run,
+# /alerts/run, /stats and /wishes. This Worker needs exactly one of those, so
+# holding the root token off-platform was a master key to use one door.
+#
+# Both are still accepted by the server, so rotate without downtime:
+#   1. set STATUS_PROBE_TOKEN on Railway, redeploy
+#   2. wrangler secret put STATUS_PROBE_TOKEN
+#   3. verify a probe lands (POST /run, or watch /status), then
+#      wrangler secret delete OPERATOR_TOKEN
+
+# GITHUB_ISSUES_TOKEN is a Worker SECRET that lets this cron open and close the
+# balance and reachability alarms directly:
+#   wrangler secret put GITHUB_ISSUES_TOKEN
+#
+# WHY: heartbeat.yml carries eighteen alarm checks - every wallet balance,
+# Postgres reachability, settlement freshness, the PayAI and CDP quota watches -
+# and is their only observer. GitHub does not deliver its schedule. Measured
+# 2026-08-30: "*/15" produced gaps of 2-12 hours, and a gentler "9,39" produced
+# ONE run in 9.8 hours. This Worker's 5-minute cron IS honoured, so it takes
+# over the alarms readable from one public endpoint (/api/gateway-status).
+# heartbeat.yml still runs them, and still owns the rest.
+#
+# SCOPE IT TIGHTLY. A fine-grained PAT, this repository only, with:
+#   Repository permissions -> Issues: Read and write
+# and NOTHING else - in particular NOT Actions. An Actions token can dispatch
+# any workflow in this repo, and that set includes deploy.yml (deploys
+# production), announce.yml (posts as the company) and paid-canary.yml /
+# tempo-volume.yml / refund.yml / algorand-external-buy.yml (spend real money).
+# GitHub has no per-workflow scoping, so "let it kick the heartbeat" is not a
+# thing that can be asked for. An issues-only token cannot deploy, post or spend.
+# Without the secret the alarms are an env-gated no-op and the probe behaves
+# exactly as before.

@@ -73,7 +73,9 @@ function goIdle(slot) {
 }
 
 function spawnSlot() {
-  const slot = { worker: new Worker(IMAGE_WORKER), job: null, idleTimer: null };
+  // resourceLimits: a decoder that outgrows the limit dies in its own thread
+  // (terminate + 503) instead of taking the process down with it.
+  const slot = { worker: new Worker(IMAGE_WORKER, { resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 64 } }), job: null, idleTimer: null };
   slot.worker.on("message", (msg) => {
     if (!slot.job || msg.id !== slot.job.id) return; // stale reply from a job we already gave up on
     if (msg.error) {

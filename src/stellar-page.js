@@ -10,6 +10,6 @@ export const stellarSellers = (snapshot) => marketSellers("stellar", snapshot);
 export const stellarTools = (snapshot) => marketTools("stellar", snapshot);
 export const stellarActivityHtml = (activity, selected) => marketActivityHtml("stellar", activity, selected);
 
-export function stellarPage(baseUrl, { snapshot, rail, activity, selectedSeller, stellarWallet } = {}) {
-  return marketPage("stellar", baseUrl, { snapshot, rail, activity, selectedSeller, wallet: stellarWallet });
+export function stellarPage(baseUrl, { snapshot, rail, activity, selectedSeller, stellarWallet, host = null } = {}) {
+  return marketPage("stellar", baseUrl, { snapshot, rail, activity, selectedSeller, wallet: stellarWallet, host });
 }

@@ -31,7 +31,7 @@ privacy policy, public docs, and a no-auth streamable-HTTP endpoint.
 
 ## Description
 
-> Agent402 is a deterministic tools layer for Claude: search the web and get
+> Agent402 is a tools and models layer for Claude: search the web and get
 > cited answers as first-class MCP tools, then reach 500+ pay-per-call utilities
 > (render, data, memory, encoding, conversions, and more) via catalog.find /
 > catalog.search / catalog.call. There is no account and no API key. Pure-CPU
@@ -39,7 +39,7 @@ privacy policy, public docs, and a no-auth streamable-HTTP endpoint.
 > payable on the connector itself over MPP (a paid call answers JSON-RPC error
 > -32042 with the challenges; an mppx-wrapped client pays and retries), or run
 > the npm server with a funded wallet or a prepaid card-credits key. No LLM is
-> involved in serving deterministic tools: same input, same output, with full
+> involved in serving the utility tools: same input, same output, with full
 > input schemas. Report products (deep research, company dossier, 13F fund
 > report, SEC filing report, domain audit, token risk, FDA recall, insider flow,
 > $0.20 to $1.10 each) are catalog slugs too. Open source. Also reachable over the x402 and MPP payment protocols for

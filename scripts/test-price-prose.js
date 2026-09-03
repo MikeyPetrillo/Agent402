@@ -94,4 +94,19 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   expect("Monitor", Math.min(...Object.values(MONITOR_PRODUCTS).map((m) => m.price)));
 }
 
+// The llms.txt reports paragraph is derived from the catalog + product tables.
+{
+  const { reportsParagraph } = await import("../src/seo.js");
+  const { REPORT_TIERS } = await import("../src/report-tiers.js");
+  const tools = Object.entries(REPORT_TIERS).map(([slug, t]) => ({ slug, route: `POST /v1/${slug}`, price: t.price }));
+  tools.push({ slug: "ipo-report", route: "POST /v1/ipo-report", price: "$0.05" });
+  const para = reportsParagraph("https://agent402.tools", tools);
+  const allowed = new Set([...real, "0.05"]);
+  const figures = [...para.matchAll(/\$(\d+\.\d{2})/g)].map((m) => m[1]);
+  const bad = figures.filter((f) => !allowed.has(f));
+  ok(figures.length >= 20 && bad.length === 0, `llms.txt reports paragraph: ${figures.length} dollar figures, every one a real price${bad.length ? ` (stale: ${bad.join(", ")})` : ""}`);
+  ok(para.includes(`POST /v1/research (${REPORT_TIERS["research"].price})`) && para.includes(`for $${(Math.min(...Object.values(HUMAN_PRODUCTS).map((p) => p.price)) / 100).toFixed(2)} to $`) && para.includes(`Monitors ($${(Math.min(...Object.values(MONITOR_PRODUCTS).map((m) => m.price)) / 100).toFixed(2)}/month`), "paragraph carries the agent route prices, the card range and the monitor price from the tables");
+  ok(!para.includes("$0.35)") && !para.includes("$3/month"), "the two stale figures that shipped 2026-08-23..27 cannot come back");
+}
+
 console.log(`\n${pass} passed, 0 failed`);

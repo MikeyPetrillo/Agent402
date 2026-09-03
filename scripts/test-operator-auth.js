@@ -4,13 +4,14 @@
 // SameSite=Strict) or a header for curl/API. Boots the real server (the only
 // faithful way to test the route wiring) with a known token.
 import { spawn } from "node:child_process";
+import { getFreePort } from "./lib/free-port.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const TOKEN = "operator-test-secret-123";
-const PORT = 3480 + (process.pid % 400);
+const PORT = await getFreePort();
 const base = `http://127.0.0.1:${PORT}`;
 
 const child = spawn(process.execPath, ["src/server.js"], {
@@ -25,9 +26,14 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
 
 (async () => {
   let up = false;
-  for (let i = 0; i < 80; i++) {
+  // 60 s, like the other booted-server tests (test-pricing-margin: 120 x 500 ms).
+  // The old 80 x 250 ms = 20 s bound failed CI run 33093827741 with the server
+  // already at "listening": the documented post-listen boot stall (per-route
+  // Ajv compile) on a loaded runner outlived it. Nothing was broken; the bound
+  // was the tightest in the suite.
+  for (let i = 0; i < 120; i++) {
     try { if ((await fetch(`${base}/health`)).ok) { up = true; break; } } catch { /* */ }
-    await wait(250);
+    await wait(500);
   }
   ok(up, "server booted");
   if (!up) { console.error(serverLog.slice(-500)); return done(1); }
@@ -148,6 +154,16 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
 
   // 7. No token ever appeared in a request-line the server logged.
   ok(!serverLog.includes(TOKEN), "the operator token never appears in server logs");
+
+  // Aggregate guessing alarm (2026-08-28): wrong credentials are counted
+  // globally and exposed as a status word on the public gateway-status.
+  {
+    for (let i = 0; i < 3; i++) await status("/__operator/stats", { headers: { Authorization: "Bearer not-the-token-" + i } });
+    const gs = await (await fetch(`${base}/api/gateway-status`)).json();
+    ok(gs.operatorAuth && typeof gs.operatorAuth.failures1h === "number" && gs.operatorAuth.failures1h >= 3 && gs.operatorAuth.status === "ok" && gs.operatorAuth.threshold >= 10,
+      `wrong operator credentials are counted on /api/gateway-status (${gs.operatorAuth?.failures1h} in the hour, status ${gs.operatorAuth?.status})`);
+    ok(!JSON.stringify(gs.operatorAuth).includes(TOKEN) && !/not-the-token/.test(JSON.stringify(gs.operatorAuth)), "the status carries counts only, never a credential");
+  }
 
   console.log(`\n${pass} passed, ${fail} failed`);
   done(fail ? 1 : 0);

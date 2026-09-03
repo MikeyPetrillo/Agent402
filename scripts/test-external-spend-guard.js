@@ -6,8 +6,10 @@
 // buyer charged nothing. Self-dealt - one wallet listing the seller and buying
 // from it - every drained dollar returns to the attacker.
 import {
-  maySpend, noteSpend, resolveSpend, payerExposureUsd, exposureSnapshot, __reset,
+  maySpend, noteSpend, adjustSpend, resolveSpend, payerExposureUsd, exposureSnapshot, __reset,
 } from "../src/external-spend-guard.js";
+
+import { readFile } from "node:fs/promises";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -141,6 +143,78 @@ const A = "0xAbCdEf0123456789AbCdEf0123456789AbCdEf01";
     `the unsettled ceiling ($${__config.DEFAULT_MAX_UNSETTLED_USD}) covers the largest tier's underlying cap ($${biggest}) - otherwise that tier can never run`);
   ok(maySpend("0x1111111111111111111111111111111111111111", biggest).ok,
     "a single largest-tier call is allowed for a payer with no exposure");
+}
+
+// --- a seller must not be able to set our own debt ceiling -------------------
+// Since 2026-08-29 a route's resolved price comes from the origin's OWN current
+// declaration (the fix for a price-cut ratchet). That makes the declared price
+// a single seller-controlled document, so it must not be the number booked
+// against the ceiling: a seller declaring $0.0001 while quoting the tier cap on
+// the live 402 would make each call count as a fiftieth of its real exposure,
+// and the ceiling is exactly what stops a RUN of those. Book the worst case,
+// correct down once the real quote is known.
+{
+  __reset();
+  const PAYER = "0x4444444444444444444444444444444444444444";
+  const CAP = 0.005;
+  const h = noteSpend(PAYER, CAP);
+  ok(payerExposureUsd(PAYER) === CAP,
+    `the worst case a call could cost is booked up front ($${CAP}), not a declared price`);
+
+  adjustSpend(h, 0.0001);
+  ok(payerExposureUsd(PAYER) === 0.0001,
+    "once the seller has actually quoted, the exposure is corrected DOWN to what was paid");
+
+  adjustSpend(h, 99);
+  ok(payerExposureUsd(PAYER) === 0.0001,
+    "adjustSpend only ever lowers - nothing may book itself above the cap it was authorized under");
+
+  adjustSpend(h, -5);
+  adjustSpend(h, Number.NaN);
+  ok(payerExposureUsd(PAYER) === 0.0001, "a negative or unreadable amount is ignored, never applied");
+
+  adjustSpend(null, 0.001);
+  adjustSpend({ payer: PAYER, id: 999999 }, 0.001);
+  ok(payerExposureUsd(PAYER) === 0.0001, "a missing handle or unknown row is a no-op, never a throw");
+
+  resolveSpend(h, true);
+  ok(payerExposureUsd(PAYER) === 0, "a settled spend still clears normally after an adjustment");
+}
+
+// The ceiling has to bite on the WORST case, or a payer can run far more calls
+// than it is meant to before being paused.
+{
+  __reset();
+  const PAYER = "0x5555555555555555555555555555555555555555";
+  const CAP = 0.005;
+  let allowed = 0;
+  for (let i = 0; i < 5000; i++) {
+    if (!maySpend(PAYER, CAP).ok) break;
+    noteSpend(PAYER, CAP);
+    allowed++;
+  }
+  const { __config } = await import("../src/external-spend-guard.js");
+  const expected = Math.floor(__config.DEFAULT_MAX_UNSETTLED_USD / CAP);
+  ok(allowed === expected,
+    `a payer whose calls never settle is paused after ${expected} worst-case calls (got ${allowed})`);
+}
+
+// --- the WIRING, not just the primitive ---------------------------------------
+// The two mutations differ in how visible they are: making adjustSpend able to
+// raise fails three assertions above, but quietly changing the caller back to
+// booking the seller's declared price fails NOTHING - the primitive is still
+// correct, it is just handed the wrong number. That is the shape of defect this
+// repo keeps rediscovering, so the call site is read directly.
+{
+  const src = await readFile(new URL("../src/tools/route-execute.js", import.meta.url), "utf8");
+  ok(/maySpend\(\s*spendPayer\s*,\s*cap\s*\)/.test(src),
+    "route-execute authorizes against the tier cap, not the seller's declared price");
+  ok(/noteSpend\(\s*spendPayer\s*,\s*cap\s*\)/.test(src),
+    "route-execute books the tier cap as the worst-case exposure");
+  ok(/adjustSpend\(\s*spendHandle\s*,\s*underlyingUsd\s*\)/.test(src),
+    "route-execute corrects the exposure down to the amount actually quoted");
+  ok(src.indexOf("adjustSpend(spendHandle") > src.indexOf("const underlyingUsd"),
+    "the correction happens AFTER the real quote is known, never before");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

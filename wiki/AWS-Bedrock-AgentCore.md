@@ -12,11 +12,13 @@ AWS ships an agent-side **Payments plugin** (built with Coinbase and Stripe) tha
 
 We publish a runnable sample: [`examples/agentcore-x402-buyer`](https://github.com/MikeyPetrillo/Agent402/tree/main/examples/agentcore-x402-buyer). It has a deterministic proof loop (`direct_buy.py`: fetch → 402 → sign → retry → verify the paid sha256 answer) and a Strands-agent showcase (`agent_buy.py`), with the full testnet (Base Sepolia faucet) → mainnet (Base USDC) path in its README. Validated live: an AgentCore agent bought `POST /api/hash` from agent402.tools for $0.001, settled on Base mainnet.
 
+> **On Base, buys settle over x402, and that is handled for you.** AgentCore Payments signs the MPP `evm` path under EIP-712 domain name `"USDC"`, while Base USDC's contract domain is `"USD Coin"`, so that signature cannot verify on Base (reported upstream as [awslabs/agentcore-samples#2002](https://github.com/awslabs/agentcore-samples/issues/2002)). The same instrument settles our x402 path perfectly. Agent402 recognises the mismatch from the credential itself, answers with an RFC 9457 problem naming both domain names, and withholds the MPP challenge briefly so the Payments plugin falls through to the x402 offer in the same `402`. Nothing to configure: your buy goes through on x402. See [[Paying with MPP]] for the signing rule.
+
 > **Where payment happens matters:** AgentCore Gateway cannot pay a 402 on the Gateway→target hop - payment is an agent-side capability. Use Gateway for tool discovery, and the Payments plugin (or the adapters below) for settlement.
 
 ## What you get out of the box
 
-- 500+ deterministic, pay-per-call tools + 70+ multi-tool skill packs from Agent402, callable from an AgentCore-hosted agent
+- 500+ pay-per-call tools + 70+ multi-tool skill packs from Agent402, callable from an AgentCore-hosted agent
 - Free tier with **no wallet** (proof-of-work; AgentCore Identity is optional for that path)
 - USDC-on-Base settlement for wallet-only tools, via AgentCore's `PaymentCredentialProvider` + CDP
 - CloudWatch observability for every payment (AgentCore handles this)

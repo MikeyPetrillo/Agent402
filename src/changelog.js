@@ -2,9 +2,24 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-09-02",
+    title: "Typed 402s, tokenized assets, MPP on the edge, and two alarms that stopped lying",
+    items: [
+      "Every 402 now carries the typed output schema as accepts[0].outputSchema (one copy, first accept) as well as in the bazaar extension; our own MPP shim and mppx's x402 codec both strip undeclared fields from the echoed accept, so the match seam restores the advertised schema onto a stripped echo - a stock x402 client, a native MPP buyer and an mppx x402 buyer all still settle",
+      "Five tokenized real-world-asset tools on the CoinGecko key we already hold: rwa-list, rwa-markets, rwa-asset, rwa-issuers, rwa-issuer - 649 tokenized stocks, ETFs and commodities with onchain market data and the 33 issuers behind them ($0.003 to $0.006)",
+      "agent402-tollbooth 0.10.0: the edge build (Workers, Next.js edge, Deno, Bun) takes MPP through the same verifyX402 callback - a WWW-Authenticate: Payment challenge beside the x402 quote, HMAC- and resource-bound credentials translated to PAYMENT-SIGNATURE; the wire codec is a runtime-agnostic module shared with the Node build",
+      "/api/route rows: executeVia appears only on rows the router will pay now (executeViaCallableNow); non-eligible rows carry executeViaWhenEligible; every row and index seller carries routerDispatchEligible and routerDispatchReason, and a manifest-priced route is read live once and then weekly so the chains its 402 offers reach the row even when the seller's manifest lags",
+      "Tempo subscriptions: a renewal that fails on a slow RPC retries in minutes, not an hour, and a send that timed out is settled by reading the chain (the transfer's memo is bound to the subscription and period) before anything is signed again - never a second charge for a landed transfer",
+      "mppx 0.9.2; a refused MCP credential answers the spec's -32043 (unpaid stays -32042); gpt-4.1-nano and the openai/o4 prefix retired ahead of OpenAI's dates (gpt-5.6-luna is the nano default, gpt-5-nano stays, gpt-5.6-terra on premium); /v1/images/fast fails over to gpt-5-image-mini",
+      "Solana seller leaderboard scanned incrementally (one signatures read per payTo per cycle, cursor + dedupe), Base chain-truth on a refused payment (EIP-3009 nonce state), in-flight report composites cut off on SIGTERM so a deploy never spends and then discards, every skill pack runs every tool it advertises, feed-watch walks the newest feed items",
+      "Two alarms fixed at the source: the Postgres reachability check no longer confirms a failure against its own 60 s cache (a failed reading is re-pinged), and the daily paid canary now proves the Tempo subscription rail after a deploy; fast-uri 3.1.7 and qs 6.16.0 overrides clear four same-day CVEs and three Dependabot alerts",
+    ],
+  },
+  {
     date: "2026-08-26",
     title: "Why pay here, settle-actual for every buyer, and a client that routes",
     items: [
+      "agent402-client 0.8.2: the User-Agent header now carries the package version and the test pins it to package.json so it cannot drift again (0.8.1 still sent 0.7.0). Contributed by epistemedeus (PR #985).",
       "agent402-client 0.8.1: route(task, { k, include, network }) ranks tools across the host's current x402/MPP index over the free /api/route, read-only and wallet-free, with executeVia tier hints for route-execute. Contributed by epistemedeus (PR #974).",
       "/why: seven first-party differences, each linked to the surface that proves it; the same points in /llms.txt, the MCP instructions, the README and the OpenClaw guide",
       "Metered gateway: credits and card buyers settle actual usage x 1.15 like upto buyers; agent402-openclaw 0.3.x pays upto when the wallet holds a Permit2 allowance (permit2-approve), proven daily by the canary's metered-upto leg; the quote is priced from the same object the handler serves",

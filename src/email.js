@@ -17,7 +17,7 @@ export function emailEnabled() {
 }
 
 /** Send one email via whichever provider is configured. 2xx -> true; never throws. */
-export async function sendEmail({ to, subject, html, text }) {
+export async function sendEmail({ to, subject, html, text, headers = null }) {
   if (!emailEnabled() || !to) return false;
   const from = key("EMAIL_FROM");
   try {
@@ -42,7 +42,7 @@ export async function sendEmail({ to, subject, html, text }) {
     const res = await fetch(RESEND_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${key("RESEND_API_KEY")}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: [to], subject, html, text }),
+      body: JSON.stringify({ from, to: [to], subject, html, text, ...(headers && typeof headers === "object" ? { headers } : {}) }),
       signal: AbortSignal.timeout(12_000),
     });
     return res.ok;
@@ -74,7 +74,7 @@ export function buildReportReadyEmail({ reportUrl, productLabel, subjectOf, kind
     : "";
   const html = `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:520px;margin:0 auto;color:#14201b">
     <h2 style="font-weight:500;color:#14201b">Your ${escapeHtml(productLabel || "report")} is ready</h2>
-    <p style="color:#35443c">Your report${escapeHtml(on)} is finished and waiting for you. It's yours to keep — open it any time with the link below.</p>
+    <p style="color:#35443c">Your report${escapeHtml(on)} is finished and waiting for you. It's yours to keep: open it any time with the link below.</p>
     <p style="margin:26px 0"><a href="${escapeAttr(reportUrl)}" style="background:#15654a;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;display:inline-block">Open your report →</a></p>
     <p style="color:#8a948c;font-size:13px">Or paste this link into your browser:<br>${escapeHtml(reportUrl)}</p>
     ${upHtml}
