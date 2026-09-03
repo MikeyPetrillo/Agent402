@@ -1400,7 +1400,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (10 scripts, one process each)
+      - name: Offline suites (11 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -1410,6 +1410,8 @@ jobs:
           t node scripts/test-html-kit.js
           # Bazaar quality ingestion (30d calls/payers on index sellers + /api/find external rows + ranking tiebreak - offline)
           t node scripts/test-bazaar-quality.js
+          # Verified-list preference (X402_VERIFIED_LIST default off; equal-rank tiebreak from a provider-neutral HTTPS feed — offline)
+          t node scripts/test-verified-list.js
           # Revenue detector classification (real x402 buys vs funding/tests)
           t node scripts/test-revenue-scan.js
           # Revenue daily series (day bucketing, EVM block estimation, canary-vs-funding split — offline)
