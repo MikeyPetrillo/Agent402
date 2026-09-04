@@ -64,7 +64,7 @@
     "@mozilla/readability": "^0.6.0",
     "@payai/facilitator": "^2.4.4",
     "@sentry/node": "^10.71.0",
-    "@solana/kit": "5.5.1",
+    "@solana/kit": "8.2.0",
     "@x402/avm": "^2.22.0",
     "@x402/evm": "^2.22.0",
     "@x402/express": "^2.22.0",
