@@ -51,6 +51,36 @@ import { priceToMicroUsd } from "./x402-index.js";
 export const DATASET_VERSION = "v1";
 export const DATASET_PREFIX = `datasets/${DATASET_VERSION}`;
 
+// THE OUTLIER LINE, AND WHY IT IS A FIXED NUMBER.
+//
+// The price column carries what sellers advertise, and some of them advertise
+// jokes: on the first recorded day, $1,500,000 for a "website intelligence"
+// call, $1,000,000 to "acquire an agent company", $500,000 to vote on a post -
+// two of those read from a LIVE 402, so they are genuinely being offered.
+// Nothing flagged them, so any buyer computing a median, a distribution or a
+// market size got a poisoned answer unless they already knew to filter.
+//
+// What this flag is NOT: a judgement about the seller. Pricing a route out of
+// reach is a legitimate thing to do, and calling it "implausible" asserts an
+// intent we did not measure. It says OUTLIER - a statement about where the row
+// sits in the distribution, which is the thing we actually observed.
+//
+// Why a FIXED threshold rather than a percentile: the whole value of a daily
+// series is that day N is comparable to day N+1, and a percentile rule moves
+// the line every day, so a row could change flag with no change in its price.
+// A constant is less precise and far more useful.
+//
+// Why $1,000 specifically, measured on 73,139 priced rows (2026-09-11):
+// legitimate commerce runs well into the hundreds - $149 team credit packs,
+// $130 print-and-ship, $103 international card orders are all real products -
+// and 99.66% of priced routes sit under $1,000. No per-call API pricing model
+// plausibly clears it. 250 rows (0.34%) are flagged today.
+//
+// Changing this number changes what every future day means, so it is a
+// constant here rather than an env knob, and it rides in the manifest so the
+// rule that produced the column travels with the data.
+export const PRICE_OUTLIER_USD = 1000;
+
 // Bounds. Row caps are generous against today's ~2,900 sellers but keep one
 // runaway crawl from writing a gigabyte into a bucket with a bill guard.
 const MAX_ROWS = Number(process.env.DATASET_MAX_ROWS) > 0 ? Number(process.env.DATASET_MAX_ROWS) : 200_000;
@@ -119,6 +149,8 @@ const ROUTE_COLUMNS = [
   // Unparseable reads null, never 0: "free" and "we could not read it" are
   // different facts and only one of them is ours to publish.
   ["price_usd", "__priceUsd"],
+  ["price_outlier", "__priceOutlier"], // see PRICE_OUTLIER_USD: distribution, not judgement
+
   ["price_published", "price"],
   ["price_source", "quoteSource"],
   ["price_resolved_from", "priceResolvedFrom"],
@@ -202,7 +234,11 @@ export function buildTables({ sellers = [], baseRows = [], solanaRows = [], mppR
     for (const t of Array.isArray(s.tools) ? s.tools : []) {
       if (routeRows.length >= MAX_ROWS) break;
       const micro = priceToMicroUsd(t?.price ?? t?.priceUsd);
-      routeRows.push(project({ ...t, __origin: s.origin, __priceUsd: micro == null ? null : micro / 1e6 }, ROUTE_COLUMNS));
+      const usd = micro == null ? null : micro / 1e6;
+      // null price -> null flag, never false: "we do not know the price" and
+      // "the price is within range" are different facts and a buyer filtering
+      // on `price_outlier = false` must not silently pick up unpriced rows.
+      routeRows.push(project({ ...t, __origin: s.origin, __priceUsd: usd, __priceOutlier: usd == null ? null : usd >= PRICE_OUTLIER_USD }, ROUTE_COLUMNS));
     }
   }
   return {
@@ -231,6 +267,9 @@ export function manifestFor({ day, tables, sources = {}, partial = null, force =
     // Provenance is part of the artifact, not a README someone loses.
     provenance: "First-party: our own crawl of publicly advertised x402/MPP endpoints, our own live 402 probes, and public chain reads. Third-party measurements are excluded by name below.",
     excludedThirdParty: EXCLUDED_THIRD_PARTY,
+    // The rule that produced routes.price_outlier, so a reader never has to
+    // guess the line or find it in our source.
+    priceOutlierRule: { column: "routes.price_outlier", thresholdUsd: PRICE_OUTLIER_USD, meaning: `true when the advertised price is at or above $${PRICE_OUTLIER_USD}; null when no price is known. A statement about the distribution, not about the seller - pricing a route out of reach is legitimate. Exclude these rows before computing medians, distributions or market size.` },
     privacy: "Seller payTo addresses are published (public infrastructure, and the join key across tables). Buyer identities are never published - buyer figures are counts only.",
     // A column's non-null COUNT is the disclosure. A buyer should be able to
     // read the completeness of every column out of the manifest rather than

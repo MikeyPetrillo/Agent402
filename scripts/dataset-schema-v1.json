@@ -75,5 +75,12 @@
       "is_host"
     ]
   },
-  "additions": []
+  "additions": [
+    {
+      "table": "routes",
+      "column": "price_outlier",
+      "date": "2026-09-11",
+      "reason": "Sellers advertise joke prices ($1.5M for one call, two of them read from a live 402) and nothing flagged them, so any median, distribution or market-size computed off price_usd was poisoned. true at or above PRICE_OUTLIER_USD ($1,000), null when no price is known. A fixed threshold, not a percentile, so day N stays comparable to day N+1; the rule rides in every manifest."
+    }
+  ]
 }

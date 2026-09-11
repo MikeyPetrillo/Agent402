@@ -17,8 +17,7 @@ import { gunzipSync } from "node:zlib";
 import { readFileSync } from "node:fs";
 import {
   buildTables, serializeTable, manifestFor, columnFill,
-  runDatasetSnapshot, EXCLUDED_THIRD_PARTY, UNFILLABLE_HERE, DATASET_PREFIX, DATASET_VERSION,
-} from "../src/dataset-snapshot.js";
+  runDatasetSnapshot, EXCLUDED_THIRD_PARTY, UNFILLABLE_HERE, DATASET_PREFIX, DATASET_VERSION, PRICE_OUTLIER_USD } from "../src/dataset-snapshot.js";
 
 let n = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); n++; };
@@ -263,6 +262,27 @@ const exists = async (key) => bucket.has(key);
 
   ok(put.includes('s3("PUT", key, { body })'), "putObject sends NO explicit content-length: undici derives it from a Buffer and rejects a caller-supplied one (UND_ERR_INVALID_ARG). The streaming backup upload still passes it, correctly, because a stream cannot be measured.");
   ok(!/contentLength/.test(put), "no contentLength in the Buffer upload path");
+}
+
+// --- the outlier flag: distribution, not judgement ---------------------------
+// Sellers advertise jokes ($1,500,000 for one call, read from a live 402 on the
+// first recorded day) and nothing flagged them, so a buyer computing a median
+// or a market size off price_usd got a poisoned answer. The flag exists so the
+// rows can be excluded; it must never be confused with "we do not know".
+{
+  const rows = (t) => buildTables({ sellers: [{ ...SELLER, tools: t }] }).routes.rows;
+  const one = (price) => rows([{ route: "/r", method: "GET", price }])[0];
+  eq(one(0.005).price_outlier, false, "an ordinary $0.005 route is not an outlier");
+  eq(one(149).price_outlier, false, "$149 is NOT an outlier: team credit packs, print-and-ship and card orders are real products in the hundreds, and flagging them would throw away real commerce");
+  eq(one(999.99).price_outlier, false, "just under the line is inside it");
+  eq(one(PRICE_OUTLIER_USD).price_outlier, true, "the threshold itself is an outlier (at or above, so the boundary is stated not guessed)");
+  eq(one(1500000).price_outlier, true, "the $1.5M listing that started this is flagged");
+  eq(one(null).price_outlier, null, "an UNPRICED route is null, never false - 'we do not know the price' and 'the price is in range' are different facts, and a buyer filtering on price_outlier = false must not silently collect unpriced rows");
+  eq(one(0).price_outlier, false, "a genuinely free route is priced and in range");
+  // The rule travels with the data: a reader must never have to find our source.
+  const m = manifestFor({ day: "2026-09-11", tables: buildTables({ sellers: [SELLER] }) });
+  eq(m.priceOutlierRule.thresholdUsd, PRICE_OUTLIER_USD, "the manifest states the threshold that produced the column");
+  ok(/distribution, not about the seller/.test(m.priceOutlierRule.meaning), "...and says it is a statement about the distribution, not about the seller");
 }
 
 // --- the v1 schema is FROZEN ------------------------------------------------
