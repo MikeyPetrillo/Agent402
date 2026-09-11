@@ -132,12 +132,21 @@ export async function scanSolanaSellers(payTos, { readFn, concurrency = CONCURRE
         try { r = await readFn(payTo); }
         catch { await new Promise((res) => setTimeout(res, retryPauseMs)); r = await readFn(payTo); }
         rpcCalls += Number(r?.rpcCalls) || 0;
-        rows.push({ payTo, origins: [...origins].sort(), credits: Number(r?.credits) || 0, payers: Number(r?.payers) || 0, truncated: !!r?.truncated, at: Date.now() });
+        // `stale` is set EXPLICITLY on every row, including the happy path.
+        // It used to appear only on the carried-over error branch below, so a
+        // freshly read row carried no such key at all - which reads as "we do
+        // not know" everywhere the field is projected rather than "this row is
+        // current". Harmless while it was only a flag on a live page; not
+        // harmless in the daily dataset, where the column landed 100% null on
+        // its first recorded day (columnFill caught it) and would have been
+        // null in every historical row after that, permanently, because a
+        // snapshot of a past day cannot be rewritten.
+        rows.push({ payTo, origins: [...origins].sort(), credits: Number(r?.credits) || 0, payers: Number(r?.payers) || 0, truncated: !!r?.truncated, stale: false, at: Date.now() });
       } catch (e) {
         errors++;
         const prev = prevBy.get(payTo);
         if (prev) rows.push({ ...prev, origins: [...origins].sort(), stale: true, error: String(e?.message || e).slice(0, 80) });
-        else rows.push({ payTo, origins: [...origins].sort(), credits: 0, payers: 0, truncated: false, at: Date.now(), unreadable: true, error: String(e?.message || e).slice(0, 80) });
+        else rows.push({ payTo, origins: [...origins].sort(), credits: 0, payers: 0, truncated: false, stale: false, at: Date.now(), unreadable: true, error: String(e?.message || e).slice(0, 80) });
       }
     }
   };

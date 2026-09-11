@@ -103,6 +103,15 @@ const idx = await import("../src/x402-index.js");
   ok(snap.scanned === 3 && snap.errors === 1, `three payTos scanned, one unreadable (${snap.errors})`);
   const byP = Object.fromEntries(snap.rows.map((r) => [r.payTo, r]));
   ok(byP[A].credits === 3 && byP[B].credits === 0 && byP[C].credits === 25 && byP[C].stale === true, "an RPC failure keeps the PREVIOUS row marked stale rather than zeroing a proven seller");
+  // EVERY row says whether it is stale, including the ones that read fine.
+  // `stale` used to be set only on the carried-over branch, so a fresh row had
+  // no such key - which is "unknown", not "current", everywhere it is
+  // projected. It landed 100% null in the daily dataset's first recorded day
+  // and a past day's snapshot cannot be rewritten, so an absent flag here is a
+  // permanent hole in the historical record rather than a cosmetic gap.
+  ok(byP[A].stale === false && byP[B].stale === false, "a freshly read row says stale:false explicitly, never leaves the field absent");
+  ok(snap.rows.every((r) => typeof r.stale === "boolean"), "every row carries a boolean stale, whatever branch produced it");
+  ok(byP[B].unreadable !== true || byP[B].stale === false, "an unreadable row is fresh-but-unreadable (its own flag), not stale - stale means carried over from an earlier scan");
   lb.__setSolanaLeaderboardForTest(snap);
   const view = lb.getSolanaLeaderboardSnapshot({ self: A });
   ok(view.rows[0].payTo === C && view.rows[0].rank === 1 && view.rows[1].payTo === A && view.rows[1].self === true && view.active === 2, "ranked by credits desc; the host's own payTo is flagged self and ranked like everyone else");
