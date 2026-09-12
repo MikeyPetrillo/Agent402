@@ -298,5 +298,29 @@ check("composeSellerDossier is pure: same inputs, same output", () => {
   assert.deepEqual(JSON.stringify(base()), JSON.stringify(base()));
 });
 
+// --- the dossier publishes the verdict, never the evidence -------------------
+// It is sold to anyone for $0.05, so it is a public surface with a price tag.
+// "We paid them and stopped routing there" is our own decision and is fair to
+// publish. "They answered HTTP 500 after 120 seconds" is a specific adverse
+// claim about a named company, and every other figure in this dossier is a
+// count, a gate verdict, or something the seller advertises about itself.
+check("a delivery failure publishes the chain and the date, never the status or the latency behind it", () => {
+  const d = composeSellerDossier({
+    host: "seller.test", detail: { origin: "https://seller.test", tools: [] }, entry: null, dispatch: null,
+    deliveryFailures: [{ chain: "base", at: NOW, status: 500, ms: 120256 }],
+    refusals: [{ chain: "solana", at: NOW, status: 402 }],
+    deliveries: new Map(), thresholds: {}, now: NOW,
+  });
+  const row = d.router.deliveryFailures[0];
+  assert.equal(d.router.deliveryFailures.length, 1);
+  assert.equal(row.chain, "base");
+  assert.ok(row.at, "the date is published: a seller can see when we stopped routing to them");
+  assert.ok(!("status" in row) && !("ms" in row), "the status and latency are not");
+  assert.ok(!/120256|HTTP 500|after 120s/.test(JSON.stringify(d)),
+    "and neither survives anywhere else in the document, including the prose flags");
+  assert.equal(d.router.refusals[0].status, 402,
+    "a REFUSAL keeps its status on purpose: a 402 on a paid retry is frequently our own end (a credential we built wrong), so it informs the seller rather than accusing them");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

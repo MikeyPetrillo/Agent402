@@ -164,7 +164,15 @@ export function dispatchEligibility({ routable, networks = [], settled = 0, paye
     // delivers. Checked before the settlement gate on Base and before the
     // pay-time verdict on every other chain, so no path can label it callable.
     const failing = deliveryFailing && typeof deliveryFailing === "object" ? deliveryFailing[c] : null;
-    if (failing) { byChain[c] = { eligible: false, reason: "delivery_failing", lastFailure: failing }; continue; }
+    // THE VERDICT IS PUBLIC, THE EVIDENCE IS NOT (the operator, 2026-09-11).
+    // `delivery_failing` is a statement about what WE will do - the same
+    // category as settlement_required, and the same thing every other row on
+    // these pages publishes. The DETAIL behind it (they answered HTTP 500
+    // after 120 seconds) is a specific adverse claim about a named third
+    // party, which is a category nothing else we publish is in. It reads back
+    // through the operator surface instead: /__operator/router-delivery.json.
+    // So the input carries the observation, and the output never echoes it.
+    if (failing) { byChain[c] = { eligible: false, reason: "delivery_failing" }; continue; }
     if (c === "base") {
       // A Base accept advertising the wrong EIP-712 domain name is unpayable by
       // every stock buyer, whatever its history says (the history predates the
@@ -211,6 +219,6 @@ export function dispatchLegend() {
     executeVia: "present only on a row the router will pay right now: the route-execute tier (and price) that runs it. Its absence on a priced row is deliberate.",
     executeViaWhenEligible: "the route-execute tier this row WOULD run under once its seller is dispatch-eligible; not callable through the router today.",
     executeViaCallableNow: "true on rows carrying executeVia, false on rows carrying executeViaWhenEligible. A buyer agent should key on this, never on the presence of a tier name.",
-    routerDispatchLastFailure: "present in routerDispatchByChain.<chain> when the reason is delivery_failing: when the last paid call to this seller on that chain failed, the status it answered (null = no answer before the timeout) and how long it took. It is our own observation of paying them, not a claim about their service in general.",
+    "routerDispatchReason.delivery_failing": "this host paid this seller on this chain and the call did not deliver, so we stopped routing to them until the memo expires or a call succeeds. The verdict is published because it is a statement about what WE do; the underlying observation (the status they answered, how long it took) is deliberately NOT published, because that is a specific adverse claim about a named third party and every other figure on these pages is a count or a gate verdict. A seller who wants to know what we saw can ask us.",
   };
 }

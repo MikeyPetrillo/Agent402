@@ -48,8 +48,9 @@ const TOOL_ROWS_MAX = 50;
  * @param {object|null} a.solana     { credits, payers } from solanaEvidenceByOrigin
  * @param {object|null} a.mpp        { verified, lastProbeOk, offers, recipients:[{recipient, transfers, payers, proven, routable}] }
  * @param {object[]} a.refusals      [{ chain, at, status }] from sellerRefusedRecently per configured chain
- * @param {object[]} a.deliveryFailures  [{ chain, at, status, ms }] from sellerDeliveryFailingRecently per configured chain:
- *                                what happened the last time our router PAID this seller there and got nothing back
+ * @param {object[]} a.deliveryFailures  [{ chain, at }] per configured chain: the chains where our router paid this
+ *                                seller and got nothing back. The status and latency behind it are NOT surfaced here -
+ *                                see the note at the projection below.
  * @param {object|null} a.registration  { first_seen, last_routable_seen, last_settled_seen } from the registrations table
  * @param {Map|object} a.deliveries  key "METHOD route" -> deliveryObservation row
  * @param {object|null} a.sharedClaims  { payTo -> [origins] } for a payTo this origin claims that others claim too
@@ -267,10 +268,25 @@ export function composeSellerDossier(a) {
     refusals: (refusals || []).map((r) => ({ chain: r.chain, at: iso(r.at), status: r.status ?? null })),
     // A refusal is the seller declining our payment (nobody charged). This is
     // the other outcome: the payment went out and nothing came back.
-    deliveryFailures: (deliveryFailures || []).map((r) => ({ chain: r.chain, at: iso(r.at), status: r.status ?? null, ms: r.ms ?? null })),
+    //
+    // CHAIN AND DATE ONLY (the operator, 2026-09-11). This tool is sold to
+    // anyone for $0.05, so it is a public surface wearing a price tag. "We
+    // paid them and stopped routing there" is our own routing decision and is
+    // fair to publish; "they answered HTTP 500 after 120 seconds" is a
+    // specific adverse claim about a named company's engineering, and nothing
+    // else in this dossier is in that category - every other figure is a
+    // count, a gate verdict, or something the seller advertises about itself.
+    // The evidence reads back through /__operator/router-delivery.json.
+    //
+    // Deliberately NOT applied to `refusals` above, which keeps its status:
+    // a 402 or 401 on a paid retry is frequently OUR end (a credential our
+    // side built wrong, the EIP-712 domain case), so the status there informs
+    // rather than accuses, and dropping it would make a seller's own row less
+    // useful to them for no gain.
+    deliveryFailures: (deliveryFailures || []).map((r) => ({ chain: r.chain, at: iso(r.at) })),
   };
   if (router.refusals.length) flags.push(`our router's last paid retry was refused on ${router.refusals.map((r) => r.chain).join(", ")}; those chains are skipped until the memo expires`);
-  for (const f of router.deliveryFailures) flags.push(`the last time our router paid this seller on ${f.chain} the call did not deliver (${f.status ? `HTTP ${f.status}` : "no response"}${f.ms ? ` after ${Math.round(f.ms / 1000)}s` : ""}, no settle receipt); that chain is skipped until the memo expires or a call succeeds`);
+  for (const f of router.deliveryFailures) flags.push(`our router paid this seller on ${f.chain} and the call did not deliver, so that chain is skipped until the memo expires or a call succeeds (what we observed is not published here; ask us)`);
   if (!self && dispatch && dispatch.routerDispatchEligible !== true && dispatch.routerDispatchReason) flags.push(`router verdict: ${dispatch.routerDispatchReason}`);
   if (prices.length && thresholds.sorCap != null && prices[0] > thresholds.sorCap) flags.push(`the cheapest priced route ($${prices[0]}) is above the router's $${thresholds.sorCap} underlying cap for the cheapest tier`);
 

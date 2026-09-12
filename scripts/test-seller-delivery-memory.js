@@ -63,9 +63,17 @@ const { dispatchEligibility, DISPATCH_REASONS, dispatchLegend } = await import("
   const failing = dispatchEligibility({ ...proven, deliveryFailing: { base: { at: "2026-09-11T01:00:00.000Z", status: 500, ms: 120256 } } });
   eq(failing.eligible, false, "the SAME seller, with 5,000 settled calls and 40 payers, is NOT eligible once its last paid call failed to deliver");
   eq(failing.reason, "delivery_failing", "and the reason says so, rather than hiding behind settlement_required");
-  eq(failing.chains.base.lastFailure.status, 500, "the row carries what actually happened, so a reader can judge it");
+  // THE VERDICT IS PUBLIC, THE EVIDENCE IS NOT. Publishing "they answered HTTP
+  // 500 after 120 seconds" on a page about a named third party is a specific
+  // adverse claim, and every other figure we publish is a count, a gate
+  // verdict, or something the seller advertises about itself. The detail reads
+  // back through /__operator/router-delivery.json instead.
+  ok(!("lastFailure" in failing.chains.base), "the public verdict does NOT echo what the seller answered");
+  ok(!/120256|2026-09-11T01|"status"|"ms"|lastFailure/.test(JSON.stringify(failing)), "no status, latency or timestamp of the failure survives anywhere in the public verdict");
+  eq(failing.chains.base.reason, "delivery_failing", "...only the verdict, which is a statement about what WE do");
   ok(DISPATCH_REASONS.delivery_failing && /deliver/i.test(DISPATCH_REASONS.delivery_failing), "the reason is documented in the public vocabulary, not a bare string");
-  ok(/routerDispatchLastFailure/.test(JSON.stringify(dispatchLegend())), "and the legend explains the field beside it");
+  ok(/delivery_failing/.test(JSON.stringify(dispatchLegend())), "the legend explains the verdict");
+  ok(/deliberately NOT published/.test(JSON.stringify(dispatchLegend())), "...and states plainly that the underlying observation is withheld, so a seller reading the legend knows the evidence exists and can ask for it");
 
   // Every other chain resolves proven-ness at pay time, which would otherwise
   // report eligible for a seller we have already proven does not deliver.
@@ -166,6 +174,10 @@ const { dispatchEligibility, DISPATCH_REASONS, dispatchLegend } = await import("
      "and every public row is labelled from the same memo, so the label and the routing decision cannot drift");
   ok(/function deliveryFailingByChain[\s\S]{0,600}spendChainsConfigured\(\)/.test(server),
      "the label covers every chain this host can actually spend on, not just Base");
+  ok(/__operator\/router-delivery\.json/.test(server) && /operatorAuthed\(req\)/.test(server.slice(server.indexOf("__operator/router-delivery.json"), server.indexOf("__operator/router-delivery.json") + 400)),
+     "the failure detail reads back through an OPERATOR-AUTHED route, so it exists where it is useful and nowhere it is a public accusation");
+  ok(!/lastFailure/.test(readFileSync(new URL("../src/dispatch-eligibility.js", import.meta.url), "utf8")),
+     "and the shared verdict function no longer emits it at all, so no surface can reintroduce it by accident");
   const buyer = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
   ok(/paid\.status >= 500 && !\(paid\.headers\.get\("payment-response"\)/.test(buyer), "the recording rule is 5xx AND no receipt, read from the response itself");
   ok(buyer.indexOf("noteSellerDeliveryFailure(sellerOrigin, chain, { status: paid.status") < buyer.indexOf("const evmAuth = chain === \"base\""),

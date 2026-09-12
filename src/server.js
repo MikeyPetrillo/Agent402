@@ -3103,6 +3103,32 @@ app.get("/__operator/sales.json", (req, res) => {
 // payload: composite can overlap gateway when a report invokes a /v1 handler
 // in-process, and the meter only sees THIS process - local audit boots and
 // card/Stripe fees are not in it.
+// What our router saw the last time it PAID each external seller and got
+// nothing back. The public rows carry the verdict (routerDispatchReason
+// delivery_failing) and deliberately not the evidence: "they answered HTTP 500
+// after 120 seconds" is a specific adverse claim about a named third party,
+// and everything else we publish is a count, a gate verdict, or something the
+// seller advertises about itself. Operator-only, so the claim exists where it
+// is useful to us and nowhere it is a public accusation.
+app.get("/__operator/router-delivery.json", (req, res) => {
+  if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
+  res.set("Cache-Control", "no-store");
+  const rows = [];
+  for (const origin of routableSellerSummaries().map((x) => x.origin)) {
+    for (const chain of spendChainsConfigured()) {
+      const f = sellerDeliveryFailingRecently(origin, chain);
+      if (f) rows.push({ origin, chain, at: new Date(f.at).toISOString(), status: f.status ?? null, ms: f.ms ?? null });
+    }
+  }
+  rows.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  res.json({
+    note: "sellers our router paid and that did not deliver (5xx with no settle receipt, or no answer before the timeout). In memory only: a restart clears it. The public rows carry the verdict, never these fields.",
+    ttlHours: Math.round(Number(process.env.SOR_SELLER_DELIVERY_FAIL_TTL_MS || 24 * 3600 * 1000) / 3600000),
+    count: rows.length,
+    rows,
+  });
+});
+
 app.get("/__operator/margin.json", (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store");
