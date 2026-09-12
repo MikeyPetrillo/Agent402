@@ -308,6 +308,8 @@ import { STT_TOOLS } from "./tools/stt-kit.js";
 import { EMBED_TOOLS } from "./tools/embed-kit.js";
 import { USAGE_TOOLS } from "./tools/usage-kit.js";
 import { FEEDBACK_TOOLS } from "./tools/feedback-kit.js";
+import { CHAIN_RPC_TOOLS } from "./tools/chain-rpc-kit.js";
+import { chainNamespaceMiddleware, chainNamespaceMap } from "./chain-namespace.js";
 import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage } from "./pages.js";
@@ -357,7 +359,7 @@ import { hostFigures, hostIndexEntry, isSelfSellerQuery } from "./host-entry.js"
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
 
-const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...BLOCKSCOUT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS];
+const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZE_TOOLS, ...DEMAND_TOOLS, ...MEDIA_TOOLS, ...GOV_TOOLS, ...GEO_TOOLS, ...OCR_TOOLS, ...AGENT_TOOLS, ...BARCODE_TOOLS, ...DATA_TOOLS, ...IMAGE_TOOLS, ...X402_TOOLS, ...B20_TOOLS, ...UTIL_TOOLS, ...API_TOOLS, ...MACRO_TOOLS, ...EDGAR_TOOLS, ...FINANCE_TOOLS, ...CRYPTO_TOOLS, ...NETWORK_TOOLS, ...NETWORK_TOOLS2, ...HTML_TOOLS, ...COMPRESSION_TOOLS, ...STATS_TOOLS, ...FORECAST_TOOLS, ...FINANCE_MATH_TOOLS, ...CHAIN_TOOLS, ...CONTRACT_TOOLS, ...ENRICH_TOOLS, ...WEB_TOOLS, ...PRICE_FEED_TOOLS, ...DEX_TOOLS, ...PREDICTION_MARKET_TOOLS, ...MEV_AND_L2_TOOLS, ...ONCHAIN_IDENTITY_TOOLS, ...NFT_MARKET_TOOLS, ...WEATHER_TOOLS, ...DATE_TIME_TOOLS, ...TEXT_ANALYSIS_TOOLS, ...VALIDATION_TOOLS, ...CRYPTO_HASH_TOOLS, ...CALENDAR_TOOLS, ...LLM_TOOLS, ...GATEWAY_TOOLS_ENABLED, ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS, ...IPO_TOOLS, ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...IMAGE_GEN_TOOLS, ...CODE_RUN_TOOLS, ...TTS_TOOLS, ...STT_TOOLS, ...EMBED_TOOLS, ...MODERATE_TOOLS, ...CDP_TOOLS, ...USAGE_TOOLS, ...BLOCKSCOUT_TOOLS, ...CAPTCHA_TOOLS, ...SQL_GUARD_TOOLS, ...ACTION_GATE_TOOLS, ...DERIVATIVES_TOOLS, ...SOLANA_INTEL_TOOLS, ...X_DATA_TOOLS_ENABLED, ...B2B_ENRICH_TOOLS_ENABLED, ...CRAWL_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DEFI_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...FARCASTER_SOCIAL_TOOLS_ENABLED, ...ALCHEMY_DATA_TOOLS, ...IMAGES_FAST_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS, ...LLM_CONTEXT_TOOLS, ...LINKEDIN_TOOLS, ...ATTEST_TOOLS, ...SANCTIONS_TOOLS, ...FEEDBACK_TOOLS, ...CHAIN_RPC_TOOLS];
 // House style on every report tier's output (agents, card buyers, monitors
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
@@ -2059,6 +2061,12 @@ app.use((req, _res, next) => {
   }
   next();
 });
+// `/api/chain/<verb>` -> the route that already serves that read. Mounted here
+// for the same reason as the alias above: every gate keys on req.path, so the
+// rewrite has to happen before any of them. The method alias further down then
+// turns a POST on a GET-only canonical route into the GET it needs, so a buyer
+// can POST every verb in the namespace without knowing which is which.
+app.use(chainNamespaceMiddleware);
 // The metered tier prices every request from its body, so a big body is a big
 // quote, never an unpriced cost - it can take real agent-host turns. A Claude
 // Code turn is ~110 KB (system prompt + 22 tool schemas, measured 2026-08-27)
@@ -5485,6 +5493,34 @@ const gatewayIndex = (_req, res) => res.set("Cache-Control", "public, max-age=60
   docs: `${BASE_URL}/guides/agent-hosts`,
 });
 for (const p of ["/v1", "/v1/info", "/v1/metered"]) app.get(p, gatewayIndex);
+// The same courtesy for the chain namespace: an agent that guesses
+// `/api/chain` gets every verb it answers and the route each one resolves to,
+// free and unpaywalled, so the namespace is self-describing rather than
+// something you have to read our docs to use. Prices are the canonical tool's,
+// read live from the catalog, so this index can never quote a stale number.
+const chainIndex = (_req, res) => {
+  const byPath = new Map(Object.values(CATALOG).map((t) => [String(t.route).split(" ").pop(), t]));
+  return res.set("Cache-Control", "public, max-age=600").json({
+    ok: true,
+    service: "Agent402 chain reads",
+    how: "GET or POST /api/chain/<verb> with the same parameters the underlying tool takes. Each verb is served by the route named below, at that route's own price and paywall.",
+    verbs: chainNamespaceMap().map(({ verb, route, own }) => {
+      const def = byPath.get(route);
+      return {
+        verb,
+        url: `${BASE_URL}/api/chain/${verb}`,
+        servedBy: def?.slug ?? null,
+        route,
+        price: def?.price ?? null,
+        ...(own ? {} : { note: "an alias: the same read this server already sold under its own name" }),
+      };
+    }),
+    networks: ["ethereum", "base", "polygon", "arbitrum", "optimism"],
+    pay: { x402: "PAYMENT-SIGNATURE (USDC)", mpp: "Authorization: Payment", credits: "Authorization: Bearer a402_... (buy at /credits)", free: "most reads are also available over proof of work - see /api/pow/challenge" },
+    catalog: `${BASE_URL}/api/pricing`,
+  });
+};
+app.get("/api/chain", chainIndex);
 app.get("/openapi.json", (_req, res) => res.set("Cache-Control", "public, max-age=3600").json(openapiSpec(BASE_URL, CATALOG)));
 app.get("/tools", (_req, res) => htmlCache(res, 300, 900).send(ledgerCatalogPage(BASE_URL, CATALOG, SKILL_PACKS)));
 app.get("/shop", (_req, res) => htmlCache(res, 300, 900).send(shopPage(BASE_URL, CATALOG)));

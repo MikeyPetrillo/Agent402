@@ -1,976 +1,1114 @@
 {
-  "about": "Chain reads over public RPCs, CoinGecko demo, DefiLlama, ENS, Sourcify (tier 1). Alchemy-backed tools skip on a keyless boot.",
-  "cases": [
-    {
-      "slug": "crypto-price",
-      "name": "single coin in eur",
-      "input": {
-        "coins": "ETH",
-        "currency": "eur"
-      },
-      "expect": {
-        "equals": {
-          "currency": "eur",
-          "count": 1
-        },
-        "gt": {
-          "coins.ethereum.price": 100
-        },
-        "populated": [
-          "coins.ethereum.marketCap"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
+ "about": "Chain reads over public RPCs, CoinGecko demo, DefiLlama, ENS, Sourcify (tier 1). Alchemy-backed tools skip on a keyless boot.",
+ "cases": [
+  {
+   "slug": "crypto-price",
+   "name": "single coin in eur",
+   "input": {
+    "coins": "ETH",
+    "currency": "eur"
+   },
+   "expect": {
+    "equals": {
+     "currency": "eur",
+     "count": 1
     },
-    {
-      "slug": "crypto-price",
-      "name": "unknown symbol is a 404 naming it",
-      "input": {
-        "coins": "ZZQX9"
-      },
-      "expect": {
-        "status": 404,
-        "matches": {
-          "error": "ZZQX9"
-        }
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
+    "gt": {
+     "coins.ethereum.price": 100
     },
-    {
-      "slug": "crypto-price",
-      "name": "unsupported currency is a 400 naming it",
-      "input": {
-        "coins": "BTC",
-        "currency": "zzz"
-      },
-      "expect": {
-        "status": 400,
-        "matches": {
-          "error": "currency"
-        }
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "crypto-price",
-      "name": "a partial miss lists the unknown id",
-      "input": {
-        "coins": "BTC,ZZQX9"
-      },
-      "expect": {
-        "equals": {
-          "count": 1,
-          "unknown": [
-            "zzqx9"
-          ]
-        },
-        "populated": [
-          "coins.bitcoin.price"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "crypto-history",
-      "name": "30 days of SOL",
-      "input": {
-        "coin": "SOL",
-        "days": "30"
-      },
-      "expect": {
-        "gte": {
-          "count": 25
-        },
-        "populated": [
-          "bars[0].price"
-        ],
-        "matches": {
-          "coin": "^(SOL|solana)$"
-        }
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "crypto-global",
-      "name": "eur denominated",
-      "input": {
-        "currency": "eur"
-      },
-      "expect": {
-        "gt": {
-          "totalMarketCap": 100000000000,
-          "btcDominancePct": 20,
-          "activeCryptocurrencies": 1000
-        },
-        "lt": {
-          "btcDominancePct": 90
-        }
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "crypto-trending",
-      "name": "trending list",
-      "input": {},
-      "expect": {
-        "gte": {
-          "count": 3
-        },
-        "populated": [
-          "coins[0]"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "price-coingecko",
-      "name": "three ids in gbp with change",
-      "input": {
-        "ids": [
-          "bitcoin",
-          "solana",
-          "dogecoin"
-        ],
-        "vsCurrency": "gbp",
-        "include24hChange": true
-      },
-      "expect": {
-        "equals": {
-          "count": 3,
-          "vsCurrency": "gbp",
-          "prices[0].id": "bitcoin"
-        },
-        "gt": {
-          "prices[0].price": 1000
-        },
-        "populated": [
-          "prices[2].price",
-          "prices[0].change24h"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "price-coingecko",
-      "name": "every id unknown is a 404",
-      "input": {
-        "ids": [
-          "not-a-coin-zzq"
-        ]
-      },
-      "expect": {
-        "status": 404
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "price-coingecko",
-      "name": "unsupported vsCurrency blames the currency, not the ids",
-      "input": {
-        "ids": [
-          "bitcoin"
-        ],
-        "vsCurrency": "zzz"
-      },
-      "expect": {
-        "status": 400,
-        "matches": {
-          "error": "vsCurrency"
-        }
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "price-coingecko",
-      "name": "partial miss keeps the null row and lists it",
-      "input": {
-        "ids": [
-          "bitcoin",
-          "not-a-coin-zzq"
-        ]
-      },
-      "expect": {
-        "equals": {
-          "count": 2,
-          "unknown": [
-            "not-a-coin-zzq"
-          ],
-          "prices[1].price": null
-        },
-        "gt": {
-          "prices[0].price": 1000
-        }
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "defi-yields",
-      "name": "ethereum, min apy, sorted by tvl",
-      "input": {
-        "chain": "Ethereum",
-        "minApy": 3,
-        "minTvlUsd": 10000000,
-        "sort": "tvl",
-        "limit": 3
-      },
-      "expect": {
-        "equals": {
-          "count": 3
-        },
-        "gt": {
-          "matched": 3,
-          "pools[0].tvlUsd": 10000000
-        },
-        "gte": {
-          "pools[0].apy": 3
-        }
-      }
-    },
-    {
-      "slug": "defi-yields",
-      "name": "impossible filter is an honest zero",
-      "_why": "The filter must be impossible for a STRUCTURAL reason, not a numerically extreme one. This case used minApy 5000 and broke on 2026-09-12 when a real Uniswap v3 WSTETH-USDC pool on Ethereum hit 5,656% APY on $84k of TVL: APY is an unbounded RATIO, so a tiny pool with a volatile fee week can exceed any threshold, and the tool was right to return it. TVL is bounded by money that actually exists - total DeFi TVL is ~$100B - so a quadrillion-dollar floor is impossible in a way no APY number is.",
-      "input": {
-        "chain": "Ethereum",
-        "minTvlUsd": 1000000000000000,
-        "limit": 3
-      },
-      "expect": {
-        "equals": {
-          "count": 0,
-          "matched": 0
-        },
-        "empty": [
-          "pools"
-        ]
-      }
-    },
-    {
-      "slug": "defi-tvl",
-      "name": "uniswap",
-      "input": {
-        "protocol": "uniswap"
-      },
-      "expect": {
-        "gt": {
-          "tvlUsd": 100000000
-        },
-        "populated": [
-          "name",
-          "category",
-          "chainTvls"
-        ]
-      }
-    },
-    {
-      "slug": "defi-tvl",
-      "name": "unknown protocol is a 404, not a 500",
-      "input": {
-        "protocol": "zzq-not-a-protocol"
-      },
-      "expect": {
-        "status": 404
-      }
-    },
-    {
-      "slug": "dex-top-pools",
-      "name": "aerodrome on base",
-      "input": {
-        "chain": "Base",
-        "project": "aerodrome-v1",
-        "limit": 3
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "pools[0]"
-        ]
-      }
-    },
-    {
-      "slug": "l2-tvl",
-      "name": "top 3",
-      "input": {
-        "limit": 3
-      },
-      "expect": {
-        "equals": {
-          "count": 3
-        },
-        "gt": {
-          "totalTvlUsd": 1000000000
-        },
-        "populated": [
-          "chains[0]"
-        ]
-      }
-    },
-    {
-      "slug": "l2-gas-comparison",
-      "name": "two networks only",
-      "input": {
-        "networks": [
-          "base",
-          "arbitrum"
-        ]
-      },
-      "expect": {
-        "count": {
-          "networks": 2
-        },
-        "populated": [
-          "cheapest",
-          "queriedAt"
-        ]
-      }
-    },
-    {
-      "slug": "l2-gas-comparison",
-      "name": "unknown network is a 400",
-      "input": {
-        "networks": [
-          "base",
-          "narnia"
-        ]
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "gas-estimate",
-      "name": "arbitrum",
-      "input": {
-        "network": "arbitrum"
-      },
-      "expect": {
-        "equals": {
-          "network": "arbitrum"
-        },
-        "gt": {
-          "gasPriceWei": 0
-        }
-      }
-    },
-    {
-      "slug": "gas-estimate",
-      "name": "unknown network is a 400",
-      "input": {
-        "network": "narnia"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "gas-snapshot",
-      "name": "ethereum mainnet tiers ordered",
-      "input": {
-        "network": "ethereum"
-      },
-      "expect": {
-        "equals": {
-          "chainId": 1
-        },
-        "gt": {
-          "baseFeeGwei": 0
-        },
-        "populated": [
-          "slow",
-          "standard",
-          "fast"
-        ]
-      }
-    },
-    {
-      "slug": "block-number",
-      "name": "polygon",
-      "input": {
-        "network": "polygon"
-      },
-      "expect": {
-        "gt": {
-          "blockNumber": 60000000
-        },
-        "matches": {
-          "hex": "^0x[0-9a-f]+$"
-        }
-      }
-    },
-    {
-      "slug": "eth-call",
-      "name": "chain id on optimism",
-      "input": {
-        "method": "eth_chainId",
-        "params": [],
-        "network": "optimism"
-      },
-      "expect": {
-        "equals": {
-          "result": "0xa"
-        }
-      }
-    },
-    {
-      "slug": "eth-call",
-      "name": "disallowed method is a 400",
-      "input": {
-        "method": "eth_sendRawTransaction",
-        "params": [
-          "0x00"
-        ],
-        "network": "base"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "usdc-balance",
-      "name": "the USDC contract itself holds none",
-      "input": {
-        "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "network": "base"
-      },
-      "expect": {
-        "populated": [
-          "token",
-          "network"
-        ],
-        "gte": {
-          "usdc": 0
-        }
-      }
-    },
-    {
-      "slug": "wallet-balance",
-      "name": "a burn address has native balance",
-      "input": {
-        "address": "0x000000000000000000000000000000000000dEaD",
-        "network": "ethereum"
-      },
-      "expect": {
-        "populated": [
-          "native"
-        ]
-      }
-    },
-    {
-      "slug": "wallet-balance",
-      "name": "bad address is a 400",
-      "input": {
-        "address": "0x123",
-        "network": "base"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "ens-resolve",
-      "name": "a name with no owner is found:false",
-      "input": {
-        "name": "this-name-surely-does-not-exist-zq7x.eth"
-      },
-      "expect": {
-        "equals": {
-          "found": false
-        }
-      }
-    },
-    {
-      "slug": "ens-resolve",
-      "name": "nick.eth resolves",
-      "input": {
-        "name": "nick.eth"
-      },
-      "expect": {
-        "equals": {
-          "found": true
-        },
-        "matches": {
-          "address": "^0x[0-9a-fA-F]{40}$"
-        }
-      }
-    },
-    {
-      "slug": "ens-bulk-resolve",
-      "name": "one named, one unnamed",
-      "input": {
-        "addresses": [
-          "0xb8c2C29ee19D8307cb7255e1Cd9CbDE883A267d5",
-          "0x1111111111111111111111111111111111111111"
-        ]
-      },
-      "expect": {
-        "equals": {
-          "count": 2
-        },
-        "gte": {
-          "namedCount": 1
-        },
-        "count": {
-          "results": 2
-        }
-      }
-    },
-    {
-      "slug": "contract-abi",
-      "name": "WETH on ethereum is verified",
-      "input": {
-        "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-        "network": "ethereum"
-      },
-      "expect": {
-        "equals": {
-          "verified": true,
-          "chainId": 1
-        },
-        "minCount": {
-          "functions": 3
-        }
-      }
-    },
-    {
-      "slug": "contract-abi",
-      "name": "an EOA is verified:false, not a 500",
-      "input": {
-        "address": "0x000000000000000000000000000000000000dEaD",
-        "network": "base"
-      },
-      "expect": {
-        "equals": {
-          "verified": false
-        }
-      }
-    },
-    {
-      "slug": "contract-source",
-      "name": "WETH source on ethereum",
-      "input": {
-        "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-        "network": "ethereum"
-      },
-      "expect": {
-        "equals": {
-          "verified": true
-        },
-        "gte": {
-          "sourceCount": 1
-        },
-        "populated": [
-          "compiler"
-        ]
-      }
-    },
-    {
-      "slug": "tx-status",
-      "name": "a real base tx",
-      "input": {
-        "hash": "0x2f1fecade9bd945e7817c11e5a34cafe6b349dd8c92a7587efed1de476bddfeb",
-        "network": "base"
-      },
-      "expect": {
-        "matches": {
-          "status": "success|confirmed|1"
-        },
-        "gt": {
-          "blockNumber": 50000000
-        },
-        "populated": [
-          "from",
-          "gasUsed"
-        ]
-      }
-    },
-    {
-      "slug": "tx-status",
-      "name": "unknown hash is not found, not a 500",
-      "input": {
-        "hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
-        "network": "base"
-      },
-      "expect": {
-        "matches": {
-          "status": "not.?found|pending|unknown"
-        }
-      }
-    },
-    {
-      "slug": "x402-verify",
-      "name": "a real settlement to our treasury",
-      "input": {
-        "hash": "0x09f85fcf1844d85277b8cce528efc8d25c6df632b1fed1c8337f078901a69562",
-        "network": "base",
-        "to": "0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0"
-      },
-      "expect": {
-        "equals": {
-          "settled": true,
-          "matched": true
-        },
-        "minCount": {
-          "transfers": 1
-        }
-      }
-    },
-    {
-      "slug": "x402-verify",
-      "name": "same tx, wrong payee is matched:false",
-      "input": {
-        "hash": "0x09f85fcf1844d85277b8cce528efc8d25c6df632b1fed1c8337f078901a69562",
-        "network": "base",
-        "to": "0x1111111111111111111111111111111111111111"
-      },
-      "expect": {
-        "equals": {
-          "settled": true,
-          "matched": false
-        }
-      }
-    },
-    {
-      "slug": "transfer-authorization",
-      "name": "typed data on polygon",
-      "input": {
-        "from": "0x1111111111111111111111111111111111111111",
-        "to": "0x2222222222222222222222222222222222222222",
-        "amount": 1.5,
-        "network": "polygon",
-        "validForSeconds": 120
-      },
-      "expect": {
-        "equals": {
-          "network": "polygon",
-          "typedData.message.value": "1500000"
-        },
-        "populated": [
-          "typedData.domain.verifyingContract",
-          "typedData.message.nonce"
-        ]
-      }
-    },
-    {
-      "slug": "transfer-authorization",
-      "name": "zero amount is a 400",
-      "input": {
-        "from": "0x1111111111111111111111111111111111111111",
-        "to": "0x2222222222222222222222222222222222222222",
-        "amount": 0
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "onramp-link",
-      "name": "solana address",
-      "input": {
-        "address": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
-        "network": "solana",
-        "amount": "25"
-      },
-      "expect": {
-        "matches": {
-          "onrampUrl": "^https://pay\\.coinbase\\.com"
-        },
-        "populated": [
-          "note"
-        ]
-      }
-    },
-    {
-      "slug": "onramp-link",
-      "name": "malformed address is a 400",
-      "input": {
-        "address": "nope",
-        "network": "base"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "testnet-fund",
-      "name": "a bad address is a 400 before any faucet call",
-      "input": {
-        "address": "0xnope",
-        "token": "usdc"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "dex-pair",
-      "name": "USDC/WETH 0.05% on base resolves",
-      "input": {
-        "tokenA": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "tokenB": "0x4200000000000000000000000000000000000006",
-        "fee": 500,
-        "network": "base"
-      },
-      "expect": {
-        "matches": {
-          "poolAddress": "^0xd0b53d9277642d899df5c87a3966a349a798f224$"
-        },
-        "equals": {
-          "exists": true
-        }
-      }
-    },
-    {
-      "slug": "dex-pair",
-      "name": "no pool is the documented zero-address sentinel with exists:false",
-      "input": {
-        "tokenA": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "tokenB": "0x1111111111111111111111111111111111111111",
-        "fee": 500,
-        "network": "base"
-      },
-      "expect": {
-        "equals": {
-          "exists": false,
-          "poolAddress": "0x0000000000000000000000000000000000000000"
-        },
-        "populated": [
-          "note"
-        ]
-      }
-    },
-    {
-      "slug": "dex-pool",
-      "name": "USDC/WETH pool state",
-      "input": {
-        "poolAddress": "0xd0b53d9277642d899df5c87a3966a349a798f224",
-        "network": "base"
-      },
-      "expect": {
-        "equals": {
-          "fee": 500
-        },
-        "populated": [
-          "token0",
-          "token1",
-          "liquidity",
-          "spotPrice_1per0"
-        ],
-        "gt": {
-          "spotPrice_1per0": 0
-        }
-      }
-    },
-    {
-      "slug": "dex-quote",
-      "name": "swap 0.01 the other direction",
-      "input": {
-        "poolAddress": "0xd0b53d9277642d899df5c87a3966a349a798f224",
-        "amountIn": 0.01,
-        "zeroForOne": false,
-        "network": "base"
-      },
-      "expect": {
-        "equals": {
-          "zeroForOne": false
-        },
-        "gt": {
-          "amountOut": 0
-        }
-      }
-    },
-    {
-      "slug": "mev-recent-blocks",
-      "name": "three blocks",
-      "input": {
-        "limit": 3
-      },
-      "expect": {
-        "equals": {
-          "count": 3
-        },
-        "populated": [
-          "blocks[0]",
-          "relay"
-        ],
-        "gte": {
-          "totalEthToProposers": 0
-        }
-      }
-    },
-    {
-      "slug": "mev-builder-share",
-      "name": "small window",
-      "input": {
-        "window": 20
-      },
-      "expect": {
-        "equals": {
-          "windowBlocks": 20
-        },
-        "gte": {
-          "uniqueBuilders": 1
-        },
-        "populated": [
-          "builders[0]"
-        ]
-      }
-    },
-    {
-      "slug": "mev-block-payment",
-      "name": "a slot with no relay record is found:false",
-      "input": {
-        "slot": 1
-      },
-      "expect": {
-        "equals": {
-          "found": false
-        }
-      }
-    },
-    {
-      "slug": "farcaster-profile",
-      "name": "lookup by username",
-      "input": {
-        "username": "dwr"
-      },
-      "expect": {
-        "equals": {
-          "username": "dwr"
-        },
-        "gt": {
-          "followerCount": 1000
-        },
-        "populated": [
-          "displayName"
-        ]
-      },
-      "requires": "NEYNAR_API_KEY"
-    },
-    {
-      "slug": "wallet-balances",
-      "name": "vitalik on ethereum has tokens",
-      "input": {
-        "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
-        "network": "ethereum"
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "balances[0]"
-        ]
-      }
-    },
-    {
-      "slug": "wallet-transactions",
-      "name": "recent transfers of a busy address",
-      "input": {
-        "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
-        "network": "ethereum",
-        "limit": 3
-      },
-      "expect": {
-        "minCount": {
-          "transfers": 1
-        }
-      }
-    },
-    {
-      "slug": "nft-collection",
-      "name": "pudgy penguins",
-      "input": {
-        "contract": "0xBd3531dA5CF5857e7CfAA92426877b022e612cf8",
-        "network": "ethereum"
-      },
-      "expect": {
-        "matches": {
-          "name": "pudgy"
-        },
-        "populated": [
-          "totalSupply",
-          "tokenType"
-        ]
-      }
-    },
-    {
-      "slug": "nft-metadata",
-      "name": "bayc #1 has traits",
-      "input": {
-        "contract": "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d",
-        "tokenId": "1",
-        "network": "ethereum"
-      },
-      "expect": {
-        "populated": [
-          "title",
-          "image"
-        ],
-        "minCount": {
-          "attributes": 3
-        }
-      }
-    },
-    {
-      "slug": "nft-floor",
-      "name": "pudgy penguins floor",
-      "input": {
-        "contract": "0xBd3531dA5CF5857e7CfAA92426877b022e612cf8"
-      },
-      "expect": {
-        "populated": [
-          "cheapestFloorEth",
-          "cheapestMarketplace"
-        ],
-        "gt": {
-          "cheapestFloorEth": 0
-        }
-      }
-    },
-    {
-      "slug": "token-metadata",
-      "name": "WETH on ethereum",
-      "input": {
-        "contract": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-        "network": "ethereum"
-      },
-      "expect": {
-        "equals": {
-          "symbol": "WETH",
-          "decimals": 18
-        }
-      }
-    },
-    {
-      "slug": "token-price",
-      "name": "WETH on base priced",
-      "input": {
-        "contract": "0x4200000000000000000000000000000000000006",
-        "network": "base"
-      },
-      "expect": {
-        "gt": {
-          "priceUsd": 100
-        },
-        "populated": [
-          "symbol",
-          "lastUpdated"
-        ]
-      }
+    "populated": [
+     "coins.ethereum.marketCap"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "crypto-price",
+   "name": "unknown symbol is a 404 naming it",
+   "input": {
+    "coins": "ZZQX9"
+   },
+   "expect": {
+    "status": 404,
+    "matches": {
+     "error": "ZZQX9"
     }
-  ],
-  "pace": 3000
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "crypto-price",
+   "name": "unsupported currency is a 400 naming it",
+   "input": {
+    "coins": "BTC",
+    "currency": "zzz"
+   },
+   "expect": {
+    "status": 400,
+    "matches": {
+     "error": "currency"
+    }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "crypto-price",
+   "name": "a partial miss lists the unknown id",
+   "input": {
+    "coins": "BTC,ZZQX9"
+   },
+   "expect": {
+    "equals": {
+     "count": 1,
+     "unknown": [
+      "zzqx9"
+     ]
+    },
+    "populated": [
+     "coins.bitcoin.price"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "crypto-history",
+   "name": "30 days of SOL",
+   "input": {
+    "coin": "SOL",
+    "days": "30"
+   },
+   "expect": {
+    "gte": {
+     "count": 25
+    },
+    "populated": [
+     "bars[0].price"
+    ],
+    "matches": {
+     "coin": "^(SOL|solana)$"
+    }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "crypto-global",
+   "name": "eur denominated",
+   "input": {
+    "currency": "eur"
+   },
+   "expect": {
+    "gt": {
+     "totalMarketCap": 100000000000,
+     "btcDominancePct": 20,
+     "activeCryptocurrencies": 1000
+    },
+    "lt": {
+     "btcDominancePct": 90
+    }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "crypto-trending",
+   "name": "trending list",
+   "input": {},
+   "expect": {
+    "gte": {
+     "count": 3
+    },
+    "populated": [
+     "coins[0]"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "price-coingecko",
+   "name": "three ids in gbp with change",
+   "input": {
+    "ids": [
+     "bitcoin",
+     "solana",
+     "dogecoin"
+    ],
+    "vsCurrency": "gbp",
+    "include24hChange": true
+   },
+   "expect": {
+    "equals": {
+     "count": 3,
+     "vsCurrency": "gbp",
+     "prices[0].id": "bitcoin"
+    },
+    "gt": {
+     "prices[0].price": 1000
+    },
+    "populated": [
+     "prices[2].price",
+     "prices[0].change24h"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "price-coingecko",
+   "name": "every id unknown is a 404",
+   "input": {
+    "ids": [
+     "not-a-coin-zzq"
+    ]
+   },
+   "expect": {
+    "status": 404
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "price-coingecko",
+   "name": "unsupported vsCurrency blames the currency, not the ids",
+   "input": {
+    "ids": [
+     "bitcoin"
+    ],
+    "vsCurrency": "zzz"
+   },
+   "expect": {
+    "status": 400,
+    "matches": {
+     "error": "vsCurrency"
+    }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "price-coingecko",
+   "name": "partial miss keeps the null row and lists it",
+   "input": {
+    "ids": [
+     "bitcoin",
+     "not-a-coin-zzq"
+    ]
+   },
+   "expect": {
+    "equals": {
+     "count": 2,
+     "unknown": [
+      "not-a-coin-zzq"
+     ],
+     "prices[1].price": null
+    },
+    "gt": {
+     "prices[0].price": 1000
+    }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "defi-yields",
+   "name": "ethereum, min apy, sorted by tvl",
+   "input": {
+    "chain": "Ethereum",
+    "minApy": 3,
+    "minTvlUsd": 10000000,
+    "sort": "tvl",
+    "limit": 3
+   },
+   "expect": {
+    "equals": {
+     "count": 3
+    },
+    "gt": {
+     "matched": 3,
+     "pools[0].tvlUsd": 10000000
+    },
+    "gte": {
+     "pools[0].apy": 3
+    }
+   }
+  },
+  {
+   "slug": "defi-yields",
+   "name": "impossible filter is an honest zero",
+   "_why": "The filter must be impossible for a STRUCTURAL reason, not a numerically extreme one. This case used minApy 5000 and broke on 2026-09-12 when a real Uniswap v3 WSTETH-USDC pool on Ethereum hit 5,656% APY on $84k of TVL: APY is an unbounded RATIO, so a tiny pool with a volatile fee week can exceed any threshold, and the tool was right to return it. TVL is bounded by money that actually exists - total DeFi TVL is ~$100B - so a quadrillion-dollar floor is impossible in a way no APY number is.",
+   "input": {
+    "chain": "Ethereum",
+    "minTvlUsd": 1000000000000000,
+    "limit": 3
+   },
+   "expect": {
+    "equals": {
+     "count": 0,
+     "matched": 0
+    },
+    "empty": [
+     "pools"
+    ]
+   }
+  },
+  {
+   "slug": "defi-tvl",
+   "name": "uniswap",
+   "input": {
+    "protocol": "uniswap"
+   },
+   "expect": {
+    "gt": {
+     "tvlUsd": 100000000
+    },
+    "populated": [
+     "name",
+     "category",
+     "chainTvls"
+    ]
+   }
+  },
+  {
+   "slug": "defi-tvl",
+   "name": "unknown protocol is a 404, not a 500",
+   "input": {
+    "protocol": "zzq-not-a-protocol"
+   },
+   "expect": {
+    "status": 404
+   }
+  },
+  {
+   "slug": "dex-top-pools",
+   "name": "aerodrome on base",
+   "input": {
+    "chain": "Base",
+    "project": "aerodrome-v1",
+    "limit": 3
+   },
+   "expect": {
+    "gte": {
+     "count": 1
+    },
+    "populated": [
+     "pools[0]"
+    ]
+   }
+  },
+  {
+   "slug": "l2-tvl",
+   "name": "top 3",
+   "input": {
+    "limit": 3
+   },
+   "expect": {
+    "equals": {
+     "count": 3
+    },
+    "gt": {
+     "totalTvlUsd": 1000000000
+    },
+    "populated": [
+     "chains[0]"
+    ]
+   }
+  },
+  {
+   "slug": "l2-gas-comparison",
+   "name": "two networks only",
+   "input": {
+    "networks": [
+     "base",
+     "arbitrum"
+    ]
+   },
+   "expect": {
+    "count": {
+     "networks": 2
+    },
+    "populated": [
+     "cheapest",
+     "queriedAt"
+    ]
+   }
+  },
+  {
+   "slug": "l2-gas-comparison",
+   "name": "unknown network is a 400",
+   "input": {
+    "networks": [
+     "base",
+     "narnia"
+    ]
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "gas-estimate",
+   "name": "arbitrum",
+   "input": {
+    "network": "arbitrum"
+   },
+   "expect": {
+    "equals": {
+     "network": "arbitrum"
+    },
+    "gt": {
+     "gasPriceWei": 0
+    }
+   }
+  },
+  {
+   "slug": "gas-estimate",
+   "name": "unknown network is a 400",
+   "input": {
+    "network": "narnia"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "gas-snapshot",
+   "name": "ethereum mainnet tiers ordered",
+   "input": {
+    "network": "ethereum"
+   },
+   "expect": {
+    "equals": {
+     "chainId": 1
+    },
+    "gt": {
+     "baseFeeGwei": 0
+    },
+    "populated": [
+     "slow",
+     "standard",
+     "fast"
+    ]
+   }
+  },
+  {
+   "slug": "block-number",
+   "name": "polygon",
+   "input": {
+    "network": "polygon"
+   },
+   "expect": {
+    "gt": {
+     "blockNumber": 60000000
+    },
+    "matches": {
+     "hex": "^0x[0-9a-f]+$"
+    }
+   }
+  },
+  {
+   "slug": "eth-call",
+   "name": "chain id on optimism",
+   "input": {
+    "method": "eth_chainId",
+    "params": [],
+    "network": "optimism"
+   },
+   "expect": {
+    "equals": {
+     "result": "0xa"
+    }
+   }
+  },
+  {
+   "slug": "eth-call",
+   "name": "disallowed method is a 400",
+   "input": {
+    "method": "eth_sendRawTransaction",
+    "params": [
+     "0x00"
+    ],
+    "network": "base"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "usdc-balance",
+   "name": "the USDC contract itself holds none",
+   "input": {
+    "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "network": "base"
+   },
+   "expect": {
+    "populated": [
+     "token",
+     "network"
+    ],
+    "gte": {
+     "usdc": 0
+    }
+   }
+  },
+  {
+   "slug": "wallet-balance",
+   "name": "a burn address has native balance",
+   "input": {
+    "address": "0x000000000000000000000000000000000000dEaD",
+    "network": "ethereum"
+   },
+   "expect": {
+    "populated": [
+     "native"
+    ]
+   }
+  },
+  {
+   "slug": "wallet-balance",
+   "name": "bad address is a 400",
+   "input": {
+    "address": "0x123",
+    "network": "base"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "ens-resolve",
+   "name": "a name with no owner is found:false",
+   "input": {
+    "name": "this-name-surely-does-not-exist-zq7x.eth"
+   },
+   "expect": {
+    "equals": {
+     "found": false
+    }
+   }
+  },
+  {
+   "slug": "ens-resolve",
+   "name": "nick.eth resolves",
+   "input": {
+    "name": "nick.eth"
+   },
+   "expect": {
+    "equals": {
+     "found": true
+    },
+    "matches": {
+     "address": "^0x[0-9a-fA-F]{40}$"
+    }
+   }
+  },
+  {
+   "slug": "ens-bulk-resolve",
+   "name": "one named, one unnamed",
+   "input": {
+    "addresses": [
+     "0xb8c2C29ee19D8307cb7255e1Cd9CbDE883A267d5",
+     "0x1111111111111111111111111111111111111111"
+    ]
+   },
+   "expect": {
+    "equals": {
+     "count": 2
+    },
+    "gte": {
+     "namedCount": 1
+    },
+    "count": {
+     "results": 2
+    }
+   }
+  },
+  {
+   "slug": "contract-abi",
+   "name": "WETH on ethereum is verified",
+   "input": {
+    "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    "network": "ethereum"
+   },
+   "expect": {
+    "equals": {
+     "verified": true,
+     "chainId": 1
+    },
+    "minCount": {
+     "functions": 3
+    }
+   }
+  },
+  {
+   "slug": "contract-abi",
+   "name": "an EOA is verified:false, not a 500",
+   "input": {
+    "address": "0x000000000000000000000000000000000000dEaD",
+    "network": "base"
+   },
+   "expect": {
+    "equals": {
+     "verified": false
+    }
+   }
+  },
+  {
+   "slug": "contract-source",
+   "name": "WETH source on ethereum",
+   "input": {
+    "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    "network": "ethereum"
+   },
+   "expect": {
+    "equals": {
+     "verified": true
+    },
+    "gte": {
+     "sourceCount": 1
+    },
+    "populated": [
+     "compiler"
+    ]
+   }
+  },
+  {
+   "slug": "tx-status",
+   "name": "a real base tx",
+   "input": {
+    "hash": "0x2f1fecade9bd945e7817c11e5a34cafe6b349dd8c92a7587efed1de476bddfeb",
+    "network": "base"
+   },
+   "expect": {
+    "matches": {
+     "status": "success|confirmed|1"
+    },
+    "gt": {
+     "blockNumber": 50000000
+    },
+    "populated": [
+     "from",
+     "gasUsed"
+    ]
+   }
+  },
+  {
+   "slug": "tx-status",
+   "name": "unknown hash is not found, not a 500",
+   "input": {
+    "hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "network": "base"
+   },
+   "expect": {
+    "matches": {
+     "status": "not.?found|pending|unknown"
+    }
+   }
+  },
+  {
+   "slug": "x402-verify",
+   "name": "a real settlement to our treasury",
+   "input": {
+    "hash": "0x09f85fcf1844d85277b8cce528efc8d25c6df632b1fed1c8337f078901a69562",
+    "network": "base",
+    "to": "0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0"
+   },
+   "expect": {
+    "equals": {
+     "settled": true,
+     "matched": true
+    },
+    "minCount": {
+     "transfers": 1
+    }
+   }
+  },
+  {
+   "slug": "x402-verify",
+   "name": "same tx, wrong payee is matched:false",
+   "input": {
+    "hash": "0x09f85fcf1844d85277b8cce528efc8d25c6df632b1fed1c8337f078901a69562",
+    "network": "base",
+    "to": "0x1111111111111111111111111111111111111111"
+   },
+   "expect": {
+    "equals": {
+     "settled": true,
+     "matched": false
+    }
+   }
+  },
+  {
+   "slug": "transfer-authorization",
+   "name": "typed data on polygon",
+   "input": {
+    "from": "0x1111111111111111111111111111111111111111",
+    "to": "0x2222222222222222222222222222222222222222",
+    "amount": 1.5,
+    "network": "polygon",
+    "validForSeconds": 120
+   },
+   "expect": {
+    "equals": {
+     "network": "polygon",
+     "typedData.message.value": "1500000"
+    },
+    "populated": [
+     "typedData.domain.verifyingContract",
+     "typedData.message.nonce"
+    ]
+   }
+  },
+  {
+   "slug": "transfer-authorization",
+   "name": "zero amount is a 400",
+   "input": {
+    "from": "0x1111111111111111111111111111111111111111",
+    "to": "0x2222222222222222222222222222222222222222",
+    "amount": 0
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "onramp-link",
+   "name": "solana address",
+   "input": {
+    "address": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+    "network": "solana",
+    "amount": "25"
+   },
+   "expect": {
+    "matches": {
+     "onrampUrl": "^https://pay\\.coinbase\\.com"
+    },
+    "populated": [
+     "note"
+    ]
+   }
+  },
+  {
+   "slug": "onramp-link",
+   "name": "malformed address is a 400",
+   "input": {
+    "address": "nope",
+    "network": "base"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "testnet-fund",
+   "name": "a bad address is a 400 before any faucet call",
+   "input": {
+    "address": "0xnope",
+    "token": "usdc"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "dex-pair",
+   "name": "USDC/WETH 0.05% on base resolves",
+   "input": {
+    "tokenA": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "tokenB": "0x4200000000000000000000000000000000000006",
+    "fee": 500,
+    "network": "base"
+   },
+   "expect": {
+    "matches": {
+     "poolAddress": "^0xd0b53d9277642d899df5c87a3966a349a798f224$"
+    },
+    "equals": {
+     "exists": true
+    }
+   }
+  },
+  {
+   "slug": "dex-pair",
+   "name": "no pool is the documented zero-address sentinel with exists:false",
+   "input": {
+    "tokenA": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "tokenB": "0x1111111111111111111111111111111111111111",
+    "fee": 500,
+    "network": "base"
+   },
+   "expect": {
+    "equals": {
+     "exists": false,
+     "poolAddress": "0x0000000000000000000000000000000000000000"
+    },
+    "populated": [
+     "note"
+    ]
+   }
+  },
+  {
+   "slug": "dex-pool",
+   "name": "USDC/WETH pool state",
+   "input": {
+    "poolAddress": "0xd0b53d9277642d899df5c87a3966a349a798f224",
+    "network": "base"
+   },
+   "expect": {
+    "equals": {
+     "fee": 500
+    },
+    "populated": [
+     "token0",
+     "token1",
+     "liquidity",
+     "spotPrice_1per0"
+    ],
+    "gt": {
+     "spotPrice_1per0": 0
+    }
+   }
+  },
+  {
+   "slug": "dex-quote",
+   "name": "swap 0.01 the other direction",
+   "input": {
+    "poolAddress": "0xd0b53d9277642d899df5c87a3966a349a798f224",
+    "amountIn": 0.01,
+    "zeroForOne": false,
+    "network": "base"
+   },
+   "expect": {
+    "equals": {
+     "zeroForOne": false
+    },
+    "gt": {
+     "amountOut": 0
+    }
+   }
+  },
+  {
+   "slug": "mev-recent-blocks",
+   "name": "three blocks",
+   "input": {
+    "limit": 3
+   },
+   "expect": {
+    "equals": {
+     "count": 3
+    },
+    "populated": [
+     "blocks[0]",
+     "relay"
+    ],
+    "gte": {
+     "totalEthToProposers": 0
+    }
+   }
+  },
+  {
+   "slug": "mev-builder-share",
+   "name": "small window",
+   "input": {
+    "window": 20
+   },
+   "expect": {
+    "equals": {
+     "windowBlocks": 20
+    },
+    "gte": {
+     "uniqueBuilders": 1
+    },
+    "populated": [
+     "builders[0]"
+    ]
+   }
+  },
+  {
+   "slug": "mev-block-payment",
+   "name": "a slot with no relay record is found:false",
+   "input": {
+    "slot": 1
+   },
+   "expect": {
+    "equals": {
+     "found": false
+    }
+   }
+  },
+  {
+   "slug": "farcaster-profile",
+   "name": "lookup by username",
+   "input": {
+    "username": "dwr"
+   },
+   "expect": {
+    "equals": {
+     "username": "dwr"
+    },
+    "gt": {
+     "followerCount": 1000
+    },
+    "populated": [
+     "displayName"
+    ]
+   },
+   "requires": "NEYNAR_API_KEY"
+  },
+  {
+   "slug": "wallet-balances",
+   "name": "vitalik on ethereum has tokens",
+   "input": {
+    "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "network": "ethereum"
+   },
+   "expect": {
+    "gte": {
+     "count": 1
+    },
+    "populated": [
+     "balances[0]"
+    ]
+   }
+  },
+  {
+   "slug": "wallet-transactions",
+   "name": "recent transfers of a busy address",
+   "input": {
+    "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "network": "ethereum",
+    "limit": 3
+   },
+   "expect": {
+    "minCount": {
+     "transfers": 1
+    }
+   }
+  },
+  {
+   "slug": "nft-collection",
+   "name": "pudgy penguins",
+   "input": {
+    "contract": "0xBd3531dA5CF5857e7CfAA92426877b022e612cf8",
+    "network": "ethereum"
+   },
+   "expect": {
+    "matches": {
+     "name": "pudgy"
+    },
+    "populated": [
+     "totalSupply",
+     "tokenType"
+    ]
+   }
+  },
+  {
+   "slug": "nft-metadata",
+   "name": "bayc #1 has traits",
+   "input": {
+    "contract": "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d",
+    "tokenId": "1",
+    "network": "ethereum"
+   },
+   "expect": {
+    "populated": [
+     "title",
+     "image"
+    ],
+    "minCount": {
+     "attributes": 3
+    }
+   }
+  },
+  {
+   "slug": "nft-floor",
+   "name": "pudgy penguins floor",
+   "input": {
+    "contract": "0xBd3531dA5CF5857e7CfAA92426877b022e612cf8"
+   },
+   "expect": {
+    "populated": [
+     "cheapestFloorEth",
+     "cheapestMarketplace"
+    ],
+    "gt": {
+     "cheapestFloorEth": 0
+    }
+   }
+  },
+  {
+   "slug": "token-metadata",
+   "name": "WETH on ethereum",
+   "input": {
+    "contract": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    "network": "ethereum"
+   },
+   "expect": {
+    "equals": {
+     "symbol": "WETH",
+     "decimals": 18
+    }
+   }
+  },
+  {
+   "slug": "token-price",
+   "name": "WETH on base priced",
+   "input": {
+    "contract": "0x4200000000000000000000000000000000000006",
+    "network": "base"
+   },
+   "expect": {
+    "gt": {
+     "priceUsd": 100
+    },
+    "populated": [
+     "symbol",
+     "lastUpdated"
+    ]
+   }
+  },
+  {
+   "slug": "chain-nonce",
+   "name": "a funded account has a nonce, and pending is never behind latest",
+   "input": {
+    "address": "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0",
+    "network": "base",
+    "block": "pending"
+   },
+   "expect": {
+    "populated": [
+     "nonce",
+     "nonceHex"
+    ],
+    "equals": {
+     "block": "pending",
+     "network": "base"
+    }
+   }
+  },
+  {
+   "slug": "chain-nonce",
+   "name": "a nonsense block tag is refused, never silently latest",
+   "input": {
+    "address": "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0",
+    "block": "yesterday"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "chain-storage",
+   "name": "slot 0 of a proxy reads as an address",
+   "input": {
+    "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "slot": "0",
+    "network": "base"
+   },
+   "expect": {
+    "populated": [
+     "value",
+     "asUint",
+     "asAddress"
+    ],
+    "matches": {
+     "value": "^0x[0-9a-f]{64}$",
+     "asAddress": "^0x[0-9a-f]{40}$"
+    }
+   }
+  },
+  {
+   "slug": "chain-storage",
+   "name": "a missing slot is a 400",
+   "input": {
+    "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "chain-total-supply",
+   "name": "USDC on Base reports a supply formatted with its own decimals",
+   "input": {
+    "contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "network": "base"
+   },
+   "expect": {
+    "populated": [
+     "totalSupply",
+     "totalSupplyFormatted"
+    ],
+    "equals": {
+     "decimals": 6
+    },
+    "gt": {
+     "totalSupply": 0
+    }
+   }
+  },
+  {
+   "slug": "chain-total-supply",
+   "name": "an account that is not a token is a 422, not a zero",
+   "input": {
+    "contract": "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0",
+    "network": "base"
+   },
+   "expect": {
+    "status": 422
+   }
+  },
+  {
+   "slug": "chain-pending",
+   "name": "the pending block carries a base fee and a transaction count",
+   "input": {
+    "network": "base"
+   },
+   "expect": {
+    "populated": [
+     "number",
+     "baseFeePerGas",
+     "gasLimit",
+     "note"
+    ],
+    "gte": {
+     "transactionCount": 0
+    }
+   }
+  },
+  {
+   "slug": "chain-erc1155-balance",
+   "name": "a holder with none of an edition reads 0, not null",
+   "input": {
+    "contract": "0x2953399124F0cBB46d2CbACD8A89cF0599974963",
+    "address": "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0",
+    "tokenId": "1",
+    "network": "polygon"
+   },
+   "expect": {
+    "equals": {
+     "balance": "0",
+     "tokenId": "1"
+    }
+   }
+  },
+  {
+   "slug": "chain-erc1155-balance",
+   "name": "an ERC-20 does not answer the 1155 interface and says so",
+   "input": {
+    "contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "address": "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0",
+    "tokenId": "1",
+    "network": "base"
+   },
+   "expect": {
+    "status": 422
+   }
+  }
+ ],
+ "pace": 3000
 }

@@ -606,6 +606,27 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   so a fallback case must use a query no earlier case primed, or it tests the cache instead. Same run: the corpus case
   `crypto-news [ethereum in the last two days]` was MY expectation, not a defect - 104 items in 48 h across the eight feeds,
   39 matching bitcoin and zero matching ethereum; the case now asks for the best-covered asset and says why.
+- **`/api/chain/<verb>`: the RPC name a buyer can guess (2026-09-12, `src/chain-namespace.js`, `src/tools/chain-rpc-kit.js`,
+  `scripts/test-chain-namespace.js` 40 in CI):** the busiest seller on x402scan by BUYER COUNT (api.onesource.io: 1,933 buyers,
+  16,716 settlements, $70.83 lifetime, one payTo, Base + Ethereum) sells exactly one thing - a paid JSON-RPC facade, 25
+  endpoints all under `/api/chain/*`, named for the RPC verbs. Measured against our catalog: **we already sold 20 of the 25**
+  under our own names, and `evm-rpc`/`eth-call` covered the rest. The gap was never capability, it was that an agent holding
+  `eth_getTransactionCount` cannot guess `wallet-transactions`. So: (1) a pre-gate PATH REWRITE (mounted beside
+  `MESSAGES_SDK_ALIASES`, before the paywall and before the method alias, so a POST on a GET-only canonical route still
+  resolves) maps 35 verbs and raw `eth_*` method names onto the routes that already serve them - it mints NO catalog entries
+  and appears on no discovery surface as a second resource, because listing one capability twice on every index that reads our
+  manifest is the registry inflation we decline to do; (2) the five reads that genuinely had no named home ship as real tools -
+  `chain-nonce`, `chain-storage`, `chain-pending`, `chain-total-supply` ($0.001 each), `chain-erc1155-balance` ($0.002), one
+  JSON-RPC read apiece through chain-kit's own transport so they inherit the Alchemy-then-public fallback and the SSRF
+  dispatcher; (3) `GET /api/chain` is a free self-describing index - every verb, the tool that serves it, and its price read
+  LIVE from the catalog, so it can never quote a stale number. **A REVERT IS AN ANSWER, NOT AN OUTAGE** (found by these tools'
+  own corpus cases): asking an EOA for `totalSupply()` or an ERC-20 for the ERC-1155 `balanceOf` came back 502, blaming the
+  upstream for a fact about the caller's address - both are 422s now (`isRevert`, revert only; a timeout or a dead node stays
+  a 502). Guards: every verb must resolve to a route the BOOTED server serves (a retired tool would otherwise leave our own
+  index pointing at a 404), the two maps must stay disjoint, an alias must be answered by the canonical tool naming itself,
+  and no alias verb may collide with a real catalog route. Mutation-checked (the one-segment verb regex, the query-string
+  carry, case folding, a dead target). Note on the figures: 1,933 buyers against our 348, on $70 against our $145 - they are
+  out-ACQUIRING us, not out-earning us, and the lever was a namespace rather than a product.
 - **Receipt-bound feedback (2026-09-12, `src/tools/feedback-kit.js`, `sale_feedback` in sales-ledger.js, `scripts/test-feedback-kit.js`
   54 in CI):** `POST /api/feedback {tx, verdict, reason}` $0.001 - a verdict on a call, writable ONLY by the wallet the ledger
   records as having paid for that exact call (`saleByTx` + `payerFromRequest`, identity-bound like attest/receipts so a rail
