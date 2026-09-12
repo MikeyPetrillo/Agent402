@@ -33,6 +33,10 @@ const POLY_GAMMA = "https://gamma-api.polymarket.com";
 // says how deep it went so 0 results are never ambiguous.
 const POLY_SEARCH_PAGE = Number(process.env.POLYMARKET_SEARCH_PAGE) || 100;
 const POLY_SEARCH_MAX_PAGES = Number(process.env.POLYMARKET_SEARCH_MAX_PAGES) || 6;
+// Events asked of Gamma's keyword index per search. Each carries its own
+// markets (11 on a measured "bitcoin" query), so this is a market budget of
+// roughly ten times its own value for one request.
+const POLY_SEARCH_INDEX_EVENTS = Number(process.env.POLYMARKET_SEARCH_INDEX_EVENTS) || 20;
 const POLY_CLOB = "https://clob.polymarket.com";
 const KALSHI = "https://api.elections.kalshi.com/trade-api/v2";
 
@@ -234,14 +238,30 @@ async function polymarketSearch({ query, limit, activeOnly } = {}) {
     throw bad('"query" is required (non-empty string)');
   }
   const lim = Math.max(1, Math.min(50, Number.parseInt(limit, 10) || 10));
-  // Gamma has no server-side keyword filter, so the match is client-side - which
-  // means the only thing that decides whether a term is FINDABLE is how many
-  // markets we look at. Fetching `lim * 4` (20 rows for the default limit) made
-  // this a search of "today's top 20 by 24h volume" wearing a search tool's
-  // name: on 2026-08-29 it answered 0 markets for "election", "Trump",
-  // "bitcoin" and "2028" while Polymarket was actively listing all of them, and
-  // 4 for "Fed" only because a Fed market happened to be hot that hour. Page the
-  // cursor instead, stopping the moment we have enough matches.
+  // TWO SOURCES, ONE PREDICATE.
+  //
+  // The match has always been ours (a plain substring over the market's own
+  // question, slug and description), and for a while the only way to FIND a
+  // candidate was to page the volume-ordered list - which makes findability a
+  // function of how deep we happen to look. On 2026-08-29 that answered 0 for
+  // "election", "Trump", "bitcoin" and "2028" at 20 rows deep, and paging to
+  // 600 fixed it for a fortnight: on 2026-09-12 "bitcoin" was 0 again, and a
+  // hand sweep of the first 3,000 active markets by 24h volume found not one
+  // (Fed and football own the top of that list, and Polymarket's bitcoin
+  // markets are numerous but individually small). A search tool that cannot
+  // find "bitcoin" on Polymarket is broken however honest its note is.
+  //
+  // Gamma DOES have a keyword index - `/public-search?q=` - and the comment
+  // that used to sit here saying otherwise was simply wrong. It is not usable
+  // on its own: it is FUZZY, and answers a gibberish query with a Copa America
+  // event, so taking its rows as results would turn "no match" into a wrong
+  // match. So it is used as a CANDIDATE SOURCE and our own exact predicate
+  // still decides - the index supplies reach, the predicate keeps precision,
+  // and an unmatchable query still returns the honest zero.
+  //
+  // The volume scan stays as the fallback and the top-up: if their search
+  // endpoint changes shape or disappears, this tool degrades to what it did
+  // yesterday instead of emptying (the same rule as polyList's dual shape).
   const params = new URLSearchParams({
     limit: String(POLY_SEARCH_PAGE),
     order: "volume24hr",
@@ -259,9 +279,46 @@ async function polymarketSearch({ query, limit, activeOnly } = {}) {
   // `markets` array and a `next_cursor`, and it REFUSES `offset` with a 422.
   const q = query.trim().toLowerCase();
   const hits = [];
-  let cursor = null;
+  const seenIds = new Set();
   let scanned = 0;
+  const keep = (m) => {
+    const id = String(m?.id ?? "");
+    if (!id || seenIds.has(id)) return;
+    if (activeOnly !== false && (!m.active || m.closed)) return;
+    const hay = `${m.question || ""} ${m.slug || ""} ${m.description || ""}`.toLowerCase();
+    if (!hay.includes(q) || hits.length >= lim) return;
+    seenIds.add(id);
+    hits.push(m);
+  };
+
+  let searchedIndex = false;
+  try {
+    const sr = await fetchJson(
+      `${POLY_GAMMA}/public-search?q=${encodeURIComponent(query.trim())}&limit_per_type=${POLY_SEARCH_INDEX_EVENTS}`,
+      "Polymarket Gamma",
+      meta,
+    );
+    const events = Array.isArray(sr?.events) ? sr.events : [];
+    searchedIndex = true;
+    for (const ev of events) {
+      for (const m of Array.isArray(ev?.markets) ? ev.markets : []) {
+        scanned++;
+        // The parent event carries the slug shapeMarket reports; a market
+        // nested inside a search result has no `events` array of its own.
+        keep(m.events ? m : { ...m, events: [{ slug: ev.slug }] });
+      }
+    }
+  } catch {
+    // Their index is a bonus, never a dependency: fall through to the scan.
+  }
+
+  let cursor = null;
   let pages = 0;
+  // Only a scan that actually reached the end of the list may claim it. With
+  // enough matches from the keyword index the scan never runs, and reporting
+  // "exhausted" there would assert we read the whole active list when we read
+  // none of it.
+  let scanExhausted = false;
   // Bounded: at most POLY_SEARCH_MAX_PAGES requests, and it stops early as soon
   // as `lim` matches are in hand, so a common term still costs one page.
   for (; pages < POLY_SEARCH_MAX_PAGES && hits.length < lim; pages++) {
@@ -269,12 +326,9 @@ async function polymarketSearch({ query, limit, activeOnly } = {}) {
     const raw = await fetchJson(`${POLY_GAMMA}/markets/keyset?${params}`, "Polymarket Gamma", meta);
     const arr = polyList(raw);
     scanned += arr.length;
-    for (const m of arr) {
-      const hay = `${m.question || ""} ${m.slug || ""} ${m.description || ""}`.toLowerCase();
-      if (hay.includes(q) && hits.length < lim) hits.push(m);
-    }
+    for (const m of arr) keep(m);
     cursor = (raw && typeof raw === "object" && !Array.isArray(raw) && raw.next_cursor) || null;
-    if (!cursor || arr.length === 0) break; // end of the list, not of our budget
+    if (!cursor || arr.length === 0) { scanExhausted = true; break; } // end of the list, not of our budget
   }
   const matched = hits.map(shapeMarket);
   return {
@@ -284,9 +338,13 @@ async function polymarketSearch({ query, limit, activeOnly } = {}) {
     // How deep the search actually went, because the match is client-side: a
     // caller seeing 0 should be able to tell "not listed" from "not reached".
     scannedMarkets: scanned,
-    searchExhausted: !cursor,
+    searchExhausted: scanExhausted,
+    // Which sources were consulted, so a zero is readable: the keyword index
+    // reaches markets the volume scan never gets to, and its absence is the
+    // difference between "not listed" and "we only looked at the busy ones".
+    searchedKeywordIndex: searchedIndex,
     ...(matched.length === 0
-      ? { note: `No active Polymarket market matched ${JSON.stringify(query.trim())} in the ${scanned} highest-volume active markets${cursor ? " searched (more exist beyond the search depth)" : " (the full active list)"}.` }
+      ? { note: `No active Polymarket market matched ${JSON.stringify(query.trim())} in ${scanned} markets${searchedIndex ? " from Polymarket's own keyword index plus the highest-volume active list" : ` (the ${scanned} highest-volume active markets; their keyword index could not be read)`}${scanExhausted ? "" : "; more exist beyond the search depth"}.` }
       : {}),
     source: "polymarket-gamma",
     ...staleFields(meta),
@@ -470,7 +528,7 @@ export const PREDICTION_MARKET_TOOLS = [
     category: "crypto",
     price: "$0.002",
     description:
-      "Search active Polymarket markets by keyword. Returns the top matches sorted by 24h volume, with question, current outcome prices (implied probabilities), volume, liquidity, end date, and CLOB token ids for orderbook lookups.",
+      "Search active Polymarket markets by keyword. Candidates come from Polymarket's own keyword index and from the highest-volume active list, and an exact substring match on the market's question, slug and description decides - so a term that matches nothing returns nothing rather than a loose neighbour. Returns question, current outcome prices (implied probabilities), volume, liquidity, end date, and CLOB token ids for orderbook lookups, plus scannedMarkets and searchExhausted so a zero can be read as \"not listed\" rather than \"not reached\".",
     tags: ["polymarket", "prediction-market", "odds", "search", "betting"],
     discovery: {
       bodyType: "json",
@@ -502,6 +560,9 @@ export const PREDICTION_MARKET_TOOLS = [
             venue: "polymarket",
             venueUrl: "https://polymarket.com/market/will-x-win-election",
           }],
+          scannedMarkets: 57,
+          searchExhausted: false,
+          searchedKeywordIndex: true,
           source: "polymarket-gamma",
         },
       },

@@ -144,6 +144,81 @@ ok(polyList(null).length === 0 && polyList({}).length === 0 && polyList("nope").
   ok((src.match(/markets\/keyset/g) || []).length >= 3, "every list call site uses /markets/keyset");
 }
 
+// polymarket-search reads TWO sources and keeps ONE predicate (2026-09-12).
+// The volume-ordered scan alone could not find "bitcoin" in the first 3,000
+// active markets (Fed and football own that list), so Gamma's own keyword index
+// is consulted first - but it is FUZZY (a gibberish query comes back with a
+// Copa America event), so our exact substring match still decides. These four
+// properties are what keep that combination honest.
+{
+  const realFetch = globalThis.fetch;
+  const json = (body) => ({ ok: true, status: 200, headers: { get: (k) => (k.toLowerCase() === "content-type" ? "application/json" : null) }, json: async () => body, text: async () => JSON.stringify(body) });
+  const market = (id, question, extra = {}) => ({ id, question, slug: `m-${id}`, description: "", active: true, closed: false, outcomes: '["Yes","No"]', outcomePrices: '["0.5","0.5"]', clobTokenIds: "[]", ...extra });
+
+  // 1. an index result our predicate does not match is DROPPED, and one it
+  //    matches is served - their fuzziness must never become our wrong answer.
+  let keysetCalls = 0;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("/public-search")) {
+      return json({ events: [{ slug: "ev", markets: [market("1", "Will Bitcoin close above $90k?"), market("2", "Copa America winner?")] }] });
+    }
+    keysetCalls++;
+    return json({ markets: [], next_cursor: null });
+  };
+  let r = await h("polymarket-search")({ query: "bitcoin", limit: 3 });
+  ok(r.count === 1 && r.markets[0].id === "1", "a keyword-index row that matches our own predicate is served");
+  ok(!JSON.stringify(r).includes("Copa America"), "a fuzzy index row that does NOT match the query is dropped, not returned as a result");
+  ok(r.searchedKeywordIndex === true, "the answer says the keyword index was consulted");
+  ok(r.markets[0].eventSlug === "ev", "a market nested in a search event still reports its event slug");
+
+  // 2. enough matches from the index means the scan never runs - and an
+  //    unrun scan may NOT claim it exhausted the active list.
+  keysetCalls = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/public-search")) {
+      return json({ events: [{ slug: "ev", markets: [market("1", "Bitcoin A"), market("2", "Bitcoin B")] }] });
+    }
+    keysetCalls++;
+    return json({ markets: [], next_cursor: null });
+  };
+  r = await h("polymarket-search")({ query: "bitcoin", limit: 2 });
+  ok(r.count === 2 && keysetCalls === 0, "a common term costs one request: the index filled the page and the volume scan never ran");
+  ok(r.searchExhausted === false, "a scan that never ran does NOT claim it read the whole active list");
+
+  // 3. the index is a bonus, never a dependency: if it fails the tool degrades
+  //    to yesterday's volume scan instead of emptying. A DIFFERENT query than
+  //    the cases above on purpose: fetchJson serves a stale cached body when a
+  //    call fails, so reusing a URL an earlier case primed would test the cache
+  //    rather than the fallback.
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/public-search")) throw new Error("index down");
+    return json({ markets: [market("9", "Dogecoin on the volume list")], next_cursor: null });
+  };
+  r = await h("polymarket-search")({ query: "dogecoin", limit: 3 });
+  ok(r.count === 1 && r.markets[0].id === "9", "a failed keyword index falls through to the volume scan");
+  ok(r.searchedKeywordIndex === false, "...and the answer says the index was not read");
+  ok(r.searchExhausted === true, "a scan that reached the end of the list may say so");
+
+  // 4. the same market from both sources is one result.
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/public-search")) return json({ events: [{ slug: "ev", markets: [market("7", "Bitcoin dupe")] }] });
+    return json({ markets: [market("7", "Bitcoin dupe"), market("8", "Bitcoin other")], next_cursor: null });
+  };
+  r = await h("polymarket-search")({ query: "bitcoin", limit: 5 });
+  ok(r.count === 2 && new Set(r.markets.map((m) => m.id)).size === 2, "a market returned by both sources is counted once");
+
+  // 5. a closed market is never served under the default activeOnly.
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/public-search")) return json({ events: [{ slug: "ev", markets: [market("3", "Bitcoin settled", { active: false, closed: true })] }] });
+    return json({ markets: [], next_cursor: null });
+  };
+  r = await h("polymarket-search")({ query: "bitcoin", limit: 3 });
+  ok(r.count === 0 && /No active Polymarket market matched/.test(r.note), "a closed market from the index is filtered out, and the zero stays honest");
+
+  globalThis.fetch = realFetch;
+}
+
 // ----------------------------------------------------------------------------
 // Input validation — all 6 tools
 // ----------------------------------------------------------------------------

@@ -589,6 +589,23 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   could not tell which row it was. `computeDemandRadar` now passes through `callers`, `qualified` (never re-derived: the rule is
   `clusterQualifies` in wish.js) and `spanHours`, takes `qualifiedOnly`, and the envelope carries `qualifiedClusters` (the beacon's
   own count), `qualifyMinCallers`, `qualifyMinSpanHours`. Legacy clusters with no caller data read callers 0 / qualified false.
+- **polymarket-search could not find "bitcoin" (2026-09-12, found by the nightly corpus):** the match has always been ours (an
+  exact substring over the market's question, slug and description) but the only CANDIDATE source was the volume-ordered list,
+  so findability was a function of search depth. The 08-29 fix paged to 600 rows and named "bitcoin" as one of the terms it
+  restored; a fortnight later it read 0 again, and a hand sweep of the first 3,000 active markets by 24h volume found not one
+  (Fed and football own the top of that list; Polymarket's bitcoin markets are numerous and individually small). **Gamma DOES
+  have a keyword index - `/public-search?q=` - and the comment in our own code saying it does not was simply wrong.** It is
+  unusable alone because it is FUZZY (a gibberish query comes back with a Copa America event), so it is a CANDIDATE SOURCE and
+  our exact predicate still decides: the index supplies reach, the predicate keeps precision, and an unmatchable query still
+  returns the honest zero. The volume scan stays as fallback and top-up, so an index that changes shape degrades the tool to
+  yesterday instead of emptying it (the polyList rule). Measured after: "bitcoin" found in 57 rows and ONE request (was 0 in
+  600 rows and 6). New fields `searchedKeywordIndex` and an honest `searchExhausted` - a scan that never ran may not claim it
+  read the whole active list, which it did the moment the index started filling the page. `POLYMARKET_SEARCH_INDEX_EVENTS`
+  (20). test-prediction-market-kit 110, six mutations killed (the predicate, the dedupe, the active filter, the exhausted
+  claim, the index flag, the whole index block). NOTE for that test: `fetchJson` serves a stale CACHED body when a call fails,
+  so a fallback case must use a query no earlier case primed, or it tests the cache instead. Same run: the corpus case
+  `crypto-news [ethereum in the last two days]` was MY expectation, not a defect - 104 items in 48 h across the eight feeds,
+  39 matching bitcoin and zero matching ethereum; the case now asks for the best-covered asset and says why.
 - **Receipt-bound feedback (2026-09-12, `src/tools/feedback-kit.js`, `sale_feedback` in sales-ledger.js, `scripts/test-feedback-kit.js`
   54 in CI):** `POST /api/feedback {tx, verdict, reason}` $0.001 - a verdict on a call, writable ONLY by the wallet the ledger
   records as having paid for that exact call (`saleByTx` + `payerFromRequest`, identity-bound like attest/receipts so a rail

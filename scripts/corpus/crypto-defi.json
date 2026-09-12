@@ -1,1331 +1,1332 @@
 {
-  "about": "Tier 1: chain reads, CoinGecko demo, DefiLlama, Hyperliquid, Deribit, Solana public APIs, Polymarket, RWAs. pace: CoinGecko's demo plan is a 30/min shared bucket, so cases from this file start no closer than 3 s apart.",
-  "cases": [
-    {
-      "slug": "block-info",
-      "name": "a fixed block on ethereum",
-      "input": {
-        "block": "20000000",
-        "network": "ethereum"
-      },
-      "expect": {
-        "equals": {
-          "number": 20000000,
-          "network": "ethereum"
-        },
-        "populated": [
-          "hash",
-          "timestampIso",
-          "gasUsed"
-        ],
-        "gt": {
-          "txCount": 0
-        }
-      }
-    },
-    {
-      "slug": "block-info",
-      "name": "a block beyond the head is a 404",
-      "input": {
-        "block": "999999999999",
-        "network": "base"
-      },
-      "expect": {
-        "status": 404
-      }
-    },
-    {
-      "slug": "calldata-decode",
-      "name": "approve() via 4byte",
-      "input": {
-        "data": "0x095ea7b3000000000000000000000000000000000022d473030f116ddee9f6b43ac78ba3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-      },
-      "expect": {
-        "equals": {
-          "selector": "0x095ea7b3"
-        },
-        "matches": {
-          "name": "approve"
-        },
-        "count": {
-          "params": 2
-        }
-      }
-    },
-    {
-      "slug": "calldata-decode",
-      "name": "too short is a 400",
-      "input": {
-        "data": "0x12"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "chain-info",
-      "name": "arbitrum",
-      "input": {
-        "network": "arbitrum"
-      },
-      "expect": {
-        "equals": {
-          "chainId": 42161
-        },
-        "gt": {
-          "latestBlock": 200000000
-        },
-        "populated": [
-          "gasPriceGwei"
-        ]
-      }
-    },
-    {
-      "slug": "coin-categories",
-      "name": "search categories",
-      "input": {
-        "query": "meme",
-        "limit": 3
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "matches": {
-          "categories[0].name": "meme"
-        }
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "coin-history",
-      "name": "a snapshot 90 days ago in eur",
-      "input": {
-        "coin": "bitcoin",
-        "daysAgo": 90,
-        "currency": "eur"
-      },
-      "expect": {
-        "equals": {
-          "id": "bitcoin",
-          "currency": "eur"
-        },
-        "gt": {
-          "price": 1000
-        },
-        "populated": [
-          "date",
-          "marketCap"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "coin-history",
-      "name": "beyond the plan window is a 400 that says so",
-      "input": {
-        "coin": "bitcoin",
-        "date": "2020-01-01"
-      },
-      "expect": {
-        "status": 400,
-        "matches": {
-          "error": "365"
-        }
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "coin-market-chart-range",
-      "name": "one day of solana",
-      "input": {
-        "coin": "solana",
-        "lookback": "1d"
-      },
-      "expect": {
-        "gte": {
-          "count": 20
-        },
-        "populated": [
-          "points[0]",
-          "summary",
-          "granularity"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "coin-ohlc",
-      "name": "30 days of eth",
-      "input": {
-        "coin": "ethereum",
-        "days": 30
-      },
-      "expect": {
-        "gte": {
-          "count": 5
-        },
-        "populated": [
-          "bars[0]",
-          "summary"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "coin-price-by-contract",
-      "name": "WETH on base by contract",
-      "input": {
-        "platform": "base",
-        "contracts": "0x4200000000000000000000000000000000000006"
-      },
-      "expect": {
-        "equals": {
-          "count": 1,
-          "platform": "base"
-        },
-        "populated": [
-          "tokens[0]"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "coin-profile",
-      "name": "solana profile",
-      "input": {
-        "coin": "solana"
-      },
-      "expect": {
-        "matches": {
-          "symbol": "^sol$"
-        },
-        "populated": [
-          "rank",
-          "description",
-          "links"
-        ],
-        "minCount": {
-          "categories": 1
-        }
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "coin-profile",
-      "name": "unknown coin is a self-explaining 422",
-      "input": {
-        "coin": "zzq-not-a-coin"
-      },
-      "expect": {
-        "status": 422
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "coin-search",
-      "name": "search doge",
-      "input": {
-        "query": "doge",
-        "limit": 3
-      },
-      "expect": {
-        "populated": [
-          "counts",
-          "coins[0].id"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "coins-list",
-      "name": "filter by symbol",
-      "input": {
-        "symbol": "eth"
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "equals": {
-          "coins[0].symbol": "eth"
-        },
-        "populated": [
-          "coins[0].id"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "contract-code",
-      "name": "an EOA has no code",
-      "input": {
-        "address": "0x000000000000000000000000000000000000dEaD",
-        "network": "base"
-      },
-      "expect": {
-        "equals": {
-          "isContract": false,
-          "bytecodeBytes": 0
-        }
-      }
-    },
-    {
-      "slug": "contract-code",
-      "name": "WETH is a contract",
-      "input": {
-        "address": "0x4200000000000000000000000000000000000006",
-        "network": "base"
-      },
-      "expect": {
-        "equals": {
-          "isContract": true
-        },
-        "gt": {
-          "bytecodeBytes": 100
-        },
-        "matches": {
-          "keccak256": "^0x[0-9a-f]{64}$"
-        }
-      }
-    },
-    {
-      "slug": "crypto-indicators",
-      "name": "ETH daily RSI and MACD",
-      "input": {
-        "coin": "ETH",
-        "interval": "1d",
-        "limit": 60,
-        "indicators": [
-          "rsi",
-          "macd"
-        ],
-        "points": 3
-      },
-      "expect": {
-        "equals": {
-          "coin": "ETH",
-          "interval": "1d"
-        },
-        "populated": [
-          "indicators.rsi",
-          "indicators.macd",
-          "lastClose"
-        ]
-      }
-    },
-    {
-      "slug": "crypto-indicators",
-      "name": "unknown coin is a self-explaining 422, not a 500",
-      "input": {
-        "coin": "ZZQCOIN"
-      },
-      "expect": {
-        "status": 422
-      }
-    },
-    {
-      "slug": "crypto-market-pulse",
-      "name": "top 3 with a volume floor",
-      "input": {
-        "limit": 3,
-        "minVolumeUsd": 1000000
-      },
-      "expect": {
-        "populated": [
-          "breadth",
-          "totals",
-          "majors"
-        ],
-        "maxCount": {
-          "topByVolume": 3
-        }
-      }
-    },
-    {
-      "slug": "crypto-news",
-      "name": "ethereum in the last two days",
-      "input": {
-        "query": "ethereum",
-        "hours": 48,
-        "limit": 5
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "items[0].title",
-          "items[0].url"
-        ]
-      }
-    },
-    {
-      "slug": "crypto-news",
-      "name": "gibberish is an honest zero",
-      "input": {
-        "query": "zzqxnothingmatches",
-        "limit": 5
-      },
-      "expect": {
-        "equals": {
-          "count": 0
-        },
-        "empty": [
-          "items"
-        ]
-      }
-    },
-    {
-      "slug": "crypto-options-chain",
-      "name": "ETH puts",
-      "input": {
-        "currency": "ETH",
-        "type": "put",
-        "limit": 5
-      },
-      "expect": {
-        "equals": {
-          "currency": "ETH"
-        },
-        "gte": {
-          "count": 1
-        },
-        "gt": {
-          "underlyingPrice": 100
-        },
-        "populated": [
-          "options[0]",
-          "expiries"
-        ]
-      }
-    },
-    {
-      "slug": "crypto-orderbook",
-      "name": "ETH-USD depth 3",
-      "input": {
-        "pair": "ETH-USD",
-        "depth": 3
-      },
-      "expect": {
-        "gt": {
-          "bestBid": 100,
-          "midPrice": 100
-        },
-        "count": {
-          "bids": 3
-        }
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "crypto-orderbook",
-      "name": "unknown pair is a self-explaining 422",
-      "input": {
-        "pair": "ZZQ-USD"
-      },
-      "expect": {
-        "status": 422
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "defi-chain-tvl-history",
-      "name": "30 days of arbitrum",
-      "input": {
-        "chain": "Arbitrum",
-        "days": 30
-      },
-      "expect": {
-        "equals": {
-          "count": 30
-        },
-        "populated": [
-          "summary",
-          "points[0]"
-        ]
-      }
-    },
-    {
-      "slug": "defi-chains",
-      "name": "search base",
-      "input": {
-        "search": "base",
-        "limit": 3
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "matches": {
-          "chains[0].name": "base"
-        }
-      }
-    },
-    {
-      "slug": "defi-dex-volume",
-      "name": "ethereum dexs",
-      "input": {
-        "chain": "Ethereum",
-        "limit": 3
-      },
-      "expect": {
-        "equals": {
-          "count": 3
-        },
-        "populated": [
-          "dexs[0]",
-          "totals",
-          "unit"
-        ]
-      }
-    },
-    {
-      "slug": "defi-fees",
-      "name": "revenue metric",
-      "input": {
-        "metric": "revenue",
-        "limit": 3
-      },
-      "expect": {
-        "equals": {
-          "metric": "revenue",
-          "count": 3
-        },
-        "populated": [
-          "protocols[0]"
-        ]
-      }
-    },
-    {
-      "slug": "defi-fees",
-      "name": "unknown metric is a 400",
-      "input": {
-        "metric": "profit"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "defi-protocol",
-      "name": "lido",
-      "input": {
-        "protocol": "lido"
-      },
-      "expect": {
-        "populated": [
-          "protocol.category",
-          "protocol.tvlUsd"
-        ],
-        "gt": {
-          "protocol.tvlUsd": 1000000000
-        }
-      }
-    },
-    {
-      "slug": "defi-protocol",
-      "name": "unknown slug is a 422 with suggestions",
-      "input": {
-        "protocol": "uniswapp"
-      },
-      "expect": {
-        "status": 422
-      }
-    },
-    {
-      "slug": "defi-protocols",
-      "name": "dexs on base",
-      "input": {
-        "category": "Dexs",
-        "chain": "Base",
-        "limit": 3
-      },
-      "expect": {
-        "equals": {
-          "count": 3
-        },
-        "populated": [
-          "protocols[0].slug"
-        ]
-      }
-    },
-    {
-      "slug": "defi-yield-history",
-      "name": "unknown pool is a self-explaining 422",
-      "input": {
-        "pool": "00000000-0000-0000-0000-000000000000"
-      },
-      "expect": {
-        "status": 422
-      }
-    },
-    {
-      "slug": "eas-attestations",
-      "name": "our own attester on base",
-      "input": {
-        "address": "0x77065d81e18ad403BCD6e9A0616b288e16744121",
-        "network": "base",
-        "role": "attester",
-        "limit": 3
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "attestations[0]"
-        ]
-      }
-    },
-    {
-      "slug": "erc721-owner",
-      "name": "pudgy #1 has an owner",
-      "input": {
-        "contract": "0xBd3531dA5CF5857e7CfAA92426877b022e612cf8",
-        "tokenId": "1",
-        "network": "ethereum"
-      },
-      "expect": {
-        "matches": {
-          "owner": "^0x[0-9a-fA-F]{40}$"
-        }
-      }
-    },
-    {
-      "slug": "event-logs",
-      "name": "recent transfers of WETH on base",
-      "input": {
-        "address": "0x4200000000000000000000000000000000000006",
-        "topic0": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
-        "network": "base"
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "logs[0]"
-        ]
-      }
-    },
-    {
-      "slug": "evm-rpc",
-      "name": "gas price on polygon",
-      "input": {
-        "network": "polygon",
-        "method": "eth_gasPrice",
-        "params": []
-      },
-      "expect": {
-        "matches": {
-          "result": "^0x[0-9a-f]+$"
-        }
-      }
-    },
-    {
-      "slug": "evm-rpc",
-      "name": "write method is a 400",
-      "input": {
-        "network": "base",
-        "method": "eth_sendTransaction",
-        "params": [
-          {}
-        ]
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "exchange-rates",
-      "name": "btc-denominated rates",
-      "input": {
-        "currencies": "usd,jpy",
-        "type": "fiat"
-      },
-      "expect": {
-        "equals": {
-          "count": 2,
-          "base": "BTC",
-          "rates[0].code": "usd"
-        },
-        "gt": {
-          "rates[0].perBtc": 1000
-        }
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "exchange-tickers",
-      "name": "coinbase btc tickers",
-      "input": {
-        "exchange": "gdax",
-        "coins": "bitcoin",
-        "limit": 3
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "tickers[0]"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "exchanges",
-      "name": "one exchange by id",
-      "input": {
-        "exchange": "kraken"
-      },
-      "expect": {
-        "equals": {
-          "mode": "profile",
-          "exchange.id": "kraken"
-        },
-        "populated": [
-          "exchange.name",
-          "exchange.country"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "global-defi",
-      "name": "defi totals",
-      "input": {},
-      "expect": {
-        "gt": {
-          "defiMarketCapUsd": 1000000000
-        },
-        "populated": [
-          "topCoin"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "options-summary",
-      "name": "ETH summary",
-      "input": {
-        "currency": "ETH"
-      },
-      "expect": {
-        "equals": {
-          "currency": "ETH"
-        },
-        "gt": {
-          "indexPrice": 100
-        },
-        "populated": [
-          "options",
-          "perpetual"
-        ]
-      }
-    },
-    {
-      "slug": "options-ticker",
-      "name": "ETH resolved from currency",
-      "input": {
-        "currency": "ETH"
-      },
-      "expect": {
-        "populated": [
-          "ticker",
-          "resolvedFrom"
-        ]
-      }
-    },
-    {
-      "slug": "options-volume",
-      "name": "top 3",
-      "input": {
-        "limit": 3
-      },
-      "expect": {
-        "equals": {
-          "count": 3
-        },
-        "populated": [
-          "totals",
-          "protocols[0]"
-        ]
-      }
-    },
-    {
-      "slug": "perp-basis",
-      "name": "SOL basis",
-      "input": {
-        "coin": "SOL"
-      },
-      "expect": {
-        "equals": {
-          "coin": "SOL"
-        },
-        "populated": [
-          "markPx",
-          "oraclePx",
-          "funding"
-        ]
-      }
-    },
-    {
-      "slug": "perp-basis",
-      "name": "unknown coin is a self-explaining 422",
-      "input": {
-        "coin": "ZZQ"
-      },
-      "expect": {
-        "status": 422
-      }
-    },
-    {
-      "slug": "perp-funding",
-      "name": "ETH 8 samples",
-      "input": {
-        "coin": "ETH",
-        "limit": 8
-      },
-      "expect": {
-        "equals": {
-          "coin": "ETH"
-        },
-        "count": {
-          "history": 8
-        },
-        "populated": [
-          "current",
-          "stats"
-        ]
-      }
-    },
-    {
-      "slug": "perp-funding-screener",
-      "name": "top 2 with a volume floor",
-      "input": {
-        "limit": 2,
-        "minVolumeUsd": 5000000
-      },
-      "expect": {
-        "count": {
-          "highest": 2,
-          "lowest": 2
-        },
-        "gte": {
-          "screened": 2
-        }
-      }
-    },
-    {
-      "slug": "perp-klines",
-      "name": "BTC 4h candles",
-      "input": {
-        "coin": "BTC",
-        "interval": "4h",
-        "limit": 6
-      },
-      "expect": {
-        "equals": {
-          "count": 6,
-          "interval": "4h"
-        },
-        "populated": [
-          "candles[0]",
-          "summary"
-        ]
-      }
-    },
-    {
-      "slug": "perp-klines",
-      "name": "unknown interval is a 400",
-      "input": {
-        "coin": "BTC",
-        "interval": "7m"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "perp-markets",
-      "name": "named coins only",
-      "input": {
-        "coins": "BTC,ETH"
-      },
-      "expect": {
-        "equals": {
-          "count": 2
-        },
-        "populated": [
-          "markets[0].markPx"
-        ]
-      }
-    },
-    {
-      "slug": "perp-open-interest",
-      "name": "one coin",
-      "input": {
-        "coin": "ETH"
-      },
-      "expect": {
-        "gt": {
-          "totalOpenInterestUsd": 1000000,
-          "market.openInterestUsd": 1000
-        },
-        "equals": {
-          "market.coin": "ETH"
-        }
-      }
-    },
-    {
-      "slug": "perp-orderbook",
-      "name": "ETH depth 3",
-      "input": {
-        "coin": "ETH",
-        "depth": 3
-      },
-      "expect": {
-        "count": {
-          "bids": 3,
-          "asks": 3
-        },
-        "gt": {
-          "mid": 100
-        }
-      }
-    },
-    {
-      "slug": "polymarket-market",
-      "name": "unknown slug is a 404",
-      "input": {
-        "slug": "zzq-no-such-market-slug"
-      },
-      "expect": {
-        "status": 404
-      }
-    },
-    {
-      "slug": "polymarket-orderbook",
-      "name": "unknown token is a 404",
-      "input": {
-        "tokenId": "1",
-        "depth": 3
-      },
-      "expect": {
-        "status": 404
-      }
-    },
-    {
-      "slug": "rwa-asset",
-      "name": "silver",
-      "input": {
-        "id": "silver"
-      },
-      "expect": {
-        "equals": {
-          "id": "silver",
-          "type": "commodity"
-        },
-        "populated": [
-          "market"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "rwa-asset",
-      "name": "unknown id is a self-explaining 422",
-      "input": {
-        "id": "zzq-not-an-asset"
-      },
-      "expect": {
-        "status": 422
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "rwa-issuer",
-      "name": "unknown issuer is a self-explaining 422",
-      "input": {
-        "id": "zzq-not-an-issuer"
-      },
-      "expect": {
-        "status": 422
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "rwa-issuers",
-      "name": "issuer list",
-      "input": {},
-      "expect": {
-        "gte": {
-          "count": 10
-        },
-        "populated": [
-          "issuers[0].id"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "rwa-list",
-      "name": "search by name",
-      "input": {
-        "q": "tesla",
-        "limit": 5
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "equals": {
-          "assets[0].id": "tesla"
-        }
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "rwa-markets",
-      "name": "etfs by volume",
-      "input": {
-        "type": "etf",
-        "order": "volume_desc",
-        "perPage": 3
-      },
-      "expect": {
-        "equals": {
-          "count": 3,
-          "type": "etf"
-        },
-        "populated": [
-          "markets[0]"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "selector-lookup",
-      "name": "approve selector",
-      "input": {
-        "selector": "0x095ea7b3"
-      },
-      "expect": {
-        "equals": {
-          "found": true
-        },
-        "matches": {
-          "signatures": "approve\\(address,uint256\\)"
-        }
-      }
-    },
-    {
-      "slug": "selector-lookup",
-      "name": "malformed selector is a 400",
-      "input": {
-        "selector": "0x12"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "sol-price",
-      "name": "one mint",
-      "input": {
-        "mints": [
-          "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-        ]
-      },
-      "expect": {
-        "equals": {
-          "count": 1
-        },
-        "populated": [
-          "prices"
-        ]
-      }
-    },
-    {
-      "slug": "sol-price",
-      "name": "a syntactically valid but unknown mint lands in missing",
-      "input": {
-        "mints": [
-          "11111111111111111111111111111112"
-        ]
-      },
-      "expect": {
-        "minCount": {
-          "missing": 1
-        }
-      }
-    },
-    {
-      "slug": "sol-swap-quote",
-      "name": "USDC to SOL",
-      "input": {
-        "inputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-        "outputMint": "So11111111111111111111111111111111111111112",
-        "amount": "10000000",
-        "slippageBps": 50
-      },
-      "expect": {
-        "populated": [
-          "outAmount",
-          "route"
-        ],
-        "gt": {
-          "outAmount": 0
-        }
-      }
-    },
-    {
-      "slug": "sol-token-holders",
-      "name": "a mint RugCheck does not track says so, never 0 holders",
-      "input": {
-        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-        "limit": 5
-      },
-      "expect": {
-        "equals": {
-          "symbol": "USDC",
-          "totalHolders": null,
-          "concentration": null
-        },
-        "populated": [
-          "note"
-        ],
-        "empty": [
-          "holders"
-        ]
-      }
-    },
-    {
-      "slug": "sol-token-holders",
-      "name": "BONK holders",
-      "input": {
-        "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
-        "limit": 5
-      },
-      "expect": {
-        "count": {
-          "holders": 5
-        },
-        "gt": {
-          "totalHolders": 1000
-        },
-        "populated": [
-          "concentration.top10Pct"
-        ]
-      }
-    },
-    {
-      "slug": "sol-token-lookup",
-      "name": "lookup by symbol",
-      "input": {
-        "query": "BONK",
-        "limit": 2
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "tokens[0]"
-        ]
-      }
-    },
-    {
-      "slug": "sol-token-pairs",
-      "name": "USDC pairs",
-      "input": {
-        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-        "limit": 3
-      },
-      "expect": {
-        "gte": {
-          "totalPairs": 3
-        },
-        "count": {
-          "pairs": 3
-        }
-      }
-    },
-    {
-      "slug": "sol-token-report",
-      "name": "BONK report",
-      "input": {
-        "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
-        "marketLimit": 2,
-        "holderLimit": 3
-      },
-      "expect": {
-        "populated": [
-          "token",
-          "authorities",
-          "score"
-        ]
-      }
-    },
-    {
-      "slug": "sol-token-safety",
-      "name": "USDC safety",
-      "input": {
-        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-      },
-      "expect": {
-        "populated": [
-          "score",
-          "riskLevel",
-          "token"
-        ]
-      }
-    },
-    {
-      "slug": "sol-token-safety",
-      "name": "malformed mint is a 400",
-      "input": {
-        "mint": "nope"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "sol-token-search",
-      "name": "search wif",
-      "input": {
-        "query": "WIF",
-        "limit": 3
-      },
-      "expect": {
-        "gte": {
-          "totalSolanaPairs": 1
-        },
-        "populated": [
-          "pairs[0]"
-        ]
-      }
-    },
-    {
-      "slug": "sol-trending",
-      "name": "profiles list",
-      "input": {
-        "limit": 3,
-        "list": "profiles"
-      },
-      "expect": {
-        "populated": [
-          "counts"
-        ]
-      }
-    },
-    {
-      "slug": "stablecoin-peg",
-      "name": "named coins",
-      "input": {
-        "coins": "USDC,DAI"
-      },
-      "expect": {
-        "equals": {
-          "count": 2
-        },
-        "populated": [
-          "coins[0]"
-        ]
-      },
-      "paceKey": "coingecko",
-      "pace": 5000
-    },
-    {
-      "slug": "stablecoin-supply-history",
-      "name": "ethereum 30 days",
-      "input": {
-        "chain": "Ethereum",
-        "days": 30
-      },
-      "expect": {
-        "equals": {
-          "count": 30
-        },
-        "populated": [
-          "summary",
-          "points[0]"
-        ]
-      }
-    },
-    {
-      "slug": "stablecoins",
-      "name": "search by name",
-      "input": {
-        "search": "tether",
-        "limit": 3
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "matches": {
-          "stablecoins[0].name": "tether"
-        }
-      }
-    },
-    {
-      "slug": "tx-simulate",
-      "name": "a reverting call reports revertReason",
-      "input": {
-        "network": "base",
-        "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "data": "0xa9059cbb000000000000000000000000000000000000000000000000000000000000dead0000000000000000000000000000000000000000000000000000ffffffffffff",
-        "from": "0x000000000000000000000000000000000000dEaD"
-      },
-      "expect": {
-        "equals": {
-          "success": false
-        }
-      }
-    },
-    {
-      "slug": "tx-simulate",
-      "name": "eth_call succeeds on a view",
-      "input": {
-        "network": "base",
-        "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "data": "0x18160ddd"
-      },
-      "expect": {
-        "equals": {
-          "success": true
-        },
-        "matches": {
-          "returnData": "^0x[0-9a-f]{64}$"
-        }
-      }
+ "about": "Tier 1: chain reads, CoinGecko demo, DefiLlama, Hyperliquid, Deribit, Solana public APIs, Polymarket, RWAs. pace: CoinGecko's demo plan is a 30/min shared bucket, so cases from this file start no closer than 3 s apart.",
+ "cases": [
+  {
+   "slug": "block-info",
+   "name": "a fixed block on ethereum",
+   "input": {
+    "block": "20000000",
+    "network": "ethereum"
+   },
+   "expect": {
+    "equals": {
+     "number": 20000000,
+     "network": "ethereum"
+    },
+    "populated": [
+     "hash",
+     "timestampIso",
+     "gasUsed"
+    ],
+    "gt": {
+     "txCount": 0
     }
-  ],
-  "pace": 3000
+   }
+  },
+  {
+   "slug": "block-info",
+   "name": "a block beyond the head is a 404",
+   "input": {
+    "block": "999999999999",
+    "network": "base"
+   },
+   "expect": {
+    "status": 404
+   }
+  },
+  {
+   "slug": "calldata-decode",
+   "name": "approve() via 4byte",
+   "input": {
+    "data": "0x095ea7b3000000000000000000000000000000000022d473030f116ddee9f6b43ac78ba3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+   },
+   "expect": {
+    "equals": {
+     "selector": "0x095ea7b3"
+    },
+    "matches": {
+     "name": "approve"
+    },
+    "count": {
+     "params": 2
+    }
+   }
+  },
+  {
+   "slug": "calldata-decode",
+   "name": "too short is a 400",
+   "input": {
+    "data": "0x12"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "chain-info",
+   "name": "arbitrum",
+   "input": {
+    "network": "arbitrum"
+   },
+   "expect": {
+    "equals": {
+     "chainId": 42161
+    },
+    "gt": {
+     "latestBlock": 200000000
+    },
+    "populated": [
+     "gasPriceGwei"
+    ]
+   }
+  },
+  {
+   "slug": "coin-categories",
+   "name": "search categories",
+   "input": {
+    "query": "meme",
+    "limit": 3
+   },
+   "expect": {
+    "gte": {
+     "count": 1
+    },
+    "matches": {
+     "categories[0].name": "meme"
+    }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "coin-history",
+   "name": "a snapshot 90 days ago in eur",
+   "input": {
+    "coin": "bitcoin",
+    "daysAgo": 90,
+    "currency": "eur"
+   },
+   "expect": {
+    "equals": {
+     "id": "bitcoin",
+     "currency": "eur"
+    },
+    "gt": {
+     "price": 1000
+    },
+    "populated": [
+     "date",
+     "marketCap"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "coin-history",
+   "name": "beyond the plan window is a 400 that says so",
+   "input": {
+    "coin": "bitcoin",
+    "date": "2020-01-01"
+   },
+   "expect": {
+    "status": 400,
+    "matches": {
+     "error": "365"
+    }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "coin-market-chart-range",
+   "name": "one day of solana",
+   "input": {
+    "coin": "solana",
+    "lookback": "1d"
+   },
+   "expect": {
+    "gte": {
+     "count": 20
+    },
+    "populated": [
+     "points[0]",
+     "summary",
+     "granularity"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "coin-ohlc",
+   "name": "30 days of eth",
+   "input": {
+    "coin": "ethereum",
+    "days": 30
+   },
+   "expect": {
+    "gte": {
+     "count": 5
+    },
+    "populated": [
+     "bars[0]",
+     "summary"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "coin-price-by-contract",
+   "name": "WETH on base by contract",
+   "input": {
+    "platform": "base",
+    "contracts": "0x4200000000000000000000000000000000000006"
+   },
+   "expect": {
+    "equals": {
+     "count": 1,
+     "platform": "base"
+    },
+    "populated": [
+     "tokens[0]"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "coin-profile",
+   "name": "solana profile",
+   "input": {
+    "coin": "solana"
+   },
+   "expect": {
+    "matches": {
+     "symbol": "^sol$"
+    },
+    "populated": [
+     "rank",
+     "description",
+     "links"
+    ],
+    "minCount": {
+     "categories": 1
+    }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "coin-profile",
+   "name": "unknown coin is a self-explaining 422",
+   "input": {
+    "coin": "zzq-not-a-coin"
+   },
+   "expect": {
+    "status": 422
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "coin-search",
+   "name": "search doge",
+   "input": {
+    "query": "doge",
+    "limit": 3
+   },
+   "expect": {
+    "populated": [
+     "counts",
+     "coins[0].id"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "coins-list",
+   "name": "filter by symbol",
+   "input": {
+    "symbol": "eth"
+   },
+   "expect": {
+    "gte": {
+     "count": 1
+    },
+    "equals": {
+     "coins[0].symbol": "eth"
+    },
+    "populated": [
+     "coins[0].id"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "contract-code",
+   "name": "an EOA has no code",
+   "input": {
+    "address": "0x000000000000000000000000000000000000dEaD",
+    "network": "base"
+   },
+   "expect": {
+    "equals": {
+     "isContract": false,
+     "bytecodeBytes": 0
+    }
+   }
+  },
+  {
+   "slug": "contract-code",
+   "name": "WETH is a contract",
+   "input": {
+    "address": "0x4200000000000000000000000000000000000006",
+    "network": "base"
+   },
+   "expect": {
+    "equals": {
+     "isContract": true
+    },
+    "gt": {
+     "bytecodeBytes": 100
+    },
+    "matches": {
+     "keccak256": "^0x[0-9a-f]{64}$"
+    }
+   }
+  },
+  {
+   "slug": "crypto-indicators",
+   "name": "ETH daily RSI and MACD",
+   "input": {
+    "coin": "ETH",
+    "interval": "1d",
+    "limit": 60,
+    "indicators": [
+     "rsi",
+     "macd"
+    ],
+    "points": 3
+   },
+   "expect": {
+    "equals": {
+     "coin": "ETH",
+     "interval": "1d"
+    },
+    "populated": [
+     "indicators.rsi",
+     "indicators.macd",
+     "lastClose"
+    ]
+   }
+  },
+  {
+   "slug": "crypto-indicators",
+   "name": "unknown coin is a self-explaining 422, not a 500",
+   "input": {
+    "coin": "ZZQCOIN"
+   },
+   "expect": {
+    "status": 422
+   }
+  },
+  {
+   "slug": "crypto-market-pulse",
+   "name": "top 3 with a volume floor",
+   "input": {
+    "limit": 3,
+    "minVolumeUsd": 1000000
+   },
+   "expect": {
+    "populated": [
+     "breadth",
+     "totals",
+     "majors"
+    ],
+    "maxCount": {
+     "topByVolume": 3
+    }
+   }
+  },
+  {
+   "slug": "crypto-news",
+   "name": "the keyword filter finds the best-covered asset in a two-day window",
+   "input": {
+    "query": "bitcoin",
+    "hours": 48,
+    "limit": 5
+   },
+   "expect": {
+    "gte": {
+     "count": 1
+    },
+    "populated": [
+     "items[0].title",
+     "items[0].url"
+    ]
+   },
+   "why": "bitcoin, not a narrower coin: these are live news feeds and the assertion has to hold on a quiet day. Measured 2026-09-12 - 104 items in 48 h across the eight sources, 39 matching bitcoin and ZERO matching ethereum, which is what this case used to ask for and why it failed. The window is kept at 48 h so the time filter is still exercised."
+  },
+  {
+   "slug": "crypto-news",
+   "name": "gibberish is an honest zero",
+   "input": {
+    "query": "zzqxnothingmatches",
+    "limit": 5
+   },
+   "expect": {
+    "equals": {
+     "count": 0
+    },
+    "empty": [
+     "items"
+    ]
+   }
+  },
+  {
+   "slug": "crypto-options-chain",
+   "name": "ETH puts",
+   "input": {
+    "currency": "ETH",
+    "type": "put",
+    "limit": 5
+   },
+   "expect": {
+    "equals": {
+     "currency": "ETH"
+    },
+    "gte": {
+     "count": 1
+    },
+    "gt": {
+     "underlyingPrice": 100
+    },
+    "populated": [
+     "options[0]",
+     "expiries"
+    ]
+   }
+  },
+  {
+   "slug": "crypto-orderbook",
+   "name": "ETH-USD depth 3",
+   "input": {
+    "pair": "ETH-USD",
+    "depth": 3
+   },
+   "expect": {
+    "gt": {
+     "bestBid": 100,
+     "midPrice": 100
+    },
+    "count": {
+     "bids": 3
+    }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "crypto-orderbook",
+   "name": "unknown pair is a self-explaining 422",
+   "input": {
+    "pair": "ZZQ-USD"
+   },
+   "expect": {
+    "status": 422
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "defi-chain-tvl-history",
+   "name": "30 days of arbitrum",
+   "input": {
+    "chain": "Arbitrum",
+    "days": 30
+   },
+   "expect": {
+    "equals": {
+     "count": 30
+    },
+    "populated": [
+     "summary",
+     "points[0]"
+    ]
+   }
+  },
+  {
+   "slug": "defi-chains",
+   "name": "search base",
+   "input": {
+    "search": "base",
+    "limit": 3
+   },
+   "expect": {
+    "gte": {
+     "count": 1
+    },
+    "matches": {
+     "chains[0].name": "base"
+    }
+   }
+  },
+  {
+   "slug": "defi-dex-volume",
+   "name": "ethereum dexs",
+   "input": {
+    "chain": "Ethereum",
+    "limit": 3
+   },
+   "expect": {
+    "equals": {
+     "count": 3
+    },
+    "populated": [
+     "dexs[0]",
+     "totals",
+     "unit"
+    ]
+   }
+  },
+  {
+   "slug": "defi-fees",
+   "name": "revenue metric",
+   "input": {
+    "metric": "revenue",
+    "limit": 3
+   },
+   "expect": {
+    "equals": {
+     "metric": "revenue",
+     "count": 3
+    },
+    "populated": [
+     "protocols[0]"
+    ]
+   }
+  },
+  {
+   "slug": "defi-fees",
+   "name": "unknown metric is a 400",
+   "input": {
+    "metric": "profit"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "defi-protocol",
+   "name": "lido",
+   "input": {
+    "protocol": "lido"
+   },
+   "expect": {
+    "populated": [
+     "protocol.category",
+     "protocol.tvlUsd"
+    ],
+    "gt": {
+     "protocol.tvlUsd": 1000000000
+    }
+   }
+  },
+  {
+   "slug": "defi-protocol",
+   "name": "unknown slug is a 422 with suggestions",
+   "input": {
+    "protocol": "uniswapp"
+   },
+   "expect": {
+    "status": 422
+   }
+  },
+  {
+   "slug": "defi-protocols",
+   "name": "dexs on base",
+   "input": {
+    "category": "Dexs",
+    "chain": "Base",
+    "limit": 3
+   },
+   "expect": {
+    "equals": {
+     "count": 3
+    },
+    "populated": [
+     "protocols[0].slug"
+    ]
+   }
+  },
+  {
+   "slug": "defi-yield-history",
+   "name": "unknown pool is a self-explaining 422",
+   "input": {
+    "pool": "00000000-0000-0000-0000-000000000000"
+   },
+   "expect": {
+    "status": 422
+   }
+  },
+  {
+   "slug": "eas-attestations",
+   "name": "our own attester on base",
+   "input": {
+    "address": "0x77065d81e18ad403BCD6e9A0616b288e16744121",
+    "network": "base",
+    "role": "attester",
+    "limit": 3
+   },
+   "expect": {
+    "gte": {
+     "count": 1
+    },
+    "populated": [
+     "attestations[0]"
+    ]
+   }
+  },
+  {
+   "slug": "erc721-owner",
+   "name": "pudgy #1 has an owner",
+   "input": {
+    "contract": "0xBd3531dA5CF5857e7CfAA92426877b022e612cf8",
+    "tokenId": "1",
+    "network": "ethereum"
+   },
+   "expect": {
+    "matches": {
+     "owner": "^0x[0-9a-fA-F]{40}$"
+    }
+   }
+  },
+  {
+   "slug": "event-logs",
+   "name": "recent transfers of WETH on base",
+   "input": {
+    "address": "0x4200000000000000000000000000000000000006",
+    "topic0": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+    "network": "base"
+   },
+   "expect": {
+    "gte": {
+     "count": 1
+    },
+    "populated": [
+     "logs[0]"
+    ]
+   }
+  },
+  {
+   "slug": "evm-rpc",
+   "name": "gas price on polygon",
+   "input": {
+    "network": "polygon",
+    "method": "eth_gasPrice",
+    "params": []
+   },
+   "expect": {
+    "matches": {
+     "result": "^0x[0-9a-f]+$"
+    }
+   }
+  },
+  {
+   "slug": "evm-rpc",
+   "name": "write method is a 400",
+   "input": {
+    "network": "base",
+    "method": "eth_sendTransaction",
+    "params": [
+     {}
+    ]
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "exchange-rates",
+   "name": "btc-denominated rates",
+   "input": {
+    "currencies": "usd,jpy",
+    "type": "fiat"
+   },
+   "expect": {
+    "equals": {
+     "count": 2,
+     "base": "BTC",
+     "rates[0].code": "usd"
+    },
+    "gt": {
+     "rates[0].perBtc": 1000
+    }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "exchange-tickers",
+   "name": "coinbase btc tickers",
+   "input": {
+    "exchange": "gdax",
+    "coins": "bitcoin",
+    "limit": 3
+   },
+   "expect": {
+    "gte": {
+     "count": 1
+    },
+    "populated": [
+     "tickers[0]"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "exchanges",
+   "name": "one exchange by id",
+   "input": {
+    "exchange": "kraken"
+   },
+   "expect": {
+    "equals": {
+     "mode": "profile",
+     "exchange.id": "kraken"
+    },
+    "populated": [
+     "exchange.name",
+     "exchange.country"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "global-defi",
+   "name": "defi totals",
+   "input": {},
+   "expect": {
+    "gt": {
+     "defiMarketCapUsd": 1000000000
+    },
+    "populated": [
+     "topCoin"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "options-summary",
+   "name": "ETH summary",
+   "input": {
+    "currency": "ETH"
+   },
+   "expect": {
+    "equals": {
+     "currency": "ETH"
+    },
+    "gt": {
+     "indexPrice": 100
+    },
+    "populated": [
+     "options",
+     "perpetual"
+    ]
+   }
+  },
+  {
+   "slug": "options-ticker",
+   "name": "ETH resolved from currency",
+   "input": {
+    "currency": "ETH"
+   },
+   "expect": {
+    "populated": [
+     "ticker",
+     "resolvedFrom"
+    ]
+   }
+  },
+  {
+   "slug": "options-volume",
+   "name": "top 3",
+   "input": {
+    "limit": 3
+   },
+   "expect": {
+    "equals": {
+     "count": 3
+    },
+    "populated": [
+     "totals",
+     "protocols[0]"
+    ]
+   }
+  },
+  {
+   "slug": "perp-basis",
+   "name": "SOL basis",
+   "input": {
+    "coin": "SOL"
+   },
+   "expect": {
+    "equals": {
+     "coin": "SOL"
+    },
+    "populated": [
+     "markPx",
+     "oraclePx",
+     "funding"
+    ]
+   }
+  },
+  {
+   "slug": "perp-basis",
+   "name": "unknown coin is a self-explaining 422",
+   "input": {
+    "coin": "ZZQ"
+   },
+   "expect": {
+    "status": 422
+   }
+  },
+  {
+   "slug": "perp-funding",
+   "name": "ETH 8 samples",
+   "input": {
+    "coin": "ETH",
+    "limit": 8
+   },
+   "expect": {
+    "equals": {
+     "coin": "ETH"
+    },
+    "count": {
+     "history": 8
+    },
+    "populated": [
+     "current",
+     "stats"
+    ]
+   }
+  },
+  {
+   "slug": "perp-funding-screener",
+   "name": "top 2 with a volume floor",
+   "input": {
+    "limit": 2,
+    "minVolumeUsd": 5000000
+   },
+   "expect": {
+    "count": {
+     "highest": 2,
+     "lowest": 2
+    },
+    "gte": {
+     "screened": 2
+    }
+   }
+  },
+  {
+   "slug": "perp-klines",
+   "name": "BTC 4h candles",
+   "input": {
+    "coin": "BTC",
+    "interval": "4h",
+    "limit": 6
+   },
+   "expect": {
+    "equals": {
+     "count": 6,
+     "interval": "4h"
+    },
+    "populated": [
+     "candles[0]",
+     "summary"
+    ]
+   }
+  },
+  {
+   "slug": "perp-klines",
+   "name": "unknown interval is a 400",
+   "input": {
+    "coin": "BTC",
+    "interval": "7m"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "perp-markets",
+   "name": "named coins only",
+   "input": {
+    "coins": "BTC,ETH"
+   },
+   "expect": {
+    "equals": {
+     "count": 2
+    },
+    "populated": [
+     "markets[0].markPx"
+    ]
+   }
+  },
+  {
+   "slug": "perp-open-interest",
+   "name": "one coin",
+   "input": {
+    "coin": "ETH"
+   },
+   "expect": {
+    "gt": {
+     "totalOpenInterestUsd": 1000000,
+     "market.openInterestUsd": 1000
+    },
+    "equals": {
+     "market.coin": "ETH"
+    }
+   }
+  },
+  {
+   "slug": "perp-orderbook",
+   "name": "ETH depth 3",
+   "input": {
+    "coin": "ETH",
+    "depth": 3
+   },
+   "expect": {
+    "count": {
+     "bids": 3,
+     "asks": 3
+    },
+    "gt": {
+     "mid": 100
+    }
+   }
+  },
+  {
+   "slug": "polymarket-market",
+   "name": "unknown slug is a 404",
+   "input": {
+    "slug": "zzq-no-such-market-slug"
+   },
+   "expect": {
+    "status": 404
+   }
+  },
+  {
+   "slug": "polymarket-orderbook",
+   "name": "unknown token is a 404",
+   "input": {
+    "tokenId": "1",
+    "depth": 3
+   },
+   "expect": {
+    "status": 404
+   }
+  },
+  {
+   "slug": "rwa-asset",
+   "name": "silver",
+   "input": {
+    "id": "silver"
+   },
+   "expect": {
+    "equals": {
+     "id": "silver",
+     "type": "commodity"
+    },
+    "populated": [
+     "market"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "rwa-asset",
+   "name": "unknown id is a self-explaining 422",
+   "input": {
+    "id": "zzq-not-an-asset"
+   },
+   "expect": {
+    "status": 422
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "rwa-issuer",
+   "name": "unknown issuer is a self-explaining 422",
+   "input": {
+    "id": "zzq-not-an-issuer"
+   },
+   "expect": {
+    "status": 422
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "rwa-issuers",
+   "name": "issuer list",
+   "input": {},
+   "expect": {
+    "gte": {
+     "count": 10
+    },
+    "populated": [
+     "issuers[0].id"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "rwa-list",
+   "name": "search by name",
+   "input": {
+    "q": "tesla",
+    "limit": 5
+   },
+   "expect": {
+    "gte": {
+     "count": 1
+    },
+    "equals": {
+     "assets[0].id": "tesla"
+    }
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "rwa-markets",
+   "name": "etfs by volume",
+   "input": {
+    "type": "etf",
+    "order": "volume_desc",
+    "perPage": 3
+   },
+   "expect": {
+    "equals": {
+     "count": 3,
+     "type": "etf"
+    },
+    "populated": [
+     "markets[0]"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "selector-lookup",
+   "name": "approve selector",
+   "input": {
+    "selector": "0x095ea7b3"
+   },
+   "expect": {
+    "equals": {
+     "found": true
+    },
+    "matches": {
+     "signatures": "approve\\(address,uint256\\)"
+    }
+   }
+  },
+  {
+   "slug": "selector-lookup",
+   "name": "malformed selector is a 400",
+   "input": {
+    "selector": "0x12"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "sol-price",
+   "name": "one mint",
+   "input": {
+    "mints": [
+     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    ]
+   },
+   "expect": {
+    "equals": {
+     "count": 1
+    },
+    "populated": [
+     "prices"
+    ]
+   }
+  },
+  {
+   "slug": "sol-price",
+   "name": "a syntactically valid but unknown mint lands in missing",
+   "input": {
+    "mints": [
+     "11111111111111111111111111111112"
+    ]
+   },
+   "expect": {
+    "minCount": {
+     "missing": 1
+    }
+   }
+  },
+  {
+   "slug": "sol-swap-quote",
+   "name": "USDC to SOL",
+   "input": {
+    "inputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "outputMint": "So11111111111111111111111111111111111111112",
+    "amount": "10000000",
+    "slippageBps": 50
+   },
+   "expect": {
+    "populated": [
+     "outAmount",
+     "route"
+    ],
+    "gt": {
+     "outAmount": 0
+    }
+   }
+  },
+  {
+   "slug": "sol-token-holders",
+   "name": "a mint RugCheck does not track says so, never 0 holders",
+   "input": {
+    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "limit": 5
+   },
+   "expect": {
+    "equals": {
+     "symbol": "USDC",
+     "totalHolders": null,
+     "concentration": null
+    },
+    "populated": [
+     "note"
+    ],
+    "empty": [
+     "holders"
+    ]
+   }
+  },
+  {
+   "slug": "sol-token-holders",
+   "name": "BONK holders",
+   "input": {
+    "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+    "limit": 5
+   },
+   "expect": {
+    "count": {
+     "holders": 5
+    },
+    "gt": {
+     "totalHolders": 1000
+    },
+    "populated": [
+     "concentration.top10Pct"
+    ]
+   }
+  },
+  {
+   "slug": "sol-token-lookup",
+   "name": "lookup by symbol",
+   "input": {
+    "query": "BONK",
+    "limit": 2
+   },
+   "expect": {
+    "gte": {
+     "count": 1
+    },
+    "populated": [
+     "tokens[0]"
+    ]
+   }
+  },
+  {
+   "slug": "sol-token-pairs",
+   "name": "USDC pairs",
+   "input": {
+    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "limit": 3
+   },
+   "expect": {
+    "gte": {
+     "totalPairs": 3
+    },
+    "count": {
+     "pairs": 3
+    }
+   }
+  },
+  {
+   "slug": "sol-token-report",
+   "name": "BONK report",
+   "input": {
+    "mint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+    "marketLimit": 2,
+    "holderLimit": 3
+   },
+   "expect": {
+    "populated": [
+     "token",
+     "authorities",
+     "score"
+    ]
+   }
+  },
+  {
+   "slug": "sol-token-safety",
+   "name": "USDC safety",
+   "input": {
+    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+   },
+   "expect": {
+    "populated": [
+     "score",
+     "riskLevel",
+     "token"
+    ]
+   }
+  },
+  {
+   "slug": "sol-token-safety",
+   "name": "malformed mint is a 400",
+   "input": {
+    "mint": "nope"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "sol-token-search",
+   "name": "search wif",
+   "input": {
+    "query": "WIF",
+    "limit": 3
+   },
+   "expect": {
+    "gte": {
+     "totalSolanaPairs": 1
+    },
+    "populated": [
+     "pairs[0]"
+    ]
+   }
+  },
+  {
+   "slug": "sol-trending",
+   "name": "profiles list",
+   "input": {
+    "limit": 3,
+    "list": "profiles"
+   },
+   "expect": {
+    "populated": [
+     "counts"
+    ]
+   }
+  },
+  {
+   "slug": "stablecoin-peg",
+   "name": "named coins",
+   "input": {
+    "coins": "USDC,DAI"
+   },
+   "expect": {
+    "equals": {
+     "count": 2
+    },
+    "populated": [
+     "coins[0]"
+    ]
+   },
+   "paceKey": "coingecko",
+   "pace": 5000
+  },
+  {
+   "slug": "stablecoin-supply-history",
+   "name": "ethereum 30 days",
+   "input": {
+    "chain": "Ethereum",
+    "days": 30
+   },
+   "expect": {
+    "equals": {
+     "count": 30
+    },
+    "populated": [
+     "summary",
+     "points[0]"
+    ]
+   }
+  },
+  {
+   "slug": "stablecoins",
+   "name": "search by name",
+   "input": {
+    "search": "tether",
+    "limit": 3
+   },
+   "expect": {
+    "gte": {
+     "count": 1
+    },
+    "matches": {
+     "stablecoins[0].name": "tether"
+    }
+   }
+  },
+  {
+   "slug": "tx-simulate",
+   "name": "a reverting call reports revertReason",
+   "input": {
+    "network": "base",
+    "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "data": "0xa9059cbb000000000000000000000000000000000000000000000000000000000000dead0000000000000000000000000000000000000000000000000000ffffffffffff",
+    "from": "0x000000000000000000000000000000000000dEaD"
+   },
+   "expect": {
+    "equals": {
+     "success": false
+    }
+   }
+  },
+  {
+   "slug": "tx-simulate",
+   "name": "eth_call succeeds on a view",
+   "input": {
+    "network": "base",
+    "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "data": "0x18160ddd"
+   },
+   "expect": {
+    "equals": {
+     "success": true
+    },
+    "matches": {
+     "returnData": "^0x[0-9a-f]{64}$"
+    }
+   }
+  }
+ ],
+ "pace": 3000
 }
