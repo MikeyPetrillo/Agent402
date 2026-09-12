@@ -589,6 +589,24 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   could not tell which row it was. `computeDemandRadar` now passes through `callers`, `qualified` (never re-derived: the rule is
   `clusterQualifies` in wish.js) and `spanHours`, takes `qualifiedOnly`, and the envelope carries `qualifiedClusters` (the beacon's
   own count), `qualifyMinCallers`, `qualifyMinSpanHours`. Legacy clusters with no caller data read callers 0 / qualified false.
+- **Receipt-bound feedback (2026-09-12, `src/tools/feedback-kit.js`, `sale_feedback` in sales-ledger.js, `scripts/test-feedback-kit.js`
+  54 in CI):** `POST /api/feedback {tx, verdict, reason}` $0.001 - a verdict on a call, writable ONLY by the wallet the ledger
+  records as having paid for that exact call (`saleByTx` + `payerFromRequest`, identity-bound like attest/receipts so a rail
+  whose payer we cannot verify is never offered the route and never charged). ONE VERDICT PER SETTLEMENT TX (`sale_feedback.tx`
+  is the primary key, upsert on conflict): a buyer may change their mind, they cannot stack five ratings on one call, which is
+  the cheapest way to distort any review system. TWO VERDICTS, NOT STARS (`good`/`bad`): a scale invites an average, an average
+  invites a ranking, and a ranking over a handful of self-selected reviews is a number that looks like a measurement. A `bad`
+  verdict REQUIRES a reason (>= 10 chars) and is logged with the slug and `response_sha256` of the bytes that call served, so the
+  complaint names a specific answer - the digest is what this has over a payment-only rating, and it rides back on the receipt so
+  the buyer can hash their own copy. The two refusals ("unknown tx" / "not yours") are the same sentence and name no slug: a
+  stranger learns nothing about whether a tx is ours or what it bought. The words go to the log and to
+  `GET /__operator/sales.json` (`feedback.bad`, no payer address) and are NEVER published; the public tally
+  `GET /api/feedback/summary` $0.001 (PoW-eligible - honest ratings should be free to read) is counts only with `raters` =
+  DISTINCT payers, bad counts printed beside good ones. The $0.001 is the facilitator's settlement floor and exists because the
+  payment IS the identity, not as a charge for complaining; every refusal is a >= 400 and therefore free. Mutation-checked
+  (payer match, divergent refusals, the bad-reason requirement, the log line, DISTINCT raters, the upsert, a body `wallet`
+  fallback). `/api/feedback/summary` is in `EMPTY_ARRAY_OK` (a cold CI boot has no verdicts) and `feedback` in `METERED_SLUGS` +
+  test-all's `isWalletIdentity`.
 - **Attest a settled call on Base (2026-09-03, `src/tools/attest-kit.js`, `attest`, `POST /api/attest` $0.050 (was $0.010 for one afternoon), `scripts/test-attest-kit.js`
   54 in CI):** the dispatcher now records sha256 of the exact JSON bytes `res.json` sends (`req.__responseSha256`, on the sale row as
   `response_sha256`; NULL for streamed/binary bodies and pre-column rows), and `POST /api/attest {tx}` looks the settlement tx up in the

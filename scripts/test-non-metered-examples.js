@@ -174,6 +174,7 @@ export const METERED_SLUGS = new Set([
   "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",
   "my-usage",
   "receipts",
+  "feedback",       // feedback-kit.js: the verdict is bound to the wallet that paid for the rated call
   // FRED keyed (503 without FRED_API_KEY / FRED_API_KEY_V2)
   "fred-series", "fred-search", "fred-series-info", "fred-release-calendar",
   "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds",

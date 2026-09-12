@@ -60,6 +60,27 @@ CREATE TABLE IF NOT EXISTS sales (
 CREATE INDEX IF NOT EXISTS idx_sales_ext_ts ON sales (internal, ts);
 CREATE INDEX IF NOT EXISTS idx_sales_slug   ON sales (slug);
 CREATE INDEX IF NOT EXISTS idx_sales_payer  ON sales (payer, ts);
+
+-- Feedback bound to a settled payment (2026-09-12).
+--
+-- Reviews are worthless when anyone can leave one. Here the credential is the
+-- settlement transaction: a row can only be written by the wallet the ledger
+-- records as having PAID for that exact call. Not a rating anyone can mint -
+-- a statement by a provable customer about a provable purchase.
+--
+-- UNIQUE on tx, so one payment is one verdict. A buyer can change their mind
+-- (the row is replaced) but cannot stack five reviews on one call, which is
+-- the cheapest way to distort any review system.
+CREATE TABLE IF NOT EXISTS sale_feedback (
+  tx        TEXT    PRIMARY KEY,   -- the settlement tx: the credential and the dedupe key
+  sale_id   INTEGER NOT NULL,
+  slug      TEXT    NOT NULL,      -- denormalised so a per-tool read needs no join
+  payer     TEXT    NOT NULL,      -- lowercased EVM payer, verified from the signed authorization
+  verdict   TEXT    NOT NULL,      -- "good" | "bad" - deliberately two, see recordSaleFeedback
+  reason    TEXT,                  -- the buyer's own words, bounded
+  ts        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_slug ON sale_feedback (slug, ts);
 `);
 // Additive column (2026-07-24): which HTTP wire carried the credential —
 // "x402" (PAYMENT-SIGNATURE) or "mpp" (Authorization: Payment via
@@ -150,6 +171,31 @@ const updateAttestation = db.prepare("UPDATE sales SET attest_uid = ?, attest_tx
 /** The newest sale settled by this transaction (hash or signature, as the
  *  receipt carried it), or null. Read by the attest tool: a settlement we did
  *  not record is not ours to attest. */
+const upsertFeedback = db.prepare(`
+  INSERT INTO sale_feedback (tx, sale_id, slug, payer, verdict, reason, ts)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(tx) DO UPDATE SET verdict = excluded.verdict, reason = excluded.reason, ts = excluded.ts
+`);
+const selectFeedbackByTx = db.prepare("SELECT tx, slug, verdict, reason, ts FROM sale_feedback WHERE tx = ?");
+// Distinct payers per tool as well as raw counts: ten verdicts from one wallet
+// is one opinion, and a tally that cannot say so is a tally that can be gamed
+// by anyone willing to buy the same call ten times.
+// Joined to the sale so the operator sees WHICH bytes are being complained
+// about, not just which tool. Payer deliberately not selected: the complaint is
+// what needs acting on, and the address adds nothing to that.
+const selectBadFeedback = db.prepare(`
+  SELECT f.ts, f.slug, f.reason, f.tx, s.response_sha256
+  FROM sale_feedback f LEFT JOIN sales s ON s.id = f.sale_id
+  WHERE f.verdict = 'bad' AND f.ts >= ? ORDER BY f.ts DESC LIMIT ?
+`);
+const selectFeedbackTally = db.prepare(`
+  SELECT slug,
+         SUM(CASE WHEN verdict = 'good' THEN 1 ELSE 0 END) AS good,
+         SUM(CASE WHEN verdict = 'bad'  THEN 1 ELSE 0 END) AS bad,
+         COUNT(DISTINCT payer) AS raters
+  FROM sale_feedback WHERE ts >= ? GROUP BY slug ORDER BY (good + bad) DESC
+`);
+
 export function saleByTx(tx) {
   const t = String(tx || "").trim();
   if (!t) return null;
@@ -388,6 +434,75 @@ export function externalSalesForSlugs(slugs, sinceMs, untilMs) {
  * Internal rows (our canaries, volume runs) are excluded: they are not
  * anybody's purchases.
  */
+/**
+ * Record one buyer's verdict on one call they paid for.
+ *
+ * THE CALLER MUST HAVE ALREADY PROVEN OWNERSHIP. This function trusts `payer`
+ * because its only call site derives it from the signed EIP-3009 authorization
+ * and compares it against the sale's own recorded payer - the same check the
+ * attest tool makes, for the same reason. Nothing here re-verifies that, and a
+ * second call site that skipped it would be a way to write reviews as somebody
+ * else.
+ *
+ * TWO VERDICTS, NOT FIVE STARS. A scale invites an average, an average invites
+ * a ranking, and a ranking built on a handful of self-selected reviews is a
+ * number that looks like a measurement and is not one. "It delivered" or "it
+ * did not" is what a buyer actually knows, and it is the only thing we would
+ * be willing to publish about someone else.
+ */
+export function recordSaleFeedback({ tx, saleId, slug, payer, verdict, reason }) {
+  const v = verdict === "good" || verdict === "bad" ? verdict : null;
+  if (!tx || !saleId || !slug || !payer || !v) return null;
+  const row = {
+    tx: String(tx), saleId: Number(saleId), slug: String(slug),
+    payer: String(payer).toLowerCase(), verdict: v,
+    // Bounded: a buyer's words, stored and later shown, so they can never be
+    // an unbounded span in anything that renders them.
+    reason: reason == null ? null : String(reason).slice(0, 1000),
+    ts: Date.now(),
+  };
+  upsertFeedback.run(row.tx, row.saleId, row.slug, row.payer, row.verdict, row.reason, row.ts);
+  return row;
+}
+
+/** This buyer's own verdict on one tx, or null. */
+export function feedbackForTx(tx) {
+  const r = selectFeedbackByTx.get(String(tx || ""));
+  return r ? { tx: r.tx, slug: r.slug, verdict: r.verdict, reason: r.reason, at: new Date(r.ts).toISOString() } : null;
+}
+
+/**
+ * Per-tool counts. COUNTS ONLY - never the payer, never the reason text.
+ *
+ * A roster of who said what about which tool is a customer list with opinions
+ * attached, and the same rule that keeps buyer addresses off every other
+ * surface applies here.
+ */
+export function feedbackByTool({ days = 90 } = {}) {
+  const since = Date.now() - Math.max(1, days) * 86_400_000;
+  return selectFeedbackTally.all(since).map((r) => ({
+    slug: r.slug, good: r.good, bad: r.bad, total: r.good + r.bad,
+    raters: r.raters,
+  }));
+}
+
+/**
+ * Operator view: the bad verdicts, with the buyer's words and the digest of the
+ * bytes they were served, newest first.
+ *
+ * The words live here and NOWHERE public. A complaint that nobody reads is the
+ * failure mode this whole table exists to avoid (a buyer's fault report once sat
+ * unread for eleven days on the wish board), so the log line at write time and
+ * this list are the two places a person actually finds them.
+ */
+export function badFeedback({ days = 30, limit = 50 } = {}) {
+  const since = Date.now() - Math.max(1, days) * 86_400_000;
+  return selectBadFeedback.all(since, Math.max(1, Math.min(500, Number(limit) || 50))).map((r) => ({
+    at: new Date(r.ts).toISOString(), item: r.slug, reason: r.reason,
+    settlementTx: r.tx, responseSha256: r.response_sha256 || null,
+  }));
+}
+
 export function payerReceipts(payer, { from = null, to = null, limit = 500 } = {}) {
   const lo = from ? Date.parse(from) : Date.now() - 90 * 86_400_000;
   const hi = to ? Date.parse(to) : Date.now();
