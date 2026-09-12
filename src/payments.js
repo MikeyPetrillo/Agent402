@@ -308,7 +308,7 @@ export function enabledNetworks(network) {
 // only be answered for a payer the server can verify. Without this a Solana or
 // Stellar buyer would settle and then be refused - charged for nothing.
 export const isIdentityBoundRoute = (def) =>
-  def?.category === "memory" || def?.slug === "my-usage" || def?.slug === "attest" || def?.slug === "receipts";
+  def?.category === "memory" || def?.slug === "my-usage" || def?.slug === "attest" || def?.slug === "receipts" || def?.slug === "feedback";
 
 // Build the `accepts` list for one catalog item. EVM rails always apply. For an
 // identity-bound route that is ALL it advertises, so a buyer can never settle on

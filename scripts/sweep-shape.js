@@ -42,6 +42,7 @@ export const EMPTY_ARRAY_OK = new Map([
   ["/api/demand-radar", "radar"],
   ["/api/bestsellers", "bestsellers"],        // reads OUR sales ledger: empty on a fresh CI boot, populated in production
   ["/api/x402-verify", "transfers"],          // placeholder 0x0…0 hash finds nothing, by design
+  ["/api/feedback/summary", "tools"],         // reads OUR feedback table: a fresh CI boot has no verdicts, production does
   // Legitimately empty for the example's own subject, not a defect:
   ["/api/stock-dividends", "splits"],         // a stock that has never split
   ["/api/dividend-calendar", "entries"],      // no US ex-dividend dates on a weekend

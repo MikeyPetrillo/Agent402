@@ -344,7 +344,7 @@ const isMemory = (p) => p.startsWith("/api/memory");
 // Wallet-keyed tools (payment = identity): in free mode there is no payment,
 // so their documented "pay to unlock" 4xx is the CORRECT answer, not a bug —
 // same leniency class as the memory tools.
-const isWalletIdentity = (p) => isMemory(p) || p === "/api/my-usage" || p === "/api/receipts";
+const isWalletIdentity = (p) => isMemory(p) || p === "/api/my-usage" || p === "/api/receipts" || p === "/api/feedback";
 
 const spec = await (await fetch(`${TARGET}/openapi.json`)).json();
 const paths = Object.entries(spec.paths);

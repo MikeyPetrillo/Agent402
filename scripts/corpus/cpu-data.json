@@ -1,1037 +1,1100 @@
 {
-  "about": "Pure-CPU finance, time, statistics, colour, image and OpenAPI tools (tier 0).",
-  "cases": [
-    {
-      "slug": "compound-interest",
-      "name": "annual compounding, known answer",
-      "input": {
-        "principal": 5000,
-        "annualRate": 0.07,
-        "years": 3,
-        "compoundingPerYear": 1
-      },
-      "expect": {
-        "gte": {
-          "futureValue": 6125.2
-        },
-        "lt": {
-          "futureValue": 6125.3
-        },
-        "equals": {
-          "periods": 3
-        },
-        "gt": {
-          "totalInterest": 1125
-        }
-      }
+ "about": "Pure-CPU finance, time, statistics, colour, image and OpenAPI tools (tier 0).",
+ "cases": [
+  {
+   "slug": "compound-interest",
+   "name": "annual compounding, known answer",
+   "input": {
+    "principal": 5000,
+    "annualRate": 0.07,
+    "years": 3,
+    "compoundingPerYear": 1
+   },
+   "expect": {
+    "gte": {
+     "futureValue": 6125.2
     },
-    {
-      "slug": "compound-interest",
-      "name": "zero rate returns principal",
-      "input": {
-        "principal": 100,
-        "annualRate": 0,
-        "years": 5
-      },
-      "expect": {
-        "equals": {
-          "futureValue": 100,
-          "totalInterest": 0
-        }
-      }
+    "lt": {
+     "futureValue": 6125.3
     },
-    {
-      "slug": "compound-interest",
-      "name": "negative principal is a 400",
-      "input": {
-        "principal": -1,
-        "annualRate": 0.05,
-        "years": 1
-      },
-      "expect": {
-        "status": 400
-      }
+    "equals": {
+     "periods": 3
     },
-    {
-      "slug": "cagr",
-      "name": "halving over 2 years is negative",
-      "input": {
-        "beginValue": 200,
-        "endValue": 50,
-        "years": 2
-      },
-      "expect": {
-        "equals": {
-          "cagr": -0.5,
-          "totalGrowth": -0.75,
-          "years": 2
-        }
-      }
-    },
-    {
-      "slug": "percentage",
-      "name": "a percent of b",
-      "input": {
-        "op": "of",
-        "a": 25,
-        "b": 120
-      },
-      "expect": {
-        "equals": {
-          "result": 30
-        }
-      }
-    },
-    {
-      "slug": "percentage",
-      "name": "unknown op is a 400",
-      "input": {
-        "op": "bogus",
-        "a": 1,
-        "b": 2
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "finance",
-      "name": "compound op",
-      "input": {
-        "op": "compound",
-        "principal": 1000,
-        "annualRatePct": 12,
-        "years": 2,
-        "compoundsPerYear": 12
-      },
-      "expect": {
-        "populated": [
-          "futureValue"
-        ],
-        "gt": {
-          "futureValue": 1269
-        },
-        "lt": {
-          "futureValue": 1270
-        }
-      }
-    },
-    {
-      "slug": "break-even",
-      "name": "fractional units round up in revenue",
-      "input": {
-        "fixedCost": 1000,
-        "pricePerUnit": 15,
-        "variableCostPerUnit": 9
-      },
-      "expect": {
-        "gte": {
-          "breakEvenUnits": 166.6
-        },
-        "equals": {
-          "contributionMargin": 6,
-          "contributionMarginRatio": 0.4
-        }
-      }
-    },
-    {
-      "slug": "break-even",
-      "name": "price at or below variable cost is a 400",
-      "input": {
-        "fixedCost": 100,
-        "pricePerUnit": 5,
-        "variableCostPerUnit": 5
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "bond-price",
-      "name": "par bond when coupon equals yield",
-      "input": {
-        "faceValue": 1000,
-        "couponRate": 0.04,
-        "yieldToMaturity": 0.04,
-        "years": 5,
-        "periodsPerYear": 1
-      },
-      "expect": {
-        "gte": {
-          "price": 999.99
-        },
-        "lt": {
-          "price": 1000.01
-        },
-        "equals": {
-          "periods": 5,
-          "couponPerPeriod": 40
-        }
-      }
-    },
-    {
-      "slug": "bond-price",
-      "name": "zero-coupon discount",
-      "input": {
-        "faceValue": 1000,
-        "couponRate": 0,
-        "yieldToMaturity": 0.05,
-        "years": 10,
-        "periodsPerYear": 1
-      },
-      "expect": {
-        "gt": {
-          "price": 613
-        },
-        "lt": {
-          "price": 614
-        },
-        "matches": {
-          "premiumOrDiscount": "discount"
-        }
-      }
-    },
-    {
-      "slug": "time-convert",
-      "name": "millisecond epoch in a negative-offset zone",
-      "input": {
-        "value": 1781172000000,
-        "tz": "America/Los_Angeles"
-      },
-      "expect": {
-        "equals": {
-          "epochSeconds": 1781172000,
-          "epochMillis": 1781172000000
-        },
-        "matches": {
-          "utc": "^2026-06-1[0-9]T",
-          "local": "2026-06-1"
-        }
-      }
-    },
-    {
-      "slug": "time-convert",
-      "name": "iso string input",
-      "input": {
-        "value": "2026-01-01T00:00:00Z",
-        "tz": "Asia/Kolkata"
-      },
-      "expect": {
-        "equals": {
-          "epochSeconds": 1767225600
-        },
-        "matches": {
-          "local": "05:30"
-        }
-      }
-    },
-    {
-      "slug": "time-convert",
-      "name": "bad zone is a 400",
-      "input": {
-        "value": 0,
-        "tz": "Mars/Olympus"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "time",
-      "name": "utc when no zone",
-      "input": {},
-      "expect": {
-        "populated": [
-          "utc",
-          "epochSeconds",
-          "dayOfWeek"
-        ],
-        "gt": {
-          "epochSeconds": 1780000000
-        }
-      }
-    },
-    {
-      "slug": "time",
-      "name": "invalid zone is a 400",
-      "input": {
-        "tz": "Not/AZone"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "timezone-convert",
-      "name": "cross a date line",
-      "input": {
-        "datetime": "2026-12-31T23:30:00",
-        "from": "Pacific/Auckland",
-        "to": "Pacific/Honolulu"
-      },
-      "expect": {
-        "matches": {
-          "utc": "^2026-12-31T10:30"
-        },
-        "populated": [
-          "input",
-          "from",
-          "to"
-        ]
-      }
-    },
-    {
-      "slug": "iso-week",
-      "name": "jan 1 2027 belongs to iso week 53 of 2026",
-      "input": {
-        "date": "2027-01-01"
-      },
-      "expect": {
-        "equals": {
-          "isoYear": 2026,
-          "isoWeek": 53,
-          "isoDayOfWeek": 5,
-          "quarter": 1
-        }
-      }
-    },
-    {
-      "slug": "iso-week",
-      "name": "bad date is a 400",
-      "input": {
-        "date": "2026-13-45"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "day-of-year",
-      "name": "leap day",
-      "input": {
-        "date": "2028-02-29"
-      },
-      "expect": {
-        "equals": {
-          "dayOfYear": 60,
-          "isLeapYear": true,
-          "daysInYear": 366,
-          "daysRemaining": 306
-        }
-      }
-    },
-    {
-      "slug": "add-time",
-      "name": "negative duration across a month boundary",
-      "input": {
-        "date": "2026-03-01T00:00:00Z",
-        "duration": "-1h"
-      },
-      "expect": {
-        "matches": {
-          "result": "^2026-02-28T23:00"
-        }
-      }
-    },
-    {
-      "slug": "add-time",
-      "name": "weeks and minutes",
-      "input": {
-        "date": "2026-01-01T00:00:00Z",
-        "duration": "1w 90m"
-      },
-      "expect": {
-        "matches": {
-          "result": "^2026-01-08T01:30"
-        }
-      }
-    },
-    {
-      "slug": "linear-regression",
-      "name": "perfect negative line",
-      "input": {
-        "x": [
-          0,
-          1,
-          2,
-          3
-        ],
-        "y": [
-          10,
-          8,
-          6,
-          4
-        ],
-        "predict": [
-          10
-        ]
-      },
-      "expect": {
-        "equals": {
-          "slope": -2,
-          "intercept": 10,
-          "rSquared": 1,
-          "n": 4,
-          "predictions[0].x": 10,
-          "predictions[0].y": -10
-        }
-      }
-    },
-    {
-      "slug": "linear-regression",
-      "name": "mismatched lengths is a 400",
-      "input": {
-        "x": [
-          1,
-          2,
-          3
-        ],
-        "y": [
-          1,
-          2
-        ]
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "forecast-naive",
-      "name": "mean method flat series",
-      "input": {
-        "values": [
-          5,
-          5,
-          5,
-          5
-        ],
-        "horizon": 2,
-        "method": "mean"
-      },
-      "expect": {
-        "equals": {
-          "method": "mean",
-          "horizon": 2,
-          "forecast[0].point": 5,
-          "forecast[1].point": 5
-        },
-        "count": {
-          "forecast": 2
-        }
-      }
-    },
-    {
-      "slug": "forecast-naive",
-      "name": "unknown method is a 400",
-      "input": {
-        "values": [
-          1,
-          2,
-          3,
-          1,
-          2,
-          3
-        ],
-        "horizon": 3,
-        "method": "seasonal",
-        "period": 3
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "stats-summary",
-      "name": "bimodal with outlier",
-      "input": {
-        "values": [
-          1,
-          1,
-          2,
-          2,
-          100
-        ]
-      },
-      "expect": {
-        "equals": {
-          "count": 5,
-          "sum": 106,
-          "median": 2,
-          "min": 1,
-          "max": 100,
-          "range": 99
-        },
-        "gt": {
-          "stddev": 39
-        }
-      }
-    },
-    {
-      "slug": "stats-summary",
-      "name": "empty list is a 400",
-      "input": {
-        "values": []
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "color",
-      "name": "rgb() input",
-      "input": {
-        "color": "rgb(255, 0, 0)"
-      },
-      "expect": {
-        "matches": {
-          "hex": "^#ff0000$"
-        },
-        "populated": [
-          "rgb",
-          "hsl",
-          "luminance"
-        ]
-      }
-    },
-    {
-      "slug": "color",
-      "name": "hsl() input",
-      "input": {
-        "color": "hsl(0, 100%, 50%)"
-      },
-      "expect": {
-        "matches": {
-          "hex": "^#ff0000$"
-        }
-      }
-    },
-    {
-      "slug": "color",
-      "name": "garbage is a 400",
-      "input": {
-        "color": "#zzz"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "image-convert",
-      "name": "png to bmp",
-      "input": {
-        "image": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==",
-        "format": "bmp"
-      },
-      "expect": {
-        "truthy": [
-          "__binary"
-        ],
-        "matches": {
-          "contentType": "image/bmp"
-        },
-        "gt": {
-          "bytes": 50
-        }
-      }
-    },
-    {
-      "slug": "image-convert",
-      "name": "unsupported format is a 400",
-      "input": {
-        "image": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==",
-        "format": "tiff"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "image-convert",
-      "name": "not an image is a 400",
-      "input": {
-        "image": "aGVsbG8gd29ybGQ=",
-        "format": "png"
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "barcode-decode",
-      "name": "an image with no barcode is found:false, not a 500",
-      "input": {
-        "image": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg=="
-      },
-      "expect": {
-        "equals": {
-          "found": false
-        }
-      }
-    },
-    {
-      "slug": "openapi-diff",
-      "name": "removed required param is breaking",
-      "input": {
-        "before": {
-          "openapi": "3.0.0",
-          "paths": {
-            "/a": {
-              "get": {
-                "parameters": [
-                  {
-                    "name": "id",
-                    "in": "query",
-                    "required": true
-                  }
-                ],
-                "responses": {
-                  "200": {}
-                }
-              }
-            }
-          }
-        },
-        "after": {
-          "openapi": "3.0.0",
-          "paths": {
-            "/a": {
-              "get": {
-                "parameters": [
-                  {
-                    "name": "id",
-                    "in": "query",
-                    "required": true
-                  },
-                  {
-                    "name": "extra",
-                    "in": "query",
-                    "required": true
-                  }
-                ],
-                "responses": {
-                  "200": {}
-                }
-              }
-            },
-            "/b": {
-              "post": {
-                "responses": {
-                  "200": {}
-                }
-              }
-            }
-          }
-        }
-      },
-      "expect": {
-        "minCount": {
-          "added": 1
-        },
-        "empty": [
-          "removed"
-        ],
-        "gte": {
-          "breakingCount": 1
-        },
-        "populated": [
-          "summary"
-        ]
-      }
-    },
-    {
-      "slug": "openapi-diff",
-      "name": "identical specs have no changes",
-      "input": {
-        "before": {
-          "openapi": "3.0.0",
-          "paths": {
-            "/x": {
-              "get": {
-                "responses": {
-                  "200": {}
-                }
-              }
-            }
-          }
-        },
-        "after": {
-          "openapi": "3.0.0",
-          "paths": {
-            "/x": {
-              "get": {
-                "responses": {
-                  "200": {}
-                }
-              }
-            }
-          }
-        }
-      },
-      "expect": {
-        "empty": [
-          "added",
-          "removed",
-          "changed"
-        ],
-        "equals": {
-          "breaking": false,
-          "breakingCount": 0
-        }
-      }
-    },
-    {
-      "slug": "openapi-extract",
-      "name": "two paths three ops with tags",
-      "input": {
-        "spec": {
-          "openapi": "3.0.0",
-          "paths": {
-            "/items": {
-              "get": {
-                "operationId": "listItems",
-                "tags": [
-                  "items"
-                ],
-                "responses": {
-                  "200": {}
-                }
-              },
-              "post": {
-                "operationId": "createItem",
-                "tags": [
-                  "items"
-                ],
-                "responses": {
-                  "201": {}
-                }
-              }
-            },
-            "/items/{id}": {
-              "delete": {
-                "operationId": "deleteItem",
-                "responses": {
-                  "204": {}
-                }
-              }
-            }
-          }
-        }
-      },
-      "expect": {
-        "count": {
-          "endpoints": 3
-        },
-        "populated": [
-          "stats"
-        ]
-      }
-    },
-    {
-      "slug": "openapi-extract",
-      "name": "spec as a JSON string",
-      "input": {
-        "spec": "{\"openapi\":\"3.0.0\",\"paths\":{\"/ping\":{\"get\":{\"responses\":{\"200\":{}}}}}}"
-      },
-      "expect": {
-        "count": {
-          "endpoints": 1
-        },
-        "equals": {
-          "endpoints[0].path": "/ping"
-        }
-      }
-    },
-    {
-      "slug": "openapi-lint",
-      "name": "bare spec scores low with violations",
-      "input": {
-        "spec": {
-          "openapi": "3.0.0",
-          "paths": {
-            "/x": {
-              "get": {
-                "responses": {
-                  "200": {}
-                }
-              }
-            }
-          }
-        }
-      },
-      "expect": {
-        "minCount": {
-          "violations": 5
-        },
-        "lt": {
-          "score": 90
-        },
-        "equals": {
-          "counts.warning": 5
-        }
-      }
-    },
-    {
-      "slug": "openapi-search",
-      "name": "query hits by summary",
-      "input": {
-        "spec": {
-          "paths": {
-            "/users": {
-              "get": {
-                "summary": "List users",
-                "responses": {
-                  "200": {}
-                }
-              }
-            },
-            "/orders": {
-              "get": {
-                "summary": "List orders",
-                "responses": {
-                  "200": {}
-                }
-              },
-              "post": {
-                "summary": "Create order",
-                "responses": {
-                  "201": {}
-                }
-              }
-            }
-          }
-        },
-        "query": "order",
-        "limit": 5
-      },
-      "expect": {
-        "equals": {
-          "total": 2
-        },
-        "count": {
-          "results": 2
-        }
-      }
-    },
-    {
-      "slug": "openapi-search",
-      "name": "no hit is total 0",
-      "input": {
-        "spec": {
-          "paths": {
-            "/users": {
-              "get": {
-                "summary": "List users",
-                "responses": {
-                  "200": {}
-                }
-              }
-            }
-          }
-        },
-        "query": "zebra"
-      },
-      "expect": {
-        "equals": {
-          "total": 0
-        },
-        "empty": [
-          "results"
-        ]
-      }
-    },
-    {
-      "slug": "openapi-validate-payload",
-      "name": "response payload against a 200 schema",
-      "input": {
-        "spec": {
-          "openapi": "3.0.0",
-          "paths": {
-            "/u": {
-              "get": {
-                "operationId": "getU",
-                "responses": {
-                  "200": {
-                    "content": {
-                      "application/json": {
-                        "schema": {
-                          "type": "object",
-                          "required": [
-                            "id"
-                          ],
-                          "properties": {
-                            "id": {
-                              "type": "integer"
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "operationId": "getU",
-        "part": "response",
-        "status": "200",
-        "payload": {
-          "id": "not-an-int"
-        }
-      },
-      "expect": {
-        "equals": {
-          "valid": false,
-          "schemaPresent": true
-        },
-        "minCount": {
-          "errors": 1
-        }
-      }
-    },
-    {
-      "slug": "openapi-validate-payload",
-      "name": "unknown operationId is a 400",
-      "input": {
-        "spec": {
-          "openapi": "3.0.0",
-          "paths": {}
-        },
-        "operationId": "nope",
-        "part": "request",
-        "payload": {}
-      },
-      "expect": {
-        "status": 400
-      }
-    },
-    {
-      "slug": "openapi-mock-response",
-      "name": "array of objects from schema",
-      "input": {
-        "spec": {
-          "openapi": "3.0.0",
-          "paths": {
-            "/list": {
-              "get": {
-                "operationId": "list",
-                "responses": {
-                  "200": {
-                    "content": {
-                      "application/json": {
-                        "schema": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "id": {
-                                "type": "integer"
-                              },
-                              "name": {
-                                "type": "string"
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "operationId": "list"
-      },
-      "expect": {
-        "equals": {
-          "status": "200"
-        },
-        "matches": {
-          "contentType": "json"
-        },
-        "minCount": {
-          "mock": 1
-        },
-        "populated": [
-          "mock[0].id",
-          "mock[0].name"
-        ]
-      }
-    },
-    {
-      "slug": "openapi-to-curl",
-      "name": "post with body example and header param",
-      "input": {
-        "spec": {
-          "openapi": "3.0.0",
-          "servers": [
-            {
-              "url": "https://api.example.com/v2"
-            }
-          ],
-          "paths": {
-            "/orders": {
-              "post": {
-                "operationId": "createOrder",
-                "parameters": [
-                  {
-                    "name": "X-Trace",
-                    "in": "header",
-                    "schema": {
-                      "type": "string"
-                    }
-                  }
-                ],
-                "requestBody": {
-                  "content": {
-                    "application/json": {
-                      "example": {
-                        "sku": "A1",
-                        "qty": 2
-                      }
-                    }
-                  }
-                },
-                "responses": {
-                  "201": {}
-                }
-              }
-            }
-          }
-        },
-        "operationId": "createOrder"
-      },
-      "expect": {
-        "equals": {
-          "method": "POST",
-          "url": "https://api.example.com/v2/orders",
-          "body.sku": "A1"
-        },
-        "matches": {
-          "curl": "^curl -X POST"
-        }
-      }
-    },
-    {
-      "slug": "skill-schema-guard",
-      "name": "payload that fails the schema",
-      "input": {
-        "payload": "{\"name\":\"Ada\"}",
-        "schema": "{\"type\":\"object\",\"required\":[\"id\"]}"
-      },
-      "expect": {
-        "equals": {
-          "pack": "schema-guard"
-        },
-        "populated": [
-          "steps",
-          "summary"
-        ],
-        "minCount": {
-          "steps": 1
-        }
-      }
+    "gt": {
+     "totalInterest": 1125
     }
-  ]
+   }
+  },
+  {
+   "slug": "compound-interest",
+   "name": "zero rate returns principal",
+   "input": {
+    "principal": 100,
+    "annualRate": 0,
+    "years": 5
+   },
+   "expect": {
+    "equals": {
+     "futureValue": 100,
+     "totalInterest": 0
+    }
+   }
+  },
+  {
+   "slug": "compound-interest",
+   "name": "negative principal is a 400",
+   "input": {
+    "principal": -1,
+    "annualRate": 0.05,
+    "years": 1
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "cagr",
+   "name": "halving over 2 years is negative",
+   "input": {
+    "beginValue": 200,
+    "endValue": 50,
+    "years": 2
+   },
+   "expect": {
+    "equals": {
+     "cagr": -0.5,
+     "totalGrowth": -0.75,
+     "years": 2
+    }
+   }
+  },
+  {
+   "slug": "percentage",
+   "name": "a percent of b",
+   "input": {
+    "op": "of",
+    "a": 25,
+    "b": 120
+   },
+   "expect": {
+    "equals": {
+     "result": 30
+    }
+   }
+  },
+  {
+   "slug": "percentage",
+   "name": "unknown op is a 400",
+   "input": {
+    "op": "bogus",
+    "a": 1,
+    "b": 2
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "finance",
+   "name": "compound op",
+   "input": {
+    "op": "compound",
+    "principal": 1000,
+    "annualRatePct": 12,
+    "years": 2,
+    "compoundsPerYear": 12
+   },
+   "expect": {
+    "populated": [
+     "futureValue"
+    ],
+    "gt": {
+     "futureValue": 1269
+    },
+    "lt": {
+     "futureValue": 1270
+    }
+   }
+  },
+  {
+   "slug": "break-even",
+   "name": "fractional units round up in revenue",
+   "input": {
+    "fixedCost": 1000,
+    "pricePerUnit": 15,
+    "variableCostPerUnit": 9
+   },
+   "expect": {
+    "gte": {
+     "breakEvenUnits": 166.6
+    },
+    "equals": {
+     "contributionMargin": 6,
+     "contributionMarginRatio": 0.4
+    }
+   }
+  },
+  {
+   "slug": "break-even",
+   "name": "price at or below variable cost is a 400",
+   "input": {
+    "fixedCost": 100,
+    "pricePerUnit": 5,
+    "variableCostPerUnit": 5
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "bond-price",
+   "name": "par bond when coupon equals yield",
+   "input": {
+    "faceValue": 1000,
+    "couponRate": 0.04,
+    "yieldToMaturity": 0.04,
+    "years": 5,
+    "periodsPerYear": 1
+   },
+   "expect": {
+    "gte": {
+     "price": 999.99
+    },
+    "lt": {
+     "price": 1000.01
+    },
+    "equals": {
+     "periods": 5,
+     "couponPerPeriod": 40
+    }
+   }
+  },
+  {
+   "slug": "bond-price",
+   "name": "zero-coupon discount",
+   "input": {
+    "faceValue": 1000,
+    "couponRate": 0,
+    "yieldToMaturity": 0.05,
+    "years": 10,
+    "periodsPerYear": 1
+   },
+   "expect": {
+    "gt": {
+     "price": 613
+    },
+    "lt": {
+     "price": 614
+    },
+    "matches": {
+     "premiumOrDiscount": "discount"
+    }
+   }
+  },
+  {
+   "slug": "time-convert",
+   "name": "millisecond epoch in a negative-offset zone",
+   "input": {
+    "value": 1781172000000,
+    "tz": "America/Los_Angeles"
+   },
+   "expect": {
+    "equals": {
+     "epochSeconds": 1781172000,
+     "epochMillis": 1781172000000
+    },
+    "matches": {
+     "utc": "^2026-06-1[0-9]T",
+     "local": "2026-06-1"
+    }
+   }
+  },
+  {
+   "slug": "time-convert",
+   "name": "iso string input",
+   "input": {
+    "value": "2026-01-01T00:00:00Z",
+    "tz": "Asia/Kolkata"
+   },
+   "expect": {
+    "equals": {
+     "epochSeconds": 1767225600
+    },
+    "matches": {
+     "local": "05:30"
+    }
+   }
+  },
+  {
+   "slug": "time-convert",
+   "name": "bad zone is a 400",
+   "input": {
+    "value": 0,
+    "tz": "Mars/Olympus"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "time",
+   "name": "utc when no zone",
+   "input": {},
+   "expect": {
+    "populated": [
+     "utc",
+     "epochSeconds",
+     "dayOfWeek"
+    ],
+    "gt": {
+     "epochSeconds": 1780000000
+    }
+   }
+  },
+  {
+   "slug": "time",
+   "name": "invalid zone is a 400",
+   "input": {
+    "tz": "Not/AZone"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "timezone-convert",
+   "name": "cross a date line",
+   "input": {
+    "datetime": "2026-12-31T23:30:00",
+    "from": "Pacific/Auckland",
+    "to": "Pacific/Honolulu"
+   },
+   "expect": {
+    "matches": {
+     "utc": "^2026-12-31T10:30"
+    },
+    "populated": [
+     "input",
+     "from",
+     "to"
+    ]
+   }
+  },
+  {
+   "slug": "iso-week",
+   "name": "jan 1 2027 belongs to iso week 53 of 2026",
+   "input": {
+    "date": "2027-01-01"
+   },
+   "expect": {
+    "equals": {
+     "isoYear": 2026,
+     "isoWeek": 53,
+     "isoDayOfWeek": 5,
+     "quarter": 1
+    }
+   }
+  },
+  {
+   "slug": "iso-week",
+   "name": "bad date is a 400",
+   "input": {
+    "date": "2026-13-45"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "day-of-year",
+   "name": "leap day",
+   "input": {
+    "date": "2028-02-29"
+   },
+   "expect": {
+    "equals": {
+     "dayOfYear": 60,
+     "isLeapYear": true,
+     "daysInYear": 366,
+     "daysRemaining": 306
+    }
+   }
+  },
+  {
+   "slug": "add-time",
+   "name": "negative duration across a month boundary",
+   "input": {
+    "date": "2026-03-01T00:00:00Z",
+    "duration": "-1h"
+   },
+   "expect": {
+    "matches": {
+     "result": "^2026-02-28T23:00"
+    }
+   }
+  },
+  {
+   "slug": "add-time",
+   "name": "weeks and minutes",
+   "input": {
+    "date": "2026-01-01T00:00:00Z",
+    "duration": "1w 90m"
+   },
+   "expect": {
+    "matches": {
+     "result": "^2026-01-08T01:30"
+    }
+   }
+  },
+  {
+   "slug": "linear-regression",
+   "name": "perfect negative line",
+   "input": {
+    "x": [
+     0,
+     1,
+     2,
+     3
+    ],
+    "y": [
+     10,
+     8,
+     6,
+     4
+    ],
+    "predict": [
+     10
+    ]
+   },
+   "expect": {
+    "equals": {
+     "slope": -2,
+     "intercept": 10,
+     "rSquared": 1,
+     "n": 4,
+     "predictions[0].x": 10,
+     "predictions[0].y": -10
+    }
+   }
+  },
+  {
+   "slug": "linear-regression",
+   "name": "mismatched lengths is a 400",
+   "input": {
+    "x": [
+     1,
+     2,
+     3
+    ],
+    "y": [
+     1,
+     2
+    ]
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "forecast-naive",
+   "name": "mean method flat series",
+   "input": {
+    "values": [
+     5,
+     5,
+     5,
+     5
+    ],
+    "horizon": 2,
+    "method": "mean"
+   },
+   "expect": {
+    "equals": {
+     "method": "mean",
+     "horizon": 2,
+     "forecast[0].point": 5,
+     "forecast[1].point": 5
+    },
+    "count": {
+     "forecast": 2
+    }
+   }
+  },
+  {
+   "slug": "forecast-naive",
+   "name": "unknown method is a 400",
+   "input": {
+    "values": [
+     1,
+     2,
+     3,
+     1,
+     2,
+     3
+    ],
+    "horizon": 3,
+    "method": "seasonal",
+    "period": 3
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "stats-summary",
+   "name": "bimodal with outlier",
+   "input": {
+    "values": [
+     1,
+     1,
+     2,
+     2,
+     100
+    ]
+   },
+   "expect": {
+    "equals": {
+     "count": 5,
+     "sum": 106,
+     "median": 2,
+     "min": 1,
+     "max": 100,
+     "range": 99
+    },
+    "gt": {
+     "stddev": 39
+    }
+   }
+  },
+  {
+   "slug": "stats-summary",
+   "name": "empty list is a 400",
+   "input": {
+    "values": []
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "color",
+   "name": "rgb() input",
+   "input": {
+    "color": "rgb(255, 0, 0)"
+   },
+   "expect": {
+    "matches": {
+     "hex": "^#ff0000$"
+    },
+    "populated": [
+     "rgb",
+     "hsl",
+     "luminance"
+    ]
+   }
+  },
+  {
+   "slug": "color",
+   "name": "hsl() input",
+   "input": {
+    "color": "hsl(0, 100%, 50%)"
+   },
+   "expect": {
+    "matches": {
+     "hex": "^#ff0000$"
+    }
+   }
+  },
+  {
+   "slug": "color",
+   "name": "garbage is a 400",
+   "input": {
+    "color": "#zzz"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "image-convert",
+   "name": "png to bmp",
+   "input": {
+    "image": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==",
+    "format": "bmp"
+   },
+   "expect": {
+    "truthy": [
+     "__binary"
+    ],
+    "matches": {
+     "contentType": "image/bmp"
+    },
+    "gt": {
+     "bytes": 50
+    }
+   }
+  },
+  {
+   "slug": "image-convert",
+   "name": "unsupported format is a 400",
+   "input": {
+    "image": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==",
+    "format": "tiff"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "image-convert",
+   "name": "not an image is a 400",
+   "input": {
+    "image": "aGVsbG8gd29ybGQ=",
+    "format": "png"
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "barcode-decode",
+   "name": "an image with no barcode is found:false, not a 500",
+   "input": {
+    "image": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg=="
+   },
+   "expect": {
+    "equals": {
+     "found": false
+    }
+   }
+  },
+  {
+   "slug": "openapi-diff",
+   "name": "removed required param is breaking",
+   "input": {
+    "before": {
+     "openapi": "3.0.0",
+     "paths": {
+      "/a": {
+       "get": {
+        "parameters": [
+         {
+          "name": "id",
+          "in": "query",
+          "required": true
+         }
+        ],
+        "responses": {
+         "200": {}
+        }
+       }
+      }
+     }
+    },
+    "after": {
+     "openapi": "3.0.0",
+     "paths": {
+      "/a": {
+       "get": {
+        "parameters": [
+         {
+          "name": "id",
+          "in": "query",
+          "required": true
+         },
+         {
+          "name": "extra",
+          "in": "query",
+          "required": true
+         }
+        ],
+        "responses": {
+         "200": {}
+        }
+       }
+      },
+      "/b": {
+       "post": {
+        "responses": {
+         "200": {}
+        }
+       }
+      }
+     }
+    }
+   },
+   "expect": {
+    "minCount": {
+     "added": 1
+    },
+    "empty": [
+     "removed"
+    ],
+    "gte": {
+     "breakingCount": 1
+    },
+    "populated": [
+     "summary"
+    ]
+   }
+  },
+  {
+   "slug": "openapi-diff",
+   "name": "identical specs have no changes",
+   "input": {
+    "before": {
+     "openapi": "3.0.0",
+     "paths": {
+      "/x": {
+       "get": {
+        "responses": {
+         "200": {}
+        }
+       }
+      }
+     }
+    },
+    "after": {
+     "openapi": "3.0.0",
+     "paths": {
+      "/x": {
+       "get": {
+        "responses": {
+         "200": {}
+        }
+       }
+      }
+     }
+    }
+   },
+   "expect": {
+    "empty": [
+     "added",
+     "removed",
+     "changed"
+    ],
+    "equals": {
+     "breaking": false,
+     "breakingCount": 0
+    }
+   }
+  },
+  {
+   "slug": "openapi-extract",
+   "name": "two paths three ops with tags",
+   "input": {
+    "spec": {
+     "openapi": "3.0.0",
+     "paths": {
+      "/items": {
+       "get": {
+        "operationId": "listItems",
+        "tags": [
+         "items"
+        ],
+        "responses": {
+         "200": {}
+        }
+       },
+       "post": {
+        "operationId": "createItem",
+        "tags": [
+         "items"
+        ],
+        "responses": {
+         "201": {}
+        }
+       }
+      },
+      "/items/{id}": {
+       "delete": {
+        "operationId": "deleteItem",
+        "responses": {
+         "204": {}
+        }
+       }
+      }
+     }
+    }
+   },
+   "expect": {
+    "count": {
+     "endpoints": 3
+    },
+    "populated": [
+     "stats"
+    ]
+   }
+  },
+  {
+   "slug": "openapi-extract",
+   "name": "spec as a JSON string",
+   "input": {
+    "spec": "{\"openapi\":\"3.0.0\",\"paths\":{\"/ping\":{\"get\":{\"responses\":{\"200\":{}}}}}}"
+   },
+   "expect": {
+    "count": {
+     "endpoints": 1
+    },
+    "equals": {
+     "endpoints[0].path": "/ping"
+    }
+   }
+  },
+  {
+   "slug": "openapi-lint",
+   "name": "bare spec scores low with violations",
+   "input": {
+    "spec": {
+     "openapi": "3.0.0",
+     "paths": {
+      "/x": {
+       "get": {
+        "responses": {
+         "200": {}
+        }
+       }
+      }
+     }
+    }
+   },
+   "expect": {
+    "minCount": {
+     "violations": 5
+    },
+    "lt": {
+     "score": 90
+    },
+    "equals": {
+     "counts.warning": 5
+    }
+   }
+  },
+  {
+   "slug": "openapi-search",
+   "name": "query hits by summary",
+   "input": {
+    "spec": {
+     "paths": {
+      "/users": {
+       "get": {
+        "summary": "List users",
+        "responses": {
+         "200": {}
+        }
+       }
+      },
+      "/orders": {
+       "get": {
+        "summary": "List orders",
+        "responses": {
+         "200": {}
+        }
+       },
+       "post": {
+        "summary": "Create order",
+        "responses": {
+         "201": {}
+        }
+       }
+      }
+     }
+    },
+    "query": "order",
+    "limit": 5
+   },
+   "expect": {
+    "equals": {
+     "total": 2
+    },
+    "count": {
+     "results": 2
+    }
+   }
+  },
+  {
+   "slug": "openapi-search",
+   "name": "no hit is total 0",
+   "input": {
+    "spec": {
+     "paths": {
+      "/users": {
+       "get": {
+        "summary": "List users",
+        "responses": {
+         "200": {}
+        }
+       }
+      }
+     }
+    },
+    "query": "zebra"
+   },
+   "expect": {
+    "equals": {
+     "total": 0
+    },
+    "empty": [
+     "results"
+    ]
+   }
+  },
+  {
+   "slug": "openapi-validate-payload",
+   "name": "response payload against a 200 schema",
+   "input": {
+    "spec": {
+     "openapi": "3.0.0",
+     "paths": {
+      "/u": {
+       "get": {
+        "operationId": "getU",
+        "responses": {
+         "200": {
+          "content": {
+           "application/json": {
+            "schema": {
+             "type": "object",
+             "required": [
+              "id"
+             ],
+             "properties": {
+              "id": {
+               "type": "integer"
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "operationId": "getU",
+    "part": "response",
+    "status": "200",
+    "payload": {
+     "id": "not-an-int"
+    }
+   },
+   "expect": {
+    "equals": {
+     "valid": false,
+     "schemaPresent": true
+    },
+    "minCount": {
+     "errors": 1
+    }
+   }
+  },
+  {
+   "slug": "openapi-validate-payload",
+   "name": "unknown operationId is a 400",
+   "input": {
+    "spec": {
+     "openapi": "3.0.0",
+     "paths": {}
+    },
+    "operationId": "nope",
+    "part": "request",
+    "payload": {}
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "openapi-mock-response",
+   "name": "array of objects from schema",
+   "input": {
+    "spec": {
+     "openapi": "3.0.0",
+     "paths": {
+      "/list": {
+       "get": {
+        "operationId": "list",
+        "responses": {
+         "200": {
+          "content": {
+           "application/json": {
+            "schema": {
+             "type": "array",
+             "items": {
+              "type": "object",
+              "properties": {
+               "id": {
+                "type": "integer"
+               },
+               "name": {
+                "type": "string"
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "operationId": "list"
+   },
+   "expect": {
+    "equals": {
+     "status": "200"
+    },
+    "matches": {
+     "contentType": "json"
+    },
+    "minCount": {
+     "mock": 1
+    },
+    "populated": [
+     "mock[0].id",
+     "mock[0].name"
+    ]
+   }
+  },
+  {
+   "slug": "openapi-to-curl",
+   "name": "post with body example and header param",
+   "input": {
+    "spec": {
+     "openapi": "3.0.0",
+     "servers": [
+      {
+       "url": "https://api.example.com/v2"
+      }
+     ],
+     "paths": {
+      "/orders": {
+       "post": {
+        "operationId": "createOrder",
+        "parameters": [
+         {
+          "name": "X-Trace",
+          "in": "header",
+          "schema": {
+           "type": "string"
+          }
+         }
+        ],
+        "requestBody": {
+         "content": {
+          "application/json": {
+           "example": {
+            "sku": "A1",
+            "qty": 2
+           }
+          }
+         }
+        },
+        "responses": {
+         "201": {}
+        }
+       }
+      }
+     }
+    },
+    "operationId": "createOrder"
+   },
+   "expect": {
+    "equals": {
+     "method": "POST",
+     "url": "https://api.example.com/v2/orders",
+     "body.sku": "A1"
+    },
+    "matches": {
+     "curl": "^curl -X POST"
+    }
+   }
+  },
+  {
+   "slug": "skill-schema-guard",
+   "name": "payload that fails the schema",
+   "input": {
+    "payload": "{\"name\":\"Ada\"}",
+    "schema": "{\"type\":\"object\",\"required\":[\"id\"]}"
+   },
+   "expect": {
+    "equals": {
+     "pack": "schema-guard"
+    },
+    "populated": [
+     "steps",
+     "summary"
+    ],
+    "minCount": {
+     "steps": 1
+    }
+   }
+  },
+  {
+   "slug": "feedback-summary",
+   "name": "a tool nobody rated is an honest empty, not a clean record",
+   "input": {
+    "slug": "no-such-tool-exists",
+    "days": 30
+   },
+   "expect": {
+    "empty": [
+     "tools"
+    ],
+    "equals": {
+     "windowDays": 30,
+     "totals.total": 0
+    },
+    "populated": [
+     "note"
+    ],
+    "matches": {
+     "note": "absence of ratings"
+    }
+   }
+  },
+  {
+   "slug": "feedback-summary",
+   "name": "the window is honoured and echoed",
+   "input": {
+    "days": 365
+   },
+   "expect": {
+    "equals": {
+     "windowDays": 365
+    },
+    "populated": [
+     "totals",
+     "note"
+    ]
+   }
+  },
+  {
+   "slug": "feedback-summary",
+   "name": "a nonsense window is refused, never silently defaulted",
+   "input": {
+    "days": 0
+   },
+   "expect": {
+    "status": 400
+   }
+  },
+  {
+   "slug": "feedback",
+   "name": "a verdict outside the two values is refused before anything is looked up",
+   "input": {
+    "tx": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "verdict": "5 stars"
+   },
+   "expect": {
+    "status": 400,
+    "matches": {
+     "error": "good"
+    }
+   }
+  }
+ ]
 }
