@@ -52,6 +52,9 @@ export const WALLET_ONLY_SLUGS = new Set([
   "linkedin-article",              // linkedin-article-kit.js: research + Opus + image generation, metered
   "v1-images-fast", "v1-images-pro", "v1-videos",  // llm-images-fast-kit.js (OpenRouter spend)
   "asset-transfers", "token-balances", "token-allowance", "tx-receipt", "block-receipts", "token-price-history",  // alchemy-data-kit.js (egress)
+  // chain-rpc-kit.js: one JSON-RPC read each (Alchemy CU when keyed, a public
+  // node otherwise) - egress, so never free-tier.
+  "chain-nonce", "chain-storage", "chain-pending", "chain-total-supply", "chain-erc1155-balance",
   "fc-cast-search", "fc-channel-feed", "fc-trending", "fc-user-casts", "fc-cast", "fc-cast-replies", "fc-channel", "fc-user-search", "fc-cast-metrics",  // farcaster-social-kit.js (egress)
   "coin-price-by-contract", "coin-profile", "coin-history", "coin-ohlc", "coin-market-chart-range", "coin-categories", "global-defi", "exchanges", "exchange-tickers", "exchange-rates", "coin-search", "coins-list",
   "rwa-list", "rwa-markets", "rwa-asset", "rwa-issuers", "rwa-issuer",  // crypto-markets-kit.js (egress)

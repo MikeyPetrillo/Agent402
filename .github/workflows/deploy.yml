@@ -1394,6 +1394,7 @@ jobs:
           t node scripts/test-price-parse.js
           t node scripts/test-receipts.js
           t node scripts/test-feedback-kit.js
+          t node scripts/test-chain-namespace.js
           t node scripts/test-wish-reports.js
 
       - name: x402 Bazaar discovery shape (POST→bodyType, GET→queryParams, example types match schema)
