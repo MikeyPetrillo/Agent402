@@ -127,3 +127,40 @@ export function chainNamespaceMap() {
   for (const [verb, route] of CHAIN_VERB_ROUTES) out.push({ verb, route, own: false });
   return out.sort((a, b) => a.verb.localeCompare(b.verb));
 }
+
+/**
+ * Canonical route -> the verbs that resolve to it, for the catalog build to
+ * fold into each tool's `aliases`.
+ *
+ * DERIVED, NEVER TYPED TWICE. The namespace map above is the one place a verb
+ * is declared; adding a verb there makes our own resolvers find it with no
+ * second edit, which is the same rule the skill-pack prices follow. Typing the
+ * list again on each tool is how the two drift, and a drifted alias is a buyer
+ * routed to the wrong tool rather than a visible error.
+ *
+ * The five verbs with their own routes are absent by construction: those tools
+ * carry their own curated aliases and there is nothing to fold them into.
+ */
+/**
+ * Verbs that stay URL-only: unambiguous under `/api/chain/` and ambiguous
+ * everywhere else, so folding them into a tool's aliases would assert a claim
+ * that fights the rest of the catalog.
+ *
+ * `proxy` means an EIP-1967 implementation pointer here and an LLM proxy in
+ * most of our other descriptions; measured 2026-09-12, folding it put
+ * address-profile behind llm, llm-pro and llm-premium for the bare word and
+ * would have dragged the LLM tiers down for it in return. The URL still
+ * answers - it is the search claim that is withdrawn. Name any addition here
+ * with its reason, the way the sweep skiplists do.
+ */
+export const VERBS_NOT_FOLDED = new Set(["proxy"]);
+
+export function chainVerbAliasesByRoute() {
+  const out = new Map();
+  for (const [verb, route] of CHAIN_VERB_ROUTES) {
+    if (VERBS_NOT_FOLDED.has(verb)) continue;
+    if (!out.has(route)) out.set(route, []);
+    out.get(route).push(verb);
+  }
+  return out;
+}

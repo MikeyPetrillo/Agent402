@@ -169,7 +169,13 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     name: (t.name || "").toLowerCase(),
     segs: new Set(t.slug.toLowerCase().split("-")),
     tagSet: new Set((t.tags || []).map((tg) => String(tg).toLowerCase())),
-    hay: `${t.name} ${t.description} ${t.category} ${(t.tags || []).join(" ")}`.toLowerCase(),
+    // Aliases are in the haystack because /api/route already scores them and
+    // the two resolvers disagreeing about the same tool is a defect a buyer
+    // meets as "your search cannot find the endpoint your own URL serves".
+    // Deliberately in `hay` rather than beside the slug: an alias is a name the
+    // tool also answers to, not a stronger claim than its own name, and the
+    // tag cap on the 402 challenge means aliases can never live in `tags`.
+    hay: `${t.name} ${t.description} ${t.category} ${(t.tags || []).join(" ")} ${(t.aliases || []).join(" ")}`.toLowerCase(),
   }));
   const N = all.length || 1;
   const idf = new Map();
