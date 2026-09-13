@@ -627,6 +627,18 @@ with `res.statusCode === 200`. (`node_modules/@x402/express/dist/esm/index.mjs`.
   and no alias verb may collide with a real catalog route. Mutation-checked (the one-segment verb regex, the query-string
   carry, case folding, a dead target). Note on the figures: 1,933 buyers against our 348, on $70 against our $145 - they are
   out-ACQUIRING us, not out-earning us, and the lever was a namespace rather than a product.
+- **The namespace's verbs are folded into our OWN resolvers (2026-09-12, same day as the namespace):** shipping
+  `/api/chain/eth_getlogs` while `/api/find?q=eth_getLogs` still missed would have been the URL a buyer guesses and the search
+  a buyer runs disagreeing about one tool. `chainVerbAliasesByRoute()` derives route -> verbs from the namespace map (declared
+  once, the pack-prices rule) and server.js folds them into each canonical tool's `aliases` at catalog build - idempotent,
+  curated aliases first. `find.js` now reads `aliases` into its haystack, which it never did: `/api/route` scored them and
+  `/api/find` did not, so the two resolvers disagreed by construction. Aliases deliberately cannot live in `tags` (the x402
+  spec caps a resource at five). MEASURED before/after over 20 generic one-word queries: ONE ranking moved, and it improved
+  (bare "tx" second place tx-inspect $0.010 -> tx-status $0.001); every first place was unchanged. 34 of 35 verbs put their
+  canonical tool in the top five of `/api/find`; the one that did not is `proxy`, which means an EIP-1967 pointer here and an
+  LLM proxy in most of our other descriptions - it is in `VERBS_NOT_FOLDED` with that reason, so the URL still answers and
+  only the search claim is withdrawn. The top-five promise is pinned per verb against the booted server rather than asserted,
+  and both mutations (dropping aliases from the haystack, folding the withdrawn verb anyway) are killed.
 - **Receipt-bound feedback (2026-09-12, `src/tools/feedback-kit.js`, `sale_feedback` in sales-ledger.js, `scripts/test-feedback-kit.js`
   54 in CI):** `POST /api/feedback {tx, verdict, reason}` $0.001 - a verdict on a call, writable ONLY by the wallet the ledger
   records as having paid for that exact call (`saleByTx` + `payerFromRequest`, identity-bound like attest/receipts so a rail

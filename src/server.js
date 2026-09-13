@@ -309,7 +309,7 @@ import { EMBED_TOOLS } from "./tools/embed-kit.js";
 import { USAGE_TOOLS } from "./tools/usage-kit.js";
 import { FEEDBACK_TOOLS } from "./tools/feedback-kit.js";
 import { CHAIN_RPC_TOOLS } from "./tools/chain-rpc-kit.js";
-import { chainNamespaceMiddleware, chainNamespaceMap } from "./chain-namespace.js";
+import { chainNamespaceMiddleware, chainNamespaceMap, chainVerbAliasesByRoute } from "./chain-namespace.js";
 import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage } from "./pages.js";
@@ -364,6 +364,23 @@ const ALL_KIT = [...KIT, ...KIT2, ...SEARCH_TOOLS, ...PDF_TOOLS, ...PDF_SUMMARIZ
 // all reach the same handler object): no em or en dashes in what a person
 // reads. Wrapped in place so _premiumHandlers below sees the wrapped one.
 for (const def of ALL_KIT) if (Object.hasOwn(REPORT_TIERS, def.slug) && typeof def.handler === "function" && !def.handler.__houseStyled) { def.handler = withHouseStyle(def.handler); def.handler.__houseStyled = true; }
+// Fold the chain namespace's verbs into the aliases of the tools that serve
+// them, so OUR OWN resolvers find what the namespace already answers. Without
+// this, `/api/chain/eth_getlogs` works and `/api/find?q=eth_getLogs` does not -
+// the URL a buyer guesses and the search a buyer runs disagreeing about the
+// same tool. Derived from the namespace map, so a verb is declared once.
+// Idempotent (a slug is only ever extended with verbs it lacks), and curated
+// aliases always come first: they were chosen for a reason.
+{
+  const byRoute = chainVerbAliasesByRoute();
+  for (const def of ALL_KIT) {
+    const verbs = byRoute.get(String(def.route).split(" ").pop());
+    if (!verbs) continue;
+    const have = new Set((def.aliases || []).map((a) => String(a).toLowerCase()));
+    const add = verbs.filter((v) => !have.has(v));
+    if (add.length) def.aliases = [...(def.aliases || []), ...add];
+  }
+}
 import { buildSkillTools } from "./tools/skill-runner.js";
 import { buildRouteExecuteTool, EXEC_TIERS } from "./tools/route-execute.js";
 import { buildSellerTrustTool } from "./tools/seller-trust.js";

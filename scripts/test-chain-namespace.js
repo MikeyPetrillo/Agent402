@@ -15,7 +15,7 @@
 //      reads our manifest, which is the registry inflation we decline to do.
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
-import { CHAIN_VERB_ROUTES, CHAIN_OWN_ROUTES, chainVerbOf, chainRouteFor, chainNamespaceMap, chainNamespaceMiddleware } from "../src/chain-namespace.js";
+import { CHAIN_VERB_ROUTES, CHAIN_OWN_ROUTES, VERBS_NOT_FOLDED, chainVerbOf, chainRouteFor, chainNamespaceMap, chainNamespaceMiddleware, chainVerbAliasesByRoute } from "../src/chain-namespace.js";
 
 const TARGET = process.env.TARGET_URL || "http://localhost:3000";
 let pass = 0, fail = 0;
@@ -127,6 +127,33 @@ if (!res || !res.ok) {
   // path the catalog also claims, or two things would answer one URL.
   const clash = chainNamespaceMap().filter((m) => !m.own && live.has(`/api/chain/${m.verb}`));
   ok(clash.length === 0, `no alias verb collides with a real catalog route${clash.length ? ` - ${clash.map((c) => c.verb).join(", ")}` : ""}`);
+
+  // The promise the folded aliases make: the URL a buyer guesses and the
+  // SEARCH a buyer runs agree about the same tool. Without this, an agent can
+  // call /api/chain/eth_getlogs and still be told by our own resolver that we
+  // do not sell it. Measured, not asserted: every folded verb must put its
+  // canonical tool in the top five of /api/find.
+  {
+    const slugByPath = new Map(pricing.endpoints.map((e) => [e.path, e.slug]));
+    const misses = [];
+    for (const [route, verbs] of chainVerbAliasesByRoute()) {
+      const want = slugByPath.get(route);
+      for (const verb of verbs) {
+        const r = await (await fetch(`${TARGET}/api/find?q=${encodeURIComponent(verb)}`)).json();
+        const top = (r.results || []).map((x) => x.slug).slice(0, 5);
+        if (!top.includes(want)) misses.push(`${verb} -> wanted ${want}, got ${top.slice(0, 3).join("/") || "nothing"}`);
+      }
+    }
+    ok(misses.length === 0, `every folded verb finds its own tool${misses.length ? ` - ${misses.join("; ")}` : ""}`);
+  }
+
+  // A verb we deliberately did NOT fold must still answer at its URL: the
+  // exception is to the search claim, never to the namespace.
+  for (const verb of VERBS_NOT_FOLDED) {
+    ok(chainRouteFor(verb) !== null, `"${verb}" is url-only by choice and still resolves to a route`);
+    const folded = [...chainVerbAliasesByRoute().values()].flat();
+    ok(!folded.includes(verb), `"${verb}" is kept out of the folded aliases`);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
