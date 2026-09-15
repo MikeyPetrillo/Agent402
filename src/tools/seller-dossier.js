@@ -197,6 +197,10 @@ export function composeSellerDossier(a) {
   if (templates) flags.push(`${templates} route(s) carry a URL template the router cannot fill`);
   const wrongDomain = toolRows.filter((t) => t.dispatch === "usdc_domain_mismatch").length;
   if (wrongDomain) flags.push(`${wrongDomain} route(s) advertise a Base USDC accept under the wrong EIP-712 domain name; no stock x402 buyer can pay them until the seller's accept names the token's own domain`);
+  // Counted apart, and worded apart: this seller is not misconfigured, we are
+  // the ones who do not speak its rail yet.
+  const gatewayRail = toolRows.filter((t) => t.dispatch === "gateway_rail_unsupported").length;
+  if (gatewayRail) flags.push(`${gatewayRail} route(s) price in Circle Gateway's batched rail rather than a plain EIP-3009 accept; this router's stock signer cannot pay them, and that is a gap on our side, not a defect on the seller's`);
   if (!paidTools.length) flags.push("no priced route is indexed, so nothing here is routable");
 
   // ----------------------------------------------------------------- wallets

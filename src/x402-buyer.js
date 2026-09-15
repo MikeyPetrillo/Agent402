@@ -11,7 +11,7 @@
 import { assertPublicUrl, ssrfDispatcher } from "./tools/fetch-guard.js";
 import { recordUpstreamSpend } from "./stats.js";
 import { provenPayToMatches } from "./settlement-proof.js";
-import { usdcDomainVerdict } from "./evm-usdc-domain.js";
+import { usdcDomainVerdict, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -581,9 +581,15 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // applies (src/evm-usdc-domain.js).
   if (chain === "base") {
     const domain = usdcDomainVerdict(payable);
-    if (domain.verdict === "wrong_domain") {
+    // Both refusing verdicts stop us here - we cannot sign either - but only
+    // wrong_domain is the seller's defect. A Gateway-rail accept settles fine
+    // for a batch facilitator, so the refusal must say "we cannot pay this",
+    // not "you are broken", or the router's own logs libel a working seller.
+    if (unsignableByStockBuyer(domain)) {
       noteSellerRefusal((() => { try { return new URL(url).origin; } catch { return null; } })(), chain, 402);
-      const e = bad(`Seller's Base USDC accept advertises EIP-712 name ${JSON.stringify(domain.advertisedName)} but the token signs under ${JSON.stringify(domain.expectedName)} - no stock x402 signature can verify against it. Nothing was signed.`, 502);
+      const e = bad(domain.verdict === "gateway_batched"
+        ? `Seller's Base accept stands on Circle's Gateway rail (extra.name ${JSON.stringify(domain.advertisedName)}${domain.verifyingContract ? `, verifyingContract ${domain.verifyingContract}` : ""}): it is signed under the GatewayWallet domain and settled by a batch facilitator, which this stock x402 signer does not speak. Nothing was signed, and nothing on the seller's side is wrong.`
+        : `Seller's Base USDC accept advertises EIP-712 name ${JSON.stringify(domain.advertisedName)} but the token signs under ${JSON.stringify(domain.expectedName)} - no stock x402 signature can verify against it. Nothing was signed.`, 502);
       e.refused = true;
       throw e;
     }

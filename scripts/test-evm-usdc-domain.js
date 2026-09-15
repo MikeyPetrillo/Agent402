@@ -6,7 +6,7 @@
 // in test-x402-live-quote carries the same accept). Offline.
 import { strict as assert } from "node:assert";
 import { readFileSync, readdirSync } from "node:fs";
-import { USDC_DOMAIN_BY_NETWORK, usdcDomainVerdict, evmDomainsOfAccepts, usdcDomainMismatchDetail } from "../src/evm-usdc-domain.js";
+import { USDC_DOMAIN_BY_NETWORK, EVM_TOKEN_DOMAINS, CIRCLE_GATEWAY, domainTruthFor, usdcDomainVerdict, evmDomainsOfAccepts, usdcDomainMismatchDetail, isCircleGatewayAccept, unsignableByStockBuyer } from "../src/evm-usdc-domain.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -28,9 +28,19 @@ const accept = (over = {}) => ({ scheme: "exact", network: "eip155:8453", asset:
   const dir = new URL("../node_modules/@x402/evm/dist/esm/", import.meta.url);
   const chunk = readdirSync(dir).filter((f) => f.endsWith(".mjs")).map((f) => readFileSync(new URL(f, dir), "utf8")).find((t) => t.includes('"eip155:8453"') && t.includes("USD Coin"));
   ok(!!chunk, "@x402/evm's asset registry chunk was found by content (never by chunk filename)");
+  // The registry's own shape has moved (2.22 published one entry per network
+  // as { address, name }; 2.25 publishes an ARRAY per network as { asset,
+  // name, version, decimals, symbol }) and the range in package.json admits
+  // both, so read either rather than failing on a lockfile refresh.
   for (const net of ["eip155:8453", "eip155:137", "eip155:42161"]) {
-    const m = chunk && chunk.match(new RegExp(`"${net}": \\{\\s*address: "(0x[0-9a-fA-F]{40})",[^}]*?name: "([^"]+)"`));
+    const at = chunk ? chunk.indexOf(`"${net}"`) : -1;
+    const block = at > -1 ? chunk.slice(at, at + 400) : "";
+    const m = block.match(/(?:address|asset): "(0x[0-9a-fA-F]{40})",[\s\S]{0,120}?name: "([^"]+)"/);
     ok(m && m[1].toLowerCase() === USDC_DOMAIN_BY_NETWORK[net].asset && m[2] === USDC_DOMAIN_BY_NETWORK[net].name, `${net}: table matches @x402/evm's registry (${m?.[2]})`);
+    // Newer registries publish the domain VERSION beside the name; where it is
+    // there it has to agree with the version the separator rebuild proved.
+    const ver = block.match(/name: "[^"]+",\s*version: "([^"]+)"/);
+    if (ver) ok(ver[1] === USDC_DOMAIN_BY_NETWORK[net].version, `${net}: table matches @x402/evm's registry version (${ver[1]})`);
   }
   ok(Object.values(USDC_DOMAIN_BY_NETWORK).every((r) => r.asset === r.asset.toLowerCase() && /^0x[0-9a-f]{40}$/.test(r.asset)), "every table asset is a lower-cased 20-byte address");
 }
@@ -47,11 +57,42 @@ const accept = (over = {}) => ({ scheme: "exact", network: "eip155:8453", asset:
   ok(usdcDomainVerdict(accept({ asset: "0x" + "ab".repeat(20), extra: { name: "USDC" } })).verdict === "unknown", "a different asset on Base (a seller's own token, a bridged USDC) is unknown, never refused");
   ok(usdcDomainVerdict(accept({ extra: { version: "2" } })).verdict === "unknown", "no extra.name is unknown (the client's registry supplies the default, which is right on every listed chain)");
   ok(usdcDomainVerdict(accept({ extra: { name: "" } })).verdict === "unknown", "an empty name is unknown");
-  ok(usdcDomainVerdict(accept({ network: "eip155:1", asset: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", extra: { name: "USDC" } })).verdict === "unknown", "a chain not in the table is unknown (we never guess a domain)");
+  ok(usdcDomainVerdict(accept({ network: "eip155:59144", asset: "0x176211869cA2b568f2A7D4EE941E073a821EE1ff", extra: { name: "USDC" } })).verdict === "unknown", "a token we have never read from its chain is unknown (we never guess a domain)");
+  ok(usdcDomainVerdict(accept({ network: "eip155:1", asset: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", extra: { name: "USDC" } })).verdict === "wrong_domain", "Ethereum mainnet USDC signs under \"USD Coin\" too - naming it \"USDC\" is refused, not shrugged at");
+  ok(usdcDomainVerdict(accept({ network: "eip155:480", asset: "0x79A02482A880bCe3F13E09da970dC34dB4cD24D1", extra: { name: "USD Coin" } })).verdict === "wrong_domain", "World Chain USDC signs under \"USDC\" - the mirror-image mistake, made by 3 live sellers");
+  // --- Circle Gateway is a rail, not a typo -------------------------------
+  // This file asserted the opposite until the name was traced to its source:
+  // circlefin/arc-nanopayments (lib/x402.ts) emits extra = { name:
+  // "GatewayWalletBatched", version: "1", verifyingContract: <GatewayWallet> }
+  // and circlefin/skills names it in pay-via-agent-wallet. 18 of the 45
+  // "mismatch" rows in the live index are this, so "wrong_domain" was telling
+  // 11 chains' worth of working sellers to break themselves.
+  {
+    const GW = "0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE";
+    const g = usdcDomainVerdict(accept({ network: "eip155:8453", extra: { name: "GatewayWalletBatched", version: "1", verifyingContract: GW } }));
+    ok(g.verdict === "gateway_batched" && g.rail === "circle-gateway", "Circle's Gateway accept is gateway_batched, not wrong_domain (a seller that settles through a batch facilitator is not broken)");
+    ok(unsignableByStockBuyer(g) && unsignableByStockBuyer({ verdict: "wrong_domain" }) && !unsignableByStockBuyer({ verdict: "matches" }) && !unsignableByStockBuyer({ verdict: "unknown" }), "it still refuses: a stock signer cannot produce a credential for either refusing verdict");
+    ok(g.verifyingContract === GW && g.expectedName === "USD Coin", "the verdict carries both the rail's contract and what the token itself signs under, so the caller can say which is which");
+    ok(!/wrong|fix|mistake|should/i.test(usdcDomainMismatchDetail(g)) && /Gateway/.test(usdcDomainMismatchDetail(g)), "and the sentence blames nobody - no seller is told to fix a rail Circle ships");
+    ok(usdcDomainVerdict(accept({ network: "eip155:999", asset: "0xb88339CB7199b77E23DB6E890353E22632Ba630f", extra: { name: "GatewayWalletBatched", version: "1", verifyingContract: GW } })).verdict === "gateway_batched", "the rail is recognised on a chain by its own signals, not by a separator rebuild");
+    ok(usdcDomainVerdict(accept({ network: "eip155:59144", asset: "0x176211869cA2b568f2A7D4EE941E073a821EE1ff", extra: { name: "GatewayWalletBatched", verifyingContract: GW } })).verdict === "gateway_batched", "...including on a chain whose token this table has never read, where the old code answered unknown and a buyer walked into an unsignable accept");
+    ok(usdcDomainVerdict(accept({ extra: { name: "GatewayWallet", version: "1" } })).verdict === "gateway_batched", "the marker name alone is enough (a seller may carry the name without the contract)");
+    ok(usdcDomainVerdict(accept({ extra: { name: "USD Coin", version: "2", verifyingContract: GW } })).verdict === "gateway_batched", "...and the contract alone is enough too (Circle's signals are read independently)");
+    ok(usdcDomainVerdict(accept({ extra: { name: "Gateway Wallet Batched", version: "1" } })).verdict === "wrong_domain", "a name that merely looks Gateway-ish is NOT the rail: only Circle's exact spellings count, never a guess");
+    ok(evmDomainsOfAccepts([accept({ extra: { name: "GatewayWalletBatched", version: "1", verifyingContract: GW } })])["eip155:8453"].verifyingContract === GW, "the index now stores extra.verifyingContract, so the rail is readable from a stored row without a second 402");
+    ok(evmDomainsOfAccepts([accept()])["eip155:8453"].verifyingContract === undefined, "a plain token accept stores no verifyingContract (the key appears only when it is another contract)");
+  }
   ok(usdcDomainVerdict(null).verdict === "unknown" && usdcDomainVerdict({}).verdict === "unknown", "null / empty input is unknown, never a throw");
   // The index's stored observation shape ({asset, name}) is accepted with the network passed separately.
   ok(usdcDomainVerdict({ asset: BASE_USDC, name: "USDC" }, "eip155:8453").verdict === "wrong_domain", "the index's {asset, name} observation shape is read with the network passed beside it");
   ok(usdcDomainVerdict({ asset: BASE_USDC, name: "USD Coin" }, "eip155:8453").verdict === "matches", "...and a matching observation matches");
+  const v = usdcDomainVerdict(accept({ extra: { name: "USD Coin", version: "1" } }));
+  ok(v.verdict === "wrong_domain" && v.field === "version" && v.expectedVersion === "2" && v.advertisedVersion === "1", "a right name under the wrong extra.version is refused too - both hash into the same separator");
+  ok(/extra\.version "1"/.test(usdcDomainMismatchDetail(v)) && /version "2"/.test(usdcDomainMismatchDetail(v)), "the version detail names the version, not the name");
+  ok(usdcDomainVerdict(accept({ extra: { name: "USD Coin", version: "2" } })).verdict === "matches", "the right name under the right version still matches");
+  ok(usdcDomainVerdict(accept({ extra: { version: "1" } })).verdict === "wrong_domain", "a wrong version refuses even with no name (the client defaults the name, never the version)");
+  ok(usdcDomainVerdict(accept({ network: "eip155:196", asset: "0x4Ae46a509F6b1D9056937bA4500cb143933D2dc8", extra: { name: "Global Dollar" } })).verdict === "matches", "a second token on a chain is answered for (X Layer carries USDC, USDG and USDT0 under three different names)");
+  ok(usdcDomainVerdict(accept({ network: "eip155:196", asset: "0x4Ae46a509F6b1D9056937bA4500cb143933D2dc8", extra: { name: "USDC" } })).verdict === "wrong_domain", "...and naming USDG \"USDC\" is refused, which a network-keyed table could not see at all");
   const detail = usdcDomainMismatchDetail(w);
   ok(/"USDC"/.test(detail) && /"USD Coin"/.test(detail) && /nothing settles/.test(detail) && /this router included/.test(detail), "the detail sentence names both names and says the router itself cannot pay it");
 }
@@ -71,6 +112,8 @@ const accept = (over = {}) => ({ scheme: "exact", network: "eip155:8453", asset:
   ok(!("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" in obs), "non-EVM accepts are not recorded (no EIP-712 domain to speak of)");
   ok(!("eip155:10" in obs), "an accept with no name records nothing (unknown is not an observation)");
   ok(obs["eip155:42161"].name.length === 40, "a hostile name is bounded to 40 chars before it is stored");
+  ok(obs["eip155:8453"].version === "2", "extra.version is recorded beside the name (the router cannot refuse a version it never stored)");
+  ok(!("version" in obs["eip155:137"]), "an accept with no extra.version stores no version key (absent is not \"2\")");
   ok(Object.keys(evmDomainsOfAccepts(null)).length === 0 && Object.keys(evmDomainsOfAccepts([])).length === 0, "no accepts -> empty observation");
   ok(usdcDomainVerdict(obs["eip155:8453"], "eip155:8453").verdict === "wrong_domain", "the stored observation round-trips into the same verdict the live accept gave");
 }
@@ -89,6 +132,29 @@ const accept = (over = {}) => ({ scheme: "exact", network: "eip155:8453", asset:
   ok(cur.evmDomainByNetwork?.["eip155:8453"]?.name === "USDC", "carry-forward keeps the live read's domain observation on the rebuilt row (the label would otherwise forget the seller every crawl)");
   const fresh = carryForwardLearnedQuotes([{ method: "POST", route: "/api/x", slug: "x", networks: ["eip155:8453"], evmDomainByNetwork: { "eip155:8453": { asset: BASE_USDC, name: "USD Coin" } } }], prev)[0];
   ok(fresh.evmDomainByNetwork["eip155:8453"].name === "USD Coin", "...but never overrides an observation this crawl made itself (a seller who fixed the accept is admitted on the next crawl)");
+}
+
+// --- the table's evidence: each row rebuilds the token's own DOMAIN_SEPARATOR ---
+// Read from each chain on 2026-09-15 and stored in the row. This is the whole
+// reason the table can be trusted without a network call: a wrong name or a
+// wrong version cannot reproduce the separator the contract published, and a
+// domain that does not reproduce it can never verify a signature.
+{
+  const { keccak256, toHex, encodeAbiParameters } = await import("viem");
+  const TYPEHASH = keccak256(toHex("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"));
+  const rebuild = (r) => keccak256(encodeAbiParameters(
+    [{ type: "bytes32" }, { type: "bytes32" }, { type: "bytes32" }, { type: "uint256" }, { type: "address" }],
+    [TYPEHASH, keccak256(toHex(r.name)), keccak256(toHex(r.version)), BigInt(r.network.split(":")[1]), r.asset],
+  ));
+  for (const r of EVM_TOKEN_DOMAINS)
+    ok(rebuild(r).toLowerCase() === r.domainSeparator.toLowerCase(), `${r.chain} ${r.symbol}: (${JSON.stringify(r.name)}, v${r.version}) rebuilds the separator the contract itself published`);
+  ok(EVM_TOKEN_DOMAINS.every((r) => /^0x[0-9a-f]{64}$/.test(r.domainSeparator) && r.asset === r.asset.toLowerCase() && /^eip155:\d+$/.test(r.network)), "every row is a lower-cased address, a CAIP-2 eip155 network and a 32-byte separator");
+  ok(new Set(EVM_TOKEN_DOMAINS.map((r) => `${r.network}|${r.asset}`)).size === EVM_TOKEN_DOMAINS.length, "no (network, asset) pair is listed twice");
+  // A row that changed its name by one character must fail this check - that is
+  // the whole point, so prove the check can fail.
+  ok(rebuild({ ...EVM_TOKEN_DOMAINS[0], name: "USDC" }).toLowerCase() !== EVM_TOKEN_DOMAINS[0].domainSeparator.toLowerCase(), "the rebuild really discriminates: Base USDC under \"USDC\" misses its own separator");
+  ok(rebuild({ ...EVM_TOKEN_DOMAINS[0], version: "1" }).toLowerCase() !== EVM_TOKEN_DOMAINS[0].domainSeparator.toLowerCase(), "...and under version \"1\" it misses too");
+  ok(EVM_TOKEN_DOMAINS.filter((r) => r.network === "eip155:196").length === 3 && domainTruthFor("eip155:196", "0x779Ded0c9e1022225f8E0630b35a9b54bE713736")?.name === "USD₮0", "one chain can carry three tokens and each is answered for by its own address");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

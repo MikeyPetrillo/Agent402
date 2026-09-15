@@ -115,6 +115,9 @@ export function readChallenge({ header, body }) {
       payTo: typeof a?.payTo === "string" ? a.payTo.slice(0, 80) : null,
       amount: a?.amount ?? a?.maxAmountRequired ?? null,
       domainName: typeof a?.extra?.name === "string" ? a.extra.name.slice(0, 40) : null,
+      // Kept beside the name because the pair, not the name alone, is what
+      // separates Circle's Gateway rail from a mistyped token domain.
+      verifyingContract: typeof a?.extra?.verifyingContract === "string" ? a.extra.verifyingContract.slice(0, 42) : null,
       maxTimeoutSeconds: Number.isFinite(Number(a?.maxTimeoutSeconds)) ? Number(a.maxTimeoutSeconds) : null,
     })),
   };
@@ -126,9 +129,9 @@ export function readChallenge({ header, body }) {
 export function domainFindings(accepts) {
   const out = [];
   for (const a of accepts || []) {
-    const v = usdcDomainVerdict({ asset: a.asset, name: a.domainName }, a.network);
+    const v = usdcDomainVerdict({ asset: a.asset, name: a.domainName, verifyingContract: a.verifyingContract }, a.network);
     if (v.verdict === "unknown") continue;
-    out.push({ network: a.network, verdict: v.verdict, advertisedName: v.advertisedName ?? a.domainName, expectedName: v.expectedName, chain: v.chain });
+    out.push({ network: a.network, verdict: v.verdict, advertisedName: v.advertisedName ?? a.domainName, expectedName: v.expectedName, chain: v.chain, ...(v.verifyingContract ? { verifyingContract: v.verifyingContract } : {}) });
   }
   return out;
 }
@@ -142,6 +145,10 @@ export function payabilityFlags({ bare, challenge, domains, paid, receipt, settl
   if (bare?.status === 402 && !challenge?.readable) flags.push(`the 402 could not be parsed: ${challenge?.reason}`);
   for (const d of domains || []) {
     if (d.verdict === "wrong_domain") flags.push(`${usdcDomainMismatchDetail(d)} - fix extra.name on the ${d.network} accept`);
+    // Not a flag against the seller: a dossier that tells a Gateway seller to
+    // "fix" a rail Circle ships would be wrong, and the seller would be right
+    // to ignore the whole report after reading it.
+    else if (d.verdict === "gateway_batched") flags.push(`${usdcDomainMismatchDetail(d)} - a stock-buyer router (this one included) will skip the ${d.network} accept until it speaks the rail; offering one plain EIP-3009 accept beside it makes you payable by both`);
   }
   if (challenge?.readable && challenge.priceUsd == null) flags.push("the accepts carry no amount we could price: a buyer that checks the quote before paying cannot");
   if (paid && paid.status === 402) flags.push("the signed payment was refused and the route answered 402 again: the credential your gate rejected is the one a stock client produces");
