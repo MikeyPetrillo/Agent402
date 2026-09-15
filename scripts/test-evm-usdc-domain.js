@@ -6,7 +6,7 @@
 // in test-x402-live-quote carries the same accept). Offline.
 import { strict as assert } from "node:assert";
 import { readFileSync, readdirSync } from "node:fs";
-import { USDC_DOMAIN_BY_NETWORK, EVM_TOKEN_DOMAINS, domainTruthFor, usdcDomainVerdict, evmDomainsOfAccepts, usdcDomainMismatchDetail } from "../src/evm-usdc-domain.js";
+import { USDC_DOMAIN_BY_NETWORK, EVM_TOKEN_DOMAINS, CIRCLE_GATEWAY, domainTruthFor, usdcDomainVerdict, evmDomainsOfAccepts, usdcDomainMismatchDetail, isCircleGatewayAccept, unsignableByStockBuyer } from "../src/evm-usdc-domain.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -60,7 +60,28 @@ const accept = (over = {}) => ({ scheme: "exact", network: "eip155:8453", asset:
   ok(usdcDomainVerdict(accept({ network: "eip155:59144", asset: "0x176211869cA2b568f2A7D4EE941E073a821EE1ff", extra: { name: "USDC" } })).verdict === "unknown", "a token we have never read from its chain is unknown (we never guess a domain)");
   ok(usdcDomainVerdict(accept({ network: "eip155:1", asset: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", extra: { name: "USDC" } })).verdict === "wrong_domain", "Ethereum mainnet USDC signs under \"USD Coin\" too - naming it \"USDC\" is refused, not shrugged at");
   ok(usdcDomainVerdict(accept({ network: "eip155:480", asset: "0x79A02482A880bCe3F13E09da970dC34dB4cD24D1", extra: { name: "USD Coin" } })).verdict === "wrong_domain", "World Chain USDC signs under \"USDC\" - the mirror-image mistake, made by 3 live sellers");
-  ok(usdcDomainVerdict(accept({ network: "eip155:8453", extra: { name: "GatewayWalletBatched" } })).verdict === "wrong_domain", "Circle Gateway's own domain name pasted onto plain USDC is refused (18 rows on 11 chains in the live index)");
+  // --- Circle Gateway is a rail, not a typo -------------------------------
+  // This file asserted the opposite until the name was traced to its source:
+  // circlefin/arc-nanopayments (lib/x402.ts) emits extra = { name:
+  // "GatewayWalletBatched", version: "1", verifyingContract: <GatewayWallet> }
+  // and circlefin/skills names it in pay-via-agent-wallet. 18 of the 45
+  // "mismatch" rows in the live index are this, so "wrong_domain" was telling
+  // 11 chains' worth of working sellers to break themselves.
+  {
+    const GW = "0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE";
+    const g = usdcDomainVerdict(accept({ network: "eip155:8453", extra: { name: "GatewayWalletBatched", version: "1", verifyingContract: GW } }));
+    ok(g.verdict === "gateway_batched" && g.rail === "circle-gateway", "Circle's Gateway accept is gateway_batched, not wrong_domain (a seller that settles through a batch facilitator is not broken)");
+    ok(unsignableByStockBuyer(g) && unsignableByStockBuyer({ verdict: "wrong_domain" }) && !unsignableByStockBuyer({ verdict: "matches" }) && !unsignableByStockBuyer({ verdict: "unknown" }), "it still refuses: a stock signer cannot produce a credential for either refusing verdict");
+    ok(g.verifyingContract === GW && g.expectedName === "USD Coin", "the verdict carries both the rail's contract and what the token itself signs under, so the caller can say which is which");
+    ok(!/wrong|fix|mistake|should/i.test(usdcDomainMismatchDetail(g)) && /Gateway/.test(usdcDomainMismatchDetail(g)), "and the sentence blames nobody - no seller is told to fix a rail Circle ships");
+    ok(usdcDomainVerdict(accept({ network: "eip155:999", asset: "0xb88339CB7199b77E23DB6E890353E22632Ba630f", extra: { name: "GatewayWalletBatched", version: "1", verifyingContract: GW } })).verdict === "gateway_batched", "the rail is recognised on a chain by its own signals, not by a separator rebuild");
+    ok(usdcDomainVerdict(accept({ network: "eip155:59144", asset: "0x176211869cA2b568f2A7D4EE941E073a821EE1ff", extra: { name: "GatewayWalletBatched", verifyingContract: GW } })).verdict === "gateway_batched", "...including on a chain whose token this table has never read, where the old code answered unknown and a buyer walked into an unsignable accept");
+    ok(usdcDomainVerdict(accept({ extra: { name: "GatewayWallet", version: "1" } })).verdict === "gateway_batched", "the marker name alone is enough (a seller may carry the name without the contract)");
+    ok(usdcDomainVerdict(accept({ extra: { name: "USD Coin", version: "2", verifyingContract: GW } })).verdict === "gateway_batched", "...and the contract alone is enough too (Circle's signals are read independently)");
+    ok(usdcDomainVerdict(accept({ extra: { name: "Gateway Wallet Batched", version: "1" } })).verdict === "wrong_domain", "a name that merely looks Gateway-ish is NOT the rail: only Circle's exact spellings count, never a guess");
+    ok(evmDomainsOfAccepts([accept({ extra: { name: "GatewayWalletBatched", version: "1", verifyingContract: GW } })])["eip155:8453"].verifyingContract === GW, "the index now stores extra.verifyingContract, so the rail is readable from a stored row without a second 402");
+    ok(evmDomainsOfAccepts([accept()])["eip155:8453"].verifyingContract === undefined, "a plain token accept stores no verifyingContract (the key appears only when it is another contract)");
+  }
   ok(usdcDomainVerdict(null).verdict === "unknown" && usdcDomainVerdict({}).verdict === "unknown", "null / empty input is unknown, never a throw");
   // The index's stored observation shape ({asset, name}) is accepted with the network passed separately.
   ok(usdcDomainVerdict({ asset: BASE_USDC, name: "USDC" }, "eip155:8453").verdict === "wrong_domain", "the index's {asset, name} observation shape is read with the network passed beside it");

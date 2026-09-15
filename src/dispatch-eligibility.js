@@ -48,12 +48,13 @@ export const DISPATCH_REASONS = Object.freeze({
   settlement_checked_at_pay_time: "on this chain proven-ness is read from the chain at pay time (recent inbound USDC to the seller's own payTo); a thin history may still be tried under the small unproven allowance",
   price_unknown: "no seller price is known for this route, and the router never spends against an unknown price",
   url_template: "the route is an unsubstituted path template; the router never spends against it",
+  gateway_rail_unsupported: "the seller's accept on this chain is signed under Circle Gateway's EIP-712 domain (extra.name \"GatewayWalletBatched\", extra.verifyingContract the GatewayWallet), not under the token's own, and settles through a batch facilitator - a deliberate, working rail that this router's stock x402 signer cannot produce a credential for; nothing for the seller to fix, and it becomes eligible the day the router speaks the rail",
   usdc_domain_mismatch: "the seller's USDC accept on this chain advertises an EIP-712 domain name that is not the token's own (Base USDC signs under \"USD Coin\"; Monad, Celo and Sei USDC under \"USDC\"), so a stock x402 buyer - this router included - signs an authorization the facilitator refuses and nothing settles; the seller has to fix the accept before anyone can pay it",
   delivery_failing: "the last time this router paid this seller on this chain the call did not deliver (a 5xx answer carrying no settle receipt, or no answer at all before the timeout), so it is skipped until that memo expires or a call to it succeeds. Settlement history is evidence about the past; this is what happened the last time someone actually paid",
   eligible: "the router will pay this seller on a buyer's behalf",
   local_catalog: "this host's own tool; no external payment is involved",
 });
-const REASON_PRECEDENCE = ["crawl_failed", "network_unknown", "no_supported_route", "url_template", "price_unknown", "usdc_domain_mismatch", "delivery_failing", "settlement_required"];
+const REASON_PRECEDENCE = ["crawl_failed", "network_unknown", "no_supported_route", "url_template", "price_unknown", "usdc_domain_mismatch", "gateway_rail_unsupported", "delivery_failing", "settlement_required"];
 // `detail` values a settlement_required verdict can carry beyond the gate's
 // own sentence. Documented in the legend under routerDispatchDetail.
 export const DISPATCH_DETAILS = Object.freeze({
@@ -181,6 +182,12 @@ export function dispatchEligibility({ routable, networks = [], settled = 0, paye
       // Only a POSITIVE mismatch on the chain's own USDC contract refuses;
       // unobserved, another asset or no name is unknown and decides nothing.
       const domain = usdcDomain ? usdcDomainVerdict(usdcDomain, "eip155:8453") : { verdict: "unknown" };
+      // Two different ineligibilities, not one: a name the token does not sign
+      // under is the seller's to fix, while Circle's Gateway rail is ours to
+      // learn. Both are "we cannot route a payment here today"; only the first
+      // is a defect, and a label that conflates them sends a working seller
+      // chasing a bug it does not have.
+      if (domain.verdict === "gateway_batched") { byChain[c] = { eligible: false, reason: "gateway_rail_unsupported", detail: usdcDomainMismatchDetail(domain), advertisedName: domain.advertisedName, verifyingContract: domain.verifyingContract }; continue; }
       if (domain.verdict === "wrong_domain") { byChain[c] = { eligible: false, reason: "usdc_domain_mismatch", detail: usdcDomainMismatchDetail(domain), advertisedName: domain.advertisedName, expectedName: domain.expectedName }; continue; }
       const gate = meetsRouterGate({ settled: basis.settled, payers, minSettled, minPayers });
       byChain[c] = gate.ok ? { eligible: true, reason: "eligible" } : { eligible: false, reason: "settlement_required", detail: gate.reason };

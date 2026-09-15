@@ -26,12 +26,23 @@
 // answer for one of them; the rest fall through as "unknown" and a wrong
 // domain ships unnoticed.
 //
+// NOT EVERY FOREIGN DOMAIN IS A SELLER'S MISTAKE. A domain name that is not
+// the token's makes an accept unsignable by a stock buyer either way, but the
+// two causes need different words and different fixes. "GatewayWalletBatched"
+// is not a typo: it is Circle's own marker for the Gateway rail, emitted by
+// circlefin/arc-nanopayments (lib/x402.ts builds extra = { name:
+// "GatewayWalletBatched", version: "1", verifyingContract: <GatewayWallet> })
+// and named in circlefin/skills' pay-via-agent-wallet. Such a seller is not
+// broken - it settles through a batch facilitator, and WE are the ones who
+// cannot pay it. Calling that "wrong_domain" tells a working seller to fix
+// something that works, so it gets its own verdict, gateway_batched.
+//
 // Measured on the public index 2026-09-15: 36 distinct (network, asset) pairs
 // across 4149 sellers, 22 of them on chains a public RPC answers. 45 seller
-// rows advertise a domain that does not rebuild the token's separator - among
-// them 18 rows on 11 chains carrying "GatewayWalletBatched" (Circle Gateway's
-// own EIP-712 domain) pasted onto plain USDC contracts, and 3 sellers naming
-// "USD Coin" on World Chain, whose USDC signs under "USDC".
+// rows advertise a domain that does not rebuild the token's separator - and
+// 18 of those 45, on 11 chains, are the Gateway rail above, not defects. The
+// rest are genuine mismatches, e.g. 3 sellers naming "USD Coin" on World
+// Chain, whose USDC signs under "USDC".
 //
 // Dependency-free on purpose: the index, the router label and the buyer all
 // read it, and none of them should pull the payment stack in to ask a
@@ -67,6 +78,21 @@ export const EVM_TOKEN_DOMAINS = Object.freeze([
   { network: "eip155:8453", chain: "Base", symbol: "X402R", asset: "0x50ec5ed76e336a7823b6924c2839defa0c5a3a2d", name: "x402 Roshambo", version: "1", domainSeparator: "0x7f03d9403ff771153871e61092bd6112ab3a66072f3dc6456b4baf24013e28b9" },
 ].map(Object.freeze));
 
+/** Circle Gateway, the one non-token EIP-712 domain the live index carries.
+ *  The wallet is the same 163-byte proxy at the same address on all 11 chains
+ *  it appears on; its eip712Domain() answers fields=0x03 (name and version
+ *  only - no chainId, no verifyingContract), name "GatewayWallet", version
+ *  "1". Sellers advertise it under Circle's own accept marker
+ *  "GatewayWalletBatched" (circlefin/arc-nanopayments, lib/x402.ts). Read
+ *  from chain 2026-09-15. */
+export const CIRCLE_GATEWAY = Object.freeze({
+  wallet: "0x77777777dcc4d5a8b6e418fd04d8997ef11000ee",
+  domainName: "GatewayWallet",
+  version: "1",
+  /** Every spelling Circle's own code and skills publish for this rail. */
+  acceptNames: Object.freeze(["GatewayWallet", "GatewayWalletBatched"]),
+});
+
 /** The USDC of each chain, keyed by CAIP-2 - the shape this module published
  *  before it learned that a chain can carry more than one payable token.
  *  DERIVED, never hand-edited, so it cannot disagree with the rows above. */
@@ -78,6 +104,28 @@ export const USDC_DOMAIN_BY_NETWORK = Object.freeze(Object.fromEntries(
 ));
 
 const lc = (s) => (typeof s === "string" ? s.trim().toLowerCase() : "");
+
+const GATEWAY_NAMES = new Set(CIRCLE_GATEWAY.acceptNames.map((n) => n.toLowerCase()));
+
+/** Does this accept stand on Circle's Gateway rail rather than on the token's
+ *  own EIP-712 domain? True on either of Circle's two signals - the marker
+ *  name it publishes, or extra.verifyingContract pointing at the Gateway
+ *  wallet - so a seller that carries one without the other is still read
+ *  correctly. Never guesses from a merely unfamiliar name. */
+export function isCircleGatewayAccept(accept) {
+  const name = typeof accept?.name === "string" ? accept.name : accept?.extra?.name;
+  if (typeof name === "string" && GATEWAY_NAMES.has(lc(name))) return true;
+  const vc = typeof accept?.verifyingContract === "string" ? accept.verifyingContract : accept?.extra?.verifyingContract;
+  return lc(vc) === CIRCLE_GATEWAY.wallet;
+}
+
+/** Can the stock x402 signer produce a credential this accept's facilitator
+ *  will take? Both refusing verdicts say no; only one of them is the seller's
+ *  fault. Callers that gate on payability should ask THIS, not compare to a
+ *  verdict string, so a new rail cannot slip past an old === check. */
+export function unsignableByStockBuyer(verdict) {
+  return verdict?.verdict === "wrong_domain" || verdict?.verdict === "gateway_batched";
+}
 
 /** (network, asset) -> row. Built once; both parts of the key already lower-cased. */
 const BY_PAIR = new Map(EVM_TOKEN_DOMAINS.map((r) => [`${r.network}|${r.asset}`, r]));
@@ -98,13 +146,33 @@ export function domainTruthFor(network, asset) {
  *
  * @param {object} accept  an x402 accepts entry ({network, asset, extra:{name, version}})
  *                         or the index's observation ({asset, name, version}) with `network`
- * @returns {{verdict:"matches"|"wrong_domain"|"unknown", expectedName?:string, advertisedName?:string,
- *            expectedVersion?:string, advertisedVersion?:string, chain?:string, field?:"name"|"version"}}
+ * Answers "gateway_batched" first, and on ANY chain - including ones whose
+ * token we have never read - because that verdict is decided by Circle's own
+ * two signals, not by a separator rebuild. It refuses like wrong_domain does
+ * (we still cannot sign it) but it does not blame the seller.
+ *
+ * @returns {{verdict:"matches"|"wrong_domain"|"gateway_batched"|"unknown", expectedName?:string,
+ *            advertisedName?:string, expectedVersion?:string, advertisedVersion?:string,
+ *            chain?:string, field?:"name"|"version", rail?:"circle-gateway", verifyingContract?:string}}
  */
 export function usdcDomainVerdict(accept, network = accept?.network) {
   const truth = domainTruthFor(network, accept?.asset);
-  if (!truth) return { verdict: "unknown" };
   const advertised = typeof accept?.name === "string" ? accept.name : accept?.extra?.name;
+  // Circle Gateway before anything else: the domain is another contract's on
+  // purpose, so rebuilding the token's separator is the wrong question, and
+  // the answer has to hold on the 11 chains this rail appears on whether or
+  // not that chain's token is in the table above.
+  if (isCircleGatewayAccept(accept)) {
+    const vc = typeof accept?.verifyingContract === "string" ? accept.verifyingContract : accept?.extra?.verifyingContract;
+    return {
+      verdict: "gateway_batched",
+      rail: "circle-gateway",
+      advertisedName: typeof advertised === "string" && advertised.trim() ? advertised.trim().slice(0, 40) : CIRCLE_GATEWAY.domainName,
+      ...(typeof vc === "string" && vc.trim() ? { verifyingContract: vc.trim().slice(0, 42) } : {}),
+      ...(truth ? { chain: truth.chain, expectedName: truth.name, expectedVersion: truth.version } : {}),
+    };
+  }
+  if (!truth) return { verdict: "unknown" };
   const advertisedVersion = typeof accept?.version === "string" ? accept.version : accept?.extra?.version;
   const named = typeof advertised === "string" && advertised.trim() !== "";
   if (named && lc(advertised) !== lc(truth.name))
@@ -129,14 +197,28 @@ export function evmDomainsOfAccepts(accepts) {
     const asset = typeof a?.asset === "string" ? a.asset.trim().slice(0, 42) : "";
     const name = typeof a?.extra?.name === "string" ? a.extra.name.trim().slice(0, 40) : "";
     const version = typeof a?.extra?.version === "string" ? a.extra.version.trim().slice(0, 16) : "";
+    // extra.verifyingContract is what tells a Gateway-rail accept from a typo
+    // WITHOUT a second 402, and dropping it here is why the index could not:
+    // every stored row read as { asset, name } and the rail was invisible.
+    const verifyingContract = typeof a?.extra?.verifyingContract === "string" ? a.extra.verifyingContract.trim().slice(0, 42) : "";
     if (!asset || !name) continue;
-    out[net] = version ? { asset, name, version } : { asset, name };
+    out[net] = {
+      asset,
+      name,
+      ...(version ? { version } : {}),
+      ...(verifyingContract && verifyingContract.toLowerCase() !== asset.toLowerCase() ? { verifyingContract } : {}),
+    };
   }
   return out;
 }
 
 /** One sentence for a wrong_domain verdict, written for the seller who has to fix it. */
-export function usdcDomainMismatchDetail({ advertisedName, expectedName, chain, field, advertisedVersion, expectedVersion } = {}) {
+export function usdcDomainMismatchDetail({ verdict, advertisedName, expectedName, chain, field, advertisedVersion, expectedVersion, verifyingContract } = {}) {
+  // The Gateway rail is a different sentence with a different addressee: there
+  // is nothing here for the seller to fix, and saying otherwise is a false
+  // accusation against a seller that settles fine through its own facilitator.
+  if (verdict === "gateway_batched")
+    return `the ${chain || "chain"} accept stands on Circle's Gateway rail - it signs under the GatewayWallet domain${verifyingContract ? ` (${verifyingContract})` : ""}, not under the token's own, by design - so it settles through a batch facilitator and this stock x402 signer cannot produce a credential for it; nothing on the seller's side is broken`;
   const what = field === "version"
     ? `advertises extra.version ${JSON.stringify(advertisedVersion)} but that token signs under version ${JSON.stringify(expectedVersion)} (the name ${JSON.stringify(expectedName)} is right)`
     : `advertises extra.name ${JSON.stringify(advertisedName)} but that token signs under ${JSON.stringify(expectedName)}`;
