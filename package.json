@@ -75,7 +75,7 @@
     "@x402/svm": "^2.26.0",
     "@zxing/library": "^0.21.3",
     "algosdk": "^3.7.0",
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.3",
     "compression": "^1.8.2",
     "express": "^5.2.1",
     "gpt-tokenizer": "^4.0.0",
