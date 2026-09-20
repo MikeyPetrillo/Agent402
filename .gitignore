@@ -69,3 +69,15 @@ site-audit-report.json
 .DS_Store
 **/.DS_Store
 .tmp-*/
+
+# Legal audit working papers. A self-authored catalogue of known issues does not
+# belong in a public repository: publishing it removes any argument the issues
+# were unknown, and it is the first document opposing counsel would reach for.
+# These live in the operator's private notes directory instead.
+LEGAL_RISK_AUDIT.md
+SECRETS_TO_ROTATE.md
+FINAL_LIABILITY_AUDIT.md
+TOOLS_REPORTS_INTEGRATIONS_INVENTORY.md
+REPO_STRATEGY.md
+OWNER_ACTION_ITEMS.md
+RESIDUAL_RISK.md
