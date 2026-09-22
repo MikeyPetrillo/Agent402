@@ -871,6 +871,7 @@ const DEFAULT_SEEDS = [
   "https://api.surplusintelligence.ai", // Surplus Intelligence — OpenAI-compatible inference market, x402 (Base USDC, exact + upto) and MPP (Tempo) on one 402; /.well-known/x402 manifest (verified 2026-08-26)
   "https://billing.ideatrace.cn", // Idie - self-evolving autonomy RPC, exact-scheme pay-per-use USDC on Solana (PR #903)
   "https://compounder-market-api.vercel.app", // Compounder Market API — deterministic bounty-fit scoring with structured JSON verdicts, $0.01 USDC exact on Base
+  "https://genesis-agent-tools.genesisagenttools.workers.dev", // GENESIS Agent Tools — five Base-USDC x402 APIs for agents (API/schema breaking-change checks, crypto price consensus, URL evidence, HTTP/JSON workflow, MCP readiness)
 ];
 
 export const seedList = () => {
