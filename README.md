@@ -1,5 +1,7 @@
 # Agent402: 500+ tools, metered models and finished reports for AI agents
 
+[![MCP Queen operational grade](https://mcpqueen.com/badge/io.github.MikeyPetrillo/agent402.svg)](https://mcpqueen.com/s/io.github.MikeyPetrillo/agent402)
+
 Live at **[agent402.tools](https://agent402.tools)**.
 
 **The paid door for AI agents: 500+ tools, metered models and finished reports, paid per call in USDC over x402 and MPP, or by card. Open source, self-hostable, MCP-native.**
