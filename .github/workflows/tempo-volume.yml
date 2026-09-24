@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       count:
-        description: "Transactions this run (default 1)"
+        description: "Transactions this run (default 17)"
         required: false
-        default: "1"
+        default: "17"
 
 permissions:
   contents: read
@@ -40,12 +40,12 @@ jobs:
           node-version: 22
       - name: Install (lock-pinned; mppx + viem from the repo lock)
         run: npm ci --ignore-scripts
-      - name: Buy ${{ inputs.count || '1' }} x /api/uuid over Tempo MPP
+      - name: Buy ${{ inputs.count || '17' }} x /api/uuid over Tempo MPP
         id: vol
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
           POW_SECRET: ${{ secrets.POW_SECRET }}
-          TEMPO_VOLUME_TX: ${{ inputs.count || '1' }}
+          TEMPO_VOLUME_TX: ${{ inputs.count || '17' }}
         run: |
           [ -n "$BURNER_KEY" ] || { echo "No BURNER_KEY secret - cannot run"; exit 2; }
           echo "::add-mask::$BURNER_KEY"
