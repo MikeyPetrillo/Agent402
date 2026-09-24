@@ -489,6 +489,13 @@ const STATIC_CHAINS = [
 // real data exists; until then (or if it throws) nav() falls back to
 // STATIC_CHAINS so it never crashes and never blocks a page render.
 let navDataProvider = null;
+// The "402" tile from /logo.svg, drawn inline at nav/footer size (no request,
+// no font file: the page already loads Geist Mono). Gradient ids carry a
+// suffix because the nav and footer marks share one page.
+export function brandMark(size, id) {
+  return `<svg aria-hidden="true" focusable="false" width="${size}" height="${size}" viewBox="0 0 512 512" style="display:block;flex:none;"><defs><linearGradient id="bm-${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F6F7F8"/><stop offset="1" stop-color="#C9CED3"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="#0B0C0E"/><rect x="104" y="104" width="304" height="304" rx="64" fill="url(#bm-${id})"/><text x="256" y="300" font-size="150" font-weight="700" font-family="'Geist Mono',Menlo,Consolas,monospace" text-anchor="middle" letter-spacing="-9" fill="#0B0C0E">402</text></svg>`;
+}
+
 export function setNavIndexProvider(fn) { navDataProvider = fn; }
 
 function chainRows() {
@@ -759,7 +766,7 @@ function nav(activePath) {
   return `<nav style="border-bottom:1px solid var(--hairline);background:var(--nav-bg);backdrop-filter:saturate(1.4) blur(14px);-webkit-backdrop-filter:saturate(1.4) blur(14px);position:sticky;top:0;z-index:50;">
   <div class="ml-nav-in" style="max-width:1180px;margin:0 auto;padding:15px 30px;display:flex;align-items:center;gap:26px;">
     <a href="/" style="display:flex;align-items:center;gap:11px;text-decoration:none;color:var(--ink);">
-      <span aria-hidden="true" style="width:22px;height:22px;border-radius:6px;background:var(--brand-mark);box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 1px 2px rgba(0,0,0,.25);display:inline-block;"></span>
+      ${brandMark(24, "n")}
       <span style="font-weight:600;font-size:16px;letter-spacing:-.01em;">Agent402</span>
     </a>
     <div class="ml-nav-links" style="display:flex;align-items:center;gap:22px;margin-left:10px;font-family:var(--font-body);font-size:14px;">
@@ -820,7 +827,7 @@ export function ledgerFooterCompact() {
   return `<footer style="border-top:1px solid var(--hairline);background:var(--footer-bg);">
   <div style="max-width:1180px;margin:0 auto;padding:26px 30px;font-family:var(--font-mono);font-size:12px;color:var(--faint);">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
-      <a href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);"><span aria-hidden="true" style="width:18px;height:18px;border-radius:5px;background:var(--brand-mark);display:inline-block;"></span><span style="font-weight:600;font-size:14px;font-family:var(--font-sans);letter-spacing:-.01em;">Agent402</span></a>
+      <a href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);">${brandMark(20, "f")}<span style="font-weight:600;font-size:14px;font-family:var(--font-sans);letter-spacing:-.01em;">Agent402</span></a>
       <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/credits" style="color:var(--muted);text-decoration:none;">credits</a><a href="/tools" style="color:var(--muted);text-decoration:none;">catalog</a><a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a><a href="/why" style="color:var(--muted);text-decoration:none;">why</a><a href="/company" style="color:var(--muted);text-decoration:none;">company</a></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--hairline);">
