@@ -446,5 +446,60 @@ console.log("revenue chart — Tempo lane (second data source, real dollars)");
   });
 }
 
+console.log("revenue chart — every button from every reachable filter state");
+
+{
+  // Walk every state the controls can reach (breadth-first from the default)
+  // and click every button in it. A button that lights up must be honoured:
+  // the clicked button stays selected, each group has exactly one selection,
+  // and no combination the UI shows is one the chart silently ignores.
+  const w = await boot({ tempoDays: TEMPO_DAYS });
+  const errors = [];
+  w.addEventListener("error", (e) => errors.push(e.message));
+  const GROUPS = ["rvzMode", "rvzMetric", "rvzScope", "rvzWire", "rvzTraffic", "rvzSettle"];
+  const buttons = GROUPS.flatMap((g) => [...w.document.querySelectorAll(`#${g} button`)].map((b) => [g, b.dataset.v]));
+  const snap = () => Object.fromEntries(GROUPS.map((g) => [g, activeOf(w, g)]));
+  const key = (st) => GROUPS.map((g) => st[g]).join("|");
+  const goTo = (st) => { // reach a state: loosest filters first, then the target values
+    for (const [g, v] of [["rvzSettle", "all"], ["rvzWire", "all"], ["rvzTraffic", "paid"], ["rvzScope", "ext"], ["rvzMetric", "tx"]]) click(w, g, v);
+    for (const g of ["rvzMode", "rvzScope", "rvzTraffic", "rvzWire", "rvzSettle", "rvzMetric"]) click(w, g, st[g]);
+    return key(snap()) === key(st);
+  };
+  const problems = [];
+  const invariants = (st, why) => {
+    const m = st.rvzMetric, sc = st.rvzScope, wi = st.rvzWire, tr = st.rvzTraffic, se = st.rvzSettle;
+    const bad = [];
+    for (const g of GROUPS) if (w.document.querySelectorAll(`#${g} button.on`).length !== 1) bad.push(`${g} has ${w.document.querySelectorAll(`#${g} button.on`).length} selected`);
+    if (m === "buyers" && (sc !== "ext" || wi !== "all" || tr !== "paid" || se !== "all")) bad.push("buyers is only defined for external, all wires, paid, all revenue");
+    if (m === "usd" && tr !== "paid") bad.push("revenue $ with free calls selected");
+    if (se !== "all" && (wi !== "all" || tr !== "paid")) bad.push("settle split is paid, all-wire only");
+    if (wi !== "all" && tr !== "paid") bad.push("free calls have no wire");
+    if (tr !== "paid" && sc === "int") bad.push("free calls are never internal");
+    if (!w.document.getElementById("rvzTable").innerHTML.includes("<table")) bad.push("chart table did not render");
+    if (bad.length) problems.push(`${why}: ${key(st)} -> ${bad.join("; ")}`);
+  };
+  const seen = new Set();
+  const queue = [snap()];
+  seen.add(key(queue[0]));
+  let clicks = 0;
+  while (queue.length) {
+    const st = queue.shift();
+    for (const [g, v] of buttons) {
+      if (!goTo(st)) { problems.push(`could not return to ${key(st)}`); continue; }
+      click(w, g, v); clicks++;
+      const after = snap();
+      if (after[g] !== v) problems.push(`clicking ${g}=${v} from ${key(st)} did not select it`);
+      invariants(after, `${g}=${v} from ${key(st)}`);
+      const k = key(after);
+      if (!seen.has(k)) { seen.add(k); queue.push(after); }
+    }
+  }
+  check(`every button works from every reachable state (${seen.size} states, ${clicks} clicks)`, () => {
+    assert.ok(seen.size > 50, `walk reached only ${seen.size} states`);
+    assert.deepEqual(problems.slice(0, 5), [], `${problems.length} problem(s)`);
+    assert.deepEqual(errors, [], "script errors while clicking");
+  });
+}
+
 console.log(failures ? `\nFAILED (${failures})` : "\nall passed");
 process.exit(failures ? 1 : 0);

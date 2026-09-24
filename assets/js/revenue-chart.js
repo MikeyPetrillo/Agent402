@@ -89,7 +89,7 @@
       // than drawn as a bar pretending call count is revenue. The metric/
       // traffic handlers already keep those two from being selected together;
       // this is defence in depth for any future caller that sets state directly.
-      if(state.traffic!=="paid"&&state.metric==="tx"){
+      if(state.traffic!=="paid"&&state.metric==="tx"&&state.wire==="all"&&state.scope!=="int"){
         state.free.forEach(function(r){var d=dayOf(r.day);d.slots.free=(d.slots.free||0)+(r.pow||0)})}
       var list=Object.keys(days).sort().map(function(k){return days[k]});
       // Weekly: dollars and transaction counts are additive, so a week is the
@@ -265,10 +265,15 @@
         if(state.settle!=="all"){state.settle="all";setSeg("rvzSettle","all");settleNote()}}
       freeNote();buyersNote()});
     seg("rvzScope",function(v){state.scope=v;
-      if(state.metric==="buyers"){state.metric="tx";setSeg("rvzMetric","tx");buyersNote()}});
+      if(state.metric==="buyers"){state.metric="tx";setSeg("rvzMetric","tx");buyersNote()}
+      // Free calls are external only; an internal-only view cannot include them.
+      if(v==="int"&&state.traffic!=="paid"){state.traffic="paid";setSeg("rvzTraffic","paid");freeNote()}});
     seg("rvzTraffic",function(v){state.traffic=v;
       if(v!=="paid"&&state.metric!=="tx"){state.metric="tx";setSeg("rvzMetric","tx")}
       if(v!=="paid"&&state.settle!=="all"){state.settle="all";setSeg("rvzSettle","all");settleNote()}
+      // Free calls have no wire and are always external.
+      if(v!=="paid"&&state.wire!=="all"){state.wire="all";setSeg("rvzWire","all");document.getElementById("rvzWireNote").style.display="none"}
+      if(v!=="paid"&&state.scope==="int"){state.scope="ext";setSeg("rvzScope","ext")}
       freeNote();buyersNote()});
     seg("rvzWire",function(v){state.wire=v;
       // The MPP subset and the SOR subset are not tracked as an intersection -
@@ -276,6 +281,7 @@
       if(v!=="all"&&state.settle!=="all"){state.settle="all";setSeg("rvzSettle","all");settleNote()}
       // Buyers is not split by wire: leave it rather than show the all-wire count under an x402/MPP label.
       if(v!=="all"&&state.metric==="buyers"){state.metric="tx";setSeg("rvzMetric","tx");buyersNote()}
+      if(v!=="all"&&state.traffic!=="paid"){state.traffic="paid";setSeg("rvzTraffic","paid");freeNote()}
       document.getElementById("rvzWireNote").style.display=v==="all"?"none":"block"});
     seg("rvzSettle",function(v){state.settle=v;
       if(v!=="all"){
