@@ -274,6 +274,8 @@
       // The MPP subset and the SOR subset are not tracked as an intersection -
       // composing them would fabricate numbers, so they are mutually exclusive.
       if(v!=="all"&&state.settle!=="all"){state.settle="all";setSeg("rvzSettle","all");settleNote()}
+      // Buyers is not split by wire: leave it rather than show the all-wire count under an x402/MPP label.
+      if(v!=="all"&&state.metric==="buyers"){state.metric="tx";setSeg("rvzMetric","tx");buyersNote()}
       document.getElementById("rvzWireNote").style.display=v==="all"?"none":"block"});
     seg("rvzSettle",function(v){state.settle=v;
       if(v!=="all"){

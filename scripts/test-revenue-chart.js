@@ -286,6 +286,16 @@ console.log("revenue chart — free-tier lane");
       "buyers is external-only; an internal scope must switch the metric");
   });
 
+  check("picking a wire leaves the buyers view rather than showing the all-wire count", () => {
+    for (const wire of ["mpp", "x402"]) {
+      click(w, "rvzMetric", "buyers");
+      click(w, "rvzWire", wire);
+      assert.equal(w.document.querySelector("#rvzMetric button.on").dataset.v, "tx", `buyers is not split by wire; ${wire} must switch the metric`);
+      assert.equal(w.document.querySelector("#rvzWire button.on").dataset.v, wire);
+      click(w, "rvzWire", "all");
+    }
+  });
+
   check("Buyers forces traffic back to paid (a free call has no buyer wallet)", () => {
     click(w, "rvzTraffic", "free");
     click(w, "rvzMetric", "buyers");
