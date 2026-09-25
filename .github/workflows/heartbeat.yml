@@ -499,6 +499,30 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
           fi
 
+      # TypeSafe credits (/v1/judge and the router's tool pick). TypeSafe has no
+      # balance API, so the server meters each response's own usage against
+      # TYPESAFE_CREDIT_USD; a rejected key also reads "low". When credits run
+      # out, judge calls answer 503 (nobody charged) and the router falls back
+      # to lexical ranking, which looks like nothing at all without this.
+      # "unconfigured" never pages.
+      - name: TypeSafe credits check (alarm on low)
+        if: always()
+        continue-on-error: true
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.typesafeCredits.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "typesafe credits: $STATUS"
+          TITLE="TypeSafe credits LOW (judge + router)"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ "$STATUS" = "low" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The TypeSafe account behind /v1/judge and the router's tool selection is below its low-water mark (TYPESAFE_LOW_USD, estimated from metered usage against TYPESAFE_CREDIT_USD), or TypeSafe rejected our key. When it runs out, /v1/judge answers 503 (not charged) and the router falls back to lexical ranking. Top up at console.typesafe.ai, then set TYPESAFE_CREDIT_USD to the new balance and TYPESAFE_CREDIT_SINCE to today on Railway. Auto-closes when it recovers."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
+            fi
+          elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ)."
+          fi
+
       # Subscription gas sponsor - watches PATHUSD, not USDC.e. A sponsored
       # Tempo transaction pays its fee in the default token, so a sponsor full
       # of USDC.e and empty of PathUSD is EMPTY for this purpose and the chain

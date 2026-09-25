@@ -4,6 +4,7 @@
 // tool runs unchanged. Fails open to the lexical order; ROUTE_JUDGE=off disables.
 import { createHash } from "node:crypto";
 
+import { noteTypesafeUsage, noteTypesafeRejected } from "./typesafe-credit.js";
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 const MODEL = (process.env.TYPESAFE_MODEL || "jev-latest").trim();
 const keyOf = () => (process.env.TYPESAFE_API_KEY || "").trim();
@@ -88,8 +89,10 @@ async function callJev(payload, fetchImpl, timeoutMs, { pool = "paid", outcome =
       body,
       signal: AbortSignal.timeout(timeoutMs || TIMEOUT_MS()),
     });
-    if (!res.ok) return null;
-    return await res.json();
+    if (!res.ok) { if ([401, 402, 403].includes(res.status)) noteTypesafeRejected(); return null; }
+    const j = await res.json();
+    noteTypesafeUsage(j?.usage);
+    return j;
   } catch {
     return null;
   }

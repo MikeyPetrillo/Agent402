@@ -2183,6 +2183,8 @@ jobs:
           t node scripts/test-quote-retired-on-free.js
           # A route the seller answers 410 Gone leaves the index and stays out across the Bazaar merge (offline)
           t node scripts/test-gone-routes.js
+          # TypeSafe credits metered from response usage; low/unconfigured/rejected states; judge 402 is ours (offline)
+          t node scripts/test-typesafe-credit.js
           # Request/response contracts read through local OpenAPI $refs (FastAPI shape); external, dangling and cyclic refs stay partial (offline)
           t node scripts/test-openapi-local-refs.js
           # Uncached /api/find and /api/route computes are budgeted per client; the seller summary is memoized (boots a server)

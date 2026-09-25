@@ -19,6 +19,8 @@
 // and it is recorded here rather than assumed silently because this project has
 // retired a data source once already for deriving income without permission.
 
+import { noteTypesafeUsage, noteTypesafeRejected } from "../typesafe-credit.js";
+
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 const keyOf = () => (process.env.TYPESAFE_API_KEY || "").trim();
 export const judgeEnabled = () => !!keyOf();
@@ -118,13 +120,16 @@ async function call(body, fetchImpl = fetch) {
   const text = await res.text();
   if (!res.ok) {
     // Relay the CLASS, never the body: it can echo the buyer's own state back.
-    if (res.status === 401 || res.status === 403) { const e = new Error("Judgment upstream rejected our credentials."); e.statusCode = 503; throw e; }
+    if (res.status === 401 || res.status === 403) { noteTypesafeRejected(); const e = new Error("Judgment upstream rejected our credentials."); e.statusCode = 503; throw e; }
+    // An exhausted credit balance is ours to fix, never the buyer's request shape.
+    if (res.status === 402) { noteTypesafeRejected(); const e = new Error("Judgment is temporarily unavailable on this server. Retry later."); e.statusCode = 503; throw e; }
     if (res.status === 429) { const e = new Error("Judgment upstream is rate limiting. Retry shortly."); e.statusCode = 503; throw e; }
     if (res.status >= 400 && res.status < 500) throw bad(`Judgment upstream refused the request (${res.status}). Check the question shapes against /v1/judge's schema.`);
     const e = new Error(`Judgment upstream returned ${res.status}.`); e.statusCode = 502; throw e;
   }
   let j; try { j = JSON.parse(text); } catch { const e = new Error("Judgment upstream returned an unreadable body."); e.statusCode = 502; throw e; }
   if (!j?.answers || typeof j.answers !== "object") { const e = new Error("Judgment upstream returned no answers."); e.statusCode = 502; throw e; }
+  noteTypesafeUsage(j.usage);
   return j;
 }
 

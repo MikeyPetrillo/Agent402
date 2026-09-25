@@ -54,6 +54,7 @@ import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
 import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
+import { typesafeCreditStatus } from "./typesafe-credit.js";
 import { backfillBrokenPackRefunds } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
 import { meteredUsd, isMeterable, applyMeteredSettlement } from "./gateway-meter.js";
@@ -2844,6 +2845,9 @@ app.get("/api/gateway-status", async (req, res) => {
     jevSpend: full ? spend.jevSpend : publicBucket(spend.jevSpend),
     upstreamBudgets: full ? budgets : publicBudgets(budgets),
     stellarFacilitator, databases, operatorAuth: operatorAuthStatus(full),
+    // TypeSafe prepaid credits, metered from each response's own usage
+    // (src/typesafe-credit.js). Status word only unless operator-authed.
+    typesafeCredits: full ? typesafeCreditStatus() : { status: typesafeCreditStatus().status },
     mppEvmDomainFallback: full ? mppFallbackStatus() : publicFallback(mppFallbackStatus()),
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
     // Daily MPP reconciliation (src/mpp-reconcile.js): status words + counts,
