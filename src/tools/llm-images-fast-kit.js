@@ -101,7 +101,7 @@ export const IMAGE_TIERS = {
     path: IMAGES_PATH,
     price: IMAGES_PRICE,
     chain: [
-      // Per-megapixel pricing, locked 1024x1024 billed as 1 MP (measured live 2026-09-24: $0.03, PNG 1024x1024).
+      // Per-megapixel pricing; the locked 1024x1024 output bills as 1 MP (PNG).
       { model: "black-forest-labs/flux.2-pro", provider: "black-forest-labs", params: { output_format: "png" }, worstCaseUsd: 0.03,
         listed: { unit: "megapixel", maxCostUsd: 0.03 } },
       { model: "openai/gpt-5-image-mini", provider: "openai", params: { quality: "medium" }, worstCaseUsd: 0.013,
