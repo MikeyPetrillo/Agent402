@@ -380,8 +380,11 @@ import { CRAWL_TOOLS } from "./tools/crawl-kit.js";
 import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus } from "./tools/x-data-kit.js";
 import { jevSpendStatus, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
-import { EXA_TOOLS, exaEnabled, exaSpendStatus, exaAllowanceStatus } from "./tools/exa-kit.js";
-import { upstreamBudgetStatus } from "./upstream-budgets.js";
+import { EXA_TOOLS, exaEnabled, exaSpendStatus, exaAllowanceStatus, exaCallsToday } from "./tools/exa-kit.js";
+import { upstreamBudgetStatus, registerUpstreamCounter } from "./upstream-budgets.js";
+// Exa is also an indexed seller the crawlers read unpaid; its budget counts only
+// the calls our Exa tools make.
+registerUpstreamCounter("exa", exaCallsToday);
 import { b2bEnrichEnabled } from "./tools/b2b-enrich-kit.js";
 const X_DATA_TOOLS_ENABLED = xDataEnabled() ? X_DATA_TOOLS : [];
 // Env-gated on EXA_API_KEY: unkeyed deployments list nothing rather than

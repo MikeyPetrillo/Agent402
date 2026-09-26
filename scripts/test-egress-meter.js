@@ -182,6 +182,15 @@ export async function fetchAtDepth(url, depth) {
   const src = readFileSync(new URL("../src/egress-meter.js", import.meta.url), "utf8");
   const line = src.split("\n").find((l) => l.startsWith("const PLUMBING = /")) || "";
   ok(line.includes("drain-abort") && line.includes("facilitator-diagnostics"), "PLUMBING skips the drain-aware and facilitator-diagnostics fetch wrappers");
+  // Every file that replaces globalThis.fetch, found rather than listed: a
+  // hand-kept list missed request-timing.js and every host read as it from
+  // 2026-09-25 to 2026-09-26.
+  const { readdirSync } = await import("node:fs");
+  const wrappers = readdirSync(new URL("../src/", import.meta.url))
+    .filter((f) => f.endsWith(".js"))
+    .filter((f) => /globalThis\.fetch\s*=/.test(readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8")));
+  ok(wrappers.length >= 3, `found the global fetch wrappers (${wrappers.join(", ")})`);
+  for (const f of wrappers) ok(line.includes(f.replace(/\./g, "\\.")), `PLUMBING skips ${f}, a global fetch wrapper`);
 }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

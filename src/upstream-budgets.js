@@ -49,6 +49,14 @@ export const UPSTREAM_BUDGETS = [
     why: "beside exaAllowance, which tracks dollars - this tracks call volume" },
 ];
 
+// A budget whose vendor is ALSO an indexed seller cannot be read off host
+// traffic: the index crawlers read api.exa.ai's public documents and price
+// quotes every cycle (unpaid), and that alone put the Exa budget "elevated" at
+// 621 calls with $0 of Exa spent (2026-09-26). Such a budget counts the tool
+// kit's own calls instead, registered here by name.
+const ownCounters = new Map();
+export function registerUpstreamCounter(name, fn) { if (typeof fn === "function") ownCounters.set(name, fn); }
+
 const budgetOf = (b) => {
   const raw = String(process.env[b.env] ?? "").trim().toLowerCase();
   if (raw === "off" || raw === "0") return 0;          // explicitly disabled
@@ -72,13 +80,18 @@ export function upstreamBudgetStatus(report = null) {
   const out = { day: rep.day, sinceRestart: true, upstreams: {} };
   let worst = "ok";
   for (const b of UPSTREAM_BUDGETS) {
-    const calls = hosts
-      .filter((h) => typeof h.host === "string" && h.host.endsWith(b.match))
-      .reduce((a, h) => a + (h.calls || 0), 0);
+    const own = ownCounters.get(b.name);
+    let calls;
+    try { calls = own ? Number(own()) || 0 : null; } catch { calls = null; }
+    if (calls === null) {
+      calls = hosts
+        .filter((h) => typeof h.host === "string" && h.host.endsWith(b.match))
+        .reduce((a, h) => a + (h.calls || 0), 0);
+    }
     const budget = budgetOf(b);
     const status = budget === 0 ? "disabled" : (calls >= budget ? "elevated" : "ok");
     if (status === "elevated") worst = "elevated";
-    out.upstreams[b.name] = { callsToday: calls, budget: budget || null, status, why: b.why };
+    out.upstreams[b.name] = { callsToday: calls, budget: budget || null, status, why: b.why, ...(own ? { counts: "tool calls only" } : {}) };
   }
   out.status = worst;
   out.note = "Counts OUR outbound calls per host, not a vendor balance - most of these publish none. "
