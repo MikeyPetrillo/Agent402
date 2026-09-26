@@ -81,7 +81,7 @@ const idx = await import("../src/x402-index.js");
   const windowMs = 7 * 24 * 3600e3;
   const st = {};
   const r1 = await lb.readPayToIncremental(A, st, { rpc: rpcFn, creditFromTx: buyer.creditFromTx, windowMs });
-  ok(r1.credits === 3 && r1.payers === 1 && r1.rpcCalls === 6 && st.ata && st.lastSig === "s1" && st.events.length === 3, `cycle 1: account + signatures + 4 tx reads = 6 RPC calls, 3 credits, cursor at the newest signature (got ${JSON.stringify(r1)})`);
+  ok(r1.credits === 3 && r1.payers === 1 && r1.rpcCalls === 6 && st.ata && st.lastSig === "s1" && r1.windows["24h"].totalUsd === 0.003 && r1.windows["24h"].uniqueBuyers === 1, `cycle 1: account + signatures + 4 tx reads = 6 RPC calls, 3 credits, cursor at the newest signature (got ${JSON.stringify(r1)})`);
   rpcLog.length = 0;
   const r2 = await lb.readPayToIncremental(A, st, { rpc: rpcFn, creditFromTx: buyer.creditFromTx, windowMs });
   ok(r2.credits === 3 && r2.rpcCalls === 1 && rpcLog.join(",") === "getSignaturesForAddress", `cycle 2: ONE signatures read with until=lastSig, no transaction reads, credits carried (got ${r2.rpcCalls} calls: ${rpcLog.join(",")})`);
@@ -93,7 +93,91 @@ const idx = await import("../src/x402-index.js");
   const b3 = await lb.readPayToIncremental(B, stB, { rpc: rpcFn, creditFromTx: buyer.creditFromTx, windowMs, now: Date.now() + 25 * 3600e3 });
   ok(b3.rpcCalls === 1, "and is re-checked after the day");
   const pruned = await lb.readPayToIncremental(A, st, { rpc: rpcFn, creditFromTx: buyer.creditFromTx, windowMs, now: Date.now() + 8 * 24 * 3600e3 });
-  ok(pruned.credits === 0 && st.events.length === 0, "events older than the window are pruned on the next read");
+  ok(pruned.credits === 0 && pruned.windows["7d"].callsSettled === 0 && pruned.windows["30d"].callsSettled === 3, "payments leave the 7-day window after a week and stay in the 30-day one");
+  const later = await lb.readPayToIncremental(A, st, { rpc: rpcFn, creditFromTx: buyer.creditFromTx, windowMs, now: Date.now() + 31 * 24 * 3600e3 });
+  ok(later.windows["30d"].callsSettled === 0 && Object.keys(st.hours).length === 0, "hours older than 30 days are pruned");
+}
+// ---- 3c. no per-seller cap, dollars and buyers, backfill pacing, atomic folds
+// An in-memory chain: a payTo with N payments, newest first, paged exactly the
+// way getSignaturesForAddress pages (limit, before, until).
+{
+  const P = "Pay1111111111111111111111111111111111111111";
+  const mkChain = (n, startSec, stepSec) => Array.from({ length: n }, (_, i) => ({ signature: `c${n - i}`, blockTime: startSec - i * stepSec, err: null, buyer: `Buyer${(n - i) % 50}`, amount: 1000 + ((n - i) % 7) }));
+  const chainRpc = (chain, { failTx = null } = {}) => {
+    const calls = { sig: 0, tx: 0 };
+    const fn = async (method, params) => {
+      if (method === "getTokenAccountsByOwner") return { value: [{ pubkey: "ATA-P" }] };
+      if (method === "getSignaturesForAddress") {
+        calls.sig++;
+        const { limit = 1000, before, until } = params[1] || {};
+        let i = before ? chain.findIndex((x) => x.signature === before) + 1 : 0;
+        const out = [];
+        for (; i < chain.length && out.length < limit; i++) { if (chain[i].signature === until) break; out.push(chain[i]); }
+        return out.map(({ signature, blockTime, err }) => ({ signature, blockTime, err }));
+      }
+      if (method === "getTransaction") {
+        calls.tx++;
+        if (failTx && failTx(params[0])) throw new Error("RPC 503");
+        const x = chain.find((c) => c.signature === params[0]);
+        return { blockTime: x.blockTime, meta: { err: null,
+          preTokenBalances: [{ accountIndex: 0, mint: USDC, owner: P, uiTokenAmount: { amount: "0" } }, { accountIndex: 1, mint: USDC, owner: x.buyer, uiTokenAmount: { amount: "999999" } }],
+          postTokenBalances: [{ accountIndex: 0, mint: USDC, owner: P, uiTokenAmount: { amount: String(x.amount) } }, { accountIndex: 1, mint: USDC, owner: x.buyer, uiTokenAmount: { amount: String(999999 - x.amount) } }] } };
+      }
+      throw new Error("unknown " + method);
+    };
+    return { fn, calls };
+  };
+  const nowSec = Math.floor(Date.now() / 1000);
+  // 5,000 payments in the last ~14 hours: far past the old 2,000 ceiling.
+  const chain = mkChain(5000, nowSec - 5, 10);
+  const expectUsd = chain.reduce((a, c) => a + c.amount, 0) / 1e6;
+  const { fn } = chainRpc(chain);
+  const st = {};
+  const r = await lb.readPayToIncremental(P, st, { rpc: fn, creditFromTx: buyer.creditFromTx, budget: { left: 1e9 } });
+  ok(r.windows["24h"].callsSettled === 5000 && r.credits === 5000, `5,000 payments count as 5,000: no per-seller cap (got ${r.windows["24h"].callsSettled})`);
+  ok(Math.abs(r.windows["24h"].totalUsd - expectUsd) < 1e-6, `USDC settled is the sum of the balance rises ($${r.windows["24h"].totalUsd} vs $${expectUsd})`);
+  ok(r.windows["24h"].uniqueBuyers === 50 && r.payers === 50, "distinct buyers are the owners of the debited USDC accounts");
+  ok(r.backfilling === false && r.windows["24h"].complete === true, "a backfill that reached the window start marks the window complete");
+  // New payments after the cursor: all of them, whatever the count, no budget needed.
+  const newer = mkChain(7000, nowSec + 70000, 5).slice(0, 2000).map((c) => ({ ...c, signature: `n${c.signature}` }));
+  const chain2 = [...newer, ...chain];
+  const { fn: fn2 } = chainRpc(chain2);
+  const r2 = await lb.readPayToIncremental(P, st, { rpc: fn2, creditFromTx: buyer.creditFromTx, budget: { left: 0 }, now: (nowSec + 70001) * 1000 });
+  ok(r2.windows["30d"].callsSettled === 7000 && st.lastSig === newer[0].signature, `2,000 new payments across pages are all read with a zero backfill allowance (30d total ${r2.windows["30d"].callsSettled})`);
+  // A failure part-way through new payments folds NOTHING and leaves the cursor, so the retry cannot double count.
+  const newest = mkChain(300, nowSec + 80000, 1).map((c) => ({ ...c, signature: `m${c.signature}` }));
+  const chain3 = [...newest, ...chain2];
+  const before30 = r2.windows["30d"].callsSettled, cursor = st.lastSig;
+  const bad = chainRpc(chain3, { failTx: (sig) => sig === newest[150].signature });
+  const threw = await lb.readPayToIncremental(P, st, { rpc: bad.fn, creditFromTx: buyer.creditFromTx, budget: { left: 0 }, now: (nowSec + 80001) * 1000 }).then(() => false, () => true);
+  const after = lb.summarizeHours(st.hours, { now: (nowSec + 80001) * 1000, coveredFrom: 0 })["30d"].callsSettled;
+  ok(threw && after === before30 && st.lastSig === cursor, "a read that fails part-way folds nothing and keeps the cursor");
+  const good = chainRpc(chain3);
+  const r3 = await lb.readPayToIncremental(P, st, { rpc: good.fn, creditFromTx: buyer.creditFromTx, budget: { left: 0 }, now: (nowSec + 80001) * 1000 });
+  ok(r3.windows["30d"].callsSettled === before30 + 300, "and the retry counts each of those payments exactly once");
+  // Backfill is paced by the shared allowance, says it is partial, and finishes on later cycles.
+  const stB = {};
+  const pace = chainRpc(chain);
+  const p1 = await lb.readPayToIncremental(P, stB, { rpc: pace.fn, creditFromTx: buyer.creditFromTx, budget: { left: 1200 } });
+  ok(p1.backfilling === true && p1.windows["24h"].complete === false && p1.windows["24h"].callsSettled === 1200 && pace.calls.tx === 1200, "backfill stops at the cycle allowance and the row says the window is not yet complete");
+  const p2 = await lb.readPayToIncremental(P, stB, { rpc: pace.fn, creditFromTx: buyer.creditFromTx, budget: { left: 1e9 } });
+  ok(p2.backfilling === false && p2.windows["24h"].callsSettled === 5000 && p2.windows["24h"].complete === true, "the next cycle finishes the history with nothing counted twice");
+  // State from the capped design is dropped and re-read, not trusted.
+  const old = { ata: "ATA-P", ataCheckedAt: Date.now(), lastSig: "c5000", events: [{ t: nowSec, f: "x", s: "c5000" }] };
+  const re = await lb.readPayToIncremental(P, old, { rpc: chainRpc(chain).fn, creditFromTx: buyer.creditFromTx, budget: { left: 1e9 } });
+  ok(!("events" in old) && re.windows["24h"].callsSettled === 5000, "a payTo's old capped event list is discarded and its history re-read");
+  // The snapshot ranks by USDC settled in the chosen window, like Base.
+  lb.__setSolanaLeaderboardForTest({ at: Date.now(), scanned: 2, candidates: 2, rows: [
+    { payTo: "Many", origins: ["https://many.example"], credits: 900, payers: 1, windows: { "24h": { callsSettled: 900, totalUsd: 9, uniqueBuyers: 1, complete: true }, "7d": { callsSettled: 900, totalUsd: 9, uniqueBuyers: 1, complete: true }, "30d": { callsSettled: 900, totalUsd: 9, uniqueBuyers: 1, complete: true } }, stale: false },
+    { payTo: "Rich", origins: ["https://rich.example"], credits: 10, payers: 10, windows: { "24h": { callsSettled: 0, totalUsd: 0, uniqueBuyers: 0, complete: true }, "7d": { callsSettled: 10, totalUsd: 500, uniqueBuyers: 10, complete: true }, "30d": { callsSettled: 10, totalUsd: 500, uniqueBuyers: 10, complete: false } }, stale: false, backfilling: true },
+  ] });
+  const v7 = lb.getSolanaLeaderboardSnapshot({ window: "7d" });
+  ok(v7.rows[0].payTo === "Rich" && v7.rows[0].totalUsd === 500 && v7.rows[0].callsSettled === 10 && v7.windowComplete === true, "7d ranks by USDC settled, with Base's field names on each row");
+  const v24 = lb.getSolanaLeaderboardSnapshot({ window: "24h" });
+  ok(v24.rows[0].payTo === "Many" && v24.active === 1, "24h ranks the same rows over the shorter window");
+  ok(lb.getSolanaLeaderboardSnapshot({ window: "30d" }).windowComplete === false && v7.backfilling === 1, "a window a backfilling row does not yet reach reads windowComplete:false");
+  ok(lb.getSolanaLeaderboardSnapshot({ window: "__proto__" }).window === "7d", "an unknown window falls back to 7d");
+  lb.__resetSolanaLeaderboardForTest();
 }
 // ---- 3b. the scan: ranking, self, stale-on-error, evidence ------------------
 {
