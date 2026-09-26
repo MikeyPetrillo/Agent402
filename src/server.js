@@ -6587,8 +6587,6 @@ app.get("/api/route/external-debug", async (req, res) => {
 //            `windowLabel` + `windowRequested`.
 const SUPPORTED_WINDOWS = new Set(["24h", "7d", "30d", "all"]);
 app.get("/api/leaderboard", (req, res) => {
-  // ?chain=solana is the Solana board; the Base board has no chain parameter.
-  if (String(req.query.chain || "").toLowerCase() === "solana") { const t = parseInt(req.query.top, 10); return res.redirect(302, `/api/solana-leaderboard${t > 0 ? `?top=${t}` : ""}`); }
   const snap = getLeaderboardSnapshot();
   // Free ceiling of 50. Discovery needs the head of the board, not a bulk export
   // of an hourly ~900-wallet on-chain scan: at top=500 a caller can recompute
@@ -6680,7 +6678,7 @@ app.get("/api/leaderboard", (req, res) => {
 });
 // Human-readable companion to /api/leaderboard. Same cached snapshot, rendered
 // as a dashboard so visitors (and the site nav) have something to land on.
-app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(ledgerLeaderboardPage(BASE_URL, getLeaderboardSnapshot(), { stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), walletAddress: WALLET_ADDRESS, host: hostEntryFigures(), standing: standingFigures(), solana: getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null }) })));
+app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(ledgerLeaderboardPage(BASE_URL, getLeaderboardSnapshot(), { stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), walletAddress: WALLET_ADDRESS, host: hostEntryFigures(), standing: standingFigures() })));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(robotsTxt(BASE_URL)));
 // IndexNow ownership key file (env-gated no-op like the other integrations).
 // The protocol verifies a submitted key by fetching /{key}.txt from the host;
