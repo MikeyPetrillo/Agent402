@@ -33,7 +33,10 @@ import { egressReport } from "./egress-meter.js";
 // page anyone on day one; the point is catching a step change, not policing
 // normal traffic. `0` or `off` in the env disables one budget.
 export const UPSTREAM_BUDGETS = [
-  { match: "alchemy.com", name: "alchemy", env: "BUDGET_ALCHEMY_CALLS", dflt: 40000,
+  // 100,000 since 2026-09-26: the Solana board reads every settled payment
+  // (about 18,000 reads a day at current volume, on top of ~21,000 of other use)
+  // and fills its first week of history at 4,000 reads a cycle.
+  { match: "alchemy.com", name: "alchemy", env: "BUDGET_ALCHEMY_CALLS", dflt: 100000,
     why: "pay-as-you-go, no ceiling - this is the one that can bill without earning" },
   { match: "api.search.brave.com", name: "brave", env: "BUDGET_BRAVE_CALLS", dflt: 2000,
     why: "backs `search`, our best-selling tool - exhaustion costs revenue, not just uptime" },
@@ -48,6 +51,14 @@ export const UPSTREAM_BUDGETS = [
   { match: "api.exa.ai", name: "exa", env: "BUDGET_EXA_CALLS", dflt: 500,
     why: "beside exaAllowance, which tracks dollars - this tracks call volume" },
 ];
+
+// A budget whose vendor is ALSO an indexed seller cannot be read off host
+// traffic: the index crawlers read api.exa.ai's public documents and price
+// quotes every cycle (unpaid), and that alone put the Exa budget "elevated" at
+// 621 calls with $0 of Exa spent (2026-09-26). Such a budget counts the tool
+// kit's own calls instead, registered here by name.
+const ownCounters = new Map();
+export function registerUpstreamCounter(name, fn) { if (typeof fn === "function") ownCounters.set(name, fn); }
 
 const budgetOf = (b) => {
   const raw = String(process.env[b.env] ?? "").trim().toLowerCase();
@@ -72,13 +83,18 @@ export function upstreamBudgetStatus(report = null) {
   const out = { day: rep.day, sinceRestart: true, upstreams: {} };
   let worst = "ok";
   for (const b of UPSTREAM_BUDGETS) {
-    const calls = hosts
-      .filter((h) => typeof h.host === "string" && h.host.endsWith(b.match))
-      .reduce((a, h) => a + (h.calls || 0), 0);
+    const own = ownCounters.get(b.name);
+    let calls;
+    try { calls = own ? Number(own()) || 0 : null; } catch { calls = null; }
+    if (calls === null) {
+      calls = hosts
+        .filter((h) => typeof h.host === "string" && h.host.endsWith(b.match))
+        .reduce((a, h) => a + (h.calls || 0), 0);
+    }
     const budget = budgetOf(b);
     const status = budget === 0 ? "disabled" : (calls >= budget ? "elevated" : "ok");
     if (status === "elevated") worst = "elevated";
-    out.upstreams[b.name] = { callsToday: calls, budget: budget || null, status, why: b.why };
+    out.upstreams[b.name] = { callsToday: calls, budget: budget || null, status, why: b.why, ...(own ? { counts: "tool calls only" } : {}) };
   }
   out.status = worst;
   out.note = "Counts OUR outbound calls per host, not a vendor balance - most of these publish none. "

@@ -172,7 +172,9 @@ export function creditFromTx(meta, payTo) {
     if (debited && !funder) funder = b.owner || null;
     return debited;
   });
-  return { credited: fundedByOther, funder: fundedByOther ? funder : null };
+  // `amount` is the seller's balance rise in base units. USDC has six
+  // decimals, so it is also the payment in micro-dollars.
+  return { credited: fundedByOther, funder: fundedByOther ? funder : null, amount: fundedByOther ? postAmt - preAmt : 0 };
 }
 export const solanaRpc = (method, params, opts) => rpcCall(method, params, opts);
 

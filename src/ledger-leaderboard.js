@@ -82,7 +82,55 @@ function railsWithTraffic(stats) {
   return `${n} of ${RAILS.length}`;
 }
 
-export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress, host = null, standing = null } = {}) {
+// The Solana board (src/solana-leaderboard.js): the same measures as the Base
+// table above - USDC settled, calls, distinct buyers, average ticket, organic -
+// read from the chain per seller payTo with no per-seller cap. Our own payTo is
+// left out, as on the Base table. A window the board's history does not yet
+// fully cover (a new payTo still backfilling) says so, and so does a scan
+// that did not reach every payTo: "not listed" must not read as "nothing settled".
+const SOLANA_ROWS = 12;
+export function solanaSectionHtml(sol) {
+  if (!sol || !Array.isArray(sol.rows)) return "";
+  const rows = sol.rows.filter((r) => !r.self && (Number(r.callsSettled) || 0) > 0).slice(0, SOLANA_ROWS);
+  const hostOf = (u) => { try { return new URL(u).host; } catch { return String(u || ""); } };
+  const body = rows.length ? rows.map((r, i) => {
+    const origins = Array.isArray(r.origins) ? r.origins : [];
+    const href = safeHref(origins[0]);
+    const first = origins[0] ? hostOf(origins[0]) : "";
+    const more = origins.length > 1 ? ` +${origins.length - 1}` : "";
+    const name = first
+      ? (href ? `<a href="${esc(href)}" target="_blank" rel="noopener nofollow" class="lb-name">${esc(first)}</a>` : `<span class="lb-name">${esc(first)}</span>`) + esc(more)
+      : `<span class="lb-name">unnamed seller</span>`;
+    const calls = Number(r.callsSettled) || 0, buyers = Number(r.uniqueBuyers) || 0, total = Number(r.totalUsd) || 0;
+    const organicRaw = calls ? (buyers / calls) * 100 : 0;
+    const organic = calls ? (organicRaw < 0.01 ? "<0.01" : organicRaw.toFixed(2)) : "·";
+    const partial = r.backfilling ? ` <span class="lb-addr" title="history still loading for this seller">· loading</span>` : "";
+    return `<div class="lb-row${i === 0 ? " first" : ""}"><span class="lb-rank">${String(i + 1).padStart(2, "0")}</span><span>${name} <span class="lb-addr">· ${esc(shortAddr(r.payTo))}</span>${partial}</span><span class="lb-usd">${esc(fmtUsd(total))}</span><span class="lb-num">${esc(fmtNum(calls))}</span><span class="lb-buyers">${esc(fmtNum(buyers))}</span><span class="lb-avg">${calls ? esc(`$${(total / calls).toFixed(4)}`) : "·"}</span><span class="lb-organic" style="color:${organicRaw >= 1 ? "var(--on-dark)" : "var(--dk-muted3)"};">${esc(organic)}</span></div>`;
+  }).join("") : `<div class="lb-row"><span></span><span>No Solana seller has settled a payment in this window yet, or the first scan is still running.</span></div>`;
+  const win = typeof sol.window === "string" ? sol.window : "7d";
+  const notes = [];
+  if (sol.scanCoversAll === false && sol.scanCandidates != null) notes.push(`scanned ${fmtNum(sol.scanned)} of ${fmtNum(sol.scanCandidates)} seller payTos`);
+  if (sol.windowComplete === false && rows.length) notes.push("history still loading, figures are a floor");
+  if (sol.stale) notes.push("stale");
+  return `
+  <section id="solana" style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:16px;">
+      <h2 class="lb-h2" style="font-weight:800;font-size:40px;line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Solana, ranked by USDC settled.</h2>
+      <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">${esc(win)} window · USDC on Solana${notes.length ? ` · ${esc(notes.join(" · "))}` : ""}</span>
+    </div>
+    <p style="font-size:16px;line-height:1.6;color:var(--muted);max-width:760px;margin:0 0 26px;">Every settled USDC payment into each seller's Solana payTo, read from the chain. A buyer is the wallet whose USDC paid, and transfers a seller sends itself are excluded, so the same organic ratio applies here as above.</p>
+    <div class="lb-scroll" style="border:1px solid var(--hairline);background:var(--surface);overflow-x:auto;">
+      <div class="lb-head" style="display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:12px 18px;min-width:820px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dk-muted3);border-bottom:1.5px solid var(--dark-border2);"><span>#</span><span>seller · payTo</span><span style="text-align:right;">usdc settled</span><span style="text-align:right;">calls</span><span style="text-align:right;">buyers</span><span style="text-align:right;">avg ticket</span><span style="text-align:right;">organic</span></div>
+      ${body}
+    </div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;font-family:var(--font-mono);font-size:12px;color:var(--faint);">
+      <span>organic = distinct buyers per 100 calls.</span>
+      <a href="/api/solana-leaderboard?window=${esc(win)}" style="color:var(--accent);text-decoration:none;">raw JSON →</a>
+    </div>
+  </section>`;
+}
+
+export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress, host = null, standing = null, solana = null } = {}) {
   const board = Array.isArray(snapshot?.leaderboard) ? snapshot.leaderboard : [];
   const hasData = board.length > 0;
   const windowLabel = snapshot?.windowLabel || "24h";
@@ -215,6 +263,7 @@ ${standingBand(standing || {})}
     </div>
     ${hostRowHtml(host, { dark: false })}
   </section>
+${solanaSectionHtml(solana)}
 
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div class="lb-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">

@@ -106,11 +106,11 @@ const EXA_DAILY_MAX_USD = () => { const n = Number(process.env.EXA_DAILY_MAX_USD
 const EXA_CREDITS_USD = () => { const n = Number(process.env.EXA_CREDITS_USD); return Number.isFinite(n) && n > 0 ? n : null; };
 const EXA_LOW_FRACTION = () => { const n = Number(process.env.EXA_LOW_FRACTION); return Number.isFinite(n) && n > 0 && n < 1 ? n : 0.25; };
 const lifetime = { micro: 0, since: Date.now() };
-const spend = { day: "", micro: 0, refused: 0 };
+const spend = { day: "", micro: 0, refused: 0, calls: 0 };
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 const spentToday = (now = Date.now()) => {
   const d = utcDay(now);
-  if (spend.day !== d) { spend.day = d; spend.micro = 0; spend.refused = 0; }
+  if (spend.day !== d) { spend.day = d; spend.micro = 0; spend.refused = 0; spend.calls = 0; }
   return spend.micro / 1e6;
 };
 
@@ -154,7 +154,11 @@ export function exaSpendStatus(now = Date.now()) {
     status: cap > 0 && spent >= cap ? "capped" : "ok",
   };
 }
-export function _exaSpendReset() { spend.day = ""; spend.micro = 0; spend.refused = 0; }
+/** Calls our Exa tools sent today. The index crawlers also read api.exa.ai
+ *  (Exa is an indexed x402 and MPP seller), unpaid, so a host-level count of
+ *  that domain is not this number. */
+export function exaCallsToday(now = Date.now()) { spentToday(now); return spend.calls; }
+export function _exaSpendReset() { spend.day = ""; spend.micro = 0; spend.refused = 0; spend.calls = 0; }
 export function _exaSpendBook(usd) { spentToday(); spend.micro += Math.round(usd * 1e6); lifetime.micro += Math.round(usd * 1e6); }
 
 /**
@@ -200,6 +204,7 @@ async function exaPost(path, body) {
   // still have been billed, and a guard that only books on success is a guard
   // a timeout walks straight through.
   _exaSpendBook(estimate);
+  spend.calls++;
 
   let res;
   try {

@@ -1,0 +1,35 @@
+name: Guarded Repository
+# HOL Guard's reusable workflow: scans the commit, has GitHub sign provenance
+# for the sanitized scan evidence (repo, commit, run, scanner version, score,
+# counts and hashes; no source, findings or paths), and registers it with the
+# HOL verifier. The verifier only accepts HOL's own reusable workflow identity,
+# so it is called as a reusable workflow rather than as a step. A verification
+# expires seven days after it is generated, so the schedule renews it twice a
+# week even when main is quiet.
+#
+# Profile "default" matches the advisory plugin-scanner.yml job; the scan never
+# blocks unless a critical finding appears. SARIF is not uploaded: CodeQL and
+# gitleaks already own code scanning and secrets on this repository.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1,4"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  guard:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+      security-events: write
+    uses: hashgraph-online/hol-guard/.github/workflows/guarded-repository.yml@f2d0ce948c39016ec194c229eb286679d7f31ff7 # release/3.0
+    with:
+      profile: default
+      fail_on_severity: critical
+      upload_sarif: false
+      visibility: public

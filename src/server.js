@@ -38,7 +38,7 @@ import {
 } from "./tools/memory.js";
 import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf, paymentIdentifierOf } from "./payer.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort } from "./drain-abort.js";
-import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin } from "./solana-leaderboard.js";
+import { startSolanaLeaderboard, getSolanaLeaderboardSnapshot, solanaEvidenceByOrigin, SOLANA_WINDOWS } from "./solana-leaderboard.js";
 import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { compositeGuardBlocked, compositeGuardGlobalPaused, recordCompositeSpendFailure, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
 import { gatewaySettleBreakerCheck } from "./gateway-settle-breaker.js";
@@ -235,7 +235,7 @@ import { runSelfCheck } from "./selfcheck.js";
 import { installEgressMeter, egressReport } from "./egress-meter.js";
 import { acpFeed, acpManifest } from "./acp.js";
 import { findTools, findRelatedSellers } from "./find.js";
-import { recordWish, getWishesAggregate, annotateServed, WISH_SERVED_MIN_SCORE } from "./wish.js";
+import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
 import { priceToMicroUsd } from "./x402-index.js";
 import { allPayToOrigins, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
@@ -380,8 +380,11 @@ import { CRAWL_TOOLS } from "./tools/crawl-kit.js";
 import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus } from "./tools/x-data-kit.js";
 import { jevSpendStatus, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
-import { EXA_TOOLS, exaEnabled, exaSpendStatus, exaAllowanceStatus } from "./tools/exa-kit.js";
-import { upstreamBudgetStatus } from "./upstream-budgets.js";
+import { EXA_TOOLS, exaEnabled, exaSpendStatus, exaAllowanceStatus, exaCallsToday } from "./tools/exa-kit.js";
+import { upstreamBudgetStatus, registerUpstreamCounter } from "./upstream-budgets.js";
+// Exa is also an indexed seller the crawlers read unpaid; its budget counts only
+// the calls our Exa tools make.
+registerUpstreamCounter("exa", exaCallsToday);
 import { b2bEnrichEnabled } from "./tools/b2b-enrich-kit.js";
 const X_DATA_TOOLS_ENABLED = xDataEnabled() ? X_DATA_TOOLS : [];
 // Env-gated on EXA_API_KEY: unkeyed deployments list nothing rather than
@@ -4438,7 +4441,7 @@ async function withIntent(req, agg) {
 app.get("/__operator/wishes", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).type("html").send("<p>Not found.</p>");
   const agg = getWishesAggregate({ limit: 500, detailed: true });
-  annotateServed(agg.clusters, wishServedScore, WISH_SERVED_MIN_SCORE);
+  await annotateServedAsync(agg.clusters, wishServedScore, WISH_SERVED_MIN_SCORE);
   res.type("html").send(operatorWishesPage(BASE_URL, await withRerank(req, await withIntent(req, agg))));
 });
 // Token-gated DETAILED wish feed (per-cluster text/counts/verdicts) — the raw
@@ -4481,7 +4484,7 @@ app.get("/__operator/wishes.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store");
   const agg = getWishesAggregate({ limit: req.query?.limit, detailed: true });
-  annotateServed(agg.clusters, wishServedScore, WISH_SERVED_MIN_SCORE);
+  await annotateServedAsync(agg.clusters, wishServedScore, WISH_SERVED_MIN_SCORE);
   res.json(await withRerank(req, await withIntent(req, agg)));
 });
 // Per-chain revenue-ledger sync state. A chain that is merely BEHIND produces
@@ -6181,11 +6184,11 @@ app.get("/api/mpp-index", (_req, res) => {
   res.set("Cache-Control", "public, max-age=120");
   res.json({ ...snap, generatedAt: new Date(snap.generatedAt).toISOString() });
 });
-// Solana SPL leaderboard: inbound USDC credits per seller payTo, hour-fresh,
-// counts only (never a per-transaction feed). The host's own payTo is the
-// flagged `self` row, ranked like everyone else.
+// Solana SPL leaderboard: settled USDC per seller payTo (calls, USDC settled,
+// distinct buyers over ?window=24h|7d|30d, default 7d), aggregates only, never
+// a per-transaction feed. The host's own payTo is the flagged `self` row.
 app.get("/api/solana-leaderboard", (req, res) => {
-  const snap = getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null });
+  const snap = getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null, window: String(req.query.window || "7d") });
   const top = Math.min(Math.max(parseInt(req.query.top, 10) || 50, 1), operatorAuthed(req) ? 1000 : 200);
   res.set("Cache-Control", "public, max-age=120, stale-while-revalidate=600").json({ ...snap, top, rows: snap.rows.slice(0, top), truncatedList: snap.rows.length > top });
 });
@@ -6584,6 +6587,17 @@ app.get("/api/route/external-debug", async (req, res) => {
 //            `windowLabel` + `windowRequested`.
 const SUPPORTED_WINDOWS = new Set(["24h", "7d", "30d", "all"]);
 app.get("/api/leaderboard", (req, res) => {
+  // ?chain=solana is the Solana board (same measures: calls, USDC settled,
+  // buyers; windows 24h/7d/30d). Only validated values are carried over.
+  if (String(req.query.chain || "").toLowerCase() === "solana") {
+    const q = new URLSearchParams();
+    const t = parseInt(req.query.top, 10);
+    if (t > 0) q.set("top", String(Math.min(t, 1000)));
+    const w = String(req.query.window || "");
+    if (Object.hasOwn(SOLANA_WINDOWS, w)) q.set("window", w);
+    const qs = q.toString();
+    return res.redirect(302, `/api/solana-leaderboard${qs ? `?${qs}` : ""}`);
+  }
   const snap = getLeaderboardSnapshot();
   // Free ceiling of 50. Discovery needs the head of the board, not a bulk export
   // of an hourly ~900-wallet on-chain scan: at top=500 a caller can recompute
@@ -6675,7 +6689,7 @@ app.get("/api/leaderboard", (req, res) => {
 });
 // Human-readable companion to /api/leaderboard. Same cached snapshot, rendered
 // as a dashboard so visitors (and the site nav) have something to land on.
-app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(ledgerLeaderboardPage(BASE_URL, getLeaderboardSnapshot(), { stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), walletAddress: WALLET_ADDRESS, host: hostEntryFigures(), standing: standingFigures() })));
+app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(ledgerLeaderboardPage(BASE_URL, getLeaderboardSnapshot(), { stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), walletAddress: WALLET_ADDRESS, host: hostEntryFigures(), standing: standingFigures(), solana: getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null, window: getLeaderboardSnapshot()?.windowLabel === "24h" ? "24h" : "7d" }) })));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(robotsTxt(BASE_URL)));
 // IndexNow ownership key file (env-gated no-op like the other integrations).
 // The protocol verifies a submitted key by fetching /{key}.txt from the host;

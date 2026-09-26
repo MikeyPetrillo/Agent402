@@ -74,5 +74,25 @@ const rep = (hosts) => ({ day: "2026-09-14", hosts });
   }
 }
 
+// A vendor that is also an indexed seller: crawler reads of its domain are not
+// tool use. 621 unpaid crawler calls to api.exa.ai tripped the Exa budget on
+// 2026-09-26 with $0 spent. With the kit's own counter registered, only tool
+// calls count - and tool calls over the budget still trip it.
+{
+  const { registerUpstreamCounter } = await import("../src/upstream-budgets.js");
+  let toolCalls = 3;
+  registerUpstreamCounter("exa", () => toolCalls);
+  const crawled = rep([{ host: "api.exa.ai", calls: 621 }]);
+  let s = upstreamBudgetStatus(crawled);
+  ok(s.upstreams.exa.status === "ok" && s.upstreams.exa.callsToday === 3, `crawler traffic to an indexed seller does not trip its budget (${JSON.stringify(s.upstreams.exa)})`);
+  ok(s.upstreams.exa.counts === "tool calls only", "and the row says what it counts");
+  toolCalls = 600;
+  s = upstreamBudgetStatus(crawled);
+  ok(s.upstreams.exa.status === "elevated", "real tool calls over the budget still trip it");
+  ok(upstreamBudgetStatus(rep([{ host: "api.search.brave.com", calls: 5000 }])).upstreams.brave.status === "elevated", "a budget with no registered counter still reads host traffic");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/registerUpstreamCounter\("exa", exaCallsToday\)/.test(server), "the server registers the Exa kit's own counter");
+}
+
 console.log(`\ntest-upstream-budgets: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

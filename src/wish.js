@@ -182,6 +182,24 @@ export function annotateServed(clusters, scoreFn, minScore) {
   return clusters;
 }
 
+/**
+ * annotateServed, handing the event loop back between clusters. Each cluster
+ * is one catalog search, and the operator board annotates up to 500 of them:
+ * run in one turn that held the thread 2-3 s on prod (2026-09-26). Same
+ * annotation, same order.
+ */
+export async function annotateServedAsync(clusters, scoreFn, minScore, { sliceMs = 8 } = {}) {
+  let sliceStart = performance.now();
+  for (const c of clusters || []) {
+    annotateServed([c], scoreFn, minScore);
+    if (performance.now() - sliceStart >= sliceMs) {
+      await new Promise((r) => setImmediate(r));
+      sliceStart = performance.now();
+    }
+  }
+  return clusters;
+}
+
 const esc = (s) => String(s ?? "")
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
