@@ -235,7 +235,7 @@ import { runSelfCheck } from "./selfcheck.js";
 import { installEgressMeter, egressReport } from "./egress-meter.js";
 import { acpFeed, acpManifest } from "./acp.js";
 import { findTools, findRelatedSellers } from "./find.js";
-import { recordWish, getWishesAggregate, annotateServed, WISH_SERVED_MIN_SCORE } from "./wish.js";
+import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
 import { priceToMicroUsd } from "./x402-index.js";
 import { allPayToOrigins, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
@@ -4438,7 +4438,7 @@ async function withIntent(req, agg) {
 app.get("/__operator/wishes", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).type("html").send("<p>Not found.</p>");
   const agg = getWishesAggregate({ limit: 500, detailed: true });
-  annotateServed(agg.clusters, wishServedScore, WISH_SERVED_MIN_SCORE);
+  await annotateServedAsync(agg.clusters, wishServedScore, WISH_SERVED_MIN_SCORE);
   res.type("html").send(operatorWishesPage(BASE_URL, await withRerank(req, await withIntent(req, agg))));
 });
 // Token-gated DETAILED wish feed (per-cluster text/counts/verdicts) — the raw
@@ -4481,7 +4481,7 @@ app.get("/__operator/wishes.json", async (req, res) => {
   if (!operatorAuthed(req)) return res.status(404).json({ error: "Not found" });
   res.set("Cache-Control", "no-store");
   const agg = getWishesAggregate({ limit: req.query?.limit, detailed: true });
-  annotateServed(agg.clusters, wishServedScore, WISH_SERVED_MIN_SCORE);
+  await annotateServedAsync(agg.clusters, wishServedScore, WISH_SERVED_MIN_SCORE);
   res.json(await withRerank(req, await withIntent(req, agg)));
 });
 // Per-chain revenue-ledger sync state. A chain that is merely BEHIND produces

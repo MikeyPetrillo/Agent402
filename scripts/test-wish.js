@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   recordWish, getWishesAggregate, WISH_THRESHOLD,
-  clusterQualifies, QUALIFY_MIN_SPAN_MS, QUALIFY_MIN_CALLERS, WISH_SERVED_MIN_SCORE, callerHash, annotateServed,
+  clusterQualifies, QUALIFY_MIN_SPAN_MS, QUALIFY_MIN_CALLERS, WISH_SERVED_MIN_SCORE, callerHash, annotateServed, annotateServedAsync,
   __testSetFilePath, __testSetLineCap, __testState, __testReset, WISH_STALE_DAYS,
 } from "../src/wish.js";
 
@@ -379,6 +379,28 @@ for (const f of tmpFiles) {
   ok(board.distinctClusters === 2 && board.liveClusters === 1, "the total still counts everything - hiding is a view, never a deletion");
   ok(board.totalWishes === 9, "and every signal is still counted, including the hidden cluster's");
   ok(getWishesAggregate({ detailed: false }).distinctClusters === 2, "the public beacon's totals are unchanged by the view filter");
+}
+
+// The operator board annotates up to 500 clusters, one catalog search each.
+// The async form must give the same annotations and hand the loop back
+// between clusters instead of holding it for the whole board.
+{
+  const busy = (ms) => { const end = performance.now() + ms; while (performance.now() < end) { /* spin */ } };
+  const scoreFn = (t) => { busy(2); return { slug: `tool-${t.length}`, score: t.length % 2 ? 60 : 1 }; };
+  const mk = () => Array.from({ length: 60 }, (_, i) => ({ text: "wish ".repeat(1 + (i % 7)).trim() }));
+  const syncRows = annotateServed(mk(), scoreFn, 45);
+  let worst = 0, last = performance.now(), live = true;
+  const tick = () => { const now = performance.now(); worst = Math.max(worst, now - last); last = now; if (live) setImmediate(tick); };
+  setImmediate(tick);
+  const t0 = performance.now();
+  const asyncRows = await annotateServedAsync(mk(), scoreFn, 45);
+  const total = performance.now() - t0;
+  // The gap since the ticker last ran counts too: a loop that never yields
+  // starves the ticker entirely, and without this it would score 0 ms.
+  worst = Math.max(worst, performance.now() - last);
+  live = false;
+  ok(JSON.stringify(asyncRows) === JSON.stringify(syncRows), "the async annotator writes exactly what the sync one does");
+  ok(total > 100 && worst < 40, `the async annotator yields while it works (longest hold ${worst.toFixed(1)} ms over ${total.toFixed(0)} ms)`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
