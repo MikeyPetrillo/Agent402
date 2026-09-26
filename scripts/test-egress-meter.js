@@ -190,7 +190,8 @@ export async function fetchAtDepth(url, depth) {
     .filter((f) => f.endsWith(".js"))
     .filter((f) => /globalThis\.fetch\s*=/.test(readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8")));
   ok(wrappers.length >= 3, `found the global fetch wrappers (${wrappers.join(", ")})`);
-  for (const f of wrappers) ok(line.includes(f.replace(/\./g, "\\.")), `PLUMBING skips ${f}, a global fetch wrapper`);
+  const reEscape = (x) => x.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&");
+  for (const f of wrappers) ok(line.includes(reEscape(f)), `PLUMBING skips ${f}, a global fetch wrapper`);
 }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
