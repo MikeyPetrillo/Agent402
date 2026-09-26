@@ -44,7 +44,7 @@ const MAX_PAYTOS = Number(process.env.SOLANA_LB_MAX_PAYTOS) || 5000;
 // Backfill pacing only: history older than the first read is filled at most
 // this many transaction reads per cycle, across all payTos. New payments are
 // never paced.
-const BACKFILL_TX_PER_CYCLE = Number(process.env.SOLANA_LB_BACKFILL_TX_PER_CYCLE) || 25_000;
+const BACKFILL_TX_PER_CYCLE = Number(process.env.SOLANA_LB_BACKFILL_TX_PER_CYCLE) || 4_000;
 const BACKFILL_DAYS = Number(process.env.SOLANA_LB_BACKFILL_DAYS) || 7;
 const RETAIN_DAYS = 30;
 const NO_ACCOUNT_RECHECK_MS = Number(process.env.SOLANA_LB_NO_ACCOUNT_RECHECK_MS) || 24 * 60 * 60_000;

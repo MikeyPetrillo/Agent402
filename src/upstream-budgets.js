@@ -33,7 +33,10 @@ import { egressReport } from "./egress-meter.js";
 // page anyone on day one; the point is catching a step change, not policing
 // normal traffic. `0` or `off` in the env disables one budget.
 export const UPSTREAM_BUDGETS = [
-  { match: "alchemy.com", name: "alchemy", env: "BUDGET_ALCHEMY_CALLS", dflt: 40000,
+  // 100,000 since 2026-09-26: the Solana board reads every settled payment
+  // (about 18,000 reads a day at current volume, on top of ~21,000 of other use)
+  // and fills its first week of history at 4,000 reads a cycle.
+  { match: "alchemy.com", name: "alchemy", env: "BUDGET_ALCHEMY_CALLS", dflt: 100000,
     why: "pay-as-you-go, no ceiling - this is the one that can bill without earning" },
   { match: "api.search.brave.com", name: "brave", env: "BUDGET_BRAVE_CALLS", dflt: 2000,
     why: "backs `search`, our best-selling tool - exhaustion costs revenue, not just uptime" },

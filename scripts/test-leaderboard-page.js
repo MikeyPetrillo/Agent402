@@ -141,5 +141,35 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
      "on the full board the host's own row is flagged self:true, so no consumer can mistake it for a third party");
 }
 
+// The Solana section: Base's columns (USDC settled, calls, buyers, avg ticket,
+// organic), our own payTo left out, a partial scan and a still-loading window
+// said, hostile origin text escaped, a javascript: origin never linked.
+{
+  const w = (calls, usd, buyers) => ({ callsSettled: calls, totalUsd: usd, uniqueBuyers: buyers });
+  const sol = {
+    window: "7d", windowComplete: false, stale: false, scanned: 600, scanCandidates: 700, scanCoversAll: false,
+    rows: [
+      { payTo: "Bd2xS189uhhnxUeBeVF3JFXrg8zQgrvqZtpqh8hgkCEQ", origins: ["https://busy.example", "https://busy2.example"], ...w(36150, 4512.25, 13), self: false, backfilling: true },
+      { payTo: "SELFSELFSELFSELFSELFSELFSELFSELFSELFSELF1111", origins: ["https://agent402.tools"], ...w(900, 1, 5), self: true },
+      { payTo: "Hx9Qe1111111111111111111111111111111111111", origins: ["https://evil.example/<script>alert(1)</script>"], ...w(40, 2, 20), self: false },
+      { payTo: "Js111111111111111111111111111111111111111111", origins: ["javascript:alert(1)"], ...w(3, 0.003, 3), self: false },
+      { payTo: "Zero111111111111111111111111111111111111111", origins: ["https://idle.example"], ...w(0, 0, 0), self: false },
+    ],
+  };
+  const html = ledgerLeaderboardPage(BASE_URL, { leaderboard: [], scannedSellers: 0 }, { solana: sol });
+  ok(/id="solana"/.test(html) && /Solana, ranked by USDC settled/.test(html), "the page carries a Solana section");
+  ok(/36,150/.test(html) && /\$4,512\.25/.test(html) && /\$0\.1248/.test(html), "a busy seller shows every payment, the dollars and the average ticket (no cap)");
+  ok(!/SELFSELF/.test(html), "our own Solana payTo is left out of the ranking, as on the Base table");
+  ok(!/idle\.example/.test(html), "a seller with no payments in the window is not ranked");
+  ok(/scanned 600 of 700 seller payTos/.test(html) && /history still loading/.test(html), "a partial scan and an incomplete window both say so");
+  ok(!/<script>alert/.test(html), "seller-controlled origin text is escaped");
+  ok(!/href="javascript:/i.test(html), "a non-http origin is shown, never linked");
+  ok(/busy\.example<\/a> \+1/.test(html), "a seller with several origins shows the first and a count");
+  ok(/usdc settled<\/span><span[^>]*>calls<\/span><span[^>]*>buyers<\/span><span[^>]*>avg ticket<\/span><span[^>]*>organic/.test(html.slice(html.indexOf('id="solana"'))), "the Solana table has the Base table's columns");
+  const empty = ledgerLeaderboardPage(BASE_URL, {}, { solana: { window: "7d", rows: [] } });
+  ok(/No Solana seller has settled a payment/.test(empty), "an empty board says so instead of rendering nothing");
+  ok(!/id="solana"/.test(ledgerLeaderboardPage(BASE_URL, {}, {})), "no Solana snapshot, no section");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
