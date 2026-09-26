@@ -176,12 +176,16 @@ export function getSolanaLeaderboardSnapshot({ self = null, now = Date.now() } =
   // Public rows carry counts and flags, never the RPC's own words (the
   // leaderboard-redaction rule: an error string on a public surface is a
   // provider detail at best and a key-bearing URL at worst).
-  const rows = rankSolanaRows((current.rows || []).map(({ error, ...r }) => r), { self });
+  // A payTo keeps at most MAX_EVENTS_PER_PAYTO credits in its window, so a row
+  // AT that number is "at least", not a measurement. Said in a field, because
+  // "2000" beside a seller reads as a count.
+  const rows = rankSolanaRows((current.rows || []).map(({ error, ...r }) => ({ ...r, capped: (Number(r.credits) || 0) >= MAX_EVENTS_PER_PAYTO })), { self });
   return {
     network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
     asset: "USDC",
     measure: "inbound USDC credits to the seller's payTo over the window (self-funded transfers excluded); truncated rows reached the per-cycle read cap",
     windowHours: current.windowHours,
+    creditCapPerSeller: MAX_EVENTS_PER_PAYTO,
     scannedAt: current.at ? new Date(current.at).toISOString() : null,
     stale: !current.at || now - current.at > STALE_MS,
     warmStarted: !!current.warm,

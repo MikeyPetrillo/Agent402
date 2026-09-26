@@ -120,6 +120,12 @@ const idx = await import("../src/x402-index.js");
   ok(ev.settled.get("https://sol.example") === 3 && ev.payers.get("https://sol.example") === 1 && ev.settled.get("https://flaky.example") === 25, "evidence maps are keyed by origin for the resolver");
   ok(lb.getSolanaLeaderboardSnapshot({ now: Date.now() + 7 * 60 * 60_000 }).stale === true, "a two-hourly board older than three refreshes reads stale");
   ok(view.rows.every((r) => !("error" in r)) && snap.rows.some((r) => r.error), "public rows never carry the RPC's error text (the internal row keeps it)");
+  // A row at the per-seller credit cap is "at least", not a count: flagged.
+  lb.__setSolanaLeaderboardForTest({ ...snap, rows: [...snap.rows, { payTo: "CAPPED1111", origins: ["https://busy.example"], credits: 2000, payers: 13, truncated: false, stale: false, at: Date.now() }] });
+  const capView = lb.getSolanaLeaderboardSnapshot();
+  const capped = capView.rows.find((r) => r.payTo === "CAPPED1111");
+  ok(capped.capped === true && capView.creditCapPerSeller === 2000, "a row at the per-seller credit cap carries capped:true and the snapshot names the cap");
+  ok(capView.rows.filter((r) => r.payTo !== "CAPPED1111").every((r) => r.capped === false), "rows under the cap say capped:false");
   let attempts = 0;
   const flaky = await lb.scanSolanaSellers(new Map([[A, new Set(["https://sol.example"])]]), { readFn: async (p) => { if (++attempts === 1) throw new Error("Solana RPC HTTP 429"); return buyer.solanaInboundCount(p, { detail: true }); }, retryPauseMs: 0 });
   ok(attempts === 2 && flaky.errors === 0 && flaky.rows[0].credits === 3, "a 429 on the first read is retried once before the row is marked unreadable");

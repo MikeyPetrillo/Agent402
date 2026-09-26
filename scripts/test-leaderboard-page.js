@@ -141,5 +141,31 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
      "on the full board the host's own row is flagged self:true, so no consumer can mistake it for a third party");
 }
 
+// The Solana section: payments and payers only (no dollars), our own payTo left
+// out, a capped row shown as "N+", a partial scan said, hostile text escaped.
+{
+  const sol = {
+    windowHours: 168, creditCapPerSeller: 2000, stale: false, scanned: 600, scanCandidates: 700, scanCoversAll: false,
+    rows: [
+      { payTo: "Bd2xS189uhhnxUeBeVF3JFXrg8zQgrvqZtpqh8hgkCEQ", origins: ["https://busy.example", "https://busy2.example"], credits: 2000, payers: 13, capped: true, self: false, rank: 1 },
+      { payTo: "SELFSELFSELFSELFSELFSELFSELFSELFSELFSELF1111", origins: ["https://agent402.tools"], credits: 900, payers: 5, capped: false, self: true, rank: 2 },
+      { payTo: "Hx9Qe1111111111111111111111111111111111111", origins: ["https://evil.example/<script>alert(1)</script>"], credits: 40, payers: 20, capped: false, self: false, rank: 3 },
+      { payTo: "Zero111111111111111111111111111111111111111", origins: ["https://idle.example"], credits: 0, payers: 0, capped: false, self: false, rank: 4 },
+    ],
+  };
+  const html = ledgerLeaderboardPage(BASE_URL, { leaderboard: [], scannedSellers: 0 }, { solana: sol });
+  ok(/id="solana"/.test(html) && /Solana, ranked by payments received/.test(html), "the page carries a Solana section");
+  ok(/2,000\+/.test(html), "a row at the per-seller cap reads 2,000+, not a measured 2,000");
+  ok(!/SELFSELF/.test(html), "our own Solana payTo is left out of the ranking, as on the Base table");
+  ok(!/idle\.example/.test(html), "a seller with no payments in the window is not ranked");
+  ok(/scanned 600 of 700 seller payTos/.test(html), "a scan that did not reach every payTo says so");
+  ok(!/<script>alert/.test(html), "seller-controlled origin text is escaped");
+  ok(/busy\.example<\/a> \+1/.test(html), "a seller with several origins shows the first and a count");
+  ok(!/usdc settled[^<]*<\/span><span[^>]*>payments/i.test(html) && /payments, not dollars/.test(html), "the section says it counts payments, not dollars");
+  const empty = ledgerLeaderboardPage(BASE_URL, {}, { solana: { windowHours: 168, rows: [] } });
+  ok(/No Solana seller has received a payment/.test(empty), "an empty board says so instead of rendering nothing");
+  ok(!/id="solana"/.test(ledgerLeaderboardPage(BASE_URL, {}, {})), "no Solana snapshot, no section");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
