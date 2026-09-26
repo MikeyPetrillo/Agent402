@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/cursor/plugins/main/schemas/plugin.schema.json",
   "name": "agent402",
   "displayName": "Agent402.Tools",
-  "version": "0.13.4",
+  "version": "2.4.0",
   "description": "Open-source MCP server: 500+ tools AI agents call and pay for per request, in USDC over x402 or MPP, by prepaid card credits, or free via proof-of-work for pure-compute tools. Web search and rendering, PDFs, OCR, SEC filings, market and crypto data, and utilities. Most tools are deterministic code; model-backed tools are marked as such.",
   "author": {
     "name": "Havok Holdings LLC"

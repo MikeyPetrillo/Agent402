@@ -1607,6 +1607,7 @@ jobs:
           t node scripts/test-reliability-claims.js
           # Four false absolutes (a claim must stay true as the service widens)
           t node scripts/test-copy-absolutes.js
+          t node scripts/test-plugin-manifests.js
           # Docs that state a requirement match the engines that enforce it
           t node scripts/test-doc-claims.js
           # The cheap EVM token-safety verdict (unknown is never counted as safe)

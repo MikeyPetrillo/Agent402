@@ -1,6 +1,6 @@
 {
   "name": "agent402",
-  "version": "0.13.4",
+  "version": "2.4.0",
   "description": "Open-source MCP server: 500+ tools AI agents call and pay for per request over x402 or MPP, or free via proof-of-work for pure-compute tools.",
   "author": {
     "name": "Havok Holdings LLC",
