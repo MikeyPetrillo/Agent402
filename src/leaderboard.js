@@ -63,6 +63,14 @@ export const PAYER_BREADTH = { multiSellerMin: 3 };
 
 export const DEFAULTS = {
   bazaarUrl: process.env.BAZAAR_URL || "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources",
+  // PayAI's discovery catalog, walked with the same pager as the Bazaar (same
+  // {items, pagination.total} contract). The Bazaar lists only resources that
+  // settled through CDP, so most sellers settling through PayAI are absent
+  // from it: measured 2026-09-28, 428 of the catalog's 524 Base wallets. The
+  // crawl seed below reaches many of them, but without their advertised
+  // prices, which priceMatches needs to admit a purchase above maxCallUsd.
+  // Set PAYAI_DISCOVERY_URL="" to skip it.
+  payaiUrl: process.env.PAYAI_DISCOVERY_URL ?? "https://facilitator.payai.network/discovery/resources",
   spanBlocks: parseInt(process.env.SPAN_BLOCKS || "43200", 10), // ~24h of Base blocks
   // Free-tier Base RPCs cap eth_getLogs at 10,000 blocks per call; chunk a wide
   // window into ranges no larger than this so it still scans cleanly.
@@ -119,6 +127,19 @@ export function payerFromLog(l) {
   return t && t.length >= 40 ? ("0x" + t.slice(-40)).toLowerCase() : null;
 }
 
+/** Does this accept pay on the scanned chain? x402 v2 names the chain by its
+ *  CAIP-2 id. A v1 listing names it by shorthand ("base"), and that shorthand
+ *  is the chain key NETWORKS already maps to the same id, so a v1 listing is
+ *  read as that chain rather than skipped. The index does the same through
+ *  NETWORK_SHORTHAND; this module keeps its own copy so it imports nothing
+ *  from the index. */
+function acceptOnChain(a, chain) {
+  const n = a?.network;
+  if (typeof n !== "string") return false;
+  if (n === String(chain.caip2 || BASE_MAINNET)) return true;
+  return n.toLowerCase() === String(chain.key || "base").toLowerCase();
+}
+
 /**
  * Pull the Base-mainnet payment wallet from a Bazaar item's `accepts[]`. An
  * item lists multiple payment options (different chains/schemes); for ranking
@@ -129,10 +150,9 @@ export function payerFromLog(l) {
  */
 export function baseUsdcPayToFromItem(item, chain = { caip2: BASE_MAINNET, token: USDC, key: "base" }) {
   const accepts = Array.isArray(item?.accepts) ? item.accepts : [];
-  const want = String(chain.caip2 || BASE_MAINNET);
   const token = String(chain.token || USDC).toLowerCase();
   for (const a of accepts) {
-    if (a?.network !== want) continue;
+    if (!acceptOnChain(a, chain)) continue;
     const asset = String(a.asset || "").toLowerCase();
     if (asset && asset !== token) continue;
     const w = a.payTo;
@@ -150,10 +170,9 @@ export function baseUsdcPayToFromItem(item, chain = { caip2: BASE_MAINNET, token
  *  every chain we scan, so base units ARE micro-dollars. */
 export function advertisedMicroUsd(item, chain = { caip2: BASE_MAINNET, token: USDC, key: "base" }) {
   const accepts = Array.isArray(item?.accepts) ? item.accepts : [];
-  const want = String(chain.caip2 || BASE_MAINNET);
   const token = String(chain.token || USDC).toLowerCase();
   for (const a of accepts) {
-    if (a?.network !== want) continue;
+    if (!acceptOnChain(a, chain)) continue;
     const asset = String(a.asset || "").toLowerCase();
     if (asset && asset !== token) continue;
     const raw = a.amount ?? a.maxAmountRequired;
@@ -237,6 +256,33 @@ export function chainScanConfig(chainKey) {
 /** Every EVM rail we can rank, Base first. */
 export function rankableChains() {
   return Object.keys(EVM).map(chainScanConfig).filter(Boolean);
+}
+
+function seedResourceKey(item) {
+  const raw = item?.resource || item?.url || item?.endpoint;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  try { return new URL(raw.trim()).href; } catch { return raw.trim(); }
+}
+
+/**
+ * Append a second Bazaar-shaped feed's items to the first, skipping any
+ * resource the first already lists. A seller listed in both registries is one
+ * endpoint, not two: counting it twice would inflate `endpoints`, which orders
+ * the optional maxWalletsScan cap. The first feed's copy wins, so the Bazaar's
+ * name and prices stay authoritative for anything it lists.
+ */
+export function mergeSeedItems(primary, extra) {
+  const items = Array.isArray(primary) ? [...primary] : [];
+  const seen = new Set(items.map(seedResourceKey).filter(Boolean));
+  let added = 0;
+  for (const it of Array.isArray(extra) ? extra : []) {
+    const k = seedResourceKey(it);
+    if (k && seen.has(k)) continue;
+    if (k) seen.add(k);
+    items.push(it);
+    added++;
+  }
+  return { items, added };
 }
 
 /**
@@ -867,9 +913,23 @@ export async function runLeaderboard(overrides = {}) {
 
   // 1. Bazaar discovery (paginated) → per-item payTo for Base-mainnet USDC.
   onProgress(`[1/3] Fetching Bazaar discovery (${opts.bazaarUrl})…`);
-  const { items, total } = await fetchAllBazaarItems(opts.bazaarUrl, opts);
+  const { items: bazaarItems, total } = await fetchAllBazaarItems(opts.bazaarUrl, opts);
+  let seedItems = bazaarItems;
+  // The PayAI catalog is a second seed. Best effort: if it is down, the scan
+  // runs on the Bazaar alone, as it did before this seed existed.
+  if (opts.payaiUrl) {
+    try {
+      const payai = await fetchAllBazaarItems(opts.payaiUrl, opts);
+      const merged = mergeSeedItems(bazaarItems, payai.items);
+      seedItems = merged.items;
+      onProgress(`      +${merged.added} listing(s) from the PayAI catalog (${payai.items.length}/${payai.total ?? "?"}; ${payai.items.length - merged.added} already in the Bazaar)`);
+    } catch (e) {
+      onProgress(`      PayAI catalog seed skipped: ${redactSecrets(String(e?.message || e)).slice(0, 120)}`);
+    }
+  }
+  const items = seedItems;
   let sellers = extractWalletsFromBazaar({ items }, chain);
-  onProgress(`      ${items.length}/${total ?? "?"} listings → ${sellers.length} unique ${chain.label}-mainnet wallets`);
+  onProgress(`      ${bazaarItems.length}/${total ?? "?"} Bazaar listings, ${items.length} with PayAI → ${sellers.length} unique ${chain.label}-mainnet wallets`);
   // Our own crawl's payTo wallets, folded in so a self-registered seller can
   // accumulate settlement evidence without joining someone else's registry.
   if (typeof opts.crawledWallets === "function") {
@@ -1353,7 +1413,7 @@ ${renderHeader("/leaderboard")}
 <div class="wrap">
 
 <h1>x402 Leaderboard</h1>
-<p class="sub">Public on-chain ranking of the x402 sellers we can see: discovered from the Coinbase CDP Bazaar plus our own crawl, and ranked by ${sortMode === "calls" ? "raw call volume" : "settled USDC volume"} on Base. A seller ranks here only once it settles inside the window, so this is not a roster of everyone listed - the card below reports how many ranked out of how many were scanned. Window: <b>${esc(windowHuman)}</b>. Snapshot is cached and refreshed hourly.</p>
+<p class="sub">Public on-chain ranking of the x402 sellers we can see: discovered from the Coinbase CDP Bazaar, the PayAI discovery catalog and our own crawl, and ranked by ${sortMode === "calls" ? "raw call volume" : "settled USDC volume"} on Base. A seller ranks here only once it settles inside the window, so this is not a roster of everyone listed - the card below reports how many ranked out of how many were scanned. Window: <b>${esc(windowHuman)}</b>. Snapshot is cached and refreshed hourly.</p>
 
 ${sortToggle}
 
@@ -1377,7 +1437,7 @@ ${sortToggle}
   <div class="ph"><h2>How the ranking is built</h2><div class="pn">Trustless on-chain signal - no self-reported counters.</div></div>
   <div style="padding:14px 18px;">
     <ol class="foot" style="margin:0 0 10px 18px; padding:0;">
-      <li>Walk the Coinbase CDP Bazaar discovery API and extract every Base-mainnet USDC <code>payTo</code> wallet.</li>
+      <li>Walk the Coinbase CDP Bazaar and PayAI discovery APIs and extract every Base-mainnet USDC <code>payTo</code> wallet (x402 v2 <code>eip155:8453</code> or v1 <code>base</code>), counting a resource listed in both once.</li>
       <li>Query <code>eth_getLogs</code> on Base USDC for Transfer events to those wallets over the <b>${esc(windowHuman)}</b> (${esc(snapshot?.scannedBlocks ?? "?")} blocks).</li>
       <li>Filter to per-call settlements (≤ ${esc(fmtUsd(snapshot?.maxCallUsd ?? 0))}); larger inbound transfers are funding/swaps, not tool buys.</li>
       <li>Aggregate by recipient wallet, then fold by canonical website host → callsSettled, totalUsd, uniqueBuyers per operator. An operator listing multiple wallets under one site becomes one row with summed volume and unioned buyers (and a <code>+N more</code> badge listing the extra wallets).</li>
@@ -1399,7 +1459,7 @@ curl -s ${esc(baseUrl)}/api/leaderboard?window=7d           # window hint (defau
   </div>
 </div>
 
-<p class="foot">x402 Leaderboard is open-source - part of <a href="${REPO_URL}">Agent402</a>. Sellers don't have to register: any wallet that appears in the Bazaar with Base-mainnet USDC payment options is scanned automatically.</p>
+<p class="foot">x402 Leaderboard is open-source - part of <a href="${REPO_URL}">Agent402</a>. Sellers don't have to register: any wallet that appears in the Bazaar or the PayAI catalog with Base-mainnet USDC payment options is scanned automatically.</p>
 
 </div>
 ${renderFooter()}

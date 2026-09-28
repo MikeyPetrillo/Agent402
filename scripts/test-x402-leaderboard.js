@@ -10,6 +10,9 @@ import {
   canonicalHost,
   rankBy,
   mergeCrawledWallets,
+  advertisedMicroUsd,
+  mergeSeedItems,
+  DEFAULTS,
 } from "../src/leaderboard.js";
 
 let pass = 0, fail = 0;
@@ -408,6 +411,50 @@ eq(original.map((r) => r.name), snap, "rankBy does not mutate input array");
   const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/startLeaderboardRefresh\(\{[\s\S]{0,300}crawledWallets:/.test(srv), "the server supplies crawledWallets at boot");
   ok(/crawledWallets: \(chain\) => allPayToOrigins\(/.test(srv), "from allPayToOrigins, the same source the Solana board uses");
+}
+
+// ---- the PayAI catalog as a second seed, and v1 `base` listings ----
+// PayAI's discovery catalog has the Bazaar's shape but mixes x402 v1 listings
+// in, and a v1 listing names Base by its shorthand. Measured 2026-09-28: 167
+// of the catalog's 524 Base wallets appear only under `network: "base"`.
+{
+  const V1_WALLET = "0x3333333333333333333333333333333333333333";
+  const v1 = {
+    resource: "https://v1.example/api/report",
+    accepts: [{ scheme: "exact", network: "base", maxAmountRequired: "1500000", asset: USDC, payTo: V1_WALLET }],
+  };
+  eq(baseUsdcPayToFromItem(v1), { wallet: V1_WALLET, network: "base" }, "a v1 listing on `base` is read as Base mainnet");
+  ok(advertisedMicroUsd(v1) === 1500000, "and its v1 maxAmountRequired is its advertised price, from the same accept");
+  ok(baseUsdcPayToFromItem({ accepts: [{ network: "base-sepolia", asset: USDC, payTo: V1_WALLET }] }) === null,
+    "v1 base-sepolia stays out, like its CAIP-2 twin");
+  ok(baseUsdcPayToFromItem({ accepts: [{ network: "solana", payTo: V1_WALLET }] }) === null,
+    "a v1 shorthand for another chain is not read as Base");
+  ok(baseUsdcPayToFromItem({ accepts: [{ network: "base", asset: "0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddead", payTo: V1_WALLET }] }) === null,
+    "a v1 `base` accept in another token is still skipped");
+
+  // Merging the two feeds: a resource both list is counted once and the
+  // Bazaar's copy (listed first) wins; everything else is appended.
+  const BAZAAR_WALLET = "0x4444444444444444444444444444444444444444";
+  const shared = { resource: "https://both.example/x", serviceName: "Both", accepts: [{ network: "eip155:8453", asset: USDC, amount: "10000", payTo: BAZAAR_WALLET }] };
+  const sharedFromPayai = { ...shared, serviceName: "Both (PayAI copy)" };
+  const { items, added } = mergeSeedItems([shared], [sharedFromPayai, v1]);
+  ok(added === 1 && items.length === 2, "a resource already in the Bazaar is not added a second time");
+  const rows = extractWalletsFromBazaar({ items });
+  const byWallet = Object.fromEntries(rows.map((r) => [r.wallet, r]));
+  ok(byWallet[BAZAAR_WALLET]?.name === "Both" && byWallet[BAZAAR_WALLET]?.endpoints === 1, "the Bazaar copy of a shared resource wins, counted once");
+  ok(byWallet[V1_WALLET]?.prices?.has(1500000), "a PayAI-only v1 wallet enters the scan WITH its advertised price, so priceMatches can admit it");
+  eq(mergeSeedItems(null, undefined), { items: [], added: 0 }, "missing feeds merge to nothing rather than throwing");
+
+  ok(DEFAULTS.payaiUrl === (process.env.PAYAI_DISCOVERY_URL ?? "https://facilitator.payai.network/discovery/resources"),
+    "the PayAI catalog is a default seed, and PAYAI_DISCOVERY_URL (empty to skip) overrides it");
+
+  // Pinned from source, like the crawl seam above: the scan has to CALL it.
+  const { readFileSync } = await import("node:fs");
+  const lb = readFileSync(new URL("../src/leaderboard.js", import.meta.url), "utf8");
+  ok(/fetchAllBazaarItems\(opts\.payaiUrl, opts\)/.test(lb), "runLeaderboard walks the PayAI catalog with the same pager as the Bazaar");
+  ok(lb.indexOf("mergeSeedItems(") > -1 && lb.indexOf("mergeSeedItems(bazaarItems") < lb.indexOf("extractWalletsFromBazaar({ items }"),
+    "and merges it before extracting wallets, so both feeds share one extraction");
+  ok(/PayAI catalog seed skipped/.test(lb), "a PayAI outage is reported and skipped, never a failed scan");
 }
 
 // ---- our own payments are not a seller's evidence (2026-09-19) ----
