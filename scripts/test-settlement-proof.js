@@ -225,7 +225,9 @@ const merchant = (m, payments, payers = 3, volumeUsd = 1) => ({ merchant: m, pay
 {
   const { readFileSync } = await import("node:fs");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/provenPayTo:\s*provenPayToByOrigin\?\.get\(norm\(r\.seller\)\)/.test(server),
+  // An unproven Base candidate (2026-09-30) binds to the address its own
+  // live 402 named; every other candidate still binds to the proven one.
+  ok(/provenPayTo:\s*\(r\.unproven && chain === "base" && r\.chainProvenPayTo\) \|\| provenPayToByOrigin\?\.get\(norm\(r\.seller\)\)/.test(server),
     "resolveExternalSeller returns provenPayTo, so the spend has an address to bind against");
   const buyer = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
   // `payable.payTo` is the whole point (the accept being signed, never

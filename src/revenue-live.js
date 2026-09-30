@@ -1573,7 +1573,7 @@ export function decideSection(d) {
   return `
     <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:40px 0 6px;">
       <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">Decide <span style="color:var(--muted);font-weight:400;">· plans and runs</span></h2>
-      <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><a href="/api/revenue/decide">/api/revenue/decide</a> · <a href="/decide">/decide</a></span>
+      <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><a href="/api/revenue/decide">/api/revenue/decide</a></span>
     </div>
     <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;max-width:70ch;">Paid use of the planner and its execute route, on every rail. Settlements count ours too (canaries and tests); the external columns are other buyers. External $ is what they paid for the plan or the run, not the pass-through payments a run makes to outside sellers.</p>
     <div class="rv-tablewrap"><table class="rv-table">
