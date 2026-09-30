@@ -360,7 +360,7 @@ export function extractWalletsFromBazaar(payload, chain = undefined) {
  * allPayToOrigins() returns. Injected rather than imported so this module
  * keeps no dependency on the index and stays testable offline.
  */
-export function mergeCrawledWallets(sellers, payToOrigins, chain = undefined) {
+export function mergeCrawledWallets(sellers, payToOrigins, chain = undefined, payToPrices = null) {
   if (!payToOrigins || typeof payToOrigins.entries !== "function") return { merged: sellers, added: 0 };
   // Match the shape extractWalletsFromBazaar emits: rows carry the chain KEY
   // ("base"), not the CAIP-2 id, and a mixed field would split the board.
@@ -391,6 +391,11 @@ export function mergeCrawledWallets(sellers, payToOrigins, chain = undefined) {
       homepage: origins[0] || null,
       endpoints: Math.max(1, origins.length),
       source: "crawl",
+      // The prices this wallet's own routes publish, as the index read them
+      // (2026-09-30). Without them priceMatches had nothing to read for a
+      // crawl-only wallet. Bazaar rows above are left as the Bazaar lists
+      // them: for a wallet both sources know, the Bazaar's prices stand.
+      prices: payToPrices?.get?.(wallet) instanceof Set ? new Set(payToPrices.get(wallet)) : new Set(),
     });
     added++;
   }
@@ -1084,7 +1089,7 @@ export async function runLeaderboard(overrides = {}) {
   // accumulate settlement evidence without joining someone else's registry.
   if (typeof opts.crawledWallets === "function") {
     try {
-      const { merged, added } = mergeCrawledWallets(sellers, opts.crawledWallets(chain), chain);
+      const { merged, added } = mergeCrawledWallets(sellers, opts.crawledWallets(chain), chain, typeof opts.crawledPrices === "function" ? opts.crawledPrices(chain) : null);
       sellers = merged;
       if (added) onProgress(`      +${added} wallet(s) from our own crawl (not in the Bazaar) → ${sellers.length} total`);
     } catch (e) {

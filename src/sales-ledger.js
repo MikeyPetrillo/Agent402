@@ -265,7 +265,7 @@ const CAIP_TO_RAIL = {
 const canonRail = (network) => CAIP_TO_RAIL[String(network || "").toLowerCase()] || (network || "unknown");
 
 const qMppTotals = db.prepare(`
-  SELECT network, internal, COUNT(*) AS n, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+  SELECT network, internal, COUNT(*) AS n, SUM(price_usd) AS usd, MIN(ts) AS first_ts, MAX(ts) AS last_ts
   FROM sales WHERE wire IN ('mpp', 'mpp-tempo', 'mpp-stripe', 'mpp-tempo-subscription')
   GROUP BY network, internal`);
 const qMppRecentExternal = db.prepare(`
@@ -696,9 +696,9 @@ export function mppSales({ limit = 30, detailed = false } = {}) {
     let count = 0, externalCount = 0, firstTs = null, lastTs = null;
     for (const t of totals) {
       const n = canonRail(t.network);
-      const e = rails[n] || (rails[n] = { count: 0, external: 0, internal: 0, lastAt: null, lastExternalAt: null, txs: [], txsInternal: false });
+      const e = rails[n] || (rails[n] = { count: 0, external: 0, externalUsd: 0, internal: 0, lastAt: null, lastExternalAt: null, txs: [], txsInternal: false });
       e.count += t.n; count += t.n;
-      if (t.internal) e.internal += t.n; else { e.external += t.n; externalCount += t.n; if (!e.lastExternalAt || t.last_ts > Date.parse(e.lastExternalAt)) e.lastExternalAt = new Date(t.last_ts).toISOString(); }
+      if (t.internal) e.internal += t.n; else { e.external += t.n; e.externalUsd = +(e.externalUsd + Number(t.usd || 0)).toFixed(6); externalCount += t.n; if (!e.lastExternalAt || t.last_ts > Date.parse(e.lastExternalAt)) e.lastExternalAt = new Date(t.last_ts).toISOString(); }
       if (!e.lastAt || t.last_ts > Date.parse(e.lastAt)) e.lastAt = new Date(t.last_ts).toISOString();
       if (firstTs === null || t.first_ts < firstTs) firstTs = t.first_ts;
       if (lastTs === null || t.last_ts > lastTs) lastTs = t.last_ts;
@@ -722,7 +722,9 @@ export function mppSales({ limit = 30, detailed = false } = {}) {
       // Per-rail slice of the same evidence (all-time count, external/internal
       // split, newest settlement, recent external hashes) so /revenue can give
       // each MPP rail its own card and link every hash to the RIGHT explorer.
-      // Still aggregate: no tool, no price, no payer, no per-tx timestamp.
+      // Still aggregate: no tool, no per-call price, no payer, no per-tx
+      // timestamp. externalUsd is the rail's all-time outside total, the same
+      // aggregate the x402 table shows per chain.
       rails,
       note: "Aggregate view, all-time. internal = settlements paid by our own wallets (daily canary, Tempo volume runner); external = everyone else. Per-settlement tool/price rows are operator-only; the tx hashes resolve on-chain for independent verification.",
     };
@@ -772,6 +774,37 @@ const qCard = db.prepare(`
   FROM sales WHERE internal = 0 AND rail IN ('card', 'credits') AND ts >= ?`);
 const qCardSubs = db.prepare(`
   SELECT COUNT(*) AS n FROM sales WHERE internal = 0 AND rail = 'card' AND wire = 'stripe-subscription' AND ts >= ?`);
+// Decide (the paid planner) and its execute route, for the /revenue monitor.
+// Counts, dollars and DISTINCT payers only, per slug x internal: never a
+// per-call row (the mppSales lesson). Paying rails only, so a proof-of-work
+// or trial row never reads as a sale. Uncapped aggregates by design (feeds
+// distinct counts; see test-capped-counts).
+const DECIDE_SLUGS = ["decide", "decide-execute"];
+const qDecideSales = db.prepare(`
+  SELECT slug, internal, COUNT(*) AS n, SUM(price_usd) AS usd, COUNT(DISTINCT payer) AS payers, MAX(ts) AS last_ts
+  FROM sales WHERE slug IN ('decide', 'decide-execute') AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+  GROUP BY slug, internal`);
+function decideWindow(since) {
+  const out = {};
+  for (const slug of DECIDE_SLUGS) out[slug] = { count: 0, internal: 0, external: 0, externalUsd: 0, externalBuyers: 0, lastExternalAt: null };
+  for (const r of qDecideSales.all(since)) {
+    const e = out[r.slug];
+    if (!e) continue;
+    e.count += r.n;
+    if (r.internal) { e.internal += r.n; continue; }
+    e.external += r.n;
+    e.externalUsd = +(e.externalUsd + Number(r.usd || 0)).toFixed(6);
+    e.externalBuyers += Number(r.payers || 0);
+    // Truncated to the hour, like every other external timestamp we publish.
+    if (r.last_ts) e.lastExternalAt = new Date(Math.floor(r.last_ts / 3_600_000) * 3_600_000).toISOString();
+  }
+  return out;
+}
+/** { days, window: {decide, decide-execute}, allTime: {...} } - see decideWindow. */
+export function decideSales({ days = 30 } = {}) {
+  return { days, window: decideWindow(Date.now() - days * 86_400_000), allTime: decideWindow(0) };
+}
+
 export function cardSales({ days = 30 } = {}) {
   const since = Date.now() - days * 86_400_000;
   const w = qCard.get(since), all = qCard.get(0), subs = qCardSubs.get(0);

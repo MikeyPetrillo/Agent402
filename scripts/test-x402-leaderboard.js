@@ -11,6 +11,7 @@ import {
   rankBy,
   mergeCrawledWallets,
   advertisedMicroUsd,
+  priceMatches,
 } from "../src/leaderboard.js";
 
 let pass = 0, fail = 0;
@@ -403,12 +404,41 @@ eq(original.map((r) => r.name), snap, "rankBy does not mutate input array");
 {
   const { readFileSync } = await import("node:fs");
   const lb = readFileSync(new URL("../src/leaderboard.js", import.meta.url), "utf8");
-  ok(/mergeCrawledWallets\(sellers, opts\.crawledWallets\(chain\), chain\)/.test(lb), "runLeaderboard folds the crawled wallets into the scan list");
+  ok(/mergeCrawledWallets\(sellers, opts\.crawledWallets\(chain\), chain, typeof opts\.crawledPrices === "function" \? opts\.crawledPrices\(chain\) : null\)/.test(lb), "runLeaderboard folds the crawled wallets, and their listed prices, into the scan list");
   ok(lb.indexOf("mergeCrawledWallets(sellers, opts.crawledWallets") > lb.indexOf("extractWalletsFromBazaar({ items }"), "and does it after the Bazaar extraction, so Bazaar names win");
   ok(!/from "\.\/x402-index\.js"/.test(lb), "the leaderboard still imports nothing from the index");
   const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/startLeaderboardRefresh\(\{[\s\S]{0,300}crawledWallets:/.test(srv), "the server supplies crawledWallets at boot");
   ok(/crawledWallets: \(chain\) => allPayToOrigins\(/.test(srv), "from allPayToOrigins, the same source the Solana board uses");
+  ok(/crawledPrices: \(chain\) => allPayToPrices\(/.test(srv), "and the listed prices from allPayToPrices");
+}
+
+// --- crawl-only wallets carry the prices their own routes publish (2026-09-30)
+// A wallet only our crawl knows (PayAI catalog, self-registration) had no
+// prices, so priceMatches could never read one of its transfers as a purchase
+// at a listed price. For a wallet the Bazaar lists, the Bazaar's prices stand.
+{
+  const bazaarPrices = new Set([5000]);
+  const bazaar = [{ wallet: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", network: "base", name: "Known", origins: ["https://known.example"], homepage: "https://known.example", endpoints: 3, prices: bazaarPrices }];
+  const crawled = new Map([
+    ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", new Set(["https://known.example"])],
+    ["0xcccccccccccccccccccccccccccccccccccccccc", new Set(["https://payai-only.example"])],
+    ["0xdddddddddddddddddddddddddddddddddddddddd", new Set(["https://unpriced.example"])],
+  ]);
+  const prices = new Map([
+    ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", new Set([999999])],
+    ["0xcccccccccccccccccccccccccccccccccccccccc", new Set([10000, 50000])],
+  ]);
+  const { merged } = mergeCrawledWallets(bazaar, crawled, { key: "base" }, prices);
+  const known = merged.find((r) => r.wallet.startsWith("0xaaaa"));
+  ok(known.prices === bazaarPrices && known.prices.size === 1 && known.prices.has(5000), "a Bazaar-listed wallet keeps the Bazaar's prices, never the index's");
+  const payai = merged.find((r) => r.wallet.startsWith("0xcccc"));
+  ok(payai.prices instanceof Set && payai.prices.has(10000) && payai.prices.has(50000), "a crawl-only wallet carries its own listed prices");
+  ok(priceMatches(10000, payai.prices) && !priceMatches(30000, payai.prices), "so its transfers match a listed price, and only a listed one");
+  const bare = merged.find((r) => r.wallet.startsWith("0xdddd"));
+  ok(bare.prices instanceof Set && bare.prices.size === 0, "a crawl-only wallet with no readable price carries an empty set, not undefined");
+  const noMap = mergeCrawledWallets([], crawled, { key: "base" });
+  ok(noMap.merged.every((r) => r.prices instanceof Set && r.prices.size === 0), "no price map: every crawl-only row gets an empty set");
 }
 
 // ---- v1 `base` listings ----

@@ -786,3 +786,50 @@ console.log("openapi-fallback tests passed");
   ok(unknownPaymentishKeys(null).length === 0, "null doc is empty, not a crash");
   console.log("ok - unknown payment-annotation dialects surface, known ones stay quiet");
 }
+
+// ---- 11. a failed fallback says WHICH file failed and why ----
+// A seller whose manifest 403s and whose /openapi.json we could not read saw
+// only "probe backed off: /.well-known/x402" (2026-09-30 report). The record
+// now carries one reason per fallback surface, and sellerDetail publishes it.
+{
+  const { sellerDetail } = await import("../src/x402-index.js");
+  const c11 = _cacheForTests();
+  c11.set("https://failing-fallback.example", {
+    manifest: { name: "failing-fallback.example", homepage: "https://failing-fallback.example" },
+    tools: [], fetchedAt: Date.now(), error: "probe backed off: /.well-known/x402",
+    fallbackErrors: [{ path: "/openapi.json", error: "HTTP 403" }, { path: "/llms.txt", error: "HTTP 404" }],
+    history: [0, 0],
+  });
+  const d = sellerDetail("failing-fallback.example");
+  ok(Array.isArray(d?.fallbackErrors) && d.fallbackErrors[0].path === "/openapi.json" && d.fallbackErrors[0].error === "HTTP 403", "sellerDetail names the fallback file and its failure");
+  c11.set("https://fine.example", { manifest: { name: "fine.example" }, tools: [], fetchedAt: Date.now(), error: null, history: [1] });
+  ok(!("fallbackErrors" in (sellerDetail("fine.example") || {})), "a record with no fallback failure carries no fallbackErrors field");
+  // Pinned from source: every fallback surface records its failure, a fallback
+  // that served the catalogue clears it, and the failure record writes it.
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
+  for (const p of ["/openapi.json", "/agents.json", "/llms.txt"]) ok(src.includes(`noteFallback("${p}", e)`), `a thrown ${p} read is recorded`);
+  ok(src.includes(`noteFallback("/openapi.json", "no payment annotation on any operation")`), "an openapi with no payment signal is recorded, not silent");
+  ok(src.includes("fallbackErrors: openapiTools.length ? undefined : fallbackErrors"), "a fallback that served the catalogue clears the reasons");
+  ok(/robotsBlocked: Boolean\(e\?\.robotsBlocked\) \|\| undefined,\s*fallbackErrors,/.test(src), "the crawl-failed record carries the reasons");
+  ok(/discoveryPath: WELL_KNOWN_PATH,\s*fallbackErrors: undefined,/.test(src), "a manifest that parsed clears stale reasons");
+  console.log("ok - fallback failures name the file and the reason");
+}
+
+// ---- 12. allPayToPrices: the listing prices the crawl knows per Base payTo ----
+{
+  const { allPayToPrices } = await import("../src/x402-index.js");
+  const c12 = _cacheForTests();
+  const W = "0xcccccccccccccccccccccccccccccccccccccccc";
+  c12.set("https://priced.example", { manifest: {}, fetchedAt: Date.now(), error: null, history: [1], tools: [
+    { price: 0.01, payToByNetwork: { "eip155:8453": W.toUpperCase().replace("0X", "0x") } },
+    { price: "$0.05", payToByNetwork: { "eip155:8453": W } },
+    { price: 0.02, paid: false, payToByNetwork: { "eip155:8453": W } },
+    { price: null, payToByNetwork: { "eip155:8453": W } },
+    { price: 0.003, payToByNetwork: { "eip155:137": W } },
+  ] });
+  const got = allPayToPrices("eip155:8453").get(W);
+  ok(got instanceof Set && got.size === 2 && got.has(10000) && got.has(50000), `Base prices only, free and unreadable rows skipped, wallet lowercased (got ${got && [...got]})`);
+  ok(allPayToPrices("eip155:137").get(W)?.has(3000), "the network argument selects that network's payTo");
+  console.log("ok - allPayToPrices reads each wallet's listed prices from the crawl");
+}

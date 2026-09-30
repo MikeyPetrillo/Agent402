@@ -312,7 +312,7 @@ import { findTools, findRelatedSellers } from "./find.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
 import { priceToMicroUsd } from "./x402-index.js";
-import { allPayToOrigins, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
+import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled } from "./mpp-tempo.js";
@@ -526,7 +526,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly } from "./sales-ledger.js";
+import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -1107,7 +1107,8 @@ const SOR_EXTERNAL_ENABLED = /^(1|true|yes|on)$/i.test((process.env.SOR_EXTERNAL
 //      paid deliveries (buyers kept paying because they got results). MIN_SETTLED
 //      gates out the unproven long tail. NOT an absolute across every chain since
 //      2026-09-02: Solana has a bounded unproven tier (SOR_SVM_UNPROVEN_MAX_USD,
-//      tried only after every proven candidate), which is why public copy renders
+//      tried only after every proven candidate), and Base since 2026-09-30
+//      (SOR_BASE_UNPROVEN_MAX_USD, src/base-unproven.js), which is why public copy renders
 //      the claim through routingProofSentence() instead of typing it. This is the safety gate — "route to any
 //      seller THAT ACTUALLY WORKS", not just any seller.
 //   2. LIVENESS — even a proven seller's crawled (method, route) can drift, so
@@ -1495,6 +1496,15 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       .filter((r) => {
         const verdict = dispatchEligibility({ routable: true, networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, spendChains: ["base"], minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, usdcDomain: r.evmDomainByNetwork?.["eip155:8453"] || null });
         const eligible = verdict.chains.base?.eligible === true;
+        // UNPROVEN TIER (src/base-unproven.js): below the floor with nothing
+        // else wrong and a price within the ceiling. Kept, marked, and
+        // ordered after every proven candidate; paid only at the wallet its
+        // own live 402 names (below) and never above the ceiling (payX402).
+        if (!eligible && verdict.chains.base?.unprovenTier === true) {
+          r.unproven = true;
+          gateDrops.byReason.unproven_admitted = (gateDrops.byReason.unproven_admitted || 0) + 1;
+          return true;
+        }
         if (!eligible) {
           gateDrops.total++;
           const why = verdict.chains.base?.reason || "other";
@@ -1502,7 +1512,8 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         }
         return eligible;
       })
-      .sort((a, b) => b.settled - a.settled)
+      // Proven first, most settled first; unproven after every proven one.
+      .sort((a, b) => ((a.unproven ? 1 : 0) - (b.unproven ? 1 : 0)) || (b.settled - a.settled))
       .slice(0, 5);
   }
   if (onlyUrl) candidates = candidates.filter((r) => sameUrl(r.url));
@@ -1695,7 +1706,20 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
         // gate with the origin's binding and the address its live 402 actually
         // asks us to pay: it counts only when THAT wallet's own evidence clears
         // the floor; unreadable is not a match.
-        if (live && chain === "base" && r.binding) {
+        // An UNPROVEN Base candidate has no evidence to bind; it is pinned to
+        // the address its own live 402 names instead, and an unreadable one
+        // is not paid (the payment re-checks the accept it signs against it).
+        if (live && chain === "base" && r.unproven) {
+          const livePayTo = await readLivePayTo();
+          if (!livePayTo) {
+            console.warn(`[sor] skipping unproven Base candidate ${r.seller}: its live payTo could not be read`);
+            live = false;
+          } else {
+            r.chainProvenPayTo = livePayTo;
+            console.log(`[sor] admitting Base candidate ${r.seller} as UNPROVEN (${r.priceUsd} is within the unproven ceiling) - tried after proven sellers`);
+          }
+        }
+        if (live && chain === "base" && r.binding && !r.unproven) {
           const livePayTo = await readLivePayTo();
           const gate = baseLiveGate({ networks: r.networks, settled: r.settled, payers: r.payers, priceUsd: r.priceUsd, urlTemplate: !!r.urlTemplate, minSettled: SOR_MIN_SETTLED_TX, minPayers: SOR_MIN_DISTINCT_PAYERS, binding: r.binding, livePayTo });
           if (!gate.ok) {
@@ -1728,7 +1752,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     // `wire` rides through: a Tempo candidate settles over MPP and its receipt
     // must say so (the first live Tempo SOR buy labelled it x402, 2026-08-27).
     if (live) {
-      resolved.push({ seller: r.seller, slug: r.slug, url: r.url, method: r.method, price: r.price, priceUsd: r.priceUsd, networks: r.networks, settled: r.settled, wire: r.wire || "x402", provenPayTo: provenPayToByOrigin?.get(norm(r.seller)) || r.chainProvenPayTo || null, evidenceWallets, route: r.route || null, guaranteedPaths: r.responseContract?.guaranteedPaths || [], ...(r.unproven ? { unproven: true } : {}), ...(r.judgedSelection ? { selection: r.judgedSelection } : {}) });
+      resolved.push({ seller: r.seller, slug: r.slug, url: r.url, method: r.method, price: r.price, priceUsd: r.priceUsd, networks: r.networks, settled: r.settled, wire: r.wire || "x402", provenPayTo: (r.unproven && chain === "base" && r.chainProvenPayTo) || provenPayToByOrigin?.get(norm(r.seller)) || r.chainProvenPayTo || null, evidenceWallets, route: r.route || null, guaranteedPaths: r.responseContract?.guaranteedPaths || [], ...(r.unproven ? { unproven: true } : {}), ...(r.judgedSelection ? { selection: r.judgedSelection } : {}) });
       // Only PROVEN candidates count toward the limit: an unproven one must
       // never crowd out a proven seller ranked below it.
       if (resolved.filter((x) => !x.unproven).length >= Math.max(1, limit)) break;
@@ -3431,6 +3455,20 @@ app.get("/api/calls/daily", (_req, res) => {
 // wallet scan that endpoint reads never sees a Tempo transaction at all.
 // This reads src/sales-ledger.js's own recorded rows directly instead - real
 // dollars, unlike the free-tier lane, since a Tempo settlement is real money.
+// Decide usage for the /revenue monitor: per slug (decide, decide-execute),
+// all-time and 30 days, settlements with ours counted separately, outside
+// dollars and distinct outside buyers. Aggregates only, never a per-call row.
+app.get("/api/revenue/decide", (_req, res) => {
+  try {
+    res.set("Cache-Control", "public, max-age=60").json(memoSurface("revenue:decide", 60_000, () => ({
+      asOf: new Date().toISOString(),
+      ...decideSales({ days: 30 }),
+      note: "Paid settlements of POST /api/decide and POST /api/decide/execute. internal = our own canaries and tests; external = everyone else. externalUsd is what outside buyers paid us for these two routes; an execute run's pass-through payments to outside sellers are not included.",
+    })));
+  } catch (e) {
+    res.status(500).json({ error: "decide revenue failed", detail: String(e?.message || e).slice(0, 120) });
+  }
+});
 app.get("/api/revenue/tempo-daily", (_req, res) => {
   try {
     res.set("Cache-Control", "public, max-age=60").json(memoSurface("revenue:tempo-daily", 60_000, () => ({
@@ -3467,7 +3505,7 @@ app.get("/revenue", async (_req, res) => {
     // than typed into the copy: a framing paragraph that goes stale is worse
     // than none, because it is the sentence asking to be trusted.
     const idx = getIndexSnapshot()?.totals || {};
-    const ledger = memoSurface("revenue:page-ledger", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }), card: cardSales({ days: 30 }), agents: ledgerBuyerConcentration(revenueWallets()) }));
+    const ledger = memoSurface("revenue:page-ledger", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }), card: cardSales({ days: 30 }), decide: decideSales({ days: 30 }), agents: ledgerBuyerConcentration(revenueWallets()) }));
     res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: { sellers: idx.sellers, listings: idx.tools, rails: settlementRailCount() } }));
   } catch (e) {
     if (e?.snapshotWarming) {
@@ -9892,6 +9930,9 @@ bootStep("setAlgorandCrawlSources", () => {
 });
 bootStep("startLeaderboardRefresh", () => startLeaderboardRefresh({
   crawledWallets: (chain) => allPayToOrigins(chain?.caip2 || "eip155:8453"),
+  // The prices those wallets' own routes publish, so a transfer to a wallet
+  // only our crawl knows can be matched to a listed price like a Bazaar one.
+  crawledPrices: (chain) => allPayToPrices(chain?.caip2 || "eip155:8453"),
 }));
 // Warm the on-chain economy snapshot once, off the boot path: the cache is
 // cold exactly once per deploy and only a cold cache blocks a visitor.

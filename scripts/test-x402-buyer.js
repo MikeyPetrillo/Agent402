@@ -413,6 +413,38 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     "A7: the check sits after the cap check and before the sanctions screen and any budget hold");
 }
 
+// --- Base unproven tier: the ceiling holds on the quote being SIGNED ---------
+// The resolver admits a Base seller below the settlement floor only when its
+// listed price is within SOR_BASE_UNPROVEN_MAX_USD. The seller answers the
+// payment's own 402 separately, so the ceiling is re-checked there.
+{
+  const { _spentThisWindow } = await import("../src/x402-buyer.js");
+  const before = process.env.SOR_BASE_UNPROVEN_MAX_USD;
+  const PAYTO = "0x3333333333333333333333333333333333333333";
+  const entry = (amt) => ({ ...v1entry({ amt }), payTo: PAYTO });
+  const refusal = async (amt, opts = {}) => {
+    globalThis.fetch = async () => challenge([entry(amt)]);
+    try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, allowUnproven: true, ...opts }); return null; } catch (e) { return e; }
+  };
+  delete process.env.SOR_BASE_UNPROVEN_MAX_USD;
+  const spentBefore = _spentThisWindow();
+  const high = await refusal("20000");
+  ok(high && high.statusCode === 409 && /above the unproven ceiling 10000/.test(high.message), "unproven Base: a signed quote above the $0.01 default ceiling is refused 409");
+  ok(_spentThisWindow() === spentBefore, "unproven Base: the refusal holds no spend budget (before reserveSpend)");
+  process.env.SOR_BASE_UNPROVEN_MAX_USD = "off";
+  const off = await refusal("1000");
+  ok(off && off.statusCode === 409, "unproven Base: with the tier switched off even a $0.001 quote is refused");
+  process.env.SOR_BASE_UNPROVEN_MAX_USD = "not-a-number";
+  const junk = await refusal("20000");
+  ok(junk && junk.statusCode === 409 && /ceiling 10000/.test(junk.message), "unproven Base: a malformed env reads as the default ceiling, never a wider one");
+  if (before === undefined) delete process.env.SOR_BASE_UNPROVEN_MAX_USD; else process.env.SOR_BASE_UNPROVEN_MAX_USD = before;
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
+  const payFn = src.slice(src.indexOf("export async function payX402"));
+  const at = payFn.indexOf('chain === "base" && allowUnproven');
+  ok(at > payFn.indexOf("quoteWithinCap(quotedAtomic, maxAtomic)") && at < payFn.indexOf("reserveSpend(quotedAtomic)"), "unproven Base: the ceiling check sits after the cap check and before any budget hold or signature");
+}
+
 globalThis.fetch = origFetch;
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

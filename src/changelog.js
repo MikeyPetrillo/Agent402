@@ -3,6 +3,16 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-09-30",
+    title: "New Base sellers can be routed before they have settlement history",
+    items: [
+      "The router pays Base sellers with settlement history above the floor. A seller below it is now tried too, under a $0.01 per-call ceiling, only after every proven seller for the task, only at the wallet its own live 402 names, and flagged unproven on the buyer's receipt. Solana has had the same tier since September.",
+      "The index shows it: a Base verdict of settlement_required carries unprovenTier when the floor is the only thing in the way and the route's price is within the ceiling.",
+      "When a seller's manifest cannot be read and the crawl falls back to its OpenAPI, agents.json or llms.txt, the seller record now names each file that gave nothing and why (fallbackErrors).",
+      "/revenue: the MPP table shows outside dollars per rail. Base and Celo MPP payments settle as x402 USDC and are counted in the x402 table.",
+    ],
+  },
+  {
+    date: "2026-09-30",
     title: "Decide: a call-ready plan for any job, and a way to run it",
     items: [
       "POST /api/decide turns a task into a plan: which tools, from this catalog and from outside x402 sellers with a recently verified 402, in what order, with fallbacks and input params that validate against each tool's schema. Priced by depth (quick, plan, full); every tool in a plan says whether it is ours, and the ranking has no first-party term. See /decide.",
