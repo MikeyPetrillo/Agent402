@@ -243,24 +243,34 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
 {
   const mod = await import("../src/routing-proof.js");
   const before = process.env.SOR_SVM_UNPROVEN_MAX_USD;
+  const beforeBase = process.env.SOR_BASE_UNPROVEN_MAX_USD;
 
-  delete process.env.SOR_SVM_UNPROVEN_MAX_USD;   // the shipped default
+  delete process.env.SOR_SVM_UNPROVEN_MAX_USD;   // the shipped defaults
+  delete process.env.SOR_BASE_UNPROVEN_MAX_USD;
   const live = mod.routingProofSentence();
   ok(/proven on-chain settlement/.test(live), "the sentence still leads with the proof requirement");
   ok(/one exception/.test(live) && /\$0\.01/.test(live),
      "with the tier on its live default the sentence NAMES the exception and its ceiling");
   ok(/after every proven candidate/.test(live) && /flagged unproven/.test(live),
      "...and says the two things that make the exception bounded: ordering and the receipt flag");
+  ok(/on Base/.test(live) && /on Solana/.test(live), "both chains' tiers are named while both are on");
 
   process.env.SOR_SVM_UNPROVEN_MAX_USD = "off";
+  ok(/on Base/.test(mod.routingProofSentence()) && !/on Solana/.test(mod.routingProofSentence()), "switching one chain's tier off drops only that chain from the sentence");
+  process.env.SOR_BASE_UNPROVEN_MAX_USD = "off";
   const off = mod.routingProofSentence();
   ok(!/exception/.test(off), "switch the tier off and the absolute comes back on its own, rather than being stale in the other direction");
 
   process.env.SOR_SVM_UNPROVEN_MAX_USD = "0.25";
   ok(/\$0\.25/.test(mod.routingProofSentence()), "the ceiling is read from the env the router reads, not typed");
+  delete process.env.SOR_SVM_UNPROVEN_MAX_USD;
+  process.env.SOR_BASE_UNPROVEN_MAX_USD = "0.03";
+  ok(/\$0\.03 a call on Base/.test(mod.routingProofSentence()), "the Base ceiling is read from its own env too");
 
   if (before === undefined) delete process.env.SOR_SVM_UNPROVEN_MAX_USD;
   else process.env.SOR_SVM_UNPROVEN_MAX_USD = before;
+  if (beforeBase === undefined) delete process.env.SOR_BASE_UNPROVEN_MAX_USD;
+  else process.env.SOR_BASE_UNPROVEN_MAX_USD = beforeBase;
 
   // Every page that makes the claim must call the function. A page that
   // reworded the absolute by hand would pass the regex sweep above.

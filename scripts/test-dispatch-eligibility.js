@@ -178,5 +178,27 @@ ok(dispatchEligibility({ local: true }).reason === "local_catalog" && dispatchEl
   ok(/executeViaWhenEligible: executeVia, executeViaCallableNow: false/.test(server) && /\{ executeVia, executeViaCallableNow: true \}/.test(server), "withDispatchFields moves executeVia to executeViaWhenEligible on a non-eligible row and stamps executeViaCallableNow either way");
   ok(/withDispatchSnapshot\(snapshot\)/.test(server) && (server.match(/withDispatchSnapshot\(snapshot\)/g) || []).length >= 2, "the marketplace and chain pages render the labelled snapshot");
 }
+// --- Base unproven tier label (2026-09-30) -------------------------------------
+{
+  const base = { routable: true, networks: ["eip155:8453"], spendChains: ["base"], minSettled: 50, minPayers: 3 };
+  const thin = dispatchEligibility({ ...base, settled: 0, priceUsd: 0.01, unprovenMaxUsd: 0.01 });
+  ok(thin.eligible === false && thin.chains.base.reason === "settlement_required" && thin.chains.base.unprovenTier === true && thin.chains.base.unprovenMaxUsd === 0.01, "below the floor at a price within the ceiling: still not eligible, but unprovenTier says it can be tried");
+  ok(dispatchEligibility({ ...base, settled: 0, priceUsd: 0.05, unprovenMaxUsd: 0.01 }).chains.base.unprovenTier === undefined, "a price above the ceiling carries no tier");
+  ok(dispatchEligibility({ ...base, settled: 0, priceUsd: 0.01, unprovenMaxUsd: 0 }).chains.base.unprovenTier === undefined, "a ceiling of 0 (switched off) carries no tier");
+  ok(dispatchEligibility({ ...base, settled: 0, priceUsd: undefined, unprovenMaxUsd: 0.01 }).chains.base.unprovenTier === undefined, "an unknown price carries no tier");
+  ok(dispatchEligibility({ ...base, settled: 500, payers: 40, priceUsd: 0.01, unprovenMaxUsd: 0.01 }).chains.base.unprovenTier === undefined, "a proven seller is eligible, not tiered");
+  const wrongDomain = dispatchEligibility({ ...base, settled: 0, priceUsd: 0.01, unprovenMaxUsd: 0.01, usdcDomain: { asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", name: "USDC" } });
+  ok(wrongDomain.chains.base.unprovenTier === undefined, "a wrong EIP-712 domain is something else wrong: no tier");
+  ok(dispatchEligibility({ ...base, settled: 0, priceUsd: 0.01, unprovenMaxUsd: 0.01, deliveryFailing: { base: true } }).chains.base.unprovenTier === undefined, "a failing delivery memo is something else wrong: no tier");
+  ok(dispatchEligibility({ ...base, settled: 0, priceUsd: 0.01, unprovenMaxUsd: 0.01, urlTemplate: true }).chains.base.unprovenTier === undefined, "a path template: no tier");
+  ok(typeof dispatchLegend()["routerDispatchByChain.base.unprovenTier"] === "string", "the legend explains unprovenTier");
+  const { readFileSync } = await import("node:fs");
+  const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/verdict\.chains\.base\?\.unprovenTier === true/.test(srv), "the resolver admits only on the label's own unprovenTier verdict");
+  ok(/\(a\.unproven \? 1 : 0\) - \(b\.unproven \? 1 : 0\)\) \|\| \(b\.settled - a\.settled\)/.test(srv), "the resolver orders unproven Base candidates after every proven one");
+  ok(/live && chain === "base" && r\.unproven[\s\S]{0,400}readLivePayTo\(\)[\s\S]{0,200}if \(!livePayTo\)/.test(srv), "an unproven Base candidate with an unreadable live payTo is not paid");
+  ok(/r\.unproven && chain === "base" && r\.chainProvenPayTo/.test(srv), "the payment is pinned to the unproven candidate's own live payTo");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

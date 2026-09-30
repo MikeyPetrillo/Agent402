@@ -887,6 +887,22 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       ? { allowUnprovenUpToAtomic: svmUnprovenAllowanceAtomic(), quotedAtomic }
       : {});
   }
+  // BASE UNPROVEN TIER (src/base-unproven.js): the resolver admitted this
+  // seller below the settlement floor. The ceiling that admitted it is
+  // checked against the quote actually being SIGNED, so a seller quoting the
+  // probe inside the ceiling and the payment above it is refused here.
+  if (chain === "base" && allowUnproven) {
+    const { baseUnprovenAllowanceAtomic } = await import("./base-unproven.js");
+    const ceiling = baseUnprovenAllowanceAtomic();
+    let quote = null;
+    try { quote = quotedAtomic != null ? BigInt(String(quotedAtomic)) : null; } catch { quote = null; }
+    if (!(ceiling > 0n) || quote == null || !(quote > 0n) || quote > ceiling) {
+      const e = new Error(`Seller ${String(payable.payTo).slice(0, 10)}… is below the Base settlement floor and quotes ${quote ?? "an unreadable amount"} atomic, above the unproven ceiling ${ceiling} - not paid`);
+      e.statusCode = 409;
+      throw e;
+    }
+    console.log(`[x402-buyer] paying UNPROVEN Base seller ${String(payable.payTo).slice(0, 10)}… - quote ${quote} atomic is within the unproven ceiling ${ceiling}`);
+  }
   const spendToken = reserveSpend(quotedAtomic); // F3 belt — before signing (throws 429 if over the window budget)
   let committed = false;
   try {
