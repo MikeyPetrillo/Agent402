@@ -24,7 +24,7 @@
   #mode.live { color:var(--accent); }
   main { position:relative; flex:1; min-height:0; }
   canvas { position:absolute; inset:0; width:100%; height:100%; display:block; }
-  aside { position:absolute; right:12px; top:12px; width:min(260px, 44vw); background:rgba(19,27,36,.92); border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:12px; }
+  aside { position:absolute; left:12px; bottom:12px; width:min(260px, 44vw); background:rgba(19,27,36,.92); border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:12px; }
   aside h2 { font-size:12px; color:var(--muted); margin:0 0 6px; font-weight:600; }
   aside ol { margin:0; padding-left:18px; } aside li { margin:2px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   #tip { position:absolute; display:none; max-width:280px; background:#0b1016; border:1px solid var(--accent); border-radius:10px; padding:10px 12px; font-size:12.5px; pointer-events:auto; z-index:5; }
@@ -56,7 +56,7 @@
   <aside><h2 id="top-title">Top sellers, last hour</h2><ol id="top"></ol></aside>
   <div id="tip" role="dialog"></div>
 </main>
-<footer>Each walker is one settled payment, read from the chain: x402 on Base (USDC) to sellers listed in public x402 discovery, and MPP on Tempo (USDC.e) to recipients named in MPP sellers' own 402s. Storefronts are sellers, sized by recent payments; names and logos come from their public listings. <a href="https://agent402.tools">agent402.tools</a></footer>
+<footer>Each walker is one settled payment, read from the chain, wearing the logo of the seller it paid and walking into the gate for its price: x402 on Base (USDC) to sellers listed in public x402 discovery, and MPP on Tempo (USDC.e) to recipients named in MPP sellers' own 402s. Names and logos come from sellers' public listings. <a href="https://agent402.tools">agent402.tools</a></footer>
 <script src="/app.js"></script>
 </body>
 </html>

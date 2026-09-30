@@ -51,55 +51,40 @@
     } catch { return null; }
   }
 
-  // ---- layout: storefronts ----------------------------------------------
-  let buildings = [];           // { key, seller, x, y, w, h, flash, count }
-  const OTHERS = { key: "others", name: "Everyone else", host: null, logo: null, agent402: false, listed: false };
+  // ---- layout: price gates on the right -------------------------------------
   function inScope(p) { return scope === "all" || p.chain === scope; }
-  // Agent402 is one storefront whichever chain it was paid on.
-  const A402 = { key: "agent402", name: "Agent402", host: "agent402.tools", logo: null, agent402: true, listed: true };
-  const bKey = (seller) => (seller.agent402 ? "agent402" : seller.key);
+  const GATES = [
+    { max: 0.001, label: "≤ $0.001" },
+    { max: 0.01, label: "≤ $0.01" },
+    { max: 0.1, label: "≤ $0.10" },
+    { max: 1, label: "≤ $1" },
+    { max: Infinity, label: "over $1" },
+  ];
+  let gates = [];                // { i, label, x, y, w, h, doorX, doorY, n, usd, flash, flashColor }
   function layout() {
     const now = Date.now();
-    const counts = new Map();
+    const tally = GATES.map(() => ({ n: 0, usd: 0 }));
     for (const p of payments) {
       if (!inScope(p) || now - p.ts > 3600_000) continue;
-      const k = bKey(p.seller);
-      counts.set(k, { seller: p.seller.agent402 ? A402 : p.seller, n: (counts.get(k)?.n || 0) + 1 });
+      const t = tally[gateIndex(p.amountUsd)]; t.n++; t.usd += p.amountUsd;
     }
-    const slots = W < 640 ? 6 : W < 1100 ? 10 : 14;
-    const ranked = [...counts.values()].filter((v) => !v.seller.agent402).sort((a, b) => b.n - a.n);
-    const shown = ranked.slice(0, slots - 2);
-    const list = [{ seller: A402, n: counts.get("agent402")?.n || 0 }, ...shown, { seller: OTHERS, n: ranked.slice(slots - 2).reduce((s, v) => s + v.n, 0) }];
-    const cols = W < 640 ? 3 : W < 1100 ? 5 : 7;
-    const rows = Math.ceil(list.length / cols);
-    const panel = W >= 640 ? 285 : 0;
-    const left = Math.max(80, W * 0.2), areaW = W - left - 16 - panel, cellW = areaW / cols;
-    const rowH = Math.min(190, (H - 70) / rows);
-    const top = Math.max(30, (H - rows * rowH) / 2);
-    const maxN = Math.max(1, ...list.map((v) => v.n));
-    const prev = new Map(buildings.map((b) => [b.key, b]));
-    buildings = list.map((v, i) => {
-      const r = Math.floor(i / cols), c = i % cols;
-      const scale = 0.45 + 0.55 * Math.sqrt(v.n / maxN);
-      const w = Math.min(cellW * 0.8, 120), h = Math.max(38, (rowH - 34) * scale);
-      const x = left + c * cellW + (cellW - w) / 2, baseY = top + (r + 1) * rowH - 18;
-      return { key: bKey(v.seller), seller: v.seller, x, y: baseY - h, w, h, baseY, count: v.n, flash: prev.get(v.seller.key)?.flash || 0 };
-    });
+    const gw = W < 640 ? 92 : 150, x = W - gw - 12;
+    const top = 16, gap = 10, h = (H - top * 2 - gap * (GATES.length - 1)) / GATES.length;
+    const prev = gates;
+    gates = GATES.map((g, i) => ({ i, label: g.label, x, y: top + i * (h + gap), w: gw, h, doorX: x, doorY: top + i * (h + gap) + h / 2, n: tally[i].n, usd: tally[i].usd, flash: prev[i]?.flash || 0, flashColor: prev[i]?.flashColor }));
   }
-  function buildingFor(seller) {
-    return buildings.find((b) => b.key === bKey(seller)) || buildings.find((b) => b.key === "others");
-  }
+  function gateIndex(usd) { return GATES.findIndex((g) => usd <= g.max); }
 
-  // ---- walkers -----------------------------------------------------------
+  // ---- walkers: the paid seller's logo on legs ------------------------------
   function spawn(p, speed = 1) {
     if (!inScope(p)) return;
-    const b = buildingFor(p.seller);
-    if (!b) return;
+    const g = gates[gateIndex(p.amountUsd)];
+    if (!g) return;
     if (walkers.length >= MAX_WALKERS) walkers.shift();
-    const sy = 40 + Math.random() * (H - 80);
-    const tx = b.x + b.w / 2 + (Math.random() - 0.5) * b.w * 0.4, ty = b.baseY;
+    const sy = 30 + Math.random() * (H - 60);
+    const ty = g.y + 14 + Math.random() * Math.max(4, g.h - 28);
     const dur = (8000 + Math.random() * 4000) / speed;
-    walkers.push({ p, b, sx: -20, sy, tx, ty, t0: performance.now(), dur, big: !!p.seller.agent402 });
+    walkers.push({ p, gi: g.i, sx: -24, sy, tx: g.x - 6, ty, t0: performance.now(), dur, big: !!p.seller.agent402 });
   }
 
   // ---- drawing -----------------------------------------------------------
@@ -109,27 +94,22 @@
     return t + "…";
   }
   function roundRect(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
-  function drawBuilding(b) {
-    const st = b.seller.agent402 ? { color: "#0f5e43" } : b.key === "others" ? { color: "#3a4655" } : sellerStyle(b.seller);
+  const fmtGateUsd = (n) => n >= 100 ? `$${n.toFixed(0)}` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`;
+  function drawGate(g) {
     ctx.save();
-    ctx.globalAlpha = 1;
-    // body
-    ctx.fillStyle = "#18222d"; roundRect(b.x, b.y, b.w, b.h, 6); ctx.fill();
-    ctx.strokeStyle = b.flash > 0 ? "#9ef0b0" : "#2a3a4b"; ctx.lineWidth = b.flash > 0 ? 2 : 1; ctx.stroke();
-    // awning in the seller color
-    ctx.fillStyle = st.color; roundRect(b.x - 3, b.y - 6, b.w + 6, 10, 4); ctx.fill();
-    // windows
-    ctx.fillStyle = b.flash > 0 ? "rgba(158,240,176,.35)" : "rgba(255,255,255,.06)";
-    for (let wy = b.y + 12; wy < b.baseY - 22; wy += 14) for (let wx = b.x + 8; wx < b.x + b.w - 12; wx += 14) ctx.fillRect(wx, wy, 8, 7);
-    // door
-    ctx.fillStyle = "#0c1117"; roundRect(b.x + b.w / 2 - 7, b.baseY - 16, 14, 16, 3); ctx.fill();
-    // logo on the facade
-    const icon = b.seller.agent402 ? (mascot.complete ? mascot : null) : st.ok ? st.img : null;
-    if (icon) ctx.drawImage(icon, b.x + b.w / 2 - 9, b.y + 8, 18, b.seller.agent402 ? 22 : 18);
-    // label
-    ctx.fillStyle = b.seller.agent402 ? "#9ef0b0" : "#c9d4de"; ctx.font = "600 11px system-ui, sans-serif"; ctx.textAlign = "center";
-    ctx.fillText(fitText(String(b.seller.name || ""), b.w + 24), b.x + b.w / 2, b.baseY + 13);
-    if (b.count) { ctx.fillStyle = "#8a99a8"; ctx.font = "10px system-ui, sans-serif"; ctx.fillText(String(b.count), b.x + b.w / 2, b.y - 10); }
+    const lit = g.flash > 0;
+    ctx.fillStyle = "#141d27"; roundRect(g.x, g.y, g.w, g.h, 10); ctx.fill();
+    ctx.lineWidth = lit ? 2.5 : 1; ctx.strokeStyle = lit ? (g.flashColor || "#9ef0b0") : "#2a3a4b"; ctx.stroke();
+    // the opening walkers step into
+    ctx.fillStyle = "#0c1117"; ctx.fillRect(g.x - 2, g.y + 10, 6, g.h - 20);
+    ctx.fillStyle = lit ? (g.flashColor || "#9ef0b0") : "#2a3a4b"; ctx.fillRect(g.x - 3, g.y + 10, 3, g.h - 20);
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#e8eef3"; ctx.font = `700 ${W < 640 ? 13 : 16}px system-ui, sans-serif`;
+    ctx.fillText(g.label, g.x + 14, g.y + Math.min(28, g.h / 2));
+    if (g.h > 46) {
+      ctx.fillStyle = "#8a99a8"; ctx.font = `${W < 640 ? 10 : 12}px system-ui, sans-serif`;
+      ctx.fillText(`${g.n.toLocaleString()} · ${fmtGateUsd(g.usd)}`, g.x + 14, g.y + Math.min(48, g.h / 2 + 18));
+    }
     ctx.restore();
   }
   function walkerPos(w, now) {
@@ -141,37 +121,41 @@
     const { k, x, y } = walkerPos(w, now);
     const step = Math.sin((now - w.t0) / 90);
     ctx.save();
-    ctx.globalAlpha = k > 0.92 ? (1 - k) / 0.08 : 1;
+    ctx.globalAlpha = k > 0.93 ? (1 - k) / 0.07 : 1;
     if (w.big) {
       const s = 0.62;
-      ctx.shadowColor = "rgba(158,240,176,.8)"; ctx.shadowBlur = 12;
+      ctx.shadowColor = "rgba(158,240,176,.85)"; ctx.shadowBlur = 14;
       if (mascot.complete) ctx.drawImage(mascot, x - 32 * s, y - 80 * s + step * 1.5, 64 * s, 80 * s);
       ctx.restore(); w.hit = { x: x - 20, y: y - 50, w: 40, h: 50 }; return;
     }
     const st = sellerStyle(w.p.seller);
-    const internal = w.p.internal;
+    const r = 15, cy = y - 24;
     // legs
-    ctx.fillStyle = "#1d2b3a";
-    ctx.fillRect(x - 4, y - 10, 3, 10 + step * 2); ctx.fillRect(x + 1, y - 10, 3, 10 - step * 2);
-    // body in the seller's color
-    ctx.fillStyle = internal ? "#56606b" : st.color; roundRect(x - 6, y - 22, 12, 13, 4); ctx.fill();
-    // head
-    ctx.fillStyle = "#f1e6da"; ctx.beginPath(); ctx.arc(x, y - 26, 4.5, 0, Math.PI * 2); ctx.fill();
-    // favicon badge
-    if (st.ok) { ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(x + 8, y - 17, 5.5, 0, Math.PI * 2); ctx.fill(); ctx.drawImage(st.img, x + 4, y - 21, 8, 8); }
+    ctx.strokeStyle = "#8a99a8"; ctx.lineWidth = 2.2; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(x - 3, cy + r - 1); ctx.lineTo(x - 4 + step * 3, y); ctx.moveTo(x + 3, cy + r - 1); ctx.lineTo(x + 4 - step * 3, y); ctx.stroke();
+    // the seller's logo as the head and body
+    ctx.fillStyle = w.p.internal ? "#56606b" : st.color;
+    ctx.beginPath(); ctx.arc(x, cy, r + 2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(x, cy, r, 0, Math.PI * 2); ctx.fill();
+    if (st.ok) {
+      ctx.save(); ctx.beginPath(); ctx.arc(x, cy, r - 1, 0, Math.PI * 2); ctx.clip();
+      ctx.drawImage(st.img, x - r + 1, cy - r + 1, 2 * r - 2, 2 * r - 2); ctx.restore();
+    } else {
+      ctx.fillStyle = st.color; ctx.font = "700 15px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(String(w.p.seller.name || "?").replace(/^0x/, "").slice(0, 1).toUpperCase(), x, cy + 0.5);
+    }
     ctx.restore();
-    w.hit = { x: x - 9, y: y - 32, w: 22, h: 32 };
+    w.hit = { x: x - r - 3, y: cy - r - 3, w: 2 * r + 6, h: y - cy + r + 6 };
   }
   function frame(now) {
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.fillStyle = "#0c1117"; ctx.fillRect(0, 0, W, H);
-    // street
-    ctx.strokeStyle = "#16202a"; ctx.lineWidth = 1;
+    ctx.strokeStyle = "#131c25"; ctx.lineWidth = 1;
     for (let y = 40; y < H; y += 46) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-    for (const b of buildings) { drawBuilding(b); if (b.flash > 0) b.flash -= 1; }
+    for (const g of gates) { drawGate(g); if (g.flash > 0) g.flash -= 1; }
     for (let i = walkers.length - 1; i >= 0; i--) {
       const w = walkers[i];
-      if (now - w.t0 >= w.dur) { w.b.flash = 24; walkers.splice(i, 1); continue; }
+      if (now - w.t0 >= w.dur) { const g = gates[w.gi]; if (g) { g.flash = 18; g.flashColor = w.big ? "#9ef0b0" : sellerStyle(w.p.seller).color; } walkers.splice(i, 1); }
     }
     for (const w of walkers) if (!w.big) drawWalker(w, now);
     for (const w of walkers) if (w.big) drawWalker(w, now);
