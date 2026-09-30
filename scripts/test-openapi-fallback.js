@@ -815,3 +815,21 @@ console.log("openapi-fallback tests passed");
   ok(/discoveryPath: WELL_KNOWN_PATH,\s*fallbackErrors: undefined,/.test(src), "a manifest that parsed clears stale reasons");
   console.log("ok - fallback failures name the file and the reason");
 }
+
+// ---- 12. allPayToPrices: the listing prices the crawl knows per Base payTo ----
+{
+  const { allPayToPrices } = await import("../src/x402-index.js");
+  const c12 = _cacheForTests();
+  const W = "0xcccccccccccccccccccccccccccccccccccccccc";
+  c12.set("https://priced.example", { manifest: {}, fetchedAt: Date.now(), error: null, history: [1], tools: [
+    { price: 0.01, payToByNetwork: { "eip155:8453": W.toUpperCase().replace("0X", "0x") } },
+    { price: "$0.05", payToByNetwork: { "eip155:8453": W } },
+    { price: 0.02, paid: false, payToByNetwork: { "eip155:8453": W } },
+    { price: null, payToByNetwork: { "eip155:8453": W } },
+    { price: 0.003, payToByNetwork: { "eip155:137": W } },
+  ] });
+  const got = allPayToPrices("eip155:8453").get(W);
+  ok(got instanceof Set && got.size === 2 && got.has(10000) && got.has(50000), `Base prices only, free and unreadable rows skipped, wallet lowercased (got ${got && [...got]})`);
+  ok(allPayToPrices("eip155:137").get(W)?.has(3000), "the network argument selects that network's payTo");
+  console.log("ok - allPayToPrices reads each wallet's listed prices from the crawl");
+}

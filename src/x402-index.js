@@ -5837,6 +5837,30 @@ export function allPayToOrigins(network = "eip155:8453") {
   return out;
 }
 
+/** The listing prices our own crawl knows per payTo on `network`: Map(lowercased
+ *  wallet -> Set(micro-dollars)). Read by the Base leaderboard for wallets the
+ *  Bazaar does not list (sellers found through our crawl, PayAI's catalog and
+ *  self-registration), whose transfers could otherwise never be matched to a
+ *  price the seller publishes. Crawled rows only: a Bazaar-listed wallet keeps
+ *  the Bazaar's own prices (mergeCrawledWallets does not touch those rows).
+ *  A route marked free, or with no readable price, contributes nothing. */
+export function allPayToPrices(network = "eip155:8453") {
+  const out = new Map();
+  for (const v of cache.values()) {
+    for (const t of v?.tools || []) {
+      const addr = t?.payToByNetwork?.[network];
+      if (typeof addr !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(addr) || t.paid === false) continue;
+      const micro = priceToMicroUsd(t.price);
+      if (!(micro > 0)) continue;
+      const k = addr.toLowerCase();
+      let set = out.get(k);
+      if (!set) { set = new Set(); out.set(k, set); }
+      set.add(micro);
+    }
+  }
+  return out;
+}
+
 /** Solana twin of allPayToOrigins: mainnet-label payTos (base58) -> origins.
  *  The Solana leaderboard's scan list (src/solana-leaderboard.js). */
 export const SOLANA_MAINNET_LABELS = new Set(["solana:5eykt4usfv8p8njdtrepy1vzqkqzkvdp", "solana", "solana-mainnet", "solana-mainnet-beta"]);
