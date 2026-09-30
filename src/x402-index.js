@@ -4529,6 +4529,7 @@ async function crawlSeller(originUrl) {
       // WHICH surface produced this catalogue. Everything below is a fallback,
       // and a seller cannot fix a gap they cannot see — see discoveryNote().
       discoveryPath: WELL_KNOWN_PATH,
+      fallbackErrors: undefined,
       // Not this seller's turn: carry the last reading forward rather than
       // dropping it — null must mean "never probed", not "not probed today".
       paywall: paywallProbeDue() ? await probePaywall(tools) : (prev?.paywall ?? null),
@@ -4560,6 +4561,12 @@ async function crawlSeller(originUrl) {
     let openapi = null;
     let openapiTools = [];
     let openapiPath = null;
+    // WHY each fallback surface gave nothing. The record's `error` names only
+    // the manifest's failure, so a seller whose /openapi.json we could not
+    // read (or read and could not use) saw "probe backed off: /.well-known/x402"
+    // and nothing about the file that actually decided the listing.
+    const fallbackErrors = [];
+    const noteFallback = (path, e) => fallbackErrors.push({ path, error: String(e?.message || e).slice(0, 160) });
     try {
       const openapiRes = await fetchOpenapi();
       const parsed = JSON.parse(openapiRes.html);
@@ -4567,9 +4574,11 @@ async function crawlSeller(originUrl) {
         openapi = parsed;
         openapiTools = normaliseOpenapiTools(parsed, originUrl);
         if (openapiTools.length) openapiPath = "/openapi.json";
-      }
-    } catch {
+        else noteFallback("/openapi.json", "no paid operation could be read from it");
+      } else noteFallback("/openapi.json", "no payment annotation on any operation");
+    } catch (e) {
       /* no openapi either — Bazaar-only seller */
+      noteFallback("/openapi.json", e);
     }
     // 3. /agents.json. Reported by a seller (#645) who served a COMPLETE
     //    catalogue there - 17 endpoints with prices and schemas - while our
@@ -4589,8 +4598,9 @@ async function crawlSeller(originUrl) {
           const fromAgents = normaliseOpenapiTools(parsed, originUrl);
           if (fromAgents.length) { openapi = openapi || parsed; openapiTools = fromAgents; openapiPath = "/agents.json"; }
         }
-      } catch {
+      } catch (e) {
         /* no agents.json either */
+        noteFallback("/agents.json", e);
       }
     }
     // 4. /llms.txt. The other half of the #645 ask. Last because it is prose:
@@ -4606,8 +4616,9 @@ async function crawlSeller(originUrl) {
         const llmsRes = await probePath(originUrl, "/llms.txt", { maxBytes: MAX_OPENAPI_BYTES });
         const fromLlms = normaliseLlmsTxtTools(llmsRes.html, originUrl);
         if (fromLlms.length) { openapiTools = fromLlms; openapiPath = "/llms.txt"; }
-      } catch {
+      } catch (e) {
         /* no llms.txt either */
+        noteFallback("/llms.txt", e);
       }
     }
     const tools = dropUnvouchedNonProductRoutes(
@@ -4643,6 +4654,7 @@ async function crawlSeller(originUrl) {
         // /agents.json. A seller told to fix their discovery path needs to know
         // which path we did read, not merely that it was not the standard one.
         discoveryPath: openapiPath,
+        fallbackErrors: openapiTools.length ? undefined : fallbackErrors,
         // A CRAWL COMPLETING IS NOT A SELLER ANSWERING, and this line is where
         // that distinction was half-applied. `originResponded` below already
         // says the truth (openapi-fallback = their document answered;
@@ -4689,6 +4701,7 @@ async function crawlSeller(originUrl) {
       // explanation - the same "absence reported as absence" rule the discovery
       // gap and /status already follow.
       robotsBlocked: Boolean(e?.robotsBlocked) || undefined,
+      fallbackErrors,
       fetchedAt: Date.now(),
       history: rollHistory(prev, false),
     });
@@ -5987,6 +6000,11 @@ export function sellerDetail(originOrHost) {
       // file has twice shipped a field present on two of three, which is
       // inert on whichever surface happens to render.
       discoveryPath: v.discoveryPath || null,
+      // Why each fallback surface (openapi, agents.json, llms.txt) gave
+      // nothing on the last crawl that fell back; absent when the manifest or
+      // a fallback served the catalogue. A backed-off path says so, and an
+      // explicit re-registration at /sell clears every backoff.
+      ...(Array.isArray(v.fallbackErrors) && v.fallbackErrors.length ? { fallbackErrors: v.fallbackErrors } : {}),
       // payTo per advertised network, from the origin's own live 402 and its
       // own documents as well as from a registry listing about it (see the
       // same field on routableSellerSummaries). Omitting it made
