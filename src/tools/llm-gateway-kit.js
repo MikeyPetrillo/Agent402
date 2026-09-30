@@ -932,7 +932,7 @@ export const MODEL_COST = [
   // repeatedly. Prompt is pinned AT v1-chat's max_price prompt cap, so no
   // provider the tier admits can ever exceed it there; completion covers the
   // observed maximum.
-  ["deepseek/deepseek-v4-pro", { prompt: 2.5, completion: 7 }], // live endpoints 2026-09-30 (relace/fp4 completion $7)
+  ["deepseek/deepseek-v4-pro", { prompt: 2.5, completion: 10 }], // live endpoints 2026-09-30 (reka completion $10)
   // deepseek-chat-v3.1: one regional endpoint lists prompt above the family row (live endpoints 2026-09-24).
   ["deepseek/deepseek-chat-v3.1", { prompt: 0.65, completion: 2.5 }],
   // deepseek-v3.2: re-admitted once its upstream expiration date was withdrawn.
