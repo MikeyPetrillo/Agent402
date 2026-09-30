@@ -76,6 +76,9 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
   ok(s.x402.h1.buyers === 2, "store: buyers are distinct payers");
   ok(s.mpp.h1.payments === 0 && s.all.h1.payments === 3, "store: scopes separate x402 and MPP");
   ok(st.recent().length === 3, "store: the replay buffer keeps only the last hour");
+  const st2 = makeStore({ now: () => t });
+  for (const [i, dt] of [[1, 100], [2, 500], [3, 300], [4, 50]]) st2.add(e(i + 10, A, t - dt * 1000));
+  ok(st2.recent().map((x) => x.ts).every((ts, i, a) => i === 0 || a[i - 1] <= ts), "store: events arriving newest first are kept in time order");
 }
 
 // --- HTTP surface, booted offline
@@ -91,11 +94,14 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
   ok(page.status === 200 && /script-src|default-src 'self'/.test(page.headers.get("content-security-policy") || "") && /app\.js\?v=[0-9a-f]{12}/.test(html), "page: served with a CSP and a versioned script");
   const health = await (await fetch(base + "/health")).json();
   ok(health.ok === true && health.events1h === 1, "health: one event, the unlisted Base payTo was not counted");
+  const { onEvents: push } = await import("./server.js");
+  push([{ chain: "x402", tx: "0xold", logIndex: 1, block: 1, payer: A, payTo: "0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0", amountUsd: 0.001, ts: Date.now() - 600_000 }], { backfill: true });
+  ok((await (await fetch(base + "/health")).json()).events1h === 2, "health: a backfilled payment joins the hour");
   const ctl = new AbortController();
   const es = await fetch(base + "/events", { signal: ctl.signal });
   const reader = es.body.getReader(); const { value } = await reader.read(); ctl.abort();
   const hello = JSON.parse(/data: (.*)\n/.exec(new TextDecoder().decode(value))[1]);
-  const p = hello.payments[0];
+  const p = hello.payments.find((x) => x.tx === "0xabc");
   ok(p && p.seller.agent402 === true && p.seller.name === "Agent402" && p.txUrl === "https://basescan.org/tx/0xabc", "events: an Agent402 payment is marked and links to basescan");
   ok(/^0x[0-9a-f]{4}…[0-9a-f]{4}$/.test(p.payer), "events: the buyer is shortened");
   ok((await fetch(base + "/logo/x402%3A" + "0".repeat(40))).status === 404 && (await fetch(base + "/logo/https%3A%2F%2Fevil.example")).status === 404, "logo: only a directory key is served, never an arbitrary URL");

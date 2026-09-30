@@ -63,13 +63,15 @@ function toPublic(ev) {
 // a seller listed in public x402 discovery (or Agent402). Tempo is already
 // limited to MPP recipients read from sellers' own 402s.
 const INCLUDE_UNLISTED = process.env.LIVE_INCLUDE_UNLISTED === "1";
-function onEvents(evs) {
+function onEvents(evs, { backfill = false } = {}) {
   for (const ev of evs) {
     const s = directory.lookup(ev.chain, ev.payTo);
     if (!s.listed && !INCLUDE_UNLISTED) continue;
     ev.seller = s;
     sellerByKey.set(s.key, sellerPublic(s));
-    if (store.add(ev)) pending.push(ev);
+    // Backfilled payments are history: they join the hour a page loads on
+    // connect, never the live stream of walkers.
+    if (store.add(ev) && !backfill) pending.push(ev);
   }
 }
 
@@ -106,8 +108,11 @@ const server = http.createServer(async (req, res) => {
     return res.end(req.method === "HEAD" ? undefined : files[path].body);
   }
   if (path === "/health") {
-    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-    return res.end(JSON.stringify({ ok: true, events1h: store.size(), clients: clients.size, directory: directory.status(), base: ingest.base?.status || null, tempo: ingest.tempo?.status || null }));
+    // Ready only once both chains have their last hour: the deploy keeps the
+    // previous instance serving until then, so a page is never empty.
+    const ready = OFFLINE || (ingest.base?.status.backfilled && ingest.tempo?.status.backfilled);
+    res.writeHead(ready ? 200 : 503, { "content-type": "application/json", "cache-control": "no-store" });
+    return res.end(JSON.stringify({ ok: !!ready, warming: !ready, events1h: store.size(), clients: clients.size, directory: directory.status(), base: ingest.base?.status || null, tempo: ingest.tempo?.status || null }));
   }
   if (path === "/api/stats") {
     res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=10", "access-control-allow-origin": "*" });

@@ -16,9 +16,14 @@ export function makeStore({ now = () => Date.now() } = {}) {
     if (seen.has(id)) return false;
     seen.add(id);
     ev.id = id;
-    // Keep order by time: backfill arrives in block order, live after it.
-    events.push(ev);
-    if (events.length > 1 && events[events.length - 2].ts > ev.ts) events.sort((a, b) => a.ts - b.ts);
+    // Keep order by time: backfill arrives newest first beside live events,
+    // so insert in place (binary search) rather than re-sort.
+    if (!events.length || events[events.length - 1].ts <= ev.ts) events.push(ev);
+    else {
+      let lo = 0, hi = events.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (events[mid].ts <= ev.ts) lo = mid + 1; else hi = mid; }
+      events.splice(lo, 0, ev);
+    }
     const m = Math.floor(ev.ts / 60_000);
     const b = minutes.get(m) || { x402: { n: 0, usd: 0 }, mpp: { n: 0, usd: 0 }, sellers: new Map() };
     b[ev.chain].n++; b[ev.chain].usd += ev.amountUsd;

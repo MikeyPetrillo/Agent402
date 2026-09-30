@@ -48,12 +48,32 @@ export function startBase({ onEvents, onStatus = () => {}, rpc = makeRpc(BASE.rp
     return pairSettlements(auth, transfers);
   }
 
+  async function backfill(fromBlock, head) {
+    let to = head;
+    while (to > fromBlock && !stopped) {
+      const from = Math.max(fromBlock + 1, to - MAX_RANGE + 1);
+      try {
+        const evs = await range(from, to);
+        const now = Date.now();
+        for (const e of evs) e.ts = now - (head - e.block) * BASE.blockSeconds * 1000;
+        if (evs.length) onEvents(evs, { backfill: true });
+        to = from - 1;
+      } catch (e) {
+        status.lastError = String(e?.message || e).slice(0, 160);
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+    status.backfilled = true;
+  }
+
   async function tick() {
     if (stopped) return;
     try {
       const head = Number(hexToBig(await rpc("eth_blockNumber", [])));
       status.head = head;
-      if (last === null) last = head - Math.round(backfillSeconds / BASE.blockSeconds);
+      // First tick: live polling starts at head, and the last hour is loaded
+      // NEWEST FIRST in the background, so recent payments appear in seconds.
+      if (last === null) { last = head; backfill(head - Math.round(backfillSeconds / BASE.blockSeconds), head); }
       while (last < head && !stopped) {
         const from = last + 1, to = Math.min(head, last + MAX_RANGE);
         const evs = await range(from, to);
@@ -61,11 +81,10 @@ export function startBase({ onEvents, onStatus = () => {}, rpc = makeRpc(BASE.rp
         // would triple the RPC calls for a value the page shows to the second.
         const now = Date.now();
         for (const e of evs) e.ts = now - (head - e.block) * BASE.blockSeconds * 1000;
-        if (evs.length) onEvents(evs, { backfill: !status.backfilled });
+        if (evs.length) onEvents(evs, { backfill: false });
         last = to;
         status.lastBlock = to;
       }
-      status.backfilled = true;
       status.lastOkAt = Date.now();
       status.lastError = null;
     } catch (e) {
