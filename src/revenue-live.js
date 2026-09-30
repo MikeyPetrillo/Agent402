@@ -1508,13 +1508,22 @@ export function railThroughput(snap) {
 // unauthenticated callers - a per-settlement list pairing tool with price is a
 // purchase feed. Count 0 and "rows withheld" are different statements; this
 // table only ever makes the first when it is true.
+// A rail whose MPP payment settles through x402 (the evm/charge shim) is
+// already in the x402 table's External $, so it shows a pointer, not a second
+// dollar figure; Tempo and Stripe settle off that ledger and show their own.
+function mppExternalUsdCell(n, r) {
+  if (/x402 settle/.test(MPP_RAIL_META[n]?.how || "")) return `<span style="color:var(--muted);" title="Settled as x402 on-chain USDC: counted in the x402 table's External $">in x402</span>`;
+  if (r.externalUsd == null) return "-";
+  return `$${Number(r.externalUsd).toFixed(Number(r.externalUsd) >= 1 ? 2 : 3)}`;
+}
+
 function mppRailsSection(mpp) {
   const count = Number(mpp?.count || 0);
   const rails = { ...(mpp?.rails || {}) };
   if (!Object.keys(rails).length && mpp?.byNetwork) {
     for (const [n, c] of Object.entries(mpp.byNetwork)) rails[n] = { count: c, external: null, lastAt: null, txs: [] };
   }
-  for (const n of Object.keys(MPP_RAIL_META)) if (!rails[n]) rails[n] = { count: 0, external: 0, lastAt: null, txs: [] };
+  for (const n of Object.keys(MPP_RAIL_META)) if (!rails[n]) rails[n] = { count: 0, external: 0, externalUsd: 0, lastAt: null, txs: [] };
   const entries = Object.entries(rails).sort((a, b) => (b[1].count - a[1].count) || a[0].localeCompare(b[0]));
   const rows = entries.map(([n, r]) => {
     const meta = MPP_RAIL_META[n] || { label: mppRailLabel(n), asset: "USDC", how: "" };
@@ -1526,6 +1535,7 @@ function mppRailsSection(mpp) {
       <td><strong>${esc(meta.label)}</strong> <span style="color:var(--muted);">${esc(meta.asset)}</span></td>
       <td class="num">${Number(r.count).toLocaleString()}</td>
       <td class="num">${r.external != null ? Number(r.external).toLocaleString() : "-"}</td>
+      <td class="num">${mppExternalUsdCell(n, r)}</td>
       <td>${r.lastAt ? esc(String(r.lastAt).slice(0, 16)) + "Z" : '<span style="color:var(--muted);">offered, no settlement yet</span>'}</td>
       <td>${proof}</td>
     </tr>`;
@@ -1535,9 +1545,9 @@ function mppRailsSection(mpp) {
       <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">MPP wire <span style="color:var(--muted);font-weight:400;">· by rail</span></h2>
       <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><strong style="color:var(--ink);">${count.toLocaleString()}</strong> settlement${count === 1 ? "" : "s"} over <code>Authorization: Payment</code> · <a href="/api/revenue/mpp">/api/revenue/mpp</a></span>
     </div>
-    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;max-width:70ch;">Payments whose credential arrived over the <strong>MPP</strong> wire. Throughput, ours included: most of it is our own daily volume exercising the rails; the external column is money from others.</p>
+    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;max-width:70ch;">Payments whose credential arrived over the <strong>MPP</strong> wire. Throughput, ours included: most of it is our own daily volume exercising the rails; the external columns are money from others. On Base and Celo an MPP payment settles as ordinary USDC through x402, so its dollars are already in the x402 table above; Tempo and card payments settle off that ledger and are counted here.</p>
     <div class="rv-tablewrap"><table class="rv-table">
-      <thead><tr><th>Rail</th><th class="num">Settlements</th><th class="num">External</th><th>Last settled</th><th>Proof</th></tr></thead>
+      <thead><tr><th>Rail</th><th class="num">Settlements</th><th class="num">External</th><th class="num">External $</th><th>Last settled</th><th>Proof</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
 }

@@ -265,7 +265,7 @@ const CAIP_TO_RAIL = {
 const canonRail = (network) => CAIP_TO_RAIL[String(network || "").toLowerCase()] || (network || "unknown");
 
 const qMppTotals = db.prepare(`
-  SELECT network, internal, COUNT(*) AS n, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+  SELECT network, internal, COUNT(*) AS n, SUM(price_usd) AS usd, MIN(ts) AS first_ts, MAX(ts) AS last_ts
   FROM sales WHERE wire IN ('mpp', 'mpp-tempo', 'mpp-stripe', 'mpp-tempo-subscription')
   GROUP BY network, internal`);
 const qMppRecentExternal = db.prepare(`
@@ -696,9 +696,9 @@ export function mppSales({ limit = 30, detailed = false } = {}) {
     let count = 0, externalCount = 0, firstTs = null, lastTs = null;
     for (const t of totals) {
       const n = canonRail(t.network);
-      const e = rails[n] || (rails[n] = { count: 0, external: 0, internal: 0, lastAt: null, lastExternalAt: null, txs: [], txsInternal: false });
+      const e = rails[n] || (rails[n] = { count: 0, external: 0, externalUsd: 0, internal: 0, lastAt: null, lastExternalAt: null, txs: [], txsInternal: false });
       e.count += t.n; count += t.n;
-      if (t.internal) e.internal += t.n; else { e.external += t.n; externalCount += t.n; if (!e.lastExternalAt || t.last_ts > Date.parse(e.lastExternalAt)) e.lastExternalAt = new Date(t.last_ts).toISOString(); }
+      if (t.internal) e.internal += t.n; else { e.external += t.n; e.externalUsd = +(e.externalUsd + Number(t.usd || 0)).toFixed(6); externalCount += t.n; if (!e.lastExternalAt || t.last_ts > Date.parse(e.lastExternalAt)) e.lastExternalAt = new Date(t.last_ts).toISOString(); }
       if (!e.lastAt || t.last_ts > Date.parse(e.lastAt)) e.lastAt = new Date(t.last_ts).toISOString();
       if (firstTs === null || t.first_ts < firstTs) firstTs = t.first_ts;
       if (lastTs === null || t.last_ts > lastTs) lastTs = t.last_ts;
@@ -722,7 +722,9 @@ export function mppSales({ limit = 30, detailed = false } = {}) {
       // Per-rail slice of the same evidence (all-time count, external/internal
       // split, newest settlement, recent external hashes) so /revenue can give
       // each MPP rail its own card and link every hash to the RIGHT explorer.
-      // Still aggregate: no tool, no price, no payer, no per-tx timestamp.
+      // Still aggregate: no tool, no per-call price, no payer, no per-tx
+      // timestamp. externalUsd is the rail's all-time outside total, the same
+      // aggregate the x402 table shows per chain.
       rails,
       note: "Aggregate view, all-time. internal = settlements paid by our own wallets (daily canary, Tempo volume runner); external = everyone else. Per-settlement tool/price rows are operator-only; the tx hashes resolve on-chain for independent verification.",
     };

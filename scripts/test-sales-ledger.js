@@ -149,6 +149,8 @@ ok(s.totals.external.sales >= 2, "ledger still readable after garbage rows");
   ok(pub.count === base.count + 40 && pub.internalCount === (base.internalCount || 0) + 40, `count is all-time incl. the 40 internal rows (${pub.count}), internalCount names them (${pub.internalCount})`);
   ok(pub.externalCount === base.externalCount, `externalCount is unchanged by 40 newer internal rows (${pub.externalCount})`);
   ok(pub.rails.tempo.external === base.rails.tempo.external && pub.rails.tempo.internal === (base.rails.tempo.internal || 0) + 40, "the tempo rail card keeps its external count and gains an internal count");
+  ok(pub.rails.tempo.externalUsd === base.rails.tempo.externalUsd && pub.rails.tempo.externalUsd >= 0.001, `the tempo rail's external dollars count outside money only (${pub.rails.tempo.externalUsd})`);
+  ok(Object.values(pub.rails).every((r) => typeof r.externalUsd === "number"), "every rail carries an externalUsd aggregate");
   ok(pub.rails.tempo.txs[0] === "0xTempo000000000000000000000000000000000000000000000000000000001" && pub.rails.tempo.txsInternal === false, "the tempo rail's hashes are the EXTERNAL settlement's, not the 40 newer internal ones");
   ok(pub.txs.every((t) => !/^0xInternal/.test(t)), "the flat txs list is external-only");
   const det = mppSales({ limit: 100, detailed: true });
