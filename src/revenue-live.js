@@ -1552,6 +1552,36 @@ function mppRailsSection(mpp) {
     </table></div>`;
 }
 
+// Decide monitor: outside use of the paid planner and its execute route.
+// Aggregates from the sales ledger (decideSales), all rails, ours counted
+// apart. The page is public, so no per-call rows.
+export function decideSection(d) {
+  if (!d?.allTime) return "";
+  const rows = [["decide", "Plans", "POST /api/decide"], ["decide-execute", "Runs", "POST /api/decide/execute"]].map(([k, label, route]) => {
+    const a = d.allTime[k] || {}, w = d.window?.[k] || {};
+    const money = (n) => `$${Number(n || 0).toFixed(Number(n || 0) >= 1 ? 2 : 3)}`;
+    return `<tr>
+      <td><strong>${esc(label)}</strong> <span style="color:var(--muted);"><code>${esc(route)}</code></span></td>
+      <td class="num">${Number(a.count || 0).toLocaleString()}</td>
+      <td class="num">${Number(a.external || 0).toLocaleString()}</td>
+      <td class="num">${money(a.externalUsd)}</td>
+      <td class="num">${Number(w.external || 0).toLocaleString()}</td>
+      <td class="num">${Number(w.externalBuyers || 0).toLocaleString()}</td>
+      <td>${a.lastExternalAt ? esc(String(a.lastExternalAt).slice(0, 13)) + "Z" : '<span style="color:var(--muted);">no outside buy yet</span>'}</td>
+    </tr>`;
+  }).join("\n");
+  return `
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:40px 0 6px;">
+      <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">Decide <span style="color:var(--muted);font-weight:400;">· plans and runs</span></h2>
+      <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><a href="/api/revenue/decide">/api/revenue/decide</a> · <a href="/decide">/decide</a></span>
+    </div>
+    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;max-width:70ch;">Paid use of the planner and its execute route, on every rail. Settlements count ours too (canaries and tests); the external columns are other buyers. External $ is what they paid for the plan or the run, not the pass-through payments a run makes to outside sellers.</p>
+    <div class="rv-tablewrap"><table class="rv-table">
+      <thead><tr><th>Route</th><th class="num">Settlements</th><th class="num">External</th><th class="num">External $</th><th class="num">External, ${Number(d.days || 30)}d</th><th class="num">Buyers, ${Number(d.days || 30)}d</th><th>Last outside buy</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
 // Revenue chart — stacked-by-chain daily/cumulative series from
 // /api/revenue/daily. Hand-rolled SVG, no libraries. Palette: the validated
 // 8-slot categorical set (dataviz skill reference; both modes pass the
@@ -1737,6 +1767,9 @@ export function revenuePage(baseUrl, snap) {
     </section>
     <section>
     ${mppRailsSection(snap.mpp)}
+    </section>
+    <section>
+    ${decideSection(snap.decide)}
     </section>
     <section>
     ${revenueNextStep()}

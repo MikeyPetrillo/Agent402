@@ -323,5 +323,31 @@ rmSync(dir, { recursive: true, force: true });
   }
 }
 
+// --- decideSales: the /revenue decide monitor -----------------------------------
+{
+  const { decideSales } = await import("../src/sales-ledger.js");
+  const before = decideSales({ days: 30 });
+  const B1 = "0x4444444444444444444444444444444444444444", B2 = "0x5555555555555555555555555555555555555555";
+  recordSale({ slug: "decide", priceUsd: 0.02, rail: "usdc", network: "eip155:8453", payer: B1, tx: "0xD1", synthetic: false });
+  recordSale({ slug: "decide", priceUsd: 0.05, rail: "usdc", network: "eip155:8453", payer: B2, tx: "0xD2", synthetic: false });
+  recordSale({ slug: "decide", priceUsd: 0.02, rail: "usdc", network: "eip155:8453", payer: B1, tx: "0xD3", synthetic: false });
+  recordSale({ slug: "decide", priceUsd: 0.02, rail: "usdc", network: "eip155:8453", payer: null, tx: "0xD4", synthetic: true });
+  recordSale({ slug: "decide-execute", priceUsd: 0.1, rail: "usdc", network: "eip155:8453", payer: B2, tx: "0xD5", synthetic: false });
+  recordSale({ slug: "decide", priceUsd: 0.02, rail: "pow", network: null, payer: null, tx: null, synthetic: false });
+  recordSale({ slug: "uuid", priceUsd: 0.001, rail: "usdc", network: "eip155:8453", payer: B1, tx: "0xD6", synthetic: false });
+  const d = decideSales({ days: 30 });
+  const dd = (k) => d.allTime[k].external - (before.allTime[k].external || 0);
+  ok(dd("decide") === 3 && d.allTime.decide.internal - before.allTime.decide.internal === 1, "decide: three outside settlements, our own counted apart");
+  ok(Math.abs(d.allTime.decide.externalUsd - before.allTime.decide.externalUsd - 0.09) < 1e-9, "decide: outside dollars sum what outside buyers paid");
+  ok(d.window.decide.externalBuyers - before.window.decide.externalBuyers === 2, "decide: buyers are DISTINCT payers (B1 twice counts once)");
+  ok(dd("decide-execute") === 1 && Math.abs(d.allTime["decide-execute"].externalUsd - before.allTime["decide-execute"].externalUsd - 0.1) < 1e-9, "execute is its own row");
+  ok(/T\d\d:00:00\.000Z$/.test(d.allTime.decide.lastExternalAt || ""), "the last outside buy is published to the hour, never the second");
+  ok(!JSON.stringify(d).includes(B1.toLowerCase()) && !JSON.stringify(d).includes("0xD1"), "no payer and no tx in the aggregate");
+  const { decideSection } = await import("../src/revenue-live.js");
+  const html = decideSection(d);
+  ok(/Plans/.test(html) && /Runs/.test(html) && /\/api\/revenue\/decide/.test(html), "the /revenue section renders both routes and links its API");
+  ok(decideSection(null) === "", "no data renders nothing, never a zero table");
+}
+
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

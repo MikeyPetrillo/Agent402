@@ -526,7 +526,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly } from "./sales-ledger.js";
+import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decideSales, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, payerUsage, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -3455,6 +3455,20 @@ app.get("/api/calls/daily", (_req, res) => {
 // wallet scan that endpoint reads never sees a Tempo transaction at all.
 // This reads src/sales-ledger.js's own recorded rows directly instead - real
 // dollars, unlike the free-tier lane, since a Tempo settlement is real money.
+// Decide usage for the /revenue monitor: per slug (decide, decide-execute),
+// all-time and 30 days, settlements with ours counted separately, outside
+// dollars and distinct outside buyers. Aggregates only, never a per-call row.
+app.get("/api/revenue/decide", (_req, res) => {
+  try {
+    res.set("Cache-Control", "public, max-age=60").json(memoSurface("revenue:decide", 60_000, () => ({
+      asOf: new Date().toISOString(),
+      ...decideSales({ days: 30 }),
+      note: "Paid settlements of POST /api/decide and POST /api/decide/execute. internal = our own canaries and tests; external = everyone else. externalUsd is what outside buyers paid us for these two routes; an execute run's pass-through payments to outside sellers are not included.",
+    })));
+  } catch (e) {
+    res.status(500).json({ error: "decide revenue failed", detail: String(e?.message || e).slice(0, 120) });
+  }
+});
 app.get("/api/revenue/tempo-daily", (_req, res) => {
   try {
     res.set("Cache-Control", "public, max-age=60").json(memoSurface("revenue:tempo-daily", 60_000, () => ({
@@ -3491,7 +3505,7 @@ app.get("/revenue", async (_req, res) => {
     // than typed into the copy: a framing paragraph that goes stale is worse
     // than none, because it is the sentence asking to be trusted.
     const idx = getIndexSnapshot()?.totals || {};
-    const ledger = memoSurface("revenue:page-ledger", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }), card: cardSales({ days: 30 }), agents: ledgerBuyerConcentration(revenueWallets()) }));
+    const ledger = memoSurface("revenue:page-ledger", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }), card: cardSales({ days: 30 }), decide: decideSales({ days: 30 }), agents: ledgerBuyerConcentration(revenueWallets()) }));
     res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: { sellers: idx.sellers, listings: idx.tools, rails: settlementRailCount() } }));
   } catch (e) {
     if (e?.snapshotWarming) {
