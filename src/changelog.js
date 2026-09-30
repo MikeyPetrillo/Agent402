@@ -3,6 +3,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-09-30",
+    title: "Live payments view",
+    items: [
+      "live.agent402.tools shows x402 payments on Base and MPP payments on Tempo as they settle, one walker per payment, with sellers named from their public listings. It runs as its own read-only service.",
+    ],
+  },
+  {
+    date: "2026-09-30",
     title: "New Base sellers can be routed before they have settlement history",
     items: [
       "The router pays Base sellers with settlement history above the floor. A seller below it is now tried too, under a $0.01 per-call ceiling, only after every proven seller for the task, only at the wallet its own live 402 names, and flagged unproven on the buyer's receipt. Solana has had the same tier since September.",

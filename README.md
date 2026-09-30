@@ -396,6 +396,20 @@ const out = await a.call("hash", { text: "hello world", algo: "sha256" });
 const b = new Agent402({ creditsKey: "a402_..." });
 ```
 
+## Live payments view (`services/live`)
+
+A separate, read-only service that draws x402 payments on Base and MPP payments on Tempo as they settle. It reads public chain RPCs and public discovery listings, holds the last hour in memory, and fans out to browsers over one server-sent event stream; it shares no process, database or key with the API. Hosted at https://live.agent402.tools.
+
+Run it locally (Node 22+, no dependencies):
+
+```bash
+cd services/live
+PORT=8090 node server.js      # then open http://localhost:8090
+node test.js                  # offline tests
+```
+
+Optional settings: `LIVE_BASE_RPCS` and `LIVE_TEMPO_RPCS` (comma-separated RPC URLs), `LIVE_INCLUDE_UNLISTED=1` (also count Base payments to wallets no discovery listing names), `LIVE_INTERNAL_PAYERS` (payer wallets to label as test traffic), `LIVE_MAX_PAYMENT_USD` (default 50).
+
 ## Plug into your agent framework (zero-dep adapters)
 
 If you're already on one of the stacks below - OpenAI, Anthropic, the Vercel AI SDK, LangChain (JS or Python), LlamaIndex, Strands, Google ADK, or the OpenAI Agents SDK - skip the wiring: there's a drop-in package that turns the Agent402 catalog into native tool objects for your framework, with payment handled underneath (proof-of-work for free tools, x402+USDC when you pass an `@x402/fetch`):
