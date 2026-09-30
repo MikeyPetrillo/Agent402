@@ -28,7 +28,8 @@
     "test": "node test.js"
   },
   "overrides": {
-    "qs": "6.16.0"
+    "qs": "6.16.0",
+    "axios": "1.20.0"
   },
   "dependencies": {
     "express": "^5.0.0",
