@@ -302,7 +302,13 @@ export async function buildDecision({ task, constraints, depth }, deps) {
   for (const p of plan) finishAt[p.step] = Math.max(0, ...p.dependsOn.map((d) => finishAt[d] || 0)) + stepLatency(p);
   const estimatedLatencyMs = Math.max(0, ...finishAt.filter(Number.isFinite));
   const estimatedCostUsd = Math.round(plan.reduce((a, p) => a + p.tool.priceUsd, 0) * 1e6) / 1e6;
-  const estimatedCostViaAgent402Usd = Math.round(plan.reduce((a, p) => a + (p.tool.executeViaAgent402Usd || 0), 0) * 1e6) / 1e6;
+  // What execute would spend: per step, the first tool in order (primary,
+  // then fallbacks) it can pay. Counting only primaries left a step whose
+  // primary is call-directly at $0, and the run's budget, which is this
+  // figure, then ran out on that step's runnable fallback before the next
+  // step (live run 2026-10-01: step 2 "over the remaining budget").
+  const runCost = (p) => [p.tool, ...(p.fallbacks || [])].find((t) => Number.isFinite(t?.executeViaAgent402Usd))?.executeViaAgent402Usd || 0;
+  const estimatedCostViaAgent402Usd = Math.round(plan.reduce((a, p) => a + runCost(p), 0) * 1e6) / 1e6;
   const coverage = steps.length ? plan.length / steps.length : 0;
   const meanFit = plan.length ? plan.reduce((a, p) => a + p._fit, 0) / plan.length : 0;
   const confidence = Math.round(meanFit * coverage * (partial ? 0.75 : 1) * 1000) / 1000;
