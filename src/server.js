@@ -6645,7 +6645,7 @@ app.get("/api/index", (req, res) => {
       // 404 now carries how many origins this server actually holds, which is
       // the number that turns "not found" from a verdict into a reading.
       const r = indexReadiness();
-      const seller = String(req.query.seller).slice(0, 253);
+      const seller = String(req.query.seller).slice(0, 512);
       if (!r.ready) {
         return res.status(503)
           .set("Retry-After", String(r.retryAfterSeconds))
@@ -6781,7 +6781,7 @@ app.post("/api/index/register", async (req, res) => {
   if (regByIp.size > RL_MAP_MAX_KEYS) sweepStaleTsMap(regByIp, REG_WINDOW_MS, now);
   const mine = (regByIp.get(ip) || []).filter((t) => now - t < REG_WINDOW_MS);
   if (mine.length >= 5) return res.status(429).json({ error: "rate limit: 5 submissions per hour per IP" });
-  const v = validateOriginInput(req.body?.origin, { selfOrigin: BASE_URL });
+  const v = validateOriginInput(req.body?.origin, { selfOrigin: BASE_URL, allowPath: true });
   if (v.error) return res.status(400).json({ error: v.error });
   if (isRemovedOrigin(v.origin)) return res.status(410).json({ error: REMOVED_ORIGIN_ERROR });
   regGlobal = regGlobal.filter((t) => now - t < REG_WINDOW_MS);
@@ -6809,7 +6809,7 @@ app.post("/api/index/register", async (req, res) => {
   // dropped, so a seller learns why it did not take.
   let replaces = null;
   if (req.body?.replaces !== undefined) {
-    const rv = validateOriginInput(req.body.replaces, { selfOrigin: BASE_URL });
+    const rv = validateOriginInput(req.body.replaces, { selfOrigin: BASE_URL, allowPath: true });
     if (rv.error) return res.status(400).json({ error: `replaces: ${rv.error}` });
     if (rv.origin === v.origin) return res.status(400).json({ error: "replaces must be a different origin" });
     if (isRemovedOrigin(rv.origin)) return res.status(410).json({ error: REMOVED_ORIGIN_ERROR });

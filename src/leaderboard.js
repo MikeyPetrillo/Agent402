@@ -408,8 +408,24 @@ export function mergeCrawledWallets(sellers, payToOrigins, chain = undefined, pa
  *  evidence a wallet is (the seller-funding rule reads a wallet's OWN
  *  outbound only). */
 export function groupKeyOf(w) {
+  // A path seller (an app under a prefix on a shared host) is its own operator
+  // row: grouping by the host would merge every app on it, and its homepage is
+  // often that shared host's root.
+  const pathSeller = pathSellerGroup(w?.origins?.[0]);
+  if (pathSeller) return `host:${pathSeller}`;
   const host = canonicalHost(w?.homepage) || canonicalHost(w?.origins?.[0]);
   return host ? `host:${host}` : `wallet:${String(w?.wallet || "").toLowerCase()}`;
+}
+// host + prefix of a listing key that carries a path, else null. Listing keys
+// are normalised origins, so a path here is a path seller's prefix.
+function pathSellerGroup(origin) {
+  if (typeof origin !== "string") return null;
+  try {
+    const u = new URL(origin);
+    const path = u.pathname.replace(/\/+$/, "");
+    if (!path) return null;
+    return `${u.host.toLowerCase().replace(/^www\./, "")}${path}`;
+  } catch { return null; }
 }
 
 /**
@@ -1770,6 +1786,7 @@ export function sellerFundingStatus({ wallet = null, now = Date.now() } = {}) {
 }
 
 /** Test hook: clear the cache. Not exported on the production path. */
+export function _setLeaderboardSnapshotForTests(snap) { cached.snapshot = snap; }
 export function _resetLeaderboardCacheForTests() {
   cached = { snapshot: null, warming: false, lastError: null, lastTriedAt: null, refreshIntervalMs: null };
   fundingStateCache = null;

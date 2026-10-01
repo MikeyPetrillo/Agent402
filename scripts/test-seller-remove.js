@@ -54,8 +54,9 @@ ok(sellerRegistrationFirstSeen(O) != null, "precondition: registration row exist
 ok(idx.seedList().includes(O), "precondition: origin is in the seed list");
 ok(idx.recordSuccession(O, OTHER), "precondition: a succession keyed on the origin");
 
-// Name-like, wildcard and path input is refused.
-for (const bad of ["Acme Corp", "seller", `*.example.com`, `https://*.example.com`, `${O}/api`, `${O}?x=1`, "ftp://seller.example.com", "", "https://nodot"]) {
+// Name-like, wildcard, query and malformed-path input is refused (a clean path
+// prefix is a path seller's key since 2026-10-01; see test-path-scoped-sellers).
+for (const bad of ["Acme Corp", "seller", `*.example.com`, `https://*.example.com`, `${O}/a/../api`, `${O}/%61pi`, `${O}?x=1`, "ftp://seller.example.com", "", "https://nodot"]) {
   ok(idx.removeOrigin(bad).error, `refused: ${JSON.stringify(bad)}`);
 }
 ok(idx._cacheForTests().has(O), "refused input removed nothing");

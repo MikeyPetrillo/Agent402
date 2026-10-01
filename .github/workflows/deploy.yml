@@ -2193,6 +2193,8 @@ jobs:
           t node scripts/test-data-kit.js
           # Index self-serve registration tests (offline)
           t node scripts/test-index-register.js
+          # Path-scoped sellers: an app under a prefix on a shared host (offline, crawl seam)
+          t node scripts/test-path-scoped-sellers.js
           # re-registration re-check: per-origin window + hourly route allowance
           t node scripts/test-register-recheck-cooldown.js
           # Settlement-derived proven-ness + discovery-gap honesty
