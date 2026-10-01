@@ -30,6 +30,9 @@ It exposes a **flagship-first** tools/list (~15 tools, each with titles + safety
 | `catalog.find` | Describe a task in plain language; returns the best-matching tool(s) **ready to call** - slug, price, input schema, an example, and the exact `catalog.call` invocation |
 | `catalog.search` | Browse the long catalog by description; returns slugs + input schemas (plus matching skill packs) |
 | `catalog.call` | Execute any catalog tool by slug. Pure-CPU tools run **free** here (rate-limited: 20/min, 120/hr per client); wallet-only tools are payable right here over MPP (below) or return paid-path instructions |
+| `decide.plan` | Describe a job; returns a call-ready plan over this catalog and outside x402 sellers: tools in order, fallbacks, validated params, chained steps. See [[Decide]] |
+| `decide.execute` | Runs a decision's plan within a budget; the decision fee comes back as credit |
+| `decide.feedback` | Free. Report whether one step of a plan worked |
 | `payment.info` | Free vs paid rails, wallet setup, spend caps, prepaid credits |
 | `server.describe` | Service description, install one-liners, free-vs-paid breakdown |
 | `demand.request` | Tell us a tool you needed that is missing (same intake as `POST /api/wish`) |

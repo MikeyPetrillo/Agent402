@@ -74,6 +74,7 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   const c = ledger.mintCredit({ decisionId: "d1", amountUsd: 0.02, ttlMs: 3600_000, now: clock });
   ledger.activateCredit(c.hash);
   ok(executeBudgetUsd({}, ledger.getDecision("d1")) === 0.031 && executeBudgetUsd({ maxBudgetUsd: 0.01 }, ledger.getDecision("d1")) === 0.01, "budget is the plan's via-Agent402 estimate, or the caller's maxBudgetUsd");
+  ok(executeBudgetUsd({}, ledger.getDecision("d1"), undefined, 0.05) === 0.05 && executeBudgetUsd({}, ledger.getDecision("d1"), undefined, 0.02) === 0.031 && executeBudgetUsd({ maxBudgetUsd: 0.01 }, ledger.getDecision("d1"), undefined, 0.05) === 0.01, "with no maxBudgetUsd the budget is the larger of the estimate and the credit already held; an asked budget wins");
   ok(executeQuoteUsd({ decisionId: "d1" }, { ledger, now: clock }) === 0.031, "no credit: the 402 quotes the whole budget");
   ok(executeQuoteUsd({ decisionId: "d1", creditToken: c.token }, { ledger, now: clock }) === 0.011, "a valid credit is taken off the quote");
   ok(executeQuoteUsd({ decisionId: "d1", creditToken: c.token, maxBudgetUsd: 0.01 }, { ledger, now: clock }) === 0.001, "a credit larger than the budget leaves the settlement floor");
@@ -227,6 +228,28 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ledger.markDecisionSettled("dchain2");
   const out2 = await exc({ decisionId: "dchain2", params: { 1: { name: "none.eth" } } }, { headers: {}, ip: "0xch2", __meteredQuoteUsd: 0.02 });
   ok(out2.steps[1].status === "skipped" && /step 1's output has no value for "address"/.test(out2.steps[1].reason) && !calls.some((c) => c[0] === "bal"), "an earlier step that found nothing skips the chained step unpaid");
+}
+
+// ---- a backup tool that names the step's one input differently gets it under its own name ----
+{
+  const { fitParamsToSchema } = await import("../src/decide/params.js");
+  const q = { type: "object", properties: { query: { type: "string" } }, required: ["query"] };
+  ok(JSON.stringify(fitParamsToSchema(q, { name: "vitalik.eth" })) === '{"query":"vitalik.eth"}', "one unknown key, one missing required key: renamed");
+  ok(JSON.stringify(fitParamsToSchema(q, { name: "a", chain: "base" })) === '{"name":"a","chain":"base"}', "two unknown keys: left alone, never guessed or dropped");
+  ok(JSON.stringify(fitParamsToSchema({ type: "object", properties: { n: { type: "integer" } }, required: ["n"] }, { name: "x" })) === '{"name":"x"}', "a value the backup's declared type refuses is not moved");
+  ok(JSON.stringify(fitParamsToSchema(q, { query: "x" })) === '{"query":"x"}' && JSON.stringify(fitParamsToSchema(q, { name: { a: 1 } })) === '{"name":{"a":1}}', "matching params and non-scalar values are untouched");
+
+  calls.length = 0;
+  const prim = tool("pn", { inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] }, exampleParams: { name: "vitalik.eth" } });
+  const back = tool("bq", { inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } });
+  const cat2 = { ...catalog,
+    pn: { slug: "pn", route: "POST /api/pn", price: "$0.01", discovery: { bodyType: "json" }, handler: async () => { throw Object.assign(new Error("down"), { statusCode: 502 }); } },
+    bq: { slug: "bq", route: "POST /api/bq", price: "$0.01", discovery: { bodyType: "json" }, handler: async (p) => { calls.push(["bq", p]); return { ok: true }; } } };
+  const exb = makeExecuteHandler({ ledger, getCatalog: () => cat2, now });
+  ledger.saveDecision({ decisionId: "dren", depth: "plan", priceUsd: 0.02, payer: "0xrn", plan: [{ step: 1, purpose: "resolve", tool: prim, fallbacks: [back], dependsOn: [] }], costViaUsd: 0.02, now: clock });
+  ledger.markDecisionSettled("dren");
+  const out = await exb({ decisionId: "dren" }, { headers: {}, ip: "0xrn", __meteredQuoteUsd: 0.02 }).catch((e) => ({ steps: [{ status: String(e.message).slice(0, 160) }] }));
+  ok(out.steps[0].status === "ok" && calls.some((c) => c[0] === "bq" && c[1].query === "vitalik.eth" && !("name" in c[1])), `the backup ran with the value under its own name (${out.steps[0].status})`);
 }
 
 // ---- a paid external failure is not followed by another paid seller ----

@@ -9,6 +9,11 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   70+ skill packs): live web search and cited answers, headless browser, PDFs, OCR,
   financial / SEC EDGAR / macro / on-chain data, an OpenAI-compatible LLM gateway
   (`/v1`), durable wallet-keyed memory, 150+ pure-CPU utilities.
+- **Decide (`POST /api/decide`, MCP `decide.plan`):** describe a job in plain
+  language and get a call-ready plan over this catalog and outside x402 sellers
+  with a recently verified 402: tools in order, fallbacks, params that validate,
+  chained steps. One ranking formula for every seller, ours included. Run it
+  yourself, or through `/api/decide/execute` with the decision fee back as credit.
 - **Market and onchain intel (keyless, deterministic, per call):** live perpetuals
   (`perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`,
   `perp-open-interest`, `perp-klines`, `perp-orderbook`, $0.001 to $0.003) and the
