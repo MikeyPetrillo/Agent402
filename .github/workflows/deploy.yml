@@ -3928,6 +3928,7 @@ jobs:
           t node scripts/test-recall-nomatch.js
           # Free email alerts engine: double opt-in, signed links, change-only daily email, caps (offline)
           t node scripts/test-free-alerts.js
+          t node scripts/test-email-status.js
           t node scripts/test-wallet-digest.js
           # Alert routes end to end on a booted server: confirm / unsubscribe / stop pages render (the engine test could not see a 500 here)
           t node scripts/test-alerts-routes.js

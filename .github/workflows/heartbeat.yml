@@ -591,6 +591,34 @@ jobs:
               ;;
           esac
 
+      # Transactional email (src/email.js): one word on /api/gateway-status,
+      # recorded from real sends and kept on the volume. exhausted / failing
+      # page; ok closes; unknown and unconfigured do neither. Built 2026-10-01
+      # after the provider's prepaid credits ran out and every report link,
+      # credits key and alert confirmation stopped sending with no trace.
+      - name: Email send check (alarm when transactional email is refused)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.email.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "email: $WORD"
+          TITLE="Transactional email is not sending"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            exhausted|failing)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports email.status=$WORD. exhausted: the provider refused the last send for credits or quota - top up the email provider's prepaid credits. failing: another refusal; the provider's error code is on the operator read of /api/gateway-status and in the [email] log line. Report links, credits keys, alert confirmations and monitor emails do not reach buyers while this is open. Auto-closes when a send is delivered." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: email reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
       # Serving health: event-loop stalls, 5xx and paid-call error rates, and
       # load shedding, from /__operator/serving-health.json (counts only). Two
       # readings 30 s apart must agree, because a deploy's no-container window

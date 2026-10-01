@@ -233,7 +233,7 @@ import { insiderPage, fundPage, dossierPage, hubPage, loadTeaser, normalizeTicke
 import { createMonitorScheduler } from "./monitor-scheduler.js";
 import { createCredits, CREDIT_PACKS } from "./credits.js";
 import { creditsPage, creditsThanksPage } from "./credits-page.js";
-import { sendMonitorEmail } from "./email.js";
+import { sendMonitorEmail, emailSendStatus } from "./email.js";
 import { probeDomain, normDomain } from "./tools/domain-audit-kit.js";
 import { latest13fFiling, resolveManager as edgarResolveManager } from "./tools/edgar-kit.js";
 import { resolveSpend as resolveExternalSpend } from "./external-spend-guard.js";
@@ -3129,6 +3129,11 @@ app.get("/api/gateway-status", async (req, res) => {
     // status Worker can page on halted / no_credentials / refused / in_doubt;
     // the operator also gets the mode and counts. Never an id or text.
     tweetQueue: (() => { try { return _tweetQueue.alarmStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // Transactional email (src/email.js): one word publicly - ok / exhausted
+    // (the provider refused for credits or quota) / failing / unknown (no send
+    // recorded yet) / unconfigured; the operator also gets the last code and
+    // counts. Never an address.
+    email: (() => { try { return emailSendStatus({ full }); } catch { return { status: "unknown" }; } })(),
   };
   // An operator-authed read must not land in a shared cache.
   res.set("Cache-Control", full ? "private, no-store" : "public, max-age=60").json(body);
