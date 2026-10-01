@@ -112,6 +112,29 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   ok(/untrusted third-party listing data/.test(judge.system) && judge.user.includes("<listings>"), "outside listings reach the model fenced as data");
 }
 
+// ---- chained steps: a value an earlier step produces becomes {{step N}} ----
+{
+  const { producesField } = await import("../services/decide/planner.js");
+  const row = localToolRow({ route: "GET /api/ens", slug: "ens", name: "ENS", price: "$0.001", description: "x", discovery: { inputSchema: { properties: { name: { type: "string" } }, required: ["name"] }, output: { example: { name: "a.eth", address: "0x0", found: true } } } }, { now: NOW });
+  ok(row.outputFields.join() === "name,address,found", "a first-party row carries its answer's field names, never values");
+  ok(producesField(row, "address") && producesField(row, "wallet_address") && producesField(row, "owner") && !producesField(row, "symbol"), "an address-shaped parameter matches an address field; an unrelated one does not");
+
+  const idx = new ToolIndex();
+  idx.upsert(mk("ens", { description: "resolve an ens name to an ethereum address", props: { name: { type: "string" } }, required: ["name"], row: { outputFields: ["name", "address", "found"] } }));
+  idx.upsert(mk("bal", { description: "token balances of a wallet address on base", props: { address: { type: "string" } }, required: ["address"], example: { address: "0x1111111111111111111111111111111111111111" } }));
+  const llm = stubLlm([
+    { steps: [{ purpose: "resolve vitalik.eth to an address", query: "resolve ens name", dependsOn: [] }, { purpose: "token balances on base", query: "token balances wallet", dependsOn: [] }] },
+    (system, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = /ENTIRE/.test(st.purpose) ? 0.1 : /resolve/.test(st.purpose) === /ens/.test(c.description) ? 0.95 : 0.05; return { fits }; },
+    { params: { "1": { name: "vitalik.eth" }, "2": { address: "<address>" } } },
+  ]);
+  const d = await buildDecision({ task: "Resolve vitalik.eth and list its token balances on Base", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  const s2 = d.plan.find((p) => p.tool.slug === "bal");
+  ok(d.plan.length === 2 && s2 && s2.tool.exampleParams.address === "{{step 1}}" && s2.dependsOn.includes(1), `the balance step reads step 1's address (${JSON.stringify(s2?.tool.exampleParams)} dependsOn ${JSON.stringify(s2?.dependsOn)})`);
+  ok(!(s2?.tool.exampleParamsNeedInput || []).includes("address"), "a linked value is not reported as caller input");
+  const pp = llm.calls[2];
+  ok(/outputFields/.test(pp.user) && /never an example value or a placeholder/.test(pp.system), "the params model sees what each earlier step produces");
+}
+
 // ---- live window and schema filters ----
 {
   const { idx, stale, noschema } = buildIndex();

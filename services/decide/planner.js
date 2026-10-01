@@ -247,7 +247,7 @@ export async function buildDecision({ task, constraints, depth }, deps) {
   //    example (first party) or a typed skeleton
   let filled = null;
   if (depth !== "quick" && plan.length && left() > 1500) {
-    const pp = paramsPrompt(task, plan.map((p) => ({ step: p.step, purpose: p.purpose, row: p._row })));
+    const pp = paramsPrompt(task, plan.map((p) => ({ step: p.step, purpose: p.purpose, dependsOn: p.dependsOn, row: p._row })));
     filled = await within(llm.call(pp.system, pp.user, { maxTokens: 900, timeoutMs: timeoutFor(0.8), meter, stage: "params" }), timeoutFor(0.8) + 250);
     if (!filled?.params) { partial = true; notes.push("parameter filling unavailable: skeleton params"); }
   }
@@ -299,6 +299,25 @@ export async function buildDecision({ task, constraints, depth }, deps) {
     const scores = await within(deps.checkParams(task, toCheck.map(({ p, ...it }) => it), { timeoutMs: timeoutFor(0.4), meter }), timeoutFor(0.4) + 250);
     if (scores) for (const it of toCheck) if (typeof scores[it.key] === "number" && scores[it.key] < (cfg.paramCheckMin ?? 0.3)) reject(it.p, it.name);
   }
+  // 5c. a required value the task does not give, which an earlier step
+  //     produces, becomes a reference to that step: the planner model links
+  //     steps unreliably (an ENS lookup then a balance read came back with an
+  //     <address> placeholder and no dependency). Only when exactly one
+  //     earlier step names a field for it (preferring the ones the step
+  //     already depends on), so the link is never a guess.
+  for (const p of plan) {
+    for (const name of p._row.inputSchema?.required || []) {
+      const v = p.tool.exampleParams?.[name];
+      if (!(v === undefined || (typeof v === "string" && /^<[^<>]*>$/.test(v)))) continue; // the task gave it
+      const earlier = plan.filter((q) => q.step < p.step && producesField(q._row, name));
+      const linked = earlier.filter((q) => p.dependsOn.includes(q.step));
+      const src = linked.length === 1 ? linked[0] : !linked.length && earlier.length === 1 ? earlier[0] : null;
+      if (!src) continue;
+      p.tool.exampleParams[name] = `{{step ${src.step}}}`;
+      if (!p.dependsOn.includes(src.step)) p.dependsOn = [...p.dependsOn, src.step].sort((a, b) => a - b);
+      if (p._needsInput) p._needsInput = p._needsInput.filter((n) => n !== name);
+    }
+  }
   for (const p of plan) if (p._needsInput?.length) { p.tool.exampleParamsNeedInput = p._needsInput; delete p._needsInput; }
 
   // 6. cost, latency, confidence
@@ -336,6 +355,16 @@ export async function buildDecision({ task, constraints, depth }, deps) {
 
 const STEP_REF = /^\{\{step \d+\}\}$/;
 /** An identifier-shaped value that appears verbatim in the task. */
+// Whether a tool's answer carries a field a parameter can be filled from: the
+// same name, or an address for an address-shaped parameter.
+const ADDRESS_PARAM = /(^|_|[a-z])(address|wallet|owner|account|holder|recipient)$/i;
+const normField = (k) => String(k).toLowerCase().replace(/[^a-z0-9]/g, "");
+export function producesField(row, name) {
+  const fields = (row?.outputFields || []).map(normField);
+  if (fields.includes(normField(name))) return true;
+  return (ADDRESS_PARAM.test(name) || normField(name) === "address") && fields.some((f) => f === "address" || f.endsWith("address"));
+}
+
 export function verbatimIdentifier(v, task) {
   const t = String(v || "").trim();
   if (t.length < 6 || t.length > 200 || !String(task || "").includes(t)) return false;
