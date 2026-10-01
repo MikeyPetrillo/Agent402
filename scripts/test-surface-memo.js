@@ -56,7 +56,7 @@ try {
   const m1 = await (await fetch(`${base}/marketplace`)).text(), m2 = await (await fetch(`${base}/marketplace`)).text();
   ok(m1.length > 1000 && m1 === m2, "the rendered marketplace is served from the memo inside the window");
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/req\.query\.seller \? render\(\) : memoSurface\(/.test(src), "a ?seller= chain view is rendered per request, never keyed into the memo");
+  ok(/if \(!req\.query\.seller\) \{\s*const html = await memoSurfaceAsync\(`market:\$\{chainKey\}:\$\{all\}`, 60_000, \(\) => buildChainPage\(chainKey, null, all\)\)/.test(src), "a ?seller= chain view is rendered per request, never keyed into the memo (only the plain chain page is memoized)");
   const memoFn = src.slice(src.indexOf("function memoSurface("), src.indexOf("function dropSurface("));
   ok(/if \(hit\) \{[\s\S]*setImmediate\([\s\S]*return hit\.value;/.test(memoFn), "an expired surface serves its last value and rebuilds after the response (no request waits on a rebuild)");
   ok(/surfaceMemo\.get\(key\) === hit/.test(memoFn) && /hit\.rebuilding = false/.test(memoFn), "one rebuild at a time, and a rebuild never overwrites a dropped or newer entry");
