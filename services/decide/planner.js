@@ -400,12 +400,15 @@ export function verbatimIdentifier(v, task) {
 
 // Four or more words, every one of them the task's (a query reordered or
 // trimmed from the task): the caller's own words, not a value to second-guess.
-function taskWorded(t, task) {
+// Filler words are ignored and a word matches its stem ("cited" is "cite").
+const FILLER = new Set(["a", "an", "and", "the", "of", "for", "with", "to", "in", "on", "about", "by", "from", "at", "or"]);
+const stem = (w) => w.replace(/(ing|ed|es|s|e)$/, "");
+function taskWorded(t, task, min = 4) {
   const split = (x) => String(x).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   const ws = split(t);
-  if (ws.length < 4) return false;
-  const have = new Set(split(task));
-  return ws.every((w) => have.has(w));
+  if (ws.length < min) return false;
+  const have = new Set(split(task).map(stem));
+  return ws.every((w) => FILLER.has(w) || have.has(stem(w)));
 }
 
 export function groundedParams(params, task) {
@@ -413,7 +416,6 @@ export function groundedParams(params, task) {
   // that writes a backslash-n means a line break).
   const norm = (x) => String(x).toLowerCase().replace(/\\n/g, "\n").replace(/\s+/g, " ").trim();
   const hay = norm(task || "");
-  const words = new Set(hay.split(/[^\p{L}\p{N}]+/u).filter(Boolean));
   const out = {};
   for (const [k, v] of Object.entries(params || {})) {
     if (typeof v === "string") {
@@ -425,8 +427,7 @@ export function groundedParams(params, task) {
       // address or path; it goes on to the value check rather than being dropped.
       if (t.length <= 40 && /^[\p{L}\p{N}][\p{L}\p{N} ._,'-]*$/u.test(t)) { out[k] = v; continue; }
       // Free text (a search query) is kept when every word in it is the task's.
-      const ws = norm(t).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3);
-      if (ws.length && !/:\/\/|@/.test(t) && ws.every((w) => words.has(w))) out[k] = v;
+      if (!/:\/\/|@/.test(t) && taskWorded(t, task, 1)) out[k] = v;
     } else if (typeof v === "number" && Number.isFinite(v)) out[k] = v; // a number carries no link; derived ones (25% as 0.25) go on to the value check
   }
   return out;

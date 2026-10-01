@@ -166,7 +166,7 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   const { verbatimIdentifier } = await import("../services/decide/planner.js");
   const task = "Audit 0x28C6c06298d514Db089934071355E5743bf21d60 on https://example.com/x for github.com: research the EU AI Act obligations today";
   ok(["0x28C6c06298d514Db089934071355E5743bf21d60", "https://example.com/x", "github.com", "research the EU AI Act obligations"].every((v) => verbatimIdentifier(v, task)), "addresses, URLs, domains and runs of the task's own words are verbatim task data");
-  ok(!verbatimIdentifier("today", task) && !verbatimIdentifier("EU AI", task) && !verbatimIdentifier("0x1111111111111111111111111111111111111111", task) && !verbatimIdentifier("the obligations of EU AI policy", task) && verbatimIdentifier("EU AI Act research obligations", task), "a short word, a value not in the task, or text with words the task lacks is still checked; the task's own words reordered are not");
+  ok(!verbatimIdentifier("today", task) && !verbatimIdentifier("EU AI", task) && !verbatimIdentifier("0x1111111111111111111111111111111111111111", task) && !verbatimIdentifier("the obligations of EU AI policy", task) && verbatimIdentifier("EU AI Act research obligations", task) && verbatimIdentifier("EU AI Act obligations with researched sources", task + " sources"), "a short word, a value not in the task, or text with words the task lacks is still checked; the task's own words reordered are not");
   const idx = new ToolIndex();
   idx.upsert(mk("rq", { description: "research a question with cited sources", props: { q: { type: "string" } }, required: ["q"] }));
   const sentQs = [];
