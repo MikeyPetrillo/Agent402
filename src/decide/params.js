@@ -33,6 +33,29 @@ export function validateParams(schema, params) {
   return { ok: errors.length === 0, errors };
 }
 
+/** A step's params are written for its primary tool. A backup tool that names
+ *  the same single input differently (`query` where the primary took `name`)
+ *  gets the value under its own name: only when exactly one given key is
+ *  unknown to it and exactly one of its required keys is missing, the value is
+ *  a scalar, and its declared type (if any) accepts it. Anything else is left
+ *  alone and the validator decides. Never drops a key: a backup that cannot
+ *  take a given input (a chain it does not serve, say) is not called with the
+ *  input quietly removed. */
+export function fitParamsToSchema(schema, params) {
+  const props = schema?.properties;
+  if (!props || !params || typeof params !== "object" || Array.isArray(params)) return params;
+  const unknown = Object.keys(params).filter((k) => !Object.hasOwn(props, k));
+  const missing = (schema.required || []).filter((k) => !Object.hasOwn(params, k));
+  if (unknown.length !== 1 || missing.length !== 1) return params;
+  const [from] = unknown, [to] = missing, v = params[from];
+  if (!(typeof v === "string" || typeof v === "number" || typeof v === "boolean")) return params;
+  const t = props[to]?.type;
+  if (typeof t === "string" && TYPE_OK[t] && !TYPE_OK[t](v) && !(typeof v === "string" && STEP_REF.test(v))) return params;
+  const out = {};
+  for (const [k, val] of Object.entries(params)) out[k === from ? to : k] = val;
+  return out;
+}
+
 /** Only declared properties, never prototype keys. */
 export function pruneParams(schema, params) {
   const props = schema?.properties || {};

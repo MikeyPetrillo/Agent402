@@ -15,7 +15,7 @@ import { decideConfig, priceForDepth, DEPTHS } from "../decide/config.js";
 import { recordWish } from "../wish.js";
 import { payerFromRequest } from "../payer.js";
 import { openDecideLedger, hashToken } from "../decide/ledger.js";
-import { validateParams } from "../decide/params.js";
+import { validateParams, fitParamsToSchema } from "../decide/params.js";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { dispatchable } from "./route-execute.js";
 import { EXPENSIVE_COMPOSITE_SLUGS } from "../composite-spend-guard.js";
@@ -149,15 +149,21 @@ export function executeQuoteUsd(body, { ledger, now = Date.now() }) {
   const floor = 0.001;
   const d = body?.decisionId ? ledger.getDecision(String(body.decisionId)) : null;
   if (!d) return floor;
-  const budget = executeBudgetUsd(body, d);
   const credit = ledger.creditAvailableUsd(body?.creditToken, d.id, now);
+  const budget = executeBudgetUsd(body, d, undefined, credit);
   return Math.max(floor, roundUsd(budget - credit));
 }
 
-export function executeBudgetUsd(body, d, cfg = decideConfig()) {
+// With no maxBudgetUsd, the budget is the plan's estimate, or the credit the
+// caller already holds for this decision when that is larger: a backup tool
+// pricier than the planned one can then still run (2026-10-01 prod run: step 1
+// fell through to a dearer seller and the estimate left nothing for step 2
+// while $0.02 of credit sat unused). Unspent budget returns as credit.
+export function executeBudgetUsd(body, d, cfg = decideConfig(), creditUsd = 0) {
   const asked = Number(body?.maxBudgetUsd);
   const planned = Number(d?.costViaUsd) || 0;
-  const base = Number.isFinite(asked) && asked > 0 ? asked : planned;
+  const held = Number(creditUsd) > 0 ? Number(creditUsd) : 0;
+  const base = Number.isFinite(asked) && asked > 0 ? asked : Math.max(planned, held);
   return roundUsd(Math.min(base, cfg.execute.perCallMaxUsd));
 }
 
@@ -191,7 +197,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const payer = payerOf(req);
     const t = now();
     const startedAt = Date.now();
-    const budget = executeBudgetUsd(input, d, cfg);
+    const budget = executeBudgetUsd(input, d, cfg, ledger.creditAvailableUsd(input.creditToken, d.id, t));
     if (budget <= 0) throw bad("Nothing to execute: the plan has no priced steps; pass maxBudgetUsd", 400);
 
     // WHAT WAS PAID is the quote the payment gate settled against (stashed on
@@ -279,6 +285,8 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       let done = null;
       const attempts = [];
       for (const tool of [step.tool, ...(step.fallbacks || [])]) {
+        // The step's params, under this tool's own name for a renamed single input.
+        const toolParams = fitParamsToSchema(tool.inputSchema, params);
         if (left() < 5000) { attempts.push({ id: tool.id, skipped: "the run's time budget is spent" }); break; }
         if (tool.callDirectly === true) { attempts.push({ id: tool.id, skipped: "call this tool directly: execute cannot pay it" }); continue; }
         const def = tool.firstParty ? bySlug.get(tool.slug) : null;
@@ -286,7 +294,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         if (tool.firstParty && listPrice === null) { attempts.push({ id: tool.id, skipped: "no longer in the catalog" }); continue; }
         const cost = tool.firstParty ? listPrice : roundUsd(listPrice * (1 + cfg.routingFeePct / 100));
         if (spent + cost > spendable + 1e-9) { attempts.push({ id: tool.id, skipped: "over the remaining budget" }); continue; }
-        const v = validateParams(tool.inputSchema, params);
+        const v = validateParams(tool.inputSchema, toolParams);
         if (!v.ok) { attempts.push({ id: tool.id, skipped: `params do not fit: ${v.errors.slice(0, 3).join("; ")}` }); continue; }
         const t0 = Date.now();
         if (tool.firstParty) {
@@ -304,7 +312,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
             // Past the timeout the step's own outbound calls are cut off too,
             // so a late step cannot keep spending upstream while the fallback runs.
             const stepStop = new AbortController();
-            const result = await withTimeout(runInAbortableScope(() => Promise.resolve(def.handler(params)), { stopSignal: stepStop.signal }), Math.min(cfg.execute.stepTimeoutMs, left()), tool.slug)
+            const result = await withTimeout(runInAbortableScope(() => Promise.resolve(def.handler(toolParams)), { stopSignal: stepStop.signal }), Math.min(cfg.execute.stepTimeoutMs, left()), tool.slug)
               .catch((e) => { stepStop.abort(e); throw e; });
             spent = roundUsd(spent + cost);
             done = { tool: { id: tool.id, slug: tool.slug, seller: tool.seller, firstParty: true }, costUsd: cost, result, latencyMs: Date.now() - t0 };
@@ -319,7 +327,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         // An outside POST that declares no input fields gets only what the
         // caller passes: never an empty body paid for on a guess (a seller
         // answers {} with a 400, and the leg is a refusal we cannot use).
-        if (String(tool.method || "").toUpperCase() === "POST" && !Object.keys(tool.inputSchema?.properties || {}).length && !Object.keys(params || {}).length) {
+        if (String(tool.method || "").toUpperCase() === "POST" && !Object.keys(tool.inputSchema?.properties || {}).length && !Object.keys(toolParams || {}).length) {
           attempts.push({ id: tool.id, skipped: "this seller declares no inputs: pass params for this step" }); continue;
         }
         if (!router) { attempts.push({ id: tool.id, skipped: "external execution is not enabled on this host" }); continue; }
@@ -333,7 +341,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         if (ledger.sellerSpendUsd(tool.seller, t - 86_400_000) + maxUsd > cfg.execute.perSellerDayUsd) { attempts.push({ id: tool.id, skipped: "this seller's daily execution ceiling is reached" }); continue; }
         const hold = ledger.holdSellerSpend({ runId, seller: tool.seller, amountUsd: maxUsd, now: now() });
         try {
-          const r = await withTimeout(router.handler({ task: `${step.purpose} (${tool.name})`, include: "external", target: tool.endpoint, params, maxUsd }, req), Math.min(left(), cfg.execute.externalStepTimeoutMs), tool.seller);
+          const r = await withTimeout(router.handler({ task: `${step.purpose} (${tool.name})`, include: "external", target: tool.endpoint, params: toolParams, maxUsd }, req), Math.min(left(), cfg.execute.externalStepTimeoutMs), tool.seller);
           const underlying = Number(r?.receipt?.underlyingPriceUsd);
           const paidOut = Number.isFinite(underlying) && underlying > 0 ? underlying : maxUsd; // unknown: book the worst case
           const fee = roundUsd(paidOut * cfg.routingFeePct / 100);
