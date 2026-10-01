@@ -209,5 +209,13 @@ for (const t of ["Detects prompt-injection patterns in text", "Web search for cu
   const absentGet = remoteToolRow({ seller: "https://x.example", route: "/now", method: "GET", name: "n", description: "d", price: 0.01 }, { requestContract: { state: "absent", required: {} } });
   ok(schemaQuality(absentPost) === 0.5 && schemaQuality(absentGet) === 1, `an outside POST that declares no inputs scores as uncertain; an outside GET with none stays complete (${schemaQuality(absentPost)}, ${schemaQuality(absentGet)})`);
 }
+
+{
+  const { schemaQuality, opaqueInputs } = await import("../src/decide/tool-rows.js");
+  const wrap = { firstParty: false, method: "POST", inputSchemaState: "declared", inputSchema: { properties: { params: { in: "body" } } } };
+  const named = { firstParty: false, method: "POST", inputSchemaState: "declared", inputSchema: { properties: { domain: { in: "body" } } } };
+  ok(opaqueInputs(wrap) && schemaQuality(wrap) < schemaQuality(named) && schemaQuality(wrap) < 0.5, "an outside tool whose only input is a generic wrapper scores below a partial schema");
+  ok(!opaqueInputs({ inputSchema: { properties: { params: {}, domain: {} } } }) && schemaQuality({ ...wrap, firstParty: true }) === 1, "a wrapper beside named fields, or on our own tool, is not opaque");
+}
 console.log(`\ntest-decide-index: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -55,6 +55,7 @@ const catalog = {
     calls.push(["router", input]);
     if (routerMode === "committed") throw Object.assign(new Error("seller settled then failed"), { statusCode: 502, committed: true });
     if (routerMode === "fail") throw Object.assign(new Error("no seller"), { statusCode: 502 });
+    if (routerMode === "refused") throw Object.assign(new Error('External seller "https://s.example" failed: Seller refused the payment (HTTP 400); the credential expired unused, nothing charged'), { statusCode: 400 });
     if (routerMode === "hang") return new Promise(() => {});
     return { result: { ext: true }, receipt: { underlyingPriceUsd: 0.018, seller: "seller.example", paidUsd: 3.3, routingFeeUsd: 3.282 } };
   } },
@@ -241,7 +242,7 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
 
   calls.length = 0;
   const prim = tool("pn", { inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] }, exampleParams: { name: "vitalik.eth" } });
-  const back = tool("bq", { inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } });
+  const back = tool("bq", { inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }, exampleParams: undefined }); // a plan from before backups carried their own params
   const cat2 = { ...catalog,
     pn: { slug: "pn", route: "POST /api/pn", price: "$0.01", discovery: { bodyType: "json" }, handler: async () => { throw Object.assign(new Error("down"), { statusCode: 502 }); } },
     bq: { slug: "bq", route: "POST /api/bq", price: "$0.01", discovery: { bodyType: "json" }, handler: async (p) => { calls.push(["bq", p]); return { ok: true }; } } };
@@ -250,6 +251,36 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ledger.markDecisionSettled("dren");
   const out = await exb({ decisionId: "dren" }, { headers: {}, ip: "0xrn", __meteredQuoteUsd: 0.02 }).catch((e) => ({ steps: [{ status: String(e.message).slice(0, 160) }] }));
   ok(out.steps[0].status === "ok" && calls.some((c) => c[0] === "bq" && c[1].query === "vitalik.eth" && !("name" in c[1])), `the backup ran with the value under its own name (${out.steps[0].status})`);
+}
+
+// ---- a seller that refuses a valid payment counts against that seller ----
+{
+  routerMode = "refused";
+  const ext = tool("xr", { seller: "s.example", firstParty: false, endpoint: "https://s.example/x", priceUsd: 0.01 });
+  ledger.saveDecision({ decisionId: "dref", depth: "plan", priceUsd: 0.02, payer: "0xrf", plan: [{ step: 1, purpose: "x", tool: ext, fallbacks: [tool("b")], dependsOn: [] }], costViaUsd: 0.02, now: clock });
+  ledger.markDecisionSettled("dref");
+  const out = await exec({ decisionId: "dref" }, { headers: {}, ip: "0xrf", __meteredQuoteUsd: 0.02 }).catch((e) => ({ steps: [{ attempts: [] }] }));
+  const a = (out.steps[0].attempts || []).find((x) => x.id === "xr");
+  ok(a && a.toolFault === true && a.status === 400, `a refused payment is the seller's fault although the router relays a 4xx (${JSON.stringify(a)})`);
+  routerMode = "ok";
+}
+
+// ---- each backup runs with the params the plan wrote for it ----
+{
+  calls.length = 0;
+  const prim = tool("pd", { inputSchema: { type: "object", properties: { S: {}, K: {} }, required: ["S", "K"] }, exampleParams: { S: 100, K: 105 } });
+  const back = tool("bs", { inputSchema: { type: "object", properties: { spot: { type: "number" }, strike: { type: "number" } }, required: ["spot", "strike"] }, exampleParams: { spot: 100, strike: 105 } });
+  const miss = tool("pm", { inputSchema: { type: "object", properties: { area: { type: "string" } }, required: ["area"] }, exampleParams: { area: "<area>" } });
+  const cat3 = { ...catalog,
+    pd: { slug: "pd", route: "POST /api/pd", price: "$0.01", discovery: { bodyType: "json" }, handler: async () => { throw Object.assign(new Error("seller down"), { statusCode: 502 }); } },
+    bs: { slug: "bs", route: "POST /api/bs", price: "$0.01", discovery: { bodyType: "json" }, handler: async (p) => { calls.push(["bs", p]); return { price: 1.2 }; } },
+    pm: { slug: "pm", route: "POST /api/pm", price: "$0.01", discovery: { bodyType: "json" }, handler: async (p) => { calls.push(["pm", p]); return {}; } } };
+  const exo = makeExecuteHandler({ ledger, getCatalog: () => cat3, now });
+  ledger.saveDecision({ decisionId: "down", depth: "plan", priceUsd: 0.02, payer: "0xow", plan: [{ step: 1, purpose: "price", tool: prim, fallbacks: [back], dependsOn: [] }, { step: 2, purpose: "labor", tool: miss, fallbacks: [tool("bq2", { slug: "bs", inputSchema: back.inputSchema, exampleParams: { spot: 1, strike: 2 } })], dependsOn: [] }], costViaUsd: 0.03, now: clock });
+  ledger.markDecisionSettled("down");
+  const out = await exo({ decisionId: "down" }, { headers: {}, ip: "0xow", __meteredQuoteUsd: 0.03 }).catch((e) => ({ steps: [{ status: String(e.message).slice(0, 120) }, {}] }));
+  ok(out.steps[0].status === "ok" && calls.some((c) => c[0] === "bs" && c[1].spot === 100 && c[1].strike === 105), `a backup with differently named fields runs with its own params (${out.steps[0].status})`);
+  ok(out.steps[1].status === "ok" && !calls.some((c) => c[0] === "pm") && /needs area/.test(JSON.stringify(out.steps[1].attempts || [])), "a tool missing an input is passed over and the next one runs; the step is not skipped whole");
 }
 
 // ---- a paid external failure is not followed by another paid seller ----
