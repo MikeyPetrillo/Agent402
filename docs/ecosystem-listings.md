@@ -362,7 +362,7 @@ Next up once submitted: the Anthropic connector directory
   Official MCP Registry entry `io.github.MikeyPetrillo/agent402`. Its title and
   description come from `mcp/server.json` (published with the npm package);
   there is no edit form. As of 2026-10-01 it still shows the June first-release
-  text ("1,407 pay-per-call tools + 100 skill packs. USDC on 6 chains") while
+  description (an exact tool count and six chains) while
   the registry's isLatest (0.13.5) carries the current copy: their submit page
   says listing changes are paused and they will re-sync from the registry when
   they resume. Action: re-check after each `[publish]`; if it is still stale

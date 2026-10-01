@@ -333,43 +333,11 @@ export function redactAnalytics(data, authed) {
   if (authed || !data || typeof data !== "object") return data;
   const { topTools, errorTools, ...aggregate } = data;
 
-  // Per-tool RELIABILITY stays public; per-tool VOLUME does not.
-  //
-  // Those two live in the same rows but do different jobs. Error rate and
-  // latency are what a buyer needs to decide whether to depend on a tool, and
-  // publishing measured reliability is the same argument as /status one level
-  // down. Call volume ranked by traffic is demand intelligence, and it is what
-  // the paid bestsellers tool sells.
-  //
-  // Every raw per-tool field is a COUNT (calls, cached, errored,
-  // client_errored, server_errored), and counts scale with traffic, so
-  // publishing them would leak the ranking even with the ordering removed.
-  // They are converted to RATES, which carry the reliability signal and no
-  // volume signal. Latency percentiles are already volume-free.
-  const reliabilityOnly = (rows) =>
-    (Array.isArray(rows) ? rows : [])
-      .map((r) => {
-        const calls = Number(r.calls || 0);
-        const rate = (n) => (calls > 0 ? Number((Number(n || 0) / calls).toFixed(4)) : null);
-        return {
-          slug: r.slug,
-          cacheRate: rate(r.cached),
-          clientErrorRate: rate(r.client_errored),
-          serverErrorRate: rate(r.server_errored),
-          p50_ms: r.p50_ms,
-          p95_ms: r.p95_ms,
-        };
-      })
-      // Alphabetical, because the source rows arrive ordered by traffic and the
-      // ORDER alone would rebuild the ranking we just removed.
-      .sort((a, b) => String(a.slug).localeCompare(String(b.slug)));
-
-  // 2026-10-01: the per-tool tables are operator-only in full. Even as rates
-  // in alphabetical order, WHICH tools make the busiest-N cut (and which are
-  // failing) is a traffic-based selection, so an unauthenticated caller gets
-  // the aggregate only. reliabilityOnly stays for the operator-shaped tests
-  // and any future public reliability view built on purpose.
-  void reliabilityOnly;
+  // The per-tool tables are operator-only (2026-10-01). They were published
+  // as alphabetical rates, but WHICH tools make the busiest-N cut, and which
+  // are failing, is still a traffic-based selection: demand intelligence. An
+  // unauthenticated caller gets the aggregate totals and the timeseries.
+  void topTools; void errorTools;
   return {
     ...aggregate,
     perToolNote: "Per-tool tables are operator-only. Public reliability is published on /status and /api/reliability.",
