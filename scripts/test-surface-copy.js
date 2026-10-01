@@ -74,6 +74,11 @@ ok(all3(HOSTED_DESC), "MCP serverInfo.description names Agentic Finance + MPP + 
 const hi = hostedInstructions("https://example.test"), si = stdioInstructions("https://example.test");
 ok(all3(hi) && all3(si), "MCP initialize instructions (hosted + stdio) name Agentic Finance + MPP + x402");
 ok(hi === si, "hosted and stdio initialize instructions are byte-identical");
+{
+  const hd = hostedInstructions("https://example.test", { decide: true }), sd = stdioInstructions("https://example.test", { decide: true });
+  ok(hd === sd && /decide\.plan/.test(hd) && /decide\.execute/.test(hd), "with the decide tools listed, both instruction copies name decide.plan and decide.execute, identically");
+  ok(!/decide\.plan/.test(hi), "without them, the instructions never name a tool the connector does not list");
+}
 ok(/positioning: `Agent402 is the applied layer of Agentic Finance/.test(read("src/mcp-http.js")), "hosted describe_server carries a positioning field naming Agentic Finance");
 ok((read("mcp/index.js").match(/positioning: `[^`]*Agentic Finance[^`]*MPP/g) || []).length >= 2, "stdio describe payloads (both aliases) carry Agentic Finance + MPP positioning");
 

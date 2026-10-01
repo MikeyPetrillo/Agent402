@@ -293,6 +293,30 @@ The credits key is understood by the SDKs: `agent402-mcp` reads
 `AGENT402_CREDITS_KEY` and `agent402-client` takes `{ creditsKey }`, so a wallet-less
 agent can still call every wallet-only tool by card.
 
+## Decide - describe the job, get the plan
+
+`POST /api/decide` turns a plain-language task into a call-ready plan: which tools, from this
+catalog and from outside x402 sellers whose 402 was verified in the last week, in what order, with
+fallbacks, inputs that validate against each tool's schema, and cost and latency estimates.
+Priced by depth: quick (one best tool), plan (steps and fallbacks) and full (plus a compiled
+prompt), from $0.005 per decision over x402, MPP or card credits.
+
+```bash
+curl -X POST https://agent402.tools/api/decide \
+  -H "Content-Type: application/json" \
+  -d '{"task":"Check whether wallet 0xd8dA...6045 is on a sanctions list, then list its recent token transfers on Base","depth":"plan"}'
+```
+
+- **Neutral ranking.** One formula scores every candidate (fit, observed reliability, price,
+  schema quality, freshness) with no term for who sells the tool, and every step says whether
+  the tool is ours (`firstParty`).
+- **The fee comes back.** The decision fee is returned as a 24-hour credit toward
+  `POST /api/decide/execute`, which runs the plan: our tools directly, outside steps paid on your
+  behalf at the seller's price plus a disclosed 5% routing fee. Spend stops at the budget,
+  fallbacks are tried in order, and a run where no step succeeds is not charged.
+- **On MCP** the same pair is `decide.plan` and `decide.execute`; `decide.feedback` (free) records
+  whether a step worked. Page: [agent402.tools/decide](https://agent402.tools/decide).
+
 ## Skill packs - 70+ multi-tool workflows
 
 For jobs that span several tools - "audit a domain", "diagnose deliverability",

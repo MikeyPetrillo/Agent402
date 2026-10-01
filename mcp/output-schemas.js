@@ -505,7 +505,7 @@ export function mcpInstallHints(baseUrl) {
  * server.describe. Keep tool names listed-only (dotted Smithery form) (self-consistency) and lead
  * with search/answer as the front door.
  */
-export function mcpInitializeInstructions(baseUrl) {
+export function mcpInitializeInstructions(baseUrl, { decide = false } = {}) {
   const install = mcpInstallHints(baseUrl);
   const hosted = install.hostedUrl;
   return [
@@ -513,6 +513,9 @@ export function mcpInitializeInstructions(baseUrl) {
     "Front door: call web.search or web.answer for live web search and cited answers.",
     "Also listed: web.news, browser.render, market.quote, audio.transcribe, memory.read, memory.write.",
     "Long catalog (500+ tools): call catalog.find with your task, or catalog.search then catalog.call.",
+    // Only where the decide tools are listed: an instruction must never name a
+    // tool the connector does not advertise.
+    ...(decide ? ["A job that needs several tools: call decide.plan with the task for a call-ready plan (tools, order, fallbacks, inputs), then decide.execute to run it; the plan fee comes back as credit toward the run."] : []),
     "Orientation: call server.describe. Payment rails / wallet setup: call payment.info.",
     "Missing a tool: call demand.request. Ecosystem sellers: call sellers.list.",
     `Install (hosted, zero wallet): ${install.claudeCodeHosted}`,
