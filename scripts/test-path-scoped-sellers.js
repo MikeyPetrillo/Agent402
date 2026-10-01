@@ -191,5 +191,19 @@ ok(rC.listed !== true && cache.get(C)?.manifest?.name !== "Alpha screen", `the r
 }
 
 __setCrawlFetchForTest(null);
+
+// The registration record's "settled" flag: a path seller is one app on a
+// shared host, so another app on that host settling must not mark it settled.
+{
+  const { __originHasSettledForTest } = await import("../src/x402-index.js");
+  const { _setLeaderboardSnapshotForTests } = await import("../src/leaderboard.js");
+  _setLeaderboardSnapshotForTests({ leaderboard: [{ callsSettled: 12, origins: ["https://shared.example/app/one"] }] });
+  ok(__originHasSettledForTest("https://shared.example/app/one") === true, "a path seller whose own listing settled reads settled");
+  ok(__originHasSettledForTest("https://shared.example/app/two") === false, "another app on the same host does not inherit that settlement");
+  ok(__originHasSettledForTest("https://shared.example/app/o") === false, "a prefix that is a substring of the settled one does not match (segment boundary)");
+  _setLeaderboardSnapshotForTests({ leaderboard: [{ callsSettled: 3, origins: ["https://bare.example"] }] });
+  ok(__originHasSettledForTest("https://bare.example") === true, "a bare origin keeps the host match");
+  _setLeaderboardSnapshotForTests(null);
+}
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

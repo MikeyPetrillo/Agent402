@@ -1243,6 +1243,17 @@ function settledHostsOf(snap) {
   return set;
 }
 function originHasSettled(origin) {
+  // A path seller is one app on a shared host: another app on the same host
+  // settling says nothing about it, so it matches only listings at or under its
+  // own prefix. A bare origin keeps the host match.
+  if (sellerPrefixOf(origin)) {
+    try {
+      const rows = getLeaderboardSnapshot()?.leaderboard || [];
+      return rows.some((row) => (row.callsSettled || 0) > 0 && (row.origins || []).some((o) => isUnderSeller(o, origin)));
+    } catch {
+      return false;
+    }
+  }
   const host = canonicalHost(origin);
   if (!host) return false;
   try {
@@ -1251,6 +1262,7 @@ function originHasSettled(origin) {
     return false;
   }
 }
+export function __originHasSettledForTest(origin) { return originHasSettled(origin); }
 
 function sellerSummary(origin, v) {
   return {

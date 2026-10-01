@@ -1786,6 +1786,7 @@ export function sellerFundingStatus({ wallet = null, now = Date.now() } = {}) {
 }
 
 /** Test hook: clear the cache. Not exported on the production path. */
+export function _setLeaderboardSnapshotForTests(snap) { cached.snapshot = snap; }
 export function _resetLeaderboardCacheForTests() {
   cached = { snapshot: null, warming: false, lastError: null, lastTriedAt: null, refreshIntervalMs: null };
   fundingStateCache = null;
