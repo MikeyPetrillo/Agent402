@@ -222,6 +222,17 @@ export async function buildDecision({ task, constraints, depth }, deps) {
       if (x.row.seller === primary.row.seller && viable.some((y) => y.row.seller !== primary.row.seller && !fallbacks.includes(y) && y !== primary)) continue;
       fallbacks.push(x);
     }
+    // Every step keeps one tool POST /api/decide/execute can run when a viable
+    // one exists: a step whose primary and every fallback are call-directly
+    // sellers leaves execute nothing to run (2026-10-01: a sanctions step of
+    // three outside call-directly tools while ours sat just below them). The
+    // ranking is untouched; the best runnable viable tool takes the last
+    // fallback slot.
+    const runnable = (x) => x.row.firstParty || x.row.executable !== false;
+    if (![primary, ...fallbacks].some(runnable)) {
+      const ex = viable.find((x) => x !== primary && !fallbacks.includes(x) && runnable(x));
+      if (ex) { if (fallbacks.length >= cfg.fallbacksPerStep) fallbacks.pop(); fallbacks.push(ex); }
+    }
     plan.push({
       step: plan.length + 1, purpose: s.purpose,
       tool: view(primary.row), why: `fit ${primary.fit.toFixed(2)}, score ${primary.score.toFixed(3)}${overrode ? `; chosen over ${overrode.row.slug || overrode.row.name} for covering the step` : ""}`,
