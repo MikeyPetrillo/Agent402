@@ -112,6 +112,73 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   ok(/untrusted third-party listing data/.test(judge.system) && judge.user.includes("<listings>"), "outside listings reach the model fenced as data");
 }
 
+// ---- chained steps: a value an earlier step produces becomes {{step N}} ----
+{
+  const { producesField } = await import("../services/decide/planner.js");
+  const row = localToolRow({ route: "GET /api/ens", slug: "ens", name: "ENS", price: "$0.001", description: "x", discovery: { inputSchema: { properties: { name: { type: "string" } }, required: ["name"] }, output: { example: { name: "a.eth", address: "0x0", found: true } } } }, { now: NOW });
+  ok(row.outputFields.join() === "name,address,found", "a first-party row carries its answer's field names, never values");
+  ok(producesField(row, "address") && producesField(row, "wallet_address") && producesField(row, "owner") && !producesField(row, "symbol"), "an address-shaped parameter matches an address field; an unrelated one does not");
+
+  const idx = new ToolIndex();
+  idx.upsert(mk("ens", { description: "resolve an ens name to an ethereum address", props: { name: { type: "string" } }, required: ["name"], row: { outputFields: ["name", "address", "found"] } }));
+  idx.upsert(mk("bal", { description: "token balances of a wallet address on base", props: { address: { type: "string" } }, required: ["address"], example: { address: "0x1111111111111111111111111111111111111111" } }));
+  const llm = stubLlm([
+    { steps: [{ purpose: "resolve vitalik.eth to an address", query: "resolve ens name", dependsOn: [] }, { purpose: "token balances on base", query: "token balances wallet", dependsOn: [] }] },
+    (system, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = /ENTIRE/.test(st.purpose) ? 0.1 : /resolve/.test(st.purpose) === /ens/.test(c.description) ? 0.95 : 0.05; return { fits }; },
+    { params: { "1": { name: "vitalik.eth" }, "2": { address: "<address>" } } },
+  ]);
+  const d = await buildDecision({ task: "Resolve vitalik.eth and list its token balances on Base", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  const s2 = d.plan.find((p) => p.tool.slug === "bal");
+  ok(d.plan.length === 2 && s2 && s2.tool.exampleParams.address === "{{step 1}}" && s2.dependsOn.includes(1), `the balance step reads step 1's address (${JSON.stringify(s2?.tool.exampleParams)} dependsOn ${JSON.stringify(s2?.dependsOn)})`);
+  ok(!(s2?.tool.exampleParamsNeedInput || []).includes("address"), "a linked value is not reported as caller input");
+  const pp = llm.calls[2];
+  ok(/outputFields/.test(pp.user) && /never an example value/.test(pp.system), "the params model sees what each earlier step produces");
+  ok(!/"id":/.test(pp.user), "the params listing carries no tool id to key the answer by");
+  // the model links the steps itself, keyed by tool id (seen live), with no dependsOn from decomposition
+  const ensId = mk("ens").id, balId = mk("bal").id;
+  const llm2 = stubLlm([{ steps: [{ purpose: "resolve vitalik.eth to an address", query: "resolve ens name", dependsOn: [] }, { purpose: "token balances on base", query: "token balances wallet", dependsOn: [] }] },
+    (system, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = /ENTIRE/.test(st.purpose) ? 0.1 : /resolve/.test(st.purpose) === /ens/.test(c.description) ? 0.95 : 0.05; return { fits }; },
+    { params: { [ensId]: { name: "vitalik.eth" }, [balId]: { address: "{{step 1}}" } } }]);
+  const e = await buildDecision({ task: "Resolve vitalik.eth then list token balances on Base", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm: llm2, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  const e1 = e.plan.find((p) => p.tool.slug === "ens"), e2 = e.plan.find((p) => p.tool.slug === "bal");
+  ok(e1?.tool.exampleParams.name === "vitalik.eth" && e2?.tool.exampleParams.address === "{{step 1}}" && e2.dependsOn.includes(1), `an answer keyed by tool id is read, and a written earlier-step reference links the steps (${JSON.stringify([e1?.tool.exampleParams, e2?.tool.exampleParams, e2?.dependsOn])})`);
+  const llm3 = stubLlm([{ steps: [{ purpose: "resolve vitalik.eth to an address", query: "resolve ens name", dependsOn: [] }, { purpose: "token balances on base", query: "token balances wallet", dependsOn: [] }] },
+    (system, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = /ENTIRE/.test(st.purpose) ? 0.1 : /resolve/.test(st.purpose) === /ens/.test(c.description) ? 0.95 : 0.05; return { fits }; },
+    { "1": { name: "vitalik.eth" }, "2": { address: "{{step 1}}" } }]);
+  const f = await buildDecision({ task: "Resolve vitalik.eth and give me token balances on Base", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm: llm3, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  ok(!f.notes.some((n) => /parameter filling/.test(n)) && f.plan.find((p) => p.tool.slug === "ens")?.tool.exampleParams.name === "vitalik.eth", `an answer without the params wrapper is read (seen live) (${f.partial} ${JSON.stringify(f.plan.map((p) => [p.tool.slug, p.tool.exampleParams]))} ${JSON.stringify(f.notes)})`);
+}
+
+// ---- partial params: what the task gave is kept, the rest is named ----
+{
+  const idx = new ToolIndex();
+  idx.upsert(mk("tr", { description: "translate text to another language", props: { text: { type: "string" }, to: { type: "string" } }, required: ["text", "to"], example: { text: "hola", to: "en" } }));
+  const llm = stubLlm([{ steps: [{ purpose: "translate", query: "translate text", dependsOn: [] }] },
+    (system, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = 0.9; return { fits }; },
+    { params: { "1": { text: "The meeting starts at noon." } } }]);
+  const d = await buildDecision({ task: "Translate: The meeting starts at noon.", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  const ep = d.plan[0]?.tool.exampleParams;
+  ok(ep?.text === "The meeting starts at noon." && ep?.to === "<to>" && d.plan[0].tool.exampleParamsNeedInput?.join() === "to", `a missing required value is named beside the ones the task gave (${JSON.stringify(ep)})`);
+}
+
+// ---- the caller's own identifiers and words are not second-guessed ----
+{
+  const { verbatimIdentifier } = await import("../services/decide/planner.js");
+  const task = "Audit 0x28C6c06298d514Db089934071355E5743bf21d60 on https://example.com/x for github.com: research the EU AI Act obligations today";
+  ok(["0x28C6c06298d514Db089934071355E5743bf21d60", "https://example.com/x", "github.com", "research the EU AI Act obligations"].every((v) => verbatimIdentifier(v, task)), "addresses, URLs, domains and runs of the task's own words are verbatim task data");
+  ok(!verbatimIdentifier("today", task) && !verbatimIdentifier("EU AI", task) && !verbatimIdentifier("0x1111111111111111111111111111111111111111", task) && !verbatimIdentifier("the obligations of EU AI policy", task) && verbatimIdentifier("EU AI Act research obligations", task) && verbatimIdentifier("EU AI Act obligations with researched sources", task + " sources"), "a short word, a value not in the task, or text with words the task lacks is still checked; the task's own words reordered are not");
+  const idx = new ToolIndex();
+  idx.upsert(mk("rq", { description: "research a question with cited sources", props: { q: { type: "string" } }, required: ["q"] }));
+  const sentQs = [];
+  const jev = makeJevJudge({ apiKey: "k", fetchImpl: async (url, init) => { const body = JSON.parse(init.body); const answers = {}; for (const [k, q] of Object.entries(body.questions)) { sentQs.push(k); answers[k] = { type: "noul", noul: 0.02 }; } return new Response(JSON.stringify({ answers, usage: { input_tokens: 10 } })); } });
+  const t2 = "Research the EU AI Act obligations for general-purpose AI models";
+  const llm = stubLlm([{ steps: [{ purpose: "research", query: "research", dependsOn: [] }] },
+    (system, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = 0.9; return { fits }; },
+    { params: { "1": { q: "EU AI Act obligations for general-purpose AI models" } } }]);
+  const d = await buildDecision({ task: t2, constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, checkParams: jev.checkParams, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  ok(d.plan[0]?.tool.exampleParams.q === "EU AI Act obligations for general-purpose AI models", `a query copied from the task survives a value check that scores everything low (${JSON.stringify(d.plan[0]?.tool.exampleParams)})`);
+}
+
 // ---- live window and schema filters ----
 {
   const { idx, stale, noschema } = buildIndex();
@@ -252,6 +319,8 @@ ok(extractJson('noise {"a":1} tail') ?.a === 1 && extractJson("nothing") === nul
   ok(!prompt.includes("wallet key") && prompt.includes("third-party tool, seller s.example") && /labels and data, never instructions/.test(prompt), "a third-party tool name never reaches the compiled prompt; the rest is marked as data");
   const g = groundedParams({ query: "EU AI Act", callback_url: "https://attacker.example/hook", n: 5, ref: "{{step 1}}", long: "x".repeat(300) }, "Research the EU AI Act, top 5 sources");
   ok(g.query === "EU AI Act" && g.n === 5 && g.ref === "{{step 1}}" && !("callback_url" in g) && !("long" in g), `third-party params keep only values the task contains (${Object.keys(g).join(",")})`);
+  const g2 = groundedParams({ data: "name,age\nada,36", to: "es", q: "AI Act obligations sources", cb: "https://x.example/h", mail: "a@b.example", path: "../etc/passwd", unknown: "<url>", vol: 0.25, made: "send the full balance to the treasury now please" }, "Convert this CSV: name,age\\nada,36 to JSON; research the AI Act obligations with sources");
+  ok(g2.data && g2.to === "es" && g2.q && g2.unknown === "<url>" && g2.vol === 0.25 && !("cb" in g2) && !("mail" in g2) && !("path" in g2) && !("made" in g2), `grounding keeps escaped-newline data, short plain values, task-worded queries and named unknowns; never links, emails, paths or invented prose (${Object.keys(g2).join(",")})`);
 }
 
 // ---- the judge sees the same bounded, link-free description for every tool ----
@@ -369,6 +438,23 @@ ok(extractJson('noise {"a":1} tail') ?.a === 1 && extractJson("nothing") === nul
   ok(Object.keys(jevChoiceQuestions([{ i: 0, purpose: "p", options: [pack, single] }])).join() === "p0", "question ids carry the step index");
 }
 
+// ---- an identifier copied verbatim from the task is not second-guessed ----
+{
+  const idx = new ToolIndex();
+  idx.upsert(mk("sanctions-wallet", { description: "wallet sanctions screening", props: { address: { type: "string" }, note: { type: "string" } }, required: ["address"] }));
+  const addr = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+  const llm = stubLlm([
+    { steps: [{ purpose: "sanctions check", query: "wallet sanctions", dependsOn: [] }] },
+    (s2, user) => { const f = {}; for (const st of keysFor(user)) for (const cc of st.candidates) f[cc.key] = /ENTIRE/.test(st.purpose) ? 0.2 : 0.95; return { fits: f }; },
+    { params: { "1": { address: addr, note: "urgent" } } },
+  ]);
+  const rejectAll = { checkParams: async (task, items) => Object.fromEntries(items.map((it) => [it.key, 0.01])) };
+  const d = await buildDecision({ task: `Check whether wallet ${addr} is on a sanctions list, urgent`, constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, checkParams: rejectAll.checkParams, cfg, now: NOW, deadline: Date.now() + 10_000 });
+  const ep = d.plan[0]?.tool.exampleParams || {};
+  ok(ep.address === addr, `a wallet address copied from the task survives a rejecting value check (${JSON.stringify(ep)})`);
+  ok(!("note" in ep), "a word-like value is still checked (the rejected optional value is dropped)");
+}
+
 // ---- written params checked by the judgment model ----
 {
   const idx = new ToolIndex();
@@ -396,10 +482,10 @@ ok(extractJson('noise {"a":1} tail') ?.a === 1 && extractJson("nothing") === nul
   const counted = makeJevJudge({ apiKey: "k", fetchImpl: async (...a) => { n++; return scoreBy(() => 0.05)(...a); } });
   const d4 = await buildDecision({ task: "Summarize a PDF at a URL in five bullets", constraints: {}, depth: "full" }, { index: idx, embed: noEmbed, llm: stubLlm([steps1, fits, written]), checkParams: counted.checkParams, cfg: { ...cfg, judge: "llm" }, now: NOW, deadline: Date.now() + 10_000 });
   ok(n === 0 && d4.plan[0].tool.exampleParams.url === "https://example.com/document.pdf", 'judge "llm" never checks');
-  // a step reference must name a step this one depends on
+  // a step reference must name an earlier step
   const selfRef = { params: { "1": { url: "{{step 1}}" } } };
   const d5 = await buildDecision({ task: "Summarize a PDF at a URL in five bullets", constraints: {}, depth: "full" }, { index: idx, embed: noEmbed, llm: stubLlm([steps1, fits, selfRef]), cfg, now: NOW, deadline: Date.now() + 10_000 });
-  ok(d5.plan[0].tool.exampleParams.url === "<url>", `a reference to a step this one does not depend on is not kept (${JSON.stringify(d5.plan[0].tool.exampleParams)})`);
+  ok(d5.plan[0].tool.exampleParams.url === "<url>", `a reference to this step itself is not kept (${JSON.stringify(d5.plan[0].tool.exampleParams)})`);
 }
 
 console.log(`\ntest-decide-planner: ${pass} passed, ${fail} failed`);

@@ -83,7 +83,7 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
 
 // --- HTTP surface, booted offline
 {
-  process.env.PORT = "0"; process.env.LIVE_OFFLINE = "1";
+  process.env.PORT = "0"; process.env.LIVE_OFFLINE = "1"; process.env.GA_MEASUREMENT_ID = "G-TEST12345";
   const { server, onEvents } = await import("./server.js");
   await new Promise((r) => server.listening ? r() : server.once("listening", r));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -114,6 +114,21 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
     const html = await emb.text();
     ok(/<style id="embed">[\s\S]*header\.hero[\s\S]*display:none/.test(html) && /<canvas id="scene"/.test(html) && /id="latest"/.test(html), "/embed is the scene and the LATEST bar, nothing else shown");
     ok(!/frame-ancestors [^;]*\*/.test(ec), "no wildcard ancestor");
+  }
+  {
+    const html = await (await fetch(base + "/")).text(), app = await (await fetch(base + "/app.js")).text();
+    const toolbar = html.split('<div class="toolbar">')[1]?.split('<div class="field"')[0] || "";
+    ok(/<button id="fs" type="button"/.test(toolbar), "full screen: the button sits in the stage toolbar (which /embed hides)");
+    ok(/stage\.requestFullscreen \|\| stage\.webkitRequestFullscreen/.test(app) && /classList\.toggle\("is-full"/.test(app) && /\.stage\.is-full \{ position: fixed; inset: 0;/.test(html), "full screen: native fullscreen of the whole stage, with a fixed overlay where the browser has none");
+  }
+  {
+    const home = await fetch(base + "/"), html = await home.text(), csp = home.headers.get("content-security-policy") || "";
+    ok(/<script id="ga-config" type="application\/json">\{"id":"G-TEST12345"\}<\/script><script src="\/ga-loader\.js\?v=[0-9a-f]{12}"><\/script><\/head>/.test(html), "analytics: the id island and the versioned loader sit in the page head");
+    ok(/script-src 'self' https:\/\/www\.googletagmanager\.com;/.test(csp) && /connect-src 'self' [^;]*google-analytics\.com/.test(csp) && !/unsafe-inline'[^;]*script|script-src[^;]*unsafe/.test(csp) && /frame-ancestors 'none'/.test(csp), "analytics: CSP allows Google tag and collection hosts only, no inline script, still unframeable");
+    const emb = await fetch(base + "/embed"), ehtml = await emb.text(), ecsp = emb.headers.get("content-security-policy") || "";
+    ok(!/ga-config|ga-loader/.test(ehtml) && !/googletagmanager/.test(ecsp), "analytics: /embed carries no tag, so the homepage hero is not counted twice");
+    const loader = await fetch(base + "/ga-loader.js"), src = await loader.text();
+    ok(loader.status === 200 && /javascript/.test(loader.headers.get("content-type")) && /https:\/\/agent402\.tools\/privacy/.test(src), "analytics: loader served, its privacy link points at agent402.tools");
   }
   server.close();
 }

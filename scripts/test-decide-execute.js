@@ -193,6 +193,42 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ok(out.steps[0].status === "skipped" && /needs q: pass params/.test(out.steps[0].reason) && !calls.some((c) => c[0] === "a" || c[0] === "b"), "a step still holding a <placeholder> is skipped, not paid for");
 }
 
+// ---- a chained step takes the value an earlier step produced ----
+{
+  const { valueForParam, resolveStepRefs } = await import("../src/decide/step-refs.js");
+  const A = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+  ok(valueForParam("address", { name: "vitalik.eth", address: A, found: true }).value === A, "a field named like the parameter is taken");
+  ok(valueForParam("wallet", { data: { resolved: A } }).value === A, "an address parameter takes the one address in the output");
+  ok(!valueForParam("wallet", { from: A, to: "0x" + "1".repeat(40) }).ok, "two different addresses: no guess");
+  ok(!valueForParam("address", { name: "x.eth", address: null, found: false }).ok, "a null field is not a value");
+  ok(valueForParam("q", "hello").value === "hello", "a scalar output is the value");
+  ok(!valueForParam("q", { q: "x".repeat(5000) }).ok, "an oversized value does not travel");
+  ok(valueForParam("ip", { host: "github.com", answers: [{ type: "A", data: "140.82.112.3" }] }).value === "140.82.112.3", "an ip parameter takes the one IP in the output");
+  ok(!valueForParam("ip", { answers: ["140.82.112.3", "140.82.112.4"] }).ok, "several IPs: no guess");
+  ok(!resolveStepRefs({ q: "{{step 1}}" }, {}).ok, "a reference to a step that did not run is not resolved");
+  const r = resolveStepRefs({ address: "{{step 1}}", chain: "base" }, { 1: { address: A } });
+  ok(r.ok && r.params.address === A && r.params.chain === "base", "a resolved reference keeps the step's other params");
+
+  calls.length = 0;
+  const ens = tool("ens", { inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] }, exampleParams: { name: "vitalik.eth" } });
+  const bal = tool("bal", { inputSchema: { type: "object", properties: { address: { type: "string" } }, required: ["address"] }, exampleParams: { address: "{{step 1}}" } });
+  const cat = { ...catalog,
+    ens: { slug: "ens", route: "POST /api/ens", price: "$0.01", discovery: { bodyType: "json" }, handler: async (p) => { calls.push(["ens", p]); return p.name === "none.eth" ? { name: p.name, address: null, found: false } : { name: p.name, address: A, found: true }; } },
+    bal: { slug: "bal", route: "POST /api/bal", price: "$0.01", discovery: { bodyType: "json" }, handler: async (p) => { calls.push(["bal", p]); return { address: p.address, tokens: [] }; } } };
+  const exc = makeExecuteHandler({ ledger, getCatalog: () => cat, now });
+  const chainPlan = [{ step: 1, purpose: "resolve", tool: ens, fallbacks: [], dependsOn: [] }, { step: 2, purpose: "balances", tool: bal, fallbacks: [], dependsOn: [1] }];
+  ledger.saveDecision({ decisionId: "dchain", depth: "plan", priceUsd: 0.02, payer: "0xch", plan: chainPlan, costViaUsd: 0.02, now: clock });
+  ledger.markDecisionSettled("dchain");
+  const out = await exc({ decisionId: "dchain" }, { headers: {}, ip: "0xch", __meteredQuoteUsd: 0.02 });
+  ok(out.steps[1].status === "ok" && calls.some((c) => c[0] === "bal" && c[1].address === A), `step 2 runs on step 1's address (${out.steps[1].status} ${out.steps[1].reason || ""})`);
+
+  calls.length = 0;
+  ledger.saveDecision({ decisionId: "dchain2", depth: "plan", priceUsd: 0.02, payer: "0xch", plan: chainPlan, costViaUsd: 0.02, now: clock });
+  ledger.markDecisionSettled("dchain2");
+  const out2 = await exc({ decisionId: "dchain2", params: { 1: { name: "none.eth" } } }, { headers: {}, ip: "0xch2", __meteredQuoteUsd: 0.02 });
+  ok(out2.steps[1].status === "skipped" && /step 1's output has no value for "address"/.test(out2.steps[1].reason) && !calls.some((c) => c[0] === "bal"), "an earlier step that found nothing skips the chained step unpaid");
+}
+
 // ---- a paid external failure is not followed by another paid seller ----
 {
   calls.length = 0;

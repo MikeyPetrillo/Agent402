@@ -75,6 +75,11 @@ export function schemaQuality(row) {
   return 0;
 }
 
+function outputFieldsOf(example) {
+  if (!example || typeof example !== "object" || Array.isArray(example)) return [];
+  return Object.keys(example).filter((k) => SAFE_FIELD.test(k)).slice(0, MAX_FIELDS);
+}
+
 function finish(row) {
   row.schemaQuality = schemaQuality(row);
   row.contentHash = contentHash(row);
@@ -128,6 +133,9 @@ export function localToolRow(def, { baseUrl = "https://agent402.tools", networks
     example,
     hasExample: !!example,
     hasOutputSchema: !!def.discovery?.output?.example,
+    // Field NAMES of the answer (never its values), so a plan can see that an
+    // ENS lookup produces an "address" a later step consumes.
+    outputFields: outputFieldsOf(def.discovery?.output?.example),
     modelBacked: def.modelBacked === true,
     ...(executable ? {} : { executable: false }),
     lastLiveAt: now,

@@ -7,7 +7,7 @@
 // None of that is a posture worth defending for a $0.001 tool.
 //
 // Databento is a paid commercial account, so access is licensed. The dataset is
-// DBEQ.BASIC, a four-venue consolidation - see databento.js for what that does
+// DBEQ.BASIC, a three-venue consolidation - see databento.js for what that does
 // and does not mean, particularly for volume.
 //
 // Three tools went with Yahoo rather than moving: options-chain (would need a
@@ -35,7 +35,7 @@ function assertSymbol(raw) {
 
 const MAX_DAYS = 250;
 // Indicators stock-history can compute from its daily bars. VWAP is left out:
-// the bars carry four-venue volume, not the consolidated tape.
+// the bars carry three-venue volume, not the consolidated tape.
 const STOCK_INDICATOR_IDS = ["rsi", "macd", "ema", "sma", "bollinger", "atr"];
 function stockIndicatorSet(raw) {
   if (raw === undefined || raw === null || raw === "" || raw === false || raw === "false") return null;
@@ -56,7 +56,7 @@ export const FINANCE_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      "End-of-day US equity quote: last close, day range, previous close and the change between them. US equities only; indices, FX and crypto are not covered (crypto-price serves those). Built from a four-venue consolidation (Databento DBEQ.BASIC), so the prices track the wider market but the volume counts those four venues only and is returned as venueVolume rather than as a total. No 52-week range and no intraday print: for a date range call stock-history.",
+      "End-of-day US equity quote: last close, day range, previous close and the change between them. US equities only; indices, FX and crypto are not covered (crypto-price serves those). Built from a three-venue consolidation (Databento DBEQ.BASIC), so the prices track the wider market but the volume counts those three venues only and is returned as venueVolume rather than as a total. No 52-week range and no intraday print: for a date range call stock-history.",
     tags: ["finance", "stocks", "quote", "market-data", "price"],
     discovery: {
       input: { symbol: "AAPL" },
@@ -80,7 +80,7 @@ export const FINANCE_TOOLS = [
           asOf: "2026-09-18",
           venues: VENUES,
           source: "databento.com DBEQ.BASIC",
-          note: "End-of-day close from a four-venue consolidation. Not a live intraday quote, not consolidated-tape volume, and no 52-week range - use stock-history for a range.",
+          note: "End-of-day close from a three-venue consolidation. Not a live intraday quote, not consolidated-tape volume, and no 52-week range - use stock-history for a range.",
         },
       },
     },
@@ -103,13 +103,13 @@ export const FINANCE_TOOLS = [
         changePct: prev ? Number((((last.close - prev.close) / prev.close) * 100).toFixed(4)) : null,
         dayHigh: last.high,
         dayLow: last.low,
-        // NOT total market volume: DBEQ.BASIC covers four venues, so this is
+        // NOT total market volume: DBEQ.BASIC covers three venues, so this is
         // their share only. Named venueVolume so it cannot read as a total.
         venueVolume: last.venueVolume,
         asOf: last.day,
         venues: VENUES,
         source: "databento.com " + DATASET,
-        note: "End-of-day close from a four-venue consolidation. Not a live intraday quote, not consolidated-tape volume, and no 52-week range - use stock-history for a range.",
+        note: "End-of-day close from a three-venue consolidation. Not a live intraday quote, not consolidated-tape volume, and no 52-week range - use stock-history for a range.",
       };
     },
   },
@@ -121,7 +121,7 @@ export const FINANCE_TOOLS = [
     category: "data",
     price: "$0.005",
     description:
-      "Daily OHLCV bars for a US equity: the last `days` sessions, 1 to 250, default 30. Daily only, no intraday. Built from a four-venue consolidation (Databento DBEQ.BASIC), so each bar's high and low are the extremes across those venues, open and close come from the venue that traded the most that session, and venueVolume sums those four venues rather than the consolidated tape. A flat ascending array ready for charting or backtests. Set indicators to also get technical analysis computed from the same bars: RSI(14), MACD(12,26,9), EMA 20/50/200, SMA 20/50, Bollinger(20,2) and ATR(14), with a plain summary (close vs EMA50, RSI zone, MACD cross). Indicators need enough sessions (EMA200 needs days >= 200) and are descriptive, not a trading recommendation.",
+      "Daily OHLCV bars for a US equity: the last `days` sessions, 1 to 250, default 30. Daily only, no intraday. Built from a three-venue consolidation (Databento DBEQ.BASIC), so each bar's high and low are the extremes across those venues, open and close come from the venue that traded the most that session, and venueVolume sums those three venues rather than the consolidated tape. A flat ascending array ready for charting or backtests. Set indicators to also get technical analysis computed from the same bars: RSI(14), MACD(12,26,9), EMA 20/50/200, SMA 20/50, Bollinger(20,2) and ATR(14), with a plain summary (close vs EMA50, RSI zone, MACD cross). Indicators need enough sessions (EMA200 needs days >= 200) and are descriptive, not a trading recommendation.",
     tags: ["finance", "stocks", "history", "ohlcv", "technical-analysis"],
     discovery: {
       input: { symbol: "AAPL", days: 30 },
@@ -145,7 +145,7 @@ export const FINANCE_TOOLS = [
           asOf: "2026-09-18",
           venues: VENUES,
           source: "databento.com DBEQ.BASIC",
-          note: "Daily bars from a four-venue consolidation; venueVolume counts those venues only, not the consolidated tape.",
+          note: "Daily bars from a three-venue consolidation; venueVolume counts those venues only, not the consolidated tape.",
         },
       },
     },
@@ -188,7 +188,7 @@ export const FINANCE_TOOLS = [
         asOf: bars.at(-1)?.day ?? null,
         venues: VENUES,
         source: "databento.com " + DATASET,
-        note: "Daily bars from a four-venue consolidation; venueVolume counts those venues only, not the consolidated tape.",
+        note: "Daily bars from a three-venue consolidation; venueVolume counts those venues only, not the consolidated tape.",
         ...(want && bars.length >= 2 ? { analysis: stockAnalysis(bars, want, points) } : {}),
       };
     },

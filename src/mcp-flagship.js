@@ -390,7 +390,7 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
       changePct: { type: "number" },
       dayHigh: { type: "number" },
       dayLow: { type: "number" },
-      // Four venues, not the consolidated tape. Named so it can never be
+      // Three venues, not the consolidated tape. Named so it can never be
       // read as a market total; `volume` is deliberately not declared.
       venueVolume: { type: "number" },
       asOf: { type: "string" },

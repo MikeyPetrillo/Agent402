@@ -458,12 +458,12 @@ export const ALCHEMY_DATA_TOOLS = [
   // =========================================================================
   {
     route: "POST /api/asset-transfers",
-    name: "Asset transfers (filtered)",
+    name: "Wallet token transfers (filtered)",
     slug: "asset-transfers",
     category: "crypto",
     price: "$0.003",
     description:
-      "Filtered transfer log for an EVM address: one direction (in or out), optional counterparty, a category subset (external / internal / erc20 / erc721 / erc1155 / specialnft), an optional contract filter (e.g. only USDC), a block range, and a cursor for paging. One indexed query per call - the cheap way to ask 'every USDC transfer into this wallet' or 'all transfers from A to B' without scanning logs. Values are exact decimal strings scaled by the token's decimals; each row carries the block timestamp.",
+      "Recent token transfers for a wallet on Base, Ethereum and other EVM chains, newest first. Filtered transfer log for an EVM address: one direction (in or out), optional counterparty, a category subset (external / internal / erc20 / erc721 / erc1155 / specialnft), an optional contract filter (e.g. only USDC), a block range, and a cursor for paging. One indexed query per call - the cheap way to ask 'every USDC transfer into this wallet' or 'all transfers from A to B' without scanning logs. Values are exact decimal strings scaled by the token's decimals; each row carries the block timestamp.",
     tags: ["crypto", "transfers", "erc20", "erc721", "erc1155", "wallet", "history", "evm", "ethereum", "base", "logs"],
     discovery: {
       bodyType: "json",

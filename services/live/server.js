@@ -26,6 +26,7 @@ const STATIC = {
   "/mascot.svg": ["mascot.svg", "image/svg+xml"],
   "/walker.svg": ["walker.svg", "image/svg+xml"],
   "/brand.svg": ["brand.svg", "image/svg+xml"],
+  "/ga-loader.js": ["ga-loader.js", "text/javascript; charset=utf-8"],
   ...Object.fromEntries(["geist-400-latin", "geist-500-latin", "geist-600-latin", "geist-mono-400-latin", "geist-mono-700-latin"].map((f) => [`/fonts/${f}.woff2`, [`fonts/${f}.woff2`, "font/woff2"]])),
 };
 const files = Object.fromEntries(Object.entries(STATIC).map(([p, [f, type]]) => [p, { body: readFileSync(join(here, "public", f)), type }]));
@@ -46,6 +47,18 @@ main.wrap{max-width:none!important;padding:0!important;margin:0!important}
 </style>`;
 files["/embed"] = { type: files["/"].type, body: Buffer.from(files["/"].body.toString("utf8").replace("</head>", `${EMBED_CSS}</head>`)) };
 export const EMBED_ANCESTORS = "https://agent402.tools https://www.agent402.tools";
+
+// Google Analytics 4 on "/" only, env-gated like the main site (the same
+// GA_MEASUREMENT_ID, so both report into one property and share a visitor id
+// across the two hostnames). /embed is built above, before this, so the
+// homepage hero that frames it never counts a second page view.
+const GA_ID = String(process.env.GA_MEASUREMENT_ID || "").trim();
+export const GA_ENABLED = /^G-[A-Z0-9]{4,16}$/.test(GA_ID);
+if (GA_ENABLED) {
+  const loaderVersion = createHash("sha256").update(files["/ga-loader.js"].body).digest("hex").slice(0, 12);
+  const island = `<script id="ga-config" type="application/json">${JSON.stringify({ id: GA_ID })}</script><script src="/ga-loader.js?v=${loaderVersion}"></script>`;
+  files["/"].body = Buffer.from(files["/"].body.toString("utf8").replace("</head>", `${island}</head>`));
+}
 
 const directory = makeDirectory();
 const logos = makeLogoCache();
@@ -113,6 +126,16 @@ const securityHeaders = {
   "referrer-policy": "no-referrer",
   "content-security-policy": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
 };
+// The page with analytics on: Google's tag script, and its collection calls.
+// The JSON island is not executed, so no inline script is allowed.
+const GA_HOSTS = "https://www.googletagmanager.com https://*.google-analytics.com https://*.analytics.google.com";
+const gaHeaders = {
+  ...securityHeaders,
+  "content-security-policy": securityHeaders["content-security-policy"]
+    .replace("default-src 'self';", "default-src 'self'; script-src 'self' https://www.googletagmanager.com;")
+    .replace("img-src 'self' data:", `img-src 'self' data: ${GA_HOSTS}`)
+    .replace("connect-src 'self'", `connect-src 'self' ${GA_HOSTS}`),
+};
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
@@ -121,7 +144,7 @@ const server = http.createServer(async (req, res) => {
   if (files[path]) {
     const headers = path === "/embed"
       ? { ...securityHeaders, "content-security-policy": securityHeaders["content-security-policy"].replace("frame-ancestors 'none'", `frame-ancestors ${EMBED_ANCESTORS}`) }
-      : securityHeaders;
+      : path === "/" && GA_ENABLED ? gaHeaders : securityHeaders;
     res.writeHead(200, { "content-type": files[path].type, "cache-control": path === "/" || path === "/embed" ? "no-cache" : url.searchParams.has("v") || path.startsWith("/fonts/") ? "public, max-age=31536000, immutable" : "public, max-age=300", ...headers });
     return res.end(req.method === "HEAD" ? undefined : files[path].body);
   }
