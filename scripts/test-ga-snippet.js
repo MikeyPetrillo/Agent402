@@ -30,6 +30,15 @@ ok(/traffic_type = "internal"/.test(loader), "loader: ?internal=1 browsers are t
 ok(!/innerHTML/.test(loader), "loader: the consent strip is built without innerHTML");
 ok(/googletagmanager\.com\/gtag\/js\?id=/.test(loader), "loader: loads Google's tag for the configured id");
 
+{
+  // The browser's own bearer-path rule must be the server's, character for character.
+  const chrome = readFileSync(new URL("../src/ledger-chrome.js", import.meta.url), "utf8");
+  const serverRe = /const GA_BEARER_PATH = (\/.+\/);/.exec(chrome)?.[1];
+  const loaderRe = /if \((\/\^.+\/)\.test\(location\.pathname\)\) return;/.exec(loader)?.[1];
+  ok(!!serverRe && serverRe === loaderRe, `loader: refuses the same bearer paths as the server (${loaderRe})`);
+  ok(/page_location: location\.origin \+ location\.pathname/.test(loader) && /\^utm_\[a-z_\]\+\$/.test(loader), "loader: the URL sent drops every query parameter but utm_*");
+}
+
 const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 const csp = /"default-src 'self';[^"]*"/.exec(server)?.[0] || "";
 ok(/script-src 'self' https:\/\/www\.googletagmanager\.com;/.test(csp), "CSP: script-src adds exactly www.googletagmanager.com");
