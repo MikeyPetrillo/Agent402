@@ -63,6 +63,13 @@ function contentHash(row) {
  *  locations but never types, so scoring types would favour our own rows),
  *  and neither are examples (outside rows never carry seller example values,
  *  by policy). */
+const WRAPPER_FIELDS = new Set(["params", "input", "inputs", "body", "data", "args", "arguments", "payload", "request"]);
+/** True when the only declared input is one generic wrapper field. */
+export function opaqueInputs(row) {
+  const keys = Object.keys(row?.inputSchema?.properties || {});
+  return keys.length === 1 && WRAPPER_FIELDS.has(keys[0].toLowerCase());
+}
+
 export function schemaQuality(row) {
   // "absent" on our own row means the tool takes no input. On an outside row
   // it only means the seller declared none, which is not the same claim: a
@@ -70,6 +77,12 @@ export function schemaQuality(row) {
   // from the listing (2026-10-01: a wallet-brief step ran with {} and the
   // seller answered 400). Score that as uncertain, like a partial schema.
   if (row.inputSchemaState === "absent" && !row.firstParty && String(row.method || "").toUpperCase() === "POST") return 0.5;
+  // An outside tool whose only declared input is a generic wrapper (one body
+  // field named params, input, data ...) says nothing about what goes inside
+  // it; a plan can only send it {} (2026-10-01 prod check: two runs failed on
+  // such tools). Scored below a partial schema, so a tool whose fields are
+  // named ranks first.
+  if (!row.firstParty && opaqueInputs(row)) return 0.25;
   if (row.inputSchemaState === "declared" || row.inputSchemaState === "absent") return 1;
   if (row.inputSchemaState === "partial") return 0.5;
   return 0;

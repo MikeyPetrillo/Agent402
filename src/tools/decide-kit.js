@@ -167,9 +167,10 @@ export function executeBudgetUsd(body, d, cfg = decideConfig(), creditUsd = 0) {
   return roundUsd(Math.min(base, cfg.execute.perCallMaxUsd));
 }
 
-function stepParams(step, overrides) {
+/** The caller's params for one step, when given. */
+function stepOverride(step, overrides) {
   const o = overrides && typeof overrides === "object" ? overrides[String(step.step)] : null;
-  return o && typeof o === "object" && !Array.isArray(o) ? o : step.tool.exampleParams || {};
+  return o && typeof o === "object" && !Array.isArray(o) ? o : null;
 }
 const PLACEHOLDER = /^<[^<>]*>$/;
 
@@ -273,20 +274,26 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const results = [];
     const outputs = {};
     for (const step of d.plan) {
-      // A "{{step N}}" value is taken from step N's output (an address an ENS
-      // lookup resolved); one that cannot be named without guessing skips the step.
-      const chained = resolveStepRefs(stepParams(step, input.params), outputs);
-      if (!chained.ok) { results.push({ step: step.step, status: "skipped", reason: chained.reason }); continue; }
-      const params = chained.params;
-      // A placeholder the plan could not fill from the task is never sent to a
-      // paid tool as if it were the value.
-      const open = Object.entries(params).filter(([, v]) => typeof v === "string" && PLACEHOLDER.test(v)).map(([k]) => k);
-      if (open.length) { results.push({ step: step.step, status: "skipped", reason: `needs ${open.join(", ")}: pass params for this step` }); continue; }
       let done = null;
       const attempts = [];
+      const inputSkips = [];
+      const callerParams = stepOverride(step, input.params);
       for (const tool of [step.tool, ...(step.fallbacks || [])]) {
-        // The step's params, under this tool's own name for a renamed single input.
-        const toolParams = fitParamsToSchema(tool.inputSchema, params);
+        // This tool's own params: the caller's for the step if given, else the
+        // ones the plan wrote for this tool (backups carry their own; a plan
+        // from before that falls back to the step's), under this tool's field
+        // names for a renamed single input.
+        const raw = callerParams || tool.exampleParams || step.tool.exampleParams || {};
+        // A "{{step N}}" value is taken from step N's output (an address an ENS
+        // lookup resolved); one that cannot be named without guessing skips
+        // this tool, and the next one is tried.
+        const chained = resolveStepRefs(raw, outputs);
+        if (!chained.ok) { inputSkips.push(chained.reason); attempts.push({ id: tool.id, skipped: chained.reason }); continue; }
+        // A placeholder the plan could not fill from the task is never sent to
+        // a paid tool as if it were the value.
+        const open = Object.entries(chained.params).filter(([, v]) => typeof v === "string" && PLACEHOLDER.test(v)).map(([k]) => k);
+        if (open.length) { const why = `needs ${open.join(", ")}: pass params for this step`; inputSkips.push(why); attempts.push({ id: tool.id, skipped: why }); continue; }
+        const toolParams = fitParamsToSchema(tool.inputSchema, chained.params);
         if (left() < 5000) { attempts.push({ id: tool.id, skipped: "the run's time budget is spent" }); break; }
         if (tool.callDirectly === true) { attempts.push({ id: tool.id, skipped: "call this tool directly: execute cannot pay it" }); continue; }
         const def = tool.firstParty ? bySlug.get(tool.slug) : null;
@@ -357,7 +364,11 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         } catch (e) {
           const timedOut = e?.statusCode === 504 && /did not answer within/.test(String(e?.message));
           const maybePaid = timedOut || e?.committed === true || e?.paidUnanswered === true || /no other seller is tried/.test(String(e?.message));
-          attempts.push({ id: tool.id, error: String(e?.message || e).slice(0, 240), status: e?.statusCode || 500, toolFault: !(e?.statusCode >= 400 && e?.statusCode < 500), ...(maybePaid ? { mayHavePaid: true } : {}) });
+          // A seller that refuses a valid payment, or rejects the paid retry,
+          // failed on its own side whatever status the router relays: it counts
+          // against the seller's reliability, so the next plans rank it lower.
+          const sellerRefused = /refused the payment|rejected the paid retry|Seller .* failed/i.test(String(e?.message || ""));
+          attempts.push({ id: tool.id, error: String(e?.message || e).slice(0, 240), status: e?.statusCode || 500, toolFault: sellerRefused || !(e?.statusCode >= 400 && e?.statusCode < 500), ...(maybePaid ? { mayHavePaid: true } : {}) });
           if (maybePaid) {
             // The payment may have left (or may still leave: a timed-out leg is
             // not cancelled). Book its worst case and try no other paid seller.
@@ -374,6 +385,9 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         }
       }
       if (done) { outputs[String(step.step)] = done.result; results.push({ step: step.step, status: "ok", ...done, ...(attempts.length ? { attempts } : {}) }); }
+      // Every tool was held back for want of an input: the step is skipped
+      // (nothing was tried, nothing paid), and the first reason says why.
+      else if (inputSkips.length && inputSkips.length === attempts.length) results.push({ step: step.step, status: "skipped", reason: inputSkips[0], attempts });
       else results.push({ step: step.step, status: "failed", attempts });
     }
 

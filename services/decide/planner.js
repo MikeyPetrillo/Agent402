@@ -14,6 +14,7 @@ import { scoreCandidates } from "./rank.js";
 import { decomposePrompt, judgePrompt, paramsPrompt } from "./llm.js";
 import { validateParams, pruneParams, skeletonParams } from "../../src/decide/params.js";
 import { DEPTHS } from "../../src/decide/config.js";
+import { opaqueInputs } from "../../src/decide/tool-rows.js";
 
 const DEFAULT_LATENCY_MS = { firstParty: 1500, thirdParty: 4000 };
 const WHOLE_TASK_FIT = 0.85;
@@ -172,8 +173,8 @@ export async function buildDecision({ task, constraints, depth }, deps) {
   // A single tool replaces the step plan only when its inputs are known: an
   // outside POST with no declared fields has nowhere to put the task's data,
   // so collapsing a typed plan onto it hands execute an empty body.
-  const knowsInputs = (r) => r.firstParty || r.inputSchemaState === "declared" || r.inputSchemaState === "partial"
-    || String(r.method || "").toUpperCase() !== "POST";
+  const knowsInputs = (r) => r.firstParty || ((r.inputSchemaState === "declared" || r.inputSchemaState === "partial"
+    || String(r.method || "").toUpperCase() !== "POST") && !opaqueInputs(r));
   const wholeBest = depth === "quick" ? null
     : whole.slice(0, 8).map((c) => ({ c, f: stepFit.get(`${wholeStepIndex}:${c.row.id}`) ?? 0 })).filter((x) => x.f >= WHOLE_TASK_FIT && knowsInputs(x.c.row)).sort((a, b) => b.f - a.f)[0]?.c || null;
   let judgedStepIndex = steps.map((_, i) => i);
@@ -228,10 +229,20 @@ export async function buildDecision({ task, constraints, depth }, deps) {
     // three outside call-directly tools while ours sat just below them). The
     // ranking is untouched; the best runnable viable tool takes the last
     // fallback slot.
+    // Two runnable options where two exist: an outside seller can refuse a
+    // valid payment at run time, and a step with a single runnable tool then
+    // has nothing left (2026-10-01 prod check: three of 25 runs ended that way).
     const runnable = (x) => x.row.firstParty || x.row.executable !== false;
-    if (![primary, ...fallbacks].some(runnable)) {
+    const wantRunnable = Math.min(2, viable.filter(runnable).length);
+    while ([primary, ...fallbacks].filter(runnable).length < wantRunnable) {
       const ex = viable.find((x) => x !== primary && !fallbacks.includes(x) && runnable(x));
-      if (ex) { if (fallbacks.length >= cfg.fallbacksPerStep) fallbacks.pop(); fallbacks.push(ex); }
+      if (!ex) break;
+      if (fallbacks.length >= cfg.fallbacksPerStep) {
+        const drop = fallbacks.map((f, j) => [f, j]).reverse().find(([f]) => !runnable(f));
+        if (!drop) break;
+        fallbacks.splice(drop[1], 1);
+      }
+      fallbacks.push(ex);
     }
     plan.push({
       step: plan.length + 1, purpose: s.purpose,
@@ -239,45 +250,54 @@ export async function buildDecision({ task, constraints, depth }, deps) {
       score: primary.score,
       fallbacks: fallbacks.map((f) => ({ ...view(f.row), score: f.score })),
       dependsOn: s.dependsOn.map((d) => newStepOf[d]).filter((d) => Number.isInteger(d)),
-      _row: primary.row, _fit: primary.fit,
+      _row: primary.row, _fit: primary.fit, _fbRows: fallbacks.map((f) => f.row),
     });
   }
 
   // 5. params: model-filled for plan/full, validated; else the tool's own
-  //    example (first party) or a typed skeleton
+  //    example (first party) or a typed skeleton. Written for EVERY tool of a
+  //    step, primary and backups alike: backups that were handed the
+  //    primary's inputs could not run whenever their fields differed (prod
+  //    check 2026-10-01: our own DeFi and options tools sat unused as backups).
+  //    A slot is one tool of one step; key "1" is step 1's primary, "1.2" its
+  //    first backup.
+  const slots = [];
+  for (const p of plan) {
+    slots.push({ key: String(p.step), p, row: p._row, target: p.tool, primary: true });
+    p._fbRows.forEach((row, j) => slots.push({ key: `${p.step}.${j + 2}`, p, row, target: p.fallbacks[j], primary: false }));
+  }
   let filled = null;
   if (depth !== "quick" && plan.length && left() > 1500) {
-    const pp = paramsPrompt(task, plan.map((p) => ({ step: p.step, purpose: p.purpose, dependsOn: p.dependsOn, row: p._row })));
-    filled = await within(llm.call(pp.system, pp.user, { maxTokens: 900, timeoutMs: timeoutFor(0.8), meter, stage: "params" }), timeoutFor(0.8) + 250);
+    const pp = paramsPrompt(task, slots.map((sl) => ({ key: sl.key, step: sl.p.step, purpose: sl.p.purpose, dependsOn: sl.p.dependsOn, row: sl.row, backup: !sl.primary })));
+    filled = await within(llm.call(pp.system, pp.user, { maxTokens: 1800, timeoutMs: timeoutFor(0.8), meter, stage: "params" }), timeoutFor(0.8) + 250);
     // The model sometimes answers without the "params" wrapper ({"1":{...}});
     // that answer is read rather than thrown away.
-    if (filled && !filled.params && plan.some((p) => filled[String(p.step)] && typeof filled[String(p.step)] === "object")) filled = { params: filled };
+    if (filled && !filled.params && slots.some((sl) => filled[sl.key] && typeof filled[sl.key] === "object")) filled = { params: filled };
     if (!filled?.params) { partial = true; notes.push("parameter filling unavailable: skeleton params"); }
   }
-  for (const p of plan) {
-    const schema = p._row.inputSchema;
-    // Keyed by step number as asked; an answer keyed by the tool's id (seen
-    // live) is read too rather than discarded.
-    let fromTask = pruneParams(schema, filled?.params?.[String(p.step)] ?? filled?.params?.[p._row.id]);
+  for (const sl of slots) {
+    const schema = sl.row.inputSchema;
+    // Keyed as asked; an answer keyed by the tool's id (seen live) is read too.
+    let fromTask = pruneParams(schema, filled?.params?.[sl.key] ?? filled?.params?.[sl.row.id]);
     // An outside tool's fields carry no types, so the validator cannot check a
     // model-written value. Only values GROUNDED in the task survive there: a
     // short string or number that appears in the task text, or a reference to
     // an earlier step. Anything else (a callback URL a listing talked the
     // model into, say) is dropped and the field falls back to the skeleton.
-    if (!p._row.firstParty) fromTask = groundedParams(fromTask, task);
+    if (!sl.row.firstParty) fromTask = groundedParams(fromTask, task);
     // Some values from the task and a named placeholder for each missing
     // required one beats discarding what the task gave.
     const merged = Object.keys(fromTask || {}).length ? { ...skeletonParams(schema), ...fromTask } : null;
     const candidates = [
       ["task", fromTask],
       ["task", merged],
-      ["tool-example", p._row.firstParty && p._row.example ? pruneParams(schema, p._row.example) : null],
+      ["tool-example", sl.row.firstParty && sl.row.example ? pruneParams(schema, sl.row.example) : null],
       ["skeleton", skeletonParams(schema)],
     ];
     const hit = candidates.find(([, v]) => v && Object.keys(v).length + (schema.required?.length ? 0 : 1) > 0 && validateParams(schema, v).ok)
       || ["skeleton", skeletonParams(schema)];
-    p.tool.exampleParams = hit[1];
-    p.tool.exampleParamsSource = hit[0];
+    sl.target.exampleParams = hit[1];
+    sl.target.exampleParamsSource = hit[0];
   }
 
   // 5b. check the written values. A step reference must name an earlier step
@@ -285,21 +305,22 @@ export async function buildDecision({ task, constraints, depth }, deps) {
   //     where it is on: below the bar, a required value becomes a placeholder
   //     and an optional one is dropped. No answer changes nothing.
   const placeholder = (name) => `<${name}>`;
-  const reject = (p, name) => {
-    if ((p._row.inputSchema?.required || []).includes(name)) p.tool.exampleParams[name] = placeholder(name);
-    else delete p.tool.exampleParams[name];
-    (p._needsInput ||= []).push(name);
+  const reject = (sl, name) => {
+    if ((sl.row.inputSchema?.required || []).includes(name)) sl.target.exampleParams[name] = placeholder(name);
+    else delete sl.target.exampleParams[name];
+    (sl.needs ||= []).push(name);
   };
   const toCheck = [];
-  for (const p of plan) {
-    for (const [name, v] of Object.entries(p.tool.exampleParams || {})) {
+  for (const sl of slots) {
+    const p = sl.p;
+    for (const [name, v] of Object.entries(sl.target.exampleParams || {})) {
       const ref = typeof v === "string" ? /^\{\{step (\d+)\}\}$/.exec(v) : null;
       // A reference to an earlier step links the steps (decomposition often
       // leaves dependsOn empty); one to this step or a later one is rejected.
       if (ref) {
         const n = Number(ref[1]);
         if (n >= 1 && n < p.step && plan.some((q) => q.step === n)) { if (!p.dependsOn.includes(n)) p.dependsOn = [...p.dependsOn, n].sort((a, b) => a - b); }
-        else reject(p, name);
+        else reject(sl, name);
         continue;
       }
       if (typeof v === "string" && /^<[^<>]*>$/.test(v)) continue; // already a placeholder
@@ -308,12 +329,12 @@ export async function buildDecision({ task, constraints, depth }, deps) {
       // and turned a wallet address into a placeholder (live run 2026-10-01),
       // so the same task planned differently from run to run.
       if (typeof v === "string" && verbatimIdentifier(v, task)) continue;
-      toCheck.push({ key: `s${p.step}:${name}`, p, purpose: p.purpose, row: p._row, name, prop: p._row.inputSchema?.properties?.[name] || {}, value: v });
+      toCheck.push({ key: `s${sl.key}:${name}`, sl, purpose: p.purpose, row: sl.row, name, prop: sl.row.inputSchema?.properties?.[name] || {}, value: v });
     }
   }
   if (toCheck.length && deps.checkParams && cfg.judge === "jev" && left() > 1000) {
-    const scores = await within(deps.checkParams(task, toCheck.map(({ p, ...it }) => it), { timeoutMs: timeoutFor(0.4), meter }), timeoutFor(0.4) + 250);
-    if (scores) for (const it of toCheck) if (typeof scores[it.key] === "number" && scores[it.key] < (cfg.paramCheckMin ?? 0.3)) reject(it.p, it.name);
+    const scores = await within(deps.checkParams(task, toCheck.map(({ sl, ...it }) => it), { timeoutMs: timeoutFor(0.4), meter }), timeoutFor(0.4) + 250);
+    if (scores) for (const it of toCheck) if (typeof scores[it.key] === "number" && scores[it.key] < (cfg.paramCheckMin ?? 0.3)) reject(it.sl, it.name);
   }
   // 5c. a required value the task does not give, which an earlier step
   //     produces, becomes a reference to that step: the planner model links
@@ -321,24 +342,41 @@ export async function buildDecision({ task, constraints, depth }, deps) {
   //     <address> placeholder and no dependency). Only when exactly one
   //     earlier step names a field for it (preferring the ones the step
   //     already depends on), so the link is never a guess.
-  for (const p of plan) {
-    for (const name of p._row.inputSchema?.required || []) {
-      const v = p.tool.exampleParams?.[name];
+  for (const sl of slots) {
+    const p = sl.p;
+    for (const name of sl.row.inputSchema?.required || []) {
+      const v = sl.target.exampleParams?.[name];
       if (!(v === undefined || (typeof v === "string" && /^<[^<>]*>$/.test(v)))) continue; // the task gave it
       const earlier = plan.filter((q) => q.step < p.step && producesField(q._row, name));
       const linked = earlier.filter((q) => p.dependsOn.includes(q.step));
       const src = linked.length === 1 ? linked[0] : !linked.length && earlier.length === 1 ? earlier[0] : null;
       if (!src) continue;
-      p.tool.exampleParams[name] = `{{step ${src.step}}}`;
+      sl.target.exampleParams[name] = `{{step ${src.step}}}`;
       if (!p.dependsOn.includes(src.step)) p.dependsOn = [...p.dependsOn, src.step].sort((a, b) => a - b);
-      if (p._needsInput) p._needsInput = p._needsInput.filter((n) => n !== name);
+      if (sl.needs) sl.needs = sl.needs.filter((n) => n !== name);
     }
   }
+  const openOf = (params) => Object.entries(params || {}).filter(([, v]) => typeof v === "string" && /^<[^<>]*>$/.test(v)).map(([k]) => k);
+  for (const sl of slots) {
+    const need = [...new Set([...(sl.needs || []), ...openOf(sl.target.exampleParams)])];
+    if (need.length) sl.target.exampleParamsNeedInput = need;
+  }
+  // 5d. a primary that still needs input the task does not give gives way to
+  //     the best backup whose inputs are all there (prod check: an outside
+  //     labor-data tool wanted an <area> while our own unemployment tool,
+  //     next in line, needed nothing). The ranking stays in the plan's "why".
   for (const p of plan) {
-    const open = Object.entries(p.tool.exampleParams || {}).filter(([, v]) => typeof v === "string" && /^<[^<>]*>$/.test(v)).map(([k]) => k);
-    const need = [...new Set([...(p._needsInput || []), ...open])];
-    delete p._needsInput;
-    if (need.length) p.tool.exampleParamsNeedInput = need;
+    if (!openOf(p.tool.exampleParams).length) continue;
+    const j = p.fallbacks.findIndex((f) => !openOf(f.exampleParams).length && f.exampleParams && (Object.keys(f.exampleParams).length || !(f.inputSchema?.required || []).length));
+    if (j < 0) continue;
+    const prev = { tool: p.tool, row: p._row, score: p.score };
+    const next = p.fallbacks[j];
+    p.tool = { ...next }; delete p.tool.score;
+    p._row = p._fbRows[j];
+    p.score = next.score;
+    p.fallbacks[j] = { ...prev.tool, score: prev.score };
+    p._fbRows[j] = prev.row;
+    p.why = `${p.why}; moved up over ${prev.tool.slug || prev.tool.name}, which needs ${openOf(prev.tool.exampleParams).join(", ")} the task does not give`;
   }
 
   // 6. cost, latency, confidence
@@ -363,7 +401,7 @@ export async function buildDecision({ task, constraints, depth }, deps) {
   const out = {
     decisionId: `dec_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
     task, depth,
-    plan: plan.map(({ _row, _fit, ...rest }) => rest),
+    plan: plan.map(({ _row, _fit, _fbRows, ...rest }) => rest),
     estimatedCostUsd, estimatedCostViaAgent402Usd, estimatedLatencyMs,
     confidence, partial, judged: fits, gaps,
     ...(notes.length ? { notes } : {}),

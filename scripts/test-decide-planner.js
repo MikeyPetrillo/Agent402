@@ -179,6 +179,30 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   ok(d.plan[0]?.tool.exampleParams.q === "EU AI Act obligations for general-purpose AI models", `a query copied from the task survives a value check that scores everything low (${JSON.stringify(d.plan[0]?.tool.exampleParams)})`);
 }
 
+// ---- backups get their own params; a primary missing input gives way ----
+{
+  const idx = new ToolIndex();
+  idx.upsert(mk("labor", { description: "unemployment rate by area from labor statistics", props: { area: { type: "string" } }, required: ["area"] }));
+  idx.upsert(mk("unemp", { description: "us unemployment rate trend", props: { months: { type: "number" } }, required: [] }));
+  idx.upsert(mk("optx", { description: "black scholes option price calculator", props: { S: { type: "number" }, K: { type: "number" } }, required: ["S", "K"] }));
+  idx.upsert(mk("bsch", { description: "black scholes option pricing", props: { spot: { type: "number" }, strike: { type: "number" } }, required: ["spot", "strike"] }));
+  const fitsAll = (system, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = /ENTIRE/.test(st.purpose) ? 0.1 : /unemployment/.test(st.purpose) && /labor/.test(c.description) ? 0.97 : /unemployment/.test(st.purpose) && /unemployment/.test(c.description) ? 0.7 : (/option/.test(st.purpose) && /black scholes/.test(c.description)) ? 0.9 : 0.02; return { fits }; };
+  let seen = null;
+  const llm = stubLlm([
+    { steps: [{ purpose: "us unemployment trend", query: "unemployment rate", dependsOn: [] }, { purpose: "option price", query: "black scholes", dependsOn: [] }] },
+    fitsAll,
+    (system, user) => { seen = keysFor(user); const out = {}; for (const e of seen) { if (e.name === "labor") out[e.key] = { area: "<area>" }; if (e.name === "unemp") out[e.key] = {}; if (e.name === "optx") out[e.key] = { S: 100, K: 105 }; if (e.name === "bsch") out[e.key] = { spot: 100, strike: 105 }; } return { params: out }; },
+  ]);
+  const d = await buildDecision({ task: "US unemployment trend, and price a call option with spot 100 strike 105", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  ok(seen && seen.some((e) => e.backup && /\./.test(e.key)), "the params model is asked for every tool of a step, backups keyed 1.2, 1.3");
+  const opt = d.plan.find((p) => /option/.test(p.purpose));
+  const all = [opt?.tool, ...(opt?.fallbacks || [])];
+  ok(all.some((t) => t?.slug === "bsch" && t.exampleParams?.spot === 100) && all.some((t) => t?.slug === "optx" && t.exampleParams?.S === 100), `each tool carries params in its own field names (${JSON.stringify(all.map((t) => [t?.slug, t?.exampleParams]))})`);
+  const un = d.plan.find((p) => /unemployment/.test(p.purpose));
+  ok(un?.tool.slug === "unemp" && un.fallbacks.some((f) => f.slug === "labor") && /moved up over labor/.test(un.why), `a primary that needs input the task lacks gives way to a complete backup (${un?.tool.slug}; ${un?.why})`);
+  ok(!JSON.stringify(d).includes("_fbRows"), "internal rows never reach the decision");
+}
+
 // ---- live window and schema filters ----
 {
   const { idx, stale, noschema } = buildIndex();
