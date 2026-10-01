@@ -142,9 +142,21 @@ export async function buildDecision({ task, constraints, depth }, deps) {
   // 3. judged fit (one call for all steps); retrieval order stands in when it
   //    fails. The whole task is judged as its own final "step" so a single
   //    tool that covers everything can win over a multi-step plan.
+  //    The judged set is the top of retrieval plus, from the rest of it, up to
+  //    four tools execute can pay (ours or an outside seller's): with tens of
+  //    thousands of rows, near-identical call-directly sellers can fill the
+  //    top twelve, and a payable tool further down was never judged, so a
+  //    plan could hold nothing execute could run (2026-10-01 prod check: an
+  //    ETH-balance step of three call-directly sellers).
+  const payable = (r) => r.firstParty || r.executable !== false;
+  const judgedSet = (cands, top) => {
+    const head = cands.slice(0, top);
+    const extra = cands.slice(top).filter((c) => payable(c.row)).slice(0, 4);
+    return [...head, ...extra];
+  };
   const judgeSteps = depth === "quick"
-    ? [{ purpose: task, candidates: whole.slice(0, 12) }]
-    : [...steps.map((s) => ({ purpose: s.purpose, candidates: s.candidates.slice(0, 12) })), { purpose: `the ENTIRE task in one call: ${task}`, candidates: whole.slice(0, 8) }];
+    ? [{ purpose: task, candidates: judgedSet(whole, 12) }]
+    : [...steps.map((s) => ({ purpose: s.purpose, candidates: judgedSet(s.candidates, 12) })), { purpose: `the ENTIRE task in one call: ${task}`, candidates: whole.slice(0, 8) }];
   const jp = judgePrompt(task, judgeSteps);
   // The judgment model first (one yes/no per pair); the model judge when it
   // is off, over its ceiling, or fails.
@@ -424,8 +436,19 @@ export function producesField(row, name) {
   return (ADDRESS_PARAM.test(name) || normField(name) === "address") && fields.some((f) => f === "address" || f.endsWith("address"));
 }
 
+/** "https://github.com" (or http, optional trailing slash) for a domain the
+ *  task names verbatim. Only the bare origin: a path the task does not
+ *  contain is not the task's. */
+export function urlOfTaskDomain(v, task) {
+  const m = /^https?:\/\/((?:[a-z0-9-]+\.)+[a-z]{2,})\/?$/i.exec(String(v || "").trim());
+  if (!m) return false;
+  const d = m[1].toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z0-9.-])${d}($|[^a-z0-9-])`).test(String(task || "").toLowerCase());
+}
+
 export function verbatimIdentifier(v, task) {
   const t = String(v || "").trim();
+  if (urlOfTaskDomain(t, task)) return true;
   if (t.length < 6 || t.length > 200) return false;
   if (taskWorded(t, task)) return true;
   if (!String(task || "").includes(t)) return false;
@@ -461,6 +484,9 @@ export function groundedParams(params, task) {
       if (!t || t.length > 200) continue;
       if (STEP_REF.test(t) || /^<[\w.-]{1,40}>$/.test(t)) { out[k] = v; continue; } // a step reference or a named unknown
       if (hay.includes(norm(t))) { out[k] = v; continue; }
+      // The plain URL of a domain the task names ("github.com" asked for as a
+      // url field): the planner writes the scheme the task left out.
+      if (urlOfTaskDomain(t, task)) { out[k] = v; continue; }
       // A short plain value (a language code, a format name) carries no link,
       // address or path; it goes on to the value check rather than being dropped.
       if (t.length <= 40 && /^[\p{L}\p{N}][\p{L}\p{N} ._,'-]*$/u.test(t)) { out[k] = v; continue; }

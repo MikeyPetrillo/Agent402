@@ -221,6 +221,28 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   ok(p.tool.slug === "sa" && runnable.length >= 2 && p.fallbacks.some((f) => f.slug === "sx"), `two payable tools per step where two exist (${[p.tool, ...p.fallbacks].map((t) => t.slug + (t.callDirectly ? "*" : "")).join(", ")})`);
 }
 
+// ---- a payable tool below the top of retrieval is still judged ----
+{
+  const idx = new ToolIndex();
+  for (let i = 0; i < 14; i++) idx.upsert({ ...mk(`cd${i}`, { description: `eth balance of an address on ethereum ${"x".repeat(i)}`, props: { address: { type: "string" } }, required: ["address"] }), firstParty: false, seller: `cd${i}.example`, executable: false });
+  idx.upsert(mk("ourbal", { description: "native coin balance for an address", props: { address: { type: "string" } }, required: ["address"] }));
+  let judgedNames = null;
+  const llm = stubLlm([{ steps: [{ purpose: "eth balance", query: "eth balance of an address on ethereum", dependsOn: [] }] },
+    (system, user) => { const L = keysFor(user); judgedNames = L[0].candidates.map((c) => c.name); const fits = {}; for (const st of L) for (const c of st.candidates) fits[c.key] = /ENTIRE/.test(st.purpose) ? 0.1 : 0.9; return { fits }; },
+    { params: {} }]);
+  const d = await buildDecision({ task: "ETH balance of 0x8589427373D6D84E98730D7795D8f6f8731FDA16", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  const p = d.plan[0];
+  ok(judgedNames?.includes("ourbal") && [p.tool, ...p.fallbacks].some((t) => t.slug === "ourbal"), `a payable tool outside the top twelve is judged and kept (${judgedNames?.length} judged; plan ${[p.tool, ...p.fallbacks].map((t) => t.slug).join(", ")})`);
+}
+
+// ---- the plain URL of a domain the task names is the task's ----
+{
+  const { urlOfTaskDomain, verbatimIdentifier } = await import("../services/decide/planner.js");
+  const t = "Get the HTTP security headers for github.com and grade them";
+  ok(urlOfTaskDomain("https://github.com", t) && urlOfTaskDomain("http://github.com/", t) && verbatimIdentifier("https://github.com", t) && groundedParams({ url: "https://github.com" }, t).url === "https://github.com", "the URL of a domain the task names is grounded and not second-guessed");
+  ok(!urlOfTaskDomain("https://hub.com", t) && !urlOfTaskDomain("https://github.com/login", t) && !urlOfTaskDomain("https://evil.example", t), "another domain, a suffix of the named one, or a path the task never gave is not");
+}
+
 // ---- live window and schema filters ----
 {
   const { idx, stale, noschema } = buildIndex();

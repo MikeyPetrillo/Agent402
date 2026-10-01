@@ -75,7 +75,7 @@ ok(echoed === SOL, "the response still echoes the resolved network");
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   const at = src.indexOf('} else if (chain === "solana") {');
   const branch = src.slice(at, src.indexOf("} else {", at));
-  ok(/routeQuery(?:Async)?\(\{[^}]*networkFilter: "solana"[^}]*strictNetwork: true/.test(branch),
+  ok(/(?:routeQuery(?:Async)?|routeRows)\(\{[^}]*networkFilter: "solana"[^}]*strictNetwork: true/.test(branch),
     "the Solana SOR branch ranks with networkFilter:'solana' + strictNetwork, so its window holds Solana rows only");
 }
 
