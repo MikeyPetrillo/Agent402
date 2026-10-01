@@ -184,6 +184,8 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   const d = await buildDecision({ task: "screen wallet 0xabc for sanctions", constraints: {}, depth: "quick" }, { index: idx, embed: noEmbed, llm, cfg, now: NOW, deadline: Date.now() + 10_000 });
   const tools = [d.plan[0].tool, ...d.plan[0].fallbacks];
   ok(d.plan[0].tool.firstParty === false && tools.some((t) => t.firstParty || t.callDirectly !== true), `the ranking still leads with the best fit, and the step keeps a runnable fallback (${tools.map((t) => (t.slug || t.name) + (t.callDirectly ? "*" : "")).join(", ")})`);
+  const firstRunnable = tools.find((t) => Number.isFinite(t.executeViaAgent402Usd));
+  ok(firstRunnable && d.estimatedCostViaAgent402Usd === firstRunnable.executeViaAgent402Usd, `the run estimate counts the first tool execute can pay, not a call-directly primary as $0 (${d.estimatedCostViaAgent402Usd})`);
 }
 
 // ---- dependsOn survives a dropped step ----
