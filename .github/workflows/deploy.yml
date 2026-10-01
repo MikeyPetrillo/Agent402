@@ -2460,6 +2460,7 @@ jobs:
           # Homepage tests (offline, fixture snapshot)
           t node scripts/test-home-page.js
           t node scripts/test-ga-snippet.js
+          t node scripts/test-chain-page-cache.js
           # Operator demand-board page tests (verdict rendering, no double-escape, robots disallow — offline)
           t node scripts/test-operator-wishes.js
           # Rail self-heal (the facilitator map cannot silently drift)

@@ -6372,20 +6372,43 @@ function resolveMarketSeller(chainKey, snapshot, sellerQuery) {
     : null;
   return { selectedSeller, scanWallet };
 }
+// One chain page, built in full: seller resolution, the revenue strip, the
+// activity scan and the render.
+async function buildChainPage(chainKey, sellerQuery, all) {
+  const snapshot = getIndexSnapshot();
+  const { selectedSeller, scanWallet } = resolveMarketSeller(chainKey, snapshot, sellerQuery);
+  const [revSnap, activity] = await Promise.all([
+    revenueSnapshot(revenueWallets()).then((snap) => withFreshRecent(snap, ledgerRecent)),
+    scanWallet ? getActivityForChain(chainKey, scanWallet, { maxWaitMs: PAGE_ACTIVITY_WAIT_MS }) : Promise.resolve(null),
+  ]);
+  const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
+  return marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey) });
+}
+// ?seller= views render per request; at most this many at once (2026-10-01).
+const CHAIN_SELLER_VIEW_MAX_INFLIGHT = 2;
+let chainSellerViewsInFlight = 0;
 for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
   app.get(`/${chainKey}`, async (req, res) => {
     try {
-      const snapshot = getIndexSnapshot();
-      const { selectedSeller, scanWallet } = resolveMarketSeller(chainKey, snapshot, req.query.seller);
-      const [revSnap, activity] = await Promise.all([
-        revenueSnapshot(revenueWallets()).then((snap) => withFreshRecent(snap, ledgerRecent)),
-        scanWallet ? getActivityForChain(chainKey, scanWallet, { maxWaitMs: PAGE_ACTIVITY_WAIT_MS }) : Promise.resolve(null),
-      ]);
-      const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
-      const render = () => marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all: req.query.all === "1" , host: hostEntryFigures(chainKey) });
-      // The rendered page is cached for 60 s (it re-labels and re-renders every
-      // seller); a ?seller= view is caller-keyed and stays per request.
-      htmlCache(res, 120, 600).send(req.query.seller ? render() : memoSurface(`market:${chainKey}:${req.query.all === "1"}`, 60_000, render));
+      const all = req.query.all === "1";
+      // THE CACHE IS CHECKED FIRST (2026-10-01). A distributed burst of plain
+      // GET /base from dozens of residential IPs at once froze the server for
+      // 47 s on 09-29: every request resolved sellers, read the revenue
+      // snapshot and the activity scan BEFORE consulting the cached page, so
+      // a thousand requests each paid for work one build covers. The plain
+      // page is now one shared build per 60 s; concurrent callers wait on the
+      // same build, and a stale page keeps serving while the next one builds.
+      if (!req.query.seller) {
+        const html = await memoSurfaceAsync(`market:${chainKey}:${all}`, 60_000, () => buildChainPage(chainKey, null, all));
+        return htmlCache(res, 120, 600).send(html);
+      }
+      // A ?seller= view is caller-keyed and renders per request, so it is
+      // bounded: past the cap it is shed like other free work.
+      if (chainSellerViewsInFlight >= CHAIN_SELLER_VIEW_MAX_INFLIGHT) { noteShed("chain-seller-view"); return shedResponse(res, 5); }
+      chainSellerViewsInFlight++;
+      try {
+        htmlCache(res, 120, 600).send(await buildChainPage(chainKey, req.query.seller, all));
+      } finally { chainSellerViewsInFlight--; }
     } catch (e) {
       res.status(500).type("text/plain").send("temporarily unavailable");
     }
