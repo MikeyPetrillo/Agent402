@@ -20,6 +20,7 @@ import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { dispatchable } from "./route-execute.js";
 import { EXPENSIVE_COMPOSITE_SLUGS } from "../composite-spend-guard.js";
 import { evmCredentialBudgetMs } from "../evm-validity.js";
+import { resolveStepRefs } from "../decide/step-refs.js";
 
 export const NEUTRALITY_NOTE = "Every candidate is scored by one formula with the same weights: fit to the step, observed reliability, price, schema quality and a freshness pass mark. It has no term for who sells the tool, and every tool carries firstParty. Fit is judged from the same bounded description for every tool; reliability counts one observation per payer per day. Outside tools are eligible when a live 402 was seen within the configured window and their input schema is known.";
 
@@ -164,7 +165,6 @@ function stepParams(step, overrides) {
   const o = overrides && typeof overrides === "object" ? overrides[String(step.step)] : null;
   return o && typeof o === "object" && !Array.isArray(o) ? o : step.tool.exampleParams || {};
 }
-const REF = /^\{\{step (\d+)\}\}$/;
 const PLACEHOLDER = /^<[^<>]*>$/;
 
 async function withTimeout(promise, ms, label) {
@@ -267,9 +267,11 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const results = [];
     const outputs = {};
     for (const step of d.plan) {
-      const params = stepParams(step, input.params);
-      const ref = Object.values(params).map((v) => (typeof v === "string" ? REF.exec(v) : null)).find(Boolean);
-      if (ref) { results.push({ step: step.step, status: "skipped", reason: `needs the output of step ${ref[1]}: pass params for this step` }); continue; }
+      // A "{{step N}}" value is taken from step N's output (an address an ENS
+      // lookup resolved); one that cannot be named without guessing skips the step.
+      const chained = resolveStepRefs(stepParams(step, input.params), outputs);
+      if (!chained.ok) { results.push({ step: step.step, status: "skipped", reason: chained.reason }); continue; }
+      const params = chained.params;
       // A placeholder the plan could not fill from the task is never sent to a
       // paid tool as if it were the value.
       const open = Object.entries(params).filter(([, v]) => typeof v === "string" && PLACEHOLDER.test(v)).map(([k]) => k);
