@@ -1,7 +1,7 @@
 // Paid end-to-end check of decide against a live server. NOT in CI: it spends.
 //
 //   BURNER_KEY=0x... POW_SECRET=... [TARGET_URL=https://agent402.tools] \
-//     node scripts/decide-paid-e2e.mjs [--skip-tempo] [--task "..."]
+//     node scripts/decide-paid-e2e.mjs [--skip-tempo] [--task "..."] [--out run.json]
 //
 // Base x402, as a stock buyer: POST /api/decide (plan depth), then
 // POST /api/decide/execute with the decision's execution credit. Checks each
@@ -76,6 +76,8 @@ if (d.decisionId && credit?.token) {
   for (const s of x.steps || []) console.log(`   step ${s.step}: ${s.status} ${s.tool?.slug || ""} $${s.costUsd ?? 0} ${s.reason || ""}${s.attempts ? ` attempts=${JSON.stringify(s.attempts).slice(0, 200)}` : ""}`);
   if (x.leftoverCredit) console.log(`   leftover credit $${x.leftoverCredit.amountUsd}`);
   ok(!x.leftoverCredit || x.leftoverCredit.amountUsd > 0, "any leftover credit is positive");
+  // --out FILE keeps the whole plan and run (receipts, step results) for a write-up.
+  if (arg("--out", null)) (await import("node:fs")).writeFileSync(arg("--out", null), JSON.stringify({ decide: d, decideReceipt: rc1, execute: x, executeReceipt: rc2 }, null, 2));
 
   // Free feedback on step 1.
   if (d.feedbackToken) {
