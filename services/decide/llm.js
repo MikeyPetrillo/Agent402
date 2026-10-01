@@ -105,9 +105,9 @@ export function judgePrompt(task, steps) {
 }
 
 export function paramsPrompt(task, picks) {
-  const listing = picks.map((p) => ({ step: p.step, purpose: p.purpose, dependsOn: p.dependsOn || [], id: p.row.id, name: p.row.name, inputSchema: p.row.inputSchema, ...(p.row.outputFields?.length ? { outputFields: p.row.outputFields } : {}) }));
+  const listing = picks.map((p) => ({ step: p.step, purpose: p.purpose, dependsOn: p.dependsOn || [], name: p.row.name, inputSchema: p.row.inputSchema, ...(p.row.outputFields?.length ? { outputFields: p.row.outputFields } : {}) }));
   return {
-    system: `For each step, write the input parameters the agent should send to the chosen tool for this task, matching its inputSchema (property names and types; respect enums). Use values the task states. When a value is not in the task but an earlier step produces it (see that step's purpose and outputFields), write exactly "{{step N}}" for it; never an example value or a placeholder. ${DATA_RULE} Return JSON: {"params":{"<step>":{...}}}.`,
+    system: `For each step, write the input parameters the agent should send to the chosen tool for this task, matching its inputSchema (property names and types; respect enums). Use values the task states. When a value is not in the task but an earlier step produces it (see that step's purpose and outputFields), write exactly "{{step N}}" for it; never an example value or a placeholder. ${DATA_RULE} Key the answer by step number. Return JSON: {"params":{"1":{...},"2":{"address":"{{step 1}}"}}}.`,
     user: `Task: ${task}\n<listings>${JSON.stringify(listing)}</listings>`,
   };
 }

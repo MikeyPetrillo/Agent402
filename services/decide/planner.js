@@ -253,7 +253,9 @@ export async function buildDecision({ task, constraints, depth }, deps) {
   }
   for (const p of plan) {
     const schema = p._row.inputSchema;
-    let fromTask = pruneParams(schema, filled?.params?.[String(p.step)]);
+    // Keyed by step number as asked; an answer keyed by the tool's id (seen
+    // live) is read too rather than discarded.
+    let fromTask = pruneParams(schema, filled?.params?.[String(p.step)] ?? filled?.params?.[p._row.id]);
     // An outside tool's fields carry no types, so the validator cannot check a
     // model-written value. Only values GROUNDED in the task survive there: a
     // short string or number that appears in the task text, or a reference to
@@ -285,7 +287,14 @@ export async function buildDecision({ task, constraints, depth }, deps) {
   for (const p of plan) {
     for (const [name, v] of Object.entries(p.tool.exampleParams || {})) {
       const ref = typeof v === "string" ? /^\{\{step (\d+)\}\}$/.exec(v) : null;
-      if (ref) { if (!p.dependsOn.includes(Number(ref[1]))) reject(p, name); continue; }
+      // A reference to an earlier step links the steps (decomposition often
+      // leaves dependsOn empty); one to this step or a later one is rejected.
+      if (ref) {
+        const n = Number(ref[1]);
+        if (n >= 1 && n < p.step && plan.some((q) => q.step === n)) { if (!p.dependsOn.includes(n)) p.dependsOn = [...p.dependsOn, n].sort((a, b) => a - b); }
+        else reject(p, name);
+        continue;
+      }
       if (typeof v === "string" && /^<[^<>]*>$/.test(v)) continue; // already a placeholder
       // An identifier copied verbatim from the task (an address, hash, URL,
       // domain) is the caller's own data: the model check second-guessed one

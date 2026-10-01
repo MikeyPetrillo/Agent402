@@ -133,6 +133,15 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   ok(!(s2?.tool.exampleParamsNeedInput || []).includes("address"), "a linked value is not reported as caller input");
   const pp = llm.calls[2];
   ok(/outputFields/.test(pp.user) && /never an example value or a placeholder/.test(pp.system), "the params model sees what each earlier step produces");
+  ok(!/"id":/.test(pp.user), "the params listing carries no tool id to key the answer by");
+  // the model links the steps itself, keyed by tool id (seen live), with no dependsOn from decomposition
+  const ensId = mk("ens").id, balId = mk("bal").id;
+  const llm2 = stubLlm([{ steps: [{ purpose: "resolve vitalik.eth to an address", query: "resolve ens name", dependsOn: [] }, { purpose: "token balances on base", query: "token balances wallet", dependsOn: [] }] },
+    (system, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = /ENTIRE/.test(st.purpose) ? 0.1 : /resolve/.test(st.purpose) === /ens/.test(c.description) ? 0.95 : 0.05; return { fits }; },
+    { params: { [ensId]: { name: "vitalik.eth" }, [balId]: { address: "{{step 1}}" } } }]);
+  const e = await buildDecision({ task: "Resolve vitalik.eth then list token balances on Base", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm: llm2, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  const e1 = e.plan.find((p) => p.tool.slug === "ens"), e2 = e.plan.find((p) => p.tool.slug === "bal");
+  ok(e1?.tool.exampleParams.name === "vitalik.eth" && e2?.tool.exampleParams.address === "{{step 1}}" && e2.dependsOn.includes(1), `an answer keyed by tool id is read, and a written earlier-step reference links the steps (${JSON.stringify([e1?.tool.exampleParams, e2?.tool.exampleParams, e2?.dependsOn])})`);
 }
 
 // ---- live window and schema filters ----
@@ -436,10 +445,10 @@ ok(extractJson('noise {"a":1} tail') ?.a === 1 && extractJson("nothing") === nul
   const counted = makeJevJudge({ apiKey: "k", fetchImpl: async (...a) => { n++; return scoreBy(() => 0.05)(...a); } });
   const d4 = await buildDecision({ task: "Summarize a PDF at a URL in five bullets", constraints: {}, depth: "full" }, { index: idx, embed: noEmbed, llm: stubLlm([steps1, fits, written]), checkParams: counted.checkParams, cfg: { ...cfg, judge: "llm" }, now: NOW, deadline: Date.now() + 10_000 });
   ok(n === 0 && d4.plan[0].tool.exampleParams.url === "https://example.com/document.pdf", 'judge "llm" never checks');
-  // a step reference must name a step this one depends on
+  // a step reference must name an earlier step
   const selfRef = { params: { "1": { url: "{{step 1}}" } } };
   const d5 = await buildDecision({ task: "Summarize a PDF at a URL in five bullets", constraints: {}, depth: "full" }, { index: idx, embed: noEmbed, llm: stubLlm([steps1, fits, selfRef]), cfg, now: NOW, deadline: Date.now() + 10_000 });
-  ok(d5.plan[0].tool.exampleParams.url === "<url>", `a reference to a step this one does not depend on is not kept (${JSON.stringify(d5.plan[0].tool.exampleParams)})`);
+  ok(d5.plan[0].tool.exampleParams.url === "<url>", `a reference to this step itself is not kept (${JSON.stringify(d5.plan[0].tool.exampleParams)})`);
 }
 
 console.log(`\ntest-decide-planner: ${pass} passed, ${fail} failed`);
