@@ -160,6 +160,10 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
   // that is briefly missing.
   const heroFromChain = Number(settledOnChain) > 0;
   const heroCount = heroFromChain ? Number(settledOnChain) : viaUsdc;
+  // The live view's /embed may be framed only by agent402.tools, so a server
+  // on any other origin (a self-hosted copy, CI on 127.0.0.1) links to it
+  // instead of rendering a frame the browser would refuse.
+  const liveEmbed = /^https:\/\/(www\.)?agent402\.tools\/?$/i.test(String(baseUrl || ""));
   const heroLabel = heroFromChain ? "on-chain settlements · all rails · ours included" : "calls served for a stablecoin payment";
   const viaPow = Number(served.viaProofOfWork) || 0;
   const mppWire = Number(served.viaMPPWire) || 0;
@@ -275,7 +279,9 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
           <span style="font-family:var(--font-mono);font-size:11.5px;color:var(--dk-muted);display:inline-flex;align-items:center;gap:8px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent-lit);box-shadow:0 0 10px var(--accent-lit);animation:ml-pulse 1.8s ease-in-out infinite;"></span>live · every x402 and MPP payment we see on chain</span>
           <a href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:11.5px;color:var(--accent-lit);text-decoration:none;white-space:nowrap;">watch full screen ↗</a>
         </div>
-        <iframe id="hm-live" src="https://live.agent402.tools/embed" title="Live x402 and MPP payments, read from the chain" style="display:block;width:100%;height:340px;border:0;background:#0A0E14;"></iframe>
+        ${liveEmbed
+          ? `<iframe id="hm-live" src="https://live.agent402.tools/embed" title="Live x402 and MPP payments, read from the chain" style="display:block;width:100%;height:340px;border:0;background:#0A0E14;"></iframe>`
+          : `<a id="hm-live-link" href="https://live.agent402.tools" style="display:flex;align-items:center;justify-content:center;height:340px;background:#0A0E14;color:var(--accent-lit);font-family:var(--font-mono);font-size:13px;text-decoration:none;">watch every x402 and MPP payment, live ↗</a>`}
         <div style="padding:16px 22px 14px;border-top:1px solid rgba(255,255,255,.07);display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;">
           <div><div id="hm-live-n" style="font-weight:500;font-size:28px;letter-spacing:-.03em;color:var(--on-dark);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dk-muted3);margin-top:6px;">payments · last hour</div></div>
           <div><div id="hm-live-usd" style="font-weight:500;font-size:28px;letter-spacing:-.03em;color:var(--on-dark);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dk-muted3);margin-top:6px;">settled</div></div>

@@ -215,8 +215,10 @@ const catalog = {
 // The hero shows the live payments view (live.agent402.tools/embed), framed;
 // the framed page may only be framed by this site, and this site may only frame it.
 {
-  const html = ledgerHomePage(BASE_URL, catalog, {}, {}, []);
-  ok(/<iframe id="hm-live" src="https:\/\/live\.agent402\.tools\/embed"/.test(html), "hero frames the live payments view");
+  const html = ledgerHomePage("https://agent402.tools", catalog, {}, {}, []);
+  ok(/<iframe id="hm-live" src="https:\/\/live\.agent402\.tools\/embed"/.test(html), "on agent402.tools the hero frames the live payments view");
+  const self = ledgerHomePage("http://127.0.0.1:3000", catalog, {}, {}, []);
+  ok(!/<iframe id="hm-live"/.test(self) && /id="hm-live-link" href="https:\/\/live\.agent402\.tools"/.test(self), "on any other origin it links instead of framing (the embed refuses other framers)");
   ok(/id="hm-live-n"[\s\S]*id="hm-live-usd"[\s\S]*id="hm-live-buyers"[\s\S]*id="hm-live-pm"/.test(html), "the live panel carries its four hourly figures");
   ok(/every x402 and MPP payment we see on chain/.test(html), "the panel says it shows every seller's payments, not only ours");
   const srv = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
