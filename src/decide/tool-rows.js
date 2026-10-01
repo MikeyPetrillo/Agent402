@@ -64,6 +64,12 @@ function contentHash(row) {
  *  and neither are examples (outside rows never carry seller example values,
  *  by policy). */
 export function schemaQuality(row) {
+  // "absent" on our own row means the tool takes no input. On an outside row
+  // it only means the seller declared none, which is not the same claim: a
+  // POST endpoint with no declared body fields cannot be called correctly
+  // from the listing (2026-10-01: a wallet-brief step ran with {} and the
+  // seller answered 400). Score that as uncertain, like a partial schema.
+  if (row.inputSchemaState === "absent" && !row.firstParty && String(row.method || "").toUpperCase() === "POST") return 0.5;
   if (row.inputSchemaState === "declared" || row.inputSchemaState === "absent") return 1;
   if (row.inputSchemaState === "partial") return 0.5;
   return 0;

@@ -150,6 +150,27 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   ok(d.plan.length === 1 && d.plan[0].tool.slug === "dossier" && d.notes.includes("one tool covers the whole task"), "a tool that covers the whole task replaces a multi-step plan");
 }
 
+// ---- an outside POST with no declared inputs never replaces a typed plan ----
+// 2026-10-01: a wallet-brief seller whose OpenAPI declared no body fields was
+// chosen as the whole-task tool; the address in the task had nowhere to go,
+// execute sent {}, and the seller answered 400.
+{
+  const idx = new ToolIndex();
+  idx.upsert(mk("sanctions", { description: "check a wallet against sanctions lists", props: { address: { type: "string" } }, required: ["address"] }));
+  idx.upsert(mk("transfers", { description: "recent token transfers for a wallet", props: { address: { type: "string" } }, required: ["address"] }));
+  const brief = remoteToolRow({ seller: "https://brief.example", route: "/wallet-brief", method: "POST", name: "Wallet brief", description: "sanctions check and recent transfers for a wallet in one call", price: 0.03, networks: ["eip155:8453"], health: 1 },
+    { requestContract: { state: "absent", required: {} }, lastLiveAt: NOW - 600_000 });
+  idx.upsert(brief);
+  const llm = stubLlm([
+    { steps: [{ purpose: "sanctions check", query: "sanctions wallet" }, { purpose: "token transfers", query: "token transfers wallet" }] },
+    (s, user) => { const fits = {}; keysFor(user).forEach((st) => st.candidates.forEach((c) => { fits[c.key] = /ENTIRE/.test(st.purpose) ? (c.name === "Wallet brief" ? 0.97 : 0.2) : (/sanctions/.test(st.purpose) && c.name === "sanctions") || (/transfers/.test(st.purpose) && c.name === "transfers") ? 0.95 : 0.1; })); return { fits }; },
+    { params: { "1": { address: "0xabc" }, "2": { address: "0xabc" } } },
+  ]);
+  const d = await buildDecision({ task: "check wallet 0xabc against sanctions lists then list its recent token transfers", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, cfg, now: NOW, deadline: Date.now() + 10_000 });
+  ok(!d.notes.includes("one tool covers the whole task") && d.plan.length === 2 && d.plan.every((p) => p.tool.exampleParams.address === "0xabc"),
+    `a whole-task tool with unknown inputs does not replace a plan whose steps can carry the task's data (${d.plan.map((p) => p.tool.slug || p.tool.name).join(", ")})`);
+}
+
 // ---- dependsOn survives a dropped step ----
 {
   const { idx } = buildIndex();

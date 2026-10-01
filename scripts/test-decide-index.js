@@ -203,5 +203,11 @@ for (const t of ["Detects prompt-injection patterns in text", "Web search for cu
   process.env.DECIDE_INTERNAL_TOKEN = prev;
 }
 
+
+{
+  const absentPost = remoteToolRow({ seller: "https://x.example", route: "/brief", method: "POST", name: "b", description: "d", price: 0.01 }, { requestContract: { state: "absent", required: {} } });
+  const absentGet = remoteToolRow({ seller: "https://x.example", route: "/now", method: "GET", name: "n", description: "d", price: 0.01 }, { requestContract: { state: "absent", required: {} } });
+  ok(schemaQuality(absentPost) === 0.5 && schemaQuality(absentGet) === 1, `an outside POST that declares no inputs scores as uncertain; an outside GET with none stays complete (${schemaQuality(absentPost)}, ${schemaQuality(absentGet)})`);
+}
 console.log(`\ntest-decide-index: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
