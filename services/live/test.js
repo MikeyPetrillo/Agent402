@@ -104,7 +104,7 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
   const p = hello.payments.find((x) => x.tx === "0xabc");
   ok(p && p.seller.agent402 === true && p.seller.name === "Agent402" && p.txUrl === "https://basescan.org/tx/0xabc", "events: an Agent402 payment is marked and links to basescan");
   ok(/^0x[0-9a-f]{4}…[0-9a-f]{4}$/.test(p.payer), "events: the buyer is shortened");
-  ok((await fetch(base + "/logo/x402%3A" + "0".repeat(40))).status === 404 && (await fetch(base + "/logo/https%3A%2F%2Fevil.example")).status === 404, "logo: only a directory key is served, never an arbitrary URL");
+  ok((await fetch(base + "/logo/v2/x402%3A" + "0".repeat(40))).status === 404 && (await fetch(base + "/logo/https%3A%2F%2Fevil.example")).status === 404, "logo: only a directory key is served, never an arbitrary URL");
   ok((await fetch(base + "/", { method: "POST" })).status === 405, "read-only: POST is refused");
   server.close();
 }

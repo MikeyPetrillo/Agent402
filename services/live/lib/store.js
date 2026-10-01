@@ -62,7 +62,7 @@ export function makeStore({ now = () => Date.now() } = {}) {
     }
     let unique = 0;
     for (const [k, ts] of buyers) if (t - ts <= ms && (scope === "all" || k.startsWith(scope + ":"))) unique++;
-    const top = [...bySeller.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 8).map(([k, v]) => ({ ...sellerInfo(k), payments: v.n, usd: +v.usd.toFixed(4) }));
+    const top = [...bySeller.entries()].sort((a, b) => b[1].usd - a[1].usd || b[1].n - a[1].n).slice(0, 8).map(([k, v]) => ({ ...sellerInfo(k), payments: v.n, usd: +v.usd.toFixed(4) }));
     return { payments: n, usd: +usd.toFixed(4), buyers: unique, topSellers: top };
   }
 

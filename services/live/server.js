@@ -25,6 +25,8 @@ const STATIC = {
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/mascot.svg": ["mascot.svg", "image/svg+xml"],
   "/walker.svg": ["walker.svg", "image/svg+xml"],
+  "/brand.svg": ["brand.svg", "image/svg+xml"],
+  ...Object.fromEntries(["geist-400-latin", "geist-500-latin", "geist-600-latin", "geist-mono-400-latin", "geist-mono-700-latin"].map((f) => [`/fonts/${f}.woff2`, [`fonts/${f}.woff2`, "font/woff2"]])),
 };
 const files = Object.fromEntries(Object.entries(STATIC).map(([p, [f, type]]) => [p, { body: readFileSync(join(here, "public", f)), type }]));
 // The page references its script with a content hash, so a deploy is never
@@ -43,7 +45,7 @@ const shortAddr = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 const hostOf = (u) => { try { return new URL(u).host; } catch { return null; } };
 
 function sellerPublic(s) {
-  return { key: s.key, name: s.name, host: hostOf(s.origin), logo: s.agent402 ? null : `/logo/${encodeURIComponent(s.key)}`, agent402: s.agent402, listed: s.listed };
+  return { key: s.key, name: s.name, host: hostOf(s.origin), logo: s.agent402 ? null : `/logo/v2/${encodeURIComponent(s.key)}`, agent402: s.agent402, listed: s.listed };
 }
 const sellerByKey = new Map();
 function sellerInfo(key) { return sellerByKey.get(key) || { key, name: key.split(":")[1] ? shortAddr(key.split(":")[1]) : key, host: null, logo: null, agent402: false, listed: false }; }
@@ -96,7 +98,7 @@ function pick(s) { return s ? { live: !!s.lastOkAt && Date.now() - s.lastOkAt < 
 const securityHeaders = {
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
-  "content-security-policy": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+  "content-security-policy": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
 };
 
 const server = http.createServer(async (req, res) => {
@@ -104,7 +106,7 @@ const server = http.createServer(async (req, res) => {
   const path = url.pathname;
   if (req.method !== "GET" && req.method !== "HEAD") { res.writeHead(405, { allow: "GET, HEAD" }); return res.end(); }
   if (files[path]) {
-    res.writeHead(200, { "content-type": files[path].type, "cache-control": path === "/" ? "no-cache" : url.searchParams.has("v") ? "public, max-age=31536000, immutable" : "public, max-age=300", ...securityHeaders });
+    res.writeHead(200, { "content-type": files[path].type, "cache-control": path === "/" ? "no-cache" : url.searchParams.has("v") || path.startsWith("/fonts/") ? "public, max-age=31536000, immutable" : "public, max-age=300", ...securityHeaders });
     return res.end(req.method === "HEAD" ? undefined : files[path].body);
   }
   if (path === "/health") {
@@ -126,14 +128,16 @@ const server = http.createServer(async (req, res) => {
     req.on("close", () => clients.delete(res));
     return;
   }
-  const lm = /^\/logo\/((?:x402|mpp)%3A0x[0-9a-f]{40})$/i.exec(path);
+  // v2: the image body is checked before it is cached (an error page served
+  // as an icon is skipped); the new path skips browsers' copies of v1.
+  const lm = /^\/logo\/v2\/((?:x402|mpp)%3A0x[0-9a-f]{40})$/i.exec(path);
   if (lm) {
     const key = decodeURIComponent(lm[1]).toLowerCase();
     const [chain, payTo] = key.split(":");
     const s = directory.lookup(chain, payTo);
     const hit = s.listed && !s.agent402 ? await logos.get(key, s) : null;
     if (!hit) { res.writeHead(404, { "cache-control": "public, max-age=3600" }); return res.end(); }
-    res.writeHead(200, { "content-type": hit.type, "cache-control": "public, max-age=86400", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox" });
+    res.writeHead(200, { "content-type": hit.type, "cache-control": "public, max-age=21600", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox" });
     return res.end(hit.body);
   }
   res.writeHead(404, { "content-type": "text/plain" });
