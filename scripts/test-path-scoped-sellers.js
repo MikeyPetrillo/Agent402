@@ -205,5 +205,16 @@ __setCrawlFetchForTest(null);
   ok(__originHasSettledForTest("https://bare.example") === true, "a bare origin keeps the host match");
   _setLeaderboardSnapshotForTests(null);
 }
+
+// sellerRouteUrl: joining seller + route text can never leave the seller.
+{
+  const { sellerRouteUrl } = await import("../src/x402-index.js");
+  ok(sellerRouteUrl("https://h.example/app/one", "/api/x") === "https://h.example/app/one/api/x", "a route under a path seller joins to its own URL");
+  ok(sellerRouteUrl("https://h.example", "/api/x?y=1") === "https://h.example/api/x?y=1", "a bare origin route (with a query) joins as before");
+  ok(sellerRouteUrl("https://h.example", "@evil.example/x") === null, "a route that would read as credentials + another host is refused");
+  ok(sellerRouteUrl("https://h.example", "//evil.example/x") === null, "a protocol-relative route is refused");
+  ok(sellerRouteUrl("https://h.example", "https://evil.example/x") === null, "an absolute URL as a route is refused");
+  ok(sellerRouteUrl("https://h.example/app/one", "/../two/x") === null, "dot segments that climb out of the prefix are refused");
+}
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

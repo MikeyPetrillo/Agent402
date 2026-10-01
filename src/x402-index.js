@@ -222,6 +222,20 @@ export function sellerKeyParts(key) {
 export const sellerPrefixOf = (key) => sellerKeyParts(key).prefix;
 export const sellerHostRootOf = (key) => sellerKeyParts(key).origin;
 
+/** The absolute URL of a seller's route, or null when the joined text would
+ *  leave the seller (a route like "@other.host/x" or "//other.host" read as an
+ *  authority, or a path outside a path seller's prefix). Every probe that joins
+ *  seller + route text builds its URL here, so a crawled route can never aim a
+ *  fetch at a different host than the seller it was listed under. */
+export function sellerRouteUrl(key, route) {
+  const r = String(route || "");
+  if (!r.startsWith("/") || r.startsWith("//")) return null;
+  let u;
+  try { u = new URL(`${String(key || "")}${r}`); } catch { return null; }
+  if (u.username || u.password) return null;
+  return isUnderSeller(u.href, key) ? u.href : null;
+}
+
 /** Is this absolute URL served by the seller - same scheme+host+port and, for a
  *  path seller, at or under its prefix (a segment boundary, never a substring:
  *  /app/x does not own /app/x2)? */
@@ -4094,7 +4108,8 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       try {
         // seller + route, as every other probe builds it: a path seller's routes
         // are relative to its prefix, which URL resolution against the key drops.
-        const target = `${originUrl}${tool.route}`;
+        const target = sellerRouteUrl(originUrl, tool.route);
+        if (!target) throw new Error("route outside the seller");
         await assertPublicUrl(target);
         const r = await fetch(target, { method: "GET", headers: { Accept: "application/json" }, dispatcher: ssrfDispatcher, redirect: "manual", signal: AbortSignal.timeout(8000) });
         statusByMethod.GET = r.status;
@@ -4247,7 +4262,8 @@ async function probePaywall(tools) {
   const pick = paid.find((t) => String(t.method || "GET").toUpperCase() === "GET") || paid[0];
   if (!pick) return null;
   const method = String(pick.method || "GET").toUpperCase();
-  const target = `${pick.seller}${pick.route}`;
+  const target = sellerRouteUrl(pick.seller, pick.route);
+  if (!target) return null;
   try {
     const { assertPublicUrl, ssrfDispatcher } = await import("./tools/fetch-guard.js");
     // Same guard as the router's live probe: crawled URLs are external data and
