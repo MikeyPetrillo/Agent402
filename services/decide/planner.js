@@ -388,12 +388,24 @@ export function producesField(row, name) {
 
 export function verbatimIdentifier(v, task) {
   const t = String(v || "").trim();
-  if (t.length < 6 || t.length > 200 || !String(task || "").includes(t)) return false;
+  if (t.length < 6 || t.length > 200) return false;
+  if (taskWorded(t, task)) return true;
+  if (!String(task || "").includes(t)) return false;
   return /^0x[0-9a-fA-F]{8,}$/.test(t)                       // EVM address, tx hash
     || /^[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(t)                 // base58 (Solana etc.)
     || /^https?:\/\/\S+$/i.test(t)                               // URL
     || /^(?=.{4,253}$)([a-z0-9-]+\.)+[a-z]{2,}$/i.test(t)      // domain
-    || t.split(/\s+/).length >= 4;                              // a run of the task's own words (a query)
+    || taskWorded(t, task);                                       // a query in the task's own words
+}
+
+// Four or more words, every one of them the task's (a query reordered or
+// trimmed from the task): the caller's own words, not a value to second-guess.
+function taskWorded(t, task) {
+  const split = (x) => String(x).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const ws = split(t);
+  if (ws.length < 4) return false;
+  const have = new Set(split(task));
+  return ws.every((w) => have.has(w));
 }
 
 export function groundedParams(params, task) {
@@ -415,7 +427,7 @@ export function groundedParams(params, task) {
       // Free text (a search query) is kept when every word in it is the task's.
       const ws = norm(t).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3);
       if (ws.length && !/:\/\/|@/.test(t) && ws.every((w) => words.has(w))) out[k] = v;
-    } else if (typeof v === "number" && Number.isFinite(v) && hay.includes(String(v))) out[k] = v;
+    } else if (typeof v === "number" && Number.isFinite(v)) out[k] = v; // a number carries no link; derived ones (25% as 0.25) go on to the value check
   }
   return out;
 }
