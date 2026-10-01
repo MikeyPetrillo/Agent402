@@ -104,7 +104,7 @@ const fetcher = (body) => async () => { hits++; if (body instanceof Error) throw
     "probePath consults robots.txt, so EVERY per-origin probe is gated by it and not just the ones we remembered");
   ok(/robotsBlocked: true/.test(helper),
     "a robots refusal is marked, so the crawl can report it as an exclusion rather than as a failure");
-  ok(helper.indexOf("robotsForbids") < helper.indexOf("safeFetch"),
+  ok(helper.indexOf("robotsForbids") > -1 && helper.indexOf("crawlFetch") > -1 && helper.indexOf("robotsForbids") < helper.indexOf("crawlFetch"),
     "and it is consulted BEFORE the fetch, which is the only ordering that saves the seller a request");
 }
 
