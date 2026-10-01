@@ -156,18 +156,161 @@ const HEALTH_WINDOW = 5; // last N crawl outcomes per seller — drives health-a
 // seed sets and the Bazaar maps refuse a removed origin at the write itself,
 // which covers every discovery source at once instead of one check per source.
 const removedOrigins = new Map(); // origin key -> { origin, removedAt, note }
+
+// ---------------------------------------------------------------------------
+// PATH-SCOPED SELLERS (2026-10-01). A seller hosted under a path prefix on a
+// shared host (`https://host/app/<name>`, whose /.well-known/x402 and
+// /openapi.json answer under that prefix while the host root 404s) is its own
+// seller. Its KEY is the origin plus the normalised prefix; a bare origin's key
+// is the origin exactly as before, so nothing about an existing seller changes.
+//
+// The invariants:
+//   * every discovery document is read UNDER the prefix (key + path), and a
+//     document a redirect served from outside the prefix is not the seller's;
+//   * a path seller's routes are stored RELATIVE to its prefix, so the callable
+//     URL stays `seller + route` everywhere it is built;
+//   * a manifest or OpenAPI row that names a route outside the prefix is
+//     dropped, never attributed - otherwise one app on a shared host could
+//     claim another app's routes;
+//   * robots.txt stays per HOST, read at the root, and its rules are matched
+//     against the full path on that host.
+// ---------------------------------------------------------------------------
+export const SELLER_PREFIX_MAX_CHARS = 200;
+export const SELLER_PREFIX_MAX_SEGMENTS = 8;
+const SELLER_PREFIX_SEGMENT_RE = /^[A-Za-z0-9._~!$&'()*+,;=:@-]+$/;
+
+/**
+ * Normalise a submitted seller URL into a key. Lowercased scheme and host, a
+ * non-default port carried, the path case preserved and its trailing slash
+ * dropped. Refused: query, fragment, credentials, any percent-encoding (one
+ * prefix, one spelling), dot segments, empty segments, and a prefix over
+ * SELLER_PREFIX_MAX_CHARS or SELLER_PREFIX_MAX_SEGMENTS. Returns
+ * { key, origin, prefix } or { error }.
+ */
+export function normalizeSellerKey(raw, { protocols = ["https:"] } = {}) {
+  const str = String(raw || "").trim();
+  let u;
+  try { u = new URL(str); } catch { return { error: "origin must be a valid URL" }; }
+  if (!protocols.includes(u.protocol)) return { error: "origin must be https" };
+  if (u.username || u.password) return { error: "origin must not contain credentials" };
+  if (u.search || u.hash || /[?#]/.test(str)) return { error: "submit the origin, optionally with a path prefix, but no query or fragment" };
+  const origin = `${u.protocol}//${u.host.toLowerCase()}`;
+  // WHATWG URL resolves "." and ".." before we see the path, so the raw text is
+  // checked: a prefix that only means something after resolution is refused.
+  const rawPath = str.slice(str.indexOf(u.host) + u.host.length).replace(/^:\d+/, "");
+  if (/%/.test(rawPath)) return { error: "the path prefix must not be percent-encoded" };
+  if (/(^|\/)\.{1,2}(\/|$)/.test(rawPath) || /\\/.test(rawPath)) return { error: "the path prefix must not contain dot segments" };
+  let prefix = u.pathname.replace(/\/+$/, "");
+  if (prefix === "") return { key: origin, origin, prefix: "" };
+  if (prefix.length > SELLER_PREFIX_MAX_CHARS) return { error: `the path prefix is longer than ${SELLER_PREFIX_MAX_CHARS} characters` };
+  const segments = prefix.slice(1).split("/");
+  if (segments.length > SELLER_PREFIX_MAX_SEGMENTS) return { error: `the path prefix has more than ${SELLER_PREFIX_MAX_SEGMENTS} segments` };
+  if (segments.some((s) => !s || !SELLER_PREFIX_SEGMENT_RE.test(s))) return { error: "the path prefix has an empty or unsupported segment" };
+  return { key: `${origin}${prefix}`, origin, prefix };
+}
+
+/** { origin, prefix } of a stored seller key; prefix is "" for a bare origin.
+ *  Keys are normalised on the way in, so this is a split, not a parse. */
+export function sellerKeyParts(key) {
+  const s = String(key || "");
+  const scheme = s.indexOf("://");
+  const slash = scheme >= 0 ? s.indexOf("/", scheme + 3) : -1;
+  if (slash < 0) return { origin: s, prefix: "" };
+  const prefix = s.slice(slash).replace(/\/+$/, "");
+  return { origin: s.slice(0, slash), prefix: prefix === "/" ? "" : prefix };
+}
+export const sellerPrefixOf = (key) => sellerKeyParts(key).prefix;
+export const sellerHostRootOf = (key) => sellerKeyParts(key).origin;
+
+/** Is this absolute URL served by the seller - same scheme+host+port and, for a
+ *  path seller, at or under its prefix (a segment boundary, never a substring:
+ *  /app/x does not own /app/x2)? */
+export function isUnderSeller(url, key) {
+  let u;
+  try { u = new URL(String(url)); } catch { return false; }
+  const { origin, prefix } = sellerKeyParts(key);
+  if (`${u.protocol}//${u.host.toLowerCase()}` !== origin.toLowerCase()) return false;
+  if (!prefix) return true;
+  return u.pathname === prefix || u.pathname.startsWith(`${prefix}/`);
+}
+
+/** A host-absolute path, as a route of this seller: unchanged for a bare
+ *  origin; for a path seller, relative to the prefix, or null when it lies
+ *  outside it. */
+export function scopeRouteToSeller(key, hostPath) {
+  const prefix = sellerPrefixOf(key);
+  const p = String(hostPath ?? "");
+  if (!prefix) return p;
+  const [path, query] = [p.split("?")[0], p.includes("?") ? p.slice(p.indexOf("?")) : ""];
+  if (path === prefix) return `/${query}`;
+  if (!path.startsWith(`${prefix}/`)) return null;
+  return path.slice(prefix.length) + query;
+}
+
+/** Scope parsed rows to their seller: routes made prefix-relative, rows
+ *  outside the prefix (or naming the prefix root itself) dropped. A no-op for a
+ *  bare origin, so every existing seller's rows are returned untouched. */
+// Rows already made prefix-relative (a Bazaar row converted in
+// bazaarItemToTool, which a single-resource manifest reuses) carry this mark,
+// so a second pass cannot read their relative route as host-absolute and drop
+// it. A Symbol, so it never reaches JSON or the persisted cache.
+const SCOPED_ROW = Symbol("scopedToSeller");
+export function scopeRowsToSeller(rows, key) {
+  if (!sellerPrefixOf(key) || !Array.isArray(rows)) return rows;
+  const out = [];
+  for (const r of rows) {
+    if (!r || typeof r.route !== "string") continue;
+    if (r[SCOPED_ROW]) { out.push(r); continue; }
+    const route = scopeRouteToSeller(key, r.route);
+    if (route == null || route === "/" || route.startsWith("/?")) continue;
+    out.push({ ...r, route, [SCOPED_ROW]: true });
+  }
+  return out;
+}
+
+/** host origin -> path-seller keys on it (longest prefix first), from every
+ *  seed and cache key that carries a prefix. Built once per discovery pass. */
+function pathSellersByHost() {
+  const out = new Map();
+  const add = (k) => {
+    if (typeof k !== "string" || !sellerPrefixOf(k)) return;
+    const o = sellerHostRootOf(k);
+    const list = out.get(o) || [];
+    if (!list.includes(k)) list.push(k);
+    out.set(o, list);
+  };
+  for (const k of submittedSeeds) add(k);
+  for (const k of discoveredSeeds) add(k);
+  for (const k of cache.keys()) add(k);
+  for (const list of out.values()) list.sort((a, b) => b.length - a.length);
+  return out;
+}
+/** The path seller whose prefix covers this URL, else null. */
+function pathSellerOwning(url, hostOrigin, byHost) {
+  const list = byHost.get(hostOrigin);
+  if (!list) return null;
+  for (const k of list) if (isUnderSeller(url, k)) return k;
+  return null;
+}
+
 function removalKeyOf(raw) {
+  const n = normalizeSellerKey(raw, { protocols: ["http:", "https:"] });
+  if (!n.error) return n.key;
+  // Anything that is not a seller key (a URL with a query, say) still keys on
+  // its host, as it always did.
   try {
     const u = new URL(String(raw || "").trim());
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
     return `${u.protocol}//${u.host.toLowerCase()}`;
   } catch { return null; }
 }
-/** Has the operator removed this origin from the index? Exact origin (scheme + host + port). */
+/** Has the operator removed this origin from the index? Exact origin (scheme +
+ *  host + port); a removed bare origin also covers every path seller on it. */
 export function isRemovedOrigin(origin) {
   if (removedOrigins.size === 0) return false;
   const k = removalKeyOf(origin);
-  return k ? removedOrigins.has(k) : false;
+  if (!k) return false;
+  return removedOrigins.has(k) || removedOrigins.has(sellerHostRootOf(k));
 }
 class GuardedSet extends Set {
   add(v) { return isRemovedOrigin(v) ? this : super.add(v); }
@@ -533,8 +676,13 @@ export function strictOriginKey(raw) {
   try { u = new URL(str); } catch { return null; }
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
   if (u.username || u.password) return null;
-  if ((u.pathname && u.pathname !== "/") || u.search || u.hash) return null;
+  if (u.search || u.hash) return null;
   if (!u.hostname.includes(".")) return null;
+  // A path seller is removed by its exact key; a bare origin as before.
+  if (u.pathname && u.pathname !== "/") {
+    const n = normalizeSellerKey(str, { protocols: ["http:", "https:"] });
+    return n.error ? null : n.key;
+  }
   return `${u.protocol}//${u.host.toLowerCase()}`;
 }
 
@@ -568,7 +716,8 @@ function persistRemovedOrigins() {
 // Drop every piece of state keyed on this origin. Returns what was held.
 function purgeOrigin(key) {
   const held = { cache: false, submitted: false, discovered: false, successions: 0 };
-  const match = (o) => removalKeyOf(o) === key;
+  // A bare-origin key also purges every path seller on that host.
+  const match = (o) => { const k = removalKeyOf(o); return k === key || (!sellerPrefixOf(key) && k != null && sellerHostRootOf(k) === key); };
   for (const o of [...submittedSeeds]) if (match(o)) { submittedSeeds.delete(o); held.submitted = true; }
   for (const o of [...discoveredSeeds]) if (match(o)) { discoveredSeeds.delete(o); held.discovered = true; }
   for (const o of [...cache.keys()]) if (match(o)) { cache.delete(o); held.cache = true; }
@@ -588,7 +737,7 @@ function purgeOrigin(key) {
  */
 export function removeOrigin(raw, { note = "" } = {}) {
   const key = strictOriginKey(raw);
-  if (!key) return { error: "pass an exact origin such as https://seller.example (scheme and host, optional port, no path, no wildcard)" };
+  if (!key) return { error: "pass an exact origin such as https://seller.example (scheme and host, optional port and path prefix, no query, no wildcard)" };
   if (!removedOrigins.has(key) && removedOrigins.size >= REMOVED_ORIGINS_MAX) return { error: `removed list is full (${REMOVED_ORIGINS_MAX})` };
   const rec = removedOrigins.get(key) || { origin: key, removedAt: Date.now(), note: String(note || "").slice(0, 500) };
   removedOrigins.set(key, rec);
@@ -752,9 +901,19 @@ export function __testResetSubmitted() { submittedSeeds.clear(); successions.cle
 export function __testSeedCache(entries = []) { for (const [o, e] of entries) cache.set(o, e); }
 
 /** Validate a raw submitted origin. Returns { origin } (normalized) or { error }. */
-export function validateOriginInput(raw, { selfOrigin } = {}) {
+export function validateOriginInput(raw, { selfOrigin, allowPath = false } = {}) {
   let u;
   try { u = new URL(String(raw || "").trim()); } catch { return { error: "origin must be a valid URL" }; }
+  // A path seller (2026-10-01): only where the caller opts in, so the MPP index
+  // and every other caller keep requiring a bare origin.
+  if (allowPath && u.pathname && u.pathname !== "/") {
+    if (u.protocol !== "https:") return { error: "origin must be https" };
+    if (!u.hostname.includes(".")) return { error: "origin must be a public hostname" };
+    const n = normalizeSellerKey(raw);
+    if (n.error) return { error: n.error };
+    if (selfOrigin && n.origin === String(selfOrigin).toLowerCase().replace(/\/+$/, "")) return { error: "this host is already the local catalog" };
+    return { origin: n.key };
+  }
   if (u.protocol !== "https:") return { error: "origin must be https" };
   if (u.username || u.password) return { error: "origin must not contain credentials" };
   // A NON-DEFAULT PORT IS CARRIED, not refused (2026-09-21). The normaliser
@@ -895,7 +1054,9 @@ async function readMarker(origin, fetchImpl) {
     // retired by whoever it redirects to. Same rule every domain-control check
     // uses (ACME http-01, site-verification files): the proof fetch may not be
     // satisfied off-host.
-    if (res.finalUrl && !sameOrigin(res.finalUrl, origin)) return null;
+    // A path seller's marker must also come from under its own prefix: another
+    // app on the same host is not the seller.
+    if (res.finalUrl && !(sellerPrefixOf(origin) ? isUnderSeller(res.finalUrl, origin) : sameOrigin(res.finalUrl, origin))) return null;
     return JSON.parse(String(res.html).slice(0, 4000));
   } catch { return null; }
 }
@@ -903,13 +1064,22 @@ async function readMarker(origin, fetchImpl) {
 const sameOrigin = (a, b) => {
   try { return new URL(a).origin.toLowerCase() === new URL(b).origin.toLowerCase(); } catch { return false; }
 };
+// Does the URL a marker names (`named`) name the seller keyed `sellerKey`? For a
+// bare-origin seller it compares as an origin, exactly as before. For a path
+// seller the normalised key must be identical, so a marker naming the host
+// does not name an app on it.
+const sameSeller = (named, sellerKey) => {
+  if (!sellerPrefixOf(sellerKey)) return sameOrigin(named, sellerKey);
+  const x = normalizeSellerKey(named, { protocols: ["http:", "https:"] });
+  return !x.error && x.key === sellerKey;
+};
 
 /** Both origins must name the other, so neither can be annexed by the other. */
 export async function verifySuccessionMarkers(claimant, predecessor, { fetchImpl } = {}) {
   const [mNew, mOld] = await Promise.all([readMarker(claimant, fetchImpl), readMarker(predecessor, fetchImpl)]);
   if (!mNew || !mOld) return { ok: false, reason: `serve a JSON document at ${SUCCESSION_PATH} on BOTH origins: {"succeeds":"<old origin>"} on the new one and {"succeededBy":"<new origin>"} on the old one` };
-  if (!sameOrigin(mNew.succeeds || "", predecessor)) return { ok: false, reason: `${SUCCESSION_PATH} on the new origin must name the old origin as "succeeds"` };
-  if (!sameOrigin(mOld.succeededBy || "", claimant)) return { ok: false, reason: `${SUCCESSION_PATH} on the old origin must name the new origin as "succeededBy"` };
+  if (!sameSeller(mNew.succeeds || "", predecessor)) return { ok: false, reason: `${SUCCESSION_PATH} on the new origin must name the old origin as "succeeds"` };
+  if (!sameSeller(mOld.succeededBy || "", claimant)) return { ok: false, reason: `${SUCCESSION_PATH} on the old origin must name the new origin as "succeededBy"` };
   return { ok: true, via: "cross-served markers" };
 }
 
@@ -1374,10 +1544,14 @@ async function discoverOneSource(source, selfOrigin) {
     const toolsByOrigin = synthesize ? new Map() : null;
     const qualityByOrigin = toolsByOrigin ? new Map() : null;
     let droppedTestnet = 0, droppedJunk = 0;
+    // A registry row under a known path seller's prefix belongs to that seller,
+    // not to its shared host (which would list every app on the host as one).
+    const pathSellers = pathSellersByHost();
     for (const item of list) {
       const url = item.resource || item.resourceUrl || item.url || item.endpoint || item.homepage;
-      const origin = extractOrigin(url);
-      if (!origin || origin === selfOrigin) continue;
+      const hostOrigin = extractOrigin(url);
+      if (!hostOrigin || hostOrigin === selfOrigin) continue;
+      const origin = pathSellerOwning(url, hostOrigin, pathSellers) || hostOrigin;
       // strict sources (open registries): drop testnet-only listings and
       // placeholder origins before they reach the index.
       if (source.strict) {
@@ -1698,12 +1872,22 @@ export function bazaarItemToTool(item, originUrl) {
   // `resource` = CDP Bazaar; `resourceUrl` = GoPlausible's AVM registry.
   const resource = item.resource || item.resourceUrl || item.url;
   if (typeof resource !== "string" || !resource.startsWith(originUrl)) return null;
+  // A segment boundary after the key: "https://host" must not own
+  // "https://hostile.example/...", nor a path seller "/app/x" own "/app/x2".
+  if (!isUnderSeller(resource, originUrl)) return null;
   const pay = paymentFieldsFromAccepts(item.accepts);
   let pathStr = "/";
   try {
     pathStr = new URL(resource).pathname || "/";
   } catch {
     /* keep "/" */
+  }
+  // A path seller's routes are relative to its prefix.
+  const scopedHere = Boolean(sellerPrefixOf(originUrl));
+  if (scopedHere) {
+    const scoped = scopeRouteToSeller(originUrl, pathStr);
+    if (scoped == null || scoped === "/") return null;
+    pathStr = scoped;
   }
   const tags = Array.isArray(item.tags) ? item.tags : [];
   const methodInferred = !(typeof item.method === "string" && item.method);
@@ -1721,6 +1905,7 @@ export function bazaarItemToTool(item, originUrl) {
     tags,
     ...pay,
     provenance: "bazaar",
+    ...(scopedHere ? { [SCOPED_ROW]: true } : {}),
     // Coinbase-measured 30-day usage of THIS resource (null when absent).
     quality: item.quality && typeof item.quality === "object"
       ? { calls30d: Number(item.quality.l30DaysTotalCalls) || 0, payers30d: Number(item.quality.l30DaysUniquePayers) || 0, lastCalledAt: typeof item.quality.lastCalledAt === "string" ? item.quality.lastCalledAt : null }
@@ -1753,14 +1938,23 @@ export function openapiBasePath(openapi, originUrl) {
     (origin && candidates.find((u) => { try { return new URL(u).origin === origin; } catch { return false; } })) ||
     candidates.find((u) => u.startsWith("/")) ||
     candidates[0];
-  if (!pick) return "";
+  // A path seller whose document names no server: its paths are relative to
+  // the prefix it is served under (the rows are then scoped back to it). A
+  // document naming another server is honoured and scoped as usual.
+  if (!pick) return sellerPrefixOf(originUrl);
   let path;
-  try { path = new URL(pick, origin || "https://x.invalid").pathname; } catch { return ""; }
+  // A relative server URL resolves against where the document is served: for a
+  // path seller that is its prefix, for a bare origin the root (as before).
+  const docBase = sellerPrefixOf(originUrl) ? `${originUrl}/` : (origin || "https://x.invalid");
+  try { path = new URL(pick, docBase).pathname; } catch { return ""; }
   path = path.replace(/\/+$/, "");
   return path === "/" ? "" : path;
 }
 
 export function normaliseOpenapiTools(openapi, originUrl) {
+  return scopeRowsToSeller(normaliseOpenapiToolsUnscoped(openapi, originUrl), originUrl);
+}
+function normaliseOpenapiToolsUnscoped(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
   const documentDistinguishesPaidOperations = openapiHasPaymentSignal(openapi);
@@ -2250,9 +2444,14 @@ function manifestPaymentAccepts(manifest) {
 }
 
 export function normaliseManifestTools(manifest, originUrl) {
+  return scopeRowsToSeller(normaliseManifestToolsUnscoped(manifest, originUrl), originUrl);
+}
+function normaliseManifestToolsUnscoped(manifest, originUrl) {
   if (!manifest || typeof manifest !== "object") return [];
   let origin;
-  try { origin = new URL(originUrl); } catch { return []; }
+  // Relative entries resolve against where the manifest is served: a path
+  // seller's prefix, or the root of a bare origin.
+  try { origin = new URL(sellerPrefixOf(originUrl) ? `${originUrl}/` : originUrl); } catch { return []; }
   // `resourceCatalog` is the same dialect one key over: one seller publishes
   // `resources` as bare URL strings (no price anywhere) and the real rows,
   // with prices, in `resourceCatalog`. Reading only the canonical array left
@@ -2679,6 +2878,9 @@ export function mergeManifestIntoTools(manifestTools = [], existing = []) {
 // Anything less structured is left unread on purpose. A thin listing is a
 // recoverable problem; a fabricated one is not.
 export function normaliseLlmsTxtTools(text, originUrl) {
+  return scopeRowsToSeller(normaliseLlmsTxtToolsUnscoped(text, originUrl), originUrl);
+}
+function normaliseLlmsTxtToolsUnscoped(text, originUrl) {
   if (typeof text !== "string" || !text) return [];
   let originHost = "";
   try { originHost = new URL(originUrl).host.toLowerCase(); } catch { return []; }
@@ -2945,6 +3147,9 @@ export function openapiHasPaymentSignal(openapi) {
  *  concrete URLs instantiate a templated path (see mergeOpenapiIntoBazaar);
  *  never to list tools. */
 export function openapiAllOperationRoutes(openapi, originUrl) {
+  return scopeRowsToSeller(openapiAllOperationRoutesUnscoped(openapi, originUrl), originUrl);
+}
+function openapiAllOperationRoutesUnscoped(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
   const httpMethods = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
@@ -3875,7 +4080,9 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
     // verb's miss a miss, ask the route once with a read-only GET.
     if (missCandidate && tool.methodInferred && statusByMethod.GET === undefined) {
       try {
-        const target = new URL(tool.route, originUrl).toString();
+        // seller + route, as every other probe builds it: a path seller's routes
+        // are relative to its prefix, which URL resolution against the key drops.
+        const target = `${originUrl}${tool.route}`;
         await assertPublicUrl(target);
         const r = await fetch(target, { method: "GET", headers: { Accept: "application/json" }, dispatcher: ssrfDispatcher, redirect: "manual", signal: AbortSignal.timeout(8000) });
         statusByMethod.GET = r.status;
@@ -4255,14 +4462,17 @@ const ROBOTS_UA = "Agent402";
 // assertPublicUrl rejects an unresolvable host before any request is made -
 // which is exactly how the first version of the test passed its fail-open cases
 // and proved nothing about the blocking ones.
-async function robotsGroupsFor(originUrl, fetchText) {
+async function robotsGroupsFor(sellerKey, fetchText) {
+  // robots.txt is a HOST document: a path seller reads its host's root file,
+  // and every seller on one host shares one cached read.
+  const originUrl = sellerHostRootOf(sellerKey);
   const hit = robotsCache.get(originUrl);
   if (hit && Date.now() - hit.at < ROBOTS_TTL_MS) return hit.groups;
   let groups = [];
   try {
     const text = fetchText
       ? await fetchText(`${originUrl}/robots.txt`)
-      : (await safeFetch(`${originUrl}/robots.txt`, { maxBytes: ROBOTS_MAX_BYTES })).html;
+      : (await crawlFetch(`${originUrl}/robots.txt`, { maxBytes: ROBOTS_MAX_BYTES })).html;
     groups = parseRobots(String(text || ""));
   } catch {
     groups = [];   // unreachable, 404, oversize: nothing to honour
@@ -4310,12 +4520,23 @@ export async function robotsForbids(originUrl, path, { fetchText, manifestPublis
   if (path === WELL_KNOWN_PATH) return null;
   const groups = await robotsGroupsFor(originUrl, fetchText);
   if (!groups.length) return null;
-  const verdict = robotsAllows(groups, ROBOTS_UA, path);
+  // Rules match the path on the HOST, so a path seller's documents are checked
+  // at their full location under its prefix.
+  const verdict = robotsAllows(groups, ROBOTS_UA, `${sellerPrefixOf(originUrl)}${path}`);
   if (verdict.allowed) return null;
   if (manifestPublished && path === OPENAPI_PATH && !robotsNamesUs(groups)) return null;
   return verdict.matchedRule || "Disallow";
 }
 export function __resetRobotsCacheForTest() { robotsCache.clear(); }
+
+// The crawl's document reads (robots.txt and every per-origin probe) go through
+// this one binding. It is the guarded safeFetch in production; a test swaps it
+// for a stub so the real crawl pipeline can be driven without a network (a
+// stubbed global fetch would exercise nothing, because safeFetch resolves the
+// host before it fetches).
+let crawlFetch = (url, opts) => safeFetch(url, opts);
+export function __setCrawlFetchForTest(fn) { crawlFetch = typeof fn === "function" ? fn : (url, opts) => safeFetch(url, opts); }
+export async function __crawlSellerForTest(originUrl) { return crawlSeller(originUrl); }
 
 /** Fetch `path` on `originUrl` unless it is backed off, recording the outcome.
  *  Every per-origin probe in the crawl goes through here so a new one cannot be
@@ -4340,7 +4561,13 @@ async function probePath(originUrl, path, { manifestPublished = false, ...opts }
     // RFC 9110 allows a 304 to omit the ETag it matched on, so overwriting them
     // with a null read would disable revalidation from the second cycle on.
     const stored = validatorFor(originUrl, path);
-    const res = await safeFetch(`${originUrl}${path}`, { ...opts, validators: stored, allowNotModified: true });
+    const res = await crawlFetch(`${originUrl}${path}`, { ...opts, validators: stored, allowNotModified: true });
+    // A path seller's document must be served from under its own prefix. A
+    // redirect to another path on the same host is another app's document,
+    // and reading it as this seller's would attribute that app to it.
+    if (sellerPrefixOf(originUrl) && res.finalUrl && !isUnderSeller(res.finalUrl, originUrl)) {
+      throw new Error(`${path} was redirected outside the seller's path prefix`);
+    }
     noteProbeOutcome(originUrl, path, true);
     if (res.notModified) {
       if (res.validators) rememberValidator(originUrl, path, res.validators);
@@ -4838,6 +5065,9 @@ export function computeAliasOrigins(cacheMap) {
 function computeAliasOriginsBase(cacheMap) {
   const byHost = new Map(); // canonical host -> { origin, v }
   for (const [origin, v] of cacheMap) {
+    // A path seller shares its host with other sellers, so it is never the
+    // host's primary, and never folded into one by host (see the loop below).
+    if (sellerPrefixOf(origin)) continue;
     const h = canonicalHost(origin);
     if (h && !byHost.has(h)) byHost.set(h, { origin, v });
   }
@@ -4849,6 +5079,7 @@ function computeAliasOriginsBase(cacheMap) {
   };
   const aliases = new Set();
   for (const [origin, v] of cacheMap) {
+    if (sellerPrefixOf(origin)) continue;
     const ownHost = canonicalHost(origin);
     // A manifest served from another origin by permanent redirect is stronger
     // evidence than a homepage field: the seller pointed the old hostname at
@@ -5916,6 +6147,7 @@ function buildRoutableSellerSummaries() {
     out.push({
       origin,
       host,
+      ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
       toolCount: v.tools?.length || manifestToolCount(v.manifest),
       // Did the origin ever answer us, or is this a registry listing about it?
       originResponded: v.originResponded !== false,
@@ -5983,13 +6215,16 @@ export function allPayTosByNetwork(tools) {
 export const SELLER_TOOLS_CAP = 500;
 
 export function sellerDetail(originOrHost) {
-  const q = String(originOrHost || "").trim().toLowerCase().slice(0, 253);
-  if (!q) return null;
-  const hostOf = (u) => { try { return new URL(u).host.toLowerCase(); } catch { return ""; } };
+  // One matcher for every lookup (findSellerKey): an exact key, or a host. A
+  // path seller is found by its prefixed URL.
+  const key = findSellerKey(originOrHost);
+  if (!key) return null;
   for (const [origin, v] of cache.entries()) {
-    if (origin.toLowerCase() !== q && hostOf(origin) !== q) continue;
+    if (origin !== key) continue;
     return {
       origin,
+      // Present only for a path seller, so a bare origin's detail is unchanged.
+      ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
       displayName: v.manifest?.name || origin.replace(/^https?:\/\//, ""),
       homepage: v.manifest?.homepage || origin,
       toolCount: v.tools?.length || manifestToolCount(v.manifest),
@@ -6147,6 +6382,7 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
   const aliasOrigins = computeAliasOrigins(cache);
   const remote = [...cache.entries()].filter(([origin]) => !isSelfOrigin(origin) && !aliasOrigins.has(origin)).map(([origin, v]) => ({
     origin,
+    ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
     displayName: v.manifest?.name || origin.replace(/^https?:\/\//, ""),
     homepage: v.manifest?.homepage || origin,
     network: v.manifest?.payment?.x402?.primaryNetwork || v.manifest?.payment?.primaryNetwork || null,
@@ -7446,13 +7682,32 @@ export function* routableRemoteEntries({ baseUrl = "" } = {}) {
 }
 
 export function sellerEntry(originOrHost) {
-  const q = String(originOrHost || "").trim().toLowerCase().slice(0, 253);
+  const origin = findSellerKey(originOrHost);
+  return origin ? { origin, ...cache.get(origin) } : null;
+}
+
+/**
+ * The cache key a lookup names: an exact key (scheme optional, trailing slash
+ * ignored, case-insensitive), or a bare host. A host names its bare-origin
+ * seller when it has one; with only path sellers on it, the first of them. A
+ * lookup carrying a path names exactly that path seller and nothing else.
+ */
+export function findSellerKey(originOrHost) {
+  // 512, not 253: a path seller's key is host plus a prefix of up to
+  // SELLER_PREFIX_MAX_CHARS characters.
+  const q = String(originOrHost || "").trim().toLowerCase().slice(0, 512).replace(/\/+$/, "");
   if (!q) return null;
+  const noScheme = (s) => s.replace(/^https?:\/\//, "");
+  const hasScheme = /^https?:\/\//.test(q);
+  const qBare = noScheme(q);
   const hostOf = (u) => { try { return new URL(u).host.toLowerCase(); } catch { return ""; } };
-  for (const [origin, v] of cache.entries()) {
-    if (origin.toLowerCase() === q || hostOf(origin) === q) return { origin, ...v };
+  let hostHit = null;
+  for (const origin of cache.keys()) {
+    const k = origin.toLowerCase();
+    if (hasScheme ? k === q : noScheme(k) === qBare) return origin;
+    if (hostOf(origin) === qBare && (!hostHit || (sellerPrefixOf(hostHit) && !sellerPrefixOf(origin)))) hostHit = origin;
   }
-  return null;
+  return qBare.includes("/") ? null : hostHit;
 }
 
 // ---------------------------------------------------------------------------

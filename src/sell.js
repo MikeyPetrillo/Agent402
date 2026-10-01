@@ -98,7 +98,7 @@ const formHtml = `
       <input id="reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;font-family:var(--font-mono);font-size:13px;padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);">
       <button id="reg-go" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:13px;border:none;padding:9px 16px;cursor:pointer;">SUBMIT</button>
     </div>
-    <div id="reg-out" role="status" aria-live="polite" style="font-family:var(--font-mono);font-size:12.5px;color:var(--muted);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers. Unreachable sellers drop out of routing (never off the roster) until they recover.</div>
+    <div id="reg-out" role="status" aria-live="polite" style="font-family:var(--font-mono);font-size:12.5px;color:var(--muted);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers. An app served under a path on a shared host registers with that path (https://host/app/name); its documents are read from under it. Unreachable sellers drop out of routing (never off the roster) until they recover.</div>
     <p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:10px 0 0;">Speak MPP? Register your MPP server on the <a href="/mpp-marketplace#list-api" style="color:var(--muted);">MPP marketplace →</a> (one call, or <code>POST /api/mpp-index/register {"origin", "path"}</code>); dual-stack sellers our x402 crawl already sees answering MPP are picked up automatically.</p>
   </div>
   <script src="/js/reg-form.js"></script>`;
