@@ -57,6 +57,16 @@ export const GOLDEN = [
   { task: "Resolve the ENS name brantly.eth, then get that address's transaction count on Ethereum", budget: 0.1, data: true, chain: true },
   { task: "Find the IP address github.com resolves to, then look up that IP's ASN and country", budget: 0.1, data: true },
   { task: "Extract the text from the PDF at https://bitcoin.org/bitcoin.pdf and count the words", budget: 0.1, data: true },
+  // held out: added after the 2026-10-01 fixes and never used while making them,
+  // so a pass here says the fixes generalize rather than fit the set above
+  { task: "What is the current price of Solana in USD and its change over the last 24 hours", budget: 0.05, data: true, heldOut: true },
+  { task: "List the MX records for gmail.com", budget: 0.05, data: true, heldOut: true },
+  { task: "What is the weather in Tokyo right now", budget: 0.05, data: true, heldOut: true },
+  { task: "Convert 100 US dollars to euros at today's exchange rate", budget: 0.05, data: true, heldOut: true },
+  { task: "Get the current gas price on Polygon", budget: 0.05, data: true, heldOut: true },
+  { task: "Show the top holders of the USDC token on Base", budget: 0.1, data: true, heldOut: true },
+  { task: "Get the HTTP security headers for github.com and grade them", budget: 0.05, data: true, heldOut: true },
+  { task: "Resolve the ENS name nick.eth to an address, then get that address's ETH balance on Ethereum", budget: 0.1, data: true, chain: true, heldOut: true },
   // without their data: the plan must name what the caller supplies
   { task: "Transcribe an audio file from a URL to text", budget: 0.2, data: false },
   { task: "Check if an Ethereum address is on the OFAC sanctions list", budget: 0.05, data: false },

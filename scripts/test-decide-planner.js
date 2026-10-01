@@ -203,6 +203,24 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   ok(!JSON.stringify(d).includes("_fbRows"), "internal rows never reach the decision");
 }
 
+// ---- every step keeps two tools execute can pay, where two exist ----
+{
+  const idx = new ToolIndex();
+  const outside = (id, extra = {}) => ({ ...mk(id, { description: "sanctions screening for a wallet address", props: { address: { type: "string" } }, required: ["address"] }), id, slug: id, firstParty: false, seller: `${id}.example`, ...extra });
+  idx.upsert(outside("sa"));
+  idx.upsert(outside("sb", { executable: false }));
+  idx.upsert(outside("sc", { executable: false }));
+  idx.upsert(outside("sd", { executable: false }));
+  idx.upsert({ ...mk("sx", { description: "sanctions screening for a wallet address", props: { address: { type: "string" } }, required: ["address"] }) });
+  const llm = stubLlm([{ steps: [{ purpose: "sanctions screening", query: "sanctions wallet", dependsOn: [] }] },
+    (system, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = /ENTIRE/.test(st.purpose) ? 0.1 : ({ sa: 0.99, sb: 0.98, sc: 0.97, sd: 0.96, sx: 0.8 })[c.name] ?? 0.5; return { fits }; },
+    { params: {} }]);
+  const d = await buildDecision({ task: "Screen wallet 0x8589427373D6D84E98730D7795D8f6f8731FDA16 for sanctions", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  const p = d.plan[0];
+  const runnable = [p.tool, ...p.fallbacks].filter((t) => t.callDirectly !== true);
+  ok(p.tool.slug === "sa" && runnable.length >= 2 && p.fallbacks.some((f) => f.slug === "sx"), `two payable tools per step where two exist (${[p.tool, ...p.fallbacks].map((t) => t.slug + (t.callDirectly ? "*" : "")).join(", ")})`);
+}
+
 // ---- live window and schema filters ----
 {
   const { idx, stale, noschema } = buildIndex();
