@@ -66,6 +66,17 @@
   .legend { display: flex; gap: 16px; font: 11px var(--mono); color: var(--t-dim); }
   .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
   .legend .x { background: var(--x402); box-shadow: 0 0 8px var(--x402); } .legend .p { background: var(--mpp); box-shadow: 0 0 8px var(--mpp); }
+  .tools { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  #fs { display: inline-flex; align-items: center; gap: 8px; font: 12px var(--mono); padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hairline); background: var(--card); color: var(--muted); cursor: pointer; }
+  #fs:hover, #fs:focus-visible { color: var(--t-ink); border-color: var(--t-dim); }
+  #fs .fs-out, .stage.is-full #fs .fs-in { display: none; } .stage.is-full #fs .fs-out { display: inline; }
+  /* Full screen: the whole stage fills the viewport and the scene takes every
+     pixel between the toolbar and the LATEST bar. Native fullscreen where the
+     browser has it; a fixed overlay where it does not (iPhone Safari). */
+  .stage.is-full { position: fixed; inset: 0; z-index: 100; border: 0; border-radius: 0; box-shadow: none; display: flex; flex-direction: column; }
+  .stage.is-full .field { flex: 1; height: auto; min-height: 0; }
+  .stage:fullscreen { width: 100vw; height: 100vh; }
+  body.stage-full { overflow: hidden; }
   .field { position: relative; height: clamp(420px, 58vh, 620px); }
   .field canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   #mode { position: absolute; left: 14px; bottom: 10px; font: 10.5px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--t-faint); }
@@ -128,7 +139,10 @@
         <div class="seg" role="group" aria-label="Rail"><button data-rail="all" aria-pressed="true">Both</button><button data-rail="x402" aria-pressed="false">x402</button><button data-rail="mpp" aria-pressed="false">MPP</button></div>
         <div class="seg" role="group" aria-label="Window"><button data-win="h1" aria-pressed="true">1h</button><button data-win="h24" aria-pressed="false">24h</button></div>
       </div>
-      <div class="legend"><span><i class="x"></i>x402 · Base · USDC</span><span><i class="p"></i>MPP · Tempo · USDC.e</span></div>
+      <div class="tools">
+        <div class="legend"><span><i class="x"></i>x402 · Base · USDC</span><span><i class="p"></i>MPP · Tempo · USDC.e</span></div>
+        <button id="fs" type="button" aria-pressed="false" aria-label="Full screen" title="Full screen (Esc to exit)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path class="fs-in" d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.6"/><path class="fs-out" d="M6 2v4H2M14 6h-4V2M10 14v-4h4M2 10h4v4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Full screen</span></button>
+      </div>
     </div>
     <div class="field" id="field">
       <canvas id="scene" aria-label="Animated view of recent payments"></canvas>

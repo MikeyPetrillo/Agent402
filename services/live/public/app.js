@@ -341,6 +341,30 @@
   }
   field.addEventListener("mousemove", (e) => { canvas.style.cursor = hitAt(e.clientX, e.clientY) ? "pointer" : "default"; });
   field.addEventListener("click", (e) => { if (e.target.closest("#tip")) return; const w = hitAt(e.clientX, e.clientY); if (w) showTip(w, e.clientX, e.clientY); else tip.style.display = "none"; });
+  // Full screen: the whole stage (toolbar, scene, LATEST bar). Native
+  // fullscreen when the browser offers it; otherwise a fixed overlay, closed
+  // by the same button or Esc. The ResizeObserver redraws the scene either way.
+  const stage = document.querySelector(".stage"), fsBtn = $("fs");
+  const nativeFs = () => document.fullscreenElement || document.webkitFullscreenElement;
+  function setFull(on) {
+    stage.classList.toggle("is-full", on); document.body.classList.toggle("stage-full", on);
+    fsBtn.setAttribute("aria-pressed", String(on)); fsBtn.setAttribute("aria-label", on ? "Exit full screen" : "Full screen");
+    fsBtn.querySelector("span").textContent = on ? "Exit" : "Full screen";
+  }
+  if (fsBtn && stage) {
+    fsBtn.addEventListener("click", async () => {
+      if (stage.classList.contains("is-full")) {
+        if (nativeFs()) { try { await (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch { /* left already */ } }
+        setFull(false); return;
+      }
+      setFull(true);
+      const req = stage.requestFullscreen || stage.webkitRequestFullscreen;
+      if (req) { try { await req.call(stage); } catch { /* the overlay stays */ } }
+    });
+    const onChange = () => { if (!nativeFs() && stage.classList.contains("is-full") && document.fullscreenEnabled !== false && (stage.requestFullscreen || stage.webkitRequestFullscreen)) setFull(false); };
+    document.addEventListener("fullscreenchange", onChange); document.addEventListener("webkitfullscreenchange", onChange);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && stage.classList.contains("is-full") && !nativeFs()) setFull(false); });
+  }
   function resize() { const r = field.getBoundingClientRect(); DPR = Math.min(2, window.devicePixelRatio || 1); W = r.width; H = r.height; canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR); layout(); }
   new ResizeObserver(resize).observe(field);
   setInterval(layout, 10_000);
