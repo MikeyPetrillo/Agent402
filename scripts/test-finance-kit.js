@@ -9,7 +9,7 @@
 // configured, never blame the caller's input.
 //
 // The consolidation assertions are the ones that matter most. DBEQ.BASIC is
-// four venues, not the consolidated tape, so a bar per venue has to be folded
+// three venues, not the consolidated tape, so a bar per venue has to be folded
 // into one: extremes across venues, volume SUMMED and labelled partial, and
 // open/close taken from the venue that actually traded the most. Getting that
 // wrong produces a confident-looking quote built on one thin venue.
@@ -45,7 +45,7 @@ for (const [slug, args, label] of [
   ["stock-history", { symbol: "AAPL", days: 9999 }, "stock-history rejects an over-wide window"],
   ["stock-history", { symbol: "AAPL", days: 251 }, "stock-history rejects one session past the advertised maximum"],
   ["stock-history", { symbol: "AAPL", days: 1.5 }, "stock-history rejects a fractional days"],
-  ["stock-history", { symbol: "AAPL", indicators: ["rsi", "vwap"] }, "stock-history rejects vwap (four-venue volume) and unknown indicators"],
+  ["stock-history", { symbol: "AAPL", indicators: ["rsi", "vwap"] }, "stock-history rejects vwap (three-venue volume) and unknown indicators"],
   ["stock-history", { symbol: "AAPL", indicators: true, points: 0 }, "stock-history rejects points 0"],
 ]) {
   try { await h(slug)(args); ok(false, label); }
@@ -66,7 +66,7 @@ for (const [slug, args, label] of [
   ok(!("vwap" in a.indicators) && /not investment advice/.test(a.disclaimer), "no VWAP, and the disclaimer rides with it");
 }
 
-// --- consolidate(): the four-venue fold (pure, offline) ---
+// --- consolidate(): the three-venue fold (pure, offline) ---
 {
   // ts_event is nanoseconds since the epoch, inside the record header.
   const ns = String(Date.UTC(2026, 8, 18) * 1e6);
@@ -83,7 +83,7 @@ for (const [slug, args, label] of [
   ok(b.high === 111 && b.low === 90, `high/low are the extremes across venues (got ${b.high}/${b.low})`);
   ok(b.close === 105 && b.open === 104, `open/close come from the highest-volume venue, not the extreme one (got ${b.open}/${b.close})`);
   ok(b.venueVolume === 1000, `venue volume SUMS the venues (got ${b.venueVolume})`);
-  ok(!("volume" in b), "the summed figure is never called `volume`: it is four venues, not the tape");
+  ok(!("volume" in b), "the summed figure is never called `volume`: it is three venues, not the tape");
   ok(/^\d{4}-\d{2}-\d{2}$/.test(b.day), `each bar carries a plain session date (got ${b.day})`);
 }
 {

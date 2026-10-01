@@ -112,7 +112,7 @@ const ENTRIES = [
     date: "2026-09-20",
     title: "Equities on a licensed feed, five tools and a pack retired, credits sales paused",
     items: [
-      "stock-quote and stock-history read Databento DBEQ.BASIC (four venues, consolidated per session): volume is reported as venueVolume, stock-history takes up to 250 sessions, and the 52-week high/low fields are gone. options-chain, premarket-quote, stock-dividends, earnings-calendar, dividend-calendar and the market-open skill pack are removed.",
+      "stock-quote and stock-history read Databento DBEQ.BASIC (three venues, consolidated per session): volume is reported as venueVolume, stock-history takes up to 250 sessions, and the 52-week high/low fields are gone. options-chain, premarket-quote, stock-dividends, earnings-calendar, dividend-calendar and the market-open skill pack are removed.",
       "Prepaid card credits are no longer sold; existing keys keep redeeming.",
       "Google's native generateContent wire on every gateway tier; POST /v1/audio/transcriptions (OpenAI transcription wire, multipart); service_tier \"priority\" on the pro and premium tiers.",
       "New tools: perp-dexs, perp-dex-markets and perp-dex-limits (Hyperliquid HIP-3 dexs); kalshi-live-data and kalshi-weather-index; edgar-13f-datasets ($0.003) and edgar-13f-dataset-head ($0.005). sol-token-holders restored.",
