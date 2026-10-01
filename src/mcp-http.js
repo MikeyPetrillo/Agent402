@@ -376,7 +376,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // paid call here cannot be settled at all.
           ...(mppLoopback ? { experimental: { payment: { methods: mcpPaymentMethods() } } } : {}),
         },
-        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl),
+        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"] }),
       },
     );
 

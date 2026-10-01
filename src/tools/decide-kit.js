@@ -314,6 +314,12 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
             continue;
           }
         }
+        // An outside POST that declares no input fields gets only what the
+        // caller passes: never an empty body paid for on a guess (a seller
+        // answers {} with a 400, and the leg is a refusal we cannot use).
+        if (String(tool.method || "").toUpperCase() === "POST" && !Object.keys(tool.inputSchema?.properties || {}).length && !Object.keys(params || {}).length) {
+          attempts.push({ id: tool.id, skipped: "this seller declares no inputs: pass params for this step" }); continue;
+        }
         if (!router) { attempts.push({ id: tool.id, skipped: "external execution is not enabled on this host" }); continue; }
         if (outsidePaused) { attempts.push({ id: tool.id, skipped: "outside steps are paused while our spending wallet is topped up" }); continue; }
         // The most this leg may pay: the planned price with room for a small

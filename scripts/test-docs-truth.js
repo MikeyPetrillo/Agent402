@@ -24,6 +24,12 @@ import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Routes a server lists only when their service is configured: the decide
+// service needs its own deployment and database, so a CI boot without it
+// does not serve them though production does (POST /api/decide etc.).
+const CONFIG_GATED_ROUTES = new Set(["/api/decide", "/api/decide/execute", "/api/decide/feedback"]);
+
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let passed = 0, failed = 0;
 const ok = (cond, msg) => {
@@ -145,7 +151,7 @@ for (const file of files) {
       routesOnLine.push(path);
     }
     for (const path of routesOnLine) {
-      if (!routeByPath.has(path)) {
+      if (!routeByPath.has(path) && !CONFIG_GATED_ROUTES.has(path)) {
         // An illustrative snippet defining a NEW tool is not a dead reference.
         if (/route:\s*"|example|e\.g\.|your own|placeholder/i.test(line)) continue;
         if (isSourceRef) continue;

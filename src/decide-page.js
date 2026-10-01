@@ -13,15 +13,27 @@ const usd = (n) => `$${Number(n).toFixed(3).replace(/0+$/, "").replace(/\.$/, ""
 
 export const DECIDE_EXAMPLE_TASK = "Check whether a wallet is on a sanctions list, then list its recent token transfers on Base";
 
-function exampleResponse() {
+// The example's endpoints and prices come from the live catalog (a typed
+// price drifted to $0.005 against $0.002/$0.003, and a typed path pointed at
+// a route that does not exist); a tool missing from the catalog drops out.
+function exampleResponse(catalog = {}) {
+  const def = (slug) => Object.entries(catalog).find(([, d]) => d?.slug === slug);
+  const priceOf = (d) => { const n = Number(String(d?.price ?? "").replace(/[^0-9.]/g, "")); return Number.isFinite(n) ? n : null; };
+  const steps = [
+    ["sanctions-wallet", "check the wallet against sanctions lists", { address: "0x…" }],
+    ["asset-transfers", "fetch recent token transfers on Base", { address: "0x…", network: "base" }],
+  ].map(([slug, purpose, exampleParams]) => {
+    const hit = def(slug); if (!hit) return null;
+    const [route, d] = hit;
+    return { purpose, tool: { slug, seller: "agent402", firstParty: true, endpoint: route.split(" ")[1] || route, priceUsd: priceOf(d), exampleParams } };
+  }).filter(Boolean);
+  const plan = steps.map((s, i) => ({ step: i + 1, ...s, fallbacks: ["…"], dependsOn: [] }));
+  const cost = Math.round(plan.reduce((a, s) => a + (s.tool.priceUsd || 0), 0) * 1e6) / 1e6;
   return {
     decisionId: "dec_…",
-    plan: [
-      { step: 1, purpose: "check the wallet against sanctions lists", tool: { slug: "sanctions-wallet", seller: "agent402", firstParty: true, endpoint: "/api/sanctions/wallet", priceUsd: 0.005, exampleParams: { address: "0x…" } }, fallbacks: ["…"], dependsOn: [] },
-      { step: 2, purpose: "fetch recent token transfers on Base", tool: { slug: "asset-transfers", seller: "agent402", firstParty: true, endpoint: "/api/alchemy/asset-transfers", priceUsd: 0.005, exampleParams: { address: "0x…", network: "base" } }, fallbacks: ["…"], dependsOn: [] },
-    ],
-    estimatedCostUsd: 0.01, estimatedLatencyMs: 3000, confidence: 0.95, gaps: [],
-    executionCredit: { amountUsd: 0.02, token: "dc_…" },
+    plan,
+    estimatedCostUsd: cost, estimatedLatencyMs: 3000, confidence: 0.95, gaps: [],
+    executionCredit: { amountUsd: decideConfig().prices.plan, token: "dc_…" },
   };
 }
 
@@ -32,7 +44,7 @@ export function decidePage(baseUrl, catalog) {
   const title = "Agent402 Decide: a plan for any job";
   const description = `Describe a job and get a call-ready plan over this catalog and outside x402 sellers with a recently verified 402: which tools, in what order, with fallbacks and params that validate. ${usd(p.quick)} to ${usd(p.full)} per decision; the fee comes back as credit when Agent402 runs the plan.`;
   const curl = `curl -X POST ${baseUrl}/api/decide \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify({ task: DECIDE_EXAMPLE_TASK, depth: "plan" })}'`;
-  const example = JSON.stringify(exampleResponse(), null, 2);
+  const example = JSON.stringify(exampleResponse(catalog), null, 2);
   const liveDays = Math.round(c.liveWithinHours / 24);
 
   const faqs = [

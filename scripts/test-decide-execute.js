@@ -127,7 +127,7 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
 // ---- ceilings hold under concurrency (checks and booking in one turn) ----
 {
   const l2 = openDecideLedger(join(mkdtempSync(join(tmpdir(), "decide-race-")), "l.db"));
-  const ext = { id: "e", slug: "e", name: "e", seller: "s.example", firstParty: false, endpoint: "https://s.example/x", method: "POST", priceUsd: 2, inputSchema: { type: "object", properties: {}, required: [] }, exampleParams: {} };
+  const ext = { id: "e", slug: "e", name: "e", seller: "s.example", firstParty: false, endpoint: "https://s.example/x", method: "POST", priceUsd: 2, inputSchema: { type: "object", properties: { q: { type: "string" } }, required: [] }, exampleParams: { q: "x" } };
   l2.saveDecision({ decisionId: "dr", depth: "plan", priceUsd: 0.02, payer: "p", plan: [{ step: 1, purpose: "x", tool: ext, fallbacks: [], dependsOn: [] }], costViaUsd: 2.1 });
   l2.markDecisionSettled("dr");
   let paidOut = 0;
@@ -505,5 +505,17 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ok(/def\.quoteRange = \{ minUsd: floor, maxUsd: Number\.isFinite\(def\.quoteMaxUsd\)/.test(src), "the published range reads a tool's own quoteMaxUsd");
 }
 
+
+// ---- an outside POST that declares no inputs is never paid with an empty body ----
+{
+  calls.length = 0;
+  const blind = tool("blind", { firstParty: false, seller: "blind.example", endpoint: "https://blind.example/x", method: "POST", inputSchema: { type: "object", properties: {}, required: [] }, exampleParams: {} });
+  ledger.saveDecision({ decisionId: "dblind", depth: "plan", priceUsd: 0.02, plan: [{ step: 1, purpose: "x", tool: blind, fallbacks: [], dependsOn: [] }], costViaUsd: 0.02, now: clock });
+  ledger.markDecisionSettled("dblind");
+  let out; try { out = await exec({ decisionId: "dblind" }, mkReq("0xblind")); } catch (e) { out = { error: e }; }
+  ok(calls.filter((c) => c[0] === "router").length === 0, "no payment is attempted for an empty body to a seller that declares no inputs");
+  const attempts = JSON.stringify(out?.steps || out?.error?.message || out);
+  ok(/declares no inputs: pass params/.test(attempts), "the step says why and how to run it (pass params)");
+}
 console.log(`\ntest-decide-execute: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

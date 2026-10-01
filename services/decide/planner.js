@@ -169,8 +169,13 @@ export async function buildDecision({ task, constraints, depth }, deps) {
     const v = stepFit.get(`${si}:${c.row.id}`);
     return v !== undefined ? v : c.retrievalFit * 0.6;
   };
+  // A single tool replaces the step plan only when its inputs are known: an
+  // outside POST with no declared fields has nowhere to put the task's data,
+  // so collapsing a typed plan onto it hands execute an empty body.
+  const knowsInputs = (r) => r.firstParty || r.inputSchemaState === "declared" || r.inputSchemaState === "partial"
+    || String(r.method || "").toUpperCase() !== "POST";
   const wholeBest = depth === "quick" ? null
-    : whole.slice(0, 8).map((c) => ({ c, f: stepFit.get(`${wholeStepIndex}:${c.row.id}`) ?? 0 })).filter((x) => x.f >= WHOLE_TASK_FIT).sort((a, b) => b.f - a.f)[0]?.c || null;
+    : whole.slice(0, 8).map((c) => ({ c, f: stepFit.get(`${wholeStepIndex}:${c.row.id}`) ?? 0 })).filter((x) => x.f >= WHOLE_TASK_FIT && knowsInputs(x.c.row)).sort((a, b) => b.f - a.f)[0]?.c || null;
   let judgedStepIndex = steps.map((_, i) => i);
   if (depth === "quick") { steps = [{ purpose: task, query: task, dependsOn: [], candidates: whole }]; judgedStepIndex = [0]; }
   else if (wholeBest) {
