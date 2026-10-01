@@ -203,6 +203,8 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ok(!valueForParam("address", { name: "x.eth", address: null, found: false }).ok, "a null field is not a value");
   ok(valueForParam("q", "hello").value === "hello", "a scalar output is the value");
   ok(!valueForParam("q", { q: "x".repeat(5000) }).ok, "an oversized value does not travel");
+  ok(valueForParam("ip", { host: "github.com", answers: [{ type: "A", data: "140.82.112.3" }] }).value === "140.82.112.3", "an ip parameter takes the one IP in the output");
+  ok(!valueForParam("ip", { answers: ["140.82.112.3", "140.82.112.4"] }).ok, "several IPs: no guess");
   ok(!resolveStepRefs({ q: "{{step 1}}" }, {}).ok, "a reference to a step that did not run is not resolved");
   const r = resolveStepRefs({ address: "{{step 1}}", chain: "base" }, { 1: { address: A } });
   ok(r.ok && r.params.address === A && r.params.chain === "base", "a resolved reference keeps the step's other params");

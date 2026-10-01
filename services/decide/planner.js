@@ -265,8 +265,12 @@ export async function buildDecision({ task, constraints, depth }, deps) {
     // an earlier step. Anything else (a callback URL a listing talked the
     // model into, say) is dropped and the field falls back to the skeleton.
     if (!p._row.firstParty) fromTask = groundedParams(fromTask, task);
+    // Some values from the task and a named placeholder for each missing
+    // required one beats discarding what the task gave.
+    const merged = Object.keys(fromTask || {}).length ? { ...skeletonParams(schema), ...fromTask } : null;
     const candidates = [
       ["task", fromTask],
+      ["task", merged],
       ["tool-example", p._row.firstParty && p._row.example ? pruneParams(schema, p._row.example) : null],
       ["skeleton", skeletonParams(schema)],
     ];
@@ -330,7 +334,12 @@ export async function buildDecision({ task, constraints, depth }, deps) {
       if (p._needsInput) p._needsInput = p._needsInput.filter((n) => n !== name);
     }
   }
-  for (const p of plan) if (p._needsInput?.length) { p.tool.exampleParamsNeedInput = p._needsInput; delete p._needsInput; }
+  for (const p of plan) {
+    const open = Object.entries(p.tool.exampleParams || {}).filter(([, v]) => typeof v === "string" && /^<[^<>]*>$/.test(v)).map(([k]) => k);
+    const need = [...new Set([...(p._needsInput || []), ...open])];
+    delete p._needsInput;
+    if (need.length) p.tool.exampleParamsNeedInput = need;
+  }
 
   // 6. cost, latency, confidence
   const stepLatency = (p) => Number(reliability(p._row.id)?.latency_p95_ms) || (p._row.firstParty ? DEFAULT_LATENCY_MS.firstParty : DEFAULT_LATENCY_MS.thirdParty);
@@ -387,11 +396,25 @@ export function verbatimIdentifier(v, task) {
 }
 
 export function groundedParams(params, task) {
-  const hay = String(task || "").toLowerCase();
+  // Comparison ignores case, runs of whitespace and an escaped newline (a task
+  // that writes a backslash-n means a line break).
+  const norm = (x) => String(x).toLowerCase().replace(/\\n/g, "\n").replace(/\s+/g, " ").trim();
+  const hay = norm(task || "");
+  const words = new Set(hay.split(/[^\p{L}\p{N}]+/u).filter(Boolean));
   const out = {};
   for (const [k, v] of Object.entries(params || {})) {
-    if (typeof v === "string" && (STEP_REF.test(v) || (v.length <= 200 && v.trim().length > 0 && hay.includes(v.trim().toLowerCase())))) out[k] = v;
-    else if (typeof v === "number" && Number.isFinite(v) && hay.includes(String(v))) out[k] = v;
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (!t || t.length > 200) continue;
+      if (STEP_REF.test(t) || /^<[\w.-]{1,40}>$/.test(t)) { out[k] = v; continue; } // a step reference or a named unknown
+      if (hay.includes(norm(t))) { out[k] = v; continue; }
+      // A short plain value (a language code, a format name) carries no link,
+      // address or path; it goes on to the value check rather than being dropped.
+      if (t.length <= 40 && /^[\p{L}\p{N}][\p{L}\p{N} ._,'-]*$/u.test(t)) { out[k] = v; continue; }
+      // Free text (a search query) is kept when every word in it is the task's.
+      const ws = norm(t).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3);
+      if (ws.length && !/:\/\/|@/.test(t) && ws.every((w) => words.has(w))) out[k] = v;
+    } else if (typeof v === "number" && Number.isFinite(v) && hay.includes(String(v))) out[k] = v;
   }
   return out;
 }

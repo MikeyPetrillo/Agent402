@@ -16,6 +16,9 @@ const MAX_NODES = 2000;
 const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const ADDRESS_PARAM = /(^|_|[a-z])(address|wallet|owner|account|holder|recipient)$/i;
+const IP_PARAM = /^(ip|ip_?addr(ess)?|ipv4|ipv6|host_?ip)$/i;
+const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+const IPV6 = /^[0-9a-f]*:[0-9a-f:]+$/i;
 
 const norm = (k) => String(k).toLowerCase().replace(/[^a-z0-9]/g, "");
 const isScalar = (v) => (typeof v === "string" && v.length > 0 && v.length <= MAX_LEN) || (typeof v === "number" && Number.isFinite(v)) || typeof v === "boolean";
@@ -42,15 +45,19 @@ export function valueForParam(name, output) {
   if (typeof output !== "object") return { ok: false, why: "produced no usable value" };
   const want = norm(name);
   for (const [k, v] of leaves(output)) if (k != null && norm(k) === want && isScalar(v)) return { ok: true, value: v };
-  if (ADDRESS_PARAM.test(name) || want === "address") {
-    const found = new Set();
-    for (const [, v] of leaves(output)) if (isAddress(v)) found.add(v);
-    if (found.size === 1) return { ok: true, value: [...found][0] };
-    if (found.size > 1) return { ok: false, why: `carries ${found.size} different addresses, so which one "${name}" means is not clear` };
-  }
+  if (IP_PARAM.test(name)) return unique(output, (v) => typeof v === "string" && (IPV4.test(v) || IPV6.test(v)), name, "IP addresses");
+  if (ADDRESS_PARAM.test(name) || want === "address") return unique(output, isAddress, name, "addresses");
   return { ok: false, why: `has no value for "${name}"` };
 }
 
+// The one distinct value of a kind in the output; none or several is no answer.
+function unique(output, test, name, kind) {
+  const found = new Set();
+  for (const [, v] of leaves(output)) if (test(v)) found.add(v);
+  if (found.size === 1) return { ok: true, value: [...found][0] };
+  if (found.size > 1) return { ok: false, why: `carries ${found.size} different ${kind}, so which one "${name}" means is not clear` };
+  return { ok: false, why: `has no value for "${name}"` };
+}
 // params: the step's params; outputs: { [step]: result } of steps that ran ok.
 // Returns { ok: true, params } with every reference replaced, or
 // { ok: false, reason } naming the first one that could not be.
