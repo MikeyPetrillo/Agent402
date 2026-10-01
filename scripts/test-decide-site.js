@@ -61,5 +61,13 @@ ok(card && card.includes("$0.009 to $0.09"), "the card's price range comes from 
 ok(sectionCardSvg("decide", { BRAND: {}, BRAND_DEFS: "", BRAND_FONT_STYLE: "" }).includes("priced per decision"), "no ctx prices: the card states no figure");
 
 setDecideLive(false);
+
+// The page's example plan quotes real routes at their catalog prices.
+{
+  const cat = { "POST /api/sanctions/wallet": { slug: "sanctions-wallet", price: "$0.002" }, "POST /api/asset-transfers": { slug: "asset-transfers", price: "$0.003" } };
+  const h = decidePage("https://agent402.tools", cat).replace(/&quot;/g, '"');
+  ok(/"endpoint": "\/api\/asset-transfers"/.test(h) && !/alchemy\/asset-transfers/.test(h), "the example names the asset-transfers route the catalog serves");
+  ok(/"priceUsd": 0\.002/.test(h) && /"priceUsd": 0\.003/.test(h) && /"estimatedCostUsd": 0\.005/.test(h), "the example's prices and total come from the catalog");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
