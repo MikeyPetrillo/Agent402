@@ -248,7 +248,7 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   const exb = makeExecuteHandler({ ledger, getCatalog: () => cat2, now });
   ledger.saveDecision({ decisionId: "dren", depth: "plan", priceUsd: 0.02, payer: "0xrn", plan: [{ step: 1, purpose: "resolve", tool: prim, fallbacks: [back], dependsOn: [] }], costViaUsd: 0.02, now: clock });
   ledger.markDecisionSettled("dren");
-  const out = await exb({ decisionId: "dren" }, { headers: {}, ip: "0xrn", __meteredQuoteUsd: 0.02 });
+  const out = await exb({ decisionId: "dren" }, { headers: {}, ip: "0xrn", __meteredQuoteUsd: 0.02 }).catch((e) => ({ steps: [{ status: String(e.message).slice(0, 160) }] }));
   ok(out.steps[0].status === "ok" && calls.some((c) => c[0] === "bq" && c[1].query === "vitalik.eth" && !("name" in c[1])), `the backup ran with the value under its own name (${out.steps[0].status})`);
 }
 
