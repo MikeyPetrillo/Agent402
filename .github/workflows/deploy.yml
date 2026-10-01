@@ -2252,6 +2252,7 @@ jobs:
           t node scripts/test-x402-audit.js
           # Finance-kit tests (Yahoo chart quote+history, Nasdaq earnings calendar — keyless live APIs)
           t node scripts/test-finance-kit.js
+          t node scripts/test-databento-timeouts.js
           # "MPP self-registration probe hint (optional path/method: validated, probed, kept only on success, persisted with the seed - offline)"
           t node scripts/test-mpp-index-hint.js
 

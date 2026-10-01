@@ -35,15 +35,29 @@ function auth() {
   return "Basic " + Buffer.from(k + ":").toString("base64");
 }
 
-async function post(path, params) {
+// Per-call upstream bounds. A slow upstream used to surface as a bare 500
+// after up to 55 s (range read 15 s + cost read 20 s + data read 20 s, and a
+// timeout carried no status), which read as our defect. Each read is bounded
+// tighter now and a timeout or a dropped connection is a 504/502 naming the
+// upstream; a >= 400 cancels settlement, so nobody is charged for it.
+export const DATABENTO_TIMEOUTS_MS = { range: 6_000, cost: 5_000, data: 12_000 };
+async function upstreamFetch(url, init, timeoutMs) {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (e) {
+    if (e?.name === "TimeoutError" || e?.name === "AbortError") throw bad(`Market data upstream did not answer within ${Math.round(timeoutMs / 1000)} s. Retry shortly.`, 504);
+    throw bad("Market data upstream could not be reached. Retry shortly.", 502);
+  }
+}
+
+async function post(path, params, timeoutMs = DATABENTO_TIMEOUTS_MS.data) {
   const url = `${HOST}/${path}`;
   await assertPublicUrl(url);
-  const res = await fetch(url, {
+  const res = await upstreamFetch(url, {
     method: "POST",
     headers: { authorization: auth(), "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(params),
-    signal: AbortSignal.timeout(20_000),
-  });
+  }, timeoutMs);
   const text = await res.text();
   if (!res.ok) {
     // Their 4xx bodies name the cause (unknown symbol, range past the data).
@@ -59,7 +73,7 @@ async function post(path, params) {
 async function get(path, params) {
   const url = `${HOST}/${path}?${new URLSearchParams(params)}`;
   await assertPublicUrl(url);
-  const res = await fetch(url, { headers: { authorization: auth() }, signal: AbortSignal.timeout(15_000) });
+  const res = await upstreamFetch(url, { headers: { authorization: auth() } }, DATABENTO_TIMEOUTS_MS.range);
   if (!res.ok) throw bad(`Market data upstream returned ${res.status}.`, 502);
   return res.json();
 }
@@ -79,7 +93,7 @@ export async function availableEnd() {
 /** Price the query first and refuse anything unexpectedly large. */
 async function assertAffordable(params, maxUsd = DEFAULT_MAX_QUERY_USD) {
   try {
-    const usd = Number(await post("metadata.get_cost", { ...params, mode: "historical" }));
+    const usd = Number(await post("metadata.get_cost", { ...params, mode: "historical" }, DATABENTO_TIMEOUTS_MS.cost));
     if (Number.isFinite(usd) && usd > maxUsd) {
       throw bad(`That request is wider than this endpoint serves. Narrow the range.`);
     }
