@@ -956,6 +956,8 @@ jobs:
 
       - name: Tollbooth tests (pay-per-crawl gate — node + edge/Web-Crypto)
         run: node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js && node tollbooth/tempo.test.js
+      - name: Live visualizer tests (services/live, offline)
+        run: node services/live/test.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
@@ -2457,6 +2459,7 @@ jobs:
           t node scripts/test-algorand-page.js
           # Homepage tests (offline, fixture snapshot)
           t node scripts/test-home-page.js
+          t node scripts/test-ga-snippet.js
           # Operator demand-board page tests (verdict rendering, no double-escape, robots disallow — offline)
           t node scripts/test-operator-wishes.js
           # Rail self-heal (the facilitator map cannot silently drift)

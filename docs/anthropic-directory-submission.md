@@ -105,5 +105,5 @@ self-contained). Per-client rate limit: 20 calls/min, 120/hour.
   MCP initialize). Live status: https://agent402.tools/status
 - Errors are structured and human-readable (each tool returns a specific
   message naming the missing/invalid field, never a bare 500).
-- No data collection: no accounts, no cookies, no trackers. IPs are used only
+- No accounts, no ad trackers; site pages run Google Analytics (consent strip in Europe) and a first-party page counter. IPs are used only
   for rate limiting (in-memory, ≤1 h). See /privacy.

@@ -2919,8 +2919,11 @@ app.use((_req, res, next) => {
     // compromised unpkg response with a mismatched hash is refused by the
     // browser before it ever executes). connect-src's existing 'https:'
     // already covers the map's runtime fetch of the world-atlas geometry
-    // from jsdelivr, so no change needed there.
-    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self' https:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+    // from jsdelivr, so no change needed there. www.googletagmanager.com
+    // (2026-10-01) serves the Google Analytics tag loaded by
+    // assets/js/ga-loader.js when GA_MEASUREMENT_ID is set; its collection
+    // requests ride the existing connect-src/img-src https:.
+    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self' https://www.googletagmanager.com; connect-src 'self' https:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
   );
   next();
 });

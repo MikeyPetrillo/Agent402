@@ -942,6 +942,21 @@ function posthogSnippet(baseUrl) {
   // text (CSP hardening, 2026-08-16).
   return jsonScriptTag("posthog-config", { key, cfg }) + '<script src="/js/posthog-loader.js"></script>';
 }
+// Google Analytics 4 (2026-10-01), env-gated on GA_MEASUREMENT_ID. The loader
+// (assets/js/ga-loader.js) is static and reads the id from a JSON island, as
+// PostHog's does. It is left off every page whose URL is itself a bearer link
+// (a paid report, a receipt, a signed alert or manage link), so those URLs
+// never reach Google. Consent and internal-traffic tagging live in the loader.
+const GA_BEARER_PATH = /^\/(r|m|reports\/public|alerts|followups|credits\/thanks|monitors\/manage|monitors\/thanks|digest)(\/|$)/;
+export function gaSnippet(canonical) {
+  const id = String(process.env.GA_MEASUREMENT_ID || "").trim();
+  if (!/^G-[A-Z0-9]{4,16}$/.test(id)) return "";
+  let path = "/";
+  try { path = new URL(canonical).pathname; } catch { /* default */ }
+  if (GA_BEARER_PATH.test(path)) return "";
+  return jsonScriptTag("ga-config", { id }) + '<script src="/js/ga-loader.js"></script>';
+}
+
 /** BreadcrumbList JSON-LD from [name, path] pairs (path relative to baseUrl). */
 export function breadcrumbLd(baseUrl, crumbs) {
   return {
@@ -1018,6 +1033,7 @@ ${LEDGER_HEAD}
 <style>${LEDGER_CSS}${extraCss}</style>
 ${jsonLdBlock}
 ${posthogSnippet(baseUrl)}
+${gaSnippet(canonical)}
 </head>
 <body style="overflow-x:hidden;">
 ${nav(activePath)}

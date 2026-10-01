@@ -88,6 +88,10 @@ regexes = [
   '''0xe15fc38f6d8c56af07bbcbe3baf5708a2bf423''',
   # The leak-guard test's own canary tokens (e.g. fredv2-LEAKCANARY0000).
   '''LEAKCANARY''',
+  # keccak256("AuthorizationUsed(address,bytes32)"): USDC's public EIP-3009
+  # event topic (services/live reads it from the chain). An event signature
+  # hash, not a credential; the generic rule fires on the AUTH in its name.
+  '''98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5''',
   # test-leaderboard-redaction.js's fake Alchemy key as first committed
   # (2026-08-18, commit b68a6ac8) before it was renamed to the LEAKCANARY
   # convention; a fake with no live counterpart, kept only so the full-history
