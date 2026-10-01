@@ -31,6 +31,21 @@
   }
   setInterval(pollStats, 30000);
 
+  // --- the live panel's four figures: every x402 and MPP payment the live
+  // view reads from the chain in the last hour (its public stats endpoint;
+  // the scene itself is the framed /embed page). Left as "-" if unreadable.
+  function pollLive() {
+    fetch('https://live.agent402.tools/api/stats').then(function(r) { return r.ok ? r.json() : null; }).then(function(d) {
+      var a = d && d.all, h = a && a.h1; if (!h) return;
+      var set = function(id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
+      set('hm-live-n', Number(h.payments || 0).toLocaleString('en-US'));
+      var u = Number(h.usd || 0); set('hm-live-usd', '$' + (u >= 100 ? Math.round(u).toLocaleString('en-US') : u.toFixed(2)));
+      set('hm-live-buyers', Number(h.buyers || 0).toLocaleString('en-US'));
+      set('hm-live-pm', Number(a.perMinute || 0).toFixed(1));
+    }).catch(function() {});
+  }
+  if (document.getElementById('hm-live-n')) { pollLive(); setInterval(pollLive, 30000); }
+
   // --- real, live proof-of-work demo: fetch a real challenge, solve it in
   // this tab, submit it, exactly matching src/pow.js's own semantics
   // (hash the "challenge" field, submit the "token" field). ---

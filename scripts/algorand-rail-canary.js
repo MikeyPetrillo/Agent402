@@ -181,8 +181,13 @@ if (ONLY.length) tools = tools.filter((t) => ONLY.includes(t.slug));
 // sub-cent tools get it so the catalog is still covered over a month. Tools at
 // or above $0.01 are unlimited and never budgeted. An explicit --slugs run
 // (re-verifying a fix) is exempt: it is a handful of tools by definition.
-const SUBCENT_MAX = Math.max(0, Number(process.env.CANARY_SUBCENT_MAX ?? "150"));
-const SUBCENT_RESERVE = Math.max(0, Number(process.env.CANARY_SUBCENT_RESERVE ?? "300"));
+// 50 a run and a 500 reserve (2026-10-01, were 150 and 300): September's
+// 1,015 sponsored sub-cent settlements were 1,006 of ours, two uncapped sweeps
+// alone 841. At 50 a week our testing spends about 230 of the monthly 1,000,
+// the daily paid canary proves the rail itself, and every tool is also swept
+// on Base, so the rotation through sub-cent tools only takes longer.
+const SUBCENT_MAX = Math.max(0, Number(process.env.CANARY_SUBCENT_MAX ?? "50"));
+const SUBCENT_RESERVE = Math.max(0, Number(process.env.CANARY_SUBCENT_RESERVE ?? "500"));
 const FACILITATOR_URL = (process.env.ALGORAND_FACILITATOR_URL || "https://facilitator.goplausible.xyz").replace(/\/$/, "");
 // While the allowance is spent the SERVER withdraws Algorand from sub-cent
 // 402s (src/avm-sponsorship.js) and says so on /api/rails. A sub-cent tool

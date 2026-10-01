@@ -160,6 +160,10 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
   // that is briefly missing.
   const heroFromChain = Number(settledOnChain) > 0;
   const heroCount = heroFromChain ? Number(settledOnChain) : viaUsdc;
+  // The live view's /embed may be framed only by agent402.tools, so a server
+  // on any other origin (a self-hosted copy, CI on 127.0.0.1) links to it
+  // instead of rendering a frame the browser would refuse.
+  const liveEmbed = /^https:\/\/(www\.)?agent402\.tools\/?$/i.test(String(baseUrl || ""));
   const heroLabel = heroFromChain ? "on-chain settlements · all rails · ours included" : "calls served for a stablecoin payment";
   const viaPow = Number(served.viaProofOfWork) || 0;
   const mppWire = Number(served.viaMPPWire) || 0;
@@ -271,22 +275,22 @@ export function ledgerHomePage(baseUrl, catalog, stats, leaderboardSnapshot, ski
       </div>
 
       <div class="hm-obsidian" style="overflow:hidden;">
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.07);">
-          <span style="display:flex;gap:6px;"><span style="width:10px;height:10px;border-radius:50%;background:#3A3F45;display:inline-block;"></span><span style="width:10px;height:10px;border-radius:50%;background:#3A3F45;display:inline-block;"></span><span style="width:10px;height:10px;border-radius:50%;background:#3A3F45;display:inline-block;"></span></span>
-          <span style="font-family:var(--font-mono);font-size:11.5px;color:var(--dk-muted);display:inline-flex;align-items:center;gap:8px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent-lit);box-shadow:0 0 10px var(--accent-lit);animation:ml-pulse 1.8s ease-in-out infinite;"></span>live · GET /api/stats</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.07);">
+          <span style="font-family:var(--font-mono);font-size:11.5px;color:var(--dk-muted);display:inline-flex;align-items:center;gap:8px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent-lit);box-shadow:0 0 10px var(--accent-lit);animation:ml-pulse 1.8s ease-in-out infinite;"></span>live · every x402 and MPP payment we see on chain</span>
+          <a href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:11.5px;color:var(--accent-lit);text-decoration:none;white-space:nowrap;">watch full screen ↗</a>
         </div>
-        <pre class="hm-term" style="padding:20px 22px 16px;"><span style="color:var(--dk-muted3);">$</span> curl agent402.tools/api/whois?domain=example.com
-<span style="color:#F0B35E;">HTTP/2 402</span>  payment-required: usdc · base · 0.001
-<span style="color:var(--dk-muted3);">$</span> curl -H "PAYMENT-SIGNATURE: …" agent402.tools/api/whois?…
-<span style="color:var(--accent-lit);">HTTP/2 200</span>  payment-response: settled · tx 0x9ec4…
-{ "registrar": "IANA", "created": "1995-08-14", … }
-
-<span style="color:var(--dk-muted3);"># same door, MPP wire</span>
-<span style="color:var(--dk-muted3);">$</span> curl -H "Authorization: Payment …" agent402.tools/api/whois?…
-<span style="color:var(--accent-lit);">HTTP/2 200</span>  Payment-Receipt: …</pre>
-        <div style="padding:16px 22px 18px;border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+        ${liveEmbed
+          ? `<iframe id="hm-live" src="https://live.agent402.tools/embed" title="Live x402 and MPP payments, read from the chain" style="display:block;width:100%;height:340px;border:0;background:#0A0E14;"></iframe>`
+          : `<a id="hm-live-link" href="https://live.agent402.tools" style="display:flex;align-items:center;justify-content:center;height:340px;background:#0A0E14;color:var(--accent-lit);font-family:var(--font-mono);font-size:13px;text-decoration:none;">watch every x402 and MPP payment, live ↗</a>`}
+        <div style="padding:16px 22px 14px;border-top:1px solid rgba(255,255,255,.07);display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;">
+          <div><div id="hm-live-n" style="font-weight:500;font-size:28px;letter-spacing:-.03em;color:var(--on-dark);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dk-muted3);margin-top:6px;">payments · last hour</div></div>
+          <div><div id="hm-live-usd" style="font-weight:500;font-size:28px;letter-spacing:-.03em;color:var(--on-dark);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dk-muted3);margin-top:6px;">settled</div></div>
+          <div><div id="hm-live-buyers" style="font-weight:500;font-size:28px;letter-spacing:-.03em;color:var(--on-dark);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dk-muted3);margin-top:6px;">paying agents</div></div>
+          <div><div id="hm-live-pm" style="font-weight:500;font-size:28px;letter-spacing:-.03em;color:var(--on-dark);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dk-muted3);margin-top:6px;">per minute</div></div>
+        </div>
+        <div style="padding:12px 22px 16px;border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;">
           <div>
-            <div id="hm-counter" data-via-usdc="${esc(heroCount)}" style="font-family:var(--font-body);font-weight:500;font-size:44px;line-height:.95;letter-spacing:-.035em;color:var(--on-dark);font-variant-numeric:tabular-nums;">${heroCount ? fmtNum(heroCount) : ""}</div>
+            <div id="hm-counter" data-via-usdc="${esc(heroCount)}" style="font-family:var(--font-body);font-weight:500;font-size:26px;line-height:.95;letter-spacing:-.035em;color:var(--on-dark);font-variant-numeric:tabular-nums;">${heroCount ? fmtNum(heroCount) : ""}</div>
             <div id="hm-counter-empty" style="display:${heroCount ? "none" : "flex"};align-items:center;gap:11px;">
               <span style="width:8px;height:8px;border-radius:50%;background:var(--accent-lit);flex:none;animation:ml-pulse 1.6s ease-in-out infinite;"></span>
               <span style="font-family:var(--font-mono);font-size:15px;color:var(--on-dark2);">Settlement count loading</span>

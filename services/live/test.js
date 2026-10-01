@@ -106,6 +106,15 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
   ok(/^0x[0-9a-f]{4}…[0-9a-f]{4}$/.test(p.payer), "events: the buyer is shortened");
   ok((await fetch(base + "/logo/v2/x402%3A" + "0".repeat(40))).status === 404 && (await fetch(base + "/logo/https%3A%2F%2Fevil.example")).status === 404, "logo: only a directory key is served, never an arbitrary URL");
   ok((await fetch(base + "/", { method: "POST" })).status === 405, "read-only: POST is refused");
+  {
+    const home = await fetch(base + "/"), emb = await fetch(base + "/embed");
+    const hc = home.headers.get("content-security-policy") || "", ec = emb.headers.get("content-security-policy") || "";
+    ok(/frame-ancestors 'none'/.test(hc), "the live page itself still refuses every framer");
+    ok(emb.status === 200 && /frame-ancestors https:\/\/agent402\.tools https:\/\/www\.agent402\.tools(;|$)/.test(ec) && !/'none'/.test(ec.split("frame-ancestors")[1].split(";")[0]), "/embed may be framed by agent402.tools only");
+    const html = await emb.text();
+    ok(/<style id="embed">[\s\S]*header\.hero[\s\S]*display:none/.test(html) && /<canvas id="scene"/.test(html) && /id="latest"/.test(html), "/embed is the scene and the LATEST bar, nothing else shown");
+    ok(!/frame-ancestors [^;]*\*/.test(ec), "no wildcard ancestor");
+  }
   server.close();
 }
 

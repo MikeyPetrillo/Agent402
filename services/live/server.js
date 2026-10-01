@@ -33,6 +33,19 @@ const files = Object.fromEntries(Object.entries(STATIC).map(([p, [f, type]]) => 
 // served a stale cached script.
 const appVersion = createHash("sha256").update(files["/app.js"].body).digest("hex").slice(0, 12);
 files["/"].body = Buffer.from(files["/"].body.toString("utf8").replace('src="/app.js"', `src="/app.js?v=${appVersion}"`));
+// /embed: the same page reduced to the scene and the LATEST bar, for the
+// agent402.tools homepage hero. Only that site may frame it (EMBED_ANCESTORS);
+// every other path keeps frame-ancestors 'none'.
+const EMBED_CSS = `<style id="embed">
+.status,nav,header.hero,.toolbar,.board,section.read,footer{display:none!important}
+html,body{background:#0A0E14!important;overflow:hidden}
+main.wrap{max-width:none!important;padding:0!important;margin:0!important}
+.stage{border:0!important;border-radius:0!important;box-shadow:none!important}
+.field{height:calc(100vh - 46px)!important}
+.latest{height:46px;box-sizing:border-box}
+</style>`;
+files["/embed"] = { type: files["/"].type, body: Buffer.from(files["/"].body.toString("utf8").replace("</head>", `${EMBED_CSS}</head>`)) };
+export const EMBED_ANCESTORS = "https://agent402.tools https://www.agent402.tools";
 
 const directory = makeDirectory();
 const logos = makeLogoCache();
@@ -106,7 +119,10 @@ const server = http.createServer(async (req, res) => {
   const path = url.pathname;
   if (req.method !== "GET" && req.method !== "HEAD") { res.writeHead(405, { allow: "GET, HEAD" }); return res.end(); }
   if (files[path]) {
-    res.writeHead(200, { "content-type": files[path].type, "cache-control": path === "/" ? "no-cache" : url.searchParams.has("v") || path.startsWith("/fonts/") ? "public, max-age=31536000, immutable" : "public, max-age=300", ...securityHeaders });
+    const headers = path === "/embed"
+      ? { ...securityHeaders, "content-security-policy": securityHeaders["content-security-policy"].replace("frame-ancestors 'none'", `frame-ancestors ${EMBED_ANCESTORS}`) }
+      : securityHeaders;
+    res.writeHead(200, { "content-type": files[path].type, "cache-control": path === "/" || path === "/embed" ? "no-cache" : url.searchParams.has("v") || path.startsWith("/fonts/") ? "public, max-age=31536000, immutable" : "public, max-age=300", ...headers });
     return res.end(req.method === "HEAD" ? undefined : files[path].body);
   }
   if (path === "/health") {

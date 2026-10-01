@@ -217,5 +217,15 @@ ok(outcomeOf({ status: 429, body: BREAKER_BODY, elapsedMs: 50 }) === "breaker", 
   ok(/const withdrawn = !expectedNoAvm && t\.priceUsd < 0\.01 && \(await subcentWithdrawnNow\(\)\)/.test(src), "only a SUB-CENT tool's missing accept is excused, and only while the server says so - anything else is still a regression");
 }
 
+
+// The sweep's defaults keep most of the month's sponsored sub-cent allowance
+// for buyers (2026-10-01: September's was spent 1,006 of 1,015 by our own runs).
+{
+  const src = (await import("node:fs")).readFileSync(new URL("./algorand-rail-canary.js", import.meta.url), "utf8");
+  const max = Number(/CANARY_SUBCENT_MAX \?\? "(\d+)"/.exec(src)?.[1]);
+  const reserve = Number(/CANARY_SUBCENT_RESERVE \?\? "(\d+)"/.exec(src)?.[1]);
+  ok(max > 0 && max <= 50 && reserve >= 500, `sweep defaults: at most 50 sub-cent buys a run, at least 500 kept for buyers (got ${max}/${reserve})`);
+  ok(5 * max + 31 <= 1000 - reserve, "five weekly sweeps plus a daily leg fit inside what the reserve leaves for testing");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

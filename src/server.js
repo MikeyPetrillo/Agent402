@@ -2923,7 +2923,7 @@ app.use((_req, res, next) => {
     // (2026-10-01) serves the Google Analytics tag loaded by
     // assets/js/ga-loader.js when GA_MEASUREMENT_ID is set; its collection
     // requests ride the existing connect-src/img-src https:.
-    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self' https://www.googletagmanager.com; connect-src 'self' https:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self' https://www.googletagmanager.com; connect-src 'self' https:; frame-src 'self' https://live.agent402.tools; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
   );
   next();
 });
