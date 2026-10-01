@@ -4,6 +4,49 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPO_URL } from "./repo-link.js";
 export const BLOG_POSTS = [
   {
+    slug: "decide-plans-for-agents",
+    date: "2026-10-01",
+    title: "Decide: describe the job, get a plan your agent can run",
+    excerpt: "One call turns a plain-language job into a call-ready plan over this catalog and outside x402 sellers: which tools, in what order, with inputs filled in, backups for each step, and steps wired to each other. Run it yourself or have Agent402 run it. A real two-step run on mainnet, end to end.",
+    body: `<p>An agent that needs something done in the world faces a long list of paid APIs. Which one does the job? What inputs does it take? What if the first choice is down, or needs a value only another call can produce? Guessing costs money: every wrong call is a paid call.</p>
+
+<p><strong><a href="/decide">Decide</a></strong> answers those questions in one request. Describe the job in plain words and get back a plan: the steps, the tool for each step with backups in order, inputs that fit each tool's schema, and which steps depend on which. It plans over this catalog and over outside x402 sellers (including sellers that also accept MPP) whose route answered a live 402 in the last seven days. Anything no indexed tool covers is listed as a gap instead of being papered over.</p>
+
+<h2>A real run, start to finish</h2>
+
+<p>Today we gave Decide this job, paying from our own test wallet on Base:</p>
+
+<blockquote><p>Find the Ethereum address for vitalik.eth, then show which tokens that address holds on Base.</p></blockquote>
+
+<p>The plan came back with two steps. Step 1 resolves the ENS name, with <code>vitalik.eth</code> filled in from the job. Step 2 reads token balances on Base, and its address input is written as <code>{{step 1}}</code>: the plan knows the address does not exist yet and will come from step 1.</p>
+
+<p>Then we sent the plan to <code>POST /api/decide/execute</code>, which runs it on the buyer's behalf. Step 1, an outside x402 seller, returned <code>0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045</code>. Execute put that address into step 2, another outside x402 seller, which returned the wallet's holdings on Base: about 3.13 ETH, 43.29 USDC, 0.20 WETH and a handful of other tokens. Both steps succeeded, the run finished in about eight seconds, and it stayed inside its budget.</p>
+
+<p>The agent paid once for the plan and once for the run. The plan's fee came back as credit toward running it, the run charged both outside sellers' prices plus a disclosed routing fee, and the part of the budget it did not use came back as credit too. Both payments settled on Base: the <a href="https://basescan.org/tx/0xbb9a93aaed27794e8019d855c9f49fa8a998f6671b9feec198460055b2a6a74c">plan</a> and the <a href="https://basescan.org/tx/0x268742f84f5116c3712dc0c9f51e47ae4e29b0c0244a04afd90d8b0aebc71ace">run</a>.</p>
+
+<h2>How it chooses</h2>
+
+<p>A plan is only useful if you can trust why each tool is in it. Every tool, ours and every outside seller's, is scored by one formula: fit to the step, observed reliability, price, how well its inputs are described, and a freshness pass mark. The weights are the same for everyone and the formula has no term for who sells a tool. Every tool in a plan carries <code>firstParty</code>, so you always see whose it is. Fit is judged by a fast judgment model that sees the same bounded description for every tool, and outside listing text is treated as data, never as instructions.</p>
+
+<h2>Steps that feed each other</h2>
+
+<p>Real jobs chain. An ENS lookup feeds a balance read; a search feeds an extraction; a filing number feeds a filing reader. When a step needs a value an earlier step produces, the plan writes <code>{{step N}}</code> and lists the dependency. Run it yourself and replace the reference with the matching field. Run it through Agent402 and the value is filled in for you: from a field with the input's own name, or the one address or IP the earlier step returned. When the value cannot be named without guessing, the step is skipped and nothing is paid for it.</p>
+
+<h2>Running a plan through Agent402</h2>
+
+<ul>
+  <li>The decision fee comes back as a credit worth all of it, valid for 24 hours, toward running that plan.</li>
+  <li>Our tools run at list price. Outside tools are paid on your behalf at the seller's price plus a disclosed routing fee.</li>
+  <li>Backups run in order. A backup that names an input differently gets it under its own name.</li>
+  <li>Spend stops at your budget, and a run where no step succeeds is not charged.</li>
+  <li>Every step comes back with its own receipt.</li>
+</ul>
+
+<h2>Connect</h2>
+
+<p>Decide is three routes: <code>POST /api/decide</code> for a plan, <code>POST /api/decide/execute</code> to run one, and <code>POST /api/decide/feedback</code> (free) to report whether a step worked, which feeds future rankings. Pay per request in USDC over x402 or MPP, or with prepaid card credits. On the hosted MCP connector they are the <code>decide</code> tools; add it with <code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code>. Prices by depth, the full method and the FAQ are on the <a href="/decide">Decide page</a>, and the reference is on the <a href="${REPO_URL}/wiki/Decide">wiki</a>.</p>`,
+  },
+  {
     slug: "what-is-agentic-finance-aifi",
     date: "2026-08-18",
     title: "Agentic Finance (AIFI): the economy that forms once agents can pay",
