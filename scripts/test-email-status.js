@@ -44,6 +44,27 @@ ok(await sendEmail({ to: TO, subject: "s", html: "h", text: "t" }) === true && e
 
 ok(providerErrorCode('{"error":{"code":"<script>"}}') === null && providerErrorCode("not json") === null, "only a code-shaped value is ever kept from a provider body");
 
+// Fallback: with both providers configured, a ZeptoMail refusal is retried once on Resend.
+{
+  process.env.RESEND_API_KEY = "re_test_not_real";
+  const hosts = [];
+  globalThis.fetch = async (url) => {
+    hosts.push(new URL(url).host);
+    if (String(url).includes("zeptomail")) return new Response(JSON.stringify({ error: { code: "TM_5001", details: [{ code: "LE_102" }] } }), { status: 429 });
+    return new Response("{}", { status: 200 });
+  };
+  ok(await sendEmail({ to: TO, subject: "s", html: "h", text: "t" }) === true && hosts.join(",") === "api.zeptomail.com,api.resend.com", `a ZeptoMail refusal is delivered through Resend (${hosts.join(",")})`);
+  ok(emailSendStatus().status === "ok" && emailSendStatus({ full: true }).provider === "resend", "the delivered fallback reads ok, attributed to the provider that sent it");
+  hosts.length = 0;
+  globalThis.fetch = async (url) => { hosts.push(new URL(url).host); return new Response("{}", { status: 200 }); };
+  await sendEmail({ to: TO, subject: "s", html: "h", text: "t" });
+  ok(hosts.join(",") === "api.zeptomail.com", "a ZeptoMail success never also sends through Resend (one email, not two)");
+  hosts.length = 0;
+  globalThis.fetch = async (url) => { hosts.push(new URL(url).host); return new Response("{}", { status: 500 }); };
+  ok(await sendEmail({ to: TO, subject: "s", html: "h", text: "t" }) === false && hosts.length === 2 && emailSendStatus().status === "failing", "both refusing returns false, tries each once, and reads failing");
+  delete process.env.RESEND_API_KEY;
+}
+
 const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 ok(/email: \(\(\) => \{ try \{ return emailSendStatus\(\{ full \}\)/.test(server), "/api/gateway-status carries the email word");
 const hb = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");

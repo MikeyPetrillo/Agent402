@@ -96,17 +96,16 @@ function withPostalFooter(html, text) {
   };
 }
 
-export async function sendEmail({ to, subject, html, text, headers = null }) {
-  if (!emailEnabled() || !to) return false;
-  ({ html, text } = withPostalFooter(html, text));
-  const from = key("EMAIL_FROM");
+// One provider attempt: true on 2xx. Records the outcome either way.
+async function sendVia(provider, { from, to, subject, html, text, headers }) {
   try {
-    if (key("ZEPTOMAIL_TOKEN")) {
+    let res;
+    if (provider === "zeptomail") {
       // ZeptoMail: token is the FULL "Zoho-enczapikey <token>" value or just the
       // token; accept both. from must be a verified ZeptoMail sender address.
       const tok = key("ZEPTOMAIL_TOKEN");
       const auth = /^Zoho-enczapikey/i.test(tok) ? tok : `Zoho-enczapikey ${tok}`;
-      const res = await fetch(ZEPTO_URL(), {
+      res = await fetch(ZEPTO_URL(), {
         method: "POST",
         headers: { Authorization: auth, "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({
@@ -116,24 +115,35 @@ export async function sendEmail({ to, subject, html, text, headers = null }) {
         }),
         signal: AbortSignal.timeout(12_000),
       });
-      const code = res.ok ? null : providerErrorCode(await res.text().catch(() => ""));
-      noteEmailOutcome(res.ok, { status: res.status, code, provider: "zeptomail" });
-      return res.ok;
+    } else {
+      res = await fetch(RESEND_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key("RESEND_API_KEY")}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to: [to], subject, html, text, ...(headers && typeof headers === "object" ? { headers } : {}) }),
+        signal: AbortSignal.timeout(12_000),
+      });
     }
-    // Resend
-    const res = await fetch(RESEND_URL, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key("RESEND_API_KEY")}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: [to], subject, html, text, ...(headers && typeof headers === "object" ? { headers } : {}) }),
-      signal: AbortSignal.timeout(12_000),
-    });
     const code = res.ok ? null : providerErrorCode(await res.text().catch(() => ""));
-    noteEmailOutcome(res.ok, { status: res.status, code, provider: "resend" });
+    noteEmailOutcome(res.ok, { status: res.status, code, provider });
     return res.ok;
   } catch (e) {
-    noteEmailOutcome(false, { status: null, code: e?.name === "TimeoutError" ? "timeout" : "network", provider: key("ZEPTOMAIL_TOKEN") ? "zeptomail" : "resend" });
+    noteEmailOutcome(false, { status: null, code: e?.name === "TimeoutError" ? "timeout" : "network", provider });
     return false;
   }
+}
+
+/** Send one email. With both providers configured, ZeptoMail goes first and a
+ *  refused send is retried once on Resend (2026-10-01: ZeptoMail's prepaid
+ *  credits ran out and its account review blocked buying more, which stopped
+ *  every email; a second provider keeps mail flowing through either outage).
+ *  2xx -> true; never throws. */
+export async function sendEmail({ to, subject, html, text, headers = null }) {
+  if (!emailEnabled() || !to) return false;
+  ({ html, text } = withPostalFooter(html, text));
+  const msg = { from: key("EMAIL_FROM"), to, subject, html, text, headers };
+  const providers = [...(key("ZEPTOMAIL_TOKEN") ? ["zeptomail"] : []), ...(key("RESEND_API_KEY") ? ["resend"] : [])];
+  for (const p of providers) if (await sendVia(p, msg)) return true;
+  return false;
 }
 
 /** "Here's your report" email with the durable link. Best-effort. */
