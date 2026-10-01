@@ -369,6 +369,23 @@ ok(extractJson('noise {"a":1} tail') ?.a === 1 && extractJson("nothing") === nul
   ok(Object.keys(jevChoiceQuestions([{ i: 0, purpose: "p", options: [pack, single] }])).join() === "p0", "question ids carry the step index");
 }
 
+// ---- an identifier copied verbatim from the task is not second-guessed ----
+{
+  const idx = new ToolIndex();
+  idx.upsert(mk("sanctions-wallet", { description: "wallet sanctions screening", props: { address: { type: "string" }, note: { type: "string" } }, required: ["address"] }));
+  const addr = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+  const llm = stubLlm([
+    { steps: [{ purpose: "sanctions check", query: "wallet sanctions", dependsOn: [] }] },
+    (s2, user) => { const f = {}; for (const st of keysFor(user)) for (const cc of st.candidates) f[cc.key] = /ENTIRE/.test(st.purpose) ? 0.2 : 0.95; return { fits: f }; },
+    { params: { "1": { address: addr, note: "urgent" } } },
+  ]);
+  const rejectAll = { checkParams: async (task, items) => Object.fromEntries(items.map((it) => [it.key, 0.01])) };
+  const d = await buildDecision({ task: `Check whether wallet ${addr} is on a sanctions list, urgent`, constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, checkParams: rejectAll.checkParams, cfg, now: NOW, deadline: Date.now() + 10_000 });
+  const ep = d.plan[0]?.tool.exampleParams || {};
+  ok(ep.address === addr, `a wallet address copied from the task survives a rejecting value check (${JSON.stringify(ep)})`);
+  ok(!("note" in ep), "a word-like value is still checked (the rejected optional value is dropped)");
+}
+
 // ---- written params checked by the judgment model ----
 {
   const idx = new ToolIndex();

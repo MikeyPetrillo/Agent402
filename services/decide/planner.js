@@ -287,6 +287,11 @@ export async function buildDecision({ task, constraints, depth }, deps) {
       const ref = typeof v === "string" ? /^\{\{step (\d+)\}\}$/.exec(v) : null;
       if (ref) { if (!p.dependsOn.includes(Number(ref[1]))) reject(p, name); continue; }
       if (typeof v === "string" && /^<[^<>]*>$/.test(v)) continue; // already a placeholder
+      // An identifier copied verbatim from the task (an address, hash, URL,
+      // domain) is the caller's own data: the model check second-guessed one
+      // and turned a wallet address into a placeholder (live run 2026-10-01),
+      // so the same task planned differently from run to run.
+      if (typeof v === "string" && verbatimIdentifier(v, task)) continue;
       toCheck.push({ key: `s${p.step}:${name}`, p, purpose: p.purpose, row: p._row, name, prop: p._row.inputSchema?.properties?.[name] || {}, value: v });
     }
   }
@@ -330,6 +335,16 @@ export async function buildDecision({ task, constraints, depth }, deps) {
 }
 
 const STEP_REF = /^\{\{step \d+\}\}$/;
+/** An identifier-shaped value that appears verbatim in the task. */
+export function verbatimIdentifier(v, task) {
+  const t = String(v || "").trim();
+  if (t.length < 6 || t.length > 200 || !String(task || "").includes(t)) return false;
+  return /^0x[0-9a-fA-F]{8,}$/.test(t)                       // EVM address, tx hash
+    || /^[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(t)                 // base58 (Solana etc.)
+    || /^https?:\/\/\S+$/i.test(t)                               // URL
+    || /^(?=.{4,253}$)([a-z0-9-]+\.)+[a-z]{2,}$/i.test(t);     // domain
+}
+
 export function groundedParams(params, task) {
   const hay = String(task || "").toLowerCase();
   const out = {};
