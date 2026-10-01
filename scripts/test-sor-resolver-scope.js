@@ -39,6 +39,12 @@ ok(/wantModel = null(?:, onlyUrl = null)? \} = \{\}\)/.test(fn.slice(0, 220)), "
 ok(/served\.verdict === "not-served"/.test(fn) && fn.indexOf('served.verdict === "not-served"') < fn.indexOf("await assertPublicUrl(r.url)"),
   "a not-served verdict skips the candidate BEFORE probing it, and only that verdict skips (unknown never does)");
 ok(fn.indexOf("sellerRouteRefusedRecently(r.url, chain)") < fn.indexOf("sellerServesModel(r.url, wantModel)"), "the refusal memo is consulted first (cheaper: no fetch)");
+// A pinned endpoint is searched again by its own URL words when the task's
+// wording leaves it outside the result window (2026-10-01: a planned,
+// router-eligible gas seller read as "no seller matched"). Both legs search
+// through routeRows, which retries only for a pinned URL that was missed.
+ok(/const routeRows = async \(args\) =>/.test(fn) && /if \(!onlyUrl \|\| \(r\.results \|\| \[\]\)\.some\(\(x\) => sameUrl\(x\.url\)\)\) return r;/.test(fn) && (fn.match(/await routeRows\(\{ query: task/g) || []).length === 2 && !/await routeQueryAsync\(\{ query: task/.test(fn),
+  "a pinned endpoint the wording missed is searched again by its own host and path (both legs)");
 const rx = readFileSync(new URL("../src/tools/route-execute.js", import.meta.url), "utf8");
 ok(/const wantModel = typeof input\.params\?\.model === "string"/.test(rx) && /limit: MAX_CANDIDATES, wantModel(?: \}|, \.\.\.\(target \? \{ onlyUrl: target \} : \{\}\) \})/.test(rx),
   "route-execute hands the params' model to the resolver (a stable resolver with nothing feeding it would pass every other test here)");

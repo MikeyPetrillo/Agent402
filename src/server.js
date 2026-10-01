@@ -1367,6 +1367,18 @@ function withDispatchSnapshot(snapshot) {
 }
 async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wantModel = null, onlyUrl = null } = {}) {
   const sameUrl = (u) => { try { return new URL(u).href === new URL(onlyUrl).href; } catch { return false; } };
+  // A pinned endpoint (a decision's own step) is found by search like any
+  // other, and the step's wording need not rank it in the first 200 rows:
+  // a planned, router-eligible gas seller read as "no seller matched"
+  // (2026-10-01 prod check). When the wording misses it, search again by the
+  // endpoint's own host and path words, which rank it first.
+  const routeRows = async (args) => {
+    const r = await routeQueryAsync(args);
+    if (!onlyUrl || (r.results || []).some((x) => sameUrl(x.url))) return r;
+    let q2 = "";
+    try { const u = new URL(onlyUrl); q2 = `${u.host.replace(/[.:]/g, " ")} ${u.pathname.replace(/[/_.-]+/g, " ")}`.trim(); } catch { return r; }
+    return routeQueryAsync({ ...args, query: q2 });
+  };
   // Filled by the dispatch gate below; read by route-execute when nothing
   // resolves, so the refusal can say which world it is in.
   const gateDrops = { total: 0, byReason: {} };
@@ -1447,7 +1459,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
     // that survived the post-filter were whichever one or two happened to
     // win a tie-break, and a Solana seller with the best-matching name could
     // sit at position 40 and never be tried (2026-09-02).
-    const { results } = await routeQueryAsync({ query: task, top: onlyUrl ? 200 : 25, include: "external", networkFilter: "solana", strictNetwork: true, ...indexCtx() });
+    const { results } = await routeRows({ query: task, top: onlyUrl ? 200 : 25, include: "external", networkFilter: "solana", strictNetwork: true, ...indexCtx() });
     candidates = (results || [])
       .filter((r) => r.seller && r.url && r.priceUsd > 0 && r.priceUsd <= cap && Array.isArray(r.networks)
         && r.networks.some((n) => SOLANA_NETWORK_LABELS.has(String(n || "").toLowerCase())))
@@ -1457,7 +1469,7 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       .slice(0, 5)
       .map((r) => ({ ...r, networks: r.networks, wire: "x402" }));
   } else {
-    const { results } = await routeQueryAsync({ query: task, top: onlyUrl ? 200 : 20, include: "external", ...indexCtx() });
+    const { results } = await routeRows({ query: task, top: onlyUrl ? 200 : 20, include: "external", ...indexCtx() });
     // The SAME evidence object every public label reads (dispatchEvidence):
     // settled and payers (the best single wallet's figures), the chain-join
     // address and the binding (every figure kept against the wallet it was
