@@ -130,6 +130,9 @@ ok(toolsA[0]?.name === "screen" || /Screen/.test(toolsA[0]?.description || tools
 ok(toolsB.length === 1 && toolsB[0].route === "/api/geo", `app B's OpenAPI with no servers is read relative to its prefix (${JSON.stringify(toolsB.map((t) => t.route))})`);
 ok(toolsA.every((t) => t.seller === A) && toolsB.every((t) => t.seller === B), "every row names its own seller key");
 ok(!(rC.listed === true && (cache.get(C)?.tools || []).some((t) => t.route === "/api/screen")), `a manifest redirected into another app's prefix is not the seller's (${JSON.stringify({ listed: rC.listed, error: rC.error })})`);
+// The routes would be scoped away anyway; the redirect guard is what keeps the
+// other app's NAME and description off this seller.
+ok(rC.listed !== true && cache.get(C)?.manifest?.name !== "Alpha screen", `the redirected document is refused outright, so app C carries none of app A's identity (${cache.get(C)?.manifest?.name ?? "no manifest"})`);
 
 // ---------------------------------------------------------------- lookups
 {
