@@ -6,7 +6,7 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPO_URL, repoUrl } from "./repo-link.js";
 export function privacyPage(baseUrl) {
   const title = "Privacy - Agent402";
-  const description = "Agent402's privacy policy: no accounts, no cookies, first-party page analytics only. What we process, why, how long we keep it, and how to have it erased.";
+  const description = "Agent402's privacy policy: no accounts, no ad trackers, page analytics with a consent choice in Europe. What we process, why, how long we keep it, and how to have it erased.";
   const canonical = `${baseUrl}/privacy`;
 
   const extraCss = `
@@ -32,14 +32,21 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-08-27.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-10-01.</p>
 </section>
 
 <section>
 <div class="pv-body">
-<p>Agent402 has no accounts, no cookies and no ad trackers on its pages. Pages run a first-party page
-counter (PostHog, served from our own domain: page path, referrer and screen size, a random per-visit id
-held in session storage, never a cookie, never your IP forwarded to the analytics provider). Free email
+<p>Agent402 has no accounts and no ad trackers on its pages. Pages run a first-party page counter
+(PostHog, served from our own domain: page path, referrer and screen size, a random per-visit id held in
+session storage, never a cookie, never your IP forwarded to the analytics provider). Pages also run
+<b>Google Analytics</b> to count visits and see how people find the site. It sets a measurement cookie
+(<code>_ga</code>) and Google receives your IP address and browser details under
+<a href="https://policies.google.com/privacy" rel="noopener">Google's privacy policy</a>. Advertising
+features, ad personalization and Google signals are off. If your browser's time zone is in Europe, the
+cookie is off until you choose "Allow" in the strip at the bottom of the page, and Google only receives
+cookieless pings before that; your choice is kept in your browser. Pages whose address is itself a private
+link (a paid report, a receipt, a signed alert or manage link) do not load Google Analytics. Free email
 alerts and the tollbooth waitlist are the only forms that take an address, and both say so where you
 enter it. The only personal data we hold is what a card purchase needs to deliver what you bought (see
 "Card purchases" below). The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
