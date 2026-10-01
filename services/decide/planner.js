@@ -249,6 +249,9 @@ export async function buildDecision({ task, constraints, depth }, deps) {
   if (depth !== "quick" && plan.length && left() > 1500) {
     const pp = paramsPrompt(task, plan.map((p) => ({ step: p.step, purpose: p.purpose, dependsOn: p.dependsOn, row: p._row })));
     filled = await within(llm.call(pp.system, pp.user, { maxTokens: 900, timeoutMs: timeoutFor(0.8), meter, stage: "params" }), timeoutFor(0.8) + 250);
+    // The model sometimes answers without the "params" wrapper ({"1":{...}});
+    // that answer is read rather than thrown away.
+    if (filled && !filled.params && plan.some((p) => filled[String(p.step)] && typeof filled[String(p.step)] === "object")) filled = { params: filled };
     if (!filled?.params) { partial = true; notes.push("parameter filling unavailable: skeleton params"); }
   }
   for (const p of plan) {

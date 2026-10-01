@@ -142,6 +142,11 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   const e = await buildDecision({ task: "Resolve vitalik.eth then list token balances on Base", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm: llm2, cfg, now: NOW, deadline: Date.now() + 20_000 });
   const e1 = e.plan.find((p) => p.tool.slug === "ens"), e2 = e.plan.find((p) => p.tool.slug === "bal");
   ok(e1?.tool.exampleParams.name === "vitalik.eth" && e2?.tool.exampleParams.address === "{{step 1}}" && e2.dependsOn.includes(1), `an answer keyed by tool id is read, and a written earlier-step reference links the steps (${JSON.stringify([e1?.tool.exampleParams, e2?.tool.exampleParams, e2?.dependsOn])})`);
+  const llm3 = stubLlm([{ steps: [{ purpose: "resolve vitalik.eth to an address", query: "resolve ens name", dependsOn: [] }, { purpose: "token balances on base", query: "token balances wallet", dependsOn: [] }] },
+    (system, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = /ENTIRE/.test(st.purpose) ? 0.1 : /resolve/.test(st.purpose) === /ens/.test(c.description) ? 0.95 : 0.05; return { fits }; },
+    { "1": { name: "vitalik.eth" }, "2": { address: "{{step 1}}" } }]);
+  const f = await buildDecision({ task: "Resolve vitalik.eth and give me token balances on Base", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm: llm3, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  ok(!f.notes.some((n) => /parameter filling/.test(n)) && f.plan.find((p) => p.tool.slug === "ens")?.tool.exampleParams.name === "vitalik.eth", `an answer without the params wrapper is read (seen live) (${f.partial} ${JSON.stringify(f.plan.map((p) => [p.tool.slug, p.tool.exampleParams]))} ${JSON.stringify(f.notes)})`);
 }
 
 // ---- live window and schema filters ----
