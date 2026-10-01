@@ -101,7 +101,6 @@ export function renderFooter() {
       <a href="/marketplace">Marketplace</a>
       <a href="/leaderboard">Leaderboard</a>
       <a href="/marketplace#economy">Economy</a>
-      <a href="/analytics">Analytics</a>
       <a href="/playground">Playground</a>
       <a href="/community">Community</a>
     </div>

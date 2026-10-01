@@ -818,7 +818,7 @@ export const ledgerFooterFull = () => ledgerFooterCompact();
 // ---------------------------------------------------------------------------
 
 // Sitemap pages that no nav menu reaches; this row is their site-wide link.
-const FOOTER_MORE = [["/faq", "faq"], ["/compare", "compare"], ["/use-cases", "use cases"], ["/community", "community"], ["/digest", "weekly digest"], ["/shop", "shop"], ["/analytics", "analytics"], ["/badges", "badges"]];
+const FOOTER_MORE = [["/faq", "faq"], ["/compare", "compare"], ["/use-cases", "use cases"], ["/community", "community"], ["/digest", "weekly digest"], ["/shop", "shop"], ["/badges", "badges"]];
 
 export function ledgerFooterCompact() {
   // Three rows, deliberately. The previous compact footer carried 31 links in

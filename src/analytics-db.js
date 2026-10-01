@@ -364,14 +364,14 @@ export function redactAnalytics(data, authed) {
       // ORDER alone would rebuild the ranking we just removed.
       .sort((a, b) => String(a.slug).localeCompare(String(b.slug)));
 
+  // 2026-10-01: the per-tool tables are operator-only in full. Even as rates
+  // in alphabetical order, WHICH tools make the busiest-N cut (and which are
+  // failing) is a traffic-based selection, so an unauthenticated caller gets
+  // the aggregate only. reliabilityOnly stays for the operator-shaped tests
+  // and any future public reliability view built on purpose.
+  void reliabilityOnly;
   return {
     ...aggregate,
-    topTools: reliabilityOnly(topTools),
-    errorTools: reliabilityOnly(errorTools),
-    ...(Array.isArray(topTools) ? { toolsCount: topTools.length } : {}),
-    // State the residual honestly: WHICH tools appear is still a traffic-based
-    // selection (the query takes the busiest N), even though the numbers and the
-    // order no longer are. Better to disclose that than imply a neutral sample.
-    perToolNote: "Reliability only. Call volume and traffic ranking are operator-only; rows are the most-called tools in the window, listed alphabetically.",
+    perToolNote: "Per-tool tables are operator-only. Public reliability is published on /status and /api/reliability.",
   };
 }

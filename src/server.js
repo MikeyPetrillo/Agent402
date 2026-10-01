@@ -5729,6 +5729,24 @@ const discoveryComputeLimiter = createRateLimiter("discovery-compute", {
 });
 const isLoopbackIp = (ip) => ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
 const discoveryCpuBudget = createComputeBudget();
+// Each client's own share of discovery CPU (2026-10-01). One client sending
+// bursts of about twenty distinct uncached /api/route searches every fifteen
+// minutes (about 0.5 s of CPU each) stayed under the per-minute limiter above
+// but drained the GLOBAL budget, so everyone else searching during a burst was
+// shed with a 503. A client past its own rolling share now gets a 429 naming
+// its limit, before it can reach the shared budget.
+const DISCOVERY_CLIENT_CPU_MS = Number(process.env.DISCOVERY_CLIENT_CPU_MS) || 1500;
+const DISCOVERY_CLIENT_WINDOW_MS = 10_000;
+const discoveryClientCpu = new Map();
+function discoveryClientBudget(ip) {
+  let b = discoveryClientCpu.get(ip);
+  if (!b) {
+    if (discoveryClientCpu.size >= 5000) discoveryClientCpu.delete(discoveryClientCpu.keys().next().value);
+    b = createComputeBudget({ budgetMs: DISCOVERY_CLIENT_CPU_MS, windowMs: DISCOVERY_CLIENT_WINDOW_MS });
+    discoveryClientCpu.set(ip, b);
+  }
+  return b;
+}
 // Uncached discovery computes running at once. A router query now yields
 // between slices, so several can be in progress together, each holding its
 // scored rows in memory; the CPU budget alone cannot bound that, because a
@@ -5742,6 +5760,9 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
   let cached = false;
   let errored = false;
   let status = 200;
+  // A shed refusal is deliberate load control with its own counter (noteShed,
+  // /__operator/perf.json); it is not recorded as a server error.
+  let shed = false;
   try {
     let cacheKey = null;
     if (policy && cacheEnabled()) {
@@ -5763,16 +5784,26 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
         retryAfterSeconds: 60,
       });
     }
+    const clientBudget = !synthetic && !isLoopbackIp(clientIp(req)) ? discoveryClientBudget(clientIp(req)) : null;
+    if (clientBudget?.over()) {
+      status = 429;
+      res.set("Retry-After", "10");
+      return res.status(429).json({
+        error: "Too many uncached searches at once",
+        detail: `Each client gets ${DISCOVERY_CLIENT_CPU_MS} ms of uncached search compute per ${DISCOVERY_CLIENT_WINDOW_MS / 1000} s, so one burst cannot slow searches for everyone else. Repeated queries are served from cache and never count. Spread the searches out and retry shortly.`,
+        retryAfterSeconds: 10,
+      });
+    }
     // Global CPU budget for uncached searches across every caller (the
     // per-IP limiter above cannot see many addresses at once). Refused before
     // computing; cache hits above never reach this.
     if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryCpuBudget.over()) {
-      status = 503;
+      status = 503; shed = true;
       noteShed("discovery-budget");
       return shedResponse(res, 2);
     }
     if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryInFlight >= DISCOVERY_MAX_INFLIGHT) {
-      status = 503;
+      status = 503; shed = true;
       noteShed("discovery-inflight");
       return shedResponse(res, 2);
     }
@@ -5786,7 +5817,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     // also reported through `meter`, so only the part of the start the meter
     // did not already charge is added here (else that slice counted twice).
     let asyncCpuMs = 0;
-    const meter = (ms) => { asyncCpuMs += ms; discoveryCpuBudget.record(ms); };
+    const meter = (ms) => { asyncCpuMs += ms; discoveryCpuBudget.record(ms); clientBudget?.record(ms); };
     discoveryInFlight++;
     let result, syncMs;
     try {
@@ -5794,6 +5825,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
       const meteredInStart = asyncCpuMs;
       syncMs = Math.max(0, Date.now() - computeStarted - meteredInStart);
       discoveryCpuBudget.record(syncMs);
+      clientBudget?.record(syncMs);
       result = await pending;
     } finally {
       discoveryInFlight--;
@@ -5821,7 +5853,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     res.status(status).json({ error: err.message });
   } finally {
     const latencyMs = Date.now() - startedAt;
-    recordToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic }).catch(() => {});
+    if (!shed) recordToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic }).catch(() => {});
     capturePostHogToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic });
   }
 }
@@ -7689,6 +7721,9 @@ function analyticsKnownSlugs() {
 // HTML with stat cards, a sparkline, and the top-tools table. When no DB is
 // wired, the page shows a clean "not enabled" panel — server still boots.
 app.get("/analytics", async (req, res) => {
+  // Operator-only since 2026-10-01: public visitors are sent to /status, which
+  // publishes measured availability without per-tool traffic.
+  if (!operatorAuthed(req)) return res.redirect(302, "/status");
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
   const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
   const includeProbes = req.query.include_probes === "1" || req.query.include_probes === "true";

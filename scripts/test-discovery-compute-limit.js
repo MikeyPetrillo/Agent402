@@ -60,4 +60,34 @@ try {
 } finally {
   proc.kill("SIGKILL");
 }
+
+// --- 5. each client's own CPU share (2026-10-01): one bursting client gets a
+// 429 naming its limit before it can drain the GLOBAL budget that sheds
+// everyone else; another client is unaffected; shed refusals are not recorded
+// as server errors.
+ok(body.indexOf("clientBudget?.over()") > 0 && body.indexOf("clientBudget?.over()") < body.indexOf("discoveryCpuBudget.over()"), "the per-client CPU check runs before the global budget");
+ok(/clientBudget\?\.record\(ms\)/.test(body) && /clientBudget\?\.record\(syncMs\)/.test(body), "the per-client budget is charged with the same CPU the global budget is");
+ok(/if \(!shed\) recordToolCall\(/.test(body), "a shed refusal is not recorded as a tool-call server error");
+{
+  const port2 = await getFreePort();
+  const proc2 = spawn(process.execPath, ["src/server.js"], {
+    env: { ...process.env, FREE_MODE: "true", PORT: String(port2), X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", DISCOVERY_CLIENT_CPU_MS: "1", DISCOVERY_COMPUTE_PER_MIN: "100" },
+    stdio: ["ignore", "ignore", "inherit"],
+  });
+  const base2 = `http://127.0.0.1:${port2}`;
+  try {
+    let up = false;
+    for (let i = 0; i < 120 && !up; i++) { try { up = (await fetch(`${base2}/health`)).ok; } catch { await new Promise((r) => setTimeout(r, 500)); } }
+    ok(up, "second server booted with a 1 ms per-client share");
+    const f = (q, ip) => fetch(`${base2}/api/find?q=${encodeURIComponent(q)}`, { headers: { "X-Forwarded-For": ip } });
+    const first = await f("a first uncached search", "203.0.113.50");
+    ok(first.status === 200, `a client's first uncached search answers (${first.status})`);
+    const second = await f("a second uncached search", "203.0.113.50");
+    const sb = await second.json();
+    ok(second.status === 429 && second.headers.get("retry-after") === "10" && /at once/i.test(sb.error), `past its own share: 429 naming the client's limit (${second.status})`);
+    ok((await f("someone else searching", "198.51.100.50")).status === 200, "another client is unaffected by the first client's burst");
+  } finally {
+    proc2.kill("SIGKILL");
+  }
+}
 console.log(`test-discovery-compute-limit: ${n} passed`);
