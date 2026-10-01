@@ -16,6 +16,17 @@ on:
     #
     # The `gate` job below makes the extra attempts free: whichever lands first
     # does the buy, the others see a recent success and stop before spending.
+    #
+    # SIX attempts, every four hours, since 2026-09-30: three attempts in one
+    # afternoon left a hole. Their deliveries clustered 18:00-01:00 UTC, so a
+    # purchase made at noon (a dispatch) was skipped by every attempt that
+    # evening, the last one at 00:28 saw it 12 h old, and nothing arrived again
+    # before the observation passed /status's 26 h line - the page read
+    # degraded with buying healthy (#1533). Spread around the clock, with the
+    # gate's 18 h window, the next buy lands by ~22 h plus delivery drift.
+    - cron: "17 1 * * *"
+    - cron: "17 5 * * *"
+    - cron: "17 9 * * *"
     - cron: "17 13 * * *"
     - cron: "17 17 * * *"
     - cron: "17 21 * * *"
@@ -77,19 +88,21 @@ jobs:
             exit 0
           fi
           echo "last proven purchase: ${AGE}ms ago (state=$STATE)"
-          # 20h, not 24h: deliveries drift by hours, and a 24h window would let
+          # 18h, not 24h: deliveries drift by hours, and a 24h window would let
           # a late run suppress the next day's on-time one, quietly halving the
-          # cadence instead of protecting it.
+          # cadence instead of protecting it. With an attempt every 4h, the
+          # first one past 18h buys, so the observation stays under /status's
+          # 26h staleness line even with two hours of delivery drift.
           #
           # state must be operational, not merely fresh: a recent observation
           # that recorded a FAILED purchase is not proof that buying works, and
           # suppressing the next attempt on the strength of it would turn the
           # three-attempt design into one attempt to fail per day.
-          if [ "$STATE" = "operational" ] && [ "$AGE" -lt 72000000 ]; then
-            echo "a real purchase settled within 20h - skipping this redundant attempt (not a failure)"
+          if [ "$STATE" = "operational" ] && [ "$AGE" -lt 64800000 ]; then
+            echo "a real purchase settled within 18h - skipping this redundant attempt (not a failure)"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "no proven purchase in the last 20h - this attempt will buy"
+            echo "no proven purchase in the last 18h - this attempt will buy"
           fi
 
   canary:
