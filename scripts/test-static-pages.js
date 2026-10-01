@@ -176,7 +176,7 @@ try {
 // --- sitemap pages no menu reaches still get a site-wide link ---------------
 {
   const html = await (await fetch(`${BASE}/pricing`)).text();
-  for (const p of ["/faq", "/compare", "/use-cases", "/community", "/digest", "/shop", "/analytics", "/badges", "/SKILL.md", "/docs/webhooks"]) {
+  for (const p of ["/faq", "/compare", "/use-cases", "/community", "/digest", "/shop", "/badges", "/SKILL.md", "/docs/webhooks"]) {
     ok(html.includes(`href="${p}"`), `footer links ${p}`);
   }
 }

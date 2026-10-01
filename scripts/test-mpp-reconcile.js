@@ -59,6 +59,8 @@ const transfers = { complete: true, source: "feed", rows: [
   xfer(6, { token: OTHER_TOKEN }),
   xfer(7),
   xfer(20, { amountAtomic: atomic(50) }),                       // non_payment_transfer (informational)
+  xfer(24, { amountAtomic: "1" }),                              // one base unit: below any price, informational
+  xfer(25, { amountAtomic: atomic(0.001) }),                    // exactly the floor: still a lost sale
   xfer(21, { sender: BURNER }),                                 // paid_unrecorded, internal by sender
   xfer(22),                                                     // explained by a refund -> charged_failed only
   xfer(14, { ts: END + 60_000 }),
@@ -89,6 +91,8 @@ ok(sum.mismatches.some((m) => m.category === "missing_tx" && m.tx === null), "mi
 ok(has("evm_unverified", 9) && !has("evm_unverified", 10), "evm_unverified: only the evm row the chain disagrees with");
 ok(sum.mismatches.some((m) => m.category === "stripe_mismatch" && m.tx === "pi_bad") && !sum.mismatches.some((m) => m.tx === "pi_good"), "stripe_mismatch: a PaymentIntent that did not succeed");
 ok(sum.info.some((m) => m.category === "non_payment_transfer" && m.tx === h(20)) && !sum.mismatches.some((m) => m.tx === h(20)), "a large unmatched transfer is informational, never a mismatch");
+ok(sum.info.some((m) => m.category === "non_payment_transfer" && m.tx === h(24) && /smallest price/.test(m.explanation)) && !sum.mismatches.some((m) => m.tx === h(24)), "a transfer below the smallest price (2026-09-28's one base unit) is informational, never a lost sale");
+ok(has("paid_unrecorded", 25), "a transfer of exactly the smallest price is still a paid-but-unrecorded sale");
 ok(!has("served_unpaid", 14) && !has("paid_unrecorded", 14), "soft day boundary: booked 23:59, landed 00:01 matches");
 ok(!sum.mismatches.some((m) => m.tx === h(99)), "a transfer from another day is not reported in this day");
 ok(sum.counts.served_unpaid.internal === 1 && sum.counts.served_unpaid.external === 1, "internal/external split on ledger rows");

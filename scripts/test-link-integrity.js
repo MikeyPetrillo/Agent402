@@ -107,7 +107,7 @@ const seeds = [
   "/", "/what-is-x402", "/what-is-mpp", "/sell", "/tools", "/leaderboard", "/marketplace",
   "/skills", "/docs", "/docs/adapters", "/docs/webhooks", "/docs/api", "/docs/api/explorer",
   "/pricing", "/playground", "/sdk-playground", "/quickstart", "/faq", "/status", "/revenue",
-  "/analytics", "/badges", "/shop", "/compare", "/community", "/contribute", "/changelog", "/blog",
+  "/badges", "/shop", "/compare", "/community", "/contribute", "/changelog", "/blog",
   "/contact", "/privacy", "/terms", "/transparency", "/integrations", "/workflows",
   "/base", "/solana", "/polygon", "/arbitrum", "/monad", "/celo", "/avalanche", "/sei",
   "/optimism", "/stellar", "/algorand", "/robinhood",

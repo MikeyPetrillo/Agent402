@@ -2252,6 +2252,7 @@ jobs:
           t node scripts/test-x402-audit.js
           # Finance-kit tests (Yahoo chart quote+history, Nasdaq earnings calendar — keyless live APIs)
           t node scripts/test-finance-kit.js
+          t node scripts/test-databento-timeouts.js
           # "MPP self-registration probe hint (optional path/method: validated, probed, kept only on success, persisted with the seed - offline)"
           t node scripts/test-mpp-index-hint.js
 
@@ -2460,6 +2461,7 @@ jobs:
           # Homepage tests (offline, fixture snapshot)
           t node scripts/test-home-page.js
           t node scripts/test-ga-snippet.js
+          t node scripts/test-chain-page-cache.js
           # Operator demand-board page tests (verdict rendering, no double-escape, robots disallow — offline)
           t node scripts/test-operator-wishes.js
           # Rail self-heal (the facilitator map cannot silently drift)
@@ -3926,6 +3928,7 @@ jobs:
           t node scripts/test-recall-nomatch.js
           # Free email alerts engine: double opt-in, signed links, change-only daily email, caps (offline)
           t node scripts/test-free-alerts.js
+          t node scripts/test-email-status.js
           t node scripts/test-wallet-digest.js
           # Alert routes end to end on a booted server: confirm / unsubscribe / stop pages render (the engine test could not see a 500 here)
           t node scripts/test-alerts-routes.js

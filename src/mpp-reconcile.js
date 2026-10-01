@@ -29,7 +29,10 @@
 // Informational, never a mismatch: `non_payment_transfer`, an unmatched
 // inbound transfer above MPP_RECONCILE_NON_PAYMENT_USD (default $10) - larger
 // than anything we sell per call over MPP, so a treasury movement rather than
-// a lost sale.
+// a lost sale - or BELOW the smallest price any route charges ($0.001, the
+// settlement floor), which no purchase can have paid. The second bound came
+// from 2026-09-28: a one-base-unit ($0.000001) transfer from an unknown sender
+// kept the day "mismatch" as a paid-but-unrecorded sale for two days.
 //
 // Rules this module keeps:
 //   * NEVER publishes a payer address. Ledger rows carry the payer only so the
@@ -95,7 +98,7 @@ function emptyCounts() {
  */
 export function reconcileRecords({
   start, end, ledgerRows = [], transfers = null, refunds = [], evmChecks = new Map(), stripeChecks = { configured: false, results: new Map() },
-  currencies = [], premiumUsd = 0, nonPaymentUsd = 10, isOwnWallet = () => false,
+  currencies = [], premiumUsd = 0, nonPaymentUsd = 10, minSaleUsd = 0.001, isOwnWallet = () => false,
 } = {}) {
   const counts = emptyCounts();
   const mismatches = [];
@@ -177,6 +180,7 @@ export function reconcileRecords({
         if (refundTx.has(k)) continue; // already reported as charged_failed
         const item = { tx: e.tx, slug: null, amountUsd: round6(e.usd), wire: "mpp-tempo", at: new Date(e.ts).toISOString() };
         if (e.usd > nonPaymentUsd) { add("non_payment_transfer", { ...item, explanation: `inbound transfer above $${nonPaymentUsd} with no ledger row - likely a treasury movement, not a sale` }, internal); continue; }
+        if (e.usd + EPS_USD < minSaleUsd) { add("non_payment_transfer", { ...item, explanation: `inbound transfer below $${minSaleUsd}, the smallest price any route charges - no purchase paid this (a dust or test transfer)` }, internal); continue; }
         const offCurrency = currencySet.size && [...e.tokens].some((t) => !currencySet.has(t));
         add("paid_unrecorded", { ...item, explanation: `transfer to our recipient with no sales-ledger row (paid, then not served or not booked)${offCurrency ? "; also in a token we do not offer" : ""}` }, internal);
         continue;

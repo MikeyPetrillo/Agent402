@@ -233,7 +233,7 @@ import { insiderPage, fundPage, dossierPage, hubPage, loadTeaser, normalizeTicke
 import { createMonitorScheduler } from "./monitor-scheduler.js";
 import { createCredits, CREDIT_PACKS } from "./credits.js";
 import { creditsPage, creditsThanksPage } from "./credits-page.js";
-import { sendMonitorEmail } from "./email.js";
+import { sendMonitorEmail, emailSendStatus } from "./email.js";
 import { probeDomain, normDomain } from "./tools/domain-audit-kit.js";
 import { latest13fFiling, resolveManager as edgarResolveManager } from "./tools/edgar-kit.js";
 import { resolveSpend as resolveExternalSpend } from "./external-spend-guard.js";
@@ -3129,6 +3129,11 @@ app.get("/api/gateway-status", async (req, res) => {
     // status Worker can page on halted / no_credentials / refused / in_doubt;
     // the operator also gets the mode and counts. Never an id or text.
     tweetQueue: (() => { try { return _tweetQueue.alarmStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // Transactional email (src/email.js): one word publicly - ok / exhausted
+    // (the provider refused for credits or quota) / failing / unknown (no send
+    // recorded yet) / unconfigured; the operator also gets the last code and
+    // counts. Never an address.
+    email: (() => { try { return emailSendStatus({ full }); } catch { return { status: "unknown" }; } })(),
   };
   // An operator-authed read must not land in a shared cache.
   res.set("Cache-Control", full ? "private, no-store" : "public, max-age=60").json(body);
@@ -5729,6 +5734,24 @@ const discoveryComputeLimiter = createRateLimiter("discovery-compute", {
 });
 const isLoopbackIp = (ip) => ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
 const discoveryCpuBudget = createComputeBudget();
+// Each client's own share of discovery CPU (2026-10-01). One client sending
+// bursts of about twenty distinct uncached /api/route searches every fifteen
+// minutes (about 0.5 s of CPU each) stayed under the per-minute limiter above
+// but drained the GLOBAL budget, so everyone else searching during a burst was
+// shed with a 503. A client past its own rolling share now gets a 429 naming
+// its limit, before it can reach the shared budget.
+const DISCOVERY_CLIENT_CPU_MS = Number(process.env.DISCOVERY_CLIENT_CPU_MS) || 1500;
+const DISCOVERY_CLIENT_WINDOW_MS = 10_000;
+const discoveryClientCpu = new Map();
+function discoveryClientBudget(ip) {
+  let b = discoveryClientCpu.get(ip);
+  if (!b) {
+    if (discoveryClientCpu.size >= 5000) discoveryClientCpu.delete(discoveryClientCpu.keys().next().value);
+    b = createComputeBudget({ budgetMs: DISCOVERY_CLIENT_CPU_MS, windowMs: DISCOVERY_CLIENT_WINDOW_MS });
+    discoveryClientCpu.set(ip, b);
+  }
+  return b;
+}
 // Uncached discovery computes running at once. A router query now yields
 // between slices, so several can be in progress together, each holding its
 // scored rows in memory; the CPU budget alone cannot bound that, because a
@@ -5742,6 +5765,9 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
   let cached = false;
   let errored = false;
   let status = 200;
+  // A shed refusal is deliberate load control with its own counter (noteShed,
+  // /__operator/perf.json); it is not recorded as a server error.
+  let shed = false;
   try {
     let cacheKey = null;
     if (policy && cacheEnabled()) {
@@ -5763,16 +5789,26 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
         retryAfterSeconds: 60,
       });
     }
+    const clientBudget = !synthetic && !isLoopbackIp(clientIp(req)) ? discoveryClientBudget(clientIp(req)) : null;
+    if (clientBudget?.over()) {
+      status = 429;
+      res.set("Retry-After", "10");
+      return res.status(429).json({
+        error: "Too many uncached searches at once",
+        detail: `Each client gets ${DISCOVERY_CLIENT_CPU_MS} ms of uncached search compute per ${DISCOVERY_CLIENT_WINDOW_MS / 1000} s, so one burst cannot slow searches for everyone else. Repeated queries are served from cache and never count. Spread the searches out and retry shortly.`,
+        retryAfterSeconds: 10,
+      });
+    }
     // Global CPU budget for uncached searches across every caller (the
     // per-IP limiter above cannot see many addresses at once). Refused before
     // computing; cache hits above never reach this.
     if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryCpuBudget.over()) {
-      status = 503;
+      status = 503; shed = true;
       noteShed("discovery-budget");
       return shedResponse(res, 2);
     }
     if (!synthetic && !isLoopbackIp(clientIp(req)) && discoveryInFlight >= DISCOVERY_MAX_INFLIGHT) {
-      status = 503;
+      status = 503; shed = true;
       noteShed("discovery-inflight");
       return shedResponse(res, 2);
     }
@@ -5786,7 +5822,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     // also reported through `meter`, so only the part of the start the meter
     // did not already charge is added here (else that slice counted twice).
     let asyncCpuMs = 0;
-    const meter = (ms) => { asyncCpuMs += ms; discoveryCpuBudget.record(ms); };
+    const meter = (ms) => { asyncCpuMs += ms; discoveryCpuBudget.record(ms); clientBudget?.record(ms); };
     discoveryInFlight++;
     let result, syncMs;
     try {
@@ -5794,6 +5830,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
       const meteredInStart = asyncCpuMs;
       syncMs = Math.max(0, Date.now() - computeStarted - meteredInStart);
       discoveryCpuBudget.record(syncMs);
+      clientBudget?.record(syncMs);
       result = await pending;
     } finally {
       discoveryInFlight--;
@@ -5821,7 +5858,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
     res.status(status).json({ error: err.message });
   } finally {
     const latencyMs = Date.now() - startedAt;
-    recordToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic }).catch(() => {});
+    if (!shed) recordToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic }).catch(() => {});
     capturePostHogToolCall({ slug: analyticsSlug, latencyMs, cached, errored, status, synthetic });
   }
 }
@@ -6340,20 +6377,43 @@ function resolveMarketSeller(chainKey, snapshot, sellerQuery) {
     : null;
   return { selectedSeller, scanWallet };
 }
+// One chain page, built in full: seller resolution, the revenue strip, the
+// activity scan and the render.
+async function buildChainPage(chainKey, sellerQuery, all) {
+  const snapshot = getIndexSnapshot();
+  const { selectedSeller, scanWallet } = resolveMarketSeller(chainKey, snapshot, sellerQuery);
+  const [revSnap, activity] = await Promise.all([
+    revenueSnapshot(revenueWallets()).then((snap) => withFreshRecent(snap, ledgerRecent)),
+    scanWallet ? getActivityForChain(chainKey, scanWallet, { maxWaitMs: PAGE_ACTIVITY_WAIT_MS }) : Promise.resolve(null),
+  ]);
+  const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
+  return marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey) });
+}
+// ?seller= views render per request; at most this many at once (2026-10-01).
+const CHAIN_SELLER_VIEW_MAX_INFLIGHT = 2;
+let chainSellerViewsInFlight = 0;
 for (const chainKey of Object.keys(SNAPSHOT_RAIL_LABEL)) {
   app.get(`/${chainKey}`, async (req, res) => {
     try {
-      const snapshot = getIndexSnapshot();
-      const { selectedSeller, scanWallet } = resolveMarketSeller(chainKey, snapshot, req.query.seller);
-      const [revSnap, activity] = await Promise.all([
-        revenueSnapshot(revenueWallets()).then((snap) => withFreshRecent(snap, ledgerRecent)),
-        scanWallet ? getActivityForChain(chainKey, scanWallet, { maxWaitMs: PAGE_ACTIVITY_WAIT_MS }) : Promise.resolve(null),
-      ]);
-      const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
-      const render = () => marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all: req.query.all === "1" , host: hostEntryFigures(chainKey) });
-      // The rendered page is cached for 60 s (it re-labels and re-renders every
-      // seller); a ?seller= view is caller-keyed and stays per request.
-      htmlCache(res, 120, 600).send(req.query.seller ? render() : memoSurface(`market:${chainKey}:${req.query.all === "1"}`, 60_000, render));
+      const all = req.query.all === "1";
+      // THE CACHE IS CHECKED FIRST (2026-10-01). A distributed burst of plain
+      // GET /base from dozens of residential IPs at once froze the server for
+      // 47 s on 09-29: every request resolved sellers, read the revenue
+      // snapshot and the activity scan BEFORE consulting the cached page, so
+      // a thousand requests each paid for work one build covers. The plain
+      // page is now one shared build per 60 s; concurrent callers wait on the
+      // same build, and a stale page keeps serving while the next one builds.
+      if (!req.query.seller) {
+        const html = await memoSurfaceAsync(`market:${chainKey}:${all}`, 60_000, () => buildChainPage(chainKey, null, all));
+        return htmlCache(res, 120, 600).send(html);
+      }
+      // A ?seller= view is caller-keyed and renders per request, so it is
+      // bounded: past the cap it is shed like other free work.
+      if (chainSellerViewsInFlight >= CHAIN_SELLER_VIEW_MAX_INFLIGHT) { noteShed("chain-seller-view"); return shedResponse(res, 5); }
+      chainSellerViewsInFlight++;
+      try {
+        htmlCache(res, 120, 600).send(await buildChainPage(chainKey, req.query.seller, all));
+      } finally { chainSellerViewsInFlight--; }
     } catch (e) {
       res.status(500).type("text/plain").send("temporarily unavailable");
     }
@@ -7689,6 +7749,9 @@ function analyticsKnownSlugs() {
 // HTML with stat cards, a sparkline, and the top-tools table. When no DB is
 // wired, the page shows a clean "not enabled" panel — server still boots.
 app.get("/analytics", async (req, res) => {
+  // Operator-only since 2026-10-01: public visitors are sent to /status, which
+  // publishes measured availability without per-tool traffic.
+  if (!operatorAuthed(req)) return res.redirect(302, "/status");
   const windowHours = Math.max(1, Math.min(720, parseInt(req.query.hours, 10) || 24));
   const includeSynthetic = req.query.include_synthetic === "1" || req.query.include_synthetic === "true";
   const includeProbes = req.query.include_probes === "1" || req.query.include_probes === "true";

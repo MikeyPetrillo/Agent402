@@ -19,7 +19,7 @@
 // The measurement is the only honest one available in-process - schedule a timer
 // for N ms and see how late it actually fires. Lateness IS the lag.
 
-import { monitorEventLoopDelay } from "node:perf_hooks";
+import { monitorEventLoopDelay, PerformanceObserver, constants as perfConstants } from "node:perf_hooks";
 
 const TICK_MS = Number(process.env.LOOP_LAG_TICK_MS) || 500;
 const WARN_MS = Number(process.env.LOOP_LAG_WARN_MS) || 1000;
@@ -53,6 +53,40 @@ export function recentLagMs() { return Math.round(lagEwma); }
 export function lastTickLateMs() { return Math.round(lastLate); }
 /** How many of the last RECENT_TICKS ticks ran at least `ms` late. */
 export function lateTicksRecent(ms) { return recentLate.filter((x) => x >= ms).length; }
+// Garbage-collection pauses, from the runtime's own gc performance entries, so
+// a stall line can say whether the time went to collection or to our code.
+// Before this a [loop-lag] line could not tell the two apart: an 18.5 s stall
+// on 2026-09-30 at no CPU-limit pressure left nothing to read. Kept as a small
+// ring of [startEpochMs, durationMs, kind]; summed over a stall's window.
+const GC_RING = 256;
+const gcEntries = [];
+let gcMinute = { ms: 0, majorMs: 0, count: 0 };
+const GC_MAJOR = perfConstants?.NODE_PERFORMANCE_GC_MAJOR ?? 4;
+export function noteGcEntry(startEpochMs, durationMs, kind) {
+  gcEntries.push([startEpochMs, durationMs, kind]);
+  if (gcEntries.length > GC_RING) gcEntries.shift();
+  gcMinute.ms += durationMs; gcMinute.count++;
+  if (kind === GC_MAJOR) gcMinute.majorMs += durationMs;
+}
+/** GC time whose pause overlaps [fromMs, toMs] (epoch ms): total, major-only, count. */
+export function gcDuring(fromMs, toMs) {
+  let ms = 0, majorMs = 0, count = 0;
+  for (const [at, dur, kind] of gcEntries) {
+    const end = at + dur;
+    if (end < fromMs || at > toMs) continue;
+    const overlap = Math.min(end, toMs) - Math.max(at, fromMs);
+    if (overlap <= 0) continue;
+    ms += overlap; count++;
+    if (kind === GC_MAJOR) majorMs += overlap;
+  }
+  return { ms: Math.round(ms), majorMs: Math.round(majorMs), count };
+}
+/** The stall line's attribution phrase: how much of a `late` ms block was GC. */
+export function gcPhrase(late, now = Date.now()) {
+  const g = gcDuring(now - late - 50, now);
+  if (!g.count) return " gc: none";
+  return ` gc: ${g.ms}ms over ${g.count} pause${g.count === 1 ? "" : "s"}${g.majorMs ? ` (major ${g.majorMs}ms)` : ""}`;
+}
 const state = { worstMs: 0, worstAt: null, stalls: 0, lastStallMs: 0, lastStallAt: null, startedAt: null };
 
 /** @returns {{worstMs:number, worstAt:string|null, stalls:number, lastStallMs:number, lastStallAt:string|null, watching:boolean}} */
@@ -81,6 +115,13 @@ export function startLoopLagMonitor({ tickMs = TICK_MS, warnMs = WARN_MS, statsM
   // event-loop delay percentiles from the runtime's own histogram, how many
   // blocks passed COUNT_MS and their total, and heap/RSS, so a slow drift is
   // visible as well as a spike.
+  let gcObs = null;
+  try {
+    gcObs = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) noteGcEntry(performance.timeOrigin + e.startTime, e.duration, e.detail?.kind ?? e.kind);
+    });
+    gcObs.observe({ entryTypes: ["gc"] });
+  } catch { gcObs = null; }
   let hist = null;
   try { hist = monitorEventLoopDelay({ resolution: 10 }); hist.enable(); } catch { hist = null; }
   let statsDue = Date.now() + statsMs;
@@ -89,8 +130,9 @@ export function startLoopLagMonitor({ tickMs = TICK_MS, warnMs = WARN_MS, statsM
     const ms = (ns) => Math.round(ns / 1e6);
     const h = hist ? `p50=${ms(hist.percentile(50))}ms p99=${ms(hist.percentile(99))}ms max=${ms(hist.max)}ms` : "hist=n/a";
     state.lastMinute = { p50: hist ? ms(hist.percentile(50)) : null, p99: hist ? ms(hist.percentile(99)) : null, max: hist ? ms(hist.max) : null, blocks200: minute.blocks200, blockedMs: Math.round(minute.blockedMs), heapMb: Math.round(mem.heapUsed / 1048576), rssMb: Math.round(mem.rss / 1048576), at: new Date().toISOString() };
-    statsLog(`[loop-stats] ${h} blocks>=${COUNT_MS}ms=${minute.blocks200} blocked=${Math.round(minute.blockedMs)}ms heap=${state.lastMinute.heapMb}MB rss=${state.lastMinute.rssMb}MB`);
+    statsLog(`[loop-stats] ${h} blocks>=${COUNT_MS}ms=${minute.blocks200} blocked=${Math.round(minute.blockedMs)}ms gc=${Math.round(gcMinute.ms)}ms major=${Math.round(gcMinute.majorMs)}ms heap=${state.lastMinute.heapMb}MB rss=${state.lastMinute.rssMb}MB`);
     minute = { blocks200: 0, blockedMs: 0 };
+    gcMinute = { ms: 0, majorMs: 0, count: 0 };
     if (hist) hist.reset();
   };
   let expected = Date.now() + tickMs;
@@ -113,10 +155,12 @@ export function startLoopLagMonitor({ tickMs = TICK_MS, warnMs = WARN_MS, statsM
       // the stall profiler (src/stall-profiler.js) names the code.
       let ctx = "";
       try { const c = stallContext ? stallContext() : null; if (c && c.length) ctx = ` in-flight: ${c.join(", ")}`; } catch { /* context is best-effort */ }
-      log(`[loop-lag] event loop blocked ${Math.round(late)}ms (stall #${state.stalls}) - in-flight sockets can hit connect timeouts while this lasts${ctx}`);
+      let gc = "";
+      try { gc = gcPhrase(late, now); } catch { /* attribution is best-effort */ }
+      log(`[loop-lag] event loop blocked ${Math.round(late)}ms (stall #${state.stalls})${gc} - in-flight sockets can hit connect timeouts while this lasts${ctx}`);
     }
   }, tickMs);
   // Never hold the process open: a diagnostic must not change shutdown.
   if (typeof timer.unref === "function") timer.unref();
-  return () => { clearInterval(timer); if (hist) hist.disable(); state.startedAt = null; };
+  return () => { clearInterval(timer); if (hist) hist.disable(); if (gcObs) gcObs.disconnect(); state.startedAt = null; };
 }

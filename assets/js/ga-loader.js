@@ -17,6 +17,11 @@
   var cfg;
   try { cfg = JSON.parse(el.textContent); } catch (e) { return; }
   if (!cfg || !/^G-[A-Z0-9]{4,16}$/.test(cfg.id || "")) return;
+  // Belt beside the server's rule (GA_BEARER_PATH in src/ledger-chrome.js, kept
+  // identical by scripts/test-ga-snippet.js): a 404 or error page rendered at a
+  // bearer path carries its own canonical, so the server may stamp the island
+  // there; the browser's own path decides.
+  if (/^\/(r|m|reports\/public|alerts|followups|credits\/thanks|monitors\/manage|monitors\/thanks|digest)(\/|$)/.test(location.pathname)) return;
 
   var store = { get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: function (k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { /* private mode */ } } };
   var q = new URLSearchParams(location.search);
@@ -34,7 +39,12 @@
   window.gtag = gtag;
   gtag("consent", "default", { analytics_storage: granted ? "granted" : "denied", ad_storage: "denied", ad_user_data: "denied", ad_personalization: "denied" });
   gtag("js", new Date());
-  var config = { allow_google_signals: false, allow_ad_personalization_signals: false };
+  // The URL Google receives keeps only campaign (utm_*) parameters: a query
+  // string elsewhere can carry a session id or a signed link.
+  var keep = new URLSearchParams();
+  q.forEach(function (v, k) { if (/^utm_[a-z_]+$/.test(k)) keep.append(k, v); });
+  var qs = keep.toString();
+  var config = { allow_google_signals: false, allow_ad_personalization_signals: false, page_location: location.origin + location.pathname + (qs ? "?" + qs : "") };
   if (store.get("a402-internal") === "1") config.traffic_type = "internal";
   gtag("config", cfg.id, config);
 

@@ -15,7 +15,7 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 - **The other side of x402** - charge AI bots crawling *your* site with the open-source pay-per-crawl gate: see [[Pay-per-crawl]]
 - **Machine-readable catalog:** [`/api/pricing`](https://agent402.tools/api/pricing) · [`/openapi.json`](https://agent402.tools/openapi.json) · [`/llms.txt`](https://agent402.tools/llms.txt)
 - **Developer experience:** [Quickstart](https://agent402.tools/quickstart) · [Playground](https://agent402.tools/playground) · [SDK REPL](https://agent402.tools/sdk-playground) · [API Explorer](https://agent402.tools/docs/api/explorer) · [Adapter Docs](https://agent402.tools/docs/adapters) · [Workflows](https://agent402.tools/workflows)
-- **Live stats (hosted instance):** [`/api/stats`](https://agent402.tools/api/stats) · [`/analytics`](https://agent402.tools/analytics) (cache-hit %, p50/p95 latency, error rate)
+- **Live stats (hosted instance):** [`/api/stats`](https://agent402.tools/api/stats) · [`/status`](https://agent402.tools/status) (measured availability)
 - **Performance surfaces:** [`/api/cache-stats`](https://agent402.tools/api/cache-stats) (Redis hit-rate counters) · [`/api/cacheable`](https://agent402.tools/api/cacheable) (which routes cache + TTL) · [`/api/analytics`](https://agent402.tools/api/analytics) (24h tool-call timeseries)
 - **Community:** [Blog](https://agent402.tools/blog) · [Community](https://agent402.tools/community) · [Contribute](https://agent402.tools/contribute) · [Changelog](https://agent402.tools/changelog) · [Badges](https://agent402.tools/badges)
 
