@@ -161,6 +161,24 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   ok(ep?.text === "The meeting starts at noon." && ep?.to === "<to>" && d.plan[0].tool.exampleParamsNeedInput?.join() === "to", `a missing required value is named beside the ones the task gave (${JSON.stringify(ep)})`);
 }
 
+// ---- the caller's own identifiers and words are not second-guessed ----
+{
+  const { verbatimIdentifier } = await import("../services/decide/planner.js");
+  const task = "Audit 0x28C6c06298d514Db089934071355E5743bf21d60 on https://example.com/x for github.com: research the EU AI Act obligations today";
+  ok(["0x28C6c06298d514Db089934071355E5743bf21d60", "https://example.com/x", "github.com", "research the EU AI Act obligations"].every((v) => verbatimIdentifier(v, task)), "addresses, URLs, domains and runs of the task's own words are verbatim task data");
+  ok(!verbatimIdentifier("today", task) && !verbatimIdentifier("EU AI", task) && !verbatimIdentifier("0x1111111111111111111111111111111111111111", task) && !verbatimIdentifier("the obligations of EU AI", task), "a short word, a value not in the task, or reworded text is still checked");
+  const idx = new ToolIndex();
+  idx.upsert(mk("rq", { description: "research a question with cited sources", props: { q: { type: "string" } }, required: ["q"] }));
+  const sentQs = [];
+  const jev = makeJevJudge({ apiKey: "k", fetchImpl: async (url, init) => { const body = JSON.parse(init.body); const answers = {}; for (const [k, q] of Object.entries(body.questions)) { sentQs.push(k); answers[k] = { type: "noul", noul: 0.02 }; } return new Response(JSON.stringify({ answers, usage: { input_tokens: 10 } })); } });
+  const t2 = "Research the EU AI Act obligations for general-purpose AI models";
+  const llm = stubLlm([{ steps: [{ purpose: "research", query: "research", dependsOn: [] }] },
+    (system, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = 0.9; return { fits }; },
+    { params: { "1": { q: "EU AI Act obligations for general-purpose AI models" } } }]);
+  const d = await buildDecision({ task: t2, constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, checkParams: jev.checkParams, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  ok(d.plan[0]?.tool.exampleParams.q === "EU AI Act obligations for general-purpose AI models", `a query copied from the task survives a value check that scores everything low (${JSON.stringify(d.plan[0]?.tool.exampleParams)})`);
+}
+
 // ---- live window and schema filters ----
 {
   const { idx, stale, noschema } = buildIndex();

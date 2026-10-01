@@ -392,7 +392,8 @@ export function verbatimIdentifier(v, task) {
   return /^0x[0-9a-fA-F]{8,}$/.test(t)                       // EVM address, tx hash
     || /^[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(t)                 // base58 (Solana etc.)
     || /^https?:\/\/\S+$/i.test(t)                               // URL
-    || /^(?=.{4,253}$)([a-z0-9-]+\.)+[a-z]{2,}$/i.test(t);     // domain
+    || /^(?=.{4,253}$)([a-z0-9-]+\.)+[a-z]{2,}$/i.test(t)      // domain
+    || t.split(/\s+/).length >= 4;                              // a run of the task's own words (a query)
 }
 
 export function groundedParams(params, task) {

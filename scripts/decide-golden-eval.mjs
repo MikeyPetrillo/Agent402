@@ -54,7 +54,8 @@ export const GOLDEN = [
   { task: "Resolve the ENS name vitalik.eth to an address and list its token balances on Base", budget: 0.1, data: true, chain: true },
   { task: "Find the address behind nick.eth and list its recent token transfers on Ethereum", budget: 0.1, data: true, chain: true },
   { task: "Resolve brantly.eth to an address, then check whether that address is on the OFAC sanctions list", budget: 0.1, data: true, chain: true },
-  { task: "Find the IP address github.com resolves to, then look up that IP's ASN and country", budget: 0.1, data: true, chain: true },
+  { task: "Resolve the ENS name brantly.eth, then get that address's transaction count on Ethereum", budget: 0.1, data: true, chain: true },
+  { task: "Find the IP address github.com resolves to, then look up that IP's ASN and country", budget: 0.1, data: true },
   { task: "Extract the text from the PDF at https://bitcoin.org/bitcoin.pdf and count the words", budget: 0.1, data: true },
   // without their data: the plan must name what the caller supplies
   { task: "Transcribe an audio file from a URL to text", budget: 0.2, data: false },
