@@ -171,6 +171,21 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
     `a whole-task tool with unknown inputs does not replace a plan whose steps can carry the task's data (${d.plan.map((p) => p.tool.slug || p.tool.name).join(", ")})`);
 }
 
+// ---- every step keeps one tool execute can run, when a viable one exists ----
+{
+  const idx = new ToolIndex();
+  const outside = (n, score) => { const r = remoteToolRow({ seller: `https://o${n}.example`, route: `/screen${n}`, method: "GET", name: `Outside screen ${n}`, description: "wallet sanctions screening", price: 0.01, networks: ["eip155:8453"], health: 1 },
+    { requestContract: { state: "declared", required: { query: ["address"] } }, lastLiveAt: NOW - 600_000, executable: false }); return r; };
+  for (const n of [1, 2, 3]) idx.upsert(outside(n));
+  idx.upsert(mk("sanctions-wallet", { description: "wallet sanctions screening ofac", props: { address: { type: "string" } }, required: ["address"] }));
+  const llm = stubLlm([
+    (s, user) => { const fits = {}; keysFor(user).forEach((st) => st.candidates.forEach((c) => { fits[c.key] = /Outside/.test(c.name) ? 0.99 : 0.9; })); return { fits }; },
+  ]);
+  const d = await buildDecision({ task: "screen wallet 0xabc for sanctions", constraints: {}, depth: "quick" }, { index: idx, embed: noEmbed, llm, cfg, now: NOW, deadline: Date.now() + 10_000 });
+  const tools = [d.plan[0].tool, ...d.plan[0].fallbacks];
+  ok(d.plan[0].tool.firstParty === false && tools.some((t) => t.firstParty || t.callDirectly !== true), `the ranking still leads with the best fit, and the step keeps a runnable fallback (${tools.map((t) => (t.slug || t.name) + (t.callDirectly ? "*" : "")).join(", ")})`);
+}
+
 // ---- dependsOn survives a dropped step ----
 {
   const { idx } = buildIndex();
