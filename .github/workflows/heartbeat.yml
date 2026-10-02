@@ -12,24 +12,16 @@ name: Heartbeat
 # became a new comment on one issue, which becomes unreadable at volume.
 on:
   schedule:
-    # MEASURED 2026-08-30, and the reason this is not "*/15": GitHub delivered
-    # that schedule with gaps of 2h02, 2h18, 2h32, 3h16, 5h22, 7h00, 7h01,
-    # 7h57, 9h58 and 12h29 over the preceding twelve runs. Eighteen alarm
-    # checks ride this workflow - every wallet balance, the settlement
-    # freshness check, Postgres reachability, the quota watches - so at that
-    # cadence a drained wallet or a dead database can go unseen for half a day,
-    # and a resolved alarm (the credits issue on 08-30) stays open for hours
-    # after the operator has fixed it.
-    #
-    # GitHub throttles high-frequency schedules first, and "*/15" with its
-    # :00-aligned ticks is both the most aggressive ask and the most contended
-    # minute. Asking for less, on uncontended offsets, is the documented way to
-    # get MORE actual delivery. This is a mitigation, not a cure: re-measure
-    # the real gaps here before trusting any number in this comment.
-    #
-    # The structural fix, if this is still bad: trigger it from the Cloudflare
-    # status worker, which already runs every 5 minutes reliably on separate
-    # infra - it needs a GitHub token there, which is a blast-radius decision.
+    # Asked for every 15 minutes; DELIVERED every 4-7 hours (measured
+    # 2026-08-30 and again 2026-10-02 - GitHub throttles high-frequency
+    # schedules). "9,39" was tried 2026-08-30 and did not help, and the wallet
+    # balance, credits, drain and Postgres alarms moved to the Cloudflare status
+    # Worker (5-minute cron, issues-only token) the same day, which is why the
+    # schedule went back to */15. Every check that still lives ONLY here pages
+    # at this workflow's real cadence, hours late: production DOWN, settlement
+    # freshness, the quota watches, email, serving health and the Stellar legs.
+    # Moving more of them to the Worker is the fix; re-measure before trusting
+    # any number in this comment.
     - cron: "*/15 * * * *"
   push:
     branches:
