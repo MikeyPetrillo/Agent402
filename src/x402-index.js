@@ -5538,7 +5538,8 @@ function releaseDeadSubmissions(okFraction) {
   persistSubmittedSeeds();
   // Loud on purpose: this is the only path that removes a listing, so it must
   // never happen quietly. seller_registrations still holds every one of them.
-  console.log(`[x402-index] released ${releasable.length} submission slot(s) after ${Math.round(RELEASE_AFTER_MS / 86400000)}d with no successful probe: ${releasable.slice(0, 10).join(", ")}${releasable.length > 10 ? ", ..." : ""}`);
+  const tunnels = releasable.filter(isEphemeralTunnelOrigin).length;
+  console.log(`[x402-index] released ${releasable.length} submission slot(s) with no successful probe (${tunnels} quick-tunnel after ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)}d, ${releasable.length - tunnels} after ${Math.round(RELEASE_AFTER_MS / 86400000)}d): ${releasable.slice(0, 10).join(", ")}${releasable.length > 10 ? ", ..." : ""}`);
   return releasable.length;
 }
 
