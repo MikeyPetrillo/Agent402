@@ -79,8 +79,9 @@ function rankedRows(snapshot, walletAddress, limit = HTML_ROWS) {
 }
 
 
-// The Solana board (src/solana-leaderboard.js): the same measures as the Base
-// table above - USDC settled, calls, distinct buyers, average ticket, organic -
+// The Solana board (src/solana-leaderboard.js): the Base table's measures read
+// as transfers - USDC received, inbound transfers, distinct buyers, average
+// transfer, organic -
 // read from the chain per seller payTo with no per-seller cap. Our own payTo is
 // left out, as on the Base table. A window the board's history does not yet
 // fully cover (a new payTo still backfilling) says so, and so does a scan
@@ -88,7 +89,10 @@ function rankedRows(snapshot, walletAddress, limit = HTML_ROWS) {
 const SOLANA_ROWS = 12;
 export function solanaSectionHtml(sol) {
   if (!sol || !Array.isArray(sol.rows)) return "";
-  const rows = sol.rows.filter((r) => !r.self && (Number(r.callsSettled) || 0) > 0).slice(0, SOLANA_ROWS);
+  // inboundTransfers is the field's name; callsSettled is its deprecated alias
+  // and is read only as a fallback for a board built before the rename.
+  const transfersOf = (r) => Number(r.inboundTransfers ?? r.callsSettled) || 0;
+  const rows = sol.rows.filter((r) => !r.self && transfersOf(r) > 0).slice(0, SOLANA_ROWS);
   const hostOf = (u) => { try { return new URL(u).host; } catch { return String(u || ""); } };
   const body = rows.length ? rows.map((r, i) => {
     const origins = Array.isArray(r.origins) ? r.origins : [];
@@ -98,7 +102,7 @@ export function solanaSectionHtml(sol) {
     const name = first
       ? (href ? `<a href="${esc(href)}" target="_blank" rel="noopener nofollow" class="lb-name">${esc(first)}</a>` : `<span class="lb-name">${esc(first)}</span>`) + esc(more)
       : `<span class="lb-name">unnamed seller</span>`;
-    const calls = Number(r.callsSettled) || 0, buyers = Number(r.uniqueBuyers) || 0, total = Number(r.totalUsd) || 0;
+    const calls = transfersOf(r), buyers = Number(r.uniqueBuyers) || 0, total = Number(r.totalUsd) || 0;
     const organicRaw = calls ? (buyers / calls) * 100 : 0;
     const organic = calls ? (organicRaw < 0.01 ? "<0.01" : organicRaw.toFixed(2)) : "·";
     const partial = r.backfilling ? ` <span class="lb-addr" title="history still loading for this seller">· loading</span>` : "";

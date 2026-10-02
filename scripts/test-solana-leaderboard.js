@@ -177,6 +177,14 @@ const idx = await import("../src/x402-index.js");
   ok(v24.rows[0].payTo === "Many" && v24.active === 1, "24h ranks the same rows over the shorter window");
   ok(lb.getSolanaLeaderboardSnapshot({ window: "30d" }).windowComplete === false && v7.backfilling === 1, "a window a backfilling row does not yet reach reads windowComplete:false");
   ok(lb.getSolanaLeaderboardSnapshot({ window: "__proto__" }).window === "7d", "an unknown window falls back to 7d");
+  // What is counted is inbound transfers; callsSettled stays as a same-value alias.
+  ok(v7.rows.every((r) => r.inboundTransfers === r.callsSettled) && v7.rows[0].inboundTransfers === 10 && v7.rows[0].windows["24h"].inboundTransfers === 0 && v7.rows[1].windows["7d"].inboundTransfers === 900, "every row and window carries inboundTransfers equal to its callsSettled alias");
+  ok(/deprecated alias of inboundTransfers/.test(v7.fieldNotes?.callsSettled || "") && /^inbound USDC transfers/.test(v7.measure) && !/settled USDC payments/.test(v7.measure), "the envelope names the measure as transfers and marks callsSettled deprecated");
+  {
+    const { solanaSectionHtml } = await import("../src/ledger-leaderboard.js");
+    const html = solanaSectionHtml({ window: "7d", rows: [{ payTo: "X".repeat(44), origins: ["https://x.example"], inboundTransfers: 7, uniqueBuyers: 2, totalUsd: 1 }] });
+    ok(/<span class="lb-num">7<\/span>/.test(html), "the /leaderboard Solana table reads inboundTransfers (no callsSettled on the row)");
+  }
   lb.__resetSolanaLeaderboardForTest();
 }
 // ---- 3b. the scan: ranking, self, stale-on-error, evidence ------------------
