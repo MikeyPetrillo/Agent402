@@ -318,7 +318,7 @@ export const TIERS = {
       "openai/gpt-6-luna",
       // gemini-2.0-flash-lite was removed here 2026-08-04: the model is gone
       // from OpenRouter entirely (verified against the live models list).
-      // gemini-2.5-flash-lite left 2026-09-29 (upstream expiration 2026-10-20): refused by name in RETIRING_MODELS.
+      // gemini-2.5-flash-lite left 2026-09-29 (upstream expiration 2026-10-20): served by its successor via RETIRING_MODELS.
       "google/gemini-3.1-flash-lite", // inside this tier's max_price
       "inception/mercury-2.5", // 2026-09-29, fast-band link; exact id only
       "meta-llama/llama-3.2-1b-instruct", "meta-llama/llama-3.2-3b-instruct",
@@ -655,7 +655,20 @@ export const PREFIX_CANONICAL = Object.freeze({
 
 export function canonicalModel(model) {
   const c = canonicalModelRaw(model);
-  return Object.hasOwn(PREFIX_CANONICAL, c.toLowerCase()) ? PREFIX_CANONICAL[c.toLowerCase()] : c;
+  const p = Object.hasOwn(PREFIX_CANONICAL, c.toLowerCase()) ? PREFIX_CANONICAL[c.toLowerCase()] : c;
+  // A retiring id is served by its named successor rather than refused: the
+  // caller asked for a model, the successor is the provider's own replacement
+  // on a tier we serve, and every wire names the swap in the reply
+  // (agent402_model_substituted). A variant suffix rides along.
+  const r = retiringModel(p);
+  if (!r) return p;
+  const variant = p.includes(":") ? p.slice(p.indexOf(":")) : "";
+  return `${r.use}${variant}`;
+}
+/** The retiring id a request named, when canonicalModel served its successor. */
+export function substitutedFrom(model) {
+  const r = retiringModel(model);
+  return r ? r.id : null;
 }
 
 function canonicalModelRaw(model) {
@@ -691,16 +704,18 @@ export function tierPriceLabel(price) {
   return price < 0.01 ? price.toFixed(3) : price.toFixed(2);
 }
 
-/** Ids a family prefix still admits but the upstream has scheduled for removal
- *  (OpenRouter expiration_date). They are refused by name, never priced: a
- *  family row need not describe them and a caller building on one would lose
- *  it days later. Delete an entry once the live guard reports the id gone
- *  upstream. An id whose expiration date is withdrawn upstream leaves this
+/** Ids the upstream has scheduled for removal (OpenRouter expiration_date),
+ *  each with the successor that serves a request naming it (canonicalModel;
+ *  the reply carries agent402_model_substituted). Never priced as themselves.
+ *  An entry outlives the upstream id on purpose: callers keep sending a
+ *  retired id long after it is gone, and the map is what keeps those calls
+ *  served. An id whose expiration date is withdrawn upstream leaves this
  *  table and is priced by its own MODEL_COST row (deepseek-v3.2, 2026-09-28). */
 export const RETIRING_MODELS = Object.freeze({
   // Gemini 2.5 (OpenRouter expiration_date 2026-10-20). Their family prefixes
-  // left the tiers 2026-09-29; these entries turn a caller naming one into a
-  // 400 that names a live successor on a tier we serve, not an upstream failure.
+  // left the tiers 2026-09-29. A caller naming one is served the successor
+  // (canonicalModel) and told so in agent402_model_substituted; until
+  // 2026-10-02 it was refused with a 400 naming the successor.
   "google/gemini-2.5-flash-lite": { until: "2026-10-20", use: "google/gemini-3.1-flash-lite" },
   "google/gemini-2.5-flash": { until: "2026-10-20", use: "google/gemini-3.5-flash-lite" },
   "google/gemini-2.5-pro": { until: "2026-10-20", use: "google/gemini-3.1-pro-preview" },
@@ -1417,8 +1432,6 @@ export function refuseCostVariants(model) {
   const variant = String(model || "").includes(":") ? String(model).slice(String(model).indexOf(":") + 1).toLowerCase() : "";
   if (variant === "online") throw bad(`Model variant ":online" is not offered on this tier. Use "${String(model).slice(0, String(model).indexOf(":"))}" instead (or POST /v1/grounded/chat/completions for grounded answers).`);
   if (/-contributor(?:$|:)/i.test(String(model || ""))) throw bad(`Model "${String(model)}" is not offered - "contributor" listings are priced for the provider's use of the request data, and a buyer's prompt is never routed there. Use "${String(model).replace(/-contributor/i, "")}" instead.`);
-  const retiring = retiringModel(model);
-  if (retiring) throw bad(`Model "${retiring.id}" is not offered - the upstream removes it on ${retiring.until}. Use "${retiring.use}" instead.`);
   if (variant === "batch") throw bad(`Model variant ":batch" is not offered - batch ids are asynchronous (24h window) and not served on a synchronous path. Use "${String(model).slice(0, String(model).indexOf(":"))}" instead.`);
 }
 /** Which routes currently sell a given server tool - used so a refusal on the
@@ -1508,6 +1521,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   if (input == null || typeof input !== "object") throw bad("Request body must be a JSON object");
 
   let model = canonicalModel(input.model);
+  const substituted = substitutedFrom(input.model);
   // Locked-model tiers (the stealth tier): the route IS the model. A buyer
   // sending a different model gets a self-explaining 400 naming where that
   // model lives, exactly like the cross-tier errors below - never a silent
@@ -1726,6 +1740,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
     }
   }
   if (defaultedModel) Object.defineProperty(body, "__defaultedModel", { value: defaultedModel, enumerable: false });
+  if (substituted && body.model && !tier.lockedModel && !tier.router) Object.defineProperty(body, "__substitutedFrom", { value: substituted, enumerable: false });
   return body;
 }
 
@@ -3138,6 +3153,7 @@ function makeHandler(routeTier) {
           data.agent402_router = { category: routedCategory, quality: routedQuality, served: data.model || model };
         }
         if (body.__defaultedModel) data.agent402_default_model = body.__defaultedModel; // the caller sent no model; say what served
+        if (body.__substitutedFrom) data.agent402_model_substituted = { requested: body.__substitutedFrom, served: body.model, reason: "the requested model is retired upstream; its named successor served instead" };
         // Served under another flat tier's config at that tier's price: say
         // which, beside the standard `model` field (additive, non-stream).
         if (tierSlug !== routeTier && data && typeof data === "object") data.agent402_tier = crossTierDisclosure(routeTier, tierSlug);

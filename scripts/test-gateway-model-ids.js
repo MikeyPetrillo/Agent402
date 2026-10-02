@@ -254,13 +254,13 @@ const expiryOf = (m) => m.expiration_date || m.deprecation_date || null;
 const watched = new Set([...Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()), ...Object.values(TIERS).flatMap((t) => t.fallbacks || [])]);
 const expiring = models.filter((m) => watched.has(m.id) && expiryOf(m) && Date.parse(expiryOf(m)) < soon).map((m) => `${m.id} (${expiryOf(m)})`);
 ok(expiring.length === 0, `no ranked/fallback model expires within 14 days${expiring.length ? ` (${expiring.join(", ")})` : ""}`);
-// 5a. RETIRING_MODELS refuses ids a family prefix would still admit. An entry
-//     must describe an id the upstream really is removing (it carries an
-//     expiration date), and its named successor must be live and admitted; an
-//     id already gone upstream is reported so the entry can be deleted.
+// 5a. RETIRING_MODELS maps ids the upstream is removing to a successor. An
+//     entry must describe an id the upstream really is removing (it carries
+//     an expiration date), and its named successor must be live and admitted;
+//     an id already gone upstream is reported, and its entry stays.
 for (const [id, r] of Object.entries(RETIRING_MODELS)) {
   const m = models.find((x) => x.id === id);
-  if (!m) { warn(`RETIRING_MODELS: ${id} is gone upstream - delete its entry`); continue; }
+  if (!m) { warn(`RETIRING_MODELS: ${id} is gone upstream - its entry stays, mapping callers to ${r.use}`); continue; }
   ok(!!expiryOf(m), `RETIRING_MODELS: ${id} carries an upstream expiration date (${expiryOf(m) || "none - a refusal with no retirement behind it"})`);
   ok(ids.has(r.use) && !!tierFor(r.use), `RETIRING_MODELS: ${id}'s named successor ${r.use} is live and admitted`);
 }
