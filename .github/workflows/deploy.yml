@@ -1937,6 +1937,8 @@ jobs:
           t node scripts/test-static-pages.js
           # Integration + learn pages and /llms-full.txt: 200, unique title, one H1, canonical, BreadcrumbList, in both sitemaps; llms-full lists every catalog route (boots a real server, offline)
           t node scripts/test-integration-learn-pages.js
+          # Developer-docs code samples match the packages they import: our adapters' exports, option names and return shapes (read from source), verified third-party imports, free-tier slugs compute-payable, /workflows costs summed from the catalog (reads the free-mode server on :3000)
+          t env TARGET_URL=http://127.0.0.1:3000 node scripts/test-doc-snippets.js
           # Section Open Graph cards: every section page derives its own og:image, tool pages keep theirs, every card SVG well-formed (2026-09-14)
           t node scripts/test-og-cards.js
           # SEO meta ratchet: title <= 70, description <= 165, exactly one H1, canonical on every hand-written page (reader pass 2026-09-08)
