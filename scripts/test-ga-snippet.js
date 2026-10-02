@@ -22,6 +22,17 @@ for (const p of ["/r/cs_abc", "/m/xyz", "/reports/public/rp_1", "/alerts/confirm
 for (const p of ["/reports", "/marketplace", "/tools/hash", "/revenue", "/privacy"]) ok(gaSnippet(`${B}${p}`) !== "", `GA on the public page ${p}`);
 delete process.env.GA_MEASUREMENT_ID;
 
+{
+  // A bearer page's canonical is its section (/reports for /r/<id>); the request
+  // path decides. Rendered inside the store the server runs every request in.
+  const { renderPathStore } = await import("../src/ledger-chrome.js");
+  process.env.GA_MEASUREMENT_ID = "G-TEST1234";
+  for (const [path, canon] of [["/r/abc123", "/reports"], ["/m/xyz", "/monitors"], ["/credits/thanks", "/credits"], ["/alerts/confirm", "/alerts"]]) {
+    ok(renderPathStore.run(path, () => gaSnippet(`${B}${canon}`)) === "", `no GA on ${path} even though its canonical is ${canon}`);
+  }
+  ok(renderPathStore.run("/reports", () => gaSnippet(`${B}/reports`)) !== "", "GA still on the section page itself");
+  delete process.env.GA_MEASUREMENT_ID;
+}
 const loader = readFileSync(new URL("../assets/js/ga-loader.js", import.meta.url), "utf8");
 ok(/ad_storage: "denied", ad_user_data: "denied", ad_personalization: "denied"/.test(loader), "loader: every ads consent signal is denied by default");
 ok(/allow_google_signals: false/.test(loader) && /allow_ad_personalization_signals: false/.test(loader), "loader: Google signals and ad personalization off");

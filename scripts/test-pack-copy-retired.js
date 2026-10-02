@@ -8,7 +8,7 @@ import { RETIRED_PACKS } from "../src/retired-tools.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };
 const retired = Object.keys(RETIRED_PACKS);
-const re = new RegExp(`(?<![\\w-])(${retired.map((s) => s.replace(/[-]/g, "\\-")).join("|")})(?![\\w-])`);
+const re = new RegExp(`(?<![\\w-])(${retired.map((s) => s.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")).join("|")})(?![\\w-])`);
 ok(re.test("Pairs with rag-prep when needed") && !re.test("Pairs with rag-prepared docs"), "control: a retired slug is found as a whole word and not inside a longer one");
 const hits = [];
 for (const p of SKILL_PACKS) {
