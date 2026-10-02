@@ -39,7 +39,7 @@ export const PACK_PRICES = {
   "sec-filings-deep-dive": 0.028, // 7 tools, parts $0.031
   "structured-scrape": 0.023, // 7 tools, parts $0.025
   "decode-blob": 0.007, // 7 tools, parts $0.007
-  "trend-analysis": 0.015, // 8 tools, parts $0.016
+  "trend-analysis": 0.018, // 11 tools, parts $0.019
   "forecasting-bake-off": 0.014, // 7 tools, parts $0.015
   "document-intel": 0.024, // 7 tools, parts $0.026
   "document-brief": 0.031, // 3 tools, parts $0.034
@@ -228,9 +228,9 @@ export const SKILL_PACKS = [
     ],
     workflow: [
       "Pull the certificate transparency log to enumerate every subdomain a CA has ever issued a cert for - this is the fastest external recon step.",
-      "For each interesting subdomain, resolve A/AAAA/MX/NS/CAA records to map the live infrastructure and certificate authority constraints.",
+      "Resolve the apex's A and CAA records, then A records for up to three subdomains the log named (shallowest first), to map the live infrastructure and certificate authority constraints.",
       "Check SPF and DMARC on the apex to see whether the domain can be spoofed in email - a missing or weak DMARC is one of the highest-impact findings on most audits.",
-      "Pull HTTP response headers on the apex and a few key subdomains; the security analyzer scores HSTS, CSP, XFO, XCTO, Referrer-Policy, Permissions-Policy, and the COOP/CORP/COEP triad.",
+      "Pull HTTP response headers on the apex and up to two of those subdomains; the security analyzer scores HSTS, CSP, XFO, XCTO, Referrer-Policy, Permissions-Policy, and the COOP/CORP/COEP triad.",
       "Inspect the live TLS cert (chain, expiry, SANs) - useful for spotting near-expiry, mismatched SANs, or weak chain configurations.",
       "Fingerprint the tech stack so you know what CMS/framework/CDN to research for known CVEs.",
     ],
@@ -630,6 +630,12 @@ export const SKILL_PACKS = [
         required: false,
         substitute: "1y",
       },
+      {
+        name: "benchmark",
+        description: "Optional second series to correlate against - a ticker (SPY) or a FRED series id. Without it the correlation step is skipped.",
+        required: false,
+        substitute: "SPY",
+      },
     ],
     // Ordered as: fetch → describe → smooth → trend → anomalies → benchmark →
     // forecast. Each step takes the array of close prices / observations from
@@ -645,6 +651,9 @@ export const SKILL_PACKS = [
       "outliers",
       "correlation",
       "forecast-eval",
+      "forecast-naive",
+      "forecast-ses",
+      "forecast-holt",
     ],
     workflow: [
       "Fetch the series. For an equity ticker, call stock-history with range=horizon (or \"1y\" if unspecified) and pull the array of `close` prices in chronological order. For a macro indicator, call fred-series with the series id (UNRATE, CPIAUCSL, FEDFUNDS, etc.) and pull the array of `value`s.",
@@ -652,7 +661,7 @@ export const SKILL_PACKS = [
       "Smooth the noise with moving-average. A 20-day SMA is the textbook short-term trend smoother for daily prices; a 12-month MA suits monthly macro data. Use which=\"both\" so you can compare SMA (lagging but stable) with EMA (responsive but jittery).",
       "Fit linear-regression with x = [0, 1, ..., n-1] (just the index) and y = values. Slope tells you direction + magnitude per unit time; r² tells you how clean the trend is (>0.7 = strong trend, <0.3 = mostly noise). Pass `predict` for next-N-period extrapolation if the user wants a projection.",
       "Flag anomalies with outliers method=\"iqr\" - Tukey fences (1.5·IQR) are the conservative default. Report the indices + values; agents should then map indices back to dates from the original fetch so the answer says \"2024-03-14: $187.23 outlier\" not just \"index 142\".",
-      "If the user asked a comparison question (\"is AAPL correlated with the S&P?\", \"do CPI and fed funds move together?\"), repeat steps 1-2 for the benchmark series, then call correlation with the two equal-length arrays. r above 0.7 = strong same-direction move; near 0 = independent; negative = inverse. Use the `interpretation` field as your one-line answer.",
+      "If the user asked a comparison question (\"is AAPL correlated with the S&P?\", \"do CPI and fed funds move together?\"), fetch the benchmark series the same way, align the two on their most recent shared length, then call correlation with the two equal-length arrays. r above 0.7 = strong same-direction move; near 0 = independent; negative = inverse. Use the `interpretation` field as your one-line answer.",
       "Pick a forecast method honestly by backtesting. Call forecast-eval three times - once each with method=\"drift\", \"ses\", \"holt\" - passing the same values + testSize (≈ 20% of the series, capped at half). Compare RMSE; the lowest wins. Check `warnings` - non-empty means treat the result as indicative not predictive. Skip the bake-off only if you already know the series shape (e.g. holt-winters for clearly seasonal data with a known period).",
       "Forecast forward with the winning method. Call forecast-naive / forecast-ses / forecast-holt (whichever won) with the full values + the user's horizon. Return the point forecast AND lower95/upper95 - never report a point estimate without its interval; that's the whole reason these tools exist instead of an LLM guess. Combine summary + trend + outliers + optional correlation + forecast into a single JSON object. That's the deterministic analyst-grade reply.",
     ],
@@ -2682,7 +2691,7 @@ const FLAGSHIP_PACKS = ["security-audit", "trend-analysis", "structured-scrape",
 // contract lives on its own page and in /api/skill-packs.json.
 const ILLUSTRATIVE_RUN = [
   ["1", "cert-transparency", "14 certificates logged, none unexpected", true],
-  ["2", "dns-lookup", "A, AAAA, MX, NS, TXT resolved", true],
+  ["2", "dns-lookup", "apex A + CAA and three subdomains resolved", true],
   ["3", "spf-check", "single include, hard fail policy", true],
   ["4", "dmarc-check", "p=none - reporting only, no enforcement", true],
   ["5", "http-headers", "HSTS present, CSP missing", true],

@@ -101,7 +101,7 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | Pack | Price | What it solves |
 |---|---|---|
 | [**number-crunch**](https://agent402.tools/skills/number-crunch) | $0.003 | Descriptive statistics, correlation and outliers over a numeric series. |
-| [**trend-analysis**](https://agent402.tools/skills/trend-analysis) | $0.015 | Take any numeric series and run the full workup - descriptives, moving averages, trend, outliers, forecast. |
+| [**trend-analysis**](https://agent402.tools/skills/trend-analysis) | $0.018 | Take any numeric series and run the full workup - descriptives, moving averages, trend, outliers, forecast. |
 | [**forecasting-bake-off**](https://agent402.tools/skills/forecasting-bake-off) | $0.014 | Backtest all four methods (naive/drift, SES, Holt, Holt-Winters), rank by RMSE, forecast with the winner. |
 
 ## Crypto & onchain (13)
