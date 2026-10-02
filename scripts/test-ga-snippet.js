@@ -28,6 +28,13 @@ ok(/allow_google_signals: false/.test(loader) && /allow_ad_personalization_signa
 ok(/analytics_storage: granted \? "granted" : "denied"/.test(loader) && /\^Europe\\\//.test(loader), "loader: analytics storage starts denied for a European time zone");
 ok(/traffic_type = "internal"/.test(loader), "loader: ?internal=1 browsers are tagged for the Internal Traffic filter");
 ok(!/innerHTML/.test(loader), "loader: the consent strip is built without innerHTML");
+ok(/"Asia\/Nicosia"/.test(loader) && /"Indian\/Reunion"/.test(loader), "loader: EU states outside the Europe/ zone prefix (Cyprus, the outermost regions) start denied too");
+{
+  // Session replay skips exactly the paths GA skips.
+  const ph = readFileSync(new URL("../assets/js/posthog-loader.js", import.meta.url), "utf8");
+  const ga = readFileSync(new URL("../src/ledger-chrome.js", import.meta.url), "utf8").match(/GA_BEARER_PATH = (\/.*\/);/)[1];
+  ok(ph.includes(ga + ".test(location.pathname)) data.cfg.disable_session_recording = true"), "posthog loader: no session replay on the bearer paths (same regex as GA_BEARER_PATH)");
+}
 ok(/googletagmanager\.com\/gtag\/js\?id=/.test(loader), "loader: loads Google's tag for the configured id");
 
 {

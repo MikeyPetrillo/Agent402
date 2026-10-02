@@ -1623,6 +1623,7 @@ jobs:
           t node scripts/test-reliability-claims.js
           # Four false absolutes (a claim must stay true as the service widens)
           t node scripts/test-copy-absolutes.js
+          t node scripts/test-legal-dates.js
           # Published SDK snippets never let the SDK send an environment credential to our host
           t node scripts/test-sdk-snippet-credentials.js
           t node scripts/test-plugin-manifests.js
