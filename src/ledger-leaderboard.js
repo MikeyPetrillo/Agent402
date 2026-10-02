@@ -38,10 +38,19 @@ const safeHref = (u) => (typeof u === "string" && /^https?:\/\//i.test(u) ? u : 
  * stay consecutive - no gap where our own row was removed. Adds avgTicket
  * and organic as computed display columns from the same three real fields
  * every row already carries; neither needs a new aggregation. */
-function rankedRows(snapshot, walletAddress, limit = HTML_ROWS) {
+/** The board rows the table ranks: every snapshot row except the host's. */
+function boardWithoutHost(snapshot, walletAddress) {
   const board = Array.isArray(snapshot?.leaderboard) ? snapshot.leaderboard : [];
   const self = (walletAddress || "").toLowerCase();
-  const filtered = self ? board.filter((r) => (r.wallet || "").toLowerCase() !== self) : board;
+  return self ? board.filter((r) => (r.wallet || "").toLowerCase() !== self) : board;
+}
+/** How many rows the table ranks from - the honest "of M". */
+function rankedBoardSize(snapshot, walletAddress) {
+  return boardWithoutHost(snapshot, walletAddress).length;
+}
+
+function rankedRows(snapshot, walletAddress, limit = HTML_ROWS) {
+  const filtered = boardWithoutHost(snapshot, walletAddress);
   const ranked = rankBy(filtered, "usd").slice(0, limit);
   return ranked.map((r) => {
     const calls = Number(r.callsSettled) || 0;
@@ -94,7 +103,7 @@ export function solanaSectionHtml(sol) {
     const organic = calls ? (organicRaw < 0.01 ? "<0.01" : organicRaw.toFixed(2)) : "·";
     const partial = r.backfilling ? ` <span class="lb-addr" title="history still loading for this seller">· loading</span>` : "";
     return `<div class="lb-row${i === 0 ? " first" : ""}"><span class="lb-rank">${String(i + 1).padStart(2, "0")}</span><span>${name} <span class="lb-addr">· ${esc(shortAddr(r.payTo))}</span>${partial}</span><span class="lb-usd">${esc(fmtUsd(total))}</span><span class="lb-num">${esc(fmtNum(calls))}</span><span class="lb-buyers">${esc(fmtNum(buyers))}</span><span class="lb-avg">${calls ? esc(`$${(total / calls).toFixed(4)}`) : "·"}</span><span class="lb-organic" style="color:${organicRaw >= 1 ? "var(--on-dark)" : "var(--dk-muted3)"};">${esc(organic)}</span></div>`;
-  }).join("") : `<div class="lb-row"><span></span><span>No Solana seller has settled a payment in this window yet, or the first scan is still running.</span></div>`;
+  }).join("") : `<div class="lb-row"><span></span><span>No Solana seller has received a USDC transfer in this window yet, or the first scan is still running.</span></div>`;
   const win = typeof sol.window === "string" ? sol.window : "7d";
   const notes = [];
   if (sol.scanCoversAll === false && sol.scanCandidates != null) notes.push(`scanned ${fmtNum(sol.scanned)} of ${fmtNum(sol.scanCandidates)} seller payTos`);
@@ -103,16 +112,16 @@ export function solanaSectionHtml(sol) {
   return `
   <section id="solana" style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:16px;">
-      <h2 class="lb-h2" style="font-weight:800;font-size:40px;line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Solana, ranked by USDC settled.</h2>
+      <h2 class="lb-h2" style="font-weight:800;font-size:40px;line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Solana, ranked by USDC received.</h2>
       <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">${esc(win)} window · USDC on Solana${notes.length ? ` · ${esc(notes.join(" · "))}` : ""}</span>
     </div>
-    <p style="font-size:16px;line-height:1.6;color:var(--muted);max-width:760px;margin:0 0 26px;">Every settled USDC payment into each seller's Solana payTo, read from the chain. A buyer is the wallet whose USDC paid, and transfers a seller sends itself are excluded, so the same organic ratio applies here as above.</p>
+    <p style="font-size:16px;line-height:1.6;color:var(--muted);max-width:760px;margin:0 0 26px;">Every inbound USDC transfer into each seller's Solana payTo, read from the chain. Unlike the Base table there is no price match and no per-call ceiling, so a transfer here may be a tool call or any other payment: these are transfers, not calls. A buyer is the wallet whose USDC paid, and transfers a seller sends itself are excluded.</p>
     <div class="lb-scroll" style="border:1px solid var(--hairline);background:var(--surface);overflow-x:auto;">
-      <div class="lb-head" style="display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:12px 18px;min-width:820px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dk-muted3);border-bottom:1.5px solid var(--dark-border2);"><span>#</span><span>seller · payTo</span><span style="text-align:right;">usdc settled</span><span style="text-align:right;">calls</span><span style="text-align:right;">buyers</span><span style="text-align:right;">avg ticket</span><span style="text-align:right;">organic</span></div>
+      <div class="lb-head" style="display:grid;grid-template-columns:36px 1fr 100px 80px 64px 78px 64px;gap:12px;padding:12px 18px;min-width:820px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dk-muted3);border-bottom:1.5px solid var(--dark-border2);"><span>#</span><span>seller · payTo</span><span style="text-align:right;">usdc received</span><span style="text-align:right;">transfers</span><span style="text-align:right;">buyers</span><span style="text-align:right;">avg transfer</span><span style="text-align:right;">organic</span></div>
       ${body}
     </div>
     <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;font-family:var(--font-mono);font-size:12px;color:var(--faint);">
-      <span>organic = distinct buyers per 100 calls.</span>
+      <span>organic = distinct buyers per 100 transfers.</span>
       <a href="/api/solana-leaderboard?window=${esc(win)}" style="color:var(--accent);text-decoration:none;">raw JSON →</a>
     </div>
   </section>`;
@@ -149,11 +158,18 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
   // resolve to. They diverge only when a seller advertises no wallet, or several
   // sellers settle to one - and THAT is the interesting case, so it is the one
   // that gets two rows. When they agree, say so once and say why.
+  //
+  // Neither is the number of RANKED rows: the board aggregates by payTo and
+  // folds wallets belonging to one seller into one row, and drops sellers with
+  // nothing settled, so the ranked population is the board itself (host left
+  // out, as in the table). That is the denominator of "top N of M".
   const walletsQueried = Number(snapshot?.walletsQueried);
   const sameCount = Number.isFinite(walletsQueried) && walletsQueried === Number(scannedSellers);
+  const boardRows = rankedBoardSize(snapshot, walletAddress);
 
   const meta = [
-    [sameCount ? "sellers ranked, one wallet each" : "sellers ranked", fmtNum(scannedSellers)],
+    ["rows ranked (a row can fold several wallets)", fmtNum(boardRows)],
+    [sameCount ? "sellers scanned, one wallet each" : "sellers scanned", fmtNum(scannedSellers)],
     ...(sameCount ? [] : [["wallets queried", fmtNum(walletsQueried)]]),
     ["bazaar listings", fmtNum(snapshot?.bazaarTotal)],
     ["blocks scanned", fmtNum(snapshot?.scannedBlocks)],
@@ -241,7 +257,7 @@ ${standingBand(standing || {})}
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:16px;">
       <h2 class="lb-h2" style="font-weight:800;font-size:40px;line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">Ranked by USDC settled.</h2>
-      <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">${esc(windowLabel)} window · top ${rows.length} of ${fmtNum(scannedSellers)} · include=external</span>
+      <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">${esc(windowLabel)} window · top ${rows.length} of ${fmtNum(boardRows)} ranked rows · include=external</span>
     </div>
     <p style="font-size:16px;line-height:1.6;color:var(--muted);max-width:760px;margin:0 0 26px;">Volume alone can be manufactured by paying yourself, so every row also carries distinct paying wallets and an organic ratio of buyers to calls. A thousand calls from two wallets reads very differently from a thousand from four hundred.</p>
     <div class="lb-scroll" style="border:1px solid var(--hairline);background:var(--surface);overflow-x:auto;">
@@ -277,7 +293,7 @@ ${solanaSectionHtml(solana)}
         <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">METHOD</div>
         <h2 style="font-weight:800;font-size:24px;margin:0 0 14px;color:var(--ink);">How the number is built</h2>
         <div style="display:flex;flex-direction:column;gap:0;">${stepsHtml}</div>
-        <p style="font-size:13.5px;line-height:1.6;color:var(--faint);margin:16px 0 0;">What this cannot see: settlements on chains other than Base, payments to addresses a seller never advertised, and which specific tool was bought. Those are limits of on-chain data, not of the crawler.</p>
+        <p style="font-size:13.5px;line-height:1.6;color:var(--faint);margin:16px 0 0;">What the Base table cannot see: settlements on other chains (Solana is read separately above, as inbound transfers), payments to addresses a seller never advertised, and which specific tool was bought. Those are limits of on-chain data, not of the crawler.</p>
         <!-- This table names outside businesses, so it states what it is not.
              A concentration figure next to a company invites an inference we
              have not made and cannot prove, and a row folded to the wrong

@@ -77,10 +77,12 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
 // when the snapshot holds hundreds of sellers.
 {
   const many = Array.from({ length: 300 }, (_, i) => ({ rank: i + 1, name: `Seller ${i}`, wallet: `0x${i}`, totalUsd: 300 - i, callsSettled: 100, uniqueBuyers: 10 }));
-  const html = ledgerLeaderboardPage(BASE_URL, { leaderboard: many, scannedSellers: 300 }, {});
+  // 2,212 origins scanned, 300 rows on the board: "of M" is the board.
+  const html = ledgerLeaderboardPage(BASE_URL, { leaderboard: many, scannedSellers: 2212, walletsQueried: 2212 }, {});
   const rowCount = (html.match(/class="lb-row/g) || []).length;
   ok(rowCount > 0 && rowCount <= 12, `ranked table renders a bounded top N, not all 300 sellers (got ${rowCount} rows)`);
-  ok(html.includes("top 12 of 300"), "the cap is disclosed honestly, not hidden");
+  ok(html.includes("top 12 of 300 ranked rows") && !html.includes("of 2,212"), "the cap is disclosed against the rows actually ranked, not the origins scanned");
+  ok(!/sellers ranked, one wallet each/.test(html) && /sellers scanned, one wallet each/.test(html) && /rows ranked \(a row can fold several wallets\)/.test(html), "scanned origins and ranked rows are labelled as the two different counts they are");
 }
 
 // --- structured data -----------------------------------------------------------
@@ -162,7 +164,7 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
     ],
   };
   const html = ledgerLeaderboardPage(BASE_URL, { leaderboard: [], scannedSellers: 0 }, { solana: sol });
-  ok(/id="solana"/.test(html) && /Solana, ranked by USDC settled/.test(html), "the page carries a Solana section");
+  ok(/id="solana"/.test(html) && /Solana, ranked by USDC received/.test(html), "the page carries a Solana section");
   ok(/36,150/.test(html) && /\$4,512\.25/.test(html) && /\$0\.1248/.test(html), "a busy seller shows every payment, the dollars and the average ticket (no cap)");
   ok(!/SELFSELF/.test(html), "our own Solana payTo is left out of the ranking, as on the Base table");
   ok(!/idle\.example/.test(html), "a seller with no payments in the window is not ranked");
@@ -170,9 +172,14 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
   ok(!/<script>alert/.test(html), "seller-controlled origin text is escaped");
   ok(!/href="javascript:/i.test(html), "a non-http origin is shown, never linked");
   ok(/busy\.example<\/a> \+1/.test(html), "a seller with several origins shows the first and a count");
-  ok(/usdc settled<\/span><span[^>]*>calls<\/span><span[^>]*>buyers<\/span><span[^>]*>avg ticket<\/span><span[^>]*>organic/.test(html.slice(html.indexOf('id="solana"'))), "the Solana table has the Base table's columns");
+  // No price filter on Solana: every inbound transfer counts, so the columns
+  // say transfers, never calls, and no "same organic ratio" claim is made.
+  const solHtml = html.slice(html.indexOf('id="solana"'));
+  ok(/usdc received<\/span><span[^>]*>transfers<\/span><span[^>]*>buyers<\/span><span[^>]*>avg transfer<\/span><span[^>]*>organic/.test(solHtml), "the Solana table labels inbound transfers, not calls");
+  ok(!/same organic ratio applies/.test(html) && /these are transfers, not calls/.test(html), "the Solana copy states it has no price filter");
+  ok(!/settlements on chains other than Base/.test(html), "the method note does not say other chains are unseen while a Solana table renders");
   const empty = ledgerLeaderboardPage(BASE_URL, {}, { solana: { window: "7d", rows: [] } });
-  ok(/No Solana seller has settled a payment/.test(empty), "an empty board says so instead of rendering nothing");
+  ok(/No Solana seller has received a USDC transfer/.test(empty), "an empty board says so instead of rendering nothing");
   ok(!/id="solana"/.test(ledgerLeaderboardPage(BASE_URL, {}, {})), "no Solana snapshot, no section");
 }
 
