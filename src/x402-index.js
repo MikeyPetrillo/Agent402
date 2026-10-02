@@ -5637,16 +5637,33 @@ function slimToolForPersist(t) {
   return out;
 }
 
-/** The entries to persist: slim projections of every non-errored origin. */
+/** An errored entry that still carries the catalogue an earlier good crawl
+ *  produced. crawlSeller keeps that catalogue on a failure on purpose ("so a
+ *  transient outage doesn't drop the seller from the Index"), so it must
+ *  survive a restart too; an origin that never produced one has nothing to
+ *  carry and is still left for the crawl to re-decide. */
+export function heldLastGood(v) {
+  return Boolean(v?.error) && Array.isArray(v.tools) && v.tools.length > 0;
+}
+
+/** The entries to persist: slim projections of every origin that holds a
+ *  catalogue (an errored one keeps its error and history, so it warm-starts
+ *  as the same unhealthy, unroutable listing it was before the restart). */
 function persistedEntries() {
   const out = [];
   for (const [origin, v] of cache.entries()) {
-    if (v?.error) continue; // don't re-seed failures; let the crawl re-decide
+    // A failure with nothing to show is not re-seeded; the crawl re-decides.
+    // A failure that still holds its last good catalogue is. Dropping those
+    // made one failed crawl before a restart delete the listing outright,
+    // and the per-operator crawl cap can take hours to bring it back
+    // (2026-10-02: five path sellers on one shared host vanished this way).
+    if (v?.error && !heldLastGood(v)) continue;
     out.push([origin, {
       manifest: slimManifestForPersist(v.manifest),
       tools: Array.isArray(v.tools) ? v.tools.map(slimToolForPersist) : [],
       fetchedAt: v.fetchedAt ?? null,
-      error: null,
+      error: v.error ? String(v.error).slice(0, 300) : null,
+      ...(v.error && Array.isArray(v.fallbackErrors) && v.fallbackErrors.length ? { fallbackErrors: v.fallbackErrors.slice(0, 5) } : {}),
       source: v.source ?? null,
       // Same class as `payment` above: published by /api/index, never
       // persisted, so it read null for every warm-started origin.
