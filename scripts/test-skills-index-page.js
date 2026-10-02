@@ -14,7 +14,24 @@ const html = skillsIndex(BASE_URL);
 
 // --- real data rendering ------------------------------------------------------
 ok(html.includes("Seven tools.") && html.includes("One <span"), "hero H1 renders");
-ok(html.includes(`${SKILL_PACKS.length}+ packs, ${PACK_PRICE_RANGE.text}`) && html.includes("priced below the sum of its tools"), "hero cites the real live pack count, the derived price range and the rule");
+ok(html.includes(`${SKILL_PACKS.length}+ packs, ${PACK_PRICE_RANGE.text}`) && html.includes("none priced above the sum of its tools"), "hero cites the real live pack count, the derived price range and the rule");
+// The pricing claim must hold for EVERY pack. Rounding up to the $0.001 floor
+// puts many packs exactly AT the sum of their tools, so the copy may claim
+// "never above", never "below" (it said "below" while 34 of 84 sat at the sum).
+{
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/skills.js", import.meta.url), "utf8");
+  const rows = [...src.matchAll(/^\s+"([a-z0-9-]+)": ([0-9.]+), \/\/ \d+ tools?, parts \$([0-9.]+)/gm)];
+  ok(rows.length === SKILL_PACKS.length, `every pack price row carries its parts sum (${rows.length}/${SKILL_PACKS.length})`);
+  const over = rows.filter(([, , price, parts]) => Number(price) > Number(parts));
+  ok(over.length === 0, `no pack is priced above the sum of its tools${over.length ? `: ${over.map((r) => r[1]).join(", ")}` : ""}`);
+  const atSum = rows.filter(([, , price, parts]) => Number(price) === Number(parts)).length;
+  ok(atSum === 0 || !/priced below the sum|Below its parts|cheaper than assembling/.test(html + src),
+    `${atSum} pack(s) sit at the sum of their tools, so no copy may claim every pack is below it`);
+  const lo = html.match(/"lowPrice":"([0-9.]+)"/)?.[1], hi = html.match(/"highPrice":"([0-9.]+)"/)?.[1];
+  ok(Number(lo) === PACK_PRICE_RANGE.min && Number(hi) === PACK_PRICE_RANGE.max, `AggregateOffer low/high derive from PACK_PRICE_RANGE (got ${lo}/${hi})`);
+  ok(/\$\{PACK_PRICE_RANGE\.text\} per pack, no signup/.test(src) && !/\$0\.05-\$1\.50/.test(html + src), "the page description quotes the derived range, never the retired $0.05-$1.50");
+}
 
 const flagshipCount = (html.match(/class="sk-flagship"/g) || []).length;
 ok(flagshipCount === 6, `exactly 6 flagship cards render (got ${flagshipCount})`);

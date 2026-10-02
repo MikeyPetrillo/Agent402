@@ -295,7 +295,7 @@ export const SKILL_PACKS = [
     tagline:
       "Quick company snapshot: latest close, 9 key financial metrics (revenue through cash flow), and upcoming earnings - one call, one payment.",
     useCase:
-      "An agent needs to answer 'how is this company doing?' without knowing XBRL tags or juggling 3 separate API calls. The $0.04 bundle is cheaper than calling the tools individually ($0.045).",
+      "An agent needs to answer 'how is this company doing?' without knowing XBRL tags or juggling 3 separate API calls.",
     promptArgs: [
       { name: "ticker", description: "Stock ticker symbol (e.g. AAPL, MSFT, NVDA)", required: true, substitute: "AAPL" },
     ],
@@ -2702,7 +2702,7 @@ const ILLUSTRATIVE_RUN = [
 const SKILLS_FAQS = [
   { q: "What is a skill pack?", a: "A multi-tool workflow that runs server-side in a single request. Instead of your agent calling seven tools in sequence - seven payments, seven round trips, seven things to handle when one fails - you make one call to POST /api/skill/{slug}, pay once, and get every step back in one response." },
   { q: "What happens if one step fails?", a: "You get a partial-success envelope rather than an error. Every step that succeeded returns its result, the failed step is marked with its reason, and the response is still usable. That is the real difference from orchestrating the sequence yourself, where a failure mid-chain leaves you holding partial state you have already paid for and have to reconcile." },
-  { q: "How is a pack priced?", a: `Below its parts. A pack costs the sum of the tools it runs minus a 10% bundle discount, rounded up to the $0.001 settlement floor - ${PACK_PRICE_RANGE.text} today, recomputed from the live catalog whenever a tool is repriced. One payment instead of several, cheaper than assembling the steps yourself, and no orchestration code to write or maintain.` },
+  { q: "How is a pack priced?", a: `Never more than its parts. A pack costs the sum of the tools it runs minus a 10% bundle discount, rounded up to the $0.001 settlement floor, so a pack of the cheapest tools can land at the sum itself - ${PACK_PRICE_RANGE.text} today, recomputed from the live catalog whenever a tool is repriced. One payment instead of several, and no orchestration code to write or maintain.` },
   { q: "Can I see which tools a pack will run before paying?", a: "Yes. Every pack publishes its tool sequence up front, on its own page and in /api/skill-packs.json. Packs are fixed sequences, not an agent improvising - the same inputs run the same steps in the same order every time." },
   { q: "Which chains can I pay a pack on?", a: `The same rails as any other call: ${RAILS_SHORT}. Gas is sponsored on EVM chains, so you need only the stablecoin, or run free over proof-of-work where a pack is pure-CPU.` },
 ];
@@ -2754,7 +2754,7 @@ export function skillsIndex(baseUrl) {
       <div>
         <h1 style="font-weight:800;font-size:56px;line-height:.96;letter-spacing:-.035em;margin:0 0 20px;color:var(--ink);">Seven tools.<br>One <span style="color:var(--accent);">payment</span>.</h1>
         <p style="font-size:18px;line-height:1.55;color:var(--muted);margin:0 0 16px;">A real job is never one call. Auditing a domain takes seven tools; parsing a document takes seven more. Orchestrate that yourself and you are running seven payments, seven round trips and seven failure modes - and writing the code that holds it together.</p>
-        <p style="font-size:16px;line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount}+ packs, ${PACK_PRICE_RANGE.text}, every one priced below the sum of its tools.</strong></p>
+        <p style="font-size:16px;line-height:1.6;color:var(--faint);margin:0 0 30px;">A skill pack runs the sequence server-side. One request, one settlement, one response with every step in it. <strong style="color:var(--ink);font-weight:700;">${packCount}+ packs, ${PACK_PRICE_RANGE.text}, none priced above the sum of its tools.</strong></p>
         <div style="display:flex;flex-wrap:wrap;gap:11px;">
           <a class="ml-cta" href="#packs" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:14px 22px;">Browse the packs →</a>
           <a class="ml-cta" href="/api/skill-packs.json" style="background:transparent;border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 22px;">skill-packs.json</a>
@@ -2853,7 +2853,7 @@ ${ledgerFooterCompact()}`;
 
   const canonical = `${baseUrl}/skills`;
   const title = "Skill packs - multi-tool agent workflows for one x402 payment";
-  const description = `${packCount}+ skill packs run a whole multi-tool job server-side for one USDC payment: several tools, one settlement, one response. Partial-success envelope means a failed step never costs you the whole call. $0.05-$1.50 per pack, no signup.`;
+  const description = `${packCount}+ skill packs run a whole multi-tool job server-side for one payment: several tools, one settlement, one response. Partial-success envelope means a failed step never costs you the whole call. ${PACK_PRICE_RANGE.text} per pack, no signup.`;
 
   const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, sameAs: ORG_SAME_AS };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
@@ -2862,7 +2862,7 @@ ${ledgerFooterCompact()}`;
     { "@type": "ListItem", position: 3, name: "Skill packs", item: canonical },
   ] };
   const collectionLd = { "@type": "CollectionPage", "@id": `${canonical}#page`, name: "Agent402 skill packs", url: canonical, description: `${packCount}+ multi-tool workflows that run server-side in one request: one payment, one settlement, and a single response with a partial-success envelope if a step fails.`, isPartOf: { "@id": `${baseUrl}/#organization` }, mainEntity: { "@id": `${canonical}#packs` } };
-  const appLd = { "@type": "SoftwareApplication", "@id": `${canonical}#app`, name: "Agent402 skill packs", applicationCategory: "DeveloperApplication", operatingSystem: "HTTP, MCP (streamable HTTP)", offers: { "@type": "AggregateOffer", offerCount: String(packCount), lowPrice: "0.05", highPrice: "1.50", priceCurrency: "USD", description: "One USDC payment per pack run, settled on twelve rails. No signup, no API key." } };
+  const appLd = { "@type": "SoftwareApplication", "@id": `${canonical}#app`, name: "Agent402 skill packs", applicationCategory: "DeveloperApplication", operatingSystem: "HTTP, MCP (streamable HTTP)", offers: { "@type": "AggregateOffer", offerCount: String(packCount), lowPrice: PACK_PRICE_RANGE.min.toFixed(3), highPrice: PACK_PRICE_RANGE.max.toFixed(3), priceCurrency: "USD", description: `One payment per pack run, on ${RAILS_SHORT}. No signup, no API key.` } };
   const itemListLd = { "@type": "ItemList", "@id": `${canonical}#packs`, name: "Featured skill packs", itemListElement: flagship.map((p, i) => ({ "@type": "ListItem", position: i + 1, name: p.slug, url: `${baseUrl}/skills/${p.slug}` })) };
   const faqLd = { "@type": "FAQPage", "@id": `${canonical}#faq`, mainEntity: SKILLS_FAQS.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) };
 
