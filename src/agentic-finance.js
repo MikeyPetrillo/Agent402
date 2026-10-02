@@ -29,7 +29,7 @@ const STACK = [
 ];
 
 const ROLES = [
-  ["BUY", "500+ pay-per-call tools", "Search, browser, PDFs, OCR, live financial and crypto data, SEC filings, forecasting, an OpenAI-compatible LLM gateway. Every one deterministic, priced, and settled on chain, over x402 or MPP.", "/tools", "browse the catalog"],
+  ["BUY", "500+ pay-per-call tools", "Search, browser, PDFs, OCR, live financial and crypto data, SEC filings, forecasting, an OpenAI-compatible LLM gateway. Every one priced and settled on chain, over x402 or MPP.", "/tools", "browse the catalog"],
   ["ROUTE", "Index + Smart Order Router", `One call resolves a task to the best seller across the whole ecosystem, ours or anyone's, pays them on the agent's behalf and relays the result. ${routingProofSentence()}`, "/marketplace", "open index"],
   ["SELL", "Tollbooth", "Charge AI agents per request on your own site or API over both wires, humans free, non-custodial. Open source, one middleware.", "/sell", "sell into it"],
   ["PROVE", "On-chain transparency", "Live transaction counts by rail and wire (external revenue underneath, ours never counted as earnings), the seller leaderboard, uptime measured from outside, refunds ledgered. Numbers you can check, not claims.", "/revenue", "see the numbers"],

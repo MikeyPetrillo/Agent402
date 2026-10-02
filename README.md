@@ -162,7 +162,7 @@ More: [Paying with MPP](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-wi
 
 ## What's in the catalog (500+ tools)
 
-> **Every tool earns its place: deterministic, tested against its own example on every CI
+> **Every tool earns its place: tested against its own example on every CI
 > run, priced to market, settled on-chain.** CI holds a 400-entry catalog floor and
 > verifies the “500+” claim against the running catalog (`scripts/sync-count.js --check`).
 > The catalog grows only when a tool is worth calling.
