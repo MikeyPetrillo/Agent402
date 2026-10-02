@@ -1361,10 +1361,16 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
   // `executeViaWhenEligible` and `executeViaCallableNow` says false in so many
   // words. The tier is still useful (it is what the buyer would pay once the
   // seller proves out), it just must not look like a button.
+  // A row in the Base unproven tier IS dispatched (after every proven
+  // candidate, src/base-unproven.js and resolveExternalSeller), so it is
+  // callable now too, marked as the unproven lane.
   const { executeVia, ...rest } = row;
+  const unprovenLane = !verdict.eligible && rowLevel && verdict.chains?.base?.unprovenTier === true;
   const affordance = executeVia === undefined ? {} : (verdict.eligible
     ? { executeVia, executeViaCallableNow: true }
-    : { executeViaWhenEligible: executeVia, executeViaCallableNow: false });
+    : unprovenLane
+      ? { executeVia, executeViaCallableNow: true, executeViaLane: "unproven" }
+      : { executeViaWhenEligible: executeVia, executeViaCallableNow: false });
   return {
     ...rest,
     networks,
@@ -6720,7 +6726,16 @@ app.get("/api/index", (req, res) => {
         ...(r.state === "disabled" ? { note: "this server holds no crawled index at all (the crawler is disabled here), so nothing can be found by this lookup" } : {}),
       });
     }
-    return res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json({ ...withDispatchFields(detail), legend: dispatchLegend({ spendChains: spendChainsConfigured() }) });
+    // The seller-level verdict has no single price, so it can never show the
+    // unproven tier; each tool row carries its own Base verdict, the same one
+    // /api/route publishes for that route.
+    const sellerRow = withDispatchFields(detail);
+    const priceUsdOf = (p) => { const n = typeof p === "number" ? p : Number(String(p ?? "").replace(/[^0-9.]/g, "")); return Number.isFinite(n) && n > 0 ? n : null; };
+    const tools = Array.isArray(sellerRow.tools) ? sellerRow.tools.map((t) => {
+      const v = withDispatchFields({ ...t, seller: detail.origin, origin: detail.origin, routable: detail.routable, networks: Array.isArray(t.networks) && t.networks.length ? t.networks : detail.networks, priceUsd: priceUsdOf(t.price), urlTemplate: /[{}]/.test(String(t.route || "")), payToByNetwork: detail.payToByNetwork, evmDomainByNetwork: detail.evmDomainByNetwork }, { rowLevel: true });
+      return { ...t, routerDispatchEligible: v.routerDispatchEligible, routerDispatchReason: v.routerDispatchReason, routerDispatchByChain: v.routerDispatchByChain };
+    }) : sellerRow.tools;
+    return res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json({ ...sellerRow, tools, legend: dispatchLegend({ spendChains: spendChainsConfigured() }) });
   }
   // The full snapshot is ~1.4MB: every crawled origin with its health score,
   // its re-crawl history and its whole tool list. The per-origin HEALTH and

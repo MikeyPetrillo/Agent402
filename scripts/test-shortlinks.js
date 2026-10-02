@@ -93,7 +93,7 @@ try {
     // executeViaCallableNow says so (outside buyer-agent readout, second pass).
     const rows = rt.results;
     ok(rows.every((r) => !(r.executeVia !== undefined && r.executeViaWhenEligible !== undefined)), "no route row carries both executeVia and executeViaWhenEligible");
-    ok(rows.filter((r) => r.executeVia !== undefined).every((r) => r.routerDispatchEligible === true && r.executeViaCallableNow === true), "executeVia appears only on dispatch-eligible rows, with executeViaCallableNow true");
+    ok(rows.filter((r) => r.executeVia !== undefined).every((r) => r.executeViaCallableNow === true && (r.routerDispatchEligible === true || (r.executeViaLane === "unproven" && r.routerDispatchByChain?.base?.unprovenTier === true))), "executeVia appears only on rows the router pays now (eligible, or the Base unproven lane), with executeViaCallableNow true");
     ok(rows.filter((r) => r.executeViaWhenEligible !== undefined).every((r) => r.routerDispatchEligible === false && r.executeViaCallableNow === false), "a non-eligible row carries executeViaWhenEligible + executeViaCallableNow false, never executeVia");
     ok(rows.filter((r) => r.seller === "self" && r.priceUsd !== undefined).some((r) => r.executeVia !== undefined && r.executeViaCallableNow === true) || rows.every((r) => r.executeVia === undefined), "local priced rows keep executeVia (they are always dispatchable)");
     ok(typeof rt.dispatchLegend.executeViaCallableNow === "string" && /key on this/.test(rt.dispatchLegend.executeViaCallableNow), "the legend explains executeViaCallableNow");
