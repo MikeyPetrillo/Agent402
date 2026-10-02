@@ -138,7 +138,13 @@ ok(nexted && cr.balance(KEY).balanceUsd === 19.997 && cr.balance(KEY).heldUsd ==
 nexted = false; res = fakeRes();
 const priceFor2 = (m, p) => (p === "/v1/big" ? { priceUsd: 25, slug: "big" } : priceFor(m, p));
 cr.gate(priceFor2)({ method: "POST", path: "/v1/big", headers: { authorization: `Bearer ${KEY}` } }, res, () => { nexted = true; });
-ok(!nexted && res.statusCode === 402 && res.body.reason === "insufficient" && res.body.balanceUsd === 19.997 && /\/credits$/.test(res.body.topup), "gate: insufficient balance -> 402 with balance + top-up link, handler never runs");
+ok(!nexted && res.statusCode === 402 && res.body.reason === "insufficient" && res.body.balanceUsd === 19.997 && res.body.topup === null && /\/api\/pricing$/.test(res.body.pay) && /not on sale/.test(res.body.topupNote), "gate: insufficient balance -> 402 with balance; credits not on sale -> no top-up link, points at per-call pay, handler never runs");
+{
+  const prev = process.env.CREDITS_SALES; process.env.CREDITS_SALES = "on";
+  const { creditsTopupFields } = await import("../src/credits-sales.js");
+  ok(/\/credits$/.test(creditsTopupFields("https://x.test").topup), "on sale -> the refusal carries the /credits top-up link");
+  if (prev === undefined) delete process.env.CREDITS_SALES; else process.env.CREDITS_SALES = prev;
+}
 // A credits 402 is not a paywall 402: it sets no PAYMENT-REQUIRED header, so
 // the 402 body mirror (src/payment-required-body.js) leaves it exactly as the
 // gate wrote it - no x402 offer beside the balance.
@@ -153,7 +159,7 @@ ok(!res.headers["PAYMENT-REQUIRED"] && !res.headers["payment-required"] && PAYME
   const r = await fetch(`http://127.0.0.1:${server.address().port}/v1/big`, { method: "POST", headers: { authorization: `Bearer ${KEY}` } });
   const body = await r.json();
   server.close();
-  ok(r.status === 402 && !r.headers.get("payment-required") && body.reason === "insufficient" && body.balanceUsd === 19.997 && /\/credits$/.test(body.topup) && PAYMENT_REQUIRED_OFFER_KEYS.every((k) => !(k in body)),
+  ok(r.status === 402 && !r.headers.get("payment-required") && body.reason === "insufficient" && body.balanceUsd === 19.997 && body.topup === null && /\/api\/pricing$/.test(body.pay) && PAYMENT_REQUIRED_OFFER_KEYS.every((k) => !(k in body)),
     `wire: behind the 402 body mirror, a credits 402 is unchanged: reason/balanceUsd/topup, no x402Version or accepts (keys: ${Object.keys(body).join(",")})`);
 }
 nexted = false; res = fakeRes();
