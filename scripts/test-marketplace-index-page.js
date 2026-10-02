@@ -179,5 +179,20 @@ function chainCard(html, slug) {
   ok(!/mlr-dispatch/.test(loc), "the host's own row carries no dispatch badge");
 }
 
+// --- origins indexed + tool listings: one function with the standing band ----
+{
+  const { standingCountsExcludingHost, standingBand } = await import("../src/standing.js");
+  const ext = Array.from({ length: 60 }, (_, i) => ({ origin: `https://t${i}.example`, displayName: `T${i}`, homepage: `https://t${i}.example`, local: false, toolCount: 7, routable: true, networks: ["eip155:8453"], payToByNetwork: {} }));
+  const sellers = [LOCAL, ...ext];
+  const snapshot = { sellers, totals: { sellers: sellers.length, tools: sellers.reduce((a, s) => a + (s.toolCount || 0), 0) } };
+  const c = standingCountsExcludingHost(snapshot);
+  const html = marketPage(null, BASE_URL, { snapshot, leaderboardSnap: { leaderboard: [] } });
+  const band = standingBand({ ...c });
+  ok(new RegExp(`TOOL LISTINGS</div><div[^>]*>${c.listings.toLocaleString("en-US")}<`).test(html) && band.includes(`${c.listings.toLocaleString("en-US")} tool listings`), `/marketplace TOOL LISTINGS and the standing band print one figure (${c.listings})`);
+  ok(html.includes(`${c.sellers.toLocaleString("en-US")} origins indexed`) && band.includes(`${c.sellers.toLocaleString("en-US")} seller origins indexed`), `/marketplace origins indexed and the standing band print one figure (${c.sellers})`);
+  const src = (await import("node:fs")).readFileSync(new URL("../src/market-page.js", import.meta.url), "utf8");
+  ok(/standingCountsExcludingHost\(snapshot\)/.test(src), "marketPageAll reads standingCountsExcludingHost, the band's own function");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

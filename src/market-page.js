@@ -16,6 +16,7 @@ import { CATEGORIES } from "./pages.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { discoveryNote } from "./discovery-note.js";
 import { hostCardHtml } from "./host-entry.js";
+import { standingCountsExcludingHost } from "./standing.js";
 
 // Seller-roster row styles hoisted to classes. A busy chain (e.g. Base) renders
 // 1000+ roster rows; when each row carried its 6 styles inline the page ballooned
@@ -1229,11 +1230,14 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   // about SETTLEMENT (what moved on chain) - never merged into one card.
   // Other sellers only: our own tools have their own card, and the host card
   // above says the host is in no count.
-  const totalToolListings = sellers.reduce((sum, s) => sum + (s.local ? 0 : Number(s.toolCount) || 0), 0);
+  // The same function the standing band reads (src/standing.js), so "seller
+  // origins indexed" and "tool listings" are one figure on every surface.
+  const standingCounts = standingCountsExcludingHost(snapshot);
+  const totalToolListings = standingCounts.listings;
 
   const statsHtml = `
   <div class="ml-2col ml-4col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 0;">
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:26px;font-weight:800;">${marketOperatorCount(null, snapshot, leaderboardSnap).toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">${sellersListedNote(true, sellers.filter((s) => !s.local).length)}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:26px;font-weight:800;">${marketOperatorCount(null, snapshot, leaderboardSnap).toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">${sellersListedNote(true, standingCounts.sellers)}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">TOOL LISTINGS</div><div style="font-size:26px;font-weight:800;">${totalToolListings.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">advertised by other sellers</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">CHAINS SUPPORTED</div><div style="font-size:26px;font-weight:800;">${Object.keys(CHAIN_PAGES).length}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">TOOLS (THIS HOST)</div><div style="font-size:26px;font-weight:800;">${(sellers.find((s) => s.local)?.toolCount || 0).toLocaleString("en-US")}</div></div>
