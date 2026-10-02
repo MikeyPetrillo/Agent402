@@ -91,5 +91,11 @@ try {
   restore();
 }
 
+// The description must match the hedge: it answered from either CT search
+// while saying "(via crt.sh)" (2026-10-02). It now names no single source and
+// points at the `source` field, which the published example documents.
+ok(!/via crt\.sh|via certspotter/i.test(tool.description), "description does not attribute every answer to one CT search");
+ok(/`source`/.test(tool.description) && "source" in tool.discovery.output.example, "description and example document the `source` field");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
