@@ -1,255 +1,73 @@
 import { repoUrl } from "./repo-link.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { INTEGRATIONS } from "./integration-pages.js";
 
-export const ADAPTERS = [
-  {
-    slug: "openai",
-    name: "OpenAI",
-    pkg: "agent402-openai-tools",
-    tagline: "OpenAI function calling integration",
-    desc: "Drop-in tool definitions for OpenAI chat.completions, Assistants v2, and the Responses API. Returns native function objects with JSON Schema parameters.",
-    install: "npm install agent402-openai-tools",
-    quickstart: `import { agent402Tools } from "agent402-openai-tools";
-import OpenAI from "openai";
-
-const openai = new OpenAI();
-const { tools, execute } = await agent402Tools();
-
-const res = await openai.chat.completions.create({
-  model: "gpt-4o",
-  messages: [{ role: "user", content: "Hash 'hello world' with SHA-256" }],
-  tools,
-});
-
-// When the model returns a tool_call, run it:
-const call = res.choices[0].message.tool_calls[0];
-const result = await execute(call.function.name, JSON.parse(call.function.arguments));
-console.log(result);`,
-    config: [
-      { option: "categories", type: "string[]", desc: "Filter tools by category.", example: `agent402Tools({ categories: ["search", "crypto"] })` },
-      { option: "slugs", type: "string[]", desc: "Load only specific tools by slug.", example: `agent402Tools({ slugs: ["hash", "geocode"] })` },
-      { option: "baseUrl", type: "string", desc: "Point to a self-hosted Agent402 instance.", example: `agent402Tools({ baseUrl: "https://my-agent402.example.com" })` },
-      { option: "agentKey", type: "string", desc: "Private key for wallet-only (paid) tools.", example: `agent402Tools({ agentKey: process.env.AGENT_KEY })` },
-    ],
-    worksWith: ["GPT-4o", "GPT-4o-mini", "GPT-4.1", "o3", "OpenAI Assistants v2", "OpenAI Responses API"],
-    github: repoUrl("tree/main/adapters/openai-tools"),
-  },
-  {
-    slug: "anthropic",
-    name: "Anthropic",
-    pkg: "agent402-anthropic-tools",
-    tagline: "Anthropic tool use integration",
-    desc: "Native tool_use blocks for the Anthropic Messages API. Returns tool definitions with input_schema matching the Anthropic format.",
-    install: "npm install agent402-anthropic-tools",
-    quickstart: `import { agent402Tools } from "agent402-anthropic-tools";
-import Anthropic from "@anthropic-ai/sdk";
-
-const anthropic = new Anthropic();
-const { tools, execute } = await agent402Tools();
-
-const res = await anthropic.messages.create({
-  model: "claude-sonnet-4-20250514",
-  max_tokens: 1024,
-  messages: [{ role: "user", content: "Hash 'hello world' with SHA-256" }],
-  tools,
-});
-
-// When the model returns a tool_use block, run it:
-const block = res.content.find(b => b.type === "tool_use");
-const result = await execute(block.name, block.input);
-console.log(result);`,
-    config: [
-      { option: "categories", type: "string[]", desc: "Filter tools by category.", example: `agent402Tools({ categories: ["search"] })` },
-      { option: "slugs", type: "string[]", desc: "Load only specific tools by slug.", example: `agent402Tools({ slugs: ["hash", "extract"] })` },
-      { option: "baseUrl", type: "string", desc: "Point to a self-hosted Agent402 instance.", example: `agent402Tools({ baseUrl: "https://my-agent402.example.com" })` },
-      { option: "agentKey", type: "string", desc: "Private key for wallet-only (paid) tools.", example: `agent402Tools({ agentKey: process.env.AGENT_KEY })` },
-    ],
-    worksWith: ["Claude Sonnet 4", "Claude Opus 4", "Claude Haiku 3.5", "Anthropic Messages API", "Anthropic Batch API"],
-    github: repoUrl("tree/main/adapters/anthropic-tools"),
-  },
-  {
-    slug: "ai-sdk",
-    name: "Vercel AI SDK",
-    pkg: "agent402-ai-sdk",
-    tagline: "Vercel AI SDK integration",
-    desc: "Drop-in tool objects for the Vercel AI SDK. Works with streamText, generateText, and generateObject across any supported provider.",
-    install: "npm install agent402-ai-sdk",
-    quickstart: `import { agent402Tools } from "agent402-ai-sdk";
-import { generateText } from "ai";
-import { openai } from "@ai-sdk/openai";
-
-const { tools, execute } = await agent402Tools();
-
-const { text, toolCalls } = await generateText({
-  model: openai("gpt-4o"),
-  prompt: "Hash 'hello world' with SHA-256",
-  tools,
-});
-
-// Tool calls are executed automatically by the AI SDK,
-// or handle them manually:
-for (const call of toolCalls) {
-  const result = await execute(call.toolName, call.args);
-  console.log(result);
-}`,
-    config: [
-      { option: "categories", type: "string[]", desc: "Filter tools by category.", example: `agent402Tools({ categories: ["pdf"] })` },
-      { option: "slugs", type: "string[]", desc: "Load only specific tools by slug.", example: `agent402Tools({ slugs: ["pdf-to-markdown", "extract"] })` },
-      { option: "baseUrl", type: "string", desc: "Point to a self-hosted Agent402 instance.", example: `agent402Tools({ baseUrl: "https://my-agent402.example.com" })` },
-      { option: "agentKey", type: "string", desc: "Private key for wallet-only (paid) tools.", example: `agent402Tools({ agentKey: process.env.AGENT_KEY })` },
-    ],
-    worksWith: ["OpenAI (via @ai-sdk/openai)", "Anthropic (via @ai-sdk/anthropic)", "Google (via @ai-sdk/google)", "Mistral (via @ai-sdk/mistral)", "streamText", "generateText", "generateObject"],
-    github: repoUrl("tree/main/adapters/ai-sdk"),
-  },
-  {
-    slug: "langchain",
-    name: "LangChain",
-    pkg: "agent402-langchain",
-    tagline: "LangChain tool integration",
-    desc: "DynamicStructuredTool instances for LangChain agents and LangGraph nodes. Compatible with createReactAgent, createToolCallingAgent, and custom chains.",
-    install: "npm install agent402-langchain",
-    quickstart: `import { agent402Tools } from "agent402-langchain";
-import { ChatOpenAI } from "@langchain/openai";
-import { createReactAgent } from "@langchain/langgraph/prebuilt";
-
-const { tools } = await agent402Tools();
-
-const agent = createReactAgent({
-  llm: new ChatOpenAI({ model: "gpt-4o" }),
-  tools,
-});
-
-const result = await agent.invoke({
-  messages: [{ role: "user", content: "Hash 'hello world' with SHA-256" }],
-});
-console.log(result);`,
-    config: [
-      { option: "categories", type: "string[]", desc: "Filter tools by category.", example: `agent402Tools({ categories: ["search", "gov"] })` },
-      { option: "slugs", type: "string[]", desc: "Load only specific tools by slug.", example: `agent402Tools({ slugs: ["search", "answer"] })` },
-      { option: "baseUrl", type: "string", desc: "Point to a self-hosted Agent402 instance.", example: `agent402Tools({ baseUrl: "https://my-agent402.example.com" })` },
-      { option: "agentKey", type: "string", desc: "Private key for wallet-only (paid) tools.", example: `agent402Tools({ agentKey: process.env.AGENT_KEY })` },
-    ],
-    worksWith: ["LangChain JS", "LangGraph", "createReactAgent", "createToolCallingAgent", "Any LangChain-compatible LLM"],
-    github: repoUrl("tree/main/adapters/langchain"),
-  },
-  {
-    slug: "llamaindex",
-    name: "LlamaIndex",
-    pkg: "agent402-llamaindex",
-    tagline: "LlamaIndex tool integration",
-    desc: "FunctionTool instances for LlamaIndex agents. Works with OpenAIAgent, ReActAgent, and custom query engines.",
-    install: "npm install agent402-llamaindex",
-    quickstart: `import { agent402Tools } from "agent402-llamaindex";
-import { OpenAIAgent } from "llamaindex";
-
-const { tools } = await agent402Tools();
-
-const agent = new OpenAIAgent({ tools });
-
-const response = await agent.chat({
-  message: "Hash 'hello world' with SHA-256",
-});
-console.log(response.toString());`,
-    config: [
-      { option: "categories", type: "string[]", desc: "Filter tools by category.", example: `agent402Tools({ categories: ["finance"] })` },
-      { option: "slugs", type: "string[]", desc: "Load only specific tools by slug.", example: `agent402Tools({ slugs: ["stock-quote", "stock-history"] })` },
-      { option: "baseUrl", type: "string", desc: "Point to a self-hosted Agent402 instance.", example: `agent402Tools({ baseUrl: "https://my-agent402.example.com" })` },
-      { option: "agentKey", type: "string", desc: "Private key for wallet-only (paid) tools.", example: `agent402Tools({ agentKey: process.env.AGENT_KEY })` },
-    ],
-    worksWith: ["LlamaIndex TS", "OpenAIAgent", "ReActAgent", "FunctionTool", "Any LlamaIndex query engine"],
-    github: repoUrl("tree/main/adapters/llamaindex"),
-  },
-  {
-    slug: "google-adk",
-    name: "Google ADK",
-    pkg: "agent402-google-adk",
-    tagline: "Google Agent Development Kit integration",
-    desc: "FunctionTool for Gemini agents via Google's Agent Development Kit. Ships 4 meta-tools: find, route, call, and about.",
-    install: "npm install agent402-google-adk",
-    quickstart: `import { agent402Tools } from "agent402-google-adk";
-import { LlmAgent } from "@google/adk";
-
-const tools = await agent402Tools();
-
-const agent = new LlmAgent({
-  model: "gemini-2.0-flash",
-  name: "my-agent",
-  tools,
-});
-
-// The agent can now discover and call any Agent402 tool
-// via the find, route, call, and about meta-tools.`,
-    config: [
-      { option: "baseUrl", type: "string", desc: "Point to a self-hosted Agent402 instance.", example: `agent402Tools({ baseUrl: "https://my-agent402.example.com" })` },
-      { option: "agentKey", type: "string", desc: "Private key for wallet-only (paid) tools.", example: `agent402Tools({ agentKey: process.env.AGENT_KEY })` },
-    ],
-    worksWith: ["Gemini 2.0 Flash", "Gemini 2.5 Pro", "Google Agent Development Kit", "LlmAgent", "SequentialAgent"],
-    github: repoUrl("tree/main/adapters/google-adk"),
-  },
-  {
-    slug: "openai-agents",
-    name: "OpenAI Agents SDK",
-    pkg: "agent402-openai-agents",
-    tagline: "OpenAI Agents SDK integration",
-    desc: "Tool adapters for OpenAI's Agents SDK. JS adapter around the Python-style agent loop with automatic tool execution.",
-    install: "npm install agent402-openai-agents",
-    quickstart: `import { agent402Tools } from "agent402-openai-agents";
-import { Agent, Runner } from "openai-agents";
-
-const tools = await agent402Tools();
-
-const agent = new Agent({
-  name: "my-agent",
-  instructions: "You are a helpful assistant.",
-  tools,
-});
-
-const result = await Runner.run(agent, "Hash 'hello world' with SHA-256");
-console.log(result.finalOutput);`,
-    config: [
-      { option: "categories", type: "string[]", desc: "Filter tools by category.", example: `agent402Tools({ categories: ["search"] })` },
-      { option: "slugs", type: "string[]", desc: "Load only specific tools by slug.", example: `agent402Tools({ slugs: ["search", "extract"] })` },
-      { option: "baseUrl", type: "string", desc: "Point to a self-hosted Agent402 instance.", example: `agent402Tools({ baseUrl: "https://my-agent402.example.com" })` },
-      { option: "agentKey", type: "string", desc: "Private key for wallet-only (paid) tools.", example: `agent402Tools({ agentKey: process.env.AGENT_KEY })` },
-    ],
-    worksWith: ["OpenAI Agents SDK", "GPT-4o", "GPT-4o-mini", "Agent", "Runner"],
-    github: repoUrl("tree/main/adapters/openai-agents"),
-  },
-  {
-    slug: "strands",
-    name: "AWS Strands",
-    pkg: "agent402-strands",
-    tagline: "AWS Strands Agents integration",
-    desc: "Tool instances for Amazon's Strands agent framework. Plug Agent402 tools into Strands-based agents with automatic discovery and execution.",
-    install: "npm install agent402-strands",
-    quickstart: `import { agent402Tools } from "agent402-strands";
-import { Agent } from "@strands/agents";
-
-const tools = await agent402Tools();
-
-const agent = new Agent({
-  tools,
-});
-
-const result = await agent.run("Hash 'hello world' with SHA-256");
-console.log(result);`,
-    config: [
-      { option: "categories", type: "string[]", desc: "Filter tools by category.", example: `agent402Tools({ categories: ["data"] })` },
-      { option: "slugs", type: "string[]", desc: "Load only specific tools by slug.", example: `agent402Tools({ slugs: ["csv-lint", "json-lint"] })` },
-      { option: "baseUrl", type: "string", desc: "Point to a self-hosted Agent402 instance.", example: `agent402Tools({ baseUrl: "https://my-agent402.example.com" })` },
-      { option: "agentKey", type: "string", desc: "Private key for wallet-only (paid) tools.", example: `agent402Tools({ agentKey: process.env.AGENT_KEY })` },
-    ],
-    worksWith: ["AWS Strands Agents", "Amazon Bedrock", "Claude (via Bedrock)", "Any Strands-compatible model"],
-    github: repoUrl("tree/main/adapters/strands"),
-  },
+// The option tables are the adapters' own parameter lists, by shape:
+// per-slug adapters destructure { baseUrl, slugs, freeOnly, fetch } and return
+// { tools, execute, client }; meta-tool adapters destructure
+// { baseUrl, fetch, fetchImpl } and return the four meta tools. The install
+// line and every code sample come from the matching /integrations entry
+// (src/integration-pages.js), so the two pages cannot drift apart, and
+// scripts/test-doc-snippets.js checks both against the adapters' exports.
+const PER_SLUG_CONFIG = [
+  { option: "slugs", type: "string[]", desc: "Load only these tools (a short list gives the model better tool selection).", example: `agent402Tools({ slugs: ["hash", "markdown-to-html"] })` },
+  { option: "freeOnly", type: "boolean", desc: "Default true: keep only compute-payable tools, paid with proof-of-work. Set false to include wallet-only tools.", example: `agent402Tools({ slugs: ["extract", "hash"], freeOnly: false, fetch: payFetch })` },
+  { option: "fetch", type: "typeof fetch", desc: "A payment-wrapped fetch (@x402/fetch for x402, mppx for MPP) that pays wallet-only tools.", example: `agent402Tools({ freeOnly: false, fetch: payFetch })` },
+  { option: "baseUrl", type: "string", desc: "Point to a self-hosted Agent402 instance.", example: `agent402Tools({ baseUrl: "https://my-agent402.example.com" })` },
 ];
+const META_CONFIG = [
+  { option: "fetch", type: "typeof fetch", desc: "A payment-wrapped fetch (@x402/fetch for x402, mppx for MPP) that agent402_call uses for wallet-only tools.", example: `agent402Tools({ fetch: payFetch })` },
+  { option: "fetchImpl", type: "typeof fetch", desc: "The plain fetch used for the unpaid lookups (find, route, about) and proof-of-work calls. Defaults to the global fetch.", example: `agent402Tools({ fetchImpl: globalThis.fetch })` },
+  { option: "baseUrl", type: "string", desc: "Point to a self-hosted Agent402 instance.", example: `agent402Tools({ baseUrl: "https://my-agent402.example.com" })` },
+];
+
+const BASE = [
+  { slug: "openai", name: "OpenAI", tagline: "OpenAI function calling integration", shape: "per-slug",
+    desc: "Tool definitions for OpenAI chat.completions, Assistants v2, and the Responses API: native function objects with JSON Schema parameters, plus an execute helper that runs and pays for a tool call.",
+    worksWith: ["OpenAI chat.completions", "OpenAI Assistants v2", "OpenAI Responses API"] },
+  { slug: "anthropic", name: "Anthropic", tagline: "Anthropic tool use integration", shape: "per-slug",
+    desc: "Tool definitions for the Anthropic Messages API (input_schema format), plus an execute helper that runs and pays for a tool_use block.",
+    worksWith: ["Anthropic Messages API", "Any Claude model with tool use"] },
+  { slug: "ai-sdk", name: "Vercel AI SDK", tagline: "Vercel AI SDK integration", shape: "meta",
+    desc: "Four meta tools (find, route, call, about) as AI SDK tool objects, keyed by name for generateText and streamText on any provider the SDK supports.",
+    worksWith: ["generateText", "streamText", "Any AI SDK provider"] },
+  { slug: "langchain", name: "LangChain", tagline: "LangChain tool integration", shape: "meta",
+    desc: "Four meta tools (find, route, call, about) as LangChain.js tool objects for LangChain agents and LangGraph nodes.",
+    worksWith: ["LangChain JS", "LangGraph", "createReactAgent", "Any LangChain chat model with tool calling"] },
+  { slug: "llamaindex", name: "LlamaIndex", tagline: "LlamaIndex tool integration", shape: "per-slug",
+    desc: "FunctionTool instances for LlamaIndex TS agents and workflows, built from the catalog's JSON Schema.",
+    worksWith: ["LlamaIndex TS", "@llamaindex/workflow agent()", "FunctionTool"] },
+  { slug: "google-adk", name: "Google ADK", tagline: "Google Agent Development Kit integration", shape: "meta",
+    desc: "Four meta tools (find, route, call, about) as FunctionTool instances for Gemini agents on Google's Agent Development Kit.",
+    worksWith: ["Google Agent Development Kit", "LlmAgent", "Gemini models"] },
+  { slug: "openai-agents", name: "OpenAI Agents SDK", tagline: "OpenAI Agents SDK integration", shape: "meta",
+    desc: "Four meta tools (find, route, call, about) for the OpenAI Agents SDK (@openai/agents), built from the adapter's framework-agnostic specs. The SDK's run loop executes them.",
+    worksWith: ["@openai/agents", "Agent", "run()"] },
+  { slug: "strands", name: "Strands Agents", tagline: "Strands Agents integration", shape: "per-slug",
+    desc: "Strands tool instances for TypeScript agents, including Strands agents on AWS Bedrock AgentCore.",
+    worksWith: ["@strands-agents/sdk", "AWS Bedrock AgentCore", "Any Strands-compatible model"] },
+];
+
+export const ADAPTERS = BASE.map((a) => {
+  const i = INTEGRATIONS.find((x) => x.docsSlug === a.slug);
+  if (!i) throw new Error(`adapter-docs: no /integrations entry for ${a.slug}`);
+  return {
+    ...a,
+    pkg: i.pkg,
+    install: i.install,
+    quickstart: i.example,
+    walletExample: i.walletExample || null,
+    config: a.shape === "per-slug" ? PER_SLUG_CONFIG : META_CONFIG,
+    github: repoUrl(`tree/main/${i.dir}`),
+  };
+});
 
 /* ── index page ──────────────────────────────────────────────────────── */
 
 export function adapterDocsIndex(baseUrl) {
   const canonical = `${baseUrl}/docs/adapters`;
   const title = "Framework Adapters - Agent402 Docs";
-  const description = "Adapter documentation for every supported agent framework: OpenAI, Anthropic, Vercel AI SDK, LangChain, LlamaIndex, Google ADK, OpenAI Agents SDK, and AWS Strands.";
+  const description = "Adapter documentation for every supported agent framework: OpenAI, Anthropic, Vercel AI SDK, LangChain, LlamaIndex, Google ADK, OpenAI Agents SDK, and Strands Agents.";
 
   const cards = ADAPTERS.map((a) => `
     <a class="ml-ad-card" href="/docs/adapters/${esc(a.slug)}">
@@ -304,6 +122,7 @@ export function adapterDocPage(baseUrl, slug) {
     { id: "install", label: "install" },
     { id: "quickstart", label: "quick start" },
   ];
+  if (adapter.walletExample) tocItems.push({ id: "paid", label: "paid tools" });
   if (adapter.config && adapter.config.length) tocItems.push({ id: "config", label: "configuration" });
   if (adapter.worksWith && adapter.worksWith.length) tocItems.push({ id: "compat", label: "works with" });
 
@@ -366,6 +185,14 @@ export function adapterDocPage(baseUrl, slug) {
           <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--dark-border);border:1px solid var(--dark-border2);color:var(--dk-muted);font-size:.72rem;padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
         </div>
       </div>
+
+      ${adapter.walletExample ? `<div id="paid" style="margin-bottom:36px;">
+        <h2 style="font-family:var(--font-body);font-weight:800;font-size:24px;letter-spacing:-.02em;margin:0 0 12px;">Paid tools</h2>
+        <div style="position:relative;">
+          <pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-size:.82rem;line-height:1.55;padding:16px;margin:0;overflow-x:auto;"><code>${esc(adapter.walletExample)}</code></pre>
+          <button class="ml-adp-copy" aria-label="Copy" style="position:absolute;top:8px;right:8px;background:var(--dark-border);border:1px solid var(--dark-border2);color:var(--dk-muted);font-size:.72rem;padding:4px 10px;cursor:pointer;font-family:var(--font-mono);">Copy</button>
+        </div>
+      </div>` : ""}
 
       <!-- Configuration -->
       ${adapter.config && adapter.config.length ? `<div id="config" style="margin-bottom:36px;">

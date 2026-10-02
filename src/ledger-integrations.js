@@ -55,9 +55,10 @@ export function ledgerIntegrationsPage(baseUrl) {
 </span>npm install agent402-openai-tools
 
 import { agent402Tools } from "agent402-openai-tools";
-const { tools, execute } = await agent402Tools({ slugs: ["extract","hash","render"] });
+const { tools, execute } = await agent402Tools({ slugs: ["hash","markdown-to-html","text-stats"] });
 <span style="color:var(--dk-muted3);">// pass tools to openai.chat.completions.create({ tools })
-// call execute(name, args) on a tool_call. payment handled underneath.</span></pre></div>
+// call execute(name, args) on a tool_call. proof-of-work pays these underneath;
+// wallet-only tools need freeOnly: false plus a paying fetch.</span></pre></div>
     <div style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-top:12px;">the per-slug adapters (OpenAI, Anthropic, LlamaIndex, Strands) share this shape; the others expose four meta tools. See each package's page.</div>
   </section>
 
