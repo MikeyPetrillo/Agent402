@@ -12,6 +12,7 @@
 // Stores:
 //   free-alerts.json          alerts[*].email            -> record deleted
 //   followups.json            seqs[*].email              -> record deleted
+//   wallet-digest.json        subs[*].email              -> record deleted
 //   stripe-subscriptions.json (map of subId -> rec.email) -> email nulled, status kept (billing history)
 //   mpp-subscriptions.json    (no email: wallet-keyed)    -> skipped
 //   monitor-runs.json         (no email)                  -> skipped
@@ -56,6 +57,16 @@ function readJson(path) { try { return JSON.parse(readFileSync(path, "utf8")); }
     if (ids.length) rewrite(p, j);
     report.push(`followups.json: ${ids.length} sequence(s) deleted`);
   } else report.push("followups.json: absent");
+}
+// weekly spend digest
+{
+  const p = join(ROOT, "wallet-digest.json"); const j = readJson(p);
+  if (j?.subs) {
+    const ids = Object.keys(j.subs).filter((id) => String(j.subs[id]?.email || "").toLowerCase() === email);
+    for (const id of ids) delete j.subs[id];
+    if (ids.length) rewrite(p, j);
+    report.push(`wallet-digest.json: ${ids.length} subscription(s) deleted`);
+  } else report.push("wallet-digest.json: absent");
 }
 // stripe subscriptions: keep the billing record, drop the address
 {
