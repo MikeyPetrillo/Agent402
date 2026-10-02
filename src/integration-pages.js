@@ -9,6 +9,10 @@
 // instead of linking to a 404.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { repoUrl } from "./repo-link.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
+// Prepaid credits are only presented as a way to pay while packs are sold.
+const CREDITS_ON = creditsSalesEnabled();
+const CREDITS_HELD = CREDITS_ON ? "a prepaid credits key" : "a credits key bought earlier";
 
 const X402_FETCH = `import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
@@ -398,24 +402,32 @@ await agent402ActionProvider({
   },
   {
     slug: "eliza",
-    meta: "An elizaOS plugin to find and call Agent402 tools, paid by prepaid credits or USDC over x402, inside per-call and daily spend ceilings.",
+    meta: `An elizaOS plugin to find and call Agent402 tools, paid in USDC over x402${CREDITS_ON ? " or by prepaid credits" : ""}, inside per-call and daily spend ceilings.`,
     name: "elizaOS plugin",
     short: "elizaOS",
     pkg: "elizaos-plugin-agent402",
     dir: "adapters/eliza",
-    what: "An elizaOS plugin with three actions and a provider, installed from npm into the agent project and named in the character's \`plugins\` list. The agent can find a tool from a plain-language task and call it, paying with a prepaid credits key or in USDC over x402, inside per-call and daily ceilings you set in the character config.",
+    what: `An elizaOS plugin with three actions and a provider, installed from npm into the agent project and named in the character's \`plugins\` list. The agent can find a tool from a plain-language task and call it, paying in USDC over x402 or with ${CREDITS_HELD}, inside per-call and daily ceilings you set in the character config.`,
     install: "npm install elizaos-plugin-agent402",
     lang: "json",
-    example: `{
+    example: CREDITS_ON ? `{
   "plugins": ["elizaos-plugin-agent402"],
   "settings": {
     "AGENT402_CREDITS_KEY": "a402_...",
     "AGENT402_MAX_PER_CALL_USD": "1"
   }
+}` : `{
+  "plugins": ["elizaos-plugin-agent402"],
+  "settings": {
+    "AGENT402_WALLET_KEY": "0x...",
+    "AGENT402_MAX_PER_CALL_USD": "1"
+  }
 }`,
-    walletExample: `# pay from a wallet instead of a credits key
+    walletExample: CREDITS_ON ? `# pay from a wallet instead of a credits key
 bun add @x402/fetch @x402/evm viem
-# then set AGENT402_WALLET_KEY (an EVM key holding USDC on Base) in settings`,
+# then set AGENT402_WALLET_KEY (an EVM key holding USDC on Base) in settings` : `# AGENT402_WALLET_KEY is an EVM key holding USDC on Base; it needs these peers
+bun add @x402/fetch @x402/evm viem
+# a credits key bought earlier still works: set AGENT402_CREDITS_KEY instead`,
     exposes: [
       "`AGENT402_FIND` (free): a task in, matching tools out with price and a ready example input.",
       "`AGENT402_CALL`: runs one tool and returns its complete JSON result in the action text the model reads next.",
@@ -423,7 +435,7 @@ bun add @x402/fetch @x402/evm viem
       "An `AGENT402` provider that tells the agent each turn which payment mode is configured. Keys never appear in results or provider text.",
     ],
     payment: [
-      "`AGENT402_CREDITS_KEY`: a prepaid card-credits key; wallet-only tools are debited only on a successful call.",
+      `\`AGENT402_CREDITS_KEY\`: ${CREDITS_HELD}; wallet-only tools are debited only on a successful call.`,
       "`AGENT402_WALLET_KEY`: an EVM key paying USDC over x402 (optional peers `@x402/fetch @x402/evm viem`).",
       "Neither set: the proof-of-work free tier still works.",
       "`AGENT402_MAX_PER_CALL_USD` (default 1) and `AGENT402_DAILY_LIMIT_USD` are enforced per runtime before any request is sent; every paid call carries an `Idempotency-Key`.",
@@ -506,7 +518,7 @@ const verdict = await a.call("sql-guard", { sql: "UPDATE users SET plan = 'pro' 
     payment: [
       "Free pure-CPU tools: built-in proof-of-work, no wallet.",
       "Wallet-only tools: pass a payment-aware `fetch`. A stock `mppx` fetch pays over MPP (USDC on Base or Celo, or natively on Tempo); an `@x402/fetch` fetch pays over x402.",
-      "`creditsKey`: a prepaid `a402_...` key pays by card balance, debited only on a 200.",
+      `\`creditsKey\`: ${CREDITS_HELD} (\`a402_...\`) pays from its balance, debited only on a 200.`,
     ],
     tools: ["extract", "hash", "sql-guard", "whois", "search"],
     guides: ["x402-in-5-minutes", "x402-and-mpp"],
@@ -555,7 +567,7 @@ npx agent402-tollbooth   # testnet dry run; for mainnet, drop TOLLBOOTH_NETWORK 
   },
   {
     slug: "openclaw",
-    meta: "Agent402 as an OpenClaw model provider: routed and explicit models priced per call, paid by credits key or USDC over x402 through a local proxy.",
+    meta: `Agent402 as an OpenClaw model provider: routed and explicit models priced per call, paid in USDC over x402${CREDITS_ON ? " or by credits key" : ""} through a local proxy.`,
     name: "OpenClaw model provider",
     short: "OpenClaw",
     pkg: "agent402-openclaw",
@@ -566,7 +578,7 @@ npx agent402-tollbooth   # testnet dry run; for mainnet, drop TOLLBOOTH_NETWORK 
     example: `openclaw plugins install agent402-openclaw
 npx agent402-openclaw setup --write   # no key? it creates a wallet and prints the address to fund
 openclaw gateway restart`,
-    walletExample: `# pay by card instead: buy a credits pack, then
+    walletExample: `# ${CREDITS_ON ? "pay by card instead: buy a credits pack, then" : "already hold a credits key? use it instead of a wallet"}
 AGENT402_CREDITS_KEY=a402_... npx agent402-openclaw setup --write
 
 # no OpenClaw? run the proxy alone and point any OpenAI client at it
@@ -577,7 +589,7 @@ npx agent402-openclaw proxy   # http://127.0.0.1:8412/v1, model "auto"`,
       "CLI commands: `setup`, `proxy`, `doctor`, `wallet`, `permit2-approve`.",
     ],
     payment: [
-      "A prepaid credits key: card balance, metered calls debited at actual usage.",
+      `${CREDITS_ON ? "A prepaid credits key" : "A credits key bought earlier"}: metered calls debited at actual usage.`,
       "A wallet: USDC on Base over x402, exact by default; after a one-time `permit2-approve`, the quote becomes a ceiling and the call settles at actual usage.",
       "The proxy answers loopback only and refuses browser-originated requests, so a web page cannot spend the key.",
     ],

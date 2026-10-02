@@ -16,6 +16,10 @@ import { GUIDE_INTEGRATIONS, integrationBySlug } from "./integration-pages.js";
 import { RAILS_OR, RAILS_AMP } from "./rails.js";
 import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE } from "./tools/llm-gateway-kit.js";
 import { routingProofSentence } from "./routing-proof.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
+// Whether prepaid credits are sold now. Copy that tells a reader to buy a pack
+// is only true while they are; read once at module load, like the env it reads.
+const CREDITS_ON = creditsSalesEnabled();
 
 // Prices in guide prose are never typed: a guide writes {{price:<slug>}} (the
 // list price), {{amount:<slug>}} (the same price in USDC atomic units, as an
@@ -1109,7 +1113,7 @@ its normal schedule.
     title: "Use Agent402 from Claude Code, Cursor, VS Code, Windsurf, Cline, Roo Code, Codex CLI, Gemini CLI, Muse Code, Continue, ElizaOS, AgentCore and any OpenAI SDK",
     seoTitle: "Use Agent402 from Claude Code, Cursor and more",
     description:
-      "Two doors into Agent402 from the agent host you already run: models through an OpenAI-compatible base URL with a prepaid credits key (metered, from $" + TIERS["v1-chat-metered"].price + " a call), and 500+ tools through MCP. Copy the block for your host.",
+      "Two doors into Agent402 from the agent host you already run: models through an OpenAI-compatible base URL (metered, from $" + TIERS["v1-chat-metered"].price + " a call, paid from a wallet over x402" + (CREDITS_ON ? " or with a prepaid credits key" : ", or with a credits key bought earlier") + "), and 500+ tools through MCP. Copy the block for your host.",
     md: `
 Agent402 opens two doors to an agent host, and both are paid with the same
 key:
@@ -1127,9 +1131,10 @@ key:
   [\`agent402-mcp\`](https://www.npmjs.com/package/agent402-mcp) stdio server,
   which pays wallet-only tools by card when \`AGENT402_CREDITS_KEY\` is set.
 
-Get the key once: buy a pack by card at
+${CREDITS_ON ? `Get the key once: buy a pack by card at
 [agent402.tools/credits](https://agent402.tools/credits); the key (\`a402_…\`)
-is shown once and emailed. \`GET /api/credits/balance\` (Bearer) reports what
+is shown once and emailed.` : `New credits keys are not on sale; a key (\`a402_…\`) bought earlier keeps
+working in every block below.`} \`GET /api/credits/balance\` (Bearer) reports what
 is left. Prefer a wallet? Every route also answers a stock x402 \`402\`
 (${RAILS_OR}) and an MPP challenge, so any x402 client pays per call with no key.
 
@@ -1536,14 +1541,15 @@ behalf, proven sellers first. Why pay here, with the proof links:
   },
   {
     slug: "openclaw-model-provider",
-    title: "Use Agent402 as your OpenClaw model provider - pay by card, no wallet",
+    title: CREDITS_ON ? "Use Agent402 as your OpenClaw model provider - pay by card, no wallet" : "Use Agent402 as your OpenClaw model provider - pay per call",
     seoTitle: "Agent402 as your OpenClaw model provider",
     description:
-      "Point OpenClaw at Agent402's OpenAI-compatible gateway with a prepaid credits key: one config block, auto-routed models at a flat per-call price, paid by card. Or pay per call in USDC from a wallet over x402.",
+      CREDITS_ON
+        ? "Point OpenClaw at Agent402's OpenAI-compatible gateway with a prepaid credits key: one config block, auto-routed models at a flat per-call price, paid by card. Or pay per call in USDC from a wallet over x402."
+        : "Point OpenClaw at Agent402's OpenAI-compatible gateway and pay per call in USDC from a wallet over x402: the agent402-openclaw plugin mints the wallet and writes the provider block. A credits key bought earlier still works in the plain config block.",
     md: `
 [OpenClaw](https://openclaw.ai) talks to any OpenAI-compatible provider through
-one block in \`openclaw.json\`. Agent402's LLM gateway is one of those, with a
-twist: it can be paid **by card**, through a prepaid credits key, so an agent
+one block in \`openclaw.json\`. Agent402's LLM gateway is one of those. ${CREDITS_ON ? `It can be paid **by card**, through a prepaid credits key, so an agent
 runs without a crypto wallet. USDC over x402 works too, if you'd rather.
 
 ## 1. Get a credits key (card, two minutes)
@@ -1551,7 +1557,13 @@ runs without a crypto wallet. USDC over x402 works too, if you'd rather.
 Buy a pack at [agent402.tools/credits](https://agent402.tools/credits) by card.
 The key (\`a402_…\`) is shown once on the thanks page and emailed. It spends on
 any paid route, including every gateway tier below, and
-\`GET /api/credits/balance\` (Bearer) reports what is left.
+\`GET /api/credits/balance\` (Bearer) reports what is left.` : `New credits keys are not on sale, so the
+plugin path in [Pay from a wallet](#pay-from-a-wallet-instead) below is the way
+in: it mints a wallet you fund with USDC on Base. The plain config block in
+this section is for a credits key (\`a402_…\`) bought earlier, which keeps
+working; \`GET /api/credits/balance\` (Bearer) reports what is left.
+
+## 1. Use a credits key you already hold`}
 
 Put it in the environment OpenClaw runs in:
 
