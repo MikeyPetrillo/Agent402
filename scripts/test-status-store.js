@@ -256,6 +256,28 @@ const NOW = Date.UTC(2026, 6, 25, 12, 0, 0); // 2026-07-25T12:00:00Z
     snap.components.every((c) => Array.isArray(c.daily) && c.daily.length === STRIP_DAYS));
 }
 
+// ---- each window counts its own span (2026-10-02) ----
+// The rows read for a component reach back STRIP_DAYS only, and every window
+// was filtered from them, so the 90-day figure carried the 30-day count.
+{
+  const { statusSnapshot } = await import("../src/status.js");
+  const T = Date.UTC(2026, 9, 2, 12, 0, 0);
+  const K = "api";
+  // 10 probes 60 days ago (one failed), 5 probes 2 days ago.
+  recordProbes([
+    ...Array.from({ length: 10 }, (_, i) => ({ ts: T - 60 * DAY + i * 60000, source: "w-test", component: K, ok: i !== 0 })),
+    ...Array.from({ length: 5 }, (_, i) => ({ ts: T - 2 * DAY + i * 60000, source: "w-test", component: K, ok: true })),
+  ]);
+  const before = probeRows(K, T - 90 * DAY).length;
+  const snap = statusSnapshot({ baseUrl: "https://example.test", nowMs: T });
+  const c = snap.components.find((x) => x.key === K);
+  const in90 = probeRows(K, T - 90 * DAY), in30 = probeRows(K, T - 30 * DAY);
+  check(`the 90-day window counts every probe in 90 days (${c.windows["90d"].observed} of ${in90.length})`, c.windows["90d"].observed === in90.length && before === in90.length);
+  check(`the 30-day window counts its own span (${c.windows["30d"].observed} of ${in30.length})`, c.windows["30d"].observed === in30.length);
+  check("the 90-day and 30-day denominators differ when probes predate the strip", c.windows["90d"].observed > c.windows["30d"].observed);
+  check("the 90-day pass count excludes the failed probe", c.windows["90d"].down === in90.filter((r) => !r.ok).length);
+}
+
 _resetForTest();
 try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
 check("scratch DB cleaned up", !existsSync(join(dir, "status.db")));
