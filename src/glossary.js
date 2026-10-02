@@ -10,6 +10,7 @@
 // the protocols' own homes.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
+import { powCostPhrase } from "./pow.js";
 import { LEARN_BY_GLOSSARY_ID, learnBySlug } from "./learn.js";
 
 import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
@@ -60,7 +61,7 @@ export const GLOSSARY = [
     def: "A server that answers ONE 402 with both an x402 offer and an MPP challenge for the same resource at the same price, and accepts either credential on the retry. A stock x402 client and a stock mppx client both work unmodified against it. Every paid route on Agent402 is dual-stack, and the open-source tollbooth adds it to any site.",
     see: [["/what-is-mpp#live", "where MPP settles today"], ["/sell", "sell dual-stack"]] },
   { id: "proof-of-work-tier", name: "Proof-of-work tier (free tier)", alt: ["PoW tier", "free tier"],
-    def: "Agent402's no-wallet path: a pure-CPU tool can be paid for with a short proof-of-work solve instead of money. The solve is signed, single-use and scoped to the tool, so it costs the caller a few hundred milliseconds of compute and the operator nothing. Tools that spend money upstream (search, LLM gateway, browser) are wallet-only.",
+    def: `Agent402's no-wallet path: a pure-CPU tool can be paid for with a short proof-of-work solve instead of money. The solve is signed, single-use and scoped to the tool, so it costs the caller ${powCostPhrase()} and the operator nothing. Tools that spend money upstream (search, LLM gateway, browser) are wallet-only.`,
     see: [["/blog/proof-of-work-free-tier", "why a free tier"], ["/pricing", "which tools are free"]] },
   { id: "smart-order-router", name: "Smart Order Router (SOR)", alt: ["route-and-execute", "cross-seller routing"],
     def: `One call that resolves a task to the best seller across the whole ecosystem - Agent402's own catalog or any indexed external seller - pays that seller on the agent's behalf on the same chain the agent paid on, and relays the result with a receipt. ${routingProofSentence()}`,
@@ -75,7 +76,7 @@ export const GLOSSARY = [
     def: "Pricing where every request carries its own payment - fractions of a cent to a few cents - instead of a subscription, a quota or an API key. It is what makes an agent's spend legible (one receipt per call) and what lets a seller earn from a single request by a stranger with no onboarding.",
     see: [["/pricing", "how Agent402 prices"], ["/tools", "500+ priced tools"]] },
   { id: "deterministic-tool", name: "Deterministic tool", alt: ["deterministic endpoint"],
-    def: "A tool whose output is a pure function of its input: same request, same answer, every time, with no language model in the serving path. Determinism is what lets an agent cache, retry safely and verify a paid answer, and what lets a catalog be tested end to end (every Agent402 tool answers its own documented example in CI).",
+    def: "A tool whose output is a pure function of its input: same request, same answer, every time, with no language model in the serving path. Determinism is what lets an agent cache, retry safely and verify a paid answer, and what lets a catalog be tested end to end (every Agent402 tool that CI can run without a third-party key answers its own documented example there; the metered tools that need one are left out of that sweep so CI never spends upstream).",
     see: [["/tools", "the catalog"], ["/blog/why-we-built-agent402", "why deterministic"]] },
   { id: "idempotency-key", name: "Idempotency key", alt: ["Idempotency-Key header", "paid retry"],
     def: "A caller-chosen header that lets a paid request be retried without paying twice: the seller stores the first settled answer under the key and replays it to an identical retry. Agent402 commits the cached body only after settlement succeeds, so an unsettled attempt is never replayed as if it were paid.",
@@ -84,7 +85,7 @@ export const GLOSSARY = [
     def: "The open standard AI assistants use to discover and call tools. Agent402 exposes its catalog as a hosted MCP connector and an npm stdio server, so an assistant can find a tool, read its price and call it - paying over x402 or MPP, or with a proof-of-work solve on the free tier - without a human creating an account.",
     see: [["/docs#add", "add to Claude"], ["/blog/building-with-mcp", "building with MCP"]] },
   { id: "tempo", name: "Tempo", alt: ["tempo method", "Tempo chain"],
-    def: "The payments-focused chain that is MPP's native settlement method (chain id 4217, TIP-20 tokens such as PathUSD and USDC.e). Its tempo/charge credentials are validated and broadcast through Tempo's own relay rather than an EIP-3009 facilitator, so a server that speaks it natively holds no signing key of its own. Agent402 accepts it and, through the router, pays other Tempo sellers over it.",
+    def: "The payments-focused chain that is MPP's native settlement method (chain id 4217, TIP-20 tokens such as PathUSD and USDC.e). Its tempo/charge credentials are validated and broadcast through Tempo's own relay rather than an EIP-3009 facilitator, so accepting a tempo/charge payment needs no signing key on the server. Agent402 accepts it, and holds Tempo keys for two other jobs: sponsoring gas on monitor subscriptions paid over MPP, and paying other Tempo sellers through the router.",
     see: [["/what-is-mpp#compare", "MPP settlement methods"], ["/mpp-marketplace", "sellers on the MPP wire"]] },
 ];
 

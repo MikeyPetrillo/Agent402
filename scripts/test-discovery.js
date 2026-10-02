@@ -45,6 +45,31 @@ ok(m.payment.proofOfWork.difficultyBits === 20, "pow difficulty");
 ok(m.payment.proofOfWork.eligibleTools === 1, "pow eligible count");
 ok(m.payment.dataHandling?.readsPaymentMetadata === false && m.payment.dataHandling?.retainsPaymentMetadata === false,
   "dataHandling attests payment-metadata minimisation");
+// The fields read off a payment are named in full. The list once named only
+// authorization.from while the server also reads the payment-identifier
+// extension, the Solana transaction's signers, the Tempo credential source and
+// the payer in the facilitator's settlement receipt, and keeps the payer per sale.
+{
+  const reads = (m.payment.dataHandling?.readsOnly || []).join(" | ");
+  for (const [needle, what] of [["authorization.from", "the EIP-3009 payer"], ["payment-identifier", "the idempotency extension"], ["Solana", "the Solana signers"], ["Tempo", "the Tempo credential source"], ["settlement receipt", "the facilitator receipt payer"]]) {
+    ok(reads.includes(needle), `dataHandling.readsOnly names ${what}`);
+  }
+  ok(/payer/.test(String(m.payment.dataHandling?.retains || "")), "dataHandling says the sales ledger keeps the payer of a sale");
+}
+// The heartbeat figure is the interval of the observer that actually keeps it:
+// the Cloudflare cron in workers/status-probe/wrangler.toml. It said 15, the
+// GitHub schedule's REQUEST, which GitHub delivers far less often.
+{
+  const { readFileSync } = await import("node:fs");
+  const toml = readFileSync(new URL("../workers/status-probe/wrangler.toml", import.meta.url), "utf8");
+  const cron = toml.match(/crons\s*=\s*\["\*\/(\d+) \* \* \* \*"\]/);
+  ok(cron, "the status-probe worker declares a minute-interval cron");
+  ok(m.trust?.productionHeartbeatMinutes === Number(cron[1]), `productionHeartbeatMinutes matches the worker cron (${m.trust?.productionHeartbeatMinutes} vs ${cron[1]})`);
+  // The crawl cadence is the crawler's timer, not a typed figure ("crawl: 300"
+  // stood here while the crawler ran every 1800 s).
+  const { CRAWL_INTERVAL_SECONDS } = await import("../src/x402-index.js");
+  ok(m.discovery?.refreshSeconds?.crawl === CRAWL_INTERVAL_SECONDS && CRAWL_INTERVAL_SECONDS > 300, `refreshSeconds.crawl is the crawler's own interval (${m.discovery?.refreshSeconds?.crawl} vs ${CRAWL_INTERVAL_SECONDS})`);
+}
 
 ok(m.capabilities.tools === 3, "capability tool count");
 const webCat = m.capabilities.categories.find((c) => c.key === "web");

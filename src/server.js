@@ -4196,7 +4196,7 @@ app.get("/x402-economy", (_req, res) => {
   res.redirect(301, "/marketplace#economy");
 });
 app.get("/changelog", (_req, res) => htmlCache(res, 300, 900).send(changelogPage(BASE_URL)));
-app.get("/use-cases", (_req, res) => htmlCache(res, 300, 900).send(useCasesPage(BASE_URL)));
+app.get("/use-cases", (_req, res) => htmlCache(res, 300, 900).send(useCasesPage(BASE_URL, CATALOG)));
 app.get("/playground", (_req, res) => htmlCache(res, 300, 900).send(playgroundPage(BASE_URL, CATALOG)));
 app.get("/sdk-playground", (_req, res) => htmlCache(res, 300, 900).send(sdkPlaygroundPage(BASE_URL)));
 // Capitalised wiki URLs whose page the site serves at a lowercase route: 301
@@ -7882,13 +7882,16 @@ app.get("/api/pricing", (_req, res) => {
     // credits for every tool, and the human report/monitor products. Stripe-
     // gated - absent rather than advertised when card checkout is off.
     ...(humanCheckoutEnabled() ? {
-      credits: { how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(CREDIT_PACKS).map((p) => p.cents / 100),
+      // Follows the CREDITS_SALES gate: while sales are off the checkout
+      // answers 503, so this block must not advertise packs or a checkout an
+      // agent would be refused. Existing keys still spend, so it says how.
+      credits: creditsSalesEnabled() ? { onSale: true, how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(CREDIT_PACKS).map((p) => p.cents / 100),
         // The IDS, not just the dollar amounts: POST /api/credits/checkout takes
-        // {"pack":"credits-20"} and an agent cannot guess that from a bare 20
-        // (an outside reviewer brute-forced it, 2026-08-28).
+        // {"pack":"credits-20"} and an agent cannot guess that from a bare 20.
         packs: Object.entries(CREDIT_PACKS).map(([id, p]) => ({ pack: id, label: p.label, priceUsd: p.cents / 100 })),
         checkout: { method: "POST", url: `${BASE_URL}/api/credits/checkout`, body: { pack: Object.keys(CREDIT_PACKS)[0] } },
-        balance: `${BASE_URL}/api/credits/balance` },
+        balance: `${BASE_URL}/api/credits/balance` }
+        : { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones; the list price is held before the call and debited only on a 200", balance: `${BASE_URL}/api/credits/balance` },
       humanProducts: {
         reports: Object.entries(HUMAN_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsd: p.price / 100, slug: p.slug, buy: `${BASE_URL}/reports` })),
         monitors: Object.entries(MONITOR_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsdPerMonth: p.price / 100, slug: p.slug, subscribe: `${BASE_URL}/monitors` })),

@@ -23,7 +23,7 @@ const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
 
 const MAX_LIMIT = 500;
 const HOURS_PER_YEAR = 24 * 365;
-const META_TTL_MS = 5 * 60_000;
+export const META_TTL_MS = 5 * 60_000;
 
 // Hyperliquid candle intervals -> milliseconds (their documented set).
 const INTERVALS = {

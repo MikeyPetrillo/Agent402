@@ -185,7 +185,7 @@ export const BLOG_POSTS = [
     slug: "catalog-milestone",
     date: "2026-06-20",
     title: "500+ tools and counting",
-    excerpt: "The Agent402 catalog passed the 500-tool mark - every one deterministic, tested in CI, callable with one HTTP request. What categories exist, how we got here, and what's coming next.",
+    excerpt: "The Agent402 catalog passed the 500-tool mark - every one priced per call and callable with one HTTP request. What categories exist, how we got here, and what's coming next.",
     body: `<p>The Agent402 catalog passed the 500-tool mark. Every one of those tools is deterministic, tested in CI, and callable with a single HTTP request. Here's a look at what's in the box.</p>
 
 <p><em>Note (updated 2026-08-18): this post originally counted every catalog entry, including hundreds of near-duplicate pairwise converters that were later collapsed into a handful of parameterized tools. The catalog is quoted as an evergreen "500+ tools" everywhere now; the exact live number is always at <a href="/api/pricing">/api/pricing</a> and <a href="/health">/health</a>.</em></p>

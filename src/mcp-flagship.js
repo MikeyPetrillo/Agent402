@@ -524,9 +524,9 @@ export function mcpInitializeInstructions(baseUrl, { decide = false } = {}) {
     "Orientation: call server.describe. Payment rails / wallet setup: call payment.info.",
     "Missing a tool: call demand.request. Ecosystem sellers: call sellers.list.",
     `Install (hosted, zero wallet): ${install.claudeCodeHosted}`,
-    `Install (npm + wallet or prepaid card credits for paid flagships): ${install.claudeCodeNpm}`,
+    `Install (npm + wallet for paid flagships): ${install.claudeCodeNpm}`,
     `Cursor mcp.json: { "mcpServers": { "agent402": { "url": "${hosted}" } } }`,
-    `Why pay here (usage priced under a quoted ceiling, a failed call is not charged and the receipt proves it, keyed retries never pay twice, one key for tools + models + reports, card credits with no wallet, proof at /status and /revenue): ${baseUrl}/why`,
+    `Why pay here (usage priced under a quoted ceiling, a failed call is not charged and the receipt proves it, keyed retries never pay twice, one key for tools + models + reports, no wallet needed for the proof-of-work tools or a report by card, proof at /status and /revenue): ${baseUrl}/why`,
     `Docs: ${baseUrl}/llms.txt · ${baseUrl}/api/find?q=… · status ${baseUrl}/status`,
   ].join("\n");
 }

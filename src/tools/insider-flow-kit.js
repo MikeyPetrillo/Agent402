@@ -28,6 +28,8 @@ export const INSIDER_TIERS = {
   "insider-report": { price: "$0.60", maxUpstreamUsd: 0.35, maxFilings: 100, synthMaxTokens: 4500, words: "~1,500" },
 };
 const SYNTH_TIMEOUT_MS = 120_000;
+// The lookback a call without "days" reads; the card storefront sends it too.
+export const INSIDER_DEFAULT_DAYS = 90;
 const XML_CONCURRENCY = 4;
 const XML_TIMEOUT_MS = 20_000;
 
@@ -148,7 +150,7 @@ function makeInsiderHandlerInner(tierSlug) {
     const cikIn = input.cik != null ? String(input.cik).trim() : "";
     if (!ticker && !cikIn) throw bad('"ticker" (US stock ticker) or "cik" is required');
     if (ticker && !TICKER_RE.test(ticker)) throw bad(`"${ticker}" is not a valid US ticker`);
-    const days = clampInt(input.days, 90, 7, 365);
+    const days = clampInt(input.days, INSIDER_DEFAULT_DAYS, 7, 365);
     const user = safeUser(req);
 
     // 1) FILINGS (cheap) -> 2) XML per filing (bounded concurrency).

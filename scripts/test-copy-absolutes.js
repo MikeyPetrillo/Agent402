@@ -101,7 +101,9 @@ const FORBIDDEN = [
     // Same shape for the no-model claim. Every honest use on the site scopes it
     // ("of the utility tools", "the deterministic tools"); the README's
     // hand-written /why copy did not, and said the service runs no model at all.
-    re: /\bno (?:model|LLM)\b[^.]{0,30}serving path/i,
+    // "no large language model runs in that serving path" (/terms) slipped
+    // past the first form of this rule: the model was named in full.
+    re: /\bno (?:model|LLM|large language model)\b[^.]{0,30}serving path/i,
     why: "the /v1 tiers, the reports and the media tools run models; scope the claim to the utility or deterministic tools",
     // A scope names WHICH tools. A bare "deterministic" was accepted here, and a
     // file whose neighbouring line was the false count claim ("500+ deterministic
@@ -147,6 +149,13 @@ const FORBIDDEN = [
   {
     re: /[Ee]very tool is deterministic/,
     why: "the /v1 tiers, the report products and the media tools are model-backed",
+  },
+  {
+    // The same claim about the catalog, written as "500+ tools ... Every one
+    // deterministic" on /101 and /agentic-finance. Neither earlier rule saw it:
+    // the count and the adjective sat in different sentences.
+    re: /\b[Ee]very one(?: of them)?,? (?:is )?deterministic\b|\b(?:[Tt]ool )?[Oo]utput is deterministic for the same input\b/,
+    why: "the catalog includes model-backed and live-data tools; say priced per call and name the model-backed ones",
   },
   {
     // A COMPLETENESS CLAIM ABOUT A SURFACE THAT ANSWERS WITH A PAGE.
@@ -226,8 +235,9 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "Agent402 never holds funds."],
                        ["<control>", "Flat pricing for ${n} deterministic web tools."],
                        ["<control>", "Every tool is deterministic."],
-                       ["<control>", "If it was, the charge is recorded as owed and refunded automatically."]]);
-ok(control.length === 5, `control: the sweep reports all 5 planted violations through its real code path (got ${control.length})`);
+                       ["<control>", "If it was, the charge is recorded as owed and refunded automatically."],
+                       ["<control>", "500+ pay-per-call tools. Every one deterministic, priced, and settled on chain."]]);
+ok(control.length === 6, `control: the sweep reports all 6 planted violations through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);
@@ -445,6 +455,12 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
     "A charge that reached no answer is automatically refunded to the paying wallet.",
     "Undelivered calls are auto-refunded on chain.",
     "Refunds for a failed paid call are automatic.",
+    // The catalog-wide determinism claim as it shipped on /101, /agentic-finance,
+    // SKILL.md and /terms.
+    "Every one deterministic, priced, tested, settled on chain over x402 or MPP.",
+    "Every one deterministic, priced, and settled on chain, over x402 or MPP.",
+    "- **200 + JSON** - the result. Tool output is deterministic for the same input.",
+    "small, deterministic web tools - same input, same output; no large language model runs in that serving path.",
   ];
   const MUST_PASS = [
     "On Base we route ONLY to sellers with proven settled volume",
@@ -468,6 +484,7 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
     // or the rule pushes authors into hedging true sentences.
     "every route and price is in /openapi.json and /api/pricing",
     "The catalog is capped - every tool here earns its place and answers its own example on every deploy",
+    "Every one priced per call and settled on chain over x402 or MPP; the model-backed ones are marked as such.",
     // The card path really does refund on its own, and says so in these forms.
     "<span> If a report fails, you're auto-refunded</span><span><span class=\"dot\"></span> Secured by Stripe</span>",
     "Payment is verified before anything is generated; if generation fails after payment, the card is refunded automatically and the x402 settlement is cancelled.",
