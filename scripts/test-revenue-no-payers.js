@@ -48,5 +48,22 @@ ok(at > 0 && /publicRevenueSnapshot\(snap\)/.test(handler), "/api/revenue serial
 const live = readFileSync(new URL("../src/revenue-live.js", import.meta.url), "utf8");
 ok(/const seen = newestOwnSettle\(r\.recent\);/.test(live), "the snapshot's lastInbound is chosen from our own settles only");
 
+// The /revenue page: the proof column links our own settle only, card MPP
+// settlements read as USD (not a stablecoin), and the SOR lane names no
+// retired kit.
+{
+  const { revenuePage } = await import("../src/revenue-live.js");
+  const html = revenuePage("https://agent402.tools", {
+    asOf: "2026-10-02T00:00:00.000Z",
+    rails: [{ rail: "Base", asset: "USDC", balance: 1, recent: snap.rails[0].recent, lastInbound: snap.rails[0].lastInbound }],
+    allTime: { perChain: {} },
+    mpp: { count: 3, rails: { stripe: { count: 3, external: 3, externalUsd: 2, lastAt: null, txs: [] } } },
+  });
+  ok(html.includes(OWN_TX) && !html.includes(OUTSIDE_TX) && !html.includes(OUTSIDE), "/revenue links our own settle, never an outside buyer's tx or address");
+  const mppSeg = html.slice(html.indexOf("MPP wire"), html.indexOf("MPP wire") + 4000);
+  ok(/Card<\/strong> <span[^>]*>USD</.test(mppSeg) && !/stripe<\/strong> <span[^>]*>USDC/i.test(mppSeg), "card settlements over MPP are labelled USD, not USDC");
+  ok(!/Blockscout kit/.test(html), "the SOR lane names no retired kit");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
