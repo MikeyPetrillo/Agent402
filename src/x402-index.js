@@ -45,7 +45,7 @@ import { RAILS, railKey, truncateCaip2 } from "./rails.js";
 import { CHAIN_PAGES, marketSellers } from "./market-page.js";
 import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
 import { judgeFreeResponse } from "./tool-judge.js";
-import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, probeAttemptsFor, isQuoteResponse } from "./x402-live-quote.js";
+import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, probeAttemptsFor, isQuoteResponse, joinSellerRoute } from "./x402-live-quote.js";
 import { evmDomainsOfAccepts, EVM_TOKEN_DOMAINS } from "./evm-usdc-domain.js";
 import { queryTerms, isCjkTerm, splitTokens } from "./query-terms.js";
 import { summarize, fmtUsd, fmtPct } from "./economy.js";
@@ -231,7 +231,7 @@ export function sellerRouteUrl(key, route) {
   const r = String(route || "");
   if (!r.startsWith("/") || r.startsWith("//")) return null;
   let u;
-  try { u = new URL(`${String(key || "")}${r}`); } catch { return null; }
+  try { u = new URL(joinSellerRoute(key, r)); } catch { return null; }
   if (u.username || u.password) return null;
   return isUnderSeller(u.href, key) ? u.href : null;
 }
@@ -262,8 +262,18 @@ export function scopeRouteToSeller(key, hostPath) {
 }
 
 /** Scope parsed rows to their seller: routes made prefix-relative, rows
- *  outside the prefix (or naming the prefix root itself) dropped. A no-op for a
- *  bare origin, so every existing seller's rows are returned untouched. */
+ *  outside the prefix dropped. A no-op for a bare origin, so every existing
+ *  seller's rows are returned untouched.
+ *
+ *  The prefix ROOT ("/" or "/?q=1") is kept only when the row declares payment
+ *  (a price, or accepts that named a chain). The root of a path seller is
+ *  usually its landing page or the function's own index, and an unpriced row
+ *  there is not a tool; but a function host often serves ONE paid endpoint at
+ *  its own path (GET <prefix>?package=react answers 402), and dropping that row
+ *  left the seller listed with no route, no chains and nothing to probe. */
+export function rowDeclaresPayment(r) {
+  return priceToMicroUsd(r?.price) > 0 || (Array.isArray(r?.networks) && r.networks.length > 0) || r?.paid === true;
+}
 // Rows already made prefix-relative (a Bazaar row converted in
 // bazaarItemToTool, which a single-resource manifest reuses) carry this mark,
 // so a second pass cannot read their relative route as host-absolute and drop
@@ -276,7 +286,8 @@ export function scopeRowsToSeller(rows, key) {
     if (!r || typeof r.route !== "string") continue;
     if (r[SCOPED_ROW]) { out.push(r); continue; }
     const route = scopeRouteToSeller(key, r.route);
-    if (route == null || route === "/" || route.startsWith("/?")) continue;
+    if (route == null) continue;
+    if ((route === "/" || route.startsWith("/?")) && !rowDeclaresPayment(r)) continue;
     out.push({ ...r, route, [SCOPED_ROW]: true });
   }
   return out;
@@ -1912,7 +1923,10 @@ export function bazaarItemToTool(item, originUrl) {
   const scopedHere = Boolean(sellerPrefixOf(originUrl));
   if (scopedHere) {
     const scoped = scopeRouteToSeller(originUrl, pathStr);
-    if (scoped == null || scoped === "/") return null;
+    // The prefix root is kept for a registry row that carries payment terms:
+    // such a row is minted by a settled payment, so it is a paid route, not a
+    // landing page (see scopeRowsToSeller).
+    if (scoped == null || (scoped === "/" && !rowDeclaresPayment(pay))) return null;
     pathStr = scoped;
   }
   const tags = Array.isArray(item.tags) ? item.tags : [];
@@ -6272,7 +6286,15 @@ export function sellerDetail(originOrHost) {
       ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
       displayName: v.manifest?.name || origin.replace(/^https?:\/\//, ""),
       homepage: v.manifest?.homepage || origin,
-      toolCount: v.tools?.length || manifestToolCount(v.manifest),
+      // The routes this lookup returns, counted. It used to fall back to the
+      // manifest's own capabilities.tools when we held no rows, so a seller
+      // whose one route we had dropped read "toolCount 1, toolsReturned 0".
+      // The seller's own figure is still published, under its own name, when
+      // it differs from what we hold.
+      toolCount: (v.tools || []).length,
+      ...(manifestToolCount(v.manifest) > 0 && manifestToolCount(v.manifest) !== (v.tools || []).length
+        ? { declaredToolCount: manifestToolCount(v.manifest), declaredToolCountNote: "the tool count the seller's own manifest states (capabilities.tools); toolCount is the routes this index holds and returns" }
+        : {}),
       ...(v.tools?.some((t) => t.paid !== undefined)
         ? { paidToolCount: v.tools.filter((t) => t.paid !== false).length }
         : {}),
@@ -7412,7 +7434,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
       name: t.name,
       method: t.method,
       route: t.route,
-      url: t.seller === LOCAL_SELLER ? `${baseUrl}${t.route}` : `${t.seller}${t.route}`,
+      url: t.seller === LOCAL_SELLER ? `${baseUrl}${t.route}` : (sellerRouteUrl(t.seller, t.route) ?? `${t.seller}${t.route}`),
       // A crawled OpenAPI path can carry template segments the seller never
       // substitutes ("/stock/{symbol}"). Handing an agent that URL as if it
       // were callable wastes its money and its time - measured 2026-08-28,

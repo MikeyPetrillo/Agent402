@@ -190,6 +190,98 @@ ok(rC.listed !== true && cache.get(C)?.manifest?.name !== "Alpha screen", `the r
   ok(isRemovedOrigin(A) && !cache.has(A), "removing the bare host covers every path seller on it");
 }
 
+// ---------------------------------------------------------------- a paid route AT the prefix root
+// A function host (Supabase edge function, Vercel/Cloudflare function) often
+// serves ONE paid endpoint at its own path: GET <prefix>?package=react answers
+// 402. The manifest below is the live shape such a seller published
+// (2026-10-02); before the fix every row scoped to "/?package=react" was
+// dropped, so the seller listed with health 1, toolCount 1, no route and no
+// chains, and nothing was ever probed.
+{
+  const H2 = "https://fn.example.invalid";
+  const D = `${H2}/functions/v1/npm-health`;
+  const E = `${H2}/functions/v1/landing-app`;
+  const PAY_D = "0xf200174de10c26ce7670aaf41d69a8979fe5629d";
+  served.set(`${H2}/robots.txt`, { body: "User-agent: *\nAllow: /\n" });
+  served.set(`${D}/.well-known/x402`, { body: {
+    name: "npm health", description: "npm package health snapshot",
+    resources: [`${D}?package=react`],
+    endpoints: [{ path: "/?package=react", methods: ["GET"], name: "npm Health Snapshot", description: "Package health", price: "$0.01" }],
+    capabilities: { tools: 1 },
+    payment: { scheme: "exact", network: "base", asset: "USDC", asset_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", pay_to: PAY_D },
+    tools: [{ name: "npm Health Snapshot", method: "GET", url: `${D}?package=react`, price: "$0.01", network: "eip155:8453" }],
+  } });
+  // E: an UNPRICED row at its prefix root (its landing page) beside one priced
+  // route, and a priced row on another app's path. No service-wide payment.
+  served.set(`${E}/.well-known/x402`, { body: {
+    name: "landing app", capabilities: { tools: 3 },
+    resources: [
+      { resource: E, method: "GET", description: "Landing page" },
+      { resource: `${E}/?tab=docs`, method: "GET", description: "Docs tab" },
+      { resource: `${E}/api/x`, method: "GET", description: "Paid x", price: "$0.01", accepts: accepts(PAY_A, "10000") },
+      { resource: `${H2}/functions/v1/other/api/y`, method: "GET", price: "$0.01", accepts: accepts(PAY_A, "10000") },
+    ],
+  } });
+  const rD = await submit(D);
+  const rE = await submit(E);
+  const toolsD = cache.get(D)?.tools || [];
+  const toolsE = cache.get(E)?.tools || [];
+  ok(rD.listed === true && toolsD.length === 1 && toolsD[0].route === "/?package=react",
+    `a priced resource at the prefix root (with a query) is kept as the seller's route (${JSON.stringify(toolsD.map((t) => t.route))})`);
+  ok((toolsD[0]?.networks || []).includes("eip155:8453") && String(toolsD[0]?.payToByNetwork?.["eip155:8453"] || "").toLowerCase() === PAY_D,
+    `the root route carries its chain and payTo from the manifest (${JSON.stringify(toolsD[0]?.networks)})`);
+  const dD = sellerDetail(D);
+  ok(dD?.toolCount === 1 && dD.toolsReturned === 1 && dD.tools?.[0]?.route === "/?package=react", `?seller= toolCount and toolsReturned agree (${dD?.toolCount}/${dD?.toolsReturned})`);
+  ok((dD?.networks || []).includes("eip155:8453"), `?seller= reports the root route's network (${JSON.stringify(dD?.networks)})`);
+  ok(!("declaredToolCount" in (dD || {})), "a manifest count that matches the rows held adds no second figure");
+  ok(rE.listed === true && toolsE.length === 1 && toolsE[0].route === "/api/x",
+    `an unpriced prefix root (landing page, with or without a query) is not a tool, and another app's path is dropped (${JSON.stringify(toolsE.map((t) => t.route))})`);
+  const dE = sellerDetail(E);
+  ok(dE?.toolCount === 1 && dE.toolsReturned === 1 && dE.declaredToolCount === 3,
+    `toolCount is the rows held; the manifest's own figure rides as declaredToolCount (${JSON.stringify({ c: dE?.toolCount, r: dE?.toolsReturned, d: dE?.declaredToolCount })})`);
+  const ctx = { baseUrl: "https://agent402.tools", catalog: {}, prices: {}, network: "base", toolCount: 0, walletName: "w" };
+  const row = (routeQuery({ query: "npm package health snapshot", top: 5, include: "external", ...ctx }).results || []).find((r) => r.seller === D);
+  ok(row?.url === `${D}?package=react`, `a root route's URL is the prefix itself plus the query, not prefix + "/" (${row?.url})`);
+
+  // URL joins: every caller builds seller + route through sellerRouteUrl.
+  const { sellerRouteUrl, scopeRowsToSeller, enrichLiveQuotes } = idx;
+  ok(sellerRouteUrl(D, "/?package=react") === `${D}?package=react` && sellerRouteUrl(D, "/") === D, "sellerRouteUrl joins a prefix-root route to the prefix itself");
+  ok(sellerRouteUrl("https://h.example", "/") === "https://h.example/" && sellerRouteUrl("https://h.example", "/?a=1") === "https://h.example/?a=1", "a bare origin's root route joins as before");
+
+  // scopeRowsToSeller directly: the rule, both directions.
+  const scoped = scopeRowsToSeller([
+    { route: "/functions/v1/npm-health", method: "GET" },
+    { route: "/functions/v1/npm-health?x=1", method: "GET", paid: false },
+    { route: "/functions/v1/npm-health", method: "POST", price: "$0.02" },
+    { route: "/functions/v1/npm-health?package=a", method: "GET", networks: ["eip155:8453"] },
+    { route: "/functions/v1/other", method: "GET", price: "$0.01" },
+  ], D);
+  ok(JSON.stringify(scoped.map((r) => `${r.method} ${r.route}`)) === JSON.stringify(["POST /", "GET /?package=a"]),
+    `scopeRowsToSeller keeps a priced or chained root row only (${JSON.stringify(scoped.map((r) => `${r.method} ${r.route}`))})`);
+  const bareRows = [{ route: "/", method: "GET" }];
+  ok(scopeRowsToSeller(bareRows, "https://h.example") === bareRows, "a bare origin's rows are untouched");
+
+  // A registry row (minted by a settled payment) at the root is a paid route.
+  ok(bazaarItemToTool({ resource: D, method: "GET", accepts: accepts(PAY_D) }, D)?.route === "/", "a registry row with accepts at the prefix root is kept");
+  ok(bazaarItemToTool({ resource: D, method: "GET" }, D) === null, "a registry row with no payment terms at the prefix root is not a tool");
+
+  // The live-402 probe asks the prefix itself and learns the route's chains.
+  // An IP-literal key keeps the SSRF guard off DNS, so this stays offline.
+  const K = "https://1.1.1.1/functions/v1/npm-health";
+  const header = Buffer.from(JSON.stringify({ x402Version: 2, accepts: accepts(PAY_D, "10000") })).toString("base64");
+  const asked = [];
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    asked.push(`${String(init.method || "GET").toUpperCase()} ${String(url)}`);
+    return new Response("{}", { status: 402, headers: { "payment-required": header, "content-type": "application/json" } });
+  };
+  const origLog = console.log; console.log = () => {};
+  const probeRows = [{ seller: K, route: "/?package=react", method: "GET", slug: "npm-health", price: null, networks: [] }];
+  try { await enrichLiveQuotes(probeRows, K, { ignoreBudget: true }); } finally { globalThis.fetch = origFetch; console.log = origLog; }
+  ok(asked.length > 0 && asked.every((a) => a === `GET ${K}?package=react`), `the probe asks the prefix itself, never prefix + "/" (${JSON.stringify(asked)})`);
+  ok((probeRows[0].networks || []).includes("eip155:8453") && Number(probeRows[0].price) > 0, `the probe learns the root route's network and price (${JSON.stringify({ n: probeRows[0].networks, p: probeRows[0].price })})`);
+}
+
 __setCrawlFetchForTest(null);
 
 // The registration record's "settled" flag: a path seller is one app on a

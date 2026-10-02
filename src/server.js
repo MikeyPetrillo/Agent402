@@ -311,7 +311,7 @@ import { acpFeed, acpManifest } from "./acp.js";
 import { findTools, findRelatedSellers } from "./find.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE } from "./wish.js";
 import { setAlgorandCrawlSources } from "./algorand-sellers.js";
-import { priceToMicroUsd } from "./x402-index.js";
+import { priceToMicroUsd, sellerRouteUrl } from "./x402-index.js";
 import { allPayToOrigins, allPayToPrices, indexMemoryFigures, indexSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedTools, indexedToolCategories, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
@@ -10008,7 +10008,7 @@ bootStep("setAlgorandCrawlSources", () => {
           const route = String(t?.route || "");
           if (!route.startsWith("/")) continue;
           out.push({
-            url: `${origin}${route}`,
+            url: sellerRouteUrl(origin, route) ?? `${origin}${route}`,
             method: String(t?.method || "GET").toUpperCase(),
             description: String(t?.description || t?.name || ""),
             amountAtomic: String(micro),
