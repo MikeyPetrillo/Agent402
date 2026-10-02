@@ -244,9 +244,6 @@ body { transition: background-color .18s ease, color .18s ease; }
    whole nav into a tap menu) --- */
 .ml-burger { display:none; align-items:center; justify-content:center; width:38px; height:34px; padding:0; border:1px solid var(--hairline); border-radius:8px; background:var(--card); color:var(--ink); cursor:pointer; }
 .ml-burger .ml-burger-close { display:none; }
-.ml-live-dot { width:7px; height:7px; border-radius:50%; background:#E5484D; display:inline-block; box-shadow:0 0 0 0 rgba(229,72,77,.55); animation:ml-live-pulse 1.8s ease-out infinite; }
-@keyframes ml-live-pulse { 0% { box-shadow:0 0 0 0 rgba(229,72,77,.55); } 70% { box-shadow:0 0 0 6px rgba(229,72,77,0); } 100% { box-shadow:0 0 0 0 rgba(229,72,77,0); } }
-@media (prefers-reduced-motion: reduce) { .ml-live-dot { animation:none; } }
 .ml-theme-toggle { display:inline-flex; align-items:center; justify-content:center; width:36px; height:34px; padding:0; border:1px solid var(--hairline); border-radius:999px; background:var(--card); color:var(--ink); cursor:pointer; }
 .ml-theme-toggle .ml-moon { display:none; } :root[data-theme="dark"] .ml-theme-toggle .ml-moon { display:inline; } :root[data-theme="dark"] .ml-theme-toggle .ml-sun { display:none; }
 .ml-mobile-menu { display:none; border-top:1px solid var(--hairline); background:var(--paper); max-height:calc(100vh - 62px); overflow-y:auto; -webkit-overflow-scrolling:touch; }
@@ -792,7 +789,7 @@ function nav(activePath) {
       ${zone3}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;">
-      <a class="ml-nav-gh ml-nav-live" href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;" title="x402 and MPP payments as they settle, read from the chain"><span class="ml-live-dot" aria-hidden="true"></span>live</a>
+      <a class="ml-nav-gh ml-nav-live" href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 11px;border:1px solid var(--hairline);border-radius:8px;background:var(--card);" title="Watch x402 and MPP payments settle, read from the chain"><svg width="15" height="13" viewBox="0 0 24 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="13" rx="2"/><path d="M8 19h8"/><path d="M10.5 6.2v4.6l4-2.3z" fill="currentColor" stroke="none"/></svg>live</a>
       <a class="ml-nav-gh" href="/status" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;" title="Uptime from two outside observers"><span aria-hidden="true" style="width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;"></span>status</a>
       <a class="ml-nav-gh" href="/llms.txt" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;padding:8px 13px;border:1px solid var(--hairline);border-radius:999px;background:var(--card);white-space:nowrap;">llms.txt</a>
       ${activePath === "/reports" ? "" : `<a class="ml-nav-cta" href="/reports" style="background:var(--btn-bg);color:var(--btn-fg);font-family:var(--font-body);font-weight:500;font-size:13.5px;text-decoration:none;padding:9px 16px;border-radius:999px;box-shadow:var(--btn-shadow);white-space:nowrap;">Get a report</a>`}
