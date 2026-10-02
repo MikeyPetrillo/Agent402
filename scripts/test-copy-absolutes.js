@@ -359,6 +359,51 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
   const missing = uncovered(kitFiles, reachable);
   ok(missing.length === 0,
      `every kit that reaches a model upstream is in MODEL_BACKED_KITS${missing.length ? ` - MISSING: ${missing.join(" | ")}` : ""}`);
+
+  // Two shapes the check above could not see (2026-10-02): a kit that reaches
+  // its model through an internal SERVICE it calls over HTTP (decide-kit ->
+  // DECIDE_SERVICE_URL -> services/decide/llm.js), and a kit that BUILDS its
+  // tools in a function (`export function buildDecideTools`) rather than
+  // exporting a *_TOOLS const - both read as "helper-only" and were skipped,
+  // so decide published modelBacked:false.
+  const serviceKits = files.filter((f) => f.startsWith("src/tools/")).filter((f) => {
+    const svc = [...(read(f) || "").matchAll(/process\.env\.([A-Z]+)_SERVICE_URL/g)].map((m) => m[1].toLowerCase());
+    return svc.some((name) => files.some((g) => g.startsWith(`services/${name}/`) && MODEL_UPSTREAM.test(read(g) || "")));
+  });
+  ok(serviceKits.includes("src/tools/decide-kit.js"), `a kit that calls a model-running service is detected (found: ${serviceKits.join(", ") || "none"})`);
+  const builderExports = (f) => {
+    const src = read(f) || "";
+    const consts = (src.match(/^export const ([A-Z0-9_]+_TOOLS[A-Z0-9_]*)/gm) || []).map((x) => x.replace("export const ", ""));
+    const builders = (src.match(/^export function (build[A-Za-z0-9]*Tools)\b/gm) || []).map((x) => x.replace("export function ", ""));
+    // A builder is covered when server.js binds its result to a const that is listed.
+    const bound = builders.flatMap((b) => [...server.matchAll(new RegExp(`const ([A-Z0-9_]+)\\s*=[^;\\n]*\\b${b}\\(`, "g"))].map((m) => m[1]));
+    return [...consts, ...bound, ...(builders.length && !bound.length ? builders : [])];
+  };
+  ok(uncovered(["<control>"], reachable, () => ["DECIDE_LIKE_UNLISTED"]).length === 1, "control: an unlisted builder-bound kit is reported");
+  const missing2 = uncovered([...new Set([...kitFiles, ...serviceKits])], reachable, builderExports);
+  ok(missing2.length === 0,
+     `every kit that reaches a model (directly or through its service), incl. builder-made tools, is in MODEL_BACKED_KITS${missing2.length ? ` - MISSING: ${missing2.join(" | ")}` : ""}`);
+
+  // A tool whose OWN description says its output is generated must say so in
+  // the catalog too: such a tool inside an otherwise deterministic kit declares
+  // `modelBacked: true` on its definition (server.js folds it in). exa-answer
+  // said "Model-backed" in its description and published modelBacked:false.
+  ok(/def\?\.modelBacked === true/.test(server), "server.js folds a definition's own modelBacked:true into MODEL_BACKED_SLUGS");
+  const GENERATED = /Model-backed|AI-generated|answer text is generated/;
+  const undeclared = [];
+  for (const f of files.filter((x) => x.startsWith("src/tools/"))) {
+    const src = read(f) || "";
+    if (exportsOf(f).some((n) => reachable.has(n))) continue; // whole kit is listed
+    const parts = src.split(/\n\s+slug: "/).slice(1);
+    for (const seg of parts) {
+      const slug = seg.slice(0, seg.indexOf('"'));
+      if (GENERATED.test(seg) && !/\bmodelBacked: true\b/.test(seg)) undeclared.push(`${f}:${slug}`);
+    }
+  }
+  ok(undeclared.length === 0, `a tool describing generated output declares modelBacked: true${undeclared.length ? ` - MISSING: ${undeclared.join(", ")}` : ""}`);
+
+  // Packs inherit: a pack running a model-backed tool is model-backed.
+  ok(/modelBackedPackSlugs\(SKILL_PACKS, isModelBacked\)/.test(server), "skill packs derive modelBacked from the tools they run");
 }
 
 // --- the class rules are pinned in BOTH directions -------------------------

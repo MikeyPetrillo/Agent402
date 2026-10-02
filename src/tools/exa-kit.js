@@ -386,6 +386,7 @@ export const EXA_TOOLS = [
     name: "Exa grounded answer",
     slug: "exa-answer",
     category: "web",
+    modelBacked: true, // the answer text is generated: read by server.js's MODEL_BACKED_SLUGS
     price: "$0.010",
     description:
       "Ask a question and get a written answer with the sources it was drawn from. Exa searches its index, reads the pages and composes the answer, returning the citation list (title, URL, published date) alongside it so every claim can be checked. Model-backed: the answer text is generated, the citations are retrieved.",

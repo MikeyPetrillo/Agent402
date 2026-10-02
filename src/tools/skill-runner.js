@@ -2810,6 +2810,12 @@ export function buildSkillTools({ getCatalog, inlineHandlers = {} }) {
   });
 }
 
+// Catalog slugs ("skill-<pack>") of the packs that run at least one
+// model-backed tool. server.js folds them into MODEL_BACKED_SLUGS.
+export function modelBackedPackSlugs(packs, isModelBacked) {
+  return (packs || []).filter((p) => (p.toolSlugs || []).some((s) => isModelBacked(s))).map((p) => `skill-${p.slug}`);
+}
+
 // Test surface — used by scripts/test-skill-runner.js.
 export const __test = {
   runPack,

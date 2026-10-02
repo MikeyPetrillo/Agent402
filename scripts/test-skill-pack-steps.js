@@ -190,3 +190,16 @@ for (const pack of SKILL_PACKS) {
 }
 
 console.log(`\n${passed} passed, 0 failed (${SKILL_PACKS.length} packs checked)`);
+
+// ---- a pack running a model-backed tool is model-backed (2026-10-02) --------
+{
+  const { modelBackedPackSlugs } = await import("../src/tools/skill-runner.js");
+  const { SKILL_PACKS } = await import("../src/skills.js");
+  const model = new Set(["pdf-summarize", "answer", "transcribe"]);
+  const got = modelBackedPackSlugs(SKILL_PACKS, (s) => model.has(s)).sort();
+  const want = SKILL_PACKS.filter((p) => p.toolSlugs.some((s) => model.has(s))).map((p) => `skill-${p.slug}`).sort();
+  ok(got.length >= 4 && JSON.stringify(got) === JSON.stringify(want), `packs running a model-backed tool are flagged (got ${got.join(", ")})`);
+  ok(["skill-document-brief", "skill-search-and-cite", "skill-article-digest", "skill-subtitle-pipeline"].every((s) => got.includes(s)), "the four packs with a model step are among them");
+  ok(modelBackedPackSlugs(SKILL_PACKS, () => false).length === 0, "no model-backed tool, no model-backed pack");
+}
+console.log("model-backed pack derivation checked");

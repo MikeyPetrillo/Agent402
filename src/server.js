@@ -559,11 +559,14 @@ const MODEL_BACKED_KITS = [
   ...RESEARCH_DEEP_TOOLS, ...DOSSIER_TOOLS, ...FUND_TOOLS, ...DOMAIN_AUDIT_TOOLS, ...RECALL_TOOLS,
   ...INSIDER_TOOLS, ...TOKEN_RISK_TOOLS, ...TOKEN_BRIEF_TOOLS, ...TICKER_PACK_TOOLS, ...FILING_WATCH_TOOLS,
   ...LINKEDIN_TOOLS,
+  ...DECIDE_TOOLS_ENABLED, // the plan is written by the decision service's model (services/decide/llm.js)
 ];
 const MODEL_BACKED_SLUGS = new Set(MODEL_BACKED_KITS.map((t) => t.slug).filter(Boolean));
-// `answer` says so in its own description ("AI-generated answer"), and lives in
-// the search kit beside deterministic tools, so it is named individually.
-MODEL_BACKED_SLUGS.add("answer");
+// A tool that runs a model inside a kit of deterministic tools (`answer` in the
+// search kit, `exa-answer` in the Exa kit) declares `modelBacked: true` on its
+// own definition. Skill packs are added below, once their tools exist: a pack
+// that runs any model-backed step is model-backed.
+for (const def of ALL_KIT) if (def?.modelBacked === true && def.slug) MODEL_BACKED_SLUGS.add(def.slug);
 export function isModelBacked(slugOrDef) {
   const slug = typeof slugOrDef === "string" ? slugOrDef : slugOrDef?.slug;
   return MODEL_BACKED_SLUGS.has(String(slug || ""));
@@ -588,7 +591,7 @@ for (const def of ALL_KIT) if (Object.hasOwn(REPORT_TIERS, def.slug) && typeof d
     if (add.length) def.aliases = [...(def.aliases || []), ...add];
   }
 }
-import { buildSkillTools } from "./tools/skill-runner.js";
+import { buildSkillTools, modelBackedPackSlugs } from "./tools/skill-runner.js";
 import { buildRouteExecuteTool, EXEC_TIERS } from "./tools/route-execute.js";
 import { buildSellerTrustTool } from "./tools/seller-trust.js";
 import { buildSellerDossierTool } from "./tools/seller-dossier.js";
@@ -1088,6 +1091,14 @@ for (const tool of SKILL_TOOLS) {
   if (CATALOG[tool.route]) throw new Error(`Duplicate route in skill set: ${tool.route}`);
   CATALOG[tool.route] = tool;
   ALL_KIT.push(tool); // so the route-binding loop below picks them up too
+}
+// A pack is model-backed when any tool it runs is (every advertised tool runs
+// as a step: test-skill-pack-steps). Derived, so a pack that gains a model step
+// can never publish modelBacked:false.
+for (const slug of modelBackedPackSlugs(SKILL_PACKS, isModelBacked)) {
+  MODEL_BACKED_SLUGS.add(slug);
+  const def = SKILL_TOOLS.find((t) => t.slug === slug);
+  if (def) def.modelBacked = true;
 }
 
 // Route-and-execute: the SOR's executing surface. Internal dispatch always;
