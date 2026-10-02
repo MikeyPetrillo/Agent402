@@ -1,8 +1,6 @@
 // In-memory payment store: the last hour of events (for the live page and its
 // replay) plus per-minute rollups for 24 hours of stats. Nothing persists; a
-// restart backfills the hour from the chain, so the 24-hour figures cover only
-// the time since the start minus an hour until a full day has passed
-// (`coverage24hSince`, which the page shows on every 24h figure).
+// restart backfills the hour from the chain.
 const HOUR = 3600_000, DAY = 24 * HOUR;
 const MAX_EVENTS = 30_000;
 

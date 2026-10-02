@@ -123,11 +123,11 @@
 <header class="hero"><div class="wrap">
   <div class="hero-l">
     <h1>Paid API calls, <span>live.</span></h1>
-    <p>Every little walker is one settled transfer, read from the chain. It wears the logo of the seller it paid and hops into the gate for its price.</p>
+    <p>Every little walker is one settled payment, read from the chain. It wears the logo of the seller it paid and hops into the gate for its price.</p>
   </div>
   <div class="stats">
     <div class="stat"><div class="n" id="s-pm">-</div><div class="k">payments / min</div></div>
-    <div class="stat usd"><div class="n" id="s-usd">-</div><div class="k">usd settled · <span class="w">1h</span></div></div>
+    <div class="stat usd"><div class="n" id="s-usd">-</div><div class="k">usdc settled · <span class="w">1h</span></div></div>
     <div class="stat"><div class="n" id="s-buyers">-</div><div class="k">buyers · <span class="w">1h</span></div></div>
   </div>
 </div></header>
@@ -140,7 +140,7 @@
         <div class="seg" role="group" aria-label="Window"><button data-win="h1" aria-pressed="true">1h</button><button data-win="h24" aria-pressed="false">24h</button></div>
       </div>
       <div class="tools">
-        <div class="legend"><span><i class="x"></i>x402 · Base · USDC</span><span><i class="p"></i>Tempo · USDC.e to MPP recipients</span></div>
+        <div class="legend"><span><i class="x"></i>x402 · Base · USDC</span><span><i class="p"></i>MPP · Tempo · USDC.e</span></div>
         <button id="fs" type="button" aria-pressed="false" aria-label="Full screen" title="Full screen (Esc to exit)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path class="fs-in" d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.6"/><path class="fs-out" d="M6 2v4H2M14 6h-4V2M10 14v-4h4M2 10h4v4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Full screen</span></button>
       </div>
     </div>
@@ -160,7 +160,7 @@
 
 <section class="wrap read">
   <p class="label">How to read this</p>
-  <p>Each walker is one settled payment, read from the chain, wearing the logo of the seller it paid and hopping into the gate for its price: x402 settlements on Base (USDC, signed authorizations, up to $<!--MAXUSD-->) to sellers listed in public x402 discovery, and, on Tempo, every USDC.e transfer of up to $<!--MAXUSD--> to a recipient named in an MPP seller's own 402. A Tempo transfer carries no marker that says it was an MPP payment, so that side counts every such transfer to those addresses. The courier is a payment to Agent402. The figures are read from the chain since this service last started: the 24h view says since when until a full day has passed. Names and logos come from sellers' public listings. Tap a walker for the payment and its transaction.</p>
+  <p>Each walker is one settled payment, read from the chain, wearing the logo of the seller it paid and hopping into the gate for its price: x402 on Base (USDC) to sellers listed in public x402 discovery, and MPP on Tempo (USDC.e) to recipients named in MPP sellers' own 402s. The courier is a payment to Agent402. Names and logos come from sellers' public listings. Tap a walker for the payment and its transaction.</p>
 </section>
 
 <footer><div class="wrap">

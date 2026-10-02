@@ -12,7 +12,7 @@ import { startTempo } from "./lib/tempo.js";
 import { makeDirectory, INTERNAL_PAYERS } from "./lib/directory.js";
 import { makeLogoCache } from "./lib/logos.js";
 import { makeStore } from "./lib/store.js";
-import { BASE, TEMPO, MAX_PAYMENT_USD } from "./lib/chains.js";
+import { BASE, TEMPO } from "./lib/chains.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
@@ -30,9 +30,6 @@ const STATIC = {
   ...Object.fromEntries(["geist-400-latin", "geist-500-latin", "geist-600-latin", "geist-mono-400-latin", "geist-mono-700-latin"].map((f) => [`/fonts/${f}.woff2`, [`fonts/${f}.woff2`, "font/woff2"]])),
 };
 const files = Object.fromEntries(Object.entries(STATIC).map(([p, [f, type]]) => [p, { body: readFileSync(join(here, "public", f)), type }]));
-// The page's "how to read this" ceiling comes from the same config the ingest uses.
-files["/"].body = Buffer.from(files["/"].body.toString("utf8")
-  .replaceAll("<!--MAXUSD-->", String(MAX_PAYMENT_USD)));
 // The page references its script with a content hash, so a deploy is never
 // served a stale cached script.
 const appVersion = createHash("sha256").update(files["/app.js"].body).digest("hex").slice(0, 12);
@@ -85,7 +82,7 @@ function toPublic(ev) {
     payer: shortAddr(ev.payer), tx: ev.tx, txUrl: (ev.chain === "mpp" ? TEMPO : BASE).txUrl(ev.tx),
     seller: sellerInfo(ev.seller.key),
     endpoint: ev.seller.endpoints?.length === 1 ? ev.seller.endpoints[0] : null,
-    internal: ev.internal || undefined,
+    internal: INTERNAL_PAYERS.has(ev.payer) || undefined,
   };
 }
 
@@ -99,8 +96,6 @@ function onEvents(evs, { backfill = false } = {}) {
     const s = directory.lookup(ev.chain, ev.payTo);
     if (!s.listed && !INCLUDE_UNLISTED) continue;
     ev.seller = s;
-    // Agent402's own canary and volume payments: counted like any other, drawn in grey.
-    ev.internal = INTERNAL_PAYERS.has(ev.payer);
     sellerByKey.set(s.key, sellerPublic(s));
     // Backfilled payments are history: they join the hour a page loads on
     // connect, never the live stream of walkers.

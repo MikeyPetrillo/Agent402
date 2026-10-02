@@ -254,13 +254,9 @@
     $("s-pm").textContent = String(s.perMinute);
     $("s-usd").textContent = fmtUsd(s[win].usd);
     $("s-buyers").textContent = s[win].buyers.toLocaleString();
-    // The 24h rollups live in memory and a restart backfills one hour, so a
-    // 24h figure read before a full day has passed covers less than a day:
-    // every 24h label says since when.
+    document.querySelectorAll(".stat .w").forEach((el) => { el.textContent = win === "h1" ? "1h" : "24h"; });
     const partial = win === "h24" && lastStats.coverage24hSince && Date.now() - lastStats.coverage24hSince < 23.5 * 3600_000;
-    const since = partial ? new Date(lastStats.coverage24hSince).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
-    document.querySelectorAll(".stat .w").forEach((el) => { el.textContent = win === "h1" ? "1h" : partial ? `since ${since}` : "24h"; });
-    $("board-title").textContent = `Top sellers · ${win === "h1" ? "last hour" : partial ? `since ${since} (not a full 24 hours)` : "last 24 hours"}`;
+    $("board-title").textContent = `Top sellers · ${win === "h1" ? "last hour" : "last 24 hours"}${partial ? ` (since ${new Date(lastStats.coverage24hSince).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})` : ""}`;
     const cards = $("cards"); cards.textContent = "";
     for (const t of s[win].topSellers) {
       const shared = /^Shared recipient/.test(t.name), href = t.agent402 ? "https://agent402.tools/" : t.listed && t.host && !shared ? `https://${t.host}` : shared ? "https://agent402.tools/mpp-marketplace" : null;
