@@ -23,6 +23,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, readdir
 import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { sendEmail } from "./email.js";
+import { creditsTopupFields } from "./credits-sales.js";
 import { chargeCancelledForClientGone } from "./hangup-settlement.js";
 
 // A hold whose buyer left before the first byte is decided when the response
@@ -246,7 +247,7 @@ export function createCredits({ stripe, baseUrl, storeDir, onDebit, onLoad, now 
       const a = authorize(key, item.priceUsd);
       if (!a.ok) {
         res.setHeader("X-Credits-Error", a.reason);
-        return res.status(402).json({ error: a.reason === "insufficient" ? `Insufficient credits: this call costs $${item.priceUsd} and the key holds $${a.balanceUsd}.` : a.reason === "unknown" ? "Unknown credits key." : a.reason === "disabled" ? "This credits key is disabled." : "Malformed credits key.", reason: a.reason, balanceUsd: a.balanceUsd ?? null, priceUsd: item.priceUsd, topup: `${baseUrl}/credits` });
+        return res.status(402).json({ error: a.reason === "insufficient" ? `Insufficient credits: this call costs $${item.priceUsd} and the key holds $${a.balanceUsd}.` : a.reason === "unknown" ? "Unknown credits key." : a.reason === "disabled" ? "This credits key is disabled." : "Malformed credits key.", reason: a.reason, balanceUsd: a.balanceUsd ?? null, priceUsd: item.priceUsd, ...creditsTopupFields(baseUrl) });
       }
       // Accepted: the x402 dispatcher is bypassed for this request, so any
       // UNSIGNED payment headers riding alongside must not survive to a handler

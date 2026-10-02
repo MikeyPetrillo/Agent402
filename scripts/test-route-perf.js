@@ -226,9 +226,12 @@ const cache = _cacheForTests();
   {
     const bigEntry = (origin, n) => ({ manifest: { name: "huge", homepage: origin }, tools: Array.from({ length: n }, (_, k) => ({ seller: origin, method: "POST", route: `/r${k}`, slug: `zanzibar-${k}`, name: `Zanzibar ${k}`, description: `zanzibar tool number ${k} quux${k}`, category: "data", tags: [], price: 0.001, networks: ["eip155:8453"] })), fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
     const big = "https://huge-seller.example";
+    // Build the 80,000 rows BEFORE the gap meter starts, so the meter times the
+    // indexer and not the fixture.
+    const bigValue = bigEntry(big, 80000);
     let worst = 0, last = performance.now();
     const iv = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last); last = now; }, 2);
-    cache.set(big, bigEntry(big, 80000));
+    cache.set(big, bigValue);
     for (let i = 0; i < 400 && (_routeIndexStatsForTest().pending || _routeIndexStatsForTest().partial); i++) await new Promise((r) => setTimeout(r, 5));
     clearInterval(iv);
     ok(!_routeIndexStatsForTest().partial && worst < 100, `an 80,000-tool seller indexes in the background without a long event-loop gap (worst ${worst.toFixed(0)} ms)`);

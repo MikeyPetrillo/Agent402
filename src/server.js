@@ -535,7 +535,7 @@ import { hostFigures, hostIndexEntry, isSelfSellerQuery, railsWithOutsideSettlem
 import { standingCountsExcludingHost } from "./standing.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
-import { creditsSalesEnabled } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsTopupFields } from "./credits-sales.js";
 
 // Listed only with a key, like every other env-gated kit: a tool we cannot serve
 // must not appear in the catalog, on /api/pricing, or in a 402's offer.
@@ -3720,7 +3720,7 @@ if (_credits) {
     res.set("Cache-Control", "no-store");
     const auth = String(req.headers.authorization || "");
     const b = /^Bearer a402_/.test(auth) ? _credits.balance(auth.slice(7).trim()) : null;
-    if (!b) return res.status(401).json({ error: "Send your credits key as Authorization: Bearer a402_…", topup: `${BASE_URL}/credits` });
+    if (!b) return res.status(401).json({ error: "Send your credits key as Authorization: Bearer a402_…", ...creditsTopupFields(BASE_URL) });
     res.json(b);
   });
   app.get("/__operator/credits.json", (req, res) => {
@@ -7676,7 +7676,7 @@ app.get("/tools/:slug", (req, res) => {
   // The method alias (POST on a GET-only path, GET/HEAD on a POST-only path)
   // runs only when the catalog has no route of the other method at this path.
   const otherMethodRouted = !!CATALOG[`${tool.method === "GET" ? "POST" : "GET"} ${tool.path}`];
-  htmlCache(res, 300, 900).send(skillPackCanonical(tool.slug, toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null, otherMethodRouted })));
+  htmlCache(res, 300, 900).send(skillPackCanonical(tool.slug, toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null, otherMethodRouted, mpp: !!(process.env.MPP_SECRET_KEY || "").trim() })));
 });
 // A skill pack's catalog page points its canonical at the pack page (/skills/<pack>).
 const SKILL_PACK_SLUGS = new Set(SKILL_PACKS.map((p) => p.slug));

@@ -1066,7 +1066,7 @@ function percentile(sorted, p) {
 
 const math = [
   {
-    route: "POST /api/calc", name: "Calculator", slug: "calc", aliases: ["divide", "fraction", "divided-by"], category: "math", price: "$0.001",
+    route: "POST /api/calc", name: "Calculator", slug: "calc", aliases: ["divide", "fraction", "divided-by", "calculate", "calculator"], category: "math", price: "$0.001",
     description: "Safely evaluate an arithmetic expression (+ - * / % ^ and parentheses). No code execution - a real parser, not eval.",
     tags: ["calc", "math", "expression", "arithmetic"],
     discovery: { bodyType: "json", input: { expr: "2 + 3 * (4 - 1) ^ 2" }, inputSchema: { properties: { expr: { type: "string" } }, required: ["expr"] }, output: { example: { result: 29 } } },

@@ -238,10 +238,10 @@ function cutAtWord(text, max) {
 /** Meta description, 120-155 characters, built from the tool's own sentence
  *  plus the price and how it is paid - different on every page because the
  *  description, price and route are. */
-export function toolMetaDescription(tool, { computePayable = false } = {}) {
+export function toolMetaDescription(tool, { computePayable = false, mpp = true } = {}) {
   const MAX = 155, MIN = 120;
   const p = priceWords(tool).long;
-  const pay = computePayable ? `${p} over x402, or free with proof-of-work.` : `${p} over x402 or MPP.`;
+  const pay = computePayable ? `${p} over x402, or free with proof-of-work.` : `${p} over x402${mpp ? " or MPP" : ""}.`;
   const room = MAX - pay.length - 2;
   let lead = String(tool.description || tool.name).replace(/\s+/g, " ").trim();
   lead = cutAtWord(lead, room);
@@ -342,7 +342,10 @@ function curlExample(baseUrl, tool) {
   return `curl -i -X ${tool.method} ${baseUrl}${tool.path} \\\n  -H "Content-Type: application/json" \\\n  -d '${body}'`;
 }
 
-export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0, cacheTtl = null, otherMethodRouted = false } = {}) {
+export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0, cacheTtl = null, otherMethodRouted = false, mpp = true } = {}) {
+  // MPP rides the shim, which mounts only with MPP_SECRET_KEY: a self-host
+  // without it offers x402 alone, so the page names only the rails it has.
+  const orMpp = mpp ? " or MPP" : "";
   const e = ledgerEsc;
   const title = toolTitle(tool);
   const canonical = `${baseUrl}/tools/${tool.slug}`;
@@ -377,7 +380,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
         "@type": "Offer",
         price: tool.price.replace("$", ""),
         priceCurrency: "USD",
-        description: `${pw.long}, paid over x402 in ${railsOrFor(tool)} or MPP. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
+        description: `${pw.long}, paid over x402 in ${railsOrFor(tool)}${orMpp}. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
       },
     },
     {
@@ -394,10 +397,10 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
 
   // --- Answer-first summary: what it does, what it costs, how to pay, where it lives.
   const payHow = computePayable
-    ? `pay ${pw.long} over x402 or MPP, or call it free by solving a proof-of-work challenge`
+    ? `pay ${pw.long} over x402${orMpp}, or call it free by solving a proof-of-work challenge`
     : evmOnly
       ? `pay ${pw.long} over x402 with ${evmOne}${tool.identityBound ? " (the paying wallet is the identity)" : ""}`
-      : `pay ${pw.long} over x402 or MPP (there is no free tier)`;
+      : `pay ${pw.long} over x402${orMpp} (there is no free tier)`;
   const reqPhrase = required.length
     ? `${required.length === 1 ? "the required field" : "the required fields"} ${codeList(required)}`
     : Object.keys(props).length ? `no required fields (${Object.keys(props).length} optional)` : "no input";
@@ -449,7 +452,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   // tool runs (src/mpp-tempo.js), so a failure there is a refund owed
   // (src/tempo-push-debts.js), not a cancelled charge.
   const tempoHere = tempoOfferedFor(tool) && !!tempoDiscoveryInfo();
-  const notCharged = ["x402", "MPP", ...(tool.identityBound ? [] : ["a prepaid credits key"])];
+  const notCharged = ["x402", ...(mpp ? ["MPP"] : []), ...(tool.identityBound ? [] : ["a prepaid credits key"])];
   facts.push(`A paid call that ends in any status of 400 or above is not charged over ${listWords(notCharged)}: settlement is cancelled when the tool fails.${tempoHere ? " The exception is a Tempo push credential, a transfer the buyer sent before the call: it settles before the tool runs, so if the tool then fails the payment is recorded as a refund owed to the paying wallet." : ""}`);
   if (computePayable) facts.push(`Free tier: no outbound network call leaves the server for this tool, so proof-of-work (${e(String(powDifficulty))} leading zero bits of sha256) pays for it.`);
   else facts.push(`Wallet-only: this tool ${tool.modelBacked ? "runs a model, so it has no proof-of-work tier" : WALLET_ONLY_POLICY_REASON.has(tool.slug) ? `${e(WALLET_ONLY_POLICY_REASON.get(tool.slug))}, so it is metered with money and has no proof-of-work tier` : "reaches the network or stored state, so it has no proof-of-work tier"}.${tool.identityBound ? "" : " A prepaid card-credits key (<code>Authorization: Bearer a402_...</code>) also pays it."}`);
@@ -550,7 +553,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
 
   <h2 class="tp-h2">Example request</h2>
   <pre class="tp-pre">${e(curlExample(baseUrl, tool))}</pre>
-  <p class="tp-sub">Without payment this returns <code>HTTP 402 Payment Required</code> with the exact price for ${e(tool.slug)}; any x402 v2 or MPP client pays it and retries.</p>
+  <p class="tp-sub">Without payment this returns <code>HTTP 402 Payment Required</code> with the exact price for ${e(tool.slug)}; any x402 v2${orMpp} client pays it and retries.</p>
 
   <h2 class="tp-h2">Example response</h2>
   ${binaryTypes
@@ -600,7 +603,7 @@ ${ledgerFooterCompact()}`;
 
   return ledgerShell({
     title,
-    description: toolMetaDescription(tool, { computePayable }),
+    description: toolMetaDescription(tool, { computePayable, mpp }),
     canonical,
     baseUrl,
     activePath: "/tools",

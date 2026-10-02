@@ -1209,6 +1209,13 @@ export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
   // Cap applies only to origins that would grow the submitted set. An origin
   // already on the list (retrying after a prior failure) is not new growth,
   // so it's exempt — it can still probe and update its own entry at cap.
+  if (!submittedSeeds.has(origin) && isEphemeralTunnelOrigin(origin)) {
+    let tunnels = 0;
+    for (const o of submittedSeeds) if (isEphemeralTunnelOrigin(o)) tunnels++;
+    if (tunnels >= tunnelSubmissionCap(submittedSeedsCap)) {
+      return { listed: false, origin, error: "tunnel submissions are full - quick-tunnel hostnames change every session, so their share of submission slots is capped; register a stable hostname, or retry after tunnel slots free up (a tunnel slot is released 3 days after its last successful probe)" };
+    }
+  }
   if (!submittedSeeds.has(origin) && submittedSeeds.size >= submittedSeedsCap) {
     return { listed: false, origin, error: "submission list is full - slots free up after 30 days with no successful probe; open a GitHub issue to get seeded sooner" };
   }
@@ -5378,6 +5385,31 @@ async function runCrawl() {
   }
 }
 
+// Quick-tunnel services hand out a random hostname per session, so a tunnel
+// origin that stops answering is gone for good: the next session is a new
+// hostname. Measured 2026-10-02: 1,753 of 2,432 self-serve registrations were
+// such hostnames, arriving 100-150 a day, which kept the submission door full
+// while a 30-day release drained it far slower. Named services only - a
+// tenant's own domain or a stable platform subdomain is never one of these.
+export const EPHEMERAL_TUNNEL_SUFFIXES = [
+  "lhr.life", "localhost.run", "trycloudflare.com", "loca.lt", "tunnelmole.net",
+  "ngrok-free.app", "ngrok-free.dev", "ngrok.app", "ngrok.io", "ngrok.dev",
+  "serveo.net", "serveousercontent.com", "pinggy.link", "pinggy.io",
+];
+export function isEphemeralTunnelOrigin(origin) {
+  let host;
+  try { host = new URL(origin).hostname.toLowerCase(); } catch { return false; }
+  return EPHEMERAL_TUNNEL_SUFFIXES.some((sfx) => host.endsWith(`.${sfx}`));
+}
+// A gone tunnel hostname never comes back, so its slot is released after days,
+// not a month, and a past settlement does not hold it: the seller, if still
+// selling, is already on a new hostname.
+const TUNNEL_RELEASE_AFTER_MS = Number(process.env.INDEX_TUNNEL_RELEASE_AFTER_DAYS || 3) * 86_400_000;
+// At most this share of the submission slots may be tunnel hostnames, so live
+// tunnels cannot fill the door for sellers on stable hostnames.
+const TUNNEL_SUBMISSION_SHARE = Number(process.env.INDEX_TUNNEL_SUBMISSION_SHARE || 0.25);
+export function tunnelSubmissionCap(cap) { return Math.floor(cap * (TUNNEL_SUBMISSION_SHARE >= 0 && TUNNEL_SUBMISSION_SHARE <= 1 ? TUNNEL_SUBMISSION_SHARE : 0.25)); }
+
 // How long an origin may go without a single successful crawl before its
 // submission slot is released. 30 days is deliberately far past any outage a
 // seller could be having: it is not a health signal, it is "this address has
@@ -5412,6 +5444,7 @@ export function selectReleasableOrigins({
   hasSettled = () => false,
   now = Date.now(),
   maxIdleMs = RELEASE_AFTER_MS,
+  tunnelMaxIdleMs = TUNNEL_RELEASE_AFTER_MS,
   cycleOkFraction = null,
   minCycleOkFraction = 0.5,
 } = {}) {
@@ -5429,12 +5462,13 @@ export function selectReleasableOrigins({
     // A seller who has ever been PAID through us is not a stale submission,
     // however long they have been down. Money is a stronger claim on a slot
     // than liveness, and releasing one would quietly drop a real counterparty.
-    if (row.last_settled_seen || hasSettled(origin)) continue;
+    const tunnel = isEphemeralTunnelOrigin(origin);
+    if (!tunnel && (row.last_settled_seen || hasSettled(origin))) continue;
     // No successful probe ever recorded falls back to first_seen, so a row
     // that predates this column cannot be immortal.
     const lastOk = Number(row.last_routable_seen || row.first_seen || 0);
     if (!lastOk) continue;
-    if (now - lastOk < maxIdleMs) continue;
+    if (now - lastOk < (tunnel ? tunnelMaxIdleMs : maxIdleMs)) continue;
     out.push(origin);
   }
   return out;
@@ -6655,8 +6689,12 @@ function setHidden(obj, key, value) {
   return true;
 }
 function decoratedRemoteTools(v) {
-  let d = remotePoolMemo.get(v);
+  const d = remotePoolMemo.get(v);
   if (d) return d;
+  return decorateRemoteToolsStep(v, Infinity);
+}
+// Seller-level facts every decorated row of one entry shares.
+function decorationContext(v) {
   // Seller-level payment networks: the union of every chain this seller's
   // OWN crawled 402s advertise plus the Bazaar's settled view of the same
   // origin - the same union the /api/index seller row carries. A route the
@@ -6679,22 +6717,43 @@ function decoratedRemoteTools(v) {
   // no accepts of its own reads the seller's (a wrong name is set once, in the
   // seller's middleware, so every route on the origin carries it).
   const sellerDomains = evmDomainUnion([...(v.tools || []), ...(sellerOrigin ? (bazaarToolsByOrigin.get(sellerOrigin) || []) : [])]);
-  d = (v.tools || [])
+  return { sellerNets, hasDomains: Object.keys(sellerDomains).length > 0, sellerDomains, home: v.manifest?.homepage, name: v.manifest?.name, health: healthScore(v) };
+}
+function decorateRow(t, c) {
+  return {
+    ...t,
+    ...(!(Array.isArray(t.networks) && t.networks.length) && c.sellerNets.length ? { networks: c.sellerNets, networksInferred: true } : {}),
+    ...(!t.evmDomainByNetwork && c.hasDomains ? { evmDomainByNetwork: c.sellerDomains } : {}),
+    sellerHome: c.home || t.seller,
+    sellerName: c.name || t.seller,
+    health: c.health,
+  };
+}
+// Decorate an entry's rows, stopping once `until` passes: returns the pool
+// when complete (and memoizes it), null when time ran out (progress is kept,
+// the next call resumes). One 80,000-row seller decorated in one pass held
+// the loop 33 ms locally and 185 ms on a CI runner (2026-10-02); the index
+// slices call this so the decoration is cut into slices too.
+const decoratePartial = new WeakMap();
+function decorateRemoteToolsStep(v, until = Infinity) {
+  const memo = remotePoolMemo.get(v);
+  if (memo) return memo;
+  let p = decoratePartial.get(v);
+  if (!p) { p = { i: 0, out: [], c: decorationContext(v) }; decoratePartial.set(v, p); }
+  const tools = v.tools || [];
+  for (; p.i < tools.length; p.i++) {
+    if ((p.i & 255) === 0 && until !== Infinity && p.i > 0 && performance.now() >= until) return null;
+    const t = tools[p.i];
     // paid:false = the seller's own doc says this operation is free.
     // It lists on the marketplace, but it is never a BUY candidate —
     // route-execute would 402-dance against an endpoint that never
     // quotes, and "cheapest tool" rankings would fill with $0 rows.
-    .filter((t) => t.paid !== false)
-    .map((t) => ({
-      ...t,
-      ...(!(Array.isArray(t.networks) && t.networks.length) && sellerNets.length ? { networks: sellerNets, networksInferred: true } : {}),
-      ...(!t.evmDomainByNetwork && Object.keys(sellerDomains).length ? { evmDomainByNetwork: sellerDomains } : {}),
-      sellerHome: v.manifest?.homepage || t.seller,
-      sellerName: v.manifest?.name || t.seller,
-      health: healthScore(v),
-    }));
-  remotePoolMemo.set(v, d);
-  return d;
+    if (t.paid === false) continue;
+    p.out.push(decorateRow(t, p.c));
+  }
+  decoratePartial.delete(v);
+  remotePoolMemo.set(v, p.out);
+  return p.out;
 }
 const NO_ALIASES = Object.freeze([]); // shared by the 100k+ tools with none
 const tokenIntern = new Map();
@@ -6901,7 +6960,8 @@ function newRouteIndexShard() {
 // tools: the production stall profiler caught a single 4,000-tool entry
 // holding the loop for 1.3 s (2026-09-25).
 function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infinity) {
-  const pool = decoratedRemoteTools(v);
+  const pool = decorateRemoteToolsStep(v, until);
+  if (!pool) return from; // decoration ran out of time: resume here next slice
   const { postings } = target;
   for (let pos = from; pos < pool.length; pos++) {
     if (pos > from && (pos & 63) === 0 && until !== Infinity && performance.now() >= until) return pos;

@@ -1928,6 +1928,7 @@ jobs:
           t node scripts/test-tool-page-backlinks.js
           # Tool pages: escaped examples, one h1, title/description bounds, sections
           t node scripts/test-tool-page-content.js
+          t node scripts/test-tool-page-mpp.js
           # Every tool category is a CATEGORIES key (breadcrumb + category page), decide included (offline + booted)
           TARGET_URL=http://localhost:3000 t node scripts/test-tool-categories.js
 
@@ -2335,6 +2336,7 @@ jobs:
           t node scripts/test-manifest-catalogue-payment.js
           # Submission slot release (30d dead, outage guard fails closed, settled sellers never released — offline)
           t node scripts/test-submission-release.js
+          t node scripts/test-tunnel-submissions.js
           # Browser pool admission (A402-08 bounded queue, deadline, disconnect-abort — offline)
           t node scripts/test-render-queue.js
           # MPP_CHALLENGE_NETWORKS default verified against installed mppx registry (drift guard — offline)
