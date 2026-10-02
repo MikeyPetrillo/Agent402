@@ -367,9 +367,12 @@ export function refreshMppLeaderboard(opts = {}) {
 
 /** Synchronous read for pages/APIs. `stale` is computed at read time so a
  *  scheduler that stopped firing shows as stale, not as fresh forever. */
+// provenMinPayers rides beside provenFloor at READ time: "proven" needs both
+// the transfer floor and distinct non-self payers (tempo-buyer's gate), and a
+// page that quotes only the floor states a rule the router does not apply.
 export function mppLeaderboardSnapshot(now = Date.now()) {
-  if (!current) return { generatedAt: 0, window: null, chain: "tempo", chainId: 4217, asset: "USDC.e", assetAddress: TEMPO_USDC, provenFloor: tempoMinSettled(), recipients: 0, activeRecipients: 0, totals: { transfers: 0, volumeUsdc: 0 }, rows: [], stale: true, lastError: null };
-  return { ...current, stale: !current.generatedAt || now - current.generatedAt > MPP_LB_STALE_MS };
+  if (!current) return { generatedAt: 0, window: null, chain: "tempo", chainId: 4217, asset: "USDC.e", assetAddress: TEMPO_USDC, provenFloor: tempoMinSettled(), provenMinPayers: tempoMinPayers(), recipients: 0, activeRecipients: 0, totals: { transfers: 0, volumeUsdc: 0 }, rows: [], stale: true, lastError: null };
+  return { ...current, provenMinPayers: tempoMinPayers(), stale: !current.generatedAt || now - current.generatedAt > MPP_LB_STALE_MS };
 }
 
 export function startMppLeaderboard({ self = null, delayMs = 120_000 } = {}) {
