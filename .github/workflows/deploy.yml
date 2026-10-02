@@ -4626,10 +4626,15 @@ jobs:
           echo "published agent402-mcp@$VERSION → https://www.npmjs.com/package/agent402-mcp"
       - name: Verify the public npx path resolves
         run: |
-          for i in $(seq 1 10); do
-            npm view agent402-mcp version >/dev/null 2>&1 && { echo "agent402-mcp visible on npm ✓"; break; }
+          # Wait for THIS version, not any version: the MCP Registry step below
+          # validates the exact version against npm and refuses it until npm
+          # serves it (measured: up to ~9 min after publish).
+          VERSION=$(node -p "require('./mcp/package.json').version")
+          for i in $(seq 1 60); do
+            npm view "agent402-mcp@$VERSION" version >/dev/null 2>&1 && { echo "agent402-mcp@$VERSION visible on npm ✓"; exit 0; }
             sleep 15
           done
+          echo "::warning::agent402-mcp@$VERSION still not visible on npm after 15 minutes"
 
       - name: Publish agent402-tollbooth to npm
         run: |
