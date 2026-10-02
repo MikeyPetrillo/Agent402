@@ -69,7 +69,6 @@ try {
   const REQUIRED_FLAGS = [
     "leadsDb",
     "operatorToken",
-    "sentry",
     "posthog",
     "statsPersistent",
     "memoryPersistent",

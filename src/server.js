@@ -259,7 +259,6 @@ import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redact
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { baseNotificationsEnabled } from "./base-notifications.js";
-import { initSentry, captureToolError, sentryEnabled } from "./sentry.js";
 import { railOf } from "./payment-rail.js";
 import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
@@ -3008,7 +3007,6 @@ app.get("/health", (req, res) => {
   const flags = {
     leadsDb: leadsDbReady,
     operatorToken: Boolean(OPERATOR_TOKEN),
-    sentry: sentryEnabled(),
     posthog: posthogEnabled(),
     // True when the stats SQLite DB is on the /data volume (counters + the
     // recentCalls ring buffer survive restarts). False = silent fallback to
@@ -5698,13 +5696,9 @@ function logToolError(slug, status, message, shape, synthetic, probe) {
   const synthStr = synthetic ? " synthetic=true" : "";
   const probeStr = probe ? " probe=true" : "";
   if (!skipConsole) console.error(`[tool-error] ${klass} slug=${slug} status=${status}${shapeStr}${synthStr}${probeStr} msg=${String(message || "").slice(0, 200)}`);
-  // Sentry mirrors the same data as searchable tags so we can query/trend
-  // rejected shapes from the Sentry UI. No-op when SENTRY_DSN is unset.
-  captureToolError({ slug, status, message, shape, synthetic });
   // PostHog mirrors the same payload as a "tool_error" event with slug/
-  // status/errorClass/shape properties. Same privacy posture, same no-op
-  // behavior when POSTHOG_API_KEY is unset. Independent of Sentry — either,
-  // both, or neither can be enabled at any time.
+  // status/errorClass/shape properties. Same privacy posture, a no-op when
+  // POSTHOG_API_KEY is unset.
   capturePostHogToolError({ slug, status, message, shape, synthetic, probe });
 }
 // True iff this request carries a valid HMAC-signed X-Heartbeat-Token (POW_SECRET).
@@ -9350,7 +9344,7 @@ for (const tool of ALL_KIT) {
     const startedAt = Date.now();
     // Unspoofable: requires a valid HMAC-signed X-Heartbeat-Token. CI canaries,
     // heartbeat probes, and operator smoke tests carry it; real callers don't.
-    // Threaded into analytics + Sentry + PostHog so test traffic never inflates
+    // Threaded into analytics + PostHog so test traffic never inflates
     // the public error rate (see /api/analytics ?include_synthetic to override).
     const synthetic = isSyntheticRequest(req);
     const payer = payerFromRequest(req);
@@ -9835,15 +9829,8 @@ initWithRetry("leads-db", initLeadsDb, { onResult: (r) => { leadsDbReady = !!r.o
 // can't hold up /health.
 initWithRetry("analytics-db", initAnalyticsDb);
 
-// Sentry — opt-in via SENTRY_DSN. Same env-gated, fire-and-forget pattern
-// as the other optional infra. Captures tool errors with slug + status + the
-// keys-only shape as searchable tags. No values, no IPs, no headers.
-const sentryInit = initSentry();
-if (sentryInit.ok) console.log("[sentry] enabled");
-else console.log(`[sentry] disabled (${sentryInit.reason || "unknown"})`);
-
 // PostHog — opt-in via POSTHOG_API_KEY. Same env-gated, fire-and-forget
-// pattern as Sentry. Captures tool errors as "tool_error" events. Free tier
+// pattern as the other optional infra. Captures tool errors as "tool_error" events. Free tier
 // is generous (1M events/mo), and the same key powers product analytics and
 // session replay later without code changes.
 const posthogInit = initPostHog();

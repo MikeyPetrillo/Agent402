@@ -61,8 +61,6 @@ so every claim below is verifiable in code.</p>
   and in standard, short-lived operational logs (request path, status code) for abuse prevention and debugging.
   The tollbooth waitlist form stores the name, email, organisation and message you type; it no longer stores
   your IP address or browser string.</li>
-  <li><b>Error reports.</b> Server errors are sent to Sentry with the request data, headers and cookies stripped,
-  so a crash report carries a stack trace and a tool name, never your input or address.</li>
   <li><b>AI gateway inputs.</b> Prompts and inputs sent to the <code>/v1</code> endpoints (chat,
   embeddings, images, speech) and other AI-proxy tools are <b>forwarded to the upstream model
   provider</b> (OpenAI, or the model operator serving the request via OpenRouter) to generate the

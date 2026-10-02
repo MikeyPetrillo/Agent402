@@ -1,20 +1,15 @@
 // PostHog product analytics + error tracking — opt-in, no-op without an API key.
 //
-// Mirrors src/sentry.js (and the cache.js / analytics-db.js pattern): if
+// Same pattern as cache.js / analytics-db.js: if
 // POSTHOG_API_KEY is unset, every export here is a safe no-op so the server
 // boots and serves identically. Set the key and the next deploy starts
 // streaming error events to PostHog.
-//
-// Why this exists alongside Sentry: PostHog's free tier is ~200x larger
-// (1M events/mo vs ~5k) and combines error tracking with product analytics in
-// a single tool. The Sentry adapter stays as scaffolding — both can be turned
-// on together, or only one. Both are env-gated and independent.
 //
 // Privacy posture matches the rest of the project:
 //   - No caller IP, wallet, payment, body, headers, or query values are sent.
 //   - distinctId is a fixed server-side identifier (we have no end-user — the
 //     "user" of a tool error is the catalog operator, not the calling agent).
-//   - shape tag is keys-only ("b:url", "q:format") — same scrubbing as Sentry.
+//   - shape tag is keys-only ("b:url", "q:format").
 //   - Human page traffic ($pageview / $pageleave / $web_vitals) is captured
 //     client-side by the cookieless posthog-js snippet in src/ledger-chrome.js,
 //     ingested first-party through the /e reverse proxy in src/server.js. This
@@ -126,9 +121,8 @@ export function posthogEnabled() {
   return enabled;
 }
 
-// Capture a tool-handler error as a PostHog event. Properties mirror the
-// Sentry tags (slug, status, errorClass, shape) so a single privacy-preserving
-// payload feeds both backends. Never blocks, never throws.
+// Capture a tool-handler error as a PostHog event (slug, status, errorClass,
+// keys-only shape). Never blocks, never throws.
 export function capturePostHogToolError({ slug, status, message, shape, synthetic, probe }) {
   if (!active()) return;
   // Probe calls (a 4xx where the caller sent zero meaningful input keys) are
