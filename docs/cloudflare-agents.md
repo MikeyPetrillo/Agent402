@@ -1,8 +1,7 @@
 # Cloudflare Agents + Agent402 - integration guide
 
-Cloudflare's Agents SDK has native x402 support (`withX402`, `paidTool`,
-`x402-hono` middleware). Agent402 is an x402 seller - 500+ pay-per-call
-tools at `https://agent402.tools`. This guide shows how a Cloudflare Worker
+Agent402 is an x402 seller - 500+ pay-per-call tools at
+`https://agent402.tools`. This guide shows how a Cloudflare Worker
 or Agent can discover and call Agent402 tools, paying per request in USDC.
 
 Cloudflare x402 docs: https://developers.cloudflare.com/agents/agentic-payments/x402/
@@ -45,55 +44,43 @@ interface Env {
 }
 ```
 
-The Worker receives a 402 response from Agent402, signs a USDC payment on
-Base (or Solana/Polygon/Arbitrum/Monad/Celo/Avalanche/Sei/Optimism/Stellar/Algorand,
-or USDG on Robinhood Chain), and replays the request with a valid
-payment header - all handled by `@x402/fetch`.
+The Worker receives a 402 response from Agent402, signs a USDC payment on an
+EVM rail the 402 offers (the exact EVM scheme registered above; register the
+Solana, Stellar or Algorand schemes to pay on those chains), and replays the
+request with a valid payment header - all handled by `@x402/fetch`.
 
 ---
 
-## 2. Using Agent402 from a Cloudflare Agent (`withX402`)
+## 2. Discover, then call
 
-If you are building with the Cloudflare Agents SDK, use the built-in
-`withX402` wrapper so your agent can call any x402-protected endpoint:
+Inside the same Worker, resolve a task to a tool with the free `/api/find`
+endpoint, then call it with the paying fetch from section 1:
 
 ```ts
-import { Agent, withX402 } from "agents";
+const task = new URL(request.url).searchParams.get("q") ?? "";
 
-const MyAgent = withX402(
-  class extends Agent {
-    async onMessage(msg: string) {
-      // Discover the right tool first (free, no payment)
-      const findRes = await fetch(
-        `https://agent402.tools/api/find?q=${encodeURIComponent(msg)}&k=1`
-      );
-      // /api/find returns { query, count, results: [...] } - take the top hit.
-      const { results } = await findRes.json();
-      const tool = results[0];
-      if (!tool) return { error: "no matching tool" };
-
-      // callExample carries the exact method, path and body/query to use.
-      const { method, path, body, query } = tool.callExample;
-      const url = new URL(path, "https://agent402.tools");
-      for (const [k, v] of Object.entries(query ?? {})) {
-        url.searchParams.set(k, String(v));
-      }
-
-      // Call it - withX402 handles the payment challenge automatically
-      const res = await this.fetch(url.toString(), {
-        method,
-        ...(method === "POST"
-          ? {
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(body ?? {}),
-            }
-          : {}),
-      });
-      return await res.json();
-    }
-  },
-  { network: "base" }
+// /api/find returns { query, count, results: [...] } - take the top hit.
+const findRes = await fetch(
+  `https://agent402.tools/api/find?q=${encodeURIComponent(task)}&k=1`
 );
+const { results } = await findRes.json();
+const tool = results[0];
+if (!tool) return Response.json({ error: "no matching tool" }, { status: 404 });
+
+// callExample carries the exact method, path and body/query to use.
+const { method, path, body, query } = tool.callExample;
+const url = new URL(path, "https://agent402.tools");
+for (const [k, v] of Object.entries(query ?? {})) {
+  url.searchParams.set(k, String(v));
+}
+
+const res = await payFetch(url.toString(), {
+  method,
+  ...(method === "POST"
+    ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) }
+    : {}),
+});
+return Response.json(await res.json());
 ```
 
 ---
@@ -111,30 +98,20 @@ This is a streamable-HTTP MCP server. Four meta-tools drive it - `catalog.search
 (run by slug) and `payment.info` (how paying and spend caps work) - alongside
 `server.describe`, `sellers.list`, `demand.request` and the flagship tools listed
 first-class by name (`web.search`, `web.answer`, `web.news`, `browser.render`,
-`market.quote`, `audio.transcribe`, `memory.read`, `memory.write`). Any
-Cloudflare Agent that supports remote MCP servers can connect directly.
+`market.quote`, `audio.transcribe`, `memory.read`, `memory.write`). A
+Cloudflare Agent can connect to it as a remote MCP server:
 
-In your `wrangler.jsonc` (or equivalent config):
-
-```jsonc
-{
-  "mcp_servers": [
-    {
-      "name": "agent402",
-      "transport": "streamable-http",
-      "url": "https://agent402.tools/mcp"
-    }
-  ]
-}
+```ts
+await this.addMcpServer("agent402", "https://agent402.tools/mcp");
 ```
 
 The MCP surface handles discovery and invocation - `catalog.call` solves
 proof-of-work automatically for free-tier tools. Wallet-only tools (search,
 browser, PDF, memory) are payable on the connector over MPP: the call answers
-with a tool result carrying the challenges in `_meta`, and an MCP client wrapped with
+JSON-RPC error -32042 carrying the challenges, and an MCP client wrapped with
 `mppx`'s `McpClient.wrap()` pays (USDC on Base/Celo, or natively on Tempo) and
 retries, receipt in `_meta`. To pay over x402 instead, run the `agent402-mcp`
-npm package with a wallet key (or a prepaid card-credits key).
+npm package with a wallet key (or a card-credits key bought earlier).
 
 ---
 
@@ -158,11 +135,11 @@ for the npm package and deploy templates.
 | Tool discovery | `GET /api/find?q=...` | None (free) |
 | Pricing catalog | `GET /api/pricing` | None (free) |
 | OpenAPI spec | `GET /openapi.json` | None (free) |
-| MCP endpoint | `POST /mcp` | None (free tier) / x402 (paid) |
-| Any paid tool | `GET\|POST /api/{slug}` | x402 (USDC) |
+| MCP endpoint | `POST /mcp` | None (free tier) / MPP (paid) |
+| Any paid tool | the tool's `path` from `/api/pricing` | x402 or MPP (USDC) |
 | x402 manifest | `GET /.well-known/x402` | None |
 
-Prices: most tools $0.001–$0.02 per call; the routing tiers top out at $0.55,
+Prices: most tools $0.001–$0.02 per call; the routing tiers top out at $3.30,
 multi-tool skill packs run $0.003 to $0.101, and the report products (research,
 dossier, fund, SEC filing, domain audit, token risk, recall, insider) run
 $0.60 to $2.00 over x402 or MPP, or $2 to $5 by card at
@@ -170,5 +147,4 @@ https://agent402.tools/reports, where the price includes payment processing.
 Networks: Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei,
 Optimism, Stellar and Algorand (USDC), plus Robinhood Chain (USDG) - 12 in
 total. MPP (Machine Payments Protocol) is accepted on the same 402 (Base/Celo,
-or natively on Tempo), and prepaid card credits (https://agent402.tools/credits)
-work on any priced route.
+or natively on Tempo).

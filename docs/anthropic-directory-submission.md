@@ -4,7 +4,7 @@ Submit at: **https://claude.com/docs/connectors/building/submission**
 (Anthropic account required - this is the one step only a human can do.)
 
 Everything below is ready to paste. All technical requirements are already
-live: tool titles + read-only safety annotations on every tool, a stable
+live: a title and safety annotations on every listed tool, a stable
 privacy policy, public docs, and a no-auth streamable-HTTP endpoint.
 
 ---
@@ -17,7 +17,7 @@ privacy policy, public docs, and a no-auth streamable-HTTP endpoint.
 | Server URL | `https://agent402.tools/mcp` |
 | Transport | Streamable HTTP |
 | Auth type | None (anonymous; no account, no API key) |
-| Read/write | Mostly read-only; `demand.request` and `memory.write` are the only writers (`readOnlyHint: false`). All other tools carry `readOnlyHint: true`. |
+| Read/write | Mostly read-only; `demand.request`, `memory.write` and, where Decide is enabled, `decide.feedback` carry `readOnlyHint: false`. |
 | Website | https://agent402.tools |
 | Public docs | https://agent402.tools/llms.txt (also /tools and /openapi.json) |
 | Privacy policy | https://agent402.tools/privacy |
@@ -38,16 +38,18 @@ privacy policy, public docs, and a no-auth streamable-HTTP endpoint.
 > tools run free on the hosted connector (rate-limited); wallet-only tools are
 > payable on the connector itself over MPP (a paid call answers JSON-RPC error
 > -32042 with the challenges; an mppx-wrapped client pays and retries), or run
-> the npm server with a funded wallet or a prepaid card-credits key. No LLM is
+> the npm server with a funded wallet or a card-credits key bought earlier. No LLM is
 > involved in serving the utility tools: same input, same output, with full
 > input schemas. Report products (deep research, company dossier, 13F fund
 > report, SEC filing report, domain audit, token risk, FDA recall, insider flow,
 > $0.60 to $2.00 each) are catalog slugs too. Open source. Also reachable over the x402 and MPP payment protocols for
 > autonomous agents with their own wallets.
 
-## Tools exposed (15, each with title + safety annotations)
+## Tools exposed (each with title + safety annotations)
 
-Flagship demand tools first, then meta discovery for the long catalog. Names
+Flagship demand tools first, then meta discovery for the long catalog. Where
+Decide is enabled, `decide.plan`, `decide.execute` and `decide.feedback` are
+listed as well. Names
 are dotted (`web.search`, `catalog.call`, …); the earlier snake_case names
 (`search_web`, `call_tool`, …) remain accepted as CallTool aliases but are not
 listed.
@@ -69,7 +71,7 @@ listed.
     single best-matching tool call-ready: slug, price, input schema, and a worked
     example. Read-only.
 11. **catalog.call** - "Run an Agent402 tool". Executes a catalog tool by slug.
-    On this hosted connector the pure-CPU, deterministic tools execute (200+ of
+    On this hosted connector the pure-CPU, deterministic tools execute (150+ of
     them); wallet-only tools are payable over MPP or return guidance. Read-only for
     free tools.
 12. **payment.info** - "Payment and wallet setup". Explains the free vs paid
@@ -98,12 +100,13 @@ self-contained). Per-client rate limit: 20 calls/min, 120/hour.
 
 ## Reliability / review notes
 
-- Every endpoint is re-tested against its own documented example in CI before
-  any deploy; the MCP connector itself has an end-to-end JSON-RPC test gating
-  both CI and the production rollout.
-- A heartbeat probes production every 15 minutes (health, catalog, paid call,
-  MCP initialize). Live status: https://agent402.tools/status
-- Errors are structured and human-readable (each tool returns a specific
-  message naming the missing/invalid field, never a bare 500).
-- No accounts, no ad trackers; site pages run Google Analytics (consent strip in Europe) and a first-party page counter. IPs are used only
-  for rate limiting (in-memory, ≤1 h). See /privacy.
+- CI drives each tool that needs no third-party key with its own documented
+  example before a deploy; the MCP connector itself has an end-to-end JSON-RPC
+  test gating both CI and the production rollout.
+- Observers outside production probe health, the catalog, a paid call and MCP
+  initialize on a schedule. Live status: https://agent402.tools/status
+- Input errors are structured and human-readable: a 400 names the missing or
+  invalid field.
+- No accounts, no ad trackers; site pages run Google Analytics (consent strip in
+  Europe) and a first-party page counter. IP addresses are used for rate limiting
+  and operational logs as described at https://agent402.tools/privacy.
