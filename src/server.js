@@ -493,7 +493,6 @@ import { guidesIndex, guidePage, guideTitles } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
 import { docsIndex, docsPage, docsApi, DOCS_SITE_ROUTES } from "./docs.js";
 import { shopPage } from "./shop.js";
-import { integrationsPage } from "./integrations.js";
 import { changelogPage, changelogRss } from "./changelog.js";
 import { useCasesPage } from "./use-cases.js";
 import { playgroundPage } from "./playground.js";
@@ -4221,7 +4220,7 @@ app.get("/blog/:slug", (req, res) => { const html = blogPost(BASE_URL, req.param
 app.get("/compare", (_req, res) => htmlCache(res, 300, 900).send(comparePage(BASE_URL)));
 app.get("/community", (_req, res) => htmlCache(res, 300, 900).send(communityPage(BASE_URL)));
 app.get("/contribute", (_req, res) => htmlCache(res, 300, 900).send(contributePage(BASE_URL)));
-app.get("/workflows", (_req, res) => htmlCache(res, 300, 900).send(workflowsPage(BASE_URL)));
+app.get("/workflows", (_req, res) => htmlCache(res, 300, 900).send(workflowsPage(BASE_URL, CATALOG)));
 // /uptime was a second, static "System Status" page carrying a hardcoded
 // "All systems operational" banner — green during an outage, which is the exact
 // failure /status was rebuilt to remove. It already declared /status as its
@@ -5340,7 +5339,7 @@ for (const alias of ["/router", "/sor", "/smart-order-router"]) {
 }
 app.get("/guides", (_req, res) => htmlCache(res, 300, 900).send(guidesIndex(BASE_URL)));
 app.get("/guides/:slug", (req, res) => {
-  const html = guidePage(BASE_URL, req.params.slug);
+  const html = guidePage(BASE_URL, req.params.slug, CATALOG);
   if (!html) return notFoundPage(res, { what: "Guide", href: "/guides", label: "All guides" });
   htmlCache(res, 300, 900).send(html);
 });

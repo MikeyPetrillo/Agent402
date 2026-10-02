@@ -158,6 +158,16 @@ const FORBIDDEN = [
     why: "the catalog includes model-backed and live-data tools; say priced per call and name the model-backed ones",
   },
   {
+    // The same claim with a word in the middle, which the rule above missed on
+    // the blog for months: "Every Agent402 tool is deterministic", "every one
+    // deterministic", "Every one of those tools is deterministic".
+    re: /\b[Ee]very (?:one|(?:\w+ )?tool)\b[^.]{0,30}\bdeterministic\b/,
+    why: "the catalog holds model-backed tools; scope it to the utility tools",
+    // A dated correction note quotes the old claim to retract it.
+    scopedBy: /\bCorrection\b|\butility\b|\bclaimed\b/,
+    scopeWindow: 0,
+  },
+  {
     // A COMPLETENESS CLAIM ABOUT A SURFACE THAT ANSWERS WITH A PAGE.
     //
     // Three live instances before this rule existed, all the same shape - the
@@ -237,7 +247,8 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "Every tool is deterministic."],
                        ["<control>", "If it was, the charge is recorded as owed and refunded automatically."],
                        ["<control>", "500+ pay-per-call tools. Every one deterministic, priced, and settled on chain."]]);
-ok(control.length === 6, `control: the sweep reports all 6 planted violations through its real code path (got ${control.length})`);
+const CONTROL_EXPECTED = 8;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 6 planted lines (${CONTROL_EXPECTED} rule hits; a line can match more than one determinism rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);
@@ -284,7 +295,7 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
 
   // Every page that makes the claim must call the function. A page that
   // reworded the absolute by hand would pass the regex sweep above.
-  for (const rel of ["src/why.js", "src/glossary.js", "src/agentic-finance.js", "src/blog.js"]) {
+  for (const rel of ["src/why.js", "src/glossary.js", "src/agentic-finance.js", "src/blog.js", "src/guides.js"]) {
     ok(/routingProofSentence\(\)/.test(read(rel) || ""), `${rel} renders the routing claim from the shared function`);
   }
 }
@@ -461,6 +472,10 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
     "Every one deterministic, priced, and settled on chain, over x402 or MPP.",
     "- **200 + JSON** - the result. Tool output is deterministic for the same input.",
     "small, deterministic web tools - same input, same output; no large language model runs in that serving path.",
+    // The determinism class with a word in the middle (all three were blog copy).
+    "Every Agent402 tool is deterministic: same input, same output, every time.",
+    "The Agent402 catalog passed the 500-tool mark - every one deterministic, tested in CI",
+    "Every one of those tools is deterministic, tested in CI, and callable with a single HTTP request.",
   ];
   const MUST_PASS = [
     "On Base we route ONLY to sellers with proven settled volume",
@@ -492,6 +507,8 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
     "Checkout, generate-once per paid session, auto-refund on failure, report at",
     // What the connector says now.
     "The call may still have completed and been charged. If it was, the charge is recorded as owed in our refund ledger and repaid after review. Do not retry blindly: a retry is a new paid call.",
+    "The utility tools are deterministic: same input, same output, every time.",
+    "Correction (2026-10-02): this post called every tool deterministic. The utility tools are.",
   ];
   const hits = (t) => sweep([["<case>", t]]).length;
   const missed = MUST_FAIL.filter((t) => hits(t) === 0);
