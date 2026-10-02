@@ -507,7 +507,7 @@ import { workflowsPage } from "./workflows.js";
 import { badgesPage, badgeSvg } from "./badges.js";
 import { adapterDocsIndex, adapterDocPage, ADAPTERS } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
-import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml } from "./ledger-chrome.js";
+import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore } from "./ledger-chrome.js";
 import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
@@ -2094,6 +2094,9 @@ const app = express();
 // Drop the Express fingerprint header (security audit A402-13): no reason to
 // advertise the stack to every caller.
 app.disable("x-powered-by");
+// Every request renders inside its own path so the page shell can tell a
+// bearer link from its section canonical (src/ledger-chrome.js renderPathStore).
+app.use((req, _res, next) => renderPathStore.run(req.path, next));
 // Behind Railway's single edge proxy: trust exactly that hop so req.ip is the
 // real client IP (the X-Forwarded-For entry the edge appends), not an
 // attacker-supplied XFF value. This is what the per-IP rate limiters key on,
