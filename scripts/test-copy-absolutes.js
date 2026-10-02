@@ -145,6 +145,12 @@ const FORBIDDEN = [
     why: "same absolute, hyphen-wrapped in markdown; scope the subject to the tools",
   },
   {
+    // Same claim in other words (truth audit 2026-10-02): route-execute and
+    // decide.execute pay outside sellers from our own wallets.
+    re: /\bAgent402 never touch(?:es)? (?:your |any )?funds\b/i,
+    why: "route-execute and decide.execute pay sellers from our wallets; scope the subject to the tools",
+  },
+  {
     re: /\bnon-custodial and never hold your funds\b/,
     why: "scope it: say what does not happen on THIS rail",
   },
@@ -268,6 +274,7 @@ function sweep(entries) {
 // real sweep uses, or a clean run proves nothing.
 const control = sweep([["<control>", "Only sellers with proven on-chain settlement are routable."],
                        ["<control>", "Agent402 never holds funds."],
+                       ["<control>", "The agent signs - Agent402 never touches funds."],
                        ["<control>", "Flat pricing for ${n} deterministic web tools."],
                        ["<control>", "Every tool is deterministic."],
                        ["<control>", "If it was, the charge is recorded as owed and refunded automatically."],
@@ -275,8 +282,8 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "Pay in USDC on Base + 11 more chains, or USDG on Robinhood Chain (12 chains total)."],
                        ["<control>", "over x402 (USDC on 12 chains) or MPP"],
                        ["<control>", "500+ strong: 400+ pay-per-call tools (x402 or MPP) + 70+ skill packs"]]);
-const CONTROL_EXPECTED = 11;
-ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 9 planted lines (${CONTROL_EXPECTED} rule hits; a line can match more than one determinism rule) through its real code path (got ${control.length})`);
+const CONTROL_EXPECTED = 12;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 10 planted lines (${CONTROL_EXPECTED} rule hits; a line can match more than one determinism rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);
