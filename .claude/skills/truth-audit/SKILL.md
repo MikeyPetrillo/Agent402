@@ -79,9 +79,11 @@ future?), `/api/pricing`, `/api/reliability`, `/api/find`, `/api/chain`,
 `server.describe` output, `robots.txt`, `sitemap.xml`, `sitemap-reports.xml`.
 
 For each claim ask: is the count evergreen ("500+", never exact, except on the
-runtime surfaces that derive it)? Is every price the current ladder (agent
-$0.60 / $0.85 / $1.10 / $2.00 ticker pack; card $2 / $3 / $4 / $5; monitors
-$5/mo; packs $0.003-$0.168 derived; metered from $0.001)? Is every absolute
+runtime surfaces that derive it)? Is every price the current ladder? Read the ladder fresh from its sources
+before reading any copy, never from this file or memory: `/api/pricing` (catalog,
+`credits`, `humanProducts`), `REPORT_TIERS` (agent price + cap), `HUMAN_PRODUCTS`
+(card cents), `MONITOR_PRODUCTS` (monthly cents), `PACK_PRICE_RANGE` (derived
+pack range), and the metered floor in the gateway kit. Is every absolute
 scoped ("these tools never hold funds", "no model in the serving path" only
 with the exclusions named)? Does any sentence promise a chain, a facilitator,
 a model id, a rail, a product or a tool that no longer exists (check against
@@ -169,7 +171,7 @@ version`), README examples run against prod with a credits key or PoW,
 `toolCount` is derived not embedded, the stdio and hosted MCP initialize
 instructions are byte-identical, `mcp/server.json` matches the published
 version, SLSA provenance on the latest publish. Every README price or count
-is the current ladder (see Lens 1).
+matches the ladder read fresh in Lens 1.
 
 ## Lens 6: production runtime truth
 
@@ -195,13 +197,27 @@ day, zero stuck `sending`.
 
 ## Lens 7: analytics (what we track, and whether we read it)
 
-**There is no Google Analytics on the site and that is deliberate.** The only
-Google surface is the `google-site-verification` meta (Search Console) and
-IndexNow. PostHog is both the browser analytics (`posthogSnippet` in
-`ledger-chrome.js`, the static loader at `/js/posthog-loader.js`) and the
-server telemetry (`src/posthog.js`). Adding GA4 would be a product decision
-with a privacy-policy change, not an audit fix; raise it only if a question
-PostHog cannot answer is named.
+**Two analytics stacks, two jobs.** PostHog is product and payment telemetry:
+the browser snippet (`posthogSnippet` in `ledger-chrome.js`, static loader
+`/js/posthog-loader.js`) and the server events (`src/posthog.js`). Google
+Analytics 4 (since 2026-10-01) counts visits and acquisition: `gaSnippet` in
+`ledger-chrome.js`, static loader `/js/ga-loader.js`, rendered only when
+`GA_MEASUREMENT_ID` is set on Railway. Guards: `test-ga-snippet.js`,
+`test-analytics-redaction.js`.
+
+GA checks: `GA_MEASUREMENT_ID` is set (name only) and the live HTML carries
+the `ga-config` island; the island is absent on every bearer path (`/r/`,
+`/m/`, `/reports/public/`, `/alerts`, `/followups`, `/credits/thanks`,
+`/monitors/manage`, `/monitors/thanks`, `/digest`) and the loader's regex
+still equals the server's `GA_BEARER_PATH`; Europe time zones start with
+analytics storage denied and see the consent strip; ad storage, ad user data
+and ad personalization are always denied; `?internal=1` traffic is filtered by
+GA's Internal Traffic rule; the CSP names `www.googletagmanager.com` and
+nothing broader; `/privacy` describes GA exactly as the loader behaves. In the
+GA property: data is flowing, the key events a buyer journey needs are marked
+(report buy click, monitor subscribe click, credits checkout, alert signup),
+Search Console is linked, and referral exclusions cover `checkout.stripe.com`
+so a card purchase is not credited to Stripe.
 
 Check: the snippet loads on every HTML shell (ledgerShell pages, error and 404
 pages, the report viewers, `/x402-test`, chain pages) and on no machine
@@ -301,17 +317,3 @@ an existing workflow by its `name:`.
 3. Update `CLAUDE.md` with what the audit found and the lesson, in the
    existing dated style, without personal info, figures that belong in
    `CLAUDE.local.md`, or assessments of other people's businesses.
-
-## Seeds (found while writing this skill, 2026-10-02; start here)
-
-- `mcp/README.md` (ships on npm with `agent402-mcp`) carries the ENTIRE
-  pre-2026-08-23 ladder: research $0.35/$0.65/$1.10, dossier $0.55/$0.95,
-  fund $0.25/$0.50, domain-audit $0.20/$0.30, token-risk $0.30/$0.60,
-  recall $0.20, insider/filing $0.25, ticker-pack $0.75, "$1 or $2 by card",
-  "$3/month" monitors. Every figure is wrong on a published surface.
-- `docs/ecosystem-listings.md`, `docs/integration-playbook.md`,
-  `docs/stellar-ecosystem-submission.md`: "$3/month monitors", "$0.20-$1.10"
-  reports, "$1-$2 by card". These are paste-ready blocks, so the stale copy
-  propagates to every directory they are pasted into.
-- `test-price-prose.js` passed over all of the above: scope its retired-literal
-  list to these figures and these paths.
