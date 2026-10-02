@@ -1099,9 +1099,16 @@ export async function verifySuccessionMarkers(claimant, predecessor, { fetchImpl
 export async function succeedsOrigin(claimant, predecessor, { fetchImpl } = {}) {
   const a = cache.get(claimant), b = cache.get(predecessor);
   if (!a || !b || a.error || b.error) return { ok: false, reason: "one of the two origins is not in the index - register it first" };
+  // Markers first: they are the only proof that retires the predecessor, and a
+  // seller who migrates keeps the same payout wallet, so checking the wallet
+  // first answered "shared payout wallet" for exactly the sellers who had also
+  // served valid markers, and their old listing was never retired (reported
+  // by a seller 2026-10-02). The wallet still answers when no markers are up.
+  const markers = await verifySuccessionMarkers(claimant, predecessor, { fetchImpl });
+  if (markers.ok) return markers;
   const shared = sharesPayTo(claimant, predecessor);
   if (shared) return { ok: true, via: "shared payout wallet", ...shared };
-  return verifySuccessionMarkers(claimant, predecessor, { fetchImpl });
+  return markers;
 }
 
 export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
