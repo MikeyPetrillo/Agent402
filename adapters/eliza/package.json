@@ -1,7 +1,7 @@
 {
   "name": "elizaos-plugin-agent402",
-  "version": "0.2.3",
-  "description": "elizaOS plugin for Agent402: find and call pay-per-call web tools (search, page render, PDFs, market and SEC data) over x402 or MPP, paid in USDC or by prepaid card credits with per-call and daily spend ceilings; Agentic Finance for elizaOS agents.",
+  "version": "0.2.4",
+  "description": "elizaOS plugin for Agent402: find and call pay-per-call web tools (search, page render, PDFs, market and SEC data), paid in USDC over x402 from an EVM wallet or by prepaid card credits, with per-call and daily spend ceilings; the pure-CPU tools are free via proof-of-work. Agentic Finance for elizaOS agents.",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",

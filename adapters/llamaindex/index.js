@@ -5,15 +5,16 @@
 // under the hood by agent402-client (proof-of-work for the free tier,
 // x402+USDC for wallet-only tools when you pass a payFetch).
 //
-//   import { OpenAIAgent } from "llamaindex";
+//   import { agent } from "@llamaindex/workflow";
+//   import { openai } from "@llamaindex/openai";
 //   import { agent402Tools } from "agent402-llamaindex";
 //
-//   const { tools } = await agent402Tools({ slugs: ["extract","hash","render"] });
-//   const agent = new OpenAIAgent({ tools });
-//   const res = await agent.chat({ message: "Hash 'hello world' with SHA-256" });
+//   const { tools } = await agent402Tools({ slugs: ["hash","uuid"] });
+//   const a = agent({ llm: openai({ model: "gpt-4o-mini" }), tools });
+//   const res = await a.run("Hash 'hello world' with SHA-256");
 //
-// Works with any LlamaIndex agent runner (OpenAIAgent, AnthropicAgent,
-// ReActAgent) and with the lower-level Workflow API.
+// The returned tools are FunctionTool instances, usable by any LlamaIndex
+// agent that accepts them.
 
 import { Agent402 } from "agent402-client";
 

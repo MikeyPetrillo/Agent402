@@ -3,8 +3,8 @@
 [Agent402](https://agent402.tools) as an [elizaOS](https://github.com/elizaOS/eliza)
 plugin: pay-per-call web tools (web search, page render, PDFs, OCR, market and
 crypto data, SEC filings, DNS/TLS checks) your agent can find and call, paid by
-prepaid card credits or in USDC over x402 or MPP. Free-tier tools pay with
-proof-of-work and need neither. Agentic Finance for elizaOS agents: every paid
+prepaid card credits or in USDC over x402 from an EVM wallet. Free-tier tools
+pay with proof-of-work and need neither. Agentic Finance for elizaOS agents: every paid
 call is quoted before it is paid and bounded by the ceilings you set.
 
 ## Install
