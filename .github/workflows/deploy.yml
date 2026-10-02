@@ -1571,6 +1571,8 @@ jobs:
           t node scripts/test-html-kit.js
           # Bazaar quality ingestion (30d calls/payers on index sellers + /api/find external rows + ranking tiebreak - offline)
           t node scripts/test-bazaar-quality.js
+          # /api/route ordering: route-order.js pinned to the comparator, read by why.tiebreaks and the ranking sentence (offline)
+          t node scripts/test-route-order.js
           # Revenue detector classification (real x402 buys vs funding/tests)
           t node scripts/test-revenue-scan.js
           # Revenue daily series (day bucketing, EVM block estimation, canary-vs-funding split — offline)

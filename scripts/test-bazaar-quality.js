@@ -61,6 +61,12 @@ ok(b && b.bazaar?.payers30d === 50 && b.bazaar?.calls30d === 3, "index snapshot 
   let rr = run("geocode");
   ok(rr[0]?.seller === "https://cur.example", `equal match, health, payers and price: the Bazaar-curated seller orders first (got ${rr.map((x) => x.seller).join(", ")})`);
   ok(rr[0].bazaar?.curated === true && rr[1].bazaar?.curated === false, "route rows expose curated beside the payer counts");
+  {
+    const { routeTiebreakLabels } = await import("../src/route-order.js");
+    const w = rr[0].why || {};
+    ok(JSON.stringify(w.tiebreaks) === JSON.stringify(routeTiebreakLabels()) && w.tiebreaks.some((l) => /payers/.test(l)) && w.tiebreaks.some((l) => /curated/.test(l)), `why.tiebreaks names payers and curated, from route-order.js (got ${JSON.stringify(w.tiebreaks)})`);
+    ok(w.bazaarPayers30d === 5 && w.bazaarCurated === true && rr[1].why?.bazaarCurated === false, "why carries the payer count and curated flag the row was sorted on");
+  }
   const idx = indexSnapshot(ctx).sellers.find((x) => x.origin === "https://cur.example");
   ok(idx?.bazaar?.curated === true, "index rows expose curated");
   // CONTROL: without the flag the same pair keeps cache order.
