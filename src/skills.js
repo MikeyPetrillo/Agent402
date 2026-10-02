@@ -2903,6 +2903,18 @@ function renderToolList(pack, ix) {
     .join("\n");
 }
 
+// The "Call it directly" snippet on a pack page. agent402-client is a library
+// (no CLI bin), so the snippet is the SDK's own constructor + call(), keyed on
+// the pack's CATALOG slug ("skill-<pack>"), which is what call() resolves.
+export function packClientSnippet(catalogSlug, args) {
+  return [
+    `import { Agent402 } from "agent402-client";`,
+    `// creditsKey pays by card credits; pass { fetch } for an x402-wrapped fetch instead`,
+    `const client = new Agent402({ creditsKey: process.env.AGENT402_CREDITS_KEY });`,
+    `const result = await client.call(${JSON.stringify(catalogSlug)}, ${JSON.stringify(args)});`,
+  ].join("\n");
+}
+
 export function skillPackPage(baseUrl, slug, catalog) {
   const e = ledgerEsc;
   const pack = SKILL_PACKS.find((p) => p.slug === slug);
@@ -2985,8 +2997,8 @@ ${returnsHtml}
 
 ${packTool ? `
 <h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Call it directly</h2>
-<p style="color:var(--muted);font-size:15px;line-height:1.7;">Any x402 client pays the 402 and gets the whole workflow back in one response:</p>
-<pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:18px 20px;font-size:13px;line-height:1.6;border:none;margin-top:12px;overflow-x:auto;">npx agent402-client call ${e(pack.slug)} ${e(JSON.stringify(Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute ?? "..."]))))}</pre>` : ""}
+<p style="color:var(--muted);font-size:15px;line-height:1.7;">Any x402 client pays the 402 and gets the whole workflow back in one response. With the <code>agent402-client</code> SDK (<code>npm i agent402-client</code>, an ES module):</p>
+<pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:18px 20px;font-size:13px;line-height:1.6;border:none;margin-top:12px;overflow-x:auto;">${e(packClientSnippet(packTool.slug, Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute ?? "..."]))))}</pre>` : ""}
 
 <h2 style="font-weight:800;font-size:22px;margin-top:40px;letter-spacing:-.01em;">Run it in Claude</h2>
 <pre style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:18px 20px;font-size:13px;line-height:1.6;border:none;margin-top:12px;">claude mcp add agent402 -s user -- npx -y agent402-mcp@latest</pre>
