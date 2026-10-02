@@ -200,14 +200,20 @@ for (const c of NEW_CHAINS) {
   ok(stripped.includes("a.example"), "base: canonical host (real domain) survives the collapse");
   ok(!/svc-b\.up\.railway\.app/.test(stripped), "base: the platform-subdomain sibling is collapsed away, not a second row");
   ok(/\+1 more endpoint\b/.test(stripped), "base: collapsed sibling is disclosed as '+1 more endpoint', not hidden");
-  ok(/SELLERS LISTED<\/div><div[^>]*>2</.test(html), "base: SELLERS count reflects the collapsed roster (LOCAL + 1 group = 2, not 3)");
+  // The host is not counted (its own card says NOT COUNTED): 1 group, not 2 hosts.
+  ok(/SELLERS LISTED<\/div><div[^>]*>1</.test(html), "base: SELLERS count reflects the collapsed roster, host not counted (1 group, not 2 hosts)");
+  ok(/host not counted/.test(html), "base: the SELLERS LISTED caption says the host is not counted");
 
   // Sellers with NO leaderboard row are the discovery long-tail — never grouped.
   const C1 = { origin: "https://c1.example", displayName: "C1", homepage: "https://c1.example", local: false, toolCount: 2, routable: true, networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": "0xc1000000000000000000000000000000000000c1" } };
   const C2 = { origin: "https://c2.example", displayName: "C2", homepage: "https://c2.example", local: false, toolCount: 2, routable: true, networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": "0xc2000000000000000000000000000000000000c2" } };
   const tailHtml = marketPage("base", "https://agent402.tools", { snapshot: { sellers: [LOCAL, C1, C2] }, rail: null, activity: null, leaderboardSnap: { leaderboard: [] }, wallet: "0x1" });
   ok(tailHtml.includes("c1.example") && tailHtml.includes("c2.example"), "base: no-leaderboard sellers stay individually listed (long-tail not collapsed)");
-  ok(/SELLERS LISTED<\/div><div[^>]*>3</.test(tailHtml), "base: SELLERS count keeps ungrouped long-tail sellers distinct (3)");
+  ok(/SELLERS LISTED<\/div><div[^>]*>2</.test(tailHtml), "base: SELLERS count keeps ungrouped long-tail sellers distinct (2, host not counted)");
+  // Another chain is not measured by the Base leaderboard: no Base tx under its name.
+  const poly = marketPage("polygon", "https://agent402.tools", { snapshot: { sellers: [LOCAL, { ...A, networks: ["eip155:137"], payToByNetwork: { "eip155:137": payTo } }] }, rail: null, activity: null, leaderboardSnap, wallet: "0x1" });
+  ok(!/999\s*tx/.test(poly.replace(/&middot;|·/g, " ")) && !/>999</.test(poly), "polygon: a Base-leaderboard figure never renders under Polygon");
+  ok(/measured on Base only/.test(poly) && /Sellers accepting Polygon/.test(poly), "polygon: the roster says per-seller settlements are measured on Base only");
 }
 
 // Market filter bar — shared chain tabs + sort + search, wired client-side.
@@ -277,7 +283,7 @@ for (const c of NEW_CHAINS) {
   ok(capped.includes("this host pinned · showing the top 100 of 120 independent sellers"), "all view: cap note discloses the pin + truncation honestly");
   ok(capped.includes('href="/marketplace?all=1"'), "all view: cap note links the ?all=1 escape hatch");
   ok(/<div data-mfb-row data-local="1"/.test(capped), "all view: the local seller survives the cap (ranked or appended, never dropped)");
-  ok(/SELLERS LISTED<\/div><div[^>]*>121</.test(capped), "all view: SELLERS LISTED card still counts the full roster (121), not the capped table");
+  ok(/SELLERS LISTED<\/div><div[^>]*>120</.test(capped), "all view: SELLERS LISTED card counts the full roster (120 independent sellers, host not counted), not the capped table");
   const full = marketPage(null, "https://agent402.tools", { snapshot, leaderboardSnap: { leaderboard: [] }, all: true });
   ok((full.match(/<div data-mfb-row/g) || []).length === 121, `all view: all:true renders every roster row (got ${(full.match(/<div data-mfb-row/g) || []).length})`);
   ok(!full.includes("showing the top 100"), "all view: no cap note when the full roster is rendered");
@@ -347,7 +353,7 @@ for (const c of NEW_CHAINS) {
   ok(stripped.includes("amulti.example"), "all view: canonical host (real domain) survives the multi-network collapse");
   ok(!/svc-b-multi\.up\.railway\.app/.test(stripped), "all view: the platform-subdomain sibling on the OTHER network is collapsed away, not a second row");
   ok(/\+1 more endpoint\b/.test(stripped), "all view: collapsed sibling is disclosed as '+1 more endpoint', not hidden");
-  ok(/SELLERS LISTED<\/div><div[^>]*>2</.test(html), "all view: SELLERS count reflects the collapsed roster (LOCAL + 1 group = 2, not 3)");
+  ok(/SELLERS LISTED<\/div><div[^>]*>1</.test(html), "all view: SELLERS count reflects the collapsed roster (1 group, host not counted)");
 }
 
 // /marketplace + per-chain filter bar — the chain views must now carry the
@@ -480,7 +486,7 @@ for (const c of NEW_CHAINS) {
   ok(rowCount(capped) === ROW_CAP + 1, `roster caps at ${ROW_CAP} + pinned local row (got ${rowCount(capped)})`);
   ok(/showing the top 100 of 150 sellers/.test(capped), "cap note states the true total (150), not the capped count");
   ok(/href="\/base\?all=1"/.test(capped), "cap note links to this chain's own ?all=1, not /marketplace");
-  ok(/SELLERS LISTED[\s\S]{0,200}151/.test(capped), "SELLERS LISTED stat stays the full honest count (151), unaffected by the render cap");
+  ok(/SELLERS LISTED[\s\S]{0,200}>150</.test(capped), "SELLERS LISTED stat stays the full honest count (150 independent sellers, host not counted), unaffected by the render cap");
 
   const uncapped = marketPage("base", "https://agent402.tools", { snapshot, rail: null, activity: null, wallet: "0x1111111111111111111111111111111111111111", all: true });
   ok(rowCount(uncapped) === 151, `?all=1 renders every seller (got ${rowCount(uncapped)}, want 151)`);
@@ -525,6 +531,38 @@ for (const c of NEW_CHAINS) {
   ok(!html.includes("[object Object]") && !html.includes("object%20Object"), "chain page: no [object Object] in roster labels or links");
   ok(html.includes('href="/base#detail"'), "chain page: the local terminal row links to the chain page itself");
   ok(html.includes("?seller=ext1.example#detail"), "chain page: external terminal rows link by origin host");
+}
+
+// Derived claims on the chain pages: payable count, terminal seller count,
+// crawl cadence, buyer-side gas, and the removal policy.
+{
+  const { catalogPayableOn } = await import("../src/market-page.js");
+  const { marketTerminalHtml } = await import("../src/market-terminal.js");
+  const { crawlIntervalLabel } = await import("../src/crawl-cadence.js");
+  const defs = [{ slug: "a" }, { slug: "mem", identityBound: true }, { slug: "rep", longRunning: true }, { slug: "only", onlyNetworks: ["eip155:8453"] }];
+  const sol = catalogPayableOn(defs, CHAIN_PAGES.solana.caip2);
+  const base = catalogPayableOn(defs, CHAIN_PAGES.base.caip2);
+  const poly = catalogPayableOn(defs, CHAIN_PAGES.polygon.caip2);
+  ok(sol.payable === 1 && sol.total === 4, `solana: identity-bound, long-running and network-pinned tools are not payable there (got ${sol.payable}/${sol.total})`);
+  ok(base.payable === 4 && poly.payable === 3, "EVM rails take identity-bound and long-running tools; a pinned tool only on its own network");
+  const solPage = marketPage("solana", "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, payable: sol });
+  ok(/1 of the <a href="\/tools">4 tools in the catalog<\/a> take USDC on Solana/.test(solPage) && !/Every one of the/.test(solPage), "solana page states the derived payable count, never 'every tool'");
+  const unknown = marketPage("solana", "https://agent402.tools", { snapshot: { sellers: [LOCAL] } });
+  ok(!/Every one of the|500\+ tools in the catalog/.test(unknown), "without derived figures the page claims no count");
+
+  const rows = Array.from({ length: 3 }, (_, i) => ({ host: `h${i}.example`, calls: 5, usd: 1, buyers: 2, tools: 1, routable: true }));
+  const capped = marketTerminalHtml({ chainName: "Base", rows, totalSellers: 1234 });
+  ok(/SELLERS<\/span>3 of 1,234/.test(capped) && /data-t-count>3 of 1,234</.test(capped), "terminal: a capped roster says shown of total, never the cap as the count");
+  ok(/SELLERS<\/span>3</.test(marketTerminalHtml({ chainName: "Base", rows, totalSellers: 3 })), "terminal: an uncapped roster shows the bare count");
+  const unmeasured = marketTerminalHtml({ chainName: "Polygon", rows, measured: false });
+  ok(!/role="cell">5</.test(unmeasured) && /role="cell">-</.test(unmeasured), "terminal: an unmeasured rail renders '-' for calls, volume and buyers, not a figure");
+
+  const html = marketPage("polygon", "https://agent402.tools", { snapshot: { sellers: [LOCAL] } });
+  ok(!/hourly/i.test(html) && html.includes(crawlIntervalLabel()), "chain page: crawl cadence derived from the crawler's constant, never typed as hourly");
+  for (const k of Object.keys(CHAIN_PAGES)) ok(!/(gas|fees) sponsored/.test(CHAIN_PAGES[k].sellParagraphHtml), `${k}: sell copy describes no third-party fee policy`);
+  ok(/buyer gas/.test(html) && !/>gas</.test(html), "rail manifest scopes gas to the buyer");
+  const all = marketPage(null, "https://agent402.tools", { snapshot: { sellers: [LOCAL] } });
+  ok(!/drops out on its own/.test(all) && !/no removal on request/.test(all), "marketplace: no removal claim the operator removal path contradicts");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

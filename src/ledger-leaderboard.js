@@ -18,8 +18,6 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { standingBand } from "./standing.js";
 import { rankBy } from "./leaderboard.js";
-import { RAILS } from "./rails.js";
-import { CAIP2_NAMES } from "./stats.js";
 import { hostRowHtml, HOST_EXCLUSION_NOTE } from "./host-entry.js";
 
 import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
@@ -71,16 +69,6 @@ function rankedRows(snapshot, walletAddress, limit = HTML_ROWS) {
   });
 }
 
-/** How many of the twelve settlement rails carry any recorded volume yet -
- * same CAIP2_NAMES join as the homepage/what-is-x402 rails tables, but only
- * the count is needed here (the "Agent402, for comparison" block cites it
- * as one line, not a full per-rail grid - that grid already lives on the
- * homepage and would just duplicate it here). */
-function railsWithTraffic(stats) {
-  const byNet = stats?.toolCallsServed?.viaUSDCByNetwork || {};
-  const n = RAILS.filter((r) => Number(byNet[CAIP2_NAMES[r.caip2] || r.name.toLowerCase()]) > 0).length;
-  return `${n} of ${RAILS.length}`;
-}
 
 // The Solana board (src/solana-leaderboard.js): the same measures as the Base
 // table above - USDC settled, calls, distinct buyers, average ticket, organic -
@@ -130,7 +118,7 @@ export function solanaSectionHtml(sol) {
   </section>`;
 }
 
-export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress, host = null, standing = null, solana = null } = {}) {
+export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress, host = null, standing = null, solana = null, self = null } = {}) {
   const board = Array.isArray(snapshot?.leaderboard) ? snapshot.leaderboard : [];
   const hasData = board.length > 0;
   const windowLabel = snapshot?.windowLabel || "24h";
@@ -146,11 +134,14 @@ export function ledgerLeaderboardPage(baseUrl, snapshot, { stats, walletAddress,
 
   const rows = rankedRows(snapshot, walletAddress);
 
+  // Our own row reads the SALES LEDGER's external classification (`self`,
+  // built in server.js from externalByNetwork and mppSales), never the
+  // lifetime /api/stats counters: those include settlements our own canary
+  // and volume wallets paid, which the caption below says are excluded.
   const served = stats?.toolCallsServed || {};
-  const selfPaid = fmtNum(served.viaUSDC);
   const selfPow = fmtNum(served.viaProofOfWork);
-  const selfMpp = fmtNum(served.viaMPPWire);
-  const selfRails = railsWithTraffic(stats);
+  const selfRails = self && Number.isFinite(Number(self.railsOffered)) ? `${fmtNum((self.railsWithOutside || []).length)} of ${fmtNum(self.railsOffered)}` : null;
+  const selfMpp = self && Number.isFinite(Number(self.mppExternal)) ? fmtNum(self.mppExternal) : null;
 
   // Two real figures that usually coincide, and reading the same number twice
   // under two labels looks like a bug rather than a fact. scannedSellers counts
@@ -270,18 +261,17 @@ ${solanaSectionHtml(solana)}
       <div style="padding:28px;border-right:1px solid var(--hairline);background:var(--card);">
         <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">OUR OWN ROW, DISCLOSED</div>
         <h2 style="font-weight:800;font-size:24px;margin:0 0 14px;color:var(--ink);">Agent402, for comparison</h2>
-        <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;">We run the index, so we keep ourselves out of the ranking above. Here is the same figure for us, from the same public endpoint. It counts paid calls in stablecoin only, excluding free proof-of-work calls and our own monitoring probes.</p>
+        <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;">We run the index, so we keep ourselves out of the ranking above. Here are our own figures instead, from our sales ledger: settlements and rails count outside buyers only, and the proof-of-work row counts free calls, excluding our own monitoring probes.</p>
         <table style="font-family:var(--font-mono);font-size:13px;border:1px solid var(--hairline);"><tbody>
-          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">calls paid in stablecoin</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfPaid)}</td></tr>
-          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">free over proof-of-work</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfPow)}</td></tr>
-          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">rails with settled traffic</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfRails)}</td></tr>
+          <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">free calls over proof-of-work</th><td style="padding:11px 14px;text-align:right;color:var(--ink);">${esc(selfPow)}</td></tr>
+          ${selfRails ? `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">rails with an outside settlement</th><td style="padding:11px 14px;text-align:right;color:var(--ink);" data-self-rails>${esc(selfRails)}</td></tr>` : ""}
           ${host ? `<tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">settlements from outside buyers, 30 days</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-ext-30d>${esc(fmtNum(host.external30d.settlements))}</td></tr>
           <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">distinct outside buyers, 30 days</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-buyers-30d>${esc(fmtNum(host.external30d.buyers))}</td></tr>
           <tr style="border-bottom:1px solid var(--hairline);"><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">settlements from outside buyers, all time</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-host-ext-all>${esc(fmtNum(host.externalAllTime.settlements))}</td></tr>` : ""}
-          <tr><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">settled over the MPP wire</th><td style="padding:11px 14px;text-align:right;color:var(--accent);">${esc(selfMpp)}</td></tr>
+          ${selfMpp != null ? `<tr><th scope="row" style="text-align:left;font-weight:400;padding:11px 14px;color:var(--faint);">outside settlements over the MPP wire</th><td style="padding:11px 14px;text-align:right;color:var(--accent);" data-self-mpp>${esc(selfMpp)}</td></tr>` : ""}
         </tbody></table>
         ${host ? `<p style="font-family:var(--font-mono);font-size:11.5px;line-height:1.6;color:var(--faint);margin:14px 0 0;">${esc(HOST_EXCLUSION_NOTE)}</p>` : ""}
-        <p style="font-family:var(--font-mono);font-size:11.5px;line-height:1.6;color:var(--faint);margin:14px 0 0;">Most sellers here settle on Base alone. Twelve rails is the difference, and it is checkable on chain.</p>
+
       </div>
       <div style="padding:28px;background:var(--card);">
         <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">METHOD</div>

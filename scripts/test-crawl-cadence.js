@@ -36,7 +36,9 @@ const PAGE_FILES = readdirSync(new URL("../src", import.meta.url))
 // Deliberately keyed on crawl/index language only: the heartbeat and the
 // Cloudflare status observer also state cadences, and those are honest claims
 // about a different system that must not be rewritten by this guard.
-const CADENCE = /(crawl|re-?probes?|index)[^.<>{}]{0,80}?every (\d+|five|ten|fifteen|thirty) minutes?/i;
+// The second shape shipped too: "hourly" beside crawl/probe language, typed
+// while the crawler re-probes every 30 minutes (market and sell pages).
+const CADENCE = /(crawl|re-?probes?|index)[^.<>{}]{0,80}?every (\d+|five|ten|fifteen|thirty) minutes?|\bhourly (crawl|probe|pass)|\b(probes?|crawl(s|er)?)( \w+){0,3} hourly\b|next hourly pass/i;
 for (const f of PAGE_FILES) {
   let src = "";
   try { src = readFileSync(new URL(`../${f}`, import.meta.url), "utf8"); } catch { continue; }
@@ -55,6 +57,8 @@ ok(CADENCE.test('this page crawls them every 5 minutes and shows what is online'
   "detector blind to the exact string that shipped on /index");
 ok(CADENCE.test('A crawl cycle re-probes every known origin every 5 minutes;'),
   "detector blind to the exact string that shipped on /mpp-marketplace");
+ok(CADENCE.test('every independent seller the hourly crawl finds') && CADENCE.test('records your tools and advertised chains, and probes health hourly') && CADENCE.test('the crawler picks you up on the next hourly pass'),
+  "detector blind to the 'hourly' crawl shapes that shipped on the market and sell pages");
 ok(!CADENCE.test('the heartbeat probes production every 15 minutes'),
   "detector over-matches unrelated cadence copy (status/heartbeat)");
 

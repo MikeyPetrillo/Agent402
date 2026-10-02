@@ -512,7 +512,7 @@ import { ledgerPricingPage } from "./ledger-pricing.js";
 import { revenueSnapshot, withFreshRecent, publicRevenueSnapshot, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
-import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml } from "./market-page.js";
+import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml, catalogPayableOn } from "./market-page.js";
 import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
 import { externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerSummary, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
@@ -529,7 +529,8 @@ import { recordSale, salesSummary, externalByNetwork, mppSales, cardSales, decid
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
-import { hostFigures, hostIndexEntry, isSelfSellerQuery } from "./host-entry.js";
+import { hostFigures, hostIndexEntry, isSelfSellerQuery, railsWithOutsideSettlements } from "./host-entry.js";
+import { standingCountsExcludingHost } from "./standing.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
 
@@ -3522,9 +3523,8 @@ app.get("/revenue", async (_req, res) => {
     // `standing` is what the page is MEASURING, read from the index totals rather
     // than typed into the copy: a framing paragraph that goes stale is worse
     // than none, because it is the sentence asking to be trusted.
-    const idx = getIndexSnapshot()?.totals || {};
     const ledger = memoSurface("revenue:page-ledger", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), mpp: mppSales({ detailed: false }), card: cardSales({ days: 30 }), decide: decideSales({ days: 30 }), agents: ledgerBuyerConcentration(revenueWallets()) }));
-    res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: { sellers: idx.sellers, listings: idx.tools, rails: settlementRailCount() } }));
+    res.set("Cache-Control", "public, max-age=30").type("html").send(revenuePage(BASE_URL, { ...snap, ...ledger, standing: standingFigures() }));
   } catch (e) {
     if (e?.snapshotWarming) {
       res.status(200).type("html").send('<!doctype html><meta http-equiv="refresh" content="6"><title>Transactions</title><body style="font-family:system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 24px;color:#14201b"><h2 style="font-weight:500">Warming up…</h2><p style="color:#5d675f">The live on-chain transaction view is loading for the first time since a deploy. It refreshes here automatically in a few seconds.</p><p><a href="/" style="color:#15654a">Home</a></p></body>');
@@ -5985,10 +5985,22 @@ function refreshIndexSnapshotInBackground() {
 function settlementRailCount() {
   return RAILS.length + (tempoEnabled() ? 1 : 0);
 }
+// Our own row on /leaderboard: OUTSIDE settlements only, from the sales
+// ledger's classification - rails that carried one, and the MPP-wire count.
+// The lifetime /api/stats counters it replaced include our own canary and
+// volume purchases.
+function leaderboardSelfFigures() {
+  return memoSurface("leaderboard:self", 60_000, () => {
+    try {
+      const rails = railsWithOutsideSettlements(externalByNetwork({ days: 36_500 }), RAILS, tempoEnabled() ? [{ name: "Tempo", keys: ["tempo", "eip155:4217"] }] : []);
+      return { railsWithOutside: rails.withOutside, railsOffered: rails.offered, mppExternal: Number(mppSales({ detailed: false }).externalCount) || 0 };
+    } catch { return null; }
+  });
+}
 function standingFigures() {
   try {
-    const t = getIndexSnapshot()?.totals || {};
-    return { sellers: t.sellers, listings: t.tools, rails: settlementRailCount() };
+    // Host left out of both counts: the band says the host is in none of them.
+    return { ...standingCountsExcludingHost(getIndexSnapshot()), rails: settlementRailCount() };
   } catch { return {}; }
 }
 
@@ -6119,7 +6131,7 @@ app.get("/stellar", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot, rail, activity, selectedSeller, stellarWallet: selfWallet || undefined, host: hostEntryFigures("stellar") }));
+    htmlCache(res, 120, 600).send(stellarPage(BASE_URL, { snapshot, rail, activity, selectedSeller, stellarWallet: selfWallet || undefined, host: hostEntryFigures("stellar"), payable: chainPayable("stellar") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -6198,7 +6210,7 @@ app.get("/algorand", async (req, res) => {
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
-    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot, rail, activity, selectedSeller, algorandWallet: selfWallet || undefined, host: hostEntryFigures("algorand") }));
+    htmlCache(res, 120, 600).send(algorandPage(BASE_URL, { snapshot, rail, activity, selectedSeller, algorandWallet: selfWallet || undefined, host: hostEntryFigures("algorand"), payable: chainPayable("algorand") }));
   } catch (e) {
     res.status(500).type("text/plain").send("temporarily unavailable");
   }
@@ -6399,7 +6411,15 @@ async function buildChainPage(chainKey, sellerQuery, all) {
     scanWallet ? getActivityForChain(chainKey, scanWallet, { maxWaitMs: PAGE_ACTIVITY_WAIT_MS }) : Promise.resolve(null),
   ]);
   const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
-  return marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey) });
+  return marketPage(chainKey, BASE_URL, { snapshot: withDispatchSnapshot(snapshot), rail, activity, selectedSeller, wallet: rail?.wallet || undefined, leaderboardSnap: getLeaderboardSnapshot(), all, host: hostEntryFigures(chainKey), payable: chainPayable(chainKey) });
+}
+// How many catalog tools a chain page can say take payment on that chain, by
+// the 402 builder's own rules (identity-bound and long-running tools are EVM
+// only). Derived, so the page never claims "every tool" for a rail that
+// serves fewer.
+function chainPayable(chainKey) {
+  const caip2 = CHAIN_PAGES[chainKey]?.caip2;
+  return caip2 ? catalogPayableOn(Object.values(CATALOG), caip2) : null;
 }
 // ?seller= views render per request; at most this many at once (2026-10-01).
 const CHAIN_SELLER_VIEW_MAX_INFLIGHT = 2;
@@ -7110,7 +7130,7 @@ app.get("/api/leaderboard", (req, res) => {
 });
 // Human-readable companion to /api/leaderboard. Same cached snapshot, rendered
 // as a dashboard so visitors (and the site nav) have something to land on.
-app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(ledgerLeaderboardPage(BASE_URL, getLeaderboardSnapshot(), { stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), walletAddress: WALLET_ADDRESS, host: hostEntryFigures(), standing: standingFigures(), solana: getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null, window: getLeaderboardSnapshot()?.windowLabel === "24h" ? "24h" : "7d" }) })));
+app.get("/leaderboard", (_req, res) => htmlCache(res, 60, 300).send(ledgerLeaderboardPage(BASE_URL, getLeaderboardSnapshot(), { stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), walletAddress: WALLET_ADDRESS, host: hostEntryFigures(), self: leaderboardSelfFigures(), standing: standingFigures(), solana: getSolanaLeaderboardSnapshot({ self: (process.env.SOLANA_WALLET_ADDRESS || "").trim() || null, window: getLeaderboardSnapshot()?.windowLabel === "24h" ? "24h" : "7d" }) })));
 app.get("/robots.txt", (_req, res) => res.type("text/plain").set("Cache-Control", "public, max-age=3600").send(robotsTxt(BASE_URL)));
 // IndexNow ownership key file (env-gated no-op like the other integrations).
 // The protocol verifies a submitted key by fetching /{key}.txt from the host;
