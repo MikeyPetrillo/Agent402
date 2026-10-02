@@ -665,7 +665,7 @@ import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledF
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness } from "./hangup-forgiveness.js";
 import { createTempoPushDebts, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
 import { recordRefundOwed, refundByEvidence, voidOwedOnClaim, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, refundTotals, refundsCreatedBetween, refundsForPayer } from "./refund-ledger.js";
-import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend } from "./stats.js";
+import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 
 const PORT = process.env.PORT || 3000;
@@ -3167,6 +3167,16 @@ app.get("/api/gateway-status", async (req, res) => {
     // recorded yet) / unconfigured; the operator also gets the last code and
     // counts. Never an address.
     email: (() => { try { return emailSendStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // A paid call that settled and then answered an error (402 refusals, where
+    // the buyer kept the money, excluded). One word publicly so the status
+    // Worker can page within minutes; heartbeat's charged-failure workflow runs
+    // every few hours. The itemised rows stay on /__operator/stats.
+    chargedFailures: (() => {
+      const hours = Number(process.env.CHARGED_FAILURE_ALARM_HOURS || 6);
+      const n = chargedFailuresGenuineSince(Date.now() - hours * 3600_000);
+      const status = n == null ? "unknown" : n > 0 ? "recent" : "ok";
+      return full ? { status, windowHours: hours, count: n } : { status, windowHours: hours };
+    })(),
   };
   // An operator-authed read must not land in a shared cache.
   res.set("Cache-Control", full ? "private, no-store" : "public, max-age=60").json(body);
