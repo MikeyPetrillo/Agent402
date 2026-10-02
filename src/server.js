@@ -534,6 +534,7 @@ import { hostFigures, hostIndexEntry, isSelfSellerQuery, railsWithOutsideSettlem
 import { standingCountsExcludingHost } from "./standing.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
 
 // Listed only with a key, like every other env-gated kit: a tool we cannot serve
 // must not appear in the catalog, on /api/pricing, or in a 402's offer.
@@ -3687,7 +3688,6 @@ app.get("/reports/dossier/:ticker", (req, res, next) => { _programmaticEntity(re
 // nobody's money is stranded by this switch. Nothing has ever been sold to an
 // outside buyer (one key has ever existed, bought by the operator and gifted
 // unused), so no refund is owed and no customer is disrupted.
-const creditsSalesEnabled = () => /^(1|true|on|yes)$/i.test(String(process.env.CREDITS_SALES || "").trim());
 app.get("/credits", (_req, res) => res.set("Cache-Control", "public, max-age=120").type("html").send(creditsPage(BASE_URL, creditsSalesEnabled())));
 app.get("/credits/thanks", (req, res) => res.set("Cache-Control", "no-store").set("X-Robots-Tag", "noindex, nofollow").type("html").send(creditsThanksPage(String(req.query.session || ""), BASE_URL)));
 if (_credits) {
