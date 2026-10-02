@@ -24,13 +24,15 @@ import Anthropic from "@anthropic-ai/sdk";
 import { agent402Tools } from "agent402-anthropic-tools";
 
 const client = new Anthropic();
-const { tools, execute } = await agent402Tools({ slugs: ["extract", "hash", "render", "screenshot"] });
+// The default (freeOnly: true) keeps only compute-payable tools, so list free ones here;
+// wallet-only slugs such as "extract" or "render" need freeOnly: false and a paying fetch (below).
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
 
 const res = await client.messages.create({
   model: "claude-sonnet-4-6",
   max_tokens: 1024,
   tools,
-  messages: [{ role: "user", content: "Get the title of https://example.com/article" }],
+  messages: [{ role: "user", content: "What is the SHA-256 of 'hello world'?" }],
 });
 
 // Resolve tool_use blocks (free - paid via proof-of-work behind the scenes).
@@ -47,6 +49,7 @@ For the catalog's wallet-only tools (browser, network, memory), wrap your fetch 
 
 ```js
 const { tools, execute } = await agent402Tools({
+  slugs: ["extract", "render", "screenshot"],
   freeOnly: false,
   fetch: payFetch, // your @x402/fetch-wrapped fetch
 });

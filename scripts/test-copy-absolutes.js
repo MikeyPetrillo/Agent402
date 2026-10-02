@@ -27,6 +27,7 @@
 // are strings that state their own scope (a boolean cannot), and the phrasings
 // that were wrong are forbidden outright in served copy.
 import { readFileSync, readdirSync } from "node:fs";
+import { RAILS } from "../src/rails.js";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -72,7 +73,29 @@ const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "
 const files = tracked.filter((f) => TEXT.test(f) && !NOT_SURFACES.some(([re]) => re.test(f)));
 const read = (rel) => { try { return readFileSync(join(root, rel), "utf8"); } catch { return null; } };
 
+// Rail counts are DERIVED here from src/rails.js, so a rail added there moves
+// what the rule accepts. Package descriptions said "USDC on Base + 11 more
+// chains, or USDG on Robinhood Chain (12 chains total)" (thirteen chains by
+// its own arithmetic) and the MCP package said "USDC on 12 chains": twelve is
+// every chain including Robinhood's USDG, eleven carry USDC.
+const USDC_RAILS = RAILS.filter((r) => r.asset === "USDC").length;
+const ALL_RAILS = RAILS.length;
 const FORBIDDEN = [
+  {
+    re: new RegExp(`\\bUSDC on (?!${USDC_RAILS}\\b)\\d+ chains\\b|\\bUSDC on Base \\+ (?!${USDC_RAILS - 1}\\b)\\d+ more chains\\b|\\b(?!${ALL_RAILS}\\b)\\d+ chains total\\b`, "i"),
+    why: `src/rails.js lists ${USDC_RAILS} USDC chains and ${ALL_RAILS} chains in all; derive the figure from RAILS or drop it`,
+    exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
+  },
+  {
+    // The static-surface count is "500+ tools" (CLAUDE.md). Package
+    // descriptions carried a hand-typed lower floor ("400+ pay-per-call
+    // tools") beside it, which reads as a second, contradicting count.
+    // A SUBSET count ("150+ pure-CPU tools") is a different, true claim, so
+    // only the catalog-level phrasings are matched.
+    re: /\b[1-4]\d\d\+ (?:(?:pay-per-call|paid|priced|web) ){0,2}(?:tools|endpoints)\b/,
+    why: "static surfaces say \"500+ tools\", never a different hand-typed floor",
+    exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
+  },
   {
     // THE CLASS, not one string. The first cut matched the exact sentence
     // "Only sellers with proven on-chain settlement are routable" and passed
@@ -82,7 +105,9 @@ const FORBIDDEN = [
     // comment said "we route ONLY to sellers with proven settled volume". A
     // claim has as many phrasings as people who write it down, so this matches
     // the SHAPE: an exclusivity word near "seller" near "proven".
-    re: /\b(?:only|exclusively)\b[^.]{0,60}sellers?[^.]{0,80}proven|\bproven\b[^.]{0,60}sellers?[^.]{0,40}\bonly\b/i,
+    // Third word order ("Sellers qualify only with proven on-chain settled
+    // volume", the MCP wiki page) slipped past the first two alternatives.
+    re: /\b(?:only|exclusively)\b[^.]{0,60}sellers?[^.]{0,80}proven|\bproven\b[^.]{0,60}sellers?[^.]{0,40}\bonly\b|\bsellers?\b[^.]{0,30}\b(?:only|exclusively) (?:with|on|if|when|after)\b[^.]{0,30}\bproven\b/i,
     why: "the unproven Solana tier makes the exclusive form false; render routingProofSentence() or name the chain it is true of",
     // The claim is always about ROUTING or ELIGIBILITY. Without this the rule
     // also read a payTo-mismatch comment ("we only refuse on a positive
@@ -246,9 +271,12 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "Flat pricing for ${n} deterministic web tools."],
                        ["<control>", "Every tool is deterministic."],
                        ["<control>", "If it was, the charge is recorded as owed and refunded automatically."],
-                       ["<control>", "500+ pay-per-call tools. Every one deterministic, priced, and settled on chain."]]);
-const CONTROL_EXPECTED = 8;
-ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 6 planted lines (${CONTROL_EXPECTED} rule hits; a line can match more than one determinism rule) through its real code path (got ${control.length})`);
+                       ["<control>", "500+ pay-per-call tools. Every one deterministic, priced, and settled on chain."],
+                       ["<control>", "Pay in USDC on Base + 11 more chains, or USDG on Robinhood Chain (12 chains total)."],
+                       ["<control>", "over x402 (USDC on 12 chains) or MPP"],
+                       ["<control>", "500+ strong: 400+ pay-per-call tools (x402 or MPP) + 70+ skill packs"]]);
+const CONTROL_EXPECTED = 11;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 9 planted lines (${CONTROL_EXPECTED} rule hits; a line can match more than one determinism rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);
@@ -432,6 +460,7 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
 // to pass; otherwise the next author suppresses it and the guard is decoration.
 {
   const MUST_FAIL = [
+    "the Smart Order Router resolves the best-matching external seller. Sellers qualify only with proven on-chain settled volume.",
     // The two sentences a plugin registry displayed in full from SKILL.md.
     "500+ deterministic web tools an agent can call over plain HTTP, paid per call.\nNo LLM sits in the serving path on Agent402's side; every response is a",
     "Pay-per-call access to Agent402.Tools: 500+ deterministic web tools (browser rendering",
@@ -509,6 +538,11 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
     "The call may still have completed and been charged. If it was, the charge is recorded as owed in our refund ledger and repaid after review. Do not retry blindly: a retry is a new paid call.",
     "The utility tools are deterministic: same input, same output, every time.",
     "Correction (2026-10-02): this post called every tool deterministic. The utility tools are.",
+    // Rail counts that match src/rails.js, and the evergreen catalog count.
+    `pay in USDC on ${USDC_RAILS} chains or USDG on Robinhood Chain (${ALL_RAILS} chains total)`,
+    `USDC on Base + ${USDC_RAILS - 1} more chains, or USDG on Robinhood Chain`,
+    "500+ pay-per-call tools and skill packs",
+    "the 150+ pure-CPU tools are free via proof-of-work",
   ];
   const hits = (t) => sweep([["<case>", t]]).length;
   const missed = MUST_FAIL.filter((t) => hits(t) === 0);

@@ -12,7 +12,7 @@ Add **`https://agent402.tools/mcp`** as a remote MCP server:
 - **Claude Code:** `claude mcp add --transport http agent402 https://agent402.tools/mcp`
 - **Copy-paste blocks for Claude Code, Cursor, Continue, ElizaOS and AgentCore:** https://agent402.tools/guides/agent-hosts
 - **Cursor:** Settings → MCP → *Add new MCP server* → name `agent402`, transport `streamable-http`, URL `https://agent402.tools/mcp`. (Or add directly to `~/.cursor/mcp.json`.)
-- **ChatGPT (Pro/Team/Enterprise):** Settings → Connectors → *Add custom connector* → that URL, no auth.
+- **ChatGPT:** Settings → Connectors → *Add custom connector* → that URL, no auth (where your plan offers custom connectors).
 - **VS Code (GitHub Copilot Chat with MCP):** *MCP: Add Server* → HTTP → `https://agent402.tools/mcp`.
 - Any client speaking **streamable HTTP** (the endpoint is stateless - every JSON-RPC message is self-contained).
 
@@ -56,12 +56,12 @@ It exposes a **flagship-first** tools/list (~15 tools, each with titles + safety
 ```
 
 - **With `AGENT_KEY`** (an EVM wallet holding USDC on Base, Polygon, or Arbitrum) **and/or `SOLANA_AGENT_KEY`** (a Solana wallet holding USDC on Solana): every tool works; each call settles via x402 invisibly under the MCP call. The underlying service also accepts USDC on Stellar and Algorand, and USDG on Robinhood Chain, but this npm server currently signs only EVM and Solana payments. Spend controls (`AGENT402_BUDGET`, `AGENT402_MAX_PER_CALL`) are enforced *before any payment is signed*.
-- **With `AGENT402_CREDITS_KEY`** (0.13.0+): a prepaid card-credits key (`a402_…`, bought at [`/credits`](https://agent402.tools/credits)) pays every wallet-only tool by card, debited only on a successful call, inside the same spend controls. No wallet needed. See [[Reports, Monitors and Credits|Reports-and-Monitors]].
+- **With `AGENT402_CREDITS_KEY`** (0.13.0+): a prepaid card-credits key already issued (`a402_…`) pays every wallet-only tool except the wallet-identity-bound ones, debited only on a successful call, inside the same spend controls. New credits are not on sale at the moment (see [`/credits`](https://agent402.tools/credits)); keys already issued keep working. See [[Reports, Monitors and Credits|Reports-and-Monitors]].
 - **Without a key:** the pure-CPU tools work free via proof-of-work; wallet-only tools explain what they'd cost and how to enable them.
 
 The same flagship set is first-class; the long tail is reachable via `catalog.search` + `catalog.call` to keep your context window small.
 
-Since 0.12.0 the npm server also exposes **`route_and_execute`** `{ task, params?, maxUsd? }`: describe a task and the Smart Order Router resolves the best-matching **external** x402 seller (the MCP tool always sends `include: "external"`; for this catalog's own tools, call the tool directly), pays it from your configured wallet, and relays the result marked `untrustedContent`. Sellers qualify only with proven on-chain settled volume. See [[x402 Index and Router|x402-Index-and-Router]].
+Since 0.12.0 the npm server also exposes **`route_and_execute`** `{ task, params?, maxUsd? }`: describe a task and the Smart Order Router resolves the best-matching **external** x402 seller (the MCP tool always sends `include: "external"`; for this catalog's own tools, call the tool directly), pays it from your configured wallet, and relays the result marked `untrustedContent`. Sellers are routable on proven on-chain settlement, with one exception: a seller with no settlement history yet is tried only after every proven candidate, under a small per-call cap, and flagged unproven on the receipt. See [[x402 Index and Router|x402-Index-and-Router]].
 
 `maxUsd` is the cap on the **underlying seller's** price and defaults to `0.005`. From it the server picks the cheapest routing rung that covers it, exactly as the HTTP ladder does: `maxUsd ≤ 0.005` → the $0.01 tier, `> 0.005` and `≤ 0.04` → the $0.05 tier, `> 0.04` → the $0.55 tier (underlying up to $0.50). Needs a funded wallet.
 

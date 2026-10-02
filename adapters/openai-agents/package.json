@@ -1,7 +1,7 @@
 {
   "name": "agent402-openai-agents",
-  "version": "0.1.8",
-  "description": "OpenAI Agents SDK tools for Agent402.Tools (the applied layer of Agentic Finance): turn its catalog - 500+ strong: 400+ pay-per-call tools (x402 or MPP) + 70+ skill packs (browser, web search, OCR, PDFs, memory) - into Agent tools via four meta-tools (find/route/call/about), plus the cross-seller x402 + MPP Smart Order Router. Free via proof-of-work or pay per call in USDC on Base + 11 more chains, or USDG on Robinhood Chain (12 chains total).",
+  "version": "0.1.9",
+  "description": "OpenAI Agents SDK tools for Agent402.Tools (the applied layer of Agentic Finance): turn its catalog of 500+ pay-per-call tools and skill packs (x402 or MPP) into Agent tools via four meta-tools (find/route/call/about), including the cross-seller x402 router. Free via proof-of-work for the pure-CPU tools, or pay per call in USDC on 11 chains or USDG on Robinhood Chain.",
   "type": "module",
   "main": "index.js",
   "exports": {

@@ -16,7 +16,7 @@ Run Agent402 on your own infrastructure for full control over pricing, data, rat
 - **Node.js >= 22.22.2** (the `engines` field in `package.json`; the hosted instance runs Node 22)
 - **git**
 - **Optional:** Redis (response caching), Postgres (analytics/call tracking)
-- **Optional:** Chromium + ffmpeg if you want browser/media tools (installed automatically by Playwright on first run)
+- **Optional:** Chromium + ffmpeg if you want browser/media tools (Chromium via `npx playwright install --with-deps chromium`, ffmpeg from your OS package manager; the project's own `Dockerfile` installs both)
 
 ## Quick start
 
@@ -60,7 +60,7 @@ For persistent state (stats, memory, PoW replay protection), mount a volume at `
 4. Set environment variables in the Railway dashboard (see table below).
 5. Deploy. Railway auto-detects the start command from `package.json`.
 
-> **Protect in-flight paid calls across redeploys:** set `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=120` on the service (the hosted deploy job sets 120). Railway's default grace between SIGTERM and SIGKILL is **0 seconds**, which kills in-flight (already paid-for) requests on every redeploy. With the variable set, the server's built-in graceful drain finishes active requests (up to 75s) before exiting.
+> **Protect in-flight calls across redeploys:** set `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=120` on the service (the hosted deploy job sets 120). Without a grace period between SIGTERM and SIGKILL, every redeploy kills in-flight requests. With it, the server's built-in graceful drain lets ordinary active requests finish (up to 75s) before exiting; report composites still running are cut off and answer 503. Settlement runs after the handler and only on a response under 400, so a request cut off this way is not charged.
 
 ## Environment variables
 
@@ -72,11 +72,11 @@ Set these on your host. None are committed to the repo.
 | `PORT` | No | HTTP listen port (default: 3000) |
 | `WALLET_ADDRESS` | For paid mode | Your USDC receiving address (Base) |
 | `WALLET_ENS` | No | ENS or Basename for display (e.g. `agent402.base.eth`) |
-| `NETWORK` | For paid mode | Chain identifier (default: `eip155:8453` = Base mainnet) |
+| `NETWORK` | For paid mode | Primary chain (default: `base` = Base mainnet; `base-sepolia` for testnet) |
 | `PAYMENT_NETWORKS` | No | Comma-separated chains to accept (default: the primary network only), e.g. `base,solana,polygon,arbitrum,stellar,algorand,monad,celo,avalanche,sei,optimism,robinhood`; each extra chain needs its own payTo / facilitator settings (see below) |
-| `CDP_API_KEY_ID` | For paid mode | Coinbase CDP API key ID (facilitator auth) |
-| `CDP_API_KEY_SECRET` | For paid mode | Coinbase CDP API secret |
-| `FACILITATOR_URL` | No | Custom x402 facilitator URL (defaults to Coinbase's) |
+| `CDP_API_KEY_ID` | For paid mode (or `FACILITATOR_URL`) | Coinbase CDP API key ID (facilitator auth) |
+| `CDP_API_KEY_SECRET` | For paid mode (or `FACILITATOR_URL`) | Coinbase CDP API secret |
+| `FACILITATOR_URL` | No | Custom x402 facilitator URL for the primary network, used when the CDP keys are unset (the CDP keys take precedence). With neither, only `NETWORK=base-sepolia` boots, on the x402.org testnet facilitator |
 | `POW_SECRET` | For PoW tier | HMAC secret for signing PoW challenges |
 | `BRAVE_API_KEY` | No | Enables search-kit tools (Web, News, Images) |
 | `BRAVE_ANSWERS_API_KEY` | No | Distinct Brave subscription token for the `answer` tool; falls back to `BRAVE_API_KEY` |
@@ -97,6 +97,7 @@ Set these on your host. None are committed to the repo.
 | `TEMPO_RECIPIENT_ADDRESS` | No | Tempo payTo (defaults to `WALLET_ADDRESS`) |
 | `TEMPO_CURRENCY` | No | CSV of TIP-20 token addresses to offer (first = preferred; default PathUSD, the hosted instance offers USDC.e then PathUSD) |
 | `STRIPE_SECRET_KEY` | For card paths | Rollout switch for the human front door: `/reports` (card checkout), `/monitors` (subscriptions), `/credits` (prepaid credits) and the `Authorization: Bearer a402_…` credits gate. Unset = none of it is mounted; the `/v1` report routes still sell over x402 / MPP |
+| `CREDITS_SALES` | No | `on` opens new prepaid credit sales at `/credits`. Off by default: keys already issued keep working and spend down, and the checkout answers 503 |
 | `STRIPE_WEBHOOK_SECRET` | With Stripe | Signing secret for the Stripe webhook endpoint (subscription status, invoices, credit packs, refunds and disputes). The webhook is verified only when set |
 | `STRIPE_PROFILE_ID` | No | With `STRIPE_SECRET_KEY`, mounts cards over the MPP wire (`stripe/charge` via Shared Payment Tokens) on routes priced $0.50 or more |
 | `STRIPE_AUTOMATIC_TAX` | No | `true` adds Stripe Tax to every Checkout Session (enable Stripe Tax in the dashboard first) |
@@ -108,7 +109,7 @@ Set these on your host. None are committed to the repo.
 ## Free mode vs paid mode
 
 - **`FREE_MODE=true`** -- every tool responds without payment. Good for development, internal deployments, or self-hosted agents that don't need metering. The PoW gate and x402 paywall are both disabled.
-- **Without `FREE_MODE`** -- the x402 paywall activates. Callers pay per request (USDC on Base by default; add Solana, Polygon, Arbitrum, Stellar, Algorand and the chains below with `PAYMENT_NETWORKS`, each with its own payTo / facilitator setting) or solve a proof-of-work challenge for pure-CPU tools. You need `WALLET_ADDRESS`, `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, and `POW_SECRET` at minimum. To also accept **USDC on Monad** (EVM chain 143), add `monad` to `PAYMENT_NETWORKS` (settles via `MONAD_FACILITATOR_URL`, default the molandak-operated public facilitator). Avalanche (43114) and Sei (1329) are likewise opt-in via `PAYMENT_NETWORKS` (both settle via PayAI, no extra config). Optimism (10) is opt-in via `PAYMENT_NETWORKS` plus `SOLVADOR_KEY` (settles via the Solvador facilitator; price its per-settlement fee in with `NETWORK_PRICE_PREMIUMS=eip155:10=0.001`). To also accept **USDC on Celo** (EVM chain 42220), add `celo` to `PAYMENT_NETWORKS` and set `CELO_FACILITATOR_KEY` (free self-service key: sign a no-gas message with any wallet at [x402.celo.org](https://x402.celo.org); the facilitator's `/settle` requires it). Settles via `CELO_FACILITATOR_URL`, default the Celo-operated `api.x402.celo.org`. To accept **USDG on Robinhood Chain**, add `robinhood` to `PAYMENT_NETWORKS` and set `ROBINHOOD_FACILITATOR_URL`.
+- **Without `FREE_MODE`** -- the x402 paywall activates. Callers pay per request (USDC on Base by default; add Solana, Polygon, Arbitrum, Stellar, Algorand and the chains below with `PAYMENT_NETWORKS`, each with its own payTo / facilitator setting) or solve a proof-of-work challenge for pure-CPU tools. You need `WALLET_ADDRESS`, a facilitator (`CDP_API_KEY_ID` + `CDP_API_KEY_SECRET`, or `FACILITATOR_URL`), and `POW_SECRET` at minimum. To also accept **USDC on Monad** (EVM chain 143), add `monad` to `PAYMENT_NETWORKS` (settles via `MONAD_FACILITATOR_URL`, default the molandak-operated public facilitator). Avalanche (43114) and Sei (1329) are likewise opt-in via `PAYMENT_NETWORKS` (both settle via the PayAI facilitator; `PAYAI_API_KEY_ID` + `PAYAI_API_KEY_SECRET` authenticate with it). Optimism (10) is opt-in via `PAYMENT_NETWORKS` plus `SOLVADOR_KEY` (settles via the Solvador facilitator; `NETWORK_PRICE_PREMIUMS`, a CAIP-2 keyed CSV such as `eip155:10=<usd>`, adds a per-chain amount to that chain's quote if your facilitator charges per settlement). To also accept **USDC on Celo** (EVM chain 42220), add `celo` to `PAYMENT_NETWORKS` and set `CELO_FACILITATOR_KEY` (a self-service key minted at [x402.celo.org](https://x402.celo.org); the facilitator's `/settle` requires it). Settles via `CELO_FACILITATOR_URL`, default the Celo-operated `api.x402.celo.org`. To accept **USDG on Robinhood Chain**, add `robinhood` to `PAYMENT_NETWORKS` and set `ROBINHOOD_FACILITATOR_URL`.
 
 **MPP on the same 402:** set `MPP_SECRET_KEY` and every paid route also answers `WWW-Authenticate: Payment` (the `evm` method settles through your existing facilitator); add `TEMPO_API_KEY` for native Tempo settlement. **Cards:** `STRIPE_SECRET_KEY` (+ `STRIPE_WEBHOOK_SECRET`) mounts the report checkout, monitors and prepaid credits; `STRIPE_PROFILE_ID` adds cards over MPP. **Email:** `EMAIL_FROM` plus `ZEPTOMAIL_TOKEN` or `RESEND_API_KEY`; without them the card pages still work and the report link is shown on the page.
 

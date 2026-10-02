@@ -1,5 +1,5 @@
-"""agent402-langchain — turn Agent402 into LangChain (and CrewAI) tools a Python
-agent can pick up directly.
+"""agent402-langchain - turn Agent402 into LangChain tools a Python agent can
+pick up directly.
 
 Four meta-tools, all free to discover — the same design as the JS adapter:
 
@@ -35,7 +35,7 @@ from typing import Any, Callable, Optional
 
 import requests
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 DEFAULT_BASE = "https://agent402.tools"
 _TIMEOUT = 60
 
@@ -184,10 +184,10 @@ def agent402_tool_specs(base_url: str = DEFAULT_BASE, x402_fetch: Optional[Calla
     ]
 
 
-# --- LangChain / CrewAI tools -------------------------------------------------
+# --- LangChain tools ---------------------------------------------------------
 class Agent402Toolkit:
     """LangChain-native toolkit. `get_tools()` returns StructuredTool objects that
-    LangChain agents and CrewAI (which consumes LangChain tools) use directly."""
+    LangChain agents use directly."""
 
     def __init__(self, base_url: str = DEFAULT_BASE, x402_fetch: Optional[Callable] = None):
         self.base_url = base_url

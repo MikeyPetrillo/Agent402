@@ -121,8 +121,8 @@ What the server does with it depends on how the call was paid:
 ## Workflows (skill packs)
 
 For jobs that no single tool covers - e.g. "audit a domain", "build a stock
-brief" - Agent402 ships curated multi-tool **skill packs**: 5-7 catalog tools
-composed into a Claude-ready task template. Discover them the same way you'd
+brief" - Agent402 ships curated multi-tool **skill packs**: several catalog
+tools (most packs run three to seven) composed into a Claude-ready task template. Discover them the same way you'd
 discover a tool:
 
 ```js

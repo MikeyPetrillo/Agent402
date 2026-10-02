@@ -56,7 +56,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > report.
 >
 > **Two payment wires, one URL.** Every paid endpoint accepts **x402**
-> (`PAYMENT-SIGNATURE`, USDC on 12 chains) **and MPP** (Machine Payments
+> (`PAYMENT-SIGNATURE`, USDC on 11 chains or USDG on Robinhood Chain) **and MPP** (Machine Payments
 > Protocol, the IETF-track `Payment` HTTP auth scheme co-authored by Tempo and
 > Stripe): the same 402 carries both, an [`mppx`](https://www.npmjs.com/package/mppx)
 > client pays out of the box, and MPP settles on Base and Celo (USDC), natively

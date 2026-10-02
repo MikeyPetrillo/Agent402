@@ -9,7 +9,7 @@
 3. Client signs a USDC `transferWithAuthorization` from its own wallet (no gas needed - the facilitator sponsors it) and retries with the payment header.
 4. Facilitator verifies + settles on-chain; the server serves the result. End-to-end this is seconds.
 
-The payer needs **only USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, or Algorand** - no ETH, no account, no API key. (Sellers can also settle **USDG on Robinhood Chain** when the operator enables it.)
+The payer needs **only USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, or Algorand** - no ETH, no account, no API key. Agent402 also accepts **USDG on Robinhood Chain** (see [[Robinhood Chain (USDG)|Robinhood-Chain]]).
 
 ## What the 402 carries
 
@@ -83,11 +83,11 @@ instead - different mechanism, same price.
 
 ## The same 402 sells report products and takes card credits
 
-The outcome-priced report routes (`POST /v1/research`, `/v1/dossier`, `/v1/ticker-pack`, `/v1/fund`, `/v1/filing-report`, `/v1/domain-audit`, `/v1/recall-report`, `/v1/insider-report`, `/v1/token-brief`, `/v1/token-risk`, `/v1/linkedin-article`; $0.60 to $2.00, and $0.05 for the `/v1/ipo-report` digest) answer the identical 402, so any client that pays a $0.001 tool pays a $0.85 dossier the same way. People without a wallet buy the same reports by card at [`/reports`](https://agent402.tools/reports) for $2 to $5, where the price includes payment processing. Buyers with a card and no wallet can load prepaid credits at [`/credits`](https://agent402.tools/credits) and send `Authorization: Bearer a402_…` instead of a payment header; the credits gate holds the list price and debits only on a final `200`. Details on [[Reports, Monitors and Credits|Reports-and-Monitors]].
+The outcome-priced report routes (`POST /v1/research`, `/v1/dossier`, `/v1/ticker-pack`, `/v1/fund`, `/v1/filing-report`, `/v1/domain-audit`, `/v1/recall-report`, `/v1/insider-report`, `/v1/token-brief`, `/v1/token-risk`, `/v1/linkedin-article`; $0.60 to $2.00, and $0.05 for the `/v1/ipo-report` digest) answer the same 402, so a client that pays a $0.001 tool pays a $0.85 dossier the same way. Every report route above except the `/v1/ipo-report` digest runs for minutes and settles after the report is written, so those routes offer only the EVM exact accepts. People without a wallet buy the same reports by card at [`/reports`](https://agent402.tools/reports) for $2 to $5, where the price includes payment processing. Buyers with a card and no wallet can load prepaid credits at [`/credits`](https://agent402.tools/credits) and send `Authorization: Bearer a402_…` instead of a payment header; the credits gate holds the list price and debits only on a final `200`. Details on [[Reports, Monitors and Credits|Reports-and-Monitors]].
 
 ## Command line: Stripe's `purl`
 
-Stripe's open-source [purl](https://github.com/stripe/purl) ("curl for paid endpoints") works against Agent402 out of the box - our CI proves it on demand with a real settled payment:
+Stripe's open-source [purl](https://github.com/stripe/purl) ("curl for paid endpoints") works against Agent402 out of the box - a dispatchable CI job checks that it parses our 402 and, when its test wallet holds funds, pays one:
 
 ```bash
 purl wallet add --name me --type evm -k 0xYOUR_KEY -p yourpass --set-active=true

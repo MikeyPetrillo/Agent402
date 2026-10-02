@@ -132,7 +132,7 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
           return json(res, 400, { error: { message: `Unknown model "${requested}". Use "auto" or an id from GET /v1/models (${table.size} available).`, type: "invalid_request_error", code: "model_not_found" } });
         }
         if (!paid) {
-          return json(res, 402, { error: { message: "No payment method configured. Set AGENT402_CREDITS_KEY (buy a pack by card at agent402.tools/credits) or configure an x402 wallet (agent402-openclaw setup --wallet).", type: "payment_required", code: "agent402_unconfigured" }, topup: `${upstream}/credits`, priceUsd: route.priceUsd });
+          return json(res, 402, { error: { message: "No payment method configured. Run `agent402-openclaw setup` to generate an x402 wallet, set AGENT402_WALLET_KEY, or set AGENT402_CREDITS_KEY to a credits key already issued.", type: "payment_required", code: "agent402_unconfigured" }, topup: `${upstream}/credits`, priceUsd: route.priceUsd });
         }
         const outbound = { ...body };
         if (requested === AUTO_ID) delete outbound.model; else outbound.model = route.id;

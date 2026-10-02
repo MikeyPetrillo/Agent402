@@ -1,6 +1,6 @@
 # Paying with MPP
 
-**MPP** (Machine Payments Protocol) is the open, IETF-track HTTP payment scheme co-authored by Tempo and Stripe: the server answers `402` with `WWW-Authenticate: Payment`, the client replies with `Authorization: Payment`, and a settled response carries a signed `Payment-Receipt`. Spec and tooling: [tempoxyz/mpp](https://github.com/tempoxyz/mpp) · [mpp.dev](https://mpp.dev) · client/server library [`mppx`](https://www.npmjs.com/package/mppx).
+**MPP** (Machine Payments Protocol) is an open, IETF-track HTTP payment scheme: the server answers `402` with `WWW-Authenticate: Payment`, the client replies with `Authorization: Payment`, and a settled response carries a signed `Payment-Receipt`. Spec and tooling: [tempoxyz/mpp](https://github.com/tempoxyz/mpp) · [mpp.dev](https://mpp.dev) · client/server library [`mppx`](https://www.npmjs.com/package/mppx).
 
 Every paid endpoint on Agent402.Tools is **dual-stack**: the same 402 carries an x402 offer *and* an MPP challenge. Same URL, same price - the buyer's client picks the wire. MPP is one of the two wires underneath [[Agentic Finance]], agents that pay and get paid on their own; Agent402 is its applied layer.
 

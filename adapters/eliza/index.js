@@ -312,7 +312,7 @@ export const agent402Plugin = {
   init: async (config, runtime) => {
     const hasKey = Boolean(setting(runtime, "AGENT402_CREDITS_KEY") || config?.AGENT402_CREDITS_KEY);
     const hasWallet = /^0x[0-9a-fA-F]{64}$/.test(setting(runtime, "AGENT402_WALLET_KEY") || config?.AGENT402_WALLET_KEY || "");
-    if (!hasKey && !hasWallet) console.warn("[agent402] no AGENT402_CREDITS_KEY or AGENT402_WALLET_KEY: free-tier tools only (buy credits at https://agent402.tools/credits)");
+    if (!hasKey && !hasWallet) console.warn("[agent402] no AGENT402_CREDITS_KEY or AGENT402_WALLET_KEY: free-tier tools only (credits keys: https://agent402.tools/credits)");
   },
 };
 
