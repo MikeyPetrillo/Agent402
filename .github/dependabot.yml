@@ -32,6 +32,11 @@ updates:
       # update-types qualifier on purpose: for 0.x packages Dependabot reads the
       # middle digit as minor, so a "semver-major" ignore would never match
       # (the @zxing note below).
+      # ox is pinned to the exact version mppx resolves (0.14.33): our Tempo
+      # sender imports it directly and must agree with the copy mppx signs
+      # with. It moves when mppx moves, never on its own (#1561 proposed 1.8
+      # and failed two lanes).
+      - dependency-name: "ox"
       - dependency-name: "@solana-program/*"
       # @solana/kit itself: @solana-program/* declare a peer of kit ^5 and
       # @coinbase/cdp-sdk depends on kit ^5, so a kit major (5 -> 8, #1214)
