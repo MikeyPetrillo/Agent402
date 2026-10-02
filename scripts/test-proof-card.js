@@ -16,6 +16,14 @@ ok(/an outside buyer/.test(b) && /\$0\.0031/.test(b) && /\$0\.0025/.test(b) && /
 ok(/preview data - final card renders from live/.test(b) && !/real output/.test(b), "preview tag replaces the real-output claim");
 ok(b.includes("0xdddddddddd…dddddddd") && !b.includes("0x" + "d".repeat(64)), "tx is shortened, never printed in full");
 ok(!/[—]/.test(a + b), "no em dashes");
+{
+  // Live shape since outside buyers' hashes are withheld: external.latest has tx null.
+  const withheld = { external: { count: 20, settledUsd: 0.4, quotedUsd: 0.5, latest: row({ tx: null, txWithheld: true }) }, internal: internalOnly.internal };
+  const p = pickRow(withheld);
+  ok(p.side === "internal" && p.row.tx, "a withheld outside tx falls back to our own canary receipt, which carries its tx");
+  const w = cardSvg(withheld, { fonts: false });
+  ok(/our own daily canary/.test(w) && /20 external settlements/.test(w) && w.includes("0x6c11e7f3"), "the card shows our receipt with its tx and still counts the outside settlements");
+}
 let threw = false; try { cardSvg({ external: {}, internal: {} }, { fonts: false }); } catch { threw = true; }
 ok(threw, "an empty feed refuses to render (a card with no receipt is not a receipt)");
 console.log(`\n${pass} passed`);
