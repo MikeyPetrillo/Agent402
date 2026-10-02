@@ -2965,6 +2965,7 @@ jobs:
           node scripts/test-router-health.js
           node scripts/test-chain-kit.js
           node scripts/test-contract-kit.js
+          node scripts/test-address-label-settlement.js
           node scripts/test-dex-kit.js
           node scripts/test-forecast-kit.js
           node scripts/test-mev-and-l2-kit.js
