@@ -289,6 +289,7 @@ import { probeCompanyFilings as faProbeFilings } from "./tools/filing-watch-kit.
 import { latest13fFiling as faLatest13f, resolveManager as faResolveManager } from "./tools/edgar-kit.js";
 import { probeDomain as faProbeDomain } from "./tools/domain-audit-kit.js";
 import { probeRecalls as faProbeRecalls } from "./tools/recall-report-kit.js";
+import { makeFreeAlertProbes } from "./free-alert-probes.js";
 import { sendEmail as faSendEmail } from "./email.js";
 import { marketsPage } from "./markets.js";
 import { decidePage } from "./decide-page.js";
@@ -2337,13 +2338,7 @@ const _freeAlerts = createFreeAlerts({
   baseUrl: BASE_URL,
   sendEmail: faSendEmail,
   validators: _monitorTargetValidators,
-  probes: {
-    insider: async (t) => { const r = await faProbeInsider({ ticker: t, days: 90, limit: 40 }); return { ids: r.ids, items: (r.filings || []).map((f) => ({ id: f.accessionNumber, label: `${(f.displayNames || []).join(", ") || "Form 4"} · filed ${f.filedDate}`, url: f.url })) }; },
-    filing: async (t) => { const r = await faProbeFilings(t); return { ids: r.keys || r.ids, items: (r.filings || []).map((f) => ({ id: f.key || `${f.accessionNumber}|${f.form}`, label: `${f.form} · filed ${f.filedDate}`, url: f.url })) }; },
-    fund: async (t) => { const m = /^\d{1,10}$/.test(t) ? await faResolveManager({ cik: t }) : await faResolveManager({ name: t }); const l = m?.cik ? await faLatest13f({ cik: m.cik }) : null; return { ids: l?.accessionNumber ? [l.accessionNumber] : [], items: l ? [{ id: l.accessionNumber, label: `13F for the period ended ${l.reportDate} · filed ${l.filedDate}` }] : [] }; },
-    domain: async (t) => { const r = await faProbeDomain(t); return { ids: [r.fingerprint], items: [{ id: r.fingerprint, label: `Security posture changed on ${t}` }] }; },
-    recall: async (t) => { const r = await faProbeRecalls(t); return { ids: r.ids, items: (r.items || []).map((x) => ({ id: x.recallNumber, label: `${x.classification || "Recall"} · ${String(x.product || "").slice(0, 90)}` })) }; },
-  },
+  probes: makeFreeAlertProbes({ probeInsider: faProbeInsider, probeFilings: faProbeFilings, resolveManager: faResolveManager, latest13f: faLatest13f, probeDomain: faProbeDomain, probeRecalls: faProbeRecalls }),
   onEvent: ({ step, kind }) => { try { capturePostHogHumanFunnel({ step, kind }); } catch { /* telemetry never breaks the engine */ } },
 });
 if (process.env.FREE_ALERTS !== "off") _freeAlerts.start();
