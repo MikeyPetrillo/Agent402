@@ -97,7 +97,7 @@ quoted ceiling, or flat tiers) and the finished report products (`/v1/research`,
 
 🟢 **Hosted demo: [agent402.tools](https://agent402.tools)** · 📖 **[Wiki](https://github.com/MikeyPetrillo/Agent402/wiki)** · 📦 **[npm](https://www.npmjs.com/package/agent402-mcp)** · 🔌 **[MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)** · 🧩 **[Smithery](https://smithery.ai/servers/mike-kq9d/agent402)**
 
-[![HOL Registry](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fplugin%3Fslug%3Dmikeypetrillo%252Fagent402%26metric%3Dstatus%26style%3Dflat)](https://hol.org/registry/plugins/mikeypetrillo%2Fagent402)
+[![HOL Registry](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fplugin%3Fslug%3Dhavok-holdings-llc%252Fagent402%26metric%3Dstatus%26style%3Dflat)](https://hol.org/registry/plugins/havok-holdings-llc%2Fagent402)
 
 ## Run it yourself in 30 seconds
 
@@ -334,7 +334,7 @@ A task-shaped query to `catalog.search` (the hosted connector's search tool; the
 | [`document-intel`](https://agent402.tools/skills/document-intel) | pdf-info · pdf-to-markdown · pdf-extract-pages · image-ocr · barcode-decode · pdf-merge · images-to-pdf | PDF/OCR/barcode pipeline |
 | [`status-snapshot`](https://agent402.tools/skills/status-snapshot) | dns-lookup · http-check · http-headers · tls-cert · robots-check | One-shot service-health sweep |
 
-All 100+ packs at [`/skills`](https://agent402.tools/skills) · JSON index at [`/api/skill-packs.json`](https://agent402.tools/api/skill-packs.json) ·
+All 80+ packs at [`/skills`](https://agent402.tools/skills) · JSON index at [`/api/skill-packs.json`](https://agent402.tools/api/skill-packs.json) ·
 on MCP the packs appear under `prompts/list` so any MCP-aware client picks them up automatically.
 
 ## x402 Index - Find · Route · Leaderboard
@@ -557,8 +557,10 @@ Every claim links to the surface that proves it (the one-page version: [agent402
 
 ## Why it's solid
 
-- **Everything is tested** - CI calls all 500+ tools with their own documented
-  examples and blocks the release on any failure. Two independent probes outside
+- **Everything is tested** - CI calls every tool that needs no third-party key
+  with its own documented example and blocks the release on any failure; the
+  key-gated and model-backed tools are covered by input probes and a daily paid
+  canary instead, because CI holds no third-party keys. Two independent probes outside
   production watch the live instance (one every 5 minutes, on separate infra from
   the other), and what they observe is public at
   [`/status`](https://agent402.tools/status) - where a day with no observation
@@ -569,10 +571,11 @@ Every claim links to the surface that proves it (the one-page version: [agent402
   security headers. See [wiki: Security Model](https://github.com/MikeyPetrillo/Agent402/wiki/Security-Model).
 - **Deterministic utilities** - no model in the serving path of the utility tools, so the same input always
   gives the same output, with full OpenAPI schemas.
-- **Auditable, on-chain revenue** - every paid call settles in USDC to
+- **Auditable, on-chain revenue** - paid calls on Base settle in USDC to
   [`agent402.base.eth`](https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns)
-  (a Base name resolving to the public receiving wallet) - verifiable by anyone
-  on Basescan; live counts at [`/api/stats`](https://agent402.tools/api/stats).
+  (a Base name resolving to the public receiving wallet); every other chain's
+  receiving address is in the live 402 and at [`/.well-known/x402`](https://agent402.tools/.well-known/x402),
+  so anyone can verify on chain; live counts at [`/api/stats`](https://agent402.tools/api/stats).
 - **AGPL-3.0 licensed, self-host-friendly** - clone it, strip what you don't need, add
   what you do.
 

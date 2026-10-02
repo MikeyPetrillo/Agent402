@@ -47,7 +47,7 @@ MCP_URL="${b}/mcp"
 say() { printf '%s\\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 did=0
-say "Agent402: 500+ paid tools, metered models and reports for agents. Free tier via proof-of-work, paid via x402/MPP or a prepaid credits key."
+say "Agent402: 500+ paid tools, metered models and reports for agents. Free tier via proof-of-work, paid per call via x402/MPP."
 say ""
 if have claude; then
   say "-> Claude Code found: adding the Agent402 MCP connector (claude mcp add --transport http agent402 $MCP_URL)"
@@ -58,7 +58,7 @@ if have claude; then
   fi
 fi
 if have openclaw; then
-  say "-> OpenClaw found: run  npx agent402-openclaw setup   (mints a wallet or takes a credits key, writes the provider)"
+  say "-> OpenClaw found: run  npx agent402-openclaw setup   (mints a wallet to fund with USDC on Base, writes the provider)"
 fi
 if have cursor || [ -d "$HOME/.cursor" ]; then
   say "-> Cursor: add to ~/.cursor/mcp.json ->  {\\"mcpServers\\":{\\"agent402\\":{\\"url\\":\\"$MCP_URL\\"}}}"
@@ -68,7 +68,7 @@ if [ "$did" = 0 ]; then
   say "   ${b}/guides/agent-hosts"
 fi
 say ""
-say "Models: OpenAI-compatible base URL ${b}/v1/metered with a credits key (${b}/credits) or a funded wallet."
+say "Models: OpenAI-compatible base URL ${b}/v1/metered, paid per call from a funded wallet (or a credits key you already hold)."
 say "Try one free call:  curl -s '${b}/api/find?q=web+search'"
 `;
 }

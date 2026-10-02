@@ -318,7 +318,7 @@ on-chain customer detector - is in
     title: "Let your agent pay anyone: the non-custodial x402 payments toolkit",
     seoTitle: "The non-custodial x402 payments toolkit",
     description:
-      "Discover a 402 quote, resolve an ENS recipient, check USDC balance and gas, build the EIP-3009 authorization your agent signs with its own key, and verify the settlement on-chain - across Base, Polygon, Arbitrum, Optimism, Ethereum, and Robinhood Chain. Agent402 never touches funds.",
+      "Discover a 402 quote, resolve an ENS recipient, check USDC balance and gas, build the EIP-3009 authorization your agent signs with its own key, and verify the settlement on-chain - across Base, Polygon, Arbitrum, Optimism, Ethereum, and Robinhood Chain. these tools never touch funds.",
     md: `
 An autonomous agent that can *pay* is far more useful than one that can't - but
 you don't want a middleman holding your money. Agent402's payments tools are

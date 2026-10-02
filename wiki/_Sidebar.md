@@ -34,7 +34,7 @@
 - [Try Tollbooth Cloud](https://agent402.tools/tollbooth/cloud) (managed)
 
 **Website & Developer**
-- [Reports](https://agent402.tools/reports) · [Monitors](https://agent402.tools/monitors) · [Credits](https://agent402.tools/credits) - buy by card
+- [Reports](https://agent402.tools/reports) · [Monitors](https://agent402.tools/monitors) - by card
 - [Quickstart](https://agent402.tools/quickstart) - first call in 60 seconds
 - [Playground](https://agent402.tools/playground) - try tools in your browser
 - [SDK REPL](https://agent402.tools/sdk-playground) - live code editor

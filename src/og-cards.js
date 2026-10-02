@@ -19,6 +19,9 @@
 
 import { RAILS } from "./rails.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
+import { SKILL_PACKS } from "./skills.js";
+// Evergreen floor (a multiple of ten at or under the live count), never an exact number.
+const PACKS_FLOOR = `${Math.floor(SKILL_PACKS.length / 10) * 10}+`;
 
 const CHAIN_KEYS = RAILS.map((r) => ({ key: r.name.toLowerCase().replace(/ chain$/, "").replace(/\s+/g, "-"), name: r.name, asset: r.asset }));
 
@@ -101,7 +104,7 @@ function sectionCopy(id, ctx) {
     tollbooth: { h1: "Pay-per-crawl", h2: "for your own site.", sub: "Bots pay, people pass. x402 accepts and MPP challenges on the same 402.",
       lines: [["$ npx agent402-tollbooth", "faint"], ["HTTP/2 402  WWW-Authenticate: Payment · PAYMENT-REQUIRED", "amber"], ["HTTP/2 200  X-Tollbooth-Paid", "accent"]], badge: ["x402 · MPP", "Tempo native"] },
     skills: { h1: "Skill packs,", h2: "priced from their parts.", sub: "Multi-tool workflows. Each costs the sum of its tools minus 10%.",
-      lines: [["$ curl -X POST agent402.tools/api/skill/crypto-dossier", "faint"], ["HTTP/2 200  steps: 6/6 succeeded", "accent"], ["a pack where nothing succeeds refuses rather than charges", "muted"]], badge: ["x402 · MPP", "85+ packs"] },
+      lines: [["$ curl -X POST agent402.tools/api/skill/crypto-dossier", "faint"], ["HTTP/2 200  steps: 6/6 succeeded", "accent"], ["a pack where nothing succeeds refuses rather than charges", "muted"]], badge: ["x402 · MPP", `${PACKS_FLOOR} packs`] },
     "x402-test": { h1: "Refused payment?", h2: "The 402 says why.", sub: "Reason, retry class and a hint on every rejected x402 or MPP credential.",
       lines: [["$ curl agent402.tools/x402-test", "faint"], ["HTTP/2 402  reason: under-price · retry: fund-wallet", "amber"], ["the reason table is built from the classifier the gate runs", "muted"]], badge: ["x402 · MPP", "conformance"] },
     guides: { h1: "Guides,", h2: "copy-paste ready.", sub: "Claude Code, Cursor, Codex, OpenClaw, AgentKit, tollbooths, wallets.",
