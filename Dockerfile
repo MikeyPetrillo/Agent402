@@ -61,8 +61,8 @@ COPY src ./src
 # `node services/decide/server.js`) ships in the same image.
 COPY services ./services
 # start.js is the shared-image dispatcher; worker/ is the secretless browser+media
-# worker it boots when WORKER_MODE=true. Both services run THIS image (railway.toml
-# pins every service to Dockerfile); WORKER_MODE unset → the main API server.
+# worker it boots when WORKER_MODE=true. Both services run THIS image (Railway
+# builds with a root Dockerfile whenever one exists); WORKER_MODE unset → the main API server.
 COPY start.js ./
 COPY worker ./worker
 # Only the two scripts the SERVER actually uses at runtime, never the whole

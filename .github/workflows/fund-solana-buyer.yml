@@ -36,7 +36,7 @@ jobs:
         with:
           node-version: "22"
       - name: Install the Solana client (pinned to the versions the repo tree proves)
-        run: npm install --no-save --ignore-scripts @solana/kit@8.3.0 @solana-program/token@0.17.0
+        run: npm install --no-save --ignore-scripts @solana/kit@8.4.0 @solana-program/token@0.17.0
       - name: Fund
         env:
           SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
