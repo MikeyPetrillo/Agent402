@@ -32,8 +32,9 @@ contracts, and volumetric denial-of-service.
 ## Controls on the code
 
 Every pull request runs CodeQL, gitleaks secret scanning (with a planted-canary self-check), Socket
-dependency review, DCO sign-off and the full test lanes, all required before merge; every GitHub
-Action is pinned to a full commit SHA; payment, gating and CI paths require code-owner review; the
+dependency review and the full test lanes, all required before merge; outside contributions also
+need DCO sign-off and the maintainer's code-owner review on payment, gating and CI paths; every
+GitHub Action is pinned to a full commit SHA; the
 container image is pinned by digest and runs as a non-root user; npm packages publish through OIDC
 with provenance. The human-readable version is at https://agent402.tools/security.
 

@@ -391,6 +391,14 @@ try {
   ok(nokey.ok === false && nokey.reason === "no-key", `no key stays a no-op regardless of NODE_ENV (got ${JSON.stringify(nokey)})`);
 }
 
+// The call site must hand over the resource the buyer's v2 payload names: v2
+// requirements carry none, and passing only requirements.resource left `path`
+// on 2 of 7,103 events (truth audit 2026-10-02).
+{
+  const { readFileSync: rf } = await import("node:fs");
+  const pay = rf(new URL("../src/payments.js", import.meta.url), "utf8");
+  ok(/capturePostHogVerifyFailed\(\{[\s\S]{0,400}resource: ctx\?\.paymentPayload\?\.resource\?\.url/.test(pay), "payments.js: verify_failed's path comes from the v2 payload's resource url");
+}
 // ---- verify_failed: reason + chain + path, never the payer, capped per hour (2026-08-28) ----
 {
   const { capturePostHogVerifyFailed, _testEventsForTest } = await import("../src/posthog.js");
