@@ -1,8 +1,8 @@
 # agent402-mcp
 
-MCP server for [Agent402](https://agent402.tools), the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance) - a catalog of **500+: 400+ pay-per-call web tools + 80+ curated multi-tool skill packs** for AI agents (every one tested, priced, and settled on-chain; every one earns its place), paid per call in USDC via the [x402 protocol](https://www.x402.org), **with compute (proof-of-work)** when no wallet is configured, or **by card** through a prepaid credits key. (The hosted API is dual-stack: it also accepts [MPP](https://agent402.tools/what-is-mpp) clients on the same 402, settling on Base/Celo or natively on Tempo; this package pays via x402 or credits.) Built by [Havok Holdings LLC](https://github.com/MikeyPetrillo/Agent402).
+MCP server for [Agent402](https://agent402.tools), the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance) - a catalog of **500+: 400+ pay-per-call web tools + 80+ curated multi-tool skill packs** for AI agents (every one priced per call and settled on-chain), paid per call in USDC via the [x402 protocol](https://www.x402.org), **with compute (proof-of-work)** when no wallet is configured, or through a prepaid credits key already issued. (The hosted API is dual-stack: it also accepts [MPP](https://agent402.tools/what-is-mpp) clients on the same 402, settling on Base/Celo or natively on Tempo; this package pays via x402 or credits.) Built by [Havok Holdings LLC](https://github.com/MikeyPetrillo/Agent402).
 
-Your agent gets browser rendering, screenshots, PDF text extraction, URL→markdown, live web search **+ web answers with citations**, live **financial/crypto/macro data** (US equity quotes and daily bars from Databento, CoinGecko, FRED, ECB FX, World Bank, yield curve), **SEC EDGAR filings** (10-K/10-Q text, XBRL, insider, 13F, IPO calendar), **deterministic stats & forecasting** (Pearson correlation, OLS, Holt-Winters), **compression** (gzip/brotli), DNS/TLS/WHOIS + email-deliverability checks, wallet-keyed shared memory, and 200+ deterministic pure-CPU utilities - plus 100+ **skill packs** like `security-audit`, `trend-analysis`, `structured-scrape`, `decode-blob`, and `forecasting-bake-off` callable as MCP prompts, and the **report products** (deep research, company dossier, 13F fund report, domain audit, token risk, FDA recall, insider flow, market brief) as ordinary catalog slugs. Payment handled invisibly underneath the MCP calls. No signup, no API key.
+Your agent gets browser rendering, screenshots, PDF text extraction, URL→markdown, live web search **+ web answers with citations**, live **financial/crypto/macro data** (US equity quotes and daily bars from Databento, CoinGecko, FRED, ECB FX, World Bank, yield curve), **SEC EDGAR filings** (10-K/10-Q text, XBRL, insider, 13F, IPO calendar), **deterministic stats & forecasting** (Pearson correlation, OLS, Holt-Winters), **compression** (gzip/brotli), DNS/TLS/WHOIS + email-deliverability checks, wallet-keyed shared memory, and the pure-CPU utilities - plus 80+ **skill packs** like `security-audit`, `trend-analysis`, `structured-scrape`, `decode-blob`, and `forecasting-bake-off` callable as MCP prompts, and the **report products** (deep research, company dossier, 13F fund report, domain audit, token risk, FDA recall, insider flow, market brief) as ordinary catalog slugs. Payment handled invisibly underneath the MCP calls. No signup, no API key.
 
 ## Quick start
 
@@ -29,7 +29,7 @@ With a funded wallet (USDC on any EVM rail the server offers - Base, Polygon, Ar
 }
 ```
 
-With prepaid card credits (no wallet) - buy a pack at https://agent402.tools/credits, claim the `a402_...` key once, and every tool is available:
+With a prepaid credits key already issued (new credits are not on sale) - every tool except the wallet-scoped ones (memory, usage) is available:
 
 ```json
 {
@@ -43,7 +43,7 @@ With prepaid card credits (no wallet) - buy a pack at https://agent402.tools/cre
 }
 ```
 
-Without a wallet or credits key - the 150+ pure-CPU tools work free via proof-of-work (the network/browser/memory tools will ask for a wallet or a credits key):
+Without a wallet or credits key - the pure-CPU tools work free via proof-of-work (the network/browser/memory tools will ask for a wallet or a credits key):
 
 ```json
 {
@@ -63,7 +63,7 @@ Every variable the server reads (all optional):
 | --- | --- | --- |
 | `AGENT_KEY` | _(unset)_ | Hex private key of an EVM wallet funded with USDC on Base (or Polygon/Arbitrum/Monad), or USDG on Robinhood Chain. |
 | `SOLANA_AGENT_KEY` | _(unset)_ | Base58 secret key (or JSON byte array) of a Solana wallet funded with USDC on Solana. |
-| `AGENT402_CREDITS_KEY` | _(unset)_ | A prepaid card-credits key (`a402_...`) from https://agent402.tools/credits. Sent as `Authorization: Bearer` on every catalog call; the server debits the list price only on a successful (200) call and answers `X-Credits-Balance`. Used only when no wallet key is set (a wallet key wins); in credits mode every call - pure-CPU tools included - is debited from the key. |
+| `AGENT402_CREDITS_KEY` | _(unset)_ | A prepaid credits key (`a402_...`) already issued (new credits are not on sale). Sent as `Authorization: Bearer` on every catalog call; the server debits the list price only on a successful (200) call and answers `X-Credits-Balance`. Used only when no wallet key is set (a wallet key wins); in credits mode every call - pure-CPU tools included - is debited from the key. |
 | `AGENT402_URL` | `https://agent402.tools` | Target service (point at your own deployment). |
 | `AGENT402_TOOLS` | curated set | Comma-separated slugs to expose as first-class tools. |
 | `AGENT402_MAX_PER_CALL` | unlimited | Refuse any single call priced above this many USD (e.g. `0.01`). Applies to the wallet and the credits path. |
@@ -76,7 +76,7 @@ caps, what's been spent, and what remains. With no wallet key and no credits key
 the server runs in proof-of-work mode (pure-CPU tools stay free). Use dedicated
 low-value wallets for `AGENT_KEY` / `SOLANA_AGENT_KEY`, funded only with what
 you intend to spend. Most tools cost $0.001–$0.02. The routing tiers top out
-at $3.30 (`route-execute-pro`); multi-tool skill packs run $0.003 to $0.119; and the
+at $3.30 (`route-execute-pro`); multi-tool skill packs run $0.003 to $0.101; and the
 report products run $0.60 to $2.00 per report (domain-audit $0.60 up to the ticker pack at $2.00),
 so set `AGENT402_MAX_PER_CALL` if you want a hard per-call ceiling.
 
