@@ -372,9 +372,11 @@ export const X402_TOOLS = [
       "Check the confirmation status of a transaction by hash on Base/Polygon/Arbitrum/Optimism/Ethereum/Monad/Celo/Avalanche/Sei/Robinhood Chain: success / failed / pending / not found, with block, from, to, gas used. Read-only. ?hash=0x…&network=base",
     tags: ["transaction", "status", "receipt", "confirmation", "multichain", "robinhood", "usdg"],
     discovery: {
-      input: { hash: "0x0000000000000000000000000000000000000000000000000000000000000000", network: "base" },
+      // A real Base transaction, so the documented call returns the shown
+      // answer (an all-zero hash answers status "not_found").
+      input: { hash: "0x2f1fecade9bd945e7817c11e5a34cafe6b349dd8c92a7587efed1de476bddfeb", network: "base" },
       inputSchema: { properties: { hash: { type: "string", description: "0x transaction hash" }, network: NETWORK_PARAM }, required: ["hash"] },
-      output: { example: { hash: "0x…", status: "success", network: "base", blockNumber: 18000000, from: "0x…", to: "0x…", gasUsed: 51000 } },
+      output: { example: { hash: "0x2f1fecade9bd945e7817c11e5a34cafe6b349dd8c92a7587efed1de476bddfeb", network: "base", status: "success", blockNumber: 50829610, from: "0x…", to: "0x…", gasUsed: 91958 } },
     },
     handler: async (i) => {
       if (!isTxHash(i.hash)) throw bad("hash must be a 0x transaction hash (32 bytes)");
@@ -415,7 +417,9 @@ export const X402_TOOLS = [
       "Confirm a USDC payment actually settled: given a tx hash (and network), returns whether it succeeded and the USDC transfers it contains (from, to, amount). Optionally check it paid a specific address at least a minimum amount. Read-only proof of payment. ?hash=0x…&network=base&to=0x…&min=0.001",
     tags: ["x402", "verify", "settlement", "receipt", "usdc", "proof", "multichain"],
     discovery: {
-      input: { hash: "0x0000000000000000000000000000000000000000000000000000000000000000", network: "base" },
+      // A real settled USDC payment on Base, with `min` so the answer carries
+      // `matched` as shown (an all-zero hash answers pending_or_not_found).
+      input: { hash: "0x09f85fcf1844d85277b8cce528efc8d25c6df632b1fed1c8337f078901a69562", network: "base", min: 0.001 },
       inputSchema: {
         properties: {
           hash: { type: "string", description: "0x transaction hash" },
@@ -425,7 +429,7 @@ export const X402_TOOLS = [
         },
         required: ["hash"],
       },
-      output: { example: { hash: "0x…", network: "base", settled: true, status: "success", transfers: [{ from: "0x…", to: "0x…", usdc: "0.001" }], matched: true } },
+      output: { example: { hash: "0x09f85fcf1844d85277b8cce528efc8d25c6df632b1fed1c8337f078901a69562", network: "base", settled: true, status: "success", transfers: [{ from: "0x…", to: "0x…", usdc: "0.01" }], matched: true } },
     },
     handler: async (i) => {
       if (!isTxHash(i.hash)) throw bad("hash must be a 0x transaction hash (32 bytes)");

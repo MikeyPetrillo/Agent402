@@ -1751,12 +1751,14 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (3 scripts, one process each)
+      - name: Offline suites (4 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # PoW solve roundtrip (paid-mode boot, honest solver unlocks /api/hash, replay rejected)
           t node scripts/test-pow-solve-roundtrip.js
+          # Tool-page PoW snippets (paid-mode boot, every GET snippet sends its documented input and answers 200)
+          t node scripts/test-tool-page-pow-snippet.js
           # Cold start (a wallet-less agent reaches its first call from the docs alone)
           t node scripts/test-coldstart.js
           # Idempotency (opt-in safe retry of paid/proven calls; boots paid-mode)

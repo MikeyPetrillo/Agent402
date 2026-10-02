@@ -366,6 +366,16 @@ export const WALLET_ONLY_SLUGS = new Set([
   "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema",
 ]);
 
+/** Wallet-only slugs that make no network call and read no stored state: they
+ *  are wallet-only by POLICY (see the comments in WALLET_ONLY_SLUGS above), so
+ *  the tool page states that reason instead of the network/state one. Each
+ *  value is completed by the page with ", so it is metered with money and has
+ *  no proof-of-work tier". */
+export const WALLET_ONLY_POLICY_REASON = new Map([
+  ["sql-guard", "is pure computation, but it can mint an execution certificate signed with this server's key"],
+  ["action-gate", "is pure computation, but its verdict is what a caller relies on before a real action"],
+]);
+
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */
 export function isComputePayable(tool) {
   return !WALLET_ONLY_SLUGS.has(tool.slug);
