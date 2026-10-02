@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 process.env.SALES_LEDGER_DB = join(mkdtempSync(join(tmpdir(), "a402-proof-")), "sales.db");
 const { recordSale, proofFeed } = await import("../src/sales-ledger.js");
-const { proofPage, txLink } = await import("../src/proof.js");
+const { proofPage, txLink, proofUsd } = await import("../src/proof.js");
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
@@ -38,4 +38,11 @@ ok(html.includes("basescan.org/tx/0x" + "b".repeat(64)) && !html.includes("d".re
 ok(/:00 UTC \(to the hour\)/.test(html), "page shows the external time to the hour and says so");
 ok(!html.includes("0x" + "4".repeat(40)), "page shows no payer");
 ok(txLink("solana", "sig") === "https://solscan.io/tx/sig" && txLink("unknown", "x") === null && txLink("base", null) === null, "txLink maps known networks and refuses unknown ones");
+{
+  const cases = [[0.66234, "$0.6623"], [0.158387, "$0.1584"], [0.001215, "$0.001215"], [0.001, "$0.001"], [12.3456, "$12.35"], [1, "$1.00"], [0.1, "$0.10"], [0, "$0.00"]];
+  const bad = cases.filter(([n, want]) => proofUsd(n) !== want);
+  ok(!bad.length, `one money format: 2 decimals from $1, up to 4 from $0.01, 4 significant below (${bad.map(([n]) => `${n} -> ${proofUsd(n)}`).join(", ") || "all match"})`);
+  const page = proofPage("https://agent402.tools", { external: { count: 1, settledUsd: 0.158387, quotedUsd: 0.66234, quotedCount: 1, latest: { settledUsd: 0.158387, quoteUsd: 0.66234, network: "base", at: "2026-10-02T10:00:00.000Z", atPrecision: "hour", txWithheld: true } }, internal: { count: 0, latest: null } });
+  ok(!/\$0\.\d{5,}/.test(page.replace(/\$0\.00\d+/g, "")) && page.includes("$0.1584") && page.includes("$0.6623"), "the page prints no raw 5- or 6-decimal floats above a cent");
+}
 console.log(`\n${pass} passed`);

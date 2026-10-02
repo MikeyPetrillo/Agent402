@@ -26,7 +26,19 @@ export function txLink(network, tx) {
   return f ? f(tx) : null;
 }
 
-const usd = (n) => (n == null ? "n/a" : `$${Number(n).toFixed(6).replace(/0+$/, "").replace(/\.$/, "")}`);
+/** One money format for the page: 2 decimals from $1, up to 4 decimals from
+ *  $0.01, and 4 significant digits below $0.01 so a sub-cent figure keeps its
+ *  real precision ($0.001215, not $0.00). Never fewer than 2 decimals. */
+export function proofUsd(n) {
+  if (n == null || !Number.isFinite(Number(n))) return "n/a";
+  const v = Number(n);
+  const a = Math.abs(v);
+  let t = a >= 1 ? v.toFixed(2) : a >= 0.01 ? v.toFixed(4) : a === 0 ? "0.00" : Number(v.toPrecision(4)).toFixed(12);
+  if (t.includes(".")) t = t.replace(/0+$/, "");
+  const [i, d = ""] = t.split(".");
+  return `$${i}.${d.padEnd(2, "0")}`;
+}
+const usd = proofUsd;
 const pct = (settled, quoted) => (quoted ? `${Math.round((settled / quoted) * 100)}%` : "n/a");
 
 function rowHtml(label, side, note) {
