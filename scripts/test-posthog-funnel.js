@@ -367,7 +367,7 @@ try {
 // 3. ENV GUARD — initPostHog must refuse a dev/test boot even with a key
 // present (the 2026-07-13 incident: a local sweep with a copied .env put a
 // burst of "not configured" tool_errors in prod telemetry). Docker sets
-// NODE_ENV=production (verified: railway.toml builder=DOCKERFILE →
+// NODE_ENV=production (verified: Railway builds from the root Dockerfile →
 // Dockerfile ENV), so every real deployment activates; POSTHOG_FORCE=true is
 // the bare-metal escape hatch. Fresh subprocess per combo — module state
 // caches the decision.
