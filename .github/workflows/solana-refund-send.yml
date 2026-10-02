@@ -74,7 +74,7 @@ jobs:
         # script code executed. Pinned to the exact versions in the repo's own
         # node_modules - the ones every local verification of this script ran
         # against - same doctrine as the canary's lock-pinned client installs.
-        run: npm install --no-save --ignore-scripts @solana/kit@8.3.0 @solana-program/token@0.17.0
+        run: npm install --no-save --ignore-scripts @solana/kit@8.4.0 @solana-program/token@0.17.0
       - name: Send
         env:
           SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}

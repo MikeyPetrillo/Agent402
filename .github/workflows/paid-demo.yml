@@ -50,7 +50,7 @@ jobs:
         # Same pinning + lifecycle-script hygiene as the paid canary (audit
         # R-07): no wallet secrets in scope here, --ignore-scripts everywhere,
         # @x402/* pinned to the server's protocol version (2.16).
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.27.0 @x402/evm@2.27.0 @x402/svm@2.27.0 @x402/stellar@2.27.0 @stellar/stellar-sdk@16.0.1 @solana/kit@8.3.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.27.0 @x402/evm@2.27.0 @x402/svm@2.27.0 @x402/stellar@2.27.0 @stellar/stellar-sdk@16.0.1 @solana/kit@8.4.0 viem@2.52.2
       - name: Buy the tool (real funds, pinned chain)
         # Wallet secrets scoped to THIS step only (audit R-07) — only the one
         # matching the pinned chain's namespace is read by the script. Inputs
