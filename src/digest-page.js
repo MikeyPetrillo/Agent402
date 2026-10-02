@@ -7,7 +7,7 @@ export function digestPage(baseUrl) {
 <main style="max-width:720px;margin:0 auto;padding:56px 24px 80px;">
   <p style="font-family:var(--font-mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:0 0 12px;">weekly digest</p>
   <h1 style="font-weight:600;font-size:38px;letter-spacing:-.02em;margin:0 0 14px;color:var(--ink);">Your week, from the wallet you pay with.</h1>
-  <p class="hm-lede" style="font-size:17px;max-width:600px;margin:0 0 26px;">One email a week: calls, dollars, the tools you used and the chains you paid on. For a credits key, the balance and a top-up link too. Nothing is sent for a quiet week, and every email carries an unsubscribe link. Your address is stored only after you click the confirmation.</p>
+  <p class="hm-lede" style="font-size:17px;max-width:600px;margin:0 0 26px;">One email a week: calls, dollars, the tools you used and the chains you paid on. For a credits key, its balance too. Nothing is sent for a quiet week, and every email carries an unsubscribe link. Your address is stored only after you click the confirmation.</p>
 
   <form class="dg-form" data-mode="wallet" style="display:grid;gap:12px;max-width:560px;border:1px solid var(--hairline);background:var(--card);padding:22px;">
     <div style="font-weight:600;">Pay with a wallet</div>

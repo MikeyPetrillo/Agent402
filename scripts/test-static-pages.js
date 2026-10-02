@@ -178,6 +178,34 @@ try {
   ok(bad.length === 0, `no page ships an uninterpolated template placeholder${bad.length ? ` - ${bad.join(" | ")}` : ""}`);
 }
 
+// --- no page sells credits while credits are off ----------------------------
+// Six pages and the /credits share card kept telling readers to buy a pack for
+// two weeks after sales stopped (truth audit 2026-10-02): every guard read
+// prices and counts, none read whether the thing offered can be bought. The
+// booted server's own /credits page says which state it is in.
+{
+  const SELLS_CREDITS = /buy (?:a |credits )?(?:credits )?pack|buy credits by card|pack by card|top-up link|\$20, \$50 or \$100/i;
+  ok(SELLS_CREDITS.test("Get the key once: buy a pack by card at /credits") && SELLS_CREDITS.test("No wallet? Buy credits by card."), "control: the credits-sale pattern matches the copy that shipped");
+  const creditsPage = await (await fetch(`${BASE}/credits`)).text().catch(() => "");
+  if (/not on sale/i.test(creditsPage)) {
+    const paths = new Set(PAGES.map((p) => p.path));
+    for (const sm of ["/sitemap-pages.xml", "/sitemap-guides.xml"]) {
+      const xml = await (await fetch(`${BASE}${sm}`)).text().catch(() => "");
+      for (const m of xml.matchAll(/<loc>https?:\/\/[^/<]+(\/[^<]*)<\/loc>/g)) paths.add(m[1]);
+    }
+    paths.add("/og/credits.svg");
+    const sells = [];
+    for (const path of paths) {
+      const html = await (await fetch(`${BASE}${path}`)).text().catch(() => "");
+      const m = String(html).match(SELLS_CREDITS);
+      if (m) sells.push(`${path}: "${m[0]}"`);
+    }
+    ok(sells.length === 0, `credits are off and no page or card offers to sell them${sells.length ? ` - ${sells.join(" | ")}` : ""}`);
+  } else {
+    console.log("skip - this boot sells credits (CREDITS_SALES on); the off-state copy check needs it off");
+  }
+}
+
 // --- sitemap pages no menu reaches still get a site-wide link ---------------
 {
   const html = await (await fetch(`${BASE}/pricing`)).text();

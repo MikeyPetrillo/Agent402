@@ -18,6 +18,7 @@
 // in the brand tokens and the live figures.
 
 import { RAILS } from "./rails.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
 
 const CHAIN_KEYS = RAILS.map((r) => ({ key: r.name.toLowerCase().replace(/ chain$/, "").replace(/\s+/g, "-"), name: r.name, asset: r.asset }));
 
@@ -115,8 +116,10 @@ function sectionCopy(id, ctx) {
       lines: [["charged-but-failed is a debt, not an alarm", "muted"], ["refunds verified on chain before they leave", "accent"], ["counts only, never addresses", "faint"]], badge: ["x402 · MPP", "measured, not asserted"] },
     status: { h1: "Measured", h2: "from outside.", sub: "Two observers. No data is never uptime. Every percentage carries its count.",
       lines: [["cloudflare cron · github heartbeat", "muted"], ["api · catalog · mcp · paywall · rails", "faint"], ["a daily paid buy over x402 on every chain, MPP on Tempo", "accent"]], badge: ["x402 · MPP", "outside production"] },
-    credits: { h1: "No wallet?", h2: "Buy credits by card.", sub: "$20, $50 or $100. A key, pay per call, a hard cap, no card on file.",
-      lines: [["Authorization: Bearer a402_…", "faint"], ["HTTP/2 200  X-Credits-Balance: 19.99", "accent"], ["every priced route, the metered tier included", "muted"]], badge: ["card", "x402 · MPP on the same routes"] },
+    credits: creditsSalesEnabled() ? { h1: "No wallet?", h2: "Buy credits by card.", sub: "$20, $50 or $100. A key, pay per call, a hard cap, no card on file.",
+      lines: [["Authorization: Bearer a402_…", "faint"], ["HTTP/2 200  X-Credits-Balance: 19.99", "accent"], ["every priced route, the metered tier included", "muted"]], badge: ["card", "x402 · MPP on the same routes"] }
+      : { h1: "Credits keys:", h2: "not on sale.", sub: "A key bought earlier keeps working. New buyers pay per call from a wallet.",
+        lines: [["Authorization: Bearer a402_…", "faint"], ["HTTP/2 200  X-Credits-Balance: 19.99", "accent"], ["or pay per call over x402 and MPP", "muted"]], badge: ["existing keys", "x402 · MPP for new buyers"] },
     learn: { h1: "x402 and MPP,", h2: "in five minutes.", sub: "The 402 handshake, both wires, and a live demo you can pay.",
       lines: [["HTTP/2 402  PAYMENT-REQUIRED · WWW-Authenticate: Payment", "amber"], ["sign · retry · settle", "muted"], ["HTTP/2 200  payment-response: settled", "accent"]], badge: ["x402 · MPP", `${rails} rails`] },
   };
