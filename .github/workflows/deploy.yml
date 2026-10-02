@@ -1235,6 +1235,7 @@ jobs:
           t node scripts/test-mcp-call-tool-contract.js
           # Exposure hardening (A402-11/12/13 no X-Powered-By; security.txt; health gates flags; credential-free MCP CORS — spawns child)
           t node scripts/test-security-headers.js
+          t node scripts/test-algorand-page-deadline.js
           # crawl kit (offline)
           t node scripts/test-crawl-kit.js
           # Memory v2 unit tests (grants, counters, audit chain, recall)

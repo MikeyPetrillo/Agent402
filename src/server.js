@@ -6154,6 +6154,15 @@ app.get("/stellar", async (req, res) => {
 const ALGORAND_RAIL_TTL_MS = 60_000;
 let algorandRailCache = { at: 0, value: null };
 let algorandRailInFlight = null;
+// Resolve `p`, or `fallback()` once `ms` passes; `p` keeps running either way.
+const ALGORAND_PAGE_WAIT_MS = Number(process.env.ALGORAND_PAGE_WAIT_MS || 8000);
+function withinMs(p, ms, fallback) {
+  let t;
+  return Promise.race([
+    Promise.resolve(p).finally(() => clearTimeout(t)),
+    new Promise((resolve) => { t = setTimeout(() => resolve(fallback()), ms); t.unref?.(); }),
+  ]);
+}
 async function getAlgorandRailCached() {
   if (Date.now() - algorandRailCache.at < ALGORAND_RAIL_TTL_MS) return algorandRailCache.value;
   if (!algorandRailInFlight) {
@@ -6218,7 +6227,13 @@ app.get("/algorand", async (req, res) => {
     const picked = (q && sellers.find((s) => !s.local && hostOf(s.homepage || s.origin) === q)) || sellers.find((s) => s.local) || null;
     const selfWallet = (process.env.ALGORAND_WALLET_ADDRESS || "").trim();
     const wallet = picked && !picked.local ? picked.algorandWallet : selfWallet;
-    const [rail, activity] = await Promise.all([getAlgorandRailCached(), getAlgorandActivityFor(wallet)]);
+    // The indexer can stall; the page never waits on it past ALGORAND_PAGE_WAIT_MS.
+    // The scans keep running and fill their caches; this render shows the last
+    // good value, or the honest "unavailable" line when there is none yet.
+    const [rail, activity] = await Promise.all([
+      withinMs(getAlgorandRailCached(), ALGORAND_PAGE_WAIT_MS, () => algorandRailCache.value ?? null),
+      withinMs(getAlgorandActivityFor(wallet), ALGORAND_PAGE_WAIT_MS, () => algorandActivityByWallet.get(wallet)?.value ?? null),
+    ]);
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
