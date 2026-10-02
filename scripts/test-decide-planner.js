@@ -243,6 +243,19 @@ const keysFor = (user) => { const m = user.match(/<listings>(.*)<\/listings>/s);
   ok(!urlOfTaskDomain("https://hub.com", t) && !urlOfTaskDomain("https://github.com/login", t) && !urlOfTaskDomain("https://evil.example", t), "another domain, a suffix of the named one, or a path the task never gave is not");
 }
 
+// ---- a failed decomposition is retried once while there is time ----
+{
+  const idx = new ToolIndex();
+  idx.upsert(mk("ens", { description: "resolve an ens name to an ethereum address", props: { name: { type: "string" } }, required: ["name"], row: { outputFields: ["address"] } }));
+  idx.upsert(mk("nonce", { description: "transaction count of an address", props: { address: { type: "string" } }, required: ["address"] }));
+  const llm = stubLlm([null,
+    { steps: [{ purpose: "resolve the ens name", query: "resolve ens name", dependsOn: [] }, { purpose: "transaction count", query: "transaction count address", dependsOn: [1] }] },
+    (system, user) => { const fits = {}; for (const st of keysFor(user)) for (const c of st.candidates) fits[c.key] = /ENTIRE/.test(st.purpose) ? 0.1 : /resolve/.test(st.purpose) === /ens/.test(c.description) ? 0.95 : 0.05; return { fits }; },
+    { params: { "1": { name: "brantly.eth" }, "2": { address: "{{step 1}}" } } }]);
+  const d = await buildDecision({ task: "Resolve brantly.eth, then get that address's transaction count", constraints: {}, depth: "plan" }, { index: idx, embed: noEmbed, llm, cfg, now: NOW, deadline: Date.now() + 20_000 });
+  ok(d.plan.length === 2 && !d.notes?.some((n) => /decomposition unavailable/.test(n)) && llm.calls[1].opts.stage === "decompose_retry", `a decomposition that fails once is retried, and the chain survives (${d.plan.length} steps)`);
+}
+
 // ---- live window and schema filters ----
 {
   const { idx, stale, noschema } = buildIndex();
