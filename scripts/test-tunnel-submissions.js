@@ -24,9 +24,9 @@ const DAY = 86_400_000, NOW = 1_800_000_000_000;
 const row = (origin, f = {}) => ({ origin, first_seen: NOW - 60 * DAY, last_routable_seen: null, last_settled_seen: null, ...f });
 const rel = (rows, hasSettled = () => false) => selectReleasableOrigins({ now: NOW, isSubmitted: () => true, hasSettled, registrations: rows, cycleOkFraction: 1 });
 
-ok(rel([row("https://t1.lhr.life", { last_routable_seen: NOW - 4 * DAY })]).includes("https://t1.lhr.life"), "a tunnel silent 4 days is released");
+ok(rel([row("https://t1.lhr.life", { last_routable_seen: NOW - 4 * DAY })]).some((o) => o === "https://t1.lhr.life"), "a tunnel silent 4 days is released");
 ok(rel([row("https://t2.lhr.life", { last_routable_seen: NOW - 1 * DAY })]).length === 0, "a tunnel seen yesterday keeps its slot");
-ok(rel([row("https://t3.lhr.life", { last_routable_seen: NOW - 4 * DAY, last_settled_seen: NOW - 5 * DAY })], () => true).includes("https://t3.lhr.life"), "a settled tunnel silent 4 days is released: the hostname cannot return");
+ok(rel([row("https://t3.lhr.life", { last_routable_seen: NOW - 4 * DAY, last_settled_seen: NOW - 5 * DAY })], () => true).some((o) => o === "https://t3.lhr.life"), "a settled tunnel silent 4 days is released: the hostname cannot return");
 ok(rel([row("https://stable.example", { last_routable_seen: NOW - 4 * DAY })]).length === 0, "a stable hostname silent 4 days keeps its slot (30-day rule)");
 ok(rel([row("https://paid.example", { last_routable_seen: NOW - 90 * DAY })], () => true).length === 0, "a settled stable seller is never released");
 ok(selectReleasableOrigins({ now: NOW, isSubmitted: () => true, registrations: [row("https://t4.lhr.life", { last_routable_seen: NOW - 9 * DAY })], cycleOkFraction: 0.1 }).length === 0, "the outage guard still holds for tunnels");
