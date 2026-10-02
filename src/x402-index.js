@@ -6689,8 +6689,12 @@ function setHidden(obj, key, value) {
   return true;
 }
 function decoratedRemoteTools(v) {
-  let d = remotePoolMemo.get(v);
+  const d = remotePoolMemo.get(v);
   if (d) return d;
+  return decorateRemoteToolsStep(v, Infinity);
+}
+// Seller-level facts every decorated row of one entry shares.
+function decorationContext(v) {
   // Seller-level payment networks: the union of every chain this seller's
   // OWN crawled 402s advertise plus the Bazaar's settled view of the same
   // origin - the same union the /api/index seller row carries. A route the
@@ -6713,22 +6717,43 @@ function decoratedRemoteTools(v) {
   // no accepts of its own reads the seller's (a wrong name is set once, in the
   // seller's middleware, so every route on the origin carries it).
   const sellerDomains = evmDomainUnion([...(v.tools || []), ...(sellerOrigin ? (bazaarToolsByOrigin.get(sellerOrigin) || []) : [])]);
-  d = (v.tools || [])
+  return { sellerNets, hasDomains: Object.keys(sellerDomains).length > 0, sellerDomains, home: v.manifest?.homepage, name: v.manifest?.name, health: healthScore(v) };
+}
+function decorateRow(t, c) {
+  return {
+    ...t,
+    ...(!(Array.isArray(t.networks) && t.networks.length) && c.sellerNets.length ? { networks: c.sellerNets, networksInferred: true } : {}),
+    ...(!t.evmDomainByNetwork && c.hasDomains ? { evmDomainByNetwork: c.sellerDomains } : {}),
+    sellerHome: c.home || t.seller,
+    sellerName: c.name || t.seller,
+    health: c.health,
+  };
+}
+// Decorate an entry's rows, stopping once `until` passes: returns the pool
+// when complete (and memoizes it), null when time ran out (progress is kept,
+// the next call resumes). One 80,000-row seller decorated in one pass held
+// the loop 33 ms locally and 185 ms on a CI runner (2026-10-02); the index
+// slices call this so the decoration is cut into slices too.
+const decoratePartial = new WeakMap();
+function decorateRemoteToolsStep(v, until = Infinity) {
+  const memo = remotePoolMemo.get(v);
+  if (memo) return memo;
+  let p = decoratePartial.get(v);
+  if (!p) { p = { i: 0, out: [], c: decorationContext(v) }; decoratePartial.set(v, p); }
+  const tools = v.tools || [];
+  for (; p.i < tools.length; p.i++) {
+    if ((p.i & 255) === 0 && until !== Infinity && p.i > 0 && performance.now() >= until) return null;
+    const t = tools[p.i];
     // paid:false = the seller's own doc says this operation is free.
     // It lists on the marketplace, but it is never a BUY candidate —
     // route-execute would 402-dance against an endpoint that never
     // quotes, and "cheapest tool" rankings would fill with $0 rows.
-    .filter((t) => t.paid !== false)
-    .map((t) => ({
-      ...t,
-      ...(!(Array.isArray(t.networks) && t.networks.length) && sellerNets.length ? { networks: sellerNets, networksInferred: true } : {}),
-      ...(!t.evmDomainByNetwork && Object.keys(sellerDomains).length ? { evmDomainByNetwork: sellerDomains } : {}),
-      sellerHome: v.manifest?.homepage || t.seller,
-      sellerName: v.manifest?.name || t.seller,
-      health: healthScore(v),
-    }));
-  remotePoolMemo.set(v, d);
-  return d;
+    if (t.paid === false) continue;
+    p.out.push(decorateRow(t, p.c));
+  }
+  decoratePartial.delete(v);
+  remotePoolMemo.set(v, p.out);
+  return p.out;
 }
 const NO_ALIASES = Object.freeze([]); // shared by the 100k+ tools with none
 const tokenIntern = new Map();
@@ -6935,7 +6960,8 @@ function newRouteIndexShard() {
 // tools: the production stall profiler caught a single 4,000-tool entry
 // holding the loop for 1.3 s (2026-09-25).
 function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infinity) {
-  const pool = decoratedRemoteTools(v);
+  const pool = decorateRemoteToolsStep(v, until);
+  if (!pool) return from; // decoration ran out of time: resume here next slice
   const { postings } = target;
   for (let pos = from; pos < pool.length; pos++) {
     if (pos > from && (pos & 63) === 0 && until !== Infinity && performance.now() >= until) return pos;
