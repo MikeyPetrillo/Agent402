@@ -7160,8 +7160,8 @@ app.get("/llms-full.txt", (_req, res) => res.type("text/plain").set("Cache-Contr
 const serveSkillMd = (_req, res) => res.type("text/markdown; charset=utf-8").set("Cache-Control", "public, max-age=3600").send(skillMd(BASE_URL, CATALOG));
 app.get("/SKILL.md", serveSkillMd);
 app.get("/skill.md", serveSkillMd);
-// The runnable buyer demo, served from the site itself (the repo is private,
-// so "git clone" is not a path a visitor can take).
+// The runnable buyer demo, served from the site itself, so a visitor can run
+// it without cloning the repository.
 app.get("/demo.js", (_req, res) =>
   res.type("text/javascript").set("Cache-Control", "public, max-age=3600").send(readFileSync(new URL("../scripts/demo-payment.js", import.meta.url), "utf-8"))
 );

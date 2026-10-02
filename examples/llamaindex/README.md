@@ -1,6 +1,6 @@
 # LlamaIndex + Agent402 -- runnable demo
 
-Proves that the [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) adapter works: `agent402-client` calls an Agent402 tool with built-in proof-of-work payment. The adapter wraps the same client to produce LlamaIndex `FunctionTool` instances for any agent runner (OpenAIAgent, AnthropicAgent, ReActAgent). No wallet, no API key required.
+Proves that the [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) adapter works: `agent402-client` calls an Agent402 tool with built-in proof-of-work payment. The adapter wraps the same client to produce LlamaIndex `FunctionTool` instances for a LlamaIndex agent workflow. No wallet, no API key required.
 
 ## Run it
 
@@ -22,15 +22,21 @@ PASS -- LlamaIndex adapter round trip works end-to-end.
 
 ## Using with real LlamaIndex
 
-Install `llamaindex` and use `agent402Tools()` to get FunctionTool instances:
+Install the agent workflow and an LLM, then pass `agent402Tools()` to an agent:
+
+```bash
+npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-llamaindex
+```
 
 ```js
-import { OpenAIAgent } from "llamaindex";
+import { agent } from "@llamaindex/workflow";
+import { openai } from "@llamaindex/openai";
 import { agent402Tools } from "agent402-llamaindex";
 
-const { tools } = await agent402Tools({ slugs: ["hash", "extract", "render"] });
-const agent = new OpenAIAgent({ tools });
-const res = await agent.chat({ message: "Hash 'hello world' with SHA-256" });
+// The default (freeOnly: true) keeps only compute-payable tools.
+const { tools } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
+const myAgent = agent({ tools, llm: openai({ model: "gpt-4o-mini" }) });
+const res = await myAgent.run("Compute SHA-256 of 'hello world'");
 ```
 
 ## Troubleshooting
