@@ -458,7 +458,9 @@ export const MEV_AND_L2_TOOLS = [
     tags: ["mev", "flashbots", "block-payment", "lookup"],
     discovery: {
       bodyType: "json",
-      input: { blockNumber: 22000000 },
+      // A block the Flashbots relay delivered, so the documented call returns
+      // found:true as shown (block 22000000 was not delivered through it).
+      input: { blockNumber: 26104983 },
       inputSchema: {
         type: "object",
         properties: {
@@ -469,18 +471,18 @@ export const MEV_AND_L2_TOOLS = [
       output: {
         example: {
           found: true,
-          slot: 12345678,
-          blockNumber: 22000000,
-          blockHash: "0xabc...",
-          builderPubkey: "0x9000...",
-          builderShort: "0x90000000…abcdef",
-          proposerPubkey: "0xa000...",
-          proposerFeeRecipient: "0x1234...",
-          valueWei: "72345000000000000",
-          valueEth: 0.072345,
-          gasUsed: 14987654,
-          gasLimit: 30000000,
-          numTx: 187,
+          slot: 15343686,
+          blockNumber: 26104983,
+          blockHash: "0x29b12476c4bdbad3d080057a7c068c42da781d4bfb1545491d65b9f942a20461",
+          builderPubkey: "0x89057b5818abfca92fb9d38ea74dfab0f6f58630b6138e4f73da26666295e047cb18d353a134c5fad672eba231ff610c",
+          builderShort: "0x89057b58…ff610c",
+          proposerPubkey: "0xb6ab19ca47a0b0f67e95e4cbb772fd8feff2a4f481eb494a06d54308f7fa959ee87889e2ffbe34ee8d466ed47a7d5dbd",
+          proposerFeeRecipient: "0xd4E96eF8eee8678dBFf4d535E033Ed1a4F7605b7",
+          valueWei: "9667520599769125",
+          valueEth: 0.009667520599769124,
+          gasUsed: 14100104,
+          gasLimit: 60000000,
+          numTx: 144,
           relay: "flashbots",
         },
       },
