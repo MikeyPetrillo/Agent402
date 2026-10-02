@@ -71,7 +71,13 @@ let t = await engine.tick();
 ok(t.due === 2 && t.sent === 2, `first tick sends both digests (${JSON.stringify(t)})`);
 const w = sent.find((m) => m.to === "buyer@example.com"), k = sent.find((m) => m.to === "cards@example.com");
 ok(/12 calls, \$0\.1234/.test(w.subject) && /search: 8 calls, \$0\.08/.test(w.text) && /eip155:8453: 12 calls/.test(w.text), `wallet digest carries calls, dollars, top tools and chains (${w.subject})`);
-ok(/Credits balance: \$12\.50/.test(k.text) && /\/credits/.test(k.text) && /research: 1 call, \$0\.60/.test(k.text), "credits digest carries the balance and a top-up link");
+{
+  // The top-up link appears only while credits are sold (CREDITS_SALES); off,
+  // the digest still carries the balance and sends no one to a page that sells nothing.
+  const { creditsSalesEnabled } = await import("../src/credits-sales.js");
+  const on = creditsSalesEnabled();
+  ok(/Credits balance: \$12\.50/.test(k.text) && /\/credits/.test(k.text) === on && /research: 1 call, \$0\.60/.test(k.text), `credits digest carries the balance${on ? " and a top-up link" : ", and no top-up link while credits are not on sale"}`);
+}
 ok(/List-Unsubscribe/.test(Object.keys(w.headers || {}).join()) && /\/digest\/unsubscribe\?id=/.test(w.text), "every digest carries the signed unsubscribe link and the List-Unsubscribe header");
 ok(!/a402_livekey|k1abc/.test(w.text + k.text), "no key material in any email");
 // ---- cadence
