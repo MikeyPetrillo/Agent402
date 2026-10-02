@@ -30,7 +30,10 @@
 
   var tz = "";
   try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) { /* unknown */ }
-  var europe = /^Europe\//.test(tz) || tz === "Atlantic/Reykjavik" || tz === "Atlantic/Canary" || tz === "Atlantic/Madeira" || tz === "Atlantic/Azores";
+  // EU law follows the EU, not the Europe/ zone prefix: Cyprus is Asia/Nicosia
+  // (and Asia/Famagusta), and the outermost regions sit in other zones.
+  var EU_OTHER = ["Atlantic/Reykjavik", "Atlantic/Canary", "Atlantic/Madeira", "Atlantic/Azores", "Asia/Nicosia", "Asia/Famagusta", "America/Guadeloupe", "America/Martinique", "America/Cayenne", "America/Marigot", "Indian/Reunion", "Indian/Mayotte"];
+  var europe = /^Europe\//.test(tz) || EU_OTHER.indexOf(tz) !== -1;
   var choice = store.get("a402-analytics-consent"); // "granted" | "denied" | null
   var granted = choice ? choice === "granted" : !europe;
 
