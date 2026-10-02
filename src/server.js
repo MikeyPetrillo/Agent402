@@ -509,7 +509,7 @@ import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, led
 import { ledgerHomePage } from "./ledger-home.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
-import { revenueSnapshot, withFreshRecent, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
+import { revenueSnapshot, withFreshRecent, publicRevenueSnapshot, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { stellarPage, stellarSellers } from "./stellar-page.js";
 import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml } from "./market-page.js";
@@ -3395,7 +3395,7 @@ app.get("/api/revenue", async (_req, res) => {
     // only the balances ride the hourly background snapshot.
     const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent);
     const ledger = memoSurface("revenue:allTime", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), sales: salesSummary() }));
-    res.set("Cache-Control", "public, max-age=30").json({ ...snap, ...ledger });
+    res.set("Cache-Control", "public, max-age=30").json({ ...publicRevenueSnapshot(snap), ...ledger });
   } catch (e) {
     res.status(500).json({ error: "revenue snapshot failed", detail: String(e?.message || e).slice(0, 120) });
   }

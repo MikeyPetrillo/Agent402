@@ -44,8 +44,11 @@ for (const c of NEW_CHAINS) ok(!!CHAIN_PAGES[c.key], `CHAIN_PAGES has a "${c.key
 for (const c of NEW_CHAINS) {
   const EXT = { origin: "https://ext1.example", displayName: "Ext One", homepage: "https://ext1.example", local: false, toolCount: 3, routable: true, networks: [c.network] };
   const snapshot = { sellers: [LOCAL, EXT], totals: { sellers: 2 } };
-  const rail = { recent: [{ tx: "https://example.com/tx/abc123", when: "2026-07-10T04:15:00Z", usd: 0.001, from: "0xabc" }] };
+  // recent[0] is an OUTSIDE buyer's transfer; lastInbound is our own canary.
+  // Only the canary's tx may render: a hash names its payer on chain.
+  const rail = { recent: [{ tx: "https://example.com/tx/outside999", when: "2026-07-10T05:15:00Z", usd: 0.002, from: "0xabc", external: true }], lastInbound: { tx: "https://example.com/tx/abc123", when: "2026-07-10T04:15:00Z", usd: 0.001, internal: true } };
   const html = marketPage(c.key, "https://agent402.tools", { snapshot, rail, activity: null, wallet: c.wallet });
+  ok(!html.includes("outside999"), `${c.key}: an outside buyer's tx is never rendered`);
 
   ok(html.includes(`The ${CHAIN_PAGES[c.key].chainName} x402 marketplace`), `${c.key}: renders with the correct title`);
   ok(html.includes(`>${c.asset}<`) || html.includes(`${c.asset} on ${CHAIN_PAGES[c.key].chainName}`), `${c.key}: settles in ${c.asset}`);

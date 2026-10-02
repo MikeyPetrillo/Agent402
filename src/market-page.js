@@ -422,9 +422,10 @@ function agoLabel(ms) {
 // 36h reads as proof of life; anything older or missing reads "unavailable"
 // rather than a stale check mark.
 function canaryManifestStatus(rail) {
-  // lastInbound survives scan windows aging past a settle (see revenue-live's
-  // carry-forward); recent[0] stays as the fallback for older snapshots.
-  const latest = rail?.lastInbound || rail?.recent?.[0] || null;
+  // lastInbound is our own newest settle on the rail and survives scan
+  // windows aging past it (see revenue-live's carry-forward). An outside
+  // buyer's transfer is never read here: this row is the CANARY's status.
+  const latest = rail?.lastInbound?.internal === true ? rail.lastInbound : null;
   const ts = latest?.when ? Date.parse(latest.when) : NaN;
   if (!latest || !Number.isFinite(ts)) return { text: "unavailable", color: "var(--muted)" };
   const ageMs = Date.now() - ts;
@@ -683,10 +684,12 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   const low = prices.length ? Math.min(...prices) : 0.001;
   const high = prices.length ? Math.max(...prices) : 0.5;
   const groups = categoryGroups(tools);
-  const latest = rail?.recent?.[0] || null;
+  // Our own newest settle (canary or volume run), never an outside buyer's:
+  // a transaction hash resolves to its payer on chain.
+  const latest = rail?.lastInbound?.internal === true && rail.lastInbound.tx ? rail.lastInbound : null;
 
   const receiptHtml = latest
-    ? `<p style="margin:8px 0 0;">Latest settlement: <strong>${usd(latest.usd)} ${esc(C.asset)}</strong> · <a href="${esc(latest.tx)}" rel="noopener">on-chain receipt</a>${latest.when ? ` · ${esc(latest.when)}` : ""}</p>`
+    ? `<p style="margin:8px 0 0;">Our latest own settlement (canary): ${latest.usd != null ? `<strong>${usd(latest.usd)} ${esc(C.asset)}</strong> · ` : ""}<a href="${esc(latest.tx)}" rel="noopener">on-chain receipt</a>${latest.when ? ` · ${esc(latest.when)}` : ""}</p>`
     : `<p style="margin:8px 0 0;color:var(--muted);">live receipts temporarily unavailable - settlements remain verifiable at <a href="${esc(walletExplorerUrl)}" rel="noopener">${esc(C.explorerUrl)}</a></p>`;
 
 

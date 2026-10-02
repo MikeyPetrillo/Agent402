@@ -521,6 +521,35 @@ async function evmRail(name, wallet) {
  * cached one. `ledgerRecentFn` is revenue-ledger's ledgerRecent (passed in:
  * a static import would close the module cycle described in evmRail).
  */
+/** The newest transfer in `recent` that one of OUR wallets paid. */
+export function newestOwnSettle(recent) {
+  return (Array.isArray(recent) ? recent : []).find((t) => t && t.when && t.internal === true) || null;
+}
+
+/**
+ * The /api/revenue body. The per-transfer `recent` rows stay server-side: each
+ * names the paying wallet (`from`), and even without that field its tx hash
+ * resolves to the payer on chain, so publishing them would publish who pays
+ * us. What leaves is per rail: our own wallet, its balance, the counts and
+ * totals, and `lastInbound`, which is only ever one of OUR settles (see
+ * newestOwnSettle). Pure: never mutates the cached snapshot.
+ */
+export function publicRevenueSnapshot(snap) {
+  if (!snap || !Array.isArray(snap.rails)) return snap;
+  const rails = snap.rails.map((r) => {
+    if (!r || typeof r !== "object") return r;
+    const { recent, ...rest } = r;
+    const li = rest.lastInbound;
+    if (li && li.internal !== true) delete rest.lastInbound;
+    return rest;
+  });
+  return {
+    ...snap,
+    rails,
+    note: "Balances read live from public RPCs (best-effort per rail). totalUsd is the combined wallet balance (includes our own canary/test money); windowExternalUsd counts only classified external per-call payments in the recent scan windows. Per-payment rows are not published: a transaction hash resolves to its payer on chain. lastInbound is our own newest settle on each rail (canary or volume run), never an outside buyer's.",
+  };
+}
+
 export function withFreshRecent(snap, ledgerRecentFn) {
   if (!snap || !Array.isArray(snap.rails) || typeof ledgerRecentFn !== "function") return snap;
   const byLabel = new Map(Object.entries(EVM).map(([name, c]) => [c.label, [name, c]]));
@@ -1427,11 +1456,17 @@ async function refreshSnapshot({ walletAddress, solanaWallet }) {
   // RPC produced a worse page than a broken one (found live 2026-07-28: the
   // Optimism "daily canary" row read unavailable hours after a real settle).
   // The market pages' canary row keys off this, with its own 36h honesty cap.
+  //
+  // OUR OWN settles only (canary and volume runs). This row is published, and
+  // a transaction hash resolves to its payer on chain, so an outside buyer's
+  // payment never becomes the rail's public proof row. A carried-forward row
+  // from before this rule (no `internal` marker) is dropped, not trusted.
   for (const r of rails) {
-    const seen = (r.recent || []).find((t) => t.when);
+    const seen = newestOwnSettle(r.recent);
     const prev = prevRails.find((p) => p.rail === r.rail);
-    if (seen) r.lastInbound = { when: seen.when, tx: seen.tx || null };
-    else if (prev?.lastInbound) r.lastInbound = prev.lastInbound;
+    if (seen) r.lastInbound = { when: seen.when, tx: seen.tx || null, usd: Number.isFinite(seen.usd) ? seen.usd : null, internal: true };
+    else if (prev?.lastInbound?.internal === true) r.lastInbound = prev.lastInbound;
+    else delete r.lastInbound;
   }
   for (const r of rails) {
     if (r.balance == null || r.error) {
@@ -1707,7 +1742,7 @@ export function revenuePage(baseUrl, snap) {
   // signal; external count + dollars is the revenue signal; the newest
   // external buy is the one proof link a reader actually opens. The twelve
   // cards this replaced each listed four recent transfers, a scan note and a
-  // wallet-explorer link - /api/revenue keeps every row.
+  // wallet-explorer link. Per-payment rows are not published at all (publicRevenueSnapshot).
   const railRow = (r) => {
     const c = perChainOf(r);
     // A balance present (fresh or carried forward from the last good read)
@@ -1715,11 +1750,13 @@ export function revenuePage(baseUrl, snap) {
     // unreachable. Carried-forward reads say "cached" so freshness is honest.
     const hasBalance = r.balance != null;
     const status = !hasBalance ? `<span style="color:var(--accent);">unreachable</span>` : r.staleBalance ? `<span style="color:var(--green);">live</span> <span style="color:var(--muted);">cached</span>` : `<span style="color:var(--green);">live</span>`;
-    const ext = (r.recent || []).filter((t) => t.usd !== undefined && t.external);
-    const newest = ext[0];
-    const proof = newest
-      ? `<a href="${esc(newest.tx)}" rel="noopener">+$${esc(String(newest.usd))}</a>${newest.when ? ` <span style="color:var(--muted);">${esc(newest.when.slice(0, 10))}</span>` : ""}`
-      : `<span style="color:var(--muted);">${hasBalance ? "none in the recent window" : "-"}</span>`;
+    // The proof link is OUR OWN newest settle (canary or volume run): an
+    // outside buyer's tx hash resolves to that buyer's wallet on chain, so it
+    // is never published here (see publicRevenueSnapshot).
+    const own = r.lastInbound?.internal === true ? r.lastInbound : null;
+    const proof = own && own.tx
+      ? `<a href="${esc(own.tx)}" rel="noopener">${own.usd != null ? `$${esc(String(own.usd))}` : "settled"}</a>${own.when ? ` <span style="color:var(--muted);">${esc(String(own.when).slice(0, 10))}</span>` : ""}`
+      : `<span style="color:var(--muted);">${hasBalance ? "none read yet" : "-"}</span>`;
     return `<tr>
       <td><strong>${esc(r.rail)}</strong> <span style="color:var(--muted);">${esc(r.asset)}</span></td>
       <td class="num">${c ? Number(c.inboundCount).toLocaleString() : "-"}${c && !c.caughtUp ? `<span style="display:block;font-size:10.5px;font-weight:400;color:var(--muted);">still syncing</span>` : ""}</td>
@@ -1773,7 +1810,7 @@ export function revenuePage(baseUrl, snap) {
     ${standing}
     ${hero}
     <p style="font-size:12px;line-height:1.55;color:var(--muted);margin:2px 0 14px;max-width:72ch;">${agents ? `The wallet count is read from on-chain transfers plus Tempo MPP settlements${snap.agents?.scope?.since ? ` from ${esc(snap.agents.scope.since)}` : ""}, one wallet counted once across rails: it is a floor, not a lifetime total, and it cannot see card or prepaid-credits buyers, or a settlement whose payer is not exposed. ` : ""}Published so these rails can be checked against the chain. Operating history for a payments service, stated for transparency: information only, not an offer, a solicitation, a recommendation or investment advice, and not a projection. <a href="/transparency#revenue-figures">How each figure is derived</a>.</p>
-    <p style="font-family:var(--font-mono);font-size:12px;color:var(--muted);margin:0 0 28px;">balances as of ${esc(snap.asOf)}, refreshed hourly · recent transfers read from the ledger on each load · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
+    <p style="font-family:var(--font-mono);font-size:12px;color:var(--muted);margin:0 0 28px;">balances as of ${esc(snap.asOf)}, refreshed hourly · <a href="/api/revenue">/api/revenue</a> · <a href="/api/revenue/mpp">/api/revenue/mpp</a> · <a href="/api/revenue/daily">/api/revenue/daily</a></p>
     </section>
     <section>
     ${revenueChartSection()}
@@ -1783,9 +1820,9 @@ export function revenuePage(baseUrl, snap) {
       <h2 style="font-family:var(--font-body);font-weight:800;font-size:22px;letter-spacing:-.01em;margin:0;">x402 rails <span style="color:var(--muted);font-weight:400;">· by chain</span></h2>
       <span style="font-family:var(--font-mono);font-size:12px;color:var(--muted);"><strong style="color:var(--ink);">${snap.rails.length}</strong> chains, ranked by transactions</span>
     </div>
-    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;max-width:70ch;">Transactions count every settlement on the rail, ours included. External is money from others. Proof is the newest outside buy in the recent window, linked to its explorer.</p>
+    <p style="font-size:13.5px;color:var(--muted);margin:0 0 12px;max-width:70ch;">Transactions count every settlement on the rail, ours included. External is money from others. Proof is our own newest settle on the rail (a canary or volume run), linked to its explorer; outside buyers' transactions are counted, never listed, because a transaction hash names its payer on chain.</p>
     <div class="rv-tablewrap"><table class="rv-table">
-      <thead><tr><th>Rail</th><th class="num">Transactions</th><th class="num">External</th><th class="num">External $</th><th>Latest outside buy</th><th>Status</th><th>Wallet</th></tr></thead>
+      <thead><tr><th>Rail</th><th class="num">Transactions</th><th class="num">External</th><th class="num">External $</th><th>Our latest settle</th><th>Status</th><th>Wallet</th></tr></thead>
       <tbody>${railsSorted.map(railRow).join("\n")}</tbody>
     </table></div>
     ${partialNotes ? `<p style="font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:8px 0 0;">${partialNotes} rail${partialNotes === 1 ? "" : "s"} read partially from public RPCs this refresh (balances are live; detail in <a href="/api/revenue">/api/revenue</a>).</p>` : ""}
