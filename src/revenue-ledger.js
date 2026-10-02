@@ -655,6 +655,26 @@ export function ledgerRecent(chain, wallets, { limit = 8 } = {}) {
   }
 }
 
+/** The newest settle one of OUR wallets paid into `wallets` on `chain`
+ *  (a canary or volume run): not external, payer known, call-sized. The
+ *  capped `ledgerRecent` page can hold only outside buyers on a busy rail,
+ *  so the rail's proof row reads this instead. Null when none is recorded. */
+export function ledgerNewestOwn(chain, wallets) {
+  const norm = (w) => (/^0x[0-9a-fA-F]{40}$/.test(String(w)) ? String(w).toLowerCase() : String(w));
+  const list = (Array.isArray(wallets) ? wallets : [wallets]).filter(Boolean).map(norm);
+  if (!chain || !list.length) return null;
+  try {
+    const placeholders = list.map(() => "?").join(",");
+    const r = db.prepare(
+      `SELECT tx_hash, block, when_ts, usd FROM transfers
+        WHERE chain = ? AND wallet IN (${placeholders}) AND external = 0 AND payer IS NOT NULL AND usd > 0 AND usd <= ?
+        ORDER BY block DESC, when_ts DESC LIMIT 1`
+    ).get(chain, ...list, MAX_CALL_USD);
+    if (!r) return null;
+    return { usd: Number(r.usd), txHash: r.tx_hash, block: r.block ?? null, when: r.when_ts ? new Date(r.when_ts * 1000).toISOString() : null };
+  } catch { return null; }
+}
+
 // Tx hashes this ledger has actually SEEN ON-CHAIN, for reconciling against the
 // settlement receipts recorded at serve time. `tx_hash` (not `txid`) is the
 // join key: EVM txids carry a `:logIndex` suffix that a settle receipt never
@@ -791,6 +811,7 @@ export function ledgerDaily(wallets, mppTx = null, { withScope = false } = {}) {
   // second pass can drift from the filter it describes.
   let droppedUndateable = 0;
   const droppedOverCap = { transactions: 0, usd: 0 };
+  const droppedDust = { transactions: 0, usd: 0 };
   const isMpp = (h) => {
     if (!mppTx || !mppTx.size || !h) return false;
     return mppTx.has(h) || (/^0x[0-9a-fA-F]+$/.test(h) && mppTx.has(h.toLowerCase()));
@@ -823,7 +844,12 @@ export function ledgerDaily(wallets, mppTx = null, { withScope = false } = {}) {
       };
       const mpp = isMpp(t.tx_hash);
       const sor = sorWallets.has(wallet);
-      if (t.external) {
+      if (t.external && belowDust(t.usd)) {
+        // Under the cheapest catalog price: paid for no call. Out of the
+        // external series exactly as ledgerSummary leaves it out of the
+        // external totals (the payer dust floor), and NAMED in the scope.
+        droppedDust.transactions += 1; droppedDust.usd += t.usd;
+      } else if (t.external) {
         b.extUsd += t.usd; b.extTx += 1;
         if (mpp) { b.extMppUsd += t.usd; b.extMppTx += 1; }
         if (sor) { b.extSorUsd += t.usd; b.extSorTx += 1; }
@@ -869,12 +895,14 @@ export function ledgerDaily(wallets, mppTx = null, { withScope = false } = {}) {
   const excluded = {
     beforeSeriesStart: { transactions: droppedPreEpoch.transactions, usd: usd(droppedPreEpoch.usd) },
     internalOverMaxCallUsd: { transactions: droppedOverCap.transactions, usd: usd(droppedOverCap.usd), maxCallUsd: MAX_CALL_USD },
+    externalUnderDustFloor: { transactions: droppedDust.transactions, usd: usd(droppedDust.usd), dustFloorUsd: payerDustFloorUsd },
     undateable: { transactions: droppedUndateable },
   };
   // Derived from the counters, never asserted: an empty ledger is complete, and
   // one dropped row is not.
   const complete = excluded.beforeSeriesStart.transactions === 0
     && excluded.internalOverMaxCallUsd.transactions === 0
+    && excluded.externalUnderDustFloor.transactions === 0
     && excluded.undateable.transactions === 0;
   return {
     days,
@@ -885,7 +913,7 @@ export function ledgerDaily(wallets, mppTx = null, { withScope = false } = {}) {
       excluded,
       note: complete
         ? `This series covers every dated transfer in the ledger from ${start}.`
-        : `This series starts ${start} and is NOT the whole ledger: ${excluded.beforeSeriesStart.transactions} transactions ($${excluded.beforeSeriesStart.usd}) settled before it, ${excluded.internalOverMaxCallUsd.transactions} internal transfers over $${MAX_CALL_USD} are excluded as treasury funding rather than calls, and ${excluded.undateable.transactions} rows carry no usable date. /api/revenue allTime is the unfiltered total; the two will not reconcile without this object.`,
+        : `This series starts ${start} and is NOT the whole ledger: ${excluded.beforeSeriesStart.transactions} transactions ($${excluded.beforeSeriesStart.usd}) settled before it, ${excluded.internalOverMaxCallUsd.transactions} internal transfers over $${MAX_CALL_USD} are excluded as treasury funding rather than calls, ${excluded.externalUnderDustFloor.transactions} outside transfers ($${excluded.externalUnderDustFloor.usd}) under the $${payerDustFloorUsd} dust floor are excluded because they cannot have paid for a call, and ${excluded.undateable.transactions} rows carry no usable date. /api/revenue allTime is the unfiltered total; the two will not reconcile without this object.`,
     },
   };
 }

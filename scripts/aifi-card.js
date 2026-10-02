@@ -11,4 +11,6 @@ try {
   const png = await rasterizeSvg(aifiCardSvg(), { width: 1200, height: 630 });
   writeFileSync(OUT, png);
   console.log(`wrote ${OUT} (${png.length} bytes)`);
+  // The shared headless browser rasterizeSvg opens keeps the process alive.
+  process.exit(0);
 } catch (e) { console.error(`render failed: ${e?.message || e}`); process.exit(2); }

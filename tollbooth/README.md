@@ -8,7 +8,7 @@ in USDC over the [x402 protocol](https://x402.org), over
 [MPP](https://mpp.dev) (the Machine Payments Protocol `Payment` HTTP auth
 scheme, settled through the same stack), or for free by solving a
 proof-of-work. No platform lock-in, no card processor required, no Merchant-of-Record, no signup.
-The first self-hostable pay-per-crawl gate that speaks both wires on one 402 -
+A self-hostable pay-per-crawl gate that speaks both wires on one 402 -
 the sell side of [Agentic Finance](https://agent402.tools/agentic-finance),
 where agents pay and sites get paid, per request, with no account in between.
 
@@ -60,7 +60,9 @@ import { createTollbooth } from "agent402-tollbooth";
 const app = express();
 
 // Humans pass through; known AI crawlers get 402 and must pay or solve a PoW.
-app.use(createTollbooth({ price: "$0.002" }));
+// payTo puts a USDC quote in the 402 (or set TOLLBOOTH_PAYTO); without it the
+// 402 offers proof-of-work only.
+app.use(createTollbooth({ price: "$0.002", payTo: "0xYourWallet" }));
 
 app.get("/article", (_req, res) => res.send("…your content…"));
 app.listen(3000);
@@ -77,7 +79,7 @@ The 402 body advertises both rails:
 {
   "error": "Payment Required",
   "message": "…humans browse free; bots pay in USDC via x402 or by solving a proof-of-work.",
-  "accepts": [{ "scheme": "exact", "network": "base", "maxAmountRequired": "$0.002", "asset": "USDC", "payTo": "0x…", "resource": "/article" }],
+  "accepts": [{ "scheme": "exact", "network": "base", "maxAmountRequired": "$0.002", "asset": "USDC", "payTo": "0x…", "resource": "http://localhost:3000/article" }],
   "proofOfWork": { "algorithm": "sha256", "challenge": "…", "difficulty": 18, "token": "…", "rule": "Find a nonce so sha256(challenge+\":\"+nonce) has >= 18 leading zero bits; resend with header X-Pow-Solution: <token>:<nonce>" }
 }
 ```
@@ -328,7 +330,7 @@ Read by the bundled proxy / Express entry point (`index.js`):
 | `TOLLBOOTH_PAYTO` | – | Wallet address; advertises a USDC x402 quote (and, with `TOLLBOOTH_FACILITATOR_URL`, settles it) |
 | `TOLLBOOTH_FACILITATOR_URL` | – | x402 facilitator that settles your network. With `TOLLBOOTH_PAYTO` the CLI builds a real `@x402/express` middleware and takes payment over x402 **and** MPP (0.8.0). Needs `@x402/express @x402/core @x402/evm` installed; refuses to start without them |
 | `TOLLBOOTH_FACILITATOR_HEADERS` | – | Optional JSON object of auth headers sent on the facilitator's `/verify`, `/settle`, `/supported` (e.g. `{"X-API-Key":"…"}`) |
-| `TOLLBOOTH_CDP_API_KEY_ID` + `TOLLBOOTH_CDP_API_KEY_SECRET` | – | Settle through Coinbase's facilitator (CDP) instead of a URL (no fee is taken from the payment itself; Coinbase's facilitator is free for the first 1,000 settlements a month and $0.001 each after). Needs `npm i @coinbase/x402`. This is how a Coinbase Business account gets paid by agents: `TOLLBOOTH_PAYTO` = the account's USDC (Base) receive address. |
+| `TOLLBOOTH_CDP_API_KEY_ID` + `TOLLBOOTH_CDP_API_KEY_SECRET` | – | Settle through Coinbase's facilitator (CDP) instead of a URL. Needs `npm i @coinbase/x402`. This is how a Coinbase Business account gets paid by agents: `TOLLBOOTH_PAYTO` = the account's USDC (Base) receive address. |
 | `TOLLBOOTH_PRICE` | `"$0.001"` | Advertised price per request |
 | `TOLLBOOTH_NETWORK` | `"base"` | x402 network. CLI settlement mode accepts `base`, `base-sepolia`, `polygon`, `arbitrum`, `optimism`, `avalanche`, `celo`, `sei`, `monad`, or a raw `eip155:<id>` |
 | `TOLLBOOTH_MPP` | on when `x402` set | `false` to switch MPP off |

@@ -1,4 +1,4 @@
-// Announcement demo card for the Robinhood Chain marketplace — renders the
+// Announcement demo card for the Robinhood Chain marketplace - renders the
 // live /api/revenue Robinhood rail as a 1200×630 TERMINAL-WINDOW card, the
 // accepted announcement style (reference: docs/announcements/media/
 // 2026-07-16-tts-demo-card.png / scripts/bestsellers-card.js): warm cream
@@ -8,7 +8,7 @@
 // The standing announcement flow wants REAL numbers: render the FINAL card
 // from live prod output at post time, never from mocked data. A layout
 // preview from fixture data must carry the on-card "preview data" tag
-// (--preview), which also REPLACES the "real output" claim — a fixture render
+// (--preview), which also REPLACES the "real output" claim - a fixture render
 // can never label itself real.
 //
 // Usage:
@@ -17,7 +17,7 @@
 //   node scripts/robinhood-card.js --from fixture.json --out card.png --preview
 //
 // --from accepts a file path or URL returning the /api/revenue JSON (free,
-// unpaywalled — no capture step needed, unlike bestsellers). The card reads
+// unpaywalled - no capture step needed, unlike bestsellers). The card reads
 // the rails entry labeled "Robinhood Chain". Exit 1 on usage, 2 on render.
 import { readFileSync, writeFileSync } from "node:fs";
 import { rasterizeSvg } from "../src/tools/render.js";
@@ -74,25 +74,33 @@ function cardSvg(data) {
   const rail = (data.rails || []).find((r) => r.rail === "Robinhood Chain");
   if (!rail) throw new Error('no "Robinhood Chain" rail in the /api/revenue payload');
   const liveDate = new Date().toISOString().slice(0, 10);
-  const settles = (rail.recent || []).filter((t) => t.usd > 0);
+  // Per-payment rows are not published (a tx hash names its payer), so the
+  // card shows our own newest settle on the rail, which /api/revenue publishes
+  // as lastInbound, plus the rail's all-time outside count.
+  const own = rail.lastInbound && rail.lastInbound.internal === true && rail.lastInbound.usd > 0 ? rail.lastInbound : null;
+  const settles = own ? [{ usd: own.usd, when: own.when, external: false }] : [];
+  const pc = data.allTime?.perChain?.["robinhood"];
   const balance = rail.balance == null ? null : Number(rail.balance).toFixed(rail.balance >= 100 ? 2 : 3);
-  // Up to 3 recent inbound settles, newest first — mirrors the bestsellers
+  // Our newest settle (and the outside count), mirroring the bestsellers
   // result rows. An empty rail renders the honest "warming" line instead.
   const settleRows = settles.slice(0, 3)
     .map((t, i) => {
       const y = 404 + i * 30;
       const when = String(t.when || "").slice(0, 16).replace("T", " ");
-      const tag = t.external ? "external" : "internal";
+      const tag = "our canary";
       const tagColor = t.external ? B.green : B.muted;
       return `<text x="126" y="${y}" font-size="19" font-family=${mono}><tspan font-weight="700" fill="${B.text}">+${Number(t.usd).toFixed(3)} USDG</tspan><tspan fill="${B.muted}"> · ${esc(when)} UTC · </tspan><tspan font-weight="700" fill="${tagColor}">${tag}</tspan></text>`;
     })
     .join("");
+  const extRow = pc && Number(pc.externalCount) > 0
+    ? `<text x="126" y="434" font-size="19" font-family=${mono} fill="${B.muted}">${Number(pc.externalCount).toLocaleString()} outside settlement${Number(pc.externalCount) === 1 ? "" : "s"} on this rail since the ledger began</text>`
+    : "";
   const emptyRow = settles.length
-    ? ""
-    : `<text x="126" y="404" font-size="19" font-family=${mono} fill="${B.muted}">rail is live — settlements land here the moment an agent buys</text>`;
-  // Preview renders may not claim "real output" — the tag replaces the claim.
+    ? extRow
+    : `<text x="126" y="404" font-size="19" font-family=${mono} fill="${B.muted}">rail is live: settlements land here the moment an agent buys</text>`;
+  // Preview renders may not claim "real output" - the tag replaces the claim.
   const insetNote = PREVIEW
-    ? `<text x="126" y="500" font-size="16" font-family=${mono} fill="${B.muted}">preview data — final card renders from live output</text>`
+    ? `<text x="126" y="500" font-size="16" font-family=${mono} fill="${B.muted}">preview data: final card renders from live output</text>`
     : `<text x="1074" y="500" font-size="16" font-family=${mono} text-anchor="end" fill="${B.muted}">real output · USDG settled on Robinhood Chain</text>`;
   const okRow = (y, label, detail, arrow) =>
     `<text x="96" y="${y}" font-size="21" font-family=${mono}><tspan font-weight="700" fill="${B.green}">OK</tspan><tspan x="150" font-weight="700" fill="${B.text}">${esc(label)}</tspan><tspan x="300" fill="${B.muted}">${esc(detail)}</tspan><tspan x="740" font-weight="700" fill="${B.text}">→ ${esc(arrow)}</tspan></text>`;
@@ -104,9 +112,9 @@ function cardSvg(data) {
   <text x="152" y="68" font-size="20" font-weight="700" font-family=${mono} fill="${B.text}">no API key · the wallet is the account</text>
   <text x="96" y="130" font-size="22" font-family=${mono}><tspan font-weight="700" fill="${B.text}">Agent402 /robinhood</tspan><tspan fill="${B.muted}"> · the Robinhood Chain x402 marketplace · live ${esc(liveDate)} UTC</tspan></text>
   ${okRow(180, "rail", "Robinhood Chain (eip155:4663)", "USDG, settling live")}
-  ${okRow(214, "tools", "500+ deterministic, pay per call", "from $0.001")}
+  ${okRow(214, "tools", "500+ tools, pay per call", "from $0.001")}
   ${okRow(248, "checkout", "HTTP 402 → sign → result", "no signup, no invoice")}
-  ${okRow(282, "sell", "serve /.well-known/x402", "listed free, ranked by health")}
+  ${okRow(282, "sell", "serve /.well-known/x402", "listed free, no placement fee")}
   <rect x="96" y="312" width="1008" height="212" rx="12" fill="${B.inset}" stroke="${B.insetLine}" stroke-width="1"/>
   <text x="126" y="348" font-size="19" font-family=${mono}><tspan fill="${B.muted}">$ </tspan><tspan fill="${B.text}">curl agent402.tools/api/revenue</tspan></text>
   <text x="126" y="376" font-size="19" font-family=${mono}><tspan fill="${B.text}">→ HTTP </tspan><tspan font-weight="700" fill="${B.green}">200</tspan><tspan fill="${B.text}"> · rail Robinhood Chain</tspan><tspan fill="${B.muted}">${balance == null ? "" : ` · merchant balance ${balance} USDG`}</tspan></text>
@@ -122,6 +130,8 @@ try {
   const png = await rasterizeSvg(cardSvg(data), { width: 1200, height: 630 });
   writeFileSync(OUT, png);
   console.log(`wrote ${OUT} (${png.length} bytes)${PREVIEW ? " [preview tag rendered]" : ""}`);
+  // The shared headless browser rasterizeSvg opens keeps the process alive.
+  process.exit(0);
 } catch (e) {
   console.error(`render failed: ${e?.message || e}`);
   process.exit(2);

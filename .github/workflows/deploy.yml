@@ -1235,6 +1235,7 @@ jobs:
           t node scripts/test-mcp-call-tool-contract.js
           # Exposure hardening (A402-11/12/13 no X-Powered-By; security.txt; health gates flags; credential-free MCP CORS — spawns child)
           t node scripts/test-security-headers.js
+          t node scripts/test-algorand-page-deadline.js
           # crawl kit (offline)
           t node scripts/test-crawl-kit.js
           # Memory v2 unit tests (grants, counters, audit chain, recall)
@@ -1521,6 +1522,7 @@ jobs:
           t node scripts/test-block-clock.js
           t node scripts/test-payai-credit-watch.js
           t node scripts/test-revenue-fresh-recent.js
+          t node scripts/test-chain-page-own-settle.js
           t node scripts/test-revenue-cold.js
           # Settle-fallback chain (Solvador first on its advertised networks -> PayAI -> Solvador last resort; double-settle gate between fallbacks - offline)
           t node scripts/test-settle-fallback.js
@@ -1571,6 +1573,8 @@ jobs:
           t node scripts/test-html-kit.js
           # Bazaar quality ingestion (30d calls/payers on index sellers + /api/find external rows + ranking tiebreak - offline)
           t node scripts/test-bazaar-quality.js
+          # /api/route ordering: route-order.js pinned to the comparator, read by why.tiebreaks and the ranking sentence (offline)
+          t node scripts/test-route-order.js
           # Revenue detector classification (real x402 buys vs funding/tests)
           t node scripts/test-revenue-scan.js
           # Revenue daily series (day bucketing, EVM block estimation, canary-vs-funding split — offline)
@@ -2691,6 +2695,8 @@ jobs:
           t node scripts/test-cross-surface.js
           # MPP discovery offers and the live 402 tempo challenge share one predicate (offline)
           t node scripts/test-mpp-discovery-agreement.js
+          # /openapi.json payment prose (MPP rails per route, creditsKey) read from the 402's own config (offline)
+          t node scripts/test-openapi-mpp-clause.js
           # Util-kit tests (jwt-sign, uuid-v5, group-by, json-to-xml, geo-distance, color-contrast)
           t node scripts/test-util-kit.js
           # x-data kit (offline)
@@ -3976,6 +3982,7 @@ jobs:
           t node scripts/test-avm-subcent-offer.js
           # Router dispatch eligibility, labelled: one function for the resolver's Base gate and every public row (offline)
           t node scripts/test-dispatch-eligibility.js
+          t node scripts/test-unproven-lane-labels.js
           # USDC EIP-712 domain truth per chain: table pinned to payments.js + @x402/evm, wrong-name accepts refused (offline)
           t node scripts/test-evm-usdc-domain.js
           # Shared-wallet settlement evidence counts only where the live 402 pays: fake leaderboard row + fake 402s, call sites pinned (offline)
@@ -4622,10 +4629,15 @@ jobs:
           echo "published agent402-mcp@$VERSION → https://www.npmjs.com/package/agent402-mcp"
       - name: Verify the public npx path resolves
         run: |
-          for i in $(seq 1 10); do
-            npm view agent402-mcp version >/dev/null 2>&1 && { echo "agent402-mcp visible on npm ✓"; break; }
+          # Wait for THIS version, not any version: the MCP Registry step below
+          # validates the exact version against npm and refuses it until npm
+          # serves it (measured: up to ~9 min after publish).
+          VERSION=$(node -p "require('./mcp/package.json').version")
+          for i in $(seq 1 60); do
+            npm view "agent402-mcp@$VERSION" version >/dev/null 2>&1 && { echo "agent402-mcp@$VERSION visible on npm ✓"; exit 0; }
             sleep 15
           done
+          echo "::warning::agent402-mcp@$VERSION still not visible on npm after 15 minutes"
 
       - name: Publish agent402-tollbooth to npm
         run: |

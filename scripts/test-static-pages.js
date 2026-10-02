@@ -93,6 +93,11 @@ try {
     ok(titleMatch != null, `${path} has a <title> tag`);
     const title = titleMatch?.[1] ?? "";
     ok(title.toLowerCase().includes(titleSubstr.toLowerCase()), `${path} title contains '${titleSubstr}' (got '${title}')`);
+    if (path === "/shop") {
+      // Every slug a shop goal lists must be a live catalog slug; the page
+      // prints a "no longer in the catalog" note when one is not.
+      ok(!/no longer in the catalog/.test(body), "/shop lists only slugs the catalog serves");
+    }
     if (path === "/marketplace") {
       // The unified marketplace surface (the old /index and /marketplaces 301
       // here) — its nav/footer must not link the retired standalone paths.

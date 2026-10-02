@@ -92,7 +92,7 @@ export const HOST_EXCLUSION_NOTE = "Our own canary and volume runs are excluded 
 
 /** How to label the widest figure: its real start when the ledger knows one,
  *  and only then the unqualified "all time". */
-const wideLabel = (f) => (f?.externalAllTime?.since ? `since ${f.externalAllTime.since}` : "all time");
+export const wideLabel = (f) => (f?.externalAllTime?.since ? `since ${f.externalAllTime.since}` : "all time");
 /** The one sentence that keeps "since" from reading as an arbitrary cutoff. */
 export const HOST_LEDGER_START_NOTE = (since) =>
   `Settlements are counted from the sales ledger, which starts ${since}; earlier calls were served and settled but are not itemised in it, so these are not lifetime totals.`;

@@ -178,14 +178,14 @@ export function shownOfTotal(shown, total) {
   return Number.isFinite(t) && t > Number(shown) ? `${num(shown)} of ${num(t)}` : num(shown);
 }
 
-export function terminalStatusBar({ chainName, asset, sellerCount, totalSellers = null, activity, scanned, scopeLabel }) {
+export function terminalStatusBar({ chainName, asset, sellerCount, totalSellers = null, hostTag = "", activity, scanned, scopeLabel }) {
   const state = !activity || activity.error ? { k: "warn", t: "SCAN UNAVAILABLE" }
     : activity.truncated ? { k: "warn", t: "SCAN CAPPED / FLOOR" }
     : { k: "ok", t: "SCAN COMPLETE" };
   const cells = [
     `<span class="t-st-cell"><span class="t-label">RAIL</span>${esc(chainName || "")}</span>`,
     `<span class="t-st-cell"><span class="t-label">ASSET</span>${esc(asset || "USDC")}</span>`,
-    `<span class="t-st-cell"><span class="t-label">SELLERS</span>${shownOfTotal(sellerCount, totalSellers)}</span>`,
+    `<span class="t-st-cell"><span class="t-label">SELLERS</span>${shownOfTotal(sellerCount, totalSellers)}${esc(hostTag)}</span>`,
     `<span class="t-st-cell"><span class="t-label">SCOPE</span>${esc(scopeLabel || "")}</span>`,
     `<span class="t-st-cell t-${state.k}"><span class="t-st-led" aria-hidden="true"></span>${esc(state.t)}</span>`,
     scanned ? `<span class="t-st-cell"><span class="t-label">WINDOW</span>${esc(scanned)}</span>` : "",
@@ -341,6 +341,11 @@ export const TERMINAL_CSS = `
 // `measured`: false when per-seller settlements are not measured on this rail,
 // so the CALLS / VOLUME / BUYERS cells read "-" rather than a zero.
 export function marketTerminalHtml({ chainName = "", asset = "USDC", rows = [], totalSellers = null, measured = true, selectedHost = null, activity = null, scopeLabel = "THIS HOST", noteText = "", ticker = [] } = {}) {
+  // `totalSellers` counts other sellers only (the host is in no seller count),
+  // so the shown figure counts other sellers too and the host row is named.
+  const others = rows.filter((r) => !r.local).length;
+  const hostTag = rows.some((r) => r.local) ? " + this host" : "";
+  const countText = `${shownOfTotal(others, totalSellers)}${hostTag}`;
   return `<section class="t-wrap" data-t-terminal aria-label="Market terminal">
     ${terminalTicker(ticker)}
     <div class="t-grid">
@@ -348,7 +353,7 @@ export function marketTerminalHtml({ chainName = "", asset = "USDC", rows = [], 
         <div class="t-toolbar">
           <span class="t-label">SELLERS</span>
           <input class="t-search" type="search" data-t-search placeholder="filter by host  (press /)" aria-label="Filter sellers by host" autocomplete="off" spellcheck="false">
-          <span class="t-count" data-t-count>${shownOfTotal(rows.length, totalSellers)}</span>
+          <span class="t-count" data-t-count>${countText}</span>
         </div>
         ${terminalRoster(rows, selectedHost, { measured })}
       </div>
@@ -356,7 +361,7 @@ export function marketTerminalHtml({ chainName = "", asset = "USDC", rows = [], 
         ${terminalMetrics(activity, scopeLabel, noteText)}
       </div>
     </div>
-    ${terminalStatusBar({ chainName, asset, sellerCount: rows.length, totalSellers, activity, scopeLabel, scanned: activity && !activity.error ? `${activity.days}D` : "" })}
+    ${terminalStatusBar({ chainName, asset, sellerCount: others, totalSellers, hostTag, activity, scopeLabel, scanned: activity && !activity.error ? `${activity.days}D` : "" })}
     ${terminalHelp()}
   </section>`;
 }

@@ -114,6 +114,7 @@ const INDEX_ROW_CAP = 100;
 // 30 min crawl, 1 hr discovery: defined in src/crawl-cadence.js so the pages
 // that quote the cadence read the same constants without importing this file.
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS } from "./crawl-cadence.js";
+import { routeTiebreakLabels } from "./route-order.js";
 
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
@@ -7404,7 +7405,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   const diversityCapped = capApplies && leftover.length > 0;
   const sellersSeen = new Set();
   let anyExternal = false;
-  const results = picked.map(([score, t, matched]) => {
+  const results = picked.map(([score, t, matched, , , payers30d, curated]) => {
     sellersSeen.add(t.seller);
     // F09: name/description/sellerName on an EXTERNAL result are seller-
     // controlled text. Regex filtering + the diversity cap above are secondary
@@ -7473,7 +7474,13 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
         // after score, so saying which kind of number this is matters.
         healthSource: external ? "crawl" : "self-asserted",
         priceRank: (() => { const r = priceRank(t.price); return Number.isFinite(r) ? r : null; })(),
-        tiebreaks: ["score", "health", "cheapest known price", "shorter slug"],
+        // The two Bazaar-measured tiebreak inputs this row was sorted on (null
+        // payers = no measurement, which the sort skips rather than reading as 0).
+        bazaarPayers30d: Number.isFinite(payers30d) ? payers30d : null,
+        bazaarCurated: curated === true,
+        // The order the sort applies, from src/route-order.js (pinned to the
+        // comparator by test-route-order.js).
+        tiebreaks: routeTiebreakLabels(),
       },
       category: t.category,
       description: t.description,

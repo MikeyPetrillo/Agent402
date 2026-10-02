@@ -1,7 +1,7 @@
 {
   "name": "elizaos-plugin-agent402",
-  "version": "0.2.3",
-  "description": "elizaOS plugin for Agent402: find and call pay-per-call web tools (search, page render, PDFs, market and SEC data) over x402 or MPP, paid in USDC or by prepaid card credits with per-call and daily spend ceilings; Agentic Finance for elizaOS agents.",
+  "version": "0.2.4",
+  "description": "elizaOS plugin for Agent402 (Agentic Finance): find and call pay-per-call web tools on a server that answers x402 and MPP on one 402. Pays in USDC over x402 from an EVM wallet or with an Agent402 credits key, under per-call and daily ceilings; pure-CPU tools are free via proof-of-work.",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
@@ -65,7 +65,7 @@
         "type": "string",
         "required": false,
         "sensitive": true,
-        "description": "Prepaid card-credits key (a402_...) from https://agent402.tools/credits. Pays wallet-only tools by card."
+        "description": "Prepaid card-credits key (a402_...) issued at https://agent402.tools/credits (that page says whether new keys are on sale). Pays wallet-only tools except the wallet-identity-bound ones."
       },
       "AGENT402_WALLET_KEY": {
         "type": "string",

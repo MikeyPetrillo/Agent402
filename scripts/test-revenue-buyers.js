@@ -406,10 +406,16 @@ check("a transfer under the catalog's cheapest price is not a paying agent", () 
   const before = ledgerBuyerConcentration(wallets);
   const sumBefore = ledgerSummary(wallets);
   setPayerDustFloorUsd(0.001);
+  const dailyExt = (d) => d.days.reduce((a, r) => a + r.extTx, 0);
+  const dailyBefore = ledgerDaily(wallets, null, { withScope: true });
   const LOOKALIKE = "0x902d8f3500000000000000000000000000002256";
   give("2026-07-29", LOOKALIKE, { usd: 0.00001 });
   const after = ledgerBuyerConcentration(wallets);
   const sumAfter = ledgerSummary(wallets);
+  const dailyAfter = ledgerDaily(wallets, null, { withScope: true });
+  assert.equal(dailyExt(dailyAfter), dailyExt(dailyBefore), "the daily chart's external series leaves it out too");
+  assert.equal(dailyAfter.scope.excluded.externalUnderDustFloor.transactions, dailyBefore.scope.excluded.externalUnderDustFloor.transactions + 1, "and the daily scope names it");
+  assert.equal(dailyAfter.scope.complete, false);
   assert.equal(getPayerDustFloorUsd(), 0.001);
   assert.equal(after.buyers, before.buyers, "the dust payer is not counted");
   assert.equal(sumAfter.allTimeExternalCount, sumBefore.allTimeExternalCount, "nor counted as an external payment");

@@ -127,98 +127,17 @@ const ok = (cond, msg) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── Metered upstream exclusion oracle ──────────────────────────────────────
-// Tools whose example answers burn the operator's third-party budget / buyer wallet /
-// identity surface. Keep in sync with the class of spend — adding a new keyed
-// upstream means listing its slugs here (and skill packs resolve transitively).
-export const METERED_SLUGS = new Set([
-  "attest",  // attest-kit.js: spends Base gas from the spending wallet, unset in CI
-  // Databento equities: a query is billed by the bytes it returns and CI
-  // holds no key on purpose, so an unkeyed sweep would 503 here and a keyed
-  // one would spend on every push. Same rule as Brave, E2B and CoinGecko.
-  "stock-quote", "stock-history",
-  // Brave Search subscription
-  "search", "search-lite", "search-news", "search-images", "search-videos", "search-suggest", "answer", "multi-search",
-  "llm-context",      // Brave /llm/context - same subscription, billed per call
-  // OpenAI
-  "llm", "llm-pro", "llm-premium",
-  "image-gen", "image-gen-hd", "image-gen-premium",
-  "tts", "tts-hd", "tts-lite", "transcribe", "transcribe-pro",
-  "embed", "embed-large", "moderate",
-  // OpenRouter gateway
-  "v1-chat-nano", "v1-chat-auto", "v1-chat-grounded", "v1-chat-ox", "v1-chat", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered",
-  "v1-embeddings", "v1-rerank", "v1-images", "v1-audio-speech",
-  "v1-chat-nano-messages", "v1-chat-auto-messages", "v1-chat-messages", "v1-chat-pro-messages", "v1-chat-premium-messages", "v1-chat-metered-messages",
-  "v1-chat-nano-gemini", "v1-chat-auto-gemini", "v1-chat-gemini", "v1-chat-pro-gemini", "v1-chat-premium-gemini", "v1-chat-metered-gemini",
-  "v1-audio-transcriptions", "v1-audio-transcriptions-pro",
-  "v1-chat-nano-responses", "v1-chat-auto-responses", "v1-chat-responses", "v1-chat-pro-responses", "v1-chat-premium-responses", "v1-chat-metered-responses",
-  // Calls the v1-chat gateway handler in-process — same OpenRouter key dependency.
-  "pdf-summarize",
-  // research-deep composites — fan out to grounded search + rerank + synthesis
-  // over OpenRouter (503 without OPENROUTER_API_KEY), same key dependency.
-  "research", "research-pro", "research-max",
-  "dossier", "dossier-max",
-  // fund-report composites — SEC 13F diff + grounded search + Opus synthesis
-  // over OpenRouter (503 without OPENROUTER_API_KEY), same key dependency.
-  "fund-report", "fund-report-max",
-  // domain-audit composites — live probes + Opus synthesis over OpenRouter.
-  "domain-audit", "domain-audit-pro",
-  // recall-report - openFDA probes + Opus synthesis over OpenRouter.
-  "recall-report", "insider-report", "market-brief", "token-brief", "filing-report", "linkedin-article",
-  // ticker-pack - runs the dossier + insider composites in-process.
-  "ticker-pack",
-  // token-risk composites - keyless probes + Opus synthesis over OpenRouter.
-  "token-risk", "token-risk-pro",
-  // E2B
-  "code-run", "code-run-pro",
-  // Route-and-execute can buy external sellers
-  "route-execute", "seller-payability", "route-execute-max", "route-execute-plus",
-  // Identity-bound (payment = identity)
-  "memory-write", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-revoke",
-  "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",
-  "my-usage",
-  "receipts",
-  "feedback",        // feedback-kit.js: the verdict is bound to the wallet that paid for the rated call
-  "judge",           // paid third-party judgment model; CI holds no key
-  "decide",          // decision service + model calls; CI runs no decide service
-  "decide-execute",  // runs plans and pays sellers; CI runs no decide service
-  // FRED keyed (503 without FRED_API_KEY / FRED_API_KEY_V2)
-  "fred-series", "fred-search", "fred-series-info", "fred-release-calendar",
-  "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds",
-  "fred-release-observations",
-  // Neynar / Farcaster
-  "farcaster-profile", "farcaster-by-address",
-  "fc-cast-search", "fc-channel-feed", "fc-trending", "fc-user-casts", "fc-cast",
-  "fc-cast-replies", "fc-channel", "fc-user-search", "fc-cast-metrics",
-  // X API v2 app-only bearer (per-post read billing) and the enrichment
-  // providers - each lists only with its own key, and 503s without it.
-  "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup",
-  "exa-search", "exa-answer", "exa-contents",
-  "hunter-domain-search", "hunter-email-finder", "hunter-email-verify", "hunter-company",
-  "apollo-people-search", "apollo-org-enrich", "apollo-person-match",
-  // OpenRouter Image + Video APIs (flat per-image / per-second upstream price).
-  "v1-images-fast", "v1-images-pro", "v1-videos",
-  // Alchemy hard-require (compute units) — publicJsonRpc-backed tools stay IN
-  "wallet-balance", "token-metadata", "token-price", "wallet-transactions",
-  "asset-transfers", "token-balances", "token-allowance", "tx-receipt",
-  "block-receipts", "token-price-history",
-  "nft-holdings", "nft-metadata", "gas-snapshot", "eth-call",
-  "dex-pair", "dex-pool", "dex-quote",
-  "nft-collection", "nft-floor",
-  "l2-gas-comparison",
-  // CDP (Coinbase Developer Platform keys)
-  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema",
-]);
+// The list lives in src/metered-slugs.js so the server can publish its count
+// (/api/reliability); re-exported here for the scripts that import it.
+import { METERED_SLUGS, meteredPackSlugs } from "../src/metered-slugs.js";
+export { METERED_SLUGS };
 
 const BROWSER_SLUGS = new Set(["render", "screenshot"]);
 // Handlers proven offline by scripts/test-media.js; live examples depend on
 // Wikimedia (same URL for all three). Soft-skip source-host flakes only.
 const MEDIA_EXAMPLE_SLUGS = new Set(["media-info", "audio-convert", "audio-normalize"]);
 
-const METERED_PACK_SLUGS = new Set();
-for (const p of SKILL_PACKS) {
-  const hits = (p.toolSlugs || []).filter((s) => METERED_SLUGS.has(s));
-  if (hits.length) METERED_PACK_SLUGS.add(p.slug);
-}
+const METERED_PACK_SLUGS = meteredPackSlugs(SKILL_PACKS);
 
 // Upstreams whose edge BLOCKS GitHub runners: Kalshi's Cloudflare answered the
 // sweep an HTML 403 page on 2026-08-28 (both examples, same run) while the same

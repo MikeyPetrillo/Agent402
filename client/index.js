@@ -23,7 +23,7 @@ import { createHash, randomBytes } from "node:crypto";
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.10";
+const VERSION = "0.8.11";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // 32MB: about a hundred times any realistic response from this catalog (the
 // largest is a base64 image at a few MB), so it cannot break a legitimate
@@ -43,7 +43,7 @@ export class Agent402 {
    * @param {number} [opts.maxPerCallUsd]    hard ceiling on a single paid call (USD); over → SpendingLimitError before paying
    * @param {number} [opts.dailyLimitUsd]    hard ceiling on rolling-24h paid spend (USD)
    * @param {number} [opts.maxPerHostUsd]    hard ceiling on rolling-24h paid spend to one seller host (USD)
-   * @param {string} [opts.creditsKey]       a prepaid card-credits key (a402_...) from agent402.tools/credits -
+   * @param {string} [opts.creditsKey]       a prepaid card-credits key (a402_...) issued at agent402.tools/credits -
    *                                         pays wallet-only tools by card when no payFetch is given
    * @param {number|null} [opts.maxResponseBytes=33554432]
    *        Hard ceiling on a response body, enforced BEFORE it is parsed. null disables it.

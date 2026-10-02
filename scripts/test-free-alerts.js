@@ -122,6 +122,27 @@ ok(alertFormHtml({ kind: "nope", target: "X" }) === "" && alertFormHtml({ kind: 
 const hostile = alertFormHtml({ kind: "insider", target: 'X"><script>alert(1)</script>' });
 ok(!hostile.includes("<script>") && hostile.includes("&lt;script&gt;"), "a hostile target is escaped in the form");
 
+// ---- probe version: a changed id space re-baselines silently ----
+{
+  let vids = ["old-1", "old-2"];
+  const vmail = [];
+  const vp = { insider: async () => ({ ids: [...vids], items: vids.map((i) => ({ id: i, label: i })) }) };
+  const fv = createFreeAlerts({ storePath: join(dir, "alerts-v.json"), probes: vp, validators, sendEmail: async (m) => { vmail.push(m); return true; }, secret: "test-secret", baseUrl: "https://x.test", now, log: () => {} });
+  await fv.signup({ email: "v@example.com", kind: "insider", target: "NVDA" });
+  const [, vid, vk] = vmail[0].text.match(/\/alerts\/confirm\?id=([^&]+)&k=([^\s)]+)/);
+  await fv.confirm(vid, vk);
+  await fv.tick({ force: true });
+  const before = vmail.length;
+  vids = ["new-space-1", "new-space-2", "new-space-3"];
+  vp.insider.version = "v2";
+  const r = await fv.tick({ force: true });
+  ok(vmail.length === before && r.baselined === 1, "a probe whose version changed re-baselines without emailing ids that are new only because the probe changed");
+  vids = ["new-space-1", "new-space-2", "new-space-3", "new-space-4"];
+  now.advance?.(2 * 24 * 3600 * 1000);
+  const r2 = await fv.tick({ force: true });
+  ok(r2.notified === 1 && vmail.length === before + 1 && /new-space-4/.test(vmail.at(-1).text) && !/new-space-1/.test(vmail.at(-1).text), "after re-baselining, a genuinely new id is emailed alone");
+}
+
 console.log(`\nPASS - ${pass} checks (free alerts: double opt-in, signed links, change-only daily email, caps)`);
 
 async function ok_throws(fn, code, label) {

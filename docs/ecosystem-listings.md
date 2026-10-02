@@ -5,8 +5,8 @@
 Use this block (or any subset) wherever a directory asks what Agent402 is. Every
 claim below is served live; verify prices against `/api/pricing` before pasting.
 
-- **Catalog:** 500+ pay-per-call endpoints for AI agents (500+ tools and
-  70+ skill packs): live web search and cited answers, headless browser, PDFs, OCR,
+- **Catalog:** 500+ pay-per-call tools and multi-tool skill packs for AI agents:
+  live web search and cited answers, headless browser, PDFs, OCR,
   financial / SEC EDGAR / macro / on-chain data, an OpenAI-compatible LLM gateway
   (`/v1`), durable wallet-keyed memory, 150+ pure-CPU utilities.
 - **Decide (`POST /api/decide`, MCP `decide.plan`):** describe a job in plain
@@ -19,11 +19,11 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   `perp-open-interest`, `perp-klines`, `perp-orderbook`, $0.001 to $0.003) and the
   options book (`options-summary`, `crypto-options-chain`, `options-ticker`,
   `options-volume`, $0.002 to $0.005); DeFi yields, TVL, fees, DEX volume and
-  stablecoin supply with history siblings (`defi-*`, `stablecoins`, $0.002 to
+  stablecoin supply with history siblings (`defi-*`, `stablecoins`, $0.001 to
   $0.003); Solana token due diligence (`sol-token-safety` $0.005,
   `sol-token-report` $0.010, holders, pairs, trending, prices, swap quotes);
   crypto news, computed technical indicators and a whole-market pulse
-  ($0.004 to $0.005); broad coin/exchange coverage including price by token
+  ($0.002 to $0.004); broad coin/exchange coverage including price by token
   contract address; indexed EVM chain reads (transfers, balances, allowances,
   decoded receipts, block receipts, token price history); Farcaster social
   (search, feeds, threads, engagement metrics); and whole-site crawling
@@ -36,9 +36,10 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
 - **Pay any way:** x402 (USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo,
   Avalanche, Sei, Optimism, Stellar, Algorand; USDG on Robinhood Chain - 12 chains),
   MPP (Machine Payments Protocol) on the same 402 (Base/Celo, or natively on Tempo),
-  free proof-of-work on the pure-CPU tools, or **prepaid card credits** -
-  $20 / $50 / $100 packs at https://agent402.tools/credits, spent on any priced
-  route with `Authorization: Bearer a402_…`, debited only on a successful call, never expire.
+  free proof-of-work on the pure-CPU tools. Prepaid card credits are not on sale;
+  a credits key bought earlier still pays any priced route except the
+  wallet-identity-bound ones with `Authorization: Bearer a402_…`, debited only on
+  a successful call, and never expires.
 - **Report products** ($0.60 to $2.00 over x402/MPP, or $2 to $5 by card at
   https://agent402.tools/reports - the card price includes payment processing,
   an agent paying per call pays the lower tool price for the same report):
@@ -50,16 +51,18 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   `/v1/token-brief`, token risk `/v1/token-risk` (+ `/pro`) - $0.60 to $2.00 per
   call for an agent, $2 to $5 by card; current per-route prices at
   https://agent402.tools/pricing.
-- **Monitors** ($3/month each, card, https://agent402.tools/monitors): domain
+- **Monitors** ($5/month each, card, https://agent402.tools/monitors): domain
   security, SEC filings, Solana token safety, 13F fund, FDA recall, insider flow,
-  IPO pipeline - a cheap daily probe, a full paid re-run and an email only when
-  something changes.
+  IPO pipeline and a research question. Most watch with a free daily probe and
+  send a full paid re-run only when something changes; the research watch
+  re-runs weekly.
 - **MCP:** hosted connector `https://agent402.tools/mcp` (dotted tools:
   `catalog.search`, `catalog.find`, `catalog.call`, `payment.info`,
   `server.describe`, `sellers.list`, `demand.request`, plus flagships `web.search`,
   `web.answer`, `web.news`, `browser.render`, `market.quote`, `audio.transcribe`,
   `memory.read`, `memory.write`); wallet-only tools are payable on the connector
-  over MPP (challenges in the tool result's `_meta`). npm: `agent402-mcp` (stdio, pays by
+  over MPP (the challenge arrives as a JSON-RPC payment error, the credential
+  goes back in `_meta`). npm: `agent402-mcp` (stdio, pays by
   wallet or credits key), `agent402-client` (buyer SDK), `agent402-tollbooth`
   (pay-per-crawl: x402 + MPP, native Tempo with split payments).
 - **Maintainer:** Havok Holdings LLC. Open source (AGPL-3.0 server, MIT packages).
@@ -82,7 +85,7 @@ alphabetical by repo name; legend: 📇 = TypeScript/JavaScript, ☁️ = cloud/
 2. In the Aggregators section, insert alphabetically:
 
 ```markdown
-- [MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402) 📇 ☁️ 🏠 - The applied layer of Agentic Finance (AIFI): the headless browser, live web search, OCR, and durable wallet-keyed memory an agent's sandbox doesn't have - a catalog of 500+: 500+ pay-per-call tools and curated skill packs, every one tested, priced, and settled on-chain - rented per call via x402 (USDC on Base + 10 more chains (Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, Algorand), or USDG on Robinhood Chain - 12 chains) or free with proof-of-work on the 150+ pure-CPU tools; every paid endpoint also accepts MPP (Machine Payments Protocol) clients, settling on Base/Celo or natively on Tempo. Also an x402 Index + Smart Order Router that finds the cheapest healthy tool across the whole ecosystem, and an MPP marketplace of live-verified MPP sellers. Hosted remote connector at agent402.tools/mcp.
+- [MikeyPetrillo/Agent402](https://github.com/MikeyPetrillo/Agent402) 📇 ☁️ 🏠 - The applied layer of Agentic Finance (AIFI): the headless browser, live web search, OCR, and durable wallet-keyed memory an agent's sandbox doesn't have - a catalog of 500+ pay-per-call tools and curated skill packs, rented per call via x402 (USDC on Base + 10 more chains (Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, Algorand), or USDG on Robinhood Chain - 12 chains) or free with proof-of-work on the 150+ pure-CPU tools; every paid endpoint also accepts MPP (Machine Payments Protocol) clients, settling on Base/Celo or natively on Tempo. Also an x402 Index + Smart Order Router that finds the cheapest healthy tool across the whole ecosystem, and an MPP marketplace of live-verified MPP sellers. Hosted remote connector at agent402.tools/mcp.
 ```
 
 3. PR title: `Add Agent402 (aggregator: 500+ x402 pay-per-call tools and skill packs)`
@@ -104,7 +107,7 @@ Coinbase reviews within ~5 business days. Category: **Services/Endpoints**.
 ```json
 {
   "name": "Agent402",
-  "description": "Agentic Finance (AIFI) applied layer: 500+ pay-per-call endpoints for AI agents over x402 - 500+ tools and skill packs, every one tested, priced, and settled on-chain - headless browser, live web search, OCR, PDFs, financial/SEC/macro data, durable wallet-keyed memory, and an OpenAI-compatible LLM gateway (/v1: chat, embeddings, auto-routing) - USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar & Algorand, USDG on Robinhood Chain (12 chains), or free via proof-of-work; dual-stack with MPP (Machine Payments Protocol) on the same 402, settling on Base/Celo or natively on Tempo. Also an x402 Index + Smart Order Router that ranks the cheapest healthy tool across the ecosystem (auto-discovered from the CDP Bazaar), and an MPP marketplace. Open source, self-hostable, MCP server included.",
+  "description": "Agentic Finance (AIFI) applied layer: 500+ pay-per-call tools and skill packs for AI agents over x402 - headless browser, live web search, OCR, PDFs, financial/SEC/macro data, durable wallet-keyed memory, and an OpenAI-compatible LLM gateway (/v1: chat, embeddings, auto-routing) - USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar & Algorand, USDG on Robinhood Chain (12 chains), or free via proof-of-work; dual-stack with MPP (Machine Payments Protocol) on the same 402, settling on Base/Celo or natively on Tempo. Also an x402 Index + Smart Order Router that ranks the cheapest healthy tool across the ecosystem (auto-discovered from the CDP Bazaar), and an MPP marketplace. Open source, self-hostable, MCP server included.",
   "logoUrl": "/logos/agent402.png",
   "websiteUrl": "https://agent402.tools",
   "category": "Services/Endpoints"
@@ -219,17 +222,17 @@ that takes a GitHub repo URL; no PR, no fork.
      Agent402 gives AI agents the headless browser, live web search + answers
      with citations, OCR, PDF text extraction, financial/crypto/macro data
      (Databento, CoinGecko, FRED, ECB, World Bank), SEC EDGAR filings, DNS/TLS/WHOIS,
-     wallet-keyed shared memory, and 200+ deterministic utilities (hash, JWT,
+     wallet-keyed shared memory, and 150+ pure-CPU utilities (hash, JWT,
      regex, compression, forecasting, statistics, finance math, etc.) - paid per
      call in USDC on Base (or Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar,
      Algorand) - plus USDG on Robinhood Chain - 12 chains total via the x402
      protocol, or free via built-in proof-of-work for the 150+ pure-CPU tools.
 
      The catalog is 500+ strong - tools and curated multi-tool skill packs
-     (published as MCP prompts); every one is tested against its own example on
-     every deploy. Every paid endpoint also accepts MPP (Machine Payments
-     Protocol) on the same 402, and prepaid card credits cover agents with no
-     wallet. One config block, no per-tool signups, no API keys.
+     (published as MCP prompts); CI drives each tool that needs no upstream key
+     with its own published example before a deploy. Every paid endpoint also
+     accepts MPP (Machine Payments Protocol) on the same 402, and finished
+     reports can be bought by card with no wallet. One config block, no per-tool signups, no API keys.
      Self-hostable (open source AGPL-3.0) or use the hosted remote at
      https://agent402.tools/mcp.
      ```
@@ -265,9 +268,7 @@ Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, Algorand, Rob
    ```
 
 3. Verify the listing shows all twelve networks (Base, Solana, Polygon,
-   Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, Algorand, Robinhood Chain) in the accepts. Also check
-   https://www.x402scan.com/facilitator/payAI once the first Solana
-   settlement lands - PayAI-settled traffic appears under that view.
+   Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, Algorand, Robinhood Chain) in the accepts.
 
 ---
 
@@ -281,12 +282,12 @@ We are already listed, but the entry predates the full 12-chain roster and the
 2. Update the chain list to "USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism,
    Stellar, Algorand - plus USDG on Robinhood Chain (12 chains)" and, if the
    entry cites a tool count, set it to "500+ pay-per-call tools and
-   70+ skill packs".
+   skill packs".
 3. PR title: `Update Agent402 entry - 12-chain settlement (USDC + USDG) + 500+ strong catalog`
 
 ---
 
-## 7b. Robinhood Chain visibility (no directory yet - mainnet is days old)
+## 7b. Robinhood Chain visibility
 
 There is no public Robinhood Chain ecosystem directory to submit to yet.
 Until one exists, the discoverable surfaces are:
@@ -314,11 +315,11 @@ The directory solana.com/x402 cross-links. Form submission, no PR.
    - **One-liner:**
 
      ```
-     500+ strong: pay-per-call web tools and skill packs for AI agents over x402, every one tested and settled on-chain - USDC on Solana (and Base/Polygon/Arbitrum/Monad/Celo/Avalanche/Sei/Optimism/Stellar/Algorand) plus USDG on Robinhood Chain - 12 chains - or free via proof-of-work. Open-source, self-hostable, MCP-native.
+     500+ strong: pay-per-call web tools and skill packs for AI agents over x402 - USDC on Solana (and Base/Polygon/Arbitrum/Monad/Celo/Avalanche/Sei/Optimism/Stellar/Algorand) plus USDG on Robinhood Chain - 12 chains - or free via proof-of-work. Open-source, self-hostable, MCP-native.
      ```
 
    - **Description:** reuse the mcpservers.org long description above; lead
-     with the Solana angle (PayAI facilitator settlement, SVM signing in the
+     with the Solana angle (USDC settlement on Solana, SVM signing in the
      agent402-mcp buyer, Solana payTo in every 402).
    - **Website:** https://agent402.tools · **Repo:** github.com/MikeyPetrillo/Agent402
 3. Featured placement on solana.com/x402 is curated; the directory listing
@@ -326,10 +327,9 @@ The directory solana.com/x402 cross-links. Form submission, no PR.
 
 ---
 
-Solana-surface status: PayAI facilitator auto-lists merchants in the x402
-Bazaar (active since the multi-chain routing deploy - first Solana settlement
-will populate it; fund SOLANA_BURNER_KEY so the daily canary provides that
-settlement). x402scan indexes our 402s (re-register after chain changes).
+Solana-surface status: every paid 402 carries a Solana accept, and the daily
+paid canary settles a Solana leg. x402scan indexes our 402s (re-register after
+chain changes).
 
 ---
 
@@ -354,7 +354,7 @@ Next up once submitted: the Anthropic connector directory
 
 - **Agentic.Market (Coinbase)** - the new consumer-facing public directory of
   x402 services (live pricing, volume, top lists). Indexes AUTOMATICALLY from
-  CDP-facilitator payments on Bazaar-discovery-enabled endpoints - our 64
+  CDP-facilitator payments on Bazaar-discovery-enabled endpoints - our
   Bazaar-registered routes should already be present. Action: browse
   agentic.market for the Agent402 entries, confirm metadata quality and that
   the accepts show all twelve chains.
@@ -397,9 +397,9 @@ Next up once submitted: the Anthropic connector directory
   attribute to it.
 - **Solana Agent Registry (solana.com/agent-registry)** + **8004-solana
   (QuantuLabs/PayAI)** - the ERC-8004 port on Solana with on-chain feedback
-  and trust tiers, integrated with PayAI (our Solana facilitator). Register
-  the Solana revenue wallet as an agent identity; PayAI-settled traffic then
-  builds portable reputation.
+  and trust tiers. Register
+  the Solana revenue wallet as an agent identity so Solana settlements build
+  portable reputation.
 
 ### Watchlist (no action yet)
 
@@ -456,9 +456,9 @@ same shape as the self-hosted data sellers already listed).
       { method: "evm", currency: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", decimals: 6 },
     ],
     endpoints: [
-      { route: "GET /api/search", desc: "Live web search (title, URL, snippet)", amount: "20000", unitType: "request" },
+      { route: "GET /api/search", desc: "Live web search (title, URL, snippet)", amount: "10000", unitType: "request" },
       { route: "GET /api/answer", desc: "Cited answer grounded in live web search", amount: "80000", unitType: "request" },
-      { route: "POST /api/render", desc: "Headless browser render of a URL (title, text, links)", amount: "20000", unitType: "request" },
+      { route: "POST /api/render", desc: "Headless browser render of a URL (title, text, links)", amount: "10000", unitType: "request" },
       { route: "POST /api/route/execute", desc: "Smart Order Router: resolve a task to the best seller across the ecosystem, pay them, relay the result", amount: "10000", unitType: "request" },
       { route: "POST /v1/chat/completions", desc: "OpenAI-compatible chat completions (base tier)", amount: "20000", unitType: "request" },
       { route: "GET /api/pricing", desc: "Machine-readable catalog of every endpoint and price" },

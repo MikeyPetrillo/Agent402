@@ -36,12 +36,28 @@ ok(withFreshRecent(snap, () => []) === snap, "an empty ledger read keeps the sna
 ok(withFreshRecent(snap, () => { throw new Error("db closed"); }).rails[0].recent[0].txHash === oldRow.txHash, "a failing ledger read keeps the snapshot's rows");
 ok(withFreshRecent(null, ledger) === null && withFreshRecent(snap, null) === snap, "no snapshot or no reader passes through");
 
+// The proof row: on a busy rail the capped page holds only outside buyers, so
+// our own newest settle comes from the ledger lookup, never from a buyer row.
+{
+  const ownTx = "0x" + "cc".repeat(32);
+  const own = (chain) => (chain === (base.ledgerChain || "base") ? { usd: 0.001, txHash: ownTx, block: 150, when: "2026-10-02T14:00:00.000Z" } : null);
+  const b2 = withFreshRecent(snap, ledger, own).rails[0];
+  ok(b2.lastInbound && b2.lastInbound.internal === true && b2.lastInbound.tx === base.tx(ownTx), "with only outside rows in the page, the proof row is our own newest settle from the ledger");
+  ok(!withFreshRecent(snap, ledger, () => null).rails[0].lastInbound, "no own settle recorded: no proof row (never an outside buyer's)");
+  const withPrev = Object.freeze({ ...snap, rails: [{ ...snap.rails[0], lastInbound: { when: "2026-10-02T15:00:00.000Z", tx: "x", usd: 0.001, internal: true } }] });
+  ok(withFreshRecent(withPrev, ledger, own).rails[0].lastInbound.when === "2026-10-02T15:00:00.000Z", "a newer own settle already on the snapshot is kept");
+}
+// The rail table's dollar cells use the page's money format, not raw ledger floats.
+{
+  const live = readFileSync(new URL("../src/revenue-live.js", import.meta.url), "utf8");
+  ok(!/\$\$\{c \? esc\(String\(c\.externalUsd\)\)/.test(live) && /usdCell\(c\.externalUsd\)/.test(live), "External $ renders through usdCell (two decimals from $1, three below)");
+}
 // Wiring: every surface that renders the recent rows re-reads them.
 const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 const route = (p) => src.slice(src.indexOf(`app.get("${p}", async`), src.indexOf(`app.get("${p}", async`) + 600);
-ok(/withFreshRecent\(await revenueSnapshot\(revenueWallets\(\)\), ledgerRecent\)/.test(route("/revenue")), "/revenue re-reads the recent rows");
-ok(/withFreshRecent\(await revenueSnapshot\(revenueWallets\(\)\), ledgerRecent\)/.test(route("/api/revenue")), "/api/revenue re-reads the recent rows");
-ok(/revenueSnapshot\(revenueWallets\(\)\)\.then\(\(snap\) => withFreshRecent\(snap, ledgerRecent\)\)/.test(src), "the chain pages re-read their rail's recent rows");
+ok(/withFreshRecent\(await revenueSnapshot\(revenueWallets\(\)\), ledgerRecent, ledgerNewestOwn\)/.test(route("/revenue")), "/revenue re-reads the recent rows and our newest settle");
+ok(/withFreshRecent\(await revenueSnapshot\(revenueWallets\(\)\), ledgerRecent, ledgerNewestOwn\)/.test(route("/api/revenue")), "/api/revenue re-reads the recent rows and our newest settle");
+ok(/revenueSnapshot\(revenueWallets\(\)\)\.then\(\(snap\) => withFreshRecent\(snap, ledgerRecent, ledgerNewestOwn\)\)/.test(src), "the chain pages re-read their rail's recent rows and our newest settle");
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

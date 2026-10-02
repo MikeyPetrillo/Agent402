@@ -9,6 +9,7 @@
 // "500+" only, no live numbers (the real-numbers doctrine applies to cards that
 // state numbers - this one states none). Fonts embedded, no network.
 import { readFileSync } from "node:fs";
+import { RAILS } from "./rails.js";
 
 const fontB64 = (f) => readFileSync(new URL(`../assets/fonts/${f}`, import.meta.url)).toString("base64");
 let fontStyle = null;
@@ -20,11 +21,16 @@ const FONT_STYLE = () => (fontStyle ??= `<style>
 const B = { paper: "#0B0C0E", card: "#141619", ink: "#E9EAEC", muted: "#B3B9C0", faint: "#868D95", hairline: "#2C3136", accent: "#9EF0B0", mono: "'Geist Mono',Menlo,Consolas,monospace", display: "'Geist',system-ui,sans-serif" };
 const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+// Rail counts come from RAILS: the card once typed twelve USDC chains while
+// twelve was the count of chains including Robinhood's USDG.
+const USDC_CHAINS = RAILS.filter((r) => r.asset === "USDC").length;
+const OTHER_ASSETS = [...new Set(RAILS.filter((r) => r.asset !== "USDC").map((r) => r.asset))];
+
 export const AIFI_STACK = [
   ["01", "agents", "assistants · crawlers · research + trading agents", "buyers and sellers"],
   ["02", "applied layer", "discovery · routing · pricing · reliability · receipts", "Agent402"],
   ["03", "payment wires", "x402 · MPP - both answered on one 402", "open, HTTP-native"],
-  ["04", "rails", "USDC on 12 chains · USDG · native Tempo · free via PoW", "wallet as identity"],
+  ["04", "rails", `USDC on ${USDC_CHAINS} chains${OTHER_ASSETS.map((a) => ` · ${a}`).join("")} · native Tempo · free via PoW`, "wallet as identity"],
 ];
 
 /** 1200x630 by default; other sizes letterbox the same art (GitHub wants 1280x640). */

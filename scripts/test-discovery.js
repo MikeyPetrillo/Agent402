@@ -119,4 +119,37 @@ JSON.parse(JSON.stringify(r));
 const r2 = reliabilityReport({ baseUrl: BASE, network: "base", wallet: null, stats });
 ok(r2.onchain.revenueProof === null, "no wallet -> null reliability proof");
 
+// ---- the CI guarantee's metered count is derived, never typed ----
+{
+  const { meteredSkip, METERED_SLUGS } = await import("../src/metered-slugs.js");
+  const { readFileSync } = await import("node:fs");
+  const metered = [...METERED_SLUGS][0];
+  const cat = {
+    "POST /api/a": { slug: "a", price: "$0.001" },
+    [`POST /api/${metered}`]: { slug: metered, price: "$0.02" },
+    "POST /api/skill/pk": { slug: "skill-pk", price: "$0.01" },
+    "POST /api/skill/clean": { slug: "skill-clean", price: "$0.01" },
+    "GET /api/free": { slug: "free", price: "$0" },
+  };
+  const packs = [{ slug: "pk", toolSlugs: ["a", metered] }, { slug: "clean", toolSlugs: ["a"] }];
+  const ms = meteredSkip(cat, packs);
+  ok(ms.metered === 2 && ms.total === 4, `meteredSkip counts the metered slug and the pack reaching it, over priced routes only (got ${JSON.stringify(ms)})`);
+  const claim = reliabilityReport({ baseUrl: BASE, network: "base", wallet: WALLET, stats, meteredSkip: ms }).guarantees[0].claim;
+  ok(/2 of this server's 4 priced routes/.test(claim), `the CI guarantee states the derived count (${claim})`);
+  ok(!/\$\{/.test(claim), "no unrendered template in the claim");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/meteredSkip: meteredSkip\(CATALOG, SKILL_PACKS\)/.test(server), "/api/reliability passes the live catalog's count");
+  const sweep = readFileSync(new URL("./test-non-metered-examples.js", import.meta.url), "utf8");
+  const flatM = JSON.stringify(m);
+  ok(/0 of 3 priced routes here/.test(flatM), "the manifest's testedBeforeEveryDeploy carries the derived metered count");
+  const salesWas = process.env.CREDITS_SALES;
+  delete process.env.CREDITS_SALES;
+  const off = JSON.stringify(serviceManifest({ baseUrl: BASE, network: "base", networks: ["base"], wallet: WALLET, catalog: CATALOG, toolCount: 3, powSlugs: POW, prices: PRICES }));
+  process.env.CREDITS_SALES = "on";
+  const on = JSON.stringify(serviceManifest({ baseUrl: BASE, network: "base", networks: ["base"], wallet: WALLET, catalog: CATALOG, toolCount: 3, powSlugs: POW, prices: PRICES }));
+  if (salesWas === undefined) delete process.env.CREDITS_SALES; else process.env.CREDITS_SALES = salesWas;
+  ok(/credits \(not on sale; issued keys still spend\)/.test(off) && /credits \(sold at \/credits\)/.test(on), "nonCustodial states the credit sales state from creditsSalesEnabled()");
+  ok(/import \{ METERED_SLUGS, meteredPackSlugs \} from "\.\.\/src\/metered-slugs\.js"/.test(sweep) && !/METERED_SLUGS = new Set\(/.test(sweep), "the sweep reads the same list (no second copy in scripts/)");
+}
+
 console.log("test-discovery: OK");

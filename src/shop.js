@@ -81,7 +81,7 @@ const TASKS = [
   {
     goal: "Persist state across calls",
     answer: "Wallet-keyed KV with TTL and atomic counters. The wallet IS the identity - no signup, no API key. Grant access to other agents by their wallet.",
-    slugs: ["memory", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-recall"],
+    slugs: ["memory-write", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-recall"],
     example: "/api/memory",
   },
   {

@@ -25,6 +25,8 @@ import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { CRAWL_INTERVAL_SECONDS, DISCOVERY_INTERVAL_SECONDS } from "./crawl-cadence.js";
 
 import { REPO_URL, REPO_NAMESPACE } from "./repo-link.js";
+import { meteredSkip as countMeteredSkip } from "./metered-slugs.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
 const REPO = REPO_URL;
 const MAINTAINER = { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: REPO };
 
@@ -146,7 +148,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
         // exception is real (prepaid card credits and card-paid reports are held
         // balances; see /security). Same rule as `deterministic` and
         // `testedBeforeEveryDeploy`, pinned by test-copy-absolutes.
-        nonCustodial: "on the x402 and MPP rails these tools never hold, receive, sign or send funds: a payment settles wallet to wallet through the facilitator. Prepaid card credits (no longer sold; issued keys still spend) are the one balance held; card reports and monitors are ordinary card charges; see /security.",
+        nonCustodial: `on the x402 and MPP rails these tools never hold, receive, sign or send funds: a payment settles wallet to wallet through the facilitator. Prepaid card credits (${creditsSalesEnabled() ? "sold at /credits" : "not on sale; issued keys still spend"}) are the one balance held; card reports and monitors are ordinary card charges; see /security.`,
         ...(process.env.BASE_BUILDER_CODE ? { builderCode: process.env.BASE_BUILDER_CODE } : {}),
       },
       proofOfWork: {
@@ -278,7 +280,14 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       // testedBeforeEveryDeploy: the two catalog sweeps exclude the metered
       // slugs by design (CI holds no third-party keys and must not spend
       // upstream), so the honest answer names the exemption and its size.
-      testedBeforeEveryDeploy: "every non-metered route answers its own documented example before each deploy; the metered routes (third-party keys, real upstream spend) are exempt, the daily paid canary buys a sample of them and an offline probe checks the report inputs",
+      // A few non-metered routes sit behind an upstream that refuses CI's
+      // runners; the lenient sweep still calls them and fails only on our own
+      // errors, so the sentence is scoped to what the sweeps enforce. The
+      // metered count is derived from src/metered-slugs.js over this catalog.
+      testedBeforeEveryDeploy: (() => {
+        const ms = catalog ? countMeteredSkip(catalog, SKILL_PACKS) : null;
+        return `every non-metered route is called with its own documented example before each deploy and an error from our own code blocks the release; the metered routes (third-party keys, real upstream spend${ms ? `; ${ms.metered} of ${ms.total} priced routes here` : ""}) are exempt, the daily paid canary buys a sample of them and an offline probe checks the report inputs`;
+      })(),
       // The interval of the observer that keeps it: the Cloudflare cron runs
       // every 5 minutes (workers/status-probe/wrangler.toml). The GitHub
       // schedule asks for 15 and is delivered far less often, so 15 was the
@@ -304,7 +313,12 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
  * verify it independently. Liveness facts come from the live stats object; the
  * guarantees are operational facts about how the service is built and watched.
  */
-export function reliabilityReport({ baseUrl, network, wallet, stats, observedStatus = null }) {
+export function reliabilityReport({ baseUrl, network, wallet, stats, observedStatus = null, meteredSkip = null }) {
+  // Exact count of priced routes the catalog sweeps skip as metered, derived
+  // from src/metered-slugs.js (the list the sweeps read) over the live catalog.
+  const skipped = meteredSkip && Number.isFinite(meteredSkip.metered) && Number.isFinite(meteredSkip.total)
+    ? `${meteredSkip.metered} of this server's ${meteredSkip.total} priced routes`
+    : null;
   const explorer = network === "base-sepolia" ? "https://sepolia.basescan.org" : "https://basescan.org";
   return {
     service: "Agent402.Tools",
@@ -327,13 +341,12 @@ export function reliabilityReport({ baseUrl, network, wallet, stats, observedSta
     },
     guarantees: [
       {
-        // Was "Every tool". It is not every tool: CI deliberately skips 20 of
-        // 528 endpoints (18 Brave-backed, 2 E2B) because exercising them spends
-        // real money on a metered upstream on every run, and the sweep once
-        // cost ~4,500 billed Brave queries in a month. The skip is the right
-        // call; claiming otherwise was not, and "every" is the kind of word a
-        // reader can check against our own open CI logs.
-        claim: "Every tool CI can run without a third-party key is called with its own documented example, and the release is blocked on any failure. The metered tools (search, the model gateway, the reports and other keyed or upstream-billed tools) are skipped so a CI run never spends upstream; the daily paid canary buys a sample of them and an offline probe checks the report inputs.",
+        // Was "Every tool". It is not every tool: CI deliberately skips the
+        // metered routes because exercising them spends real money upstream on
+        // every run. The count is derived (meteredSkip over the live catalog,
+        // from src/metered-slugs.js, the list both sweeps read), never typed:
+        // a typed "20 of 528" here went stale as the metered set grew.
+        claim: `Every tool CI can run without a third-party key is called with its own documented example, and an error from our own code blocks the release. The metered tools (search, the model gateway, the reports and other keyed or upstream-billed tools${skipped ? `: ${skipped}` : ""}) are skipped so a CI run never spends upstream; the daily paid canary buys a sample of them and an offline probe checks the report inputs.`,
         verify: `${baseUrl}/openapi.json`,
         evidence: `${REPO}/actions/workflows/deploy.yml`,
       },

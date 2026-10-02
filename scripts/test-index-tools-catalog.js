@@ -1400,5 +1400,14 @@ const page = (results, extra = {}) =>
     swept.length === 2 && thousandfold(swept).length === 0);
 }
 
+// The directory's endpoint count measures rows held (healthy https sellers,
+// one per distinct endpoint), not the summed advertised tool counts the
+// marketplace and the standing band print; the page says which it is.
+{
+  const html = page([tool()]);
+  check("/marketplace/tools names what its endpoint count measures", /1 endpoints in one searchable list, one row per distinct endpoint from sellers whose last crawl over https succeeded/.test(html));
+  check("/marketplace/tools says why its figure differs from the marketplace tool listings", /sum the tool count each indexed seller advertises, including sellers this list leaves out/.test(html));
+}
+
 console.log(`\ntest-index-tools-catalog: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -24,7 +24,7 @@
 //        three probes and 100% of three thousand are different claims.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import {
-  probeRows, latestByComponent, latestBySource, earliestObservation, totalObservations, statusPersistent,
+  probeRows, probeCounts, latestByComponent, latestBySource, earliestObservation, totalObservations, statusPersistent,
   uptimeFrom, dailyFrom, incidentsFrom, stateFrom, stateFromSources,
 } from "./status-store.js";
 import { RAILS } from "./rails.js";
@@ -175,7 +175,7 @@ export const STRIP_DAYS = 30;
 // The store reads a snapshot is built from. Injectable so a test can build the
 // same page from a reference implementation of the reads and compare the two
 // (scripts/test-status-store-scale.js); production always uses the store.
-const STORE_READS = Object.freeze({ probeRows, latestByComponent, latestBySource, earliestObservation, totalObservations, statusPersistent });
+const STORE_READS = Object.freeze({ probeRows, probeCounts, latestByComponent, latestBySource, earliestObservation, totalObservations, statusPersistent });
 export function statusSnapshot({ baseUrl = "", nowMs = Date.now(), historyDays = STRIP_DAYS, live = {}, store = STORE_READS } = {}) {
   const latest = new Map(store.latestByComponent().map((r) => [r.component, r]));
   const since = nowMs - historyDays * DAY;
@@ -189,7 +189,15 @@ export function statusSnapshot({ baseUrl = "", nowMs = Date.now(), historyDays =
     const rows = store.probeRows(c.key, since);
     rowsByKey.set(c.key, rows);
     const windows = {};
-    for (const w of WINDOWS) windows[w.key] = uptimeFrom(rows.filter((r) => r.ts >= nowMs - w.ms));
+    // `rows` reach back historyDays (the strip). A window longer than that is
+    // counted over its own span, so each window prints its own denominator.
+    for (const w of WINDOWS) {
+      if (w.ms <= historyDays * DAY) { windows[w.key] = uptimeFrom(rows.filter((r) => r.ts >= nowMs - w.ms)); continue; }
+      if (typeof store.probeCounts === "function") {
+        const { observed, up } = store.probeCounts(c.key, nowMs - w.ms);
+        windows[w.key] = { observed, up, down: observed - up, pct: observed ? +((up / observed) * 100).toFixed(4) : null };
+      } else windows[w.key] = uptimeFrom(store.probeRows(c.key, nowMs - w.ms));
+    }
     return {
       key: c.key,
       label: c.label,

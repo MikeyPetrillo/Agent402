@@ -9,7 +9,7 @@ import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { agentReportPriceRange, cardReportPriceRange } from "./report-tiers.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly } from "./rails.js";
-import { mppOffersFor } from "./mpp-offers.js";
+import { mppOffersFor, mppRailsPhrase, mppOfferShortProse } from "./mpp-offers.js";
 import { tempoOfferedFor, tempoDiscoveryInfo } from "./mpp-tempo.js";
 import { WALLET_ONLY_POLICY_REASON, powCostPhrase } from "./pow.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -848,9 +848,19 @@ export function openapiSpec(baseUrl, catalog) {
   const mppFlagshipBySlug = new Map(mppFlagship.map((r) => [r.slug, r]));
   for (const tool of toolList(catalog)) {
     const { method, path, discovery } = tool;
+    // Every MPP offer the live 402 makes on this route, in the order it lists
+    // them (tempo per currency, evm per chain, stripe) - read from the same
+    // predicates and env the 402 middlewares read, so the document never
+    // promises a method the 402 withholds (identity-bound and long-running
+    // routes get no tempo; evm only on MPP_CHALLENGE_NETWORKS rails that are
+    // also accepted; stripe only at or above the card minimum; nothing when a
+    // method is switched off). The prose clause and x-payment-info both read it.
+    const toolPriceUsd = Number(String(tool.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+    const mppOffers = mppOffersFor({ priceUsd: toolPriceUsd, identityBound: tool.identityBound, longRunning: tool.longRunning });
+    const mppRails = mppRailsPhrase(mppOffers);
     const op = {
       operationId: `${tool.slug}${method === "GET" ? "Get" : ""}`,
-      summary: `${tool.name} (${tool.quoteRange ? `from ${tool.price}` : tool.price}/call via x402 or MPP)`,
+      summary: `${tool.name} (${tool.quoteRange ? `from ${tool.price}` : tool.price}/call via x402${mppRails ? " or MPP" : ""})`,
       // A route that can quote MORE than its list price for some bodies says so
       // here, in the same breath as the number. `x-price` stays the list price
       // (it is what this route charges for the models it serves, and every
@@ -858,7 +868,7 @@ export function openapiSpec(baseUrl, catalog) {
       // from reading as a ceiling it is not.
       // The 402 walkthrough lives ONCE in info.x-guidance; repeating it on
       // every operation was ~20% of a 2 MB document for no new information.
-      description: `${tool.description}\n\nPrice: ${typeof tool.quote === "function" ? `quoted per request from the body, from ${tool.price}` : `${tool.price} per call`}, over x402 (${railsOrFor(tool)}) or MPP (${tool.identityBound || tool.longRunning ? "Base" : "Tempo or Base"}).${typeof tool.tierQuote === "function" ? ` ${PRICED_BY_MODEL_NOTE}` : ""} Docs: ${baseUrl}/tools/${tool.slug}`,
+      description: `${tool.description}\n\nPrice: ${typeof tool.quote === "function" ? `quoted per request from the body, from ${tool.price}` : `${tool.price} per call`}, over x402 (${railsOrFor(tool)})${mppRails ? ` or MPP (${mppRails})` : ""}.${typeof tool.tierQuote === "function" ? ` ${PRICED_BY_MODEL_NOTE}` : ""} Docs: ${baseUrl}/tools/${tool.slug}`,
       tags: [tool.category],
       responses: {
         200: {
@@ -886,18 +896,13 @@ export function openapiSpec(baseUrl, catalog) {
       //     what actually answers MPP's evm/charge wire, and src/mpp-tempo.js
       //     the tempo one.
       "x-payment-info": (() => {
-        const priceUsd = Number(String(tool.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+        const priceUsd = toolPriceUsd;
         // Per-request-priced routes (metered, priced by model) publish their
         // range, never the catalog floor as if it were the price.
         const range = tool.quoteRange || null;
         const fmtUsd = (n) => String(Number(n.toFixed(6)));
-        // Every MPP offer the live 402 makes on this route, in the order it
-        // lists them (tempo per currency, evm per chain, stripe) - read from
-        // the same predicates and env the 402 middlewares read, so the
-        // document never promises a method the 402 withholds (identity-bound
-        // and long-running routes get no tempo; stripe only at or above the
-        // card minimum; nothing when a method is switched off).
-        const mpp = mppOffersFor({ priceUsd, identityBound: tool.identityBound, longRunning: tool.longRunning });
+        // The route's MPP offers, computed once above from the 402's own predicates.
+        const mpp = mppOffers;
         const firstOf = (m) => mpp.find((o) => o.method === m);
         return {
           // STRUCTURED protocol objects, not bare strings: @agentcash/discovery
@@ -1023,6 +1028,8 @@ export function openapiSpec(baseUrl, catalog) {
       },
     },
   };
+  // Instance-wide MPP offer, read from the same config the 402 middlewares read.
+  const mppShort = mppOfferShortProse();
   return {
     openapi: "3.1.0",
     info: {
@@ -1035,7 +1042,7 @@ export function openapiSpec(baseUrl, catalog) {
         // Template literal, not a plain string: this is the spec description
         // every crawler and directory reads, and as a quoted string it shipped
         // a literal ${RAILS_OR} to production.
-        `The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: 500+ machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Each priced operation is paid per call over x402 (${RAILS_OR}; identity-bound and long-running operations take EVM chains only, and each operation's description names its own rails), or over MPP (Machine Payments Protocol: USDC on Base/Celo, or USDC.e (and PathUSD) natively on Tempo) - no signup, no API keys - the first request returns HTTP 402 carrying both offers, an x402 or mppx client pays and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
+        `The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: 500+ machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Each priced operation is paid per call over x402 (${RAILS_OR}; identity-bound and long-running operations take EVM chains only, and each operation's description names its own rails)${mppShort ? `, or over MPP (Machine Payments Protocol: ${mppShort})` : ""} - no signup, no API keys - the first request returns HTTP 402 carrying ${mppShort ? "both offers, an x402 or mppx client pays" : "the offer, an x402 client pays"} and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
       // Email doubles as x402scan's ownership-verification signal; it is the
       // same public maintainer contact the /.well-known/x402 manifest names.
       contact: { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: baseUrl },
@@ -1065,7 +1072,9 @@ export function openapiSpec(baseUrl, catalog) {
       securitySchemes: {
         x402: { type: "apiKey", in: "header", name: "PAYMENT-SIGNATURE", description: "x402 v2 payment payload (USDC, EIP-3009 authorization) - answer to the 402's PAYMENT-REQUIRED header." },
         mpp: { type: "http", scheme: "Payment", description: "MPP (Machine Payments Protocol) credential answering the 402's WWW-Authenticate: Payment challenge (evm/charge, tempo/charge, stripe/charge)." },
-        creditsKey: { type: "http", scheme: "bearer", bearerFormat: "a402_<key>", description: "Prepaid card credits key from /credits - the list price is held before the call and debited only on a 200." },
+        // Purchase is offered only while credits are on sale (CREDITS_SALES);
+        // a key already issued keeps working either way.
+        creditsKey: { type: "http", scheme: "bearer", bearerFormat: "a402_<key>", description: `Prepaid card credits key (Authorization: Bearer a402_<key>), accepted on any paid operation except the wallet-identity-bound ones. The list price is held before the call and debited only on a 200; read the remaining balance at GET /api/credits/balance with the same header.${creditsSalesEnabled() ? " New keys are sold at /credits." : " New credits are not on sale; a key already issued keeps working."}` },
       },
     },
     // MPP discovery (paymentauth.org draft-payment-discovery) service-level

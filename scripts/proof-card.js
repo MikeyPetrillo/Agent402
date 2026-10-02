@@ -31,7 +31,9 @@ const usd = (n) => (n == null ? "n/a" : `$${Number(n).toFixed(6).replace(/0+$/, 
 
 /** Pick the row the card shows: external first, else internal (labelled). */
 export function pickRow(proof) {
-  if (proof?.external?.latest) return { row: proof.external.latest, side: "external" };
+  // An outside buyer's tx hash is withheld (it names the payer on chain), so
+  // the receipt shown is our own canary's unless the external row carries one.
+  if (proof?.external?.latest?.tx) return { row: proof.external.latest, side: "external" };
   if (proof?.internal?.latest) return { row: proof.internal.latest, side: "internal" };
   return null;
 }

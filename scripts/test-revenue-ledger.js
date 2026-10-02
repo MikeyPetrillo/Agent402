@@ -13,7 +13,7 @@ process.env.REVENUE_LEDGER_DB = join(dir, "test-revenue.db");
 // The ledger folds Tempo settlements in from the sales ledger; isolate it.
 process.env.SALES_LEDGER_DB = join(dir, "test-sales.db");
 
-const { recordTransfer, ledgerSummary, startRevenueLedger, ledgerDaily } = await import("../src/revenue-ledger.js");
+const { recordTransfer, ledgerSummary, startRevenueLedger, ledgerDaily, ledgerNewestOwn } = await import("../src/revenue-ledger.js");
 
 let passed = 0, failed = 0;
 const ok = (cond, msg) => {
@@ -45,6 +45,14 @@ ok(Math.abs(s.perChain.base.inboundUsd - 25.011) < 1e-9, "base inbound includes 
 ok(s.perChain.base.externalUsd === 0.01 && s.perChain.base.externalCount === 1, "base external split correct");
 ok(s.perChain.robinhood.externalUsd === 0 && s.perChain.robinhood.inboundCount === 1, "robinhood canary buy stays internal");
 ok(s.perChain.solana.externalUsd === 0.05, "solana external tracked");
+
+// --- our own newest settle: internal, call-sized, never a buyer or funding ----
+{
+  const own = ledgerNewestOwn("base", W);
+  ok(own && own.txHash === "0xbbb" && own.usd === 0.001, `newest own settle is the canary row, not the newer $25 funding row or a buyer (got ${own?.txHash})`);
+  ok(ledgerNewestOwn("solana", SW) === null, "a rail with only outside payments has no own settle");
+  ok(ledgerNewestOwn("base", W.toUpperCase().replace("0X", "0x")) ?.txHash === "0xbbb", "EVM wallet case is folded like ledgerRecent");
+}
 
 // --- idempotency: replaying the same rows must not double-count ---------------
 recordTransfer({ chain: "base", wallet: W, txid: "0xaaa:1", tx_hash: "0xaaa", block: 100, payer: "0x1111111111111111111111111111111111111111", usd: 0.01, asset: "USDC", external: true });

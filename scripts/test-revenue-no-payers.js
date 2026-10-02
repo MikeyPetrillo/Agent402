@@ -63,6 +63,12 @@ ok(/const seen = newestOwnSettle\(r\.recent\);/.test(live), "the snapshot's last
   const mppSeg = html.slice(html.indexOf("MPP wire"), html.indexOf("MPP wire") + 4000);
   ok(/Card<\/strong> <span[^>]*>USD</.test(mppSeg) && !/stripe<\/strong> <span[^>]*>USDC/i.test(mppSeg), "card settlements over MPP are labelled USD, not USDC");
   ok(!/Blockscout kit/.test(html), "the SOR lane names no retired kit");
+  const withCard = revenuePage("https://agent402.tools", {
+    asOf: "2026-10-02T00:00:00.000Z", rails: [{ rail: "Base", asset: "USDC", balance: 1, recent: [] }],
+    allTime: { perChain: {}, allTimeInboundCount: 10, allTimeExternalCount: 4, allTimeExternalUsd: 0.5 },
+    card: { allTimeCount: 2, allTimeUsd: 7 },
+  });
+  ok(/2<\/strong> card purchases \(\$7\.00\)/.test(withCard), "the hero's card purchase total carries its dollar sign");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

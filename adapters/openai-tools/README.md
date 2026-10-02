@@ -24,11 +24,13 @@ import { agent402Tools } from "agent402-openai-tools";
 const openai = new OpenAI();
 
 // Pick the tools you want the model to know about. Smaller list = better tool-selection.
-const { tools, execute } = await agent402Tools({ slugs: ["extract", "hash", "render", "screenshot"] });
+// The default (freeOnly: true) keeps only compute-payable tools, so list free ones here;
+// wallet-only slugs such as "extract" or "render" need freeOnly: false and a paying fetch (below).
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
 
 const res = await openai.chat.completions.create({
   model: "gpt-4o-mini",
-  messages: [{ role: "user", content: "Get the title of https://example.com/article" }],
+  messages: [{ role: "user", content: "What is the SHA-256 of 'hello world'?" }],
   tools,
 });
 
@@ -59,6 +61,7 @@ registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_K
 const payFetch = wrapFetchWithPayment(fetch, client);
 
 const { tools, execute } = await agent402Tools({
+  slugs: ["extract", "render", "screenshot"],
   freeOnly: false,
   fetch: payFetch,
 });

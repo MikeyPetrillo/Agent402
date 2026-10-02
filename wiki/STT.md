@@ -14,7 +14,7 @@ Two tiers of audio transcription, paywalled via x402. Provide a URL to an audio 
 | `POST /api/transcribe` | $0.03 | `gpt-transcribe` | 4 min |
 | `POST /api/transcribe-pro` | $0.10 | `gpt-transcribe` | 10 min |
 
-Both tiers run the same model and differ only in the duration cap. `gpt-4o-mini-transcribe`, which the standard tier used to send, is retired by OpenAI on 2027-02-26.
+Both tiers run the same model and differ only in the duration cap.
 
 Both tiers are **wallet-only** - every call burns real upstream transcription credit. See [[Security Model]].
 

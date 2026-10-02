@@ -3,7 +3,8 @@
 [Agent402](https://agent402.tools) as a [Coinbase AgentKit](https://github.com/coinbase/agentkit)
 action provider: give an agent with a CDP, Privy, ZeroDev or viem-backed
 wallet 500+ pay-per-call web tools through three actions, paying under the
-hood over x402 in USDC from the agent's own wallet, or free via proof-of-work.
+hood over x402 in USDC from the agent's own wallet; the pure-CPU tools are
+free via proof-of-work.
 
 > **Agent402 is the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance)** - agents that pay and get paid on their own over the two open wires, [x402](https://x402.org) and MPP.
 
@@ -59,7 +60,7 @@ const actions = await agent402Actions();   // [{ name, description, schema, invo
 
 [`examples/agentkit-data-to-deploy`](https://github.com/MikeyPetrillo/Agent402/tree/main/examples/agentkit-data-to-deploy)
 is one script on one wallet: `agent402_call` buys the live ETH price over x402
-for one cent, then `walletProvider.sendTransaction` deploys a contract to Base
+(`crypto-price`), then `walletProvider.sendTransaction` deploys a contract to Base
 mainnet that stores the price and the payment transaction hash. Proven from CI
 against production.
 
@@ -79,8 +80,9 @@ against production.
 Web search, news and cited answers, browser render and screenshots, PDFs and
 OCR, live market and crypto data, SEC filings, DNS and TLS checks, a code
 sandbox, wallet-keyed memory, finished reports, and an OpenAI-compatible model
-gateway. Most tools are deterministic code; the gateway and the reports are
-model-backed. Every tool is priced per call, from $0.001. Catalog:
+gateway. Most tools are deterministic code; the model gateway, the reports and
+the media, embedding and answer tools are model-backed (`modelBacked` on
+`/api/pricing`). Prices are per call; the live list is `/api/pricing`. Catalog:
 https://agent402.tools/tools · agent-readable docs: https://agent402.tools/llms.txt
 
 MIT. Maintained by Havok Holdings LLC.

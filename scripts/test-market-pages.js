@@ -547,6 +547,9 @@ for (const c of NEW_CHAINS) {
   ok(base.payable === 4 && poly.payable === 3, "EVM rails take identity-bound and long-running tools; a pinned tool only on its own network");
   const solPage = marketPage("solana", "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, payable: sol });
   ok(/1 of the <a href="\/tools">4 tools in the catalog<\/a> take USDC on Solana/.test(solPage) && !/Every one of the/.test(solPage), "solana page states the derived payable count, never 'every tool'");
+  const polyPage = marketPage("polygon", "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, payable: poly });
+  ok(/3 of the <a href="\/tools">4 tools in the catalog<\/a> take USDC on Polygon \(1 tool is offered on Base only\)/.test(polyPage) && !/EVM rails only/.test(polyPage), "an EVM chain page names the real reason (a route offered on Base only), never 'EVM rails only'");
+  ok(/\(2 identity-bound or long-running tools settle on the EVM rails only; 1 tool is offered on Base only\)/.test(solPage), "solana page names both reasons with their counts");
   const unknown = marketPage("solana", "https://agent402.tools", { snapshot: { sellers: [LOCAL] } });
   ok(!/Every one of the|500\+ tools in the catalog/.test(unknown), "without derived figures the page claims no count");
 
@@ -563,6 +566,37 @@ for (const c of NEW_CHAINS) {
   ok(/buyer gas/.test(html) && !/>gas</.test(html), "rail manifest scopes gas to the buyer");
   const all = marketPage(null, "https://agent402.tools", { snapshot: { sellers: [LOCAL] } });
   ok(!/drops out on its own/.test(all) && !/no removal on request/.test(all), "marketplace: no removal claim the operator removal path contradicts");
+}
+
+// --- One per-chain seller count: nav, /marketplace grid, chain page card and
+// terminal all read marketOperatorCount, host excluded. Optimism sellers share
+// a payTo with a Base leaderboard wallet group; the Optimism page lists one row
+// per origin, so the count must too (the "page 209, nav 10" regression).
+{
+  const { marketOperatorCount } = await import("../src/market-page.js");
+  const G = "0x" + "9".repeat(40);
+  const mk = (host, nets, wallet) => ({ origin: `https://${host}`, displayName: host, homepage: `https://${host}`, local: false, toolCount: 2, routable: true, networks: nets, payToByNetwork: Object.fromEntries(nets.map((n) => [n, wallet])) });
+  const LOC = { ...LOCAL, networks: ["eip155:8453", "eip155:10"] };
+  const sellers = [LOC,
+    mk("o1.example", ["eip155:10"], G), mk("o2.example", ["eip155:10"], G), mk("o3.example", ["eip155:10"], G),
+    mk("b1.example", ["eip155:8453"], G), mk("b2.example", ["eip155:8453"], G), mk("b3.example", ["eip155:8453"], "0x" + "8".repeat(40))];
+  const snapshot = { sellers };
+  const lb = { leaderboard: [{ wallet: G, callsSettled: 9, totalUsd: 1, uniqueBuyers: 2 }] };
+  const all = marketPage(null, "https://agent402.tools", { snapshot, leaderboardSnap: lb });
+  const gridCount = (slug) => { const m = all.match(new RegExp(`href="/${slug}" title=[\\s\\S]*?tabular-nums;">([\\d,]+)</span>`)); return m ? Number(m[1].replace(/,/g, "")) : NaN; };
+  for (const [slug, want] of [["optimism", 3], ["base", 2]]) {
+    const page = marketPage(slug, "https://agent402.tools", { snapshot, leaderboardSnap: lb });
+    const card = Number((page.match(/SELLERS LISTED<\/div><div[^>]*>([\d,]+)</) || [])[1]);
+    const term = page.match(/data-t-count>([^<]+)</)?.[1];
+    ok(marketOperatorCount(slug, snapshot, lb) === want, `${slug}: marketOperatorCount = ${want} (host excluded; merged only on the leaderboard chain)`);
+    ok(card === want, `${slug}: SELLERS LISTED card (${card}) = the shared count`);
+    ok(gridCount(slug) === want, `${slug}: /marketplace grid (${gridCount(slug)}) = the shared count`);
+    ok(term === `${want} + this host`, `${slug}: terminal count (${term}) uses the same total and names the host row`);
+  }
+  const allCard = Number((all.match(/SELLERS LISTED<\/div><div[^>]*>([\d,]+)</) || [])[1]);
+  ok(allCard === marketOperatorCount(null, snapshot, lb), `all-chains SELLERS LISTED card (${allCard}) = marketOperatorCount(null)`);
+  const srv = readFileSync(fileURLToPath(new URL("../src/server.js", import.meta.url)), "utf8");
+  ok(/sellers: marketOperatorCount\(chainKey, snapshot, board\)/.test(srv), "nav dropdown reads marketOperatorCount for its per-chain seller count");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

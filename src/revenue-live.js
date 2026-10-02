@@ -550,21 +550,40 @@ export function publicRevenueSnapshot(snap) {
   };
 }
 
-export function withFreshRecent(snap, ledgerRecentFn) {
+export function withFreshRecent(snap, ledgerRecentFn, ledgerNewestOwnFn = null) {
   if (!snap || !Array.isArray(snap.rails) || typeof ledgerRecentFn !== "function") return snap;
   const byLabel = new Map(Object.entries(EVM).map(([name, c]) => [c.label, [name, c]]));
   let changed = false;
   const rails = snap.rails.map((rail) => {
-    if (!rail || rail.recentSource !== "ledger" || !rail.wallet) return rail;
+    if (!rail || !rail.wallet) return rail;
     const hit = byLabel.get(rail.rail);
     if (!hit) return rail;
     const [name, c] = hit;
-    let rows;
-    try { rows = ledgerRecentFn(c.ledgerChain || name, rail.wallet, { limit: 8 }); } catch { return rail; }
-    if (!Array.isArray(rows) || !rows.length) return rail;
-    changed = true;
-    const recent = rows.map((t) => ({ ...t, tx: t.txHash ? c.tx(t.txHash) : null }));
-    return { ...rail, recent, externalUsd: Number(recent.filter((t) => t.external).reduce((sum, t) => sum + t.usd, 0).toFixed(6)) };
+    let out = rail;
+    // Recent rows: re-read only where the snapshot's rows came from the
+    // ledger (a chain-scan fallback is kept as scanned).
+    if (rail.recentSource === "ledger") {
+      let rows = [];
+      try { rows = ledgerRecentFn(c.ledgerChain || name, rail.wallet, { limit: 8 }); } catch { rows = []; }
+      if (Array.isArray(rows) && rows.length) {
+        const recent = rows.map((t) => ({ ...t, tx: t.txHash ? c.tx(t.txHash) : null }));
+        out = { ...rail, recent, externalUsd: Number(recent.filter((t) => t.external).reduce((sum, t) => sum + t.usd, 0).toFixed(6)) };
+      }
+    }
+    // The proof row is our own newest settle. On a busy rail the capped page
+    // above holds only outside buyers, so read our newest settle directly.
+    // Read for every EVM rail with a wallet, whatever the recent rows' source:
+    // a snapshot built before the ledger had rows (chain-scan) or a ledger
+    // page that came back empty must not leave the chain page without it.
+    if (typeof ledgerNewestOwnFn === "function") {
+      const seen = newestOwnSettle(out.recent);
+      let own = seen ? { when: seen.when, tx: seen.tx || null, usd: Number.isFinite(seen.usd) ? seen.usd : null } : null;
+      if (!own) { try { const r = ledgerNewestOwnFn(c.ledgerChain || name, rail.wallet); if (r && r.when) own = { when: r.when, tx: r.txHash ? c.tx(r.txHash) : null, usd: Number.isFinite(r.usd) ? r.usd : null }; } catch { /* keep the snapshot's row */ } }
+      const prevWhen = rail.lastInbound?.internal === true ? Date.parse(rail.lastInbound.when) : -Infinity;
+      if (own && Date.parse(own.when) >= prevWhen) out = { ...out, lastInbound: { ...own, internal: true } };
+    }
+    if (out !== rail) changed = true;
+    return out;
   });
   return changed ? { ...snap, rails } : snap;
 }
@@ -1745,6 +1764,8 @@ export function revenuePage(baseUrl, snap) {
   // external buy is the one proof link a reader actually opens. The twelve
   // cards this replaced each listed four recent transfers, a scan note and a
   // wallet-explorer link. Per-payment rows are not published at all (publicRevenueSnapshot).
+  // Dollar cells: two decimals from $1, three below (sub-cent calls stay legible).
+  const usdCell = (n) => { const v = Number(n || 0); return v === 0 ? "$0" : `$${v.toFixed(v >= 1 ? 2 : 3)}`; };
   const railRow = (r) => {
     const c = perChainOf(r);
     // A balance present (fresh or carried forward from the last good read)
@@ -1763,7 +1784,7 @@ export function revenuePage(baseUrl, snap) {
       <td><strong>${esc(r.rail)}</strong> <span style="color:var(--muted);">${esc(r.asset)}</span></td>
       <td class="num">${c ? Number(c.inboundCount).toLocaleString() : "-"}${c && !c.caughtUp ? `<span style="display:block;font-size:10.5px;font-weight:400;color:var(--muted);">still syncing</span>` : ""}</td>
       <td class="num">${c && c.externalCount ? Number(c.externalCount).toLocaleString() : "0"}</td>
-      <td class="num">$${c ? esc(String(c.externalUsd)) : "0"}</td>
+      <td class="num">${c ? esc(usdCell(c.externalUsd)) : "$0"}</td>
       <td>${proof}</td>
       <td>${status}</td>
       <td>${r.explorer ? `<a href="${esc(r.explorer)}" rel="noopener">explorer</a>` : "-"}</td>
@@ -1799,7 +1820,7 @@ export function revenuePage(baseUrl, snap) {
       ${big(throughput, "settled transactions, all-time", `x402 + MPP, ours included${at.syncing ? " · ledger still backfilling" : ""}`)}
       ${agents ? big(agents, `distinct agent${agents === 1 ? "" : "s"} have paid us on-chain`, `unique outside wallets${snap.agents?.scope?.since ? `, since ${esc(snap.agents.scope.since)}` : ""}${snap.agents?.top5SharePct != null ? ` · top 5 = ${snap.agents.top5SharePct}% of their payments` : ""}`) : ""}
     </div>
-    <p style="font-family:var(--font-mono);font-size:13px;color:var(--ink);margin:0 0 4px;"><strong>${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, settled on-chain (x402 rails + Tempo MPP)${snap.card?.allTimeCount ? ` · <strong>${Number(snap.card.allTimeCount).toLocaleString()}</strong> card purchase${snap.card.allTimeCount === 1 ? "" : "s"} (${Number(snap.card.allTimeUsd).toFixed(2)}) <span style="color:var(--muted);font-weight:400;">by card, not on-chain</span>` : ""}</p>` : "";
+    <p style="font-family:var(--font-mono);font-size:13px;color:var(--ink);margin:0 0 4px;"><strong>${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, settled on-chain (x402 rails + Tempo MPP)${snap.card?.allTimeCount ? ` · <strong>${Number(snap.card.allTimeCount).toLocaleString()}</strong> card purchase${snap.card.allTimeCount === 1 ? "" : "s"} ($${Number(snap.card.allTimeUsd).toFixed(2)}) <span style="color:var(--muted);font-weight:400;">by card, not on-chain</span>` : ""}</p>` : "";
 
   const body = `
   <div style="max-width:1100px;margin:0 auto;padding:56px 30px;">

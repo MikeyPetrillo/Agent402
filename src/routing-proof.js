@@ -11,6 +11,7 @@
 // off. Derive both from the same function the router reads.
 import { svmUnprovenAllowanceAtomic } from "./solana-buyer.js";
 import { baseUnprovenAllowanceUsd } from "./base-unproven.js";
+import { ROUTE_ORDER, routeTiebreakProse } from "./route-order.js";
 
 /** The unproven-tier ceiling in dollars, or 0 when the tier is disabled. */
 export function unprovenAllowanceUsd() {
@@ -45,5 +46,5 @@ export function routingProofSentence() {
  * ("health then price", "health x price", "match, health, price").
  */
 export function routerRankingSentence() {
-  return "Candidates are shortlisted by how well they match the task, then ordered by crawl health, by distinct payers over the last 30 days and by price; a judgment model can then pick the one that does the job from that shortlist, or decline them all, and when it is not consulted the shortlist order stands.";
+  return `Candidates are shortlisted by ${ROUTE_ORDER[0].prose}, then ordered ${routeTiebreakProse()}; a judgment model can then pick the one that does the job from that shortlist, or decline them all, and when it is not consulted the shortlist order stands.`;
 }

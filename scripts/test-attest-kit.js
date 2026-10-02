@@ -162,7 +162,7 @@ ok(tool.discovery.inputSchema.required.includes("tx"), "tx required");
 eq(tool.discovery.bodyType, "json", "POST tool declares bodyType for the Bazaar extension (a missing one is an invalid extension at boot)");
 const pow = readFileSync(new URL("../src/pow.js", import.meta.url), "utf8");
 ok(/"attest",/.test(pow), "attest is wallet-only (never PoW: it spends gas)");
-const nonMetered = readFileSync(new URL("./test-non-metered-examples.js", import.meta.url), "utf8");
+const nonMetered = readFileSync(new URL("../src/metered-slugs.js", import.meta.url), "utf8"); // METERED_SLUGS lives in src/
 ok(/"attest",/.test(nonMetered), "attest is in METERED_SLUGS (CI has no wallet)");
 const testAll = readFileSync(new URL("./test-all.js", import.meta.url), "utf8");
 ok(testAll.includes('"/api/attest"'), "attest is in test-all's NETWORK set");

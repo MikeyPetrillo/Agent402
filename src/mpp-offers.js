@@ -40,17 +40,26 @@ export function mppOffersFor(item = {}) {
   const tempo = tempoOfferedFor(item) ? tempoDiscoveryInfo() : null;
   if (tempo) {
     for (const currency of tempo.currencies) {
-      out.push({ method: "tempo", intent: "charge", currency, decimals: tempo.decimals, chainId: 4217, description: `${tempoCurrencyLabel(currency)} on Tempo` });
+      out.push({ method: "tempo", intent: "charge", currency, decimals: tempo.decimals, chainId: 4217, rail: "Tempo", description: `${tempoCurrencyLabel(currency)} on Tempo` });
     }
   }
   for (const r of mppEvmDiscoveryRails()) {
-    out.push({ method: "evm", intent: "charge", currency: r.currency, decimals: 6, chainId: r.chainId, description: `${r.asset} on ${r.name}` });
+    out.push({ method: "evm", intent: "charge", currency: r.currency, decimals: 6, chainId: r.chainId, rail: r.name, description: `${r.asset} on ${r.name}` });
   }
   const stripe = stripeDiscoveryInfo();
   if (stripe && !item.identityBound && Number(item.priceUsd) >= stripe.minUsd) {
-    out.push({ method: "stripe", intent: "charge", currency: "usd", decimals: 2, description: "Card via Stripe" });
+    out.push({ method: "stripe", intent: "charge", currency: "usd", decimals: 2, rail: "card", description: "Card via Stripe" });
   }
   return out;
+}
+
+/** The places one route's MPP offers settle, in 402 order, as prose
+ *  ("Tempo, Base or Celo"); "" when the route carries no MPP offer. Read from
+ *  mppOffersFor, so the phrase names exactly what that route's 402 lists. */
+export function mppRailsPhrase(offers) {
+  const rails = [];
+  for (const o of offers || []) if (o.rail && !rails.includes(o.rail)) rails.push(o.rail);
+  return listOr(rails);
 }
 
 /** Instance-wide summary of the MPP offer, for prose and manifests. */
@@ -79,4 +88,17 @@ export function mppMethodsProse() {
   if (s.evm) parts.push(`\`evm\` charge (USDC on ${listOr(s.evm.rails.map((r) => r.chain))}, EIP-3009, settles on-chain identically to x402)`);
   if (s.stripe) parts.push(`\`stripe\` charge (card, on routes priced $${s.stripe.minUsd.toFixed(2)} or more)`);
   return parts.join(", then ");
+}
+
+/** Short, instance-wide phrase for what MPP settles in, in 402 order, e.g.
+ *  "USDC.e or PathUSD natively on Tempo, or USDC on Base or Celo"; "" when no
+ *  MPP method is on. Same summary every other surface reads. */
+export function mppOfferShortProse() {
+  const s = mppMethodsSummary();
+  if (!s.enabled) return "";
+  const parts = [];
+  if (s.tempo) parts.push(`${listOr(s.tempo.currencies.map((c) => c.label))} natively on Tempo`);
+  if (s.evm) parts.push(`USDC on ${listOr(s.evm.rails.map((r) => r.chain))}`);
+  if (s.stripe) parts.push(`a card on routes priced $${s.stripe.minUsd.toFixed(2)} or more`);
+  return parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")}, or ${parts.at(-1)}`;
 }

@@ -53,7 +53,7 @@ const AGENT_KEY = process.env.AGENT_KEY || "";
 // settle on whichever chain the seller offers (EVM accepts are tried first).
 const SOLANA_AGENT_KEY = process.env.SOLANA_AGENT_KEY || "";
 const HAS_WALLET = Boolean(AGENT_KEY || SOLANA_AGENT_KEY);
-// Prepaid card credits (no wallet): a key bought at https://agent402.tools/credits.
+// Prepaid card credits (no wallet): a key issued at https://agent402.tools/credits.
 // Sent as Authorization: Bearer on every catalog call; the server debits the
 // list price only on a successful (200) call and returns X-Credits-Balance.
 const CREDITS_KEY = (process.env.AGENT402_CREDITS_KEY || "").trim();
@@ -716,7 +716,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         payableWithCompute: computePayable,
         walletOnly: catalog.size - computePayable,
         workflows: skillPacks.length,
-        credits: HAS_CREDITS ? { configured: true, how: "prepaid card credits (Authorization: Bearer a402_...) - every tool pays by card, debited only on a successful call", balance: `${BASE}/api/credits/balance`, topup: `${BASE}/credits` } : { configured: false, buy: `${BASE}/credits` },
+        credits: HAS_CREDITS ? { configured: true, how: "prepaid card credits (Authorization: Bearer a402_...) - every wallet-only tool except the wallet-identity-bound ones (memory, usage, receipts, attest, feedback) pays from the balance, debited only on a successful call", balance: `${BASE}/api/credits/balance`, topup: `${BASE}/credits` } : { configured: false, buy: `${BASE}/credits` },
         spendControls: (HAS_WALLET || HAS_CREDITS)
           ? {
               maxPerCallUsd: MAX_PER_CALL === Infinity ? "unlimited" : MAX_PER_CALL,

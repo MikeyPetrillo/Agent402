@@ -120,7 +120,7 @@ export function indexToolsPage(baseUrl, data, categories, params = {}) {
 
   const body = `<div class="ix-wrap">
 <h1 class="ix-h1">Every tool, indexed</h1>
-<p class="ix-sub">${fmtNum(data.total)} endpoints across the x402 ecosystem in one searchable list: <b>${fmtNum(data.ours)} we build and operate ourselves</b>, and ${fmtNum(data.thirdParty)} run by other people. Every row says which is which. Ours are badged <span class="ix-badge ours">OURS</span> and tinted; everything else belongs to a third party.</p>
+<p class="ix-sub">${fmtNum(data.total)} endpoints in one searchable list, one row per distinct endpoint from sellers whose last crawl over https succeeded: <b>${fmtNum(data.ours)} we build and operate ourselves</b>, and ${fmtNum(data.thirdParty)} run by other people. Every row says which is which. Ours are badged <span class="ix-badge ours">OURS</span> and tinted; everything else belongs to a third party. The tool listings on <a href="/marketplace">/marketplace</a> sum the tool count each indexed seller advertises, including sellers this list leaves out, so the two figures differ.</p>
 
 <div class="ix-note">
   <h2>What each badge means</h2>

@@ -43,9 +43,15 @@ const MIN_SELLERS_TO_FRAME = 50;
  * its figures through this. Pure.
  */
 export function standingCountsExcludingHost(snapshot) {
-  const t = snapshot?.totals || {};
-  const local = (Array.isArray(snapshot?.sellers) ? snapshot.sellers : []).find((x) => x && x.local) || null;
+  const list = Array.isArray(snapshot?.sellers) ? snapshot.sellers : [];
+  const local = list.find((x) => x && x.local) || null;
   const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  // indexSnapshot's totals are sellers.length and the summed toolCount; a
+  // snapshot without totals (a fixture, a partial build) derives them the
+  // same way rather than reading zero.
+  const t = snapshot?.totals && Number.isFinite(Number(snapshot.totals.sellers))
+    ? snapshot.totals
+    : { sellers: list.length, tools: list.reduce((sum, x) => sum + n(x?.toolCount), 0) };
   return {
     sellers: Math.max(0, n(t.sellers) - (local ? 1 : 0)),
     listings: Math.max(0, n(t.tools) - (local ? n(local.toolCount) : 0)),

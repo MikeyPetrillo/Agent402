@@ -305,6 +305,7 @@ import { learnPage, learnIndex } from "./learn.js";
 import { skillMd } from "./skill-md.js";
 import { createMcpMppLoopback } from "./mcp-mpp.js";
 import { serviceManifest, reliabilityReport } from "./discovery.js";
+import { meteredSkip } from "./metered-slugs.js";
 import { runSelfCheck, createSelfCheckRoute } from "./selfcheck.js";
 import { installEgressMeter, egressReport } from "./egress-meter.js";
 import { acpFeed, acpManifest } from "./acp.js";
@@ -516,7 +517,7 @@ import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml, catalogPayableOn } from "./market-page.js";
 import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
-import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerSummary, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
+import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
@@ -1360,10 +1361,16 @@ function withDispatchFields(row, { local = false, rowLevel = false } = {}) {
   // `executeViaWhenEligible` and `executeViaCallableNow` says false in so many
   // words. The tier is still useful (it is what the buyer would pay once the
   // seller proves out), it just must not look like a button.
+  // A row in the Base unproven tier IS dispatched (after every proven
+  // candidate, src/base-unproven.js and resolveExternalSeller), so it is
+  // callable now too, marked as the unproven lane.
   const { executeVia, ...rest } = row;
+  const unprovenLane = !verdict.eligible && rowLevel && verdict.chains?.base?.unprovenTier === true;
   const affordance = executeVia === undefined ? {} : (verdict.eligible
     ? { executeVia, executeViaCallableNow: true }
-    : { executeViaWhenEligible: executeVia, executeViaCallableNow: false });
+    : unprovenLane
+      ? { executeVia, executeViaCallableNow: true, executeViaLane: "unproven" }
+      : { executeViaWhenEligible: executeVia, executeViaCallableNow: false });
   return {
     ...rest,
     networks,
@@ -3405,7 +3412,7 @@ app.get("/api/revenue", async (_req, res) => {
   try {
     // Recent rows are re-read from the ledger per request (withFreshRecent);
     // only the balances ride the hourly background snapshot.
-    const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent);
+    const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent, ledgerNewestOwn);
     const ledger = memoSurface("revenue:allTime", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), sales: salesSummary() }));
     res.set("Cache-Control", "public, max-age=30").json({ ...publicRevenueSnapshot(snap), ...ledger });
   } catch (e) {
@@ -3530,7 +3537,7 @@ app.get("/revenue", async (_req, res) => {
   try {
     // Recent rows are re-read from the ledger per request (withFreshRecent);
     // only the balances ride the hourly background snapshot.
-    const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent);
+    const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent, ledgerNewestOwn);
     // `standing` is what the page is MEASURING, read from the index totals rather
     // than typed into the copy: a framing paragraph that goes stale is worse
     // than none, because it is the sentence asking to be trusted.
@@ -5522,6 +5529,7 @@ app.get("/api/rails", (_req, res) => {
 app.get("/api/reliability", async (_req, res) =>
   res.json(reliabilityReport({
     baseUrl: BASE_URL, network: NETWORK, wallet: WALLET_ADDRESS,
+    meteredSkip: meteredSkip(CATALOG, SKILL_PACKS),
     observedStatus: await (async () => { try { return (await cachedStatusSnapshot()).overall; } catch { return null; } })(),
     stats: getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }),
   }))
@@ -6152,6 +6160,15 @@ app.get("/stellar", async (req, res) => {
 const ALGORAND_RAIL_TTL_MS = 60_000;
 let algorandRailCache = { at: 0, value: null };
 let algorandRailInFlight = null;
+// Resolve `p`, or `fallback()` once `ms` passes; `p` keeps running either way.
+const ALGORAND_PAGE_WAIT_MS = Number(process.env.ALGORAND_PAGE_WAIT_MS || 8000);
+function withinMs(p, ms, fallback) {
+  let t;
+  return Promise.race([
+    Promise.resolve(p).finally(() => clearTimeout(t)),
+    new Promise((resolve) => { t = setTimeout(() => resolve(fallback()), ms); t.unref?.(); }),
+  ]);
+}
 async function getAlgorandRailCached() {
   if (Date.now() - algorandRailCache.at < ALGORAND_RAIL_TTL_MS) return algorandRailCache.value;
   if (!algorandRailInFlight) {
@@ -6216,7 +6233,13 @@ app.get("/algorand", async (req, res) => {
     const picked = (q && sellers.find((s) => !s.local && hostOf(s.homepage || s.origin) === q)) || sellers.find((s) => s.local) || null;
     const selfWallet = (process.env.ALGORAND_WALLET_ADDRESS || "").trim();
     const wallet = picked && !picked.local ? picked.algorandWallet : selfWallet;
-    const [rail, activity] = await Promise.all([getAlgorandRailCached(), getAlgorandActivityFor(wallet)]);
+    // The indexer can stall; the page never waits on it past ALGORAND_PAGE_WAIT_MS.
+    // The scans keep running and fill their caches; this render shows the last
+    // good value, or the honest "unavailable" line when there is none yet.
+    const [rail, activity] = await Promise.all([
+      withinMs(getAlgorandRailCached(), ALGORAND_PAGE_WAIT_MS, () => algorandRailCache.value ?? null),
+      withinMs(getAlgorandActivityFor(wallet), ALGORAND_PAGE_WAIT_MS, () => algorandActivityByWallet.get(wallet)?.value ?? null),
+    ]);
     const selectedSeller = picked
       ? { local: !!picked.local, host: picked.local ? null : hostOf(picked.homepage || picked.origin), name: picked.displayName || null }
       : null;
@@ -6417,7 +6440,7 @@ async function buildChainPage(chainKey, sellerQuery, all) {
   const snapshot = getIndexSnapshot();
   const { selectedSeller, scanWallet } = resolveMarketSeller(chainKey, snapshot, sellerQuery);
   const [revSnap, activity] = await Promise.all([
-    revenueSnapshot(revenueWallets()).then((snap) => withFreshRecent(snap, ledgerRecent)),
+    revenueSnapshot(revenueWallets()).then((snap) => withFreshRecent(snap, ledgerRecent, ledgerNewestOwn)),
     scanWallet ? getActivityForChain(chainKey, scanWallet, { maxWaitMs: PAGE_ACTIVITY_WAIT_MS }) : Promise.resolve(null),
   ]);
   const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;
@@ -6703,7 +6726,16 @@ app.get("/api/index", (req, res) => {
         ...(r.state === "disabled" ? { note: "this server holds no crawled index at all (the crawler is disabled here), so nothing can be found by this lookup" } : {}),
       });
     }
-    return res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json({ ...withDispatchFields(detail), legend: dispatchLegend({ spendChains: spendChainsConfigured() }) });
+    // The seller-level verdict has no single price, so it can never show the
+    // unproven tier; each tool row carries its own Base verdict, the same one
+    // /api/route publishes for that route.
+    const sellerRow = withDispatchFields(detail);
+    const priceUsdOf = (p) => { const n = typeof p === "number" ? p : Number(String(p ?? "").replace(/[^0-9.]/g, "")); return Number.isFinite(n) && n > 0 ? n : null; };
+    const tools = Array.isArray(sellerRow.tools) ? sellerRow.tools.map((t) => {
+      const v = withDispatchFields({ ...t, seller: detail.origin, origin: detail.origin, routable: detail.routable, networks: Array.isArray(t.networks) && t.networks.length ? t.networks : detail.networks, priceUsd: priceUsdOf(t.price), urlTemplate: /[{}]/.test(String(t.route || "")), payToByNetwork: detail.payToByNetwork, evmDomainByNetwork: detail.evmDomainByNetwork }, { rowLevel: true });
+      return { ...t, routerDispatchEligible: v.routerDispatchEligible, routerDispatchReason: v.routerDispatchReason, routerDispatchByChain: v.routerDispatchByChain };
+    }) : sellerRow.tools;
+    return res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300").json({ ...sellerRow, tools, legend: dispatchLegend({ spendChains: spendChainsConfigured() }) });
   }
   // The full snapshot is ~1.4MB: every crawled origin with its health score,
   // its re-crawl history and its whole tool list. The per-origin HEALTH and
@@ -7158,8 +7190,8 @@ app.get("/llms-full.txt", (_req, res) => res.type("text/plain").set("Cache-Contr
 const serveSkillMd = (_req, res) => res.type("text/markdown; charset=utf-8").set("Cache-Control", "public, max-age=3600").send(skillMd(BASE_URL, CATALOG));
 app.get("/SKILL.md", serveSkillMd);
 app.get("/skill.md", serveSkillMd);
-// The runnable buyer demo, served from the site itself (the repo is private,
-// so "git clone" is not a path a visitor can take).
+// The runnable buyer demo, served from the site itself, so a visitor can run
+// it without cloning the repository.
 app.get("/demo.js", (_req, res) =>
   res.type("text/javascript").set("Cache-Control", "public, max-age=3600").send(readFileSync(new URL("../scripts/demo-payment.js", import.meta.url), "utf-8"))
 );

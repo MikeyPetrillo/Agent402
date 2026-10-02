@@ -12,7 +12,7 @@ export const FILING_ALERT_FORMS = Object.freeze(["10-K", "10-Q", "8-K"]);
  * @param {object} deps kit probes (injected so the adapters test offline)
  */
 export function makeFreeAlertProbes({ probeInsider, probeFilings, resolveManager, latest13f, probeDomain, probeRecalls }) {
-  return {
+  const probes = {
     insider: async (t) => {
       const r = await probeInsider({ ticker: t, days: 90, limit: 40 });
       return { ids: r.ids, items: (r.filings || []).map((f) => ({ id: f.accessionNumber, label: `${(f.displayNames || []).join(", ") || "Form 4"} · filed ${f.filedDate}`, url: f.url })) };
@@ -40,4 +40,10 @@ export function makeFreeAlertProbes({ probeInsider, probeFilings, resolveManager
       return { ids: r.ids, items: (r.items || []).map((x) => ({ id: x.recallNumber, label: `${x.classification || "Recall"} · ${String(x.product || "").slice(0, 90)}` })) };
     },
   };
+  // A probe whose id space changes carries a new `version`; the engine then
+  // re-baselines an alert silently instead of mailing every id the old
+  // baseline did not hold. The filing probe narrowed to three forms on
+  // 2026-10-02, so a baseline taken before it holds other forms.
+  probes.filing.version = "forms:" + FILING_ALERT_FORMS.join(",");
+  return probes;
 }

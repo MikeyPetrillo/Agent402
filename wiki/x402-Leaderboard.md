@@ -16,8 +16,8 @@ neutral Smart Order Router across every seller).
 | Surface | Free | What it returns |
 |---|---|---|
 | `GET /api/find?q={task}` | ✅ | Best matching tools (route, price, schema, example) |
-| `POST /api/route {query, top, include}` | ✅ | Smart Order Router ranked over every x402 seller crawled (match → health → price); the response returns the top N and carries `matched` |
-| `GET /api/leaderboard?top=N&include=all\|external` | ✅ | Top N of the on-chain ranking of x402 sellers by Base USDC settled volume - 25 default, 50 ceiling, `totalSellers` for the full count (`?limit=` is accepted as an alias of `?top=`) |
+| `POST /api/route {query, top, include}` | ✅ | Smart Order Router ranked over every x402 seller crawled (match → health → distinct payers → price); the response returns the top N and carries `matched` |
+| `GET /api/leaderboard?top=N&include=external\|all` | ✅ | Top N of the on-chain ranking of x402 sellers by Base USDC settled volume (`include=external`, the default, leaves out this host's own row) - 25 default, 50 ceiling, `totalSellers` for the full count (`?limit=` is accepted as an alias of `?top=`) |
 
 ## Why on-chain volume
 
@@ -60,11 +60,12 @@ refresh ever fails, the last good snapshot is preserved.
 ## Calling it
 
 ```bash
-# Top 10, including Agent402 itself (top, or limit, defaults to 25, clamped to 1..500)
+# Top 10 of the rest of the ecosystem (the default excludes Agent402;
+# top, or limit, defaults to 25 and is clamped to 1..50)
 curl 'https://agent402.tools/api/leaderboard?top=10'
 
-# Rank only the rest of the ecosystem (exclude Agent402)
-curl 'https://agent402.tools/api/leaderboard?top=25&include=external'
+# The full board, with this host's own row included and flagged self: true
+curl 'https://agent402.tools/api/leaderboard?top=25&include=all'
 
 # Rank by call count instead of USD (default sort=usd)
 curl 'https://agent402.tools/api/leaderboard?sort=calls'
@@ -104,7 +105,7 @@ Returns (the seller array is **`leaderboard`**, not `rows`):
     }
   ],
   "cache": { "cachedAt": "…", "lastTriedAt": "…", "lastError": null, "refreshIntervalMs": 3600000 },
-  "include": "all",
+  "include": "external",
   "sortServed": "usd",
   "windowRequested": "24h",
   "windowServed": "7d",
@@ -131,14 +132,14 @@ Field notes that matter when you parse it:
   can tell "25 rows because I asked for 25" from "25 rows because that's all
   there is".
 
-`include=external` excludes the Agent402 payTo (`SELF_WALLET` in the
-operator's env) - same logic as `/api/route?include=external`. We list because
-we trust the ranking, not because we'd rig it for ourselves.
+`include=external` (the default) excludes the operator's own payTo
+(`WALLET_ADDRESS`), because this host's own row is inflated by its canary and
+volume runs; `include=all` returns it, flagged `self: true`.
 
 ## Tests & guarantees
 
 - [`scripts/test-x402-leaderboard.js`](https://github.com/MikeyPetrillo/Agent402/blob/main/scripts/test-x402-leaderboard.js)
-  - 70 offline assertions covering the parsers, the asset/network filter, the
+  - offline assertions covering the parsers, the asset/network filter, the
   ceiling cutoff, and the deterministic tie-break.
 - [`scripts/test-leaderboard-surface.js`](https://github.com/MikeyPetrillo/Agent402/blob/main/scripts/test-leaderboard-surface.js)
   - locks the leaderboard surfacing into robots.txt, sitemap.xml, llms.txt,

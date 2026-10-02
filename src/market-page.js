@@ -11,10 +11,12 @@
 // floors, javascript: href neutralization, testnet exclusion, >12-seller
 // compact roster, per-seller activity switching via ?seller=.
 import { ledgerShell, ledgerFooterCompact, decideLive } from "./ledger-chrome.js";
+import { x402RailsFor } from "./rails.js";
 import { CATEGORIES } from "./pages.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { discoveryNote } from "./discovery-note.js";
 import { hostCardHtml } from "./host-entry.js";
+import { standingCountsExcludingHost } from "./standing.js";
 
 // Seller-roster row styles hoisted to classes. A busy chain (e.g. Base) renders
 // 1000+ roster rows; when each row carried its 6 styles inline the page ballooned
@@ -317,13 +319,21 @@ export const LEADERBOARD_CHAIN = "base";
  *  long-running tools take the EVM rails only. `defs` = the priced catalog. */
 export function catalogPayableOn(defs, caip2) {
   const list = Array.isArray(defs) ? defs : [];
-  const evm = String(caip2 || "").startsWith("eip155:");
-  const payable = list.filter((d) => {
-    const only = Array.isArray(d?.onlyNetworks) && d.onlyNetworks.length ? d.onlyNetworks : null;
-    if (only) return only.includes(caip2);
-    return evm || (!d?.identityBound && !d?.longRunning);
-  }).length;
-  return { payable, total: list.length };
+  // The same rule the live 402 applies (rails.js x402RailsFor), so the page
+  // cannot count a tool the 402 withholds on this chain, plus why each
+  // withheld tool is withheld, so the sentence names the real reason.
+  let payable = 0, evmOnly = 0;
+  const pinned = new Map(); // "Base" -> tools offered on those chains only
+  for (const d of list) {
+    const rails = x402RailsFor(d);
+    if (rails.some((r) => r.caip2 === caip2)) { payable++; continue; }
+    const only = Array.isArray(d?.onlyNetworks) && d.onlyNetworks.length;
+    if (only) {
+      const names = rails.map((r) => r.name).join(", ") || "other chains";
+      pinned.set(names, (pinned.get(names) || 0) + 1);
+    } else evmOnly++;
+  }
+  return { payable, total: list.length, excluded: { evmOnly, pinned: [...pinned].map(([networks, count]) => ({ networks, count })) } };
 }
 
 /** Sellers with a rail on this chain: the local catalog always qualifies
@@ -466,9 +476,14 @@ function sellersListedNote(merged, origins) {
 function payableSentence(p, C) {
   const n = Number(p?.payable), t = Number(p?.total);
   if (Number.isFinite(n) && Number.isFinite(t) && t > 0) {
-    return n === t
-      ? `Every one of the <a href="/tools">${t.toLocaleString("en-US")} tools in the catalog</a> takes ${esc(C.asset)} on ${esc(C.chainName)}`
-      : `${n.toLocaleString("en-US")} of the <a href="/tools">${t.toLocaleString("en-US")} tools in the catalog</a> take ${esc(C.asset)} on ${esc(C.chainName)} (the rest settle on the EVM rails only)`;
+    if (n === t) return `Every one of the <a href="/tools">${t.toLocaleString("en-US")} tools in the catalog</a> takes ${esc(C.asset)} on ${esc(C.chainName)}`;
+    const x = p.excluded || {};
+    const k = (c) => c.toLocaleString("en-US");
+    const why = [
+      ...(x.evmOnly ? [`${k(x.evmOnly)} identity-bound or long-running tool${x.evmOnly === 1 ? " settles" : "s settle"} on the EVM rails only`] : []),
+      ...(Array.isArray(x.pinned) ? x.pinned : []).map((g) => `${k(g.count)} tool${g.count === 1 ? " is" : "s are"} offered on ${esc(g.networks)} only`),
+    ];
+    return `${n.toLocaleString("en-US")} of the <a href="/tools">${t.toLocaleString("en-US")} tools in the catalog</a> take ${esc(C.asset)} on ${esc(C.chainName)}${why.length ? ` (${why.join("; ")})` : ""}`;
   }
   return `Tools in the <a href="/tools">catalog</a> take ${esc(C.asset)} on ${esc(C.chainName)}`;
 }
@@ -628,6 +643,9 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   const walletExplorerUrl = effectiveWallet ? C.explorerWalletUrl(effectiveWallet) : `https://${C.explorerUrl}`;
   const sellers = marketSellers(chainKey, snapshot);
   const tools = marketTools(chainKey, snapshot);
+  // The page's seller count, from the same function the nav and the
+  // /marketplace grid read (host excluded; merged only where the roster merges).
+  const sellerCount = marketOperatorCount(chainKey, snapshot, leaderboardSnap);
 
   // Per-seller settlement stats for the roster (#tx column) and the seller card,
   // joined from the leaderboard snapshot by the seller's payTo on THIS chain.
@@ -775,7 +793,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
 
   const statsHtml = `
   <div class="ml-2col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 0;">
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:26px;font-weight:800;">${rosterSellers.filter((s) => !s.local).length.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">${sellersListedNote(measured, sellers.filter((s) => !s.local).length)}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:26px;font-weight:800;">${sellerCount.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">${sellersListedNote(measured, sellers.filter((s) => !s.local).length)}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">TOOLS (THIS HOST)</div><div style="font-size:26px;font-weight:800;">${tools.length.toLocaleString("en-US")}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">OUR LATEST SETTLE</div><div style="font-size:26px;font-weight:800;">${latest && latest.usd != null ? usd(latest.usd) : "-"}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">our own canary or volume run</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">PRICE FLOOR</div><div style="font-size:26px;font-weight:800;">${usd(low)}</div></div>
@@ -899,6 +917,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
       calls: st.calls || 0, usd: st.usd || 0, buyers: st.buyers || 0,
       tools: Number(s.toolCount) || (s.local ? tools.length : 0),
       routable: !!(s.local || s.routable),
+      local: !!s.local,
     };
   });
   // Ticker rows are the busiest sellers this page already lists, with the
@@ -919,7 +938,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
     activity && activity.truncated ? "scan stopped at its time budget - totals are a floor" : "",
   ].filter(Boolean).join(" \u00b7 ");
   const terminalHtml = marketTerminalHtml({
-    chainName: C.chainName, asset: C.asset, rows: terminalRows, totalSellers: rosterSellers.length, measured, selectedHost: selHost,
+    chainName: C.chainName, asset: C.asset, rows: terminalRows, totalSellers: sellerCount, measured, selectedHost: selHost,
     activity, scopeLabel: selHost ? String(selHost).toUpperCase() : "THIS HOST",
     noteText: terminalNote, ticker: tickerRows,
   });
@@ -1211,11 +1230,14 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   // about SETTLEMENT (what moved on chain) - never merged into one card.
   // Other sellers only: our own tools have their own card, and the host card
   // above says the host is in no count.
-  const totalToolListings = sellers.reduce((sum, s) => sum + (s.local ? 0 : Number(s.toolCount) || 0), 0);
+  // The same function the standing band reads (src/standing.js), so "seller
+  // origins indexed" and "tool listings" are one figure on every surface.
+  const standingCounts = standingCountsExcludingHost(snapshot);
+  const totalToolListings = standingCounts.listings;
 
   const statsHtml = `
   <div class="ml-2col ml-4col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 0;">
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:26px;font-weight:800;">${rosterSellers.filter((s) => !s.local).length.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">${sellersListedNote(true, sellers.filter((s) => !s.local).length)}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:26px;font-weight:800;">${marketOperatorCount(null, snapshot, leaderboardSnap).toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">${sellersListedNote(true, standingCounts.sellers)}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">TOOL LISTINGS</div><div style="font-size:26px;font-weight:800;">${totalToolListings.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">advertised by other sellers</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">CHAINS SUPPORTED</div><div style="font-size:26px;font-weight:800;">${Object.keys(CHAIN_PAGES).length}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">TOOLS (THIS HOST)</div><div style="font-size:26px;font-weight:800;">${(sellers.find((s) => s.local)?.toolCount || 0).toLocaleString("en-US")}</div></div>
@@ -1229,7 +1251,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   const headerHtml = `
   <div>
     <h1 style="font-size:34px;font-weight:800;letter-spacing:-.02em;margin:0 0 8px;">The x402 marketplace.</h1>
-    <p style="font-size:16.5px;color:var(--muted);margin:0;max-width:640px;">The open index of paid APIs for agentic commerce - ${baseSellerCount.toLocaleString("en-US")} sellers on Base alone, theirs as well as ours, with what they charge and what they have actually settled.</p>
+    <p style="font-size:16.5px;color:var(--muted);margin:0;max-width:640px;">The open index of paid APIs for agentic commerce - ${baseSellerCount.toLocaleString("en-US")} independent sellers on Base alone besides this host, with what they charge and what they have actually settled.</p>
     <div style="margin:18px 0 0;padding:16px 18px;border:1px solid var(--hairline);background:var(--card);max-width:640px;">
       <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--faint);margin-bottom:10px;">START HERE · BUYER PATH</div>
       <form action="/tools" method="get" class="mkt-search-wrap" style="display:flex;gap:0;background:var(--paper);margin-bottom:12px;">
@@ -1408,23 +1430,26 @@ ${ledgerFooterCompact()}`;
   });
 }
 
-/** Operator-level seller count for a chain page (null = all chains): the same
- *  leaderboard-group collapse the rosters render, WITHOUT building rows —
- *  hosts settling to one leaderboard group count once, everything ungrouped
- *  counts individually. Exists so the nav dropdown and the page's SELLERS
- *  LISTED card speak the same unit (operators): the dropdown used raw origin
- *  counts (e.g. Base 1,554) while the page's deduped roster showed 843, which
- *  read as a bug from the outside. Endpoints stay disclosed on the rows
- *  ("+N more endpoints"), never hidden. */
+/** The ONE per-chain seller count: the nav dropdown, the /marketplace
+ *  "Markets by chain" grid, the hero subhead and each page's SELLERS LISTED
+ *  card and terminal roster total all read it, so two surfaces never quote
+ *  different numbers for one chain. The host is never counted (its own card
+ *  says so). Hosts collapse into one seller only where the page collapses
+ *  them: on the leaderboard chain (Base) and in the all-chains view, hosts
+ *  whose payTo sits in one leaderboard wallet group count once, because the
+ *  leaderboard measures Base wallets. Every other chain page lists one row
+ *  per origin, and this count is that row count. `chainKey` null = the
+ *  all-chains view. */
 export function marketOperatorCount(chainKey, snapshot, leaderboardSnap) {
-  const sellers = chainKey ? marketSellers(chainKey, snapshot) : marketSellersAll(snapshot);
+  const sellers = (chainKey ? marketSellers(chainKey, snapshot) : marketSellersAll(snapshot)).filter((s) => !s.local);
+  const merges = !chainKey || chainKey === LEADERBOARD_CHAIN;
+  if (!merges) return sellers.length;
   const gidByWallet = new Map();
   (Array.isArray(leaderboardSnap?.leaderboard) ? leaderboardSnap.leaderboard : []).forEach((r, i) => {
     for (const w of (r.wallets && r.wallets.length ? r.wallets : [r.wallet])) if (w) gidByWallet.set(String(w).toLowerCase(), `lb${i}`);
   });
   const C = chainKey ? CHAIN_PAGES[chainKey] : null;
   const gidOf = (s) => {
-    if (s.local) return null;
     const entries = Object.entries(s.payToByNetwork || {});
     const pay = C
       ? (entries.find(([net]) => C.isNetwork(net))?.[1] || null)

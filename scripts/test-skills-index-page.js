@@ -94,6 +94,17 @@ ok(html.includes(">failed<"), "illustrative table shows a real failed-step statu
   const snippet = packClientSnippet("skill-security-audit", { domain: "example.com" });
   ok(detail.includes("client.call(&quot;skill-security-audit&quot;"), "pack page shows the SDK call keyed on the catalog slug");
   ok(!/npx agent402-client/.test(detail), "pack page does not show a CLI the package does not ship");
+  {
+    const prev = process.env.CREDITS_SALES;
+    delete process.env.CREDITS_SALES;
+    const off = packClientSnippet("skill-security-audit", { domain: "example.com" });
+    process.env.CREDITS_SALES = "on";
+    const on = packClientSnippet("skill-security-audit", { domain: "example.com" });
+    if (prev === undefined) delete process.env.CREDITS_SALES; else process.env.CREDITS_SALES = prev;
+    ok(/new Agent402\(\{ fetch: payFetch \}\)/.test(off) && /proof-of-work/.test(off), "snippet leads with the wallet path and names the proof-of-work free tier");
+    ok(!/process\.env\.AGENT402_CREDITS_KEY/.test(off) && /an existing prepaid credits key/.test(off) && !/\/credits/.test(off), "credits off sale: a credits key is mentioned only as an existing key");
+    ok(/key from \/credits/.test(on), "credits on sale: the snippet points at /credits");
+  }
   const pkg = JSON.parse(readFileSync(new URL("../client/package.json", import.meta.url), "utf8"));
   ok(/import \{ Agent402 \} from "agent402-client"/.test(snippet) && pkg.name === "agent402-client" && pkg.bin === undefined, "snippet imports the package the way it is published (a library, no bin)");
   const hits = [];

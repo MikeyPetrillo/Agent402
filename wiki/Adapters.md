@@ -2,28 +2,30 @@
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-If your agent isn't an MCP client, there's a zero-dependency npm package that turns the Agent402 catalog into native tool objects for your framework - with payment handled underneath (proof-of-work for free tools, USDC via x402 for wallet-only).
+If your agent isn't an MCP client, there's an npm package that turns the Agent402 catalog into native tool objects for your framework - with payment handled underneath (proof-of-work for free tools, USDC via x402 for wallet-only).
 
 | Stack | npm package | Returns |
 |---|---|---|
 | OpenAI function-calling (chat.completions / Assistants v2 / Responses) | [`agent402-openai-tools`](https://www.npmjs.com/package/agent402-openai-tools) | `tools[]` for the `tools:` param |
 | Anthropic Messages API (`tool_use`) | [`agent402-anthropic-tools`](https://www.npmjs.com/package/agent402-anthropic-tools) | `tools[]` for the `tools:` param |
-| Vercel AI SDK (`streamText` / `generateText` / `generateObject`) | [`agent402-ai-sdk`](https://www.npmjs.com/package/agent402-ai-sdk) | `Record<name, tool()>` |
-| LangChain JS / LangGraph | [`agent402-langchain`](https://www.npmjs.com/package/agent402-langchain) | `DynamicStructuredTool[]` |
+| Vercel AI SDK (`streamText` / `generateText`) | [`agent402-ai-sdk`](https://www.npmjs.com/package/agent402-ai-sdk) | `Record<name, tool()>` (four meta tools) |
+| LangChain JS / LangGraph | [`agent402-langchain`](https://www.npmjs.com/package/agent402-langchain) | `DynamicStructuredTool[]` (four meta tools) |
 | LlamaIndex TS | [`agent402-llamaindex`](https://www.npmjs.com/package/agent402-llamaindex) | `FunctionTool[]` |
 | elizaOS | [`elizaos-plugin-agent402`](https://www.npmjs.com/package/elizaos-plugin-agent402) | a `Plugin` with `AGENT402_FIND` / `AGENT402_CALL` / `AGENT402_ABOUT` actions and an `AGENT402` provider |
 | Coinbase AgentKit (CDP, Privy, ZeroDev, viem wallets) | [`agent402-agentkit`](https://www.npmjs.com/package/agent402-agentkit) | an `ActionProvider` for `AgentKit.from({ actionProviders })` |
 | Strands Agents (AWS Bedrock AgentCore) | [`agent402-strands`](https://www.npmjs.com/package/agent402-strands) | `StrandsTool[]` for `new Agent({ tools })` |
-| Google ADK (Agent Development Kit) | [`agent402-google-adk`](https://www.npmjs.com/package/agent402-google-adk) | `FunctionTool[]` |
-| OpenAI Agents SDK | [`agent402-openai-agents`](https://www.npmjs.com/package/agent402-openai-agents) | `tool()` instances for `new Agent({ tools })` |
+| Google ADK (Agent Development Kit) | [`agent402-google-adk`](https://www.npmjs.com/package/agent402-google-adk) | `FunctionTool[]` (four meta tools) |
+| OpenAI Agents SDK | [`agent402-openai-agents`](https://www.npmjs.com/package/agent402-openai-agents) | `tool()` instances for `new Agent({ tools })` (four meta tools) |
 
 Sources live at [`adapters/`](https://github.com/MikeyPetrillo/Agent402/tree/main/adapters).
 
 > Already a Claude/MCP user? Use the hosted [[MCP Connector]] - it's the better path. Adapters are for direct API integrations where MCP isn't available.
 
-## Shared surface
+## Two shapes
 
-Every adapter exports the same `agent402Tools()` function:
+The adapters come in two shapes.
+
+**Catalog tools** (`agent402-openai-tools`, `agent402-anthropic-tools`, `agent402-llamaindex`, `agent402-strands`) turn the catalog tools you pick into native tool objects, one per slug:
 
 ```ts
 agent402Tools(opts?: {
@@ -38,7 +40,18 @@ agent402Tools(opts?: {
 }>
 ```
 
-A standalone `agent402Execute({ baseUrl, fetch })` is also exported if you built your tool list a different way and just want the payment-aware executor.
+With the default `freeOnly: true`, a wallet-only slug in `slugs` (such as `extract` or `render`) is filtered out, so list compute-payable tools there, or pass `freeOnly: false` with a paying `fetch`. A standalone `agent402Execute({ baseUrl, fetch })` is also exported if you built your tool list a different way and just want the payment-aware executor.
+
+**Meta tools** (`agent402-ai-sdk`, `agent402-langchain`, `agent402-google-adk`, `agent402-openai-agents`) register four tools instead of one per slug: `agent402_find` (resolve a task to a catalog tool), `agent402_route` (the cross-seller router), `agent402_call` (call any tool by slug, paying underneath) and `agent402_about` (the service manifest). The model picks the slug at run time:
+
+```ts
+agent402Tools(opts?: {
+  baseUrl?: string;       // default "https://agent402.tools"
+  fetch?: typeof fetch;   // an @x402/fetch-wrapped fetch; only needed for wallet-only tools
+}): Promise<<framework-shape>>   // the tools themselves: an object keyed by name (AI SDK) or an array
+```
+
+`agent402ToolSpecs(opts)` returns the same four entries as framework-agnostic specs (plain JSON Schema plus an `execute`).
 
 ## OpenAI
 
@@ -47,11 +60,11 @@ import OpenAI from "openai";
 import { agent402Tools } from "agent402-openai-tools";
 
 const openai = new OpenAI();
-const { tools, execute } = await agent402Tools({ slugs: ["extract", "hash", "render", "screenshot"] });
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
 
 const res = await openai.chat.completions.create({
   model: "gpt-4o-mini",
-  messages: [{ role: "user", content: "Get the title of https://example.com/article" }],
+  messages: [{ role: "user", content: "What is the SHA-256 of 'hello world'?" }],
   tools,
 });
 
@@ -68,13 +81,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import { agent402Tools } from "agent402-anthropic-tools";
 
 const client = new Anthropic();
-const { tools, execute } = await agent402Tools({ slugs: ["extract", "hash"] });
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
 
 const res = await client.messages.create({
   model: "claude-sonnet-4-6",
   max_tokens: 1024,
   tools,
-  messages: [{ role: "user", content: "Get the title of https://example.com/article" }],
+  messages: [{ role: "user", content: "What is the SHA-256 of 'hello world'?" }],
 });
 
 const block = res.content.find((b) => b.type === "tool_use");
@@ -84,18 +97,16 @@ if (block) console.log(await execute(block.name, block.input));
 ## Vercel AI SDK
 
 ```js
-import { streamText } from "ai";
+import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { agent402Tools } from "agent402-ai-sdk";
 
-const { tools } = await agent402Tools({ slugs: ["extract", "hash"] });
-const result = await streamText({
+const tools = await agent402Tools();   // or agent402Tools({ fetch: payFetch }) for wallet-only tools
+const { text } = await generateText({
   model: openai("gpt-4o-mini"),
   tools,
-  prompt: "Get the title of https://example.com/article",
+  prompt: "Hash 'hello world' with sha256",
 });
-
-for await (const chunk of result.textStream) process.stdout.write(chunk);
 ```
 
 ## LangChain JS
@@ -105,25 +116,26 @@ import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { ChatOpenAI } from "@langchain/openai";
 import { agent402Tools } from "agent402-langchain";
 
-const { tools } = await agent402Tools({ slugs: ["extract", "hash"] });
+const tools = await agent402Tools();   // or agent402Tools({ fetch: payFetch }) for wallet-only tools
 const agent = createReactAgent({
   llm: new ChatOpenAI({ model: "gpt-4o-mini" }),
   tools,
 });
 const res = await agent.invoke({
-  messages: [{ role: "user", content: "Get the title of https://example.com/article" }],
+  messages: [{ role: "user", content: "Hash 'hello world' with sha256" }],
 });
 ```
 
 ## LlamaIndex TS
 
 ```js
-import { OpenAIAgent } from "llamaindex";
+import { agent } from "@llamaindex/workflow";
+import { openai } from "@llamaindex/openai";
 import { agent402Tools } from "agent402-llamaindex";
 
-const { tools } = await agent402Tools({ slugs: ["extract", "hash"] });
-const agent = new OpenAIAgent({ tools });
-const res = await agent.chat({ message: "Get the title of https://example.com/article" });
+const { tools } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
+const myAgent = agent({ tools, llm: openai({ model: "gpt-4o-mini" }) });
+const res = await myAgent.run("Compute SHA-256 of 'hello world'");
 ```
 
 ## elizaOS
@@ -152,16 +164,16 @@ Three actions: `agent402_find` (free discovery), `agent402_call` (pays: proof-of
 import { Agent } from "@strands-agents/sdk";
 import { agent402Tools } from "agent402-strands";
 
-const { tools } = await agent402Tools({ slugs: ["extract", "hash", "render"] });
+const { tools } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
 const agent = new Agent({ tools });
-const res = await agent.invoke("Get the title of https://example.com/article");
+const res = await agent.invoke("What is the SHA-256 of 'hello world'?");
 ```
 
-Designed for [AWS Bedrock AgentCore Payments](AWS-Bedrock-AgentCore) - AgentCore orchestrates x402 over the same protocol Agent402 speaks natively, so the adapter is the only glue you need. Wallet-only tools sign via the CDP `PaymentCredentialProvider` you configure in AgentCore Identity.
+For an agent on [AWS Bedrock AgentCore](AWS-Bedrock-AgentCore), this adapter embeds a chosen subset of tools in a Strands agent; the hosted `/mcp` connector as a Gateway target is the other way in. Wallet-only tools are paid through the x402-wrapped `fetch` you pass, as in the next section.
 
 ## Pay with USDC (wallet-only tools)
 
-By default `freeOnly: true` restricts to compute-payable tools so no wallet is needed. For the wallet-only catalog (browser, network, memory), wrap your fetch with `@x402/fetch` and pass it in:
+On the catalog-tools adapters, `freeOnly: true` (the default) restricts to compute-payable tools so no wallet is needed. For the wallet-only catalog (browser, network, memory), wrap your fetch with `@x402/fetch` and pass it in (the meta-tool adapters take the same `fetch` option):
 
 ```js
 import { wrapFetchWithPayment } from "@x402/fetch";
@@ -173,7 +185,7 @@ const client = new x402Client();
 registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.AGENT_KEY) });
 const payFetch = wrapFetchWithPayment(fetch, client);
 
-const { tools, execute } = await agent402Tools({ freeOnly: false, fetch: payFetch });
+const { tools, execute } = await agent402Tools({ slugs: ["extract", "render"], freeOnly: false, fetch: payFetch });
 ```
 
 ## Self-hosted catalog
@@ -181,11 +193,11 @@ const { tools, execute } = await agent402Tools({ freeOnly: false, fetch: payFetc
 Point at your own Agent402 instance:
 
 ```js
-const { tools } = await agent402Tools({ baseUrl: "https://agent402.example.com" });
+const { tools } = await agent402Tools({ baseUrl: "https://agent402.example.com" });   // meta-tool adapters: const tools = await agent402Tools({ baseUrl })
 ```
 
 ## Trust & `baseUrl`
 
-The catalog server you point `baseUrl` at controls the **name, description, and JSON Schema** of every generated tool - and tool descriptions are passed to your LLM. Only point `baseUrl` at an Agent402 instance you operate or trust. The default (`https://agent402.tools`) is the maintained, open-source hosted instance. Catalog/pricing fetches are bounded by a 15s `AbortSignal.timeout()` to cap the discovery hang if a misconfigured `baseUrl` is unreachable.
+The catalog server you point `baseUrl` at controls the **name, description, and JSON Schema** of every generated catalog tool, and the results the meta tools return - and both reach your LLM. Only point `baseUrl` at an Agent402 instance you operate or trust. The default (`https://agent402.tools`) is the maintained, open-source hosted instance. On the catalog-tools adapters, the catalog and pricing fetches are bounded by a 15s `AbortSignal.timeout()` to cap the discovery hang if a misconfigured `baseUrl` is unreachable.
 
 See also: [[Security Model]] · [[Getting Started]] · [[Paying with x402]] · [[Paying with Compute]].

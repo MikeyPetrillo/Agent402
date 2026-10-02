@@ -26,19 +26,21 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 
 const deploy = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
 const nonMetered = readFileSync(new URL("./test-non-metered-examples.js", import.meta.url), "utf8");
+// METERED_SLUGS lives in src/metered-slugs.js (the server publishes its count).
+const meteredSrc = readFileSync(new URL("../src/metered-slugs.js", import.meta.url), "utf8");
 
 // --- METERED_SLUGS, the set both catalog sweeps skip -----------------------
 // Balanced-bracket scan, not indexOf("]);"): the set literal contains nested
 // brackets in comments, and the naive cut read 24 of 147 slugs - a guard that
 // silently sees a sixth of the set would have "found" leaks everywhere.
-const mStart = nonMetered.indexOf("METERED_SLUGS = new Set([");
+const mStart = meteredSrc.indexOf("METERED_SLUGS = new Set([");
 let depth = 0, mEnd = mStart;
-for (let i = nonMetered.indexOf("[", mStart); i < nonMetered.length; i++) {
-  const ch = nonMetered[i];
+for (let i = meteredSrc.indexOf("[", mStart); i < meteredSrc.length; i++) {
+  const ch = meteredSrc[i];
   if (ch === "[") depth++;
   else if (ch === "]") { depth--; if (depth === 0) { mEnd = i; break; } }
 }
-const mBody = nonMetered.slice(mStart, mEnd);
+const mBody = meteredSrc.slice(mStart, mEnd);
 const METERED = new Set([...mBody.matchAll(/"([a-z0-9][a-z0-9-]*)"/g)].map((m) => m[1]));
 ok(METERED.size > 100, `read METERED_SLUGS from source (${METERED.size} slugs)`);
 

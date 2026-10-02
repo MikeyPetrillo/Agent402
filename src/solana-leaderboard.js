@@ -294,12 +294,27 @@ export function getSolanaLeaderboardSnapshot({ self = null, now = Date.now(), wi
   // leaderboard-redaction rule: an error string on a public surface is a
   // provider detail at best and a key-bearing URL at worst). The selected
   // window's figures sit at the top level of each row under Base's names.
-  const rows = rankSolanaRows((current.rows || []).map(({ error, ...r }) => ({ ...r, ...(r.windows ? { callsSettled: r.windows[win].callsSettled, totalUsd: r.windows[win].totalUsd, uniqueBuyers: r.windows[win].uniqueBuyers } : {}) })), { self, window: win });
+  // `inboundTransfers` is the name for what is counted: inbound USDC
+  // transfers, not proven tool calls (there is no price match on this chain).
+  // `callsSettled` stays beside it with the same value as a deprecated alias,
+  // so no consumer of the live field breaks; `fieldNotes` says so.
+  const withTransfers = (w) => (w ? { ...w, inboundTransfers: w.callsSettled } : w);
+  const rows = rankSolanaRows((current.rows || []).map(({ error, ...r }) => {
+    if (!r.windows) return { ...r, inboundTransfers: r.credits || 0, callsSettled: r.credits || 0 };
+    const windows = Object.fromEntries(Object.entries(r.windows).map(([k, w]) => [k, withTransfers(w)]));
+    return { ...r, windows, inboundTransfers: r.windows[win].callsSettled, callsSettled: r.windows[win].callsSettled, totalUsd: r.windows[win].totalUsd, uniqueBuyers: r.windows[win].uniqueBuyers };
+  }), { self, window: win });
   const withWindows = rows.filter((r) => r.windows);
   return {
     network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
     asset: "USDC",
-    measure: "settled USDC payments into each seller's payTo, read from the chain: calls, USDC settled and distinct buyers (the owner of the debited USDC account); self-funded transfers excluded; no per-seller cap",
+    measure: "inbound USDC transfers into each seller's payTo, read from the chain: transfer count, USDC received and distinct buyers (the owner of the debited USDC account); self-funded transfers excluded; no price match, so a transfer may be a tool call or any other payment; no per-seller cap",
+    fieldNotes: {
+      inboundTransfers: "inbound USDC transfers into the payTo in the selected window",
+      callsSettled: "deprecated alias of inboundTransfers (same value); these are transfers, not proven tool calls",
+      totalUsd: "USDC received in the selected window",
+      uniqueBuyers: "distinct wallets whose USDC paid in the selected window",
+    },
     window: win,
     windows: Object.keys(SOLANA_WINDOWS),
     // A window is complete when every row's history reaches back past its
@@ -323,7 +338,7 @@ export function getSolanaLeaderboardSnapshot({ self = null, now = Date.now(), wi
     errors: current.errors,
     rpcCallsLastScan: current.rpcCalls || 0,
     txReadsLastScan: current.txReads || 0,
-    active: rows.filter((r) => (r.windows ? r.windows[win].callsSettled : r.credits) > 0).length,
+    active: rows.filter((r) => (r.inboundTransfers || 0) > 0).length,
     rows,
   };
 }

@@ -138,7 +138,7 @@ for (const [status, want, why] of [[401, 503, "a refused key is OUR problem, a 5
     "and it is declared BEFORE ALL_KIT uses it (a const used above its declaration is a TDZ crash at boot, which node --check cannot see)");
   const pow = readFileSync(new URL("../src/pow.js", import.meta.url), "utf8");
   ok(/"judge"/.test(pow), "judge is wallet-only: it spends upstream, so it is never PoW-payable on the free tier");
-  const sweep = readFileSync(new URL("./test-non-metered-examples.js", import.meta.url), "utf8");
+  const sweep = readFileSync(new URL("../src/metered-slugs.js", import.meta.url), "utf8"); // METERED_SLUGS lives in src/
   ok(/"judge"/.test(sweep), "and it is in METERED_SLUGS, because CI holds no key and a 503 there is a hard failure");
 }
 

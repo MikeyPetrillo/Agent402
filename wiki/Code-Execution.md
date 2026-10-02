@@ -14,6 +14,8 @@ Two tiers of sandboxed code execution, paywalled via x402. An agent sends source
 | `POST /api/code-run` | $0.02 | 30s | 10,000 chars | Python, JavaScript |
 | `POST /api/code-run-pro` | $0.05 | 60s | 50,000 chars | Python, JavaScript |
 
+Output (stdout, stderr, the result and any error text together) is capped at 256 KB on `code-run` and 1 MB on `code-run-pro`; a capped answer carries `"truncated": true`.
+
 Both tiers are **wallet-only** -- there is no proof-of-work free tier because every call spins up a real cloud VM. See [[Security Model]] for the wallet-only rationale.
 
 ## Request format

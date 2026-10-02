@@ -121,6 +121,18 @@ export function probeRows(component, sinceMs) {
     .all(String(component), Math.floor(sinceMs));
 }
 
+/** Observation count and passes for one component since `sinceMs`, counted
+ *  in SQLite on the (component, ts) index without materialising rows: the
+ *  window figures longer than the strip need a count, not the rows. */
+export function probeCounts(component, sinceMs) {
+  const d = open();
+  if (!d) return { observed: 0, up: 0 };
+  const r = d
+    .prepare("SELECT COUNT(*) AS n, COALESCE(SUM(ok), 0) AS up FROM status_probes WHERE component = ? AND ts >= ?")
+    .get(String(component), Math.floor(sinceMs));
+  return { observed: Number(r?.n) || 0, up: Number(r?.up) || 0 };
+}
+
 // THE READS BELOW COST THE SAME ON ANY SIZE OF HISTORY. status_probes is never
 // pruned (the page prints its whole span and count), the Cloudflare observer
 // adds a row per component every 5 minutes, and /status rebuilds after every

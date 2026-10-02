@@ -240,7 +240,7 @@ ok(!/caller = "unknown"/.test(searchSrc),
 //    them from BOTH catalog sweeps. If a future change lists them for the
 //    sweeps, this fails first.
 {
-  const nonMetered = readFileSync(new URL("./test-non-metered-examples.js", import.meta.url), "utf8");
+  const nonMetered = readFileSync(new URL("../src/metered-slugs.js", import.meta.url), "utf8"); // METERED_SLUGS lives in src/
   for (const slug of ["exa-search", "exa-answer", "exa-contents"]) {
     ok(new RegExp(`"${slug}"`).test(nonMetered), `${slug} is in METERED_SLUGS, so neither catalog sweep can buy it`);
   }

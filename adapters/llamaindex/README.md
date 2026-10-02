@@ -12,29 +12,24 @@ Drop-in **LlamaIndex TS tools** for [Agent402](https://agent402.tools) - the ope
 ## Install
 
 ```bash
-npm install llamaindex agent402-llamaindex
+npm install llamaindex @llamaindex/workflow @llamaindex/openai agent402-llamaindex
 ```
 
-## Use with the OpenAI agent
+`llamaindex` is what this adapter builds its tools with; `@llamaindex/workflow`
+(the agent) and `@llamaindex/openai` (an LLM) are what the example below runs on.
+
+## Use with an agent workflow
 
 ```js
-import { OpenAIAgent } from "llamaindex";
+import { agent } from "@llamaindex/workflow";
+import { openai } from "@llamaindex/openai";
 import { agent402Tools } from "agent402-llamaindex";
 
-const { tools } = await agent402Tools({ slugs: ["extract", "hash", "render", "screenshot"] });
+// The default (freeOnly: true) keeps only compute-payable tools, so list free ones here;
+// wallet-only slugs such as "extract" or "render" need freeOnly: false and a paying fetch (below).
+const { tools } = await agent402Tools({ slugs: ["hash", "uuid", "json-to-csv"] });
 
-const agent = new OpenAIAgent({ tools });
-const res = await agent.chat({ message: "Get the title of https://example.com/article" });
-console.log(res.response);
-```
-
-## Use with a Workflow
-
-```js
-import { agent } from "llamaindex";
-
-const { tools } = await agent402Tools({ slugs: ["hash"] });
-const myAgent = agent({ tools });
+const myAgent = agent({ tools, llm: openai({ model: "gpt-4o-mini" }) });
 const res = await myAgent.run("Compute SHA-256 of 'hello world'");
 ```
 
@@ -42,6 +37,7 @@ const res = await myAgent.run("Compute SHA-256 of 'hello world'");
 
 ```js
 const { tools } = await agent402Tools({
+  slugs: ["extract", "render", "screenshot"],
   freeOnly: false,
   fetch: payFetch, // your @x402/fetch-wrapped fetch
 });

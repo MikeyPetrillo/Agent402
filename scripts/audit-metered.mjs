@@ -27,9 +27,9 @@ const OUT = arg("out", "");
 const PER_CALL_MS = Number(process.env.AUDIT_PER_CALL_MS || 300_000);
 const CONCURRENCY = Number(process.env.AUDIT_CONCURRENCY || 2);
 
-// The metered list is the sweep's own exclusion set, read from its source so
-// the two cannot drift.
-const src = readFileSync(new URL("./test-non-metered-examples.js", import.meta.url), "utf8");
+// The metered list is the sweep's own exclusion set (src/metered-slugs.js),
+// read from its source so the two cannot drift.
+const src = readFileSync(new URL("../src/metered-slugs.js", import.meta.url), "utf8");
 const m = src.match(/METERED_SLUGS = new Set\(\[([\s\S]*?)\]\)/);
 const METERED = [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
 
