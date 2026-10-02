@@ -22,7 +22,7 @@ import { RAIL_CHAIN_NAMES, RAILS_NOTE } from "./rails.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
-import { CRAWL_INTERVAL_SECONDS, DISCOVERY_INTERVAL_SECONDS } from "./x402-index.js";
+import { CRAWL_INTERVAL_SECONDS, DISCOVERY_INTERVAL_SECONDS } from "./crawl-cadence.js";
 
 import { REPO_URL, REPO_NAMESPACE } from "./repo-link.js";
 const REPO = REPO_URL;

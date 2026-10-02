@@ -69,6 +69,25 @@ export function hostFigures({ summaryFn, byNetworkFn, network = null, networkLab
 
 const fmt = (v) => Number(v || 0).toLocaleString("en-US");
 
+/**
+ * Which settlement rails carried at least one OUTSIDE settlement, from the
+ * sales ledger's own external classification (externalByNetwork). `rails` is
+ * the offered rail list (src/rails.js RAILS), `extra` any rail offered beside
+ * it (Tempo). A rail matches by its friendly key or its CAIP-2 id, the two
+ * spellings the ledger records. Pure.
+ */
+export function railsWithOutsideSettlements(byNetwork, rails, extra = []) {
+  const m = byNetwork && typeof byNetwork === "object" ? byNetwork : {};
+  const keyOf = (name) => String(name).replace(/ Chain$/, "").toLowerCase().replace(/\s+/g, "");
+  const offered = [
+    ...(Array.isArray(rails) ? rails : []).map((r) => ({ name: r.name, keys: [keyOf(r.name), String(r.caip2 || "").toLowerCase()].filter(Boolean) })),
+    ...(Array.isArray(extra) ? extra : []).map((r) => ({ name: r.name, keys: (r.keys || [keyOf(r.name)]).map((k) => String(k).toLowerCase()) })),
+  ];
+  const settled = (k) => Object.entries(m).some(([key, v]) => String(key).toLowerCase() === k && Number(v?.settlements) > 0);
+  const withOutside = offered.filter((r) => r.keys.some(settled)).map((r) => r.name);
+  return { withOutside, offered: offered.length };
+}
+
 export const HOST_EXCLUSION_NOTE = "Our own canary and volume runs are excluded from these figures; the ranked rows measure other sellers on chain and never include the host.";
 
 /** How to label the widest figure: its real start when the ledger knows one,

@@ -12,7 +12,7 @@ import { startTempo } from "./lib/tempo.js";
 import { makeDirectory, INTERNAL_PAYERS } from "./lib/directory.js";
 import { makeLogoCache } from "./lib/logos.js";
 import { makeStore } from "./lib/store.js";
-import { BASE, TEMPO } from "./lib/chains.js";
+import { BASE, TEMPO, MAX_PAYMENT_USD } from "./lib/chains.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
@@ -30,6 +30,13 @@ const STATIC = {
   ...Object.fromEntries(["geist-400-latin", "geist-500-latin", "geist-600-latin", "geist-mono-400-latin", "geist-mono-700-latin"].map((f) => [`/fonts/${f}.woff2`, [`fonts/${f}.woff2`, "font/woff2"]])),
 };
 const files = Object.fromEntries(Object.entries(STATIC).map(([p, [f, type]]) => [p, { body: readFileSync(join(here, "public", f)), type }]));
+// The page's "how to read this" figures come from the same config the ingest
+// uses: the per-payment ceiling, and whether our own wallets are configured
+// (only then are their payments left out of the counts, so only then is it said).
+export const OWN_SENTENCE = " Payments from Agent402's own test and volume wallets walk past in grey and are left out of every count.";
+files["/"].body = Buffer.from(files["/"].body.toString("utf8")
+  .replaceAll("<!--MAXUSD-->", String(MAX_PAYMENT_USD))
+  .replace("<!--OWN-->", INTERNAL_PAYERS.size ? OWN_SENTENCE : ""));
 // The page references its script with a content hash, so a deploy is never
 // served a stale cached script.
 const appVersion = createHash("sha256").update(files["/app.js"].body).digest("hex").slice(0, 12);
@@ -82,7 +89,7 @@ function toPublic(ev) {
     payer: shortAddr(ev.payer), tx: ev.tx, txUrl: (ev.chain === "mpp" ? TEMPO : BASE).txUrl(ev.tx),
     seller: sellerInfo(ev.seller.key),
     endpoint: ev.seller.endpoints?.length === 1 ? ev.seller.endpoints[0] : null,
-    internal: INTERNAL_PAYERS.has(ev.payer) || undefined,
+    internal: ev.internal || undefined,
   };
 }
 
@@ -96,6 +103,8 @@ function onEvents(evs, { backfill = false } = {}) {
     const s = directory.lookup(ev.chain, ev.payTo);
     if (!s.listed && !INCLUDE_UNLISTED) continue;
     ev.seller = s;
+    // Agent402's own canary and volume payments: shown, never counted.
+    ev.internal = INTERNAL_PAYERS.has(ev.payer);
     sellerByKey.set(s.key, sellerPublic(s));
     // Backfilled payments are history: they join the hour a page loads on
     // connect, never the live stream of walkers.
@@ -117,7 +126,9 @@ const keepAlive = setInterval(() => { for (const c of clients) c.write(": ping\n
 keepAlive.unref?.();
 
 function statsNow() {
-  return { ...store.stats(sellerInfo), ingest: { base: pick(ingest.base?.status), tempo: pick(ingest.tempo?.status) } };
+  // excludesOwnPayments: whether the wallet list that marks Agent402's own
+  // payments is configured on this service (the counts exclude them only then).
+  return { ...store.stats(sellerInfo), excludesOwnPayments: INTERNAL_PAYERS.size > 0, ingest: { base: pick(ingest.base?.status), tempo: pick(ingest.tempo?.status) } };
 }
 function pick(s) { return s ? { live: !!s.lastOkAt && Date.now() - s.lastOkAt < 60_000, backfilled: s.backfilled } : null; }
 

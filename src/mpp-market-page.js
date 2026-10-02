@@ -54,9 +54,34 @@ const fmtUsd = (n) => (Number(n) >= 100 ? `$${Math.round(Number(n)).toLocaleStri
  *  on Tempo to the recipient their LIVE challenge names (src/mpp-leaderboard.js).
  *  A window, not lifetime, and a proxy (any inbound transfer), both said in the
  *  copy. Rows with zero transfers are counted, never listed. */
+/** The rows the ranked table shows, host left out, ranks renumbered over
+ *  them. The roster's "routable · #N" badges read the same ranks. */
+function rankedMppRows(lb) {
+  return (Array.isArray(lb?.rows) ? lb.rows : [])
+    .filter((r) => !r.self && (r.transfers > 0 || (r.d30?.transfers || 0) > 0))
+    .map((r, i) => ({ ...r, rank: i + 1 }));
+}
+
 function leaderboardHtml(lb, host = null) {
-  const rows = Array.isArray(lb?.rows) ? lb.rows : [];
-  const active = rows.filter((r) => r.transfers > 0 || (r.d30?.transfers || 0) > 0);
+  // The host's own recipient is NOT ranked: the host card below says the
+  // ranked rows never include the host, and its pinned row discloses ours.
+  // Ranks are renumbered over what is shown, so no gap reveals where we sat.
+  const rows = (Array.isArray(lb?.rows) ? lb.rows : []).filter((r) => !r.self);
+  const active = rankedMppRows(lb);
+  const floor = lb?.provenFloor;
+  const minPayers = lb?.provenMinPayers;
+  // The router's own rule, stated as it is applied (tempo-buyer.js): the
+  // transfer floor AND distinct payers that are not the recipient itself, then
+  // a tempo/charge offer on the live challenge (the router pays charge only).
+  const ruleText = `at least ${floor ?? "-"} inbound transfers in the window${minPayers != null ? ` from at least ${minPayers} distinct payers other than the recipient` : ""}, plus a tempo/charge offer on the live challenge`;
+  const routerCell = (r) => {
+    if (r.routable) return `<span class="mpr-proven">routable</span>`;
+    const dim = (t, title = "") => `<span style="font-family:var(--font-mono);font-size:11px;color:var(--faint);"${title ? ` title="${esc(title)}"` : ""}>${t}</span>`;
+    if (r.proven) return dim("session only", "On-chain floor met, but the live challenge offers no tempo/charge - the router pays charge only");
+    if (floor != null && r.transfers < floor) return dim(`below floor (${r.transfers.toLocaleString("en-US")} of ${floor} transfers)`);
+    if (minPayers != null && r.evidencePayers != null && r.evidencePayers < minPayers) return dim(`too few payers (${r.evidencePayers} of ${minPayers})`);
+    return dim("not proven");
+  };
   const hours = lb?.window?.approxHours;
   const hist = lb?.history;
   const histNote = hist?.since ? ` Rolling 7d/30d columns sum what we observed since ${esc(hist.since)} (${hist.daysCovered || Object.keys(hist.days || {}).length} UTC day${(hist.daysCovered || 1) === 1 ? "" : "s"}${hist.gaps ? `, ${hist.gaps} refresh gap${hist.gaps === 1 ? "" : "s"} lost blocks` : ""}) - a running total from that date, not lifetime.` : "";
@@ -84,7 +109,7 @@ function leaderboardHtml(lb, host = null) {
       <td class="num">${(r.d30?.transfers ?? 0).toLocaleString("en-US")}</td>
       <td class="num">${r.payers.toLocaleString("en-US")}</td>
       <td class="num">${esc(fmtUsd(r.d7?.volumeUsdc ?? r.volumeUsdc))}</td>
-      <td>${r.routable ? `<span class="mpr-proven">routable</span>` : r.proven ? `<span style="font-family:var(--font-mono);font-size:11px;color:var(--faint);" title="On-chain floor met, but the live challenge offers no tempo/charge - the router pays charge only">session only</span>` : `<span style="font-family:var(--font-mono);font-size:11px;color:var(--faint);">below floor (${lb.provenFloor})</span>`}</td>
+      <td>${routerCell(r)}</td>
     </tr>`;
   }).join("");
   const table = active.length
@@ -92,11 +117,11 @@ function leaderboardHtml(lb, host = null) {
       <thead><tr><th class="num">#</th><th>Seller &middot; Tempo recipient</th><th class="num" title="inbound USDC.e transfers in the read window">${esc(windowLabel)}</th><th class="num" title="rolling 7 days of observed transfers">7d</th><th class="num" title="rolling 30 days of observed transfers">30d</th><th class="num" title="distinct payer addresses in the read window">Payers</th><th class="num" title="7-day observed volume">Volume 7d</th><th>Router</th></tr></thead>
       <tbody>${trs}</tbody></table></div>`
     : `<p style="color:var(--muted);font-size:13.5px;margin:0;">${lb?.generatedAt ? "No verified seller's recipient received a USDC.e transfer on Tempo in the window." : "First on-chain read pending - the leaderboard rebuilds every 30 minutes from the verified index above."}</p>`;
-  const zero = rows.length - active.length;
+  const zero = rows.length - active.length; // host row already left out of both
   // (rows here are lb.rows; a row is active with a window OR a 30d count)
   return `
   <h2 id="leaderboard" style="font-size:21px;font-weight:800;margin:40px 0 6px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">MPP leaderboard &middot; settled on Tempo${staleNote}</h2>
-  <p style="font-size:13px;color:var(--faint);margin:0 0 12px;max-width:820px;">Verified sellers ranked by inbound USDC.e transfers on Tempo (chain 4217) to the recipient address their <em>live</em> MPP challenge names, ${windowSource}. A window, not lifetime; an inbound transfer is the same proxy the <a href="/guides/smart-order-router" style="color:var(--muted);">router</a> requires before it spends (floor ${lb?.provenFloor ?? "-"} in the window = <span class="mpr-proven" style="margin:0;">routable</span>).${histNote} Ranked by 7d, then window. Machine-readable: <a href="/api/mpp-leaderboard" style="color:var(--muted);">/api/mpp-leaderboard</a>.</p>
+  <p style="font-size:13px;color:var(--faint);margin:0 0 12px;max-width:820px;">Verified sellers ranked by inbound USDC.e transfers on Tempo (chain 4217) to the recipient address their <em>live</em> MPP challenge names, ${windowSource}. A window, not lifetime; an inbound transfer is the same proxy the <a href="/guides/smart-order-router" style="color:var(--muted);">router</a> requires before it spends (<span class="mpr-proven" style="margin:0;">routable</span> = ${esc(ruleText)}).${histNote} Our own recipient is not ranked; it is disclosed below the table. Ranked by 7d, then window. Machine-readable: <a href="/api/mpp-leaderboard" style="color:var(--muted);">/api/mpp-leaderboard</a>.</p>
   ${table}
   ${hostRowHtml(host)}
   ${zero > 0 ? `<p style="font-family:var(--font-mono);font-size:11.5px;color:var(--faint);margin-top:10px;">${zero.toLocaleString("en-US")} more verified recipient${zero === 1 ? "" : "s"} with no inbound transfer observed (listed below, not ranked).</p>` : ""}`;
@@ -106,7 +131,7 @@ function sellerRowHtml(s, lbByRecipient) {
   const endpoint = Array.isArray(s.endpoints) ? s.endpoints[0] : null;
   const rec = (s.offers || []).find((o) => o?.method === "tempo" && o.recipient && lbByRecipient?.has(o.recipient));
   const lbRow = rec ? lbByRecipient.get(rec.recipient) : null;
-  const provenHtml = lbRow?.routable ? `<span class="mpr-proven" title="${esc(String(lbRow.transfers))} inbound USDC.e transfers on Tempo in the window">routable &middot; #${lbRow.rank}</span>` : "";
+  const provenHtml = lbRow?.routable ? `<span class="mpr-proven" title="${esc(String(lbRow.transfers))} inbound USDC.e transfers on Tempo in the window">routable${lbRow.rank ? ` &middot; #${lbRow.rank}` : ""}</span>` : "";
   const endpointHtml = endpoint
     ? `<span class="mpr-endpoint">${esc(String(endpoint.method || "GET").toUpperCase())} ${esc(endpoint.path || "")}${endpoint.payment?.amount ? ` &middot; $${(Number(endpoint.payment.amount) / Math.pow(10, Number(endpoint.payment.decimals ?? 6))).toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}` : ""}</span>`
     : "";
@@ -138,7 +163,10 @@ function sellerRowHtml(s, lbByRecipient) {
  *  @param snapshot mppIndexSnapshot() result */
 export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = null } = {}) {
   const sellers = Array.isArray(snapshot?.sellers) ? snapshot.sellers : [];
-  const lbByRecipient = new Map((leaderboard?.rows || []).map((r) => [r.recipient, r]));
+  const lbByRecipient = new Map([
+    ...(leaderboard?.rows || []).map((r) => [r.recipient, { ...r, rank: null }]),
+    ...rankedMppRows(leaderboard).map((r) => [r.recipient, r]),
+  ]);
   const verifiedCount = snapshot?.verifiedSellers || 0;
   const discoveredTotal = snapshot?.discoveredTotal || 0;
   const totalEndpoints = sellers.reduce((sum, s) => sum + (Array.isArray(s.endpoints) ? s.endpoints.length : 0), 0);
@@ -235,7 +263,7 @@ export function mppMarketPage(baseUrl, snapshot, leaderboard = null, { host = nu
     { q: "What is the MPP marketplace?", a: "A directory of services that accept payments over MPP (the IETF-track \"Payment\" HTTP auth scheme). Every listing here has been independently, live-verified - a real unpaid request confirming the seller's endpoint genuinely answers with a WWW-Authenticate: Payment challenge - not just copied from a registry's claim." },
     { q: "How is this different from Agent402's x402 marketplace?", a: "Different protocol, different seller population, and a separate crawler entirely. An MPP seller isn't necessarily an x402 seller and vice versa; Agent402 itself supports both, as a buyer-facing wire translation on its own tools and as a neutral index for each ecosystem." },
     { q: "How does a seller get listed?", a: "Three ways, all free and automatic: appear in the public mpp.dev registry or on MPPScan (both crawled), answer an MPP challenge on a 402 our x402 crawler already probes (dual-stack sellers are detected without any listing), or register directly - the form above, or POST /api/mpp-index/register with your origin and, optionally, the priced path your 402 lives on. There is no review queue: verification is a real unpaid probe, and a listing appears as soon as it comes back with WWW-Authenticate: Payment." },
-    { q: "How is the MPP leaderboard ranked?", a: "By what the chain shows, not by what anyone claims: for every verified seller we take the recipient address its live MPP challenge names, then count inbound USDC.e transfers to that address on Tempo over the most recent read window (24 hours from Tempo's own transfer index when it is available, otherwise about fifteen hours of blocks read from the RPC, its per-query cap), plus distinct payers and volume. It is a window, not lifetime, and an inbound transfer is a proxy for a settlement rather than proof of one - the same proxy Agent402's own router requires before it spends money with a seller, which is why rows at or above the floor are marked routable." },
+    { q: "How is the MPP leaderboard ranked?", a: "By what the chain shows, not by what anyone claims: for every verified seller we take the recipient address its live MPP challenge names, then count inbound USDC.e transfers to that address on Tempo over the most recent read window (24 hours from Tempo's own transfer index when it is available, otherwise about fifteen hours of blocks read from the RPC, its per-query cap), plus distinct payers and volume. It is a window, not lifetime, and an inbound transfer is a proxy for a settlement rather than proof of one - the same proxy Agent402's own router requires before it spends money with a seller, which is why rows that also clear its distinct-payer rule and offer tempo/charge are marked routable." },
     { q: "Why do discovered and verified counts differ?", a: "Discovery finds candidate origins from the mpp.dev registry and MPPScan; verification is our own real probe of each one. A gap between the two is normal - a fresh discovery awaiting its first probe, or a listing that no longer answers - and is always shown, never hidden." },
   ];
   const faqHtml = MPP_FAQS.map((f) => `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:17.5px;margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:15px;line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`).join("");

@@ -18,6 +18,8 @@
   var scroller = body;
   var search = root.querySelector('[data-t-search]');
   var count = root.querySelector('[data-t-count]');
+  // The server's count can read "400 of 1,234" (a capped roster); keep it.
+  var countAll = count ? count.textContent : '';
   var help = root.querySelector('[data-t-help]');
   var head = root.querySelector('.t-head');
   if (!body) return;
@@ -125,7 +127,7 @@
     for (var i = 0; i < view.length; i++) body.appendChild(view[i]);
     if (virtual && spacerBottom) body.appendChild(spacerBottom);
     if (count) count.textContent = view.length === all.length
-      ? String(all.length)
+      ? countAll
       : String(view.length) + '/' + String(all.length);
     cursor = Math.min(cursor, Math.max(0, view.length - 1));
     paint();

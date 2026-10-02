@@ -1,5 +1,5 @@
 // /proof - receipts for the metered tier: the settled amount next to the
-// quoted ceiling, with the settle transaction, so "you pay for what the model
+// quoted ceiling (our own canary row with its settle transaction), so "you pay for what the model
 // used, under a price you saw first" is a fact anyone can check on-chain
 // rather than a sentence on /why.
 //
@@ -38,7 +38,7 @@ function rowHtml(label, side, note) {
 </div>`;
   }
   const link = txLink(l.network, l.tx);
-  const txCell = l.tx ? (link ? `<a href="${esc(link)}" rel="noopener" style="color:var(--ink);word-break:break-all;">${esc(l.tx)}</a>` : `<span style="word-break:break-all;">${esc(l.tx)}</span>`) : "n/a";
+  const txCell = l.tx ? (link ? `<a href="${esc(link)}" rel="noopener" style="color:var(--ink);word-break:break-all;">${esc(l.tx)}</a>` : `<span style="word-break:break-all;">${esc(l.tx)}</span>`) : l.txWithheld ? `<span style="color:var(--muted);font-family:var(--font-body);">not published: a transaction hash names its payer on chain</span>` : "n/a";
   return `<div style="background:var(--card);border:1px solid var(--hairline);padding:22px 24px;">
   <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:12px;">${esc(label)}</div>
   <dl style="display:grid;grid-template-columns:150px 1fr;gap:8px 16px;margin:0;font-size:15px;line-height:1.5;">
@@ -56,7 +56,7 @@ function rowHtml(label, side, note) {
 export function proofPage(baseUrl, feed, standing = null) {
   const canonical = `${baseUrl}/proof`;
   const title = "Receipts: settled under the quoted ceiling";
-  const description = "The metered model route quotes a ceiling before payment and settles what the call actually used. This page shows the latest settlement next to its quote, with the on-chain transaction, plus the aggregate.";
+  const description = "The metered model route quotes a ceiling before payment and settles what the call actually used. This page shows the latest settlement next to its quote, plus the aggregate; our own canary settlement carries its on-chain transaction.";
   const ext = feed?.external || { count: 0, latest: null };
   const int = feed?.internal || { count: 0, latest: null };
   const body = `
@@ -66,7 +66,7 @@ export function proofPage(baseUrl, feed, standing = null) {
       <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/why" style="color:var(--muted);text-decoration:none;">why pay here</a> / <span style="color:var(--ink);">receipts</span>
     </nav>
     <h1 style="font-weight:800;font-size:48px;line-height:.98;letter-spacing:-.035em;margin:0 0 20px;color:var(--ink);max-width:900px;">Settled under the ceiling you saw first.</h1>
-    <p style="font-size:17px;line-height:1.6;color:var(--muted);max-width:820px;margin:0;">Every call to the metered route (<code>POST /v1/metered/chat/completions</code>) is quoted from its own body before payment. A buyer whose client speaks the <code>upto</code> scheme, or who pays by card or credits, settles what the call actually used, never more than the quote. The ledger records both numbers per settlement; the settle transaction is on-chain. Machine-readable: <a href="/api/proof" style="color:var(--ink);">/api/proof</a>.</p>
+    <p style="font-size:17px;line-height:1.6;color:var(--muted);max-width:820px;margin:0;">Every call to the metered route (<code>POST /v1/metered/chat/completions</code>) is quoted from its own body before payment. A buyer whose client speaks the <code>upto</code> scheme, or who pays by card or credits, settles what the call actually used, never more than the quote. The ledger records both numbers per settlement. Our own canary row links its settle transaction on-chain; an outside buyer's transaction is not listed, because a hash names its payer. Machine-readable: <a href="/api/proof" style="color:var(--ink);">/api/proof</a>.</p>
   </div>
 </header>
 ${standingBand(standing || {})}

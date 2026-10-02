@@ -1565,6 +1565,8 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Ledger-backed rail transfers (empty ledger must fall back, never render zero)
           t node scripts/test-ledger-recent.js
+          # /api/revenue publishes no payer address and no outside buyer's tx hash
+          t node scripts/test-revenue-no-payers.js
           # Html-kit tests (html-select, html-table, html-strip, html-links, html-meta)
           t node scripts/test-html-kit.js
           # Bazaar quality ingestion (30d calls/payers on index sellers + /api/find external rows + ranking tiebreak - offline)

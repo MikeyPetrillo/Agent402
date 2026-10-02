@@ -67,7 +67,7 @@ ok(m.payment.dataHandling?.readsPaymentMetadata === false && m.payment.dataHandl
   ok(m.trust?.productionHeartbeatMinutes === Number(cron[1]), `productionHeartbeatMinutes matches the worker cron (${m.trust?.productionHeartbeatMinutes} vs ${cron[1]})`);
   // The crawl cadence is the crawler's timer, not a typed figure ("crawl: 300"
   // stood here while the crawler ran every 1800 s).
-  const { CRAWL_INTERVAL_SECONDS } = await import("../src/x402-index.js");
+  const { CRAWL_INTERVAL_SECONDS } = await import("../src/crawl-cadence.js");
   ok(m.discovery?.refreshSeconds?.crawl === CRAWL_INTERVAL_SECONDS && CRAWL_INTERVAL_SECONDS > 300, `refreshSeconds.crawl is the crawler's own interval (${m.discovery?.refreshSeconds?.crawl} vs ${CRAWL_INTERVAL_SECONDS})`);
 }
 

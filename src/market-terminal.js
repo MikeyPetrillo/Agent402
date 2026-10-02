@@ -134,7 +134,7 @@ export function terminalTicker(rows = []) {
  *  hides rows it is not showing, so search, sort and deep links keep working
  *  with the script absent or broken. Rows carry their own numbers as data-*
  *  so the script never re-derives a figure the server already computed. */
-export function terminalRoster(rows = [], selectedHost = null) {
+export function terminalRoster(rows = [], selectedHost = null, { measured = true } = {}) {
   if (!rows.length) return `<div class="t-empty">no sellers indexed on this rail yet</div>`;
   const maxCalls = Math.max(...rows.map((r) => Number(r.calls) || 0), 1);
   const body = rows.map((r, i) => {
@@ -147,9 +147,9 @@ export function terminalRoster(rows = [], selectedHost = null) {
        ${sel ? 'aria-current="true"' : ""}>
       <span class="t-c t-c-n" role="cell">${String(i + 1).padStart(3, "0")}</span>
       <span class="t-c t-c-host" role="cell"><span class="t-dot${r.routable ? " is-on" : ""}" aria-hidden="true"></span>${esc(r.host)}</span>
-      <span class="t-c t-c-num" role="cell">${num(r.calls)}</span>
-      <span class="t-c t-c-num" role="cell">${esc(compactUsd(r.usd))}</span>
-      <span class="t-c t-c-num" role="cell">${num(r.buyers)}</span>
+      <span class="t-c t-c-num" role="cell">${measured ? num(r.calls) : "-"}</span>
+      <span class="t-c t-c-num" role="cell">${measured ? esc(compactUsd(r.usd)) : "-"}</span>
+      <span class="t-c t-c-num" role="cell">${measured ? num(r.buyers) : "-"}</span>
       <span class="t-c t-c-num" role="cell">${num(r.tools)}</span>
       <span class="t-c t-c-bar" role="cell" aria-hidden="true"><i style="width:${share}%"></i></span>
     </a>`;
@@ -171,14 +171,21 @@ export function terminalRoster(rows = [], selectedHost = null) {
 /** Status bar. Reports what the page actually knows, including what it does
  *  NOT know: a capped scan says "floor", an unavailable one says so, and
  *  neither is dressed up as a measurement. */
-export function terminalStatusBar({ chainName, asset, sellerCount, activity, scanned, scopeLabel }) {
+/** "400 of 1,234" when the rendered roster is a capped page of a longer one,
+ *  the bare count when it is the whole roster. */
+export function shownOfTotal(shown, total) {
+  const t = Number(total);
+  return Number.isFinite(t) && t > Number(shown) ? `${num(shown)} of ${num(t)}` : num(shown);
+}
+
+export function terminalStatusBar({ chainName, asset, sellerCount, totalSellers = null, activity, scanned, scopeLabel }) {
   const state = !activity || activity.error ? { k: "warn", t: "SCAN UNAVAILABLE" }
     : activity.truncated ? { k: "warn", t: "SCAN CAPPED / FLOOR" }
     : { k: "ok", t: "SCAN COMPLETE" };
   const cells = [
     `<span class="t-st-cell"><span class="t-label">RAIL</span>${esc(chainName || "")}</span>`,
     `<span class="t-st-cell"><span class="t-label">ASSET</span>${esc(asset || "USDC")}</span>`,
-    `<span class="t-st-cell"><span class="t-label">SELLERS</span>${num(sellerCount)}</span>`,
+    `<span class="t-st-cell"><span class="t-label">SELLERS</span>${shownOfTotal(sellerCount, totalSellers)}</span>`,
     `<span class="t-st-cell"><span class="t-label">SCOPE</span>${esc(scopeLabel || "")}</span>`,
     `<span class="t-st-cell t-${state.k}"><span class="t-st-led" aria-hidden="true"></span>${esc(state.t)}</span>`,
     scanned ? `<span class="t-st-cell"><span class="t-label">WINDOW</span>${esc(scanned)}</span>` : "",
@@ -330,7 +337,10 @@ export const TERMINAL_CSS = `
 }`;
 
 /** Assemble the terminal for one chain page. */
-export function marketTerminalHtml({ chainName = "", asset = "USDC", rows = [], selectedHost = null, activity = null, scopeLabel = "THIS HOST", noteText = "", ticker = [] } = {}) {
+// `totalSellers`: the roster's full length when `rows` is a capped page of it.
+// `measured`: false when per-seller settlements are not measured on this rail,
+// so the CALLS / VOLUME / BUYERS cells read "-" rather than a zero.
+export function marketTerminalHtml({ chainName = "", asset = "USDC", rows = [], totalSellers = null, measured = true, selectedHost = null, activity = null, scopeLabel = "THIS HOST", noteText = "", ticker = [] } = {}) {
   return `<section class="t-wrap" data-t-terminal aria-label="Market terminal">
     ${terminalTicker(ticker)}
     <div class="t-grid">
@@ -338,15 +348,15 @@ export function marketTerminalHtml({ chainName = "", asset = "USDC", rows = [], 
         <div class="t-toolbar">
           <span class="t-label">SELLERS</span>
           <input class="t-search" type="search" data-t-search placeholder="filter by host  (press /)" aria-label="Filter sellers by host" autocomplete="off" spellcheck="false">
-          <span class="t-count" data-t-count>${num(rows.length)}</span>
+          <span class="t-count" data-t-count>${shownOfTotal(rows.length, totalSellers)}</span>
         </div>
-        ${terminalRoster(rows, selectedHost)}
+        ${terminalRoster(rows, selectedHost, { measured })}
       </div>
       <div class="t-col" id="detail">
         ${terminalMetrics(activity, scopeLabel, noteText)}
       </div>
     </div>
-    ${terminalStatusBar({ chainName, asset, sellerCount: rows.length, activity, scopeLabel, scanned: activity && !activity.error ? `${activity.days}D` : "" })}
+    ${terminalStatusBar({ chainName, asset, sellerCount: rows.length, totalSellers, activity, scopeLabel, scanned: activity && !activity.error ? `${activity.days}D` : "" })}
     ${terminalHelp()}
   </section>`;
 }

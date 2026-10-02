@@ -17,7 +17,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { RAILS, railKey, RAILS_AMP } from "./rails.js";
-import { crawlIntervalLabel } from "./x402-index.js";
+import { crawlIntervalLabel } from "./crawl-cadence.js";
 import { routerRankingSentence } from "./routing-proof.js";
 import { EXTERNAL_CHAIN_BY_NETWORK } from "./tools/route-execute.js";
 
@@ -58,7 +58,7 @@ const LANES = [
 const REGISTER_STEPS = [
   ["01", "Serve a 402", "Return HTTP 402 Payment Required with your price, asset, network and payTo address on the endpoints you want to charge for. Any x402 middleware does this."],
   ["02", "Register the origin", "One POST to /api/index/register. No account, no review queue, no waiting on us."],
-  ["03", "Get crawled", `The crawler reads your manifest, records your tools and advertised chains, and re-reads it ${crawlIntervalLabel()}; health is scored from those crawls. Probes are never paid calls.`],
+  ["03", "Get crawled", `The crawler reads your manifest at once, records your tools and advertised chains, and re-probes it ${crawlIntervalLabel()}; health is scored from those probes. Probes are never paid calls.`],
   ["04", "Get routed", `The Smart Order Router resolves a described task to a listing. ${routerRankingSentence()} An accurate description is how you win it.`],
   ["05", "Get paid", "Buyers pay your wallet directly in USDC. Your settled volume shows up on the public on-chain leaderboard."],
 ];
@@ -91,7 +91,7 @@ const FAQS = [
   ["What if my site is not an API?", "Use agent402-tollbooth - the pay-per-crawl mechanism is explained above under \"Charge the crawlers instead\". It ships as an open MIT middleware for Express, Next.js, Cloudflare Workers, a reverse proxy or WordPress: drop it in front of any site, no rebuild required."],
   ["Which chains can I get paid on?", `Advertise whichever you support. Agent402 itself accepts ${RAILS.length} rails: ${RAILS_AMP}. ${ROUTER_CHAIN_SENTENCE}`],
   ["How do I know what to charge, or what to build?", "Two paid intelligence tools, both half a cent a read. /api/bestsellers ranks what agents actually pay for across a 500+-tool catalog by distinct buyers, sales, revenue or buyer diversity, with a trend against the previous window. /api/demand-radar ranks what agents asked for and did not find. Neither can be reconstructed from on-chain data: settlements are public, but which tool was bought is not."],
-  ["What happens if my endpoint goes down?", `The next crawl (${crawlIntervalLabel()}) notices and your rolling health drops, so the router routes around you until you recover. Health is a rolling window rather than a single failure, and new sellers are not punished for having no history yet.`],
+  ["What happens if my endpoint goes down?", `The probe that runs ${crawlIntervalLabel()} notices and your rolling health drops, so the router routes around you until you recover. Health is a rolling window rather than a single failure, and new sellers are not punished for having no history yet.`],
 ];
 
 function costRow([label, value, tone]) {
@@ -229,7 +229,7 @@ table{border-collapse:collapse;width:100%}
     <div style="padding:28px;border-right:1px solid var(--hairline);background:var(--card);display:flex;flex-direction:column;">
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:16px;">01 / YOU HAVE AN API</div>
       <h3 style="font-weight:800;font-size:23px;margin:0 0 12px;color:var(--ink);">List it and get routed</h3>
-      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Return a 402 with your price, asset, network and payTo on the endpoints you want to charge for. Register the origin and the crawler reads your manifest, then re-reads it ${crawlIntervalLabel()}. From then on the Smart Order Router can send you work, ranked against our own tools on the same terms.</p>
+      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Return a 402 with your price, asset, network and payTo on the endpoints you want to charge for. Register the origin and the crawler reads your manifest at once, then re-probes it ${crawlIntervalLabel()}. From then on the Smart Order Router can send you work, ranked against our own tools on the same terms.</p>
       <pre style="margin:0 0 18px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># what a buyer's agent sees
 </span>HTTP/1.1 402 Payment Required
 PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;

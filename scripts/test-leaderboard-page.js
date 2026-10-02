@@ -25,7 +25,8 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
     ],
   };
   const stats = { toolCallsServed: { viaUSDC: 28200, viaProofOfWork: 7608, viaMPPWire: 69, viaUSDCByNetwork: { base: 28200 } } };
-  const html = ledgerLeaderboardPage(BASE_URL, snapshot, { stats, walletAddress: SELF_WALLET });
+  const self = { railsWithOutside: ["Base", "Solana", "Stellar"], railsOffered: 13, mppExternal: 7 };
+  const html = ledgerLeaderboardPage(BASE_URL, snapshot, { stats, walletAddress: SELF_WALLET, self });
 
   ok(html.includes("Who is actually") && html.includes("settling <span"), "hero H1 renders");
   ok(!html.slice(0, html.indexOf("Agent402, for comparison")).includes(">Agent402.Tools<"), "Agent402's own row is excluded from the ranked table (wallet-matched)");
@@ -40,8 +41,12 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
   ok(html.includes("0.01"), "organic ratio for a high-volume, low-buyer seller computes correctly");
   ok(html.includes("0.02"), "organic ratio for a low-buyer seller computes correctly");
   ok(html.includes("824") && html.includes("1,040") && html.includes("14,866") && html.includes("302,400"), "snapshot meta table renders real scan figures");
-  ok(html.includes("28,200") && html.includes("7,608") && html.includes("69"), "Agent402's own comparison figures render from real stats");
-  ok(/\d+ of 12/.test(html), "rails-with-traffic count renders as 'N of 12'");
+  // Our own row reads the sales ledger's OUTSIDE figures, never the lifetime
+  // /api/stats counters (viaUSDC 28,200 / viaMPPWire 69 include our own buys).
+  ok(html.includes("7,608") && !html.includes("28,200") && !/>69</.test(html), "our own row shows no lifetime stats counter that includes our own purchases");
+  ok(/data-self-rails>3 of 13</.test(html) && /rails with an outside settlement/.test(html), "rails count = rails with an outside settlement, of the rails offered");
+  ok(/data-self-mpp>7</.test(html) && /outside settlements over the MPP wire/.test(html), "MPP row = outside settlements only");
+  ok(!/Twelve rails/.test(html), "no hand-typed rail count");
 }
 
 // --- organic ratio: genuinely sub-0.01 case reads as "<0.01", never a
@@ -72,10 +77,12 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
 // when the snapshot holds hundreds of sellers.
 {
   const many = Array.from({ length: 300 }, (_, i) => ({ rank: i + 1, name: `Seller ${i}`, wallet: `0x${i}`, totalUsd: 300 - i, callsSettled: 100, uniqueBuyers: 10 }));
-  const html = ledgerLeaderboardPage(BASE_URL, { leaderboard: many, scannedSellers: 300 }, {});
+  // 2,212 origins scanned, 300 rows on the board: "of M" is the board.
+  const html = ledgerLeaderboardPage(BASE_URL, { leaderboard: many, scannedSellers: 2212, walletsQueried: 2212 }, {});
   const rowCount = (html.match(/class="lb-row/g) || []).length;
   ok(rowCount > 0 && rowCount <= 12, `ranked table renders a bounded top N, not all 300 sellers (got ${rowCount} rows)`);
-  ok(html.includes("top 12 of 300"), "the cap is disclosed honestly, not hidden");
+  ok(html.includes("top 12 of 300 ranked rows") && !html.includes("of 2,212"), "the cap is disclosed against the rows actually ranked, not the origins scanned");
+  ok(!/sellers ranked, one wallet each/.test(html) && /sellers scanned, one wallet each/.test(html) && /rows ranked \(a row can fold several wallets\)/.test(html), "scanned origins and ranked rows are labelled as the two different counts they are");
 }
 
 // --- structured data -----------------------------------------------------------
@@ -157,7 +164,7 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
     ],
   };
   const html = ledgerLeaderboardPage(BASE_URL, { leaderboard: [], scannedSellers: 0 }, { solana: sol });
-  ok(/id="solana"/.test(html) && /Solana, ranked by USDC settled/.test(html), "the page carries a Solana section");
+  ok(/id="solana"/.test(html) && /Solana, ranked by USDC received/.test(html), "the page carries a Solana section");
   ok(/36,150/.test(html) && /\$4,512\.25/.test(html) && /\$0\.1248/.test(html), "a busy seller shows every payment, the dollars and the average ticket (no cap)");
   ok(!/SELFSELF/.test(html), "our own Solana payTo is left out of the ranking, as on the Base table");
   ok(!/idle\.example/.test(html), "a seller with no payments in the window is not ranked");
@@ -165,10 +172,24 @@ const SELF_WALLET = "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0";
   ok(!/<script>alert/.test(html), "seller-controlled origin text is escaped");
   ok(!/href="javascript:/i.test(html), "a non-http origin is shown, never linked");
   ok(/busy\.example<\/a> \+1/.test(html), "a seller with several origins shows the first and a count");
-  ok(/usdc settled<\/span><span[^>]*>calls<\/span><span[^>]*>buyers<\/span><span[^>]*>avg ticket<\/span><span[^>]*>organic/.test(html.slice(html.indexOf('id="solana"'))), "the Solana table has the Base table's columns");
+  // No price filter on Solana: every inbound transfer counts, so the columns
+  // say transfers, never calls, and no "same organic ratio" claim is made.
+  const solHtml = html.slice(html.indexOf('id="solana"'));
+  ok(/usdc received<\/span><span[^>]*>transfers<\/span><span[^>]*>buyers<\/span><span[^>]*>avg transfer<\/span><span[^>]*>organic/.test(solHtml), "the Solana table labels inbound transfers, not calls");
+  ok(!/same organic ratio applies/.test(html) && /these are transfers, not calls/.test(html), "the Solana copy states it has no price filter");
+  ok(!/settlements on chains other than Base/.test(html), "the method note does not say other chains are unseen while a Solana table renders");
   const empty = ledgerLeaderboardPage(BASE_URL, {}, { solana: { window: "7d", rows: [] } });
-  ok(/No Solana seller has settled a payment/.test(empty), "an empty board says so instead of rendering nothing");
+  ok(/No Solana seller has received a USDC transfer/.test(empty), "an empty board says so instead of rendering nothing");
   ok(!/id="solana"/.test(ledgerLeaderboardPage(BASE_URL, {}, {})), "no Solana snapshot, no section");
+}
+
+// railsWithOutsideSettlements: the ledger's external map, matched by rail key or CAIP-2.
+{
+  const { railsWithOutsideSettlements } = await import("../src/host-entry.js");
+  const { RAILS } = await import("../src/rails.js");
+  const r = railsWithOutsideSettlements({ base: { settlements: 4 }, "eip155:1329": { settlements: 0 }, "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": { settlements: 2 }, stripe: { settlements: 9 }, tempo: { settlements: 1 } }, RAILS, [{ name: "Tempo", keys: ["tempo", "eip155:4217"] }]);
+  ok(r.offered === RAILS.length + 1, "offered = the rail list plus Tempo");
+  ok(r.withOutside.join(",") === "Base,Solana,Tempo", `only rails with an outside settlement count; zero rows and card do not (got ${r.withOutside.join(",")})`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

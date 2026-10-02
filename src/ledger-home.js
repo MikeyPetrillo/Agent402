@@ -3,6 +3,7 @@
 // transcript, real PoW demo, sell block, index/leaderboard, lane-level
 // demand teaser, FAQ, closing CTA, footer.
 
+import { crawlIntervalLabel } from "./crawl-cadence.js";
 import { ledgerShell, ledgerFooterCompact, esc, decideLive } from "./ledger-chrome.js";
 import { decideConfig } from "./decide/config.js";
 import { toolList } from "./pages.js";
@@ -17,7 +18,6 @@ import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 
 import { REPO_URL } from "./repo-link.js";
 import { powCostPhrase } from "./pow.js";
-import { crawlIntervalLabel } from "./x402-index.js";
 import { routerRankingSentence } from "./routing-proof.js";
 // PRICES IN COPY ARE DERIVED, NEVER TYPED.
 //
@@ -401,7 +401,7 @@ curl -X POST /api/hash \\
     <div class="hm-card" style="padding:26px;display:flex;flex-direction:column;">
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">01 / LIST AN x402 API</div>
       <h3 style="font-weight:500;font-size:22px;margin:0 0 10px;color:var(--ink);letter-spacing:-.02em;">Get routed by the Smart Order Router</h3>
-      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;font-weight:300;">Serve x402 challenges, register your origin, and the index crawler re-reads it ${esc(crawlIntervalLabel())}. You get ranked next to ${fmtNum(count)} of our own tools on the same terms. ${esc(routerRankingSentence())} A public leaderboard row follows once your on-chain volume shows up.</p>
+      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;font-weight:300;">Serve x402 challenges, register your origin, and the index crawler reads it at once and re-probes it ${esc(crawlIntervalLabel())}. You get ranked next to ${fmtNum(count)} of our own tools on the same terms. ${esc(routerRankingSentence())} A public leaderboard row follows once your on-chain volume shows up.</p>
       <pre class="hm-term" style="margin:0 0 14px;background:var(--surface);color:var(--on-dark);padding:14px;border-radius:12px;font-size:11.5px;"><span style="color:var(--dk-muted3);"># or paste your origin below - same call, no terminal needed
 </span>curl -X POST https://agent402.tools/api/index/register \\
   -H 'content-type: application/json' \\

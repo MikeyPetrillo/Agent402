@@ -111,18 +111,10 @@ const INDEX_ROW_CAP = 100;
 // see it, versus five minutes, and the churn signals downstream all read in
 // days). Raise the interval BEFORE raising any seed cap: the cap is linear,
 // this is the multiplier.
-const CRAWL_INTERVAL_MS = 30 * 60 * 1000; // 30 min — gentle on third-party sellers
-const DISCOVERY_INTERVAL_MS = 60 * 60 * 1000; // 1 hr — registries don't change fast
-// Seconds, for machine surfaces that state the cadence (/.well-known/x402).
-export const CRAWL_INTERVAL_SECONDS = CRAWL_INTERVAL_MS / 1000;
-export const DISCOVERY_INTERVAL_SECONDS = DISCOVERY_INTERVAL_MS / 1000;
+// 30 min crawl, 1 hr discovery: defined in src/crawl-cadence.js so the pages
+// that quote the cadence read the same constants without importing this file.
+import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS } from "./crawl-cadence.js";
 
-/**
- * Human label for the crawl cadence, DERIVED from CRAWL_INTERVAL_MS so served
- * copy cannot drift from the timer. Page prose that states a cadence is a
- * factual claim about our own behaviour toward third parties - the same class
- * as a price quoted in prose - so it is generated, never typed.
- */
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
 // 2026-08-28). Only a non-negative integer counts; everything else is 0.
@@ -131,14 +123,6 @@ function manifestToolCount(manifest) {
   return Number.isInteger(n) && n >= 0 && n < 1_000_000 ? n : 0;
 }
 
-export function crawlIntervalLabel() {
-  const mins = Math.round(CRAWL_INTERVAL_MS / 60000);
-  if (mins % 60 === 0 && mins >= 60) {
-    const h = mins / 60;
-    return h === 1 ? "every hour" : `every ${h} hours`;
-  }
-  return `every ${mins} minutes`;
-}
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_OPENAPI_BYTES = 12 * 1024 * 1024; // Agent402's own is ~5 MB; allow headroom
 const MAX_DISCOVERY_BYTES = 64 * 1024 * 1024;

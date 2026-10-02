@@ -64,7 +64,8 @@
   }
   function layout() {
     const now = Date.now(), tally = GATES.map(() => ({ n: 0, usd: 0 }));
-    for (const p of payments) if (inRail(p) && now - p.ts <= 3600_000) { const t = tally[gateIndex(p.amountUsd)]; t.n++; t.usd += p.amountUsd; }
+    // Gate tallies count outside payments only; our own walk past uncounted.
+    for (const p of payments) if (inRail(p) && !p.internal && now - p.ts <= 3600_000) { const t = tally[gateIndex(p.amountUsd)]; t.n++; t.usd += p.amountUsd; }
     const g = geometry(), gap = 8, h = (g.bottom - g.top - gap * (GATES.length - 1)) / GATES.length;
     const prev = gates;
     gates = GATES.map((x, i) => ({ i, label: x.label, x: g.gx, y: g.top + i * (h + gap), w: g.gw, h, n: tally[i].n, usd: tally[i].usd, hit: prev[i]?.hit || 0, hitRail: prev[i]?.hitRail || "x402" }));
@@ -254,9 +255,13 @@
     $("s-pm").textContent = String(s.perMinute);
     $("s-usd").textContent = fmtUsd(s[win].usd);
     $("s-buyers").textContent = s[win].buyers.toLocaleString();
-    document.querySelectorAll(".stat .w").forEach((el) => { el.textContent = win === "h1" ? "1h" : "24h"; });
+    // The 24h rollups live in memory and a restart backfills one hour, so a
+    // 24h figure read before a full day has passed covers less than a day:
+    // every 24h label says since when.
     const partial = win === "h24" && lastStats.coverage24hSince && Date.now() - lastStats.coverage24hSince < 23.5 * 3600_000;
-    $("board-title").textContent = `Top sellers · ${win === "h1" ? "last hour" : "last 24 hours"}${partial ? ` (since ${new Date(lastStats.coverage24hSince).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})` : ""}`;
+    const since = partial ? new Date(lastStats.coverage24hSince).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+    document.querySelectorAll(".stat .w").forEach((el) => { el.textContent = win === "h1" ? "1h" : partial ? `since ${since}` : "24h"; });
+    $("board-title").textContent = `Top sellers · ${win === "h1" ? "last hour" : partial ? `since ${since} (not a full 24 hours)` : "last 24 hours"}`;
     const cards = $("cards"); cards.textContent = "";
     for (const t of s[win].topSellers) {
       const shared = /^Shared recipient/.test(t.name), href = t.agent402 ? "https://agent402.tools/" : t.listed && t.host && !shared ? `https://${t.host}` : shared ? "https://agent402.tools/mpp-marketplace" : null;

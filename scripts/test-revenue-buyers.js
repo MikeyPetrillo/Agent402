@@ -12,7 +12,7 @@
 //   • lowercasing base58/Stellar addresses merges distinct buyers into one
 // Each is asserted here against a seeded ledger.
 import { strict as assert } from "node:assert";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,7 +22,7 @@ process.env.REVENUE_DAILY_START = "2026-06-15";
 // Tempo MPP settlements are folded in from the sales ledger; keep it isolated.
 process.env.SALES_LEDGER_DB = join(dir, "sales.db");
 
-const { recordTransfer, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, weekStartOf, ledgerBuyerRetention, ledgerBuyerConcentration, ledgerSummary, ledgerDaily, ledgerSyncState, nextChunkSpan, LEDGER_BLOCK_MS } = await import("../src/revenue-ledger.js");
+const { setPayerDustFloorUsd, getPayerDustFloorUsd, recordTransfer, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, weekStartOf, ledgerBuyerRetention, ledgerBuyerConcentration, ledgerSummary, ledgerDaily, ledgerSyncState, nextChunkSpan, LEDGER_BLOCK_MS } = await import("../src/revenue-ledger.js");
 const { railThroughput } = await import("../src/revenue-live.js");
 const Database = (await import("better-sqlite3")).default;
 
@@ -397,6 +397,31 @@ check("the external payment headline adds Tempo only, never Base/Celo MPP", () =
 check("throughput adds Tempo once and Base/Celo MPP zero extra times", () => {
   const t = railThroughput({ allTime: { allTimeInboundCount: 10 }, mpp: { rails: { tempo: { count: 3 }, base: { count: 5 }, celo: { count: 2 } } } });
   assert.deepEqual(t, { onchain: 10, tempoMpp: 3, total: 13 });
+});
+
+// A sub-cent lookalike transfer (address poisoning) paid for no call: under
+// the cheapest catalog price it is no paying agent and no external payment.
+// The floor is set from the catalog at boot; no address list is involved.
+check("a transfer under the catalog's cheapest price is not a paying agent", () => {
+  const before = ledgerBuyerConcentration(wallets);
+  const sumBefore = ledgerSummary(wallets);
+  setPayerDustFloorUsd(0.001);
+  const LOOKALIKE = "0x902d8f3500000000000000000000000000002256";
+  give("2026-07-29", LOOKALIKE, { usd: 0.00001 });
+  const after = ledgerBuyerConcentration(wallets);
+  const sumAfter = ledgerSummary(wallets);
+  assert.equal(getPayerDustFloorUsd(), 0.001);
+  assert.equal(after.buyers, before.buyers, "the dust payer is not counted");
+  assert.equal(sumAfter.allTimeExternalCount, sumBefore.allTimeExternalCount, "nor counted as an external payment");
+  assert.equal(sumAfter.allTimeInboundCount, sumBefore.allTimeInboundCount + 1, "it stays in throughput (every inbound transfer)");
+  assert.ok(after.scope.excludes.some((e) => /cheapest catalog price/.test(e)), "the scope names the exclusion");
+  give("2026-07-29", "0x1234000000000000000000000000000000005678", { usd: 0.001 });
+  assert.equal(ledgerBuyerConcentration(wallets).buyers, before.buyers + 1, "a payment AT the cheapest price still counts");
+  setPayerDustFloorUsd(0);
+});
+check("the server derives the floor from the catalog's cheapest price, not an address list", () => {
+  const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  assert.ok(/setPayerDustFloorUsd\(Math\.min\(\.\.\.Object\.values\(TOOL_PRICES\)/.test(src));
 });
 
 salesDb.close();

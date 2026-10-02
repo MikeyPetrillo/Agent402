@@ -709,14 +709,17 @@ export function ledgerSummary(wallets) {
   let allTimeExternalCount = 0;
   let allTimeInboundUsd = 0;
   let allTimeInboundCount = 0;
+  // External = classified external AND at least the dust floor (a transfer
+  // under the cheapest catalog price paid for no call). Inbound keeps every
+  // transfer: it is throughput, ours and dust included.
   const q = db.prepare(`SELECT
       COUNT(*) AS n, COALESCE(SUM(usd), 0) AS usd,
-      COALESCE(SUM(CASE WHEN external = 1 THEN usd END), 0) AS extUsd,
-      COALESCE(SUM(external), 0) AS extN
+      COALESCE(SUM(CASE WHEN external = 1 AND usd + ${DUST_EPSILON} >= ? THEN usd END), 0) AS extUsd,
+      COALESCE(SUM(CASE WHEN external = 1 AND usd + ${DUST_EPSILON} >= ? THEN 1 ELSE 0 END), 0) AS extN
     FROM transfers WHERE chain = ? AND wallet = ?`);
   for (const [chain, wallet] of walletPairs(wallets)) {
     if (!wallet) continue;
-    const t = q.get(chain, wallet);
+    const t = q.get(payerDustFloorUsd, payerDustFloorUsd, chain, wallet);
     const cur = getCursor.get(chain, wallet);
     // Two wallets on one chain (treasury + spending) ACCUMULATE into one row.
     const p = per[chain] || (per[chain] = { externalUsd: 0, externalCount: 0, inboundUsd: 0, inboundCount: 0, caughtUp: true, syncedAt: null });
@@ -976,16 +979,41 @@ function tempoExternalRows() {
 // each read this full history. A caller building several of them at once
 // reads it ONCE (externalPaymentEventsFor) and passes `{ events }` to each;
 // a figure asked for on its own reads fresh.
+// A DUST FLOOR FOR "A WALLET THAT PAID US".
+//
+// A transfer smaller than the cheapest price we sell cannot have paid for a
+// call. Address-poisoning sends exactly that: a sub-cent transfer from a
+// lookalike of a wallet we really trade with, so the lookalike lands in our
+// history. Measured on /revenue: a $0.00001 transfer from an address mimicking
+// the CI burner's first and last characters counted as an outside paying
+// agent. The floor is DERIVED from the catalog (server.js sets it to the
+// cheapest priced tool at boot), never a typed address list, so it catches the
+// next lookalike too. Unset (0) means no floor, which is what tests and
+// scripts that do not boot the catalog get.
+let payerDustFloorUsd = 0;
+const DUST_EPSILON = 1e-9;
+/** Set the floor: the cheapest price in the catalog, in USD. */
+export function setPayerDustFloorUsd(usd) {
+  const n = Number(usd);
+  payerDustFloorUsd = Number.isFinite(n) && n > 0 ? n : 0;
+}
+/** The current floor (0 = none). */
+export function getPayerDustFloorUsd() { return payerDustFloorUsd; }
+const belowDust = (usd) => payerDustFloorUsd > 0 && !(Number(usd) + DUST_EPSILON >= payerDustFloorUsd);
+
 export function externalPaymentEventsFor(wallets) { return readExternalPaymentEvents(wallets); }
 function externalPaymentEvents(wallets, events) { return events || readExternalPaymentEvents(wallets); }
 function readExternalPaymentEvents(wallets) {
   const out = [];
-  const rows = db.prepare("SELECT chain, wallet, block, when_ts, external, payer FROM transfers WHERE chain = ? AND wallet = ?");
+  const rows = db.prepare("SELECT chain, wallet, block, when_ts, external, payer, usd FROM transfers WHERE chain = ? AND wallet = ?");
   for (const [chain, wallet] of walletPairs(wallets)) {
     if (!wallet) continue;
     const dateOf = undatedRowDater(chain, wallet);
     for (const t of rows.all(chain, wallet)) {
       if (t.chain !== chain || !t.external) continue;
+      // Under the cheapest catalog price: not a payment for a call (see the
+      // dust floor above), so not a paying agent.
+      if (belowDust(t.usd)) continue;
       let ms = t.when_ts ? t.when_ts * 1000 : null;
       if (ms == null) ms = dateOf(t.block);
       if (ms == null) continue;
@@ -1187,6 +1215,7 @@ const BUYER_SCOPE = ({ since }) => ({
       "card and prepaid-credits buyers (they settle no on-chain transfer to us)",
       "settlements whose payer is not exposed (Solana, Stellar, and any Tempo settlement recorded without a payer)",
       "transfers whose date could not be established",
+      ...(payerDustFloorUsd > 0 ? [`transfers under $${payerDustFloorUsd} (the cheapest catalog price), which cannot have paid for a call`] : []),
     ],
     note: since
       ? `Distinct wallets counted from ${since}; a floor, not a lifetime total of everyone who has paid us.`
