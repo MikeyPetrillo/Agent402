@@ -15,6 +15,7 @@
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chrome.js";
 import { RAILS_SHORT } from "./rails.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
 
 import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
 export const PACK_PRICES = {
@@ -2907,10 +2908,17 @@ function renderToolList(pack, ix) {
 // (no CLI bin), so the snippet is the SDK's own constructor + call(), keyed on
 // the pack's CATALOG slug ("skill-<pack>"), which is what call() resolves.
 export function packClientSnippet(catalogSlug, args) {
+  // The wallet path is the one always on sale. Credits keys are named only as
+  // an existing key unless card credits are on sale (creditsSalesEnabled).
+  const creditsLine = creditsSalesEnabled()
+    ? `// or pay by card: new Agent402({ creditsKey }) with a key from /credits`
+    : `// an existing prepaid credits key also works: new Agent402({ creditsKey })`;
   return [
     `import { Agent402 } from "agent402-client";`,
-    `// creditsKey pays by card credits; pass { fetch } for an x402-wrapped fetch instead`,
-    `const client = new Agent402({ creditsKey: process.env.AGENT402_CREDITS_KEY });`,
+    `// payFetch: an x402-wrapped fetch your wallet signs (@x402/fetch).`,
+    `// Tools on the free tier need no options: new Agent402() pays them by proof-of-work.`,
+    creditsLine,
+    `const client = new Agent402({ fetch: payFetch });`,
     `const result = await client.call(${JSON.stringify(catalogSlug)}, ${JSON.stringify(args)});`,
   ].join("\n");
 }
