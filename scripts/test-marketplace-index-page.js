@@ -34,18 +34,19 @@ function chainCard(html, slug) {
   const html = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] } });
 
   ok(html.includes("Markets by chain"), "the new 'Markets by chain' section renders");
-  // Base: LOCAL + SellerA + SellerB all advertise a Base network -> 3 sellers, 5+3+8=16 tools.
+  // Base: SellerA + SellerB advertise a Base network -> 2 sellers (the host is
+  // in no seller count), 5+3+8=16 tools (the host's catalog included).
   const baseCard = chainCard(html, "base");
-  ok(baseCard && /<span[^>]*color:var\(--green\)[^>]*>3</.test(baseCard), "Base card shows the real seller count (3), not a hardcoded design number");
+  ok(baseCard && /<span[^>]*color:var\(--green\)[^>]*>2</.test(baseCard), "Base card shows the real seller count (2, host excluded), not a hardcoded design number");
   ok(baseCard && />16</.test(baseCard), "Base card shows the real summed tool count (16), computed from marketSellers/toolCount");
-  // Solana: LOCAL (qualifies on every chain by design - see marketSellers'
-  // own comment) + SellerB -> 2 sellers.
+  // Solana: SellerB only -> 1 seller (the host qualifies on every chain but is
+  // in no seller count).
   const solCard = chainCard(html, "solana");
-  ok(solCard && /<span[^>]*color:var\(--green\)[^>]*>2</.test(solCard), "Solana card shows the real seller count (2: LOCAL + SellerB)");
-  // Celo: no external seller advertises it, but LOCAL still qualifies on
-  // every chain - so the real floor here is 1, never a fabricated 0.
+  ok(solCard && /<span[^>]*color:var\(--green\)[^>]*>1</.test(solCard), "Solana card shows the real seller count (1: SellerB; host excluded)");
+  // Celo: no external seller advertises it, so the real count is 0 (the host
+  // is in no seller count), and the card still renders.
   const celoCard = chainCard(html, "celo");
-  ok(celoCard && /<span[^>]*color:var\(--green\)[^>]*>1</.test(celoCard), "a chain with no external sellers still shows the real local-only count (1), not 0 or omitted");
+  ok(celoCard && /<span[^>]*color:var\(--green\)[^>]*>0</.test(celoCard), "a chain with no external sellers shows 0, still rendered, never omitted");
   ok((html.match(/href="\/[a-z]+" title="[^"]+ x402 marketplace"/g) || []).length === 12, "all 12 chain cards render, one per CHAIN_PAGES entry");
 }
 
@@ -55,7 +56,7 @@ function chainCard(html, slug) {
 // verification, plus a pre-existing 5th, untouched instance in the nav
 // dropdown (src/ledger-chrome.js) - fixed both.
 {
-  const sellers = [LOCAL];
+  const sellers = [LOCAL, { origin: "https://c1.example", displayName: "C1", homepage: "https://c1.example", local: false, toolCount: 1, routable: true, networks: ["eip155:42220"], payToByNetwork: { "eip155:42220": "0xc1" } }];
   const html = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] } });
   const celoCard = chainCard(html, "celo");
   ok(celoCard && /seller<\/span>/.test(celoCard) && !/sellers<\/span>/.test(celoCard), "a chain card with exactly 1 seller reads the singular 'seller', never '1 sellers'");
@@ -81,7 +82,7 @@ function chainCard(html, slug) {
 {
   const sellers = [LOCAL, ...Array.from({ length: 4 }, (_, i) => ({ origin: `https://s${i}.example`, displayName: `S${i}`, homepage: `https://s${i}.example`, local: false, toolCount: 1, routable: true, networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": `0x${i}` } }))];
   const html = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] } });
-  ok(html.includes("5 sellers on Base alone"), "hero subhead cites the real, live-computed Base seller count (5), not the design's frozen 1,494");
+  ok(html.includes("4 independent sellers on Base alone"), "hero subhead cites the real, live-computed Base seller count (4, host excluded), not the design's frozen 1,494");
 }
 
 // --- real 4-stat row, including the new TOOL LISTINGS card -------------------
