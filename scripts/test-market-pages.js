@@ -547,6 +547,9 @@ for (const c of NEW_CHAINS) {
   ok(base.payable === 4 && poly.payable === 3, "EVM rails take identity-bound and long-running tools; a pinned tool only on its own network");
   const solPage = marketPage("solana", "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, payable: sol });
   ok(/1 of the <a href="\/tools">4 tools in the catalog<\/a> take USDC on Solana/.test(solPage) && !/Every one of the/.test(solPage), "solana page states the derived payable count, never 'every tool'");
+  const polyPage = marketPage("polygon", "https://agent402.tools", { snapshot: { sellers: [LOCAL] }, payable: poly });
+  ok(/3 of the <a href="\/tools">4 tools in the catalog<\/a> take USDC on Polygon \(1 tool is offered on Base only\)/.test(polyPage) && !/EVM rails only/.test(polyPage), "an EVM chain page names the real reason (a route offered on Base only), never 'EVM rails only'");
+  ok(/\(2 identity-bound or long-running tools settle on the EVM rails only; 1 tool is offered on Base only\)/.test(solPage), "solana page names both reasons with their counts");
   const unknown = marketPage("solana", "https://agent402.tools", { snapshot: { sellers: [LOCAL] } });
   ok(!/Every one of the|500\+ tools in the catalog/.test(unknown), "without derived figures the page claims no count");
 

@@ -11,6 +11,7 @@
 // floors, javascript: href neutralization, testnet exclusion, >12-seller
 // compact roster, per-seller activity switching via ?seller=.
 import { ledgerShell, ledgerFooterCompact, decideLive } from "./ledger-chrome.js";
+import { x402RailsFor } from "./rails.js";
 import { CATEGORIES } from "./pages.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { discoveryNote } from "./discovery-note.js";
@@ -317,13 +318,21 @@ export const LEADERBOARD_CHAIN = "base";
  *  long-running tools take the EVM rails only. `defs` = the priced catalog. */
 export function catalogPayableOn(defs, caip2) {
   const list = Array.isArray(defs) ? defs : [];
-  const evm = String(caip2 || "").startsWith("eip155:");
-  const payable = list.filter((d) => {
-    const only = Array.isArray(d?.onlyNetworks) && d.onlyNetworks.length ? d.onlyNetworks : null;
-    if (only) return only.includes(caip2);
-    return evm || (!d?.identityBound && !d?.longRunning);
-  }).length;
-  return { payable, total: list.length };
+  // The same rule the live 402 applies (rails.js x402RailsFor), so the page
+  // cannot count a tool the 402 withholds on this chain, plus why each
+  // withheld tool is withheld, so the sentence names the real reason.
+  let payable = 0, evmOnly = 0;
+  const pinned = new Map(); // "Base" -> tools offered on those chains only
+  for (const d of list) {
+    const rails = x402RailsFor(d);
+    if (rails.some((r) => r.caip2 === caip2)) { payable++; continue; }
+    const only = Array.isArray(d?.onlyNetworks) && d.onlyNetworks.length;
+    if (only) {
+      const names = rails.map((r) => r.name).join(", ") || "other chains";
+      pinned.set(names, (pinned.get(names) || 0) + 1);
+    } else evmOnly++;
+  }
+  return { payable, total: list.length, excluded: { evmOnly, pinned: [...pinned].map(([networks, count]) => ({ networks, count })) } };
 }
 
 /** Sellers with a rail on this chain: the local catalog always qualifies
@@ -466,9 +475,14 @@ function sellersListedNote(merged, origins) {
 function payableSentence(p, C) {
   const n = Number(p?.payable), t = Number(p?.total);
   if (Number.isFinite(n) && Number.isFinite(t) && t > 0) {
-    return n === t
-      ? `Every one of the <a href="/tools">${t.toLocaleString("en-US")} tools in the catalog</a> takes ${esc(C.asset)} on ${esc(C.chainName)}`
-      : `${n.toLocaleString("en-US")} of the <a href="/tools">${t.toLocaleString("en-US")} tools in the catalog</a> take ${esc(C.asset)} on ${esc(C.chainName)} (the rest settle on the EVM rails only)`;
+    if (n === t) return `Every one of the <a href="/tools">${t.toLocaleString("en-US")} tools in the catalog</a> takes ${esc(C.asset)} on ${esc(C.chainName)}`;
+    const x = p.excluded || {};
+    const k = (c) => c.toLocaleString("en-US");
+    const why = [
+      ...(x.evmOnly ? [`${k(x.evmOnly)} identity-bound or long-running tool${x.evmOnly === 1 ? " settles" : "s settle"} on the EVM rails only`] : []),
+      ...(Array.isArray(x.pinned) ? x.pinned : []).map((g) => `${k(g.count)} tool${g.count === 1 ? " is" : "s are"} offered on ${esc(g.networks)} only`),
+    ];
+    return `${n.toLocaleString("en-US")} of the <a href="/tools">${t.toLocaleString("en-US")} tools in the catalog</a> take ${esc(C.asset)} on ${esc(C.chainName)}${why.length ? ` (${why.join("; ")})` : ""}`;
   }
   return `Tools in the <a href="/tools">catalog</a> take ${esc(C.asset)} on ${esc(C.chainName)}`;
 }
