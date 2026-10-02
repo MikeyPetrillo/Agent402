@@ -245,11 +245,11 @@ export async function buildDecision({ task, constraints, depth }, deps) {
     // three outside call-directly tools while ours sat just below them). The
     // ranking is untouched; the best runnable viable tool takes the last
     // fallback slot.
-    // Two runnable options where two exist: an outside seller can refuse a
-    // valid payment at run time, and a step with a single runnable tool then
-    // has nothing left (2026-10-01 prod check: three of 25 runs ended that way).
+    // Three runnable options where three exist: an outside seller can refuse
+    // a valid payment at run time, and in the 2026-10-01 prod checks a step
+    // whose first two payable sellers refused had nothing left.
     const runnable = (x) => x.row.firstParty || x.row.executable !== false;
-    const wantRunnable = Math.min(2, viable.filter(runnable).length);
+    const wantRunnable = Math.min(3, viable.filter(runnable).length);
     while ([primary, ...fallbacks].filter(runnable).length < wantRunnable) {
       const ex = viable.find((x) => x !== primary && !fallbacks.includes(x) && runnable(x));
       if (!ex) break;

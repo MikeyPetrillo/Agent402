@@ -47,7 +47,8 @@ ok(remoteToolRow(remote, { lastLiveAt: 0 }).lastLiveAt === null, "no live proof 
 ok(remoteToolRow(remote, { executable: false }).executable === false && !("executable" in remoteToolRow(remote)), "an outside row execute cannot pay is marked executable:false; the default leaves it unmarked");
 {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/remoteExecutable: \(t\) => \{[\s\S]{0,300}withDispatchFields\([\s\S]{0,120}\{ rowLevel: true \}\)\.routerDispatchByChain\?\.base\?\.eligible === true/.test(src), "the export marks an outside row executable only on the router's Base verdict");
+  ok(/remoteExecutable: \(t\) => \{[\s\S]{0,700}withDispatchFields\([\s\S]{0,120}\{ rowLevel: true \}\)\.routerDispatchByChain\?\.base\?\.eligible === true/.test(src), "the export marks an outside row executable only on the router's Base verdict");
+  ok(/remoteExecutable: \(t\) => \{[\s\S]{0,500}if \(url && routeRefusedNow\(url, "base"\)\) return false;[\s\S]{0,200}withDispatchFields/.test(src), "a route the router has benched for refusing payment is exported as not payable");
 }
 ok(cleanText("a".repeat(700), 600).length === 600, "cleaned text is length-capped");
 
@@ -227,6 +228,14 @@ for (const t of ["Detects prompt-injection patterns in text", "Web search for cu
   ok(routes.every((r) => src.includes(`set("${r}",`)), "extract, meta, dns, render and pdf get handlers that execute can call");
   const { WALLET_ONLY_SLUGS } = await import("../src/pow.js");
   ok(["extract", "meta", "dns", "render", "pdf"].every((s) => WALLET_ONLY_SLUGS.has(s)), "and every one of them stays wallet-only (no free path)");
+}
+
+{
+  // A change to what a plan acts on (payable or not, input quality, output
+  // fields) reaches the index even when the text and live time are unchanged.
+  const { readFileSync: rf } = await import("node:fs");
+  const sync = rf(new URL("../services/decide/sync.js", import.meta.url), "utf8");
+  ok(/\(prev\.executable !== false\) !== \(row\.executable !== false\)/.test(sync) && /prev\.schemaQuality !== row\.schemaQuality/.test(sync) && /outputFields/.test(sync), "sync refreshes a row whose payable flag, input quality or output fields changed");
 }
 console.log(`\ntest-decide-index: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

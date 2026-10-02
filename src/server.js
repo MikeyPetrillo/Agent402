@@ -594,7 +594,7 @@ import { buildSellerTrustTool } from "./tools/seller-trust.js";
 import { buildSellerDossierTool } from "./tools/seller-dossier.js";
 import { buildSellerPayabilityTool } from "./tools/seller-payability-kit.js";
 import { deliveryObservation } from "./response-observation.js";
-import { payX402, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerDeliveryFailingRecently, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
+import { payX402, avmBuyerConfigured, avmBuyerStatus, sellerRefusedRecently, sellerRouteRefusedRecently as routeRefusedNow, sellerDeliveryFailingRecently, sellerDeliveryMemoEntries, DELIVERY_FAIL_STRIKES_REQUIRED, deliveryFailTtlMsNow } from "./x402-buyer.js";
 import { readTextCapped } from "./capped-body.js";
 import { svmBuyerConfigured, svmBuyerStatus, SOLANA_NETWORK_LABELS } from "./solana-buyer.js";
 import { payTempo, tempoBuyerConfigured, tempoBuyerStatus, tempoRpc } from "./tempo-buyer.js";
@@ -4855,6 +4855,12 @@ app.get("/__internal/decide/tools.ndjson", decideIndexExportHandler({
   // executable only when the router's Base verdict for it is eligible now.
   remoteExecutable: (t) => {
     const priceUsd = Number(String(t?.price ?? "").replace(/^\$/, ""));
+    // A route the router has benched for refusing our payment is not one a
+    // run can pay right now (the resolver skips it), so plans do not lean on
+    // it while the bench lasts (2026-10-01 prod checks: steps failed on
+    // sellers that had just refused).
+    const url = t?.url || t?.endpoint;
+    if (url && routeRefusedNow(url, "base")) return false;
     return withDispatchFields({ ...t, priceUsd: Number.isFinite(priceUsd) ? priceUsd : null }, { rowLevel: true }).routerDispatchByChain?.base?.eligible === true;
   },
 }));
