@@ -1099,9 +1099,16 @@ export async function verifySuccessionMarkers(claimant, predecessor, { fetchImpl
 export async function succeedsOrigin(claimant, predecessor, { fetchImpl } = {}) {
   const a = cache.get(claimant), b = cache.get(predecessor);
   if (!a || !b || a.error || b.error) return { ok: false, reason: "one of the two origins is not in the index - register it first" };
+  // Markers first: they are the only proof that retires the predecessor, and a
+  // seller who migrates keeps the same payout wallet, so checking the wallet
+  // first answered "shared payout wallet" for exactly the sellers who had also
+  // served valid markers, and their old listing was never retired (reported
+  // by a seller 2026-10-02). The wallet still answers when no markers are up.
+  const markers = await verifySuccessionMarkers(claimant, predecessor, { fetchImpl });
+  if (markers.ok) return markers;
   const shared = sharesPayTo(claimant, predecessor);
   if (shared) return { ok: true, via: "shared payout wallet", ...shared };
-  return verifySuccessionMarkers(claimant, predecessor, { fetchImpl });
+  return markers;
 }
 
 export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
@@ -5531,7 +5538,8 @@ function releaseDeadSubmissions(okFraction) {
   persistSubmittedSeeds();
   // Loud on purpose: this is the only path that removes a listing, so it must
   // never happen quietly. seller_registrations still holds every one of them.
-  console.log(`[x402-index] released ${releasable.length} submission slot(s) after ${Math.round(RELEASE_AFTER_MS / 86400000)}d with no successful probe: ${releasable.slice(0, 10).join(", ")}${releasable.length > 10 ? ", ..." : ""}`);
+  const tunnels = releasable.filter(isEphemeralTunnelOrigin).length;
+  console.log(`[x402-index] released ${releasable.length} submission slot(s) with no successful probe (${tunnels} quick-tunnel after ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)}d, ${releasable.length - tunnels} after ${Math.round(RELEASE_AFTER_MS / 86400000)}d): ${releasable.slice(0, 10).join(", ")}${releasable.length > 10 ? ", ..." : ""}`);
   return releasable.length;
 }
 

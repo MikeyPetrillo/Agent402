@@ -159,6 +159,15 @@ await baseTool.handler({ model: "openai/gpt-4o-mini", input: "hi" }, fakeReq).th
   const { _testEventsForTest } = await import("../src/posthog.js");
   const ev = _testEventsForTest().filter((e) => e.event === "gateway_usage").pop();
   ok(seen[0].b.model === "openai/gpt-4o-mini" && out.agent402_default_model === "openai/gpt-4o-mini" && ev?.properties.defaulted === true, "a defaulted call serves the tier default, says so in the reply, and gateway_usage records defaulted:true");
+  // A retiring id is served by its successor and the reply names the swap.
+  {
+    const { RETIRING_MODELS, tierFor: tf } = await import("../src/tools/llm-gateway-kit.js");
+    const [id, { use }] = Object.entries(RETIRING_MODELS)[0];
+    seen = [];
+    const out2 = await bySlug(`${tf(use)}-responses`).handler({ model: id, input: "hi", max_output_tokens: 16 }, fakeReq);
+    ok(seen[0].b.model === use && out2.agent402_model_substituted?.requested === id && out2.agent402_model_substituted?.served === use,
+      `a retiring id (${id}) is served as ${use} and the reply names the swap`);
+  }
   globalThis.fetch = realFetch;
 }
 globalThis.fetch = realFetch;

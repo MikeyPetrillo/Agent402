@@ -1582,11 +1582,13 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   // qwen3.8-max-prime: its own row, so the metered tier's provider.max_price is not under its only endpoint.
   ok(cf("qwen/qwen3.8-max-prime").prompt === 4 && cf("qwen/qwen3.8-max-prime").completion === 12 && cf("qwen/qwen3.8-max-0902").prompt === 2, "qwen3.8-max-prime has its own row; the qwen/ family row still prices the rest");
   ok(tierAllows("v1-chat-metered", "qwen/qwen3.8-max-prime") && JSON.stringify(dr("qwen/qwen3.8-max-prime", "v1-chat-metered")) === '{"effort":"minimal"}', "qwen3.8-max-prime is metered-admitted and gets the lowest effort there (mandatory, default xhigh upstream)");
-  // Retiring DeepSeek ids: refused by name everywhere, with the successor named.
+  // Retiring ids: served by their successor (since 2026-10-02; refused by name
+  // before), the swap named in the reply, never priced as themselves.
   for (const id of Object.keys(RETIRING_MODELS)) {
-    ok(!tierFor(id) && !tierAllows("v1-chat-metered", id) && retiringModel(id + ":nitro")?.id === id, `${id}: admitted by no tier (a :variant too)`);
-    let e = null; try { validateRequest({ model: id, messages: [{ role: "user", content: "hi" }] }, "v1-chat"); } catch (x) { e = x; }
-    ok(e?.statusCode === 400 && e.message.includes(`removes it on ${RETIRING_MODELS[id].until}`) && e.message.includes(RETIRING_MODELS[id].use), `${id}: a self-explaining 400 naming the date and the successor`);
+    const use = RETIRING_MODELS[id].use;
+    ok(retiringModel(id + ":nitro")?.id === id && tierFor(id) === tierFor(use), `${id}: resolves to the successor's tier (${tierFor(use)}), a :variant too`);
+    const b = validateRequest({ model: id, messages: [{ role: "user", content: "hi" }] }, tierFor(use));
+    ok(b.model === use && b.__substitutedFrom === id && !Object.keys(b).includes("__substitutedFrom"), `${id}: served as ${use}, the requested id carried non-enumerably for the reply`);
   }
   ok(!K.MODEL_COST.some(([p]) => Object.hasOwn(RETIRING_MODELS, p)), "no MODEL_COST row prices a retiring id");
   // Gemini 2.5 (upstream expiration 2026-10-20): refused by name on every tier
@@ -1596,8 +1598,10 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     ok(!K.FLEX_MODELS.includes(id) && !Object.values(TIERS).some((t) => (t.prefixes || []).includes(id) || (t.fallbacks || []).includes(id)), `${id}: in no tier prefix, fallback or flex entry`);
     ok(!Object.values(AUTO_RANKINGS).some((b) => Object.values(b).flat().includes(id)), `${id}: in no auto ranking`);
     for (const tier of ["v1-chat-nano", "v1-chat", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered"]) {
-      let e = null; try { validateRequest({ model: id, messages: [{ role: "user", content: "hi" }] }, tier); } catch (x) { e = x; }
-      ok(e?.statusCode === 400 && !!RETIRING_MODELS[id] && e.message.includes(RETIRING_MODELS[id].use), `${id} on ${tier}: 400 naming ${RETIRING_MODELS[id]?.use}`);
+      // Every tier treats the retiring id exactly as it treats its successor.
+      const run = (m) => { try { return { model: validateRequest({ model: m, messages: [{ role: "user", content: "hi" }] }, tier).model }; } catch (x) { return { status: x.statusCode }; } };
+      const a = run(id), b = run(RETIRING_MODELS[id].use);
+      ok(JSON.stringify(a) === JSON.stringify(b), `${id} on ${tier}: same outcome as ${RETIRING_MODELS[id].use} (${JSON.stringify(a)})`);
     }
     ok(tierFor(id + "-preview-09-2025") === null || !String(tierFor(id + "-preview-09-2025")).length, `${id}: dated/preview twins are not admitted by a family prefix either`);
   }

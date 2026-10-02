@@ -127,7 +127,7 @@ const NEW = `https://api.seller-${TAG}.com`;
 // feature was in that third, with no payTo on any chain. A binding unavailable
 // to its own use case is not a binding, it is a wall.
 {
-  const { sharesPayTo, verifySuccessionMarkers, SUCCESSION_PATH } = await import("../src/x402-index.js");
+  const { sharesPayTo, verifySuccessionMarkers, succeedsOrigin, SUCCESSION_PATH } = await import("../src/x402-index.js");
   const { loadPersistedIndexCache } = await import("../src/x402-index.js");
   const { writeFileSync: wf } = await import("node:fs");
   // REAL public hostnames: the SSRF guard is unconditional (CodeQL flagged the
@@ -158,6 +158,16 @@ const NEW = `https://api.seller-${TAG}.com`;
     return body === undefined ? { ok: false, status: 404, text: async () => "" } : { ok: true, status: 200, text: async () => JSON.stringify(body) };
   };
   const N = `https://example.net${SUCCESSION_PATH}`, O = `${OLD_O}${SUCCESSION_PATH}`;
+  // A migrating seller keeps its payout wallet AND serves markers. The markers
+  // must win, because only they retire the old listing; the wallet answered
+  // first until 2026-10-02 and no same-wallet pair was ever retired on register.
+  {
+    const nm = `${NEW_O}${SUCCESSION_PATH}`;
+    served[nm] = { succeeds: OLD_O }; served[O] = { succeededBy: NEW_O };
+    eq((await succeedsOrigin(NEW_O, OLD_O, { fetchImpl: stubFetch })).via, "cross-served markers", "same wallet + valid markers: the markers are the proof (they retire)");
+    delete served[nm]; delete served[O];
+    eq((await succeedsOrigin(NEW_O, OLD_O, { fetchImpl: stubFetch })).via, "shared payout wallet", "same wallet, no markers: the wallet still proves succession (first-seen only)");
+  }
   eq((await verifySuccessionMarkers("https://example.net", OLD_O, { fetchImpl: stubFetch })).ok, false, "with no markers served, nothing is proved");
   ok(/BOTH origins/.test((await verifySuccessionMarkers("https://example.net", OLD_O, { fetchImpl: stubFetch })).reason),
      "...and the refusal tells the seller exactly what to serve, on both hosts");

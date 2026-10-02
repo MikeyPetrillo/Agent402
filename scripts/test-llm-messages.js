@@ -95,6 +95,12 @@ ok(out.content[0].text === "Hi there!" && out.usage.input_tokens === 22 && !("co
 seen = [];
 await bySlug("v1-chat-nano-messages").handler({ model: "google/gemini-3.1-flash-lite", max_tokens: 32, messages: msg() }, fakeReq);
 ok(seen[0].b.provider?.sort === "price" && seen[0].b.service_tier === "flex", "nano: price sort + flex-first attempt on a flex-eligible model");
+// A retiring id is served by its successor, and the reply names the swap.
+seen = [];
+{
+  const subOut = await bySlug("v1-chat-nano-messages").handler({ model: "google/gemini-2.5-flash-lite", max_tokens: 32, messages: msg() }, fakeReq);
+  ok(seen[0].b.model === "google/gemini-3.1-flash-lite" && subOut.agent402_model_substituted?.requested === "google/gemini-2.5-flash-lite" && subOut.agent402_model_substituted?.served === "google/gemini-3.1-flash-lite", "a retiring id is served as its successor and the reply names the swap");
+}
 seen = [];
 const autoOut = await bySlug("v1-chat-auto-messages").handler({ max_tokens: 32, messages: msg("hello") }, fakeReq);
 ok(autoOut.agent402_router?.category === "general" && typeof autoOut.agent402_router?.served === "string" && seen[0].b.model, `auto tier discloses agent402_router (${JSON.stringify(autoOut.agent402_router)})`);
