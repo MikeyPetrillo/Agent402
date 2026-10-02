@@ -130,6 +130,8 @@ try {
   const png = await rasterizeSvg(cardSvg(data), { width: 1200, height: 630 });
   writeFileSync(OUT, png);
   console.log(`wrote ${OUT} (${png.length} bytes)${PREVIEW ? " [preview tag rendered]" : ""}`);
+  // The shared headless browser rasterizeSvg opens keeps the process alive.
+  process.exit(0);
 } catch (e) {
   console.error(`celo-card: ${e?.message || e}`);
   process.exit(2);
