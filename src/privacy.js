@@ -4,6 +4,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 import { REPO_URL, repoUrl } from "./repo-link.js";
+import { DEFAULTS as TRAFFIC_DEFAULTS } from "./traffic-classifier.js";
 export function privacyPage(baseUrl) {
   const title = "Privacy - Agent402";
   const description = "Agent402's privacy policy: no accounts, no ad trackers, page analytics with a consent choice in Europe. What we process, why, how long we keep it, and how to have it erased.";
@@ -77,7 +78,7 @@ so every claim below is verifiable in code.</p>
   to one hour. The free trial's counters are kept in our Redis store, with the address (for IPv6, its
   /64 prefix) in the counter's key, for one hour, or 24 hours for the per-client daily allowance. We also
   keep keyed hashes of addresses, never the addresses themselves: in daily traffic statistics (request
-  classes, paths and User-Agent product names), in the record that limits how often a dropped
+  classes, paths and User-Agent product names; each day is deleted after ${TRAFFIC_DEFAULTS.retentionDays} days), in the record that limits how often a dropped
   connection is excused from payment (24 hours), and on the demand board and the waitlist (combined
   with the day). The tollbooth waitlist form stores the name, email, organisation and message you type;
   it does not store your IP address or browser string.</li>
