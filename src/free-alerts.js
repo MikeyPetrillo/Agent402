@@ -195,13 +195,17 @@ export function createFreeAlerts({ storePath = defaultStorePath(), probes = {}, 
         catch (e) { a.failures++; a.lastCheckAt = now(); a.lastError = String(e?.message || e).slice(0, 120); out.failed++; continue; }
         const ids = Array.isArray(r?.ids) ? r.ids.map(String) : [];
         a.lastCheckAt = now(); a.failures = 0; a.lastError = null;
-        if (!Array.isArray(a.baseline)) { a.baseline = ids; out.baselined++; continue; }
+        const version = String(probe.version || "");
+        // A missing baseline, or one taken by a probe whose id space has since
+        // changed, is (re)set silently: comparing across versions would mail
+        // ids that are only "new" because the probe changed.
+        if (!Array.isArray(a.baseline) || String(a.baselineVersion || "") !== version) { a.baseline = ids; a.baselineVersion = version; out.baselined++; continue; }
         const seen = new Set(a.baseline);
         const fresh = ids.filter((x) => !seen.has(x));
         if (!fresh.length) { out.unchanged++; continue; }
         if (a.lastNotifiedAt && now() - a.lastNotifiedAt < NOTIFY_MIN_GAP_MS) { out.skipped++; continue; } // keep the baseline: tomorrow's email carries it
         const sent = await sendChange(a, fresh, r);
-        if (sent) { a.baseline = ids; a.lastNotifiedAt = now(); a.notified++; out.notified++; emit("alert_sent", { kind: a.kind }); }
+        if (sent) { a.baseline = ids; a.baselineVersion = version; a.lastNotifiedAt = now(); a.notified++; out.notified++; emit("alert_sent", { kind: a.kind }); }
         else { out.failed++; }
       }
       persist();
