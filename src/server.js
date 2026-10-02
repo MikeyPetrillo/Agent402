@@ -5457,6 +5457,11 @@ function refreshPerf24hInBackground() {
             calls: t.calls,
             cacheHitRate: +((t.cached / t.calls) || 0).toFixed(4),
             errorRate: +((t.errored / t.calls) || 0).toFixed(4),
+            // Scope, said as a field: discovery calls refused by load shedding
+            // (503) are not recorded in this store, so they are not in calls or
+            // errorRate (~120 a day were missing from a published 0, truth
+            // audit 2026-10-02).
+            errorRateScope: "tool handler errors over recorded calls; discovery requests refused by load shedding (503) are not recorded and not counted",
             p50LatencyMs: t.p50_latency_ms,
             p95LatencyMs: t.p95_latency_ms,
             dashboardUrl: `${BASE_URL}/analytics`,
