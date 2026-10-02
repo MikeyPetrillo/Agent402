@@ -2,8 +2,9 @@
 
 [Agent402](https://agent402.tools) as an [elizaOS](https://github.com/elizaOS/eliza)
 plugin: pay-per-call web tools (web search, page render, PDFs, OCR, market and
-crypto data, SEC filings, DNS/TLS checks) your agent can find and call, paid by
-prepaid card credits or in USDC over x402 from an EVM wallet. Free-tier tools
+crypto data, SEC filings, DNS/TLS checks) your agent can find and call. Agent402
+answers x402 and MPP (Machine Payments Protocol) on the same 402; this plugin pays
+in USDC over x402 from an EVM wallet or with an Agent402 credits key. Free-tier tools
 pay with proof-of-work and need neither. Agentic Finance for elizaOS agents: every paid
 call is quoted before it is paid and bounded by the ceilings you set.
 
@@ -26,8 +27,9 @@ Character config:
 }
 ```
 
-`AGENT402_CREDITS_KEY` is a prepaid card-credits key from
-https://agent402.tools/credits (shown once, emailed). To pay from a wallet
+`AGENT402_CREDITS_KEY` is a prepaid card-credits key issued at
+https://agent402.tools/credits (shown once, emailed; that page says whether new
+keys are on sale). To pay from a wallet
 instead, set `AGENT402_WALLET_KEY` (an EVM key holding USDC on Base) and
 install the optional peers `@x402/fetch @x402/evm viem`. With neither, the
 free tier still works.

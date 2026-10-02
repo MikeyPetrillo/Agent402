@@ -2,10 +2,11 @@
 
 Part of [Agent402](https://agent402.tools), the open-source paid door for AI agents.
 
-Agent402 as an [OpenClaw](https://openclaw.ai) model provider: auto-routed and
-explicit frontier models at a **flat per-call price**, paid **by card** (a prepaid
-credits key, no wallet) or in **USDC over x402** from a wallet. The same key and
-gateway reach Agent402's 500+ pay-per-call tools.
+Agent402 as an [OpenClaw](https://openclaw.ai) model provider: the auto-routed
+tier at a **flat per-call price** and explicit frontier models **priced per
+request** from the body, paid in **USDC over x402** from a wallet or with a
+prepaid credits key already issued (new credits are not on sale). The same key
+and gateway reach Agent402's 500+ pay-per-call tools.
 
 Guide: https://agent402.tools/guides/openclaw-model-provider
 
@@ -21,8 +22,7 @@ With no credits key and no `AGENT402_WALLET_KEY`, `setup` generates an EVM
 wallet into `~/.openclaw/agent402/wallet.key` (0600, the only copy, never
 printed) and prints its address: send it USDC on Base and every call is paid
 from it over x402. `agent402-openclaw wallet` shows the address and balance;
-`--no-wallet` skips the generation. Prefer a card? Buy a pack at
-https://agent402.tools/credits and run
+`--no-wallet` skips the generation. Holding a credits key already issued? Run
 `AGENT402_CREDITS_KEY=a402_... npx agent402-openclaw setup --write` (key by env,
 or `--credits-key -` on stdin).
 
@@ -64,7 +64,7 @@ Two ways the wallet can pay a metered call:
   what the call actually used, so a short answer costs a fraction of the
   quote. `agent402-openclaw doctor` says which mode the wallet is in.
 
-Card / credits buyers already pay actual usage on metered calls.
+Credits-key buyers already pay actual usage on metered calls.
 
 ## Models and pricing
 
@@ -79,8 +79,9 @@ Either way OpenClaw's per-token cost fields stay zero; the price is per call. A 
 tier's route is priced at its home tier: the 402 quotes that tier's price, and the paid call is served under
 that tier's caps (the answer says so in `agent402_tier`). The router, grounded and stealth tiers still answer a
 400 naming the right route; nothing is charged. A client-supplied `Idempotency-Key`
-is passed through (an x402 retry with the same key replays the paid answer);
-without one, each call is its own payment.
+is passed through: on a credits key, a retry with the same key replays the paid
+answer; on a wallet, each forwarded call signs a fresh payment, which the server
+treats as a new purchase. Without a key, each call is its own payment.
 
 The proxy answers native clients on loopback only: requests carrying a browser
 `Origin` header or a non-loopback `Host` are refused, so a web page cannot spend
@@ -88,7 +89,7 @@ the key.
 
 ## Commands
 
-- `agent402-openclaw setup [--credits-key K | --credits-key - (stdin) | AGENT402_CREDITS_KEY env] [--write] [--port N] [--flat]`
+- `agent402-openclaw setup [--credits-key K | --credits-key - (stdin) | AGENT402_CREDITS_KEY env] [--no-wallet] [--write] [--port N] [--flat]`
 - `agent402-openclaw proxy [--port N] [--upstream URL]`
 - `agent402-openclaw doctor`
 - `agent402-openclaw wallet [--rpc URL]` (address + USDC balance of the wallet the proxy pays from)
@@ -102,11 +103,12 @@ Anthropic Messages wires, embeddings, rerank, images, video, speech,
 transcription, grounded answers with citations, 500+ tools over
 MCP or HTTP, wallet-keyed memory, finished reports (dossiers, insider flow, 13F,
 domain audits, token risk, deep research) and monitors, plus routing that buys
-from proven external sellers on the agent's behalf.
+from external sellers on the agent's behalf.
 
 Why pay here, with every claim linked to its proof: https://agent402.tools/why.
 Usage is priced under a ceiling quoted before you pay, a failed call is not
-charged and the receipt proves it, a keyed retry never pays twice, and uptime and transactions are
-published from outside production.
+charged and the receipt proves it, a keyed retry on a credits key is not
+debited twice, and uptime and transactions are published from outside
+production.
 
 Zero dependencies. MIT. Maintained by Havok Holdings LLC.

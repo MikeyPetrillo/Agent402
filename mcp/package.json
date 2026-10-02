@@ -1,6 +1,6 @@
 {
   "name": "agent402-mcp",
-  "version": "0.13.6",
+  "version": "0.13.7",
   "mcpName": "io.github.MikeyPetrillo/agent402",
   "author": "Havok Holdings LLC <mike@agent402.tools> (https://agent402.tools)",
   "homepage": "https://agent402.tools",
@@ -9,7 +9,7 @@
     "url": "git+https://github.com/MikeyPetrillo/Agent402.git",
     "directory": "mcp"
   },
-  "description": "Agent402 MCP server: 500+ pay-per-call tools + skill packs for AI agents over x402 (USDC on 12 chains) or MPP on the same 402, or free via proof-of-work - the applied layer of Agentic Finance. Catalog: browser, web search + cited answers, PDFs, OCR, images, LLM inference, image generation, code execution, STT, embeddings, live financial/crypto/macro data, SEC EDGAR filings, deterministic stats & forecasting, compression, payments. Open source, self-hostable.",
+  "description": "Agent402 MCP server: 500+ pay-per-call tools + skill packs for AI agents over x402 (USDC or USDG on 12 chains) or MPP on the same 402, or free via proof-of-work - the applied layer of Agentic Finance. Catalog: browser, web search + cited answers, PDFs, OCR, images, LLM inference, image generation, code execution, STT, embeddings, live financial/crypto/macro data, SEC EDGAR filings, deterministic stats & forecasting, compression, payments. Open source, self-hostable.",
   "type": "module",
   "bin": {
     "agent402-mcp": "index.js"
