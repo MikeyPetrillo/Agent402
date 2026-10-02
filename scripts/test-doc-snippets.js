@@ -111,7 +111,10 @@ const THIRD_PARTY = {
 };
 
 // ---- pages -------------------------------------------------------------------
-const decode = (s) => s.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'").replace(/&hellip;/g, "…").replace(/&rarr;/g, "→").replace(/&amp;/g, "&");
+// Strip tags until none remain (a single pass can leave a tag formed by what
+// it removed), then decode entities, &amp; last.
+const stripTags = (s) => { let prev; do { prev = s; s = s.replace(/<[^>]*>/g, ""); } while (s !== prev); return s; };
+const decode = (s) => stripTags(s).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'").replace(/&hellip;/g, "…").replace(/&rarr;/g, "→").replace(/&amp;/g, "&");
 const get = async (p) => { const r = await fetch(BASE + p); return { status: r.status, text: await r.text() }; };
 const json = async (p) => (await fetch(BASE + p)).json();
 
