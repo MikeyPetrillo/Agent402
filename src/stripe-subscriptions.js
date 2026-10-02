@@ -23,32 +23,32 @@ export const MONITOR_PRODUCTS = {
   "domain-monitor": {
     label: "Domain security monitor", price: 500, kind: "domain", slug: "domain-audit",
     inputField: "domain", inputLabel: "a domain, e.g. example.com",
-    blurb: "Monthly re-audit of your domain's email auth, TLS and security headers, with an alert the moment your certificate is expiring or your config drifts.",
+    blurb: "Monthly re-audit of your domain's email auth, TLS and security headers, with an alert from the daily check when your certificate nears expiry or your config drifts.",
   },
   "filing-monitor": {
     label: "SEC filing watch", price: 500, kind: "filing", slug: "filing-report",
     inputField: "ticker", inputLabel: "a US stock ticker",
-    blurb: "We check this company's SEC filings index every day and email you a fresh cited report the moment anything new lands, an 8-K, a 10-Q, a 10-K, a proxy or a registration statement, with the new document read and explained in plain language.",
+    blurb: "We check this company's SEC filings index every day and email you a fresh cited report when anything new lands, an 8-K, a 10-Q, a 10-K, a proxy or a registration statement, with the new document read and explained in plain language.",
   },
   "token-monitor": {
     label: "Solana token safety watch", price: 500, kind: "token", slug: "token-brief",
     inputField: "mint", inputLabel: "a Solana token mint address",
-    blurb: "We re-check this token's mint and freeze authorities, LP lock, holder concentration and risk flags every day, and email you a fresh cited brief the moment any of them changes.",
+    blurb: "We re-check this token's mint and freeze authorities, LP lock, holder concentration and risk flags every day, and email you a fresh cited brief when any of them changes.",
   },
   "fund-monitor": {
     label: "Fund 13F watch", price: 500, kind: "fund", slug: "fund-report",
     inputField: "manager", inputLabel: "a fund name, ticker, or CIK",
-    blurb: "We watch this manager's SEC 13F filings and email you a fresh holdings + changes report each time they file.",
+    blurb: "We watch this manager's SEC 13F filings and email you a fresh holdings + changes report when they file.",
   },
   "recall-monitor": {
     label: "FDA recall watch", price: 500, kind: "recall", slug: "recall-report",
     inputField: "query", inputLabel: "a drug, food, brand or device, e.g. losartan",
-    blurb: "We check the FDA drug, food and device recall feeds for your term every day and email you a fresh cited report the moment a new recall appears.",
+    blurb: "We check the FDA drug, food and device recall feeds for your term every day and email you a fresh cited report when a new recall appears.",
   },
   "insider-monitor": {
     label: "Insider flow watch", price: 500, kind: "insider", slug: "insider-report",
     inputField: "ticker", inputLabel: "a US stock ticker",
-    blurb: "We watch Form 4 filings against this company every day and email you a fresh insider-flow report - buys, sells, who and how much - each time a new filing lands.",
+    blurb: "We watch Form 4 filings against this company every day and email you a fresh insider-flow report - buys, sells, who and how much - when a new filing lands.",
   },
   "research-monitor": {
     label: "Research question watch", price: 500, kind: "research", slug: "research",

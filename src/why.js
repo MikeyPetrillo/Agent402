@@ -5,6 +5,9 @@
 // claims only: no comparisons, no third-party names, evergreen "500+" counts.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
+import { RAILS } from "./rails.js";
+import { STRIPE_MIN_USD } from "./mpp-stripe.js";
+import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
 
 import { REPO_URL } from "./repo-link.js";
 export const WHY_POINTS = [
@@ -12,7 +15,7 @@ export const WHY_POINTS = [
     id: "actual",
     kicker: "01 / PRICE",
     h: "Pay for what the model used, with the ceiling quoted first.",
-    p: "On the metered gateway every 402 quotes this exact request from its own body. A wallet that can pay upto settles the actual usage under that ceiling; provider discounts such as prompt-cache reads pass through. Every settled x402 or MPP response carries a receipt, and any settled call can then be attested on Base: POST /api/attest with the settlement transaction writes an Ethereum Attestation Service record of the tool, the response digest and the payment, from our wallet, so an agent can prove afterwards what it acted on.",
+    p: "On the metered gateway every 402 quotes this exact request from its own body. A wallet that can pay upto settles the actual usage under that ceiling; provider discounts such as prompt-cache reads pass through. Every settled x402 or MPP response carries a receipt. A JSON answer bought with an EVM wallet can then be attested on Base by that same wallet: POST /api/attest with the settlement transaction writes an Ethereum Attestation Service record of the tool, the response digest and the payment, from our wallet, so an agent can prove afterwards what it acted on. Streamed and binary answers carry no digest, and wallet-scoped routes such as memory are never attested.",
     links: [["/tools/v1-chat-metered", "the metered tier"], ["/guides/openclaw-model-provider", "OpenClaw setup"]],
   },
   {
@@ -26,21 +29,21 @@ export const WHY_POINTS = [
     id: "one-key",
     kicker: "03 / ONE KEY",
     h: "One key buys everything.",
-    p: "The same wallet or credits key pays for five LLM tiers on three wires (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools, wallet-keyed memory and finished reports. One paywall, one key.",
+    p: "The same wallet pays for five LLM tiers on three wires (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools and finished reports, and an EVM wallet also keys its own memory. One paywall, one key.",
     links: [["/tools", "the catalog"], ["/v1/models", "gateway models"], ["/reports", "reports"]],
   },
   {
     id: "no-wallet",
     kicker: "04 / NO WALLET",
     h: "No wallet required.",
-    p: "Prepaid credits by card, cards over MPP, and card checkout for reports sit beside USDC or USDG on twelve chains and native MPP on Tempo. An agent with no crypto can be buying in minutes; an agent with a wallet never needs an account.",
-    links: [["/credits", "prepaid credits"], ["/reports", "buy a report by card"]],
+    p: `Proof-of-work pays for the pure-CPU tools, cards over MPP pay any route priced at $${STRIPE_MIN_USD.toFixed(2)} or more, and card checkout sells the finished reports, beside USDC or USDG on ${RAILS.length} chains and native MPP on Tempo. An agent with a wallet never needs an account.`,
+    links: [["/pricing", "ways to pay"], ["/reports", "buy a report by card"]],
   },
   {
     id: "deliverables",
     kicker: "05 / DELIVERABLES",
     h: "Finished work, ready to use.",
-    p: "Company dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a LinkedIn article package, grounded in primary sources with a data appendix. Monitors probe daily for free and re-run the paid report when the facts change.",
+    p: `Company dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a LinkedIn article package, grounded in live sources, most with a downloadable data appendix. Monitors check for free on a schedule and re-run the paid report when the facts change, up to ${MAX_FULL_PER_SUB_30D} full reports in any 30 days; past that a change arrives as an alert.`,
     links: [["/reports", "report products"], ["/monitors", "monitors"]],
   },
   {
@@ -54,7 +57,7 @@ export const WHY_POINTS = [
     id: "proof",
     kicker: "07 / PROOF",
     h: "Everything is checkable.",
-    p: "Uptime is observed by two probes outside production, a real-money canary buys through every rail daily, transactions are published by rail and by wire, and the whole server is open source and self-hostable. The deterministic tools are pure code with no model in their path - parsers, hashes, math, a real browser - and the ones that DO run a model are named rather than blended in: the /v1 gateway tiers, the report products, and the image, speech, transcription, embedding and AI-answer tools. Every 402 also carries the SHAPE of the answer before you pay: the accept declares an outputSchema, so an agent can check what came back against what was promised instead of taking a status code on trust. The operator is identified on-chain too: Agent402 is agent 94639 in the ERC-8004 Identity Registry on Base, and /.well-known/agent-registration.json is the record that registration points at, beside an A2A agent card at /.well-known/agent-card.json. So an agent can resolve who serves this catalog from the chain rather than from this page.",
+    p: "Uptime is observed by two probes outside production, a real-money canary buys through every rail daily, transactions are published by rail and by wire, and the whole server is open source and self-hostable. The deterministic tools are pure code with no model in their path - parsers, hashes, math, a real browser - and the ones that DO run a model are named rather than blended in: the /v1 gateway tiers, the report products, the image, speech, transcription, embedding and AI-answer tools, the Decide planner, and the judgment model that can pick among the router's shortlisted candidates. Every 402 also carries the SHAPE of the answer before you pay: the accept declares an outputSchema, so an agent can check what came back against what was promised instead of taking a status code on trust. The operator is identified on-chain too: Agent402 is agent 94639 in the ERC-8004 Identity Registry on Base, and /.well-known/agent-registration.json is the record that registration points at, beside an A2A agent card at /.well-known/agent-card.json. So an agent can resolve who serves this catalog from the chain rather than from this page.",
     links: [["/proof", "receipts"], ["/status", "status"], ["/revenue", "transactions"], ["/.well-known/agent-registration.json", "on-chain identity"], [REPO_URL, "source"]],
   },
 ];
@@ -108,10 +111,9 @@ ${pointsHtml}
 <section style="max-width:1180px;margin:0 auto;padding:56px 30px 56px;">
   <div style="background:var(--surface);border:1px solid var(--hairline);padding:44px 40px;">
     <h2 style="font-weight:800;font-size:32px;line-height:1.05;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-dark);">Start with one call.</h2>
-    <p style="font-size:16px;line-height:1.6;color:var(--dk-muted2);margin:0 0 24px;max-width:600px;">Add the hosted MCP connector, buy prepaid credits by card, or pay per call in USDC from a wallet. All three reach the same catalog. Selling into it is open too: the tollbooth charges agents per request on your own API over both protocols.</p>
+    <p style="font-size:16px;line-height:1.6;color:var(--dk-muted2);margin:0 0 24px;max-width:600px;">Add the hosted MCP connector, pay per call in USDC from a wallet, or buy a finished report by card. Selling into it is open too: the tollbooth charges agents per request on your own API over both protocols.</p>
     <div style="display:flex;gap:11px;flex-wrap:wrap;">
       <a href="/docs#add" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:14px 24px;">ADD TO YOUR AGENT →</a>
-      <a href="/credits" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 24px;">PREPAID CREDITS</a>
       <a href="/reports" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 24px;">GET A REPORT</a>
       <a href="/sell" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 24px;">SELL YOUR API</a>
     </div>

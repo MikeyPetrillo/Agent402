@@ -50,7 +50,7 @@ function assertBodyWithinCap(res, capBytes, label) {
 
 const TIMEOUT_MS = 10_000;
 const BULK_TIMEOUT_MS = 15_000;
-const CACHE_TTL_MS = 5 * 60_000;
+export const CACHE_TTL_MS = 5 * 60_000;
 const STALE_MAX_MS = 30 * 60_000;
 const MAX_ROWS = 100;
 const MAX_POINTS = 3650;

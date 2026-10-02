@@ -113,6 +113,9 @@ const INDEX_ROW_CAP = 100;
 // this is the multiplier.
 const CRAWL_INTERVAL_MS = 30 * 60 * 1000; // 30 min — gentle on third-party sellers
 const DISCOVERY_INTERVAL_MS = 60 * 60 * 1000; // 1 hr — registries don't change fast
+// Seconds, for machine surfaces that state the cadence (/.well-known/x402).
+export const CRAWL_INTERVAL_SECONDS = CRAWL_INTERVAL_MS / 1000;
+export const DISCOVERY_INTERVAL_SECONDS = DISCOVERY_INTERVAL_MS / 1000;
 
 /**
  * Human label for the crawl cadence, DERIVED from CRAWL_INTERVAL_MS so served

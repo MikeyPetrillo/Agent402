@@ -163,7 +163,7 @@ for the npm package and deploy templates.
 | x402 manifest | `GET /.well-known/x402` | None |
 
 Prices: most tools $0.001–$0.02 per call; the routing tiers top out at $0.55,
-multi-tool skill packs run $0.003 to $0.119, and the report products (research,
+multi-tool skill packs run $0.003 to $0.101, and the report products (research,
 dossier, fund, SEC filing, domain audit, token risk, recall, insider) run
 $0.60 to $2.00 over x402 or MPP, or $2 to $5 by card at
 https://agent402.tools/reports, where the price includes payment processing.

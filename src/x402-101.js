@@ -17,6 +17,7 @@
 // Behaviour lives in assets/js/x402-101.js (CSP: no inline scripts).
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
+import { powCostPhrase } from "./pow.js";
 
 // [id, kicker, headline, bodyHtml (trusted, authored here), notesText, opts]
 // notesText is the presenter's talk track - shown only with the N key / print.
@@ -54,7 +55,7 @@ export const SLIDES = [
     <div class="s101-out" id="s101-ask-out" aria-live="polite"></div>
   </div>
   <div class="s101-step" data-step="2">
-    <div class="s101-step-h"><span class="s101-num">2</span><strong>Pay.</strong> <span class="s101-muted">Two ways to put a coin in: money from a wallet, or, on the free tier, a few milliseconds of computer work (a puzzle). This browser has no wallet, so it will solve the puzzle.</span></div>
+    <div class="s101-step-h"><span class="s101-num">2</span><strong>Pay.</strong> <span class="s101-muted">Two ways to put a coin in: money from a wallet, or, on the free tier, a short burst of computer work (a puzzle: ${esc(powCostPhrase())}). This browser has no wallet, so it will solve the puzzle.</span></div>
     <button class="s101-btn" id="s101-pay" type="button" disabled>Solve the puzzle and retry &rarr;</button>
     <div class="s101-out" id="s101-pay-out" aria-live="polite"></div>
   </div>
@@ -63,7 +64,7 @@ export const SLIDES = [
     <div class="s101-out" id="s101-receipts" aria-live="polite"><span class="s101-muted">loading the latest settlements&hellip;</span></div>
   </div>
 </div>`,
-    notes: "Click step 1. Read the decoded 402 out loud: 'the server says: this costs a tenth of a cent, pay in USDC, on any of these chains, to this address, valid for five minutes.' Point out the two headers: same offer, two dialects (x402 and MPP). Click step 2: 'this browser has no wallet, so it pays with a few milliseconds of work instead of money' - the tool answers. Then step 3: 'when it IS money, here is a real payment from a few minutes ago, on a public ledger; click it.' That is the whole protocol.",
+    notes: "Click step 1. Read the decoded 402 out loud: 'the server says: this costs a tenth of a cent, pay in USDC, on any of these chains, to this address, valid for five minutes.' Point out the two headers: same offer, two dialects (x402 and MPP). Click step 2: 'this browser has no wallet, so it pays with a fraction of a second of work instead of money' - the tool answers. Then step 3: 'when it IS money, here is a real payment from a few minutes ago, on a public ledger; click it.' That is the whole protocol.",
   },
   {
     id: "recap", kicker: "04 / what just happened",
@@ -95,8 +96,8 @@ export const SLIDES = [
     id: "money", kicker: "06 / the money",
     headline: "Dollars on a public ledger, and receipts anyone can check.",
     body: `<p><strong>Stablecoins</strong> are dollars that live on a public ledger: USDC is one dollar, always. Payments here are USDC (or USDG on Robinhood Chain), so nobody prices anything in a volatile token.</p>
-<p><strong>Twelve rails.</strong> A buyer pays on whichever chain their wallet already uses; the 402 lists them all at one price. On the EVM chains the buyer pays no network fee at all.</p>
-<p><strong>Every payment is a public record.</strong> That is what makes this an economy rather than a wire: sellers can be ranked by settlements the chain actually shows, revenue can be published with proof, and a router can refuse to send money to a seller nobody has ever paid.</p>
+<p><strong>Twelve rails.</strong> A buyer pays on whichever chain their wallet already uses; the 402 lists every rail with its own amount, the list price on most and a little more on a rail whose settlement carries a fee. On the EVM chains the buyer pays no network fee at all.</p>
+<p><strong>Every payment is a public record.</strong> That is what makes this an economy rather than a wire: sellers can be ranked by settlements the chain actually shows, revenue can be published with proof, and a router can try sellers with proven settlement before anyone untested.</p>
 <p class="s101-links"><a href="/revenue">Live transactions with every figure linked to its receipt &rarr;</a></p>`,
     notes: "Anticipate 'is this crypto speculation?' - no: dollar stablecoins only, and no native token is required from the buyer on the EVM chains. The public-ledger point is the strategic one: it enables trust without accounts. Show /revenue if you have time; every number links to chain proof.",
   },
@@ -104,7 +105,7 @@ export const SLIDES = [
     id: "agent402", kicker: "07 / where we sit",
     headline: "Most of the ecosystem ships the protocol. Agent402 ships the market that runs on it.",
     body: `<div class="s101-grid">
-<div><div class="s101-tag">Buy</div><strong>500+ pay-per-call tools</strong><p>Web search with citations, headless browser, PDFs, OCR, financial and SEC data, an OpenAI-compatible LLM gateway. Every one deterministic, priced, tested, settled on chain over x402 or MPP.</p></div>
+<div><div class="s101-tag">Buy</div><strong>500+ pay-per-call tools</strong><p>Web search with citations, headless browser, PDFs, OCR, financial and SEC data, an OpenAI-compatible LLM gateway. Every one priced per call and settled on chain over x402 or MPP; the model-backed ones are marked as such.</p></div>
 <div><div class="s101-tag">Route</div><strong>An open index and a Smart Order Router</strong><p>One call resolves a task to the best seller across the whole ecosystem, ours or anyone's, pays them on the agent's behalf and relays the result. ${routingProofSentence()}</p></div>
 <div><div class="s101-tag">Sell</div><strong>The tollbooth</strong><p>One line in front of any site or API: humans browse free, agents pay per request over both wires, straight to your wallet. Non-custodial, no signup, nothing deducted from your price.</p></div>
 <div><div class="s101-tag">Prove</div><strong>Numbers you can check</strong><p>Live transaction counts by rail and wire (external revenue underneath), an on-chain seller leaderboard, uptime measured from outside, refunds ledgered.</p></div>

@@ -160,7 +160,7 @@ export function tollboothCloudPage(baseUrl) {
       <li>Unlimited sites</li>
       <li>Per-site <code>/__tollbooth</code> dashboard</li>
       <li>KV / HTTP stats sink for your own infra</li>
-      <li>MIT licensed, audited, non-custodial</li>
+      <li>MIT licensed, open source, non-custodial</li>
     </ul>
     <div class="cta"><a href="${esc(baseUrl)}/tollbooth">Install →</a></div>
   </div>
@@ -259,12 +259,6 @@ export function tollboothCloudPage(baseUrl) {
 </div>
 <p style="margin:8px 0 0;"><a href="${esc(waitlistUrl("partner"))}&kind=partner">Apply as a partner agency →</a></p>
 
-<h2>The two-sided flywheel kicker</h2>
-<div class="flywheel">
-  <div class="h">Bonus for verified Tollbooth installs</div>
-  <p>Any wallet that runs a verified Tollbooth install earns <b>1.5× bonus Agent402.tools credit</b> per dollar of settled USDC its install charges. Spend it on the 500+ paid tools in the <a href="${esc(baseUrl)}/tools">catalog</a> (browser, search, PDFs, images, live data, identifiers) or against the <a href="${esc(baseUrl)}/index">Smart Order Router</a>. Tollbooth installs feed Agent402 demand; Agent402 buyers feed Tollbooth supply.</p>
-</div>
-
 <h2>How it stays non-custodial</h2>
 <div class="tcols">
   <div class="b">
@@ -300,7 +294,7 @@ export function tollboothCloudPage(baseUrl) {
   <dd>No. The gate runs anywhere Node 20+ runs: Express, Next.js middleware, a reverse proxy, a Cloudflare Worker, a Deno or Bun script. Cloud reads stats from any of them.</dd>
 
   <dt>Which AI crawlers does it charge by default?</dt>
-  <dd>The default <code>bots</code> mode targets 25 AI/LLM crawler user-agents (GPTBot, ClaudeBot, PerplexityBot, CCBot, Google-Extended, Bytespider, …). Classic search indexers (Googlebot, Bingbot) are <b>deliberately not</b> on the list - you almost always want classic SEO indexing to stay free.</dd>
+  <dd>The default <code>bots</code> mode targets the AI/LLM crawler user-agents on its published list (GPTBot, ClaudeBot, PerplexityBot, CCBot, Google-Extended, Bytespider, …). Classic search indexers (Googlebot, Bingbot) are <b>deliberately not</b> on the list - you almost always want classic SEO indexing to stay free.</dd>
 
   <dt>What if AI vendors haven't shipped buyer-side x402 yet?</dt>
   <dd>Right now Tollbooth's main job for most sites is to <b>deter</b> AI training crawl (with proof-of-work or an outright block), not to <b>monetize</b> it. The USDC rail is fully wired and ready for the moment buyer-side payments ship in the large AI vendors' crawlers. Most operators run <code>observe</code> mode for 1-2 weeks first to size the traffic.</dd>
