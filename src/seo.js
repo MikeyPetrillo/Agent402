@@ -161,6 +161,8 @@ export function sitemapXml(baseUrl, catalog) {
     // page = new sitemap entry, zero edits here.
     ...Object.keys(CHAIN_PAGES).map((key) => ({ loc: `${baseUrl}/${key}`, priority: "0.8" })),
     { loc: `${baseUrl}/faq`, priority: "0.8" },
+    { loc: `${baseUrl}/docs`, priority: "0.8" },
+    { loc: `${baseUrl}/transparency`, priority: "0.4" },
     { loc: `${baseUrl}/llms.txt`, priority: "0.8" },
     { loc: `${baseUrl}/SKILL.md`, priority: "0.8" },
     { loc: `${baseUrl}/openapi.json`, priority: "0.7" },

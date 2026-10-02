@@ -1626,6 +1626,7 @@ jobs:
           t node scripts/test-legal-dates.js
           t node scripts/test-wire-count-copy.js
           t node scripts/test-pack-copy-retired.js
+          t node scripts/test-sitemap-superset.js
           # Published SDK snippets never let the SDK send an environment credential to our host
           t node scripts/test-sdk-snippet-credentials.js
           t node scripts/test-plugin-manifests.js
