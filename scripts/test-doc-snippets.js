@@ -113,6 +113,17 @@ const THIRD_PARTY = {
 // ---- pages -------------------------------------------------------------------
 // Strip tags until none remain (a single pass can leave a tag formed by what
 // it removed), then decode entities, &amp; last.
+// Remove <script> elements without a tag regex: cut from each "<script" to the
+// end of the next "</script" tag, case-insensitively.
+function dropScripts(html) {
+  let out = "", i = 0; const low = html.toLowerCase();
+  for (;;) {
+    const a = low.indexOf("<script", i); if (a < 0) return out + html.slice(i);
+    out += html.slice(i, a);
+    const b = low.indexOf("</script", a); if (b < 0) return out;
+    const c = low.indexOf(">", b); i = c < 0 ? html.length : c + 1;
+  }
+}
 const stripTags = (s) => { let prev; do { prev = s; s = s.replace(/<[^>]*>/g, ""); } while (s !== prev); return s; };
 const decode = (s) => stripTags(s).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'").replace(/&hellip;/g, "…").replace(/&rarr;/g, "→").replace(/&amp;/g, "&");
 const get = async (p) => { const r = await fetch(BASE + p); return { status: r.status, text: await r.text() }; };
@@ -153,7 +164,7 @@ for (const page of pages) {
   const { status, text } = await get(page);
   ok(status === 200, `${page} answers 200 (got ${status})`);
   if (status !== 200) continue;
-  const body = decode(text.replace(/<script[\s\S]*?<\/script>/g, ""));
+  const body = decode(dropScripts(text));
   ok(!/\{\{(?:price|amount|routerTiers|routingProof)[^}]*\}\}/.test(body), `${page}: no unresolved guide token`);
   ok(!/elizaos plugins add/.test(body), `${page}: no \`elizaos plugins add\` (the community registry is retired)`);
   ok(!/X-Pow-Solution:\s*<nonce>/i.test(body), `${page}: the PoW header is "<token>:<nonce>", never "<nonce>:..."`);
@@ -270,7 +281,7 @@ for (const page of pages) {
   }
 }
 // /playground runs catalog tools only; it has no /v1 gateway client.
-ok(!/\/v1\b/.test(decode((await get("/playground")).text.replace(/<script[\s\S]*?<\/script>/g, ""))), "/playground does not offer the /v1 gateway it cannot call");
+ok(!/\/v1\b/.test(decode(dropScripts((await get("/playground")).text))), "/playground does not offer the /v1 gateway it cannot call");
 ok(blocks > 50 && imports > 30 && toolCalls >= 12, `the sweep measured something (${blocks} blocks, ${imports} imports, ${toolCalls} agent402Tools calls)`);
 
 // The checker must catch the defects it was written for (a planted control,

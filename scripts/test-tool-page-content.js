@@ -16,6 +16,10 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
 import { toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetRequest } from "../src/pages.js";
+// Remove every tag, repeating until none remain (one pass can leave a tag
+// formed by the text it removed).
+function stripTags(s) { let prev; do { prev = s; s = s.replace(/<[^>]*>/g, ""); } while (s !== prev); return s; }
+
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0;
@@ -67,7 +71,7 @@ ok(/\$0\.002\/call/.test(toolTitle({ name: "An extremely long name for a tool th
 // the idempotent replay (not for raw bytes), the free-tier and wallet-only
 // reasons, and the JSON field table on a tool that answers raw bytes.
 {
-  const factsOf = (html) => decode(((html.match(/<ul class="tp-facts">([\s\S]*?)<\/ul>/) || [])[1] || "").replace(/<[^>]+>/g, ""));
+  const factsOf = (html) => decode(stripTags((html.match(/<ul class="tp-facts">([\s\S]*?)<\/ul>/) || [])[1] || ""));
   const plain = { ...hostile, slug: "plain", method: "GET", path: "/api/plain", discovery: { ...hostile.discovery, input: { text: "a b", n: 2 } } };
   const saved = { k: process.env.TEMPO_API_KEY, r: process.env.TEMPO_RECIPIENT_ADDRESS };
   delete process.env.TEMPO_API_KEY;
@@ -154,7 +158,7 @@ try {
 
   // ---- 4. Booted: the per-tool claims on real routes, and /openapi.json. ----
   {
-    const factsOf = (html) => decode(((html.match(/<ul class="tp-facts">([\s\S]*?)<\/ul>/) || [])[1] || "").replace(/<[^>]+>/g, ""));
+    const factsOf = (html) => decode(stripTags((html.match(/<ul class="tp-facts">([\s\S]*?)<\/ul>/) || [])[1] || ""));
     const page = async (slug) => (await fetch(`${BASE}/tools/${slug}`)).text();
     // /api/memory carries both a GET and a POST route, so the method alias never runs there.
     for (const slug of ["memory-read", "memory-write"]) {

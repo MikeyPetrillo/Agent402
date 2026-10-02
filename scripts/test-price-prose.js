@@ -193,7 +193,7 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
   const uc = useCasesPage("https://agent402.tools", odd);
   const expected = useCaseCost({ calls: [["render", 20], ["extract", 20], ["memory-write", 20]], per: "per day" }, odd);
   ok(expected && expected.startsWith("$1.94 per day"), `the use-case cost is summed from catalog prices (${expected})`);
-  ok(uc.includes(expected.replace(/×/g, "×").slice(0, 14)), "and the page renders that computed cost");
+  ok(uc.includes(expected.slice(0, 14)), "and the page renders that computed cost");
   ok(!/~\$/.test(uc), "no typed approximate cost line is left on /use-cases");
 }
 
