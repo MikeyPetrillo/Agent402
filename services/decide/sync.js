@@ -47,7 +47,13 @@ export async function syncIndex({ index, store, source, embed, now = Date.now() 
     if (seen.has(row.id)) { dupes++; continue; }
     seen.add(row.id);
     const prev = index.rows.get(row.id);
-    if (!prev || prev.contentHash !== row.contentHash || prev.lastLiveAt !== row.lastLiveAt || prev.health !== row.health) {
+    // Besides the text, the fields a plan acts on: whether execute can pay the
+    // tool, how well its inputs are described, and its output fields. A change
+    // to any of them alone used to leave the old row in place until the text
+    // or live time also moved.
+    if (!prev || prev.contentHash !== row.contentHash || prev.lastLiveAt !== row.lastLiveAt || prev.health !== row.health
+      || (prev.executable !== false) !== (row.executable !== false) || prev.schemaQuality !== row.schemaQuality
+      || JSON.stringify(prev.outputFields || []) !== JSON.stringify(row.outputFields || [])) {
       index.upsert(row);
       changed.push(row);
     }

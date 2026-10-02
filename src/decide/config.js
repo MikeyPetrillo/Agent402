@@ -14,7 +14,7 @@ export const DEFAULTS = Object.freeze({
   liveWithinHours: 168,
   freshnessHalfLifeHours: 72,
   maxSteps: 6,
-  fallbacksPerStep: 2,
+  fallbacksPerStep: 3,
   candidatesPerStep: 24,
   // Whole-request budgets (ms). Past them the best partial plan is returned.
   budgetMs: { quick: 8000, plan: 18000, full: 26000 },
