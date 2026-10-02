@@ -185,6 +185,15 @@ ok(countAfterRun2 === countAfterRun1, `same-day keys overwrite (still ${countAft
   ok(backupPlan().files.length > 0 && backupPlan().configured === false, "plan endpoint still inventories without creds");
 }
 
+// The status outlives a restart: a fresh module instance (a new container)
+// reads the last run back from /data instead of reporting null.
+{
+  const fresh = await import("../src/backup.js?restart=1");
+  const st = fresh.backupStatus();
+  ok(typeof st.lastAttempt === "string" && st.lastAttempt.length > 0, `status survives a restart (lastAttempt ${st.lastAttempt})`);
+  ok(byName["backup-status.json"] === undefined || byName["backup-status.json"].excluded === true, "the status file itself is never backed up");
+}
+
 db.close();
 stub.close();
 rmSync(dataDir, { recursive: true, force: true });

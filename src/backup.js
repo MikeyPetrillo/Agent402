@@ -108,7 +108,7 @@ const PRIORITY = ["agent402-refunds.db", "agent402-sales.db", "credits", "human-
 // plan skipped every directory, so prepaid credit balances and every purchased
 // report had NO offsite copy while the module said the volume was covered.
 const DIR_BUNDLE_MAX_FILES = 50_000;
-const EXCLUDE = [/cache/i, /\btmp\b|\.tmp$/i, /-wal$/, /-shm$/, /\.log$/i];
+const EXCLUDE = [/cache/i, /\btmp\b|\.tmp$/i, /-wal$/, /-shm$/, /\.log$/i, /^backup-status\.json$/];
 
 /** Inventory of /data: what a run would consider, with sizes and the
  *  exclude/include decision per file. Pure read — safe pre-bucket. */
@@ -277,13 +277,28 @@ const status = {
   lastAttempt: null, lastSuccess: null, lastError: null,
   lastUploaded: [], lastHeld: [], lastPruned: 0, storedBytes: null,
 };
-export const backupStatus = () => ({ ...status, configured: backupConfigured() });
+// Persisted beside the data it describes, so /__operator/backup.json still
+// shows the last run after a redeploy (it read null on every fresh container
+// until 2026-10-02). Best-effort both ways: a status file is never worth a
+// failed backup.
+const statusFile = () => join(cfg().dataDir, "backup-status.json");
+let statusLoaded = false;
+function loadStatus() {
+  if (statusLoaded) return;
+  statusLoaded = true;
+  try { const saved = JSON.parse(readFileSync(statusFile(), "utf8")); if (saved && typeof saved === "object") for (const k of Object.keys(status)) if (k in saved && status[k] == null) status[k] = saved[k]; if (saved?.encrypted !== undefined && status.encrypted === undefined) status.encrypted = saved.encrypted; } catch { /* no saved status yet */ }
+}
+function saveStatus() {
+  try { writeFileSync(statusFile(), JSON.stringify(status)); } catch { /* best-effort */ }
+}
+export const backupStatus = () => { loadStatus(); return { ...status, configured: backupConfigured() }; };
 
 let running = false;
 export async function runBackup({ log = console.log } = {}) {
   if (!backupConfigured()) return { skipped: "not configured (BACKUP_S3_* unset)" };
   if (running) return { skipped: "already running" };
   running = true;
+  loadStatus();
   status.lastAttempt = new Date().toISOString();
   const c = cfg();
   const day = status.lastAttempt.slice(0, 10);
@@ -366,6 +381,7 @@ export async function runBackup({ log = console.log } = {}) {
     log(`[backup] FAILED: ${e.message}`);
     return { ok: false, error: String(e.message) };
   } finally {
+    saveStatus();
     rmSync(tmp, { recursive: true, force: true });
     running = false;
   }
