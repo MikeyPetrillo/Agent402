@@ -20,7 +20,7 @@ Settlement runs after the handler answers and an error status cancels it, so a r
 
 ## 03 / One key - One key buys everything.
 
-The same wallet pays for five LLM tiers on three wires (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools and finished reports, and an EVM wallet also keys its own memory. One paywall, one key.
+The same wallet pays for five LLM tiers on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini generateContent), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools and finished reports, and an EVM wallet also keys its own memory. One paywall, one key.
 
 - The catalog: https://agent402.tools/tools
 - Gateway models: https://agent402.tools/v1/models

@@ -3056,11 +3056,12 @@ app.get("/health", (req, res) => {
   res.status(ok ? 200 : 503).json({ ok, checks, flags, meta: { ...meta, ...diagnostics } });
 });
 // Security disclosure contact (RFC 9116, security audit A402-13). Expires is
-// computed ~1 year out on each request so the file is never stale. Contact
+// computed ~180 days out on each request so the file is never stale (RFC 9116
+// recommends under a year). Contact
 // override via SECURITY_CONTACT_EMAIL; defaults to the maintainer address.
 app.get("/.well-known/security.txt", (_req, res) => {
   const contact = (process.env.SECURITY_CONTACT_EMAIL || "").trim() || "mike@agent402.tools";
-  const expires = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString();
+  const expires = new Date(Date.now() + 180 * 24 * 3600 * 1000).toISOString();
   const body = [
     `Contact: mailto:${contact}`,
     `Expires: ${expires}`,

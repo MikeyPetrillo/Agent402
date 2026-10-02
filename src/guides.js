@@ -1531,8 +1531,8 @@ not as its model host.
 
 ## What the same key buys
 
-The credits key that pays for chat pays for the rest: three wires on every
-tier (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank,
+The credits key that pays for chat pays for the rest: four wires on every
+tier (OpenAI chat, OpenAI Responses, Anthropic Messages, Gemini generateContent), embeddings, rerank,
 images, speech and transcription, 500+ tools, finished reports
 and monitors, and a router that buys from other sellers on your agent's
 behalf, proven sellers first. Why pay here, with the proof links:
@@ -1673,8 +1673,8 @@ The credits key (or the wallet) that pays for chat is the same one that pays
 for everything else on the gateway and the catalog, with one 402 shape and one
 receipt shape:
 
-- **Three wires on every tier**: OpenAI chat, OpenAI Responses and Anthropic
-  Messages, plus streaming, embeddings, rerank, images, video, speech and
+- **Four wires on every tier**: OpenAI chat, OpenAI Responses, Anthropic
+  Messages and Gemini generateContent, plus streaming, embeddings, rerank, images, video, speech and
   transcription, and a grounded tier that cites the web on every answer.
 - **500+ tools** over MCP or HTTP: web search, news, cited
   answers, browser render, market quotes, SEC filings, crypto and DeFi data,
