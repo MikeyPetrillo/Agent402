@@ -2,10 +2,13 @@
 // store, and the HTTP surface booted with no network ingest.
 import { pairSettlements } from "./lib/base.js";
 import { tempoEvents } from "./lib/tempo.js";
-import { bazaarDirectory } from "./lib/directory.js";
 import { isPrivateIp } from "./lib/logos.js";
 import { makeStore } from "./lib/store.js";
 import { AUTH_USED_TOPIC, TRANSFER_TOPIC } from "./lib/chains.js";
+// Our own wallet list is read when directory.js loads, so it is set first.
+const OWN = "0x" + "d".repeat(40);
+process.env.LIVE_INTERNAL_PAYERS = OWN;
+const { bazaarDirectory } = await import("./lib/directory.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -79,6 +82,14 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
   const st2 = makeStore({ now: () => t });
   for (const [i, dt] of [[1, 100], [2, 500], [3, 300], [4, 50]]) st2.add(e(i + 10, A, t - dt * 1000));
   ok(st2.recent().map((x) => x.ts).every((ts, i, a) => i === 0 || a[i - 1] <= ts), "store: events arriving newest first are kept in time order");
+  // Our own canary and volume payments walk past, never reach a count.
+  const st3 = makeStore({ now: () => t });
+  st3.add(e(21, A, t - 1000, 0.01));
+  st3.add({ ...e(22, C, t - 900, 5), internal: true });
+  const s3 = st3.stats((k) => ({ key: k, name: "Seller" }));
+  ok(s3.all.h1.payments === 1 && s3.all.h1.usd === 0.01 && s3.all.h1.buyers === 1 && s3.all.h24.payments === 1, "store: an internal payment is in no count (payments, usd, buyers, 24h)");
+  ok(s3.all.h1.topSellers.length === 1 && s3.all.h1.topSellers[0].payments === 1, "store: an internal payment does not rank a seller");
+  ok(st3.recent().length === 2 && st3.recent().some((x) => x.internal), "store: the internal payment still reaches the page's event list");
 }
 
 // --- HTTP surface, booted offline
@@ -104,6 +115,16 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
   const p = hello.payments.find((x) => x.tx === "0xabc");
   ok(p && p.seller.agent402 === true && p.seller.name === "Agent402" && p.txUrl === "https://basescan.org/tx/0xabc", "events: an Agent402 payment is marked and links to basescan");
   ok(/^0x[0-9a-f]{4}…[0-9a-f]{4}$/.test(p.payer), "events: the buyer is shortened");
+  {
+    const before = await (await fetch(base + "/api/stats")).json();
+    push([{ chain: "x402", tx: "0xown", logIndex: 1, block: 1, payer: OWN, payTo: "0xabf4fabd7c416fb67202e5f9002389fc75e2a9d0", amountUsd: 0.5, ts: Date.now() }]);
+    const after = await (await fetch(base + "/api/stats")).json();
+    ok(after.all.h1.payments === before.all.h1.payments && after.all.h1.usd === before.all.h1.usd && after.all.h1.buyers === before.all.h1.buyers, "stats: a payment from our own wallet changes no count");
+    ok(after.excludesOwnPayments === true, "stats: says our own payments are excluded when the wallet list is configured");
+    const page = await (await fetch(base + "/")).text();
+    ok(/left out of every count/.test(page) && !/<!--OWN-->|<!--MAXUSD-->/.test(page) && /up to \$50 to a recipient/.test(page), "page: the read-me states the exclusion and the derived per-payment ceiling");
+    ok(/carries no marker that says it was an MPP payment/.test(page), "page: says the Tempo side counts every transfer to an MPP recipient");
+  }
   ok((await fetch(base + "/logo/v2/x402%3A" + "0".repeat(40))).status === 404 && (await fetch(base + "/logo/https%3A%2F%2Fevil.example")).status === 404, "logo: only a directory key is served, never an arbitrary URL");
   ok((await fetch(base + "/", { method: "POST" })).status === 405, "read-only: POST is refused");
   {
