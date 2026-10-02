@@ -237,5 +237,16 @@ for (const t of ["Detects prompt-injection patterns in text", "Web search for cu
   const sync = rf(new URL("../services/decide/sync.js", import.meta.url), "utf8");
   ok(/\(prev\.executable !== false\) !== \(row\.executable !== false\)/.test(sync) && /prev\.schemaQuality !== row\.schemaQuality/.test(sync) && /outputFields/.test(sync), "sync refreshes a row whose payable flag, input quality or output fields changed");
 }
+{
+  // A path seller's priced prefix root runs at the prefix itself, not "<prefix>/".
+  const ps = (route) => remoteToolRow({ seller: "https://fns.example/functions/v1/npm", route, method: "GET", name: "N", description: "n", price: 0.01, networks: ["eip155:8453"] }, { lastLiveAt: 1 });
+  ok(ps("/?package=react").endpoint === "https://fns.example/functions/v1/npm?package=react", `prefix-root route keeps no trailing slash (${ps("/?package=react").endpoint})`);
+  ok(ps("/").endpoint === "https://fns.example/functions/v1/npm", "bare prefix root is the prefix");
+  ok(ps("/sub").endpoint === "https://fns.example/functions/v1/npm/sub", "a route under the prefix joins normally");
+  const other = remoteToolRow({ seller: "https://fns.example/functions/v1/other", route: "/", method: "GET", name: "O", description: "o", price: 0.01 }, { lastLiveAt: 1 });
+  ok(other.id !== ps("/").id, "two path sellers on one host get distinct ids for the same route");
+  ok(remoteToolRow({ seller: "https://seller.example", route: "/v1/search", method: "post", name: "S", description: "s", price: 0.01 }, { lastLiveAt: 1 }).endpoint === "https://seller.example/v1/search", "a bare-origin seller is unchanged");
+}
 console.log(`\ntest-decide-index: ${pass} passed, ${fail} failed`);
+
 process.exit(fail ? 1 : 0);

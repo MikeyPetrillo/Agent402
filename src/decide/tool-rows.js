@@ -174,6 +174,14 @@ export function remoteToolRow(t, { requestContract = null, injected = false, las
   if (!rawRoute.startsWith("/") || /[{}]/.test(rawRoute) || rawRoute.length > 512) return null;
   let route;
   try { const u = new URL(rawRoute, origin); if (u.origin !== new URL(origin).origin) return null; route = `${u.pathname}${u.search}`; } catch { return null; }
+  // A path seller (origin carries a prefix, e.g. https://host/functions/v1/fn)
+  // can price its prefix root: route "/" or "/?q". Its URL is the prefix
+  // itself, never "<prefix>/" (function hosts 404 or redirect that), the same
+  // join the index's /api/route rows use (joinSellerRoute in x402-live-quote).
+  const prefix = (() => { try { return new URL(origin).pathname.replace(/\/+$/, ""); } catch { return ""; } })();
+  const endpoint = prefix && (route === "/" || route.startsWith("/?")) ? `${origin}${route.slice(1)}` : `${origin}${route}`;
+  // Two path sellers on one host can share a route; their ids must not.
+  const idHost = prefix ? `${host}${prefix}` : host;
   const priceUsd = priceNumber(t.price);
   if (priceUsd === null || priceUsd <= 0) return null;
   const method = String(t.method || "POST").toUpperCase();
@@ -202,7 +210,7 @@ export function remoteToolRow(t, { requestContract = null, injected = false, las
   const networks = Array.isArray(t.networks) ? t.networks.filter((n) => typeof n === "string").slice(0, 16) : [];
   const rails = ["x402", ...(mppOrigins.has(origin) ? ["mpp"] : [])];
   return finish({
-    id: rowId(host, method, route),
+    id: rowId(idHost, method, route),
     slug: cleanText(String(t.slug || route), 120),
     name: cleanText(t.name || route, MAX_NAME),
     description: cleanText(t.description || "", MAX_DESC),
@@ -211,7 +219,7 @@ export function remoteToolRow(t, { requestContract = null, injected = false, las
     sellerName: cleanText(t.sellerName || host, 80),
     firstParty: false,
     method,
-    endpoint: `${origin}${route}`,
+    endpoint,
     priceUsd,
     pricedByQuote: false,
     rails,
