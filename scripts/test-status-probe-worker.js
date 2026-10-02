@@ -368,7 +368,7 @@ for (const [name, over, detail] of failCases) {
   // times), the record, a confirmed alarm reading, and every other alarm
   // closing an open issue (a comment and a PATCH each).
   let calls = 0;
-  const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" } };
+  const HEALTHY_GW = { status: "ok", upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 } };
   const { ALARMS } = await import("../workers/status-probe/src/index.js");
   stub({ health: () => new Response("down", { status: 503 }) });
   const prodStub = globalThis.fetch;
@@ -476,7 +476,8 @@ for (const [name, over, detail] of failCases) {
     const r = await syncAlarms(ENV, { ...nosleep, fetchStatus: feed(HEALTHY) });
     assert.deepEqual(r.closed, ["Upstream buyer wallet LOW (x402)"]);
     assert.equal(closed.length, 1);
-    assert.equal(comments.length, 1);
+    // One subrequest per close: the close is the recovery record, no comment.
+    assert.equal(comments.length, 0);
   });
 
   await acheck("a pull request with a colliding title is not an alarm", async () => {
@@ -589,9 +590,41 @@ for (const [name, over, detail] of failCases) {
     assert.match(a.body({ gateway: { tweetQueue: { status: "<script>" } } }), /tweetQueue\.status=unknown/);
   });
 
-  await acheck("every alarm title also exists in heartbeat.yml, so the two never fork", async () => {
-    const yml = await readFile(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
-    for (const a of ALARMS) assert.ok(yml.includes(a.title), `heartbeat.yml has no "${a.title}"`);
+  await acheck("every alarm title also exists in the GitHub workflow that raises it, so the two never fork", async () => {
+    const yml = (await readFile(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"))
+      + (await readFile(new URL("../.github/workflows/charged-failure-alert.yml", import.meta.url), "utf8"));
+    for (const a of ALARMS) assert.ok(yml.includes(a.title), `no workflow has "${a.title}"`);
+    const { DOWN_TITLE } = await import("../workers/status-probe/src/index.js");
+    assert.ok(yml.includes(DOWN_TITLE), `heartbeat.yml has no "${DOWN_TITLE}"`);
+  });
+
+  await acheck("charged failures: recent pages, ok clears, unknown or absent does neither", async () => {
+    const { judge } = await import("../workers/status-probe/src/index.js");
+    const T = "Charged failure: a paid tool returned an error to a paying agent";
+    assert.equal(judge({ gateway: { chargedFailures: { status: "recent" } } })[T], "bad");
+    assert.equal(judge({ gateway: { chargedFailures: { status: "ok" } } })[T], "good");
+    assert.equal(judge({ gateway: { chargedFailures: { status: "unknown" } } })[T], "quiet");
+    assert.equal(judge({ gateway: {} })[T], "quiet");
+  });
+
+  await acheck("production DOWN: opens only after the confirm reads also fail; a blip opens nothing; recovery closes", async () => {
+    const { syncOutage, DOWN_TITLE } = await import("../workers/status-probe/src/index.js");
+    mkGh([]);
+    let reads = 0;
+    const r1 = await syncOutage(ENV, { apiFailed: true, detail: "api(health 503)", sleep: async () => {}, healthRead: async () => { reads++; return false; } });
+    assert.equal(r1.action, "opened");
+    assert.equal(reads, 2, "two confirm reads before opening");
+    assert.equal(created.length, 1);
+    mkGh([]);
+    const r2 = await syncOutage(ENV, { apiFailed: true, sleep: async () => {}, healthRead: async () => true });
+    assert.equal(r2.action, "none", "a deploy blip that answers on a confirm read opens nothing");
+    assert.equal(created.length, 0);
+    mkGh([{ number: 5, title: DOWN_TITLE }]);
+    const r3 = await syncOutage(ENV, { apiFailed: false, sleep: async () => {} });
+    assert.equal(r3.action, "closed");
+    mkGh([{ number: 5, title: DOWN_TITLE }]);
+    const r4 = await syncOutage(ENV, { apiFailed: true, sleep: async () => {}, healthRead: async () => false });
+    assert.equal(r4.action, "none", "an open outage issue is not duplicated");
   });
 
   globalThis.fetch = realFetch;

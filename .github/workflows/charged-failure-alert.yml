@@ -6,7 +6,7 @@ name: Charged-failure alert
 # When a tool settles USDC on-chain and the handler then returns non-200, the
 # server records it in /api/stats -> chargedFailures[] (the code calls this "an
 # operational red alert"). Nothing consumed it. This polls that surface every
-# 30 min and opens a GitHub issue if any tool charged-and-failed a paying agent
+# 30 min (delivered every 4-6 h) and opens a GitHub issue if any tool charged-and-failed a paying agent
 # in the recent window. It complements the synthetic self-check (which only covers
 # a curated set): this catches real paid failures on ANY of the ~1,400 tools,
 # with zero config — /api/stats is free and public.
@@ -83,7 +83,7 @@ jobs:
           echo "window starts $CUTOFF"
           # Charged failures in the window, summarized as "slug(httpStatus)xN".
           SUMMARY="$(echo "$RESP" | jq -r --arg cut "$CUTOFF" '
-            [.chargedFailures[] | select(.at > $cut)]
+            [.chargedFailures[] | select(.at > $cut and .status != 402)]
             | group_by(.slug + ":" + (.status|tostring))
             | map("\(.[0].slug)(\(.[0].status))x\(length)")
             | join(", ")')"
@@ -114,6 +114,8 @@ jobs:
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
             fi
             exit 1
-          elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "No charged failures since ${{ steps.check.outputs.cutoff }} at $(date -u +%FT%TZ)."
           fi
+          # No close branch here: the status Worker (workers/status-probe, every
+          # 5 minutes) pages on the server's chargedFailures word and closes the
+          # issue when its window reads clear. Closing from this every-few-hours
+          # run as well made the two fight over the same issue.
