@@ -555,25 +555,34 @@ export function withFreshRecent(snap, ledgerRecentFn, ledgerNewestOwnFn = null) 
   const byLabel = new Map(Object.entries(EVM).map(([name, c]) => [c.label, [name, c]]));
   let changed = false;
   const rails = snap.rails.map((rail) => {
-    if (!rail || rail.recentSource !== "ledger" || !rail.wallet) return rail;
+    if (!rail || !rail.wallet) return rail;
     const hit = byLabel.get(rail.rail);
     if (!hit) return rail;
     const [name, c] = hit;
-    let rows;
-    try { rows = ledgerRecentFn(c.ledgerChain || name, rail.wallet, { limit: 8 }); } catch { return rail; }
-    if (!Array.isArray(rows) || !rows.length) return rail;
-    changed = true;
-    const recent = rows.map((t) => ({ ...t, tx: t.txHash ? c.tx(t.txHash) : null }));
-    const out = { ...rail, recent, externalUsd: Number(recent.filter((t) => t.external).reduce((sum, t) => sum + t.usd, 0).toFixed(6)) };
+    let out = rail;
+    // Recent rows: re-read only where the snapshot's rows came from the
+    // ledger (a chain-scan fallback is kept as scanned).
+    if (rail.recentSource === "ledger") {
+      let rows = [];
+      try { rows = ledgerRecentFn(c.ledgerChain || name, rail.wallet, { limit: 8 }); } catch { rows = []; }
+      if (Array.isArray(rows) && rows.length) {
+        const recent = rows.map((t) => ({ ...t, tx: t.txHash ? c.tx(t.txHash) : null }));
+        out = { ...rail, recent, externalUsd: Number(recent.filter((t) => t.external).reduce((sum, t) => sum + t.usd, 0).toFixed(6)) };
+      }
+    }
     // The proof row is our own newest settle. On a busy rail the capped page
     // above holds only outside buyers, so read our newest settle directly.
+    // Read for every EVM rail with a wallet, whatever the recent rows' source:
+    // a snapshot built before the ledger had rows (chain-scan) or a ledger
+    // page that came back empty must not leave the chain page without it.
     if (typeof ledgerNewestOwnFn === "function") {
-      const seen = newestOwnSettle(recent);
+      const seen = newestOwnSettle(out.recent);
       let own = seen ? { when: seen.when, tx: seen.tx || null, usd: Number.isFinite(seen.usd) ? seen.usd : null } : null;
       if (!own) { try { const r = ledgerNewestOwnFn(c.ledgerChain || name, rail.wallet); if (r && r.when) own = { when: r.when, tx: r.txHash ? c.tx(r.txHash) : null, usd: Number.isFinite(r.usd) ? r.usd : null }; } catch { /* keep the snapshot's row */ } }
       const prevWhen = rail.lastInbound?.internal === true ? Date.parse(rail.lastInbound.when) : -Infinity;
-      if (own && Date.parse(own.when) >= prevWhen) out.lastInbound = { ...own, internal: true };
+      if (own && Date.parse(own.when) >= prevWhen) out = { ...out, lastInbound: { ...own, internal: true } };
     }
+    if (out !== rail) changed = true;
     return out;
   });
   return changed ? { ...snap, rails } : snap;

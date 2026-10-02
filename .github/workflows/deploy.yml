@@ -1522,6 +1522,7 @@ jobs:
           t node scripts/test-block-clock.js
           t node scripts/test-payai-credit-watch.js
           t node scripts/test-revenue-fresh-recent.js
+          t node scripts/test-chain-page-own-settle.js
           t node scripts/test-revenue-cold.js
           # Settle-fallback chain (Solvador first on its advertised networks -> PayAI -> Solvador last resort; double-settle gate between fallbacks - offline)
           t node scripts/test-settle-fallback.js
