@@ -486,6 +486,7 @@ import { corsMiddleware } from "./cors.js";
 import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, toolsIndexPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
+import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
 import { mountMcp } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles } from "./guides.js";
 import { skillsIndex, skillPackPage, skillPacksJson, SKILL_PACKS, buildPromptMessages } from "./skills.js";
@@ -7611,7 +7612,10 @@ app.get("/tools/:slug", (req, res) => {
   if (!tool) return notFoundPage(res, { what: "Tool", href: "/tools", label: "All tools" });
   const related = relatedTools(tool, tools, 6);
   const cachePolicy = tool.method === "GET" ? CACHEABLE_ROUTES[tool.path] : null;
-  htmlCache(res, 300, 900).send(skillPackCanonical(tool.slug, toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null })));
+  // The method alias (POST on a GET-only path, GET/HEAD on a POST-only path)
+  // runs only when the catalog has no route of the other method at this path.
+  const otherMethodRouted = !!CATALOG[`${tool.method === "GET" ? "POST" : "GET"} ${tool.path}`];
+  htmlCache(res, 300, 900).send(skillPackCanonical(tool.slug, toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null, otherMethodRouted })));
 });
 // A skill pack's catalog page points its canonical at the pack page (/skills/<pack>).
 const SKILL_PACK_SLUGS = new Set(SKILL_PACKS.map((p) => p.slug));
@@ -8205,7 +8209,7 @@ const IDEM_MAX_ENTRIES = 5000;
 // responses skip the cache entirely (retry will re-run the tool, no charge
 // because PoW/x402 credentials are single-use anyway).
 const IDEM_MAX_BYTES = 32 * 1024 * 1024;
-const IDEM_MAX_BODY_BYTES = 1024 * 1024;
+// IDEM_MAX_BODY_BYTES lives in src/idempotency-limits.js (the tool pages quote it).
 let idemBytes = 0;
 // Background sweep: entries expire on read at IDEM_TTL_MS, but on a quiet
 // service stale bodies (some kits return large blobs) would sit in memory

@@ -3511,6 +3511,8 @@ export const LLM_GATEWAY_TOOLS = [
     description:
       "OpenAI-compatible text-to-speech over x402 - point any OpenAI SDK's audio.speech.create() at base_url https://agent402.tools/v1 and pay $0.06 per call in USDC, no API key, no signup. Served by Voxtral Mini TTS behind a five-model failover chain (xAI Grok Voice, Kokoro, MAI-Voice-2 Flash, MAI-Voice-2), every link proven by a real paid canary - a provider outage never becomes your failure. Up to 2,000 chars in, raw mp3 (default) or pcm bytes out - the same wire shape as OpenAI's endpoint. OpenAI voice names (alloy, nova, …) map per-model; native voice ids (e.g. en_paul_cheerful) work too. zdr:true routes only to zero-data-retention providers.",
     tags: ["tts", "text-to-speech", "speech", "audio", "voice", ...SHARED_TAGS],
+    // Raw audio bytes through the __binary sentinel, typed by response_format.
+    binaryTypes: [...new Set(Object.values(SPEECH_FORMATS))],
     discovery: {
       bodyType: "json",
       input: { input: "Agent402 serves fourteen hundred tools, paid per call.", voice: "alloy" },

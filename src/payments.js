@@ -26,6 +26,7 @@ import {
 } from "@x402/extensions/builder-code";
 import { declarePaymentIdentifierExtension, PAYMENT_IDENTIFIER } from "@x402/extensions/payment-identifier";
 import { normalizePayerAddress } from "./payer.js";
+import { x402EvmOnly } from "./rails.js";
 import { installFacilitatorDiagnostics, labelFacilitatorErrors } from "./facilitator-diagnostics.js";
 import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
@@ -466,7 +467,8 @@ export function acceptsForItem(item, rails) {
   // (~28s) and Tempo credentials are client-bounded - on those rails the work
   // is done, settlement fails, and the buyer is never charged. A rail that
   // structurally cannot settle these must not be advertised for them.
-  if (item.longRunning || allowed) return evm;
+  // x402EvmOnly (src/rails.js) is this same rule, read by the docs surfaces.
+  if (x402EvmOnly(item)) return evm;
   return [
     ...evm,
     ...upto,
