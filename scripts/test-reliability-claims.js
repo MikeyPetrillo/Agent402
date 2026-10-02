@@ -38,7 +38,7 @@ const text = claims.map((c) => c.claim).join("\n");
 const testAll = readFileSync(new URL("./test-all.js", import.meta.url), "utf8");
 const skipsExist = /BRAVE_ROUTES|E2B_ROUTES/.test(testAll) && /skipBrave|skipE2b/.test(testAll);
 ok(skipsExist, "CI genuinely skips some routes (the fact the claim has to account for)");
-const ciClaim = claims.find((c) => /documented example in CI/.test(c.claim));
+const ciClaim = claims.find((c) => /documented example/.test(c.claim));
 ok(ciClaim, "the CI claim is present");
 ok(!/^Every tool is called with its own documented example in CI, and the release is blocked on any failure\.$/.test(ciClaim.claim),
   "...and is no longer the bare 'every tool' form that the skips contradict");

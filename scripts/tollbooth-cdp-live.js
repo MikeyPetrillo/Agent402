@@ -7,6 +7,7 @@
 // (`self_send_not_allowed`, measured 2026-08-27), so no self-pay proof exists. Asserts: 402 with a Base USDC accept naming the payTo, then a
 // paid 200 whose PAYMENT-RESPONSE receipt says success with a transaction.
 // Dispatch-only (.github/workflows/tollbooth-cdp-live.yml); never in CI lanes.
+import { randomBytes } from "node:crypto";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
 import express from "express";
 import { createTollbooth, buildCliX402Middleware } from "../tollbooth/index.js";
@@ -28,7 +29,10 @@ console.log("facilitator:", control ? "PayAI (control)" : "Coinbase CDP");
 if (typeof mw !== "function") { console.error("CLI did not build a settling middleware from CDP keys"); process.exit(1); }
 
 const app = express();
-app.use(createTollbooth({ x402: mw, mode: "all", pow: false, powSecret: "live-proof", resourceBaseUrl: "https://tollbooth-cdp-live-proof.invalid" }));
+// One process, one proof: the MPP challenge ids this gate mints only have to
+// verify against the process that minted them, so a per-process random key
+// is exactly right (PoW is off, so nothing else is keyed).
+app.use(createTollbooth({ x402: mw, mode: "all", pow: false, mppSecret: randomBytes(32).toString("hex"), resourceBaseUrl: "https://tollbooth-cdp-live-proof.invalid" }));
 app.get("/paid", (_req, res) => res.json({ ok: true, served: new Date().toISOString() }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));

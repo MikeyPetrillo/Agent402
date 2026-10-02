@@ -24,25 +24,42 @@
 // eth_getLogs calls (~30s-2min). We cache the snapshot in memory and refresh
 // hourly; the endpoint reads from cache so each request is sub-millisecond.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { readFile, writeFile, rename as renameFile } from "node:fs/promises";
 import { timedSync } from "./boot-timing.js";
 import { fetchAllBazaarItems as walkBazaar } from "./bazaar-pager.js";
 import { EVM, OUR_EVM_WALLETS } from "./revenue-live.js";
 import { redactSecrets } from "./tools/redact.js";
+import { FUNDING_DEFAULTS, posOf, endOfBlock, circularWalletsFrom, readSellerFunding, readPayerHistory, readFundingGaps, newFundingReadControl, fundingDayCalls, processSellerFunding, sellerFundingFigures, createFundingState, serializeFundingState, parseFundingState, pruneFundingState, fundingPairCount, fundingKnownCount, historyFromBlockFor, isScannableWallet } from "./seller-funding.js";
 import { NETWORKS } from "./payments.js";
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
 import { applyMetaTrims } from "./seo-meta.js";
 
-// Base block time is ~2s, so 24h ≈ 43200 blocks and 7d ≈ 302400 blocks. A
-// wider window surfaces sellers with bursty (vs. constant) traffic — without
-// it, any seller below ~9 calls/sec averaged over a day shows $0 even when
-// their lifetime revenue is real. The scan folds transfers incrementally
+import { REPO_URL } from "./repo-link.js";
+import { createBlockClock, rpcHeaderReader } from "./block-clock.js";
+// The board's window is a span of TIME (24h by default, 7d in production),
+// and the scan finds the block where it starts by BLOCK TIMESTAMP
+// (src/block-clock.js). It used to be a block count at an assumed 2 s per Base
+// block (24h = 43,200, 7d = 302,400); Base's Denim upgrade moves blocks to
+// 200 ms on a date not known in advance, and that count would have become a
+// 17-hour board with nothing failing. A wider window surfaces sellers with
+// bursty (vs. constant) traffic. The scan folds transfers incrementally
 // (see initWalletAccumulator/foldTransfers/finalizeLeaderboard below) so any
-// window is memory-bounded, but the default stays 24h — 7d re-enable is a
-// deliberate staged env flip (SPAN_BLOCKS=302400) after prod verification,
-// not a silent default. ?window= remains the hook for a future deep-cache
-// rollout (30d/all-time) that doesn't require widening this live scan further.
-const SECONDS_PER_BASE_BLOCK = 2;
+// window is memory-bounded.
+//
+// LEADERBOARD_WINDOW_SECONDS sets the window. The older SPAN_BLOCKS is still
+// honoured and read as blocks of the 2 s Base block time it was written
+// against (302400 -> 7d), so the production setting keeps its meaning across
+// the fork rather than silently shrinking with it.
+const LEGACY_SECONDS_PER_BLOCK = 2;
+function windowSecondsFromEnv(env = process.env) {
+  const s = parseInt(env.LEADERBOARD_WINDOW_SECONDS || "", 10);
+  if (Number.isFinite(s) && s > 0) return s;
+  const b = parseInt(env.SPAN_BLOCKS || "", 10);
+  if (Number.isFinite(b) && b > 0) return b * LEGACY_SECONDS_PER_BLOCK;
+  return 86_400;
+}
+export { windowSecondsFromEnv };
 const DEFAULT_BASE_RPCS = [
   "https://mainnet.base.org",
   "https://base-rpc.publicnode.com",
@@ -60,13 +77,18 @@ export const CONCENTRATION = { majority: 0.5, supermajority: 0.9 };
 // uniqueBuyers cannot tell them apart.
 export const PAYER_BREADTH = { multiSellerMin: 3 };
 
-const DEFAULTS = {
+export const DEFAULTS = {
   bazaarUrl: process.env.BAZAAR_URL || "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources",
-  spanBlocks: parseInt(process.env.SPAN_BLOCKS || "43200", 10), // ~24h of Base blocks
+  // The window in seconds; the scan resolves its first block by timestamp.
+  windowSeconds: windowSecondsFromEnv(),
   // Free-tier Base RPCs cap eth_getLogs at 10,000 blocks per call; chunk a wide
   // window into ranges no larger than this so it still scans cleanly.
   chunkBlocks: parseInt(process.env.CHUNK_BLOCKS || "9000", 10),
   maxCallUsd: parseFloat(process.env.MAX_CALL_USD || "0.75"),
+  // A transfer that matches a price the seller publishes is admitted above
+  // maxCallUsd, but only up to this: a published $1,000 gift card is still
+  // value moved, not a tool call, and the board sorts by dollars.
+  priceMatchMaxUsd: parseFloat(process.env.PRICE_MATCH_MAX_USD || "25"),
   // Public RPCs limit topic-filter array length; chunk the wallet list per call
   // so a corpus with thousands of unique payTo addresses still scans cleanly.
   walletChunk: parseInt(process.env.WALLET_CHUNK || "200", 10),
@@ -114,6 +136,19 @@ export function payerFromLog(l) {
   return t && t.length >= 40 ? ("0x" + t.slice(-40)).toLowerCase() : null;
 }
 
+/** Does this accept pay on the scanned chain? x402 v2 names the chain by its
+ *  CAIP-2 id. A v1 listing names it by shorthand ("base"), and that shorthand
+ *  is the chain key NETWORKS already maps to the same id, so a v1 listing is
+ *  read as that chain rather than skipped. The index does the same through
+ *  NETWORK_SHORTHAND; this module keeps its own copy so it imports nothing
+ *  from the index. */
+function acceptOnChain(a, chain) {
+  const n = a?.network;
+  if (typeof n !== "string") return false;
+  if (n === String(chain.caip2 || BASE_MAINNET)) return true;
+  return n.toLowerCase() === String(chain.key || "base").toLowerCase();
+}
+
 /**
  * Pull the Base-mainnet payment wallet from a Bazaar item's `accepts[]`. An
  * item lists multiple payment options (different chains/schemes); for ranking
@@ -124,10 +159,9 @@ export function payerFromLog(l) {
  */
 export function baseUsdcPayToFromItem(item, chain = { caip2: BASE_MAINNET, token: USDC, key: "base" }) {
   const accepts = Array.isArray(item?.accepts) ? item.accepts : [];
-  const want = String(chain.caip2 || BASE_MAINNET);
   const token = String(chain.token || USDC).toLowerCase();
   for (const a of accepts) {
-    if (a?.network !== want) continue;
+    if (!acceptOnChain(a, chain)) continue;
     const asset = String(a.asset || "").toLowerCase();
     if (asset && asset !== token) continue;
     const w = a.payTo;
@@ -135,6 +169,73 @@ export function baseUsdcPayToFromItem(item, chain = { caip2: BASE_MAINNET, token
     return { wallet: w.toLowerCase(), network: chain.key || "base" };
   }
   return null;
+}
+
+/** The price this listing ADVERTISES on the scanned chain, in micro-dollars,
+ *  or null when it declares none we can read.
+ *
+ *  Reads the same accept `baseUsdcPayToFromItem` picked, so the price and the
+ *  wallet always come from one row rather than two. USDC is 6 decimals on
+ *  every chain we scan, so base units ARE micro-dollars. */
+export function advertisedMicroUsd(item, chain = { caip2: BASE_MAINNET, token: USDC, key: "base" }) {
+  const accepts = Array.isArray(item?.accepts) ? item.accepts : [];
+  const token = String(chain.token || USDC).toLowerCase();
+  for (const a of accepts) {
+    if (!acceptOnChain(a, chain)) continue;
+    const asset = String(a.asset || "").toLowerCase();
+    if (asset && asset !== token) continue;
+    const raw = a.amount ?? a.maxAmountRequired;
+    const n = Number(raw);
+    // Whole positive base units only. A decimal, a NaN or a zero tells us
+    // nothing about what this seller charges, and a wrong price here would
+    // admit transfers rather than exclude them.
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) return null;
+    return n;
+  }
+  return null;
+}
+
+/** Does this transfer look like a purchase at a price the seller publishes?
+ *
+ *  WHY THIS EXISTS. The fold used to keep a transfer only when it was under a
+ *  flat MAX_CALL_USD ceiling, with the reasoning that "bigger transfers are
+ *  funding/swaps, not tool buys". That was true when every x402 tool cost a
+ *  fraction of a cent and it is not true now. Measured 2026-09-21 against a
+ *  curated list of seven active services over the same 7-day window we scan:
+ *  SIX were absent from our board entirely, and every one of those six has an
+ *  average transfer above the ceiling - one of them by four cents (27,590
+ *  transactions, 715 buyers, $0.79 each). We were not ranking them lower. We
+ *  could not see them.
+ *
+ *  The ceiling was not simply wrong, which is why this does not just raise it.
+ *  Some of those services convert stablecoins or sell gift cards, so their
+ *  volume is the value moved rather than a fee, and folding that in would make
+ *  this a table of money-moved and call it API revenue. The ceiling was
+ *  aiming at that and hitting everything else.
+ *
+ *  So ask the seller instead. We already hold every price each wallet
+ *  advertises, from the same feed and the same accept the wallet came from. A
+ *  transfer that equals one of them is a purchase at a published price, up to
+ *  priceMatchMaxUsd ($25 by default): that rescues the $0.79 tool the flat
+ *  ceiling hid and still refuses the $1,000 gift card whose price is published
+ *  just the same (measured the day this shipped: five such transfers supplied
+ *  ~$5,000 of one seller's $5,072 row). A transfer that matches nothing is
+ *  held to the old ceiling, which is the honest fallback for a wallet whose
+ *  listings we cannot read.
+ *
+ *  TOLERANCE. Premium chains quote slightly above list (NETWORK_PRICE_PREMIUMS)
+ *  and a buyer may round up, so a payment AT or slightly ABOVE a published
+ *  price counts, and one below it does not - underpaying is not buying. The
+ *  window is one cent or 2%, whichever is larger, which covers a premium on a
+ *  dollar-scale price without letting a $1,000 transfer match a $0.99 listing.
+ */
+export function priceMatches(microUsd, prices) {
+  if (!prices || !prices.size || !Number.isFinite(microUsd)) return false;
+  for (const p of prices) {
+    const slack = Math.max(10_000, Math.round(p * 0.02));
+    if (microUsd >= p && microUsd <= p + slack) return true;
+  }
+  return false;
 }
 
 /** Scan config for any EVM rail we settle on, assembled from the two places
@@ -190,12 +291,18 @@ export function extractWalletsFromBazaar(payload, chain = undefined) {
         origins: new Set(),
         names: new Map(), // name → count, so we can pick the most common
         endpoints: 0,
+        // Every price this wallet ADVERTISES, in micro-dollars. This is what
+        // turns "is this transfer a tool buy" from a guess into a reading of
+        // the seller's own listing - see priceMatches below.
+        prices: new Set(),
       });
     }
     const row = byWallet.get(pay.wallet);
     if (origin) row.origins.add(origin);
     const name = String(item?.serviceName || item?.name || "").trim();
     if (name) row.names.set(name, (row.names.get(name) || 0) + 1);
+    const micro = advertisedMicroUsd(item, chain);
+    if (micro != null) row.prices.add(micro);
     row.endpoints += 1;
   }
   return [...byWallet.values()].map((r) => {
@@ -221,6 +328,10 @@ export function extractWalletsFromBazaar(payload, chain = undefined) {
       origins,
       homepage: origins[0] || null,
       endpoints: r.endpoints,
+      // Carried through to the fold, which needs the seller's own prices to
+      // decide whether a transfer is a purchase. Kept as a Set: it is read
+      // per transfer and never serialised.
+      prices: r.prices,
     };
   });
 }
@@ -249,7 +360,7 @@ export function extractWalletsFromBazaar(payload, chain = undefined) {
  * allPayToOrigins() returns. Injected rather than imported so this module
  * keeps no dependency on the index and stays testable offline.
  */
-export function mergeCrawledWallets(sellers, payToOrigins, chain = undefined) {
+export function mergeCrawledWallets(sellers, payToOrigins, chain = undefined, payToPrices = null) {
   if (!payToOrigins || typeof payToOrigins.entries !== "function") return { merged: sellers, added: 0 };
   // Match the shape extractWalletsFromBazaar emits: rows carry the chain KEY
   // ("base"), not the CAIP-2 id, and a mixed field would split the board.
@@ -280,10 +391,41 @@ export function mergeCrawledWallets(sellers, payToOrigins, chain = undefined) {
       homepage: origins[0] || null,
       endpoints: Math.max(1, origins.length),
       source: "crawl",
+      // The prices this wallet's own routes publish, as the index read them
+      // (2026-09-30). Without them priceMatches had nothing to read for a
+      // crawl-only wallet. Bazaar rows above are left as the Bazaar lists
+      // them: for a wallet both sources know, the Bazaar's prices stand.
+      prices: payToPrices?.get?.(wallet) instanceof Set ? new Set(payToPrices.get(wallet)) : new Set(),
     });
     added++;
   }
   return { merged: [...known.values()], added };
+}
+
+/** The operator group a wallet row belongs to on the public board: its
+ *  canonical host, else the wallet itself. Display grouping only: the host
+ *  comes from listings, which anyone can write, so it never decides whose
+ *  evidence a wallet is (the seller-funding rule reads a wallet's OWN
+ *  outbound only). */
+export function groupKeyOf(w) {
+  // A path seller (an app under a prefix on a shared host) is its own operator
+  // row: grouping by the host would merge every app on it, and its homepage is
+  // often that shared host's root.
+  const pathSeller = pathSellerGroup(w?.origins?.[0]);
+  if (pathSeller) return `host:${pathSeller}`;
+  const host = canonicalHost(w?.homepage) || canonicalHost(w?.origins?.[0]);
+  return host ? `host:${host}` : `wallet:${String(w?.wallet || "").toLowerCase()}`;
+}
+// host + prefix of a listing key that carries a path, else null. Listing keys
+// are normalised origins, so a path here is a path seller's prefix.
+function pathSellerGroup(origin) {
+  if (typeof origin !== "string") return null;
+  try {
+    const u = new URL(origin);
+    const path = u.pathname.replace(/\/+$/, "");
+    if (!path) return null;
+    return `${u.host.toLowerCase().replace(/^www\./, "")}${path}`;
+  } catch { return null; }
 }
 
 /**
@@ -329,9 +471,9 @@ export function canonicalHost(rawUrl) {
  * Returns ranked array. Ties on totalUsd break on callsSettled (more activity
  * wins), then alphabetical (purely deterministic — no informational signal).
  */
-export function aggregateLeaderboard(transfers, sellers, { maxCallUsd = DEFAULTS.maxCallUsd, ourWallets = OUR_EVM_WALLETS } = {}) {
+export function aggregateLeaderboard(transfers, sellers, { maxCallUsd = DEFAULTS.maxCallUsd, ourWallets = OUR_EVM_WALLETS, priceMatchMaxUsd = DEFAULTS.priceMatchMaxUsd } = {}) {
   const byWallet = initWalletAccumulator(sellers);
-  foldTransfers(byWallet, transfers, maxCallUsd, ourWallets);
+  foldTransfers(byWallet, transfers, maxCallUsd, ourWallets, priceMatchMaxUsd);
   return finalizeLeaderboard(byWallet, { maxCallUsd });
 }
 
@@ -380,7 +522,7 @@ export function initWalletAccumulator(sellers) {
  * a seller can be paid is the clearest thing that is not demand.
  *
  * Measured before changing it: about 39 payments a week leave our wallets to
- * other sellers (route-execute, seller-payability, the Blockscout buys),
+ * other sellers (route-execute, seller-payability),
  * against a board whose top row alone settles ~90,000 in the window. So this
  * moves no ranking. It matters at the BOTTOM, where a seller with three
  * settlements had one of them from us, and the bottom is exactly the
@@ -390,7 +532,12 @@ export function initWalletAccumulator(sellers) {
  * caller passes OUR_EVM_WALLETS. Omitted, behaviour is byte-identical to
  * before, which keeps every existing test honest.
  */
-export function foldTransfers(byWallet, transfers, maxCallUsd = DEFAULTS.maxCallUsd, ourWallets = null) {
+/** Over-ceiling inbound payments held for the funding pass: per wallet and in
+ *  total across one scan's fold. */
+export const UNCOUNTED_IN_MAX_PER_WALLET = 20_000;
+export const UNCOUNTED_IN_MAX_TOTAL = 200_000;
+const UNCOUNTED_HELD = Symbol("uncountedHeld");
+export function foldTransfers(byWallet, transfers, maxCallUsd = DEFAULTS.maxCallUsd, ourWallets = null, priceMatchMaxUsd = DEFAULTS.priceMatchMaxUsd) {
   // ALWAYS normalize, including when a Set is passed. The first cut took a Set
   // as-is on the assumption it was already lowercase, which OUR_EVM_WALLETS is
   // - but that made the exclusion fail OPEN for any future caller holding
@@ -403,17 +550,55 @@ export function foldTransfers(byWallet, transfers, maxCallUsd = DEFAULTS.maxCall
   for (const t of transfers) {
     const row = byWallet.get(t.wallet);
     if (!row) continue;
-    if (!(t.usd > 0) || t.usd > maxCallUsd) continue;
+    if (!(t.usd > 0)) continue;
+    // A transfer counts when the seller publishes that price, up to
+    // priceMatchMaxUsd; otherwise it falls back to the flat ceiling. `prices` is empty for a
+    // wallet whose listings carry no readable amount, and then this is exactly
+    // the old rule. See priceMatches for why the ceiling alone was hiding
+    // whole sellers rather than ranking them low.
+    const micro = Math.round(t.usd * 1e6);
+    const matched = priceMatches(micro, row.prices) && t.usd <= priceMatchMaxUsd;
+    if (!matched && t.usd > maxCallUsd) {
+      row.overCeilingSkipped = (row.overCeilingSkipped || 0) + 1;
+      // Not a tool call, so not evidence, but still money this payer sent the
+      // wallet: the seller-funding pass lets it offset a later refund and pay
+      // back a pool (src/seller-funding.js). Kept only with a chain position,
+      // and never for our own wallets or the wallet itself.
+      // Bounded per wallet and across the scan (every chunk folds into the same
+      // map): a listing can name any busy wallet as its payTo, and an exchange
+      // hot wallet's inbound would otherwise be held whole for the scan. Past
+      // either cap the credit is dropped and counted, which only nets more.
+      if (Number.isFinite(t.pos) && t.payer && !ours.has(String(t.payer).toLowerCase()) && String(t.payer).toLowerCase() !== String(t.wallet).toLowerCase()) {
+        const held = byWallet[UNCOUNTED_HELD] || (byWallet[UNCOUNTED_HELD] = { n: 0 });
+        if ((row.uncountedInHeld || 0) >= UNCOUNTED_IN_MAX_PER_WALLET || held.n >= UNCOUNTED_IN_MAX_TOTAL) { row.uncountedInDropped = (row.uncountedInDropped || 0) + 1; continue; }
+        row.uncountedInHeld = (row.uncountedInHeld || 0) + 1; held.n++;
+        const u = (row.uncountedIn ||= new Map()).get(t.payer) || { pos: [], micro: [] };
+        u.pos.push(t.pos); u.micro.push(Math.round(t.usd * 1e6));
+        row.uncountedIn.set(t.payer, u);
+      }
+      continue;
+    }
+    if (matched && t.usd > maxCallUsd) row.abovePriceMatched = (row.abovePriceMatched || 0) + 1;
     // Skipped whole, not just as a payer: a settlement we paid for is not a
     // settlement the seller earned, so counting the call while dropping the
     // payer would leave callsSettled overstating what uniqueBuyers reports.
     if (t.payer && ours.has(String(t.payer).toLowerCase())) { row.selfPaidSkipped = (row.selfPaidSkipped || 0) + 1; continue; }
+    // A wallet paying itself is not a buyer (2026-09-28): skipped whole, the
+    // same way our own payments are.
+    if (t.payer && String(t.payer).toLowerCase() === String(t.wallet).toLowerCase()) { row.selfTransferSkipped = (row.selfTransferSkipped || 0) + 1; continue; }
     row.callsSettled += 1;
     row.totalUsd += t.usd;
     if (t.payer) {
       const p = row.perPayer.get(t.payer) || { calls: 0, usd: 0 };
       p.calls += 1;
       p.usd += t.usd;
+      // Where on the chain each payment sits (block, log index) and its
+      // amount in token units, kept only when the scan supplies a position:
+      // the seller-funding pass works each payment against the USDC this
+      // wallet had sent that payer before it (src/seller-funding.js). Two
+      // numbers per payment, dropped with the accumulator once the scan
+      // finalizes.
+      if (Number.isFinite(t.pos)) { (p.pos ||= []).push(t.pos); (p.micro ||= []).push(Math.round(t.usd * 1e6)); }
       row.perPayer.set(t.payer, p);
     }
   }
@@ -542,8 +727,7 @@ export function payerBreadth(perPayer, callsSettled, sellersPerPayer) {
 export function finalizeLeaderboard(byWallet, { maxCallUsd = DEFAULTS.maxCallUsd } = {}) {
   const groups = new Map();
   for (const w of byWallet.values()) {
-    const host = canonicalHost(w.homepage) || canonicalHost(w.origins?.[0]);
-    const key = host ? `host:${host}` : `wallet:${w.wallet}`;
+    const key = groupKeyOf(w);
     if (!groups.has(key)) {
       groups.set(key, {
         name: w.name,
@@ -560,6 +744,10 @@ export function finalizeLeaderboard(byWallet, { maxCallUsd = DEFAULTS.maxCallUsd
     const g = groups.get(key);
     g.callsSettled += w.callsSettled;
     g.totalUsd += w.totalUsd;
+    // Visible rather than silent: how much of this row the flat ceiling alone
+    // would have dropped, and how much it is still dropping.
+    g.abovePriceMatched = (g.abovePriceMatched || 0) + (w.abovePriceMatched || 0);
+    g.overCeilingSkipped = (g.overCeilingSkipped || 0) + (w.overCeilingSkipped || 0);
     for (const [payer, v] of w.perPayer) {
       const p = g.perPayer.get(payer) || { calls: 0, usd: 0 };
       p.calls += v.calls;
@@ -614,6 +802,11 @@ export function finalizeLeaderboard(byWallet, { maxCallUsd = DEFAULTS.maxCallUsd
         callsSettled: g.callsSettled,
         totalUsd: Number(g.totalUsd.toFixed(6)),
         uniqueBuyers: g.perPayer.size,
+        // Published so a reader can see the rule working rather than take it on
+        // trust: settlements counted ONLY because they matched a price this
+        // seller advertises, and settlements still dropped for matching none.
+        settlementsAbovePerCallCeiling: g.abovePriceMatched || 0,
+        transfersSkippedOverCeiling: g.overCeilingSkipped || 0,
         ...payerConcentration(g.perPayer, g.callsSettled, g.totalUsd),
         ...payerBreadth(g.perPayer, g.callsSettled, sellersPerPayer),
       };
@@ -624,7 +817,91 @@ export function finalizeLeaderboard(byWallet, { maxCallUsd = DEFAULTS.maxCallUsd
       return (a.name || "").localeCompare(b.name || "");
     })
     .map((r, i) => ({ rank: i + 1, ...r }));
+  // PER-WALLET EVIDENCE for the router (2026-09-28). A row above is an
+  // OPERATOR group, so its totals add up every wallet in it. The router's gate
+  // asks whether the ONE wallet a seller's live 402 names clears the floor on
+  // that wallet's own history (src/evidence-binding.js), which the group totals
+  // cannot answer. Kept beside the ranked rows, never on them: it is router
+  // input, not a public column, and getLeaderboardSnapshot() strips it from
+  // every served snapshot. Non-enumerable, so a caller that serializes the
+  // ranked array directly cannot leak it either.
+  //
+  // Net of SELLER-FUNDED payments when the scan read the seller's outbound
+  // transfers (applySellerFunding): callsSettled / uniqueBuyers are what the
+  // router may credit, the gross figures and the self-funded share ride beside
+  // them. The public row above stays gross.
+  const walletEvidence = {};
+  for (const w of byWallet.values()) {
+    const k = typeof w.wallet === "string" ? w.wallet.toLowerCase() : null;
+    if (!k) continue;
+    const grossCalls = w.callsSettled || 0, grossBuyers = w.perPayer ? w.perPayer.size : 0;
+    const f = w.funding;
+    walletEvidence[k] = f
+      ? {
+          callsSettled: f.netCalls, uniqueBuyers: f.netPayers,
+          grossCallsSettled: grossCalls, grossUniqueBuyers: grossBuyers,
+          selfFundedCalls: f.fundedCalls, selfFundedPayers: f.fundedPayers, selfFundedUsd: Number(f.fundedUsd.toFixed(6)), grossUsd: Number(f.grossUsd.toFixed(6)),
+          // The same over the Bazaar's 30 days: what third-party counts of
+          // this wallet are reduced by (src/evidence-binding.js).
+          selfFundedCalls30d: f.fundedCalls30d, selfFundedPayers30d: f.fundedPayers30d,
+          // Payments the seller refunded: removed from the evidence, and from
+          // third-party counts of the same wallet (src/evidence-binding.js).
+          refundedCalls: f.refundedCalls || 0, refundedCalls30d: f.refundedCalls30d || 0, refundedUsd: Number((f.refundedUsd || 0).toFixed(6)),
+          // Payers EVERY one of whose payments in the window was refunded: not
+          // buyers, so third-party payer counts of this wallet lose them too.
+          refundedPayers: f.refundedPayers || 0,
+          circular: f.circular, lastCircularAt: f.lastCircularAt, fundingRead: f.read,
+          ...(f.withheldUntilRead ? { fundingPending: true } : {}),
+          ...(f.truncated ? { fundingTruncated: true } : {}),
+          origins: [...(w.origins || [])],
+        }
+      : { callsSettled: grossCalls, uniqueBuyers: grossBuyers, origins: [...(w.origins || [])] };
+  }
+  Object.defineProperty(ranked, "walletEvidence", { value: walletEvidence, enumerable: false, configurable: true });
   return ranked;
+}
+
+/** The tail of the funding read's log line: why wallets were not read.
+ *  Counts and reasons only, never a wallet. */
+export function fundingReadNotes(f) {
+  if (!f) return "";
+  const parts = [];
+  if (f.historyWalletsOverShare) parts.push(`${f.historyWalletsOverShare} over their share of the reads`);
+  if (f.historyWalletsGaveUp) parts.push(`${f.historyWalletsGaveUp} refused at the narrowest range`);
+  if (f.historyWalletsWaiting) parts.push(`${f.historyWalletsWaiting} waiting to retry`);
+  if (f.historyWalletsTooLarge) parts.push(`${f.historyWalletsTooLarge} too large to read in a scan (FUNDING_HISTORY_CHUNK_BLOCKS, or widths they learned)`);
+  if (f.historyWalletsTooDense) parts.push(`${f.historyWalletsTooDense} too dense to hold between scans`);
+  if (f.historyReadsResumed) parts.push(`${f.historyReadsResumed} read(s) resumed`);
+  if (f.historyWalletsDayHeld) parts.push(`${f.historyWalletsDayHeld} held for the day's retries`);
+  if (f.dayCapReached) parts.push(`the day's retries are spent (LEADERBOARD_FUNDING_DAY_MAX_CALLS)`);
+  if (f.readStopped) parts.push(`stopped: ${f.readStopped}${f.readStopped === "range-limited" ? (f.rangeLimitFits ? " (this RPC limits eth_getLogs ranges: set FUNDING_HISTORY_CHUNK_BLOCKS under its limit, or turn the reader off)" : " (this RPC limits eth_getLogs ranges too narrowly to read a history in a scan: use a primary RPC without that limit, or turn the reader off)") : ""}`);
+  return parts.length ? `; ${parts.join(", ")}` : "";
+}
+
+// --- seller-funded payers (2026-09-28) --------------------------------------
+//
+// The rule, the incremental read and the persisted pools live in
+// src/seller-funding.js; this is where the scan applies them. A wallet row gets
+// `funding` = the netted figures the router may credit, the gross beside them,
+// and the verdict. Only the paid wallet's OWN outbound transfers count.
+export { FUNDING_DEFAULTS, posOf, circularWalletsFrom, readSellerFunding, readPayerHistory, readFundingGaps, processSellerFunding, sellerFundingFigures, createFundingState, serializeFundingState, parseFundingState, historyFromBlockFor, isScannableWallet } from "./seller-funding.js";
+
+/**
+ * Attach `funding` to every scanned row that has funding state (or a verdict
+ * carried from an earlier scan). `previous` is the last snapshot's
+ * walletEvidence, a fallback for the carried verdict when the state has none.
+ * Mutates each row; returns byWallet.
+ */
+export function applySellerFunding(byWallet, state, { latest, now = Date.now(), previous = null, circularWindowMs = FUNDING_DEFAULTS.circularWindowMs, bazaarWindowBlocks = FUNDING_DEFAULTS.bazaarWindowBlocks } = {}) {
+  for (const w of byWallet.values()) {
+    const k = String(w.wallet).toLowerCase();
+    const ws = state?.wallets?.get?.(k) || null;
+    const carried = [ws?.lastCircularAt, previous && typeof previous === "object" ? previous[k]?.lastCircularAt : null].filter((x) => typeof x === "string").sort().pop() || null;
+    if (!ws && !carried) continue;
+    w.funding = sellerFundingFigures(w, ws, { latest, now, carriedAt: carried, circularWindowMs, bazaarWindowBlocks: bazaarWindowBlocks ?? FUNDING_DEFAULTS.bazaarWindowBlocks });
+    if (ws) ws.lastCircularAt = w.funding.lastCircularAt;
+  }
+  return byWallet;
 }
 
 // --- network helpers --------------------------------------------------------
@@ -689,14 +966,21 @@ function rpcHost(url) {
 
 // --- pipeline ---------------------------------------------------------------
 
-/** Render a block count as a human-friendly window label ("5h", "24h", "7d"). */
-export function windowLabelFromBlocks(blocks) {
-  const seconds = (Number(blocks) || 0) * SECONDS_PER_BASE_BLOCK;
+/** Render a window length in seconds as a label ("5h", "24h", "7d"). */
+export function windowLabelFromSeconds(secs) {
+  const seconds = Number(secs) || 0;
   if (seconds <= 0) return "-";
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
   const hours = seconds / 3600;
   if (hours < 48) return `${Math.round(hours)}h`;
   return `${Math.round(hours / 24)}d`;
+}
+
+/** Label for a snapshot persisted before windows were measured in time: its
+ *  block count was written at the 2 s Base block time. New snapshots carry
+ *  `windowSeconds` and never need this. */
+export function windowLabelFromBlocks(blocks) {
+  return windowLabelFromSeconds((Number(blocks) || 0) * LEGACY_SECONDS_PER_BLOCK);
 }
 
 /**
@@ -728,15 +1012,64 @@ export function rankBy(board, sort = "usd") {
 const emptySnapshot = (opts, reason) => ({
   spec: "x402-leaderboard/1",
   asOf: new Date().toISOString(),
-  scannedBlocks: opts.spanBlocks,
-  windowLabel: windowLabelFromBlocks(opts.spanBlocks),
+  scannedBlocks: 0,
+  windowSeconds: opts.windowSeconds,
+  windowLabel: windowLabelFromSeconds(opts.windowSeconds),
   maxCallUsd: opts.maxCallUsd,
+  priceMatchMaxUsd: opts.priceMatchMaxUsd,
   scannedSellers: 0,
   walletsQueried: 0,
   leaderboard: [],
   scanSkipped: true,
   reason,
 });
+
+/**
+ * The block range a scan covers. The window is `opts.windowSeconds` of chain
+ * time ending at the head; its first block is the first whose timestamp is
+ * inside it, read from the chain (src/block-clock.js), so the range is right
+ * whatever the chain's block time is and across a change to it. A caller
+ * that pins `opts.spanBlocks` gets exactly that many blocks. When no header
+ * can be read the head still comes from eth_blockNumber and the start is
+ * estimated (`source` says which), so a flaky RPC narrows nothing silently.
+ */
+export async function resolveScanWindow(clock, opts, blockNumber) {
+  let head = null;
+  try { head = await clock.latest(); } catch { /* estimated below */ }
+  const latest = head ? head.number : parseInt(await blockNumber(), 16);
+  if (Number.isFinite(opts.spanBlocks) && opts.spanBlocks > 0) {
+    return { latest, start: Math.max(0, latest - opts.spanBlocks), spanBlocks: opts.spanBlocks, windowSeconds: opts.spanBlocks * LEGACY_SECONDS_PER_BLOCK, source: "pinned" };
+  }
+  const windowSeconds = Number(opts.windowSeconds) > 0 ? Number(opts.windowSeconds) : 86_400;
+  const nowSec = head ? head.timestamp : Math.floor((opts.now ?? Date.now()) / 1000);
+  const at = await clock.blockAtOrAfter(nowSec - windowSeconds, { headNumber: latest });
+  const start = Math.min(latest, at.block);
+  return { latest, start, spanBlocks: latest - start, windowSeconds, source: at.source, headTimestamp: head ? head.timestamp : null };
+}
+
+/**
+ * Block counts for the seller-funding state's time-based windows (the
+ * Bazaar's 30 days, the 30-day credit and 45-day known-payer TTLs), read from
+ * the chain the same way. The FUNDING_DEFAULTS constants are those windows at
+ * 2 s blocks; a count that could not be read from the chain is never allowed
+ * below them, because a narrower TTL prunes state that is still needed.
+ */
+export async function fundingWindowBlocks(clock, latest, nowSec) {
+  const d = 86_400;
+  const blocksBack = async (secs, floor) => {
+    try {
+      const at = await clock.blockAtOrAfter(nowSec - secs, { headNumber: latest });
+      const n = latest - at.block;
+      return at.source === "chain" ? n : Math.max(floor, n);
+    } catch { return floor; }
+  };
+  const month = await blocksBack(30 * d, FUNDING_DEFAULTS.bazaarWindowBlocks);
+  return {
+    bazaarWindowBlocks: month,
+    creditTtlBlocks: month,
+    knownTtlBlocks: await blocksBack(45 * d, FUNDING_DEFAULTS.knownTtlBlocks),
+  };
+}
 
 /**
  * Run the full pipeline once and return a snapshot. Pure data in / data out;
@@ -753,10 +1086,10 @@ export async function runLeaderboard(overrides = {}) {
   if (!chain) throw new Error(`leaderboard: no scan config for chain "${overrides.chain}"`);
   const opts = {
     ...DEFAULTS,
-    // The rail's own tuned span and RPC list win unless the caller is explicit,
-    // because a single SPAN_BLOCKS across chains is meaningless: identical
-    // block counts are 24h on Base and under 7h on Arbitrum.
-    spanBlocks: overrides.spanBlocks ?? (process.env.SPAN_BLOCKS ? DEFAULTS.spanBlocks : chain.spanBlocks),
+    // The rail's own RPC list wins unless the caller is explicit. The window
+    // is TIME, the same on every chain; its first block is found by
+    // timestamp below. A caller may still pin `spanBlocks` (tests, one-off
+    // scripts), which is then taken as given.
     rpcs: overrides.rpcs ?? chain.rpcs,
     ...overrides,
   };
@@ -772,17 +1105,31 @@ export async function runLeaderboard(overrides = {}) {
   // accumulate settlement evidence without joining someone else's registry.
   if (typeof opts.crawledWallets === "function") {
     try {
-      const { merged, added } = mergeCrawledWallets(sellers, opts.crawledWallets(chain), chain);
+      const { merged, added } = mergeCrawledWallets(sellers, opts.crawledWallets(chain), chain, typeof opts.crawledPrices === "function" ? opts.crawledPrices(chain) : null);
       sellers = merged;
       if (added) onProgress(`      +${added} wallet(s) from our own crawl (not in the Bazaar) → ${sellers.length} total`);
     } catch (e) {
       onProgress(`      crawled-wallet seed skipped: ${String(e?.message || e).slice(0, 120)}`);
     }
   }
+  // The zero address and the token contract are not anybody's wallet: a
+  // listing naming either as its payTo would have burns (or transfers to the
+  // contract) counted as sales, and would make every mint a "funding" source.
+  const nonWallets = sellers.filter((s) => !isScannableWallet(s.wallet, chain.token)).length;
+  if (nonWallets) {
+    sellers = sellers.filter((s) => isScannableWallet(s.wallet, chain.token));
+    onProgress(`      dropped ${nonWallets} listed payTo(s) that are not wallets (the zero address or the token contract)`);
+  }
   if (!sellers.length) return emptySnapshot(opts, "no Base-mainnet payTo wallets found in Bazaar");
 
   // Optional cap: keep the on-chain scan tight by ranking by listing count first.
+  // A capped scan is a SAMPLE, and the snapshot has to say so: `scannedSellers`
+  // alone reads as "every seller we know", and a seller outside the cut would
+  // be reported with zero settlements rather than as unmeasured - the reading
+  // that turns a partial answer into a false negative.
+  let walletCap = null;
   if (opts.maxWalletsScan > 0 && sellers.length > opts.maxWalletsScan) {
+    walletCap = { limit: opts.maxWalletsScan, eligible: sellers.length, rankedBy: "listing count" };
     sellers = sellers.slice().sort((a, b) => b.endpoints - a.endpoints).slice(0, opts.maxWalletsScan);
     onProgress(`      capping scan to top ${opts.maxWalletsScan} wallets by listing count`);
   }
@@ -790,12 +1137,14 @@ export async function runLeaderboard(overrides = {}) {
   // 2. Query USDC transfers — chunk both the block range AND the wallet array,
   //    since free-tier RPCs limit each.
   const wallets = [...new Set(sellers.map((s) => s.wallet))];
-  onProgress(`[2/3] Scanning ${chain.label} USDC transfers (${opts.spanBlocks} blocks, ${wallets.length} wallets)…`);
-  const latest = parseInt(await rpcCall(opts.rpcs, "eth_blockNumber", []), 16);
+  const clock = createBlockClock(opts.getHeader || rpcHeaderReader((m, p) => rpcCall(opts.rpcs, m, p, { passes: 1 })), { fallbackMsPerBlock: 2000, maxCalls: 80 });
+  const win = await resolveScanWindow(clock, opts, () => rpcCall(opts.rpcs, "eth_blockNumber", []));
+  const latest = win.latest;
+  onProgress(`[2/3] Scanning ${chain.label} USDC transfers (${win.spanBlocks} blocks, ${windowLabelFromSeconds(win.windowSeconds)}${win.source === "chain" ? "" : `, start by ${win.source}`}, ${wallets.length} wallets)…`);
   const padded = wallets.map(pad);
   const walletChunks = [];
   for (let i = 0; i < padded.length; i += opts.walletChunk) walletChunks.push(padded.slice(i, i + opts.walletChunk));
-  const start = latest - opts.spanBlocks;
+  const start = win.start;
   const blockChunks = [];
   for (let from = start; from <= latest; from += opts.chunkBlocks) {
     blockChunks.push([from, Math.min(from + opts.chunkBlocks - 1, latest)]);
@@ -818,8 +1167,11 @@ export async function runLeaderboard(overrides = {}) {
   const byWallet = initWalletAccumulator(sellers);
   let transferCount = 0;
   let failedChunks = 0;
+  // The first block a failed chunk left unread, per wallet chunk: the
+  // seller-funding pass never works a wallet's pools past it.
+  const failedFromByChunk = new Map();
   for (const [from, to] of blockChunks) {
-    for (const chunk of walletChunks) {
+    for (const [chunkIdx, chunk] of walletChunks.entries()) {
       try {
         const part = await rpcCall(opts.rpcs, "eth_getLogs", [{
           fromBlock: "0x" + from.toString(16),
@@ -832,12 +1184,14 @@ export async function runLeaderboard(overrides = {}) {
             wallet: ("0x" + l.topics[2].slice(-40)).toLowerCase(),
             payer: payerFromLog(l),
             usd: Number(BigInt(l.data)) / 1e6,
+            pos: posOf(parseInt(l.blockNumber, 16), parseInt(l.logIndex, 16)),
           }));
-          foldTransfers(byWallet, chunkTransfers, opts.maxCallUsd, OUR_EVM_WALLETS);
+          foldTransfers(byWallet, chunkTransfers, opts.maxCallUsd, OUR_EVM_WALLETS, opts.priceMatchMaxUsd);
           transferCount += chunkTransfers.length;
         }
       } catch (e) {
         failedChunks += 1;
+        failedFromByChunk.set(chunkIdx, Math.min(failedFromByChunk.get(chunkIdx) ?? Infinity, from));
         onProgress(`      chunk failed (blocks ${from}-${to}): ${redactSecrets(String(e?.message || e))}`);
       }
     }
@@ -848,23 +1202,148 @@ export async function runLeaderboard(overrides = {}) {
   const partial = failedChunks > 0;
   onProgress(`      ${transferCount} transfer log(s) total${partial ? ` (partial: ${failedChunks} of ${callCount} ranges unavailable)` : ""}`);
 
+  // 2b. Seller-funded payers (src/seller-funding.js): read the outbound
+  // transfers each paid wallet sent its known payers since its cursor, the
+  // whole history of every payer seen for the first time, and the gap before
+  // the window of a wallet that fell behind; then work each (wallet, payer)
+  // pool through the payments in chain order. Router input only; the public
+  // rows stay gross. Base only by default (the router's chain).
+  let fundingScan = null;
+  let fundingStateUsed = null;
+  let fundingWindows = null;
+  const fundingOn = (opts.fundingScan ?? chain.key === "base") && sellerFundingEnabled();
+  if (fundingOn) {
+    const nowMs = opts.now ?? Date.now();
+    const state = opts.fundingState || createFundingState(chain.token);
+    const walletIndex = new Map(wallets.map((w, i) => [String(w).toLowerCase(), i]));
+    const throughFor = (w) => {
+      const failedFrom = failedFromByChunk.get(Math.floor((walletIndex.get(w) ?? -1) / opts.walletChunk));
+      return failedFrom === undefined ? Infinity : endOfBlock(failedFrom - 1);
+    };
+    try {
+      const floor = { minSettled: 50, minPayers: 3, ...(opts.fundingFloor || {}) };
+      const skip = typeof opts.fundingSkip === "function" ? opts.fundingSkip : () => false;
+      const clears = (w) => ((w.callsSettled || 0) >= floor.minSettled && w.perPayer.size >= floor.minPayers ? 1 : 0);
+      // Wallets that clear the router's floor on gross figures first (only
+      // they can change a routing decision on their own), then the busiest.
+      const paid = [...byWallet.values()]
+        .filter((w) => w.perPayer && w.perPayer.size && !skip(String(w.wallet).toLowerCase()))
+        .sort((a, b) => clears(b) - clears(a) || (b.callsSettled || 0) - (a.callsSettled || 0));
+      const paidList = paid.map((w) => ({ wallet: w.wallet, payers: new Set([...w.perPayer.keys()].map((p) => String(p).toLowerCase())) }));
+      const primary = Array.isArray(opts.rpcs) && opts.rpcs.length ? [opts.rpcs[0]] : opts.rpcs;
+      // The primary RPC only, one attempt: a refusal is answered by splitting
+      // the job, not by walking every public fallback.
+      const fundingRpc = opts.fundingRpc || ((method, params) => rpcCall(primary, method, params, { passes: 1 }));
+      const maxCalls = Number.isFinite(opts.fundingMaxCalls) ? opts.fundingMaxCalls : FUNDING_DEFAULTS.maxCalls;
+      // One control for the whole scan: its timeouts, its stop, and each
+      // wallet's share of the history and gap reads (src/seller-funding.js).
+      const ctl = newFundingReadControl();
+      const held = Number.isFinite(opts.fundingMaxPartialLogsPerWallet) ? { maxPartialLogsPerWallet: opts.fundingMaxPartialLogsPerWallet } : {};
+      const share = { ctl, scanMaxCalls: maxCalls, now: nowMs, ...held, ...(Number.isFinite(opts.fundingWalletMaxCalls) ? { walletMaxCalls: opts.fundingWalletMaxCalls } : {}), ...(Number.isFinite(opts.fundingDayMaxCalls) ? { dayMaxCalls: opts.fundingDayMaxCalls } : {}) };
+      const facts = await readSellerFunding({
+        rpc: fundingRpc,
+        token: chain.token, state,
+        wallets: paidList,
+        latest,
+        windowStartBlock: start,
+        walletChunk: opts.walletChunk,
+        maxCalls,
+        ignore: new Set([...(OUR_EVM_WALLETS || [])].map((w) => String(w).toLowerCase())),
+        now: nowMs,
+        ctl,
+        onProgress,
+      });
+      // The whole history of every payer a wallet has not seen before (and
+      // the credit of a known payer about to be funded for the first time),
+      // from what is left of the budget.
+      const history = await readPayerHistory({ rpc: fundingRpc, token: chain.token, state, wallets: paidList, windowStartBlock: start, historyFromBlock: Number.isFinite(opts.fundingHistoryFromBlock) ? opts.fundingHistoryFromBlock : historyFromBlockFor(chain.token), walletChunk: opts.walletChunk, maxCalls: Math.max(0, maxCalls - facts.calls), ...share, onProgress });
+      // Once per wallet whose pools start before the window: what its funded
+      // payers paid it in between (see readFundingGaps), within what is left
+      // of the budget.
+      const gapRead = await readFundingGaps({ rpc: fundingRpc, token: chain.token, state, wallets: paid.map((w) => w.wallet), windowStartBlock: start, maxCalls: Math.max(0, maxCalls - facts.calls - history.stats.calls), ...share, onProgress });
+      // The same rule the fold applies: a transfer the board would count is a
+      // payment, anything larger is not a tool call.
+      const classify = (wallet, micro) => {
+        const row = byWallet.get(wallet);
+        const usd = micro / 1e6;
+        return (priceMatches(micro, row?.prices) && usd <= opts.priceMatchMaxUsd) || usd <= opts.maxCallUsd ? 1 : 2;
+      };
+      processSellerFunding(state, byWallet, { throughFor, windowStartBlock: start, gaps: gapRead.gaps, histories: history.histories, classify });
+      const pruned = {};
+      fundingWindows = await fundingWindowBlocks(clock, latest, win.headTimestamp ?? Math.floor(nowMs / 1000));
+      pruneFundingState(state, { now: nowMs, latest, counts: pruned, ...held, ...fundingWindows });
+      const h = history.stats;
+      const g = gapRead.stats;
+      fundingScan = {
+        calls: facts.calls + h.calls + gapRead.stats.calls, refusals: facts.refusals + h.refusals + (gapRead.stats.refusals || 0), wallets: facts.wallets,
+        historyCalls: h.calls, historyWallets: h.wallets, historyWalletsRead: h.read, historyWalletsFailed: h.failed, historyPayers: h.payers, historyPayersFunded: h.funded, creditReads: h.creditReads,
+        // Counts only: wallets whose reads went past their share, were refused
+        // over the narrowest range, need more calls than a scan has (or lost
+        // their progress to its cap), or are waiting after one of those.
+        historyWalletsOverShare: h.overShare + (g.overShare || 0), historyWalletsGaveUp: h.gaveUp + (g.gaveUp || 0), historyWalletsTooLarge: h.tooLarge + (g.tooLarge || 0) + (pruned.progressDropped || 0), historyWalletsTooDense: h.tooDense + (g.tooDense || 0), historyWalletsWaiting: h.waiting + (g.waiting || 0),
+        // Reads that resumed an earlier scan's progress; retries (calls past
+        // a wallet's plan, or picking up a read refused at every width last
+        // time) this scan and in the rolling day; wallets the day's allowance
+        // for them held back, and whether it held any.
+        historyReadsResumed: h.resumed + (g.resumed || 0),
+        historyRetryCalls: h.retries + (g.retries || 0), historyRetryCallsDay: fundingDayCalls(state, nowMs), historyWalletsDayHeld: h.dayHeld + (g.dayHeld || 0), ...(h.dayCapReached || g.dayCapReached ? { dayCapReached: true } : {}),
+        ...(ctl.stop ? { readStopped: ctl.stop } : {}), ...(ctl.stop === "range-limited" ? { rangeLimitFits: !!h.rangeLimitFits } : {}),
+        walletsReadTargeted: facts.targeted,
+        gapWallets: gapRead.stats.wallets, gapWalletsRead: gapRead.stats.read, gapCalls: gapRead.stats.calls,
+        walletsCaughtUp: facts.caughtUp, walletsBehind: facts.behind, walletsStuck: facts.stuck, walletsTruncated: facts.truncated, walletsNew: facts.fresh,
+        fundingEvents: facts.events + h.events, budgetExhausted: facts.budgetExhausted || h.budgetExhausted || gapRead.stats.budgetExhausted,
+        ...(facts.transportError || h.transportError || gapRead.stats.transportError ? { transportError: redactSecrets(facts.transportError || h.transportError || gapRead.stats.transportError) } : {}),
+        partial: facts.behind > 0 || !!facts.transportError || h.failed > 0 || h.waiting > 0 || !!h.transportError || gapRead.stats.failed > 0 || gapRead.stats.waiting > 0 || facts.budgetExhausted || h.budgetExhausted || gapRead.stats.budgetExhausted || !!ctl.stop,
+        stateWallets: state.wallets.size, statePairs: fundingPairCount(state), stateKnownPayers: fundingKnownCount(state),
+      };
+      onProgress(`      funding read: ${fundingScan.calls} eth_getLogs call(s) over ${facts.wallets} wallet(s) (${h.calls} for ${h.payers} new payer(s)), ${facts.caughtUp} caught up${facts.behind ? `, ${facts.behind} behind` : ""}${h.failed ? `, ${h.failed} with history pending` : ""}${fundingReadNotes(fundingScan)}`);
+    } catch (e) {
+      fundingScan = { error: redactSecrets(String(e?.message || e)).slice(0, 160), partial: true };
+      onProgress(`      funding read failed: ${fundingScan.error}`);
+    }
+    // Always applied, from whatever the state knows: a wallet not read this
+    // scan is "behind", and a circular one behind is credited nothing.
+    applySellerFunding(byWallet, state, { latest, now: nowMs, previous: opts.previousWalletEvidence || null, bazaarWindowBlocks: fundingWindows?.bazaarWindowBlocks });
+    fundingStateUsed = state;
+  }
+
   // 3. Aggregate. byWallet has already absorbed every successfully-scanned
   // chunk's transfers — finalize only does the bounded (O(sellers)) grouping
   // + ranking pass, no transfer-sized array involved.
   onProgress(`[3/3] Aggregating leaderboard…`);
   const ranked = finalizeLeaderboard(byWallet, { maxCallUsd: opts.maxCallUsd });
-  const windowLabel = windowLabelFromBlocks(opts.spanBlocks);
+  // A wallet found circular within the window keeps that verdict while the
+  // Bazaar's 30 days still count its self-payments, even when this scan did
+  // not see it at all (no longer listed, or no payments this window).
+  const walletEvidenceOut = { ...(ranked.walletEvidence || {}) };
+  const carryAt = new Map();
+  if (fundingOn) for (const k of circularWalletsFrom(opts.previousWalletEvidence || null, { now: opts.now ?? Date.now() })) carryAt.set(k, opts.previousWalletEvidence[k]);
+  for (const [k, ws] of fundingStateUsed?.wallets || []) {
+    if (typeof ws.lastCircularAt === "string" && circularWalletsFrom({ [k]: { lastCircularAt: ws.lastCircularAt } }, { now: opts.now ?? Date.now() }).size) carryAt.set(k, { ...(carryAt.get(k) || {}), lastCircularAt: [carryAt.get(k)?.lastCircularAt, ws.lastCircularAt].filter((x) => typeof x === "string").sort().pop() });
+  }
+  for (const [k, prev] of carryAt) {
+    if (!walletEvidenceOut[k]) walletEvidenceOut[k] = { callsSettled: 0, uniqueBuyers: 0, circular: false, lastCircularAt: prev.lastCircularAt, carried: true, origins: Array.isArray(prev.origins) ? prev.origins : [] };
+  }
+  const windowLabel = windowLabelFromSeconds(win.windowSeconds);
 
   return {
     spec: "x402-leaderboard/1",
     asOf: new Date().toISOString(),
-    scannedBlocks: opts.spanBlocks,
+    scannedBlocks: win.spanBlocks,
     windowLabel,
     maxCallUsd: opts.maxCallUsd,
+    priceMatchMaxUsd: opts.priceMatchMaxUsd,
+    // The window in time; its first block was found by timestamp ("chain").
+    windowSeconds: win.windowSeconds,
+    windowStartSource: win.source,
     scannedSellers: sellers.length,
     walletsQueried: wallets.length,
     bazaarTotal: total,
     leaderboard: ranked,
+    // Router input, persisted with the snapshot so a warm start carries it;
+    // removed from every served copy by getLeaderboardSnapshot().
+    walletEvidence: walletEvidenceOut,
+    ...(fundingScan ? { routerFundingScan: fundingScan } : {}),
     // Honesty flags: a partial scan under-covers the window (missed ranges
     // mean some settlements aren't counted) — never render it as if it were
     // a complete scan. See ledger-leaderboard.js / x402-index.js for where
@@ -872,6 +1351,12 @@ export async function runLeaderboard(overrides = {}) {
     ...(partial ? {
       partial: true,
       windowNote: `${windowLabel} scan, partial: ${failedChunks} of ${callCount} ranges unavailable`,
+    } : {}),
+    // A wallet cap makes the board a sample of known sellers, not all of them.
+    ...(walletCap ? {
+      sellersSampled: true,
+      sellerSampleNote: `scan capped to the top ${walletCap.limit} of ${walletCap.eligible} known seller wallets by ${walletCap.rankedBy}; sellers outside the cut are unmeasured, not zero`,
+      sellersEligible: walletCap.eligible,
     } : {}),
   };
 }
@@ -964,6 +1449,102 @@ export function persistLeaderboardHistoryPoint(snapshot, file = LEADERBOARD_HIST
   }
 }
 
+// Seller-funding state (src/seller-funding.js): per-wallet cursors, known
+// payers and the (wallet, payer) pools, so each hourly read covers only new
+// blocks, a payer's history is read once, and a pool is remembered until it is
+// spent. Kept in its own file beside the snapshot, read once (asynchronously)
+// before the first scan and written after each.
+export const LEADERBOARD_FUNDING_FILE =
+  process.env.LEADERBOARD_FUNDING_FILE || "/data/leaderboard-funding.json";
+let fundingStateCache = null;
+async function loadSellerFundingState(file = LEADERBOARD_FUNDING_FILE) {
+  if (fundingStateCache) return fundingStateCache;
+  let text = null;
+  try { text = await readFile(file, "utf8"); } catch { /* no file yet: a fresh state */ }
+  fundingStateCache = text ? parseFundingState(text, USDC) : createFundingState(USDC);
+  return fundingStateCache;
+}
+async function persistSellerFundingState(state, file = LEADERBOARD_FUNDING_FILE) {
+  try {
+    const tmp = `${file}.${process.pid}.tmp`;
+    await writeFile(tmp, serializeFundingState(state));
+    await renameFile(tmp, file);
+    return true;
+  } catch { return false; } // no /data volume (local dev, CI): the next scan reads every payer's history again
+}
+
+// THE SWITCH (2026-09-28): the seller-funding reader and everything it feeds
+// the router, on by default. Off when LEADERBOARD_FUNDING_SCAN=off (read at
+// call time; the env wins) or when the operator turned it off at runtime
+// (POST /__operator/seller-funding {"action":"disable"}, persisted on the
+// volume, no redeploy). OFF IS THE GROSS PER-WALLET EVIDENCE AND NOTHING ELSE:
+// no funding read, no netting, no circular verdict, not even one carried from
+// an earlier scan - and it applies from the next read of the getters below,
+// not from the next scan, so a warm-started snapshot's netted figures and
+// verdicts stop counting at once. The measurement already on the volume is
+// left alone: switching back on resumes from it.
+export const LEADERBOARD_FUNDING_SWITCH_FILE =
+  process.env.LEADERBOARD_FUNDING_SWITCH_FILE || "/data/leaderboard-funding-switch.json";
+let fundingSwitch = null; // null: not loaded; false: no operator choice; else { enabled, at, note, persisted }
+let fundingSwitchVersion = 0;
+function operatorFundingSwitch() {
+  if (fundingSwitch === null) {
+    fundingSwitch = false;
+    try {
+      const j = JSON.parse(readFileSync(LEADERBOARD_FUNDING_SWITCH_FILE, "utf8"));
+      if (typeof j?.enabled === "boolean") fundingSwitch = { enabled: j.enabled, at: typeof j.at === "string" ? j.at : null, note: typeof j.note === "string" ? j.note.slice(0, 200) : "", persisted: true };
+    } catch { /* no operator choice on the volume */ }
+  }
+  return fundingSwitch || null;
+}
+/** Whether the seller-funding reader and its evidence are on (see THE SWITCH). */
+export function sellerFundingEnabled() {
+  if (String(process.env.LEADERBOARD_FUNDING_SCAN || "").trim().toLowerCase() === "off") return false;
+  const op = operatorFundingSwitch();
+  return op ? op.enabled : true;
+}
+/** Operator view of the switch: whether it is on, and what decided it. */
+export function sellerFundingSwitch() {
+  const env = String(process.env.LEADERBOARD_FUNDING_SCAN || "").trim().toLowerCase() === "off";
+  const op = operatorFundingSwitch();
+  return { enabled: sellerFundingEnabled(), source: env ? "env" : op ? "operator" : "default", envOff: env, operator: op ? { enabled: op.enabled, at: op.at, note: op.note, persisted: op.persisted } : null };
+}
+/** The operator's runtime switch. Persisted on the volume when it can be
+ *  (else it holds until the process restarts). */
+export function setSellerFundingEnabled(enabled, { note = "", now = Date.now() } = {}) {
+  if (typeof enabled !== "boolean") throw Object.assign(new Error("enabled must be true or false"), { statusCode: 400 });
+  const before = sellerFundingEnabled();
+  const next = { enabled, at: new Date(now).toISOString(), note: String(note || "").slice(0, 200), persisted: false };
+  try {
+    const tmp = `${LEADERBOARD_FUNDING_SWITCH_FILE}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ enabled: next.enabled, at: next.at, note: next.note }));
+    renameSync(tmp, LEADERBOARD_FUNDING_SWITCH_FILE);
+    next.persisted = true;
+  } catch { /* no volume: in memory until the next restart */ }
+  fundingSwitch = next;
+  fundingSwitchVersion++;
+  evidenceMemo = { ev: null, ver: null, out: null };
+  circularMemo = { ev: null, at: 0, set: new Set(), version: "", ver: null };
+  return { changed: before !== sellerFundingEnabled(), ...sellerFundingSwitch() };
+}
+
+// Operator levers for the seller-funding rule, handed in by the server:
+//   cleared: wallets whose self-funded verdict the operator has cleared
+//            (anything with has(wallet) and a changing `version`): their
+//            evidence reads gross and they are never circular while listed;
+//            the measurement goes on, so restoring one applies at once.
+//   skip:    wallets whose outbound is not read at all (the operator-listed
+//            shared settlement contracts: they credit nobody anyway, and they
+//            pay out on every payment).
+const fundingConfig = { cleared: null, skip: () => false };
+export function configureSellerFunding({ cleared = null, skip = null } = {}) {
+  fundingConfig.cleared = cleared && typeof cleared.has === "function" ? cleared : null;
+  fundingConfig.skip = typeof skip === "function" ? skip : () => false;
+  evidenceMemo = { ev: null, ver: null, out: null };
+  circularMemo = { ev: null, at: 0, set: new Set(), version: "", ver: null };
+}
+const clearanceVersion = () => `${sellerFundingEnabled() ? "on" : "off"}:${fundingSwitchVersion}:${fundingConfig.cleared ? String(fundingConfig.cleared.version ?? "") : ""}`;
+
 // --- server-side cache + refresh -------------------------------------------
 
 // One process-global snapshot. Restart-tolerant by design: a fresh boot warms
@@ -984,7 +1565,17 @@ async function refreshOnce(opts) {
   cached.warming = true;
   cached.lastTriedAt = new Date().toISOString();
   try {
-    const snap = await runLeaderboard(opts);
+    // The persisted seller-funding state (cursors and pools) rides in and out
+    // of every Base scan; the previous scan's per-wallet evidence rides in too,
+    // so a wallet found circular keeps that verdict for the Bazaar's window.
+    const base = !opts.chain || opts.chain === "base";
+    const fundingState = base && sellerFundingEnabled() ? await loadSellerFundingState() : undefined;
+    const snap = await runLeaderboard({ ...opts, fundingState, fundingSkip: fundingConfig.skip, previousWalletEvidence: cached.snapshot?.walletEvidence || null });
+    if (snap?.routerFundingScan) {
+      const f = snap.routerFundingScan;
+      console.log(`[leaderboard] seller-funding read: ${f.calls ?? 0} call(s) over ${f.wallets ?? 0} wallet(s) (${f.historyCalls ?? 0} for ${f.historyPayers ?? 0} new payer(s)), ${f.walletsCaughtUp ?? 0} caught up${f.walletsBehind ? `, ${f.walletsBehind} behind` : ""}${f.historyWalletsFailed ? `, ${f.historyWalletsFailed} with history pending` : ""}${fundingReadNotes(f)}${f.error ? ` (failed: ${f.error})` : ""}`);
+      if (fundingState) await persistSellerFundingState(fundingState);
+    }
     cached.snapshot = snap;
     cached.lastError = null;
     // Best-effort daily digest to /data so week-over-week deltas (the
@@ -1059,8 +1650,12 @@ export function stopLeaderboardRefresh() {
  */
 export function getLeaderboardSnapshot() {
   if (cached.snapshot) {
+    // walletEvidence is router input (getLeaderboardWalletEvidence below).
+    // Every public path spreads this return value, so this is the one place it
+    // has to be dropped.
+    const { walletEvidence: _routerOnly, routerFundingScan: _routerOnlyScan, ...served } = cached.snapshot;
     return {
-      ...cached.snapshot,
+      ...served,
       cache: {
         cachedAt: cached.snapshot.asOf,
         lastTriedAt: cached.lastTriedAt,
@@ -1076,8 +1671,9 @@ export function getLeaderboardSnapshot() {
     spec: "x402-leaderboard/1",
     asOf: new Date().toISOString(),
     warming: true,
-    scannedBlocks: DEFAULTS.spanBlocks,
-    windowLabel: windowLabelFromBlocks(DEFAULTS.spanBlocks),
+    scannedBlocks: 0,
+    windowSeconds: DEFAULTS.windowSeconds,
+    windowLabel: windowLabelFromSeconds(DEFAULTS.windowSeconds),
     maxCallUsd: DEFAULTS.maxCallUsd,
     leaderboard: [],
     cache: {
@@ -1089,9 +1685,113 @@ export function getLeaderboardSnapshot() {
   };
 }
 
+/**
+ * The last scan's per-wallet evidence: wallet -> { callsSettled, uniqueBuyers,
+ * origins }. Read by the router's evidence binding (src/evidence-binding.js) to
+ * keep every figure against the wallet it was measured at, rather than an
+ * operator row's totals. `{}` before the first scan and for a snapshot
+ * persisted before this field existed, which credits a multi-wallet row
+ * nothing (its totals cannot be split), never its totals.
+ */
+export function getLeaderboardWalletEvidence() {
+  const ev = cached.snapshot?.walletEvidence;
+  if (!(ev && typeof ev === "object" && !Array.isArray(ev))) return {};
+  // Switched off: the gross per-wallet figures, with no netting and no verdict.
+  if (!sellerFundingEnabled()) {
+    const ver = clearanceVersion();
+    if (evidenceMemo.ev === ev && evidenceMemo.ver === ver) return evidenceMemo.out;
+    const out = {};
+    for (const [w, e] of Object.entries(ev)) {
+      if (!e || typeof e !== "object" || e.carried) continue;
+      out[w] = { callsSettled: e.grossCallsSettled ?? e.callsSettled, uniqueBuyers: e.grossUniqueBuyers ?? e.uniqueBuyers, origins: Array.isArray(e.origins) ? e.origins : [] };
+    }
+    evidenceMemo = { ev, ver, out };
+    return out;
+  }
+  const cleared = fundingConfig.cleared;
+  if (!cleared) return ev;
+  // A wallet the operator has cleared reads its gross figures (the netting
+  // and the verdict are the measurement; the clearance is the judgement).
+  const ver = clearanceVersion();
+  if (evidenceMemo.ev === ev && evidenceMemo.ver === ver) return evidenceMemo.out;
+  let out = ev;
+  for (const [w, e] of Object.entries(ev)) {
+    if (!e || e.grossCallsSettled === undefined || !cleared.has(w)) continue;
+    if (out === ev) out = { ...ev };
+    out[w] = { callsSettled: e.grossCallsSettled, uniqueBuyers: e.grossUniqueBuyers, origins: e.origins || [], selfFundingCleared: true };
+  }
+  evidenceMemo = { ev, ver, out };
+  return out;
+}
+let evidenceMemo = { ev: null, ver: null, out: null };
+
+/** The last scan's seller-funding read (counts only): router/operator input. */
+export function getLeaderboardFundingScan() {
+  return cached.snapshot?.routerFundingScan || null;
+}
+
+// Circular wallets, memoized per evidence object for ten minutes (the verdict
+// only changes at a scan, but its 30-day window slides).
+let circularMemo = { ev: null, at: 0, set: new Set(), version: "", ver: null };
+/**
+ * { wallets: Set, version }: the Base wallets whose settled evidence was mostly
+ * self-funded in a scan inside the Bazaar's window. The router disregards
+ * their Bazaar and chain-join figures (src/evidence-binding.js) and their
+ * Bazaar payer count in ranking ties (x402-index routeQuery).
+ */
+export function getLeaderboardCircularWallets(now = Date.now()) {
+  const ev = cached.snapshot?.walletEvidence || null;
+  const ver = clearanceVersion();
+  if (!sellerFundingEnabled()) return { wallets: new Set(), version: `${cached.snapshot?.asOf || "none"}:0:${ver}` };
+  if (circularMemo.ev !== ev || circularMemo.ver !== ver || now - circularMemo.at > 10 * 60_000) {
+    const set = circularWalletsFrom(ev, { now, cleared: fundingConfig.cleared });
+    circularMemo = { ev, at: now, set, ver, version: `${cached.snapshot?.asOf || "none"}:${set.size}:${ver}` };
+  }
+  return { wallets: circularMemo.set, version: circularMemo.version };
+}
+
+/**
+ * Operator view of the seller-funding rule (counts and verdicts only, never a
+ * payer): the last read's counts, and per wallet the state and the figures.
+ * `wallet` narrows it to one.
+ */
+export function sellerFundingStatus({ wallet = null, now = Date.now() } = {}) {
+  const ev = cached.snapshot?.walletEvidence || {};
+  const cleared = fundingConfig.cleared;
+  const one = (w) => {
+    const e = ev[w] || null;
+    const ws = fundingStateCache?.wallets?.get(w) || null;
+    return {
+      wallet: w,
+      circular: circularWalletsFrom(e ? { [w]: e } : {}, { now }).has(w),
+      cleared: !!cleared?.has?.(w),
+      lastCircularAt: e?.lastCircularAt || ws?.lastCircularAt || null,
+      evidence: e ? { callsSettled: e.callsSettled, uniqueBuyers: e.uniqueBuyers, grossCallsSettled: e.grossCallsSettled ?? null, grossUniqueBuyers: e.grossUniqueBuyers ?? null, selfFundedCalls: e.selfFundedCalls ?? null, selfFundedPayers: e.selfFundedPayers ?? null, selfFundedUsd: e.selfFundedUsd ?? null, grossUsd: e.grossUsd ?? null, selfFundedCalls30d: e.selfFundedCalls30d ?? null, selfFundedPayers30d: e.selfFundedPayers30d ?? null, fundingRead: e.fundingRead ?? null, fundingPending: !!e.fundingPending, fundingTruncated: !!e.fundingTruncated } : null,
+      state: ws ? { cursor: ws.cursor, since: ws.since, pools: ws.pairs.size, openPools: [...ws.pairs.values()].filter((p) => p.pool > 0).length, knownPayers: ws.known.size, truncated: ws.truncated, retryAt: ws.retryAt > 0 ? new Date(ws.retryAt).toISOString() : null, waits: ws.st || 0, readsInProgress: ws.hp?.length || 0, episodeCalls: ws.ep ? ws.ep.sp : 0 } : null,
+    };
+  };
+  if (wallet) return { ...one(String(wallet).toLowerCase()), switch: sellerFundingSwitch() };
+  const circularWallets = [...circularWalletsFrom(ev, { now })].sort();
+  return {
+    // `circular` below is what the last scans MEASURED; with the switch off
+    // the router applies none of it (evidence gross, no verdict).
+    switch: sellerFundingSwitch(),
+    asOf: cached.snapshot?.asOf || null,
+    lastRead: cached.snapshot?.routerFundingScan || null,
+    stateWallets: fundingStateCache?.wallets?.size ?? null,
+    statePairs: fundingStateCache ? fundingPairCount(fundingStateCache) : null,
+    stateKnownPayers: fundingStateCache ? fundingKnownCount(fundingStateCache) : null,
+    circular: circularWallets.map(one),
+  };
+}
+
 /** Test hook: clear the cache. Not exported on the production path. */
+export function _setLeaderboardSnapshotForTests(snap) { cached.snapshot = snap; }
 export function _resetLeaderboardCacheForTests() {
   cached = { snapshot: null, warming: false, lastError: null, lastTriedAt: null, refreshIntervalMs: null };
+  fundingStateCache = null;
+  fundingSwitch = null;
+  configureSellerFunding({});
   stopLeaderboardRefresh();
 }
 
@@ -1196,7 +1896,7 @@ export function leaderboardPage(snapshot, { baseUrl, sort }) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>x402 Leaderboard - Agent402</title>
-<meta name="description" content="Public on-chain ranking of every x402 seller by Base USDC settled volume - callsSettled, totalUsd, uniqueBuyers per seller.">
+<meta name="description" content="Public on-chain ranking of x402 sellers by Base USDC settled volume in the scan window - callsSettled, totalUsd, uniqueBuyers per seller.">
 ${CHROME_HEAD_LINKS}
 <style>
   :root { --bg:#0b0e14; --fg:#e6e9f0; --muted:#8b93a7; --accent:#4ade80; --line:#1e2638; --card:#0f1320; --warn:#f97316; }
@@ -1238,7 +1938,7 @@ ${renderHeader("/leaderboard")}
 <div class="wrap">
 
 <h1>x402 Leaderboard</h1>
-<p class="sub">Public on-chain ranking of every x402 seller listed on the Coinbase CDP Bazaar, ranked by ${sortMode === "calls" ? "raw call volume" : "settled USDC volume"} on Base. Window: <b>${esc(windowHuman)}</b>. Snapshot is cached and refreshed hourly.</p>
+<p class="sub">Public on-chain ranking of the x402 sellers we can see: discovered from the Coinbase CDP Bazaar plus our own crawl, and ranked by ${sortMode === "calls" ? "raw call volume" : "settled USDC volume"} on Base. A seller ranks here only once it settles inside the window, so this is not a roster of everyone listed - the card below reports how many ranked out of how many were scanned. Window: <b>${esc(windowHuman)}</b>. Snapshot is cached and refreshed hourly.</p>
 
 ${sortToggle}
 
@@ -1270,6 +1970,12 @@ ${sortToggle}
       <li>Measure how many DISTINCT sellers on this board each payer settles with. A row flagged <code>cross-seller N%</code> draws that share of its settlements from wallets that also pay ${esc(PAYER_BREADTH.multiSellerMin)}+ other sellers here - evaluators and scanners walking the ecosystem rather than customers who chose one seller. Breadth is measured against the sellers we index, never the whole chain.</li>
       <li>Payer addresses are never published on any of these surfaces. A seller's payer roster is their customer list, the same rule we apply to our own buyers on <a href="/revenue">/revenue</a>. Our own row is measured and flagged on identical terms.</li>
       <li>Rank by totalUsd; tiebreak on activity, then alphabetical.</li>
+      <!-- A concentration flag is a MEASUREMENT, and next to a named business a
+           measurement invites an inference we have not made and cannot prove.
+           Say what it does not mean, in the methodology, where the figure is
+           explained - and name a route to have a row corrected. -->
+      <li><strong>What a concentration flag is not.</strong> <code>1 payer N%</code> and <code>cross-seller N%</code> report the distribution of on-chain settlements we observed, nothing more. A concentrated row is the expected shape for a seller with one large integration partner, a seller in its first weeks, or a seller whose buyers run many agents from one wallet. We are not asserting that any flagged row is inauthentic, and no row here is a judgement about a business or its operators.</li>
+      <li><strong>Corrections.</strong> Every figure is an on-chain reading as of the scan above and may be stale or, where wallets fold to the wrong operator, simply wrong. A seller who believes their row misreads them can write to <a href="mailto:mike@agent402.tools">mike@agent402.tools</a> and we will re-scan and correct or withdraw it.</li>
     </ol>
     <pre>curl -s ${esc(baseUrl)}/api/leaderboard?top=10
 curl -s ${esc(baseUrl)}/api/leaderboard?include=external   # exclude Agent402 itself
@@ -1278,7 +1984,7 @@ curl -s ${esc(baseUrl)}/api/leaderboard?window=7d           # window hint (defau
   </div>
 </div>
 
-<p class="foot">x402 Leaderboard is open-source - part of <a href="https://github.com/MikeyPetrillo/Agent402">Agent402</a>. Sellers don't have to register: any wallet that appears in the Bazaar with Base-mainnet USDC payment options is scanned automatically.</p>
+<p class="foot">x402 Leaderboard is open-source - part of <a href="${REPO_URL}">Agent402</a>. Sellers don't have to register: any wallet that appears in the Bazaar with Base-mainnet USDC payment options is scanned automatically.</p>
 
 </div>
 ${renderFooter()}

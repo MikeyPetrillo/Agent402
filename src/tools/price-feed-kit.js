@@ -81,14 +81,14 @@ export const PRICE_FEED_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "Live spot price (and optional 24-hour change) for one or more coins from CoinGecko's public Simple Price endpoint. Identify coins by their CoinGecko ID slug (bitcoin, ethereum, solana, usd-coin, …). Defaults to USD; pass a `vsCurrency` to denominate in EUR, JPY, ETH, BTC, etc.",
+      "Live spot price for up to 25 coins by CoinGecko id, one row per id in the order asked: prices[] of {id, price, change24h, lastUpdated}. Identify coins by their CoinGecko ID slug (bitcoin, ethereum, solana, usd-coin, ...), as an array or a comma-separated string; for ticker symbols (BTC, ETH) plus volume and market cap use crypto-price. Defaults to USD; pass vsCurrency to denominate in EUR, JPY, ETH, BTC, etc. change24h is filled only when include24hChange is true. An id CoinGecko does not know comes back with a null price and is listed in unknown.",
     tags: ["crypto", "price", "coingecko", "spot", "market"],
     discovery: {
       bodyType: "json",
       input: { ids: ["bitcoin", "ethereum"] },
       inputSchema: {
         properties: {
-          ids: { type: "array", description: "CoinGecko coin IDs (e.g. bitcoin, ethereum, solana). 1-25 entries." },
+          ids: { type: ["array", "string"], items: { type: "string" }, description: "CoinGecko coin IDs (e.g. bitcoin, ethereum, solana): an array, or one comma-separated string. 1-25 entries." },
           vsCurrency: { type: "string", description: "Quote currency (default usd). Supports any CoinGecko vs_currencies value." },
           include24hChange: { type: "boolean", description: "Include 24h % change in the response (default false)." },
         },
@@ -98,16 +98,20 @@ export const PRICE_FEED_TOOLS = [
         example: {
           count: 2, vsCurrency: "usd",
           prices: [
-            { id: "bitcoin", price: 67000.12, change24h: null },
-            { id: "ethereum", price: 3500.05, change24h: null },
+            { id: "bitcoin", price: 67000.12, change24h: null, lastUpdated: "2026-09-24T14:50:20.000Z" },
+            { id: "ethereum", price: 3500.05, change24h: null, lastUpdated: "2026-09-24T14:50:20.000Z" },
           ],
         },
       },
     },
     handler: async (i) => {
-      if (!Array.isArray(i.ids) || i.ids.length === 0) throw bad(`"ids" must be a non-empty array`);
-      if (i.ids.length > 25) throw bad(`"ids" cannot exceed 25 entries`);
-      const ids = i.ids.map((x) => {
+      // One id or a comma list as a plain string is the obvious other shape (the
+      // sibling sol-price and crypto-price both take it); refusing it was a 400
+      // on a correct request.
+      const rawIds = typeof i.ids === "string" ? i.ids.split(",").map((x) => x.trim()).filter(Boolean) : i.ids;
+      if (!Array.isArray(rawIds) || rawIds.length === 0) throw bad(`"ids" must be a non-empty array (or a comma-separated string)`);
+      if (rawIds.length > 25) throw bad(`"ids" cannot exceed 25 entries`);
+      const ids = rawIds.map((x) => {
         if (typeof x !== "string" || !x.trim()) throw bad(`Each id must be a non-empty string`);
         if (!/^[a-z0-9-]+$/i.test(x.trim())) throw bad(`"${x}" is not a valid CoinGecko id (alphanumerics + hyphens only)`);
         return x.trim().toLowerCase();
@@ -116,16 +120,19 @@ export const PRICE_FEED_TOOLS = [
         ? i.vsCurrency.trim().toLowerCase()
         : "usd";
       const wantChange = i.include24hChange === true;
-      const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(",")}&vs_currencies=${vs}` +
+      const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(",")}&vs_currencies=${vs}&include_last_updated_at=true` +
         (wantChange ? `&include_24hr_change=true` : "");
       const data = await feedFetch(url);
       const prices = ids.map((id) => {
         const row = data[id];
-        if (!row) return { id, price: null, change24h: null };
+        if (!row) return { id, price: null, change24h: null, lastUpdated: null };
         return {
           id,
           price: typeof row[vs] === "number" ? row[vs] : null,
           change24h: wantChange && typeof row[`${vs}_24h_change`] === "number" ? row[`${vs}_24h_change`] : null,
+          // When CoinGecko last refreshed this price: a spot price without a
+          // timestamp cannot be judged fresh or stale.
+          lastUpdated: Number.isFinite(row.last_updated_at) ? new Date(row.last_updated_at * 1000).toISOString() : null,
         };
       });
       // Every id unknown was a 200 of null rows (corpus, 2026-09-06): 404

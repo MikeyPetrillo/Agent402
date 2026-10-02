@@ -1,7 +1,7 @@
 // One-off LIVE verification: a real mppx client, signed by the existing EVM
 // canary burner (0x902dCf34E53695bDEA2fFB354b1a2e58bD598256 — GitHub Actions
 // secret BURNER_KEY, the SAME wallet paid-canary.js already uses for its
-// other EVM legs, now also funded with 2 PathUSD on Tempo mainnet), makes
+// other EVM legs, now also funded on Tempo mainnet), makes
 // ONE real purchase against agent402.tools's live tempo/charge challenge.
 //
 // This exists because scripts/test-mpp-tempo-shim.js only proves OUR OWN
@@ -57,54 +57,48 @@ if (secret) {
   headers["X-Heartbeat-Token"] = createHmac("sha256", secret).update(`heartbeat:${minute}`).digest("base64url").slice(0, 32);
 }
 
-let res;
-try {
-  res = await mppxClient.fetch(`${TARGET}/api/uuid`, { headers });
-} catch (e) {
-  console.error("FAIL: fetch threw:", e?.message || e);
-  process.exit(1);
+// CANARY_CALLS (optional JSON array of {method, path, body}) buys several
+// tools in one run; default is the original single /api/uuid buy. Every call
+// must settle and answer 200 with a JSON body.
+let calls = [{ method: "GET", path: "/api/uuid", check: (b) => Array.isArray(b?.uuids) && b.uuids.length > 0 }];
+if ((process.env.CANARY_CALLS || "").trim()) {
+  try {
+    const parsedCalls = JSON.parse(process.env.CANARY_CALLS);
+    if (!Array.isArray(parsedCalls) || !parsedCalls.length || parsedCalls.length > 10) throw new Error("need 1-10 calls");
+    calls = parsedCalls.map((c) => {
+      if (!/^\/(api|v1)\//.test(String(c.path || ""))) throw new Error(`path must start /api/ or /v1/: ${c.path}`);
+      return { method: String(c.method || "GET").toUpperCase(), path: c.path, body: c.body, check: (b) => b && typeof b === "object" && !b.error };
+    });
+  } catch (e) { console.error(`FAIL: CANARY_CALLS unreadable: ${e.message}`); process.exit(2); }
 }
 
-const bodyText = await res.text();
-console.log(`status: ${res.status}`);
-console.log(`payment-receipt header: ${res.headers.get("payment-receipt") || "(none)"}`);
-console.log(`body: ${bodyText.slice(0, 500)}`);
-
-if (!sawChallenge) {
-  console.error("FAIL: never saw a 402 challenge — client may not have reached the paywall at all");
-  process.exit(1);
+let failed = 0;
+for (const call of calls) {
+  sawChallenge = false; sawCredential = false; credentialRounds = 0; paymentFailure = null;
+  const init = { method: call.method, headers: { ...headers, ...(call.body !== undefined ? { "content-type": "application/json" } : {}) }, ...(call.body !== undefined ? { body: JSON.stringify(call.body) } : {}) };
+  let res;
+  try {
+    res = await mppxClient.fetch(`${TARGET}${call.path}`, init);
+  } catch (e) {
+    console.error(`FAIL ${call.method} ${call.path}: fetch threw: ${e?.message || e}`); failed++; continue;
+  }
+  const bodyText = await res.text();
+  console.log(`\n${call.method} ${call.path} -> status ${res.status}`);
+  console.log(`payment-receipt header: ${res.headers.get("payment-receipt") || "(none)"}`);
+  console.log(`body: ${bodyText.slice(0, 300)}`);
+  let parsed = null; try { parsed = JSON.parse(bodyText); } catch { parsed = null; }
+  const why = !sawChallenge ? "never saw a 402 challenge"
+    : !sawCredential ? "never created a signed credential"
+    : paymentFailure ? "mppx reported a payment.failed event"
+    : res.status !== 200 ? `final status ${res.status}, expected 200`
+    : !res.headers.get("payment-receipt") ? "200 without a Payment-Receipt"
+    : !call.check(parsed) ? "response body is not the tool's answer"
+    : null;
+  if (why) { console.error(`FAIL ${call.method} ${call.path}: ${why}`); failed++; continue; }
+  // More than one signed credential is still a pass (one debit on-chain), but
+  // not a clean one: say so, and read prod's [mpp-tempo] timing lines.
+  if (credentialRounds > 1) console.warn(`WARN  ${call.path} settled only on credential round ${credentialRounds}`);
+  console.log(`OK ${call.method} ${call.path} settled over tempo`);
 }
-if (!sawCredential) {
-  console.error("FAIL: never created a signed credential — challenge selection or signing failed");
-  process.exit(1);
-}
-if (paymentFailure) {
-  console.error("FAIL: mppx reported a payment.failed event");
-  process.exit(1);
-}
-if (res.status !== 200) {
-  console.error(`FAIL: final status ${res.status}, expected 200`);
-  process.exit(1);
-}
-
-let parsed;
-try {
-  parsed = JSON.parse(bodyText);
-} catch {
-  console.error("FAIL: response body isn't valid JSON");
-  process.exit(1);
-}
-if (!Array.isArray(parsed?.uuids) || parsed.uuids.length === 0) {
-  console.error("FAIL: response doesn't look like a real uuid-generator payload");
-  process.exit(1);
-}
-
-// A settle that needed more than one signed credential is still a PASS (the
-// buyer got their answer, one debit on-chain), but it is not a clean one:
-// both first live settlements (2026-08-18) took two rounds, the first
-// attempt dying in a ~22s relay broadcast against the credential's 25s
-// validBefore. Say so, so a "green" run can't hide a rail that only works
-// on retry — check prod's `[mpp-tempo] settled ... [validate= broadcast=]`
-// timing line for the same buy.
-if (credentialRounds > 1) console.warn(`WARN  settled only on credential round ${credentialRounds} — the first attempt(s) were rejected or timed out; read prod's [mpp-tempo] timing lines`);
-console.log("\nPASS — real Tempo settlement round trip confirmed live against production.");
+if (failed) { console.error(`\nFAIL: ${failed} of ${calls.length} call(s) did not settle and answer`); process.exit(1); }
+console.log(`\nPASS — ${calls.length} real Tempo settlement round trip(s) confirmed live against production.`);

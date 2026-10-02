@@ -21,43 +21,80 @@ GitHub incident and a Cloudflare incident are not the same event.
 
 `api` (health), `catalog` (route count above the floor), `mcp` (connector
 handshake), `paywall` (an unpaid call still 402s), `rails` (Base still in the
-402 offer).
+402 offer), and `paid-call` (the proof-of-work path end to end: challenge,
+solve, call `/api/hash`, check the answer is the hash of what it sent).
 
-It deliberately does **not** run the paid-call probe. That needs a 16-bit
-proof-of-work solve plus an `X-Heartbeat-Token` minted from `POW_SECRET`.
-Copying that secret to a second platform widens its blast radius, and without it
-every probe would count as real external free-tier demand: 288 synthetic calls a
-day against roughly 130 genuine ones, which would corrupt the free-tier series
-on `/revenue`. `paid-call` therefore stays the GitHub heartbeat's job, and
-`src/status.js` sizes that component's staleness against *its* observer.
+The paid-call check walks a low-difficulty **probe** challenge, not the one a
+buyer is issued: its difficulty, TTL and token shape all differ. The GitHub
+heartbeat walks the buyer's. Because the two paths differ, `/status` judges
+paid-call per observer rather than by the newest row: a failure either one
+records stands until that same observer sees the path work again, or its own
+reading goes stale (45 minutes for this Worker, 3 hours for the heartbeat). So
+this Worker's success every 5 minutes cannot clear a failure only the buyer's
+path has (`stateFromSources` in `src/status-store.js`).
+
+The paid-call check does **not** use `POW_SECRET`. The heartbeat marks its call
+as internal with an `X-Heartbeat-Token` minted from that secret, and copying it
+to a second platform widens what a leak here could forge. Instead the Worker
+presents `STATUS_PROBE_TOKEN` (the credential it already holds) as
+`X-Operator-Token` when it asks for the challenge. For the `hash` slug only, the
+server then issues a 4-bit challenge (16 hashes expected) whose signed token is
+marked as the probe's, and books the call it unlocks as internal exactly like
+the heartbeat's, so these calls never count as outside free-tier demand. The
+token opens nothing else: no other slug, no paid route, no operator surface
+(`scripts/test-status-probe-pow.js`).
+
+The Worker is sized to the tightest Workers limits (10 ms of CPU, 50
+subrequests per invocation):
+
+- It refuses to solve any challenge above 4 bits. A normal free-tier challenge is
+  16 bits and would blow the CPU limit, killing the whole run. That is what a
+  server without `STATUS_PROBE_TOKEN`, or one that predates the probe challenge,
+  hands back, so the check is then reported as **not observed** (logged, nothing
+  recorded) rather than as an outage.
+- A solve stops after 256 hashes (16x the expected count); that rare case is
+  also "not observed".
+- Measured 2026-09-28: `crypto.subtle.digest` costs about 2.5-4.5 us of CPU per
+  hash in workerd and about 10 us in Node, so the expected solve is about
+  0.05 ms and the hard cap about 1.1 ms (2.6 ms at Node's cost).
+- The paid-call adds two subrequests per attempt; the worst possible run
+  (retry, alarms opening and closing) is 39, pinned in
+  `scripts/test-status-probe-worker.js`.
 
 ## Deploy
 
+A push to `main` that touches `workers/status-probe/**` deploys it
+(`.github/workflows/deploy-status-probe.yml`), then verifies the running Worker
+against production. By hand:
+
 ```sh
 cd workers/status-probe
-wrangler secret put OPERATOR_TOKEN   # same value as AGENT402_OPERATOR_TOKEN on Railway
+wrangler secret put STATUS_PROBE_TOKEN   # same value as STATUS_PROBE_TOKEN on Railway
 wrangler deploy
 ```
 
-Verify it end to end (should return `"recorded": true`):
+Verify it end to end (should return `"recorded": true`, and
+`"paidCall": {"observed": true}` once the server carries the probe challenge and
+the same `STATUS_PROBE_TOKEN`):
 
 ```sh
 curl -s -X POST https://agent402-status-probe.<your-subdomain>.workers.dev/run \
-  -H "X-Operator-Token: $AGENT402_OPERATOR_TOKEN" | jq
+  -H "X-Operator-Token: $STATUS_PROBE_TOKEN" | jq '.recorded, .paidCall'
 ```
 
-Then confirm the observation landed with a `cloudflare-cron` source:
+Then confirm the observation landed:
 
 ```sh
-curl -s https://agent402.tools/api/status | jq '.overall, .measurement'
+curl -s https://agent402.tools/api/status | jq '.components[] | select(.key=="paid-call") | .current'
 ```
 
 ## Rotating the token
 
-`OPERATOR_TOKEN` here and `AGENT402_OPERATOR_TOKEN` on Railway are the same
-secret. Rotate Railway first, then `wrangler secret put OPERATOR_TOKEN`. Between
-those two steps this Worker's observations are rejected and `/status` shows a
-gap rather than wrong data, which is the intended failure direction.
+`STATUS_PROBE_TOKEN` here and `STATUS_PROBE_TOKEN` on Railway are the same
+secret. Rotate Railway first, then `wrangler secret put STATUS_PROBE_TOKEN`.
+Between those two steps this Worker's observations are rejected and the
+paid-call check reports "not observed", so `/status` shows a gap rather than
+wrong data, which is the intended failure direction.
 
 ## What this Worker deliberately cannot do
 
@@ -70,7 +107,8 @@ that move money" (`deploy.yml`, `announce.yml`, `refund.yml`, `paid-canary.yml`,
 and reverted the same hour for this reason.
 
 The Worker holds exactly two secrets: `STATUS_PROBE_TOKEN` (write to
-`POST /api/status/probe`, one route, nothing else) and `GITHUB_ISSUES_TOKEN`
+`POST /api/status/probe`, plus the low-difficulty challenge for the one
+paid-call slug, nothing else) and `GITHUB_ISSUES_TOKEN`
 (`Issues: write` on this repository only, so it can open and close its own alarm
 issues). If you find a `GITHUB_DISPATCH_TOKEN` on the Cloudflare account or a
 matching PAT on GitHub, nothing reads it - revoke it.

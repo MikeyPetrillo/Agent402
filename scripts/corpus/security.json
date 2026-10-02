@@ -1,0 +1,10 @@
+{
+ "about": "Free public vulnerability data: NVD CVE API, FIRST EPSS, CISA KEV (tier 1). Keyless NVD allows about 5 requests per 30 s, so these cases are paced.",
+ "pace": 7000,
+ "cases": [
+  {"slug": "cve-lookup", "name": "Log4Shell carries CVSS, EPSS and a KEV entry", "input": {"cve": "CVE-2021-44228"}, "expect": {"equals": {"results.0.id": "CVE-2021-44228", "results.0.severity": "CRITICAL", "results.0.kev.inCatalog": true}, "gt": {"results.0.cvss.v31.score": 9, "results.0.epss.probability": 0.5, "results.0.affected.total": 10}, "populated": ["results.0.description", "results.0.cwes.0", "sources.nvd.notice"]}},
+  {"slug": "cve-lookup", "name": "keyword search returns attributed matches", "input": {"keyword": "openssl heap overflow", "limit": 2}, "expect": {"equals": {"returned": 2}, "gt": {"matched": 2}, "populated": ["results.0.id", "results.1.id"]}},
+  {"slug": "cve-lookup", "name": "an unpublished id is a 404", "input": {"cve": "CVE-2099-99999"}, "expect": {"status": 404, "matches": {"error": "not in the NVD"}}},
+  {"slug": "cve-lookup", "name": "a malformed id is a 400", "input": {"cve": "log4shell"}, "expect": {"status": 400, "matches": {"error": "CVE-YYYY-NNNN"}}}
+ ]
+}

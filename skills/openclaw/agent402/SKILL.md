@@ -1,6 +1,6 @@
 ---
 name: agent402
-description: "Pay-per-call access to Agent402.Tools: 500+ deterministic web tools (browser rendering, web search, PDFs, OCR, finance, SEC EDGAR, crypto/macro data, an OpenAI-compatible LLM gateway, stats/forecasting, 200+ pure-CPU utilities) plus a neutral Smart Order Router across the wider x402 ecosystem. Discover with GET /api/find?q=<task>, pay per call in USDC on Base (eleven other chains also accepted) or free via proof-of-work with no wallet at all, dispatch one-shot with POST /api/route/execute. Use when the agent needs a specific deterministic capability instead of reasoning it out itself: scrape a URL, hash a string, look up a stock quote, OCR an image, query SEC EDGAR, run a chat/embeddings/image call through an OpenAI-compatible wire, or pay a small USDC amount for any of the above. Do NOT activate for open-ended reasoning or tasks with no matching tool; POST /api/wish first in that case."
+description: "Pay-per-call access to Agent402.Tools: 500+ tools an agent calls over plain HTTP or MCP, paid per request in USDC over x402 or MPP, with a prepaid card credits key, or free via proof-of-work for pure-compute tools. Web search and page rendering, PDFs and OCR, SEC EDGAR and market data, crypto data, utilities, a metered model gateway on the OpenAI and Anthropic wires, and finished report products. Discover with GET /api/find?q=<task>. Use when the agent needs a specific capability it cannot do itself: scrape or render a URL, search the web, read a filing, OCR an image, hash or convert data, or run a model call without its own inference account. Do NOT activate for open-ended reasoning or when no tool matches; POST /api/wish in that case."
 homepage: https://github.com/MikeyPetrillo/Agent402
 metadata:
   openclaw:
@@ -11,258 +11,159 @@ metadata:
 
 # Agent402.Tools
 
-500+ deterministic web tools an agent can call over plain HTTP, paid per call.
-No LLM sits in the serving path on Agent402's side; every response is a
-straight function call, so it's cheap, fast, and reproducible. Open-source and
-self-hostable (this skill points at the hosted instance).
+500+ tools an agent can call over plain HTTP (or MCP), paid per call. Most are
+deterministic code: the same input gives the same output. The model-backed
+ones (the `/v1` gateway tiers, the report products, and the image, speech,
+transcription, embedding and answer tools) are marked `modelBacked` in
+`GET /api/pricing`. Open source (AGPL-3.0) and self-hostable; this skill points
+at the hosted instance.
 
 Base URL for every path below: `https://agent402.tools`
 
 ## Prerequisites
 
-**Browse only, zero keys needed:**
+**Browse only, no keys needed:**
 ```bash
 curl "https://agent402.tools/api/find?q=hash a string"
 curl "https://agent402.tools/api/pricing"
 ```
 
-**To pay for a tool, pick one (both work with no signup):**
+**To pay for a tool, pick one (none needs a signup):**
 
-1. **Wallet, USDC on Base**: set `EVM_PRIVATE_KEY` in `.env` to a Base wallet
-   funded with USDC (bridge at bridge.base.org or buy at coinbase.com). This is
-   the native rail for OpenClaw agents on Virtuals/Base.
-2. **No wallet at all**: solve a proof-of-work puzzle instead of paying. Over
-   200 of the 500+ tools are pure-CPU and PoW-eligible; no money, no signup,
-   no funding step. See "Free tier" below.
+1. **Wallet, USDC over x402.** Set `EVM_PRIVATE_KEY` to a **dedicated** wallet
+   that holds only a small working balance, never a treasury or personal
+   wallet. Base is the default rail; the same call also settles on Solana,
+   Polygon, Arbitrum, Stellar, Algorand, Monad, Avalanche, Sei, Optimism,
+   Robinhood Chain (USDG) and Celo, as listed in each tool's 402.
+2. **Prepaid card credits.** Buy a pack at `https://agent402.tools/credits` and
+   send `Authorization: Bearer a402_<key>`. The list price is held before the
+   call and debited only when the call returns 200. No wallet involved.
+3. **No payment at all.** Pure-compute tools accept a proof-of-work solution
+   instead of a payment. See "Free tier" below.
 
-Never hardcode a price. Treat the runtime `402 Payment Required` response as
-the source of truth: prices can change between releases.
+Never hardcode a price. The 402 response is the source of truth, and
+`GET /api/pricing` lists every current price.
 
-## When to Activate This Skill
+## When to activate this skill
 
 Activate when the agent needs to:
-- find or call a deterministic tool (scraping, PDFs, OCR, finance/EDGAR/crypto/macro
-  data, encoding/hashing, stats, forecasting, barcodes, images)
-- run a chat completion, embedding, or image generation through an
-  OpenAI-compatible wire without standing up its own inference account
-- pay a small USDC amount over x402 for any of the above
-- resolve "what tool does X" without burning tokens reading docs
+- call a specific tool: scraping or rendering a page, web search, PDFs, OCR,
+  SEC EDGAR, market or crypto data, DNS and other utilities, hashing,
+  encoding, conversion, stats
+- run a chat, embedding, image or speech call through an OpenAI- or
+  Anthropic-compatible wire without its own inference account
+- pay a small USDC amount over x402 or MPP for any of the above
+- resolve "which tool does X" without reading docs
 
-Do not activate for open-ended reasoning, or for a task with no matching tool
-(use `POST /api/wish`, described below, once nothing in `/api/find` fits).
+Do not activate for open-ended reasoning, or when nothing in `/api/find`
+matches (use `POST /api/wish`, below).
 
 ## Discover: `GET /api/find?q=<task>`
 
-Free, no keys. Send a plain-language task description; get back the
-best-matching tool(s) with route, price, input schema, and a ready-to-run
-example.
+Free, no keys. Send a plain-language task; get back the best-matching tools
+with route, price, input schema and a ready-to-run example.
 
 ```bash
 curl "https://agent402.tools/api/find?q=hash a string"
 ```
-```json
-{
-  "query": "hash a string",
-  "count": 5,
-  "results": [
-    {
-      "slug": "hash",
-      "route": "POST /api/hash",
-      "price": "$0.001",
-      "callExample": { "method": "POST", "path": "/api/hash", "body": { "text": "hello world", "algo": "sha256" } },
-      "inputSchema": { "properties": { "text": { "type": "string" }, "algo": { "type": "string" } }, "required": ["text"] },
-      "computePayable": true,
-      "docs": "https://agent402.tools/tools/hash"
-    }
-  ]
-}
+
+Each result carries `route`, `price`, `inputSchema`, a pre-assembled
+`callExample` (method, path, body or query) and `computePayable`, which is
+`true` when the tool also accepts proof-of-work. For the whole catalog in one
+call, use `GET /api/pricing`.
+
+## Pay per call
+
+Send the request normally. A priced tool answers `402 Payment Required` with:
+- a `PAYMENT-REQUIRED` header: the x402 v2 challenge (base64 JSON) whose
+  `accepts[]` lists every chain the tool settles on, and
+- a `WWW-Authenticate: Payment` header: the MPP challenge.
+
+Pay one of them and retry: x402 clients send `PAYMENT-SIGNATURE`, MPP clients
+send `Authorization: Payment`. A failed call is never charged: payment settles
+only after the tool returns a successful answer.
+
+With the JavaScript SDK (`agent402-client`) and a standard x402 client:
+
+```js
+import { Agent402 } from "agent402-client";
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const client = new x402Client();
+registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.EVM_PRIVATE_KEY) });
+const a = new Agent402({ fetch: wrapFetchWithPayment(fetch, client), maxPerCallUsd: 0.05 });
+
+const article = await a.call("extract", { url: "https://example.com/article" });
 ```
 
-`callExample` is pre-assembled (method, path, body or query) so the agent
-doesn't have to guess whether the tool takes a body or query string. When
-`computePayable` is `true`, the tool is also reachable free via proof-of-work.
+Or with a credits key and no wallet: `new Agent402({ creditsKey: "a402_..." })`.
 
-For the whole catalog at once (name, route, price, schema, per tool), pull
-`GET /api/pricing` is useful for building a local index instead of round-tripping
-`/api/find` per task.
-
-## Pay per call: x402 on Base USDC
-
-Send the request normally. A priced tool answers `402 Payment Required` with a
-`payment-required` header (base64 x402 v2 payload) until a valid payment
-accompanies the retry. Verified live:
-
-```bash
-curl -i -X POST https://agent402.tools/api/extract \
-  -H 'content-type: application/json' \
-  -d '{"url":"https://example.com"}'
-# HTTP/1.1 402 Payment Required
-# payment-required: eyJ4NDAyVmVyc2lvbiI6Mi...   <- base64 x402 v2 challenge
-```
-
-Decoded, the challenge's `accepts[]` array lists every rail this tool takes.
-Base is first and is the native rail for an OpenClaw/Base wallet, but the same
-call can also settle on Polygon, Arbitrum, Monad, Celo, Avalanche, Sei,
-Optimism, Solana, Stellar, Algorand, or Robinhood Chain (USDG) if that's what
-the agent's wallet is funded with - twelve rails in total:
-
-```json
-{
-  "accepts": [
-    { "scheme": "exact", "network": "eip155:8453",  "asset": "0x8335...913", "payTo": "0xaBF4...9D0" },
-    { "scheme": "exact", "network": "eip155:137",   "asset": "0x3c49...359" },
-    { "scheme": "exact", "network": "eip155:42161", "asset": "0xaf88...831" },
-    { "scheme": "exact", "network": "eip155:143"   },
-    { "scheme": "exact", "network": "eip155:42220" },
-    { "scheme": "exact", "network": "eip155:43114" },
-    { "scheme": "exact", "network": "eip155:1329"  },
-    { "scheme": "exact", "network": "eip155:10"    },
-    { "scheme": "exact", "network": "eip155:4663",  "asset": "0x5fc5...168", "extra": { "name": "Global Dollar" } },
-    { "scheme": "exact", "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" },
-    { "scheme": "exact", "network": "stellar:pubnet" },
-    { "scheme": "exact", "network": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=" }
-  ]
-}
-```
-
-**Negotiation flow:**
-1. Send the request normally.
-2. On `402`, parse the payment requirements from the `payment-required` header
-   (and the response body, where present).
-3. Sign a payment payload for whichever `accepts[]` entry matches the agent's
-   funded chain and retry with the `X-PAYMENT` header.
-4. Continue once the retried request returns `200`.
-
-Any standard x402 client handles this negotiation; here's the shape (Python,
-`x402` package, same pattern these skills ship with):
-
-```python
-import os
-from eth_account import Account
-from x402 import x402ClientSync
-from x402.http import x402HTTPClientSync
-from x402.http.clients import x402_requests
-from x402.mechanisms.evm import EthAccountSigner
-from x402.mechanisms.evm.exact.register import register_exact_evm_client
-
-account = Account.from_key(os.getenv("EVM_PRIVATE_KEY"))
-client = x402ClientSync()
-register_exact_evm_client(client, EthAccountSigner(account))
-http_client = x402HTTPClientSync(client)
-
-with x402_requests(client) as session:
-    r = session.post("https://agent402.tools/api/extract", json={"url": "https://example.com"})
-    print(r.status_code, r.text)
-```
-
-**Budget guardrail:** if there's no pre-approved spend budget, confirm with the
-user before executing paid x402 calls above a few cents.
+**Budget guardrail:** without a pre-approved spend budget, confirm with the
+user before paid calls above a few cents.
 
 ## Free tier: proof-of-work (no wallet needed)
 
 ```bash
 curl "https://agent402.tools/api/pow/challenge?slug=hash"
 ```
-```json
-{
-  "algorithm": "sha256",
-  "challenge": "f5cbdd18bb09ddb4666c534f4db2a078",
-  "difficulty": 16,
-  "rule": "Find an integer nonce such that sha256(\"<challenge>:\" + nonce) has at least 16 leading zero bits.",
-  "submitHeader": "X-Pow-Solution",
-  "submitFormat": "<token>:<nonce>",
-  "token": "f5cbdd18bb09ddb4666c534f4db2a078.1783778609.16.hash.FpT-1yFu..."
-}
-```
 
-Solve it (a fraction of a second of CPU), then resend the original request
-with `X-Pow-Solution: <token>:<nonce>` instead of a payment header. Full spec
-and the eligible-tool list at `GET /api/pow`. This is the path to use when the
-agent has no funded wallet at all, or when the tool it needs happens to be
-pure-CPU.
+The answer gives a `challenge`, a `difficulty` in leading zero bits and a
+`token`. Find a nonce such that `sha256("<challenge>:" + nonce)` has that many
+leading zero bits (a fraction of a second of CPU), then resend the original
+request with `X-Pow-Solution: <token>:<nonce>` instead of a payment. The full
+spec and the list of eligible tools are at `GET /api/pow`.
 
-## LLM gateway: chat, embeddings, images
+## Model gateway
 
-An OpenAI-compatible wire, five chat price tiers plus embeddings, images and
-speech, same request/response shapes as the OpenAI endpoints elsewhere:
+OpenAI-compatible chat, embeddings, images and speech, plus the Anthropic
+Messages wire, on the same payment rails:
 
-| Tier | Route | Price | Notes |
-|---|---|---|---|
-| nano | `POST /v1/nano/chat/completions` | $0.003 | small/fast models, high-frequency loops |
-| auto | `POST /v1/auto/chat/completions` | $0.01 | model optional, deterministic quality-ranked routing |
-| base | `POST /v1/chat/completions` | $0.02 | |
-| pro | `POST /v1/pro/chat/completions` | $0.10 | |
-| premium | `POST /v1/premium/chat/completions` | $0.50 | |
-| embeddings | `POST /v1/embeddings` | $0.002 | batch up to 64 inputs, cached by default |
-| images | `POST /v1/images/generations` | $0.08 | returns `b64_json` |
-| speech | `POST /v1/audio/speech` | $0.06 | OpenAI TTS wire, up to 2,000 chars in, raw mp3 (default) or pcm bytes out |
+- Chat tiers: `POST /v1/nano/chat/completions`, `/v1/auto/...`,
+  `/v1/chat/completions`, `/v1/pro/...`, `/v1/premium/...`, each a flat price
+  per call.
+- Metered: `POST /v1/metered/chat/completions` (and `/v1/metered/messages`)
+  quotes a price from the request body in the 402 and settles actual usage
+  under that quote.
+- `POST /v1/embeddings`, `POST /v1/images/generations`, `POST /v1/audio/speech`.
 
-`GET /v1/models` lists the allowlisted model ids per tier. Verified live:
-`POST /v1/nano/chat/completions` with no payment answers `402 Payment Required`
-the same way any other priced tool does; pay it exactly like `/api/extract`
-above.
-
-```bash
-curl "https://agent402.tools/v1/models"
-```
+`GET /v1/models` lists the models each tier serves; `GET /api/pricing` lists
+each tier's current price.
 
 ## One-shot dispatch: `POST /api/route/execute`
 
-Skip the find-then-call round trip. Pay one flat fee and describe the task
-(or name the exact slug); Agent402 resolves the best match and runs it in the
-same request. Three rungs keep the flat fee proportional to what is being
-bought - pick the cheapest one that covers the underlying tool's price:
-
-| Underlying tool price | Fee | Route |
-|---|---|---|
-| up to $0.005 | $0.01 | `POST /api/route/execute` |
-| up to $0.04 | $0.05 | `POST /api/route/execute-plus` |
-| up to $0.50 | $0.55 | `POST /api/route/execute-max` |
-
-`GET /api/route?q=<task>` (free) quotes which rung a task needs. The examples
-below use the $0.01 rung.
+Pay one flat fee, describe the task (or name the slug), and the router
+resolves the best match and runs it in the same request. Four tiers cover
+increasingly expensive underlying tools: `/api/route/execute`,
+`/api/route/execute-plus`, `/api/route/execute-max` and
+`/api/route/execute-pro`. `GET /api/route?q=<task>` (free) shows which tool
+matches and which tier it needs.
 
 ```bash
 curl -i -X POST https://agent402.tools/api/route/execute \
   -H 'content-type: application/json' \
   -d '{"slug":"hash","params":{"text":"agent402","algo":"sha256"}}'
-# HTTP/1.1 402 Payment Required (pay it like any other route, then retry)
+# HTTP/2 402 Payment Required - pay it like any other route, then retry
 ```
 
-```json
-{
-  "receipt": { "slug": "hash", "route": "POST /api/hash", "underlyingPriceUsd": 0.001, "paidUsd": 0.01, "routingFeeUsd": 0.009 },
-  "result": { "algo": "sha256", "hex": "..." }
-}
-```
-
-Pass `task` instead of `slug` to let the same ranker behind `/api/find` pick
-the tool. A tool priced above the rung's ceiling answers a self-correcting 409
-naming its direct route, so the agent can call it there at list price instead
-(or retry on a higher rung).
+The answer carries a `receipt` (tool, route, what was paid) and the tool's
+`result`. A tool priced above the tier's ceiling answers a 409 naming its
+direct route, so the agent can call it there at list price or retry on a
+higher tier.
 
 ## Nothing matches: `POST /api/wish`
 
-If `GET /api/find?q=<task>` returns no strong match, `POST /api/wish` with
-`{ "need": "<what the agent needs>", "context": "<why, optional>" }` logs the
-gap for a tool to be built against (free, rate-limited; the MCP connector
-exposes the same thing as the `request_tool` tool). Demand is public at
-`GET /api/wishes`.
-
-## Error handling
-
-| Error | Cause | Fix |
-|---|---|---|
-| `402 Payment Required` with no `payment-required` header | Free-tier tool, not priced | Nothing to pay, retry with no changes |
-| `409` from `/api/route/execute` | Underlying tool priced above that rung's cap ($0.005 / $0.04 / $0.50) | Call the named direct route at list price, or retry on a higher rung |
-| `404` from `/api/find` results (empty `results`) | No lexical match for the query | Broaden the query, or `POST /api/wish` |
-| `413` from a memory tool | Namespace over its 10k-key / 32MB quota | Free space or use a new namespace |
-| PoW `410`/expired token | Challenge TTL (300s) elapsed before submit | Request a fresh challenge and resolve faster |
+If `/api/find` has no strong match, `POST /api/wish` with
+`{ "need": "<what the agent needs>", "context": "<optional>" }` records the gap
+(free, rate-limited). On the MCP connector the same thing is `demand.request`.
 
 ## Reference
 
 - `GET /health`: liveness
-- `GET /api/pricing`: full priced catalog, one call
-- `GET /.well-known/x402`: machine-readable service manifest (every resource + schema)
-- `GET /api/reliability`: uptime/error-rate report per tool
-- Full docs: https://agent402.tools · Source: https://github.com/MikeyPetrillo/Agent402
+- `GET /api/pricing`: the full priced catalog in one call
+- `GET /.well-known/x402`: machine-readable service manifest
+- `GET /api/reliability`: uptime and error rates
+- MCP: `https://agent402.tools/mcp`, or `npx -y agent402-mcp`
+- Docs: https://agent402.tools/docs · Source: https://github.com/MikeyPetrillo/Agent402

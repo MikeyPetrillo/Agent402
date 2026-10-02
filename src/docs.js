@@ -12,7 +12,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { marked } from "marked";
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WIKI_DIR = join(__dirname, "..", "wiki");
@@ -49,6 +49,11 @@ const WIKI = loadWikiFiles();
 const SIDEBAR_RAW = loadSidebarRaw();
 const VALID_SLUGS = new Set(Object.keys(WIKI));
 
+// Wiki pages the site renders natively at a lowercase route. The capitalised
+// URL 301s there, and every internal link points straight at it.
+export const DOCS_SITE_ROUTES = { Adapters: "/docs/adapters" };
+const docHref = (slug) => (slug === "Home" ? "/docs" : DOCS_SITE_ROUTES[slug] || `/docs/${slug}`);
+
 // Wikilink transform: `[[Display|Slug]]` and `[[Page Name]]`. GitHub-style
 // wikilinks use spaces in the rendered text but hyphens in the filename
 // (`Pay-per-crawl.md`). We mirror that here.
@@ -60,17 +65,17 @@ function transformWikilinks(md) {
   return md
     .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, (_m, display, target) => {
       const slug = target.trim();
-      return `[${display.trim()}](/docs/${slug})`;
+      return `[${display.trim()}](${docHref(slug)})`;
     })
     .replace(/\[\[([^\]]+)\]\]/g, (_m, name) => {
       const slug = slugFromPageName(name);
-      return `[${name.trim()}](/docs/${slug})`;
+      return `[${name.trim()}](${docHref(slug)})`;
     })
     // GitHub-wiki-style RELATIVE markdown links, `[text](Page-Slug)`: on the
     // wiki they resolve to the sibling page; served under /docs they resolved
     // to the site root and 404'd (five of them, found by the 2026-09-09 link
     // crawl). Only a slug that names a real wiki page is rewritten.
-    .replace(/\]\(([A-Za-z0-9][A-Za-z0-9-]*)\)/g, (m, slug) => (VALID_SLUGS.has(slug) ? `](/docs/${slug})` : m));
+    .replace(/\]\(([A-Za-z0-9][A-Za-z0-9-]*)\)/g, (m, slug) => (VALID_SLUGS.has(slug) ? `](${docHref(slug)})` : m));
 }
 
 // Parse the GitHub-flavored _Sidebar.md into a normalized structure we can
@@ -153,7 +158,7 @@ function flatDocEntries() {
   const entries = [{ slug: "Home", display: "Home", href: "/docs" }];
   for (const sec of SIDEBAR_SECTIONS) {
     for (const it of sec.items) {
-      if (it.kind === "doc" && it.slug !== "Home") entries.push({ slug: it.slug, display: it.display, href: `/docs/${it.slug}` });
+      if (it.kind === "doc" && it.slug !== "Home") entries.push({ slug: it.slug, display: it.display, href: docHref(it.slug) });
     }
   }
   return entries;
@@ -176,8 +181,8 @@ export function renderSidebar(currentSlug) {
     for (const it of sec.items) {
       if (it.kind === "doc") {
         const active = it.slug === currentSlug ? " active" : "";
-        // Home in the wiki sidebar links to /docs (the index), not /docs/Home.
-        const href = it.slug === "Home" ? "/docs" : `/docs/${it.slug}`;
+        // Home links to /docs (the index), not /docs/Home.
+        const href = docHref(it.slug);
         parts.push(`<li><a class="ml-docs-side-a${active}" href="${href}">${esc(it.display)}</a></li>`);
       } else {
         parts.push(`<li><a class="ml-docs-side-a" href="${esc(it.href)}" rel="noopener">${esc(it.display)} &#8599;</a></li>`);
@@ -235,20 +240,17 @@ export function docPrevNextHtml(slug) {
 // wiki page - before this they were two unrelated layouts, so clicking from
 // the landing page into any real doc page felt like leaving the site rather
 // than navigating within it.
+// The H1 clamp: wiki page titles (rendered from each doc's own markdown
+// heading) wrap up to 3 lines at narrow widths while others stay on 1
+// (measured live, 126px vs 42px), so a 2-line clamp bounds the height the way
+// /tools and /skills do. No title="" attribute: this H1 comes from marked's
+// rendering, not a template string, and the page's own <title> carries the
+// full text. A JS comment, not a CSS one: the CSS block is served to every
+// visitor.
 export const DOCS_LAYOUT_CSS = `
   .ml-docs-layout { display:block; }
   .ml-docs-side { display:none; }
   .ml-docs-main { min-width:0; }
-  /* Wiki page titles vary enough in length (rendered from each doc's own
-     markdown # heading) to wrap up to 3 lines at narrow widths while others
-     stay on 1 - measured live, up to 126px vs 42px. Same fix as /tools and
-     /skills: a 2-line clamp bounds the height regardless of title length,
-     instead of an unbounded wrap. No title="" attribute here (unlike those
-     two) - this H1 comes from marked's markdown rendering, not a controlled
-     template string, so injecting one would mean hooking marked's renderer
-     rather than a simple string edit; the page's own <title> tag already
-     carries the full text, and most titles here don't come close to
-     truncating anyway. */
   .ml-docs-main h1 { font-family:var(--font-body);font-weight:800;font-size:42px;line-height:1;letter-spacing:-.02em;margin:0 0 18px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis; }
   .ml-docs-main h2 { font-size:1.2rem;margin-top:36px;color:var(--accent);font-weight:700; }
   .ml-docs-main h3 { font-size:1.02rem;margin-top:26px;font-weight:700; }
@@ -305,6 +307,7 @@ export const DOCS_SEARCH_SCRIPT = `<script src="/js/docs-sidebar.js"></script>`;
 
 function shell(baseUrl, title, description, path, body, currentSlug) {
   const extraCss = DOCS_LAYOUT_CSS;
+  const crumbs = [["Agent402", "/"], ["Docs", "/docs"], ...(path === "/docs" ? [] : [[title, path]])];
 
   const pageBody = `
   <div style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;">
@@ -320,12 +323,30 @@ function shell(baseUrl, title, description, path, body, currentSlug) {
     baseUrl,
     activePath: "/docs",
     extraCss,
+    jsonLd: breadcrumbLd(baseUrl, crumbs),
     body: pageBody,
   });
 }
 
 function renderMarkdown(md) {
   return marked.parse(transformWikilinks(md));
+}
+
+/** Meta description from a page's first real prose paragraph: skips headings,
+ * blockquote banners, tables, lists, code and HTML, then strips markdown. */
+export function docDescription(md, title) {
+  const paras = String(md).replace(/```[\s\S]*?```/g, "").split(/\n\s*\n/);
+  for (const raw of paras) {
+    const t = raw.trim();
+    if (!t || /^(#|>|\||[-*+] |\d+\. |<|!\[|---|\*\*\*)/.test(t)) continue;
+    let text = t
+      .replace(/\[\[([^\]|]+)\|[^\]]+\]\]/g, "$1").replace(/\[\[([^\]]+)\]\]/g, "$1")
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
+    for (let prev = ""; prev !== text; ) { prev = text; text = text.replace(/<[^<>]*>/g, ""); }
+    text = text.replace(/[<>*_`]+/g, "").replace(/\s+/g, " ").trim();
+    if (text.length >= 40) return text; // the shell trims to snippet length
+  }
+  return `Agent402 documentation: ${title}.`;
 }
 
 export function docsIndex(baseUrl) {
@@ -353,9 +374,8 @@ export function docsIndex(baseUrl) {
 export function docsPage(baseUrl, slug) {
   const md = Object.hasOwn(WIKI, slug) ? WIKI[slug] : null;
   if (!md) return null;
-  const title = slug.replace(/-/g, " ");
-  const firstPara = (md.replace(/^#.*$/m, "").match(/\n\n([^\n#][^\n]+)/) || [])[1] || `Agent402 documentation: ${title}.`;
-  const description = firstPara.replace(/\s+/g, " ").trim().slice(0, 200);
+  const title = slug === "API-Reference" ? "API Reference Guide" : slug.replace(/-/g, " ");
+  const description = docDescription(md, title);
   const crumbs = `<div class="ml-docs-crumbs"><a href="/docs">Docs</a> &rsaquo; ${esc(title)}</div>`;
   return shell(
     baseUrl,

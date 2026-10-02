@@ -13,7 +13,7 @@
 // could not tell a facilitator outage from an edge blocking our egress - and
 // the difference decides whether we wait or build a relay.
 //
-// The repo has four relays already (Yahoo, Nasdaq, Sei, Nodely) because third
+// The repo has relays already (Sei, Nodely) because third
 // parties block Railway's egress IPs; Nodely 403s it outright. "Their outage"
 // and "our IP is being refused" look identical at 200 characters, and we
 // guessed wrong on this one before reading the headers.

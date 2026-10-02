@@ -31,5 +31,18 @@ recordServedCall("uuid", "pow", null, null, { internal: true });
 const c = snap();
 ok(c.viaProofOfWork === b.viaProofOfWork + 1 && c.viaUSDCInternal === b.viaUSDCInternal, "the internal flag only reclassifies usdc (a PoW call is unaffected)");
 
+// Our jobs that pay WITHOUT the heartbeat token (the Bazaar keep-alive, seller
+// sweeps) are booked internal by payer too, and the keep-alive now signs the
+// token. Pinned from source: both halves are one line each.
+{
+  const { readFileSync: rf } = await import("node:fs");
+  const srv = rf(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/internal: method === "usdc" && \(isSyntheticRequest\(req\) \|\| isOwnWallet\(payerFromRequest\(req\)\)\)/.test(srv), "the odometer books an own-wallet payer as internal even without the token");
+  const rb = rf(new URL("./refresh-bazaar.js", import.meta.url), "utf8");
+  ok((rb.match(/headers: \{ \.\.\.heartbeatHeaders\(\)/g) || []).length === 2, "both keep-alive fetch sites send the heartbeat token");
+  const wf = rf(new URL("../.github/workflows/bazaar-keepalive.yml", import.meta.url), "utf8");
+  ok(/POW_SECRET: \$\{\{ secrets\.POW_SECRET \}\}/.test(wf), "the keep-alive job holds POW_SECRET to sign it");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

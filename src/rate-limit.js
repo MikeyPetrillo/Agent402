@@ -1,3 +1,4 @@
+import { isIPv6 } from "node:net";
 // Shared per-IP sliding-window rate limiter used by both the hosted MCP free
 // tier (src/mcp-http.js) and the direct HTTP PoW redemption path
 // (src/server.js). One implementation, one quota: a client that exhausts the
@@ -39,6 +40,24 @@ const REPLICAS = Math.max(1, Number(process.env.RATE_LIMIT_REPLICAS) || 1);
 /** Per-replica share of a system-wide budget. Never below 1. */
 export const perReplica = (n) => Math.max(1, Math.floor(Number(n) / REPLICAS));
 
+// A client that rotates addresses inside one IPv6 /64 (which a single host is
+// routinely assigned) used to get a fresh bucket per address. IPv6 keys fold
+// to their /64; IPv4 and non-IP keys are used as given.
+export function limiterKey(key) {
+  const k = String(key ?? "");
+  // Only a bare IPv6 address folds; a composite key (ip|tool, ...) is used as given.
+  if (!isIPv6(k.split("%")[0]) || k.startsWith("::ffff:")) return k;
+  const parts = k.split("%")[0].split(":");
+  // Expand "::" enough to take the first four hextets.
+  const gap = parts.indexOf("");
+  const head = gap === -1 ? parts : parts.slice(0, gap);
+  const out = [...head, "0", "0", "0", "0"].slice(0, 4);
+  return `${out.join(":")}::/64`;
+}
+// Most keys one limiter holds. Past it the oldest-inserted key is dropped, so
+// address rotation costs memory at a fixed ceiling rather than without bound.
+const MAX_KEYS = Number(process.env.RATE_LIMIT_MAX_KEYS) || 20_000;
+
 export function createLimiter(name = "default", { perMin = MAX_CALLS_PER_BURST, perHour = MAX_CALLS_PER_WINDOW } = {}) {
   perMin = perReplica(perMin);
   perHour = perReplica(perHour);
@@ -46,10 +65,14 @@ export function createLimiter(name = "default", { perMin = MAX_CALLS_PER_BURST, 
   const prune = (hits, now) => { while (hits.length && hits[0] < now - WINDOW_MS) hits.shift(); };
   const over = (hits, now) =>
     hits.length >= perHour || hits.filter((t) => t > now - BURST_WINDOW_MS).length >= perMin;
-  function check(ip) {
+  function check(rawKey) {
+    const ip = limiterKey(rawKey);
     const now = Date.now();
     let hits = buckets.get(ip);
-    if (!hits) buckets.set(ip, (hits = []));
+    if (!hits) {
+      if (buckets.size >= MAX_KEYS) buckets.delete(buckets.keys().next().value);
+      buckets.set(ip, (hits = []));
+    }
     prune(hits, now);
     if (over(hits, now)) return { limited: true, name };
     hits.push(now);
@@ -62,7 +85,8 @@ export function createLimiter(name = "default", { perMin = MAX_CALLS_PER_BURST, 
   // request that should not itself count - notably an auth gate that meters only
   // FAILURES: calling check() there would charge the successful operator for
   // every page load and lock them out of their own dashboard.
-  function peek(ip) {
+  function peek(rawKey) {
+    const ip = limiterKey(rawKey);
     const now = Date.now();
     const hits = buckets.get(ip);
     if (!hits) return { limited: false, name };
@@ -72,7 +96,7 @@ export function createLimiter(name = "default", { perMin = MAX_CALLS_PER_BURST, 
   // Forget a key's history. For flows where a stronger proof of identity
   // supersedes the failures counted so far (e.g. a successful login), so a
   // legitimate operator always has a way back in.
-  const reset = (ip) => { buckets.delete(ip); };
+  const reset = (ip) => { buckets.delete(limiterKey(ip)); };
   /**
    * Give back the most recent charge for a key.
    *
@@ -84,7 +108,7 @@ export function createLimiter(name = "default", { perMin = MAX_CALLS_PER_BURST, 
    * >=400 means a paying buyer is not charged either.
    */
   const refund = (ip) => {
-    const hits = buckets.get(ip);
+    const hits = buckets.get(limiterKey(ip));
     if (Array.isArray(hits) && hits.length) hits.pop();
   };
   // Bound the table: drop empty/stale buckets occasionally.
@@ -95,7 +119,7 @@ export function createLimiter(name = "default", { perMin = MAX_CALLS_PER_BURST, 
       if (!hits.length) buckets.delete(ip);
     }
   }, 10 * 60 * 1000).unref();
-  return { check, peek, reset, refund };
+  return { check, peek, reset, refund, size: () => buckets.size };
 }
 
 export const LIMITS_LABEL = `${MAX_CALLS_PER_BURST}/min, ${MAX_CALLS_PER_WINDOW}/hour per client`;

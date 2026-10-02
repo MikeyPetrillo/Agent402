@@ -8,9 +8,7 @@ name: OpenRouter TTS model probe
 # probe hardcodes NOTHING: it pulls the live list from
 # /api/v1/models?output_modalities=speech and buys one "ping" from each
 # model with that model's own first supported voice. GitHub runners are the
-# egress path the dev sandbox doesn't have. A rejected model id costs $0
-# (errors before generation); a working one costs ~4 chars of input
-# (fractions of a cent).
+# egress path the dev sandbox doesn't have. Each probe is a one-word input.
 
 on:
   workflow_dispatch:
@@ -39,8 +37,8 @@ jobs:
           COUNT=$(jq '.data | length' /tmp/speech-models.json)
           echo "live speech models: $COUNT"
           [ "$COUNT" -gt 0 ] || { echo "::error::speech model list is empty"; exit 1; }
-          # id | first voice | $/char | worst-case $ at the 2000-char cap (tier price is $0.06)
-          jq -r '.data[] | [.id, (.supported_voices[0] // "MISSING"), .pricing.prompt, ((.pricing.prompt | tonumber) * 2000 * 1000 | round / 1000)] | @tsv' /tmp/speech-models.json \
+          # id | first voice
+          jq -r '.data[] | [.id, (.supported_voices[0] // "MISSING")] | @tsv' /tmp/speech-models.json \
             | column -t -s $'\t'
 
       - name: Authenticated probe of /v1/audio/speech (skips without secret)
@@ -73,7 +71,7 @@ jobs:
       # full E2E through our booted server (route binder, __binary sentinel,
       # failover chain head) — the part unit tests can only mock.
       # ------------------------------------------------------------------
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.HAVE_KEY == 'true'
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: env.HAVE_KEY == 'true'
@@ -164,7 +162,7 @@ jobs:
 
       # ------------------------------------------------------------------
       # mode=capture: buy ONE real /v1/audio/speech call from prod with the
-      # canary burner (a genuine $0.06 x402 settlement, heartbeat-marked so
+      # canary burner (a genuine x402 settlement, heartbeat-marked so
       # it records as internal), render the actual audio's waveform, and
       # upload mp3 + waveform + stats artifacts. Feeds the launch-card
       # pipeline: cards must show REAL output from a REAL paid call.

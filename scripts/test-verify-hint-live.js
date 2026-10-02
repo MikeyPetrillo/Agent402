@@ -7,6 +7,7 @@
 // a paid server against a stub facilitator that answers BOTH shapes and asserts
 // the buyer's 402 carries hint + retry either way, that the hint goes only to
 // the exact credential that failed, and that a bare 402 stays untouched.
+import { decodeFunctionData, encodeFunctionResult } from "viem";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { getFreePorts } from "./lib/free-port.js";
@@ -23,6 +24,9 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else fail(m)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const PAYER = "0x00000000000000000000000000000000000000a1";
+const AGG3 = [{ type: "function", name: "aggregate3", stateMutability: "payable",
+  inputs: [{ name: "calls", type: "tuple[]", components: [{ name: "target", type: "address" }, { name: "allowFailure", type: "bool" }, { name: "callData", type: "bytes" }] }],
+  outputs: [{ name: "returnData", type: "tuple[]", components: [{ name: "success", type: "bool" }, { name: "returnData", type: "bytes" }] }] }];
 let verifyMode = "graceful"; let verifies = 0; let rpcReads = 0;
 facilitator = createServer((req, res) => {
   let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
@@ -33,7 +37,13 @@ facilitator = createServer((req, res) => {
       if (verifyMode === "graceful") return reply(200, { isValid: false, invalidReason: "insufficient_funds", payer: PAYER });
       return reply(400, { isValid: false, invalidReason: "invalid_payload: contract call failed: execution reverted", payer: PAYER });
     }
-    if (req.url === "/rpc") { rpcReads++; return reply(200, { jsonrpc: "2.0", id: 1, result: "0x0" }); }
+    if (req.url === "/rpc") {
+      // Multicall3 aggregate3 over balanceOf: answer a zero balance per inner call.
+      rpcReads++;
+      const { args } = decodeFunctionData({ abi: AGG3, data: JSON.parse(body).params[0].data });
+      const result = encodeFunctionResult({ abi: AGG3, functionName: "aggregate3", result: args[0].map(() => ({ success: true, returnData: "0x" + "0".repeat(64) })) });
+      return reply(200, { jsonrpc: "2.0", id: 1, result });
+    }
     return reply(404, {});
   });
 });

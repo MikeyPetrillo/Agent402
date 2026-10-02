@@ -100,7 +100,7 @@ export function agent402ToolSpecs({ baseUrl = DEFAULT_BASE, fetch: payFetch, fet
     {
       name: "agent402_call",
       description:
-        "Call an Agent402 tool by slug. Pays automatically: pure-CPU tools settle via built-in proof-of-work (no wallet), wallet-only tools settle via the x402 fetch you configured (USDC on Base, Solana, Polygon, or Arbitrum). Returns the parsed JSON result.",
+        "Call an Agent402 tool by slug. Pays automatically: pure-CPU tools settle via built-in proof-of-work (no wallet), wallet-only tools settle via the payment-wrapped fetch you configured, on whichever chain its signer pays. Returns the parsed JSON result.",
       parametersJsonSchema: {
         type: "object",
         properties: {
@@ -174,46 +174,26 @@ async function callTool({ base, slug, params, payFetch, fetchImpl }) {
 
 /**
  * Framework-native OpenAI Agents SDK tools. Dynamically imports `@openai/agents`
- * and `zod` (both peer dependencies) so the spec path works without them.
+ * (a peer dependency) so the spec path works without it.
  *
  * Returns an array of tools — pass into `new Agent({ tools })`.
  */
 export async function agent402Tools(opts) {
-  const [{ tool }, { z }] = await Promise.all([
-    import("@openai/agents"),
-    import("zod"),
-  ]);
+  const { tool } = await import("@openai/agents");
   const specs = agent402ToolSpecs(opts);
   return specs.map((s) =>
     tool({
       name: s.name,
       description: s.description,
-      parameters: jsonSchemaToZod(s.parametersJsonSchema, z),
+      // A plain JSON schema in non-strict mode: agent402_call takes a free-form
+      // `params` object and optional fields, which strict mode (the only mode
+      // the SDK allows for Zod parameters) refuses.
+      parameters: { additionalProperties: true, ...s.parametersJsonSchema },
+      strict: false,
       execute: s.execute,
     }),
   );
 }
 
-// Minimal JSON-Schema → Zod converter for the shapes we emit. Not a general
-// solution — it covers `object` with primitive/enum/object properties and the
-// `required` list. Keeps a zero-fat dep on zod's surface.
-function jsonSchemaToZod(schema, z) {
-  if (!schema || schema.type !== "object") return z.object({});
-  const shape = {};
-  const required = new Set(schema.required || []);
-  for (const [k, prop] of Object.entries(schema.properties || {})) {
-    let s;
-    if (prop.enum) s = z.enum(prop.enum);
-    else if (prop.type === "string") s = z.string();
-    else if (prop.type === "number") s = z.number();
-    else if (prop.type === "boolean") s = z.boolean();
-    else if (prop.type === "object") s = z.record(z.any());
-    else s = z.any();
-    if (prop.description) s = s.describe(prop.description);
-    if (!required.has(k)) s = s.optional();
-    shape[k] = s;
-  }
-  return z.object(shape);
-}
 
 export default agent402Tools;

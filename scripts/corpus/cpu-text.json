@@ -199,6 +199,36 @@
       }
     },
     {
+      "slug": "text-stats",
+      "name": "japanese text has no spaces: a character per word, 。 ends a sentence",
+      "input": {
+        "text": "日本語のテキストです。二文目。"
+      },
+      "expect": {
+        "equals": {
+          "characters": 15,
+          "words": 13,
+          "sentences": 2
+        },
+        "gte": {
+          "estimatedTokens": 13
+        }
+      }
+    },
+    {
+      "slug": "text-stats",
+      "name": "a lone dash is punctuation and an emoji is one character",
+      "input": {
+        "text": "ship it - now 😀"
+      },
+      "expect": {
+        "equals": {
+          "characters": 15,
+          "words": 3
+        }
+      }
+    },
+    {
       "slug": "redact",
       "name": "phone, email, card and ip",
       "input": {

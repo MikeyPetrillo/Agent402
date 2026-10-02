@@ -75,6 +75,7 @@
 // Deliberately NOT gated on TEMPO_API_KEY: that key is the relay credential for
 // tempo/charge, and no subscription call ever touches the relay.
 import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { assertSigningAllowed } from "./signing-halt.js";
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { Challenge, Credential, Method, Receipt } from "mppx";
@@ -134,6 +135,10 @@ export function productDefFor(product) {
 }
 /** True for the canary product only. */
 export const isCanaryProduct = (product) => String(product ?? "") === CANARY_PRODUCT_KEY;
+/** A canary run lasts at most its workflow's 10-minute timeout (one period,
+ *  the renewal wait and the transient retry). A rail-canary record older than
+ *  this is one the run never closed. */
+export const CANARY_SWEEP_AFTER_MS = Number(process.env.MPP_CANARY_SWEEP_AFTER_MS) > 0 ? Number(process.env.MPP_CANARY_SWEEP_AFTER_MS) : 30 * 60 * 1000;
 // How long the standing authorization is good for. The buyer signs this, so it
 // is the hard ceiling on how long we could ever pull from them.
 export const SUBSCRIPTION_TERM_MS = 365 * 24 * 60 * 60 * 1000;
@@ -195,8 +200,52 @@ export function isSendPhaseAmbiguity(err) {
   }
   return false;
 }
-/** How far back the chain is read for an unconfirmed renewal: the expiring nonce means a sent transaction can only land within ~25 s, so a minute either side is generous. */
+/** How far back the chain is read for an unconfirmed renewal, before the attempt time. A sent transaction can only land before its validBefore, which lies AFTER the attempt; the forward bound is `settleableUntil` below. */
 export const UNCONFIRMED_LOOKBACK_MS = 60_000;
+
+// VALIDITY WINDOW OF A SERVER-SIGNED RENEWAL. viem's Tempo chain config stamps
+// an expiring-nonce transaction with validBefore = now + 25 s (the protocol's
+// old 30 s cap). Tempo's T11 upgrade (mainnet 2026-09-10, TIP-1093) raised the
+// expiring-nonce window to 5 minutes, and a renewal that met a slow RPC on
+// 2026-09-02 expired between signing and eth_estimateGas. mppx 0.11 exposes no
+// validBefore parameter on renewSubscription: it prepares the transfer through
+// `prepareTransactionRequest(client, {..., nonceKey: "expiring"})` on the
+// client we hand it, and viem's chain hook only stamps validBefore when the
+// request carries none. So renewals get their OWN client whose chain hook sets
+// validBefore first (`withRenewalValidity`). Activation and every buyer-side
+// charge credential are untouched: they never see this client.
+export const RENEWAL_VALID_FOR_DEFAULT_S = 120;
+export const RENEWAL_VALID_FOR_MAX_S = 240;   // under the 5-minute protocol cap, with margin for clock skew
+export const RENEWAL_VALID_FOR_MIN_S = 25;    // viem's own default; never shorter
+/** TEMPO_SUBSCRIPTION_VALID_FOR_S, clamped to [25, 240]; unset or malformed -> 120. */
+export function renewalValidForSeconds(raw = process.env.TEMPO_SUBSCRIPTION_VALID_FOR_S) {
+  const txt = String(raw ?? "").trim();
+  if (!/^\d+$/.test(txt)) return RENEWAL_VALID_FOR_DEFAULT_S;
+  const n = Number(txt);
+  if (!Number.isSafeInteger(n) || n <= 0) return RENEWAL_VALID_FOR_DEFAULT_S;
+  return Math.min(RENEWAL_VALID_FOR_MAX_S, Math.max(RENEWAL_VALID_FOR_MIN_S, n));
+}
+const MAX_UINT256 = 2n ** 256n - 1n;
+/**
+ * A copy of a viem chain whose prepareTransactionRequest hook stamps an
+ * expiring-nonce request with validBefore = now + `seconds` before viem's own
+ * hook runs (viem then keeps it: it only fills an undefined validBefore). A
+ * request that already names validBefore, or does not use the expiring nonce,
+ * passes through untouched.
+ */
+export function withRenewalValidity(chain, seconds, nowMs = () => Date.now()) {
+  const hook = chain?.prepareTransactionRequest;
+  const [fn, opts] = Array.isArray(hook) ? hook : typeof hook === "function" ? [hook, { runAt: ["beforeFillTransaction"] }] : [null, null];
+  if (!fn) throw new Error("chain has no prepareTransactionRequest hook to extend");
+  const wrapped = async (r, ctx) => {
+    const expiring = r && (r.nonceKey === "expiring" || r.nonceKey === MAX_UINT256 || (r.feePayer && r.nonceKey === undefined));
+    const req = expiring && r.validBefore === undefined ? { ...r, validBefore: Math.floor(nowMs() / 1000) + seconds } : r;
+    return fn(req, ctx);
+  };
+  return { ...chain, prepareTransactionRequest: [wrapped, opts] };
+}
+/** Extra time past the validity window before an unconfirmed send is treated as unable to land. */
+export const SETTLEABLE_SLACK_MS = 30_000;
 /** viem's default request timeout is 10 s; a sync send waits for inclusion and the RPC was answering in 7-20 s on 2026-09-02. */
 export const TEMPO_RPC_TIMEOUT_MS = Number(process.env.TEMPO_SUBSCRIPTION_RPC_TIMEOUT_MS) > 0 ? Number(process.env.TEMPO_SUBSCRIPTION_RPC_TIMEOUT_MS) : 30_000;
 
@@ -276,11 +325,8 @@ function envCurrency() {
  *
  * 6,000,000 is deliberately generous rather than tuned, because the gas ceiling
  * is NOT the money bound here - `maxTotalFee` is. Fees settle in USDC.e (the
- * receipt's `feeToken`), and gas*price converts to token units at ~1e12: the
- * measured charge tx paid 28 units, i.e. $0.000028. At the live 0.6 gwei basefee
- * this ceiling is worth $0.0036 per transaction, while mppx's untouched
- * `maxTotalFee` still refuses anything over $0.05 however far the gas price
- * moves. Against a $5/mo subscription both are noise.
+ * receipt's `feeToken`), and mppx's untouched `maxTotalFee` still refuses an
+ * outsized fee however far the gas price moves.
  *
  * The ~4M figure for an access-key install is an UNVERIFIED note carried in
  * project docs, not something measured here, which is the other reason to leave
@@ -616,6 +662,16 @@ export function createMppSubscriptions({
     return _client;
   }
   const clientOverride = () => ({ getClient: () => tempoClient() });
+  // Renewals only: same transport, chain hook stamps the longer validBefore.
+  const renewalValidForS = renewalValidForSeconds();
+  let _renewalClient = null;
+  async function tempoRenewalClient() {
+    if (_renewalClient) return _renewalClient;
+    const { createClient, http } = await import("viem");
+    const { tempo: tempoChain } = await import("viem/tempo/chains");
+    _renewalClient = createClient({ chain: withRenewalValidity(tempoChain, renewalValidForS), transport: http(process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz", { timeout: TEMPO_RPC_TIMEOUT_MS }) });
+    return _renewalClient;
+  }
 
   /**
    * Default chain reader for an unconfirmed renewal: Transfer logs on the
@@ -723,11 +779,21 @@ export function createMppSubscriptions({
       // lookup key and once by address, and the address entry's real prefix is
       // `<accessKeyPrefix>address:` - a hand-written prefix here would leave
       // live private-key material on disk while the sweep reported success.
-      for (const [k2, v2] of Object.entries(snap)) {
-        if (v2 && typeof v2 === "object" && v2.privateKey && String(v2.accessKeyAddress || "").toLowerCase() === addr) await kv.delete(k2);
-      }
+      await destroyAccessKey(addr, snap);
     }
     return open;
+  }
+  /** Delete OUR private half of one access key, by content match (see the
+   *  note in sweepOffers). With it gone the buyer's standing authorization for
+   *  that key can never be exercised by anyone. Returns how many records went. */
+  async function destroyAccessKey(address, snap = kv._snapshot()) {
+    const addr = String(address || "").toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(addr)) return 0;
+    let n = 0;
+    for (const [k2, v2] of Object.entries(snap)) {
+      if (v2 && typeof v2 === "object" && v2.privateKey && String(v2.accessKeyAddress || "").toLowerCase() === addr) { await kv.delete(k2); n++; }
+    }
+    return n;
   }
 
   // --- the offer -------------------------------------------------------------
@@ -987,6 +1053,7 @@ export function createMppSubscriptions({
    *  delegated access key and broadcasts it to a Tempo RPC. Returns null when
    *  mppx says nothing is due. */
   async function defaultChargePeriod(rec) {
+    assertSigningAllowed("a subscription renewal");
     const result = await tempoServer.renewSubscription({
       subscriptionId: rec.mppxSubscriptionId,
       store: kv,
@@ -1000,7 +1067,7 @@ export function createMppSubscriptions({
       // with the same `-32000 gas price is less than basefee` the activation leg
       // had already been fixed for.
       ...(feePayer ? { feePayer, feePayerPolicy: subscriptionFeePayerPolicy() } : {}),
-      ...clientOverride(),
+      getClient: () => tempoRenewalClient(),
     });
     return result ? { reference: result.receipt?.reference || result.subscription?.reference || null } : null;
   }
@@ -1066,6 +1133,16 @@ export function createMppSubscriptions({
           log(`[mpp-subs] reconciled ${subId} period ${due} from the chain: the send that timed out had landed, tx=${verdict.tx} - not charged twice`);
           return "active";
         }
+        // Not on chain YET is not "never landed": until its validBefore has
+        // passed, the timed-out transaction can still be included. Wait.
+        const settleableUntil = Date.parse(rec.unconfirmedCharge.settleableUntil || "") ||
+          (Date.parse(rec.unconfirmedCharge.at) + renewalValidForS * 1000 + SETTLEABLE_SLACK_MS);
+        if (at < settleableUntil) {
+          const next = { ...rec, status: rec.status === "active" ? "past_due" : rec.status, nextChargeAttemptAt: new Date(settleableUntil).toISOString() };
+          await writeRec(next);
+          log(`[mpp-subs] ${subId}: unconfirmed period ${due} not on chain yet and still settleable - waiting, not re-charging`);
+          return next.status;
+        }
         rec = { ...rec, unconfirmedCharge: null };
         await writeRec(rec);
         log(`[mpp-subs] ${subId}: the send that timed out for period ${due} never landed - charging now`);
@@ -1100,11 +1177,15 @@ export function createMppSubscriptions({
         : Math.min(CHARGE_BACKOFF_MS * 2 ** (failures - 1), MAX_CHARGE_BACKOFF_MS);
       const givenUp = at - Date.parse(firstFailedAt) >= PAST_DUE_GRACE_MS;
       const ambiguous = isSendPhaseAmbiguity(err);
+      // The transaction was signed before this failure surfaced, so its
+      // validBefore is at most now + the window: past that (plus slack) it
+      // cannot land, and only then may the chain's silence mean "never sent".
+      const settleableUntil = now() + renewalValidForS * 1000 + SETTLEABLE_SLACK_MS;
       const next = {
         ...rec, chargeFailures: failures, firstFailedAt,
-        nextChargeAttemptAt: new Date(at + backoff).toISOString(),
+        nextChargeAttemptAt: new Date(ambiguous ? Math.max(at + backoff, settleableUntil) : at + backoff).toISOString(),
         lastChargeError: String(err?.message || err).slice(0, 200),
-        ...(ambiguous ? { unconfirmedCharge: { at: new Date(at).toISOString(), periodIndex: due } } : {}),
+        ...(ambiguous ? { unconfirmedCharge: { at: new Date(at).toISOString(), periodIndex: due, settleableUntil: new Date(settleableUntil).toISOString() } } : {}),
         status: givenUp ? "canceled" : "past_due",
         ...(givenUp ? { canceledAt: new Date(at).toISOString(), canceledReason: "unpaid" } : {}),
       };
@@ -1126,15 +1207,49 @@ export function createMppSubscriptions({
     if (rec.status === "canceled") return publicView(rec);
     const at = now();
     const endsAt = paidThroughAt(rec);
-    const stillPaid = at < endsAt && rec.status === "active";
+    // The rail canary's own subscription closes AT ONCE. Honouring the paid
+    // period is a promise to a subscriber; the canary is our own money on both
+    // ends, and nothing else ever refreshes a canary record (listActive skips
+    // its product, and only the canary's own ?refresh=1 pulls it), so "cancel
+    // at period end" left canary records reading `active` indefinitely.
+    const canaryRec = isCanaryProduct(rec.product);
+    const stillPaid = !canaryRec && at < endsAt && rec.status === "active";
     const next = {
       ...rec, cancelAtPeriodEnd: true,
       canceledAt: new Date(at).toISOString(), canceledReason: "requested",
       status: stillPaid ? "active" : "canceled",
     };
     await writeRec(next);
+    // A closed canary record's access key is never needed again; drop our
+    // private half so the burner's standing authorization is inert.
+    if (canaryRec) await destroyAccessKey(rec.accessKeyAddress);
     log(`[mpp-subs] canceled ${subId} (${stillPaid ? `active until ${new Date(endsAt).toISOString()}` : "immediately"})`);
     return publicView(next);
+  }
+
+  /** Close every rail-canary subscription a canary run failed to close itself
+   *  (a crashed run, a refused cancel, or a record from before cancel() closed
+   *  canary records at once). CANARY ONLY: the product is read from the STORED
+   *  record and must be the canary product; a real subscriber is never
+   *  touched, whatever its age or status. A record younger than `olderThanMs`
+   *  may belong to a run still in flight, so it is left alone. Writes status
+   *  only: no money moves and nothing is signed. Returns what it closed, with
+   *  each record's access key address so the burner can revoke it on-chain. */
+  async function sweepStaleCanaries({ olderThanMs = CANARY_SWEEP_AFTER_MS } = {}) {
+    const at = now();
+    const swept = [];
+    let skippedYoung = 0;
+    for (const rec of await allRecs()) {
+      if (!isCanaryProduct(rec.product)) continue;
+      if (rec.status === "canceled" || rec.status === "expired") continue;
+      const born = Date.parse(rec.createdAt || rec.billingAnchor || "");
+      if (Number.isFinite(born) && at - born < olderThanMs) { skippedYoung++; continue; }
+      await writeRec({ ...rec, status: "canceled", cancelAtPeriodEnd: true, canceledAt: rec.canceledAt || new Date(at).toISOString(), canceledReason: rec.canceledReason || "canary-sweep" });
+      const keysDestroyed = await destroyAccessKey(rec.accessKeyAddress);
+      swept.push({ subId: rec.subId, accessKeyAddress: rec.accessKeyAddress || null, keysDestroyed });
+    }
+    if (swept.length) log(`[mpp-subs] canary sweep closed ${swept.length} stale rail-canary subscription(s)`);
+    return { swept, skippedYoung };
   }
 
   // --- read surfaces ---------------------------------------------------------
@@ -1219,10 +1334,11 @@ export function createMppSubscriptions({
   }
 
   return {
-    offerInfo, mintOffer, activateFromCredential, refreshStatus, cancel, isCanarySub,
+    offerInfo, mintOffer, activateFromCredential, refreshStatus, cancel, isCanarySub, sweepStaleCanaries,
     listActive, get, isMine, status, warm, warmSync, manageToken, manageTokenOk, publicView,
     _store: kv, _subStore: subStore, _method: method,
     _feePayer: feePayer, _feePayerPolicy: feePayer ? subscriptionFeePayerPolicy() : null,
+    _client: tempoClient, _renewalClient: tempoRenewalClient, _renewalValidForS: renewalValidForS,
     _currentPeriodIndex: currentPeriodIndex, _paidThroughAt: paidThroughAt, _readRec: readRec, _writeRec: writeRec,
   };
 }

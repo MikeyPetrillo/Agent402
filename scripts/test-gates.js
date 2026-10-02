@@ -49,7 +49,7 @@ const GATES = [
     gate: "test-docs-truth.js",
     needsServer: true,
     file: "wiki/Tool-Catalog.md",
-    from: "| `search` | $0.02 |",
+    from: "| `search` | $0.01 |",
     to: "| `search` | $0.99 |",
     defect: "a documented price that disagrees with the catalog",
   },
@@ -57,7 +57,7 @@ const GATES = [
     gate: "test-docs-truth.js",
     needsServer: true,
     file: "wiki/Skill-Packs.md",
-    from: "/skills/company-dossier) | $0.046",
+    from: "/skills/company-dossier) | $0.037",
     to: "/skills/company-dossier) | $0.99",
     defect: "a stale pack price on a /skills link (the shape that slipped past the first version)",
   },
@@ -78,13 +78,11 @@ const GATES = [
   {
     gate: "test-analytics-redaction.js",
     file: "src/analytics-db.js",
-    // Simulate a REAL regression rather than a crash: pass the raw per-tool rows
-    // straight through. The original defect (a mis-named destructure) now only
-    // throws, because the rows are re-assigned explicitly after the spread - so
-    // mutating the destructure would prove sensitivity to a line, not to the
-    // leak. This mutation is what a careless "simplification" would look like.
-    from: "    topTools: reliabilityOnly(topTools),",
-    to: "    topTools,",
+    // Simulate a REAL regression rather than a crash: spread the whole payload
+    // instead of the aggregate, which passes the raw per-tool rows straight
+    // through. This is what a careless "simplification" would look like.
+    from: "    ...aggregate,\n    perToolNote:",
+    to: "    ...data,\n    perToolNote:",
     defect: "raw per-tool rows (call volume, traffic ranking) passed through to unauthenticated callers",
   },
   {

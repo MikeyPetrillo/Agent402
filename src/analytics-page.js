@@ -10,6 +10,7 @@
 // instance — same fail-soft behavior as /api/analytics.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
+import { REPO_URL } from "./repo-link.js";
 const fmtInt = (n) => Number(n || 0).toLocaleString("en-US");
 const fmtPct = (num, denom) => {
   const d = Number(denom || 0);
@@ -269,7 +270,7 @@ ${body}
 </section>
 
 <section>
-<p class="an-foot" style="margin-top:24px;">Analytics is open-source - part of <a href="https://github.com/MikeyPetrillo/Agent402">Agent402</a>. Self-hosters get the same dashboard by attaching a Postgres instance.</p>
+<p class="an-foot" style="margin-top:24px;">Analytics is open-source - part of <a href="${REPO_URL}">Agent402</a>. Self-hosters get the same dashboard by attaching a Postgres instance.</p>
 </section>
 
 </div>

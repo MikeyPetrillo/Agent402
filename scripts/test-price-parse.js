@@ -39,6 +39,21 @@ eq(priceToMicroUsd({ amountMinor: 50, currency: "USD", display: "$0.50" }), 5000
 eq(priceToMicroUsd({ display: "$0.25" }), 250000, "display string as the fallback");
 eq(priceToMicroUsd({ amountMinor: 50, currency: "EUR" }), null, "minor units in another currency are not USD micro-dollars");
 
+// an AMOUNT beside payment context is BASE UNITS here too (2026-09-22). This is
+// the reader every drift comparison and every router tier check goes through,
+// so a price object carrying decimals or an MPP currency would otherwise bring
+// the same million-fold overquote the manifest reader had.
+eq(priceToMicroUsd({ amount: "3000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6 }), 3000,
+  "atomic USDC units are $0.003, never $3000");
+eq(priceToMicroUsd({ amount: "5000", currency: "0x20C000000000000000000000b9537d11c60E8b50", method: "tempo", intent: "charge" }), 5000,
+  "an MPP amount is sized by its currency");
+eq(priceToMicroUsd({ amount: "0.032", currency: "USDC" }), 32000,
+  "a bare currency beside a fractional amount is still dollars");
+eq(priceToMicroUsd({ amount: "3000", asset: "0x00000000000000000000000000000000000000ff" }), null,
+  "a token we cannot size is null, never a guessed exponent");
+eq(priceToMicroUsd({ amount: "7500", asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }), 7500,
+  "the Solana USDC mint is six decimals too (a mistyped id reads as unsizable and publishes nothing)");
+
 // absences and nonsense
 for (const v of [null, undefined, "", {}, [], -1, NaN, Infinity]) eq(priceToMicroUsd(v), null, `${JSON.stringify(v)} is null`);
 

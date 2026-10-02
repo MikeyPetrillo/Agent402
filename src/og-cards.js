@@ -24,7 +24,7 @@ const CHAIN_KEYS = RAILS.map((r) => ({ key: r.name.toLowerCase().replace(/ chain
 /** Exact path -> section id. Prefix rules live in ogSectionFor. */
 const EXACT = {
   "/why": "why", "/docs": "docs", "/tools": "tools", "/marketplace": "marketplace", "/mpp-marketplace": "mpp-marketplace",
-  "/markets": "markets", "/reports": "reports", "/monitors": "monitors", "/proof": "proof", "/leaderboard": "leaderboard",
+  "/markets": "markets", "/decide": "decide", "/reports": "reports", "/monitors": "monitors", "/proof": "proof", "/leaderboard": "leaderboard",
   "/sell": "sell", "/tollbooth": "tollbooth", "/skills": "skills", "/x402-test": "x402-test", "/digest": "digest",
   "/security": "security", "/revenue": "revenue", "/transparency": "transparency", "/status": "status", "/credits": "credits",
   "/101": "learn", "/what-is-mpp": "learn", "/pricing": "docs", "/quickstart": "docs", "/integrations": "guides",
@@ -85,6 +85,8 @@ function sectionCopy(id, ctx) {
       lines: [["$ curl agent402.tools/api/mpp-index", "faint"], ["WWW-Authenticate: Payment  tempo/charge · USDC.e", "amber"], ["Payment-Receipt on every settled answer", "accent"]], badge: ["MPP · x402", "Tempo mainnet"] },
     markets: { h1: "Market data,", h2: "priced per call.", sub: "Perps, options, prediction markets, DeFi, tokenized assets. Keyless upstreams.",
       lines: [["$ curl -X POST agent402.tools/api/crypto-market-pulse", "faint"], [`HTTP/2 402  usdc · base · ${price("crypto-market-pulse", "$0.004").replace("$", "")}`, "amber"], ["HTTP/2 200  breadth · open interest · funding", "accent"]], badge: ["x402 · MPP · card", "24 keyless tools"] },
+    decide: { h1: "Describe the job.", h2: "Get the plan.", sub: "Which tools, in what order, with fallbacks and valid params, across this catalog and outside x402 sellers.",
+      lines: [["$ curl -X POST agent402.tools/api/decide", "faint"], [ctx.decide ? `HTTP/2 402  usdc · base · ${ctx.decide.quick} to ${ctx.decide.full}` : "HTTP/2 402  priced per decision", "amber"], ["HTTP/2 200  plan · fallbacks · gaps · firstParty on every tool", "accent"]], badge: ["x402 · MPP · card", "one formula for every seller"] },
     reports: { h1: "Finished reports,", h2: "by card or by call.", sub: "Research, dossiers, 13F funds, domain audits, recalls, insider flow.",
       lines: [["$ curl -X POST agent402.tools/v1/research", "faint"], [`HTTP/2 402  usdc · base · ${price("research", "$0.60").replace("$", "")}`, "amber"], ["HTTP/2 200  sources cited, gaps named, tables included", "accent"]], badge: ["x402 · MPP · card", "monitors from $5/mo"] },
     monitors: { h1: "Watch one target,", h2: "get told when it moves.", sub: `A free probe every day, a full report only on change. ${ctx.monitorPrice || "$5"} a month.`,

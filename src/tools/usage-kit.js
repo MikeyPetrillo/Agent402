@@ -10,6 +10,8 @@
 // get a self-explaining 400 instead of a report.
 import { payerFromRequest } from "../payer.js";
 import { payerUsage, payerReceipts } from "../sales-ledger.js";
+import { refundsForPayer } from "../refund-ledger.js";
+import { ownRefundsView } from "../refund-lookup.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -42,7 +44,7 @@ export const USAGE_TOOLS = [
     category: "payments",
     price: "$0.005",
     description:
-      "Your own purchase history, keyed to the wallet that pays for the call - no wallet parameter, no signup: the x402 payment IS the identity, so nobody can read another wallet's profile. Returns totals, per-tool counts, per-chain breakdown, and recent receipts with settle tx hashes (independently verifiable on-chain). Requires an EIP-3009 payment (USDC on Base, Polygon, or Arbitrum); Solana/Stellar payments carry no signed payer the server can verify.",
+      "Your own purchase history, keyed to the wallet that pays for the call - no wallet parameter, no signup: the x402 payment IS the identity, so nobody can read another wallet's profile. Returns totals, per-tool counts, per-chain breakdown, recent receipts with settle tx hashes (independently verifiable on-chain), and this wallet's refunds: any payment that settled for a call that failed to deliver, with its status and our refund transaction once sent. Anyone holding a settlement tx can also check it for free at GET /api/refunds/lookup?tx=<hash>. Requires an EIP-3009 payment (USDC on Base, Polygon, or Arbitrum); Solana/Stellar payments carry no signed payer the server can verify.",
     tags: ["usage", "receipts", "billing", "audit", "wallet", "x402", "history"],
     discovery: {
       bodyType: "json",
@@ -63,6 +65,7 @@ export const USAGE_TOOLS = [
           byNetwork: { base: { calls: 40, usd: 1.2 }, polygon: { calls: 2, usd: 0.034 } },
           bySlug: [{ slug: "hash", calls: 12, usd: 0.012, lastAt: "2026-07-09T00:00:00.000Z" }],
           recent: [{ at: "2026-07-09T00:00:00.000Z", slug: "hash", priceUsd: 0.001, network: "base", tx: "0x…" }],
+          refunds: { count: 1, owedUsd: 0, paidUsd: 0.005, rows: [{ tx: "0x…", status: "paid", amountUsd: 0.005, network: "eip155:8453", chain: "base", refundTx: "0x…", refundTxUrl: "https://basescan.org/tx/0x…", refundedAt: "2026-07-09T01:00:00.000Z", recordedAt: "2026-07-09T00:00:00.000Z" }] },
           note: "Every USDC row keeps its settle tx - verifiable on-chain.",
         },
       },
@@ -78,7 +81,8 @@ export const USAGE_TOOLS = [
       if (Number.isNaN(days) || days < 1 || days > 365) throw bad('"days" must be an integer between 1 and 365 (default 30)');
       const limit = input?.limit === undefined ? 50 : parseInt(input.limit, 10);
       if (Number.isNaN(limit) || limit < 1 || limit > 200) throw bad('"limit" must be an integer between 1 and 200 (default 50)');
-      return payerUsage(wallet, { days, limit });
+      // The wallet's own refunds, all time (a refund can lag the call it repays).
+      return { ...payerUsage(wallet, { days, limit }), refunds: ownRefundsView(refundsForPayer(wallet, { limit })) };
     },
   },
   {

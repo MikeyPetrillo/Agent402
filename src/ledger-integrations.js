@@ -1,27 +1,21 @@
 // Machine Ledger — Integrations page
-// 8 framework adapters, shared code example, CTA, compact footer.
+// Every published package (one row per /integrations/<slug> page), shared code example, CTA, compact footer.
 
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
+import { INTEGRATIONS } from "./integration-pages.js";
 
-const ADAPTERS = [
-  { name: "OpenAI",          desc: 'Function-calling tools for chat.completions - pass <span style="font-family:var(--font-mono);font-size:12px;">tools</span>, call <span style="font-family:var(--font-mono);font-size:12px;">execute</span> on a tool_call.', pkg: "agent402-openai-tools" },
-  { name: "Anthropic",       desc: "Messages API tool_use blocks - native tool objects with auto-payment.", pkg: "agent402-anthropic-tools" },
-  { name: "Vercel AI SDK",   desc: 'Drop into <span style="font-family:var(--font-mono);font-size:12px;">streamText</span> / <span style="font-family:var(--font-mono);font-size:12px;">generateText</span>.', pkg: "agent402-ai-sdk" },
-  { name: "LangChain JS",    desc: "Tool objects for LangChain &amp; LangGraph agents.", pkg: "agent402-langchain" },
-  { name: "LlamaIndex TS",   desc: "Native FunctionTool wrappers for LlamaIndex agents.", pkg: "agent402-llamaindex" },
-  { name: "Google ADK",      desc: "Tools for Gemini agents on the Agent Development Kit.", pkg: "agent402-google-adk" },
-  { name: "AWS Strands",     desc: "Native tool objects for the Strands agent runtime.", pkg: "agent402-strands" },
-  { name: "MCP (any client)", desc: 'Hosted connector or <span style="font-family:var(--font-mono);font-size:12px;">npx agent402-mcp</span> - Claude, and any MCP client.', pkg: "agent402-mcp" },
-];
+// Rows are derived from the per-package pages, so the hub lists exactly the
+// packages that have an /integrations/<slug> page.
+const ADAPTERS = INTEGRATIONS.map((i) => ({ name: i.name, desc: i.what.split(". ")[0].replace(/`([^`]+)`/g, '<span style="font-family:var(--font-mono);font-size:12px;">$1</span>') + ".", pkg: i.pkg, slug: i.slug, registry: i.registry }));
 
 function adapterRow(a, isLast) {
-  return `<div class="ml-adapter-row" style="display:grid;grid-template-columns:220px 1fr auto;gap:18px;align-items:center;padding:16px 20px;${isLast ? "" : "border-bottom:1px solid var(--hairline);"}"><div style="font-weight:700;font-size:16px;">${a.name}</div><div style="font-size:13.5px;color:var(--muted);">${a.desc}</div><code style="font-family:var(--font-mono);font-size:11.5px;background:var(--surface);color:var(--on-dark);padding:6px 10px;white-space:nowrap;">${a.pkg}</code></div>`;
+  return `<div class="ml-adapter-row" style="display:grid;grid-template-columns:220px 1fr auto;gap:18px;align-items:center;padding:16px 20px;${isLast ? "" : "border-bottom:1px solid var(--hairline);"}"><div style="font-weight:700;font-size:16px;"><a href="/integrations/${a.slug}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">${a.name}</a></div><div style="font-size:13.5px;color:var(--muted);">${a.desc}</div><code style="font-family:var(--font-mono);font-size:11.5px;background:var(--surface);color:var(--on-dark);padding:6px 10px;white-space:nowrap;">${a.pkg}</code></div>`;
 }
 
 export function ledgerIntegrationsPage(baseUrl) {
   const canonical = baseUrl + "/integrations";
   const title = "Integrations - Agent402";
-  const description = "8 zero-dependency npm adapters that turn the Agent402 catalog into native tool objects for OpenAI, Anthropic, Vercel AI SDK, LangChain, LlamaIndex, Google ADK, AWS Strands, and MCP.";
+  const description = "Packages that turn the Agent402 catalog into native tools for OpenAI, Anthropic, the Vercel AI SDK, LangChain, LlamaIndex, Google ADK, the OpenAI Agents SDK, Strands, AgentKit, elizaOS and MCP, plus the buyer SDK, the tollbooth and the OpenClaw provider.";
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -42,8 +36,8 @@ export function ledgerIntegrationsPage(baseUrl) {
   <!-- HEAD -->
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 30px;">
     <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:14px;">$ GET /integrations</div>
-    <h1 class="ml-h1" style="font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;">8 framework adapters.<br>One surface underneath.</h1>
-    <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:620px;margin:0;">Zero-dependency npm packages that turn the catalog into native tool objects for your stack - payment handled underneath (proof-of-work for free tools, USDC via x402 for paid).</p>
+    <h1 class="ml-h1" style="font-family:var(--font-body);font-weight:800;font-size:58px;line-height:.96;letter-spacing:-.03em;margin:0 0 14px;">Framework adapters.<br>One surface underneath.</h1>
+    <p style="font-size:17px;line-height:1.55;color:var(--muted);max-width:620px;margin:0;">Packages that turn the catalog into native tool objects for your stack, with payment handled underneath: proof-of-work for free tools, x402 or MPP for paid ones, or a prepaid credits key. Each package has its own page with the install line, a working example and how it pays. New to the protocols? Start with <a href="/learn" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">the explainers</a>.</p>
   </section>
 
   <!-- ADAPTERS -->
@@ -61,10 +55,11 @@ export function ledgerIntegrationsPage(baseUrl) {
 </span>npm install agent402-openai-tools
 
 import { agent402Tools } from "agent402-openai-tools";
-const { tools, execute } = await agent402Tools({ slugs: ["extract","hash","render"] });
+const { tools, execute } = await agent402Tools({ slugs: ["hash","markdown-to-html","text-stats"] });
 <span style="color:var(--dk-muted3);">// pass tools to openai.chat.completions.create({ tools })
-// call execute(name, args) on a tool_call. payment handled underneath.</span></pre></div>
-    <div style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-top:12px;">all 8 adapters share the surface: zero-dep, native tool objects, non-custodial payment underneath.</div>
+// call execute(name, args) on a tool_call. proof-of-work pays these underneath;
+// wallet-only tools need freeOnly: false plus a paying fetch.</span></pre></div>
+    <div style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-top:12px;">the per-slug adapters (OpenAI, Anthropic, LlamaIndex, Strands) share this shape; the others expose four meta tools. See each package's page.</div>
   </section>
 
   <!-- CTA -->

@@ -17,8 +17,8 @@
 //   SOLANA_AGENT_KEY      base58 (or JSON byte-array) secret key of a funded Solana wallet (USDC on Solana) — optional
 //   AGENT402_TOOLS        comma-separated slugs to expose first-class (overrides default)
 //   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (e.g. 0.01)
-//   AGENT402_CREDITS_KEY  a prepaid card-credits key (a402_...) from https://agent402.tools/credits -
-//                         pays every tool by card with no wallet; debited per successful call
+//   AGENT402_CREDITS_KEY  a prepaid credits key (a402_...) already issued (new credits are not on
+//                         sale); pays per successful call with no wallet
 //   AGENT402_BUDGET       hard cap on total USDC spent this session (e.g. 1.00)
 //   AGENT402_NETWORKS     restrict + order the chains to pay on (e.g. "robinhood" for USDG on
 //                         Robinhood Chain, "base,solana", or a raw CAIP-2 like eip155:4663) — optional
@@ -53,7 +53,7 @@ const AGENT_KEY = process.env.AGENT_KEY || "";
 // settle on whichever chain the seller offers (EVM accepts are tried first).
 const SOLANA_AGENT_KEY = process.env.SOLANA_AGENT_KEY || "";
 const HAS_WALLET = Boolean(AGENT_KEY || SOLANA_AGENT_KEY);
-// Prepaid card credits (no wallet): a key bought at https://agent402.tools/credits.
+// Prepaid card credits (no wallet): a key issued at https://agent402.tools/credits.
 // Sent as Authorization: Bearer on every catalog call; the server debits the
 // list price only on a successful (200) call and returns X-Credits-Balance.
 const CREDITS_KEY = (process.env.AGENT402_CREDITS_KEY || "").trim();
@@ -72,9 +72,11 @@ let spentUsd = 0;
 
 const DEFAULT_CURATED = [
   // Flagship demand set — keep aligned with src/mcp-flagship.js FLAGSHIP_SLUGS.
-  // Search/answer is the front door; long tail stays behind search_tools/call_tool.
+  // Search/answer is the front door; long tail stays behind catalog.search/catalog.call.
   "search", "answer", "search-news", "render",
   "stock-quote", "transcribe", "memory-read", "memory-write",
+  // Present only on hosts running the decide service; skipped elsewhere.
+  "decide", "decide-execute",
 ];
 
 // stdout is the MCP protocol channel — all logging goes to stderr.
@@ -196,9 +198,93 @@ function walletRequiredText(tool) {
     `To enable it: set AGENT_KEY on this MCP server to the hex private key of an EVM wallet funded with USDC`,
     `on Base (or Polygon/Arbitrum), and/or SOLANA_AGENT_KEY to the base58 secret key of a Solana wallet funded`,
     `with USDC on Solana. Payment is per call via the x402 protocol — no signup or API key.`,
-    `No wallet? Buy prepaid card credits at ${BASE}/credits and set AGENT402_CREDITS_KEY to the a402_ key - every tool then pays by card, debited per successful call.`,
+    `Already hold a prepaid credits key? Set AGENT402_CREDITS_KEY to the a402_ key and it pays per successful call (new credits are not on sale).`,
     `Pricing and details: ${BASE}/tools/${tool.slug}`,
   ].join(" ");
+}
+
+// ---------------------------------------------------------------------------
+// What THIS call will actually be asked to pay.
+//
+// The catalog price is the ROUTE's list price, and it is not always the amount
+// in the challenge: a route may quote per request from the body (a token-
+// metered route, or a chat route priced by the model named in it). A cap
+// enforced against the list price is therefore not a cap at all, so both paid
+// paths read the amount out of the 402 before spending anything.
+//
+// The preflight carries no payment header and no credits key, so it can only
+// ever draw an unpaid 402 - it never signs and never debits. Only run when a
+// ceiling is configured: with none, the number changes nothing and the round
+// trip is pure cost.
+const CAPS_CONFIGURED = Number.isFinite(MAX_PER_CALL) || Number.isFinite(BUDGET);
+
+/** The accepts array, at the top level or under the envelope keys sellers wrap it in. */
+function acceptsOf(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  if (Array.isArray(obj.accepts) && obj.accepts.length) return obj.accepts;
+  for (const k of ["payment", "x402", "paymentRequired", "payment_required"]) {
+    const nested = obj[k];
+    if (nested && typeof nested === "object" && Array.isArray(nested.accepts) && nested.accepts.length) return nested.accepts;
+  }
+  return null;
+}
+
+/** The MAXIMUM across accepts: the wallet picks which chain to settle on and
+ *  this server cannot know which, so the only sound ceiling is the dearest
+ *  offer. An entry we cannot price makes the whole quote unreadable (null),
+ *  never a guess. */
+function usdFromAccepts(accepts) {
+  if (!Array.isArray(accepts) || !accepts.length) return null;
+  let maxUsd = null;
+  for (const a of accepts) {
+    // v2 names the base-unit amount `amount`; x402 v1 called it `maxAmountRequired`.
+    const atomic = Number(a && (a.amount ?? a.maxAmountRequired));
+    if (!Number.isFinite(atomic) || atomic < 0) return null;
+    // USDC is 6 decimals on every chain these rails settle; a wrong exponent is
+    // a 1000x pricing error, so an out-of-range hint reads as unreadable.
+    const declared = (a && a.extra && a.extra.decimals) ?? (a && a.decimals);
+    const decimals = declared == null ? 6 : Number(declared);
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 30) return null;
+    const usd = atomic / 10 ** decimals;
+    if (maxUsd == null || usd > maxUsd) maxUsd = usd;
+  }
+  return maxUsd;
+}
+
+/** The quoted price for this request, or `listUsd` when the 402 cannot be read.
+ *  x402 v2 carries the challenge base64 in the PAYMENT-REQUIRED header and
+ *  leaves the body `{}`; v1 sellers put it in the body. Header first. */
+async function quotedUsd(url, init, listUsd) {
+  if (!CAPS_CONFIGURED) return listUsd;
+  try {
+    const pre = await fetch(url, init);
+    if (pre.status !== 402) return listUsd;
+    let quoted = null;
+    const header = pre.headers.get("payment-required");
+    if (header) {
+      try { quoted = usdFromAccepts(acceptsOf(JSON.parse(Buffer.from(header.trim(), "base64").toString("utf8")))); } catch { quoted = null; }
+    }
+    if (quoted == null) {
+      let body = null; try { body = await pre.json(); } catch { body = null; }
+      quoted = usdFromAccepts(acceptsOf(body));
+    }
+    // Larger of the two: an understated catalog must not lower the ceiling.
+    return quoted == null ? listUsd : Math.max(listUsd, quoted);
+  } catch { return listUsd; /* fail-open to the advertised price */ }
+}
+
+// A refused call's tool text. A 402 body from an x402 v2 seller may also carry
+// the whole PaymentRequired offer (this server copies its PAYMENT-REQUIRED
+// header into the body), which is kilobytes of accepts and extension schemas
+// an agent cannot act on in text. Keep the refusal's own fields (error,
+// reason, hint, retry) and say where the offer is; any other body is returned
+// as it came.
+function failureText(status, text) {
+  let doc;
+  try { doc = JSON.parse(text); } catch { return text; }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc) || typeof doc.x402Version !== "number") return text;
+  const { x402Version: _v, resource: _r, accepts, extensions: _e, ...rest } = doc;
+  return JSON.stringify({ ...rest, status, paymentOptions: Array.isArray(accepts) ? accepts.length : 0, note: "The full offer is in the PAYMENT-REQUIRED header of this 402." });
 }
 
 async function callEndpoint(tool, args = {}) {
@@ -216,14 +302,16 @@ async function callEndpoint(tool, args = {}) {
 
   let res;
   if (!HAS_WALLET && HAS_CREDITS) {
-    // Card credits: same budget guards as the wallet path (the server enforces
-    // the balance; these keep a runaway session from draining a pack).
-    const price = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;
+    // Card credits: same budget guards as the wallet path, against the same
+    // number - the credits gate holds and debits what the 402 quotes for THIS
+    // body, not the route's list price.
+    const listUsd = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;
+    const price = await quotedUsd(url, init, listUsd);
     if (price > MAX_PER_CALL) {
-      return { content: [{ type: "text", text: `Refused: "${tool.slug}" costs ${tool.price}/call, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}.` }], isError: true };
+      return { content: [{ type: "text", text: `Refused: "${tool.slug}" is quoted $${price} for this request${price !== listUsd ? ` (list price ${tool.price})` : ""}, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}.` }], isError: true };
     }
     if (spentUsd + price > BUDGET) {
-      return { content: [{ type: "text", text: `Refused: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent; "${tool.slug}" costs ${tool.price}).` }], isError: true };
+      return { content: [{ type: "text", text: `Refused: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent; "${tool.slug}" is quoted $${price} for this request).` }], isError: true };
     }
     res = await fetch(url, { ...init, headers: { ...init.headers, Authorization: `Bearer ${CREDITS_KEY}` } });
     if (res.ok) spentUsd += price;
@@ -232,16 +320,20 @@ async function callEndpoint(tool, args = {}) {
       return { content: [{ type: "text", text: `Credits refused for "${tool.slug}": ${body.error || "payment required"}${body.balanceUsd != null ? ` (balance $${body.balanceUsd})` : ""}. Top up at ${body.topup || `${BASE}/credits`}.` }], isError: true };
     }
   } else if (HAS_WALLET) {
-    const price = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;
+    // The wallet signs whatever the challenge asks for (vendor spend controls
+    // are off - this package bounds spend itself), so the cap is checked
+    // against that amount, read from the 402 before anything is signed.
+    const listUsd = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;
+    const price = await quotedUsd(url, init, listUsd);
     if (price > MAX_PER_CALL) {
       return {
-        content: [{ type: "text", text: `Refused without paying: "${tool.slug}" costs ${tool.price}/call, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}. Raise the cap on this MCP server to allow it.` }],
+        content: [{ type: "text", text: `Refused without paying: "${tool.slug}" is quoted $${price} for this request${price !== listUsd ? ` (list price ${tool.price})` : ""}, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}. Raise the cap on this MCP server to allow it.` }],
         isError: true,
       };
     }
     if (spentUsd + price > BUDGET) {
       return {
-        content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent; "${tool.slug}" costs ${tool.price}). Restart the MCP server or raise AGENT402_BUDGET.` }],
+        content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent; "${tool.slug}" is quoted $${price} for this request). Restart the MCP server or raise AGENT402_BUDGET.` }],
         isError: true,
       };
     }
@@ -273,7 +365,7 @@ async function callEndpoint(tool, args = {}) {
   }
   const text = await res.text();
   if (res.status >= 400) {
-    return { content: [{ type: "text", text }], isError: true };
+    return { content: [{ type: "text", text: failureText(res.status, text) }], isError: true };
   }
   let parsed;
   try { parsed = JSON.parse(text); } catch { parsed = { raw: text }; }
@@ -624,7 +716,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         payableWithCompute: computePayable,
         walletOnly: catalog.size - computePayable,
         workflows: skillPacks.length,
-        credits: HAS_CREDITS ? { configured: true, how: "prepaid card credits (Authorization: Bearer a402_...) - every tool pays by card, debited only on a successful call", balance: `${BASE}/api/credits/balance`, topup: `${BASE}/credits` } : { configured: false, buy: `${BASE}/credits` },
+        credits: HAS_CREDITS ? { configured: true, how: "prepaid card credits (Authorization: Bearer a402_...) - every wallet-only tool except the wallet-identity-bound ones (memory, usage, receipts, attest, feedback) pays from the balance, debited only on a successful call", balance: `${BASE}/api/credits/balance`, topup: `${BASE}/credits` } : { configured: false, buy: `${BASE}/credits` },
         spendControls: (HAS_WALLET || HAS_CREDITS)
           ? {
               maxPerCallUsd: MAX_PER_CALL === Infinity ? "unlimited" : MAX_PER_CALL,
@@ -637,7 +729,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ? "Every tool is available; each call is paid in USDC via x402 from the configured wallet(s) - EVM chains via AGENT_KEY, Solana via SOLANA_AGENT_KEY - within the spend controls above."
           : HAS_CREDITS
             ? "Every tool is available; each call is paid from the prepaid card credits key (AGENT402_CREDITS_KEY), debited only on a successful call, within the spend controls above."
-            : `No wallet or credits key configured: ${computePayable} pure-CPU tools are free via proof-of-work; the ${catalog.size - computePayable} network/browser/memory tools need a funded wallet (AGENT_KEY / SOLANA_AGENT_KEY) or a prepaid credits key (AGENT402_CREDITS_KEY, buy at ${BASE}/credits).`,
+            : `No wallet or credits key configured: ${computePayable} pure-CPU tools are free via proof-of-work; the ${catalog.size - computePayable} network/browser/memory tools need a funded wallet (AGENT_KEY / SOLANA_AGENT_KEY) or a prepaid credits key already issued (AGENT402_CREDITS_KEY).`,
         install: {
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: "claude mcp add agent402 -s user -- npx -y agent402-mcp@latest",
@@ -812,14 +904,14 @@ try {
   // Don't hard-exit: starting with an empty catalog still lets the server
   // connect and answer introspection (tools/list) — required to pass directory
   // health checks (e.g. Glama) and more resilient if the catalog endpoint is
-  // briefly unreachable. search_tools/call_tool just return nothing until the
+  // briefly unreachable. catalog.search/catalog.call just return nothing until the
   // catalog is reachable again.
   log(`Could not load the catalog from ${BASE}: ${err.message} — starting with an empty catalog`);
 }
 const requested = (process.env.AGENT402_TOOLS || DEFAULT_CURATED.join(","))
   .split(",").map((s) => s.trim()).filter(Boolean);
 curated = requested.map((slug) => catalog.get(slug)).filter(Boolean);
-log(`catalog: ${catalog.size} tools from ${BASE}; ${curated.length} first-class, rest via search_tools/call_tool`);
+log(`catalog: ${catalog.size} tools from ${BASE}; ${curated.length} first-class, rest via catalog.search/catalog.call`);
 log(
   HAS_WALLET
     ? `payment: USDC via x402 (${[AGENT_KEY && "EVM", SOLANA_AGENT_KEY && "Solana"].filter(Boolean).join(" + ")} wallet configured; max/call ${MAX_PER_CALL === Infinity ? "unlimited" : `$${MAX_PER_CALL}`}, budget ${BUDGET === Infinity ? "unlimited" : `$${BUDGET}`})`

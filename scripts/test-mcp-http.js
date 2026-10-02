@@ -51,14 +51,22 @@ const META = [
   "server.describe", "sellers.list", "demand.request",
 ];
 const FLAGSHIP_NAMES = FLAGSHIP_SLUGS.map((s) => FLAGSHIP_MCP_NAMES[s] || s.replace(/-/g, "_"));
-const EXPECTED_LIST = [...META, ...FLAGSHIP_NAMES].sort();
+// A flagship whose route is absent from this server's catalog (the decide
+// tools without the decide service) is not listed, by design.
+const pricingDoc = await (await fetch(`${BASE}/api/pricing`)).json().catch(() => ({}));
+const served = JSON.stringify(pricingDoc);
+const inCatalog = (slug) => slug !== "decide" && slug !== "decide-execute" ? true : served.includes(slug === "decide" ? '"/api/decide"' : '"/api/decide/execute"');
+// decide.feedback (free, no catalog route) is listed alongside the decide tools.
+const EXPECTED_LIST = [...META, ...FLAGSHIP_SLUGS.filter(inCatalog).map((s) => FLAGSHIP_MCP_NAMES[s] || s.replace(/-/g, "_")), ...(inCatalog("decide") && served.includes('"/api/decide"') ? ["decide.feedback"] : [])].sort();
 assert(
   names.length === EXPECTED_LIST.length && EXPECTED_LIST.every((n) => names.includes(n)),
   `tools/list is the flagship set (got ${names.length}: ${names.join(",")}; expected ${EXPECTED_LIST.join(",")})`
 );
+// 16, plus the three decide tools when the decide service is configured.
+const SIZE_CAP = 16 + (served.includes('"/api/decide"') ? 3 : 0);
 assert(
-  names.length <= 16,
-  `tools/list stays flagship-sized (<=16), got ${names.length}`
+  names.length <= SIZE_CAP,
+  `tools/list stays flagship-sized (<=${SIZE_CAP}), got ${names.length}`
 );
 assert(
   !names.includes("generate_hash") && !names.includes("convert_units"),
@@ -94,9 +102,12 @@ assert(
 // Writers: demand.request (wish) + memory.write (durable state). Everything else
 // is read-only so clients that trust readOnlyHint are not misled.
 const writers = (list.result?.tools ?? []).filter((t) => t.annotations?.readOnlyHint === false).map((t) => t.name).sort();
+// With the decide service configured, decide.execute (runs a paid plan) and
+// decide.feedback (records a verdict) write too.
+const expectedWriters = ["demand.request", "memory.write", ...(served.includes('"/api/decide"') ? ["decide.execute", "decide.feedback"] : [])].sort();
 assert(
-  writers.length === 2 && writers.includes("demand.request") && writers.includes("memory.write"),
-  `writers are demand.request + memory.write (got ${writers.join(",") || "none"})`
+  writers.join(",") === expectedWriters.join(","),
+  `writers are ${expectedWriters.join(" + ")} (got ${writers.join(",") || "none"})`
 );
 
 // Legacy free-utility aliases still route (not listed, but CallTool works).
@@ -233,6 +244,13 @@ assert(search.result?.structuredContent?.results, "catalog.search call returns s
   assert(sc.results.every((r) => typeof r.wallet === "string" && r.network === "eip155:4217" && typeof r.routable === "boolean"), "wire=mpp rows carry recipient wallet, Tempo network, routable flag");
   const x402 = await rpc("tools/call", { name: "sellers.list", arguments: { limit: 3 } });
   assert(!x402.result?.isError && Array.isArray(x402.result?.structuredContent?.results) && !x402.result?.structuredContent?.wire, "default wire (x402) is unchanged");
+}
+
+{
+  // A body that is not JSON is a JSON-RPC parse error, not the site's generic 400.
+  const res = await fetch(`${BASE}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: "{not json" });
+  const j = await res.json().catch(() => null);
+  assert(res.status === 400 && j?.jsonrpc === "2.0" && j?.error?.code === -32700 && j?.id === null, `malformed JSON answers -32700 (got ${res.status} ${JSON.stringify(j)?.slice(0, 120)})`);
 }
 
 console.log("\nremote MCP connector: all checks passed");

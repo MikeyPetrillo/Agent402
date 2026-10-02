@@ -3,9 +3,8 @@
 // tool charges per call) - these tests prove the cap is enforced locally,
 // before any upstream spend, and that the cap itself is sized to the model's
 // live per-minute rate (2026-09-18: the standard tier moved off
-// gpt-4o-mini-transcribe, which OpenAI retires 2027-02-26, onto gpt-transcribe
-// at $0.0045/min, and its cap dropped 5 -> 4 minutes so worst case is 60% of
-// $0.03 rather than 75%). Offline: synthetic WAV buffers, no network.
+// gpt-4o-mini-transcribe, which OpenAI retires 2027-02-26, onto gpt-transcribe,
+// and its cap dropped 5 -> 4 minutes to stay inside the margin rule). Offline: synthetic WAV buffers, no network.
 import { probeDurationSeconds, assertWithinDurationCap, STT_TIERS, UPSTREAM_USD_PER_MINUTE, STT_MARGIN, STT_TOOLS } from "../src/tools/stt-kit.js";
 
 let pass = 0, fail = 0;

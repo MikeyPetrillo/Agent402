@@ -24,6 +24,12 @@ import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Routes a server lists only when their service is configured: the decide
+// service needs its own deployment and database, so a CI boot without it
+// does not serve them though production does (POST /api/decide etc.).
+const CONFIG_GATED_ROUTES = new Set(["/api/decide", "/api/decide/execute", "/api/decide/feedback"]);
+
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let passed = 0, failed = 0;
 const ok = (cond, msg) => {
@@ -67,7 +73,7 @@ function docFiles() {
     if (!existsSync(dir)) return;
     for (const name of readdirSync(dir)) {
       const p = join(dir, name);
-      if (statSync(p).isDirectory()) { if (name !== "releases" && name !== "node_modules") walk(p); continue; }
+      if (statSync(p).isDirectory()) { if (name !== "releases" && name !== "node_modules" && name !== "internal") walk(p); continue; }
       if (name.endsWith(".md")) out.push(p);
     }
   };
@@ -110,6 +116,8 @@ const KNOWN_NON_CATALOG = new Set([
   "/api/tollbooth/waitlist", "/api/wish", "/api/route/execute", "/api/skill-packs",
   "/api/health", "/api/route/external-debug", "/api/market",
   "/api/mpp-index", "/api/mpp-leaderboard", "/api/mpp-index/register",
+  // Free refund-ledger lookup by settlement tx (app.get/post in server.js), quoted by /why.
+  "/api/refunds/lookup",
   // Card front door (Stripe): served outside CATALOG, mounted with STRIPE_SECRET_KEY.
   "/api/buy", "/api/subscribe", "/api/credits/checkout", "/api/credits/claim", "/api/credits/balance",
 ]);
@@ -145,7 +153,7 @@ for (const file of files) {
       routesOnLine.push(path);
     }
     for (const path of routesOnLine) {
-      if (!routeByPath.has(path)) {
+      if (!routeByPath.has(path) && !CONFIG_GATED_ROUTES.has(path)) {
         // An illustrative snippet defining a NEW tool is not a dead reference.
         if (/route:\s*"|example|e\.g\.|your own|placeholder/i.test(line)) continue;
         if (isSourceRef) continue;

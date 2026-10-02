@@ -16,6 +16,7 @@
 // nobody pays is not routable, whatever a registry says.
 
 import { disableVendorSpendControls } from "./x402-spend-controls.js";
+import { assertSigningAllowed } from "./signing-halt.js";
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const SOLANA_CAIP2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
@@ -97,7 +98,7 @@ async function rpcCall(method, params, { fetchImpl = fetch, timeoutMs = 6000 } =
  * failure - the CALLER treats that as refusal (fail closed).
  */
 // Window: 7 DAYS by default (SOR_SVM_WINDOW_HOURS overrides). Solana's x402
-// volume is concentrated - one seller (sol.blockrun) dominates settlements and
+// volume is concentrated - one seller (a seller) dominates settlements and
 // almost every other seller has only a handful of inbound credits in any 15h
 // slice, so a 15h window admitted exactly ONE routable seller and the rail had
 // no fallback when that one seller's upstream was down (2026-09-01). The TRUST
@@ -157,7 +158,7 @@ export function creditFromTx(meta, payTo) {
     // (the spoof the review flagged). On Solana x402 that debited account is
     // typically a shared FACILITATOR, not the buyer - so we count the CREDIT,
     // not distinct funders (distinct-funder collapses to 1 for a real,
-    // facilitator-intermediated seller: measured 2026-09-01, sol.blockrun has
+    // facilitator-intermediated seller: measured 2026-09-01, a seller has
     // 49 buyers on x402scan but one on-chain sender). Residual: a seller with
     // a SECOND wallet can still fund payTo for ~$0.001/tx in fees; that costs
     // real money per fake and is bounded downstream by cap + the per-payer
@@ -171,7 +172,9 @@ export function creditFromTx(meta, payTo) {
     if (debited && !funder) funder = b.owner || null;
     return debited;
   });
-  return { credited: fundedByOther, funder: fundedByOther ? funder : null };
+  // `amount` is the seller's balance rise in base units. USDC has six
+  // decimals, so it is also the payment in micro-dollars.
+  return { credited: fundedByOther, funder: fundedByOther ? funder : null, amount: fundedByOther ? postAmt - preAmt : 0 };
 }
 export const solanaRpc = (method, params, opts) => rpcCall(method, params, opts);
 
@@ -261,6 +264,7 @@ export function svmUnprovenAllowanceAtomic() {
  * transaction: base64}}), so the facilitator accepts it unchanged.
  */
 export async function createSvmPaymentPayload(signer, paymentRequirements) {
+  assertSigningAllowed("a Solana payment");
   const kit = await import("@solana/kit");
   const { findAssociatedTokenPda, getTransferCheckedInstruction, TOKEN_PROGRAM_ADDRESS } = await import("@solana-program/token");
   const { getSetComputeUnitLimitInstruction, setTransactionMessageComputeUnitPrice } = await import("@solana-program/compute-budget");
@@ -270,7 +274,7 @@ export async function createSvmPaymentPayload(signer, paymentRequirements) {
   if (String(req.asset) !== USDC_MINT) throw bad("SVM payload builder only signs USDC on Solana mainnet", 502);
   const feePayer = req.extra?.feePayer;
   if (!feePayer) throw bad("feePayer is required in the accept's extra for SVM", 502);
-  // Blockhash: prefer the one the facilitator's 402 already carries (sol.blockrun
+  // Blockhash: prefer the one the facilitator's 402 already carries (a seller
   // does - then signing needs ZERO RPC, the whole point of this builder). When a
   // seller's accept omits it (x402node.dev and most non-Pyth sellers), fetch it
   // via the PLAIN-fetch `rpcCall` helper - NOT @solana/kit's RPC transport, which
@@ -330,7 +334,7 @@ export async function createSvmPaymentPayload(signer, paymentRequirements) {
   // The v2 wrap is the STOCK client's, field for field: @x402/core wraps every
   // scheme payload with the 402's own `resource` and `extensions` beside
   // `accepted` (client/index.mjs createPaymentPayload). A seller running the
-  // stock middleware tolerated their absence (sol.blockrun settled two buys
+  // stock middleware tolerated their absence (a seller settled two buys
   // without them, 2026-09-02); a seller with its own verifier did not -
   // api.xfuel.app answered `payment_payload_invalid` to a transaction that was
   // byte-for-byte the shape of the ones it settles for stock clients. Same
@@ -480,7 +484,7 @@ export async function passesSolanaResolveGate({ header, body, inboundFn = cached
 //   bare(ssrf) + ~20-read proven-gate + sign cannot satisfy that ordering.
 //
 // The DIRECT buy path is unaffected and settled on-chain earlier tonight
-//   (tx 2jXgRZRQ568...ymFE6, $0.001 to sol.blockrun's proven payTo): it uses
+//   (tx 2jXgRZRQ568...ymFE6, to a proven seller's payTo): it uses
 //   the manual getUpstreamBuyerSvm + createPaymentPayload flow with plain
 //   fetches and no dispatcher chain. So the RAIL works; only the composed
 //   route-execute path hits this.

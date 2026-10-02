@@ -15,6 +15,7 @@ import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chr
 import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chrome.js";
 import { isComputePayable } from "./pow.js";
 import { RAILS_SHORT } from "./rails.js";
+import { routerRankingSentence } from "./routing-proof.js";
 
 const esc = (s) =>
   String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -49,14 +50,14 @@ const TASKS = [
   },
   {
     goal: "Track crypto markets",
-    answer: "Live prices, market-cap rankings, history, and global dominance - keyless, batched, no rate-limit headaches.",
+    answer: "Live prices, market-cap rankings, history, and global dominance, batched in one request; when the shared upstream quota is spent the call answers 503 and is not charged.",
     slugs: ["crypto-price", "crypto-market", "crypto-history", "crypto-trending", "crypto-global"],
     example: "/api/crypto-price?ids=BTC,ETH",
   },
   {
     goal: "Track equities",
-    answer: "Live quote, OHLCV history, and earnings calendar - works for stocks, indices, FX, and crypto symbols via Yahoo's chart endpoint.",
-    slugs: ["stock-quote", "stock-history", "earnings-calendar"],
+    answer: "End-of-day US equity quote and daily OHLCV bars from a licensed three-venue consolidation. US equities only - for crypto pairs use crypto-price. Volume is those three venues, returned as venueVolume, never as a market total.",
+    slugs: ["stock-quote", "stock-history"],
     example: "/api/stock-quote?symbol=AAPL",
   },
   {
@@ -80,18 +81,18 @@ const TASKS = [
   {
     goal: "Persist state across calls",
     answer: "Wallet-keyed KV with TTL and atomic counters. The wallet IS the identity - no signup, no API key. Grant access to other agents by their wallet.",
-    slugs: ["memory", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-recall"],
+    slugs: ["memory-write", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-recall"],
     example: "/api/memory",
   },
   {
     goal: "Pay another x402 seller",
-    answer: "Decode HTTP 402 quotes, verify settlements on Base, check USDC balances, build EIP-3009 transfer authorizations. You sign - Agent402 never touches funds.",
+    answer: "Decode HTTP 402 quotes, verify settlements on Base, check USDC balances, build EIP-3009 transfer authorizations. You sign - these tools never touch funds.",
     slugs: ["x402-quote", "x402-verify", "usdc-balance", "transfer-authorization", "tx-status", "gas-estimate"],
     example: "/api/x402-quote",
   },
   {
     goal: "Find a tool across every x402 seller",
-    answer: "/api/find ranks the local catalog plus every seller we crawl from public registries by health × price. Free, instant, no payment.",
+    answer: `/api/route ranks this catalog and the outside sellers we index; /api/find resolves a task within this catalog and names related outside sellers. ${routerRankingSentence()} Both are free, no payment.`,
     slugs: [],
     extraLinks: [
       { href: "/api/find?q=stock+quote", label: "Try /api/find" },

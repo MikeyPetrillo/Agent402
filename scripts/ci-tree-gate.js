@@ -58,8 +58,15 @@ function isSha(s) { return typeof s === "string" && /^[0-9a-f]{40}$/.test(s); }
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop())) {
   const { execFileSync } = await import("node:child_process");
   const { appendFileSync, readFileSync } = await import("node:fs");
-  const git = (...a) => { try { return execFileSync("git", a, { encoding: "utf8" }).trim(); } catch { return ""; } };
-  const sh = (cmd, ...a) => { try { return execFileSync(cmd, a, { encoding: "utf8" }); } catch { return ""; } };
+  // Every subprocess is bounded, and the whole read has a deadline: a `gh` call
+  // that stalled on GitHub's secondary rate limit held this job to its 5-minute
+  // limit on 2026-09-22 (run 35682625160), which reads as a cancelled run on a
+  // green main and skips the published-package verification that keys off it.
+  // The gate fails closed on "" anyway, so a timeout costs nothing but the skip.
+  const CALL_TIMEOUT_MS = Number(process.env.TREE_GATE_CALL_TIMEOUT_MS || 30_000);
+  const DEADLINE = Date.now() + Number(process.env.TREE_GATE_BUDGET_MS || 150_000);
+  const git = (...a) => { try { return execFileSync("git", a, { encoding: "utf8", timeout: CALL_TIMEOUT_MS }).trim(); } catch { return ""; } };
+  const sh = (cmd, ...a) => { try { return execFileSync(cmd, a, { encoding: "utf8", timeout: CALL_TIMEOUT_MS }); } catch { return ""; } };
 
   const currentTree = git("rev-parse", "HEAD^{tree}");
   const devBranch = process.env.DEV_BRANCH || "claude/sweet-brown-i99jl3";
@@ -122,6 +129,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop()
 
   const shas = [];
   for (const r of runs) {
+    if (Date.now() > DEADLINE) { console.log("  budget spent - not reading further runs (fail closed)"); break; }
     let jobs = [];
     try {
       const raw = sh("gh", "api", "--paginate", `repos/${repo}/actions/runs/${Number(r.databaseId)}/jobs?per_page=100`, "--jq", ".jobs[] | {name, conclusion}");
@@ -146,6 +154,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop()
   // simply drops that candidate instead of poisoning the comparison.
   const passedTrees = [];
   for (const sha of shas) {
+    if (Date.now() > DEADLINE) { console.log("  budget spent - not resolving further trees (fail closed)"); break; }
     // Shape-check before this value is ever an argv entry. Everything here goes
     // through execFileSync with no shell, so there is no injection today, and
     // GitHub returns real 40-hex SHAs - but `git fetch ... origin <sha>` would

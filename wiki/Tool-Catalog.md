@@ -2,7 +2,7 @@
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-**500+ endpoints + 70+ multi-tool [[Skill Packs|Skill-Packs]].** The utility tools are deterministic - **no LLM in that serving path**: same input, same output, full input/output schemas; the `/v1` model gateway and the report products are model-backed and priced as such. Discover them machine-readably (don't hardcode this page):
+**500+ endpoints, 70+ of them multi-tool [[Skill Packs|Skill-Packs]].** Most tools are deterministic code with full input/output schemas; the model-backed ones (the `/v1` model gateway, the report products, and the media, speech, embedding and `answer` tools) carry `modelBacked: true` in `/api/pricing` and are priced as such. Discover them machine-readably (don't hardcode this page):
 
 - [`/api/find?q={task}`](https://agent402.tools/api/find?q=extract%20article) - **resolve a plain-language task to the right tool** (route, price, schema, ready example) in one call, so an agent skips the token-heavy "search to find a tool" step. Also the `catalog.find` MCP tool on the connector.
 - [`/api/pricing`](https://agent402.tools/api/pricing) - slug, route, price, category, description for everything
@@ -10,46 +10,47 @@
 - [`/tools`](https://agent402.tools/tools) - human-readable docs, one page per tool with a working example
 - x402 Bazaar discovery extension - every 402 response self-describes
 
-## The headline tools (wallet-only)
+## The headline tools
 
-These exist because an agent mid-task cannot give itself a browser, a paid search index, or a disk:
+These exist because an agent mid-task cannot give itself a browser, a paid search index, or a disk. Most are wallet-only; the API-kit and image-transform rows are pure-CPU and also payable with proof-of-work:
 
 | Tool | Price | What it does |
 |---|---|---|
-| `search` | $0.02 | Live web search over a paid index, no signup: the wallet is the credential |
+| `search` | $0.01 | Live web search over a paid index, no signup: the wallet is the credential |
+| `search-lite` | $0.008 | A quick sample of the same web search: up to 5 results (title, URL, snippet), no freshness filter |
 | `answer` | $0.08 | Web answer with inline citations: a one-call "ask the web" the model couldn't reach otherwise |
-| `render` | $0.02 | Real headless Chromium, JavaScript executed - reads SPAs that `extract` can't |
+| `render` | $0.01 | Real headless Chromium, JavaScript executed - reads SPAs that `extract` can't |
 | `screenshot` | $0.004 | PNG of any public page (viewport or full-page) |
 | `extract` | $0.01 | Main-article extraction → clean markdown (title, byline, word count) |
 | `pdf-info`, `pdf-rotate`, `pdf-extract-pages`, `pdf-merge`, `images-to-pdf`, `pdf`, `pdf-to-markdown` | $0.001–$0.01 | Read and manipulate PDFs |
 | `media-info`, `audio-convert`, `audio-normalize` | $0.005–$0.02 | Real ffmpeg: probe, transcode to mp3, EBU R128 loudness normalize |
 | `memory-*` (11 tools) | $0.001–$0.003 | Durable wallet-keyed state + cross-wallet coordination. See [[Memory and Coordination]] |
-| `x402-quote`, `x402-verify`, `usdc-balance`, `tx-status`, `gas-estimate`, `transfer-authorization`, `ens-resolve` | $0.001–$0.004 | **Non-custodial x402 payment toolkit** - decode 402 quotes, verify settlements, read balances/gas/tx, build EIP-3009 authorizations, resolve ENS. Multi-chain: Base, Polygon, Arbitrum, Optimism, Ethereum. See [[Payments and x402]] |
+| `x402-quote`, `x402-verify`, `usdc-balance`, `tx-status`, `gas-estimate`, `transfer-authorization`, `ens-resolve` | $0.001–$0.004 | **Non-custodial x402 payment toolkit** - decode 402 quotes, verify settlements, read balances/gas/tx, build EIP-3009 authorizations, resolve ENS. Multi-chain: Base, Polygon, Arbitrum, Optimism, Ethereum, Monad, Celo, Avalanche, Sei. See [[Payments and x402]] |
 | `dns`, `meta`, `robots-check`, `email-validate`, `ip-info`, `http-check`, `tls-cert`, `sitemap`, `whois` | $0.001–$0.005 | Network truth: metadata, DNS, TLS, liveness |
 | `block-number`, `chain-info`, `block-info`, `contract-code`, `erc721-owner`, `event-logs` | $0.001–$0.003 | **Chain reads**: head block and chain metadata, a block by number/hash, deployed bytecode at an address, ERC-721 `ownerOf`, and decoded `eth_getLogs` event queries. Read primitives an agent can call without running a node or holding an RPC key |
 | `openapi-diff`, `openapi-lint`, `openapi-extract`, `openapi-to-curl`, `openapi-mock-response`, `openapi-search`, `openapi-validate-payload`, `openapi-redact`, `openapi-resolve-refs`, `openapi-security-summary`, `openapi-required-params` | $0.001–$0.002 | **API-kit** - work an OpenAPI 3.x / Swagger 2.x spec end-to-end: find the right operation, see its effective auth, know the minimum inputs, build a runnable curl, mock a response, validate a payload, diff two versions, score agent-readiness, shrink for LLM context, inline `$ref`s |
 | `fx-rate`, `gov-data`, `weather-forecast`, `weather-alerts`, `earthquakes`, `barcode-lookup` | $0.001–$0.005 | Live keyless data: ECB currency rates, data.gov datasets, NWS weather, USGS quakes, product barcode lookup |
-| `stock-quote`, `stock-dividends`, `stock-history`, `earnings-calendar` | $0.001–$0.005 | **finance-kit**: price, dividend history, OHLC history, and the upcoming/recent earnings calendar for any ticker. Fresh, no API key required |
+| `stock-quote`, `stock-history` | $0.001–$0.005 | **finance-kit**: end-of-day US equity quote and daily OHLCV bars, from a licensed three-venue consolidation (Databento DBEQ.BASIC). Prices track the wider market; volume counts those three venues only and is returned as `venueVolume`, never as a total. US equities only |
 | `crypto-trending`, `crypto-global`, `crypto-price`, `crypto-market`, `crypto-history` | $0.001–$0.015 | **crypto-kit**: prices, market data, OHLC history, trending coins, total market cap. Multi-coin in one call |
-| `treasury-*`, `fred-*`, `cpi-yoy`, `fed-funds`, `sahm-rule`, `yield-curve-spread`, `world-bank-*` | $0.002–$0.01 | **macro-kit**: official macro time-series from the St. Louis Fed (FRED v1 + v2 bulk release observations), the US Treasury, and the World Bank |
-| `edgar-company-lookup`, `edgar-filings`, `edgar-company-concept`, `edgar-company-facts`, `edgar-xbrl-frame`, `edgar-insider-trades`, `edgar-13f-holdings`, `edgar-recent-ipos`, `edgar-search` | $0.002–$0.005 | **edgar-kit**, SEC EDGAR: ticker→CIK, filings, XBRL company facts and concepts, cross-company XBRL frames, insider Form 4, 13F holdings, recent IPOs, full-text search |
+| `treasury-*`, `fred-*`, `cpi-yoy`, `fed-funds`, `sahm-rule`, `yield-curve-spread`, `world-bank-*` | $0.002–$0.005 | **macro-kit**: official macro time-series from the St. Louis Fed (FRED v1 + v2 bulk release observations), the US Treasury, and the World Bank |
+| `edgar-company-lookup`, `edgar-filings`, `edgar-company-concept`, `edgar-company-facts`, `edgar-xbrl-frame`, `edgar-insider-trades`, `edgar-13f-holdings`, `edgar-recent-ipos`, `edgar-search` | $0.001–$0.005 | **edgar-kit**, SEC EDGAR: ticker→CIK, filings, XBRL company facts and concepts, cross-company XBRL frames, insider Form 4, 13F holdings, recent IPOs, full-text search |
 | `image-resize`, `image-convert`, `image-thumbnail`, `barcode-decode` | $0.001–$0.005 | Pure-CPU image transforms + barcode/QR decode (jimp / zxing) |
 
 ## Crypto derivatives, DeFi and Solana intel
 
-Market structure an agent can read directly, keyless and deterministic, at per-call prices. Every one is on the same x402 / MPP 402 as the rest of the catalog.
+Market structure an agent can read directly, as deterministic reads at per-call prices (the caller holds no API key for any of them). Every one is on the same x402 / MPP 402 as the rest of the catalog.
 
 | Tools | Price | What you get |
 |---|---|---|
-| `perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`, `perp-open-interest`, `perp-klines`, `perp-orderbook` | $0.002 to $0.003 | Live perpetuals: every listed market with mark and oracle price, funding now and hourly history, the funding screener across the whole book, premium and predicted funding, open interest, OHLCV candles and order-book depth |
+| `perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`, `perp-open-interest`, `perp-klines`, `perp-orderbook` | $0.001 to $0.003 | Live perpetuals: every listed market with mark and oracle price, funding now and hourly history, the funding screener across the whole book, premium and predicted funding, open interest, OHLCV candles and order-book depth |
 | `options-summary`, `crypto-options-chain`, `options-ticker`, `options-volume` | $0.002 to $0.005 | The options book: index price and the implied-volatility index, call/put open interest and put-call ratio, a full chain by expiry with mark IV, per-instrument greeks (delta, gamma, vega, theta, rho), and onchain options protocols ranked by notional volume |
 | `defi-yields`, `defi-yield-history`, `defi-protocols`, `defi-protocol`, `defi-chains`, `defi-chain-tvl-history`, `defi-fees`, `defi-dex-volume`, `stablecoins`, `stablecoin-supply-history` | $0.001 to $0.003 | DeFi: screen yield pools by chain, project, token and TVL (stablecoin-only filter included), rank protocols and chains by TVL, read fees and revenue, DEX volume, and stablecoin supply with peg deviation, each with a history sibling |
-| `sol-token-safety`, `sol-token-report`, `sol-token-holders`, `sol-token-pairs`, `sol-token-search`, `sol-trending`, `sol-price`, `sol-swap-quote`, `sol-token-lookup` | $0.002 to $0.010 | Solana token due diligence: a graded safety check (mint and freeze authority, liquidity, holder concentration), the full risk write-up, holders, pairs, trending mints, live prices and a swap quote with the route |
-| `crypto-news`, `crypto-indicators`, `crypto-market-pulse` | $0.004 to $0.005 | Market context: headlines from major outlets normalized and deduplicated, technical indicators computed here from candles (RSI, MACD, EMA, SMA, Bollinger, ATR, VWAP), and a one-call breadth snapshot across every listed perp |
+| `sol-token-safety`, `sol-token-report`, `sol-token-holders`, `sol-token-pairs`, `sol-token-search`, `sol-trending`, `sol-price`, `sol-swap-quote`, `sol-token-lookup` | $0.001 to $0.010 | Solana token due diligence: a graded safety check (mint and freeze authority, liquidity, holder concentration), the full risk write-up, holders, pairs, trending mints, live prices and a swap quote with the route |
+| `crypto-news`, `crypto-indicators`, `crypto-market-pulse` | $0.002 to $0.004 | Market context: headlines from major outlets normalized and deduplicated, technical indicators computed here from candles (RSI, MACD, EMA, SMA, Bollinger, ATR, VWAP), and a one-call breadth snapshot across every listed perp |
 | `coin-price-by-contract`, `coin-profile`, `coin-history`, `coin-ohlc`, `coin-market-chart-range`, `coin-categories`, `global-defi`, `exchanges`, `exchange-tickers`, `exchange-rates`, `coin-search`, `coins-list` | $0.005 to $0.008 | Broad market coverage, including price by token **contract address** on a named chain when an agent holds an address and no coin id |
-| `rwa-list`, `rwa-markets`, `rwa-asset`, `rwa-issuers`, `rwa-issuer` | $0.003 to $0.006 | Tokenized real-world assets on the same CoinGecko key: 649 tokenized stocks, ETFs and commodities (gold, Nvidia, Tesla, pre-IPO names) with onchain market data, one asset joined with its market row, and the 33 issuers behind them with each token's contract per platform |
+| `rwa-list`, `rwa-markets`, `rwa-asset`, `rwa-issuers`, `rwa-issuer` | $0.003 to $0.006 | Tokenized real-world assets: tokenized stocks, ETFs and commodities with onchain market data, one asset joined with its market row, and the issuers behind them with each token's contract per platform |
 | `asset-transfers`, `token-balances`, `token-allowance`, `tx-receipt`, `block-receipts`, `token-price-history` | $0.002 to $0.005 | Indexed chain reads across the major EVM chains: a filtered transfer log, balances for named contracts, an ERC-20 allowance, a decoded receipt, a whole block summarised, and historical token prices |
-| `fc-cast-search`, `fc-channel-feed`, `fc-trending`, `fc-user-casts`, `fc-cast`, `fc-cast-replies`, `fc-channel`, `fc-user-search`, `fc-cast-metrics` | $0.003 to $0.005 | Farcaster: search casts, read channel and user feeds, pull a thread, and measure engagement on the onchain social graph |
+| `fc-cast-search`, `fc-channel-feed`, `fc-trending`, `fc-user-casts`, `fc-cast`, `fc-cast-replies`, `fc-channel`, `fc-user-search`, `fc-cast-metrics` | $0.003 to $0.005 | Farcaster: search casts, read channel and user feeds, pull a thread, and measure engagement on the onchain social graph (listed when the instance holds a Farcaster API key) |
 | `site-map`, `site-crawl` | $0.005, $0.02 | Whole-site structure on demand: enumerate a site's URLs from robots.txt, its sitemaps and internal links, then crawl breadth-first to clean markdown under hard page, depth and time budgets |
 
 ## Images and video (flat per call)
@@ -70,6 +71,10 @@ When the job is a whole report rather than a call, the `/v1` report routes sell 
 ## The long tail (pure-CPU, also payable with compute)
 
 150+ utilities at mostly **$0.001**: hashing/HMAC, base58/base32/base64, JWT decode+verify, UUIDs, CRC32, morse, HTML entities, `token-count` (exact OpenAI BPE), `text-chunk` (RAG), `json-validate` (JSON Schema), `jsonl`, text stats/dedupe/sort/truncate/diff (Levenshtein), JSON/CSV/YAML conversion and querying, date math and cron calculators, validators (email syntax, IP, IBAN-style checksums…), math/stats, QR codes, and **`unit-convert`** - one parametric endpoint (`POST /api/unit-convert` with `{value, from, to}`) covering every unit pair across length, mass, volume, area, speed, time, data, pressure, energy, power, angle, frequency, temperature.
+
+`unit-convert` accepts the other spelling of a unit (plural or singular, British spellings, spaces or underscores, the `statute-` prefix); an unknown unit is still a 400.
+
+`judge` ($0.001, listed when the judgment upstream is configured) is the one model-backed tool at this price: a typed judgment over supplied state (a choice from your named options with a probability each, a position on levels you describe, or a yes/no as a probability), up to 8 questions per call, input bounded by bytes.
 
 Why would an agent pay $0.001 instead of writing the code? Because writing, testing, and debugging a CSV parser mid-task burns 10–100× that in tokens - and some sandboxes can't execute code at all.
 
@@ -92,6 +97,6 @@ Three design points worth knowing:
 
 ## Quality guarantees
 
-- Every endpoint is re-tested **against its own documented example** in CI before any deploy reaches production.
+- Every endpoint CI can call without a third-party key is re-tested **against its own documented example** before any deploy reaches production. The metered ones (LLM tiers, search, report products) are kept out of those sweeps so CI never spends upstream; their input probes run in CI instead.
 - Tools that can't be served honestly get removed rather than left to take money and 502 (this has happened - see [[Operations]]).
-- Errors are structured: a specific message naming the invalid field, never a bare 500.
+- Input errors are structured: a 4xx naming the invalid field and the expected shape.

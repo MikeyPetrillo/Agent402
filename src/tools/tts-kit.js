@@ -6,28 +6,19 @@
 //   tts      $0.05  — OpenAI tts-1              (2000 chars)  [OPENAI_API_KEY]
 //   tts-hd   $0.10  — OpenAI tts-1-hd           (2000 chars)  [OPENAI_API_KEY]
 //
-// WHY A LITE TIER (2026-09-11, from the 30-day ledger): `tts` is the single
-// best-selling paid tool we have (317 outside settlements, $15.85 - a third of
-// all external revenue), and the route sweep put peers at $0.001 against our
-// $0.05. The spread is in the UPSTREAM, not in our margin: OpenAI tts-1 bills
-// ~$0.000015/char while Kokoro-82M billed $0.00000062 when this shipped - 24x
-// cheaper, and already a proven link in the /v1/audio/speech failover chain
-// (SPEECH_MODELS, live-verified by the TTS probe workflow). So the answer to a
-// $0.001 peer is a cheaper MODEL at an honest margin, not a cut on the premium
+// WHY A LITE TIER (2026-09-11): a cheaper MODEL - Kokoro-82M, already a
+// proven link in the /v1/audio/speech failover chain (SPEECH_MODELS,
+// live-verified by the TTS probe workflow) - rather than a cut on the premium
 // voice. The premium tiers are untouched - a buyer who wants the OpenAI voice
 // still pays for it.
 //
-// CAP CUT 2,000 -> 800 CHARS (2026-09-18): Kokoro gained a second OpenRouter
-// endpoint (Together, $0.000004/char, 6.5x DeepInfra's $0.00000062), and the
-// worst case has to be the DEAREST endpoint because nothing we send can keep a
-// call off it - measured: `provider.order`/`max_price` are ignored on
-// /audio/speech, a Together pin still served DeepInfra. At 2,000 chars that
-// worst case is $0.008 against a $0.005 price, a loss on any full-length call
-// that lands there; found by an upstream audit, not by any guard (the live
-// model guard checked ids, never speech cost rows; it pins them against the
-// dearest endpoint now). The price stays: "$0.005, ten times cheaper than
-// /api/tts" is the front door and the reason the tier exists. At 800 chars the
-// worst case is $0.0032, 64% of price, under the 70% bound. Billing unit is
+// CAP CUT 2,000 -> 800 CHARS (2026-09-18): Kokoro gained a second, dearer
+// OpenRouter endpoint, and the worst case has to be the DEAREST endpoint
+// because nothing we send can keep a call off it - `provider.order`/`max_price`
+// are ignored on /audio/speech. At 2,000 chars that worst case broke the
+// margin bound; found by an upstream audit, not by any guard (the live model
+// guard now pins speech cost rows against the dearest endpoint). The price
+// stays; at 800 chars the worst case is back under the bound. Billing unit is
 // the JS string length (measured: ASCII, CJK, emoji and accented text of equal
 // .length each billed the same 100 "tokens" = 400 chars), so `text.length`
 // counts exactly what OpenRouter bills.
@@ -149,7 +140,7 @@ async function callOpenAI(text, voice, format, tierSlug) {
  *  No failover: the chain belongs to /v1/audio/speech, which is what a buyer
  *  pays $0.06 for; this tier is one model at one price and says so, and an
  *  upstream failure is a 502 that cancels settlement rather than a silent
- *  walk onto a model costing 24x more than this price covers. */
+ *  walk onto a model this price does not cover. */
 async function callKokoro(text, voice, format, tierSlug) {
   const key = OPENROUTER_KEY();
   if (!key) throw bad("Speech gateway not configured (OPENROUTER_API_KEY unset)", 503);
@@ -236,7 +227,7 @@ export const TTS_TOOLS = [
     category: "ai",
     price: "$0.050",
     description:
-      "Convert text to speech using OpenAI TTS-1. Returns base64-encoded audio (mp3/opus/aac/flac/wav/pcm). 10 voices available. No API key needed; pay per call via x402. Text capped at 2000 chars. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at $0.005.",
+      "Convert text to speech using OpenAI TTS-1: returns audio (the base64-encoded file in the format asked for: mp3, opus, aac, flac, wav or pcm) with model, voice, format and chars (the characters spoken). 10 voices available. No API key needed; pay per call over x402 or MPP. Text capped at 2000 chars. Model-backed. For high-volume speech where timbre matters less, /api/tts-lite is the same interface on Kokoro-82M at $0.005.",
     tags: [...SHARED_TAGS, "tts-1"],
     discovery: {
       bodyType: "json",

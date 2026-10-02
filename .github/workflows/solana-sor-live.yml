@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       task:
-        description: "Task text (default: api v1 exa search - ranks blockrun's Solana exa route)"
+        description: "Task text (default: an exa web search task)"
         required: false
         default: ""
       expect_text:
@@ -20,7 +20,7 @@ on:
         required: false
         default: ""
       route:
-        description: "/api/route/execute (cap $0.005) or /api/route/execute-plus (cap $0.04, the default)"
+        description: "/api/route/execute or /api/route/execute-plus (the default)"
         required: false
         default: ""
 
@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v5.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - run: npm ci --ignore-scripts

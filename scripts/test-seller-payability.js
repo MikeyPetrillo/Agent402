@@ -21,17 +21,30 @@ for (const r of []) void r;
 const hdr = (m) => ({ get: (k) => m.get(k.toLowerCase()) ?? null });
 const wrap = (r) => ({ ...r, headers: hdr(r.headers) });
 
-/** A tool wired to stubs; `spent` records what the guard was asked for. */
-function toolWith({ bare, pay, spendOk = true } = {}) {
+/** Waits `ms` of real time, or rejects the way fetch does when `signal` aborts first. */
+const delay = (ms, signal) => new Promise((resolve, reject) => {
+  const t = setTimeout(resolve, ms);
+  signal?.addEventListener("abort", () => { clearTimeout(t); reject(new Error("The operation was aborted due to timeout")); }, { once: true });
+});
+
+/** A tool wired to stubs; `spent` records what the guard was asked for. The
+ *  unpaid call may take `bareDelayMs` of real time (honouring its abort
+ *  signal) and move the tool's clock on by `bareAdvanceMs`. */
+function toolWith({ bare, pay, spendOk = true, bareDelayMs = 0, bareAdvanceMs = 0 } = {}) {
   const spent = { may: [], note: [], adjust: [], payOpts: [] };
+  let clock = 1_757_000_000_000;
   const tool = buildSellerPayabilityTool({
     pay: pay || (async (u, o) => { spent.payOpts.push(o); return { result: { ok: true }, quote: { usd: 0.01, atomic: "10000" }, receipt: { network: "eip155:8453", payer: "0xpayer", transaction: "0xtx", success: true } }; }),
-    fetchImpl: async () => wrap(bare || res402([accept()])),
+    fetchImpl: async (u, init) => {
+      if (bareDelayMs) await delay(bareDelayMs, init?.signal);
+      clock += bareAdvanceMs;
+      return wrap(bare || res402([accept()]));
+    },
     assertPublicUrl: async () => {},
     maySpend: (p, usd, o) => { spent.may.push({ usd, chain: o?.chain, payer: p }); return spendOk ? { ok: true } : { ok: false, code: "wallet_daily_ceiling" }; },
     noteSpend: (p, usd, o) => { spent.note.push({ usd, chain: o?.chain, payer: p }); return { handle: 1 }; },
     adjustSpend: (h, usd) => spent.adjust.push(usd),
-    now: () => 1_757_000_000_000,
+    now: () => clock,
   });
   return { tool, spent };
 }
@@ -55,7 +68,7 @@ function toolWith({ bare, pay, spendOk = true } = {}) {
 // --- the money bound -------------------------------------------------------
 {
   const price = Number("0.10");
-  ok(MAX_SPEND_USD <= price * 0.7, `the hard spend ceiling $${MAX_SPEND_USD} is inside 70% of the $${price} price (the margin rule)`);
+  ok(MAX_SPEND_USD <= price * 0.7, `the hard spend ceiling is inside the margin rule on the $${price} price`);
   const { tool, spent } = toolWith();
   await tool.handler({ url: "https://s.example" }, {});
   ok(spent.may[0]?.chain === "base" && spent.may[0].usd === 0.01, "every check asks the Base wallet's daily ceiling BEFORE any call, for the cap");
@@ -174,8 +187,11 @@ function toolWith({ bare, pay, spendOk = true } = {}) {
   ok(keyed.spent.may[0]?.payer === "ip:203.0.113.9" && keyed.spent.note[0]?.payer === "ip:203.0.113.9",
     `the spend is keyed to the buyer so the per-payer ceiling applies (got ${keyed.spent.may[0]?.payer})`);
   const tempo = toolWith();
-  await tempo.tool.handler({ url: "https://s.example" }, { mppTempoPayer: "0xabc", ip: "203.0.113.9" });
-  ok(tempo.spent.note[0]?.payer === "tempo:0xabc", "a Tempo buyer is keyed by its credential payer, not by the IP (the gate strips the x402 header)");
+  await tempo.tool.handler({ url: "https://s.example" }, { mppTempoSender: "0xabc", mppTempoPayer: "0xhint", ip: "203.0.113.9" });
+  ok(tempo.spent.note[0]?.payer === "tempo:0xabc", "a Tempo buyer is keyed by the sender recovered from its transaction, not by the IP (the gate strips the x402 header)");
+  const hintOnly = toolWith();
+  await hintOnly.tool.handler({ url: "https://s.example" }, { mppTempoPayer: "0xhint", ip: "203.0.113.9" });
+  ok(hintOnly.spent.note[0]?.payer === "ip:203.0.113.9", "the client-supplied source hint alone is never the key: the IP is");
   const req = {};
   const handled = toolWith();
   await handled.tool.handler({ url: "https://s.example" }, req);
@@ -188,6 +204,42 @@ function toolWith({ bare, pay, spendOk = true } = {}) {
   await bounded.tool.handler({ url: "https://s.example" }, {});
   const rw = bounded.spent.payOpts[0]?.refusalMaxWaitMs;
   ok(Number.isFinite(rw) && rw > 0 && rw <= 55_000, `the payer is handed the request's remaining deadline, never the 90 s default (got ${rw})`);
+
+  // 4. THE CHECK RUNS INSIDE THE BUYER'S OWN AUTHORIZATION. Settlement runs
+  //    after this handler, so a check that outlives the buyer's validBefore
+  //    (less the facilitator's 6 s rule) paid a seller for a payment that can
+  //    no longer settle. A short window gets a shorter check; too short a
+  //    window pays nobody (504, uncharged); a stock window is unchanged.
+  const NOW_S = 1_757_000_000;
+  const evmReq = (validBefore) => ({ ip: "203.0.113.9", header: (n) => (String(n).toLowerCase() === "payment-signature" ? Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453", maxTimeoutSeconds: 300 }, payload: { signature: "0x11", authorization: { from: "0x" + "ab".repeat(20), to: "0x" + "cd".repeat(20), value: "100000", validAfter: "0", validBefore: String(validBefore), nonce: "0x01" } } })).toString("base64") : undefined) });
+  const stockW = toolWith();
+  await stockW.tool.handler({ url: "https://s.example" }, evmReq(NOW_S + 299));
+  ok(stockW.spent.payOpts[0]?.timeoutMs === 45_000 && stockW.spent.payOpts[0]?.refusalMaxWaitMs === 55_000, `control: a stock 300 s authorization keeps the full check (timeout ${stockW.spent.payOpts[0]?.timeoutMs}, wait ${stockW.spent.payOpts[0]?.refusalMaxWaitMs})`);
+  const noHdr = toolWith();
+  await noHdr.tool.handler({ url: "https://s.example" }, {});
+  ok(noHdr.spent.payOpts[0]?.timeoutMs === 45_000 && noHdr.spent.payOpts[0]?.refusalMaxWaitMs === 55_000, "control: a request with no EVM authorization keeps the full check");
+  const shortW = toolWith();
+  const rShort = await shortW.tool.handler({ url: "https://s.example" }, evmReq(NOW_S + 30));
+  ok(rShort.payable === true && shortW.spent.payOpts[0]?.timeoutMs === 20_000 && shortW.spent.payOpts[0]?.refusalMaxWaitMs === 20_000, `a 30 s authorization: the paid leg and its wait end inside it, and a fast seller is still checked in full (timeout ${shortW.spent.payOpts[0]?.timeoutMs}, wait ${shortW.spent.payOpts[0]?.refusalMaxWaitMs})`);
+  const cut = toolWith({ pay: async () => { throw Object.assign(new Error("The operation was aborted due to timeout"), { statusCode: 504 }); } });
+  const rCut = await cut.tool.handler({ url: "https://s.example" }, evmReq(NOW_S + 30));
+  ok(rCut.flags.some((f) => /remaining life/.test(f) && /300 s/.test(f)), "a paid leg that fails inside a shortened check says the buyer's window shortened it");
+  const rCutStock = await toolWith({ pay: async () => { throw Object.assign(new Error("The operation was aborted due to timeout"), { statusCode: 504 }); } }).tool.handler({ url: "https://s.example" }, evmReq(NOW_S + 299));
+  ok(!rCutStock.flags.some((f) => /remaining life/.test(f)), "control: the same failure under a stock window carries no such flag");
+  const tiny = toolWith();
+  let eTiny = null; try { await tiny.tool.handler({ url: "https://s.example" }, evmReq(NOW_S + 8)); } catch (x) { eTiny = x; }
+  ok(eTiny?.statusCode === 504 && /Nothing was spent/.test(eTiny.message) && tiny.spent.payOpts.length === 0 && tiny.spent.adjust.at(-1) === 0, `an 8 s authorization: no seller is paid, the day's booking is given back, 504 uncharged (${eTiny?.statusCode})`);
+  // Only the PAID leg is bounded by the buyer's authorization. The unpaid
+  // call spends nothing, so it keeps its own timeout: a seller that takes 3 s
+  // to answer it under a 16 s window is checked in full, and the paid leg
+  // still ends inside the window and must be signed by its sign-by moment.
+  const slowProbe = toolWith({ bareDelayMs: 3_000 });
+  const rSlow = await slowProbe.tool.handler({ url: "https://s.example" }, evmReq(NOW_S + 16));
+  ok(rSlow.unpaidCall.status === 402 && !rSlow.unpaidCall.error && rSlow.payable === true && slowProbe.spent.payOpts[0]?.timeoutMs === 6_000 && slowProbe.spent.payOpts[0]?.signBy === (NOW_S + 16 - 6) * 1000 - 8_000, `a 16 s authorization and a seller that answers the unpaid call in 3 s: checked in full, the paid leg bounded by the window (unpaid ${rSlow.unpaidCall.status ?? rSlow.unpaidCall.error}, payable ${rSlow.payable}, paid timeout ${slowProbe.spent.payOpts[0]?.timeoutMs}, signBy ${slowProbe.spent.payOpts[0]?.signBy})`);
+  // Control: an unpaid call that uses up the window still pays nobody.
+  const spentProbe = toolWith({ bareAdvanceMs: 5_000 });
+  let eSpent = null; try { await spentProbe.tool.handler({ url: "https://s.example" }, evmReq(NOW_S + 12)); } catch (x) { eSpent = x; }
+  ok(eSpent?.statusCode === 504 && spentProbe.spent.payOpts.length === 0 && spentProbe.spent.adjust.at(-1) === 0, `control: a 12 s authorization whose unpaid call took 5 s pays no seller, 504 uncharged, booking given back (${eSpent?.statusCode})`);
 
   ok(LONG_RUNNING_SLUGS.has("seller-payability"),
     "and the slug is long-running, so the paywall offers EVM exact only - the short-lived rails cannot settle a 55 s handler that already paid a seller");

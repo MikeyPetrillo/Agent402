@@ -9,8 +9,8 @@
       if (n) { n.hidden = false; }
     }
   } catch (e) { /* no-op */ }
-  var sel = { research: "research", dossier: "dossier", fund: "fund-report", domain: "domain-audit", recall: "recall-report", insider: "insider-report", market: "market-brief", filing: "filing-report", token: "token-brief", ticker: "ticker-pack", linkedin: "linkedin-article" };
-  var need = { dossier: "a ticker.", research: "a question.", fund: "a fund name, ticker, or CIK.", domain: "a domain, e.g. example.com", recall: "a drug, food, brand or device.", insider: "a US ticker.", market: "a market, category or company.", filing: "a US ticker.", token: "a Solana token mint address.", ticker: "a US ticker.", linkedin: "a topic." };
+  var sel = { "research": "research", "dossier": "dossier", "fund": "fund-report", "domain": "domain-audit", "recall": "recall-report", "insider": "insider-report", "market": "market-brief", "filing": "filing-report", "token": "token-brief", "ticker": "ticker-pack", "linkedin": "linkedin-article" };
+  var need = { "dossier": "a ticker.", "research": "a question.", "fund": "a fund name, ticker, or CIK.", "domain": "a domain, e.g. example.com", "recall": "a drug, food, brand or device.", "insider": "a US ticker.", "market": "a market, category or company.", "filing": "a US ticker.", "token": "a Solana token mint address.", "ticker": "a US ticker.", "linkedin": "a topic." };
   function ph(ev, props) { try { if (window.posthog && window.posthog.capture) window.posthog.capture(ev, props); } catch (e) { /* telemetry never blocks a buy */ } }
   document.querySelectorAll(".pcard").forEach(function (card) {
     card.querySelectorAll(".tierbtn").forEach(function (b) {

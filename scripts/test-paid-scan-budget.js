@@ -5,11 +5,9 @@
 //
 // WHY: `/<chain>?seller=<host>` and `/api/market/<chain>/panel` are public,
 // unauthenticated, and take an arbitrary seller from a roster of ~2,300. On
-// Base each distinct wallet ran a CDP SQL query billed at $0.0083, twice.
-//
-// July 2026 invoice: 29,589 SQL queries, $245.59 - against roughly $50 of
-// revenue that month. One crawler walking the seller roster is ~4,600 billed
-// queries, and robots.txt explicitly welcomed every major crawler.
+// Base each distinct wallet ran a billed CDP SQL query, twice. One crawler
+// walking the seller roster is thousands of billed queries, and robots.txt
+// explicitly welcomed every major crawler.
 //
 // Three defects, three guards:
 //   1. robots.txt invited crawlers to the paid URLs
@@ -43,15 +41,19 @@ ok(/const SQL_SCAN_DAILY_BUDGET/.test(src), "a daily ceiling on paid scans exist
 
 // The ceiling DEFAULTS TO ZERO. These queries power an activity chart on a
 // free page; no paid tool handler calls the path, so none of the spend is
-// attached to revenue. At 120 scans/day it cost ~$60/month against ~$50/month
-// of total external revenue - more for the chart than the business earns.
+// attached to revenue.
 ok(/SQL_SCAN_DAILY_BUDGET\) \|\| 0;/.test(src),
   "the paid scanner is OFF by default - it must be opted INTO, not out of");
 const baseBranch = src.slice(src.indexOf('if (chainKey === "base")'), src.indexOf('if (chainKey === "base")') + 400);
 ok(/paidScanAllowed\(\)/.test(baseBranch), "the Base branch consults the budget");
 ok(baseBranch.indexOf("paidScanAllowed()") < baseBranch.indexOf("baseActivityViaSql"),
   "the budget is checked BEFORE the query - checking after would still spend");
-ok(/return evmActivity\("base", wallet\)/.test(baseBranch),
+// Matches the CALL, not its argument list: the scanner grew a `prior` option
+// for the incremental resume, and pinning the exact arguments would fail on a
+// change that leaves this guarantee untouched. What must hold is that the
+// over-budget path RETURNS the free scanner for this wallet - not an error,
+// not null, not the paid query again.
+ok(/return evmActivity\("base", wallet[,)]/.test(baseBranch),
   "past the ceiling it falls back to the FREE scanner rather than erroring - the panel still renders");
 
 // 3. The cache must not empty itself under load.

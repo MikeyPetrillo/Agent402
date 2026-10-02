@@ -144,12 +144,58 @@ export function clusterQualifies(c) {
  * is injected (server wires findTools + CATALOG) so this stays pure and the
  * threshold lives with the caller. Mutates and returns the same array.
  */
+/** Attach the resolver's closest catalog match to each cluster, as EVIDENCE
+ *  rather than as a verdict.
+ *
+ *  This used to set `served: {slug, score}` whenever the score cleared a
+ *  threshold, and the operator board rendered that as "served - not
+ *  outstanding demand". It was wrong often enough to hide real demand:
+ *  measured across 138 marked clusters on the live board, fx-historical
+ *  (foreign exchange) was marked as serving "historical technical evidence
+ *  website", and image-dominant-color was marked as serving "index url
+ *  metadata api at ..." at a score of 98.3.
+ *
+ *  Four candidate rules were measured against that board and every one traded
+ *  a false positive for a worse false negative. Requiring the wish to cover
+ *  the slug's tokens downgraded unit-convert on "convert us gallons to
+ *  liters", crypto-indicators on "price and rsi ema", and unemployment-rate
+ *  on "bls cpi unemployment". Term coverage ranked the known-bad match ABOVE
+ *  two known-good ones. Score does not separate them either, and neither does
+ *  the margin over the runner-up (the worst match had the widest margin).
+ *
+ *  The reason none of them work is that the resolver scores NAME SIMILARITY,
+ *  not whether a tool answers a need. It cannot support a binary verdict, so
+ *  this no longer states one. The slug and the score are reported and the
+ *  reader judges: at 109 the match is obvious, at 47 it deserves suspicion.
+ *  That is strictly more information than the old boolean carried, and none
+ *  of it is a claim we cannot evidence.
+ *
+ *  Nothing is suppressed by this annotation and nothing ever was: it is a
+ *  label on an operator board, and qualification never consulted it. */
 export function annotateServed(clusters, scoreFn, minScore) {
   for (const c of clusters || []) {
     try {
       const top = scoreFn(c.text);
-      if (top && top.score >= minScore) c.served = { slug: top.slug, score: top.score };
+      if (top && top.score >= minScore) c.closestMatch = { slug: top.slug, score: Math.round(top.score) };
     } catch { /* annotation is best-effort - the board must render regardless */ }
+  }
+  return clusters;
+}
+
+/**
+ * annotateServed, handing the event loop back between clusters. Each cluster
+ * is one catalog search, and the operator board annotates up to 500 of them:
+ * run in one turn that held the thread 2-3 s on prod (2026-09-26). Same
+ * annotation, same order.
+ */
+export async function annotateServedAsync(clusters, scoreFn, minScore, { sliceMs = 8 } = {}) {
+  let sliceStart = performance.now();
+  for (const c of clusters || []) {
+    annotateServed([c], scoreFn, minScore);
+    if (performance.now() - sliceStart >= sliceMs) {
+      await new Promise((r) => setImmediate(r));
+      sliceStart = performance.now();
+    }
   }
   return clusters;
 }
@@ -482,8 +528,31 @@ export function getWishesAggregate({ limit = 200, detailed = false } = {}) {
       // necessary but not sufficient — see clusterQualifies / QUALIFY_MIN_SPAN_MS.
       qualified: clusterQualifies(c),
     }));
+  // ATTRIBUTABLE VS NOT, because reading this board by count is misleading and
+  // nothing said so. Measured on the live board 2026-09-21: 227 of 400 rows
+  // carried ZERO distinct callers and held 2,636 of the 2,962 hits - 89% of the
+  // volume - and all but 18 of those rows were first seen before 2026-08-27,
+  // the day per-caller fingerprinting shipped. That mass is machines looping in
+  // August, and sorting by count puts it on top.
+  //
+  // The rows are NOT removed and the counts are NOT changed. A cluster with no
+  // caller credit is still a real observation; it is just not evidence of
+  // distinct demand, which is the thing the board exists to measure. Saying so
+  // in one derived line is cheaper than a filter the next reader has to find.
+  const attributableOf = (rows2) => {
+    const withCallers = rows2.filter((r) => (r.callers || 0) > 0);
+    const hits = (rs) => rs.reduce((n, r) => n + (r.count || 0), 0);
+    return {
+      clusters: withCallers.length,
+      hits: hits(withCallers),
+      unattributedClusters: rows2.length - withCallers.length,
+      unattributedHits: hits(rows2) - hits(withCallers),
+      note: "A cluster with no distinct caller cannot qualify however many hits it holds, so counts alone do not rank demand. Most un-attributed volume predates per-caller fingerprinting.",
+    };
+  };
   return {
     ...base,
+    attributable: attributableOf(rows),
     // Stated, so a quiet board reads as quiet rather than as a rendering bug.
     staleDays: WISH_STALE_DAYS,
     staleHidden: clusters.size - live.length,

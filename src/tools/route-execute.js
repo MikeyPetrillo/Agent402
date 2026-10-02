@@ -20,8 +20,10 @@ import { createHash } from "node:crypto";
 import { paymentHeaderOf, payerFromRequest } from "../payer.js";
 import { maySpend, noteSpend, adjustSpend, resolveSpend } from "../external-spend-guard.js";
 import { findTools } from "../find.js";
+import { judgeTool, decide } from "../tool-judge.js";
 import { observeDelivery } from "../response-observation.js";
 import { isIdentityBoundRoute } from "../payments.js";
+import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
 
 // Two execution tiers, both from buildRouteExecuteTool. The tier a buyer needs
 // is quoted by /api/route (routeExecuteHint below), so there's no guessing:
@@ -35,24 +37,21 @@ import { isIdentityBoundRoute } from "../payments.js";
 // SOR_EXTERNAL_ENABLED until a real external buy proves it.
 export const EXEC_TIERS = [
   { slug: "route-execute", execPriceUsd: 0.01, underlyingMaxUsd: 0.005 },
-  // Proportional middle tier (2026-07-29 leaderboard review): the curve had
-  // exactly two points - $0.01 covering <=$0.005 and $0.55 covering <=$0.50 -
-  // so a $0.02 flight search or a $0.01 Nansen call could only ride the max
-  // tier at a 27x markup. $0.05 covering <=$0.04 keeps the fee proportional
-  // (25% margin at the cap, more below it) and unlocks the mid-priced
-  // external inventory the seller review identified as routable demand.
+  // Proportional middle tier (2026-07-29): the curve had exactly two points,
+  // so a mid-priced external tool could only ride the max tier. This tier
+  // keeps the fee proportional and unlocks mid-priced external inventory.
   { slug: "route-execute-plus", execPriceUsd: 0.05, underlyingMaxUsd: 0.04 },
   { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 },
   // 2026-08-07: the $0.50 underlying ceiling excluded every indexed tool priced
   // above it, so the router could only answer those with a 409 pointing at the
-  // seller's own direct route. Same 10% spread as the max tier, so the fee
-  // curve stays proportional rather than punishing size.
+  // seller's own direct route. The fee curve stays proportional rather than
+  // punishing size.
   //
   // This tier is only safe because of the per-payer debt ceiling in
   // external-spend-guard.js. Settlement runs AFTER the handler, so raising the
   // cap raises exactly one exposure: what a buyer whose payment verifies and
   // then fails to settle can make us spend before we stop them. Keep
-  // EXTERNAL_MAX_UNSETTLED_USD sized against THIS number, not the old $0.50.
+  // EXTERNAL_MAX_UNSETTLED_USD sized against THIS tier's underlying cap.
   { slug: "route-execute-pro", execPriceUsd: 3.3, underlyingMaxUsd: 3.0 },
 ];
 const EXEC_SLUGS = new Set(EXEC_TIERS.map((t) => t.slug));
@@ -126,7 +125,7 @@ const toUsd = (price) => Number(String(price ?? "").replace(/[^0-9.]/g, "")) || 
 //   so this holds on a raw catalog, independent of server.js's flag mutation.
 // - route-execute itself (no recursion).
 // - non-JSON bodies (binary/multipart uploads don't fit the {params} envelope).
-function dispatchable(def) {
+export function dispatchable(def) {
   if (!def || typeof def.handler !== "function") return { ok: false, why: "tool has no internal handler" };
   // ANY execution tier, not just the base slug: before 2026-07-29 the max
   // tier could dispatch route-execute itself (nested routing fees on one
@@ -183,6 +182,12 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
     slug: tier.slug,
     category: "agent",
     price: `$${EXEC_PRICE_USD}`,
+    // Read by /guides/smart-order-router to render the tier table from the catalog.
+    underlyingMaxUsd: UNDERLYING_MAX_USD,
+    // Pays an outside seller from one of this server's own wallets inside the
+    // handler, i.e. before the buyer's own payment settles. Read by
+    // spendsBeforeSettlement (composite-spend-guard.js).
+    spendsOwnWallet: true,
     description:
       `Describe a task (or name a slug) and the Smart Order Router resolves the best-matching tool and RUNS it in the same call - flat $${EXEC_PRICE_USD} covering any tool listed at $${UNDERLYING_MAX_USD} or less, from THIS host's catalog or any external seller in the open index - x402 sellers, or MPP sellers on Tempo (paid on your behalf over x402 or MPP, result relayed). One payment, one request, result + receipt. /api/route quotes which tier a task needs; pricier tools return a self-correcting 409 with their direct route.`,
     // Tags are the discoverability surface: a tag hit scores +3 in the ranker
@@ -220,12 +225,23 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
       const params = input.params != null ? input.params : {};
       if (typeof params !== "object" || Array.isArray(params)) throw bad('"params" must be an object matching the resolved tool\'s inputSchema');
       const cap = Math.min(Number(input.maxUsd) > 0 ? Number(input.maxUsd) : UNDERLYING_MAX_USD, UNDERLYING_MAX_USD);
+      // `target` pins the external leg to ONE endpoint (the decide executor
+      // runs a planned step this way). It only narrows: the endpoint must still
+      // be a candidate the resolver would have chosen from, so every gate
+      // (proven seller, cap, chain, live probe, refusal memos) still applies.
+      let target = null;
+      if (input.target != null) {
+        if (input.include !== "external") throw bad('"target" applies only with include:"external"');
+        try { const u = new URL(String(input.target)); if (u.protocol !== "https:" || String(input.target).length > 2048) throw 0; target = u.href; }
+        catch { throw bad('"target" must be one https URL from the index'); }
+      }
 
       // Resolve: explicit slug wins; otherwise rank the task with the same
       // lexical ranker behind /api/find and walk down until a dispatchable,
       // in-budget tool is found (the top hit may be excluded or over-cap).
       let def = null;
       let resolvedBy;
+      let selection = null; // how a task-resolved internal tool was chosen (receipt)
       const bySlug = new Map(Object.values(catalog).map((d) => [d.slug, d]));
       if (input.slug != null) {
         resolvedBy = "slug";
@@ -277,8 +293,8 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // our settlement broadcasts AFTER the handler. An external buy that
           // outlives that window is work done and an upstream seller paid,
           // then a refused settle: the buyer sees 402 and we ate the seller's
-          // price (measured 2026-08-27: a 69s Firecrawl scrape, $0.002 gone,
-          // vs a 23s one that settled). So on Tempo the external leg runs
+          // price (measured 2026-08-27: a 69s external scrape was lost, a 23s
+          // one settled). So on Tempo the external leg runs
           // under a budget: refuse BEFORE spending when resolution ate it,
           // and hand the seller call a timeout that keeps the whole handler
           // inside the window. A 504 cancels settlement; the only loss is the
@@ -294,35 +310,73 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // (the Tempo budget where one exists, else SOR_EXTERNAL_DEADLINE_MS,
           // under the 300 s our own 402 advertises), and the remaining budget
           // rides into payExternal as refusalMaxWaitMs. A wait cut short keeps
-          // the hold (nothing falls through), so the bound is money-safe.
-          const externalDeadlineMs = tempoBudgetMs ?? Math.max(30_000, Number(process.env.SOR_EXTERNAL_DEADLINE_MS) || 240_000);
+          // the hold (nothing falls through), so the bound is money-safe. An
+          // EVM buyer's own authorization bounds the wait too when it ends
+          // sooner (its validBefore less the facilitator's settle rule and a
+          // margin, src/evm-validity.js): a wait past that point could only
+          // end in a second seller paid for a payment that cannot settle.
+          const defaultDeadlineMs = Math.max(30_000, Number(process.env.SOR_EXTERNAL_DEADLINE_MS) || 240_000);
+          const credentialMs = tempoBudgetMs == null ? evmCredentialBudgetMs(req) : null;
+          const externalDeadlineMs = tempoBudgetMs ?? (credentialMs != null && credentialMs < defaultDeadlineMs ? Math.max(0, credentialMs) : defaultDeadlineMs);
           const refusalBudgetMs = () => Math.max(0, externalDeadlineMs - (Date.now() - startedAt));
           // FALLTHROUGH ON A SELLER 5xx. Resolve up to SOR_MAX_CANDIDATES live
           // sellers (ranked, settled-desc) for the first chain that has any, so
-          // a seller whose OWN upstream is down (sol.blockrun's Pyth feed,
+          // a seller whose OWN upstream is down (a seller's Pyth feed,
           // 2026-09-01) does not fail a route another seller can serve. Only a
           // 5xx from the PAID leg advances - a 4xx cancels settlement and means
           // our request is wrong, and a receipt means we already paid.
           const MAX_CANDIDATES = Math.max(1, Number(process.env.SOR_MAX_CANDIDATES || "3"));
+          // Bound the number of SIGNED payments ONE request may cause. Each attempt is
+          // already amount-capped and the per-payer / per-chain ceilings bound the
+          // aggregate, but nothing bounded the COUNT inside a single call: a caller
+          // quoted one price could cause several signatures by choosing a task whose
+          // candidates all take payment and then fail.
+          //
+          // Only attempts that actually SIGNED count - a candidate skipped at
+          // resolution (over cap, wrong chain, no model) costs nothing and must not
+          // consume the budget. Malformed reads as 1, never as unlimited.
+          const MAX_PAID_ATTEMPTS = (() => {
+            const raw = String(process.env.SOR_MAX_PAID_ATTEMPTS ?? "").trim();
+            if (!raw) return 1;
+            const n = Number(raw);
+            return Number.isInteger(n) && n >= 1 && n <= 10 ? n : 1;
+          })();
           // The requested model rides into resolution so a chat seller that
           // publishes a model list without it is skipped before anything is
           // probed or paid (a seller can charge on the 400 it answers).
           const wantModel = typeof input.params?.model === "string" && input.params.model.trim() ? input.params.model.trim() : null;
-          let candidateList = []; let chain = chains[0];
+          let candidateList = []; let chain = chains[0]; let lastDrops = null;
           for (const c of chains) {
-            const found = await resolveExternal(input.task, { cap, baseUrl, chain: c, limit: MAX_CANDIDATES, wantModel });
+            const found = await resolveExternal(input.task, { cap, baseUrl, chain: c, limit: MAX_CANDIDATES, wantModel, ...(target ? { onlyUrl: target } : {}) });
             const list = Array.isArray(found) ? found : (found ? [found] : []);
+            // Keep the tally from the LAST chain tried even when it resolved
+            // nothing, or an all-empty run would report no reason at all.
+            if (found && found.__gateDrops) lastDrops = found.__gateDrops;
             if (list.length) { candidateList = list; chain = c; break; }
           }
           if (tempoBudgetMs != null && remainingMs() < 4000) {
             throw bad(`Resolving an external seller used the Tempo time budget (${tempoBudgetMs}ms); nothing was spent and nothing is charged. Tempo credentials expire about 25s after signing, so retry with a fresh credential or pay this route over an EVM rail.`, 504);
           }
           const chainCaip2 = EXTERNAL_CHAIN_CAIP2[chain];
+          // Name WHICH world this is. The resolver tallies candidates it dropped at
+          // the dispatch gate, so "nothing does this task" and "plenty do, all of
+          // them below the settlement floor" stop sharing one message. They call
+          // for opposite responses, and until now telemetry classified both as
+          // "other".
+          const drops = candidateList.__gateDrops || lastDrops || { total: 0, byReason: {} };
+          const gatedOut = Number(drops.byReason?.settlement_required || 0);
+          if (!candidateList.length && Number(drops.byReason?.judged_no_match || 0) > 0) {
+            throw bad(`${drops.byReason.judged_no_match} outside seller(s) matched those words on ${chain}, and none of them does that task (judged). Nothing was spent and nothing is charged. Try /api/route?q=<task>&include=external to see them.`, 404);
+          }
+          if (!candidateList.length && gatedOut > 0) {
+            throw bad(`No external seller is eligible for this task on ${chain} right now: ${gatedOut} matched it and all of them are below our settlement gate. Nothing was spent and nothing is charged.`, 409);
+          }
           if (!candidateList.length) throw bad(`No external ${chains.includes("tempo") && chains.length > 1 ? "x402 or MPP" : chains[0] === "tempo" ? "MPP" : "x402"} seller matched that task${chains[0] !== "base" || chains.length > 1 ? ` on ${chains.join("/")}` : ""}. Explore /api/route?q=<task>&include=external.`, 404);
           // Try candidates in order; keep the last error so an all-fail run
           // reports something real. A 5xx from a seller's paid leg -> next
           // candidate; anything else stops (return on success, throw otherwise).
           let lastErr = null;
+          let __paidAttempts = 0;
           for (let __i = 0; __i < candidateList.length; __i++) {
           const ext = candidateList[__i];
           const hasNext = __i < candidateList.length - 1;
@@ -355,6 +409,23 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             extUrl = qs ? `${ext.url}${ext.url.includes("?") ? "&" : "?"}${qs}` : ext.url;
             extBody = undefined;
           }
+          // AN EVM BUYER'S AUTHORIZATION MUST STILL SETTLE AFTER THE SELLER
+          // ANSWERS. The facilitator settles only while validBefore is at
+          // least 6 s ahead (src/evm-validity.js), so a seller is paid only
+          // while at least EVM_SELLER_ALLOWANCE_MS more remains; below that
+          // the buy is refused here, before any booking or signature, 504 and
+          // uncharged. The same bound is handed to the payer as `signBy`, which
+          // re-checks it at the moment of signing, so a slow bare 402 from the
+          // seller cannot push the signature past it. The seller call itself
+          // keeps the payer's own timeout: once the payment header has gone out
+          // a shorter cut prevents no payment, it only discards the answer. A
+          // stock client (300 s) never meets this.
+          if (tempoBudgetMs == null) {
+            const settleableMs = evmCredentialSettleableMs(req);
+            if (settleableMs != null && settleableMs < EVM_SELLER_ALLOWANCE_MS) {
+              throw bad(`Too little of your payment authorization's life is left for a seller to answer and this payment to settle (EVM credentials expire at their validBefore, and must still be valid 6 s after the answer). Nothing was spent and nothing is charged. Retry with a fresh authorization: a stock client signs 300 s ahead.`, 504);
+            }
+          }
           // PER-PAYER DEBT CEILING. Everything above bounds WHAT we pay (the
           // canonical-USDC asset pin, this tier's cap re-checked against the
           // live 402, the 50-settlement reliability floor). Nothing bounds
@@ -370,9 +441,14 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // the x402 headers on acceptance, so payerFromRequest is null for an
           // MPP/Tempo buyer and an unkeyed payer was exempt from the ceiling -
           // found in the 2026-08-27 review, the first day the Tempo leg
-          // resolved anything), else the client IP so nobody is unkeyed.
+          // resolved anything), else the client IP so nobody is unkeyed. The
+          // Tempo key is the sender the gate VERIFIED, not the credential's
+          // client-supplied `source`: a caller naming a fresh source per
+          // request would get a fresh ceiling each time. A Tempo pull
+          // credential reaches this handler only with a verified sender (the
+          // gate refuses it otherwise; see spendsBeforeSettlement).
           const spendPayer = payerFromRequest(req)
-            || (req?.mppTempoPayer ? `tempo:${req.mppTempoPayer}` : null)
+            || (req?.mppTempoSender ? `tempo:${req.mppTempoSender}` : null)
             || (req?.ip ? `ip:${req.ip}` : null);
           // Book the WORST CASE this call could cost, not the seller's declared
           // price. `cap` is what payExternal will refuse to exceed, so it is the
@@ -395,7 +471,11 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // that installs nothing and reports no error, which is the exact shape
           // of defect this session keeps finding. server.js resolves it on the
           // FINAL response (post-settlement), never on handler success.
-          if (spendHandle && req && typeof req === "object") req.__externalSpend = spendHandle;
+          if (spendHandle && req && typeof req === "object") {
+            req.__externalSpend = spendHandle;
+            // A request that runs several external legs (decide execute) keeps every handle.
+            (req.__externalSpends ||= []).push(spendHandle);
+          }
           let paid;
           try {
             // provenPayTo: the address this seller's reliability evidence was
@@ -404,18 +484,31 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // and the seller answers both, so the check has to happen again
             // against the accept actually signed. Null = no chain-derived
             // address on record, which is not a failure - see provenPayToMatches.
+            // evidenceWallets: the wallets the seller's INHERITED settlement
+            // history belongs to, when that binding made it eligible. Same
+            // reason: the resolver checked the probe's 402, and the payer must
+            // check the one it signs. Null = nothing inherited decided it.
             if (ext.unproven) console.warn(`[sor] paying UNPROVEN ${chain} seller ${ext.seller} (${ext.price}) - every proven candidate was exhausted; loss bounded by the unproven allowance`);
-            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, allowUnproven: ext.unproven === true, refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : {}) });
+            if (__paidAttempts >= MAX_PAID_ATTEMPTS) {
+              // Not a fall-through: the next candidate would be a SECOND signature,
+              // which is the thing being bounded.
+              throw lastErr || bad(`Tried ${__paidAttempts} paid seller(s) for this task without a delivered answer. Refusing to sign another payment for one request.`, 502);
+            }
+            paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(tempoBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : {}) });
           } catch (e) {
-            // The exposure DELIBERATELY stands. It is tempting to clear it here
-            // ("the buy failed, so we never spent"), but payExternal can throw
-            // after signing and broadcasting - a network error on the response,
-            // a timeout - and clearing on those is exactly the case that lets a
-            // spend disappear from the ledger. It ages out on its own within
-            // the stale window, so an honest buyer caught by a seller outage
-            // waits, while a spend we cannot account for keeps counting.
+            // WHAT STAYS BOOKED IS WHAT MAY HAVE LEFT THE WALLET. The payer
+            // stamps `committed:true` on every failure after the payment
+            // header left us (a seen response, or a request that got no
+            // answer) unless the chain showed the credential expired unused,
+            // and `signedUsd` with the amount that credential carries: the
+            // most it can move. Those bookings are lowered to that amount, per
+            // payer and on the chain's 24 h ledger (the tier cap only when no
+            // amount came back). Anything else provably spent nothing - the
+            // seller was unreachable, its 402 was unusable or over the cap,
+            // nothing was signed, or the chain said so - and is lowered to $0
+            // below, so failed candidates cannot fill the chain's day.
             const sc = e?.statusCode && e.statusCode >= 400 && e.statusCode < 600 ? e.statusCode : 502;
-            lastErr = bad(`External seller "${ext.seller}" failed: ${String(e?.message || e).slice(0, 200)}`, sc);
+            lastErr = bad(`External seller "${ext.seller}" failed: ${String(e?.message || e).slice(0, 200)}${e?.paidUnanswered === true ? "; no other seller is tried for this request" : ""}`, sc);
             // FALL THROUGH TO THE NEXT SELLER only on a 5xx (their own upstream
             // or gateway failed), and only when the error carries NO settle
             // receipt - a payExternal throw that includes a receipt means the
@@ -438,8 +531,28 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // OUR buyer code from whether the header was sent, which the seller
             // cannot influence. Tempo never falls through either way (single-
             // use, time-boxed credential).
+            // A pre-payment failure (unreachable, over cap, SSRF refusal) signed
+            // NOTHING, so it must not consume the paid-attempt budget - counting
+            // it would let two cheap misses starve a legitimate retry. `committed`
+            // is payX402's own stamp for "the authorization left".
             const spentMaybe = e?.committed === true;
-            if (hasNext && !spentMaybe && chain !== "tempo") {
+            // A paid request that got no answer is never followed by another
+            // seller in the same request, even once the chain shows it unused.
+            // "No answer" is the outcome a caller's own params can produce (a
+            // scrape seller handed a URL that never responds), and waiting
+            // for the chain's answer has already spent most of the request's
+            // time. The chain's answer decides the booking, not a fallthrough.
+            const unanswered = e?.paidUnanswered === true;
+            if (spentMaybe || unanswered) __paidAttempts++;
+            const signedUsd = Number(e?.signedUsd);
+            // Carry the payer's own stamps onto the error a caller sees: an
+            // in-process caller (the decide executor) must know a payment may
+            // have left, or it would treat the leg as unpaid and pay another.
+            if (spentMaybe) lastErr.committed = true;
+            if (unanswered) lastErr.paidUnanswered = true;
+            if (spentMaybe && Number.isFinite(signedUsd) && signedUsd >= 0) lastErr.signedUsd = signedUsd;
+            adjustSpend(spendHandle, spentMaybe ? (e?.signedUsd != null && Number.isFinite(signedUsd) && signedUsd >= 0 ? signedUsd : cap) : 0);
+            if (hasNext && !spentMaybe && !unanswered && chain !== "tempo") {
               console.warn(e?.refused
                 ? `[sor] seller ${ext.seller} refused the payment and the chain shows no debit - trying next candidate, nothing spent`
                 : `[sor] seller ${ext.seller} failed pre-payment (${sc}) - trying next candidate, nothing spent`);
@@ -483,6 +596,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
               settleNetwork: chainCaip2,
               wire: extWire,
               resolvedBy: "task-external",
+              ...(ext.selection ? { selection: ext.selection } : {}),
               // A buyer should know when the seller that served them had no
               // settlement history on this chain when we paid it.
               ...(ext.unproven ? { sellerProof: "unproven" } : {}),
@@ -499,14 +613,38 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
 
         // Default: resolve the best in-budget tool from THIS host's catalog.
         const { results } = findTools(catalog, input.task, { k: 10, baseUrl });
+        // find's eligible candidates, in find's order (top 5 go to the judge).
+        const eligible = [];
         for (const r of results) {
           const candidate = bySlug.get(r.slug);
           if (!candidate) continue;
           if (!dispatchable(candidate).ok) continue;
           if (toUsd(candidate.price) > cap) continue;
-          def = candidate;
-          break;
+          eligible.push(candidate);
+          if (eligible.length >= 5) break;
         }
+        const decision = decide(eligible, await judgeTool(input.task, eligible));
+        selection = decision.selection;
+        if (decision.action === "refuse") {
+          // Nothing affordable fits: point at a pricier tool that does (409, uncharged).
+          const pricier = [];
+          for (const r of results) {
+            const c = bySlug.get(r.slug);
+            if (c && dispatchable(c).ok && toUsd(c.price) > cap) pricier.push(c);
+            if (pricier.length >= 5) break;
+          }
+          const alt = pricier.length ? decide(pricier, await judgeTool(input.task, pricier)) : null;
+          if (alt?.action === "run" && (alt.selection.method === "judged" || alt.selection.method === "judged-tie") && alt.def) {
+            const up = routeExecuteHint(toUsd(alt.def.price));
+            throw bad(`No tool under this endpoint's $${cap} cap does that task; ${alt.def.slug} does, listed at $${toUsd(alt.def.price)} (judged, confidence ${alt.selection.confidence}).${up && up.tool !== tier.slug ? ` Use ${up.tool} (${up.price}) to run it through the router, or call` : " Call"} it directly: ${alt.def.route}${baseUrl ? ` on ${baseUrl}` : ""}. Nothing was run or charged.`, 409);
+          }
+          const hasExternal = externalEnabled() && !!resolveExternal;
+          throw bad(
+            `No tool in this catalog does that task (judged, confidence ${selection.confidence}); nothing was run or charged.${hasExternal ? ' Retry with include:"external" to route to an outside x402 seller,' : ""} or try /api/find?q=<task>.`,
+            404
+          );
+        }
+        def = decision.def;
         if (!def) {
           const hasExternal = externalEnabled() && !!resolveExternal;
           throw bad(
@@ -544,6 +682,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           routingFeeUsd: Number((EXEC_PRICE_USD - underlying).toFixed(6)),
           seller: "internal",
           resolvedBy,
+          ...(selection ? { selection } : {}),
           ts,
           ...(callRef ? { callRef } : {}),
         },

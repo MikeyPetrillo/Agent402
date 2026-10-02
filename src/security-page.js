@@ -6,6 +6,7 @@
 // test-surface-copy keeps the house style).
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
+import { REPO_URL, repoUrl } from "./repo-link.js";
 const SECTIONS = [
   {
     h: "Report a vulnerability",
@@ -13,7 +14,7 @@ const SECTIONS = [
       `Open a private advisory on GitHub or email <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>. We acknowledge within two business days, fix through the same CI pipeline every change goes through, and note the fix in the changelog once it has shipped.`,
       `Good-faith research inside the scope below will not be met with legal action. Scope: agent402.tools, the /mcp connector, the /v1 gateway, the x402 and MPP paywall on every paid route, the prepaid credits gate, the card front door (/reports, /monitors, /credits, the Stripe webhook) and the published packages. Out of scope: the payment protocols themselves, third-party facilitators and chains, and volumetric denial of service.`,
     ],
-    links: [["https://github.com/MikeyPetrillo/Agent402/security/advisories/new", "Private advisory"], ["/.well-known/security.txt", "security.txt"], ["https://github.com/MikeyPetrillo/Agent402/blob/main/SECURITY.md", "SECURITY.md"]],
+    links: [[repoUrl("security/advisories/new"), "Private advisory"], ["/.well-known/security.txt", "security.txt"], [repoUrl("blob/main/SECURITY.md"), "SECURITY.md"]],
   },
   {
     h: "What we hold",
@@ -26,7 +27,7 @@ const SECTIONS = [
   {
     h: "Key handling",
     p: [
-      `Payments on the crypto rails are non-custodial: buyers sign with their own keys, settlement goes to a public treasury address, and no customer key ever reaches the server. Two card paths are not, and we say so rather than let the word cover them: a prepaid credits balance is money we hold until it is spent, and a card report purchase is held by the payment processor until the report is delivered or refunded. The wallets the service spends from are dedicated, low-balance and alarmed; the treasury never signs a request. Production secrets live only in the hosting platform's variable store, are never committed, and CI signing and publishing keys are scoped Actions secrets with npm publishing on OIDC provenance. Links we email (confirmations, unsubscribes, monitor management) are HMAC-signed with dedicated secrets and verified in constant time.`,
+      `Payments on the crypto rails are non-custodial: buyers sign with their own keys, settlement goes to a public treasury address, and no customer key ever reaches the server. One card path is not, and we say so rather than let the word cover it: a prepaid credits balance is money we hold until it is spent (credits are no longer sold; keys already issued keep spending). A card report is an ordinary card charge: taken at checkout, and refunded to the card automatically if the report fails to generate. The wallets the service spends from are dedicated, low-balance and alarmed; the treasury never signs a request. Production secrets live only in the hosting platform's variable store, are never committed, and CI signing and publishing keys are scoped Actions secrets with npm publishing on OIDC provenance. Links we email (confirmations, unsubscribes, monitor management) are HMAC-signed with dedicated secrets and verified in constant time.`,
     ],
     links: [["/transparency", "Disclosures"]],
   },
@@ -42,7 +43,7 @@ const SECTIONS = [
     p: [
       `The server is open source under AGPL-3.0, so every control on this page can be read. Every pull request runs CodeQL, gitleaks secret scanning with a planted-canary self-check, Socket dependency review, DCO sign-off and the full test lanes, and every one is a required check before merge; every GitHub Action is pinned to a full commit SHA; the payment, gating and CI paths require code-owner review; the container image is pinned by digest and runs as a non-root user.`,
     ],
-    links: [["https://github.com/MikeyPetrillo/Agent402", "Source"], ["https://github.com/MikeyPetrillo/Agent402/wiki/Security-Model", "Security model"]],
+    links: [[REPO_URL, "Source"], [repoUrl("wiki/Security-Model"), "Security model"]],
   },
   {
     h: "Availability",

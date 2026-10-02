@@ -21,13 +21,12 @@
 
 export const SELFCHECK_SLUGS = [
   "hash",                  // pure-CPU canary — proves the server itself is healthy
-  "stock-quote",           // wedge star (Yahoo, via relay in prod)
-  "earnings-calendar",     // the tool that silently died (Nasdaq UA)
+  "stock-quote",           // wedge star (Databento; 503s without DATABENTO_API_KEY)
   "treasury-debt",         // Treasury Fiscal Data
   "treasury-avg-rates",    // Treasury Fiscal Data
   "treasury-yield-curve",  // FRED CSV (keyless — also proves FRED CSV is reachable)
   "fx-dashboard",          // ECB / Frankfurter
-  "stock-history",         // wedge (Yahoo) — second Yahoo endpoint beyond the quote
+  "stock-history",         // wedge — the second Databento endpoint beyond the quote
   "crypto-market",         // crypto prices
   "whois",                 // DNS / RDAP
   // High-value paid tools the reliability review flagged as unmonitored — added so
@@ -134,9 +133,9 @@ async function checkOne(def, timeoutMs) {
 
 // Run the curated self-check against a route→def CATALOG. Each failing tool is
 // retried ONCE after a short backoff before being reported failed, so a single
-// transient upstream blip (Yahoo/Nasdaq hiccup) can't page us — only a tool that
+// transient upstream blip can't page us — only a tool that
 // fails twice in a row is real.
-// Keyed checks hit PAID upstreams (Brave web search bills ~$0.005/call), and
+// Keyed checks hit PAID upstreams (Brave web search bills per call), and
 // they exist to catch KEY EXPIRY — an hours-scale event. The route's 5-min
 // cache is right for the keyless checks but let monitoring (tool-alert polls
 // every 30 min) plus any stranger hitting the free endpoint burn ~48 real
@@ -193,5 +192,48 @@ export async function runSelfCheck(catalog, slugs = selfcheckSlugs(), { timeoutM
     failing,
     results,
     at: new Date().toISOString(),
+  };
+}
+
+// The HTTP surface's cache, kept here so it can be tested without booting the
+// server. /api/selfcheck is free and unauthenticated, and a fresh run drives
+// metered upstreams (the CoinGecko Demo key's monthly quota, billed Databento
+// queries, public RPCs). So a public caller can never cause a run more often
+// than once per `publicTtlMs`, however often it polls: the one scheduled
+// consumer (tool-alert.yml) polls every 30 minutes, so a 30-minute cache costs
+// it nothing. The operator may ask for a fresher answer with `?fresh=1`, but
+// even then no more than once per `operatorFloorMs`. Every run is single-
+// flighted, so a burst of callers shares one run.
+export const SELFCHECK_PUBLIC_TTL_MS = 30 * 60 * 1000;
+export const SELFCHECK_OPERATOR_FLOOR_MS = 5 * 60 * 1000;
+export function createSelfCheckRoute({
+  run,
+  isOperator = () => false,
+  publicTtlMs = SELFCHECK_PUBLIC_TTL_MS,
+  operatorFloorMs = SELFCHECK_OPERATOR_FLOOR_MS,
+  now = () => Date.now(),
+} = {}) {
+  let cache = { at: 0, value: null };
+  let inFlight = null;
+  return async function selfCheckRoute(req, res) {
+    const wantsFresh = String(req?.query?.fresh || "") === "1" && isOperator(req);
+    const ttl = wantsFresh ? operatorFloorMs : publicTtlMs;
+    const age = now() - cache.at;
+    const meta = (a) => ({ cacheTtlSeconds: Math.round(ttl / 1000), ageSeconds: Math.max(0, Math.round(a / 1000)) });
+    if (cache.value && age < ttl) {
+      return res.json({ ...cache.value, cached: true, ...meta(age) });
+    }
+    if (!inFlight) {
+      inFlight = Promise.resolve()
+        .then(() => run())
+        .then((v) => { cache = { at: now(), value: v }; return v; })
+        .finally(() => { inFlight = null; });
+    }
+    try {
+      const v = await inFlight;
+      res.json({ ...v, cached: false, ...meta(now() - cache.at) });
+    } catch {
+      res.status(500).json({ ok: false, error: "selfcheck failed to run" });
+    }
   };
 }

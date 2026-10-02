@@ -1,5 +1,5 @@
 {
-  "about": "Tier 2 (metered): Exa neural search, grounded answer and page contents. Real money per call - search $0.007, answer $0.005, contents $0.001/page upstream - so these run only under --tier 2 with a key. Shipped 2026-09-13 and outside the corpus on day one, which is the gap these close.",
+  "about": "Tier 2 (metered): Exa neural search, grounded answer and page contents. Each call spends on a paid upstream, so these run only under --tier 2 with a key. Shipped 2026-09-13 and outside the corpus on day one, which is the gap these close.",
   "cases": [
     {
       "slug": "exa-search",

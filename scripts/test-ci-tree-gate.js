@@ -106,5 +106,14 @@ ok(/if \(!isSha\(sha\)\) continue;/.test(loop),
 ok(loop.indexOf("isSha(sha)") < loop.indexOf("git(\"cat-file\""),
   "the shape check must run BEFORE the value is passed to git, not after");
 
+// Every subprocess is bounded and the read has a deadline (2026-09-22): a gh
+// call that stalled on GitHub's secondary rate limit held the job to its
+// 5-minute limit, which reads as a cancelled run on a green main. Fail-closed
+// on "" already, so the timeout costs nothing but the skip.
+const helpers = gateSrc.slice(gateSrc.indexOf("const git = "), gateSrc.indexOf("const currentTree"));
+ok((helpers.match(/timeout: CALL_TIMEOUT_MS/g) || []).length === 2, "both subprocess helpers carry a timeout");
+ok(/for \(const r of runs\) \{\s*\n\s*if \(Date\.now\(\) > DEADLINE\)/.test(gateSrc), "the run-listing loop stops at the deadline");
+ok(/for \(const sha of shas\) \{\s*\n\s*if \(Date\.now\(\) > DEADLINE\)/.test(gateSrc), "the tree-resolving loop stops at the deadline");
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

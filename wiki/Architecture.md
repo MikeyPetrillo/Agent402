@@ -71,7 +71,7 @@ the x402 payment headers on acceptance and refuse identity-bound routes (memory,
 `my-usage`), where the signed wallet is the identity.
 
 **The hosted MCP connector is payable over MPP too** (`src/mcp-mpp.js`): a paid call
-arrives as JSON-RPC error `-32042` (`-32043` for a refused credential) + challenges / `_meta` credential, and the connector
+is answered with a tool result carrying the challenges in `_meta` (`-32042` on the tasks path, `-32043` for a refused credential), the credential rides back in `_meta`, and the connector
 replays it as a loopback HTTP request to its own paid route so the gates above keep
 sole settlement authority.
 
@@ -93,7 +93,7 @@ packs. The Stripe webhook endpoint is signature-verified with
 - **Browser tools** (`src/tools/render.js`, executed in the render worker): a shared headless Chromium with max 3 concurrent contexts, self-healing relaunch on crash, and per-request SSRF re-validation of *every* subresource the page loads (see [[Security Model]]).
 - **Media tools** (same worker): ffmpeg via `execFile` (no shell), 30 MB cap, 90 s timeout, max 2 concurrent with `429 + Retry-After`.
 - **Remote MCP** (`src/mcp-http.js` + `src/mcp-flagship.js`): stateless streamable-HTTP endpoint mounted *before* the paywall; it meters itself (free set + per-IP rate limit) and feeds the same stats counters. Tools are dotted (`catalog.find`, `catalog.call`, `web.search`, …; the old snake names are aliases only) and wallet-only tools are payable in the call over MPP (`src/mcp-mpp.js`).
-- **x402 Index + Router** (`src/x402-index.js`): a free, in-memory aggregation layer. Crawls the local catalog + operator seeds + auto-discovered sellers (from public x402 registries, refreshed hourly) every 30 minutes via `safeFetch`. Every crawl outcome lands in a rolling 5-entry history per seller; the Smart Order Router (`POST /api/route`) skips sellers whose recent history shows errors, and tiebreaks on health then price. Public surfaces: `/marketplace` (HTML; `/index` redirects there), `/api/index` (JSON), `/api/route` (router). See [[x402-Index-and-Router]].
+- **x402 Index + Router** (`src/x402-index.js`): a free, in-memory aggregation layer. Crawls the local catalog + operator seeds + auto-discovered sellers (from public x402 registries, refreshed hourly) every 30 minutes via `safeFetch`. Every crawl outcome lands in a rolling 5-entry history per seller; the Smart Order Router (`POST /api/route`) skips sellers whose recent history shows errors, and breaks ties on health, then distinct payers over the last 30 days, then price, then the curated flag (each result lists the order in `why.tiebreaks`). Public surfaces: `/marketplace` (HTML; `/index` redirects there), `/api/index` (JSON), `/api/route` (router). See [[x402-Index-and-Router]].
 - **State**: SQLite (better-sqlite3, WAL) on a Railway persistent volume at `/data` - stats, memory namespaces, PoW replay protection all survive redeploys.
 - **Shutdown**: SIGTERM drains in-flight requests before exit, because a hard kill would take an agent's money and return nothing.
 

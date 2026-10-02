@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Strict FREE_MODE sweep of paid catalog tools that do NOT burn Mike's metered
+// Strict FREE_MODE sweep of paid catalog tools that do NOT burn the operator's metered
 // third-party keys. Unlike scripts/test-all.js NETWORK leniency (which treats
 // 502/503/504 as green), this suite FAILS on those statuses — that hole is how
 // gov-data stayed green while its upstream was permanently dead (issue #730).
@@ -15,7 +15,7 @@
 //
 // SCOPE FILTER (documented, deliberate):
 //   IN  — price > 0 AND documented OpenAPI example does not spend Brave /
-//         OpenAI / OpenRouter / E2B / Blockscout-buyer / FRED / Neynar /
+//         OpenAI / OpenRouter / E2B / FRED / Neynar /
 //         Alchemy-hard / CDP keys. Free-public APIs (data.gov DEMO_KEY,
 //         weather.gov, CoinGecko keyless, Nominatim, Open-Meteo, …) stay IN
 //         even when they live in WALLET_ONLY_SLUGS.
@@ -127,94 +127,17 @@ const ok = (cond, msg) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── Metered upstream exclusion oracle ──────────────────────────────────────
-// Tools whose example answers burn Mike's third-party budget / buyer wallet /
-// identity surface. Keep in sync with the class of spend — adding a new keyed
-// upstream means listing its slugs here (and skill packs resolve transitively).
-export const METERED_SLUGS = new Set([
-  "attest",  // attest-kit.js: spends Base gas from the spending wallet, unset in CI
-  // Brave Search subscription
-  "search", "search-news", "search-images", "search-videos", "search-suggest", "answer", "multi-search",
-  "llm-context",      // Brave /llm/context - same subscription, billed per call
-  // OpenAI
-  "llm", "llm-pro", "llm-premium",
-  "image-gen", "image-gen-hd", "image-gen-premium",
-  "tts", "tts-hd", "tts-lite", "transcribe", "transcribe-pro",
-  "embed", "embed-large", "moderate",
-  // OpenRouter gateway
-  "v1-chat-nano", "v1-chat-auto", "v1-chat-grounded", "v1-chat-ox", "v1-chat", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered",
-  "v1-embeddings", "v1-rerank", "v1-images", "v1-audio-speech",
-  "v1-chat-nano-messages", "v1-chat-auto-messages", "v1-chat-messages", "v1-chat-pro-messages", "v1-chat-premium-messages", "v1-chat-metered-messages",
-  "v1-chat-nano-gemini", "v1-chat-auto-gemini", "v1-chat-gemini", "v1-chat-pro-gemini", "v1-chat-premium-gemini", "v1-chat-metered-gemini",
-  "v1-audio-transcriptions", "v1-audio-transcriptions-pro",
-  "v1-chat-nano-responses", "v1-chat-auto-responses", "v1-chat-responses", "v1-chat-pro-responses", "v1-chat-premium-responses", "v1-chat-metered-responses",
-  // Calls the v1-chat gateway handler in-process — same OpenRouter key dependency.
-  "pdf-summarize",
-  // research-deep composites — fan out to grounded search + rerank + synthesis
-  // over OpenRouter (503 without OPENROUTER_API_KEY), same key dependency.
-  "research", "research-pro", "research-max",
-  "dossier", "dossier-max",
-  // fund-report composites — SEC 13F diff + grounded search + Opus synthesis
-  // over OpenRouter (503 without OPENROUTER_API_KEY), same key dependency.
-  "fund-report", "fund-report-max",
-  // domain-audit composites — live probes + Opus synthesis over OpenRouter.
-  "domain-audit", "domain-audit-pro",
-  // recall-report - openFDA probes + Opus synthesis over OpenRouter.
-  "recall-report", "insider-report", "market-brief", "token-brief", "filing-report", "linkedin-article",
-  // ticker-pack - runs the dossier + insider composites in-process.
-  "ticker-pack",
-  // token-risk composites — Blockscout x402 buys (upstream-buyer wallet) +
-  // Opus synthesis over OpenRouter; metered upstream both ways.
-  "token-risk", "token-risk-pro",
-  // E2B
-  "code-run", "code-run-pro",
-  // Blockscout x402 buyer wallet
-  "contract-inspect", "address-profile", "token-info", "token-holders", "tx-inspect",
-  // Route-and-execute can buy external sellers
-  "route-execute", "seller-payability", "route-execute-max", "route-execute-plus",
-  // Identity-bound (payment = identity)
-  "memory-write", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-revoke",
-  "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",
-  "my-usage",
-  "receipts",
-  "feedback",       // feedback-kit.js: the verdict is bound to the wallet that paid for the rated call
-  // FRED keyed (503 without FRED_API_KEY / FRED_API_KEY_V2)
-  "fred-series", "fred-search", "fred-series-info", "fred-release-calendar",
-  "sahm-rule", "cpi-yoy", "unemployment-rate", "fed-funds",
-  "fred-release-observations",
-  // Neynar / Farcaster
-  "farcaster-profile", "farcaster-by-address",
-  "fc-cast-search", "fc-channel-feed", "fc-trending", "fc-user-casts", "fc-cast",
-  "fc-cast-replies", "fc-channel", "fc-user-search", "fc-cast-metrics",
-  // X API v2 app-only bearer (per-post read billing) and the enrichment
-  // providers - each lists only with its own key, and 503s without it.
-  "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup",
-  "exa-search", "exa-answer", "exa-contents",
-  "hunter-domain-search", "hunter-email-finder", "hunter-email-verify", "hunter-company",
-  "apollo-people-search", "apollo-org-enrich", "apollo-person-match",
-  // OpenRouter Image + Video APIs (flat per-image / per-second upstream price).
-  "v1-images-fast", "v1-images-pro", "v1-videos",
-  // Alchemy hard-require (compute units) — publicJsonRpc-backed tools stay IN
-  "wallet-balance", "token-metadata", "token-price", "wallet-transactions",
-  "asset-transfers", "token-balances", "token-allowance", "tx-receipt",
-  "block-receipts", "token-price-history",
-  "nft-holdings", "nft-metadata", "gas-snapshot", "eth-call",
-  "dex-pair", "dex-pool", "dex-quote",
-  "nft-collection", "nft-floor",
-  "l2-gas-comparison",
-  // CDP (Coinbase Developer Platform keys)
-  "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema",
-]);
+// The list lives in src/metered-slugs.js so the server can publish its count
+// (/api/reliability); re-exported here for the scripts that import it.
+import { METERED_SLUGS, meteredPackSlugs } from "../src/metered-slugs.js";
+export { METERED_SLUGS };
 
 const BROWSER_SLUGS = new Set(["render", "screenshot"]);
 // Handlers proven offline by scripts/test-media.js; live examples depend on
 // Wikimedia (same URL for all three). Soft-skip source-host flakes only.
 const MEDIA_EXAMPLE_SLUGS = new Set(["media-info", "audio-convert", "audio-normalize"]);
 
-const METERED_PACK_SLUGS = new Set();
-for (const p of SKILL_PACKS) {
-  const hits = (p.toolSlugs || []).filter((s) => METERED_SLUGS.has(s));
-  if (hits.length) METERED_PACK_SLUGS.add(p.slug);
-}
+const METERED_PACK_SLUGS = meteredPackSlugs(SKILL_PACKS);
 
 // Upstreams whose edge BLOCKS GitHub runners: Kalshi's Cloudflare answered the
 // sweep an HTML 403 page on 2026-08-28 (both examples, same run) while the same
@@ -304,6 +227,35 @@ function isCertTransparencyUpstreamFlake(slug, status, body, threw) {
 /** Client AbortSignal / connect flake (status 0). Server 502/504 stay hard fails. */
 function isClientTimeoutFlake(status, body, threw) {
   return status === 0 && /timeout|aborted|AbortError|ETIMEDOUT|UND_ERR_CONNECT|ECONNRESET|fetch failed/i.test(errText(body, threw));
+}
+
+// An upstream that stops answering THIS RUNNER (2026-09-25: RugCheck timed out
+// on every GitHub-hosted run for hours while answering production and a local
+// machine in under a second). A tool's own "<Label> upstream timed out" 504
+// counts as that only when the harness, from the same runner, cannot reach the
+// upstream directly either; if the direct probe answers, the tool failing is
+// ours and it fails. One probe per label per run.
+const RUNNER_PROBES = {
+  // The exact request sol-token-safety's published example makes (JUP summary).
+  RugCheck: "https://api.rugcheck.xyz/v1/tokens/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN/report/summary",
+};
+export function runnerProbeLabel(status, body) {
+  if (status !== 504) return null;
+  const m = /^(\w+) upstream timed out/.exec(String(body?.error || ""));
+  return m && RUNNER_PROBES[m[1]] ? m[1] : null;
+}
+const RUNNER_PROBE_UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
+const runnerProbeMemo = new Map();
+function upstreamAnswersRunner(label) {
+  if (!runnerProbeMemo.has(label)) {
+    // The same User-Agent the tool sends: an upstream that refuses our
+    // identity from this runner must read as refusing, not as answering.
+    const t0 = Date.now();
+    runnerProbeMemo.set(label, fetch(RUNNER_PROBES[label], { headers: { "User-Agent": RUNNER_PROBE_UA, Accept: "application/json" }, signal: AbortSignal.timeout(10_000) })
+      .then((res) => { console.log(`\n# runner probe ${label}: HTTP ${res.status} in ${Date.now() - t0} ms`); return res.status < 500; })
+      .catch((e) => { console.log(`\n# runner probe ${label}: ${e?.name || "error"} after ${Date.now() - t0} ms`); return false; }));
+  }
+  return runnerProbeMemo.get(label);
 }
 
 // A 5xx RELAYED FROM A THIRD PARTY, as opposed to one of ours. Deliberately
@@ -522,6 +474,10 @@ function runControls() {
     "control: client AbortSignal timeout is a soft-skip");
   ok(isClientTimeoutFlake(504, { error: "timeout" }, null) === false,
     "control: server HTTP 504 timeout is NOT a client-timeout soft-skip");
+  ok(runnerProbeLabel(504, { error: "RugCheck upstream timed out" }) === "RugCheck",
+    "control: a tool's RugCheck timeout is a runner-probe candidate");
+  ok(runnerProbeLabel(504, { error: "data.gov upstream timed out" }) === null && runnerProbeLabel(502, { error: "RugCheck upstream timed out" }) === null,
+    "control: only a listed upstream's 504 is a candidate (an unlisted host, or a 502, still fails)");
   ok(isStrictFailure(503, { error: "capacity" }, null) === true,
     "control: HTTP 503 is a hard fail");
   ok(isStrictFailure(504, { error: "timeout" }, null) === true,
@@ -621,6 +577,7 @@ async function main() {
   let skippedPriceFeed = 0;
   let skippedCertTransparency = 0;
   let skippedClientTimeout = 0;
+  let skippedRunnerUnreachable = 0;
   const liveFails = [];
   // Documented-output-keys check on every strict pass. This used to live only
   // in test-all.js; now that the lenient sweep hands these routes over, the
@@ -712,6 +669,13 @@ async function main() {
       return;
     }
 
+    const probeLabel = runnerProbeLabel(r.status, r.body);
+    if (probeLabel && !(await upstreamAnswersRunner(probeLabel))) {
+      skippedRunnerUnreachable++;
+      console.log(`\nskip - ${t.slug}: ${probeLabel} does not answer this runner directly either (upstream refusing or unreachable from here; not our defect)`);
+      return;
+    }
+
     const err = r.threw || (r.body && r.body.error) || `HTTP ${r.status}`;
     const msg = `${t.method.toUpperCase()} ${t.path} (${t.slug}) → ${r.status || "threw"} ${String(typeof err === "object" ? JSON.stringify(err) : err).slice(0, 160)}`;
     liveFails.push(msg);
@@ -736,8 +700,11 @@ async function main() {
   if (skippedClientTimeout) {
     console.log(`skip - ${skippedClientTimeout} tool(s) soft-skipped after client timeout (retry exhausted)`);
   }
+  if (skippedRunnerUnreachable) {
+    console.log(`skip - ${skippedRunnerUnreachable} tool(s) soft-skipped: their upstream does not answer this runner directly (checked once per upstream)`);
+  }
 
-  const softSkipped = skippedBrowser + skippedRateLimit + skippedMediaSource + skippedPriceFeed + skippedClientTimeout + skippedCertTransparency;
+  const softSkipped = skippedBrowser + skippedRateLimit + skippedMediaSource + skippedPriceFeed + skippedClientTimeout + skippedCertTransparency + skippedRunnerUnreachable;
   const asserted = work.length - softSkipped;
   ok(liveFails.length === 0,
     liveFails.length

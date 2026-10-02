@@ -2,7 +2,15 @@
 // Mocks global fetch so no wallet/network is needed. The refusal paths throw
 // BEFORE any signing, so they run offline with a throwaway key.
 import { randomBytes } from "node:crypto";
-import { quoteWithinCap, readAfterSpend } from "../src/x402-buyer.js";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+// Two cases below settle against a stub seller, and a settled payment writes a
+// per-payment ledger line. Point it at a scratch directory before the buyer
+// module (and the ledger it imports) is loaded, so a test run never writes to
+// the volume path.
+process.env.OUTBOUND_LEDGER_FILE = join(mkdtempSync(join(tmpdir(), "x402-buyer-test-")), "outbound-spend.ndjson");
+const { quoteWithinCap, readAfterSpend } = await import("../src/x402-buyer.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
@@ -40,7 +48,7 @@ process.env.X402_UPSTREAM_BUYER_KEY = "0x" + randomBytes(32).toString("hex");
 const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 const origFetch = globalThis.fetch;
 const v1entry = (over) => ({ scheme: over.scheme ?? "exact", network: over.network ?? "base", asset: over.asset ?? USDC, maxAmountRequired: over.amt ?? "1000", payTo: "0xabc", resource: "https://seller.example/x", description: "d", maxTimeoutSeconds: 60 });
-const challenge = (accepts) => ({ status: 402, headers: { get: () => null }, json: async () => ({ x402Version: 1, accepts }), text: async () => "" });
+const challenge = (accepts) => ({ status: 402, headers: { get: () => null }, json: async () => ({ x402Version: 1, accepts }), text: async () => JSON.stringify({ x402Version: 1, accepts }) });
 const { payX402 } = await import("../src/x402-buyer.js");
 
 // decoy: cheap non-exact first, expensive exact/USDC behind → must refuse (cap)
@@ -101,6 +109,22 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   ok(raw && !raw.message.includes("0xAbCdEfAbCdEfAbCdEfAbCdEfAbCdEfAbCdEfAbCd"),
     "payTo binding: the refusal never echoes the seller's raw payTo string back (injection surface)");
 
+  // signBy: a payment the buyer could no longer settle is never signed. The
+  // bound is re-checked after the bare 402 read, just before signing.
+  {
+    let fetches = 0;
+    globalThis.fetch = async () => { fetches++; return challenge([payToEntry(PROVEN)]); };
+    let late = null;
+    try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, signBy: Date.now() - 1 }); } catch (e) { late = e; }
+    ok(late && late.statusCode === 504 && /Nothing was signed/.test(late.message) && fetches === 1, `signBy: past its sign-by moment the payer refuses 504 after the bare 402 and sends no paid request (fetches ${fetches}, ${late?.statusCode})`);
+    ok(_spentThisWindow() === 0n, "signBy: a refused late signature holds no spend budget");
+    fetches = 0;
+    let slow = null;
+    globalThis.fetch = async () => { fetches++; await new Promise((r) => setTimeout(r, 60)); return challenge([payToEntry(PROVEN)]); };
+    try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, signBy: Date.now() + 20 }); } catch (e) { slow = e; }
+    ok(slow && slow.statusCode === 504 && fetches === 1, `signBy: a seller whose bare 402 takes past the sign-by moment is not paid (fetches ${fetches}, ${slow?.statusCode})`);
+  }
+
   // MATCH (case-insensitive, EVM): must NOT be refused for payTo reasons.
   globalThis.fetch = async () => challenge([payToEntry(PROVEN.toUpperCase().replace("0X", "0x"))]);
   let ma = null;
@@ -131,11 +155,13 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     const v2challenge = (accepts) => ({ status: 402, headers: { get: (n) => (String(n).toLowerCase() === "payment-required" ? Buffer.from(JSON.stringify({ x402Version: 2, accepts })).toString("base64") : null) }, json: async () => ({}), text: async () => "" });
     globalThis.fetch = async () => v2challenge([v2("USDC")]);
     let wd = null;
-    try { await payX402("https://wrongdomain.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base" }); } catch (e) { wd = e; }
+    try { await payX402("https://wrongdomain.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", memoizeDelivery: true }); } catch (e) { wd = e; }
     ok(wd && /EIP-712 name "USDC"/.test(wd.message) && /"USD Coin"/.test(wd.message) && /Nothing was signed/.test(wd.message), "wrong domain: a Base accept naming \"USDC\" is refused before signing, naming both names");
     ok(wd && wd.refused === true && wd.statusCode === 502, "wrong domain: the error is marked refused (route-execute falls through) with a 502");
     ok(_spentThisWindow() === 0n, "wrong domain: no budget held");
-    ok(!!sellerRefusedRecently("https://wrongdomain.example", "base"), "wrong domain: the seller is memoized as refusing on base for the TTL");
+    ok(!sellerRefusedRecently("https://wrongdomain.example", "base"), "wrong domain: one meeting is recorded and benches nothing yet");
+    try { await payX402("https://wrongdomain.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", memoizeDelivery: true }); } catch { /* refused again */ }
+    ok(!!sellerRefusedRecently("https://wrongdomain.example", "base"), "wrong domain: the second meeting benches that route on base for the TTL");
     // Control: the same accept naming "USD Coin" passes the domain check. It
     // is then refused by the payTo binding one line further down (the proven
     // address differs), which proves the domain check threw nothing AND keeps
@@ -237,9 +263,10 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     if (!paid) return { status: 402, headers: { get: (h) => (h.toLowerCase() === "payment-required" ? v2hdr : null) }, json: async () => ({}), text: async () => "{}" };
     paidAttempts++;
     try { sentPayload = JSON.parse(Buffer.from(paid, "base64").toString("utf8")); } catch { sentPayload = null; }
-    return { status: 402, headers: { get: () => "application/json" }, json: async () => ({ error: "payment_verification_failed" }), text: async () => JSON.stringify({ error: "payment_verification_failed" }) };
+    // The seller's payment layer refusing: it answers with its offer again.
+    return { status: 402, headers: { get: (h) => (h.toLowerCase() === "payment-required" ? v2hdr : "application/json") }, json: async () => ({ error: "payment_verification_failed" }), text: async () => JSON.stringify({ error: "payment_verification_failed" }) };
   };
-  const buy = (notDebited, extra = {}) => payX402("https://refuser.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", notDebited, ...extra }).then(() => null, (e) => e);
+  const buy = (notDebited, extra = {}) => payX402("https://refuser.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", memoizeDelivery: true, notDebited, ...extra }).then(() => null, (e) => e);
   const held0 = _spentThisWindow();
   const t0 = Math.floor(Date.now() / 1000);
   const r1 = await buy(async (q) => { asked = q; return { debited: false, observed: 1, expired: true }; }, { refusalMaxWaitMs: 12345 });
@@ -251,7 +278,9 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   ok(Number.isFinite(vb) && vb <= t1 + 30 && vb >= t0 + 25, `the SIGNED validBefore is now + the 30 s refusal window (got +${vb - t0}s) even though the accept said maxTimeoutSeconds 300`);
   ok(sentPayload?.accepted?.maxTimeoutSeconds === 300, "the ECHOED accept keeps the seller's own maxTimeoutSeconds (the facilitator's requirements match)");
   ok(asked.untilUnix === vb + 5 && asked.maxWaitMs === 12345, "the chain check is told to wait until the signed validBefore (+ slack), bounded by the caller's refusalMaxWaitMs");
-  ok(sellerRefusedRecently("https://refuser.example", "base")?.status === 402 && !sellerRefusedRecently("https://refuser.example", "solana"), "the refusing seller is memoized on base only");
+  ok(!sellerRefusedRecently("https://refuser.example", "base"), "one refusal is recorded and benches nothing yet");
+  await buy(async () => ({ debited: false, observed: 1, expired: true }));
+  ok(sellerRefusedRecently("https://refuser.example", "base")?.status === 402 && !sellerRefusedRecently("https://refuser.example", "solana"), "the second benches the refusing route on base only");
   __resetSellerRefusalsForTest();
   const heldLive = _spentThisWindow();
   const rLive = await buy(async () => ({ debited: false, observed: 1, expired: false }));
@@ -264,10 +293,156 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   ok(r2 && r2.committed === true && !r2.refused && _spentThisWindow() === held1 + 1000n, "Base: nonce consumed -> post-commit stance kept, hold stands");
   const r3 = await buy(async () => { throw new Error("RPC 429"); });
   ok(r3 && r3.committed === true && !sellerRefusedRecently("https://refuser.example", "base"), "Base: unreadable chain -> post-commit stance kept, nothing memoized");
-  ok(paidAttempts === 5, "one paid attempt per buy (a refusal that does not name X-PAYMENT gets no resend)");
+  ok(paidAttempts === 6, "one paid attempt per buy (a refusal that does not name X-PAYMENT gets no resend)");
   // The pure cap: never above the window, never rewrites a shorter seller value upward.
   const { capEvmValidity } = await import("../src/x402-buyer.js");
   ok(capEvmValidity({ maxTimeoutSeconds: 300 }, 30).maxTimeoutSeconds === 30 && capEvmValidity({ maxTimeoutSeconds: 10 }, 30).maxTimeoutSeconds === 10 && capEvmValidity({}, 30).maxTimeoutSeconds === 30, "capEvmValidity: min(seller, window), and a missing seller value takes the window");
+}
+
+// --- the payment we SIGN re-checks the evidence wallets (2026-09-28) ----------
+//
+// The resolver binds INHERITED settlement history to the wallets it came from,
+// and checks that the PROBE's 402 pays one of them. payX402 then makes its own
+// unpaid request and signs whatever that 402 names, and the seller answers
+// both - so a seller could show the bound wallet to the probe and another
+// address to the payment. `evidenceWallets` carries the binding to the accept
+// actually signed. The signer is spied on the live client instance, so "signed
+// zero times" is measured at the signing call itself, not inferred from a
+// header.
+{
+  const { payX402, getUpstreamBuyer, getUpstreamBuyerAvm, _spentThisWindow } = await import("../src/x402-buyer.js");
+  // Letters in the address on purpose: an all-digit wallet has no case, and
+  // the case-insensitive compare is one of the things under test.
+  const W1 = "0x" + "1a".repeat(20);
+  const X = "0x" + "9".repeat(40);
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
+  const accept = (payTo) => ({ scheme: "exact", network: "eip155:8453", asset: USDC, amount: "1000", payTo, maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } });
+  let paidRequests = 0;
+  const seller = (payTo) => async (_url, init) => {
+    const h = init?.headers || {};
+    if (!(h["PAYMENT-SIGNATURE"] || h["payment-signature"] || h["X-PAYMENT"])) {
+      return { status: 402, headers: { get: (n) => (String(n).toLowerCase() === "payment-required" ? b64({ x402Version: 2, accepts: [accept(payTo)] }) : null) }, json: async () => ({}), text: async () => "{}" };
+    }
+    paidRequests++;
+    return new Response(JSON.stringify({ answer: 42 }), { status: 200, headers: { "content-type": "application/json", "payment-response": b64({ success: true, transaction: "0x" + "ab".repeat(32), network: "eip155:8453" }) } });
+  };
+  const evm = await getUpstreamBuyer();
+  const realSign = evm.client.createPaymentPayload.bind(evm.client);
+  let signs = 0;
+  evm.client.createPaymentPayload = async (...a) => { signs++; return realSign(...a); };
+  const pay = (payTo, evidenceWallets, extra = {}) => {
+    globalThis.fetch = seller(payTo);
+    return payX402("https://tenant.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "base", evidenceWallets, ...extra }).then((r) => ({ r }), (e) => ({ e }));
+  };
+
+  // A1 CONTROL, first: the 402 names the bound wallet -> it signs once and
+  // settles. Without this the refusals below could be a signer that never
+  // works at all.
+  signs = 0; paidRequests = 0;
+  const a1 = await pay(W1, [W1]);
+  ok(!a1.e && a1.r?.result?.answer === 42 && a1.r?.receipt?.transaction && signs === 1 && paidRequests === 1,
+    `A1 control: the pay 402 names the evidence wallet -> signed once and settled (signs ${signs}, paid requests ${paidRequests}${a1.e ? `, threw ${a1.e.message}` : ""})`);
+
+  // A2: the pay 402 names another address -> refused before anything is signed.
+  signs = 0; paidRequests = 0;
+  const held2 = _spentThisWindow();
+  const a2 = await pay(X, [W1]);
+  ok(a2.e && a2.e.statusCode === 502 && /Nothing was signed/.test(a2.e.message) && a2.e.message.includes(X),
+    "A2: a pay 402 naming a wallet outside the evidence wallets is refused 502, naming the normalized address, and says nothing was signed");
+  ok(signs === 0 && paidRequests === 0 && _spentThisWindow() === held2, "A2: the signer was called 0 times and no budget was held");
+  ok(/belongs to a different wallet/.test(a2.e?.message || ""), "A2: the refusal says the history belongs to a different wallet");
+
+  // A3: an unreadable payTo refuses (unlike provenPayTo, where it is unknown),
+  // and no part of the seller's raw string reaches the message.
+  const long = "Q9".repeat(150);
+  for (const junk of ["not-an-address", long]) {
+    signs = 0;
+    const a3 = await pay(junk, [W1]);
+    const m = a3.e?.message || "";
+    ok(a3.e && /Refusing to pay an unreadable address/.test(m) && signs === 0,
+      `A3: an unreadable pay 402 payTo (${junk.length} chars) is refused as "an unreadable address", nothing signed`);
+    ok(!m.includes("not-an-address") && !m.includes("Q9Q9") && !m.includes(junk.slice(-12)), "A3: the refusal never echoes any part of the seller's raw payTo string");
+  }
+
+  // A4: case never decides - an upper-case 402 payTo against a lower-case list signs.
+  signs = 0;
+  const a4 = await pay(W1.toUpperCase().replace("0X", "0x"), [W1.toLowerCase()]);
+  ok(!a4.e && signs === 1, `A4: the same wallet in upper case against a lower-case evidence list is a match and signs${a4.e ? ` (threw ${a4.e.message})` : ""}`);
+
+  // A5: no binding (null, or an empty list) is today's behaviour: pays X.
+  signs = 0;
+  const a5null = await pay(X, null);
+  const a5empty = await pay(X, []);
+  ok(!a5null.e && !a5empty.e && signs === 2, "A5: evidenceWallets null or [] checks nothing and pays as before");
+
+  // A6: Base only. On Algorand the accept's payTo is not an EVM address and the
+  // Base binding must not refuse it. The AVM signer is replaced by a sentinel,
+  // so reaching it proves the check was not applied and nothing touches algod.
+  {
+    const algosdk = (await import("algosdk")).default;
+    process.env.ALGORAND_UPSTREAM_BUYER_MNEMONIC = algosdk.secretKeyToMnemonic(algosdk.generateAccount().sk);
+    const avm = await getUpstreamBuyerAvm();
+    let avmSigns = 0;
+    avm.client.createPaymentPayload = async () => { avmSigns++; throw new Error("SENTINEL: reached the AVM signer"); };
+    const algoPayTo = algosdk.generateAccount().addr.toString();
+    globalThis.fetch = async () => ({ status: 402, headers: { get: (n) => (String(n).toLowerCase() === "payment-required" ? b64({ x402Version: 2, accepts: [{ scheme: "exact", network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", asset: "31566704", amount: "1000", payTo: algoPayTo, maxTimeoutSeconds: 60 }] }) : null) }, json: async () => ({}), text: async () => "{}" });
+    let a6 = null;
+    try { await payX402("https://tenant.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, chain: "algorand", evidenceWallets: [W1] }); } catch (e) { a6 = e; }
+    ok(a6 && /SENTINEL/.test(a6.message) && avmSigns === 1, `A6: on Algorand the Base-only check is not applied (reached the AVM signer${a6 && !/SENTINEL/.test(a6.message) ? `; threw ${a6.message}` : ""})`);
+  }
+
+  evm.client.createPaymentPayload = realSign;
+}
+
+// A7: the call sites, pinned from source. The payer check above is inert unless
+// the resolver SETS the list and route-execute FORWARDS it (a behavioural twin
+// of the second pin lives in test-route-execute.js).
+{
+  const { readFileSync } = await import("node:fs");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const fn = server.slice(server.indexOf("async function resolveExternalSeller("), server.indexOf("async function diagnoseExternalSeller("));
+  ok(/evidenceWallets = gate\.evidenceWallets;/.test(fn) && fn.indexOf("evidenceWallets = gate.evidenceWallets;") > fn.indexOf("const gate = baseLiveGate({"),
+    "A7: resolveExternalSeller's Base branch sets evidenceWallets from the passed binding gate (the wallets whose own evidence clears)");
+  ok(/resolved\.push\(\{[^\n]*\bevidenceWallets,/.test(fn), "A7: the resolved candidate carries evidenceWallets");
+  const re = readFileSync(new URL("../src/tools/route-execute.js", import.meta.url), "utf8");
+  ok(/payExternal\(extUrl, \{[^\n]*evidenceWallets: ext\.evidenceWallets/.test(re), "A7: route-execute passes evidenceWallets: ext.evidenceWallets to payExternal");
+  const buyer = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
+  const payFn = buyer.slice(buyer.indexOf("export async function payX402("));
+  const at = payFn.indexOf("evidenceWallets.length");
+  ok(at > payFn.indexOf("quoteWithinCap(quotedAtomic, maxAtomic)") && at < payFn.indexOf("screenAddressForPayment") && at < payFn.indexOf("reserveSpend(quotedAtomic)"),
+    "A7: the check sits after the cap check and before the sanctions screen and any budget hold");
+}
+
+// --- Base unproven tier: the ceiling holds on the quote being SIGNED ---------
+// The resolver admits a Base seller below the settlement floor only when its
+// listed price is within SOR_BASE_UNPROVEN_MAX_USD. The seller answers the
+// payment's own 402 separately, so the ceiling is re-checked there.
+{
+  const { _spentThisWindow } = await import("../src/x402-buyer.js");
+  const before = process.env.SOR_BASE_UNPROVEN_MAX_USD;
+  const PAYTO = "0x3333333333333333333333333333333333333333";
+  const entry = (amt) => ({ ...v1entry({ amt }), payTo: PAYTO });
+  const refusal = async (amt, opts = {}) => {
+    globalThis.fetch = async () => challenge([entry(amt)]);
+    try { await payX402("https://seller.example/x", { maxAtomic: 500000n, trusted: true, method: "POST", body: {}, allowUnproven: true, ...opts }); return null; } catch (e) { return e; }
+  };
+  delete process.env.SOR_BASE_UNPROVEN_MAX_USD;
+  const spentBefore = _spentThisWindow();
+  const high = await refusal("20000");
+  ok(high && high.statusCode === 409 && /above the unproven ceiling 10000/.test(high.message), "unproven Base: a signed quote above the $0.01 default ceiling is refused 409");
+  ok(_spentThisWindow() === spentBefore, "unproven Base: the refusal holds no spend budget (before reserveSpend)");
+  process.env.SOR_BASE_UNPROVEN_MAX_USD = "off";
+  const off = await refusal("1000");
+  ok(off && off.statusCode === 409, "unproven Base: with the tier switched off even a $0.001 quote is refused");
+  process.env.SOR_BASE_UNPROVEN_MAX_USD = "not-a-number";
+  const junk = await refusal("20000");
+  ok(junk && junk.statusCode === 409 && /ceiling 10000/.test(junk.message), "unproven Base: a malformed env reads as the default ceiling, never a wider one");
+  if (before === undefined) delete process.env.SOR_BASE_UNPROVEN_MAX_USD; else process.env.SOR_BASE_UNPROVEN_MAX_USD = before;
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/x402-buyer.js", import.meta.url), "utf8");
+  const payFn = src.slice(src.indexOf("export async function payX402"));
+  const at = payFn.indexOf('chain === "base" && allowUnproven');
+  ok(at > payFn.indexOf("quoteWithinCap(quotedAtomic, maxAtomic)") && at < payFn.indexOf("reserveSpend(quotedAtomic)"), "unproven Base: the ceiling check sits after the cap check and before any budget hold or signature");
 }
 
 globalThis.fetch = origFetch;

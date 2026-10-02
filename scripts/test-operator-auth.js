@@ -196,7 +196,20 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
     ok(body.origin === "https://proof.example.com", "seller-evidence echoes the origin it answered for");
     // An origin we never crawled must say so rather than report zero evidence:
     // "we hold none" and "we never looked" are different answers to a seller.
-    ok(body.listed === false && /not in our index/i.test(String(body.reason)), "an uncrawled origin says never looked, not zero");
+    // Two honest answers, and the test pins BOTH rather than the one phrasing
+    // that happened to ship first. With the index settled, "not in our index -
+    // never crawled" is a fact about the seller. While it is still loading it
+    // is not, so the answer says YET, names the state, and carries
+    // `indexLoading` as a field - the distinction a reader acts on, and the
+    // reason this must not be relaxed to "reason is a non-empty string".
+    ok(body.listed === false, "an uncrawled origin is not listed");
+    if (body.indexLoading) {
+      ok(/\byet\b/i.test(String(body.reason)) && /fact about this boot/i.test(String(body.indexLoadingNote || "")),
+        `a still-loading index says so rather than claiming never-crawled (${body.indexState})`);
+      ok(Number(body.retryAfterSeconds) > 0, "...and says when to ask again");
+    } else {
+      ok(/not in our index/i.test(String(body.reason)), "an uncrawled origin says never looked, not zero");
+    }
     ok(body.settlementEvidence && body.settlementEvidence.base?.observed === false, "unobserved sources read observed:false, never 0");
     ok(!JSON.stringify(body).includes(TOKEN), "seller-evidence never echoes the credential");
     // It is under /__operator, which the CORS allow-list denies by name.

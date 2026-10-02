@@ -3,8 +3,8 @@ name: Cross-chain tool matrix
 # Manually-dispatched proof run: buy the top-N external tools on EACH of the
 # seven rails and print a tools×chains grid of real on-chain settlements. Proves
 # every top tool renders its payload through every chain (settlement → unlock →
-# payload), with a tx receipt per cell. Not scheduled — it spends real money
-# (~$3-5 for the full 15×7 grid), so it runs only when dispatched. Informational:
+# payload), with a tx receipt per cell. Not scheduled — it spends real money,
+# so it runs only when dispatched. Informational:
 # the grid is the job-log output; it never opens an issue or pages.
 on:
   workflow_dispatch:
@@ -34,7 +34,7 @@ jobs:
       MATRIX_TOP_N: ${{ github.event.inputs.top_n }}
       MATRIX_DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -46,7 +46,7 @@ jobs:
         # @stellar/stellar-sdk pinned to the repo lock (no floating installs);
         # @x402/avm + algosdk come from package.json via `npm ci`. Keep in
         # lockstep with the canary — version skew causes SVM/AVM settle failures.
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.26.0 @x402/core@2.26.0 @x402/evm@2.26.0 @x402/svm@2.26.0 @x402/stellar@2.26.0 @stellar/stellar-sdk@16.0.1 @solana/kit@8.3.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 @x402/svm@2.27.0 @x402/stellar@2.27.0 @stellar/stellar-sdk@16.0.1 @solana/kit@8.4.0 viem@2.52.2
       - name: Run the cross-chain tool matrix
         # Wallet/pow secrets scoped to THIS step only (audit R-07).
         env:

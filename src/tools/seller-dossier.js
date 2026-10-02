@@ -34,7 +34,7 @@ function iso(ms) {
 // host-entry.js on 2026-08-28; it surfaced here when the operator evidence
 // route added a second caller-controlled path into this tool, on top of the
 // paid tool's own `origin` parameter.
-function hostOf(raw) {
+export function hostOf(raw) {
   let v = String(raw || "").trim().slice(0, 300).toLowerCase();
   for (const scheme of ["https://", "http://"]) {
     if (v.startsWith(scheme)) { v = v.slice(scheme.length); break; }
@@ -75,7 +75,7 @@ const TOOL_ROWS_MAX = 50;
 export function composeSellerDossier(a) {
   const {
     host, detail, entry, dispatch, evidenceBinding, leaderboardRow, bazaar, solana, mpp,
-    refusals = [], deliveryFailures = [], registration, deliveries, sharedClaims, helpers = {}, thresholds = {}, self = false, now = Date.now(),
+    refusals = [], deliveryFailures = [], registration, deliveries, sharedClaims, helpers = {}, thresholds = {}, self = false, loading = null, now = Date.now(),
   } = a;
   const generatedAt = new Date(now).toISOString();
   const origin = detail?.origin || `https://${host}`;
@@ -91,7 +91,14 @@ export function composeSellerDossier(a) {
       origin,
       listed: false,
       ...(self ? { self: true, note: "this is the local catalog - our router never routes to itself; the host's own external figures are at /api/index?seller=<host>" } : {}),
-      reason: self ? "the local catalog is not a crawled seller; call its tools directly" : "not in our index - never crawled, so we hold no evidence either way",
+      // `loading` overrides the reason outright: "never crawled" is a claim
+      // about the seller and would be false while this boot is still reading.
+      ...(loading || {}),
+      reason: self
+        ? "the local catalog is not a crawled seller; call its tools directly"
+        : loading
+          ? `not in this server's index YET - it is still ${loading.indexState}, so this is not a finding about ${host}`
+          : "not in our index - never crawled, so we hold no evidence either way",
       settlementEvidence: {
         base: leaderboardRow
           ? { source: "on-chain leaderboard", callsSettled: leaderboardRow.callsSettled ?? 0, uniqueBuyers: leaderboardRow.uniqueBuyers ?? 0 }
@@ -130,7 +137,11 @@ export function composeSellerDossier(a) {
   if (detail.error) flags.push(`last crawl failed: ${String(detail.error).slice(0, 120)}`);
   if (entry?.robotsBlocked) flags.push("the seller's robots.txt blocks our crawler; the catalog below may be stale");
   if (detail.originResponded === false) flags.push("the origin did not respond on the last crawl");
-  if (injected) flags.push("listing text contains instructions aimed at agents (prompt-injection shape); rows are excluded from routing");
+  // Describe the MATCH, never a purpose. "instructions aimed at agents" asserts
+  // intent we cannot observe from text alone, about a named business; the
+  // observable fact is that the listing text matches an imperative-instruction
+  // pattern, and that we excluded the rows. Same finding, no imputed motive.
+  if (injected) flags.push("listing text matches our imperative-instruction pattern (the shape a prompt injection takes); rows are excluded from routing as a precaution");
 
   // ------------------------------------------------------------------ health
   const paywall = detail.paywall || null;
@@ -219,24 +230,69 @@ export function composeSellerDossier(a) {
   // ----------------------------------------------------------------- wallets
   const payTosByNetwork = detail.payTosByNetwork || {};
   const basePayTo = detail.payToByNetwork?.["eip155:8453"] || null;
-  const inherited = evidenceBinding?.payTos ? [...evidenceBinding.payTos] : [];
+  // The binding's payTos are EVERY wallet with evidence, the origin's own
+  // advertised wallet included; only the others are inherited.
+  const ownWallets = new Set([basePayTo, ...Object.values(payTosByNetwork).flat()].filter((w) => typeof w === "string").map((w) => w.toLowerCase()));
+  const inherited = evidenceBinding?.payTos ? [...evidenceBinding.payTos].filter((w) => !ownWallets.has(String(w).toLowerCase())) : [];
   const ownSettled = Number(evidenceBinding?.ownSettled) || 0;
   const ownPayers = evidenceBinding?.ownPayers;
   const claimsFor = basePayTo && sharedClaims ? sharedClaims[String(basePayTo).toLowerCase()] : null;
+  // Every figure the router credits this origin with, kept against the wallet
+  // it was measured at: the gate asks whether the wallet the live 402 names
+  // clears the floor on that wallet's own figures.
+  const byWallet = evidenceBinding?.byWallet instanceof Map
+    ? [...evidenceBinding.byWallet].map(([wallet, v]) => ({ wallet, settled: Number(v?.settled) || 0, payers: v?.payers === undefined ? null : Number(v.payers), clearsFloor: evidenceBinding.clearing instanceof Set ? evidenceBinding.clearing.has(wallet) : null }))
+    : [];
+  // The router's Base detail, wherever the dispatch row carries it.
+  const baseDetail = dispatch?.routerDispatchDetail || dispatch?.routerDispatchByChain?.base?.detail || null;
+  // What the router did NOT count because it was paid with USDC the seller's
+  // own wallet had sent the payer earlier: what the scan ACTUALLY netted,
+  // summed over this origin's wallets, counts only. Never the figures that
+  // would have counted had those payments been genuine (most of those are the
+  // payers' own money, and publishing them under this heading would present a
+  // seller's whole history as self-funded), and never per wallet or per payer:
+  // that detail stays on the operator surface, as delivery failures do.
+  const netted = evidenceBinding?.selfFunded?.netted instanceof Map ? [...evidenceBinding.selfFunded.netted.values()] : [];
+  const nettedCalls = netted.reduce((a, n) => a + (Number(n?.calls) || 0), 0);
+  const nettedUsd = Number(netted.reduce((a, n) => a + (Number(n?.usd) || 0), 0).toFixed(6));
+  const mostlySelfFunded = netted.some((n) => n?.circular === true);
+  // Payments the seller refunded: removed from the evidence, not self-funding.
+  const refundedCalls = netted.reduce((a, n) => a + (Number(n?.refunded) || 0), 0);
+  const baseReason = dispatch?.routerDispatchByChain?.base?.reason || dispatch?.routerDispatchReason || null;
+  const changesRouterVerdict = baseReason === "settlement_self_funded";
   const wallets = {
     advertisedByNetwork: payTosByNetwork,
     base: {
       advertised: basePayTo,
-      ownEvidence: { settled: ownSettled, payers: ownPayers === undefined ? null : ownPayers, note: "chain join on this origin's OWN advertised address, plus any committed seed" },
+      ownEvidence: { settled: ownSettled, payers: ownPayers === undefined ? null : ownPayers, note: "chain join on this origin's OWN advertised address" },
+      evidenceByWallet: byWallet,
+      evidenceByWalletNote: byWallet.length ? "settlement evidence credited to this origin, per wallet it was measured at; the router pays only a wallet whose own figures clear the floor, and only when the live 402 names it" : null,
+      // Figures at wallets this host lists as shared settlement contracts:
+      // credited to no seller, reported so their absence is never read as zero.
+      withheldAtSharedWallets: evidenceBinding?.withheld?.byWallet instanceof Map
+        ? [...evidenceBinding.withheld.byWallet].map(([wallet, v]) => ({ wallet, settled: Number(v?.settled) || 0, payers: v?.payers === undefined ? null : Number(v.payers) }))
+        : [],
+      selfFunded: nettedCalls > 0 || mostlySelfFunded
+        ? { nettedCalls, nettedUsd, mostlySelfFunded, changesRouterVerdict, note: "payments the router's scan found paid with USDC this seller's own wallet had sent the payer earlier (a refund of the payer's own earlier payments is not counted here: see refunded); they are not counted as settlement. Summed over the scan window and this origin's wallets" }
+        : null,
+      refunded: refundedCalls > 0
+        ? { calls: refundedCalls, note: "payments the seller refunded to the payer that made them; refunded payments are not counted as settlement, and are not self-funding. Summed over the scan window and this origin's wallets" }
+        : null,
       inheritedFrom: inherited.length ? inherited : [],
       inheritedNote: inherited.length ? "evidence counted for this origin came partly from wallets other listings also name; the router requires the live 402 to pay one of them" : null,
       sharedWithOrigins: Array.isArray(claimsFor) ? claimsFor.filter((o) => String(o).toLowerCase() !== String(origin).toLowerCase()) : [],
     },
-    routerDispatchDetail: dispatch?.routerDispatchDetail || null,
+    routerDispatchDetail: baseDetail,
   };
   if (wallets.base.sharedWithOrigins.length) flags.push(`the advertised Base wallet is also advertised by ${wallets.base.sharedWithOrigins.length} other origin(s); chain evidence for it is withheld from all of them`);
-  if (dispatch?.routerDispatchDetail === "evidence_payto_mismatch") flags.push("the settlement evidence behind this origin belongs to a wallet its live 402 does not pay; the router will not spend on it");
-  if (dispatch?.routerDispatchDetail === "evidence_payto_unverified") flags.push("the router could not read a live 402 payTo to bind the inherited evidence to");
+  if (baseDetail === "evidence_payto_mismatch") flags.push("the settlement evidence that clears the floor for this origin was measured at a wallet its live 402 does not pay; the router will not spend on it");
+  if (baseDetail === "evidence_payto_unverified") flags.push("the router could not read a live 402 payTo to bind the settlement evidence to");
+  // Only when it matters: most of the wallet's dollars were its own, or the
+  // payments it paid for itself are what keep it below the floor. A refund
+  // netted from an otherwise ordinary history is in the counts above, not a flag.
+  if (mostlySelfFunded) flags.push("in a router scan within the last 30 days, most of the dollars this seller's wallet received were paid with USDC that wallet had sent its payers earlier; the router counts only the rest, and not third-party tallies of that wallet (the detail is not published here; ask us)");
+  else if (changesRouterVerdict) flags.push("payments made with USDC this seller's wallet had sent its payers earlier are not counted, and without them its settlement history is below the router's floor (the detail is not published here; ask us)");
+  if (baseDetail === "evidence_payto_shared" || wallets.base.withheldAtSharedWallets.length) flags.push("settlement history at a wallet this host lists as a settlement contract shared by many sellers is credited to none of them; only settlement measured on this origin's own URLs counts for it");
 
   // Concentration reads as a sentence here, like every other dossier flag: a
   // buyer deciding whether to route to this seller wants "most of their volume
@@ -342,7 +398,7 @@ export function composeSellerDossier(a) {
     // useful to them for no gain.
     deliveryFailures: (deliveryFailures || []).map((r) => ({ chain: r.chain, at: iso(r.at) })),
   };
-  if (router.refusals.length) flags.push(`our router's last paid retry was refused on ${router.refusals.map((r) => r.chain).join(", ")}; those chains are skipped until the memo expires`);
+  if (router.refusals.length) flags.push(`our router's paid retries to one of this seller's routes were refused on ${router.refusals.map((r) => r.chain).join(", ")}; that route is skipped there until the memo expires`);
   for (const f of router.deliveryFailures) flags.push(`our router paid this seller on ${f.chain} and the call did not deliver, so that chain is skipped until the memo expires or a call succeeds (what we observed is not published here; ask us)`);
   if (!self && dispatch && dispatch.routerDispatchEligible !== true && dispatch.routerDispatchReason) flags.push(`router verdict: ${dispatch.routerDispatchReason}`);
   if (prices.length && thresholds.sorCap != null && prices[0] > thresholds.sorCap) flags.push(`the cheapest priced route ($${prices[0]}) is above the router's $${thresholds.sorCap} underlying cap for the cheapest tier`);
@@ -373,13 +429,42 @@ export function composeSellerDossier(a) {
     flags,
     caveats,
     evidenceSource: "x402 seller crawl + on-chain settlement + Bazaar + MPP index + our own paid calls",
+    // Every line above is an OBSERVATION we made, at generatedAt, by the method
+    // named in evidenceSource - not a conclusion about the business, its
+    // operators or their conduct. Published about named third parties, so it
+    // says so in the payload itself rather than in documentation the reader may
+    // never open, and it names a route to have a reading corrected.
+    notice: NOTICE,
     generatedAt,
   };
 }
 
+// What this report claims, stated in the report itself.
+//
+// This is the one product that publishes an assessment-shaped read of a NAMED
+// third-party business, so the discipline is: every line is an observation we
+// made, by a stated method, at a stated time - never a characterisation of the
+// company, its operators or their intent. Truth and disclosed method are what
+// make a report like this fair; a verdict dressed as a fact is what makes it
+// actionable. Flags describe what WE read and what OUR router experienced, in
+// the first person, and unobserved is "not observed", never zero.
+//
+// The notice ships inside the payload rather than in documentation, because the
+// payload is what gets quoted, and it names a route to have a reading corrected.
+// A seller who thinks a line is wrong should be able to reach us without
+// guessing; that path is also the cheapest way for us to find out we are wrong.
+export const NOTICE = Object.freeze({
+  what: "Automated observations of public data, recorded by Agent402 at generatedAt using the methods named in evidenceSource.",
+  notAnAssessment: "This is not an assessment of the business, its operators, their conduct or their creditworthiness, and it is not advice. Flags describe what our crawler read and what our router experienced, not conclusions about the seller.",
+  unobserved: "\"Not observed\" means we hold no reading, not that the thing did not happen. Absence of evidence here is absence of OUR evidence.",
+  pointInTime: "Every figure is as of generatedAt and may already be stale; re-read before relying on it.",
+  corrections: "A seller who believes a line misreads them can write to mike@agent402.tools and we will re-read the origin and correct or withdraw the line.",
+});
+
 export function buildSellerDossierTool({
   getSellerDetail, getSellerEntry, getDispatchRow, getEvidenceBinding, getLeaderboardRow, getBazaarQuality,
   getSolanaEvidence, getMpp, getRefusals, getDeliveryFailures, getRegistration, getDelivery, getSharedClaims, helpers = {},
+  getIndexReadiness = null,
   sorThreshold = 50, sorPayers = 3, sorCap = 0.005, selfHost = "", now = () => Date.now(),
 }) {
   return {
@@ -422,13 +507,42 @@ export function buildSellerDossierTool({
         },
       },
     },
-    handler(input) {
+    // `ctx` is a SECOND argument, which the HTTP dispatcher never passes: the
+    // operator flag must not be reachable from a request body, or a buyer
+    // could set it and pay $0.05 for the hollow answer this refusal exists to
+    // stop them being sold. Only an in-process caller can set it.
+    handler(input, ctx = {}) {
+      const operator = ctx?.operator === true;
       const raw = String(input?.origin || input?.host || input?.seller || "").trim();
       if (!raw) { const e = new Error("`origin` is required - pass a seller origin or bare host, e.g. example.com"); e.statusCode = 400; throw e; }
       const host = hostOf(raw);
       if (!host.includes(".")) { const e = new Error("`origin` must be a public host, e.g. example.com"); e.statusCode = 400; throw e; }
       const t = now();
       const detail = getSellerDetail(host) || null;
+      // "WE HOLD NOTHING" IS ONLY WORTH $0.05 IF IT IS A FACT ABOUT THE SELLER.
+      // The no-detail branch below says "not in our index - never crawled, so we
+      // hold no evidence either way", which is a strong claim about a third
+      // party, and it was made from a cache that can simply be mid-load: the
+      // warm-start reads the volume for ~2 s after every boot, and a volume with
+      // no cache waits minutes for its first crawl. A buyer paying for the
+      // assembled record would have been sold "never crawled" about a seller we
+      // crawl every 30 minutes. A >= 400 cancels settlement, so refusing here
+      // costs the buyer nothing and is the only honest answer while loading.
+      //
+      // THE OPERATOR IS NOT A BUYER. /__operator/seller-evidence.json shares
+      // this handler, pays nothing, and is the surface used to diagnose a
+      // seller DURING the minutes a boot is still crawling - refusing it takes
+      // the tool away exactly when it is wanted. So the operator gets the
+      // record we hold plus the caveat as a FIELD (`indexLoading`), which is
+      // what this whole class asks for: state the scope, do not withhold the
+      // answer. Only the paid path refuses, because only the paid path charges.
+      const readiness = !detail && typeof getIndexReadiness === "function" ? (getIndexReadiness() || {}) : {};
+      if (readiness.ready === false && !operator) {
+        const e = new Error(`the seller index is still loading on this server (${readiness.state || "loading"}), so "we hold nothing for ${host}" would be a fact about us, not about that seller - not charged, retry in ${readiness.retryAfterSeconds || 30}s`);
+        e.statusCode = 503;
+        e.retryAfter = Number(readiness.retryAfterSeconds) || 30;
+        throw e;
+      }
       const origin = detail?.origin || `https://${host}`;
       const self = Boolean(selfHost) && host === String(selfHost).toLowerCase();
       const entry = detail && typeof getSellerEntry === "function" ? (getSellerEntry(host) || null) : null;
@@ -442,7 +556,12 @@ export function buildSellerDossierTool({
           if (d) deliveries.set(key, d);
         }
       }
+      const loading = readiness.ready === false
+        ? { indexLoading: true, indexState: readiness.state || "loading", retryAfterSeconds: Number(readiness.retryAfterSeconds) || 30,
+            indexLoadingNote: `the seller index is still loading on this server (${readiness.state || "loading"}), so an absence below is a fact about this boot, not about ${host}` }
+        : null;
       return composeSellerDossier({
+        loading,
         host, detail, entry, dispatch,
         evidenceBinding: typeof getEvidenceBinding === "function" ? getEvidenceBinding(origin) : null,
         leaderboardRow: typeof getLeaderboardRow === "function" ? getLeaderboardRow(origin, host) : null,

@@ -4,6 +4,7 @@
 // to call them directly: route, price, input schema, and a ready example.
 // Deterministic lexical ranking (no LLM, no tokens), consistent with the MCP
 // connector's search_tools weighting.
+import { partialFields, clampFields } from "./partial-answer.js";
 import { toolList } from "./pages.js";
 import { queryTerms } from "./query-terms.js";
 import { rankSkillPacks } from "./skills.js";
@@ -87,6 +88,11 @@ export function applyFrontDoorTerms(terms, q) {
  * @param {Set<string>} [opts.powSlugs] compute-payable slugs (for the free flag)
  * @returns {{query:string, count:number, results:Array}}
  */
+// Most rows one /api/find answer carries, and the default when none is asked
+// for. Published on every answer so the ceiling is never read as the match count.
+export const FIND_TOP_MAX = 25;
+export const FIND_TOP_DEFAULT = 5;
+
 export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}) {
   // Cap the query length so a pathological input can't drive unbounded work.
   const q = String(query || "").slice(0, 500);
@@ -125,8 +131,14 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   // ("search" inside "search tools catalog", bare "question") do not hijack
   // unrelated tasks. Tags appended are curated on search / answer / search-news.
   applyFrontDoorTerms(terms, q);
-  const limit = Math.min(Math.max(parseInt(k, 10) || 5, 1), 25);
-  if (!terms.length) return { query: q, count: 0, results: [] };
+  // The default is FIVE and the ceiling is 25, and `count` below reports what
+  // this answer carries - so a caller reading `count: 5` for a broad query was
+  // being told five tools match when five is simply what we return. Publish the
+  // ceiling and whether the ranking was cut by it, the same disclosure
+  // /api/route and /api/index now carry (2026-09-22).
+  const limit = Math.min(Math.max(parseInt(k, 10) || 5, 1), FIND_TOP_MAX);
+  // The miss carries the same envelope as the hit: one shape to learn.
+  if (!terms.length) return { query: q, count: 0, topMax: FIND_TOP_MAX, truncated: false, ...partialFields(0, 0), results: [] };
 
   // Directional alignment: how many adjacent (q[i], q[i+1]) query-term pairs
   // appear in the slug *in the same order*. Historically this broke the tie
@@ -169,6 +181,9 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     name: (t.name || "").toLowerCase(),
     segs: new Set(t.slug.toLowerCase().split("-")),
     tagSet: new Set((t.tags || []).map((tg) => String(tg).toLowerCase())),
+    // Each alias as the words it is made of (stopwords and 1-letter parts
+    // dropped, the same filter the query terms go through).
+    aliasWords: (t.aliases || []).map((a) => String(a).toLowerCase().split(/[-\s]+/).filter((w) => w.length > 1 && !STOPWORDS.has(w))).filter((ws) => ws.length),
     // Aliases are in the haystack because /api/route already scores them and
     // the two resolvers disagreeing about the same tool is a defect a buyer
     // meets as "your search cannot find the endpoint your own URL serves".
@@ -188,9 +203,15 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     idf.set(term, Math.max(0.25, Math.log((N + 1) / (df + 1))));
   }
 
+  const termSet = new Set(terms);
   const scored = [];
   for (const e of all) {
-    const { t, slug, name, tagSet, hay } = e;
+    const { t, slug, name, tagSet, hay, aliasWords } = e;
+    // An alias counts only when EVERY word of it is in the query: "website
+    // history" hits the alias website-history, but "chat" alone does not hit
+    // chat-completions-nano-tier. Word-by-word credit let generic aliases
+    // outrank a tool's own name.
+    const aliasHitWords = new Set(aliasWords.filter((ws) => ws.every((w) => termSet.has(w))).flat());
     // Slugs are hyphenated words, so a WHOLE segment matching a query term is a
     // real signal while an incidental substring is usually an accident:
     // "check" sits inside "checksum", "data" inside "wikidata-entity", "detect"
@@ -206,9 +227,14 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     let score = 0;
     for (const term of terms) {
       let s = 0;
-      if (slug === term) s += 10;
-      else if (segs.has(term)) s += 6;      // a whole word of the slug
-      else if (slug.includes(term)) s += 2; // incidental substring, kept but demoted
+      // A curated alias is a name the tool also answers to (/api/route scores
+      // it like the slug). It scores like a word of the slug, never above the
+      // tool's own exact name, and never ADDED to a slug hit (max, not sum).
+      // At +1 in the haystack an alias moved nothing: "md5" ranked `hash`
+      // below `checksum` although hash carries the alias (2026-09-25).
+      const slugPart = slug === term ? 10 : segs.has(term) ? 6 : slug.includes(term) ? 2 : 0;
+      const aliasPart = aliasHitWords.has(term) ? 6 : 0;
+      s += Math.max(slugPart, aliasPart);
       if (name.includes(term)) s += 2;
       // A curated tag is a stronger signal than a stray hit in the description.
       if (tagSet.has(term)) s += 3;
@@ -300,7 +326,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   //
   // This is ADDITIVE. Ranking is untouched and every result is still returned;
   // it only lets the caller tell a real answer from a lexical coincidence.
-  let rarestTerm = null, rarestTermCovered = true;
+  let rarestTerm = null, rarestTermCovered = true, coverageShare = null;
   if (results.length && terms.length) {
     rarestTerm = terms.reduce((a, b) => (idf.get(b) > idf.get(a) ? b : a));
     const top = all.find((e) => e.t.slug === results[0].slug);
@@ -308,18 +334,50 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     // which omits `tags` — so tools whose match lives in a tag looked like
     // misses, and the rule appeared to have a 40% false-positive rate it did
     // not have.
-    rarestTermCovered = top
-      ? top.slug.includes(rarestTerm) || top.hay.includes(rarestTerm) || top.tagSet.has(rarestTerm)
-      : false;
+    const covers = (term) => !!top && (top.slug.includes(term) || top.hay.includes(term) || top.tagSet.has(term));
+    rarestTermCovered = covers(rarestTerm);
+    // An uncovered rarest term is often an incidental word that no tool
+    // mentions ("claims" in "decode jwt token and extract claims", "statute" in
+    // "convert statute miles to kilometers"): the top hit IS the answer, yet
+    // every such query was told to file a wish and recorded as a miss - 346 of
+    // the 359 live clusters on the demand board read that way on 2026-09-25.
+    // So the rarest term decides only when the top hit carries little of the
+    // query's weight: to count as served it must cover at least two terms, at
+    // least half the query's idf weight, and at least one term in its own slug
+    // or name (a description-only overlap is how "excel data jobs" reached an
+    // unemployment tool). "call my mother" (covers "call" only) and "order me
+    // a pizza" stay misses.
+    if (!rarestTermCovered && top) {
+      let coveredW = 0, totalW = 0, coveredN = 0, named = false;
+      for (const term of terms) {
+        const w = idf.get(term) || 0;
+        totalW += w;
+        if (covers(term)) {
+          coveredW += w; coveredN++;
+          if (top.slug.includes(term) || top.name.includes(term)) named = true;
+        }
+      }
+      coverageShare = totalW > 0 ? coveredW / totalW : 0;
+      if (coveredN >= 2 && coverageShare >= 0.5 && named) rarestTermCovered = true;
+    }
   }
 
   return {
     query: String(query),
+    // `count` is what this answer CARRIES. It read as "this is how many tools
+    // can do that" - `count: 5` against a 600-row catalog is the same silence
+    // that had one page of /api/index read as the whole index. `matched` is the
+    // number a caller concluding "there is no tool for this" actually needs.
     count: results.length,
+    topMax: FIND_TOP_MAX,
+    ...partialFields(scored.length, results.length),
+    ...clampFields(k, FIND_TOP_MAX, "k"),
+    truncated: results.length >= limit && scored.length > results.length,
     results,
     packs,
     rarestTerm,
     rarestTermCovered,
+    ...(coverageShare != null ? { coverageShare: Math.round(coverageShare * 100) / 100 } : {}),
   };
 }
 

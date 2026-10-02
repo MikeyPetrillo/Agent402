@@ -30,8 +30,9 @@ import { Challenge, Credential, Expires, Method, Receipt } from "mppx";
 import { stripe as stripeMethods } from "mppx/server";
 import { createHmac } from "node:crypto";
 import { mppProblem, markMppProblem, sendMppProblem } from "./mpp-problem.js";
+import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 
-const STRIPE_MIN_USD = 0.50; // SPT card minimum (docs.stripe.com/payments/machine)
+export const STRIPE_MIN_USD = 0.50; // SPT card minimum (docs.stripe.com/payments/machine)
 const CHALLENGE_TIMEOUT_SECONDS = 300;
 
 export function stripeEnabled() {
@@ -321,6 +322,20 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
         restore();
         replay();
         releaseReplay();
+        return;
+      }
+      // The buyer left before anything could reach them and the request holds
+      // a granted forgiveness ticket (src/hangup-settlement.js): do not
+      // capture. The credential stays spent, so it cannot buy a second run.
+      // Without a ticket the card is captured as usual and the hang-up hook
+      // books the undelivered charge as owed; so is a close during the
+      // capture itself.
+      if (chargeCancelledForClientGone(req)) {
+        bufferedCalls = [];
+        restore();
+        settleReplay();
+        console.warn(`[mpp-stripe] client gone before the handler's answer could be sent (${req.method} ${req.path}) - not captured, not charged`);
+        try { res.removeHeader("Content-Length"); res.statusCode = 499; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ error: CLIENT_GONE_TEXT, charged: false })); } catch { /* socket already gone */ }
         return;
       }
       const b = await settle(auth);

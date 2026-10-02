@@ -90,7 +90,7 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   eq(after.status, "ok", "and is under the cap");
   // Burn the rest of the cap, then the next call must be refused uncharged.
   _exaSpendBook(0.02);
-  await throws(() => tool("exa-search").handler({ query: "two" }), /spend cap/, "past the cap the tool refuses");
+  await throws(() => tool("exa-search").handler({ query: "two" }), /usage cap/, "past the cap the tool refuses");
   const s = exaSpendStatus();
   eq(s.status, "capped", "status says capped");
   ok(s.refusedToday >= 1, "and the refusal is counted");
@@ -119,6 +119,22 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   await tool("exa-search").handler({ query: "unknown cost" });
   ok(exaSpendStatus().spentUsd >= estimateExaUsd("/search", { numResults: 10 }) - 1e-9,
      "and a response with no cost field keeps the estimate instead of booking zero");
+}
+
+// --- type "instant" (2026-09-29): accepted, sent, and booked at its own rate --
+{
+  reset(); stub(200, { results: [], resolvedSearchType: "instant" });
+  await tool("exa-search").handler({ query: "fast answer", type: "instant", numResults: 10 });
+  eq(JSON.parse(calls[0].opts.body).type, "instant", "type instant is sent to Exa as written");
+  ok(Math.abs(exaSpendStatus().spentUsd - 0.004) < 1e-9, `an instant search with no costDollars books the instant estimate (booked ${exaSpendStatus().spentUsd})`);
+  ok(Math.abs(estimateExaUsd("/search", { type: "instant", numResults: 10 }) - 0.004) < 1e-9 && Math.abs(estimateExaUsd("/search", { type: "instant", numResults: 3, contents: { text: true } }) - 0.007) < 1e-9, "instant estimate = $0.004 plus per-page content, like the other types");
+  ok(Math.abs(estimateExaUsd("/search", { numResults: 10 }) - 0.007) < 1e-9 && Math.abs(estimateExaUsd("/search", { type: "auto", numResults: 10 }) - 0.007) < 1e-9 && Math.abs(estimateExaUsd("/search", { type: "fast", numResults: 10 }) - 0.007) < 1e-9, "control: auto, fast and no type keep their estimate");
+  ok(Math.abs(estimateExaUsd("/findSimilar", { type: "instant", numResults: 10 }) - 0.007) < 1e-9, "instant pricing applies to /search only");
+  reset(); stub(200, { results: [], costDollars: { total: 0.005 } });
+  await tool("exa-search").handler({ query: "fast answer", type: "instant" });
+  ok(Math.abs(exaSpendStatus().spentUsd - 0.005) < 1e-9, "Exa's own costDollars still corrects the instant estimate upward");
+  await throws(() => tool("exa-search").handler({ query: "x", type: "deep" }), /auto, neural, keyword, fast or instant/, "an unlisted type is still refused, naming instant");
+  eq(tool("exa-search").price, "$0.012", "the tool's price is unchanged");
 }
 
 // --- upstream errors are mapped, never relayed ------------------------------

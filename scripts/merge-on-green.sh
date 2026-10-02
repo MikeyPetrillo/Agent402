@@ -140,6 +140,21 @@ done
 [ -z "$MISSING" ] || { echo "required check(s) never completed:$MISSING - not merging"; exit 1; }
 echo "every ruleset-required check is green on PR $PR"
 
+# The markers job on MAIN rescans every subject in the push range, and a merge
+# whose range carries a subject it rejects leaves deploy and publish SKIPPED on
+# a run that is otherwise green - the change is merged and not shipped, which is
+# the class of bug an unconditional deploy on main exists to prevent. The PR
+# lanes never look at the branch's own subjects, so the first reading is the one
+# after the merge. Read them here, where the merge can still be stopped.
+# Measured 2026-09-22: PR #1454 merged green and its main run failed markers on a
+# 76-character subject, so neither prod nor npm received it.
+if [ -f scripts/test-commit-message-framing.js ]; then
+  if ! COMMIT_RANGE="origin/main..$SHA" node scripts/test-commit-message-framing.js; then
+    echo "commit subjects on PR $PR would fail the markers job on main - reword them before merging"
+    exit 1
+  fi
+fi
+
 gh pr ready "$PR" >/dev/null 2>&1 || true
 # Pinned to the tested SHA: if the branch moved since, gh refuses and we stop.
 gh pr merge "$PR" --merge --admin --match-head-commit "$SHA"

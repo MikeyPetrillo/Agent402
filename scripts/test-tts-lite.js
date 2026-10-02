@@ -24,10 +24,10 @@ process.env.OPENROUTER_API_KEY = "test-key";
   ok(!!kokoro, "the Kokoro entry the lite tier pins is still in SPEECH_MODELS (one table, so the voice map cannot drift)");
   const price = Number(lite.price.replace("$", ""));
   const cap = Number(lite.discovery.inputSchema.properties.text.description.match(/max (\d+) chars/)[1]);
-  ok(cap === 800, `the lite cap is 800 chars (cut from 2,000 on 2026-09-18 when Kokoro gained a 6.5x dearer endpoint we cannot route away from; got ${cap})`);
+  ok(cap === 800, `the lite cap is 800 chars (cut from 2,000 on 2026-09-18 when Kokoro gained a dearer endpoint we cannot route away from; got ${cap})`);
   const worst = kokoro.costPerChar * cap;
   ok(price === 0.005, `the lite tier is $0.005 (got ${lite.price})`);
-  ok(worst <= price * 0.7, `worst case at the ${cap}-char cap is $${worst.toFixed(5)}, at or under 70% of $${price} (the margin rule)`);
+  ok(worst <= price * 0.7, `worst case at the ${cap}-char cap is within the margin rule on $${price}`);
   ok(worst * 10 < Number(full.price.replace("$", "")), "and an order of magnitude under the premium tier it sits beside");
 }
 

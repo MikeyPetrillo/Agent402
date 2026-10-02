@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.MikeyPetrillo/agent402",
   "title": "Agent402.Tools: pay-per-call web tools",
-  "description": "Agentic Finance: 500+ agent tools, multi-chain USDC over x402 or MPP, free via PoW or card credits",
-  "version": "0.13.2",
+  "description": "Agentic Finance: 500+ agent tools, multi-chain USDC over x402 or MPP, or free via proof-of-work",
+  "version": "0.13.7",
   "repository": {
     "url": "https://github.com/MikeyPetrillo/Agent402",
     "source": "github"
@@ -20,14 +20,14 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "agent402-mcp",
-      "version": "0.13.2",
+      "version": "0.13.7",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
           "name": "AGENT_KEY",
-          "description": "Hex private key of a wallet funded with USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar or Algorand (or USDG on Robinhood Chain). Unset = proof-of-work mode (free pure-CPU tools).",
+          "description": "Hex private key of an EVM wallet funded with USDC on any EVM rail the server offers (Base, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism) or USDG on Robinhood Chain; use SOLANA_AGENT_KEY for Solana. Stellar and Algorand are not signed by this package. Unset = proof-of-work mode (free pure-CPU tools).",
           "isRequired": false,
           "isSecret": true
         },
@@ -45,7 +45,7 @@
         },
         {
           "name": "AGENT402_CREDITS_KEY",
-          "description": "Prepaid card-credits key (a402_...) from https://agent402.tools/credits. With it set and no wallet key, every tool pays by card; the list price is debited only on a successful call.",
+          "description": "Prepaid card-credits key (a402_...) already issued; new credits are not on sale. With it set and no wallet key, every tool except the wallet-scoped ones (memory, usage) is debited from the key; the list price is debited only on a successful call.",
           "isRequired": false,
           "isSecret": true
         },

@@ -4,19 +4,18 @@ import { meteredUsd, METER_MARKUP, METER_FLOOR_USD, METER_MIN_SETTLE_USD, isMete
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
 
-// The measured reality this exists to fix: v1-chat charges $0.02 against
-// $0.0001 of real spend, i.e. 170x. Metered, the same call bills whichever
-// floor is higher - ours, or the one the rail will actually accept.
+// What this exists to fix: a small flat-tier call pays the whole tier price.
+// Metered, a small call bills whichever floor is higher - ours, or the one the
+// rail will actually accept. (Upstream figures below are synthetic inputs.)
 const smallFloor = Math.max(METER_FLOOR_USD, METER_MIN_SETTLE_USD);
 const chat = meteredUsd({ upstreamUsd: 0.0001, ceilingUsd: 0.02 });
-ok(chat === smallFloor, `a typical v1-chat call ($0.0001 upstream) bills $${chat} instead of the $0.02 flat price`);
+ok(chat === smallFloor, `a small v1-chat call bills the floor instead of the $0.02 flat price`);
 ok(chat < 0.02, "which is still cheaper for the buyer than the flat tier");
 
 // HOW MUCH CHEAPER IS SET BY THE FACILITATOR, NOT BY US, and the honest number
-// moves when METER_MIN_SETTLE_USD does. At a $0.01 rail floor a $0.02 call is
-// 2x cheaper, not the 17x the markup alone would give - CDP refused $0.00115 as
-// amount_too_low, and a refused settle pays us NOTHING while we have already
-// done the work. Anyone quoting a multiple on a page must read it from here.
+// moves when METER_MIN_SETTLE_USD does. The rail refuses amounts under its
+// floor as amount_too_low, and a refused settle pays us NOTHING while we have
+// already done the work. Anyone quoting a multiple on a page must read it from here.
 ok(chat >= METER_MIN_SETTLE_USD, "a metered amount is never below what the facilitator will settle");
 
 // A tier whose whole price is under the rail's floor cannot be metered at all:
@@ -32,17 +31,17 @@ ok(meteredUsd({ upstreamUsd: 0.0001, ceilingUsd: METER_MIN_SETTLE_USD / 2 }) ===
 // is the arithmetic that makes it false.
 const breakeven = smallFloor / METER_MARKUP;
 ok(meteredUsd({ upstreamUsd: breakeven * 0.5, ceilingUsd: 0.1 }) === smallFloor,
-  `below the $${breakeven.toFixed(6)} breakeven the bill is the flat floor, not the markup`);
+  `below the breakeven the bill is the flat floor, not the markup`);
 ok(meteredUsd({ upstreamUsd: breakeven * 2, ceilingUsd: 0.1 }) > smallFloor,
   "above it the markup governs");
 
 // A real, large call bills its cost plus the markup, still under the ceiling.
 const big = meteredUsd({ upstreamUsd: 0.012, ceilingUsd: 0.02 });
-ok(Math.abs(big - 0.012 * METER_MARKUP) < 1e-6, `a large call ($0.012 upstream) bills $${big}, cost plus ${Math.round((METER_MARKUP - 1) * 100)}%`);
+ok(Math.abs(big - 0.012 * METER_MARKUP) < 1e-6, `a large call bills its cost plus the markup`);
 ok(big < 0.02, "and still lands under the ceiling the buyer authorized");
 
 // THE INVARIANT THAT MAKES THE CAP UNREACHABLE: the margin clamp already holds
-// upstream at or under 70% of the tier price, so metered <= 0.91 x ceiling.
+// upstream at or under MARGIN x the tier price, so metered stays under the ceiling.
 for (const ceiling of [0.003, 0.01, 0.02, 0.10, 0.50]) {
   const worst = meteredUsd({ upstreamUsd: ceiling * 0.7, ceilingUsd: ceiling });
   // Tiers at or under the rail's floor are declined outright (null), which is
@@ -52,7 +51,7 @@ for (const ceiling of [0.003, 0.01, 0.02, 0.10, 0.50]) {
     ok(METER_MIN_SETTLE_USD >= ceiling, `$${ceiling} is not metered because the facilitator floor ($${METER_MIN_SETTLE_USD}) is not below it`);
     continue;
   }
-  ok(worst < ceiling, `at the margin clamp's own bound (70% of $${ceiling}), the metered amount $${worst} is still under the ceiling, so the cap never binds`);
+  ok(worst < ceiling, `at the margin clamp's own bound on $${ceiling}, the metered amount is still under the ceiling, so the cap never binds`);
 }
 
 // It must still be capped, because "should never bind" is not a reason to omit
@@ -149,14 +148,14 @@ ok(isMeterable({ x402: { scheme: "upto" } }) === false && isMeterable({ _x402Sch
   const tool = { slug: "v1-chat", price: "$0.02" };  // ceiling above the rail floor, so it IS meterable
   const mk = (cost) => ({ ok: true, __meterUpstreamUsd: cost });
 
-  // The happy path, end to end: upstream $0.001 -> $0.00115 at 15%.
+  // The happy path, end to end: upstream x markup.
   let overrides = null; let res = mkRes();
   // Upstream large enough that the markup, not a floor, governs - so this
   // asserts the arithmetic rather than whichever floor happens to be highest.
   const bigUp = Math.max(0.001, METER_MIN_SETTLE_USD);           // > every floor
   const expect = Math.ceil(bigUp * METER_MARKUP * 1e6 - 1e-9) / 1e6;
   let amt = applyMeteredSettlement({ result: mk(bigUp), req: uptoReq, tool: { slug: "v1-chat-pro", price: "$0.10" }, res, enabled: true, setOverrides: (r, o) => { overrides = o; } });
-  ok(amt === expect, `meters an upto call at upstream + markup (got ${amt}, expected ${expect})`);
+  ok(amt === expect, `meters an upto call at upstream + markup`);
   ok(overrides && overrides.amount === `$${expect.toFixed(6)}`, "sets the settlement override to the metered amount");
   ok(res.headers["x-metered-usd"] === expect.toFixed(6), "reports the metered amount on the response header");
 
@@ -173,7 +172,7 @@ ok(isMeterable({ x402: { scheme: "upto" } }) === false && isMeterable({ _x402Sch
   {
     let o = null; const rc = mkRes();
     const amtC = applyMeteredSettlement({ result: mk(bigUp), req: { headers: {}, creditsSettled: true, __meteredQuoteUsd: 0.10 }, tool: { slug: "v1-chat-metered", price: "$0.001" }, res: rc, enabled: true, setOverrides: (r, x) => { o = x; } });
-    ok(amtC === expect && rc.headers["x-metered-usd"] === expect.toFixed(6) && o === null, `credits request is metered (${amtC}) with the header set and no x402 override`);
+    ok(amtC === expect && rc.headers["x-metered-usd"] === expect.toFixed(6) && o === null, `credits request is metered with the header set and no x402 override`);
   }
   const r3 = mk(0.001);
   applyMeteredSettlement({ result: r3, req: uptoReq, tool, res: mkRes(), enabled: false, setOverrides: () => {} });
@@ -222,7 +221,7 @@ ok(isMeterable({ x402: { scheme: "upto" } }) === false && isMeterable({ _x402Sch
   const overrides = [];
   const req = { ...reqWith({ "payment-signature": paymentHeader(uptoPayload) }), __meteredQuoteUsd: 0.058011 };
   const amount = applyMeteredSettlement({ result: data, req, tool: { slug: "v1-chat-metered", price: "$0.001" }, res: { headersSent: false, setHeader() {} }, enabled: true, setOverrides: (_r, o) => overrides.push(o) });
-  ok(typeof amount === "number" && amount > 0.0042 && amount < 0.0049 && !("__meterUpstreamUsd" in data) && overrides.length === 1, `applyMeteredSettlement reads the non-enumerable sentinel, meters ($${amount}), and deletes it`);
+  ok(typeof amount === "number" && amount > 0.0042 && amount < 0.0049 && !("__meterUpstreamUsd" in data) && overrides.length === 1, `applyMeteredSettlement reads the non-enumerable sentinel, meters, and deletes it`);
 }
 
 // ---- metered tier: the ceiling is the per-request quote, not the catalog floor ----
@@ -232,7 +231,7 @@ ok(isMeterable({ x402: { scheme: "upto" } }) === false && isMeterable({ _x402Sch
   const result = { __meterUpstreamUsd: 0.02 };
   const req = { ...reqWith({ "payment-signature": paymentHeader(uptoPayload) }), __meteredQuoteUsd: 0.058011 };
   const amount = applyMeteredSettlement({ result, req, tool: { slug: "v1-chat-metered", price: "$0.001" }, res, enabled: true, setOverrides: (_r, o) => overrides.push(o) });
-  ok(amount === Math.max(METER_FLOOR_USD, METER_MIN_SETTLE_USD, 0.02 * METER_MARKUP), `metered tier: settles actual x markup ($${amount}) under the QUOTED ceiling, not refused by the $0.001 catalog floor`);
+  ok(amount === Math.max(METER_FLOOR_USD, METER_MIN_SETTLE_USD, 0.02 * METER_MARKUP), `metered tier: settles actual x markup under the QUOTED ceiling, not refused by the $0.001 catalog floor`);
   ok(overrides.length === 1, "an override was set");
 }
 

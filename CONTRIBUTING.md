@@ -23,14 +23,25 @@ last commit. CI checks this on every PR.
 
 ## List your x402 seller
 
-Running your own x402 service? Get it into the index in one line:
+Running your own x402 service? Listing takes one request, no PR:
 
-1. Publish a service manifest at `/.well-known/x402` (identity + payment options).
-2. Add your origin to `DEFAULT_SEEDS` in
-   [`src/x402-index.js`](src/x402-index.js) - **stable HTTPS origins only** (no
-   ephemeral tunnels like `*.trycloudflare.com`; they flap to `STALE`).
-3. Open a PR. The index crawls and health-checks it automatically every few
-   minutes - a dead origin just shows `STALE`, so there's nothing to maintain.
+1. Publish a service manifest at `/.well-known/x402` (identity + payment options)
+   on a **stable HTTPS origin** (no ephemeral tunnels like `*.trycloudflare.com`;
+   they flap to `STALE`).
+2. Register it:
+
+   ```bash
+   curl -s -X POST https://agent402.tools/api/index/register \
+     -H 'content-type: application/json' \
+     -d '{"origin":"https://your-origin.example"}'
+   ```
+
+3. Check your listing at `https://agent402.tools/api/index?seller=<your origin>`.
+   The index re-crawls and health-checks it on every cycle, so manifest changes
+   show up there on their own. Full details: [agent402.tools/sell](https://agent402.tools/sell).
+
+`DEFAULT_SEEDS` in [`src/x402-index.js`](src/x402-index.js) is maintained by
+the project; a PR is not needed to get listed.
 
 ## Dev quickstart
 
@@ -89,7 +100,7 @@ The simplest home for a pure-CPU tool is `AGENT_TOOLS` in
 
 ### Ground rules (a tool ships only if it can be served *honestly*)
 
-1. **Deterministic** - no LLM in the serving path; same input, same output.
+1. **Deterministic** - a utility tool runs no model: same input, same output.
    (The `/v1` gateway and the finished report products under `src/tools/*-report-kit.js`,
    `research-deep-kit.js`, `dossier-kit.js`, `token-risk-kit.js` are the explicit
    exceptions: priced as LLM surfaces, wallet-only, never proof-of-work.)

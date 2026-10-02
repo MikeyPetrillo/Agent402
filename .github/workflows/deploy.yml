@@ -98,7 +98,7 @@ jobs:
       bazaar_register: ${{ steps.parse.outputs.bazaar_register }}
       bazaar_solana: ${{ steps.parse.outputs.bazaar_solana }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Commit messages carry mechanism, not market framing
@@ -191,7 +191,7 @@ jobs:
       skip: ${{ steps.gate.outputs.skip }}
       reason: ${{ steps.gate.outputs.reason }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -234,12 +234,12 @@ jobs:
     env:
       TARGET_URL: https://agent402.tools
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.26.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 viem@2.52.2
 
       # Run FIRST (before the slow faucet-funding E2E) for fast iteration. Live
       # proof of the agent402-client 402-inspection preflight (v0.6.0): a real Base
@@ -506,12 +506,12 @@ jobs:
       MAX_PRICE_USD: "0.05"
       MAX_SPEND_USD: "8"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.26.0 @x402/core@2.26.0 @x402/evm@2.26.0 @x402/svm@2.26.0 @solana/kit@8.3.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 @x402/svm@2.27.0 @solana/kit@8.4.0 viem@2.52.2
       - name: Sweep the catalog via Solana settlement
         env:
           SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}
@@ -531,12 +531,12 @@ jobs:
     env:
       TARGET_URL: https://agent402.tools
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.26.0 @x402/core@2.26.0 @x402/evm@2.26.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 viem@2.52.2
       - name: Refresh stale Bazaar listings
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -552,8 +552,7 @@ jobs:
     # drop out of the missing set, so partial runs can be resumed.
     #
     # Cost is bounded by MAX_SPEND_USD; the script refuses to run if the
-    # estimate exceeds that ceiling. With 42 skill packs ($0.05-$1.50 each)
-    # the missing set can sum to ~$11 on a fresh pass.
+    # estimate exceeds that ceiling.
     #
     # Ordering: buys hit PROD, so when this run also deploys, wait for the
     # deploy — otherwise the sweep buys routes the old build still serves
@@ -570,12 +569,12 @@ jobs:
       MAX_SPEND_USD: "12"
       SLUGS: ${{ vars.BAZAAR_REGISTER_SLUGS || '' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.26.0 @x402/core@2.26.0 @x402/evm@2.26.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 viem@2.52.2
       - name: Register missing Bazaar routes
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -593,7 +592,6 @@ jobs:
     # indexes key on. Split into BATCH_COUNT passes (BATCH_INDEX 0..N) so no
     # single pass runs long enough to time out; each pass is bounded by
     # MAX_SPEND_USD (the script refuses to run a batch whose estimate exceeds it).
-    # Full pass ≈ 1,293 routes ≤ $0.01 ≈ $1.75 total; 4 batches ≈ $0.44 each.
     needs: [markers, deploy]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'bazaar-sweep' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')
     runs-on: ubuntu-24.04
@@ -605,12 +603,12 @@ jobs:
       MAX_PRICE_USD: "0.01"
       MAX_SPEND_USD: "1"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.26.0 @x402/core@2.26.0 @x402/evm@2.26.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 viem@2.52.2
       - name: Sweep the catalog via Base settlement (4 batches)
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -630,12 +628,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.26.0 @x402/core@2.26.0 @x402/evm@2.26.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 viem@2.52.2
       - name: Drain the burner into the revenue wallet via paid tool calls
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
@@ -735,12 +733,12 @@ jobs:
     env:
       TARGET_URL: https://agent402.tools
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.26.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 viem@2.52.2
       - name: Run the demo (real paid buys from the burner)
         env:
           AGENT_KEY: ${{ secrets.BURNER_KEY }}
@@ -832,7 +830,7 @@ jobs:
       # calls per run are reliable, and the quota lasts.
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -958,6 +956,8 @@ jobs:
 
       - name: Tollbooth tests (pay-per-crawl gate — node + edge/Web-Crypto)
         run: node tollbooth/test.js && node tollbooth/edge.test.js && node tollbooth/features.test.js && node tollbooth/tempo.test.js
+      - name: Live visualizer tests (services/live, offline)
+        run: node services/live/test.js
 
       # ONE STEP, MANY SCRIPTS (2026-08-25): GitHub spends ~0.7 s of runner setup
       # per step and this lane had over a hundred one-line steps. Each script still
@@ -1041,7 +1041,7 @@ jobs:
       # calls per run are reliable, and the quota lasts.
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -1136,6 +1136,7 @@ jobs:
           t node scripts/test-leaderboard-memory.js
           # Conversion tools (~970 endpoints, exact + round-trip)
           t node scripts/test-convert.js
+          t node scripts/test-json-canonical.js
 
   test-unit-a2:
     # Second half of test-unit-a (2026-08-25), split by the seconds each script
@@ -1167,7 +1168,7 @@ jobs:
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -1234,6 +1235,7 @@ jobs:
           t node scripts/test-mcp-call-tool-contract.js
           # Exposure hardening (A402-11/12/13 no X-Powered-By; security.txt; health gates flags; credential-free MCP CORS — spawns child)
           t node scripts/test-security-headers.js
+          t node scripts/test-algorand-page-deadline.js
           # crawl kit (offline)
           t node scripts/test-crawl-kit.js
           # Memory v2 unit tests (grants, counters, audit chain, recall)
@@ -1296,6 +1298,10 @@ jobs:
       # that grows the challenge is caught on the run AFTER the one that ships
       # it.
       - name: 402 challenge header stays payable (a buyer echoes it back)
+        env:
+          # Marks the sweep's ~600 prod 402s per run as synthetic (signed
+          # X-Heartbeat-Token), so they never read as outside demand.
+          POW_SECRET: ${{ secrets.POW_SECRET }}
         run: CHALLENGE_LOCAL_BOOT=1 TARGET_URL=https://agent402.tools node scripts/test-challenge-size.js
       - name: Router aliases + short-term token rule (offline)
         run: X402_INDEX_CRAWL=off node scripts/test-route-aliases.js
@@ -1309,6 +1315,12 @@ jobs:
       # query under the bound and the ranking byte-identical to the full-scan golden (offline, mutation-tested)
       - name: Router perf pin + golden ranking on a prod-sized index (offline)
         run: X402_INDEX_CRAWL=off node scripts/test-route-perf.js
+      # routeQueryAsync answers exactly as routeQuery and hands the event loop back while scoring (offline, mutation-tested)
+      - name: Router async query equals sync and yields the loop (offline)
+        run: X402_INDEX_CRAWL=off node scripts/test-route-query-async.js
+      # The router's short-term whole-token match agrees with the Unicode regex it replaced (20k-case fuzz, offline)
+      - name: Router whole-token matcher equals the regex (offline)
+        run: X402_INDEX_CRAWL=off node scripts/test-whole-token-matcher.js
       # ?network= was echoed and never applied; the Solana SOR branch ranks strictly on-chain rows (offline, mutation-tested)
       - name: Router network filter + strict chain mode (offline)
         run: X402_INDEX_CRAWL=off node scripts/test-route-network-filter.js
@@ -1342,8 +1354,13 @@ jobs:
           t node scripts/test-seller-verify.js
           # Seller succession: a seller moving to a permanent domain keeps their listing age, and the claim can never retire or edit the predecessor
           t node scripts/test-seller-succession.js
+          # Operator removal of one seller origin: exact match, persisted, every discovery write refuses it, register answers 410
+          t node scripts/test-seller-remove.js
           # Two surfaces that told a consumer something false (paging base, find-miss wish)
           t node scripts/test-index-paging-and-find-bridge.js
+          t node scripts/test-index-paging-contract.js
+          # A negative answer must be a fact about its subject: a miss while the index is still loading, an upstream that refused US relayed as the caller's bad input, a degraded board sold as the live one
+          t node scripts/test-negative-answer-honesty.js
           # What the pack sweep excuses and what it must never excuse - both edges, because a classifier that excuses too much stops being able to fail
           t node scripts/test-pack-classifier.js
           # Sanctions screening: a MISS must never read as a clearance, and a list that failed to load must refuse rather than answer 'no match'
@@ -1356,8 +1373,14 @@ jobs:
           t node scripts/test-seller-delivery-memory.js
           # "External spend guard (per-payer debt ceiling: an UNSETTLED upstream spend keeps counting, so verify-then-fail-to-settle cannot drain the wallet — offline)"
           t node scripts/test-external-spend-guard.js
+          # H-01/H-03: one halt reaches every signing path; the daily ceiling survives a restart
+          t node scripts/test-signing-halt.js
           # A paid seller's rejection is logged with its reason, and none of their body reaches our buyer (source assertions, offline)
           t node scripts/test-buyer-rejection-diagnostics.js
+          # A paid request with no answer keeps its hold and ends the request; a candidate that spent nothing leaves no booking on the chain's day; only the router's own purchase refused with 402/401 writes the refusal memo (offline, controls beside each rule)
+          t node scripts/test-router-paid-outcomes.js
+          # Seller-written and caller-chosen bodies are read as capped streams: reading stops at the cap instead of buffering the whole body first (offline, pull-counted streams)
+          t node scripts/test-capped-body-reads.js
 
   test-unit-a4:
     # The second half of test-unit-a2 (2026-08-25, split by the seconds each item
@@ -1392,7 +1415,7 @@ jobs:
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -1496,6 +1519,11 @@ jobs:
           t node scripts/test-query-terms.js
           # Revenue ledger unit tests (all-time external accounting, idempotent rescans, CI self-gate)
           t node scripts/test-revenue-ledger.js
+          t node scripts/test-block-clock.js
+          t node scripts/test-payai-credit-watch.js
+          t node scripts/test-revenue-fresh-recent.js
+          t node scripts/test-chain-page-own-settle.js
+          t node scripts/test-revenue-cold.js
           # Settle-fallback chain (Solvador first on its advertised networks -> PayAI -> Solvador last resort; double-settle gate between fallbacks - offline)
           t node scripts/test-settle-fallback.js
           # Render actual-byte budget (F03 — chunked/streamed/headerless/WebSocket bytes counted via CDP, cap not bypassable — offline)
@@ -1504,6 +1532,12 @@ jobs:
           t node scripts/test-tempo-confirm.js
           # Leaderboard RPC failures never carry the Alchemy key (host-only naming + redaction on the public lastError path — offline)
           t node scripts/test-leaderboard-redaction.js
+          t node scripts/test-leaderboard-price-match.js
+          t node scripts/test-price-known.js
+          # /api/revenue error strings never carry the Alchemy key, and the transaction surfaces keep their scraping bound (offline + source pins)
+          t node scripts/test-revenue-redaction.js
+          # The public source link is read from one constant, so moving the repo off a personal account stays a one-line change (offline)
+          t node scripts/test-repo-link.js
           # Surface copy gate (every package, README, wiki page, connector string and machine surface names Agentic Finance + both wires - offline)
           t node scripts/test-surface-copy.js
           # Leaderboard SEO/discovery surfaces (robots, sitemap, llms.txt, manifest, landing JSON-LD)
@@ -1533,16 +1567,21 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Ledger-backed rail transfers (empty ledger must fall back, never render zero)
           t node scripts/test-ledger-recent.js
+          # /api/revenue publishes no payer address and no outside buyer's tx hash
+          t node scripts/test-revenue-no-payers.js
           # Html-kit tests (html-select, html-table, html-strip, html-links, html-meta)
           t node scripts/test-html-kit.js
           # Bazaar quality ingestion (30d calls/payers on index sellers + /api/find external rows + ranking tiebreak - offline)
           t node scripts/test-bazaar-quality.js
+          # /api/route ordering: route-order.js pinned to the comparator, read by why.tiebreaks and the ranking sentence (offline)
+          t node scripts/test-route-order.js
           # Revenue detector classification (real x402 buys vs funding/tests)
           t node scripts/test-revenue-scan.js
           # Revenue daily series (day bucketing, EVM block estimation, canary-vs-funding split — offline)
           t node scripts/test-revenue-daily.js
           # New-tool coverage lock (The 500 slugs swept by test-all; canary leg prices honest — offline)
           t node scripts/test-canary-coverage.js
+          t node scripts/test-canary-refusal-classify.js
           # Self-listing exclusion (crawled agent402.tools origin never appears as an "external" seller — offline)
           t node scripts/test-self-listing-exclusion.js
           # OCR crash containment (A402-10 malformed image returns clean error, no uncaughtException — tesseract worker)
@@ -1584,6 +1623,9 @@ jobs:
           t node scripts/test-reliability-claims.js
           # Four false absolutes (a claim must stay true as the service widens)
           t node scripts/test-copy-absolutes.js
+          # Published SDK snippets never let the SDK send an environment credential to our host
+          t node scripts/test-sdk-snippet-credentials.js
+          t node scripts/test-plugin-manifests.js
           # Docs that state a requirement match the engines that enforce it
           t node scripts/test-doc-claims.js
           # The cheap EVM token-safety verdict (unknown is never counted as safe)
@@ -1658,7 +1700,7 @@ jobs:
       # calls per run are reliable, and the quota lasts.
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -1715,12 +1757,14 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (3 scripts, one process each)
+      - name: Offline suites (4 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # PoW solve roundtrip (paid-mode boot, honest solver unlocks /api/hash, replay rejected)
           t node scripts/test-pow-solve-roundtrip.js
+          # Tool-page PoW snippets (paid-mode boot, every GET snippet sends its documented input and answers 200)
+          t node scripts/test-tool-page-pow-snippet.js
           # Cold start (a wallet-less agent reaches its first call from the docs alone)
           t node scripts/test-coldstart.js
           # Idempotency (opt-in safe retry of paid/proven calls; boots paid-mode)
@@ -1819,7 +1863,7 @@ jobs:
       # calls per run are reliable, and the quota lasts.
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -1882,6 +1926,11 @@ jobs:
           t node scripts/test-shared-limit.js
           # Tool pages backlink to the skill packs they belong to
           t node scripts/test-tool-page-backlinks.js
+          # Tool pages: escaped examples, one h1, title/description bounds, sections
+          t node scripts/test-tool-page-content.js
+          t node scripts/test-tool-page-mpp.js
+          # Every tool category is a CATEGORIES key (breadcrumb + category page), decide included (offline + booted)
+          TARGET_URL=http://localhost:3000 t node scripts/test-tool-categories.js
 
       - name: Tool-count sync (static surfaces match the live catalog total — no count drift)
         run: node scripts/sync-count.js --check
@@ -1897,6 +1946,10 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Static page renders smoke (every HTML surface returns 200 with the right page-specific title)
           t node scripts/test-static-pages.js
+          # Integration + learn pages and /llms-full.txt: 200, unique title, one H1, canonical, BreadcrumbList, in both sitemaps; llms-full lists every catalog route (boots a real server, offline)
+          t node scripts/test-integration-learn-pages.js
+          # Developer-docs code samples match the packages they import: our adapters' exports, option names and return shapes (read from source), verified third-party imports, free-tier slugs compute-payable, /workflows costs summed from the catalog (reads the free-mode server on :3000)
+          t env TARGET_URL=http://127.0.0.1:3000 node scripts/test-doc-snippets.js
           # Section Open Graph cards: every section page derives its own og:image, tool pages keep theirs, every card SVG well-formed (2026-09-14)
           t node scripts/test-og-cards.js
           # SEO meta ratchet: title <= 70, description <= 165, exactly one H1, canonical on every hand-written page (reader pass 2026-09-08)
@@ -1905,6 +1958,8 @@ jobs:
           t node scripts/test-operator-auth.js
           # Probe-only credential: STATUS_PROBE_TOKEN opens POST /api/status/probe and NOTHING else, the operator token still works there, and the narrow gate is wired to one route (boots a real server, offline)
           t node scripts/test-status-probe-token.js
+          # The status Worker's paid-call challenge: STATUS_PROBE_TOKEN gets a low-difficulty challenge on the probe slug only, its call is booked internal, the mark cannot be forged or reused, and the token buys nothing else (boots two real servers, offline)
+          t node scripts/test-status-probe-pow.js
           # /openapi.json header parameters (Idempotency-Key on every op, X-Pow-Solution only where PoW-eligible)
           t node scripts/test-openapi-header-params.js
           # Process lifecycle (A402-10 SIGTERM drains + exits 0; uncaught exception is fatal + exits non-zero — spawns child)
@@ -1913,6 +1968,8 @@ jobs:
           t node scripts/test-drain-on-sigterm.js
           t node scripts/test-db-status.js
           t node scripts/test-db-init-retry.js
+          # Search data pipeline: JWT, GSC pagination/backfill, Bing parsing, idempotent upserts, weekly summary, IndexNow helpers, operator routes 404 without auth (stubbed, boots a server)
+          t node scripts/test-search-data.js
           # The Stellar facilitator's fee account is a spending wallet; its low-water alarm must never report "ok" off an unreadable balance or a stranger's /health
           t node scripts/test-stellar-facilitator-status.js
           # Facilitator gate scoping stays honest (its tests import nothing outside facilitator/)
@@ -1950,7 +2007,7 @@ jobs:
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -2017,7 +2074,7 @@ jobs:
           t node scripts/test-edgar-kit.js
           # Form 13F data sets: index parser + bounded Range reads of a real in-memory zip (offline)
           t node scripts/test-edgar-13f-datasets.js
-          # Deploy quiet gate (lull detection, fail-open paths — offline)
+          # Deploy quiet gate (outside-traffic lull incl. free/MCP calls, visibility, fail-open paths; offline)
           t node scripts/test-quiet-gate.js
           # Self-check policy (transient-filtering, timeout, unknown-slug — the prod tool-failure alarm — offline)
           t node scripts/test-selfcheck.js
@@ -2068,6 +2125,20 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
+      # A throwaway Postgres for the decide service's storage test.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: decide
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: decide_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U decide"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     env:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
@@ -2075,7 +2146,7 @@ jobs:
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -2136,6 +2207,10 @@ jobs:
           t node scripts/test-data-kit.js
           # Index self-serve registration tests (offline)
           t node scripts/test-index-register.js
+          # Path-scoped sellers: an app under a prefix on a shared host (offline, crawl seam)
+          t node scripts/test-path-scoped-sellers.js
+          # re-registration re-check: per-origin window + hourly route allowance
+          t node scripts/test-register-recheck-cooldown.js
           # Settlement-derived proven-ness + discovery-gap honesty
           t node scripts/test-settlement-proof.js
           # "A venue with many payees is not one seller (multi-payTo index — offline)"
@@ -2149,8 +2224,22 @@ jobs:
           # "Live 402 quote (a priceless row learns its price from the challenge; unpriceable never becomes $0; PUT/PATCH/DELETE never probed — offline)"
           t node scripts/test-x402-live-quote.js
           t node scripts/test-live-quote-method-refused.js
+          t node scripts/test-live-quote-query-params.js
+          t node scripts/test-live-price-adopt.js
+          t node scripts/test-live-quote-body-redirect.js
+          t node scripts/test-proto-pollution-guard.js
+          t node scripts/test-tool-judge.js
+          # Free /api/route judged answers are bounded per caller (boots a free server against a stub judgment endpoint - offline)
+          t node scripts/test-route-judge-limit.js
+          t node scripts/test-route-conversion.js
           # A route that went free retires its learned price (issue #1365: re-register re-asks priced rows, GET 200 retires, carry-forward keeps it over the Bazaar snapshot - offline)
           t node scripts/test-quote-retired-on-free.js
+          # A route the seller answers 410 Gone leaves the index and stays out across the Bazaar merge (offline)
+          t node scripts/test-gone-routes.js
+          # Request/response contracts read through local OpenAPI $refs (FastAPI shape); external, dangling and cyclic refs stay partial (offline)
+          t node scripts/test-openapi-local-refs.js
+          # Uncached /api/find and /api/route computes are budgeted per client; the seller summary is memoized (boots a server)
+          t node scripts/test-discovery-compute-limit.js
           t node scripts/test-coingecko-rate.js
           # Paid smoke buyer preflight (external targets require an outcome assertion before key/client/network work)
           t node scripts/test-smoke-buy.js
@@ -2179,6 +2268,7 @@ jobs:
           t node scripts/test-x402-audit.js
           # Finance-kit tests (Yahoo chart quote+history, Nasdaq earnings calendar — keyless live APIs)
           t node scripts/test-finance-kit.js
+          t node scripts/test-databento-timeouts.js
           # "MPP self-registration probe hint (optional path/method: validated, probed, kept only on success, persisted with the seed - offline)"
           t node scripts/test-mpp-index-hint.js
 
@@ -2202,16 +2292,33 @@ jobs:
           t node scripts/test-manifest-resources-dedup.js
           # AVM validity guard (short-window Algorand payment rejected pre-handler, no upstream burn — offline)
           t node scripts/test-avm-validity.js
+          t node scripts/test-decide-index.js
+          t node scripts/test-decide-planner.js
+          t node scripts/test-decide-execute.js
+          t node scripts/test-decide-feedback.js
+          t node scripts/test-decide-site.js
+          t node scripts/test-decide-cost.js
+          t node scripts/test-decide-reconcile.js
+          DECIDE_TEST_PG_URL=postgres://decide@127.0.0.1:5432/decide_test t node scripts/test-decide-pg.js
+          t node scripts/test-image-gen-kit.js
           # Leaderboard chain config (right token on the right rail; testnets excluded — offline)
           t node scripts/test-leaderboard-chains.js
           # Discovery strict-source filters (testnet + junk origins)
           t node scripts/test-discovery-filter.js
           # Index warm-start (crawl cache survives a redeploy; no half-crawled marketplace — offline)
           t node scripts/test-index-warmstart.js
+          t node scripts/test-index-persist-last-good.js
           # Crawl load is per operator, not per origin; the register global cap is a backstop (offline)
           t node scripts/test-crawl-politeness.js
           # Index warm-start is incremental (NDJSON twin parsed a batch per turn; no event-loop hold; legacy fallback — offline)
           t node scripts/test-index-ndjson-warmstart.js
+          t node scripts/test-stall-profiler.js
+          t node scripts/test-offload-stalls.js
+          t node scripts/test-manifest-input-schema.js
+          t node scripts/test-request-timing.js
+          t node scripts/test-surface-memo.js
+          t node scripts/test-load-shed.js
+          t node scripts/test-perf-budget.js
           # Crawl cadence copy is derived (served pages cannot advertise a cadence we do not run — offline)
           t node scripts/test-crawl-cadence.js
           # CI lane gating (every test lane blocks deploy/publish; Chromium only where a script needs it — offline)
@@ -2219,6 +2326,8 @@ jobs:
           t node scripts/test-port-hygiene.js
           # Licensing split stays legible: server AGPL, every published package MIT with its own LICENSE + repository.directory (offline)
           t node scripts/test-package-licenses.js
+          # OFL 1.1 condition 2: a redistributed font ships its licence
+          t node scripts/test-font-licenses.js
           # CI tree gate (a merge may skip the suite ONLY on a tree that already passed it — offline)
           t node scripts/test-ci-tree-gate.js
           # Single-resource x402 manifest (spec 402-body shape; chains reach an OpenAPI-sourced row — offline)
@@ -2227,6 +2336,7 @@ jobs:
           t node scripts/test-manifest-catalogue-payment.js
           # Submission slot release (30d dead, outage guard fails closed, settled sellers never released — offline)
           t node scripts/test-submission-release.js
+          t node scripts/test-tunnel-submissions.js
           # Browser pool admission (A402-08 bounded queue, deadline, disconnect-abort — offline)
           t node scripts/test-render-queue.js
           # MPP_CHALLENGE_NETWORKS default verified against installed mppx registry (drift guard — offline)
@@ -2274,7 +2384,7 @@ jobs:
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -2343,6 +2453,8 @@ jobs:
           t node scripts/test-route-execute.js
           # Status page store (unobserved days are never uptime; stale is never operational — offline)
           t node scripts/test-status-store.js
+          # Status page reads at scale (two million rows: the page is byte-identical to the whole-table reads, every history-independent read is an index search, the kept count equals COUNT(*) - offline)
+          t node scripts/test-status-store-scale.js
           # /llms.txt route-execute tier pricing derived from EXEC_TIERS (a future 5th tier can't go silently missing — offline)
           t node scripts/test-llms-route-execute-tiers.js
           # Status probe worker (Cloudflare cron observer mapping; stubbed fetch — offline)
@@ -2366,6 +2478,8 @@ jobs:
           t node scripts/test-algorand-page.js
           # Homepage tests (offline, fixture snapshot)
           t node scripts/test-home-page.js
+          t node scripts/test-ga-snippet.js
+          t node scripts/test-chain-page-cache.js
           # Operator demand-board page tests (verdict rendering, no double-escape, robots disallow — offline)
           t node scripts/test-operator-wishes.js
           # Rail self-heal (the facilitator map cannot silently drift)
@@ -2380,6 +2494,10 @@ jobs:
           t node scripts/test-stripe-subscriptions.js
           # Prepaid card credits (mint-once, exact micro-dollar balances, gate debits only on 200, 402 on insufficient, operator view)
           t node scripts/test-credits.js
+          # CAN-SPAM: every outbound email carries the physical postal address
+          t node scripts/test-email-postal-address.js
+          # Prepaid credits are not SOLD by default (no held balance), but existing keys still redeem
+          t node scripts/test-credits-sales-gate.js
           # Stripe shadow ledger (off by default and inert, idempotent on tx hash, failures swallowed, restart-durable, caller unchanged in every world)
           t node scripts/test-stripe-shadow-ledger.js
           # Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)
@@ -2412,7 +2530,7 @@ jobs:
           t node scripts/test-usage.js
           # STT margin cap (duration enforced locally before any OpenAI spend — offline)
           t node scripts/test-stt-cap.js
-          # TTS lite tier (Kokoro over OpenRouter at a tenth of the OpenAI tiers): contract parity, the margin bound, refusals (offline)
+          # TTS lite tier (Kokoro over OpenRouter): contract parity, the margin bound, refusals (offline)
           t node scripts/test-tts-lite.js
           # Stellar late-settle confirmation (a confirmed transfer overrides the facilitator; a payment to anyone else never does — offline)
           t node scripts/test-stellar-confirm.js
@@ -2420,8 +2538,14 @@ jobs:
           t node scripts/test-svm-clarify.js
           # Refund ledger + planner (idempotent debts, evidence-gated resolution, caps, canary excluded, no silent chain drops — offline)
           t node scripts/test-refund-ledger.js
+          # Refund lookup (exact tx only, unknown == no refund, no payer leak, own rows on my-usage, rate limited - boots its own server)
+          t node scripts/test-refund-lookup.js
+          # Daily MPP reconciliation (every mismatch category, unknown never ok, idempotent reruns, words-only public status, operator-only routes — offline)
+          t node scripts/test-mpp-reconcile.js
           # Refund pre-send proof (same payer, our payTo, enough value, on a transaction that actually succeeded — offline)
           t node scripts/test-payment-verify.js
+          # Refund job proves a route-execute debt paid to a spending wallet (the real job, refund.yml's env, stub chains — offline)
+          t node scripts/test-refund-run-self-funding.js
           # Payment-header precedence (attribution must follow the header the middleware SETTLES from — offline)
           t node scripts/test-payer-header-order.js
           # Refund monitor (stuck sends page, in-flight ones do not, and no address ever reaches a public issue — offline)
@@ -2446,6 +2570,8 @@ jobs:
           t node scripts/test-seller-trust.js
           # Seller-dossier honesty invariants (unknown is unknown; inherited wallets named; no score; flags name their evidence — offline)
           t node scripts/test-seller-dossier.js
+          # F-15: what the dossier and the leaderboards publish about NAMED outside businesses
+          t node scripts/test-third-party-reports.js
           # Seller payability check (buys one call from a seller): contract, the spend bound, the wrong-domain case, every refusal (offline stubs)
           t node scripts/test-seller-payability.js
           # Package integrity (files allowlist covers every import; no sibling dep range excludes what we ship — offline)
@@ -2454,7 +2580,7 @@ jobs:
           t node scripts/test-skill-pack-steps.js
           # Refund backfill decides who is OWED money: who is in, who is out, idempotent (offline, temp ledgers)
           t node scripts/test-refund-backfill.js
-          # Upstream-spend meter records with PostHog OFF (the $11-vs-$0.03 shape) and in exact micro-dollars (offline)
+          # Upstream-spend meter records with PostHog OFF and in exact micro-dollars (offline)
           t node scripts/test-upstream-spend.js
           # Analytics redaction (per-tool table never reaches an unauthenticated caller - seeded, DB not required)
           t node scripts/test-analytics-redaction.js
@@ -2462,6 +2588,12 @@ jobs:
           t node scripts/test-reveal-no-hero-flash.js
           # Revenue buyers series (distinct-count semantics; seeded ledger — offline)
           t node scripts/test-revenue-buyers.js
+          # Marketplace activity scan bounds (a paged walk must report the whole window,
+          # not its own page ceiling; stubbed sources — offline, spends nothing)
+          t node scripts/test-scan-cap.js
+          # Market terminal contract (palette resolves + clears WCAG AA in BOTH themes,
+          # no literal hex, escaping, and a capped scan still reads as a floor — offline)
+          t node scripts/test-terminal-tokens.js
           # Revenue buyers trend (rolling 14d recent-vs-prior comparison — offline)
           t node scripts/test-buyers-trend.js
           # Per-chain price premiums (fee-charging rails priced in; dormant default byte-identical — offline)
@@ -2480,14 +2612,21 @@ jobs:
           t node scripts/test-safe-regex.js
           # Sales ledger unit tests (named sales, internal/external classification, revenue math — offline)
           t node scripts/test-sales-ledger.js
+          # Weekly outside MPP agents: counts only, internal excluded, new vs returning over all history, operator-only route
+          t node scripts/test-mpp-agents-weekly.js
           t node scripts/test-attest-kit.js
           # Repo-wide: no count-named field is the length of a LIMITed query result (source scan, offline)
           t node scripts/test-capped-counts.js
+          # Every published figure carries its own scope: a capped, sampled, windowed or filtered
+          # number must say so in a machine-readable field, never only in prose (offline)
+          t node scripts/test-figure-scope.js
           t node scripts/test-proof.js
           # Tempo relay verdicts are visible (non-2xx relay status + body reach the rejection log, per-request — offline)
           t node scripts/test-mpp-tempo-relay-errors.js
           # workflow_run references name a workflow that exists (GitHub matches on name:, a mismatch never fires - offline)
           t node scripts/test-workflow-run-refs.js
+          # Every workflow job names a versioned runner image, never a moving -latest label (offline)
+          t node scripts/test-workflow-runner-pins.js
           # Metered settlement pricing rule (upto only, never above the ceiling, missing cost is not free - offline)
           t node scripts/test-gateway-meter.js
           t node scripts/test-metered-quote-binding.js
@@ -2556,6 +2695,10 @@ jobs:
           t node scripts/test-corpus.js --tier 0 --concurrency 6
           # Cross-surface pairs: pricing/openapi/manifest/models/route/find/wishes/radar must agree (self-booted FREE_MODE)
           t node scripts/test-cross-surface.js
+          # MPP discovery offers and the live 402 tempo challenge share one predicate (offline)
+          t node scripts/test-mpp-discovery-agreement.js
+          # /openapi.json payment prose (MPP rails per route, creditsKey) read from the 402's own config (offline)
+          t node scripts/test-openapi-mpp-clause.js
           # Util-kit tests (jwt-sign, uuid-v5, group-by, json-to-xml, geo-distance, color-contrast)
           t node scripts/test-util-kit.js
           # x-data kit (offline)
@@ -2572,6 +2715,8 @@ jobs:
           t node scripts/test-alchemy-data-kit.js
           # llm-context kit (Brave grounding context, stubbed fetch, no live Brave call, offline)
           t node scripts/test-llm-context-kit.js
+          # search-lite (Brave web search sample: validation + output shaping, stubbed fetch, no live Brave call, offline)
+          t node scripts/test-search-lite.js
           # Paid-upstream leak guard (Brave + E2B — every metered route/pack must be skipped — offline)
           t node scripts/test-brave-leak.js
           # Derived CI-spend exposure: every paid key a TEST lane can reach must have its slugs bounded
@@ -2600,6 +2745,12 @@ jobs:
           t node scripts/test-mpp-market-page.js
           # Agent wish loop tests (caps, dedup clustering, rate limits, file cap, aggregate shape — offline)
           t node scripts/test-wish.js
+          # Wish-board intent judgment: no key means no calls, a failing upstream changes no row, and no verdict can move a count (offline, stubbed)
+          t node scripts/test-wish-classify.js
+          # Discovery re-rank: build-vs-alias verdicts, no key means no calls, adverts never reach the build list, /api/find untouched (offline, stubbed)
+          t node scripts/test-discovery-rerank.js
+          # Typed judgment tool: the input caps ARE the margin guard, upstream bodies never reach the buyer, model-backed is declared (offline, stubbed)
+          t node scripts/test-judge-kit.js
           # Wish-board input hygiene (a client bug is not market demand)
           t node scripts/test-wish-hygiene.js
 
@@ -2729,7 +2880,7 @@ jobs:
       # calls per run are reliable, and the quota lasts.
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -2789,6 +2940,7 @@ jobs:
           t node scripts/test-solana-intel-kit.js
           # defi kit (offline)
           t node scripts/test-defi-kit.js
+          t node scripts/test-cve-kit.js
           # crypto-signals kit (offline)
           t node scripts/test-crypto-signals-kit.js
           # x402-market-pulse category classifier (path-aware, closed taxonomy)
@@ -2799,9 +2951,8 @@ jobs:
           t node scripts/test-crypto-markets-kit.js
 
       - name: Previously-orphaned kit suites (offline, no upstream spend)
-        # These 31 suites existed but no workflow ran them. All verified offline
-        # and spend-free: test-blockscout-kit deletes X402_UPSTREAM_BUYER_KEY
-        # itself, test-enrich-kit gates live calls behind ENRICH_LIVE_TEST.
+        # These 30 suites existed but no workflow ran them. All verified offline
+        # and spend-free: test-enrich-kit gates live calls behind ENRICH_LIVE_TEST.
         # Listed one per line ON PURPOSE - a for-loop over a variable hides
         # which suites actually run, and test-ci-coverage.js requires the
         # literal path so the wiring stays greppable.
@@ -2823,10 +2974,12 @@ jobs:
           node scripts/test-sor-seed.js
           node scripts/test-self-funding.js
           node scripts/test-x402-buyer.js
+          node scripts/test-router-identification.js
           node scripts/test-synthetic-marker.js
           node scripts/test-router-health.js
           node scripts/test-chain-kit.js
           node scripts/test-contract-kit.js
+          node scripts/test-address-label-settlement.js
           node scripts/test-dex-kit.js
           node scripts/test-forecast-kit.js
           node scripts/test-mev-and-l2-kit.js
@@ -2837,7 +2990,6 @@ jobs:
           node scripts/test-weather-kit.js
           node scripts/test-web-kit.js
           node scripts/test-enrich-kit.js
-          node scripts/test-blockscout-kit.js
 
       - name: Rails-copy lock (rails.js ↔ payments.js + every key page renders every rail)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-rails.js
@@ -2880,6 +3032,9 @@ jobs:
       - name: Single <main> landmark per page (no page-level renderer may nest a second <main> inside ledgerShell's own)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-single-main-landmark.js
 
+      - name: Heading order (one h1 per page, no skipped levels, no empty headings - a screen reader announces level as structure)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-heading-order.js
+
       - name: Wrong-method 405 with Allow header (a known catalog path hit with the wrong verb no longer looks like a dead route)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-wrong-method-405.js
 
@@ -2887,7 +3042,7 @@ jobs:
         run: bash scripts/test-heartbeat-probe.sh
 
       # Strict FREE_MODE sweep of paid tools that do NOT burn Brave/OpenAI/
-      # OpenRouter/E2B/Blockscout-buyer/FRED/Neynar/etc. Fails on 502/503/504
+      # OpenRouter/E2B/FRED/Neynar/etc. Fails on 502/503/504
       # (unlike test-all.js NETWORK leniency — that hole kept gov-data green
       # while dead; issue #730). Filter never calls metered routes; own-boot
       # strips keys too. Uses the shared FREE_MODE server when TARGET_URL is set.
@@ -2932,7 +3087,7 @@ jobs:
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -2965,8 +3120,10 @@ jobs:
           E2B_API_KEY: ""
         run: npm ci
       - name: Deep security audit (payment gate + PoW replay/slug-bind/tamper + SSRF + attribution; boots paid-mode)
-        env:
-          POW_SECRET: ${{ secrets.POW_SECRET }}
+        # No POW_SECRET here, on purpose: the audit only talks to the server it
+        # boots, which mints and verifies its own challenges, so src/pow.js's
+        # random per-process secret is exactly right. The production signer has
+        # no business in this step.
         run: |
           # Boot a paid-mode server (x402 paywall ACTIVE) so the gate is real,
           # then run the deep audit against it. PoW/SSRF/attribution assertions
@@ -2974,7 +3131,7 @@ jobs:
           # when the base-sepolia facilitator syncs, and fails CLOSED otherwise
           # (the audit treats fail-closed as no-bypass, only a 200 is a hard fail).
           WALLET_ADDRESS=0x0000000000000000000000000000000000000001 NETWORK=base-sepolia \
-          POW_SECRET="${POW_SECRET:-ci-audit-secret}" POW_DIFFICULTY=12 POW_ALLOW_EPHEMERAL=true \
+          POW_DIFFICULTY=12 POW_ALLOW_EPHEMERAL=true \
           PORT=3778 node src/server.js > /tmp/audit-deep-srv.log 2>&1 &
           SRV_PID=$!
           for i in $(seq 1 30); do curl -s localhost:3778/api/pow >/dev/null && break; sleep 1; done
@@ -2999,6 +3156,7 @@ jobs:
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/ai-sdk/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/langchain/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/openai-agents/test.js
+          AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/openai-agents/test-real-sdk.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/llamaindex/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/strands/test.js
           AGENT402_BASE_URL=http://127.0.0.1:3091 node adapters/google-adk/test.js
@@ -3185,7 +3343,7 @@ jobs:
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -3238,6 +3396,10 @@ jobs:
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # Native MPP on /mcp (stock MCP SDK client + mppx McpClient pays a wallet-only tool via the real gates; stub facilitator; -32042 wire; RFC 9457 problem on tamper - offline)
           t node scripts/test-mcp-mpp.js
+          # A paid call whose client hangs up is settled once and recorded once as owed (boots a paid server against a slow-settle stub facilitator - offline)
+          t node scripts/test-hangup-settlement.js
+          # A paid run that never gets paid meets a bound: a hang-up whose settle fails is counted, a short EVM authorization on a slow route is refused before the handler, one wallet cannot trip the report pause alone, and concurrent runs must be covered by the balance (boots a paid server against a stub facilitator and a stub OpenRouter - offline)
+          t node scripts/test-paytime-bounds.js
           # One-product MCP endpoint (/mcp/sec): profile lists only the SEC tools, hides the catalog meta tools, /mcp unchanged (boots a free server)
           t node scripts/test-mcp-sec.js
 
@@ -3267,7 +3429,7 @@ jobs:
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -3373,6 +3535,10 @@ jobs:
             X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       - name: Crypto-kit tests (CoinGecko price/market/history/trending/global — keyless live API)
+        # Keyless on purpose: the job-scope key is for the sampled sweep only,
+        # and these live calls ran against the monthly Demo quota on every push.
+        env:
+          COINGECKO_API_KEY: ""
         run: node scripts/test-crypto-kit.js
 
       # The strict sweep runs FIRST so its sampled CoinGecko calls land before
@@ -3450,7 +3616,7 @@ jobs:
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -3716,7 +3882,7 @@ jobs:
       # calls per run are reliable, and the quota lasts.
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -3770,21 +3936,31 @@ jobs:
           t node scripts/test-payment-reject.js
           # A v1-era client names the price maxAmountRequired; x402 v2 deep-equals the echoed accepts block, so that one rename made a correct payment unmatchable — boots a paid server, offline
           t node scripts/test-x402-v1-accepts.js
+          # The 402 JSON body carries the same PaymentRequired object as the PAYMENT-REQUIRED header (header keys win, our fields kept, settle-failure 402s untouched; stock x402 and mppx buys unchanged) - boots a paid server, offline
+          t node scripts/test-payment-required-body.js
           # HEAD paywall bypass closed (HEAD on paid GET routes 402s with challenges + empty body; free surfaces untouched — offline)
           t node scripts/test-head-paywall.js
           # Anthropic SDK base-URL alias (/v1/<tier>/v1/messages) + 1 MB body limit on the metered routes (boots a paid server, offline)
           t node scripts/test-messages-sdk-alias.js
+          # Price by model: a flat route's 402 quotes the named model's home tier (x402 + Tempo), and only that payment is served as that tier (boots a paid server, offline)
+          t node scripts/test-price-by-model.js
           # Real sample reports: fixtures are finished reports, pages indexable with own title/JSON-LD, /reports links them, sitemap carries them (boots FREE_MODE, offline)
           t node scripts/test-sample-reports.js
           # openFDA 404 = no matches, an empty result: recall-report must not 502 on it (offline)
           t node scripts/test-recall-nomatch.js
           # Free email alerts engine: double opt-in, signed links, change-only daily email, caps (offline)
           t node scripts/test-free-alerts.js
+          t node scripts/test-free-alert-probes.js
+          t node scripts/test-email-status.js
           t node scripts/test-wallet-digest.js
           # Alert routes end to end on a booted server: confirm / unsubscribe / stop pages render (the engine test could not see a 500 here)
           t node scripts/test-alerts-routes.js
           # Post-purchase follow-ups: two emails at most, stoppable, failure notice (offline)
           t node scripts/test-followups.js
+          # Erasure on request: erase-subject.js removes an address from every file store that holds one (alerts, follow-ups, weekly digest, subscriptions) (offline)
+          t node scripts/test-erase-subject.js
+          # Server-side tweet queue: one post per clock hour oldest first, recorded before it is sent (a killed child never re-sends), two processes post once, drops past the window, an in-doubt post retried once (a duplicate refusal records it posted), the alarm word on /api/gateway-status, kill switch, only the production server posts (FREE_MODE, no NODE_ENV=production or no volume stay read-only), no text or credential in logs or the operator read (stub X; boots three servers, one a control that posts to the stub)
+          t node scripts/test-tweet-queue.js
           # Public reports: buyer toggle by session id, unguessable public id, indexable page, revocable (boots FREE_MODE)
           t node scripts/test-public-reports.js
           # House style on every report tier: no em/en dashes in delivered copy (offline)
@@ -3793,17 +3969,32 @@ jobs:
           t node scripts/test-domain-audit-inputs.js
           # Dev shortlinks (/claude, /cursor, ...) + the /install script (boots a free server)
           t node scripts/test-shortlinks.js
+          # Retired catalog routes answer 410 with the replacement, never the guessed-slug 404 (boots a free server)
+          t node scripts/test-retired-routes.js
+          # Who hits us: per-request classes, the crawler rule, repeat-buyer memory, the operator read (boots a free server)
+          t node scripts/test-traffic-classifier.js
+          # Hourly budget on unpaid price checks per client: 429 past it, never for payments, named indexers, our probes or discovery (boots paid + FREE_MODE servers, offline)
+          t node scripts/test-unpaid-quote-budget.js
           # A rejected payment is answered in the buyer's terms (balance vs stale authorization) on the 402 (offline)
           t node scripts/test-verify-hint.js
           t node scripts/test-verify-hint-live.js
           # Settle-failure breaker on EVERY wallet-only tool (paid boot, stub facilitator verifies then refuses to settle)
           t node scripts/test-paid-settle-breaker.js
+          # Algorand leaves sub-cent 402s while the facilitator's sponsored sub-cent allowance is spent; a quota refusal is never the buyer's (paid boot, stub facilitators + stub sponsorship status)
+          t node scripts/test-avm-subcent-offer.js
           # Router dispatch eligibility, labelled: one function for the resolver's Base gate and every public row (offline)
           t node scripts/test-dispatch-eligibility.js
+          t node scripts/test-unproven-lane-labels.js
           # USDC EIP-712 domain truth per chain: table pinned to payments.js + @x402/evm, wrong-name accepts refused (offline)
           t node scripts/test-evm-usdc-domain.js
           # Shared-wallet settlement evidence counts only where the live 402 pays: fake leaderboard row + fake 402s, call sites pinned (offline)
           t node scripts/test-sor-payto-binding.js
+          # Operator-listed shared payTo wallets credit nobody: the rule, the persisted store, and the lever on a booted free server across a restart
+          t node scripts/test-shared-paytos.js
+          # Self-funded payers are not settlement evidence: ordered funding read, refunds kept, circular wallets' Bazaar figures ignored, end-to-end scan against a stub Bazaar + RPC (offline)
+          t node scripts/test-seller-funding.js
+          # The funding reader's calls stay bounded and fall away with 1 to 200 heavy payTos: the real scan, refresh after refresh, against a stub Bazaar + RPC (offline)
+          t node scripts/test-funding-read-budget.js
           # In-flight composites are cut off on SIGTERM: scope wrapper + fetch signal + shutdown seam (offline)
           t node scripts/test-drain-abort.js
           # Solana SPL leaderboard: batched credits scan, primed gate, payTo list, ranking, persistence (offline stub RPC)
@@ -3872,7 +4063,7 @@ jobs:
       # calls per run are reliable, and the quota lasts.
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -3997,7 +4188,7 @@ jobs:
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -4055,6 +4246,13 @@ jobs:
           t node scripts/test-loop-lag.js
           # Tempo MPP settlement (native tempo/charge via Tempo's relay — challenge wiring + settlement-ordering proof — offline)
           t node scripts/test-mpp-tempo-shim.js
+          t node scripts/test-tempo-push-debts.js
+          # Tempo pull credentials: per-buyer bounds key only on a sender the signature (or the chain, for an access key) proves; routes that spend before settlement refuse an unproven one before any relay call (real Tempo transactions, stubbed relay + RPC, boots paid mode, offline)
+          t node scripts/test-tempo-sender.js
+          # MPP discovery parity: every paid route's 402 challenges == its /openapi.json offers; /llms.txt + /.well-known/x402 agree (boots paid mode, offline)
+          t node scripts/test-mpp-discovery-parity.js
+          # MPP start-here set: every slug offers tempo, and /what-is-mpp, /llms.txt, /openapi.json and MCP payment.info derive from src/mpp-flagship.js at catalog prices (boots FREE_MODE, offline)
+          t node scripts/test-mpp-flagship.js
 
   publish-gate:
     # Every per-package gate that used to run INSIDE the publish job. It is a
@@ -4086,7 +4284,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -4263,7 +4461,7 @@ jobs:
       contents: read
       id-token: write   # GitHub OIDC → authorize the io.github.mikeypetrillo/* MCP Registry namespace
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -4433,10 +4631,15 @@ jobs:
           echo "published agent402-mcp@$VERSION → https://www.npmjs.com/package/agent402-mcp"
       - name: Verify the public npx path resolves
         run: |
-          for i in $(seq 1 10); do
-            npm view agent402-mcp version >/dev/null 2>&1 && { echo "agent402-mcp visible on npm ✓"; break; }
+          # Wait for THIS version, not any version: the MCP Registry step below
+          # validates the exact version against npm and refuses it until npm
+          # serves it (measured: up to ~9 min after publish).
+          VERSION=$(node -p "require('./mcp/package.json').version")
+          for i in $(seq 1 60); do
+            npm view "agent402-mcp@$VERSION" version >/dev/null 2>&1 && { echo "agent402-mcp@$VERSION visible on npm ✓"; exit 0; }
             sleep 15
           done
+          echo "::warning::agent402-mcp@$VERSION still not visible on npm after 15 minutes"
 
       - name: Publish agent402-tollbooth to npm
         run: |
@@ -4512,11 +4715,20 @@ jobs:
             # ClawHub's reusable workflow, whose actions are tag-pinned, and this
             # repository requires full-SHA pinning for every action - so the token
             # path stays until ClawHub pins its workflow.
-            npx -y clawhub@0.23.3 package publish ./openclaw \
+            # A version still under ClawHub review is hidden from inspect, so a
+            # re-run reaches publish and is refused "already exists": that is
+            # the no-op the check above means, not a failure (run 36433008854).
+            if OUT=$(npx -y clawhub@0.23.3 package publish ./openclaw \
               --manual-override-reason "repository policy requires SHA-pinned actions; ClawHub's reusable OIDC workflow is tag-pinned" \
               --source-repo "$GITHUB_REPOSITORY" --source-commit "$GITHUB_SHA" --source-ref "$GITHUB_REF_NAME" --source-path openclaw \
-              --changelog "agent402-openclaw $VERSION (see the package README and CHANGELOG at https://agent402.tools/changelog)"
-            echo "published agent402-openclaw@$VERSION → https://clawhub.ai/plugins/agent402-openclaw (hidden until ClawHub review completes)"
+              --changelog "agent402-openclaw $VERSION (see the package README and CHANGELOG at https://agent402.tools/changelog)" 2>&1); then
+              printf '%s\n' "$OUT"
+              echo "published agent402-openclaw@$VERSION → https://clawhub.ai/plugins/agent402-openclaw (hidden until ClawHub review completes)"
+            elif printf '%s' "$OUT" | grep -q "already exists"; then
+              echo "agent402-openclaw@$VERSION is already on ClawHub (hidden while under review) — nothing to do"
+            else
+              printf '%s\n' "$OUT"; rm -f "$CLAWHUB_CONFIG_PATH"; exit 1
+            fi
           fi
           rm -f "$CLAWHUB_CONFIG_PATH"
 
@@ -4738,7 +4950,7 @@ jobs:
       # id in hand every step goes straight to project(id:).
       RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Multi-chain ground truth. /health flags show which env-gated features are
       # live; the 402 challenge shows the payment options a buyer is ACTUALLY
@@ -4998,6 +5210,7 @@ jobs:
     # secrets keep working until they are migrated to the environment.
     environment: "agent402 / production"
     env:
+      DATABENTO_API_KEY: ${{ secrets.DATABENTO_API_KEY }}
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       # The project id is KNOWN (repo var). Railway's `projects` listing query
       # answered "Internal Server Error" for account tokens on 2026-09-08 (the
@@ -5012,14 +5225,6 @@ jobs:
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       FRED_API_KEY_V2: ${{ secrets.FRED_API_KEY_V2 }}
-      # Cloudflare Worker relay for Yahoo Finance (workers/yfinance-relay).
-      # Both must be set for the relay to engage; otherwise finance-kit hits
-      # Yahoo directly. Surfaced as flags.yahooRelay on /health.
-      YAHOO_RELAY_URL: ${{ secrets.YAHOO_RELAY_URL }}
-      YAHOO_RELAY_TOKEN: ${{ secrets.YAHOO_RELAY_TOKEN }}
-      # MPP dual-stack shim (src/mpp-shim.js) — HMAC secret binding MPP
-      # challenge ids. Presence is the rollout switch: unset → shim not
-      # mounted, server stays pure-x402.
       MPP_SECRET_KEY: ${{ secrets.MPP_SECRET_KEY }}
       X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
       # Offsite /data backup (src/backup.js) - Railway Bucket S3 creds. All
@@ -5066,18 +5271,22 @@ jobs:
         run: |
           [ -n "$RAILWAY_API_TOKEN" ] && echo "::add-mask::$RAILWAY_API_TOKEN"
           [ -n "$CDP_KEY_SECRET" ] && echo "::add-mask::$CDP_KEY_SECRET"
+          [ -n "$DATABENTO_API_KEY" ] && echo "::add-mask::$DATABENTO_API_KEY"
           [ -n "$BRAVE_API_KEY" ] && echo "::add-mask::$BRAVE_API_KEY"
           [ -n "$FRED_API_KEY" ] && echo "::add-mask::$FRED_API_KEY"
           [ -n "$FRED_API_KEY_V2" ] && echo "::add-mask::$FRED_API_KEY_V2"
-          [ -n "$YAHOO_RELAY_TOKEN" ] && echo "::add-mask::$YAHOO_RELAY_TOKEN"
           [ -n "$MPP_SECRET_KEY" ] && echo "::add-mask::$MPP_SECRET_KEY"
           [ -n "$X_BEARER_TOKEN" ] && echo "::add-mask::$X_BEARER_TOKEN"
           [ -n "$BACKUP_S3_KEY_ID" ] && echo "::add-mask::$BACKUP_S3_KEY_ID"
           [ -n "$BACKUP_S3_SECRET" ] && echo "::add-mask::$BACKUP_S3_SECRET"
+          # Not credentials, but a bucket name and a project id narrow a target
+          # and have no reader in a public log.
+          [ -n "$BACKUP_S3_BUCKET" ] && echo "::add-mask::$BACKUP_S3_BUCKET"
+          [ -n "$RAILWAY_PROJECT_ID" ] && echo "::add-mask::$RAILWAY_PROJECT_ID"
           [ -n "$RAILWAY_API_TOKEN" ] || { echo "No Railway token provided"; exit 1; }
           [ -n "$WALLET_ADDRESS" ] || { echo "No wallet address provided"; exit 1; }
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Find or create project
         id: project
@@ -5180,9 +5389,14 @@ jobs:
           # domain, so harmless, but unbounded). Only a readable, well-formed
           # answer that says "none" may create one; an unreadable answer falls
           # through to the custom domain below, which is what the poll needs.
+          # Railway's `domains` query requires projectId since 2026-09-22 (the
+          # 02:31Z deploy was the first to fail the read); without it every
+          # read failed and the custom-domain step re-attempted a create on
+          # every run.
+          PROJECT_ID='${{ steps.project.outputs.project_id }}'
           queryDomain() {
-            jq -n --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
-              '{query:"query($e:String!, $s:String!) { domains(environmentId: $e, serviceId: $s) { serviceDomains { domain } } }", variables:{e:$e,s:$s}}' | gql
+            jq -n --arg p "$PROJECT_ID" --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
+              '{query:"query($p:String!, $e:String!, $s:String!) { domains(projectId: $p, environmentId: $e, serviceId: $s) { serviceDomains { domain } } }", variables:{p:$p,e:$e,s:$s}}' | gql
           }
           RAW=$(queryDomain || true)
           DOMAIN=""
@@ -5221,9 +5435,17 @@ jobs:
           }
           ENV_ID='${{ steps.project.outputs.env_id }}'
           SERVICE_ID='${{ steps.service.outputs.service_id }}'
-          EXISTING=$(jq -n --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
-            '{query:"query($e:String!, $s:String!) { domains(environmentId: $e, serviceId: $s) { customDomains { domain } } }", variables:{e:$e,s:$s}}' | gql \
-            | jq -r '.data.domains.customDomains[]?.domain')
+          PROJECT_ID='${{ steps.project.outputs.project_id }}'
+          RAW=$(jq -n --arg p "$PROJECT_ID" --arg e "$ENV_ID" --arg s "$SERVICE_ID" \
+            '{query:"query($p:String!, $e:String!, $s:String!) { domains(projectId: $p, environmentId: $e, serviceId: $s) { customDomains { domain } } }", variables:{p:$p,e:$e,s:$s}}' | gql || true)
+          # Same rule as the public-domain step: only a READABLE list that lacks
+          # the domain may create it. An unreadable answer is a skip, not a
+          # create (every run was attempting one while the query was broken).
+          if ! printf '%s' "$RAW" | jq -e '.data.domains.customDomains | type == "array"' >/dev/null 2>&1; then
+            echo "::warning::could not read the custom domain list (not attaching): $(printf '%s' "$RAW" | head -c 300)"
+            exit 0
+          fi
+          EXISTING=$(printf '%s' "$RAW" | jq -r '.data.domains.customDomains[]?.domain')
           echo "existing custom domains: ${EXISTING:-none}"
           if ! echo "$EXISTING" | grep -qx "$CUSTOM_DOMAIN"; then
             RESP=$(jq -n --arg p '${{ steps.project.outputs.project_id }}' --arg e "$ENV_ID" --arg s "$SERVICE_ID" --arg d "$CUSTOM_DOMAIN" \
@@ -5231,13 +5453,14 @@ jobs:
             echo "$RESP" | jq .
           fi
 
-      # Hold the deploy until external paid traffic has a lull, so a container
-      # swap never lands in the middle of a buyer's burst. Fail-open by design
-      # (stats down / sustained traffic past the max wait → proceed with a
-      # warning) — the in-server SIGTERM drain plus the Railway grace set
-      # below still protect whatever is in flight. Runs BEFORE the variable
-      # upsert because that upsert can itself trigger a redeploy.
-      - name: Quiet gate — wait for a lull in external paid traffic
+      # Hold the deploy until outside traffic has a lull, paid or free (the
+      # hosted /mcp connector's calls count), so a container swap never lands
+      # in the middle of someone's burst; our own heartbeat rows are ignored.
+      # Fail-open by design (stats down / sustained traffic past the max wait:
+      # proceed with a warning); the in-server SIGTERM drain plus the Railway
+      # grace set below still protect whatever is in flight. Runs BEFORE the
+      # variable upsert because that upsert can itself trigger a redeploy.
+      - name: Quiet gate - wait for a lull in outside traffic
         env:
           TARGET_URL: https://${{ env.CUSTOM_DOMAIN || steps.domain.outputs.domain }}
           QUIET_GATE: ${{ vars.QUIET_GATE }}
@@ -5273,6 +5496,13 @@ jobs:
           if [ -n "$CDP_KEY_ID" ] && [ -n "$CDP_KEY_SECRET" ]; then
             VARS=$(echo "$VARS" | jq --arg i "$CDP_KEY_ID" --arg s "$CDP_KEY_SECRET" '. + {CDP_API_KEY_ID:$i, CDP_API_KEY_SECRET:$s}')
           fi
+          # Databento replaced Yahoo Finance for the equity tools (2026-09-20).
+          # Prod needs the key; CI deliberately does NOT get it - Databento
+          # bills per query, and an unkeyed CI is what keeps a sweep from
+          # spending, the same rule as Brave, E2B and CoinGecko.
+          if [ -n "$DATABENTO_API_KEY" ]; then
+            VARS=$(echo "$VARS" | jq --arg d "$DATABENTO_API_KEY" '. + {DATABENTO_API_KEY:$d}')
+          fi
           if [ -n "$BRAVE_API_KEY" ]; then
             VARS=$(echo "$VARS" | jq --arg b "$BRAVE_API_KEY" '. + {BRAVE_API_KEY:$b}')
           fi
@@ -5284,9 +5514,6 @@ jobs:
           fi
           # Yahoo relay: only inject when BOTH are set — partial config would
           # silently fall through to direct Yahoo and re-trigger the canary.
-          if [ -n "$YAHOO_RELAY_URL" ] && [ -n "$YAHOO_RELAY_TOKEN" ]; then
-            VARS=$(echo "$VARS" | jq --arg u "$YAHOO_RELAY_URL" --arg t "$YAHOO_RELAY_TOKEN" '. + {YAHOO_RELAY_URL:$u, YAHOO_RELAY_TOKEN:$t}')
-          fi
           if [ -n "$OPENROUTER_TTS_ENABLED" ]; then
             VARS=$(echo "$VARS" | jq --arg v "$OPENROUTER_TTS_ENABLED" '. + {OPENROUTER_TTS_ENABLED:$v}')
           fi
@@ -5465,12 +5692,27 @@ jobs:
             [ "$code" = "200" ] && echo "🌐 CUSTOM DOMAIN LIVE: https://$CUSTOM_DOMAIN" || echo "(not resolving yet — Railway-managed DNS usually completes within minutes)"
           fi
 
+      # The previous run's URL set, so only new URLs from every sitemap are pinged.
+      - name: Restore IndexNow URL state
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .indexnow-state.json
+          key: indexnow-state-${{ github.run_id }}
+          restore-keys: indexnow-state-
+
       - name: Ping IndexNow (instant Bing/Copilot/DDG re-indexing — best-effort, never fails the deploy)
         env:
           INDEXNOW_KEY: ${{ secrets.INDEXNOW_KEY }}
         run: |
           if [ -z "$INDEXNOW_KEY" ]; then echo "INDEXNOW_KEY secret not set — skipping"; exit 0; fi
-          node scripts/indexnow-submit.js || echo "IndexNow ping failed (non-fatal — the sitemap remains the source of truth)"
+          node scripts/indexnow-submit.js --state .indexnow-state.json || echo "IndexNow ping failed (non-fatal — the sitemap remains the source of truth)"
+
+      - name: Save IndexNow URL state
+        if: ${{ hashFiles('.indexnow-state.json') != '' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .indexnow-state.json
+          key: indexnow-state-${{ github.run_id }}
 
       # The moved smoke check runs node against production: demo-payment.js
       # imports @x402/core, @x402/evm, @x402/fetch and viem at call time, and
@@ -5606,3 +5848,70 @@ jobs:
           TARGET_URL=https://agent402.tools node scripts/demo-payment.js
           echo "=== live M2M stats (informational; present once deployed) ==="
           curl -s https://agent402.tools/api/stats | jq '{tools, wallet, onchainRevenueProof, served: .toolCallsServed}' || echo "(/api/stats not live yet — will appear after this image rolls out)"
+
+      # The decide service (DECIDE_MODE=true, same image) builds from the same
+      # commit, AFTER the main app is verified: its index syncs from the main
+      # app's internal export, which this commit's main build serves. It runs
+      # only when a service named agent402-decide exists (created and given its
+      # variables by hand); without one, nothing here changes. It is the LAST
+      # step so a decide failure cannot skip a check of the main app, and it
+      # still fails the job.
+      - name: Deploy the decide service at the same commit
+        run: |
+          gql() {
+            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+              --data @-
+          }
+          PROJECT_ID='${{ steps.project.outputs.project_id }}'
+          ENV_ID='${{ steps.project.outputs.env_id }}'
+          UUID='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          LIST=$(jq -n --arg id "$PROJECT_ID" '{query:"query($id:String!) { project(id: $id) { services { edges { node { id name } } } } }", variables:{id:$id}}' | gql)
+          # An unreadable answer is not "no decide service": fail rather than skip.
+          printf '%s' "$LIST" | jq -e '.data.project.services.edges | type == "array"' >/dev/null 2>&1 \
+            || { echo "::error::could not list the project's services: $(printf '%s' "$LIST" | head -c 300)"; exit 1; }
+          SID=$(printf '%s' "$LIST" | jq -r '.data.project.services.edges[] | select(.node.name=="agent402-decide") | .node.id' | head -1)
+          if [ -z "$SID" ]; then echo "No agent402-decide service in this project: nothing to deploy."; exit 0; fi
+          [[ "$SID" =~ $UUID ]] || { echo "::error::decide service id is not a UUID"; exit 1; }
+          # First run only: the service has no source yet. Connecting one is
+          # what lets a commit be deployed to it; it may start a build of the
+          # branch head, which the pinned deploy below replaces.
+          INST=$(jq -n --arg e "$ENV_ID" --arg s "$SID" '{query:"query($e:String!,$s:String!){ serviceInstance(environmentId:$e, serviceId:$s){ source { repo } } }", variables:{e:$e,s:$s}}' | gql)
+          printf '%s' "$INST" | jq -e '.data.serviceInstance' >/dev/null 2>&1 \
+            || { echo "::error::could not read the decide service instance: $(printf '%s' "$INST" | head -c 300)"; exit 1; }
+          SRC=$(printf '%s' "$INST" | jq -r '.data.serviceInstance.source.repo // empty')
+          if [ -z "$SRC" ]; then
+            RESP=$(jq -n --arg s "$SID" --arg r "$REPO" '{query:"mutation($s:String!,$r:String!){ serviceConnect(id:$s, input:{ repo:$r, branch:\"main\" }) { id } }", variables:{s:$s,r:$r}}' | gql)
+            echo "$RESP" | jq -e '.errors' >/dev/null && { echo "::error::could not connect the decide service to the repo: $(echo "$RESP" | jq -c '.errors' | head -c 300)"; exit 1; }
+            echo "Connected agent402-decide to $REPO (main)."
+            # Pushes must not deploy it on their own (only this pinned step
+            # may): a watch pattern no commit touches means a push never
+            # matches. The pinned deploy below names its commit explicitly.
+            RESP=$(jq -n --arg e "$ENV_ID" --arg s "$SID" '{query:"mutation($e:String!,$s:String!){ serviceInstanceUpdate(environmentId:$e, serviceId:$s, input:{ watchPatterns:[\"/.decide-deploys-only-from-ci\"] }) }", variables:{e:$e,s:$s}}' | gql)
+            echo "$RESP" | jq -e '.errors' >/dev/null && { echo "::error::could not set the decide service's watch pattern: $(echo "$RESP" | jq -c '.errors' | head -c 300)"; exit 1; }
+            echo "Set a watch pattern no push matches: agent402-decide deploys only from this step."
+          fi
+          RESP=$(jq -n --arg e "$ENV_ID" --arg s "$SID" --arg c "$GITHUB_SHA" \
+            '{query:"mutation($e:String!, $s:String!, $c:String) { serviceInstanceDeployV2(environmentId: $e, serviceId: $s, commitSha: $c) }", variables:{e:$e,s:$s,c:$c}}' | gql)
+          if echo "$RESP" | jq -e '.errors' >/dev/null; then
+            echo "::error::Railway rejected the decide deploy trigger - the main app is live, the decide service is NOT updated: $(echo "$RESP" | jq -c '.errors' | head -c 300)"
+            exit 1
+          fi
+          DID=$(echo "$RESP" | jq -r '.data.serviceInstanceDeployV2 // empty')
+          [ -n "$DID" ] || { echo "::error::no deployment id returned for the decide service"; exit 1; }
+          echo "decide deployment: $DID"
+          LAST=none
+          for i in $(seq 1 90); do
+            RAW=$(jq -n --arg id "$DID" '{query:"query($id:String!){ deployment(id:$id){ status } }", variables:{id:$id}}' | gql || true)
+            ST=$(printf '%s' "$RAW" | jq -r '.data.deployment.status // "UNREADABLE"' 2>/dev/null || echo UNREADABLE)
+            LAST="$ST"
+            echo "[$i] decide $DID -> $ST"
+            case "$ST" in
+              SUCCESS) echo "decide service is LIVE at $GITHUB_SHA"; exit 0 ;;
+              SKIPPED) echo "::error::decide deployment was SKIPPED - the main app is live. If Railway applied the service's watch pattern (/.decide-deploys-only-from-ci) to this pinned deploy, clear the pattern in the service settings and turn off auto-deploy there instead."; exit 1 ;;
+              FAILED|CRASHED|REMOVED) echo "::error::decide deployment ended $ST - the main app is live; decide keeps its previous build (check its Railway logs)"; exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "::error::decide deployment did not reach SUCCESS in 15 minutes (last status: $LAST). The main app is live."
+          exit 1

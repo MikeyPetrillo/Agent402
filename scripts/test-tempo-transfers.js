@@ -38,6 +38,8 @@ const tx = (id, recipient, sender, minutesAgo, units = "1000", token = TEMPO_USD
   ok(st.buckets[hkNow][R2].t === 2 && st.buckets[hkNow][R2].p === undefined, "untracked recipient: counts kept, no payer list");
   ok(st.buckets[hkNow][R1].p.length === 1, "tracked recipient: payer list kept");
   ok(feedStats(st, [R2], { now: NOW }).get(R2).transfers === 2 && feedStats(st, [R2], { now: NOW }).get(R2).payers.size === 0, "stats on an untracked recipient: transfers count, payers 0 (not a throw)");
+  ok(feedStats(st, [R2], { now: NOW }).get(R2).payersPartial === true && !feedStats(st, [R1], { now: NOW }).get(R1).payersPartial,
+     "an hour kept as counts only marks the payer figure partial (the proven floor reads it as unknown, never as 0 payers); a tracked recipient is not partial");
   pruneFeedState(st, NOW, { track });
   ok(Object.values(st.buckets).some((b) => b[R2]), "prune at 48h: recent untracked buckets survive");
   pruneFeedState(st, NOW + 49 * 3600e3, { track });

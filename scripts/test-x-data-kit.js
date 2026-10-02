@@ -273,7 +273,7 @@ if (fail) process.exit(1);
     const r1 = await __test.xGet("/tweets/search/recent", { max_results: 5 }); // $0.025 estimate: 0.02 + 0.025 <= 0.06 -> allowed, books $0.005 actual
     ok(Array.isArray(r1.data) && fetched === 1 && Math.abs(xDataSpendStatus().spentUsd - 0.025) < 1e-6, `under the cap: fetched, booked the actual ($${xDataSpendStatus().spentUsd})`);
     let threw = null; try { await __test.xGet("/tweets/search/recent", { max_results: 10 }); } catch (e) { threw = e; } // 0.025 + 0.05 > 0.06 -> refused before fetch
-    ok(threw?.statusCode === 503 && /spend cap/.test(threw.message) && fetched === 1, "over the cap: 503 before any fetch, names the cap");
+    ok(threw?.statusCode === 503 && /usage cap/.test(threw.message) && !/\$\d/.test(threw.message) && fetched === 1, "over the cap: 503 before any fetch, names the cap");
     ok(xDataSpendStatus().refusedToday === 1 && xDataSpendStatus().status === "ok", "status counts the refusal; the cap is not yet reached by booked spend");
     process.env.X_DATA_DAILY_MAX_USD = "0"; threw = null; try { await __test.xGet("/tweets/1"); } catch (e) { threw = e; }
     ok(threw === null && fetched === 2, "cap 0 disables the guard");

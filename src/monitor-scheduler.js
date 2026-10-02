@@ -49,10 +49,8 @@ export const LOCK_STALE_MS = 20 * 60_000;
 export const TICK_MS = 10 * 60_000;
 export const RESEARCH_RERUN_MS = 7 * DAY; // a saved question is re-researched weekly (the 30-day cap bounds a 5-week month)
 export const MAX_FULL_PER_SUB_30D = 4;   // welcome + scheduled + up to 4 change runs; beyond = alert-only.
-// Bounds a $3/month subscription against its own upstream. MEASURED cost of one
-// report is ~$0.10-0.30 (Opus synthesis p50 $0.075/call plus cheap planning), so
-// 4 runs is ~$1.20 against the $3 fee ($2.61 net of card fees). The tier's own `maxUpstreamUsd`
-// (0.15-0.30 on the monitor slugs) is a circuit breaker that downgrades the synthesis model, not
+// Bounds a monthly subscription against its own MEASURED upstream per report,
+// net of card fees. The tier's own `maxUpstreamUsd` is a circuit breaker that downgrades the synthesis model, not
 // the normal cost; a run that hit it every time would still be capped here at 4.
 export const PERMANENT_FAIL_NOTICE_AT = 5; // consecutive failures before the subscriber is told (once)
 const REPORTS_PER_SUB = 12;

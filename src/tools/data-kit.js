@@ -162,10 +162,10 @@ export const DATA_TOOLS = [
       // upstream state, which the catalog contract requires.
       try {
         if (from === to) {
-          const jId = await getJson(`https://api.frankfurter.app/latest?from=USD&to=EUR`);
+          const jId = await getJson(`https://api.frankfurter.dev/v1/latest?from=USD&to=EUR`);
           return { from, to, amount, rate: 1, result: amount, date: jId.date };
         }
-        const j = await getJson(`https://api.frankfurter.app/latest?from=${from}&to=${to}&amount=${amount}`);
+        const j = await getJson(`https://api.frankfurter.dev/v1/latest?from=${from}&to=${to}&amount=${amount}`);
         const result = j.rates?.[to];
         if (result == null) throw bad(`unsupported currency pair ${from}/${to}`, 502);
         return { from, to, amount, rate: Number((result / amount).toFixed(6)), result, date: j.date };

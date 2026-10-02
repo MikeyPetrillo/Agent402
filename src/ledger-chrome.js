@@ -1,6 +1,7 @@
 import { RAILS, RAILS_AMP, RAILS_OS } from "./rails.js";
 import { metaTitle, metaDescription } from "./seo-meta.js";
 import { ogSectionFor } from "./og-cards.js";
+import { REPO_URL } from "./repo-link.js";
 // Machine Ledger design system — shared chrome for the Agent402 marketing site.
 // Exports the status line, nav, footers (full + compact), design-token CSS,
 // and a ledgerShell() wrapper that composes a full HTML page.
@@ -81,6 +82,11 @@ export const LEDGER_HEAD = `<link rel="preload" href="/fonts/geist-500-latin.wof
 // ---------------------------------------------------------------------------
 
 export const LEDGER_CSS = `
+/* A heading that exists for structure rather than for the eye. A screen reader
+   announces heading LEVEL as structure, so h1 straight to h3 tells a listener
+   there is a section title they have missed. Where a visual design genuinely
+   has no title, this supplies one without changing the page for anyone else. */
+.sr-section{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 /* Hard stop on page-level horizontal scroll: no content should ever push the
    document sideways on a phone. Uses overflow-x: clip (not hidden) so it never
    turns the root into a scroll container - position: sticky (docs TOC) keeps
@@ -135,6 +141,22 @@ html { overflow-x: clip; }
   --obsidian-border: rgba(255,255,255,.10);
   --card-inset: rgba(255,255,255,.04);
   --chip-bg: rgba(255,255,255,.04);
+  --t-bg: #0A0E14;
+  --t-panel: #0F141C;
+  --t-panel-2: #141B24;
+  --t-rule: #1E2733;
+  --t-rule-2: #2A3542;
+  --t-ink: #DCE4EE;
+  --t-ink-dim: #8A97A8;
+  --t-ink-faint: #7C8AA0;
+  --t-cyan: #4FD1D9;
+  --t-violet: #A78BFA;
+  --t-up: #6EE7A8;
+  --t-down: #FF8A7A;
+  --t-warn: #F5C97B;
+  --t-sel: rgba(79,209,217,.14);
+  --t-sel-edge: #4FD1D9;
+  --t-grid: rgba(220,228,238,.05);
   --shadow-lg: 0 18px 40px rgba(0,0,0,.35);
 }
 :root { color-scheme: light; }
@@ -178,6 +200,40 @@ html { overflow-x: clip; }
   --obsidian-border: rgba(255,255,255,.08);
   --card-inset: #FFFFFF;
   --chip-bg: rgba(255,255,255,.55);
+  /* --- Terminal surfaces (market pages) -------------------------------
+     A dense data surface needs its own scale: the page palette above is
+     built for prose at 15-21px, and reusing it at 11-12px in a grid gives
+     rules that vanish and dim text that fails contrast. These are scoped by
+     name (--t-*) rather than by selector so the theme parity gate covers
+     them like any other token, and so a terminal panel dropped on any page
+     inherits the right theme with no extra wiring.
+
+     Palette: "Deepwater". The two terminal cliches are amber-on-black and
+     phosphor-green-on-black - both warm-or-green monochromes on pure black.
+     This is neither: a cool, low-chroma blue-slate base (pure black halates
+     on OLED and is not what a real desk uses) with a cyan primary and a
+     violet for live/attention. Direction is mint and coral rather than
+     green and red, which stays legible under deuteranopia and is far less
+     garish at this density. Every value below clears WCAG AA 4.5:1 against
+     every surface it is composited on, in BOTH themes - measured, and
+     pinned by scripts/test-terminal-tokens.js, because density is exactly
+     where contrast normally gets given away. */
+  --t-bg: #EEF2F6;
+  --t-panel: #FFFFFF;
+  --t-panel-2: #F5F8FB;
+  --t-rule: #D4DDE6;
+  --t-rule-2: #BCC8D4;
+  --t-ink: #0E1721;
+  --t-ink-dim: #46566A;
+  --t-ink-faint: #5A6B7F;
+  --t-cyan: #0E6F78;
+  --t-violet: #5B3FBF;
+  --t-up: #0F7A54;
+  --t-down: #B4402F;
+  --t-warn: #8A5A12;
+  --t-sel: rgba(14,111,120,.10);
+  --t-sel-edge: #0E6F78;
+  --t-grid: rgba(14,23,33,.05);
   --shadow-lg: 0 18px 40px rgba(17,19,21,.10);
   color-scheme: light;
 }
@@ -228,6 +284,10 @@ a { color: inherit; }
 .mlnav-g { position: relative; }
 .mlnav-g > .mlnav-dd { display: none; position: absolute; top: 100%; left: -18px; padding-top: 13px; z-index: 60; }
 .mlnav-g:hover > .mlnav-dd, .mlnav-g:focus-within > .mlnav-dd { display: block; }
+.mlnav-row { display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink); }
+.mlnav-row--sep { border-bottom: 1px solid var(--hairline); }
+.mlnav-label { display:block;padding:10px 16px 8px;font-size:11px;letter-spacing:.1em;color:var(--faint);border-bottom:1px solid var(--hairline); }
+.mlnav-faint { color: var(--faint); }
 .mlnav-row:hover { background: var(--card-zebra); }
 .ml-nav-link { color: var(--muted); text-decoration: none; border-bottom: 1.5px solid transparent; padding-bottom: 2px; transition: color .15s ease, border-color .15s ease; }
 .ml-nav-link:hover { color: var(--ink); border-bottom-color: var(--dash); }
@@ -383,6 +443,13 @@ function statusLine() {
 // panel's own footer carries a "what is x402/mpp" row instead (see
 // marketPanelNav/mppPanelNav), keeping the top-level word count unchanged
 // (was 6, now 7: sell / x402 / mpp / leaderboard / our tools / 101 / docs).
+// Agent402 Decide rides the chrome only once its tools are in the catalog, so
+// no page links a product that answers 404. The server sets this at boot.
+let DECIDE_LIVE = false;
+export function setDecideLive(v) { DECIDE_LIVE = Boolean(v); }
+export function decideLive() { return DECIDE_LIVE; }
+const DECIDE_NAV_ITEM = { href: "/decide", label: "Decide" };
+
 const NAV_ZONES = [
   [
     // Reports carries the whole "for people" set (reports, monitors, credits):
@@ -429,6 +496,13 @@ const STATIC_CHAINS = [
 // real data exists; until then (or if it throws) nav() falls back to
 // STATIC_CHAINS so it never crashes and never blocks a page render.
 let navDataProvider = null;
+// The "402" tile from /logo.svg, drawn inline at nav/footer size (no request,
+// no font file: the page already loads Geist Mono). Gradient ids carry a
+// suffix because the nav and footer marks share one page.
+export function brandMark(size, id) {
+  return `<svg aria-hidden="true" focusable="false" width="${size}" height="${size}" viewBox="0 0 512 512" style="display:block;flex:none;"><defs><linearGradient id="bm-${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F6F7F8"/><stop offset="1" stop-color="#C9CED3"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="#0B0C0E"/><rect x="104" y="104" width="304" height="304" rx="64" fill="url(#bm-${id})"/><text x="256" y="300" font-size="150" font-weight="700" font-family="'Geist Mono',Menlo,Consolas,monospace" text-anchor="middle" letter-spacing="-9" fill="#0B0C0E">402</text></svg>`;
+}
+
 export function setNavIndexProvider(fn) { navDataProvider = fn; }
 
 function chainRows() {
@@ -461,13 +535,13 @@ function chainRowHtml(c, live) {
     // the two numbers an agent picks a chain on. Tools omitted (not zeroed) if
     // the count is missing, never a fabricated 0.
     const toolsSpan = typeof c.tools === "number" && c.tools > 0
-      ? `<span style="color:var(--faint);">${fmt(c.tools)} tool${c.tools === 1 ? "" : "s"}</span>`
+      ? `<span class="mlnav-faint">${fmt(c.tools)} tool${c.tools === 1 ? "" : "s"}</span>`
       : "";
-    return `<a href="${esc(c.href)}" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">${esc(c.label)}</span><span style="display:inline-flex;align-items:center;gap:10px;"><span style="display:inline-flex;align-items:center;gap:6px;color:var(--green);"><span style="width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;"></span>${fmt(c.sellers)} seller${c.sellers === 1 ? "" : "s"}</span>${toolsSpan}</span></a>`;
+    return `<a href="${esc(c.href)}" class="mlnav-row"><span style="font-weight:700;">${esc(c.label)}</span><span style="display:inline-flex;align-items:center;gap:10px;"><span style="display:inline-flex;align-items:center;gap:6px;color:var(--green);"><span style="width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;"></span>${fmt(c.sellers)} seller${c.sellers === 1 ? "" : "s"}</span>${toolsSpan}</span></a>`;
   }
   // Provider returned this chain but its data failed - honesty rule:
   // "unavailable", never zero.
-  return `<a href="${esc(c.href)}" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">${esc(c.label)}</span><span style="display:inline-flex;align-items:center;gap:6px;color:var(--faint);"><span style="width:7px;height:7px;border-radius:50%;background:var(--faint);display:inline-block;"></span>unavailable</span></a>`;
+  return `<a href="${esc(c.href)}" class="mlnav-row"><span style="font-weight:700;">${esc(c.label)}</span><span style="display:inline-flex;align-items:center;gap:6px;color:var(--faint);"><span style="width:7px;height:7px;border-radius:50%;background:var(--faint);display:inline-block;"></span>unavailable</span></a>`;
 }
 
 // Marketplace dropdown - the single buy-side door (the old separate
@@ -483,13 +557,13 @@ function marketPanelNav(chainInfo) {
   // set. Explainers (what is x402, agentic finance) live under Docs.
   return `<span class="mlnav-dd">
               <span style="display:block;width:340px;border:1px solid var(--hairline);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
-                <span style="display:block;padding:10px 16px 8px;font-size:11px;letter-spacing:.1em;color:var(--faint);border-bottom:1px solid var(--hairline);">SELLERS, INDEXED AND VERIFIED</span>
-                <a href="/marketplace" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">x402 marketplace</span><span style="color:var(--faint);">every indexed seller</span></a>
-                <a href="/mpp-marketplace" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">MPP marketplace</span><span style="color:var(--faint);">verified sellers</span></a>
-                <a href="/leaderboard" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">leaderboard</span><span style="color:var(--faint);">settled on-chain</span></a>
-                <a href="/revenue" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">transactions</span><span style="color:var(--faint);">our rails, every settle</span></a>
-                <a href="/marketplace/tools" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);border-bottom:1px solid var(--hairline);"><span style="font-weight:700;">every tool indexed</span><span style="color:var(--faint);">ours + third-party</span></a>
-                <span style="display:block;padding:10px 16px 8px;font-size:11px;letter-spacing:.1em;color:var(--faint);border-bottom:1px solid var(--hairline);">BY CHAIN</span>
+                <span class="mlnav-label">SELLERS, INDEXED AND VERIFIED</span>
+                <a href="/marketplace" class="mlnav-row"><span style="font-weight:700;">x402 marketplace</span><span class="mlnav-faint">every indexed seller</span></a>
+                <a href="/mpp-marketplace" class="mlnav-row"><span style="font-weight:700;">MPP marketplace</span><span class="mlnav-faint">verified sellers</span></a>
+                <a href="/leaderboard" class="mlnav-row"><span style="font-weight:700;">leaderboard</span><span class="mlnav-faint">settled on-chain</span></a>
+                <a href="/revenue" class="mlnav-row"><span style="font-weight:700;">transactions</span><span class="mlnav-faint">our rails, every settle</span></a>
+                <a href="/marketplace/tools" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">every tool indexed</span><span class="mlnav-faint">ours + third-party</span></a>
+                <span class="mlnav-label">BY CHAIN</span>
                 ${rows}
                 <a href="/guides/smart-order-router" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">buy from any seller with one call</span><span style="opacity:.7;">→</span></a>
               </span>
@@ -500,10 +574,9 @@ function marketPanelNav(chainInfo) {
 function peoplePanelNav() {
   return `<span class="mlnav-dd">
               <span style="display:block;width:300px;border:1px solid var(--hairline);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
-                <span style="display:block;padding:10px 16px 8px;font-size:11px;letter-spacing:.1em;color:var(--faint);border-bottom:1px solid var(--hairline);">FOR PEOPLE · CARD OR USDC</span>
-                <a href="/reports" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">reports</span><span style="color:var(--faint);">finished, cited, $2 and up</span></a>
-                <a href="/monitors" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">monitors</span><span style="color:var(--faint);">watch one target monthly</span></a>
-                <a href="/credits" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);border-bottom:1px solid var(--hairline);"><span style="font-weight:700;">credits</span><span style="color:var(--faint);">pay by card, use every tool</span></a>
+                <span class="mlnav-label">FOR PEOPLE · CARD OR USDC</span>
+                <a href="/reports" class="mlnav-row"><span style="font-weight:700;">reports</span><span class="mlnav-faint">finished, cited, $2 and up</span></a>
+                <a href="/monitors" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">monitors</span><span class="mlnav-faint">watch one target monthly</span></a>
                 <a href="/reports" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">get a report</span><span style="opacity:.7;">→</span></a>
               </span>
             </span>`;
@@ -515,14 +588,14 @@ function peoplePanelNav() {
 function docsPanelNav() {
   return `<span class="mlnav-dd">
               <span style="display:block;width:300px;border:1px solid var(--hairline);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
-                <span style="display:block;padding:10px 16px 8px;font-size:11px;letter-spacing:.1em;color:var(--faint);border-bottom:1px solid var(--hairline);">BUILD ON AGENT402</span>
-                <a href="/docs" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">docs</span><span style="color:var(--faint);">API, MCP, SDKs</span></a>
-                <a href="/quickstart" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">quickstart</span><span style="color:var(--faint);">first paid call in a minute</span></a>
-                <a href="/guides" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">guides</span><span style="color:var(--faint);">hosts, router, selling</span></a>
-                <a href="/integrations" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);border-bottom:1px solid var(--hairline);"><span style="font-weight:700;">integrations</span><span style="color:var(--faint);">frameworks and adapters</span></a>
-                <a href="/x402-test" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);border-bottom:1px solid var(--hairline);"><span style="font-weight:700;">test your client</span><span style="color:var(--faint);">why a payment was refused</span></a>
-                <a href="/blog" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">blog</span><span style="color:var(--faint);"></span></a>
-                <a href="/changelog" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">changelog</span><span style="color:var(--faint);">what shipped</span></a>
+                <span class="mlnav-label">BUILD ON AGENT402</span>
+                <a href="/docs" class="mlnav-row"><span style="font-weight:700;">docs</span><span class="mlnav-faint">API, MCP, SDKs</span></a>
+                <a href="/quickstart" class="mlnav-row"><span style="font-weight:700;">quickstart</span><span class="mlnav-faint">first paid call in a minute</span></a>
+                <a href="/guides" class="mlnav-row"><span style="font-weight:700;">guides</span><span class="mlnav-faint">hosts, router, selling</span></a>
+                <a href="/integrations" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">integrations</span><span class="mlnav-faint">frameworks and adapters</span></a>
+                <a href="/x402-test" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">test your client</span><span class="mlnav-faint">why a payment was refused</span></a>
+                <a href="/blog" class="mlnav-row"><span style="font-weight:700;">blog</span><span class="mlnav-faint"></span></a>
+                <a href="/changelog" class="mlnav-row"><span style="font-weight:700;">changelog</span><span class="mlnav-faint">what shipped</span></a>
                 <a href="/docs" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">read the docs</span><span style="opacity:.7;">→</span></a>
               </span>
             </span>`;
@@ -533,15 +606,15 @@ function docsPanelNav() {
 function whyPanelNav() {
   return `<span class="mlnav-dd">
               <span style="display:block;width:300px;border:1px solid var(--hairline);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
-                <span style="display:block;padding:10px 16px 8px;font-size:11px;letter-spacing:.1em;color:var(--faint);border-bottom:1px solid var(--hairline);">WHY PAY HERE</span>
-                <a href="/why" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">seven things</span><span style="color:var(--faint);">each with its proof</span></a>
-                <a href="/proof" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);border-bottom:1px solid var(--hairline);"><span style="font-weight:700;">receipts</span><span style="color:var(--faint);">metered calls against their quotes</span></a>
-                <span style="display:block;padding:10px 16px 8px;font-size:11px;letter-spacing:.1em;color:var(--faint);border-bottom:1px solid var(--hairline);">WHAT THIS IS</span>
-                <a href="/101" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">x402 &amp; MPP 101</span><span style="color:var(--faint);">the walkthrough</span></a>
-                <a href="/what-is-x402" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">what is x402</span><span style="color:var(--faint);">the HTTP 402 protocol</span></a>
-                <a href="/what-is-mpp" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">what is MPP</span><span style="color:var(--faint);">the Payment auth scheme</span></a>
-                <a href="/agentic-finance" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">agentic finance</span><span style="color:var(--faint);">the category</span></a>
-                <a href="/glossary" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">glossary</span><span style="color:var(--faint);">the terms</span></a>
+                <span class="mlnav-label">WHY PAY HERE</span>
+                <a href="/why" class="mlnav-row"><span style="font-weight:700;">seven things</span><span class="mlnav-faint">each with its proof</span></a>
+                <a href="/proof" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">receipts</span><span class="mlnav-faint">metered calls against their quotes</span></a>
+                <span class="mlnav-label">WHAT THIS IS</span>
+                <a href="/101" class="mlnav-row"><span style="font-weight:700;">x402 &amp; MPP 101</span><span class="mlnav-faint">the walkthrough</span></a>
+                <a href="/what-is-x402" class="mlnav-row"><span style="font-weight:700;">what is x402</span><span class="mlnav-faint">the HTTP 402 protocol</span></a>
+                <a href="/what-is-mpp" class="mlnav-row"><span style="font-weight:700;">what is MPP</span><span class="mlnav-faint">the Payment auth scheme</span></a>
+                <a href="/agentic-finance" class="mlnav-row"><span style="font-weight:700;">agentic finance</span><span class="mlnav-faint">the category</span></a>
+                <a href="/glossary" class="mlnav-row"><span style="font-weight:700;">glossary</span><span class="mlnav-faint">the terms</span></a>
                 <a href="/why" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">why pay here</span><span style="opacity:.7;">→</span></a>
               </span>
             </span>`;
@@ -550,12 +623,12 @@ function whyPanelNav() {
 function ourToolsPanelNav() {
   return `<span class="mlnav-dd">
               <span style="display:block;width:280px;border:1px solid var(--hairline);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
-                <span style="display:block;padding:10px 16px 8px;font-size:11px;letter-spacing:.1em;color:var(--faint);border-bottom:1px solid var(--hairline);">OUR 500+ TOOL CATALOG</span>
-                <a href="/tools" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">catalog</span><span style="color:var(--faint);">browse by category</span></a>
-                <a href="/skills" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">skill packs</span><span style="color:var(--faint);">one payment, N tools</span></a>
-                <a href="/tools/category/crypto" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">crypto, DeFi &amp; Solana</span><span style="color:var(--faint);">perps · yields · token risk</span></a>
-                <a href="/tools/category/llm" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">images &amp; video</span><span style="color:var(--faint);">flat per picture or clip</span></a>
-                <a href="/playground" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">playground</span><span style="color:var(--faint);">try free · PoW</span></a>
+                <span class="mlnav-label">OUR 500+ TOOL CATALOG</span>
+                <a href="/tools" class="mlnav-row"><span style="font-weight:700;">catalog</span><span class="mlnav-faint">browse by category</span></a>
+                <a href="/skills" class="mlnav-row"><span style="font-weight:700;">skill packs</span><span class="mlnav-faint">one payment, N tools</span></a>
+                <a href="/tools/category/crypto" class="mlnav-row"><span style="font-weight:700;">crypto, DeFi &amp; Solana</span><span class="mlnav-faint">perps · yields · token risk</span></a>
+                <a href="/tools/category/llm" class="mlnav-row"><span style="font-weight:700;">images &amp; video</span><span class="mlnav-faint">flat per picture or clip</span></a>
+                <a href="/playground" class="mlnav-row"><span style="font-weight:700;">playground</span><span class="mlnav-faint">try free · PoW</span></a>
                 <a href="/pricing" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">pricing →</span><span style="color:var(--dk-muted);">/pricing</span></a>
               </span>
             </span>`;
@@ -564,10 +637,10 @@ function ourToolsPanelNav() {
 function sellPanelHtml() {
   return `<span class="mlnav-dd">
               <span style="display:block;width:330px;border:1px solid var(--hairline);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:0 18px 40px rgba(17,19,21,.12);">
-                <span style="display:block;padding:10px 16px 8px;font-size:11px;letter-spacing:.1em;color:var(--faint);border-bottom:1px solid var(--hairline);">FOR API SELLERS - GET PAID PER CALL</span>
-                <a href="/sell" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">list your API</span><span style="color:var(--faint);">free · health-ranked</span></a>
-                <a href="/tollbooth" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">tollbooth</span><span style="color:var(--faint);">pay-per-crawl</span></a>
-                <a href="/contribute" class="mlnav-row" style="display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink);"><span style="font-weight:700;">contribute a tool</span><span style="color:var(--faint);">AGPL · ~15 lines</span></a>
+                <span class="mlnav-label">FOR API SELLERS - GET PAID PER CALL</span>
+                <a href="/sell" class="mlnav-row"><span style="font-weight:700;">list your API</span><span class="mlnav-faint">free · health-ranked</span></a>
+                <a href="/tollbooth" class="mlnav-row"><span style="font-weight:700;">tollbooth</span><span class="mlnav-faint">pay-per-crawl</span></a>
+                <a href="/contribute" class="mlnav-row"><span style="font-weight:700;">contribute a tool</span><span class="mlnav-faint">AGPL · ~15 lines</span></a>
                 <a href="/sell" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--surface);color:var(--on-dark);"><span style="font-weight:700;">start selling →</span><span style="color:var(--dk-muted);">/sell</span></a>
               </span>
             </span>`;
@@ -615,11 +688,14 @@ function mobileMenuHtml(chainInfo, activePath) {
   const chains = chainInfo.chains.map((c) => `<a href="${esc(c.href)}" class="ml-mm-chip${c.href === activePath ? " ml-mm-active" : ""}">${esc(c.label)}</a>`).join("");
   return `<div id="ml-mobile-menu" class="ml-mobile-menu">
     ${activePath === "/reports" ? "" : `<div class="ml-mm-group">${mmLink("/reports", "Get a report →", false, " ml-mm-cta")}</div>`}
+    ${DECIDE_LIVE ? `<div class="ml-mm-h">Decide</div>
+    <div class="ml-mm-group">
+      ${mmLink("/decide", "decide · a plan for any job", activePath === "/decide")}
+    </div>` : ""}
     <div class="ml-mm-h">For people</div>
     <div class="ml-mm-group">
       ${mmLink("/reports", "reports · card or USDC", activePath === "/reports")}
       ${mmLink("/monitors", "monitors · monthly, cancel anytime", activePath === "/monitors")}
-      ${mmLink("/credits", "credits · pay by card, use every tool", activePath === "/credits")}
     </div>
     <div class="ml-mm-h">Buy</div>
     <div class="ml-mm-group">
@@ -658,6 +734,7 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/guides", "guides", activePath === "/guides")}
       ${mmLink("/blog", "blog", activePath === "/blog")}
       ${mmLink("/changelog", "changelog", activePath === "/changelog")}
+      ${mmLink("https://live.agent402.tools", "live · payments as they settle", false)}
       ${mmLink("/revenue", "transactions · on-chain", activePath === "/revenue")}
       ${mmLink("/status", "status · uptime", activePath === "/status")}
       ${mmLink("/integrations", "integrations", activePath === "/integrations")}
@@ -691,7 +768,7 @@ function nav(activePath) {
     tools: new Set(["/tools", "/skills", "/playground", "/pricing"]),
   };
 
-  const zone1 = NAV_ZONES[0].map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
+  const zone1 = (DECIDE_LIVE ? [DECIDE_NAV_ITEM, ...NAV_ZONES[0]] : NAV_ZONES[0]).map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
   const zone2 = NAV_ZONES[1].map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
   const zone3 = NAV_ZONES[2].map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
   const divider = `<span style="width:1px;height:15px;background:var(--hairline);flex:none;"></span>`;
@@ -699,7 +776,7 @@ function nav(activePath) {
   return `<nav style="border-bottom:1px solid var(--hairline);background:var(--nav-bg);backdrop-filter:saturate(1.4) blur(14px);-webkit-backdrop-filter:saturate(1.4) blur(14px);position:sticky;top:0;z-index:50;">
   <div class="ml-nav-in" style="max-width:1180px;margin:0 auto;padding:15px 30px;display:flex;align-items:center;gap:26px;">
     <a href="/" style="display:flex;align-items:center;gap:11px;text-decoration:none;color:var(--ink);">
-      <span aria-hidden="true" style="width:22px;height:22px;border-radius:6px;background:var(--brand-mark);box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 1px 2px rgba(0,0,0,.25);display:inline-block;"></span>
+      ${brandMark(24, "n")}
       <span style="font-weight:600;font-size:16px;letter-spacing:-.01em;">Agent402</span>
     </a>
     <div class="ml-nav-links" style="display:flex;align-items:center;gap:22px;margin-left:10px;font-family:var(--font-body);font-size:14px;">
@@ -710,6 +787,7 @@ function nav(activePath) {
       ${zone3}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;">
+      <a class="ml-nav-gh ml-nav-live" href="https://live.agent402.tools" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 11px;border:1px solid var(--hairline);border-radius:8px;background:var(--card);" title="Watch x402 and MPP payments settle, read from the chain"><svg width="15" height="13" viewBox="0 0 24 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="13" rx="2"/><path d="M8 19h8"/><path d="M10.5 6.2v4.6l4-2.3z" fill="currentColor" stroke="none"/></svg>live</a>
       <a class="ml-nav-gh" href="/status" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;" title="Uptime from two outside observers"><span aria-hidden="true" style="width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;"></span>status</a>
       <a class="ml-nav-gh" href="/llms.txt" style="font-family:var(--font-mono);font-size:12px;color:var(--muted);text-decoration:none;padding:8px 13px;border:1px solid var(--hairline);border-radius:999px;background:var(--card);white-space:nowrap;">llms.txt</a>
       ${activePath === "/reports" ? "" : `<a class="ml-nav-cta" href="/reports" style="background:var(--btn-bg);color:var(--btn-fg);font-family:var(--font-body);font-weight:500;font-size:13.5px;text-decoration:none;padding:9px 16px;border-radius:999px;box-shadow:var(--btn-shadow);white-space:nowrap;">Get a report</a>`}
@@ -739,6 +817,9 @@ export const ledgerFooterFull = () => ledgerFooterCompact();
 // Footer - compact single-row (sub-pages)
 // ---------------------------------------------------------------------------
 
+// Sitemap pages that no nav menu reaches; this row is their site-wide link.
+const FOOTER_MORE = [["/faq", "faq"], ["/compare", "compare"], ["/use-cases", "use cases"], ["/community", "community"], ["/digest", "weekly digest"], ["/shop", "shop"], ["/badges", "badges"]];
+
 export function ledgerFooterCompact() {
   // Three rows, deliberately. The previous compact footer carried 31 links in
   // one undifferentiated wall, which is the same failure as labelling eight
@@ -757,16 +838,20 @@ export function ledgerFooterCompact() {
   return `<footer style="border-top:1px solid var(--hairline);background:var(--footer-bg);">
   <div style="max-width:1180px;margin:0 auto;padding:26px 30px;font-family:var(--font-mono);font-size:12px;color:var(--faint);">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
-      <a href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);"><span aria-hidden="true" style="width:18px;height:18px;border-radius:5px;background:var(--brand-mark);display:inline-block;"></span><span style="font-weight:600;font-size:14px;font-family:var(--font-sans);letter-spacing:-.01em;">Agent402</span></a>
-      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/credits" style="color:var(--muted);text-decoration:none;">credits</a><a href="/tools" style="color:var(--muted);text-decoration:none;">catalog</a><a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a><a href="/why" style="color:var(--muted);text-decoration:none;">why</a><a href="/company" style="color:var(--muted);text-decoration:none;">company</a></span>
+      <a href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);">${brandMark(20, "f")}<span style="font-weight:600;font-size:14px;font-family:var(--font-sans);letter-spacing:-.01em;">Agent402</span></a>
+      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/tools" style="color:var(--muted);text-decoration:none;">catalog</a>${DECIDE_LIVE ? `<a href="/decide" style="color:var(--muted);text-decoration:none;">decide</a>` : ""}<a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a><a href="/why" style="color:var(--muted);text-decoration:none;">why</a><a href="/company" style="color:var(--muted);text-decoration:none;">company</a></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--hairline);">
       <span>© 2026 Havok Holdings LLC · <a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:underline;">mike@agent402.tools</a></span>
-      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/status" style="color:var(--muted);text-decoration:none;">status</a><a href="/security" style="color:var(--muted);text-decoration:none;">security</a><a href="/transparency" style="color:var(--muted);text-decoration:none;">transparency</a><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="/company#contact" style="color:var(--muted);text-decoration:none;">contact</a><a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener" aria-label="GitHub" title="GitHub" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${GITHUB_ICON_SVG}</a><a href="https://x.com/Agent402Tools" rel="noopener" aria-label="X" title="X" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${X_ICON_SVG}</a></span>
+      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/status" style="color:var(--muted);text-decoration:none;">status</a><a href="/security" style="color:var(--muted);text-decoration:none;">security</a><a href="/transparency" style="color:var(--muted);text-decoration:none;">transparency</a><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="/company#contact" style="color:var(--muted);text-decoration:none;">contact</a><a href="${REPO_URL}" rel="noopener" aria-label="GitHub" title="GitHub" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${GITHUB_ICON_SVG}</a><a href="https://x.com/Agent402Tools" rel="noopener" aria-label="X" title="X" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${X_ICON_SVG}</a></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:10px;">
       <span style="letter-spacing:.1em;text-transform:uppercase;">for agents</span>
-      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/llms.txt" style="color:var(--muted);text-decoration:none;">llms.txt</a><a href="/openapi.json" style="color:var(--muted);text-decoration:none;">openapi.json</a><a href="/.well-known/x402" style="color:var(--muted);text-decoration:none;">.well-known/x402</a><a href="/api/pricing" style="color:var(--muted);text-decoration:none;">/api/pricing</a><a href="/api/stats" style="color:var(--muted);text-decoration:none;">/api/stats</a><a href="/api/status" style="color:var(--muted);text-decoration:none;">/api/status</a><a href="/x402-test" style="color:var(--muted);text-decoration:none;">test your client</a><a href="/crawler" style="color:var(--muted);text-decoration:none;">our crawler</a></span>
+      <span style="display:flex;gap:16px;flex-wrap:wrap;"><a href="/llms.txt" style="color:var(--muted);text-decoration:none;">llms.txt</a><a href="/openapi.json" style="color:var(--muted);text-decoration:none;">openapi.json</a><a href="/.well-known/x402" style="color:var(--muted);text-decoration:none;">.well-known/x402</a><a href="/api/pricing" style="color:var(--muted);text-decoration:none;">/api/pricing</a><a href="/api/stats" style="color:var(--muted);text-decoration:none;">/api/stats</a><a href="/api/status" style="color:var(--muted);text-decoration:none;">/api/status</a><a href="/x402-test" style="color:var(--muted);text-decoration:none;">test your client</a><a href="/crawler" style="color:var(--muted);text-decoration:none;">our crawler</a><a href="/SKILL.md" style="color:var(--muted);text-decoration:none;">SKILL.md</a><a href="/docs/webhooks" style="color:var(--muted);text-decoration:none;">webhooks</a></span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:10px;">
+      <span style="letter-spacing:.1em;text-transform:uppercase;">more</span>
+      <span style="display:flex;gap:16px;flex-wrap:wrap;">${FOOTER_MORE.map(([href, label]) => `<a href="${href}" style="color:var(--muted);text-decoration:none;">${label}</a>`).join("")}</span>
     </div>
   </div>
 </footer>`;
@@ -857,6 +942,30 @@ function posthogSnippet(baseUrl) {
   // text (CSP hardening, 2026-08-16).
   return jsonScriptTag("posthog-config", { key, cfg }) + '<script src="/js/posthog-loader.js"></script>';
 }
+// Google Analytics 4 (2026-10-01), env-gated on GA_MEASUREMENT_ID. The loader
+// (assets/js/ga-loader.js) is static and reads the id from a JSON island, as
+// PostHog's does. It is left off every page whose URL is itself a bearer link
+// (a paid report, a receipt, a signed alert or manage link), so those URLs
+// never reach Google. Consent and internal-traffic tagging live in the loader.
+const GA_BEARER_PATH = /^\/(r|m|reports\/public|alerts|followups|credits\/thanks|monitors\/manage|monitors\/thanks|digest)(\/|$)/;
+export function gaSnippet(canonical) {
+  const id = String(process.env.GA_MEASUREMENT_ID || "").trim();
+  if (!/^G-[A-Z0-9]{4,16}$/.test(id)) return "";
+  let path = "/";
+  try { path = new URL(canonical).pathname; } catch { /* default */ }
+  if (GA_BEARER_PATH.test(path)) return "";
+  return jsonScriptTag("ga-config", { id }) + '<script src="/js/ga-loader.js"></script>';
+}
+
+/** BreadcrumbList JSON-LD from [name, path] pairs (path relative to baseUrl). */
+export function breadcrumbLd(baseUrl, crumbs) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: crumbs.map(([name, path], i) => ({ "@type": "ListItem", position: i + 1, name, item: `${baseUrl}${path}` })),
+  };
+}
+
 export function ledgerShell({ title: rawTitle, description: rawDescription, canonical, baseUrl, activePath = "", ogImage, jsonLd, extraCss = "", body, robots = "index, follow, max-image-preview:large" }) {
   // The snippet is derived here, once, for every page (see seo-meta.js): a
   // page author writes the paragraph, the shell serves what a search result
@@ -882,7 +991,9 @@ export function ledgerShell({ title: rawTitle, description: rawDescription, cano
     description: `x402 pay-per-call agent tools settling in ${RAILS_AMP}. Available as a Base MCP plugin (app ID 6a3dd86ca341d86b910769fb). Gas is sponsored on EVM chains - callers need only the stablecoin.`,
     url: baseUrl,
   };
-  const allLd = [baseEcosystemLd, ...(jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [])];
+  // Each block is its own script tag, so each needs its own @context.
+  const allLd = [baseEcosystemLd, ...(jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [])]
+    .map((j) => (j && typeof j === "object" && !j["@context"] ? { "@context": "https://schema.org", ...j } : j));
   // Every "<" is escaped as \u003c, exactly as jsonScriptTag does and for the
   // same reason: JSON.stringify never escapes it, so a string field carrying
   // the literal text "</script>" would close this tag early and let whatever
@@ -922,6 +1033,7 @@ ${LEDGER_HEAD}
 <style>${LEDGER_CSS}${extraCss}</style>
 ${jsonLdBlock}
 ${posthogSnippet(baseUrl)}
+${gaSnippet(canonical)}
 </head>
 <body style="overflow-x:hidden;">
 ${nav(activePath)}

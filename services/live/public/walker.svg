@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 40" width="24" height="40">
+  <title>Buyer</title>
+  <circle cx="12" cy="7" r="5.5" fill="#f1e6da" stroke="#1d2b3a" stroke-width="1.5"/>
+  <rect x="5" y="13" width="14" height="15" rx="5" fill="#6b7a8a" stroke="#1d2b3a" stroke-width="1.5"/>
+  <rect x="7" y="27" width="4" height="10" rx="2" fill="#1d2b3a"/>
+  <rect x="13" y="27" width="4" height="10" rx="2" fill="#1d2b3a"/>
+</svg>

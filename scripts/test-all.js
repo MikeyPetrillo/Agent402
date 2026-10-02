@@ -18,7 +18,7 @@ const TARGET = process.env.TARGET_URL || "http://127.0.0.1:3000";
 // exercised by this sweep — search-kit shape/validation is covered by
 // scripts/test-search-kit.js and post-deploy by scripts/paid-canary.js.
 const BRAVE_ROUTES = new Set([
-  "/api/search", "/api/search-news", "/api/search-images", "/api/search-videos", "/api/search-suggest", "/api/answer",
+  "/api/search", "/api/search-lite", "/api/search-news", "/api/search-images", "/api/search-videos", "/api/search-suggest", "/api/answer",
   "/api/multi-search",
   // Skill packs whose EXECUTABLE steps invoke Brave-backed handlers in-process
   // (skill-runner bypasses the HTTP route, so the direct-route skip above never
@@ -78,6 +78,7 @@ const NETWORK = new Set([
   // 503 is tolerated, exactly like the keyed tools.
   "/api/sanctions/wallet",
   "/api/sanctions/name",
+  "/api/cve-lookup",  // cve-kit.js (NVD + EPSS + CISA KEV)
   "/api/defi-yields", "/api/defi-yield-history", "/api/defi-protocols", "/api/defi-protocol", "/api/defi-chains", "/api/defi-chain-tvl-history", "/api/stablecoins", "/api/stablecoin-supply-history", "/api/defi-fees", "/api/defi-dex-volume",  // defi-kit.js
   "/api/crypto-news", "/api/crypto-indicators", "/api/crypto-market-pulse",  // crypto-signals-kit.js
   "/api/site-map", "/api/site-crawl",  // crawl-kit.js
@@ -90,7 +91,7 @@ const NETWORK = new Set([
   "/api/hunter-domain-search", "/api/hunter-email-finder", "/api/hunter-email-verify", "/api/hunter-company", "/api/apollo-people-search", "/api/apollo-org-enrich", "/api/apollo-person-match",
   "/api/extract", "/api/meta", "/api/dns", "/api/render", "/api/screenshot", "/api/pdf",
   "/api/http-check", "/api/tls-cert", "/api/whois", "/api/robots-check", "/api/sitemap",
-  "/api/email-validate", "/api/ip-info", "/api/search", "/api/search-news", "/api/search-images", "/api/search-videos", "/api/search-suggest", "/api/answer", "/api/multi-search",
+  "/api/email-validate", "/api/ip-info", "/api/search", "/api/search-lite", "/api/search-news", "/api/search-images", "/api/search-videos", "/api/search-suggest", "/api/answer", "/api/multi-search",
   "/api/llm-context",  // llm-context-kit.js (Brave grounding context - live egress, skipped by BRAVE_ROUTES)
   // Web-content kit: archive.org (archive-snapshot), caller feed URLs
   // (feed-parse), caller redirect chains (unshorten-url) — all live egress.
@@ -98,9 +99,9 @@ const NETWORK = new Set([
   // a2a-card-fetch: its example fetches the static sample card on PROD, which
   // 404s on the CI run that first ships the route — lenient until deployed.
   "/api/a2a-card-fetch",
-  // Blockscout kit: paid x402 upstream — 503 without X402_UPSTREAM_BUYER_KEY
-  // (CI boots keyless; the real path costs $0.002/call and is canary-class).
-  "/api/contract-inspect", "/api/address-profile", "/api/seller-payability", "/api/token-info", "/api/token-holders", "/api/tx-inspect",
+  // seller-payability pays an external seller's probe from the spending
+  // wallet - 503 without X402_UPSTREAM_BUYER_KEY (CI boots keyless).
+  "/api/seller-payability",
   // route-execute-max/-plus: external tiers may pay an upstream seller — lenient.
   "/api/route/execute-max", "/api/route/execute-plus",
   // captcha-verify hits a live provider siteverify (egress) — lenient.
@@ -164,10 +165,10 @@ const NETWORK = new Set([
   "/api/edgar-insider-trades", "/api/edgar-13f-holdings", "/api/edgar-recent-ipos", "/api/edgar-search",
   "/api/edgar-13f-datasets", "/api/edgar-13f-dataset-head",
   "/api/company-financials",
-  // Finance-kit: Yahoo Finance chart (quote + history) and Nasdaq earnings
+  // Finance-kit: Databento equities (quote + history)
   // calendar — keyless live upstreams; tolerate transient 502/503/504.
-  "/api/stock-quote", "/api/stock-history", "/api/earnings-calendar",
-  "/api/options-chain", "/api/premarket-quote", "/api/stock-dividends", "/api/dividend-calendar",
+  "/api/stock-quote", "/api/stock-history",
+  "/api/options-chain", "/api/premarket-quote", "/api/stock-dividends",
   // Crypto-kit: CoinGecko public API — keyless, ~30 req/min from a single IP.
   // Tolerate transient 429/502/503/504 (rate limit + Cloudflare hiccups).
   // crypto-orderbook rides Coinbase Exchange's public API (same lenient posture).
@@ -211,12 +212,9 @@ const NETWORK = new Set([
   // Dex-kit: 3 Alchemy-backed (dex-pair / dex-pool / dex-quote) — 503 without
   // ALCHEMY_API_KEY, same as chain-kit. dex-top-pools hits DeFiLlama keylessly.
   "/api/dex-pair", "/api/dex-pool", "/api/dex-quote", "/api/dex-top-pools",
-  // Prediction-market-kit: keyless public upstreams (Polymarket Gamma + CLOB,
-  // Kalshi). Per-IP rate-limited; tolerate transient 429/502/503/504. The
-  // placeholder example inputs may also return 4xx (e.g. "election" keyword
-  // search returns 0 results out of cycle, or a fake tokenId yields 404).
-  "/api/polymarket-search", "/api/polymarket-market", "/api/polymarket-orderbook",
-  "/api/polymarket-price-history", "/api/kalshi-markets", "/api/kalshi-event", "/api/kalshi-live-data", "/api/kalshi-weather-index",
+  // Prediction-market-kit: Kalshi's keyless public API. Per-IP rate-limited;
+  // tolerate transient 429/502/503/504.
+  "/api/kalshi-markets", "/api/kalshi-event", "/api/kalshi-live-data", "/api/kalshi-weather-index",
   // MEV + L2 kit: Flashbots relay (keyless), DeFiLlama (keyless), and Alchemy
   // (503 without key). Tolerate transient upstream errors + 4xx from
   // placeholder example inputs (e.g. specific block-number lookups may miss).
@@ -282,7 +280,7 @@ const NETWORK = new Set([
   "/api/skill/webhook-intake",
   // Packs that compose WALLET_ONLY (egress) tools and were never added here, so
   // a slow upstream tripping the 20s AbortSignal counted as a strict failure —
-  // price-monitor (Yahoo + CoinGecko) broke the build this way on 2026-07-24.
+  // price-monitor (equities + CoinGecko) broke the build this way on 2026-07-24.
   // Scoped deliberately: an audit of all 109 packs found 23 absent from this
   // set, but only these 6 reach the network. The other 17 are pure-CPU chains
   // with no upstream that could ever be slow, so they stay STRICT rather than
@@ -315,8 +313,8 @@ const NETWORK = new Set([
   // ticker-pack: the bundle - runs the dossier + insider composites in-process
   // plus live SEC EDGAR reads; 503 without OPENROUTER_API_KEY, same tolerance.
   "/v1/ticker-pack",
-  // token-risk composites: Blockscout x402 buys + synthesis; 503 without the
-  // upstream-buyer wallet / OPENROUTER_API_KEY, same NETWORK tolerance.
+  // token-risk composites: keyless probes + synthesis; 503 without
+  // OPENROUTER_API_KEY, same NETWORK tolerance.
   "/v1/token-risk", "/v1/token-risk/pro",
   // dossier-kit composites: EDGAR + grounded web search + synthesis, 503 without key.
   "/v1/dossier", "/v1/dossier/max",
@@ -334,6 +332,8 @@ const NETWORK = new Set([
   // Image generation kit: every call hits OpenAI GPT Image API upstream.
   // Returns 503 without OPENAI_API_KEY — same tolerance as LLM proxy.
   "/api/image-gen", "/api/image-gen-hd", "/api/image-gen-premium",
+  "/api/decide",
+  "/api/decide/execute",
   // Named chain-read primitives (chain-kit 2026-07-29): live public-RPC reads.
   "/api/block-number", "/api/chain-info", "/api/block-info", "/api/erc721-owner", "/api/contract-code", "/api/event-logs",
   "/api/chain/nonce", "/api/chain/storage", "/api/chain/pending", "/api/chain/total-supply", "/api/chain/erc1155-balance",

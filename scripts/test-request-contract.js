@@ -8,7 +8,7 @@
 // paste live keys into specs and examples carry personal data, and detecting
 // that by signature is a losing game. Names are constrained by an allowlist
 // instead, which an attacker cannot write their way around.
-import { requestContractOf, packRequestContract, unpackRequestContract, safeName } from "../src/request-contract.js";
+import { requestContractOf, packRequestContract, unpackRequestContract, safeName, requestContractFromInputSchema, requestContractStrength } from "../src/request-contract.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - ${m}`); };
@@ -127,7 +127,11 @@ for (const kw of ["$ref", "allOf", "oneOf", "not"]) {
   const back = unpackRequestContract({ requestContract: packRequestContract(c) });
   ok(back.required.path.join() === "id", "the compact tuple round-trips");
   ok(packRequestContract(requestContractOf({})) === null, "unknown stores nothing");
-  ok(packRequestContract(requestContractOf({ parameters: [] })) === null, "absent stores nothing either");
+  const absentTuple = packRequestContract(requestContractOf({ parameters: [] }));
+  ok(JSON.stringify(absentTuple) === JSON.stringify(["absent", {}]), "absent IS stored, so a row can say \"requires nothing\" rather than nothing at all");
+  const absentBack = unpackRequestContract({ requestContract: absentTuple });
+  ok(absentBack.state === "absent" && absentBack.source === "seller_openapi" && Object.keys(absentBack.required).length === 0, "an absent tuple round-trips as absent, with no names");
+  ok(unpackRequestContract({ requestContract: ["absent", { body: ["x"] }] }) === null, "an absent tuple carrying names is not what we wrote, and reads as no contract");
 
   // A cache file is state we persist and reload. A value that was safe when
   // written is not self-evidently safe when read back by a later version.
@@ -181,6 +185,25 @@ for (const kw of ["$ref", "allOf", "oneOf", "not"]) {
   const store = between("const packed = packRequestContract", "})(),");
   ok(/catch \{ return \{\}; \}/.test(store),
     "a per-operation parse failure is caught locally, so one bad operation cannot drop a seller");
+}
+
+// ---- optional inputs are kept beside the required ones ----
+{
+  // The 2s.io shape: two optional query parameters, nothing required.
+  const op = { parameters: [{ name: "query", in: "query", required: false }, { name: "companyNumber", in: "query" }, { name: "X-Trace", in: "header" }] };
+  const c = requestContractOf(op);
+  ok(c.state === "absent" && c.optional?.query?.join() === "query,companyNumber" && !c.optional.header, `all-optional query parameters are kept as optional names (${JSON.stringify(c.optional)})`);
+  const packed = packRequestContract(c);
+  const back = unpackRequestContract({ requestContract: packed });
+  ok(packed.length === 4 && back.state === "absent" && back.optional.query.join() === "query,companyNumber" && Object.keys(back.required).length === 0, "an absent contract with optional names round-trips through the cache tuple");
+  const body = requestContractOf({ requestBody: { content: { "application/json": { schema: { type: "object", required: ["a"], properties: { a: { type: "string" }, b: { type: "number" }, __proto__x: {} } } } } } });
+  ok(body.state === "declared" && body.required.body.join() === "a" && body.optional?.body?.join() === "b,__proto__x", `body properties not required are optional; required ones stay required (${JSON.stringify(body)})`);
+  ok(unpackRequestContract({ requestContract: ["absent", {}] }).optional === undefined && unpackRequestContract({ requestContract: ["declared", { query: ["q"] }, "seller_manifest"] }).required.query[0] === "q", "caches written before optional names still read (2- and 3-element tuples)");
+  ok(unpackRequestContract({ requestContract: ["absent", {}, "seller_openapi", ["x"]] }) === null && unpackRequestContract({ requestContract: ["absent", {}, "seller_openapi", { query: ["bad name!", "ok_name"] }] }).optional.query.join() === "ok_name", "a malformed optional element is refused; unsafe names are dropped on the way out");
+  ok(unpackRequestContract({ requestContract: ["declared", { query: ["q"] }, "seller_openapi", { query: ["q", "r"] }] }).optional.query.join() === "r", "a name that is required is never also optional");
+  const m = requestContractFromInputSchema({ type: "object", properties: { companyNumber: { type: "string" }, query: { type: "string" } } }, "GET");
+  ok(m.state === "absent" && m.optional?.query?.join() === "companyNumber,query", `a manifest schema with no required list keeps its properties as optional (${JSON.stringify(m.optional)})`);
+  ok(requestContractStrength(packed) > requestContractStrength(["absent", {}]), "a tuple with optional names outranks the same state without them when crawl sources merge");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

@@ -7,7 +7,7 @@
 
 > **Looking for the OpenAI-compatible wire paths?** The [[LLM Gateway (OpenAI /v1)|LLM-Gateway]] serves standard `chat/completions`, `embeddings`, `rerank`, `images/generations`, `videos/generations` and `audio/speech` at `https://agent402.tools/v1` (plus the Anthropic Messages and OpenAI Responses wires) - flat chat tiers from $0.003 per call, a metered tier quoted per request, embeddings and rerank from $0.002, model-optional auto-routing, streaming, and response caching. Any OpenAI SDK adopts it by changing `base_url`. The `/api/llm*` tools below remain available as the simpler custom-JSON proxy.
 
-Three tiers of OpenAI inference, paywalled via x402. An agent sends a standard `chat/completions` request and pays per call with USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, or Algorand -- no OpenAI API key needed on the caller's side, no signup, no account. The operator's own `OPENAI_API_KEY` handles upstream auth; per-tier input and output caps keep worst-case upstream cost well below the x402 price.
+Three tiers of OpenAI inference, paywalled via x402. An agent sends a standard `chat/completions` request and pays per call with USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, or Algorand -- no OpenAI API key needed on the caller's side, no signup, no account. The operator's own `OPENAI_API_KEY` handles upstream auth; per-tier input and output caps bound what one call can ask for.
 
 ## Tiers
 
@@ -39,7 +39,7 @@ Every tier accepts the same OpenAI-shaped JSON body:
 
 | Field | Required | Notes |
 |---|---|---|
-| `model` | yes | Must match the tier's allowlist by prefix (`gpt-4o-mini` for `/api/llm`; `gpt-4o` / `gpt-4.1` for `/api/llm-pro`; `o3` / `o3-mini` for `/api/llm-premium`) |
+| `model` | no | Defaults to `gpt-4o-mini` when omitted. Must match the tier's allowlist by prefix (`gpt-4o-mini` for `/api/llm`; `gpt-4o` / `gpt-4.1` for `/api/llm-pro`; `o3` / `o3-mini` for `/api/llm-premium`, which refuses the default, so name a model there) |
 | `messages` | yes | Array of `{role, content}` objects; max 50 messages |
 | `max_tokens` | no | Default 1,024; silently clamped to the tier's output cap |
 | `temperature` | no | 0--2; controls randomness |
@@ -111,16 +111,16 @@ curl -X POST https://agent402.tools/api/llm-premium \
 
 All three return `402` without a valid x402 payment header -- the same flow as every other paid tool. See [[Paying with x402]] for how to sign and attach payment.
 
-## Operator caps that protect margins
+## Per-tier caps
 
-The per-tier caps are set so that the worst-case upstream OpenAI cost stays comfortably below the x402 price charged to the caller:
+Each tier bounds what a single call can ask for:
 
 - **Input cap** (chars) limits how much prompt text the caller can send, bounding prompt-token cost.
 - **Output cap** (tokens) hard-limits `max_completion_tokens` sent to OpenAI, bounding completion-token cost.
-- **Model allowlist** per tier prevents a caller from requesting a more expensive model than the tier's price covers (e.g. sending `gpt-4o` to the $0.01 endpoint returns `400`).
+- **Model allowlist** per tier keeps each endpoint to the models its tier serves (e.g. sending `gpt-4o` to `/api/llm` returns `400`).
 - **Message count** is capped at 50 per request.
 
-These caps are enforced server-side before the upstream call is made -- a misconfigured client cannot cause the operator to lose money.
+These caps are enforced server-side before the upstream call is made.
 
 ## Environment gating
 

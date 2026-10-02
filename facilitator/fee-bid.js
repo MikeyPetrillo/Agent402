@@ -49,9 +49,8 @@ import { TransactionBuilder, BASE_FEE } from "@stellar/stellar-sdk";
 export const VENDOR_BID_STROOPS = Number(BASE_FEE);
 
 /** Default bid, in stroops, per operation. Chosen to clear the measured
- *  fee_charged p90 (9,486) with room, while capping worst-case exposure at
- *  0.005 XLM (~$0.0015) on a settlement whose typical charge stays 100
- *  stroops. Deliberately a fixed bid rather than a /fee_stats read: an
+ *  fee_charged p90 (9,486) with room, while capping worst-case exposure on a
+ *  settlement whose typical charge stays 100 stroops. Deliberately a fixed bid rather than a /fee_stats read: an
  *  adaptive bid would put a network call in the settle path, and the
  *  clearing-price rule means the extra precision buys nothing. */
 export const DEFAULT_BID_STROOPS = 50_000;

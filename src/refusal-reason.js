@@ -36,6 +36,19 @@ export const REFUSAL_REASONS = Object.freeze([
   "unsupported_field",    // a field we refuse by name rather than ignore
   "malformed_body",       // not parseable as the documented shape
   "not_found",            // the named resource does not exist upstream
+  // Routing refusals (2026-09-21). Added after a question telemetry could not
+  // answer: how many calls do we fail to route because no seller clears the
+  // settlement gate? Every one of these used to classify as "other", so the
+  // gate's cost was invisible and the two very different causes below could
+  // not be separated.
+  "no_seller_matched",    // nothing in the index does this task on this chain
+  "no_seller_eligible",   // sellers DO this task, every one is below the gate
+  "underlying_over_cap",  // a seller matched, priced above this tier's cap
+  "network_unsupported",  // the buyer paid on a chain we cannot route from
+  "routing_disabled",     // external routing is off on this host
+  "routing_paused",       // a spend ceiling paused routing for now
+  "routing_budget_spent", // resolution used the request's time budget
+  "judged_no_match",      // candidates matched the words; the judgment found none does the task
   "other",
 ]);
 
@@ -46,6 +59,24 @@ export const REFUSAL_REASONS = Object.freeze([
 // literal is the same polynomial-backtracking shape CodeQL flagged in the
 // Gemini path alias. Forty characters is far past any real field name.
 const RULES = [
+  // Routing first: these are specific sentences from route-execute, and the
+  // generic rules below would otherwise claim them (an "above this endpoint's
+  // $X underlying cap" message matches the over_cap rule).
+  [/\bno external (x402|MPP|x402 or MPP) seller (matched|is eligible)\b.*\ball of them are below\b/i, "no_seller_eligible"],
+  [/\bbelow (our|the) settlement (gate|floor)\b/i, "no_seller_eligible"],
+  // Judgment-step refusals (src/tool-judge.js).
+  [/\bno tool under this endpoint'?s .{0,24}cap does that task\b/i, "underlying_over_cap"],
+  [/\bdoes that task \(judged/i, "judged_no_match"],
+  [/\bno external (x402|MPP|x402 or MPP) seller matched\b/i, "no_seller_matched"],
+  // NOT \$[0-9.]+ : the real template is `above this endpoint's $${cap}
+  // underlying cap`, so the amount is an interpolation and a digit class here
+  // matched the string I typed into the test and never the one we emit. The
+  // phrase alone is distinctive.
+  [/\bunderlying cap\b/i, "underlying_over_cap"],
+  [/\bexternal routing settles on\b|\bpay on a supported (chain|network)\b/i, "network_unsupported"],
+  [/\bexternal routing is not enabled on this host\b/i, "routing_disabled"],
+  [/\bexternal routing on .{0,24} is paused\b|\bexternal routing is paused\b/i, "routing_paused"],
+  [/\bused the Tempo time budget\b|\bcredentials expire\b/i, "routing_budget_spent"],
   [/\bis not in the gateway allowlist\b/i, "model_not_allowed"],
   [/\bis served by the .* tier\b|\bcall \/v1\/[a-z0-9/-]+ .*instead\b/i, "model_wrong_tier"],
   [/\bbut the body being served quotes\b|\bresend the request exactly as it should be served\b/i, "quote_mismatch"],

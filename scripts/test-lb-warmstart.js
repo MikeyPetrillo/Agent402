@@ -46,6 +46,24 @@ try {
   ok(s.leaderboard[1].callsSettled === 47570 && s.leaderboard[1].origins[0] === "https://x402.ottoai.services",
     "origins + settled survive the round-trip (the SOR reliability join needs these)");
   stopLeaderboardRefresh();
+
+  // The per-wallet evidence the router's evidence binding reads (2026-09-28)
+  // persists and warm-starts with the snapshot, and never reaches a served
+  // copy: every public path spreads getLeaderboardSnapshot().
+  const { getLeaderboardWalletEvidence } = await import("../src/leaderboard.js");
+  const W = "0x" + "1".repeat(40);
+  writeFileSync(FILE, JSON.stringify({
+    spec: "x402-leaderboard/1", asOf: "2026-07-20T00:00:00.000Z", windowLabel: "Last 7d",
+    leaderboard: [{ rank: 1, homepage: "https://seller-a.example", origins: ["https://seller-a.example"], wallet: W, wallets: [W], callsSettled: 90, uniqueBuyers: 5 }],
+    walletEvidence: { [W]: { callsSettled: 90, uniqueBuyers: 5, origins: ["https://seller-a.example"] } },
+  }));
+  _resetLeaderboardCacheForTests();
+  startLeaderboardRefresh({ intervalMs: 3600_000 });
+  const served = getLeaderboardSnapshot();
+  ok(!("walletEvidence" in served) && served.leaderboard.every((r) => !("walletEvidence" in r)) && !JSON.stringify(served).includes("walletEvidence"),
+    "the served snapshot carries no walletEvidence, at the top level or on any row");
+  ok(getLeaderboardWalletEvidence()[W]?.uniqueBuyers === 5, "the per-wallet evidence warm-starts for the router");
+  stopLeaderboardRefresh();
 } finally {
   try { rmSync(FILE, { force: true }); } catch { /* best-effort */ }
 }

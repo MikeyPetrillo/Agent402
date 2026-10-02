@@ -32,7 +32,7 @@
 // A changed fingerprint is what triggers a paid re-run + alert, exactly like
 // probeDomain / probeRecalls.
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
-import { SOLANA_INTEL_TOOLS, MINTS } from "./solana-intel-kit.js";
+import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase } from "./solana-intel-kit.js";
 import { markUntrusted } from "./provenance.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 
@@ -42,9 +42,8 @@ const SYNTH = "anthropic/claude-opus-5";
 export const TOKEN_BRIEF_MODELS = [SYNTH];
 
 // One synthesis call; every other leg is keyless (zero upstream cost). The cap
-// is the MEASURED worst case for an opus-5 synthesis, not a nominal figure:
-// PostHog $ai_generation over 30 days puts opus-5 at avg $0.107, p95 $0.195,
-// max $0.311. A cap below that is fiction, and in research-deep (the one kit
+// is the MEASURED worst case for an opus-5 synthesis, not a nominal figure.
+// A cap below that is fiction, and in research-deep (the one kit
 // that reads its own field) it would also downgrade the model on a normal run.
 export const TOKEN_BRIEF_TIERS = {
   "token-brief": {
@@ -307,8 +306,8 @@ function makeTokenBriefHandlerInner(tierSlug) {
     if (probes.report) sources.push({ title: `RugCheck full report for ${mint}`, url: `https://api.rugcheck.xyz/v1/tokens/${mint}/report` });
     if (probes.safety) sources.push({ title: `RugCheck safety summary for ${mint}`, url: `https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary` });
     if (probes.pairs) sources.push({ title: `DexScreener pairs trading ${symbol || mint}`, url: `https://api.dexscreener.com/token-pairs/v1/solana/${mint}` });
-    if (probes.lookup) sources.push({ title: `Jupiter token index entry for ${symbol || mint}`, url: `https://lite-api.jup.ag/tokens/v2/search?query=${mint}` });
-    if (probes.price) sources.push({ title: `Jupiter price v3 for ${symbol || mint}`, url: `https://lite-api.jup.ag/price/v3?ids=${mint}` });
+    if (probes.lookup) sources.push({ title: `Jupiter token index entry for ${symbol || mint}`, url: `${jupiterBase()}/tokens/v2/search?query=${mint}` });
+    if (probes.price) sources.push({ title: `Jupiter price v3 for ${symbol || mint}`, url: `${jupiterBase()}/price/v3?ids=${mint}` });
     const numbered = sources.map((s, i) => ({ n: i + 1, ...s }));
     const sourceMenu = numbered.map((s) => `[${s.n}] ${s.title}`).join("\n");
 

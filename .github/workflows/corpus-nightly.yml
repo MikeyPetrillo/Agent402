@@ -4,7 +4,7 @@
 # the answer is populated rather than merely shaped. Tier 0 (pure CPU) also runs
 # on every push in deploy.yml; this run adds tier 1, the free public upstreams
 # (SEC, openFDA, DefiLlama, Hyperliquid, CoinGecko demo, open-meteo, public RPCs,
-# Kalshi, Polymarket), which are rate-limited and belong to a nightly cadence, not
+# Kalshi), which are rate-limited and belong to a nightly cadence, not
 # a per-push one. Costs nothing. Upstream failures are reported, never fatal; only
 # OUR code failing (a hollow 200, a silent fallback, our own 4xx on a valid input,
 # a 500) opens the issue. Heartbeat-style: one issue, closed on the next clean run.
@@ -35,7 +35,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -133,7 +133,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22

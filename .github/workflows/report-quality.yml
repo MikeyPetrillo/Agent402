@@ -2,20 +2,18 @@ name: Report quality audit (weekly, rotating)
 
 # Do the paid reports still SAY anything?
 #
-# Found 2026-09-11: a $1.10 research-max returned a report built on ONE search
+# Found 2026-09-11: a research-max run returned a report built on ONE search
 # and five sources against a tier configured for twelve searches and a
 # forty-source pool. The envelope was perfect, so every shape guard passed. The
 # reports have card buyers and monitor subscribers and nobody was reading what
 # they produce.
 #
-# ROTATES rather than sweeping. A full pass is ~$9 of synthesis against a
-# business earning ~$50/month, so each week audits one group and every report is
+# ROTATES rather than sweeping: each week audits one group and every report is
 # covered inside a month. The point is to notice a regression in weeks, not to
 # re-audit everything every time.
 #
 # Spend is labelled: it uses the dedicated OpenRouter AUDIT key, never prod's,
-# so an audit is separable from buyer traffic on the invoice (the rule that
-# exists because $11 of audit once read as $0.03 of prod telemetry).
+# so an audit is separable from buyer traffic on the invoice.
 on:
   schedule:
     - cron: "37 6 * * 2"   # Tuesdays, away from the deploy-heavy hours
@@ -36,7 +34,7 @@ jobs:
     timeout-minutes: 60
     environment: spending
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22

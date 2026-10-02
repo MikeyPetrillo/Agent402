@@ -6,8 +6,7 @@ name: Base list sweep (register the unlisted routes in the Bazaar)
 # bought - the pro/premium model tiers, every report product, video, the X
 # tools. This buys the 37 of them that spend only against our OWN upstream
 # accounts, once each, from the CI burner to our own payTo, so the USDC
-# recycles and the real cost is the upstream bill (~$12, mostly report
-# synthesis). See scripts/base-list-sweep.js for the route list and why the two
+# recycles and the real cost is the upstream calls. See scripts/base-list-sweep.js for the route list and why the two
 # router tiers are excluded.
 #
 # Dispatch only. DRY BY DEFAULT - set dry=false to actually pay.
@@ -40,12 +39,12 @@ jobs:
     env:
       TARGET_URL: https://agent402.tools
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Install x402 client
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.26.0 @x402/evm@2.26.0
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.27.0 @x402/evm@2.27.0
       - name: Run the sweep
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}

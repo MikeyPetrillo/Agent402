@@ -85,11 +85,15 @@ const synthFetch = !secret ? fetch : (input, init) => {
 };
 // Wrap once more when stripping: rewrite the 402 (body AND the PAYMENT-REQUIRED
 // header, since a client may read either) before the payment layer parses it.
+// The challenge is read from the HEADER first and the body only when there is
+// no header: a body may carry fields of the seller's own beside the offer, and
+// those must never be written into the header a client echoes back.
 const stripFetch = !STRIP_EXT.length ? synthFetch : async (input, init) => {
   const res = await synthFetch(input, init);
   if (res.status !== 402) return res;
-  const text = await res.clone().text();
-  let doc; try { doc = JSON.parse(text); } catch { return res; }
+  const hdr = res.headers.get("payment-required");
+  let doc;
+  try { doc = hdr ? JSON.parse(Buffer.from(hdr.trim(), "base64").toString("utf8")) : JSON.parse(await res.clone().text()); } catch { return res; }
   if (!doc?.extensions) return res;
   const before = Object.keys(doc.extensions);
   for (const k of STRIP_EXT) delete doc.extensions[k];

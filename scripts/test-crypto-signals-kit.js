@@ -362,6 +362,14 @@ ok(Object.keys(NEWS_SOURCES).length >= 5 && Object.keys(NEWS_SOURCES).length <= 
   ok(r.source === "hyperliquid" && r.coin === "BTC" && r.interval === "1h" && r.candles === 60, "indicators: coin resolved case-insensitively, 60 candles");
   ok(Object.keys(r.indicators).sort().join() === "macd,rsi,vwap" && r.indicators.rsi.series.length === 4, "indicators: CSV subset honoured, 4 points");
   ok(r.summary && r.summary.trend !== "unknown" && typeof r.fetchedAt === "string", "indicators: summary + fetchedAt");
+  ok(r.ohlcv === undefined, "indicators: no OHLCV rows unless asked");
+  await throws(h("crypto-indicators")({ coin: "BTC", ohlcv: 101 }), 400, "ohlcv 101 -> 400");
+  const callsBefore = calls.length;
+  const ro = await h("crypto-indicators")({ coin: "BTC", interval: "1h", limit: 60, points: 1, ohlcv: 3 });
+  const lastBar = ro.ohlcv?.[2];
+  ok(Array.isArray(ro.ohlcv) && ro.ohlcv.length === 3 && lastBar.close === ro.lastClose && ["open", "high", "low", "close", "volume"].every((k) => typeof lastBar[k] === "number") && !Number.isNaN(Date.parse(lastBar.t)),
+    `indicators: ohlcv returns the last 3 bars, newest last, closing at lastClose (${JSON.stringify(lastBar)})`);
+  ok(calls.filter((c) => c.body && JSON.parse(c.body).type === "candleSnapshot").length === calls.slice(0, callsBefore).filter((c) => c.body && JSON.parse(c.body).type === "candleSnapshot").length + 1, "indicators: ohlcv rides the same single candle read");
   const snap = calls.find((c) => c.body && JSON.parse(c.body).type === "candleSnapshot");
   const req = JSON.parse(snap.body).req;
   ok(req.coin === "BTC" && req.interval === "1h" && req.endTime - req.startTime === 60 * H, "indicators: candleSnapshot window = limit x interval");

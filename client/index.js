@@ -23,7 +23,7 @@ import { createHash, randomBytes } from "node:crypto";
 // `User-Agent: agent402-client/<version>` - a standard header, no extra
 // network calls - so a seller can attribute traffic (and settled payments)
 // to this SDK. Product token only; nothing about the caller rides along.
-const VERSION = "0.8.6";
+const VERSION = "0.8.11";
 const USER_AGENT = `agent402-client/${VERSION}`;
 // 32MB: about a hundred times any realistic response from this catalog (the
 // largest is a base64 image at a few MB), so it cannot break a legitimate
@@ -43,7 +43,7 @@ export class Agent402 {
    * @param {number} [opts.maxPerCallUsd]    hard ceiling on a single paid call (USD); over → SpendingLimitError before paying
    * @param {number} [opts.dailyLimitUsd]    hard ceiling on rolling-24h paid spend (USD)
    * @param {number} [opts.maxPerHostUsd]    hard ceiling on rolling-24h paid spend to one seller host (USD)
-   * @param {string} [opts.creditsKey]       a prepaid card-credits key (a402_...) from agent402.tools/credits -
+   * @param {string} [opts.creditsKey]       a prepaid card-credits key (a402_...) issued at agent402.tools/credits -
    *                                         pays wallet-only tools by card when no payFetch is given
    * @param {number|null} [opts.maxResponseBytes=33554432]
    *        Hard ceiling on a response body, enforced BEFORE it is parsed. null disables it.
@@ -342,30 +342,24 @@ export class Agent402 {
         // Spending policy: refuse to pay BEFORE signing if the price breaks a
         // configured ceiling (per-call / rolling-24h / per-host).
         const host = hostOf(this.baseUrl);
-        let usd = parseUsd(tool.price);
-        // The catalog price is seller-ADVERTISED - a hostile server could under-
-        // state it and then quote more in the 402. When a cap is set, preflight
-        // the 402 to learn the price the wallet will actually be asked to sign and
-        // check the cap against the larger of the two. Fail-open: if the 402 can't
-        // be read (FREE_MODE / non-402 / unparseable), fall back to the advertised
+        const listUsd = parseUsd(tool.price);
+        // The catalog price is the ROUTE's list price, and it is not the amount
+        // the wallet will be asked to sign: a seller may quote per request from
+        // the body (a token-metered route, or a chat route priced by the model
+        // named in it), and a hostile one could understate the catalog outright.
+        // When a cap is set, preflight the 402 and check the cap against the
+        // amount THIS request is quoted. Fail-open: a 402 we cannot read
+        // (FREE_MODE / non-402 / unparseable) falls back to the advertised
         // price - never block a legitimate payment on a parse miss.
-        if (this._spendCapsConfigured()) {
-          try {
-            const pre = await send();
-            if (pre.status === 402) {
-              const quoted = parse402Usd(await pre.json().catch(() => null));
-              if (quoted != null) usd = Math.max(usd, quoted);
-            }
-          } catch { /* fail-open to the advertised price */ }
-        }
+        const usd = await this._quotedUsd(send, listUsd);
         // Reserve the amount synchronously (before the await) so concurrent calls
         // can't each observe the pre-commit total and collectively blow a rolling
         // cap; release the reservation if the call doesn't settle.
-        const reservation = this._spendReserve(host, usd, slug);
+        const reservation = this._spendReserve(host, usd, slug, listUsd);
         let settled = false;
         try {
           const r = await send({}, this.payFetch);
-          if (!r.ok) throw new Error(await this._failureDetail(slug, r));
+          if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
           this._spendSettle(reservation); // confirm the reservation as settled spend
           settled = true;
           return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
@@ -379,18 +373,23 @@ export class Agent402 {
       if (this.creditsKey) {
         // Prepaid card credits: the server authorizes against the key's balance
         // before the handler and debits only on a 200 (X-Credits-Balance tells
-        // what is left). The same spend caps apply as on the wallet path.
+        // what is left). The same spend caps apply as on the wallet path, and
+        // against the same number: a credits gate holds and debits the amount
+        // the 402 quotes for THIS body, not the route's list price. The
+        // preflight carries no Authorization, so it is an unpaid 402, never a
+        // debit.
         const host = hostOf(this.baseUrl);
-        const usd = parseUsd(tool.price);
-        const reservation = this._spendReserve(host, usd, slug);
+        const listUsd = parseUsd(tool.price);
+        const usd = await this._quotedUsd(send, listUsd);
+        const reservation = this._spendReserve(host, usd, slug, listUsd);
         let settled = false;
         try {
           const r = await send({ Authorization: `Bearer ${this.creditsKey}` });
           if (r.status === 402) {
             const body = await r.json().catch(() => ({}));
-            throw new Error(`call "${slug}" refused by credits: ${body.error || "payment required"}${body.balanceUsd != null ? ` (balance $${body.balanceUsd})` : ""} - top up at ${body.topup || `${this.baseUrl}/credits`}`);
+            throw this._fail(slug, r, `call "${slug}" refused by credits: ${body.error || "payment required"}${body.balanceUsd != null ? ` (balance $${body.balanceUsd})` : ""} - top up at ${body.topup || `${this.baseUrl}/credits`}`);
           }
-          if (!r.ok) throw new Error(await this._failureDetail(slug, r));
+          if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
           this._spendSettle(reservation);
           settled = true;
           return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: true });
@@ -398,7 +397,7 @@ export class Agent402 {
       }
       const r = await send(); // no wallet - succeeds only on a FREE_MODE instance
       if (r.ok) return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
-      throw new Error(`call "${slug}" failed: HTTP ${r.status} - wallet-only tool; construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch) or { creditsKey } (prepaid card credits from ${this.baseUrl}/credits)`);
+      throw this._fail(slug, r, `call "${slug}" failed: HTTP ${r.status} - wallet-only tool; construct with { fetch: payFetch } (an @x402/fetch-wrapped fetch) or { creditsKey } (prepaid card credits from ${this.baseUrl}/credits)`);
     }
 
     // Free (compute-payable) tool: succeeds plainly on a FREE_MODE instance,
@@ -409,7 +408,7 @@ export class Agent402 {
       const chal = await this._powChallenge(slug);
       r = await send({ "X-Pow-Solution": Agent402.solvePow(chal) });
     }
-    if (!r.ok) throw new Error(await this._failureDetail(slug, r, " after proof-of-work"));
+    if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r, " after proof-of-work"));
     return this._deliverResponse(slug, r, cacheKey, cache, validator, { maxResponseBytes, paid: false });
   }
 
@@ -445,15 +444,39 @@ export class Agent402 {
   _store(key, val, cache) { if (this._cache && cache) this._cache.set(key, val); return val; }
   clearCache() { this._cache?.clear(); }
 
+  /** The price THIS request will be asked to pay, read from its own 402.
+   *
+   *  A cap enforced against the catalog price is not a cap: the seller decides
+   *  the amount in the challenge, and a route may quote per request from the
+   *  body. Only preflights when a ceiling is configured (it costs a round trip,
+   *  and with no cap the number changes nothing). The preflight send carries no
+   *  payment header and no credits key, so it can only ever draw a 402.
+   *  @returns {Promise<number>} the quoted amount, or `listUsd` when unreadable */
+  async _quotedUsd(send, listUsd) {
+    if (!this._spendCapsConfigured()) return listUsd;
+    try {
+      const pre = await send();
+      if (pre?.status !== 402) return listUsd;
+      const quoted = await quoted402Usd(pre);
+      // Larger of the two: an understated catalog must not lower the ceiling
+      // the cap is checked against.
+      return quoted == null ? listUsd : Math.max(listUsd, quoted);
+    } catch { return listUsd; /* fail-open to the advertised price */ }
+  }
+
   /** Throw SpendingLimitError if paying `usd` to `host` now would break a cap.
-   *  Prunes the rolling 24h window first; a null cap is unlimited. */
-  _spendCheck(host, usd, slug) {
+   *  Prunes the rolling 24h window first; a null cap is unlimited.
+   *  `listUsd` (when it differs) is the catalog price, named in the refusal so
+   *  a caller can see the quote is not the number they budgeted from. */
+  _spendCheck(host, usd, slug, listUsd = null) {
     const s = this._spend;
     if (s.maxPerCall == null && s.daily == null && s.perHost == null) return;
+    const quotedNote = listUsd != null && listUsd !== usd
+      ? ` (this request is quoted $${usd}; the catalog lists $${listUsd})` : "";
     if (s.maxPerCall != null && usd > s.maxPerCall) {
       throw new SpendingLimitError(
-        `refusing to pay $${usd} for "${slug}" - exceeds maxPerCallUsd $${s.maxPerCall}`,
-        { limit: "maxPerCallUsd", slug, priceUsd: usd, cap: s.maxPerCall });
+        `refusing to pay $${usd} for "${slug}" - exceeds maxPerCallUsd $${s.maxPerCall}${quotedNote}`,
+        { limit: "maxPerCallUsd", slug, priceUsd: usd, cap: s.maxPerCall, ...(listUsd != null ? { listPriceUsd: listUsd } : {}) });
     }
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     s.log = s.log.filter((e) => e.ts >= cutoff);
@@ -485,11 +508,21 @@ export class Agent402 {
    *  it is parsed (maxResponseBytes, 32 MB default), so a second cut here
    *  protected nothing and lost the part of the message an agent needs to
    *  act on. A body that is not JSON contributes nothing but its status. */
+  /** A refusal a caller can branch on: `status` (the HTTP status), `slug` and
+   *  `paid: false` ride on the Error, so a 402 is not something to regex out of
+   *  the message. Nothing was spent on any path that reaches this. */
+  _fail(slug, r, message) {
+    return Object.assign(new Error(message), { status: r?.status, slug, paid: false });
+  }
+
   async _failureDetail(slug, r, when = "") {
     let detail = "";
     try {
       const body = await r.json();
-      const msg = body?.error ?? body?.message ?? body?.detail;
+      // A refused payment that says what went wrong carries that sentence in
+      // `detail` (an RFC 9457 problem) or `hint` (an x402 refusal), with no
+      // `error`; a seller's plain error keeps its place first.
+      const msg = body?.error ?? body?.message ?? body?.detail ?? body?.hint;
       if (msg != null) detail = ` - ${typeof msg === "string" ? msg : JSON.stringify(msg)}`;
       if (body?.expected != null) detail += ` (expected: ${JSON.stringify(body.expected)})`;
     } catch { /* not JSON: the status is the whole story */ }
@@ -506,8 +539,8 @@ export class Agent402 {
    *  concurrent calls account for each other's in-flight reservations instead of
    *  all passing against the same pre-commit total. Returns a reservation handle
    *  (or null for a $0 call). Throws SpendingLimitError before reserving if over. */
-  _spendReserve(host, usd, slug) {
-    this._spendCheck(host, usd, slug);
+  _spendReserve(host, usd, slug, listUsd = null) {
+    this._spendCheck(host, usd, slug, listUsd);
     if (!(usd > 0)) return null;
     const entry = { ts: Date.now(), host, usd, pending: true };
     this._spend.log.push(entry);
@@ -575,17 +608,56 @@ export class SpendingLimitError extends Error {
 // the offered rails. x402 is stablecoin-settled (USDC/USDG), so
 // atomic / 10^decimals ≈ USD. Returns null if the body isn't a parseable 402
 // challenge, so the caller fails open to the advertised catalog price.
-function parse402Usd(body) {
-  const accepts = body && body.accepts;
+/** The dearest amount a 402 asks for, in USD, or null when it cannot be read.
+ *
+ *  x402 v2 carries the challenge base64 in the `PAYMENT-REQUIRED` HEADER and
+ *  leaves the body `{}`, so a body-only reader learns nothing from a stock v2
+ *  seller and silently falls back to the catalog price. Header first, then the
+ *  body (v1 sellers, and sellers that serve both). */
+export async function quoted402Usd(res) {
+  const header = res?.headers?.get?.("payment-required");
+  const fromHeader = usdFromAccepts(decodeChallengeHeader(header));
+  if (fromHeader != null) return fromHeader;
+  let body = null;
+  try { body = await res.json(); } catch { body = null; }
+  return usdFromAccepts(acceptsOf(body));
+}
+
+function decodeChallengeHeader(header) {
+  if (typeof header !== "string" || !header.trim()) return null;
+  try { return acceptsOf(JSON.parse(Buffer.from(header.trim(), "base64").toString("utf8"))); } catch { return null; }
+}
+
+/** The accepts array, at the top level or under the envelope keys sellers wrap it in. */
+function acceptsOf(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  if (Array.isArray(obj.accepts) && obj.accepts.length) return obj.accepts;
+  for (const k of ["payment", "x402", "paymentRequired", "payment_required"]) {
+    const nested = obj[k];
+    if (nested && typeof nested === "object" && Array.isArray(nested.accepts) && nested.accepts.length) return nested.accepts;
+  }
+  return null;
+}
+
+/** The MAXIMUM across accepts: the wallet picks which chain to settle on and
+ *  this client cannot know which, so the only sound ceiling is the dearest
+ *  offer. Any entry we cannot price returns null (unreadable, never a guess -
+ *  the caller falls back to the advertised price). */
+function usdFromAccepts(accepts) {
   if (!Array.isArray(accepts) || !accepts.length) return null;
-  let maxUsd = 0;
+  let maxUsd = null;
   for (const a of accepts) {
-    const atomic = Number(a && a.maxAmountRequired);
+    // v2 names the base-unit amount `amount`; x402 v1 called it `maxAmountRequired`.
+    const atomic = Number(a && (a.amount ?? a.maxAmountRequired));
     if (!Number.isFinite(atomic) || atomic < 0) return null;
-    const decimals = Number((a && a.extra && a.extra.decimals) ?? (a && a.decimals) ?? 6);
-    if (!Number.isFinite(decimals) || decimals < 0 || decimals > 30) return null;
+    // USDC is 6 decimals on every chain these rails settle; an accept may say
+    // otherwise, and a wrong exponent is a 1000x pricing error, so a
+    // non-integer or out-of-range hint makes the whole quote unreadable.
+    const declared = (a && a.extra && a.extra.decimals) ?? (a && a.decimals);
+    const decimals = declared == null ? 6 : Number(declared);
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 30) return null;
     const usd = atomic / 10 ** decimals;
-    if (usd > maxUsd) maxUsd = usd;
+    if (maxUsd == null || usd > maxUsd) maxUsd = usd;
   }
   return maxUsd;
 }

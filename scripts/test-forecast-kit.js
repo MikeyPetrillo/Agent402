@@ -6,7 +6,7 @@
 // and the two design decisions baked into the kit:
 //   - hybrid period detection in holt-winters (auto-detect when omitted,
 //     surface periodSource + periodAcf, throw clearly when neither works)
-//   - warn-but-compute in forecast-eval (testSize > n/2 → warning, not error)
+//   - warn-but-compute in forecast-eval: testSize > n/2 is a warning, not an error
 import { FORECAST_TOOLS } from "../src/tools/forecast-kit.js";
 
 let passed = 0;

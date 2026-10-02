@@ -6,7 +6,7 @@
 // (token-allowance, block-info, eth-call, contract-code, contract-abi,
 // ens-resolve, token-balances, asset-transfers, nft-holdings, gas-estimate,
 // event-logs, wallet-balance, chain-info, nft-metadata, erc721-owner,
-// tx-receipt, tx-status, wallet-transactions, address-profile, evm-rpc), and
+// tx-receipt, tx-status, wallet-transactions, evm-rpc), and
 // the generic evm-rpc route covered the rest. The gap was that a buyer who
 // knows `eth_getTransactionCount` had no way to guess we sell it.
 //

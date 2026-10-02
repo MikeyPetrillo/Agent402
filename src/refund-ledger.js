@@ -52,10 +52,45 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS refunds_status ON refunds (status);
 `);
+// Additive column (2026-09-24): which payment wire carried the charge
+// ("x402", "mpp", "mpp-tempo", "mpp-stripe"). The MPP reconciliation job
+// (src/mpp-reconcile.js) counts paid-but-failed MPP calls from it; a NULL is
+// a row recorded before the column existed.
+try { db.exec("ALTER TABLE refunds ADD COLUMN wire TEXT"); } catch { /* exists */ }
+// Additive column: on a disconnect debt (http 499), why the run was not
+// forgiven - the forgiveness ticket's denial reason ("payer budget", "ip
+// budget", "global budget", "lasting effect", ...), "settled in flight" when a
+// granted ticket lost the race to a settle already under way, "no ticket" when
+// none was reserved. The refund planner holds the budget denials for review
+// (scripts/refund-run.js). NULL on every other debt and on rows written before
+// the column existed.
+try { db.exec("ALTER TABLE refunds ADD COLUMN hangupReason TEXT"); } catch { /* exists */ }
 
 const insertOwed = db.prepare(`
-  INSERT OR IGNORE INTO refunds (evidence, slug, network, payer, priceUsd, httpStatus, synthetic, createdAt)
-  VALUES (@evidence, @slug, @network, @payer, @priceUsd, @httpStatus, @synthetic, @createdAt)
+  INSERT OR IGNORE INTO refunds (evidence, slug, network, payer, priceUsd, httpStatus, synthetic, createdAt, wire, hangupReason, note)
+  VALUES (@evidence, @slug, @network, @payer, @priceUsd, @httpStatus, @synthetic, @createdAt, @wire, @hangupReason, @note)
+`);
+const selectByEvidence = db.prepare("SELECT * FROM refunds WHERE evidence = ?");
+// Only an OWED row: a row already being sent or paid is never quietly voided.
+const voidOwedByEvidence = db.prepare(`
+  UPDATE refunds SET status = 'void', note = CASE WHEN note IS NULL OR note = '' THEN @note ELSE note || '; ' || @note END, resolvedAt = @resolvedAt
+  WHERE evidence = @evidence AND status = 'owed'
+`);
+const renoteOwed = db.prepare("UPDATE refunds SET note = @to WHERE evidence = @evidence AND status = 'owed' AND note = @from");
+// A push debt booked as "input refused" whose transfer was then claimed on a
+// retry that the buyer hung up on: the same evidence, now a disconnect. Owed
+// rows only, and only while the note still reads the input refusal.
+const promoteHangup = db.prepare(`
+  UPDATE refunds SET httpStatus = 499, hangupReason = @hangupReason,
+    note = CASE WHEN note IS NULL OR note = '' THEN @append ELSE note || '; ' || @append END
+  WHERE evidence = @evidence AND status = 'owed' AND note = @from
+`);
+// The same rewrite for a claimed push whose handler then failed: the owed
+// input-refused row takes the handler's status and says what happened.
+const restateHandlerFailure = db.prepare(`
+  UPDATE refunds SET httpStatus = @httpStatus,
+    note = CASE WHEN note IS NULL OR note = '' THEN @append ELSE note || '; ' || @append END
+  WHERE evidence = @evidence AND status = 'owed' AND note = @from
 `);
 const selectByStatus = db.prepare("SELECT * FROM refunds WHERE status = ? ORDER BY id DESC LIMIT ?");
 const selectAll = db.prepare("SELECT * FROM refunds ORDER BY id DESC LIMIT ?");
@@ -94,7 +129,7 @@ export function receiptProvesCharge(receipt) {
 /** Record a debt. Returns true when a NEW row was created (false = duplicate
  *  evidence, already on the books). Addresses are stored exactly as given -
  *  base58/base32 rails are case-sensitive and must never be folded. */
-export function recordRefundOwed({ slug, network, payer, priceUsd, tx, httpStatus, synthetic } = {}) {
+export function recordRefundOwed({ slug, network, payer, priceUsd, tx, httpStatus, synthetic, wire, hangupReason, note = null } = {}) {
   try {
     const evidence = (typeof tx === "string" && tx.trim())
       ? tx.trim()
@@ -108,6 +143,9 @@ export function recordRefundOwed({ slug, network, payer, priceUsd, tx, httpStatu
       httpStatus: Number(httpStatus) || null,
       synthetic: synthetic ? 1 : 0,
       createdAt: Date.now(),
+      wire: wire ? String(wire).slice(0, 40) : null,
+      hangupReason: hangupReason ? String(hangupReason).slice(0, 40) : null,
+      note: typeof note === "string" && note.trim() ? note.trim().slice(0, 200) : null,
     });
     return info.changes > 0;
   } catch {
@@ -166,6 +204,50 @@ export function markRefundVoid(id, note) {
   } catch { return false; }
 }
 
+/** The row recorded under this evidence (a settle tx or push hash), or null. */
+export function refundByEvidence(evidence) {
+  try { return (typeof evidence === "string" && evidence.trim() && selectByEvidence.get(evidence.trim())) || null; } catch { return null; }
+}
+
+/** A debt booked for a payment that has since been claimed for the request it
+ *  paid (a Tempo push transfer refused on input, then presented again and
+ *  served): void it, so the buyer is never both served and refunded. Requires
+ *  a note like every void; touches an OWED row only. Returns true when a row
+ *  was voided. */
+export function voidOwedOnClaim(evidence, note) {
+  if (typeof evidence !== "string" || !evidence.trim() || !note || typeof note !== "string" || !note.trim()) return false;
+  try { return voidOwedByEvidence.run({ evidence: evidence.trim(), note: note.trim(), resolvedAt: Date.now() }).changes > 0; } catch { return false; }
+}
+
+/** Replace an owed row's note when it currently reads `from`. Returns true
+ *  when it did (so a caller can act once per transition). */
+export function renoteOwedRefund(evidence, from, to) {
+  try { return renoteOwed.run({ evidence: String(evidence || "").trim(), from, to }).changes > 0; } catch { return false; }
+}
+
+/** Turn an OWED row whose note reads `from` into a disconnect debt (http 499,
+ *  `hangupReason`, `append` added to the note), so the refund planner's
+ *  hang-up holds apply to it. Never touches a sending, paid or void row.
+ *  Returns true when it did. */
+export function promoteOwedToHangup(evidence, { from, hangupReason, append } = {}) {
+  if (typeof evidence !== "string" || !evidence.trim() || !from || !append) return false;
+  try {
+    return promoteHangup.run({ evidence: evidence.trim(), from, append: String(append).slice(0, 120), hangupReason: hangupReason ? String(hangupReason).slice(0, 40) : null }).changes > 0;
+  } catch { return false; }
+}
+
+/** An OWED row whose note is exactly `from` takes a handler's failure status
+ *  (>= 400, never 499: disconnects go through promoteOwedToHangup) and gains
+ *  `append` in its note. Rows being sent, paid or void are never touched.
+ *  True when the row changed. */
+export function restateOwedAsHandlerFailure(evidence, { from, httpStatus, append } = {}) {
+  const st = Number(httpStatus);
+  if (typeof evidence !== "string" || !evidence.trim() || !from || !append || !Number.isInteger(st) || st < 400 || st === 499) return false;
+  try {
+    return restateHandlerFailure.run({ evidence: evidence.trim(), from, append: String(append).slice(0, 120), httpStatus: st }).changes > 0;
+  } catch { return false; }
+}
+
 export function refundTotals() {
   try {
     const out = { owed: { n: 0, usd: 0 }, paid: { n: 0, usd: 0 }, void: { n: 0, usd: 0 } };
@@ -175,6 +257,35 @@ export function refundTotals() {
     }
     return out;
   } catch { return { owed: { n: 0, usd: 0 }, paid: { n: 0, usd: 0 }, void: { n: 0, usd: 0 } }; }
+}
+
+const selectCreatedBetween = db.prepare(
+  "SELECT id, evidence, slug, network, priceUsd, httpStatus, synthetic, status, createdAt, wire FROM refunds WHERE createdAt >= ? AND createdAt < ? ORDER BY id ASC LIMIT ?"
+);
+/** Debts recorded in [sinceMs, untilMs), WITHOUT the payer column: the
+ *  reconciliation job reads this and publishes counts, and nothing it holds
+ *  should be able to leak an address. Bounded by `limit`. */
+export function refundsCreatedBetween(sinceMs, untilMs = Date.now(), { limit = 5000 } = {}) {
+  try { return selectCreatedBetween.all(Number(sinceMs) || 0, Number(untilMs) || Date.now(), limit); } catch { return []; }
+}
+
+// A payer's OWN rows, for identity-bound surfaces only (my-usage, the weekly
+// digest): the caller has already proved the address. EVM addresses match
+// case-insensitively (hex); every other address matches exactly, because
+// base58/base32 rails are case-sensitive and must never be folded.
+const selectForPayerExact = db.prepare(
+  "SELECT evidence, network, priceUsd, status, paidTx, createdAt, resolvedAt FROM refunds WHERE payer = ? ORDER BY id DESC LIMIT ?"
+);
+const selectForPayerEvm = db.prepare(
+  "SELECT evidence, network, priceUsd, status, paidTx, createdAt, resolvedAt FROM refunds WHERE lower(payer) = ? ORDER BY id DESC LIMIT ?"
+);
+export function refundsForPayer(payer, { limit = 50 } = {}) {
+  const p = typeof payer === "string" ? payer.trim() : "";
+  if (!p) return [];
+  const n = Math.max(1, Math.min(500, Number(limit) || 50));
+  try {
+    return /^0x[0-9a-fA-F]{40}$/.test(p) ? selectForPayerEvm.all(p.toLowerCase(), n) : selectForPayerExact.all(p, n);
+  } catch { return []; }
 }
 
 /** Test seam. */

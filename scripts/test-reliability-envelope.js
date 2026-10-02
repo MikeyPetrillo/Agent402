@@ -25,9 +25,10 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { getFreePorts } from "./lib/free-port.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 3082;
+const [PORT] = await getFreePorts(1);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 let pass = 0;

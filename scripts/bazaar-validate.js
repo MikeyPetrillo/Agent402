@@ -39,7 +39,7 @@ export const FLAGSHIP_PATHS = [
   "/api/search", "/api/answer", "/api/search-news", "/api/extract", "/api/render",
   "/api/vin-decode", "/api/geo-lookup", "/api/hash", "/api/sql-guard",
   "/api/route/execute", "/v1/auto/chat/completions", "/v1/embeddings",
-  "/api/image-ocr", "/api/address-profile", "/api/memory",
+  "/api/image-ocr", "/api/memory",
 ];
 
 function args() {

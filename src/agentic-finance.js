@@ -10,6 +10,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
 
+import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
 const FAQS = [
   { q: "What is Agentic Finance (AIFI)?", a: "Agentic Finance, AIFI for short, is the practice of software agents transacting on their own: discovering a service, reading a machine-readable price, paying per request from a non-custodial wallet, receiving a verifiable receipt, and, on the other side, earning per request for what they serve. No accounts, no API keys, no invoices. The payment is the identity, and every settlement is on a public ledger." },
   { q: "How is agentic finance different from agentic payments or agentic commerce?", a: "Agentic payments is the plumbing: a wire format that lets a program pay another program (x402 and MPP are the two open ones). Agentic commerce usually means agents buying goods for humans through checkout flows. Agentic finance is the machine-to-machine economy that forms on top of the plumbing: price discovery, routing between competing sellers, reliability signals, treasury and spend controls, and transparent revenue, all operated by and for autonomous agents." },
@@ -28,7 +29,7 @@ const STACK = [
 ];
 
 const ROLES = [
-  ["BUY", "500+ pay-per-call tools", "Search, browser, PDFs, OCR, live financial and crypto data, SEC filings, forecasting, an OpenAI-compatible LLM gateway. Every one deterministic, priced, and settled on chain, over x402 or MPP.", "/tools", "browse the catalog"],
+  ["BUY", "500+ pay-per-call tools", "Search, browser, PDFs, OCR, live financial and crypto data, SEC filings, forecasting, an OpenAI-compatible LLM gateway. Every one priced per call and settled on chain over x402 or MPP; the model-backed ones are marked as such.", "/tools", "browse the catalog"],
   ["ROUTE", "Index + Smart Order Router", `One call resolves a task to the best seller across the whole ecosystem, ours or anyone's, pays them on the agent's behalf and relays the result. ${routingProofSentence()}`, "/marketplace", "open index"],
   ["SELL", "Tollbooth", "Charge AI agents per request on your own site or API over both wires, humans free, non-custodial. Open source, one middleware.", "/sell", "sell into it"],
   ["PROVE", "On-chain transparency", "Live transaction counts by rail and wire (external revenue underneath, ours never counted as earnings), the seller leaderboard, uptime measured from outside, refunds ledgered. Numbers you can check, not claims.", "/revenue", "see the numbers"],
@@ -48,7 +49,7 @@ export function agenticFinancePage(baseUrl) {
   const description =
     "Agentic Finance (AIFI) is software agents transacting on their own: discovering services, paying per request from a wallet over open protocols like x402 and MPP, receiving verifiable receipts, and earning per request in return. The definition, the stack, and where Agent402 fits as its applied layer.";
 
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ["https://github.com/MikeyPetrillo/Agent402", "https://x.com/Agent402Tools"], knowsAbout: ["Agentic Finance", "AIFI", "x402", "Machine Payments Protocol", "MPP", "agentic payments", "AI agents"] };
+  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS, knowsAbout: ["Agentic Finance", "AIFI", "x402", "Machine Payments Protocol", "MPP", "agentic payments", "AI agents"] };
   const termLd = { "@type": "DefinedTerm", "@id": `${canonical}#term`, name: "Agentic Finance", alternateName: "AIFI", description: FAQS[0].a, url: canonical, inDefinedTermSet: { "@type": "DefinedTermSet", "@id": `${baseUrl}/glossary#set`, name: "Agentic Finance (AIFI) glossary", url: `${baseUrl}/glossary` } };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },

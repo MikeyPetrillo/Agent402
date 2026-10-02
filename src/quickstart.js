@@ -21,7 +21,7 @@ export function quickstartPage(baseUrl) {
 
 .qs-panel{display:none;padding:28px 0 0}
 .qs-panel.active{display:block}
-.qs-panel h3{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink)}
+.qs-panel h2{font-family:var(--font-body);font-weight:800;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink)}
 .qs-panel .qs-oneliner{color:var(--muted);margin:0 0 20px;font-size:15px;line-height:1.55}
 
 .qs-code-wrap{position:relative;margin-bottom:20px}
@@ -45,7 +45,7 @@ export function quickstartPage(baseUrl) {
 .qs-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:48px}
 .qs-card{background:var(--card);border:1px solid var(--hairline);padding:24px;text-decoration:none;color:var(--ink);transition:border-color .15s,transform .15s}
 .qs-card:hover{border-color:var(--accent);transform:translateY(-2px)}
-.qs-card h4{margin:0 0 6px;font-family:var(--font-body);font-weight:800;font-size:18px}
+.qs-card h3{margin:0 0 6px;font-family:var(--font-body);font-weight:800;font-size:18px}
 .qs-card p{margin:0;color:var(--muted);font-size:14px;line-height:1.55}
 
 @media(max-width:600px){
@@ -76,7 +76,7 @@ export function quickstartPage(baseUrl) {
 
 <!-- Panel: Claude / MCP -->
 <div class="qs-panel active" id="panel-mcp" role="tabpanel">
-<h3>Add to Claude Code</h3>
+<h2>Add to Claude Code</h2>
 <p class="qs-oneliner">One command and you're done - 500+ tools available instantly.</p>
 
 <span class="qs-label">Install</span>
@@ -111,7 +111,7 @@ export function quickstartPage(baseUrl) {
 
 <!-- Panel: curl / HTTP -->
 <div class="qs-panel" id="panel-curl" role="tabpanel">
-<h3>Call any tool with curl</h3>
+<h2>Call any tool with curl</h2>
 <p class="qs-oneliner">Standard HTTP - POST JSON, get JSON back. No SDK required.</p>
 
 <span class="qs-label">See a 402 quote (free)</span>
@@ -124,13 +124,14 @@ export function quickstartPage(baseUrl) {
 
 <span class="qs-label">Pay with proof-of-work (free, no wallet)</span>
 <div class="qs-code-wrap">
-<pre><code># Grab a challenge
-CHAL=$(curl -s "https://agent402.tools/api/pow/challenge?slug=hash")
+<pre><code># Grab a challenge: { "challenge", "difficulty", "token", ... }
+curl -s "https://agent402.tools/api/pow/challenge?slug=hash"
 
-# Solve the challenge, then retry with:
+# Find an integer nonce so sha256("&lt;challenge&gt;:&lt;nonce&gt;") has at least
+# &lt;difficulty&gt; leading zero bits, then send the TOKEN (not the challenge):
 curl -X POST https://agent402.tools/api/hash \\
   -H "Content-Type: application/json" \\
-  -H "X-Pow-Solution: &lt;nonce&gt;:&lt;hash&gt;" \\
+  -H "X-Pow-Solution: &lt;token&gt;:&lt;nonce&gt;" \\
   -d '{"text":"hello world","algo":"sha256"}'</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
@@ -147,7 +148,7 @@ curl -X POST https://agent402.tools/api/hash \\
 
 <!-- Panel: JavaScript -->
 <div class="qs-panel" id="panel-js" role="tabpanel">
-<h3>Use the JavaScript SDK</h3>
+<h2>Use the JavaScript SDK</h2>
 <p class="qs-oneliner">Install agent402-client - auto-payment via proof-of-work, no wallet needed.</p>
 
 <span class="qs-label">Install</span>
@@ -175,7 +176,7 @@ console.log(result);</code></pre>
 <div class="qs-next-title">What to try next</div>
 <ul>
   <li>Use <code>a.find("geocode")</code> to search tools programmatically</li>
-  <li>Pass a wallet key to unlock paid-only tools</li>
+  <li>Pass a payment-wrapped <code>fetch</code> (<code>new Agent402({ fetch: payFetch })</code>, see the USDC tab) to call wallet-only tools</li>
   <li>Enable <a href="/docs">idempotent retries</a> for production use</li>
 </ul>
 </div>
@@ -183,7 +184,7 @@ console.log(result);</code></pre>
 
 <!-- Panel: OpenAI / Anthropic / Vercel AI SDK -->
 <div class="qs-panel" id="panel-ai" role="tabpanel">
-<h3>Plug into any LLM framework</h3>
+<h2>Plug into any LLM framework</h2>
 <p class="qs-oneliner">Drop-in tool definitions for OpenAI, Anthropic, and Vercel AI SDK.</p>
 
 <span class="qs-label">Install</span>
@@ -196,20 +197,24 @@ console.log(result);</code></pre>
 <span class="qs-label">Wire into your LLM call</span>
 <div class="qs-code-wrap">
 <pre><code>import { agent402Tools } from "agent402-openai-tools";
-// also: agent402-anthropic-tools, agent402-ai-sdk
+// same shape: agent402-anthropic-tools
 
-const { tools, execute } = await agent402Tools();
+// free tier: every compute-payable tool, paid with proof-of-work
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-html"] });
 
 // pass tools to your LLM call
 // when it returns a tool_call, run:
-await execute(name, args);</code></pre>
+const result = await execute(call.function.name, JSON.parse(call.function.arguments));
+
+// agent402-ai-sdk returns four meta tools instead, keyed by name:
+// const tools = await agent402Tools(); await generateText({ model, tools, prompt });</code></pre>
 <button class="qs-copy" aria-label="Copy">Copy</button>
 </div>
 
 <div class="qs-next">
 <div class="qs-next-title">What to try next</div>
 <ul>
-  <li>Filter tools by category: <code>agent402Tools({ categories: ["search"] })</code></li>
+  <li>Wallet-only tools (search, extract, render): <code>agent402Tools({ slugs: ["search"], freeOnly: false, fetch: payFetch })</code></li>
   <li>Combine with the <a href="/docs">MCP connector</a> for Claude-native integration</li>
   <li>See the <a href="/playground">playground</a> for live examples</li>
 </ul>
@@ -218,7 +223,7 @@ await execute(name, args);</code></pre>
 
 <!-- Panel: Pay with USDC -->
 <div class="qs-panel" id="panel-usdc" role="tabpanel">
-<h3>Pay directly with ${RAILS_AMP.replace("&", "&amp;")}</h3>
+<h2>Pay directly with ${RAILS_AMP.replaceAll("&", "&amp;")}</h2>
 <p class="qs-oneliner">Use the x402 protocol for on-chain payment - no API keys, no accounts.</p>
 
 <span class="qs-label">Install</span>
@@ -261,18 +266,18 @@ const res = await payFetch("https://agent402.tools/api/extract", {
 </section>
 
 <section>
-<!-- What to try next cards -->
+<h2 class="sr-section">What to try next</h2>
 <div class="qs-cards">
   <a class="qs-card" href="/tools">
-    <h4>Browse 500+ tools</h4>
+    <h3>Browse 500+ tools</h3>
     <p>Search, filter, and preview every tool in the catalog.</p>
   </a>
   <a class="qs-card" href="/playground">
-    <h4>Try it live</h4>
+    <h3>Try it live</h3>
     <p>Run any tool interactively in the browser playground.</p>
   </a>
   <a class="qs-card" href="/docs">
-    <h4>Read the docs</h4>
+    <h3>Read the docs</h3>
     <p>API reference, authentication, pricing, and advanced usage.</p>
   </a>
 </div>

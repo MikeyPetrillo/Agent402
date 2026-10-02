@@ -1,7 +1,7 @@
 {
   "id": "agent402",
   "name": "Agent402",
-  "description": "Agent402 model provider: auto-routed and explicit frontier models at a flat per-call price, paid by card (prepaid credits key) or in USDC over x402. Same key reaches 500+ pay-per-call tools.",
+  "description": "Agent402 model provider: an auto-routed tier at a flat per-call price and explicit frontier models priced per request, paid in USDC over x402 or with a prepaid credits key. Same key reaches 500+ pay-per-call tools.",
   "activation": {
     "onStartup": true
   },
@@ -49,7 +49,7 @@
   "uiHints": {
     "creditsKey": {
       "label": "Credits key",
-      "help": "Buy by card at https://agent402.tools/credits",
+      "help": "Issued at https://agent402.tools/credits; that page says whether new keys are on sale",
       "sensitive": true
     },
     "walletKey": {

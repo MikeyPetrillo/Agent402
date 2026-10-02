@@ -57,7 +57,7 @@ ok(/querySelectorAll\('header,section,\[data-reveal\]'\)/.test(chromeSrc),
 const MIN_SECTIONS = {
   "/": 9, "/base": 4, "/marketplace": 7, "/pricing": 6, "/leaderboard": 5, "/skills": 6, "/tools": 4, "/what-is-x402": 10, "/sell": 9,
   "/docs": 6, "/status": 4, "/faq": 2, "/revenue": 4, "/playground": 2, "/badges": 3, "/compare": 6, "/community": 6,
-  "/changelog": 2, "/blog": 2, "/transparency": 2, "/privacy": 2, "/terms": 2, "/analytics": 3,
+  "/changelog": 2, "/blog": 2, "/transparency": 2, "/privacy": 2, "/terms": 2,
   "/workflows": 3, "/quickstart": 3, "/guides": 2,
 };
 for (const [path, min] of Object.entries(MIN_SECTIONS)) {

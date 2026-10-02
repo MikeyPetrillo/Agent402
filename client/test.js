@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { Agent402, OutputValidationError, withNetworkPreference, withPayeeAllowlist, NETWORK_CAIP2 } from "./index.js";
+import { Agent402, OutputValidationError, withNetworkPreference, withPayeeAllowlist, NETWORK_CAIP2, quoted402Usd } from "./index.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 3081;
@@ -89,6 +89,18 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
     ok(c.spendingSummary().dailyUsd === 0.01, "settled spend is recorded");
   }
 
+  // a refusal is something to branch on, not to regex out of the message
+  {
+    const c = new Agent402({
+      baseUrl: "https://seller.example", cache: false,
+      fetchImpl: async () => ({ ok: false, status: 402, json: async () => ({ error: "payment required" }), text: async () => "payment required", headers: new Map() }),
+    });
+    c._catalog = new Map([["cheap", { method: "POST", path: "/api/cheap", computePayable: false, price: "$0.01" }]]);
+    let e = null; try { await c.call("cheap"); } catch (err) { e = err; }
+    ok(e && e.status === 402 && e.slug === "cheap" && e.paid === false, "a wallet-only refusal with no payer carries status 402, the slug and paid:false on the Error");
+    ok(/wallet-only/.test(e?.message || ""), "...and the message still says what to construct");
+  }
+
   // daily cap sums across calls and blocks the one that would cross it
   {
     const { c, paid } = mk({ dailyLimitUsd: 0.025 });
@@ -125,6 +137,91 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
     let failed = false; try { await c.call("cheap"); } catch { failed = true; }
     ok(failed && paid === 1, "a failed paid call throws");
     ok(c.spendingSummary().dailyUsd === 0, "a failed paid call does not count against the budget");
+  }
+}
+
+// Offline: the cap is enforced against the amount the 402 ACTUALLY QUOTES, not
+// the catalog price. A route may quote per request from the body (a token-
+// metered route, or a chat route priced by the model named in it), so a client
+// that budgets from the catalog would sign whatever the seller asked for. x402
+// v2 carries the challenge base64 in the PAYMENT-REQUIRED header and leaves the
+// body `{}`, which is why reading the body alone learned nothing.
+{
+  const okResp = { ok: true, json: async () => ({ ok: true }) };
+  const challengeHeader = (usd) => Buffer.from(JSON.stringify({
+    x402Version: 2,
+    accepts: [
+      { scheme: "exact", network: "eip155:8453", amount: String(Math.round(usd * 1e6)), asset: "0xUSDC", payTo: "0xdead", extra: { name: "USD Coin" } },
+      { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", amount: String(Math.round(usd * 1e6)), asset: "mint", payTo: "sol" },
+    ],
+  })).toString("base64");
+  // 402 to an unauthenticated send (the preflight), served to one carrying a
+  // credits key - so the same stub drives both the preflight and the real call.
+  const seller = (quotedUsd, counters) => async (_url, init = {}) => {
+    if (init.headers?.Authorization) { counters.paid++; return okResp; }
+    counters.preflights++;
+    return { ok: false, status: 402, headers: new Headers({ "payment-required": challengeHeader(quotedUsd) }), json: async () => ({}) };
+  };
+  const mk = (quotedUsd, opts = {}) => {
+    const counters = { paid: 0, preflights: 0 };
+    const c = new Agent402({
+      baseUrl: "https://seller.example", cache: false,
+      fetch: async () => { counters.paid++; return okResp; },   // wallet payFetch
+      fetchImpl: seller(quotedUsd, counters),
+      ...opts,
+    });
+    c._catalog = new Map([["chat", { method: "POST", path: "/v1/chat/completions", computePayable: false, price: "$0.02" }]]);
+    return { c, counters };
+  };
+
+  // wallet: a 402 quoting more than the cap is refused BEFORE signing
+  {
+    const { c, counters } = mk(0.5, { maxPerCallUsd: 0.1 });
+    let e = null; try { await c.call("chat", { model: "premium-model" }); } catch (err) { e = err; }
+    ok(e?.name === "SpendingLimitError" && e.limit === "maxPerCallUsd", "a 402 quoting over the cap raises SpendingLimitError");
+    ok(e?.priceUsd === 0.5 && e?.cap === 0.1 && e?.listPriceUsd === 0.02, "the refusal carries the quoted amount, the cap and the catalog price");
+    ok(/\$0\.5\b/.test(e?.message || "") && /\$0\.1\b/.test(e?.message || ""), `the message names both numbers (${e?.message})`);
+    ok(counters.paid === 0, "nothing was signed - the wallet was never asked");
+    ok(counters.preflights === 1, "exactly one unpaid preflight");
+  }
+
+  // wallet: a quote INSIDE the cap still pays, and is booked at the quote
+  {
+    const { c, counters } = mk(0.05, { maxPerCallUsd: 0.1 });
+    const out = await c.call("chat", { model: "mid-model" });
+    ok(out?.ok === true && counters.paid === 1, "a quote under the cap pays normally");
+    ok(c.spendingSummary().dailyUsd === 0.05, `settled spend is the quote, not the catalog price (${c.spendingSummary().dailyUsd})`);
+  }
+
+  // no caps configured -> no preflight at all (the round trip buys nothing)
+  {
+    const { c, counters } = mk(0.5, {});
+    await c.call("chat", {});
+    ok(counters.preflights === 0 && counters.paid === 1, "with no cap configured nothing is preflighted");
+  }
+
+  // credits: the gate holds and debits the quote too, so the cap reads it
+  {
+    const { c, counters } = mk(0.5, { creditsKey: `a402_${"k".repeat(40)}`, maxPerCallUsd: 0.1, fetch: undefined });
+    let e = null; try { await c.call("chat", { model: "premium-model" }); } catch (err) { e = err; }
+    ok(e?.name === "SpendingLimitError" && e.priceUsd === 0.5, "credits: an over-cap quote is refused before the key is spent");
+    ok(counters.paid === 0, "credits: no authorized call was made");
+  }
+  {
+    const { c, counters } = mk(0.05, { creditsKey: `a402_${"k".repeat(40)}`, maxPerCallUsd: 0.1, fetch: undefined });
+    const out = await c.call("chat", {});
+    ok(out?.ok === true && counters.paid === 1, "credits: a quote under the cap still pays");
+  }
+
+  // the decoder itself: v2 `amount`, v1 `maxAmountRequired`, body fallback, and
+  // the max across accepts (the wallet picks the chain, so the dearest bounds it)
+  {
+    const hdr = (obj) => ({ headers: new Headers({ "payment-required": Buffer.from(JSON.stringify(obj)).toString("base64") }), json: async () => ({}) });
+    ok(await quoted402Usd(hdr({ accepts: [{ amount: "20000" }, { amount: "500000" }] })) === 0.5, "the quote is the dearest accept");
+    ok(await quoted402Usd(hdr({ accepts: [{ maxAmountRequired: "3000" }] })) === 0.003, "a v1 maxAmountRequired is read");
+    ok(await quoted402Usd({ headers: new Headers(), json: async () => ({ accepts: [{ amount: "1000" }] }) }) === 0.001, "a body-carried challenge is read when the header has none");
+    ok(await quoted402Usd({ headers: new Headers(), json: async () => ({}) }) === null, "an unreadable 402 quotes null, never a guess");
+    ok(await quoted402Usd(hdr({ accepts: [{ amount: "1000", extra: { decimals: 99 } }] })) === null, "an out-of-range decimals hint makes the quote unreadable");
   }
 }
 
@@ -375,6 +472,22 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
     let err = null;
     try { await c.call("t", { text: "a" }); } catch (e) { err = e; }
     ok(err && err.message.includes(long) && err.message.endsWith(`(expected: {"text":"string"})`) && !/more characters not shown/.test(err.message), "a 2,600-character seller error reaches the caller whole, nothing sliced, expected block intact");
+  }
+
+  {
+    // A refused payment explains itself in `hint` (an x402 refusal) or
+    // `detail` (an RFC 9457 problem) and carries no `error`, beside the
+    // mirrored offer. The failure text is that sentence, never the bare status
+    // and never the offer; a seller's own `error` still comes first.
+    const detailOf = (body) => new Agent402({ baseUrl: "https://seller.example", cache: false })
+      ._failureDetail("t", { status: 402, json: async () => body });
+    const offer = { x402Version: 2, resource: { url: "https://seller.example/api/t" }, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000" }], extensions: {} };
+    const hinted = await detailOf({ reason: "unsupported-scheme", hint: "Scheme \"lightning\" is not offered on this route.", retry: "choose-offered-option", ...offer });
+    ok(hinted === 'call "t" failed: HTTP 402 - Scheme "lightning" is not offered on this route.', `an x402 refusal reads as its hint (${hinted})`);
+    const problem = await detailOf({ type: "https://paymentauth.org/problems/invalid-challenge", title: "Invalid Challenge", status: 402, detail: "Challenge is invalid.", hint: "Request a fresh challenge.", ...offer });
+    ok(problem === 'call "t" failed: HTTP 402 - Challenge is invalid.', `a problem document reads as its detail before its hint (${problem})`);
+    const plain = await detailOf({ error: "bad input", hint: "send text" });
+    ok(plain === 'call "t" failed: HTTP 402 - bad input', `a body's own error still comes first (${plain})`);
   }
 
   {

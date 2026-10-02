@@ -2,7 +2,6 @@
 // CI smoke tests, and CDN load balancers all hit. A regression in its shape
 // silently breaks the "is prod alive" answer everywhere at once. Beyond
 // "ok: true", the `flags` block is the runtime feature-activation report —
-// `flags.yahooRelay` documented this once already: the YAHOO_RELAY_URL/TOKEN
 // env vars flapped set→missing→set inside 26 hours, and a missing key on
 // `flags` (vs `false`) silently slipped past truthy checks. So the flag
 // shape itself is now a contract worth locking.
@@ -15,9 +14,7 @@
 //      probes. (db=true on every boot; wallet=true means a wallet address
 //      is configured.)
 //   4. flags{} carries the full documented set: leadsDb, operatorToken,
-//      sentry, posthog, yahooRelay, statsPersistent, memoryPersistent.
 //      EACH ONE must be a boolean — not undefined, not a string. The
-//      Yahoo-relay flap surfaced because `flags.yahooRelay` flipped between
 //      `false` and `undefined`; downstream truthy checks couldn't tell.
 //   5. Liveness sanity: /health responds in well under a second.
 //
@@ -74,17 +71,23 @@ try {
   ok(typeof body.checks.wallet === "boolean", `checks.wallet is boolean (got ${typeof body.checks.wallet})`);
 
   // flags{} — runtime activation report. Every flag here MUST be a boolean.
-  // A `undefined` (key missing) silently reads as `false` to truthy checks
-  // but breaks `=== false` / `=== true` checks; the Yahoo relay flap was
-  // exactly this — `flags.yahooRelay` going missing instead of going to
-  // false, and the audit memory recommends verifying `/health.flags.yahooRelay`
-  // before trusting any prior activation claim. Locking this shape forces a
-  // boolean discipline that the truthy/identity check gap can't slip past.
+  // An `undefined` (key missing) silently reads as `false` to a truthy check
+  // but breaks `=== false` / `=== true`, so an activation claim can read
+  // either way depending on which comparison the caller used. Locking the
+  // shape forces a boolean discipline that gap cannot slip past. Mirrors
+  // scripts/test-health-flags.js: a flag added there belongs here too.
+  const REQUIRED_FLAGS = [
+    "leadsDb",
+    "operatorToken",
+    "posthog",
+    "statsPersistent",
+    "memoryPersistent",
+    "llmGateway",
+  ];
   ok(typeof body.flags === "object" && body.flags != null, `flags is an object`);
-  const REQUIRED_FLAGS = ["leadsDb", "operatorToken", "sentry", "posthog", "yahooRelay", "statsPersistent", "memoryPersistent"];
   for (const f of REQUIRED_FLAGS) {
     ok(f in body.flags, `flags carries '${f}' key (got: ${Object.keys(body.flags).join(",")})`);
-    ok(typeof body.flags[f] === "boolean", `flags.${f} is a boolean (got ${typeof body.flags[f]}: ${body.flags[f]}) — a missing/non-boolean is the Yahoo-relay-flap class of regression`);
+    ok(typeof body.flags[f] === "boolean", `flags.${f} is a boolean (got ${typeof body.flags[f]}: ${body.flags[f]}) — a missing or non-boolean flag is the regression this pins`);
   }
 
   console.log(`\n${pass} passed (latency=${latencyMs}ms, flags: ${REQUIRED_FLAGS.map(f => `${f}=${body.flags[f]}`).join(", ")})`);

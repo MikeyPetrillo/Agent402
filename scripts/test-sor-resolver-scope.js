@@ -20,26 +20,33 @@ const decl = fn.indexOf("let provenPayToByOrigin = new Map()");
 const branch = fn.indexOf('if (chain === "tempo")');
 ok(decl > 0 && branch > 0 && decl < branch, "provenPayToByOrigin is declared at function scope BEFORE the chain branches");
 ok(!/var provenPayToByOrigin/.test(fn), "no `var provenPayToByOrigin` inside a branch (the hoisted-undefined shape)");
-ok(/provenPayToByOrigin = buildProvenPayToByOrigin\(\)/.test(fn), "the Base branch still assigns the proven-payTo evidence");
+ok(/provenPayToByOrigin = ev\.provenPayTo;/.test(fn), "the Base branch still assigns the proven-payTo evidence (from dispatchEvidence)");
 ok((fn.match(/provenPayToByOrigin[?.]+get\(/g) || []).length >= 1, "the post-probe check still reads the map (so an undefined map would have been fatal on the non-Base legs)");
 ok(/r\.unproven = true/.test(fn) && /Number\.isFinite\(gate\.inbound\)/.test(fn),
   "the Solana gate admits an UNPROVEN candidate only when the chain was readable (a count came back) and the quote is within the allowance");
 ok(/resolved\.filter\(\(x\) => !x\.unproven\)\.length >= Math\.max\(1, limit\)/.test(fn), "only PROVEN candidates count toward the limit");
 ok(/resolved\.sort\(\(a, b\) => \(a\.unproven \? 1 : 0\) - \(b\.unproven \? 1 : 0\)\)/.test(fn) && fn.indexOf("resolved.sort(") < fn.indexOf("resolved.splice("),
   "proven candidates are ordered before unproven ones, then the limit applies");
-ok(/sellerRefusedRecently\(r\.seller, chain\)/.test(fn) && fn.indexOf("sellerRefusedRecently(r.seller, chain)") < fn.indexOf("await assertPublicUrl(r.url)"),
-  "the resolve loop skips a seller that refused a payment on this chain BEFORE probing it (the memo x402-buyer writes after a chain-verified refusal)");
+ok(/sellerRouteRefusedRecently\(r\.url, chain\)/.test(fn) && fn.indexOf("sellerRouteRefusedRecently(r.url, chain)") < fn.indexOf("await assertPublicUrl(r.url)"),
+  "the resolve loop skips a ROUTE whose payment layer refused our payment on this chain BEFORE probing it (the memo x402-buyer writes after a chain-verified refusal)");
+ok(!/sellerRefusedRecently\(r\.seller/.test(fn), "the resolver does not bench a whole origin for one route's refusals");
 ok(/resolved\.push\(\{[^\n]*wire: r\.wire/.test(fn), "the resolved candidate carries its wire (a Tempo seller settles over MPP; the receipt said x402 before)");
 // The model-list skip (2026-09-02): a chat seller whose readable model list
 // lacks the requested model is skipped BEFORE the probe, and the model reaches
 // the resolver from route-execute's params. Pinned from source because the
 // offline router tests inject the resolver and cannot see the call site.
-ok(/wantModel = null \} = \{\}\)/.test(fn.slice(0, 200)), "resolveExternalSeller accepts wantModel");
+ok(/wantModel = null(?:, onlyUrl = null)? \} = \{\}\)/.test(fn.slice(0, 220)), "resolveExternalSeller accepts wantModel");
 ok(/served\.verdict === "not-served"/.test(fn) && fn.indexOf('served.verdict === "not-served"') < fn.indexOf("await assertPublicUrl(r.url)"),
   "a not-served verdict skips the candidate BEFORE probing it, and only that verdict skips (unknown never does)");
-ok(fn.indexOf("sellerRefusedRecently(r.seller, chain)") < fn.indexOf("sellerServesModel(r.url, wantModel)"), "the refusal memo is consulted first (cheaper: no fetch)");
+ok(fn.indexOf("sellerRouteRefusedRecently(r.url, chain)") < fn.indexOf("sellerServesModel(r.url, wantModel)"), "the refusal memo is consulted first (cheaper: no fetch)");
+// A pinned endpoint is searched again by its own URL words when the task's
+// wording leaves it outside the result window (2026-10-01: a planned,
+// router-eligible gas seller read as "no seller matched"). Both legs search
+// through routeRows, which retries only for a pinned URL that was missed.
+ok(/const routeRows = async \(args\) =>/.test(fn) && /if \(!onlyUrl \|\| \(r\.results \|\| \[\]\)\.some\(\(x\) => sameUrl\(x\.url\)\)\) return r;/.test(fn) && (fn.match(/await routeRows\(\{ query: task/g) || []).length === 2 && !/await routeQueryAsync\(\{ query: task/.test(fn),
+  "a pinned endpoint the wording missed is searched again by its own host and path (both legs)");
 const rx = readFileSync(new URL("../src/tools/route-execute.js", import.meta.url), "utf8");
-ok(/const wantModel = typeof input\.params\?\.model === "string"/.test(rx) && /limit: MAX_CANDIDATES, wantModel \}/.test(rx),
+ok(/const wantModel = typeof input\.params\?\.model === "string"/.test(rx) && /limit: MAX_CANDIDATES, wantModel(?: \}|, \.\.\.\(target \? \{ onlyUrl: target \} : \{\}\) \})/.test(rx),
   "route-execute hands the params' model to the resolver (a stable resolver with nothing feeding it would pass every other test here)");
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

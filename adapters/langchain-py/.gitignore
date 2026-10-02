@@ -1,0 +1,8 @@
+# Build output for this package. Kept local on purpose: hatchling copies the
+# nearest .gitignore into the sdist, and without this file it walks up to the
+# repository root and publishes that one instead.
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.pyc

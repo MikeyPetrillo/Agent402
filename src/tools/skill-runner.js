@@ -124,7 +124,7 @@ export function defaultMapInput(args, tool) {
 // one module. rankSkillPacks() needs the price to tell a buyer what the
 // one-call purchase costs, and skills.js cannot import from tools/ without a
 // cycle (this file already imports SKILL_PACKS from there). Re-exported here
-// because ledger-home.js and landing.js import it from this path.
+// because ledger-home.js imports it from this path.
 export { PACK_PRICES };
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -200,16 +200,60 @@ function parseGoalString(s) {
 // a matching PACK_STEPS entry falls back to the auto-stub in getStepConfig
 // (every step returns 501 — the envelope is still well-formed).
 // ──────────────────────────────────────────────────────────────────────────
+// stock-history is priced per session now and takes `days`, not the old
+// range vocabulary. Every pack here used to pass range: "1y" / "2y" / "3mo",
+// which the handler silently ignored - so a pack promising a year of closes
+// and computing a year-over-year return from them would have been served 30
+// sessions and produced a confident wrong number. Translate here, once, and
+// cap at the 250 sessions the licensed window actually serves.
+const HISTORY_SESSIONS = { "1d": 1, "5d": 5, "1mo": 21, "3mo": 63, "6mo": 126, ytd: 180, "1y": 250, "2y": 250, "5y": 250, "10y": 250, max: 250 };
+const sessionsFor = (range, fallback = 250) => HISTORY_SESSIONS[String(range || "").toLowerCase()] ?? fallback;
+
+// trend-analysis's forecast bake-off: the backtested methods and the
+// forward-forecast tool for each.
+const TREND_METHODS = ["drift", "ses", "holt"];
+const TREND_FORECAST_SLUG = { drift: "forecast-naive", ses: "forecast-ses", holt: "forecast-holt" };
+
+// security-audit: how many CT-log subdomains get a DNS lookup and a header
+// check. Spread at module load, so they sit above PACK_STEPS too.
+export const AUDIT_DNS_SUBDOMAINS = 3;
+export const AUDIT_HEADER_SUBDOMAINS = 2;
+// Subdomains from the cert-transparency step: the apex itself and wildcards
+// excluded (the tool already drops wildcards), shallowest first, then by name.
+function auditSubdomains(args, prior) {
+  const apex = String(args?.domain || "").trim().toLowerCase();
+  const subs = (prior?.["cert-transparency"]?.subdomains ?? [])
+    .map((s) => String(s).toLowerCase())
+    .filter((s) => s !== apex && !s.startsWith("*.") && s.endsWith(`.${apex}`) && /^[a-z0-9.-]+$/.test(s));
+  return [...new Set(subs)].sort((x, y) => x.split(".").length - y.split(".").length || x.localeCompare(y));
+}
+
 export const PACK_STEPS = {
   // ▼ Example 1: simple fanout. All tools key off one prompt arg (domain).
+  // Chain: the certificate transparency log runs first and names the
+  // subdomains the DNS and header legs then check (up to
+  // AUDIT_DNS_SUBDOMAINS / AUDIT_HEADER_SUBDOMAINS of them, shallowest first).
+  // Until 2026-10-02 every leg ran on the apex only while the workflow
+  // promised per-subdomain DNS and header checks.
   "security-audit": {
-    mode: "fanout",
+    mode: "chain",
     steps: [
       { slug: "cert-transparency", mapInput: (a) => ({ domain: a.domain }) },
       { slug: "dns-lookup",        mapInput: (a) => ({ host: a.domain, type: "A" }) },
+      { slug: "dns-lookup", as: "dns-lookup-caa", mapInput: (a) => ({ host: a.domain, type: "CAA" }) },
+      ...Array.from({ length: AUDIT_DNS_SUBDOMAINS }, (_, i) => ({
+        slug: "dns-lookup", as: `dns-lookup-subdomain-${i + 1}`,
+        when: (a, p) => !!auditSubdomains(a, p)[i], skipReason: "the certificate log named fewer subdomains",
+        mapInput: (a, p) => ({ host: auditSubdomains(a, p)[i], type: "A" }),
+      })),
       { slug: "spf-check",         mapInput: (a) => ({ domain: a.domain }) },
       { slug: "dmarc-check",       mapInput: (a) => ({ domain: a.domain }) },
       { slug: "http-headers",      mapInput: (a) => ({ url: `https://${a.domain}` }) },
+      ...Array.from({ length: AUDIT_HEADER_SUBDOMAINS }, (_, i) => ({
+        slug: "http-headers", as: `http-headers-subdomain-${i + 1}`,
+        when: (a, p) => !!auditSubdomains(a, p)[i], skipReason: "the certificate log named fewer subdomains",
+        mapInput: (a, p) => ({ url: `https://${auditSubdomains(a, p)[i]}` }),
+      })),
       { slug: "tls-cert",          mapInput: (a) => ({ host: a.domain }) },
       { slug: "tech-stack",        mapInput: (a) => ({ url: `https://${a.domain}` }) },
     ],
@@ -222,7 +266,7 @@ export const PACK_STEPS = {
     steps: [
       // Equity ticker: fetch OHLCV (range from horizon arg if provided).
       // Yahoo bars come back as [{time,open,high,low,close,volume}].
-      { slug: "stock-history", mapInput: (a) => ({ symbol: a.series, range: a.horizon || "1y" }) },
+      { slug: "stock-history", mapInput: (a) => ({ symbol: a.series, days: sessionsFor(a.horizon, 250) }) },
       // Macro indicator: the workflow's own "for a FRED series id" branch,
       // advertised in toolSlugs and never run until 2026-09-02. Runs ONLY
       // when stock-history served nothing (a FRED id is not a ticker), so an
@@ -237,12 +281,40 @@ export const PACK_STEPS = {
           return { x: v.map((_, i) => i), y: v };
       } },
       { slug: "outliers",        mapInput: (_a, p) => ({ values: bakeOffValues(p) }) },
-      { slug: "correlation",     mapInput: (_a, p) => { const v = bakeOffValues(p); return { x: v, y: v }; } },
-      { slug: "forecast-eval",   mapInput: (_a, p) => {
-          const v = bakeOffValues(p);
-          const testSize = Math.max(5, Math.floor(v.length / 10));
-          return { values: v, testSize, method: "drift" };
+      // Benchmark (optional `benchmark` arg): fetched like the series, ticker
+      // first, FRED id when the ticker fetch served nothing. Stored under its
+      // own keys so the main series is never overwritten. Until 2026-10-02 the
+      // correlation step passed the series against ITSELF (r = 1 on every run).
+      { slug: "stock-history", as: "benchmark-stock", when: (a) => !!benchmarkOf(a), skipReason: "no benchmark was given",
+        mapInput: (a) => ({ symbol: benchmarkOf(a), days: sessionsFor(a.horizon, 250) }) },
+      { slug: "fred-series", as: "benchmark-fred",
+        when: (a, p) => !!benchmarkOf(a) && !((p["benchmark-stock"]?.bars ?? []).length), skipReason: "no benchmark was given, or it was served as an equity ticker",
+        mapInput: (a) => ({ seriesId: benchmarkOf(a) }) },
+      { slug: "correlation", when: (a) => !!benchmarkOf(a), skipReason: "no benchmark was given",
+        mapInput: (_a, p) => {
+          const [x, y] = alignTails(bakeOffValues(p), seriesValues(p, "benchmark-stock", "benchmark-fred"));
+          if (x.length < 3) throw Object.assign(new Error(`need at least 3 paired observations of the series and its benchmark, got ${x.length}`), { statusCode: 424 });
+          return { x, y };
       } },
+      // The bake-off: backtest drift, SES and Holt on the same holdout, then
+      // forecast forward with the lowest-RMSE method and its 95% interval.
+      ...TREND_METHODS.map((method) => ({
+        slug: "forecast-eval", as: `forecast-eval-${method}`,
+        mapInput: (_a, p) => {
+          const v = bakeOffValues(p);
+          return { values: v, testSize: trendTestSize(v.length), method };
+        },
+      })),
+      ...TREND_METHODS.map((method) => ({
+        slug: TREND_FORECAST_SLUG[method],
+        when: (_a, p) => trendWinner(p) === method,
+        skipReason: "another method had the lower backtest RMSE",
+        mapInput: (_a, p) => {
+          const v = bakeOffValues(p);
+          const horizon = trendForecastHorizon(v.length);
+          return method === "drift" ? { values: v, horizon, method: "drift" } : { values: v, horizon };
+        },
+      })),
     ],
   },
 
@@ -262,7 +334,7 @@ export const PACK_STEPS = {
     steps: [
       { slug: "stock-quote",         mapInput: (a) => ({ symbol: a.ticker }) },
       { slug: "company-financials",  mapInput: (a) => ({ ticker: a.ticker }) },
-      { slug: "earnings-calendar",   mapInput: (a) => ({ symbol: a.ticker }) },
+      { slug: "stock-history",       mapInput: (a) => ({ symbol: a.ticker }) },
     ],
   },
 
@@ -271,7 +343,7 @@ export const PACK_STEPS = {
     mode: "fanout",
     steps: [
       { slug: "stock-quote",         mapInput: (a) => ({ symbol: a.ticker }) },
-      { slug: "stock-history",       mapInput: (a) => ({ symbol: a.ticker, range: "1y" }) },
+      { slug: "stock-history",       mapInput: (a) => ({ symbol: a.ticker, days: sessionsFor("1y") }) },
       { slug: "edgar-filings",       mapInput: (a) => ({ ticker: a.ticker }) },
       { slug: "edgar-company-facts", mapInput: (a) => ({ ticker: a.ticker }) },
       { slug: "edgar-insider-trades", mapInput: (a) => ({ ticker: a.ticker, lookbackDays: 90 }) },
@@ -1313,7 +1385,7 @@ export const PACK_STEPS = {
   "forecasting-bake-off": {
     mode: "chain",
     steps: [
-      { slug: "stock-history", mapInput: (a) => ({ symbol: a.series, range: "2y" }) },
+      { slug: "stock-history", mapInput: (a) => ({ symbol: a.series, days: sessionsFor("2y") }) },
       { slug: "fred-series",   mapInput: (a) => ({ seriesId: a.series }) },
       // Helper: closes from whichever fetcher succeeded.
       ...["naive", "ses", "holt", "holt-winters"].map((method) => ({
@@ -1502,7 +1574,6 @@ export const PACK_STEPS = {
   "earnings-deep-dive": {
     mode: "fanout",
     steps: [
-      { slug: "earnings-calendar",  mapInput: (a) => ({ symbol: a.ticker }) },
       { slug: "company-financials", mapInput: (a) => ({ ticker: a.ticker }) },
       { slug: "edgar-filings",      mapInput: (a) => ({ ticker: a.ticker, limit: 10 }) },
       { slug: "stock-quote",        mapInput: (a) => ({ symbol: a.ticker }) },
@@ -1517,7 +1588,7 @@ export const PACK_STEPS = {
     mode: "chain",
     steps: [
       { slug: "stock-quote",   mapInput: (a) => ({ symbol: a.ticker }) },
-      { slug: "stock-history", mapInput: (a) => ({ symbol: a.ticker, range: "3mo" }) },
+      { slug: "stock-history", mapInput: (a) => ({ symbol: a.ticker, days: sessionsFor("3mo") }) },
       { slug: "black-scholes", mapInput: (a, p) => {
           const spot = requireNumber(p["stock-quote"]?.price, "the live spot price");
           const volatility = realizedVolatility(p["stock-history"]?.bars);
@@ -1589,9 +1660,9 @@ export const PACK_STEPS = {
   "earnings-watch": {
     mode: "fanout",
     steps: [
-      { slug: "earnings-calendar", mapInput: (a) => ({ symbol: a.ticker }) },
       { slug: "stock-quote",       mapInput: (a) => ({ symbol: a.ticker }) },
       { slug: "search",            mapInput: (a) => ({ q: `${a.ticker} earnings`, count: 5 }) },
+      { slug: "edgar-filings",     mapInput: (a) => ({ ticker: a.ticker }) },
     ],
   },
 
@@ -2175,7 +2246,7 @@ export const PACK_STEPS = {
     mode: "fanout",
     steps: [
       { slug: "stock-quote",    mapInput: (a) => ({ symbol: a.ticker }) },
-      { slug: "stock-history",  mapInput: (a) => ({ symbol: a.ticker, range: "1y" }) },
+      { slug: "stock-history",  mapInput: (a) => ({ symbol: a.ticker, days: sessionsFor("1y") }) },
       { slug: "crypto-price",   mapInput: (a) => ({ coins: a.coin, currency: "usd" }) },
       { slug: "crypto-history", mapInput: (a) => ({ coin: a.coin, days: "365", currency: "usd" }) },
       { slug: "date-format",    mapInput: () => ({ datetime: new Date().toISOString() }) },
@@ -2248,22 +2319,7 @@ export const PACK_STEPS = {
     ],
   },
 
-  // Pre-open trading snapshot: four ticker reads + today's market-wide
-  // earnings calendar. The earnings step deliberately does NOT filter by the
-  // ticker — earnings-calendar returns companies reporting on ONE date
-  // (defaults today; symbol is only a filter), so a ticker filter comes back
-  // empty on almost every day and always for ETFs. The market-wide list
-  // ("which prints hit the tape today") is the useful pre-open context.
-  "market-open": {
-    mode: "fanout",
-    steps: [
-      { slug: "stock-quote",       mapInput: (a) => ({ symbol: a.ticker }) },
-      { slug: "premarket-quote",   mapInput: (a) => ({ symbol: a.ticker }) },
-      { slug: "options-chain",     mapInput: (a) => ({ symbol: a.ticker }) },
-      { slug: "stock-dividends",   mapInput: (a) => ({ symbol: a.ticker }) },
-      { slug: "earnings-calendar", mapInput: () => ({}) },
-    ],
-  },
+  // Pre-open trading snapshot: four ticker reads. The market-wide earnings
 
   // KYB-style identity dossier: six independent lookups keyed off the
   // company name / domain / ticker. Private companies fail the EDGAR step
@@ -2406,14 +2462,45 @@ function firstUrl(urls) {
 // with .close); fred-series wins for FRED ids (returns observations with
 // .value). Returns the first non-empty source.
 function bakeOffValues(prior) {
-  const fromStock = (prior?.["stock-history"]?.bars ?? [])
+  return seriesValues(prior, "stock-history", "fred-series");
+}
+
+// Closes from a stock-history result stored under `stockKey`, else values
+// from a fred-series result under `fredKey`.
+function seriesValues(prior, stockKey, fredKey) {
+  const fromStock = (prior?.[stockKey]?.bars ?? [])
     .map((b) => Number(b?.close))
     .filter(Number.isFinite);
   if (fromStock.length) return fromStock;
-  const fromFred = (prior?.["fred-series"]?.observations ?? [])
+  const fromFred = (prior?.[fredKey]?.observations ?? [])
     .map((o) => Number(o?.value))
     .filter(Number.isFinite);
   return fromFred;
+}
+
+// trend-analysis helpers (TREND_METHODS / TREND_FORECAST_SLUG sit above
+// PACK_STEPS: the step list spreads them at module load).
+const benchmarkOf = (a) => String(a?.benchmark ?? "").trim();
+// Holdout ~20% of the series, capped at half and at n - 2 (forecast-eval's bound).
+const trendTestSize = (n) => Math.max(1, Math.min(Math.floor(n / 2), n - 2, Math.round(n * 0.2)));
+// Forward horizon: a quarter of the observed length, at most 63 periods
+// (one trading quarter), at least 1.
+const trendForecastHorizon = (n) => Math.max(1, Math.min(63, Math.floor(n / 4)));
+// The two series aligned on their most recent shared length.
+function alignTails(a, b) {
+  const n = Math.min(a.length, b.length);
+  return [a.slice(a.length - n), b.slice(b.length - n)];
+}
+// The backtest winner: lowest RMSE among the methods whose backtest ran;
+// ties go to the simpler method (TREND_METHODS order). No usable backtest =
+// drift, the baseline, so the forward leg still runs and reports its outcome.
+function trendWinner(prior) {
+  let best = null;
+  for (const m of TREND_METHODS) {
+    const rmse = Number(prior?.[`forecast-eval-${m}`]?.rmse);
+    if (Number.isFinite(rmse) && (best === null || rmse < best.rmse)) best = { m, rmse };
+  }
+  return best ? best.m : "drift";
 }
 
 // Fetch a URL and return its bytes as base64. Used by media-pipeline's chain
@@ -2558,6 +2645,12 @@ async function runPack(packSlug, args, ctx) {
   }
   const config = getStepConfig(packSlug, ctx.packIndex);
   const prior = {};
+  // A step may declare `as`: the key its result is stored under in `prior`
+  // (and reported beside the slug in the envelope). It lets one tool run
+  // several times in a pack - trend-analysis's three backtests, a benchmark
+  // fetch beside the main fetch - without each run overwriting the last.
+  const keyOf = (step) => step.as || step.slug;
+  const tag = (step) => (step.as ? { as: step.as } : {});
 
   const runStep = async (step) => {
     // Internal steps bypass the HTTP route, so tool_call never sees them —
@@ -2573,7 +2666,7 @@ async function runPack(packSlug, args, ctx) {
     if (typeof step.when === "function") {
       let applies = true;
       try { applies = !!(await step.when(args, prior)); } catch { applies = true; }
-      if (!applies) return { slug: step.slug, ok: true, skipped: true, reason: step.skipReason || "not applicable to this input" };
+      if (!applies) return { slug: step.slug, ...tag(step), ok: true, skipped: true, reason: step.skipReason || "not applicable to this input" };
     }
     try {
       const handler = lookupHandler(step.slug, ctx);
@@ -2601,9 +2694,9 @@ async function runPack(packSlug, args, ctx) {
       for (const input of inputs) {
         try {
           const result = await handler(input);
-          prior[step.slug] = result;
+          prior[keyOf(step)] = result;
           capturePostHogPackStep({ pack: packSlug, slug: step.slug, ok: true, ms: Date.now() - startedAt });
-          return { slug: step.slug, ok: true, result };
+          return { slug: step.slug, ...tag(step), ok: true, result };
         } catch (err) { lastErr = err; }
       }
       throw lastErr;
@@ -2611,6 +2704,7 @@ async function runPack(packSlug, args, ctx) {
       capturePostHogPackStep({ pack: packSlug, slug: step.slug, ok: false, ms: Date.now() - startedAt });
       return {
         slug: step.slug,
+        ...tag(step),
         ok: false,
         error: err.message,
         statusCode: err.statusCode || 500,
@@ -2678,11 +2772,13 @@ export function buildSkillTools({ getCatalog, inlineHandlers = {} }) {
       slug: `skill-${slug}`,
       category: "skill-pack",
       price: `$${price.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}` /* whole milli-dollars: the derived pack price is charged as derived, never rounded to a cent */,
+      // Lead with what the pack does.
       description:
-        `Bundled execution of the ${pack.title} workflow - ${pack.tagline} ` +
-        `One x402 payment runs ${pack.toolSlugs.length} underlying tools (${pack.toolSlugs.join(", ")}); ` +
+        `${pack.tagline} ${pack.title} skill pack: one x402 payment runs ` +
+        `${pack.toolSlugs.length} underlying tools (${pack.toolSlugs.join(", ")}); ` +
         `partial-success per step.`,
-      tags: ["skill-pack", "workflow", slug],
+      // Optional curated search words (`searchTags`).
+      tags: ["skill-pack", "workflow", slug, ...(Array.isArray(pack.searchTags) ? pack.searchTags : [])],
       discovery: {
         bodyType: "json",
         input: exampleArgs,
@@ -2712,6 +2808,12 @@ export function buildSkillTools({ getCatalog, inlineHandlers = {} }) {
         }),
     };
   });
+}
+
+// Catalog slugs ("skill-<pack>") of the packs that run at least one
+// model-backed tool. server.js folds them into MODEL_BACKED_SLUGS.
+export function modelBackedPackSlugs(packs, isModelBacked) {
+  return (packs || []).filter((p) => (p.toolSlugs || []).some((s) => isModelBacked(s))).map((p) => `skill-${p.slug}`);
 }
 
 // Test surface — used by scripts/test-skill-runner.js.

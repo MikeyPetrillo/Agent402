@@ -124,7 +124,8 @@ export const CACHEABLE_ROUTES = {
 
   // Search — shift over time, but for agent batch tasks the same query
   // repeated within a minute is wasted spend. 5min is a fair middle.
-  "/api/search":   { ttl: 300, keyFields: ["q", "count", "freshness"] },
+  // The domain lists change which pages come back, so they are part of the key.
+  "/api/search":   { ttl: 300, keyFields: ["q", "count", "freshness", "includeDomains", "excludeDomains"] },
   "/api/gov-data": { ttl: 3600, keyFields: ["q", "rows"] },
 
   // Discovery primitives — every agent hits /api/find and /api/route on the
@@ -132,8 +133,16 @@ export const CACHEABLE_ROUTES = {
   // explore. The underlying CATALOG only changes when the server reboots, but
   // we still keep TTLs short (60s) because the resolver is cheap and we'd
   // rather pick up index refreshes (leaderboard / reliability) within a minute.
+  // `network` is load-bearing in /api/route's key. It arrived as a FILTER on
+  // the handler (routeQuery networkFilter) and was never added here, so
+  // ?q=swap&network=solana and ?q=swap&network=base shared one cache entry:
+  // whichever ran first served the other for 60 s, and the answer a buyer got
+  // was a list of sellers on a chain they cannot pay on, with nothing saying it
+  // had been filtered for someone else. A key that ignores a filter is the same
+  // defect class as a page that calls itself complete - the response is a
+  // subset, and the contract says nothing.
   "/api/find":  { ttl: 60, keyFields: ["q", "task", "query", "k"] },
-  "/api/route": { ttl: 60, keyFields: ["q", "task", "query", "top", "k", "include"] },
+  "/api/route": { ttl: 60, keyFields: ["q", "task", "query", "top", "k", "include", "network"] },
 
   // x402 payments helpers. Quotes are mostly static (sellers rarely re-price);
   // x402-verify is fully immutable once a tx confirms; tx-status is short-ttl

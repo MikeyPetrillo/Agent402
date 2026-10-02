@@ -10,6 +10,8 @@
 // page that types the exception would be wrong the day the tier is switched
 // off. Derive both from the same function the router reads.
 import { svmUnprovenAllowanceAtomic } from "./solana-buyer.js";
+import { baseUnprovenAllowanceUsd } from "./base-unproven.js";
+import { ROUTE_ORDER, routeTiebreakProse } from "./route-order.js";
 
 /** The unproven-tier ceiling in dollars, or 0 when the tier is disabled. */
 export function unprovenAllowanceUsd() {
@@ -25,7 +27,24 @@ function usd(n) {
  * Reads as an absolute only when the exception is actually switched off.
  */
 export function routingProofSentence() {
-  const cap = unprovenAllowanceUsd();
-  if (!(cap > 0)) return "Sellers are routable on proven on-chain settlement.";
-  return `Sellers are routable on proven on-chain settlement, with one exception: a Solana seller with no settlement history yet is tried only after every proven candidate, capped at ${usd(cap)} a call, and flagged unproven on the receipt.`;
+  const sol = unprovenAllowanceUsd();
+  const base = baseUnprovenAllowanceUsd();
+  const tiers = [];
+  if (base > 0) tiers.push(`${usd(base)} a call on Base`);
+  if (sol > 0) tiers.push(`${usd(sol)} a call on Solana`);
+  if (!tiers.length) return "Sellers are routable on proven on-chain settlement.";
+  return `Sellers are routable on proven on-chain settlement, with one exception: a seller with no settlement history yet is tried only after every proven candidate, capped at ${tiers.join(" and ")}, and flagged unproven on the receipt.`;
+}
+
+/**
+ * How the router orders candidates, written once. The order is the comparator
+ * in routeQuery (src/x402-index.js): lexical match score, then crawl health,
+ * then distinct payers measured over the last 30 days, then the cheapest known
+ * price; a judgment model (src/tool-judge.js) may then pick one candidate from
+ * that shortlist or decline them all, and when it is not consulted the
+ * shortlist order stands. Pages used to type three different versions of this
+ * ("health then price", "health x price", "match, health, price").
+ */
+export function routerRankingSentence() {
+  return `Candidates are shortlisted by ${ROUTE_ORDER[0].prose}, then ordered ${routeTiebreakProse()}; a judgment model can then pick the one that does the job from that shortlist, or decline them all, and when it is not consulted the shortlist order stands.`;
 }

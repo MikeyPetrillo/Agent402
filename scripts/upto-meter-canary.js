@@ -1,7 +1,6 @@
 // LIVE proof that a metered call settles BELOW the ceiling the buyer authorized.
 //
-// The flat-price gateway charges the tier price whatever a call cost: measured
-// over 30 days, $0.02 against $0.0001 of real spend on v1-chat. Metering bills
+// The flat-price gateway charges the tier price whatever a call cost. Metering bills
 // the actual cost plus a markup, using x402's `upto` scheme - the buyer signs a
 // Permit2 authorization for a CEILING and the seller names the settled amount
 // afterwards, never above it.

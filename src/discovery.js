@@ -17,9 +17,17 @@
 
 import { toolList, CATEGORIES } from "./pages.js";
 import { SKILL_PACKS } from "./skills.js";
+import { mppMethodsSummary } from "./mpp-offers.js";
 import { RAIL_CHAIN_NAMES, RAILS_NOTE } from "./rails.js";
+import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
+import { HUMAN_PRODUCTS } from "./human-checkout.js";
+import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
+import { CRAWL_INTERVAL_SECONDS, DISCOVERY_INTERVAL_SECONDS } from "./crawl-cadence.js";
 
-const REPO = "https://github.com/MikeyPetrillo/Agent402";
+import { REPO_URL, REPO_NAMESPACE } from "./repo-link.js";
+import { meteredSkip as countMeteredSkip } from "./metered-slugs.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
+const REPO = REPO_URL;
 const MAINTAINER = { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: REPO };
 
 function priceRange(prices) {
@@ -73,7 +81,10 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     about: `${REPO}#agent402-in-the-x402-ecosystem`,
     name: "Agent402.Tools",
     summary:
-      `Agent402.Tools - open-source, self-hostable, x402 + MPP (+ MCP server): 500+ pay-per-call tools for AI agents in one integration (the applied layer of Agentic Finance) - browser, search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, ${SKILL_PACKS.length} curated multi-tool skill packs callable as MCP prompts, wallet-keyed memory, and an OpenAI-compatible LLM gateway at /v1 (flat-priced chat from $0.003/call, embeddings $0.002 - no API key, the wallet is the account). Free via proof-of-work, or pay per call in USDC via x402 or over MPP (Base/Celo USDC, native Tempo).`,
+      `Agent402.Tools - open-source, self-hostable, x402 + MPP (+ MCP server): 500+ pay-per-call tools for AI agents in one integration (the applied layer of Agentic Finance) - browser, search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, ${SKILL_PACKS.length} curated multi-tool skill packs callable as MCP prompts, wallet-keyed memory, and an OpenAI-compatible LLM gateway at /v1 (flat-priced chat from $0.003/call, embeddings $0.002 - no API key, the wallet is the account). Free via proof-of-work, or pay per call in USDC via x402 or over MPP (native Tempo, Base/Celo USDC, cards on routes of $0.50 or more).`,
+    // The MPP methods the 402 offers, in its order (src/mpp-offers.js - the
+    // same source /openapi.json x-payment-info and /llms.txt read).
+    mpp: mppMethodsSummary(),
     homepage: baseUrl,
     repository: REPO,
     openSource: true,
@@ -103,9 +114,10 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
     differentiators: [
       "Open-source and self-hostable - read every line, run it yourself (AGPL-3.0).",
       `One integration covers all 500+ tools - no per-service SDKs or signups.`,
-      "People pay too: finished, cited reports by card at /reports ($2 to $5 by card; agents pay the lower tool price, $0.60 to $2.00 per call for an agent, per call), $5/month monitors at /monitors, and prepaid credits at /credits (an a402_ key that pays every tool by card, debited only on success).",
+      // Prices read from the product tables, never typed; credits are not on sale.
+      `People pay too: finished reports by card at /reports (${cardReportPriceRange(HUMAN_PRODUCTS).text} by card; an agent pays the tool price per call, ${agentReportPriceRange().text}) and monitors at /monitors (${reportLadderProse({ monitorProducts: MONITOR_PRODUCTS }).monthly} a month).`,
       "Two-sided: also ships agent402-tollbooth, an open pay-per-crawl gate for the demand side of x402.",
-      "Deterministic utility tools - no LLM in that serving path; same input, same output, full OpenAPI schemas. The /v1 gateway (metered and flat tiers) and the report products are model-backed and say so.",
+      "Utility tools run as code with no language model writing the answer, and every route publishes a full OpenAPI schema. The /v1 gateway (metered and flat tiers), the report products and the media tools are model-backed and say so.",
       "Free without a wallet via proof-of-work on the pure-CPU tools.",
       `${SKILL_PACKS.length} curated multi-tool workflows (skill packs) callable as MCP prompts - agents fetch the whole task template, not just one tool.`,
     ],
@@ -136,7 +148,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
         // exception is real (prepaid card credits and card-paid reports are held
         // balances; see /security). Same rule as `deterministic` and
         // `testedBeforeEveryDeploy`, pinned by test-copy-absolutes.
-        nonCustodial: "on the x402 and MPP rails these tools never hold, receive, sign or send funds: a payment settles wallet to wallet through the facilitator. Prepaid card credits and card-paid reports are the two paths where a balance is held; see /security.",
+        nonCustodial: `on the x402 and MPP rails these tools never hold, receive, sign or send funds: a payment settles wallet to wallet through the facilitator. Prepaid card credits (${creditsSalesEnabled() ? "sold at /credits" : "not on sale; issued keys still spend"}) are the one balance held; card reports and monitors are ordinary card charges; see /security.`,
         ...(process.env.BASE_BUILDER_CODE ? { builderCode: process.env.BASE_BUILDER_CODE } : {}),
       },
       proofOfWork: {
@@ -147,15 +159,23 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
         info: `${baseUrl}/api/pow`,
       },
       // Data minimisation on the payment path (machine-readable so a
-      // compliance-aware buyer can verify posture before transacting). An x402
-      // token may carry optional annotation fields; we read only the signed
-      // payer address (already public on-chain) and never parse, log, or retain
-      // the rest.
+      // compliance-aware buyer can verify posture before transacting). The
+      // list names every field of a payment the server reads and why; it once
+      // named only authorization.from while the payment-identifier extension,
+      // the Solana transaction's signers, the Tempo credential source and the
+      // facilitator receipt's payer were all read too.
       dataHandling: {
         readsPaymentMetadata: false,
         retainsPaymentMetadata: false,
-        readsOnly: ["authorization.from (signed payer address, public on-chain)"],
-        note: "Optional x402 token annotation fields (resource URL, description, reason) are never parsed, logged, or retained. Data-minimisation by construction.",
+        readsOnly: [
+          "authorization.from (signed EVM payer address, public on-chain): the identity of wallet-scoped routes and the payer recorded for a sale",
+          "the payment-identifier extension, when sent: an idempotency key bound to the credential, route and body",
+          "the signers of a Solana payment transaction: to tell one paying wallet from another in failure telemetry, stored only as a keyed hash",
+          "the source of a Tempo MPP credential (a did:pkh address): to classify the payer of a sale",
+          "the payer named in the facilitator's settlement receipt: recorded with the sale when the payment itself names none we can verify",
+        ],
+        retains: "each sale's payer address, settlement transaction, route and price, in the sales ledger; payer addresses are never published",
+        note: "Optional x402 token annotation fields (resource URL, description, reason) are not parsed, logged, or retained.",
         policy: `${baseUrl}/privacy`,
       },
     },
@@ -186,7 +206,7 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       remoteConnector: `${baseUrl}/mcp`,
       remoteNote: "Streamable HTTP, no auth - paste into Claude, Claude Code, Cursor, ChatGPT (Pro+), or VS Code (GitHub Copilot MCP) custom connectors. Pure-CPU tools run free (rate-limited).",
       package: "agent402-mcp",
-      registry: "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402",
+      registry: `https://registry.modelcontextprotocol.io/v0/servers?search=${REPO_NAMESPACE}/agent402`,
     },
     machineReadable: {
       openapi: `${baseUrl}/openapi.json`,
@@ -196,7 +216,9 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       reliability: `${baseUrl}/api/reliability`,
       // Resolve a task to the right tool in one call (skip the exploration step).
       findTool: `${baseUrl}/api/find?q={task}`,
-      // Public on-chain ranking of every x402 seller by Base USDC settled volume.
+      // Public on-chain ranking of x402 sellers by Base USDC settled volume.
+      // A top-N slice per request (25 default, 50 ceiling unauthenticated);
+      // `totalSellers` in the response carries how many are ranked in all.
       leaderboard: `${baseUrl}/api/leaderboard`,
     },
     // Neutral cross-seller discovery surface - same router we use ourselves,
@@ -209,9 +231,10 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       neutralRouter: `${baseUrl}/api/route`,
       sellerIndex: `${baseUrl}/api/index`,
       sellerIndexHtml: `${baseUrl}/marketplace`,
-      // On-chain ranking of every seller in the Bazaar by Base USDC settled
-      // volume. Same router, different sort key - closes the loop on
-      // discovery: find a tool, route to a seller, see who's most used.
+      // On-chain ranking of Bazaar sellers by Base USDC settled volume, head
+      // of the board first - a ranked page, never the whole board in one GET.
+      // Same router, different sort key - closes the loop on discovery: find a
+      // tool, route to a seller, see who's most used.
       leaderboard: `${baseUrl}/api/leaderboard`,
       leaderboardHtml: `${baseUrl}/leaderboard`,
       // The MPP side of the same primitives: a live-verified index of sellers
@@ -241,7 +264,9 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
         body: { query: "ocr image", top: 3, include: "external" },
       },
       sources: ["self", "Coinbase CDP Bazaar"],
-      refreshSeconds: { discovery: 3600, crawl: 300, leaderboard: 3600 },
+      // Read from the crawler's own timers; "crawl: 300" stood here while the
+      // crawler ran every 1800 s.
+      refreshSeconds: { discovery: DISCOVERY_INTERVAL_SECONDS, crawl: CRAWL_INTERVAL_SECONDS, leaderboard: 3600 },
     },
     trust: {
       onchainRevenueProof: wallet
@@ -255,8 +280,20 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
       // testedBeforeEveryDeploy: the two catalog sweeps exclude the metered
       // slugs by design (CI holds no third-party keys and must not spend
       // upstream), so the honest answer names the exemption and its size.
-      testedBeforeEveryDeploy: "every non-metered route answers its own documented example before each deploy; the metered routes (third-party keys, real upstream spend) are exempt and covered by the daily paid canary instead",
-      productionHeartbeatMinutes: 15,
+      // A few non-metered routes sit behind an upstream that refuses CI's
+      // runners; the lenient sweep still calls them and fails only on our own
+      // errors, so the sentence is scoped to what the sweeps enforce. The
+      // metered count is derived from src/metered-slugs.js over this catalog.
+      testedBeforeEveryDeploy: (() => {
+        const ms = catalog ? countMeteredSkip(catalog, SKILL_PACKS) : null;
+        return `every non-metered route is called with its own documented example before each deploy and an error from our own code blocks the release; the metered routes (third-party keys, real upstream spend${ms ? `; ${ms.metered} of ${ms.total} priced routes here` : ""}) are exempt, the daily paid canary buys a sample of them and an offline probe checks the report inputs`;
+      })(),
+      // The interval of the observer that keeps it: the Cloudflare cron runs
+      // every 5 minutes (workers/status-probe/wrangler.toml). The GitHub
+      // schedule asks for 15 and is delivered far less often, so 15 was the
+      // request, not the cadence.
+      productionHeartbeatMinutes: 5,
+      productionHeartbeat: "a Cloudflare cron probes every 5 minutes; a GitHub schedule adds its own observations at irregular intervals; per-component observation counts are at /api/status",
       // deterministic: true was false for the /v1 gateway tiers, every report
       // product, and the image, speech, transcription, embedding and
       // AI-answer tools. The string says which is which.
@@ -276,7 +313,12 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
  * verify it independently. Liveness facts come from the live stats object; the
  * guarantees are operational facts about how the service is built and watched.
  */
-export function reliabilityReport({ baseUrl, network, wallet, stats, observedStatus = null }) {
+export function reliabilityReport({ baseUrl, network, wallet, stats, observedStatus = null, meteredSkip = null }) {
+  // Exact count of priced routes the catalog sweeps skip as metered, derived
+  // from src/metered-slugs.js (the list the sweeps read) over the live catalog.
+  const skipped = meteredSkip && Number.isFinite(meteredSkip.metered) && Number.isFinite(meteredSkip.total)
+    ? `${meteredSkip.metered} of this server's ${meteredSkip.total} priced routes`
+    : null;
   const explorer = network === "base-sepolia" ? "https://sepolia.basescan.org" : "https://basescan.org";
   return {
     service: "Agent402.Tools",
@@ -299,13 +341,12 @@ export function reliabilityReport({ baseUrl, network, wallet, stats, observedSta
     },
     guarantees: [
       {
-        // Was "Every tool". It is not every tool: CI deliberately skips 20 of
-        // 528 endpoints (18 Brave-backed, 2 E2B) because exercising them spends
-        // real money on a metered upstream on every run, and the sweep once
-        // cost ~4,500 billed Brave queries in a month. The skip is the right
-        // call; claiming otherwise was not, and "every" is the kind of word a
-        // reader can check against our own open CI logs.
-        claim: "Every tool is called with its own documented example in CI, and the release is blocked on any failure - except 20 of 528 endpoints backed by metered third-party APIs (Brave, E2B), which are skipped so a CI run does not spend on every push and are covered instead by the post-deploy paid canary and a dedicated live test.",
+        // Was "Every tool". It is not every tool: CI deliberately skips the
+        // metered routes because exercising them spends real money upstream on
+        // every run. The count is derived (meteredSkip over the live catalog,
+        // from src/metered-slugs.js, the list both sweeps read), never typed:
+        // a typed "20 of 528" here went stale as the metered set grew.
+        claim: `Every tool CI can run without a third-party key is called with its own documented example, and an error from our own code blocks the release. The metered tools (search, the model gateway, the reports and other keyed or upstream-billed tools${skipped ? `: ${skipped}` : ""}) are skipped so a CI run never spends upstream; the daily paid canary buys a sample of them and an offline probe checks the report inputs.`,
         verify: `${baseUrl}/openapi.json`,
         evidence: `${REPO}/actions/workflows/deploy.yml`,
       },
@@ -316,10 +357,14 @@ export function reliabilityReport({ baseUrl, network, wallet, stats, observedSta
         // and a Cloudflare cron), which is the part actually worth claiming,
         // and the measured rate is better than the number we advertised.
         // Measured over 24h at the time of writing: 378 observations for
-        // health/catalog/MCP/paywall/rails (~3.8 min apart) and 90 for the
-        // proof-of-work paid path (~16 min apart), the latter lower because
-        // only the GitHub observer holds the credentials to make a paid call.
-        claim: "Two independent observers outside production (a GitHub schedule and a Cloudflare cron on separate infrastructure) probe the live instance - health, catalog, MCP, the 402 paywall, rails - and file a public issue on failure. Measured over 24h: ~378 observations per component, about one every 4 minutes; the proof-of-work paid path is probed by the GitHub observer alone at ~16 minute intervals. Per-component uptime and observation counts are published at /api/status.",
+        // health/catalog/MCP/paywall/rails (~3.8 min apart). The proof-of-work
+        // paid path was then observed by the GitHub heartbeat alone; since
+        // 2026-09-28 the Cloudflare cron walks it too, with a probe-only
+        // challenge (src/pow.js), so the claim names both and quotes that
+        // cadence as a schedule, not as a measurement. The two walk different
+        // challenges, which is why /status judges paid-call per observer
+        // (stateFromSources in src/status-store.js) and the claim says so.
+        claim: "Two independent observers outside production (a GitHub schedule and a Cloudflare cron on separate infrastructure) probe the live instance - health, catalog, MCP, the 402 paywall, rails and the proof-of-work paid path - and file a public issue on failure. The Cloudflare cron runs every 5 minutes and the GitHub schedule adds its own runs; the paid path is walked end to end by both observers, the GitHub schedule on the challenge a buyer is issued and the Cloudflare cron on a low-difficulty probe challenge every 5 minutes, and a failure either records stands until that same observer sees the path work again. Per-component uptime and observation counts are published at /api/status.",
         verify: `${baseUrl}/health`,
         evidence: `${REPO}/issues?q=label%3Aheartbeat`,
       },
@@ -329,11 +374,11 @@ export function reliabilityReport({ baseUrl, network, wallet, stats, observedSta
         evidence: wallet ? `${explorer}/address/${wallet}#tokentxns` : null,
       },
       {
-        claim: "Deterministic utilities: no LLM in the serving path of the utility tools - the same input always yields the same output. The /v1 gateway and the report products are model-backed and priced as such.",
+        claim: "No language model writes the answer of a utility tool: a pure-computation tool returns the same output for the same input, and a live-data tool returns its source's current reading. The /v1 gateway, the report products and the media tools are model-backed and priced as such, and a judgment model can choose among candidates on the router.",
         verify: `${baseUrl}/openapi.json`,
       },
       {
-        claim: "Non-custodial on the payment rails: an agent signs with its own key and settlement goes wallet to wallet, so no customer key or crypto balance is ever held. Two card paths are NOT non-custodial and are named as such: prepaid credits are a balance we hold until spent, and card report purchases are held by the payment processor.",
+        claim: "Non-custodial on the payment rails: an agent signs with its own key and settlement goes wallet to wallet, so no customer key or crypto balance is ever held. One card path is NOT non-custodial and is named as such: a prepaid credits balance (credits are no longer sold; issued keys still spend) is money we hold until spent. A card report is charged at checkout and refunded to the card automatically if generation fails.",
         verify: `${baseUrl}/llms.txt`,
       },
       {

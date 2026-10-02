@@ -175,6 +175,72 @@ const NOW = Date.UTC(2026, 6, 25, 12, 0, 0); // 2026-07-25T12:00:00Z
     overallState([c("api", "operational")]) === "operational");
 }
 
+// ---- paid-call is judged per observer, not newest-row-wins (2026-09-28) ----
+// The two observers of paid-call walk DIFFERENT proof-of-work challenges: the
+// GitHub heartbeat walks the one a buyer is issued, the Cloudflare Worker a
+// low-difficulty probe challenge with its own token and verify branch. With
+// newest-row-wins, the Worker's "ok" every 5 minutes overwrote a failure only
+// the buyer's path had, so /status read operational while the heartbeat was
+// failing. A failure from either observer must stand until THAT observer sees
+// the path work again or its own reading goes stale.
+{
+  const { stateFromSources, latestBySource } = await import("../src/status-store.js");
+  const { COMPONENTS, PAID_CALL_SOURCES, statusSnapshot } = await import("../src/status.js");
+  const HB = PAID_CALL_SOURCES.heartbeat, CF = PAID_CALL_SOURCES.worker;
+  const paid = COMPONENTS.find((c) => c.key === "paid-call");
+  const opts = { nowMs: NOW, staleAfterMs: paid.staleAfterMs, sourceStaleAfterMs: paid.sourceStaleAfterMs };
+  const row = (source, agoMs, ok, detail = null) => ({ source, ts: NOW - agoMs, ok: ok ? 1 : 0, detail });
+
+  check("paid-call is judged per source", paid.perSource === true);
+  const hbFailWorkerOk = stateFromSources([row(HB, 60_000, false, "pow-paid-call"), row(CF, 1000, true)], opts);
+  check("a heartbeat failure is NOT cleared by a newer Worker success", hbFailWorkerOk.state === "outage");
+  check("the outage names the observer that saw it and its detail", hbFailWorkerOk.source === HB && hbFailWorkerOk.detail === "pow-paid-call");
+  check("each observer's own reading is published beside the verdict",
+    hbFailWorkerOk.sources.length === 2 && hbFailWorkerOk.sources.some((s) => s.source === CF && s.state === "operational"));
+  check("a Worker failure is NOT cleared by a newer heartbeat success",
+    stateFromSources([row(CF, 60_000, false), row(HB, 1000, true)], opts).state === "outage");
+  check("a 2h-old heartbeat failure still stands against a 1-minute-old Worker success (heartbeat bound is 3h)",
+    stateFromSources([row(HB, 2 * 3600_000, false), row(CF, 60_000, true)], opts).state === "outage");
+  check("a heartbeat failure past its own bound no longer votes; the fresh Worker decides",
+    stateFromSources([row(HB, 4 * 3600_000, false), row(CF, 60_000, true)], opts).state === "operational");
+  check("a Worker failure ages out on the Worker's cadence (45 min), not the heartbeat's 3h",
+    stateFromSources([row(CF, 50 * 60_000, false), row(HB, 2 * 3600_000, true)], opts).state === "operational");
+  check("both observers operational is operational", stateFromSources([row(HB, 3600_000, true), row(CF, 60_000, true)], opts).state === "operational");
+  check("every reading stale is unknown, not operational",
+    stateFromSources([row(HB, 4 * 3600_000, true), row(CF, 50 * 60_000, true)], opts).state === "unknown");
+  check("never observed is unknown", stateFromSources([], opts).state === "unknown");
+  check("an observer with no bound of its own falls back to the component's",
+    stateFromSources([row("backfill", 2 * 3600_000, false)], opts).state === "outage");
+
+  // End to end through the store and the snapshot /api/status serves.
+  recordProbe({ ts: NOW - 60_000, source: HB, component: "paid-call", ok: false, detail: "pow-paid-call" });
+  recordProbe({ ts: NOW - 1000, source: CF, component: "paid-call", ok: true });
+  check("latestBySource returns one row per observer", latestBySource("paid-call").length === 2);
+  let snap = statusSnapshot({ baseUrl: "https://example.test", nowMs: NOW });
+  const pc = () => snap.components.find((c) => c.key === "paid-call");
+  check("the snapshot does not read paid-call operational over a live heartbeat failure", pc().current.state === "outage");
+  // The heartbeat recovering on its OWN path is what clears it.
+  recordProbe({ ts: NOW - 500, source: HB, component: "paid-call", ok: true });
+  snap = statusSnapshot({ baseUrl: "https://example.test", nowMs: NOW });
+  check("the heartbeat's own later success clears its failure", pc().current.state === "operational");
+
+  // Scoped: every other component still reads newest-row-wins, because both
+  // observers check the same thing there and a newer success IS recovery.
+  recordProbe({ ts: NOW - 60_000, source: HB, component: "catalog", ok: false, detail: "catalog(1)" });
+  recordProbe({ ts: NOW - 1000, source: CF, component: "catalog", ok: true });
+  snap = statusSnapshot({ baseUrl: "https://example.test", nowMs: NOW });
+  check("a component whose observers walk the same path still reads its newest row",
+    snap.components.find((c) => c.key === "catalog").current.state === "operational");
+
+  // The source names are the observers' own; a rename on either side would
+  // silently drop that observer onto the component-wide bound.
+  const { readFileSync } = await import("node:fs");
+  const hbScript = readFileSync(new URL("./heartbeat-probe.sh", import.meta.url), "utf8");
+  const worker = readFileSync(new URL("../workers/status-probe/src/index.js", import.meta.url), "utf8");
+  check(`the heartbeat records under "${HB}"`, hbScript.includes(`source:"${HB}"`));
+  check(`the Worker records under "${CF}"`, worker.includes(`source: "${CF}"`));
+}
+
 // ---- the strip window and the footer figure must agree (2026-09-18) ----
 // The per-component footer reads windows[`${STRIP_DAYS}d`]. That key is only
 // present because 30d happens to be one of the WINDOWS rows; set STRIP_DAYS to
@@ -188,6 +254,28 @@ const NOW = Date.UTC(2026, 6, 25, 12, 0, 0); // 2026-07-25T12:00:00Z
     snap.components.every((c) => c.windows && c.windows[`${STRIP_DAYS}d`] && typeof c.windows[`${STRIP_DAYS}d`].observed === "number"));
   check(`the strip renders exactly STRIP_DAYS bars (${STRIP_DAYS})`,
     snap.components.every((c) => Array.isArray(c.daily) && c.daily.length === STRIP_DAYS));
+}
+
+// ---- each window counts its own span (2026-10-02) ----
+// The rows read for a component reach back STRIP_DAYS only, and every window
+// was filtered from them, so the 90-day figure carried the 30-day count.
+{
+  const { statusSnapshot } = await import("../src/status.js");
+  const T = Date.UTC(2026, 9, 2, 12, 0, 0);
+  const K = "api";
+  // 10 probes 60 days ago (one failed), 5 probes 2 days ago.
+  recordProbes([
+    ...Array.from({ length: 10 }, (_, i) => ({ ts: T - 60 * DAY + i * 60000, source: "w-test", component: K, ok: i !== 0 })),
+    ...Array.from({ length: 5 }, (_, i) => ({ ts: T - 2 * DAY + i * 60000, source: "w-test", component: K, ok: true })),
+  ]);
+  const before = probeRows(K, T - 90 * DAY).length;
+  const snap = statusSnapshot({ baseUrl: "https://example.test", nowMs: T });
+  const c = snap.components.find((x) => x.key === K);
+  const in90 = probeRows(K, T - 90 * DAY), in30 = probeRows(K, T - 30 * DAY);
+  check(`the 90-day window counts every probe in 90 days (${c.windows["90d"].observed} of ${in90.length})`, c.windows["90d"].observed === in90.length && before === in90.length);
+  check(`the 30-day window counts its own span (${c.windows["30d"].observed} of ${in30.length})`, c.windows["30d"].observed === in30.length);
+  check("the 90-day and 30-day denominators differ when probes predate the strip", c.windows["90d"].observed > c.windows["30d"].observed);
+  check("the 90-day pass count excludes the failed probe", c.windows["90d"].down === in90.filter((r) => !r.ok).length);
 }
 
 _resetForTest();

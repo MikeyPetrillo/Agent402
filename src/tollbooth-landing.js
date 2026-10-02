@@ -12,6 +12,7 @@
 // insertion, matching the original pre-migration implementation.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
+import { repoUrl } from "./repo-link.js";
 export function tollboothLandingPage(baseUrl) {
   const title = "Tollbooth - charge AI bots that crawl your site (30-second install)";
   const description = "agent402-tollbooth is the open-source monetization gateway: a self-hostable pay-per-crawl gate for any origin - no platform, no waitlist. Drop it in front of any Node site (Express, Next.js, Cloudflare Worker, Docker) and AI crawlers pay USDC on Base (or Solana, Polygon, Arbitrum, Stellar) - or burn CPU - to read your content. Humans browse free.";
@@ -67,7 +68,7 @@ export function tollboothLandingPage(baseUrl) {
   const body = `<div class="tb-wrap">
 
 <h1>Charge AI bots that crawl your site</h1>
-<p class="lede"><b>agent402-tollbooth</b> is the open-source monetization gateway - a self-hostable pay-per-crawl gate that is live today, no waitlist, and works in front of <em>any</em> origin, not just sites behind a platform proxy. Drop it in front of any Node site and AI crawlers pay USDC on Base (or Solana, Polygon, Arbitrum, Stellar) - or burn CPU - to read your content. Humans browse free, funds settle straight to your wallet with a 0% take. <a href="https://github.com/MikeyPetrillo/Agent402/wiki/Pay-per-crawl-Walkthrough" rel="noopener">30-min walkthrough →</a> <a href="/compare" rel="noopener">vs. platform gateways →</a></p>
+<p class="lede"><b>agent402-tollbooth</b> is the open-source monetization gateway - a self-hostable pay-per-crawl gate that is live today, no waitlist, and works in front of <em>any</em> origin, not just sites behind a platform proxy. Drop it in front of any Node site and AI crawlers pay USDC on Base (or Solana, Polygon, Arbitrum, Stellar) - or burn CPU - to read your content. Humans browse free, funds settle straight to your wallet with a 0% take. <a href="${repoUrl("wiki/Pay-per-crawl-Walkthrough")}" rel="noopener">30-min walkthrough →</a> <a href="/compare" rel="noopener">vs. platform gateways →</a></p>
 
 <div class="cloud-cta">
   <span>Managing multiple sites or running an SEO agency? Multi-site rollup, alerts, white-label dashboard, 20% partner program.</span>
@@ -109,17 +110,17 @@ export function tollboothLandingPage(baseUrl) {
 
 <h2>Not running Express?</h2>
 <div class="deploy">
-  <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare" rel="noopener"><span class="t">Cloudflare Worker</span><span class="s">One <code>wrangler deploy</code>. KV-backed.</span></a>
-  <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs" rel="noopener"><span class="t">Next.js middleware</span><span class="s">One file in <code>middleware.ts</code>.</span></a>
-  <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/docker" rel="noopener"><span class="t">Docker reverse proxy</span><span class="s">Any backend, any language.</span></a>
-  <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/wordpress" rel="noopener"><span class="t">WordPress plugin <small style="color:var(--accent);">beta</small></span><span class="s">Drop-in PHP. Settings → Agent402 Tollbooth.</span></a>
+  <a href="${repoUrl("tree/main/tollbooth/deploy/cloudflare")}" rel="noopener"><span class="t">Cloudflare Worker</span><span class="s">One <code>wrangler deploy</code>. KV-backed.</span></a>
+  <a href="${repoUrl("tree/main/tollbooth/deploy/nextjs")}" rel="noopener"><span class="t">Next.js middleware</span><span class="s">One file in <code>middleware.ts</code>.</span></a>
+  <a href="${repoUrl("tree/main/tollbooth/deploy/docker")}" rel="noopener"><span class="t">Docker reverse proxy</span><span class="s">Any backend, any language.</span></a>
+  <a href="${repoUrl("tree/main/tollbooth/deploy/wordpress")}" rel="noopener"><span class="t">WordPress plugin <small style="color:var(--accent);">beta</small></span><span class="s">Drop-in PHP. Settings → Agent402 Tollbooth.</span></a>
 </div>
 
 <h2>More</h2>
 <div class="links">
-  <a href="https://github.com/MikeyPetrillo/Agent402/wiki/Pay-per-crawl-Walkthrough" rel="noopener">30-min walkthrough</a>
-  <a href="https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth" rel="noopener">README + reference</a>
-  <a href="https://github.com/MikeyPetrillo/Agent402/blob/main/tollbooth/demo.js" rel="noopener"><code>node demo.js</code></a>
+  <a href="${repoUrl("wiki/Pay-per-crawl-Walkthrough")}" rel="noopener">30-min walkthrough</a>
+  <a href="${repoUrl("tree/main/tollbooth")}" rel="noopener">README + reference</a>
+  <a href="${repoUrl("blob/main/tollbooth/demo.js")}" rel="noopener"><code>node demo.js</code></a>
   <a href="https://www.npmjs.com/package/agent402-tollbooth" rel="noopener">npm</a>
   <a href="/guides/coinbase-business-get-paid-by-agents">Get paid into a Coinbase Business account</a>
 </div>

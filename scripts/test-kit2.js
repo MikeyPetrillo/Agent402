@@ -127,6 +127,42 @@ await check("calc", { formula: "100 / 4" }, (o) => o.result === 25, "alias: form
 await check("stats", { numbers: [2, 4, 4, 4, 5, 5, 7, 9] }, (o) => o.mean === 5 && o.median === 4.5 && o.mode === 4 && o.stddev === 2);
 await check("unit-convert", { value: 100, from: "f", to: "c" }, (o) => Math.abs(o.result - 37.7778) < 0.01);
 await check("unit-convert", { value: 1, from: "km", to: "m" }, (o) => o.result === 1000, "km→m");
+
+// THE OBVIOUS OTHER SPELLING IS ACCEPTED (2026-09-21). One real buyer made
+// ~18 calls in a day and got a 400 on most of them: "kilopascal" while we
+// listed kilopascals, "bar" while we listed bars, "millilitres", "mechanical-
+// horsepower", "btu-per-hour", "statute miles" - each a unit we convert, one
+// spelling away, refused with a message naming the spelling we wanted. Every
+// case below is a verbatim value from that buyer's failures.
+await check("unit-convert", { value: 1, from: "kilopascal", to: "pascals" }, (o) => o.result === 1000, "singular: kilopascal → pascals");
+await check("unit-convert", { value: 1, from: "bar", to: "pascals" }, (o) => o.result === 100000, "singular: bar → pascals");
+await check("unit-convert", { value: 1000, from: "millilitres", to: "liters" }, (o) => Math.abs(o.result - 1) < 1e-9, "British spelling: millilitres → liters");
+await check("unit-convert", { value: 1, from: "mechanical-horsepower", to: "watts" }, (o) => Math.abs(o.result - 745.7) < 0.5, "synonym: mechanical-horsepower → watts");
+await check("unit-convert", { value: 1, from: "btu-per-hour", to: "watts" }, (o) => Math.abs(o.result - 0.2931) < 0.001, "plural inside x-per-y: btu-per-hour → watts");
+await check("unit-convert", { value: 1, from: "statute miles", to: "kilometers" }, (o) => Math.abs(o.result - 1.609344) < 1e-6, "space + qualifier: statute miles → kilometers");
+await check("unit-convert", { value: 1, from: "metre", to: "centimeters" }, (o) => o.result === 100, "British singular: metre → centimeters");
+
+// ...AND A NAME THAT RESOLVES NOWHERE STILL GETS THE HONEST 400. The widening
+// must never turn an unknown unit into a guess. "poundal", "cubit" and "shaku"
+// are units the table does not carry ("pood" and "verst" were on this list
+// until the imperial Russian measures were added on 2026-09-25).
+{
+  const { normalizeUnitId } = await import("../src/tools/kit2.js");
+  const { UNIT_CATEGORIES } = await import("../src/tools/convert-gen.js");
+  const known = new Set(Object.values(UNIT_CATEGORIES).flatMap((c) => Object.keys(c.units)));
+  for (const u of ["poundal", "cubit", "shaku"]) {
+    try { await bySlug["unit-convert"].handler({ value: 1, from: u, to: "kilograms" }); fails.push(`unit-convert: "${u}" should be a 400, it converted`); }
+    catch (e) { if (e.statusCode === 400 && /Unknown unit/.test(e.message)) { pass++; console.log(`✓ unit-convert        unknown "${u}" is still a self-explaining 400`); } else fails.push(`unit-convert: "${u}" threw ${e.statusCode} ${e.message}`); }
+  }
+  // The guard that makes the widening safe: whatever the normaliser returns is
+  // an id the table has. A fuzz over mangled spellings of every known id.
+  let bad = 0, resolved = 0;
+  for (const id of known) for (const v of [id.toUpperCase(), id.replace(/s$/, ""), id.replace(/-/g, " "), id + "x", "statute-" + id]) {
+    const r = normalizeUnitId(v); if (r === null) continue; resolved++; if (!known.has(r)) bad++;
+  }
+  if (bad === 0 && resolved > 50) { pass++; console.log(`✓ unit-convert        normaliser only ever returns a KNOWN id (${resolved} resolutions, 0 invented)`); }
+  else fails.push(`unit-convert: normaliser returned ${bad} unknown ids across ${resolved} resolutions`);
+}
 await check("percentage", { op: "change", a: 80, b: 100 }, (o) => o.result === 25);
 await check("percentage", { op: "of", a: 25, b: 200 }, (o) => o.result === 50, "of");
 await check("number-format", { value: 1234567.891, decimals: 2 }, (o) => o.result === "1,234,567.89");

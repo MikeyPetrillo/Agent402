@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Agent402 Live</title>
+<meta name="description" content="Paid API calls over x402 on Base and MPP on Tempo, read from the chain as they settle.">
+<link rel="icon" href="/brand.svg">
+<style>
+  @font-face { font-family: Geist; font-weight: 400; font-display: swap; src: url(/fonts/geist-400-latin.woff2) format("woff2"); }
+  @font-face { font-family: Geist; font-weight: 500; font-display: swap; src: url(/fonts/geist-500-latin.woff2) format("woff2"); }
+  @font-face { font-family: Geist; font-weight: 600; font-display: swap; src: url(/fonts/geist-600-latin.woff2) format("woff2"); }
+  @font-face { font-family: "Geist Mono"; font-weight: 400; font-display: swap; src: url(/fonts/geist-mono-400-latin.woff2) format("woff2"); }
+  @font-face { font-family: "Geist Mono"; font-weight: 700; font-display: swap; src: url(/fonts/geist-mono-700-latin.woff2) format("woff2"); }
+  :root {
+    --paper:#0B0C0E; --card:#141619; --surface:#16191D; --footer:#0E1012;
+    --ink:#E9EAEC; --muted:#B3B9C0; --faint:#8B929A; --dk-muted:#9AA1A9;
+    --hairline:#24282C; --border:#2C3136; --border2:#3A4148;
+    --accent:#34A877; --accent-lit:#9EF0B0;
+    --t-bg:#0A0E14; --t-panel:#0F141C; --t-rule:#1E2733; --t-rule2:#2A3542; --t-ink:#DCE4EE; --t-dim:#8A97A8; --t-faint:#7C8AA0;
+    --x402:#6EE7A8; --mpp:#A78BFA;
+    --sans: Geist, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "Geist Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 var(--sans); }
+  a { color: inherit; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 0 30px; }
+  @media (max-width: 640px) { .wrap { padding: 0 16px; } }
+
+  .status { background: var(--surface); border-bottom: 1px solid var(--border); font: 12px/1 var(--mono); letter-spacing: .02em; }
+  .status .wrap { display: flex; justify-content: space-between; gap: 16px; padding-top: 8px; padding-bottom: 8px; }
+  .status .l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .status b { color: var(--accent-lit); } .status .m { color: var(--dk-muted); }
+
+  nav { position: sticky; top: 0; z-index: 20; background: rgba(11,12,14,.82); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--hairline); }
+  nav .wrap { display: flex; justify-content: space-between; align-items: center; padding-top: 14px; padding-bottom: 14px; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 600; font-size: 17px; letter-spacing: -.01em; }
+  .pill-live { font: 11px var(--mono); letter-spacing: .14em; color: var(--accent-lit); border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px; }
+  .nav-r { display: flex; align-items: center; gap: 10px; }
+  .conn { display: flex; align-items: center; gap: 8px; font: 12px var(--mono); color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); position: relative; }
+  .dot.live { background: var(--accent); }
+  .dot.live::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--accent); animation: ring 2s infinite; }
+  @keyframes ring { from { transform: scale(.6); opacity: .9; } to { transform: scale(1.6); opacity: 0; } }
+  .chip { font: 12px var(--mono); border: 1px solid var(--hairline); background: var(--card); border-radius: 999px; padding: 8px 14px; text-decoration: none; }
+  .btn { font: 500 14px var(--sans); color: #0B0C0E; background: linear-gradient(180deg,#F6F7F8,#D9DDE1); box-shadow: inset 0 1px 0 #fff, 0 8px 20px rgba(0,0,0,.35); border-radius: 999px; padding: 9px 16px; text-decoration: none; white-space: nowrap; }
+  @media (max-width: 640px) { .chip, .conn span { display: none; } }
+
+  .hero .wrap { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 32px 48px; padding-top: 56px; padding-bottom: 28px; }
+  .hero-l { flex: 1 1 460px; }
+  h1 { font-weight: 500; font-size: clamp(40px, 5.4vw, 68px); line-height: 1; letter-spacing: -.035em; margin: 0; text-wrap: balance; }
+  h1 span { color: var(--faint); }
+  .hero p { margin: 20px 0 0; max-width: 560px; font-size: 17px; line-height: 1.6; color: var(--muted); }
+  .stats { display: flex; gap: 36px; flex-wrap: wrap; }
+  .stat .n { font-weight: 500; font-size: clamp(30px, 3.4vw, 44px); letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .stat .k { margin-top: 10px; font: 10.5px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--dk-muted); }
+  .stat.usd .n { color: var(--accent-lit); }
+
+  .stage { position: relative; border: 1px solid var(--t-rule); border-radius: 18px; overflow: hidden; background: radial-gradient(120% 90% at 50% 40%, #0F141C 0%, #0A0E14 60%, #080B10 100%); box-shadow: 0 18px 40px rgba(0,0,0,.35); }
+  .toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--t-rule); background: rgba(15,20,28,.7); }
+  .seg { display: inline-flex; padding: 3px; gap: 2px; border: 1px solid var(--hairline); border-radius: 999px; background: var(--card); }
+  .seg button { font: 12px var(--mono); padding: 6px 14px; border-radius: 999px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #0B0C0E; }
+  .segs { display: flex; gap: 10px; flex-wrap: wrap; }
+  .legend { display: flex; gap: 16px; font: 11px var(--mono); color: var(--t-dim); }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+  .legend .x { background: var(--x402); box-shadow: 0 0 8px var(--x402); } .legend .p { background: var(--mpp); box-shadow: 0 0 8px var(--mpp); }
+  .tools { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  #fs { display: inline-flex; align-items: center; gap: 8px; font: 12px var(--mono); padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hairline); background: var(--card); color: var(--muted); cursor: pointer; }
+  #fs:hover, #fs:focus-visible { color: var(--t-ink); border-color: var(--t-dim); }
+  #fs .fs-out, .stage.is-full #fs .fs-in { display: none; } .stage.is-full #fs .fs-out { display: inline; }
+  /* Full screen: the whole stage fills the viewport and the scene takes every
+     pixel between the toolbar and the LATEST bar. Native fullscreen where the
+     browser has it; a fixed overlay where it does not (iPhone Safari). */
+  .stage.is-full { position: fixed; inset: 0; z-index: 100; border: 0; border-radius: 0; box-shadow: none; display: flex; flex-direction: column; }
+  .stage.is-full .field { flex: 1; height: auto; min-height: 0; }
+  .stage:fullscreen { width: 100vw; height: 100vh; }
+  body.stage-full { overflow: hidden; }
+  .field { position: relative; height: clamp(420px, 58vh, 620px); }
+  .field canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #mode { position: absolute; left: 14px; bottom: 10px; font: 10.5px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--t-faint); }
+  .latest { display: flex; align-items: center; gap: 10px; padding: 11px 16px; border-top: 1px solid var(--t-rule); background: rgba(15,20,28,.7); overflow: hidden; white-space: nowrap; }
+  .latest .lbl { font: 10.5px var(--mono); letter-spacing: .14em; color: var(--t-faint); }
+  .latest a { display: inline-flex; gap: 8px; align-items: center; font: 11px var(--mono); color: var(--t-dim); padding: 4px 10px; border: 1px solid var(--t-rule); border-radius: 999px; background: var(--t-bg); text-decoration: none; flex: none; }
+  .latest a .nm { color: var(--t-ink); } .latest a .amt { color: var(--x402); font-weight: 700; } .latest a .amt.mpp { color: #C4B5FD; }
+  .latest a i { width: 7px; height: 7px; border-radius: 50%; }
+
+  section.board { padding-top: 40px; }
+  .label { font: 12px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--faint); margin: 0 0 14px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 10px; }
+  .card { display: grid; grid-template-columns: 34px minmax(0,1fr) auto; gap: 12px; align-items: center; padding: 10px 14px; border: 1px solid var(--t-rule); border-radius: 12px; background: rgba(20,27,36,.85); text-decoration: none; }
+  a.card:hover { border-color: var(--border2); }
+  .tile { width: 34px; height: 34px; border-radius: 9px; overflow: hidden; display: grid; place-items: center; font: 700 9.5px var(--mono); color: #F3F4F5; }
+  .tile img { width: 100%; height: 100%; object-fit: contain; background: #F3F4F5; padding: 5px; }
+  .card .nm { font-weight: 500; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .sub { font: 10.5px var(--mono); color: var(--t-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .usd { font: 700 13px var(--mono); font-variant-numeric: tabular-nums; }
+
+  .read { padding-top: 56px; padding-bottom: 56px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px 32px; }
+  .read p { grid-column: span 2; margin: 0; max-width: 760px; font-size: 16px; line-height: 1.65; color: var(--muted); }
+  @media (max-width: 700px) { .read p { grid-column: auto; } }
+  footer { background: var(--footer); border-top: 1px solid var(--hairline); font: 12px var(--mono); color: var(--dk-muted); }
+  footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 14px 22px; padding-top: 26px; padding-bottom: 26px; }
+  footer nav { all: unset; display: flex; flex-wrap: wrap; gap: 8px 22px; }
+  footer a { text-decoration: none; } footer a:hover { color: var(--ink); }
+
+  #tip { position: absolute; display: none; max-width: 280px; background: #0B1016; border: 1px solid var(--accent-lit); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; z-index: 5; }
+  #tip a { color: var(--accent-lit); } #tip .amt { font-size: 16px; font-weight: 600; } #tip .muted { color: var(--t-dim); word-break: break-all; font-family: var(--mono); font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="status"><div class="wrap"><span class="l">HTTP/1.1 <b>402</b> PAYMENT REQUIRED · <span class="m">x402 on Base + MPP on Tempo, read from the chain</span></span><span class="m" id="clock"></span></div></div>
+<nav><div class="wrap">
+  <a class="brand" href="https://agent402.tools/"><img src="/brand.svg" width="22" height="22" alt="">Agent402 <span class="pill-live">LIVE</span></a>
+  <div class="nav-r">
+    <span class="conn"><i class="dot" id="dot"></i><span id="conn">connecting</span></span>
+    <a class="chip" href="https://agent402.tools/leaderboard">leaderboard</a>
+    <a class="btn" href="https://agent402.tools/">agent402.tools →</a>
+  </div>
+</div></nav>
+
+<header class="hero"><div class="wrap">
+  <div class="hero-l">
+    <h1>Paid API calls, <span>live.</span></h1>
+    <p>Every little walker is one settled payment, read from the chain. It wears the logo of the seller it paid and hops into the gate for its price.</p>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="n" id="s-pm">-</div><div class="k">payments / min</div></div>
+    <div class="stat usd"><div class="n" id="s-usd">-</div><div class="k">usdc settled · <span class="w">1h</span></div></div>
+    <div class="stat"><div class="n" id="s-buyers">-</div><div class="k">buyers · <span class="w">1h</span></div></div>
+  </div>
+</div></header>
+
+<main class="wrap">
+  <div class="stage">
+    <div class="toolbar">
+      <div class="segs">
+        <div class="seg" role="group" aria-label="Rail"><button data-rail="all" aria-pressed="true">Both</button><button data-rail="x402" aria-pressed="false">x402</button><button data-rail="mpp" aria-pressed="false">MPP</button></div>
+        <div class="seg" role="group" aria-label="Window"><button data-win="h1" aria-pressed="true">1h</button><button data-win="h24" aria-pressed="false">24h</button></div>
+      </div>
+      <div class="tools">
+        <div class="legend"><span><i class="x"></i>x402 · Base · USDC</span><span><i class="p"></i>MPP · Tempo · USDC.e</span></div>
+        <button id="fs" type="button" aria-pressed="false" aria-label="Full screen" title="Full screen (Esc to exit)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path class="fs-in" d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.6"/><path class="fs-out" d="M6 2v4H2M14 6h-4V2M10 14v-4h4M2 10h4v4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span>Full screen</span></button>
+      </div>
+    </div>
+    <div class="field" id="field">
+      <canvas id="scene" aria-label="Animated view of recent payments"></canvas>
+      <span id="mode">connecting</span>
+      <div id="tip" role="dialog"></div>
+    </div>
+    <div class="latest" id="latest"><span class="lbl">LATEST</span></div>
+  </div>
+
+  <section class="board">
+    <p class="label" id="board-title">Top sellers · last hour</p>
+    <div class="cards" id="cards"></div>
+  </section>
+</main>
+
+<section class="wrap read">
+  <p class="label">How to read this</p>
+  <p>Each walker is one settled payment, read from the chain, wearing the logo of the seller it paid and hopping into the gate for its price: x402 on Base (USDC) to sellers listed in public x402 discovery, and MPP on Tempo (USDC.e) to recipients named in MPP sellers' own 402s. The courier is a payment to Agent402. Names and logos come from sellers' public listings. Tap a walker for the payment and its transaction.</p>
+</section>
+
+<footer><div class="wrap">
+  <a class="brand" href="https://agent402.tools/" style="font-size:15px"><img src="/brand.svg" width="18" height="18" alt="">Agent402</a>
+  <nav><a href="https://agent402.tools/marketplace">marketplace</a><a href="https://agent402.tools/mpp-marketplace">mpp marketplace</a><a href="https://agent402.tools/leaderboard">leaderboard</a><a href="https://agent402.tools/revenue">transactions</a><a href="https://agent402.tools/what-is-x402">what is x402</a><a href="https://agent402.tools/what-is-mpp">what is MPP</a></nav>
+  <span>© 2026 Havok Holdings LLC</span>
+</div></footer>
+<script src="/app.js"></script>
+</body>
+</html>

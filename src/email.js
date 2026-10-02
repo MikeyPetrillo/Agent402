@@ -4,6 +4,7 @@
 // (recommended - the domain is already on Zoho) and Resend. Gated on the
 // provider's key + EMAIL_FROM - a no-op that returns false when unconfigured, so
 // nothing breaks before email is set up. NEVER throws into the caller.
+import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { upgradeOffer } from "./report-upgrade.js";
 
 const RESEND_URL = "https://api.resend.com/emails";
@@ -12,21 +13,99 @@ const ZEPTO_URL = () => (process.env.ZEPTOMAIL_URL || "https://api.zeptomail.com
 
 const key = (n) => (process.env[n] || "").trim();
 
+// Send outcomes. Until 2026-10-01 a refused send returned false with nothing
+// logged, and every caller treats email as best-effort, so when the provider's
+// prepaid credits ran out every report link, credits key, alert confirmation
+// and monitor email stopped going out with no trace anywhere (ZeptoMail
+// answered 429 TM_5001 / LE_102 "Credit exhausted" for over a week). A refusal
+// now logs its status and the provider's error CODE (never an address or a
+// body), and the last outcome is kept on the volume so /api/gateway-status can
+// page on it across restarts.
+const EMAIL_STATUS_FILE = process.env.EMAIL_STATUS_FILE || "/data/email-status.json";
+let outcome = null; // { ok, at, status, code, provider, failuresSinceOk, sentTotal, failedTotal }
+function loadOutcome() {
+  if (outcome) return outcome;
+  try { outcome = JSON.parse(readFileSync(EMAIL_STATUS_FILE, "utf8")); } catch { outcome = null; }
+  if (!outcome || typeof outcome !== "object") outcome = { ok: null, at: null, status: null, code: null, provider: null, failuresSinceOk: 0, sentTotal: 0, failedTotal: 0 };
+  return outcome;
+}
+function persistOutcome() {
+  try { const tmp = EMAIL_STATUS_FILE + ".tmp"; writeFileSync(tmp, JSON.stringify(outcome)); renameSync(tmp, EMAIL_STATUS_FILE); } catch { /* no volume: memory only */ }
+}
+/** Provider error code from a refusal body, bounded and code-shaped only. */
+export function providerErrorCode(bodyText) {
+  try {
+    const j = JSON.parse(bodyText);
+    const c = j?.error?.details?.[0]?.code || j?.error?.code || j?.name || j?.code || null;
+    return c && /^[A-Za-z0-9_.-]{1,40}$/.test(String(c)) ? String(c) : null;
+  } catch { return null; }
+}
+export function noteEmailOutcome(ok, { status = null, code = null, provider = null } = {}) {
+  const o = loadOutcome();
+  o.ok = !!ok; o.at = new Date().toISOString(); o.status = status; o.code = ok ? null : code; o.provider = provider;
+  if (ok) { o.failuresSinceOk = 0; o.sentTotal++; } else { o.failuresSinceOk++; o.failedTotal++; }
+  persistOutcome();
+  if (!ok) console.warn(`[email] send refused by ${provider || "provider"}: HTTP ${status ?? "error"}${code ? ` ${code}` : ""} (${o.failuresSinceOk} in a row since the last delivered send)`);
+}
+/** One word publicly; counts and the last code for the operator. */
+export function emailSendStatus({ full = false } = {}) {
+  if (!emailEnabled()) return { status: "unconfigured" };
+  const o = loadOutcome();
+  const status = o.ok === null ? "unknown" : (o.ok ? "ok" : (o.code === "LE_102" || /credit|quota|limit/i.test(String(o.code || "")) || o.status === 429 ? "exhausted" : "failing"));
+  return full ? { status, lastAt: o.at, lastStatus: o.status, lastCode: o.code, provider: o.provider, failuresSinceOk: o.failuresSinceOk, sentTotal: o.sentTotal, failedTotal: o.failedTotal } : { status };
+}
+
 export function emailEnabled() {
   return Boolean(key("EMAIL_FROM") && (key("ZEPTOMAIL_TOKEN") || key("RESEND_API_KEY")));
 }
 
 /** Send one email via whichever provider is configured. 2xx -> true; never throws. */
-export async function sendEmail({ to, subject, html, text, headers = null }) {
-  if (!emailEnabled() || !to) return false;
-  const from = key("EMAIL_FROM");
+// CAN-SPAM 15 U.S.C. 7704(a)(5): every commercial message must carry the
+// sender's valid physical postal address. Unsubscribe handling was already
+// here; the address was not, and the statute requires BOTH. It is appended in
+// sendEmail rather than in each template because there are four senders
+// (alerts, follow-ups, monitors, digest) and a per-caller footer is one a
+// future sender forgets.
+//
+// Set COMPANY_POSTAL_ADDRESS to the registered address of the entity that
+// sends the mail. Unset, mail still goes out - a missing env var must not
+// black out a paying subscriber's monitor report - but every send warns,
+// because sending without it is the violation the FTC actually brings.
+let postalWarnAt = 0;
+export function postalAddress() {
+  const a = (process.env.COMPANY_POSTAL_ADDRESS || "").trim();
+  if (a) return a;
+  const now = Date.now();
+  if (now - postalWarnAt > 600_000) {
+    postalWarnAt = now;
+    console.warn("[email] COMPANY_POSTAL_ADDRESS is unset - outbound mail is missing the physical address CAN-SPAM requires. Set it on the host.");
+  }
+  return null;
+}
+
+function withPostalFooter(html, text) {
+  const addr = postalAddress();
+  if (!addr) return { html, text };
+  const esc = String(addr).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const line = esc.replace(/\s*\n\s*/g, ", ");
+  return {
+    html: typeof html === "string"
+      ? `${html}\n<p style="margin:18px 0 0;font-size:12px;color:#6b7280;">${line}</p>`
+      : html,
+    text: typeof text === "string" ? `${text}\n\n${String(addr).replace(/\s*\n\s*/g, ", ")}` : text,
+  };
+}
+
+// One provider attempt: true on 2xx. Records the outcome either way.
+async function sendVia(provider, { from, to, subject, html, text, headers }) {
   try {
-    if (key("ZEPTOMAIL_TOKEN")) {
+    let res;
+    if (provider === "zeptomail") {
       // ZeptoMail: token is the FULL "Zoho-enczapikey <token>" value or just the
       // token; accept both. from must be a verified ZeptoMail sender address.
       const tok = key("ZEPTOMAIL_TOKEN");
       const auth = /^Zoho-enczapikey/i.test(tok) ? tok : `Zoho-enczapikey ${tok}`;
-      const res = await fetch(ZEPTO_URL(), {
+      res = await fetch(ZEPTO_URL(), {
         method: "POST",
         headers: { Authorization: auth, "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({
@@ -36,17 +115,35 @@ export async function sendEmail({ to, subject, html, text, headers = null }) {
         }),
         signal: AbortSignal.timeout(12_000),
       });
-      return res.ok;
+    } else {
+      res = await fetch(RESEND_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key("RESEND_API_KEY")}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to: [to], subject, html, text, ...(headers && typeof headers === "object" ? { headers } : {}) }),
+        signal: AbortSignal.timeout(12_000),
+      });
     }
-    // Resend
-    const res = await fetch(RESEND_URL, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key("RESEND_API_KEY")}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: [to], subject, html, text, ...(headers && typeof headers === "object" ? { headers } : {}) }),
-      signal: AbortSignal.timeout(12_000),
-    });
+    const code = res.ok ? null : providerErrorCode(await res.text().catch(() => ""));
+    noteEmailOutcome(res.ok, { status: res.status, code, provider });
     return res.ok;
-  } catch { return false; }
+  } catch (e) {
+    noteEmailOutcome(false, { status: null, code: e?.name === "TimeoutError" ? "timeout" : "network", provider });
+    return false;
+  }
+}
+
+/** Send one email. With both providers configured, ZeptoMail goes first and a
+ *  refused send is retried once on Resend (2026-10-01: ZeptoMail's prepaid
+ *  credits ran out and its account review blocked buying more, which stopped
+ *  every email; a second provider keeps mail flowing through either outage).
+ *  2xx -> true; never throws. */
+export async function sendEmail({ to, subject, html, text, headers = null }) {
+  if (!emailEnabled() || !to) return false;
+  ({ html, text } = withPostalFooter(html, text));
+  const msg = { from: key("EMAIL_FROM"), to, subject, html, text, headers };
+  const providers = [...(key("ZEPTOMAIL_TOKEN") ? ["zeptomail"] : []), ...(key("RESEND_API_KEY") ? ["resend"] : [])];
+  for (const p of providers) if (await sendVia(p, msg)) return true;
+  return false;
 }
 
 /** "Here's your report" email with the durable link. Best-effort. */

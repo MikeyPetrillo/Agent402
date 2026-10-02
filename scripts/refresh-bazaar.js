@@ -51,6 +51,16 @@
 // for (spend/price cap, batch stride) · 2 = misconfigured.
 
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
+import { createHmac } from "node:crypto";
+// The keep-alive pays production from our own burner. It sends the signed
+// X-Heartbeat-Token (when the job holds POW_SECRET) so every accounting
+// surface books these settlements as ours, not as outside demand.
+const heartbeatHeaders = () => {
+  const secret = (process.env.POW_SECRET || "").trim();
+  if (!secret) return {};
+  const minute = Math.floor(Date.now() / 60_000);
+  return { "X-Heartbeat-Token": createHmac("sha256", secret).update(`heartbeat:${minute}`).digest("base64url").slice(0, 32) };
+};
 import { readFileSync, existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 // viem + @x402/* are loaded lazily so DRY_RUN works without them installed.
@@ -74,8 +84,8 @@ const PAY_NETWORK = (process.env.PAY_NETWORK || "base").toLowerCase();
 const MAX_PRICE_USD = Number(process.env.MAX_PRICE_USD || (MODE === "sweep" ? "0.05" : "Infinity"));
 // UPSTREAM_FREE_ONLY=1 sweeps only routes that cost us nothing per call at a
 // third party, so the pass can run daily instead of weekly. The price ceiling
-// is only a PROXY for upstream cost (a $0.002 Blockscout call bills us $0.002
-// upstream); this is the real question, asked of the server. Memory tools are
+// is only a PROXY for upstream cost (a cheap paid-upstream call still bills us
+// per call upstream); this is the real question, asked of the server. Memory tools are
 // admitted by name: they are wallet-keyed rather than compute-payable, and the
 // only resource they consume is our own Railway volume.
 const UPSTREAM_FREE_ONLY = /^(1|true|yes)$/i.test(process.env.UPSTREAM_FREE_ONLY || "");
@@ -331,7 +341,7 @@ async function runMissingMode({ sweep = false } = {}) {
       try {
         const res = await payFetch(url, {
           method: t.method,
-          headers: isGet ? {} : { "Content-Type": "application/json" },
+          headers: { ...heartbeatHeaders(), ...(isGet ? {} : { "Content-Type": "application/json" }) },
           body: isGet ? undefined : JSON.stringify(example),
         });
         lastStatus = res.status;
@@ -534,7 +544,7 @@ async function main() {
       try {
         const res = await payFetch(url, {
           method,
-          headers: isGet ? {} : { "Content-Type": "application/json" },
+          headers: { ...heartbeatHeaders(), ...(isGet ? {} : { "Content-Type": "application/json" }) },
           body: isGet ? undefined : JSON.stringify(meta.example),
         });
         lastStatus = res.status;

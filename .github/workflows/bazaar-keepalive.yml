@@ -16,69 +16,52 @@
 # WEEKLY, not monthly, against a 30-day rule: four missed runs in a row still
 # leave the listings alive, so a broken week is not a cull.
 #
-# The money is close to circular - the CI burner pays OUR payTo, so face value
-# moves between our own wallets and the real cost is the facilitator's
-# settlement fee (CDP: 1,000/month free, then $0.001) plus sponsored gas.
-#
-# NOT entirely circular, and this is what sets the cadence. The ceiling is a
-# PROXY for upstream cost, never an exclusion: at $0.05 the pass also buys the
-# routes that bill a third party per call - the LLM tiers, images, tts,
-# transcribe, code-run (E2B), Brave-backed search, Blockscout (which we pay
-# $0.002 a call upstream), Alchemy, Neynar, and 12 skill packs whose STEPS
-# reach Brave even though the pack's own slug is not metered. Measured
-# 2026-08-31: 97 of the 472 swept routes touch a metered upstream. That spend
-# is real and it is why this runs WEEKLY rather than daily - the rule being
-# defended is 30 days without a settlement, so weekly already carries 4x
-# headroom and daily would buy nothing but 7x the upstream burn.
-#
-# Routes above the ceiling (101 of 573) stay unlisted on purpose: they are the
-# report products and premium tiers, where one sweep of a single $2 pack can
-# burn ~$1.20 upstream. They remain findable via the live 402.
+# The CI burner pays OUR payTo, so most of the money is circular. The price
+# ceiling is a proxy for upstream cost, not an exclusion: some swept routes
+# bill a third party per call, which is why this runs weekly rather than daily.
+# Routes above the ceiling (report products, premium tiers) stay unlisted on
+# purpose and remain findable via the live 402.
 name: Bazaar keep-alive
 
 on:
   schedule:
     # TUESDAY 04:17 UTC, and only the PRICED routes the daily pass does not
-    # already cover (SKIP_UPSTREAM_FREE): 296 routes, ~$2.51 of face value.
-    # Re-buying the 177 free ones here would spend ~700 extra facilitator
-    # settlements a month against CDP's 1,000/month free tier for nothing.
+    # already cover (SKIP_UPSTREAM_FREE); re-buying those here would add
+    # facilitator settlements for nothing.
     # GitHub throttles schedules on a busy repo (measured 2026-08-30: a
     # 15-minute cron delivered one run in 9.8 hours), which is exactly why the
     # cadence keeps 4x headroom against the 30-day rule.
     - cron: "17 4 * * 2"
     # DAILY, zero-upstream only. The weekly pass above is bounded by PRICE,
-    # which is only a proxy for what a route costs us: 97 of its 472 routes
-    # bill a third party per call. This one is bounded by that actual question
-    # (UPSTREAM_FREE_ONLY), so it can run every day - 177 routes whose only
-    # cost is face value moving between our own wallets plus our own Railway
-    # volume for the memory tools. It keeps the majority of the catalog well
-    # inside the 30-day cull with no upstream burn at all.
+    # which is only a proxy for upstream cost. This one is bounded by that
+    # actual question (UPSTREAM_FREE_ONLY): routes that call no third party,
+    # so it can run every day and keeps most of the catalog inside the cull.
     - cron: "37 5 * * *"
   workflow_dispatch:
     inputs:
       max_price_usd:
-        description: "Per-route ceiling. 0.01 covers 405 routes (~$1.18); 0.05 covers 472 (~$3.31)."
+        description: "Per-route price ceiling."
         default: "0.05"
       batches:
         description: "Split the pass into N batches so no single run times out."
         default: "4"
       upstream_free_only:
-        description: "1 = only routes that cost nothing at a third party (177 routes, ~$0.86 face). The daily schedule sets this."
+        description: "1 = only routes that call no third party. The daily schedule sets this."
         default: ""
       skip_upstream_free:
-        description: "1 = skip what the daily pass already covers (296 priced routes). The Tuesday schedule sets this."
+        description: "1 = skip what the daily pass already covers. The Tuesday schedule sets this."
         default: ""
       min_price_usd:
-        description: "Price FLOOR. Set 0.05 with max_price_usd 999 to sweep only the expensive tail (101 routes, ~$35.45 face, ~$15-20 real upstream)."
+        description: "Price FLOOR. Set it with a high max_price_usd to sweep only the expensive tail."
         default: "0"
       stale_days:
         description: "Only pay for listings older than N days (any settlement resets the clock, ours or a buyer's). Schedules use 21. 0 = sweep everything selected."
         default: "21"
       slug_prefix:
-        description: "Only slugs starting with this. 'skill-' with min_price_usd 0.05 sweeps the 63 packs (~$12.55 face)."
+        description: "Only slugs starting with this (e.g. 'skill-' for the skill packs)."
         default: ""
       max_spend_usd:
-        description: "PER-BATCH spend cap. Tail pass at 4 batches needs ~9."
+        description: "PER-BATCH spend cap."
         default: "1"
 
 permissions:
@@ -106,7 +89,7 @@ jobs:
         with:
           node-version: "22"
       - name: Install the x402 client
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.26.0 @x402/core@2.26.0 @x402/evm@2.26.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 viem@2.52.2
       - name: Refresh settlements
         env:
           TARGET_URL: https://agent402.tools
@@ -128,8 +111,11 @@ jobs:
           BATCH_COUNT: ${{ inputs.batches || '4' }}
           BATCH_INDEX: ${{ matrix.batch }}
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          # Signs X-Heartbeat-Token so these self-buys are booked as ours.
+          POW_SECRET: ${{ secrets.POW_SECRET }}
         run: |
           [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY is not set - the keep-alive cannot pay, and listings will age out in 30 days"; exit 1; }
+          [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
           echo "::add-mask::$BURNER_KEY"
           node scripts/refresh-bazaar.js
 

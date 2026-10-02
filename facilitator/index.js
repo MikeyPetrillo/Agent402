@@ -56,11 +56,9 @@ const PORT = Number(process.env.PORT) || 4021;
 const AUTH_TOKEN = (process.env.FACILITATOR_AUTH_TOKEN || "").trim();
 const ALLOWED_PAYTO = (process.env.FACILITATOR_ALLOWED_PAYTO || "")
   .split(",").map((s) => s.trim()).filter(Boolean);
-// 1 XLM, not 5. A settlement's observed fee_charged is 23,501 stroops =
-// 0.00235 XLM (~$0.0007), so 1 XLM is ~425 settlements and 5 XLM was ~2,100 -
-// a threshold that pages while years of runway remain is an alarm nobody
-// reads. Raised bids do not change this much: even paying the full inclusion
-// bid every time, 1 XLM is ~136 settlements.
+// 1 XLM, not 5. At the observed per-settlement fee, 1 XLM is hundreds of
+// settlements and 5 XLM was thousands - a threshold that pages while years of
+// runway remain is an alarm nobody reads. Raised bids do not change this much.
 const LOW_BALANCE_XLM = Number(process.env.FACILITATOR_LOW_BALANCE_XLM) || 1;
 // Found live in production (2026-08-14, first full day on mainnet): a
 // /settle call hung for 300s straight - no timeout, no error, nothing on

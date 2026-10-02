@@ -43,7 +43,7 @@ export const RAILS_OR = `USDC on ${usdcOr}${othersDash}`;
  *  the "primary chain first" phrasing used in buyer-facing prose. */
 export const RAILS_PAREN = `USDC on ${usdc[0]} (or ${usdc.slice(1).join(", ")}${othersDash})`;
 
-/** "USDC on Base + 8 more chains, or USDG on Robinhood Chain" — tight UI copy (derives live from RAILS). */
+/** "USDC on Base + 10 more chains, or USDG on Robinhood Chain" — tight UI copy (derives live from RAILS). */
 export const RAILS_SHORT = `USDC on ${usdc[0]} + ${usdc.length - 1} more chains${others.length ? `, or ${others.map((o) => `${o.asset} on ${o.name}`).join(" / ")}` : ""}`;
 
 /** Chain names for the /.well-known/x402 manifest's ecosystem.chains. */
@@ -81,4 +81,35 @@ export function truncateCaip2(caip2, { max = 18, tail = 5 } = {}) {
   const idx = s.indexOf(":");
   if (idx === -1) return `${s.slice(0, tail)}…`;
   return `${s.slice(0, idx + 1)}${s.slice(idx + 1, idx + 1 + tail)}…`;
+}
+
+/** True when a route's x402 offer is EVM `exact` only. ONE predicate, read by
+ *  src/payments.js acceptsForItem (the live 402) and by every surface that
+ *  names the rails a route takes (/openapi.json, /tools/<slug>), so the docs
+ *  cannot list a chain the 402 withholds:
+ *    - identity-bound routes: the payer is the signed EIP-3009 authorization;
+ *    - long-running routes: settlement after a multi-minute run needs the
+ *      EIP-3009 validity window;
+ *    - a route naming `onlyNetworks`: the handler serves those chains only. */
+export function x402EvmOnly(item) {
+  return !!(item && (item.identityBound || item.longRunning || (Array.isArray(item.onlyNetworks) && item.onlyNetworks.length)));
+}
+
+/** The RAILS entries a route's x402 402 can offer (before PAYMENT_NETWORKS
+ *  narrows them, exactly as RAILS_OR does for the whole catalog). */
+export function x402RailsFor(item) {
+  const only = Array.isArray(item?.onlyNetworks) && item.onlyNetworks.length ? new Set(item.onlyNetworks) : null;
+  return RAILS.filter((r) => (!x402EvmOnly(item) || r.caip2.startsWith("eip155:")) && (!only || only.has(r.caip2)));
+}
+
+/** RAILS_OR phrasing for one route's own rails, e.g. "USDC on Base, Polygon,
+ *  or Optimism - or USDG on Robinhood Chain". Equals RAILS_OR for a route that
+ *  takes every rail. */
+export function railsOrFor(item) {
+  const rails = x402RailsFor(item);
+  const u = rails.filter((r) => r.asset === "USDC").map((r) => r.name);
+  const o = rails.filter((r) => r.asset !== "USDC").map((r) => `${r.asset} on ${r.name}`);
+  const list = u.length <= 1 ? u.join("") : u.length === 2 ? `${u[0]} or ${u[1]}` : `${u.slice(0, -1).join(", ")}, or ${u.at(-1)}`;
+  if (!u.length) return o.join(" - or ");
+  return `USDC on ${list}${o.map((t) => ` - or ${t}`).join("")}`;
 }

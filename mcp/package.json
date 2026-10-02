@@ -1,6 +1,6 @@
 {
   "name": "agent402-mcp",
-  "version": "0.13.2",
+  "version": "0.13.7",
   "mcpName": "io.github.MikeyPetrillo/agent402",
   "author": "Havok Holdings LLC <mike@agent402.tools> (https://agent402.tools)",
   "homepage": "https://agent402.tools",
@@ -9,7 +9,7 @@
     "url": "git+https://github.com/MikeyPetrillo/Agent402.git",
     "directory": "mcp"
   },
-  "description": "Agent402 MCP server: 500+ pay-per-call tools + skill packs for AI agents over x402 (USDC on 12 chains) or MPP on the same 402, or free via proof-of-work - the applied layer of Agentic Finance. Catalog: browser, web search + cited answers, PDFs, OCR, images, LLM inference, image generation, code execution, STT, embeddings, live financial/crypto/macro data, SEC EDGAR filings, deterministic stats & forecasting, compression, payments. Open source, self-hostable.",
+  "description": "Agent402 MCP server: 500+ pay-per-call tools + skill packs for AI agents over x402 (USDC or USDG on 12 chains) or MPP on the same 402, or free via proof-of-work - the applied layer of Agentic Finance. Catalog: browser, web search + cited answers, PDFs, OCR, images, LLM inference, image generation, code execution, STT, embeddings, live financial/crypto/macro data, SEC EDGAR filings, deterministic stats & forecasting, compression, payments. Open source, self-hostable.",
   "type": "module",
   "bin": {
     "agent402-mcp": "index.js"
@@ -69,21 +69,21 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@solana/kit": "^5.1.0",
-    "@x402/core": "2.26.0",
-    "@x402/evm": "2.26.0",
-    "@x402/fetch": "2.26.0",
-    "@x402/svm": "2.26.0",
+    "@x402/core": "2.27.0",
+    "@x402/evm": "2.27.0",
+    "@x402/fetch": "2.27.0",
+    "@x402/svm": "2.27.0",
     "viem": "^2.21.0"
   },
   "overrides": {
     "qs": "6.16.0",
     "ws": "^8.21.0",
     "hono": "4.13.7",
-    "fast-uri": "3.1.7",
+    "fast-uri": "3.1.8",
     "body-parser": "2.3.0",
     "@hono/node-server": "2.0.12",
-    "ip-address": "10.4.0"
+    "ip-address": "10.7.1"
   }
 }

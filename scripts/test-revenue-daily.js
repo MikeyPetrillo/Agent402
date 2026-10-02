@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.REVENUE_LEDGER_DB = join(mkdtempSync(join(tmpdir(), "rvd-")), "t.db");
+// The ledger folds Tempo settlements in from the sales ledger; isolate it.
+process.env.SALES_LEDGER_DB = join(mkdtempSync(join(tmpdir(), "rvd-sales-")), "s.db");
 const { recordTransfer, ledgerDaily } = await import("../src/revenue-ledger.js");
 const Database = (await import("better-sqlite3")).default;
 

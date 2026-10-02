@@ -6,11 +6,27 @@
 // Note: EDGAR enforces a User-Agent header — set EDGAR_USER_AGENT to your own
 // "Name email@domain" string for friendlier rate treatment. The kit ships a
 // generic Agent402 fallback that works out-of-the-box.
-import { EDGAR_TOOLS } from "../src/tools/edgar-kit.js";
+import { EDGAR_TOOLS, tickerSuggestions } from "../src/tools/edgar-kit.js";
 
 const h = (slug) => EDGAR_TOOLS.find((t) => t.slug === slug).handler;
 let assertFail = 0, liveOk = 0, liveErr = 0;
 const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; console.error(`ASSERT FAIL - ${m}`); } };
+
+// --- a company name where a ticker goes gets the likely tickers (offline) ---
+{
+  const map = new Map([
+    ["TSLA", { name: "Tesla, Inc." }], ["NVDA", { name: "NVIDIA CORP" }],
+    ["BRK-A", { name: "BERKSHIRE HATHAWAY INC" }], ["BRK-B", { name: "BERKSHIRE HATHAWAY INC" }],
+    ["TSLL", { name: "Direxion Daily TSLA Bull 2X Shares" }], ["XTES", { name: "Some Tesla Supplier Ltd" }],
+  ]);
+  const t = tickerSuggestions(map, "Tesla");
+  ok(t[0]?.ticker === "TSLA", `"Tesla" suggests TSLA first (got ${JSON.stringify(t)})`);
+  ok(t.some((x) => x.ticker === "XTES") && t.length <= 3, "a name containing the word ranks after names that start with it, capped at 3");
+  ok(tickerSuggestions(map, "nvidia")[0]?.ticker === "NVDA", "case-insensitive");
+  ok(tickerSuggestions(map, "berkshire hathaway").map((x) => x.ticker).join() === "BRK-A,BRK-B", "multi-word names match; both share classes listed");
+  ok(tickerSuggestions(map, "ts").length === 0, "under three letters suggests nothing (too loose)");
+  ok(tickerSuggestions(map, "zzzz").length === 0, "no match suggests nothing");
+}
 
 // --- deterministic validation (no network) ---
 // Each row asserts the handler throws a 400 Error on bad input — we never

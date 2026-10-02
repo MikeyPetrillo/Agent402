@@ -17,14 +17,13 @@ const rails = {
 
 ok(SELF_FUNDING_SLUGS.has("route-execute") && SELF_FUNDING_SLUGS.has("route-execute-plus") && SELF_FUNDING_SLUGS.has("route-execute-max"), "all three route-execute tiers are self-funding slugs");
 // House rule (2026-07-29): everything that SPENDS from the burner SETTLES to
-// the burner. The Blockscout kit pays ~$0.002/call upstream from the same
-// wallet - if any of these five drops out of the set, its revenue goes to the
-// treasury while its costs drain the burner, a one-way leak.
+// the burner. The five explorer tools that also spent from it were retired on
+// 2026-09-22 (src/retired-tools.js); a retired slug left in the set would be a
+// payTo override for a route that no longer exists, so none may linger.
 {
-  const { BLOCKSCOUT_TOOLS } = await import("../src/tools/blockscout-kit.js");
-  for (const t of BLOCKSCOUT_TOOLS) {
-    ok(SELF_FUNDING_SLUGS.has(t.slug), `burner-spending tool ${t.slug} is self-funding (settles to the burner)`);
-  }
+  const { RETIRED_TOOLS } = await import("../src/retired-tools.js");
+  const stale = [...SELF_FUNDING_SLUGS].filter((s) => Object.hasOwn(RETIRED_TOOLS, s));
+  ok(stale.length === 0, `no retired slug is still a self-funding slug${stale.length ? ` - ${stale.join(", ")}` : ""}`);
 }
 
 // route-execute: Base leg -> burner, other EVM + Solana -> treasury
@@ -46,10 +45,10 @@ ok(noBurner.find((a) => a.network === "eip155:8453").payTo === TREASURY, "no bur
 
 // --- chain-matched Algorand self-funding (2026-07-29, same rule as Base) -----
 // An Algorand buyer's route-execute payment settles to the AVM spending wallet
-// that pays Algorand sellers. ROUTER TIERS ONLY: the Blockscout kit spends
-// from the BASE wallet regardless of the buyer's rail, so its Algorand
-// revenue must keep the treasury payTo - routing it to the AVM wallet would
-// fund the wrong wallet.
+// that pays Algorand sellers. ROUTER TIERS ONLY: a tool that spends from the
+// BASE wallet regardless of the buyer's rail must keep the treasury payTo for
+// its Algorand revenue - routing it to the AVM wallet would fund the wrong
+// wallet.
 {
   const ALGO_TREASURY = "ALGOTREASURYXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
   const AVM_BUYER = "W4GZHN36X35LGSJTTLNZNFPGSSBLMJKFLCMZK4NBLQGUS6PYPPCDB67UOE";
@@ -63,8 +62,6 @@ ok(noBurner.find((a) => a.network === "eip155:8453").payTo === TREASURY, "no bur
     const a = acceptsForItem({ slug, price: "$0.01" }, avmRails).find((x) => x.network === "algorand:mainnet");
     ok(a?.payTo === AVM_BUYER, `${slug} Algorand leg pays the AVM spending wallet (chain-matched self-funding)`);
   }
-  const bs = acceptsForItem({ slug: "contract-inspect", price: "$0.005" }, avmRails).find((x) => x.network === "algorand:mainnet");
-  ok(bs?.payTo === ALGO_TREASURY, "Blockscout Algorand leg keeps the treasury (its spend is Base-pinned)");
   const plain = acceptsForItem({ slug: "hash", price: "$0.001" }, avmRails).find((x) => x.network === "algorand:mainnet");
   ok(plain?.payTo === ALGO_TREASURY, "a normal tool's Algorand leg pays the treasury");
   const unset = acceptsForItem({ slug: "route-execute", price: "$0.01" }, { ...avmRails, avmUpstreamBuyerAddress: "" })

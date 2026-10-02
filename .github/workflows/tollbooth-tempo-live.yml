@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -33,14 +33,18 @@ jobs:
           [ -n "$TEMPO_API_KEY" ] || { echo "::error::TEMPO_API_KEY secret missing - add the Railway TEMPO_API_KEY value as an Actions secret to run this proof"; exit 1; }
           [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY secret missing"; exit 1; }
           echo "::add-mask::$BURNER_KEY"; echo "::add-mask::$TEMPO_API_KEY"
+          # mppSecret binds the tempo challenge ids this gate mints; they only
+          # have to verify inside this one process, so a per-process random key
+          # is exactly right (PoW is off, so nothing else is keyed).
           node --input-type=module -e '
+          import { randomBytes } from "node:crypto";
           import express from "express";
           import { createTollbooth } from "./tollbooth/index.js";
           import { Mppx, tempo } from "mppx/client";
           import { Challenge, Receipt } from "mppx";
           import { privateKeyToAccount } from "viem/accounts";
           const app = express();
-          const gate = createTollbooth({ price: "$0.001", mode: "all", pow: false, powSecret: "live-proof", resourceBaseUrl: "https://tollbooth-live-proof.agent402.tools", tempo: { apiKey: process.env.TEMPO_API_KEY, recipient: process.env.RECIPIENT } });
+          const gate = createTollbooth({ price: "$0.001", mode: "all", pow: false, mppSecret: randomBytes(32).toString("hex"), resourceBaseUrl: "https://tollbooth-live-proof.agent402.tools", tempo: { apiKey: process.env.TEMPO_API_KEY, recipient: process.env.RECIPIENT } });
           app.use(gate);
           app.get("/paid", (req, res) => res.json({ ok: true }));
           const server = app.listen(0, "127.0.0.1", async () => {

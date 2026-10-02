@@ -20,14 +20,47 @@ const fmt = (iso) => String(iso || "").replace("T", " ").slice(0, 16) + "Z";
 // A cluster's story at a glance: qualified (would auto-open an issue), or the
 // reason it won't. Mirrors clusterQualifies in wish.js.
 function verdict(c, threshold) {
-  // Served beats every other verdict: the catalog can answer this text NOW,
-  // so it is not outstanding demand no matter how qualified the count looks.
-  if (c.served) return { label: "served", color: "#5B8DEF", note: `find returns ${c.served.slug}` };
-  if (c.qualified) return { label: "qualified", color: "#3E9B6E", note: "opens an issue" };
-  if (c.count < threshold) return { label: "below", color: "#8C8C8C", note: `needs ${threshold - c.count} more` };
+  // The resolver's closest catalog match, shown as evidence and never as a
+  // verdict. It scores name similarity, not whether a tool answers a need, so
+  // it may not outrank "qualified": a lexical coincidence must never bury real
+  // demand, which is exactly what the old "served" label did.
+  const near = c.closestMatch ? ` - closest catalog match ${c.closestMatch.slug} (${c.closestMatch.score})` : "";
+  if (c.qualified) return { label: "qualified", color: "#3E9B6E", note: `opens an issue${near}` };
+  if (c.count < threshold) return { label: "below", color: "#8C8C8C", note: `needs ${threshold - c.count} more${near}` };
   const distinct = ["api", "mcp", "find-miss"].filter((s) => (c.sources?.[s] || 0) > 0).length;
-  if (distinct < 2) return { label: "single-source", color: "#c4a44e", note: "one surface, not corroborated" };
-  return { label: "held", color: "#c4a44e", note: "not yet sustained" };
+  if (distinct < 2) return { label: "single-source", color: "#c4a44e", note: `one surface, not corroborated${near}` };
+  return { label: "held", color: "#c4a44e", note: `not yet sustained${near}` };
+}
+
+// An intent judgment, shown as its own thing. Measured on sixteen live rows
+// (2026-09-21): adverts read 0.83-0.96, plain wishes 0.96-0.98 on the other
+// side, nothing in between. The probability is printed because a reader
+// deciding whether to trust a row deserves the number, not just the word.
+function intentCell(c) {
+  const i = c.intent;
+  if (!i) return `<span class="ow-faint ow-small">-</span>`;
+  const color = i.kind === "advertisement" ? "#c4574e" : i.kind === "unclear" ? "#c4a44e" : "#8C8C8C";
+  const word = i.kind === "advertisement" ? "advert" : i.kind === "unclear" ? "unclear" : "wish";
+  return `<span class="ow-badge" style="color:${color};border-color:${color}55">${esc(word)}</span>`
+    + `<div class="ow-note">p=${esc(Number(i.p).toFixed(2))}</div>`;
+}
+
+// The re-rank verdict, which answers the question the board could not: is this
+// row something to BUILD, or something find failed to rank? Kept out of
+// verdict() for the same reason intent is: it must not reach what opens an issue.
+function rerankCell(c) {
+  const r = c.rerank;
+  if (!r) return `<span class="ow-faint ow-small">-</span>`;
+  const style = {
+    "catalog-gap": ["#3E9B6E", "build"],
+    "index-miss": ["#c4574e", "alias"],
+    confirmed: ["#8C8C8C", "found"],
+    consider: ["#c4a44e", "maybe"],
+    unclear: ["#8C8C8C", "unclear"],
+  }[r.kind] || ["#8C8C8C", r.kind];
+  const slug = r.slug && r.kind !== "confirmed" ? ` ${esc(r.slug)}` : "";
+  return `<span class="ow-badge" style="color:${style[0]};border-color:${style[0]}55">${esc(style[1])}</span>`
+    + `<div class="ow-note">${esc(Number(r.confidence).toFixed(2))}${slug}</div>`;
 }
 
 export function operatorWishesPage(baseUrl, aggregate) {
@@ -51,6 +84,8 @@ export function operatorWishesPage(baseUrl, aggregate) {
     return `<tr>
       <td class="ow-mono ow-num">${esc(c.count)}</td>
       <td><span class="ow-badge" style="color:${v.color};border-color:${v.color}55">${esc(v.label)}</span><div class="ow-note">${esc(v.note)}</div></td>
+      <td>${intentCell(c)}</td>
+      <td>${rerankCell(c)}</td>
       <td class="ow-mono ow-faint" title="api / mcp / find-miss">${esc(src)}</td>
       <td class="ow-mono ow-small ow-faint">${esc(fmt(c.firstSeen))}<br>${esc(fmt(c.lastSeen))}</td>
       <td class="ow-text">${c.text}</td>
@@ -60,7 +95,7 @@ export function operatorWishesPage(baseUrl, aggregate) {
   const table = clusters.length
     ? `<div class="ow-tbl-wrap"><table>
         <thead><tr>
-          <th class="ow-num">Count</th><th>Verdict</th><th title="api / mcp / find-miss">a/m/f</th><th>First / last</th><th>Normalized request</th>
+          <th class="ow-num">Count</th><th>Verdict</th><th title="Advert judgment - opt in with ?intent=1; spends per uncached row">Intent</th><th title="Build-vs-alias - opt in with ?rerank=1; spends per uncached query">Re-rank</th><th title="api / mcp / find-miss">a/m/f</th><th>First / last</th><th>Normalized request</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table></div>`
@@ -99,7 +134,7 @@ tr:last-child td{border-bottom:0}
   const body = `
 <div class="ow-wrap">
   <h1 class="ow-h1">Agent demand</h1>
-  <p class="ow-sub">The full wish board, ranked - every cluster including single-source and below-threshold, which the public feed never shows ranked. A cluster auto-opens a GitHub issue only when <b>qualified</b> (count &ge; ${esc(threshold)} and either &ge;2 sources or sustained past ${esc(qualifyMinSpanHours)}h). Not public - gated by <code>AGENT402_OPERATOR_TOKEN</code>. <a href="/__operator">Back to operator</a> &middot; <form method="POST" action="/__operator/logout" style="display:inline;margin:0"><button type="submit" style="background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer">Log out</button></form></p>
+  <p class="ow-sub">The full wish board, ranked - every cluster including single-source and below-threshold, which the public feed never shows ranked. A cluster auto-opens a GitHub issue only when <b>qualified</b> (count &ge; ${esc(threshold)} and either &ge;2 sources or sustained past ${esc(qualifyMinSpanHours)}h). Not public - gated by <code>AGENT402_OPERATOR_TOKEN</code>. <b>Intent</b> is blank unless you add <code>?intent=1</code>: it asks a paid model whether a row is a seller advertising rather than a request, and spends per uncached row. It annotates only - it can never change a count or a verdict. <b>Re-rank</b> (<code>?rerank=1</code>) asks the same model which catalog tool actually does the job: <b>build</b> means nothing we sell does it, so the row is real demand; <b>alias</b> means we DO sell it and /api/find ranked it below something else, so the fix is a curated alias rather than a new tool. Both propose only. <a href="/__operator">Back to operator</a> &middot; <form method="POST" action="/__operator/logout" style="display:inline;margin:0"><button type="submit" style="background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer">Log out</button></form></p>
   ${summary}
   ${table}
 </div>

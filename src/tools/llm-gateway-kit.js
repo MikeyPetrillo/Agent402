@@ -17,16 +17,16 @@
 // token is spent — no credit risk beyond one in-flight call. Env-gated:
 // missing OPENROUTER_API_KEY → 503 at call time, not boot failure.
 //
-// Pricing is deterministic by design (flat per tier), matching the project's
-// predictability brand: model allowlists + input/output caps keep worst-case
-// upstream cost well under the x402 price. Streaming (stream: true) is
+// Pricing is deterministic by design (flat per tier): model allowlists +
+// input/output caps bound each call. Streaming (stream: true) is
 // supported: max_tokens is clamped before the upstream call, so the provider
-// stops the stream at the cap and worst-case cost stays under the price
-// regardless of settlement timing. (Under @x402/express v2.16 settlement runs
+// stops the stream at the cap regardless of settlement timing. (Under @x402/express v2.16 settlement runs
 // AFTER the handler and only for a <400 response — a streamed 200 settles once
 // the stream finishes.) Streamed responses are not idempotency-replayable (the
 // cache hooks res.json only).
 
+import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
+export { OPENROUTER_ATTRIBUTION };
 import { METER_MARKUP, METER_FLOOR_USD, METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { flattenNamespaceForChat } from "./tool-namespaces.js";
 import { createHash, createHmac } from "node:crypto";
@@ -50,6 +50,7 @@ import { payerFromRequest, paymentHeaderOf } from "../payer.js";
 // Settle-failure breaker: every gateway handler consults it FIRST (see the
 // module header) - refuses before any upstream call, arms the outcome listener.
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
+import { clientGoneSignal } from "../drain-abort.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -188,7 +189,7 @@ export async function probeOxAlphaAvailability({ fetchImpl } = {}) {
 // model; the gateway classifies the prompt and serves it with the top-ranked
 // budget model for that task type. The classification is lexical-signal only
 // and the ranking is a fixed, human-curated table distilled from public evals
-// (LMArena + OpenRouter usage rankings for sub-$1/M models) — updated by code
+// (LMArena + OpenRouter usage rankings for budget models) — updated by code
 // review, never at runtime — so the routing decision is fully deterministic:
 // no LLM in the routing path, identical requests always route identically.
 //
@@ -199,42 +200,54 @@ export async function probeOxAlphaAvailability({ fetchImpl } = {}) {
 // The `quality` knob picks the BAND (fast / balanced / best); all three stay
 // inside the flat $0.01 price — a per-request price can't exist under x402's
 // fixed per-route quote, so quality trades latency/depth, never what the
-// buyer pays. Worst-case upstream at the auto caps (~4k tokens in / 1024
-// out): fast tops out at gemini-2.5-flash-lite (~$0.0008, 12x headroom),
-// balanced at deepseek-chat (~$0.0022, >4x), best at gemini-2.5-flash
-// (~$0.0038, ~2.6x) — the thinnest band is documented, deliberate, still >2x.
+// buyer pays. Every ranked model fits the tier's caps (~4k tokens in / 1024
+// out) under the margin clamp.
 //
 // 2026-08-04 refresh (live-verified against openrouter.ai/api/v1/models):
 // google/gemini-2.0-flash-001 and -lite are GONE from OpenRouter — the old
 // fast band led every category with a dead model, so every fast-routed call
 // burned a failed upstream round-trip before failing over. Replaced with
-// gemini-2.5-flash-lite ($0.10/$0.40). openai/gpt-5.6-luna entered at
-// $0.10/$0.60 (July 2026 price cut) — frontier-lab efficiency at 4o-mini
-// prices, 1M context — and takes the balanced/best slots the dead model and
-// age had left weakest. Every list still ends in openai/gpt-4o-mini.
+// gemini-2.5-flash-lite. openai/gpt-5.6-luna entered (1M context) and takes
+// the balanced/best slots the dead model and age had left weakest. Every list still ends in openai/gpt-4o-mini.
+//
+// 2026-09-23 refresh: google/gemini-2.5-flash and -flash-lite carry an
+// OpenRouter expiration date of 2026-10-20. The fast band now leads with
+// gemini-3.1-flash-lite, and the best band with
+// gemini-3.5-flash-lite (priced like the model it replaces). Both were
+// live-verified to answer with no hidden reasoning at a 64-token budget.
+//
+// 2026-09-29: inception/mercury-2.5 is the third fast-band link (one endpoint,
+// 260k context). Live calls: at effort "low" (what the budget tiers inject) it
+// reasoned ~260 tokens and then answered at a 768-token budget in under a
+// second; at a 64-token budget it spent the budget reasoning, which the chain
+// walks past (isEmptyLength), never a paid empty answer.
+//
+// 2026-09-24: openai/gpt-6-luna leads the fast band. A live call at a
+// 64-token budget with reasoning effort "low" (what the auto tier injects)
+// answered in one sentence with zero reasoning tokens and finish "stop".
 export const AUTO_QUALITIES = ["fast", "balanced", "best"];
 export const AUTO_RANKINGS = {
   // fast — cheapest/snappiest serving; right for high-frequency loop turns.
   fast: {
-    code: ["google/gemini-2.5-flash-lite", "qwen/qwen-2.5-coder-32b-instruct", "openai/gpt-4o-mini"],
-    reasoning: ["google/gemini-2.5-flash-lite", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
-    long: ["google/gemini-2.5-flash-lite", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
-    general: ["google/gemini-2.5-flash-lite", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
+    code: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "inception/mercury-2.5", "qwen/qwen-2.5-coder-32b-instruct", "openai/gpt-4o-mini"],
+    reasoning: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "inception/mercury-2.5", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
+    long: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "inception/mercury-2.5", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
+    general: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "inception/mercury-2.5", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
   },
   // balanced — the default band. deepseek-chat keeps the code head (proven,
   // cheap); gpt-5.6-luna leads the rest (1M ctx covers `long` natively).
   balanced: {
     code: ["deepseek/deepseek-chat", "openai/gpt-5.6-luna", "openai/gpt-4o-mini"],
     reasoning: ["openai/gpt-5.6-luna", "deepseek/deepseek-chat", "openai/gpt-4o-mini"],
-    long: ["openai/gpt-5.6-luna", "google/gemini-2.5-flash-lite", "openai/gpt-4o-mini"],
+    long: ["openai/gpt-5.6-luna", "google/gemini-3.1-flash-lite", "openai/gpt-4o-mini"],
     general: ["openai/gpt-5.6-luna", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
   },
-  // best — strongest models that still clear the price with ≥2.5x headroom.
+  // best — strongest models that still fit the tier's price bound.
   best: {
     code: ["openai/gpt-5.6-luna", "deepseek/deepseek-chat", "openai/gpt-4o-mini"],
-    reasoning: ["google/gemini-2.5-flash", "openai/gpt-5.6-luna", "openai/gpt-4o-mini"],
-    long: ["google/gemini-2.5-flash", "openai/gpt-5.6-luna", "openai/gpt-4o-mini"],
-    general: ["google/gemini-2.5-flash", "openai/gpt-5.6-luna", "openai/gpt-4o-mini"],
+    reasoning: ["google/gemini-3.5-flash-lite", "openai/gpt-5.6-luna", "openai/gpt-4o-mini"],
+    long: ["google/gemini-3.5-flash-lite", "openai/gpt-5.6-luna", "openai/gpt-4o-mini"],
+    general: ["google/gemini-3.5-flash-lite", "openai/gpt-5.6-luna", "openai/gpt-4o-mini"],
   },
 };
 
@@ -267,50 +280,47 @@ export function classifyPrompt(messages) {
 }
 
 // Tier → OpenRouter model-id prefixes, input char budget, output token cap.
-// Caps chosen so worst-case upstream cost stays well below the x402 price
-// (budget models run ~$0.15-0.60/M tokens; 2048 output + 32k input tops out
-// around $0.003 - a $0.02 price leaves >6x headroom).
+// Caps bound the worst-case size of each call; the margin clamp does the rest.
 //
 // `maxPrice` (USD per 1M tokens, {prompt, completion}) rides to OpenRouter as
 // provider.max_price - a HARD upstream price filter. These are CATASTROPHE
-// BOUNDS, not tight budgets: each sits ~1.5-2x above the priciest allowlisted
+// BOUNDS, not tight budgets: each sits above the priciest allowlisted
 // model's list price, so they never affect normal serving. What they block is
 // the silent failure mode where one of a model's providers charges multiples
-// of list (or a provider reprices) - OpenRouter then refuses that provider
-// instead of us quietly eating the margin. A model with NO provider under the
+// of list (or a provider reprices) - OpenRouter then refuses that provider. A model with NO provider under the
 // bound errors upstream, which the failover chain already treats as walkable.
 export const TIERS = {
-  // Nano tier - priced for agent LOOPS, not occasional calls. The x402
-  // leaderboard's top earner does ~800k inference calls/day at sub-cent
-  // average prices; the $0.02 base tier is priced out of that traffic.
-  // Caps keep worst-case upstream (~3k tokens in / 768 out on ~$0.10-0.40/M
-  // models) around $0.0006 - >5x headroom under the $0.003 price, same
-  // discipline as the other tiers. Listed FIRST so tierFor()'s
+  // Nano tier - priced for agent LOOPS, not occasional calls. Small caps
+  // (~3k tokens in / 768 out) on budget models. Listed FIRST so tierFor()'s
   // self-correcting 400s and /v1/models lead with the cheapest home.
   "v1-chat-nano": {
-    defaultModel: "openai/gpt-5.6-luna", // gpt-4.1-nano retires 2026-10-23 (OpenAI deprecations, read 2026-08-28); luna is its named successor. served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
+    defaultModel: "openai/gpt-6-luna", // 2026-09-24: gpt-6-luna (live call at a 64-token budget, effort low, answered cleanly). Before that gpt-5.6-luna; gpt-4.1-nano retires 2026-10-23 (OpenAI deprecations, read 2026-08-28); luna is its named successor. served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
     route: "POST /v1/nano/chat/completions",
     price: 0.003,
     priceSort: true, // cheapest provider under max_price (budget tier: price IS the product)
     reasoningDefault: "lowest", // see REASONING_MODELS: minimal/low effort unless the buyer asks
     maxInputChars: 12_000,
     maxTokens: 768,
-    maxPrice: { prompt: 0.5, completion: 1.5 }, // priciest allowlisted: deepseek-chat ~$0.27/$1.10
+    maxPrice: { prompt: 0.5, completion: 1.5 }, // catastrophe bound above the priciest allowlisted model
     // Server-chosen upstream failover, tried in order when the requested
     // model's provider errors. The terminal entry is deliberately gpt-4o-mini:
-    // the daily canary proves it alive every morning, and at the nano caps its
-    // worst case (~$0.0009) stays ~3x under the price. Fallback models bypass
+    // the daily canary proves it alive every morning, and it fits the nano
+    // caps under the clamp. Fallback models bypass
     // the tier allowlist (server-chosen, caps still enforced by the body).
     fallbacks: ["deepseek/deepseek-chat", "openai/gpt-4o-mini"],
     prefixes: [
       // gpt-4.1-nano retired here 2026-09-02 ahead of OpenAI's 2026-10-23 removal; gpt-5.6-luna is its named successor and the tier default.
       "openai/gpt-5-nano",
-      // gpt-5.6-luna: $0.10/$0.60 after OpenAI's 2026-07-30 cut — frontier-lab
-      // efficiency in the nano price class (live-verified 2026-08-04).
+      // gpt-5.6-luna: frontier-lab model in the nano class (live-verified 2026-08-04).
       "openai/gpt-5.6-luna",
+      // gpt-6-luna (live 2026-09-24, 1M context): the nano default. The prefix
+      // also admits gpt-6-luna-pro, which lists the same price and efforts.
+      "openai/gpt-6-luna",
       // gemini-2.0-flash-lite was removed here 2026-08-04: the model is gone
       // from OpenRouter entirely (verified against the live models list).
-      "google/gemini-2.5-flash-lite",
+      // gemini-2.5-flash-lite left 2026-09-29 (upstream expiration 2026-10-20): served by its successor via RETIRING_MODELS.
+      "google/gemini-3.1-flash-lite", // inside this tier's max_price
+      "inception/mercury-2.5", // 2026-09-29, fast-band link; exact id only
       "meta-llama/llama-3.2-1b-instruct", "meta-llama/llama-3.2-3b-instruct",
       // ministral-3b/8b were renamed upstream to the -2512 ids (the bare ids
       // 404 at OpenRouter; live-verified 2026-08-19). Listed with the live id so
@@ -318,7 +328,7 @@ export const TIERS = {
       "mistralai/ministral-3b-2512", "mistralai/ministral-8b-2512",
       "qwen/qwen-2.5-7b-instruct",
       "deepseek/deepseek-chat",
-      "poolside/laguna-xs-2.1", "poolside/laguna-s-2.1", // $0.06-0.09/$0.12-0.18
+      "poolside/laguna-xs-2.1", "poolside/laguna-s-2.1",
     ],
   },
   "v1-chat": {
@@ -328,24 +338,34 @@ export const TIERS = {
     price: 0.02,
     maxInputChars: 32_000,
     maxTokens: 2048,
-    maxPrice: { prompt: 2.5, completion: 8 }, // family prefixes reach mistral-large ~$2/$6, qwen-max ~$1.6/$6.4
+    maxPrice: { prompt: 2.5, completion: 8 }, // catastrophe bound above the priciest family prefix
     prefixes: [
       // gpt-5-nano is admitted on base as well (a nano model on a pricier tier is
       // harmless), the way gpt-4.1-nano was until its 2026-10-23 retirement.
       "openai/gpt-4o-mini", "openai/gpt-4.1-mini", "openai/gpt-5-nano",
-      // gpt-5.6-terra was admitted here when it listed at $1/$6. It lists at
-      // $2/$12 today (live 2026-08-28), OVER this tier's completion bound, so
+      // gpt-5.6-terra was admitted here until a repricing put it OVER this
+      // tier's completion bound, so
       // `provider.max_price` refused every non-flex attempt and each call burnt
       // a wasted round trip; with OPENROUTER_FLEX=off it was unservable. Kept
       // off the base tier rather than raising the bound, which is the belt that
       // catches a model repriced upward: a buyer naming it now gets a
       // self-explaining 400 instead of a silent failover.
-      "anthropic/claude-haiku", "anthropic/claude-3-haiku", // claude-3.5-haiku left OpenRouter (live-verified 2026-08-19)
+      // claude-3.5-haiku left OpenRouter (live-verified 2026-08-19) and
+      // claude-3-haiku followed on 2026-09-26 (the live model-id guard failed on it).
+      "anthropic/claude-haiku",
       // gemini-flash (bare) and gemini-2.0-flash left OpenRouter (live-verified
-      // 2026-08-19, scripts/test-gateway-model-ids.js); 2.5 + 3.x remain.
-      "google/gemini-2.5-flash",
-      "google/gemini-3.1-flash-lite", "google/gemini-3.5-flash-lite", // $0.25/$1.50, $0.30/$2.50
+      // 2026-08-19, scripts/test-gateway-model-ids.js); gemini-2.5-flash left
+      // 2026-09-29 ahead of its 2026-10-20 upstream expiration (RETIRING_MODELS).
+      "google/gemini-3.1-flash-lite", "google/gemini-3.5-flash-lite",
       "deepseek/", "meta-llama/", "mistralai/", "qwen/",
+      // Meta's Muse models. Glimmer 30B (live 2026-09-23): reasoning mandatory (see REASONING_MODELS). The "-contributor" listings
+      // are refused by name in refuseCostVariants: a buyer's prompt is never
+      // routed to a listing priced for the provider's use of the data.
+      // Muse Spark (one provider, 1M context): OpenRouter gates it
+      // behind an account-level 18+ age attestation, completed 2026-09-23; a
+      // live call answers. Reasoning is mandatory (see REASONING_MODELS).
+      "meta/muse-spark-1.3", "meta/muse-spark-1.2", "meta/muse-spark-1.1",
+      "meta/muse-glimmer-30b",
     ],
   },
   "v1-chat-pro": {
@@ -355,18 +375,16 @@ export const TIERS = {
     price: 0.10,
     maxInputChars: 48_000,
     maxTokens: 4096,
-    maxPrice: { prompt: 6, completion: 20 }, // priciest allowlisted: grok ~$3/$15 (claude sonnet 5 is $2/$10, permanent as of 2026-08-10)
+    maxPrice: { prompt: 6, completion: 20 }, // catastrophe bound above the priciest allowlisted model
     // Buyer knob `service_tier: "priority"` (see PRIORITY_PRICE_FACTOR): the
     // margin clamp prices the call at the priority rate, so the flat price
     // holds and a long prompt gets a smaller max_tokens or a 400, never a loss.
     priority: true,
     // Server tools (see SERVER_TOOL_POLICY): pro is the CHEAPEST tier that can
-    // absorb a bounded agent loop. One Exa search is $0.007 - on the $0.02
-    // base tier two of them are the entire 70% margin budget with nothing left
-    // for tokens, so the budget tiers refuse server tools outright and the 400
-    // names this route. One step here bounds the loop at $0.007 of execution
-    // and two model turns; worst case is priced by serverToolWorstCase and
-    // clamped like every other cost.
+    // absorb a bounded agent loop; the budget tiers refuse server tools
+    // outright and the 400 names this route. One step here bounds the loop at
+    // one search and two model turns; worst case is priced by
+    // serverToolWorstCase and clamped like every other cost.
     serverTools: {
       maxSteps: 1,
       tools: {
@@ -377,12 +395,15 @@ export const TIERS = {
     },
     prefixes: [
       "openai/gpt-4o", "openai/gpt-4.1",
-      // claude-sonnet prefix covers claude-sonnet-5, $2/$10 — see MODEL_COST
-      // below for the pricing-history note.
+      // claude-sonnet prefix covers claude-sonnet-5 — see MODEL_COST below.
       "anthropic/claude-sonnet", // covers claude-sonnet-4.x and -5; 3.5/3.7-sonnet left OpenRouter (2026-08-19)
-      "google/gemini-2.5-pro", // bare gemini-pro left OpenRouter (2026-08-19)
-      "google/gemini-3.1-pro", "google/gemini-3.5-flash", "google/gemini-3.6-flash", // $2/$12, $1.5/$9, $1.5/$7.5
+      // bare gemini-pro left OpenRouter 2026-08-19; gemini-2.5-pro left 2026-09-29
+      // ahead of its 2026-10-20 upstream expiration (RETIRING_MODELS).
+      "google/gemini-3.1-pro", "google/gemini-3.5-flash", "google/gemini-3.6-flash",
       "x-ai/grok",
+      // gpt-6-sol (live 2026-09-24): fits this tier's bound at its dearest
+      // endpoint; the prefix also admits gpt-6-sol-pro (same price and efforts).
+      "openai/gpt-6-sol",
     ],
   },
   "v1-chat-premium": {
@@ -420,10 +441,9 @@ export const TIERS = {
     // 1,024 was consumed entirely by reasoning and our own documented example
     // answered 502 (2026-09-02 audit). Same lever the ox tier already had.
     defaultMaxTokens: 4_096,
-    maxPrice: { prompt: 20, completion: 100 }, // priciest allowlisted: claude opus ~$15/$75
+    maxPrice: { prompt: 20, completion: 100 }, // catastrophe bound above the priciest allowlisted model
     priority: true, // service_tier "priority" accepted and priced at PRIORITY_PRICE_FACTOR
-    // Server tools (see SERVER_TOOL_POLICY): the $0.50 price buys two search
-    // steps and richer results. The clamp still decides per request - premium
+    // Server tools (see SERVER_TOOL_POLICY): two search steps and richer results. The clamp still decides per request - premium
     // models are the priciest per token, so a long prompt PLUS a tool loop is
     // refused pre-spend rather than served at a loss.
     serverTools: {
@@ -437,17 +457,16 @@ export const TIERS = {
     prefixes: [
       // gpt-5.6-sol needs its own entry: prefix matching is boundary-aware
       // ("openai/gpt-5" matches gpt-5-*, not gpt-5.6-*). claude-opus covers
-      // claude-opus-5 ($5/$25); the -fast ids left the catalog 2026-07-24.
+      // claude-opus-5; the -fast ids left the catalog 2026-07-24.
       // openai/o4 (the never-released flagship prefix) retired 2026-09-02 ahead of its
       // 2026-10-23 removal: o4-mini stays by its own id, gpt-5.6-terra is the successor.
       "openai/gpt-5", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/o3", "openai/o4-mini",
       "anthropic/claude-opus",
-      // Admitted 2026-09-18, both $10/$50 headline, both 1M context, both
-      // reasoning-mandatory (REASONING_MODELS). gpt-6-astra also admits
-      // gpt-6-astra-pro (same price) under the "-suffix" rule; the exact id
-      // for Fable keeps fable-5 (a different, older model) out. Measured at
-      // premium's $0.50 with a 4k-char prompt the clamp leaves ~6k output
-      // tokens on either, so the tier is usable (pinned in test-llm-gateway).
+      // Admitted 2026-09-18, both 1M context, both reasoning-mandatory
+      // (REASONING_MODELS). gpt-6-astra also admits gpt-6-astra-pro under the
+      // "-suffix" rule; the exact id for Fable keeps fable-5 (a different,
+      // older model) out. With a 4k-char prompt the clamp still leaves a usable
+      // output budget on either (pinned in test-llm-gateway).
       "openai/gpt-6-astra", "anthropic/claude-fable-5.1",
     ],
   },
@@ -462,49 +481,25 @@ export const TIERS = {
     price: 0.01,
     maxInputChars: 16_000,
     maxTokens: 1024,
-    maxPrice: { prompt: 0.6, completion: 3 }, // priciest ranked: gemini-2.5-flash ~$0.30/$2.50
+    maxPrice: { prompt: 0.6, completion: 3 }, // catastrophe bound above the priciest ranked model
     router: true,
     priceSort: true, // budget router: cheapest provider under the cap
     fallbacks: ["openai/gpt-4o-mini"],
     prefixes: [...new Set(Object.values(AUTO_RANKINGS).flatMap((byCategory) => Object.values(byCategory).flat()))],
   },
   // Grounded tier - the auto router plus OpenRouter's web-search plugin on
-  // every call (Exa, up to 5 results), $0.03. The sanctioned home for "answer
+  // every call (Exa, up to 5 results). The sanctioned home for "answer
   // with the live web": `:online` variants stay refused on every other tier
   // because the search is billed per REQUEST on top of tokens, outside
-  // provider.max_price. Here that fee is the tier's own cost: measured
-  // 2026-08-19 - Exa auto $0.007/request in usage.cost, ~700 injected prompt
-  // tokens per result - and both ride into the margin clamp as
+  // provider.max_price. Here that fee is the tier's own cost: the per-request
+  // search fee and the injected prompt tokens ride into the margin clamp as
   // fixedUpstreamUsd + extraInputTokens. Results come back as OpenAI-wire
   // `annotations` (url_citation). Never cached: the web moves. Listed after
   // auto so tierFor() keeps resolving explicit models to their home tiers.
   //
-  // ENGINE DECISION, re-measured 2026-09-18 against OpenRouter's live plugin
-  // docs and one call per engine (gpt-4o-mini, max_results 5, the same
-  // "current Node.js release + Active LTS" prompt, truth read from
-  // nodejs.org/dist/index.json: v26.9.0 / v24.21.0 that day):
-  //   engine "exa" (mode auto, $0.007/request):        usage.cost $0.00734,
-  //     1,745 prompt tokens, 5 citations (GitHub releases, CHANGELOG,
-  //     nodejs.org, the release schedule); answer one release stale.
-  //   engine "parallel" mode "turbo" ($0.001/request): usage.cost $0.00156,
-  //     3,094 prompt tokens (Parallel injects ~2x the excerpt text), 5
-  //     citations, ALL of them version-archive pages (v26.0.0 ... v26.7.0)
-  //     rather than a release or schedule page; answer identical to Exa's.
-  //   engine "parallel" mode "basic" ($0.005/request): usage.cost $0.00543,
-  //     2,118 prompt tokens, 5 citations, answer one release fresher than
-  //     both; the price gap to Exa is $0.002, not worth a sample of one.
-  //   The same prompt in German: Exa answered v26.9.0 / v24.21.0 with the
-  //     right dates (correct); Parallel turbo answered v26.8.1 / v24.20.0
-  //     with wrong dates, citing five localized archive pages - Parallel
-  //     documents turbo/fast as "English and Japanese", and that is what a
-  //     buyer would notice.
-  // So the engine stays Exa: a grounded answer is sold on its citations, and
-  // Parallel's cheaper modes returned weaker ones on both prompts and a wrong
-  // answer on the non-English one. Parallel's own doc prices: turbo/fast
-  // $0.001, basic/advanced $0.005 per request, all "up to 10 results, then
-  // $0.001 per additional result" (same additional-result rule as Exa).
-  // Re-run the pair before switching; the recipe is in the memory note for
-  // the 2026-09-18 audit.
+  // Engine: Exa, chosen on citation quality (release/schedule pages rather
+  // than version archives) and correctness on a non-English prompt. Re-run
+  // the comparison before switching engines.
   "v1-chat-grounded": {
     reasoningDefault: "lowest",
     route: "POST /v1/grounded/chat/completions",
@@ -520,12 +515,11 @@ export const TIERS = {
     fixedUpstreamUsd: 0.007,
     extraInputTokens: 4_500,
     noCache: true,
-    // Every attempt re-runs the $0.007 search: a chain of 4 links x flex+default
-    // all failing AFTER the search would cost $0.056 against a $0.03 price.
-    // Two attempts bound the fixed part at $0.014 (cost audit 2026-08-19).
+    // Every attempt re-runs the search, so a long chain failing AFTER the
+    // search would bill it many times over. Two attempts bound it.
     maxAttempts: 2,
   },
-  // Ox Alpha tier - ONE locked model (stealth/ox-alpha), $0.002.
+  // Ox Alpha tier - ONE locked model (stealth/ox-alpha).
   //
   // Verified against the live OpenRouter catalog 2026-08-22: pricing
   // prompt "0" / completion "0", context_length 1,048,576,
@@ -533,17 +527,15 @@ export const TIERS = {
   // text+image+video->text, reasoning {mandatory:true, default_enabled:true,
   // supported_efforts:["max","high","low"], default_effort:"max"}.
   //
-  // The model is FREE upstream, so this is the cheapest chat tier we sell and
-  // essentially pure margin - and the reason it is free is that the provider
-  // logs prompts (see the STEALTH_MODEL_IDS note above). That is disclosed in
+  // The provider logs prompts (see the STEALTH_MODEL_IDS note above). That is disclosed in
   // the tool description, on /api/pricing, and on GET /v1/models, and `zdr` is
   // refused here (logsPrompts below).
   //
   // Cost discipline WITHOUT a live price to clamp against: MODEL_COST prices
-  // it 0/0 (true today) so the margin clamp is a no-op, which means the ONLY
+  // it 0/0 so the margin clamp is a no-op, which means the ONLY
   // thing standing between us and a surprise bill is `maxPrice` riding
-  // upstream as provider.max_price. It is set at $0.005/M on BOTH sides -
-  // below every real model on OpenRouter - so the day Ox Alpha stops being
+  // upstream as provider.max_price. It is set below every real model on
+  // OpenRouter on BOTH sides, so the day Ox Alpha stops being
   // free, OpenRouter refuses the provider, the call surfaces as an upstream
   // error (502), settlement is cancelled and nobody is charged. Fails closed,
   // loudly, on the safe side. (scripts/test-ox-tier.js pins the worst case AT
@@ -589,10 +581,9 @@ export const TIERS = {
 // METERED TIER (2026-08-26): pay what the call costs, quoted per request.
 //
 // The flat tiers fix the amount in the 402 before the handler runs, so a
-// 5-token "hi" on the base tier costs the same $0.02 as a 2k-token answer -
-// measured 170x-2,162x upstream on the chat tiers (see gateway-meter.js). The
-// `upto` meter already fixes that for buyers whose client speaks upto: they
-// authorize the tier price as a ceiling and settle actual usage + 15%. But
+// 5-token "hi" on the base tier costs the buyer the same as a 2k-token
+// answer. The `upto` meter already fixes that for buyers whose client speaks
+// upto: they authorize the tier price as a ceiling and settle actual usage. But
 // most x402 clients (every stock exact-scheme client among them) pay `exact`, and for them the price IS what the 402 says.
 //
 // So this tier quotes the 402 amount FROM THE REQUEST BODY: @x402/core
@@ -664,7 +655,20 @@ export const PREFIX_CANONICAL = Object.freeze({
 
 export function canonicalModel(model) {
   const c = canonicalModelRaw(model);
-  return Object.hasOwn(PREFIX_CANONICAL, c.toLowerCase()) ? PREFIX_CANONICAL[c.toLowerCase()] : c;
+  const p = Object.hasOwn(PREFIX_CANONICAL, c.toLowerCase()) ? PREFIX_CANONICAL[c.toLowerCase()] : c;
+  // A retiring id is served by its named successor rather than refused: the
+  // caller asked for a model, the successor is the provider's own replacement
+  // on a tier we serve, and every wire names the swap in the reply
+  // (agent402_model_substituted). A variant suffix rides along.
+  const r = retiringModel(p);
+  if (!r) return p;
+  const variant = p.includes(":") ? p.slice(p.indexOf(":")) : "";
+  return `${r.use}${variant}`;
+}
+/** The retiring id a request named, when canonicalModel served its successor. */
+export function substitutedFrom(model) {
+  const r = retiringModel(model);
+  return r ? r.id : null;
 }
 
 function canonicalModelRaw(model) {
@@ -700,10 +704,35 @@ export function tierPriceLabel(price) {
   return price < 0.01 ? price.toFixed(3) : price.toFixed(2);
 }
 
+/** Ids the upstream has scheduled for removal (OpenRouter expiration_date),
+ *  each with the successor that serves a request naming it (canonicalModel;
+ *  the reply carries agent402_model_substituted). Never priced as themselves.
+ *  An entry outlives the upstream id on purpose: callers keep sending a
+ *  retired id long after it is gone, and the map is what keeps those calls
+ *  served. An id whose expiration date is withdrawn upstream leaves this
+ *  table and is priced by its own MODEL_COST row (deepseek-v3.2, 2026-09-28). */
+export const RETIRING_MODELS = Object.freeze({
+  // Gemini 2.5 (OpenRouter expiration_date 2026-10-20). Their family prefixes
+  // left the tiers 2026-09-29. A caller naming one is served the successor
+  // (canonicalModel) and told so in agent402_model_substituted; until
+  // 2026-10-02 it was refused with a 400 naming the successor.
+  "google/gemini-2.5-flash-lite": { until: "2026-10-20", use: "google/gemini-3.1-flash-lite" },
+  "google/gemini-2.5-flash": { until: "2026-10-20", use: "google/gemini-3.5-flash-lite" },
+  "google/gemini-2.5-pro": { until: "2026-10-20", use: "google/gemini-3.1-pro-preview" },
+});
+export function retiringModel(model) {
+  const id = canonicalModelRaw(model).toLowerCase().split(":")[0];
+  return Object.hasOwn(RETIRING_MODELS, id) ? { id, ...RETIRING_MODELS[id] } : null;
+}
+
 export function tierAllows(tierSlug, model) {
   const tier = TIERS[tierSlug];
   if (!tier) return false;
   const id = canonicalModel(model).toLowerCase();
+  if (retiringModel(id)) return false;
+  // Belt for refuseCostVariants: a "-contributor" listing is never admitted
+  // by a family prefix (meta/muse-spark admits meta/muse-spark-1.3-...).
+  if (/-contributor(?:$|:)/.test(id)) return false;
   return tier.prefixes.some((p) => (p.endsWith("/") ? id.startsWith(p) : id === p || id.startsWith(p + "-") || id.startsWith(p + ":")));
 }
 
@@ -711,6 +740,86 @@ export function tierAllows(tierSlug, model) {
 export function tierFor(model) {
   for (const slug of Object.keys(TIERS)) if (tierAllows(slug, model)) return slug;
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// PRICE BY MODEL (2026-09-22). A flat tier asked for a model that another flat
+// tier serves used to answer 400 naming that tier. Now the 402 quotes the
+// model's HOME tier price and, once that price is paid, the request is served
+// under the home tier's whole config (allowlist, caps, max_price, margin clamp,
+// failover chain, reasoning defaults, server-tool budget). The price function
+// runs on every request including the paid retry, so a payment authorized at
+// one tier's price cannot ride a body naming a dearer tier's model.
+//
+// Scope: the four named flat tiers only (nano, base, pro, premium) as both the
+// route and the home. The router tiers pick their own model, the grounded tier
+// is sold on its web search, the stealth tier is locked to one model whose
+// provider keeps prompts (never a destination a caller did not choose by
+// route), and the metered tier already serves every flat-tier model.
+export function isFlatTier(slug) {
+  const t = TIERS[slug];
+  return !!t && !t.metered && !t.router && !t.lockedModel && !t.stealth && !t.web;
+}
+/** The flat tier a request should be priced and served as when `routeTier`
+ *  (a flat tier) does not allow `model` but another flat tier does; null when
+ *  the route serves the model itself, the model has no flat home, or the model
+ *  id carries a variant every tier refuses (it is answered by the 400). */
+// `model: "auto"` on a flat route (2026-09-29: v1-chat answered 400 "Model
+// \"auto\" is not in the gateway allowlist" to real callers) is the auto tier's
+// own spelling for "route this for me", so it is priced and served as the auto
+// tier: the 402 quotes the auto price and the answer carries agent402_router.
+// Never the route tier's caps: the served config is the auto tier's, whatever
+// route the body arrived on.
+export const AUTO_MODEL = "auto";
+export const AUTO_TIER = "v1-chat-auto";
+export function crossTierHome(routeTier, model) {
+  if (!isFlatTier(routeTier)) return null;
+  const m = canonicalModel(model);
+  if (m === AUTO_MODEL && TIERS[AUTO_TIER]?.router === true) return AUTO_TIER;
+  if (!m || tierAllows(routeTier, m)) return null;
+  try { refuseCostVariants(m); } catch { return null; }
+  const home = tierFor(m);
+  return home && home !== routeTier && isFlatTier(home) ? home : null;
+}
+/** The per-request price of a flat route: its home tier's price when the body
+ *  names another flat tier's model, else the route's own. Cheap (no tokenizer),
+ *  never throws. The wires pass the model the way their validator reads it. */
+export function flatTierQuoteUsd(routeTier, model) {
+  let home = null;
+  try { home = crossTierHome(routeTier, model); } catch { home = null; }
+  return TIERS[home || routeTier].price;
+}
+/** The tier a handler serves under. The home tier only when the price this
+ *  request was gated at (`req.__meteredQuoteUsd`, stashed by the x402 price
+ *  function and by the Tempo, Stripe and credits gates) covers that tier's
+ *  price. No request (route-execute's in-process dispatch) or no stashed price
+ *  (FREE_MODE) keeps the route tier, so the model is refused with the 400
+ *  naming its home tier, exactly as before. */
+export function servedTierFor(routeTier, model, req) {
+  const home = crossTierHome(routeTier, model);
+  if (!home) return routeTier;
+  const gated = Number(req?.__meteredQuoteUsd);
+  return Number.isFinite(gated) && gated + 1e-9 >= TIERS[home].price ? home : routeTier;
+}
+/** What a machine-readable surface must say about a flat chat route now that
+ *  its price depends on the body. The catalog price is still the price for the
+ *  models that tier serves, so the figure on /api/pricing and /openapi.json
+ *  stays exactly right - but a buyer budgeting from it would be surprised by a
+ *  dearer 402 on a cross-tier model, and a fixed number with no sentence beside
+ *  it reads as a promise. ONE copy, read by both surfaces: a price sentence
+ *  typed twice is a price sentence that drifts. */
+export const PRICED_BY_MODEL_NOTE = "Flat per call for the models this tier serves. A body naming another flat tier's model (nano, base, pro, premium) is quoted at that tier's price in the 402 and served under that tier; model \"auto\" is quoted and served as the auto tier. The answer names the tier in agent402_tier. The live 402 is always the price.";
+
+/** The additive `agent402_tier` field a cross-tier answer carries. */
+export function crossTierDisclosure(routeTier, servedTier) {
+  return {
+    route: TIERS[routeTier].route.split(" ")[1],
+    served: servedTier,
+    priceUsd: TIERS[servedTier].price,
+    note: servedTier === AUTO_TIER
+      ? `Model "auto" is routed by the ${servedTier} tier, so this call was priced and served as that tier.`
+      : `The model you named is served by the ${servedTier} tier, so this call was priced and served as that tier.`,
+  };
 }
 
 const MAX_MESSAGES = 100; // default; a tier may raise it (`maxMessages`) - the metered tier does, its quote grows with the body
@@ -741,45 +850,46 @@ export const MODEL_COST = [
   ["openai/o3-mini", { prompt: 1.1, completion: 4.4 }],
   ["openai/o3", { prompt: 2, completion: 8 }],
   ["openai/o4-mini", { prompt: 1.1, completion: 4.4 }],
-  // OpenAI-family rows carry the azure/swedencentral figure, 10% over the
-  // headline and inside every tier bound (live endpoints 2026-09-18).
+  // OpenAI-family rows carry the dearest routable endpoint's figure, inside
+  // every tier bound (live endpoints 2026-09-18).
   ["openai/gpt-5-nano", { prompt: 0.055, completion: 0.44 }],
   ["openai/gpt-5-mini", { prompt: 0.275, completion: 2.2 }],
   // gpt-5.6 family — explicit entries are LOAD-BEARING: costFor's plain
-  // startsWith would otherwise match "openai/gpt-5" and price sol at a fifth
-  // of its real cost. -pro variants share their base price and match these
-  // prefixes. The per-row comments carry the date each was last read live;
-  // the figures BELOW are the source of truth, not this block - it once still
-  // said "sol $5/$30" a day after the row beneath it had been corrected to
-  // 2/10, so a reader could not tell which to believe. test-gateway-model-ids
-  // checks every row against the live catalog on each run.
+  // startsWith would otherwise match "openai/gpt-5" and under-price sol.
+  // -pro variants share their base price and match these prefixes. The
+  // per-row comments carry the date each was last read live; the figures are
+  // the source of truth. test-gateway-model-ids checks every row against the
+  // live catalog on each run.
   // Rows are the DEAREST live endpoint OpenRouter can route a default-tier call
-  // to, not the catalog headline (2026-09-18 audit): sol's headline is $2/$10
-  // but its azure/us and azure/eu endpoints bill $5.5/$33 and sit inside the
-  // premium max_price bound, so the headline row under-counted a routable
-  // fallback by 2.75x. test-gateway-model-ids rule 4 reads every admitted
+  // to, not the catalog headline (2026-09-18 audit): a regional endpoint inside
+  // the tier's max_price bound can bill above the headline, so a headline row
+  // under-counts a routable fallback. test-gateway-model-ids rule 4 reads every admitted
   // model's /endpoints and fails on a row under any default-tier endpoint;
   // the priority ("*/fast") endpoints are excluded because no wire ever sends
   // service_tier "priority" (pinned from source in the same test).
-  ["openai/gpt-5.6-sol", { prompt: 5.5, completion: 33 }],   // live endpoints 2026-09-18 (headline 2/10; azure/us + azure/eu 5.5/33)
-  ["openai/gpt-5.6-terra", { prompt: 2.2, completion: 13.2 }], // headline 2/12; azure/us + azure/eu bill 2.2/13.2 (live endpoints 2026-09-18)
-  // GPT-6 Astra (premium, admitted 2026-09-18): headline $10/$50, azure/us
-  // endpoint $11/$55 inside the premium bound; the "openai/gpt-5" row would
+  ["openai/gpt-5.6-sol", { prompt: 5.5, completion: 33 }], // live endpoints 2026-09-18
+  ["openai/gpt-5.6-terra", { prompt: 2.2, completion: 13.2 }], // live endpoints 2026-09-18
+  // GPT-6 Astra (premium, admitted 2026-09-18): the "openai/gpt-5" row would
   // never match it (boundary-aware) so it would have fallen to the tier bound.
   ["openai/gpt-6-astra", { prompt: 11, completion: 55 }],
+  // GPT-6 Luna (nano) and Sol (pro), admitted 2026-09-24: regional endpoints
+  // are the dearest default-tier routes (live endpoints 2026-09-24).
+  ["openai/gpt-6-luna", { prompt: 0.11, completion: 0.55 }],
+  ["openai/gpt-6-sol", { prompt: 2.2, completion: 11 }],
   // Nano-tier small models, live 2026-09-02 (exact rows so the clamp prices
   // them at cost instead of the tier bound).
-  ["mistralai/ministral-8b-2512", { prompt: 0.165, completion: 0.165 }], // mistral/eu endpoint +10% (live endpoints 2026-09-18)
+  ["mistralai/ministral-8b-2512", { prompt: 0.165, completion: 0.165 }], // live endpoints 2026-09-18
   ["mistralai/ministral-3b-2512", { prompt: 0.11, completion: 0.11 }],
-  ["openai/gpt-5.6-luna", { prompt: 0.22, completion: 1.32 }], // headline $0.20/$1.20; azure/us + azure/eu bill 0.22/1.32 (live endpoints 2026-09-18)
+  ["mistralai/mistral-medium-3-5", { prompt: 2.2, completion: 8.25 }], // dearest endpoint (mistral/eu) 2026-09-25
+  ["openai/gpt-5.6-luna", { prompt: 0.22, completion: 1.32 }], // live endpoints 2026-09-18
   // gpt-5-pro / gpt-5-image (+ -mini, :batch) sit under the "openai/gpt-5"
   // prefix at far higher rates - explicit so the family rate never prices them
-  // (live 2026-08-19: image $10/$10, image-mini $2.5/$2, pro:batch $7.5/$60).
+  // (live 2026-08-19).
   ["openai/gpt-5-pro", { prompt: 15, completion: 120 }],
   ["openai/gpt-5-image", { prompt: 10, completion: 10 }],
   ["openai/gpt-5", { prompt: 1.375, completion: 11 }],
   ["openai/gpt-4o-mini", { prompt: 0.165, completion: 0.66 }],
-  // STILL LIVE upstream at $5/$15 until OpenAI removes it on 2026-10-23, and the
+  // STILL LIVE upstream until OpenAI removes it on 2026-10-23, and the
   // "openai/gpt-4o" prefix admits it, so the row stays until the id is gone: with
   // no row the plain gpt-4o price would UNDER-count it (the live guard says so).
   // Delete this row once the live guard reports the id absent.
@@ -787,71 +897,86 @@ export const MODEL_COST = [
   ["openai/gpt-4o", { prompt: 2.5, completion: 10 }],
   ["openai/gpt-4.1-mini", { prompt: 0.44, completion: 1.76 }],
   ["openai/gpt-4.1", { prompt: 2.2, completion: 8.8 }],
-  // claude-opus covers claude-opus-5 ($5/$25 headline) - the $15/$75 legacy-opus
-  // blanket overestimates it, which is the safe direction. Longest prefix wins,
+  // claude-opus covers claude-opus-5 - the legacy-opus blanket overestimates it, which is the safe direction. Longest prefix wins,
   // so the specific rows below beat the legacy blanket. The "-fast" model ids
   // (claude-opus-5-fast, -4.7-fast, -4.8-fast) LEFT the catalog when Anthropic
   // retired fast mode on 2026-07-24; "anthropic/fast" is now an ENDPOINT TAG
-  // (priority tier, $10/$50 on opus-5) that a default-tier call never routes to,
+  // (priority tier) that a default-tier call never routes to,
   // so those rows were deleted 2026-09-18 (the live guard reads the ids absent).
-  // Regional endpoints (google-vertex/us, amazon-bedrock/eu-west-1 ...) bill
-  // 10% over the headline on every Claude model and are inside every tier
-  // bound, so the rows carry the regional figure (live endpoints 2026-09-18).
+  // Regional endpoints bill above the headline on every Claude model and are
+  // inside every tier bound, so the rows carry the regional figure (live
+  // endpoints 2026-09-18).
+  // claude-opus-5.5 (listed 2026-09-22) is admitted by the claude-opus prefix;
+  // without its own row the opus-5 row priced it (over, the safe direction,
+  // but its own figure is the honest clamp). Live endpoints 2026-09-24.
+  ["anthropic/claude-opus-5.5", { prompt: 4.4, completion: 22 }],
   ["anthropic/claude-opus-5", { prompt: 5.5, completion: 27.5 }],
   ["anthropic/claude-opus-4.5", { prompt: 5.5, completion: 27.5 }],
   ["anthropic/claude-opus-4.6", { prompt: 5.5, completion: 27.5 }],
   ["anthropic/claude-opus-4.7", { prompt: 5.5, completion: 27.5 }],
   ["anthropic/claude-opus-4.8", { prompt: 5.5, completion: 27.5 }],
-  // opus-4 and 4.1 genuinely still list at $15/$75.
+  // opus-4 and 4.1 still list at the legacy rate.
   ["anthropic/claude-opus", { prompt: 15, completion: 75 }],
-  // Claude Fable 5.1 (premium, admitted 2026-09-18): headline $10/$50 on every
-  // endpoint; the family row is the belt for fable-5, whose google-vertex/europe
-  // endpoint bills $11/$55. Without these the "anthropic/claude" haiku blanket
-  // ($1/$5) would price Fable at a TENTH of its cost.
+  // Claude Fable 5.1 (premium, admitted 2026-09-18); the family row is the
+  // belt for fable-5's dearest endpoint. Without these the "anthropic/claude"
+  // haiku blanket would badly under-price Fable.
   ["anthropic/claude-fable-5.1", { prompt: 10, completion: 50 }],
   ["anthropic/claude-fable", { prompt: 11, completion: 55 }],
-  // claude-sonnet covers claude-sonnet-5 — was priced at an anticipated
-  // STANDARD $3/$15 to guard against a scheduled 2026-09-01 increase from the
-  // $2/$10 intro rate; Anthropic cancelled that increase on 2026-08-10 and
-  // made $2/$10 the permanent standard price (confirmed against their own
-  // release notes, not just OpenRouter's current listing — the two would
-  // read identically before 09-01 either way). Live on OpenRouter at $2/$10.
-  ["anthropic/claude-sonnet-4", { prompt: 3.3, completion: 16.5 }], // sonnet-4 / 4.5 / 4.6 headline $3/$15, regional endpoints +10% (live 2026-09-18)
-  ["anthropic/claude-sonnet", { prompt: 2.2, completion: 11 }], // sonnet-5 headline $2/$10; google-vertex/us + amazon-bedrock/eu-west-1 bill $2.2/$11 (live 2026-09-18)
+  // claude-sonnet covers claude-sonnet-5 (standard price confirmed against
+  // Anthropic's own release notes 2026-08-10).
+  ["anthropic/claude-sonnet-4", { prompt: 3.3, completion: 16.5 }], // live 2026-09-18
+  ["anthropic/claude-sonnet-5.5", { prompt: 2.2, completion: 11 }], // 2026-09-29
+  ["anthropic/claude-sonnet", { prompt: 2.2, completion: 11 }], // live 2026-09-18
   ["anthropic/claude-3.5-sonnet", { prompt: 3, completion: 15 }],
   ["anthropic/claude-3.7-sonnet", { prompt: 3, completion: 15 }],
-  ["anthropic/claude-haiku-4.5", { prompt: 1.1, completion: 5.5 }], // headline $1/$5; amazon-bedrock/us + google-vertex/us-east5 bill $1.1/$5.5 (live 2026-09-18)
-  ["anthropic/claude", { prompt: 1, completion: 5 }], // haiku family
-  ["google/gemini-2.5-pro", { prompt: 1.25, completion: 10 }], // live 2026-08-28
+  ["anthropic/claude-haiku-4.5", { prompt: 1.1, completion: 5.5 }], // live 2026-09-18
+  ["anthropic/claude", { prompt: 1, completion: 5 }],
   ["google/gemini-pro", { prompt: 2.5, completion: 15 }],
   // gemini-3.x — explicit entries: the bare "google/gemini" flash-family rate
-  // would underestimate them. Live 2026-08-04: 3.5-flash $1.5/$9, 3.6-flash
-  // $1.5/$7.5, 3.1-pro(-preview) $2/$12, lites $0.25-0.30/$1.5-2.5.
+  // would underestimate them (live 2026-08-04).
   ["google/gemini-3.5-flash-lite", { prompt: 0.4, completion: 3 }],
   ["google/gemini-3.5-flash", { prompt: 2, completion: 10 }],
-  ["google/gemini-3.6-flash", { prompt: 0.825, completion: 4.125 }], // headline 0.75/3.75; google-vertex/us bills +10% (live endpoints 2026-09-18)
+  ["google/gemini-3.6-flash", { prompt: 0.825, completion: 4.125 }], // live endpoints 2026-09-18
   ["google/gemini-3.1-flash-lite", { prompt: 0.4, completion: 2 }],
+  ["inception/mercury-2.5", { prompt: 0.04, completion: 0.15 }], // one live endpoint, 2026-09-29
   ["google/gemini-3.1-pro", { prompt: 2.5, completion: 15 }],
-  ["google/gemini", { prompt: 0.4, completion: 2.5 }], // flash family
-  ["x-ai/grok", { prompt: 2.2, completion: 6.6 }],       // grok-4.6 headline 2/6; amazon-bedrock/us-west-2 bills 2.2/6.6 (live endpoints 2026-09-18)
+  ["google/gemini", { prompt: 0.4, completion: 2.5 }],
+  ["x-ai/grok", { prompt: 2.2, completion: 6.6 }], // live endpoints 2026-09-18
   // deepseek-v4-pro and r1 price above deepseek-chat; explicit so the family
   // rate keeps fitting chat. This prefix covers TWO live pools that repriced
-  // three times in two days (completion 3.168 -> 3.96 on -0813; then base
-  // v4-pro's 18-provider pool reached prompt $1.91 on 2026-08-20). Prompt is
-  // pinned AT v1-chat's max_price prompt cap (2.5), so no provider the tier
-  // admits can ever exceed it there — this guard cannot re-fire on prompt;
-  // completion 4.5 covers the observed max 3.96 with ~14% headroom.
-  ["deepseek/deepseek-v4-pro", { prompt: 2.5, completion: 4.95 }], // completion: venice endpoint 4.95 (live endpoints 2026-09-18)
-  ["deepseek/deepseek-v3.2", { prompt: 1, completion: 2.5 }], // phala endpoint prompt $1 vs the $0.6 family rate (live endpoints 2026-09-18)
+  // repeatedly. Prompt is pinned AT v1-chat's max_price prompt cap, so no
+  // provider the tier admits can ever exceed it there; completion covers the
+  // observed maximum.
+  ["deepseek/deepseek-v4-pro", { prompt: 2.5, completion: 10 }], // live endpoints 2026-09-30 (reka completion $10)
+  // deepseek-chat-v3.1: one regional endpoint lists prompt above the family row (live endpoints 2026-09-24).
+  ["deepseek/deepseek-chat-v3.1", { prompt: 0.65, completion: 2.5 }],
+  // deepseek-v3.2: re-admitted once its upstream expiration date was withdrawn.
+  // Two endpoints list both units above the family row. Their prompt sits over
+  // the base tier's bound, so on base provider.max_price refuses them and the
+  // other endpoints route (the clamp still prices base at min(row, bound)); the
+  // metered tier sends this row as its bound and admits all of them. Live
+  // endpoints 2026-09-28.
+  ["deepseek/deepseek-v3.2", { prompt: 3, completion: 4.5 }],
   ["deepseek/deepseek-r1", { prompt: 0.8, completion: 2.5 }],
   ["deepseek/", { prompt: 0.6, completion: 2.5 }],
   ["meta-llama/", { prompt: 3.5, completion: 3.5 }],
-  ["mistralai/", { prompt: 2.2, completion: 7.5 }], // mistral-medium-3-5 $1.5/$7.5 (live 2026-08-19); mistral-large on mistral/eu 2.2/6.6 (live endpoints 2026-09-18)
-  ["qwen/", { prompt: 2, completion: 6.4 }], // qwen3.8-max / -2.4t-a95b $2/$6 (live 2026-08-19)
-  ["poolside/", { prompt: 0.15, completion: 0.3 }], // laguna xs/s: $0.06-0.09/$0.12-0.18
-  // Stealth listing: genuinely $0/$0 upstream (verified on the live catalog
-  // 2026-08-22 - pricing.prompt "0", pricing.completion "0", and a real call
-  // returned usage.cost 0). A zero row makes the margin clamp a NO-OP by
+  ["meta/muse-spark", { prompt: 1.25, completion: 4.25 }], // live 2026-09-23
+  ["meta/muse-glimmer", { prompt: 0.35, completion: 1.5 }], // live 2026-09-23
+  ["mistralai/", { prompt: 2.2, completion: 7.5 }], // live 2026-08-19
+  // qwen3.8-max-prime (listed 2026-09-23, one endpoint) sits above the family
+  // row. The metered tier sends the row itself as provider.max_price, so with
+  // only the family row every metered call to it was refused upstream. It
+  // does not fit the base tier's bound, so on base it still walks the chain;
+  // the metered tier is its real home. Live endpoints 2026-09-24.
+  ["qwen/qwen3.8-max-prime", { prompt: 4, completion: 12 }],
+  // qwen3.7-max: one endpoint lists both units above the family row and still
+  // inside the base tier's bound, so the family row under-priced it on the
+  // base and metered tiers alike (live endpoints 2026-09-27).
+  ["qwen/qwen3.7-max", { prompt: 2.5, completion: 7.5 }],
+  ["qwen/", { prompt: 2, completion: 6.4 }], // live 2026-08-19
+  ["poolside/", { prompt: 0.15, completion: 0.3 }],
+  // Stealth listing: priced zero on the live catalog (verified 2026-08-22).
+  // A zero row makes the margin clamp a NO-OP by
   // design (see clampToMargin's zero-cost branch); the v1-chat-ox maxPrice
   // bound is what actually holds the margin if the model is ever repriced.
   ["stealth/ox-alpha", { prompt: 0, completion: 0 }],
@@ -868,9 +993,9 @@ export function costFor(model) {
   return best ? best.cost : null;
 }
 
-/** Worst-case input multiplier when prompt caching is on: Anthropic bills a
- *  cache write at 1.25x list input (5-minute TTL; 1h would be 2x and is
- *  refused). Everyone else caches implicitly at <= list. */
+/** Worst-case input multiplier when prompt caching is on: an Anthropic cache
+ *  write bills above list input (5-minute TTL; the 1h TTL is refused).
+ *  Everyone else caches implicitly at <= list. */
 export function cacheWriteFactor(model) {
   return canonicalModel(model).toLowerCase().startsWith("anthropic/") ? 1.25 : 1;
 }
@@ -917,20 +1042,17 @@ export function cacheControlPref(input) {
   if (cc === false || cc === null) return null;
   if (!cc || typeof cc !== "object" || Array.isArray(cc)) throw bad('"cache_control" must be {type:"ephemeral"} (optional ttl:"5m"), or false to disable prompt caching');
   if (cc.type !== "ephemeral") throw bad('"cache_control.type" must be "ephemeral"');
-  if (cc.ttl !== undefined && cc.ttl !== "5m") throw bad('"cache_control.ttl" must be "5m" - the 1h tier doubles cache-write cost and is not offered at these flat prices');
+  if (cc.ttl !== undefined && cc.ttl !== "5m") throw bad('"cache_control.ttl" must be "5m" - the 1h tier is not offered at these flat prices');
   return { type: "ephemeral" };
 }
 
-export const MARGIN = 0.7;   // worst-case upstream ≤ 70% of the tier price
+export const MARGIN = 0.7;   // worst-case upstream bound, as a fraction of the tier price
 const MIN_OUT_TOKENS = 64;   // a clamp below this is useless - reject with guidance instead
 const IMAGE_TOKENS = 1600;   // conservative flat per-image input estimate (high-detail tiling)
-// Per-model overrides (longest prefix wins). OpenAI bills gpt-4o-mini image
-// input at ~33x the 4o token count (2,833 base + 5,667 per 512px tile, up to
-// 8 tiles at high detail = ~48k tokens, ~$0.0072/image at $0.15/M) so that a
-// "cheap" model costs the same dollars per image as 4o - the flat 1,600 under-
-// priced it ~30x and four images on the $0.02 tier were ~$0.029 of upstream
-// (security review 2026-08-19). gpt-4.1-nano/mini use patch multipliers
-// (2.46x / 1.62x on <=1,536 patches): ~3.8k / ~2.5k worst case.
+// Per-model overrides (longest prefix wins). gpt-4o-mini counts image input
+// at many times the 4o token count (base + per-512px-tile, up to 8 tiles at
+// high detail = ~48k tokens), so the flat estimate badly under-counted it
+// (security review 2026-08-19). gpt-4.1-nano/mini use patch multipliers.
 const IMAGE_TOKENS_BY_MODEL = [
   ["openai/gpt-4o-mini", 48_200],
   ["openai/gpt-4.1-mini", 2_500],
@@ -972,23 +1094,14 @@ const TOKEN_SAFETY = 1.15;   // headroom for BPE drift across vendors
 //     error result instead of executing" (web_search and web_fetch). A hard
 //     count, enforced at the tool, so parallel tool calls in one step cannot
 //     overshoot the DOLLAR side.
-//   * a PINNED engine with a published per-call price, so a use costs a known
-//     number of dollars. Verified 2026-08-22:
-//       web_search, Exa: instant/fast/auto $0.007, deep-lite/deep $0.012,
-//         deep-reasoning $0.015 per request. (Native provider search is billed
-//         by the provider at rates we do not control and forwards `max_uses`
-//         only to Anthropic - so `engine` is pinned to "exa", never "auto".)
-//       web_fetch, engine "openrouter" (direct HTTP fetch): "Free". Exa and
-//         Parallel are $1 per 1,000 fetches; Firecrawl is BYOK.
-//       datetime: "no additional cost beyond standard token usage".
-//     Re-read 2026-09-18: the server-tool price table now also lists
-//       Parallel (turbo/fast $0.001, basic/advanced $0.005 per request) and
-//       Perplexity ($0.005). Exa stays pinned here for the same reason the
-//       grounded tier keeps it (see v1-chat-grounded): measured side by side
-//       that day, Parallel's $0.001 modes returned archive pages where Exa
-//       returned release and schedule pages, and answered wrong on a
-//       non-English prompt. The price table would allow the switch; the
-//       results do not.
+  //   * a PINNED engine with a published per-call price, so a use costs a known
+//     amount (verified 2026-08-22, re-read 2026-09-18):
+//       web_search: engine pinned to "exa", never "auto" (native provider
+//         search is billed at rates we do not control and forwards
+//         `max_uses` only to Anthropic). Exa stays pinned for the same
+//         reason the grounded tier keeps it (see v1-chat-grounded).
+//       web_fetch: engine "openrouter" (direct HTTP fetch), the unpriced one.
+//       datetime: no cost beyond standard token usage.
 //   * `max_characters` / `max_content_tokens` - a hard per-result content cap,
 //     which is what bounds the TOKEN side.
 //
@@ -1021,7 +1134,7 @@ const TOKEN_SAFETY = 1.15;   // headroom for BPE drift across vendors
 // deliberate over-estimate of the true triangular growth.
 export const SERVER_TOOL_POLICY = {
   "openrouter:web_search": {
-    feeUsdPerUse: 0.007, // Exa, mode auto - the published request price
+    feeUsdPerUse: 0.007, // pinned engine + mode: the published request price
     // Cost-neutral narrowing a buyer may still ask for. Domain filters only
     // ever shrink the result set and never change the per-request price.
     buyerParams: ["allowed_domains", "excluded_domains"],
@@ -1030,7 +1143,7 @@ export const SERVER_TOOL_POLICY = {
     pin(limits) {
       return {
         engine: "exa",   // never "auto": native search is priced by the provider
-        mode: "auto",    // $0.007; deep-lite/deep are $0.012, deep-reasoning $0.015
+        mode: "auto",    // the deeper modes are priced higher
         max_uses: limits.max_uses,
         max_results: limits.max_results,
         max_total_results: limits.max_uses * limits.max_results,
@@ -1042,7 +1155,7 @@ export const SERVER_TOOL_POLICY = {
     tokensPerUse: (l) => Math.ceil((l.max_results * l.max_characters / 4) * TOKEN_SAFETY) + 200,
   },
   "openrouter:web_fetch": {
-    feeUsdPerUse: 0, // engine "openrouter" is priced "Free" (Exa/Parallel are $0.001)
+    feeUsdPerUse: 0, // engine "openrouter" carries no per-fetch fee
     buyerParams: ["allowed_domains", "blocked_domains"],
     pin(limits) {
       return {
@@ -1194,13 +1307,13 @@ export function worstCaseUpstreamCost(body, tier, imageCount = 0) {
   // the worst case is the min of the two. The METERED tier quotes the model's
   // own row and sends THAT row as its bound (`costFor` in the handlers), so
   // its quote must not be min'd with a ceiling the request never carries
-  // (review 2026-08-27: opus-4.7-fast at 30/150 quoted as 20/100, ~30% under).
+  // (review 2026-08-27: a pricier model quoted under its own row).
   const cost = tier.metered ? { prompt: listed.prompt, completion: listed.completion } : {
     prompt: Math.min(listed.prompt, tier.maxPrice.prompt),
     completion: Math.min(listed.completion, tier.maxPrice.completion),
   };
   // A tier may inject upstream input of its own (the grounded tier's web
-  // results ride into the prompt as tokens - measured ~700 tokens/result) and
+  // results ride into the prompt as tokens) and
   // carry a fixed per-call upstream fee (the search itself, billed per
   // request on top of tokens). Both are the tier's cost, not the buyer's
   // input, and both are priced here so the clamp stays an honest bound.
@@ -1212,8 +1325,8 @@ export function worstCaseUpstreamCost(body, tier, imageCount = 0) {
   const st = serverToolWorstCase(body, tier);
   const inTokens = (estimateInputTokens(body, imageCount) + (tier.extraInputTokens || 0) + st.injectedTokens) * st.turns;
   // Prompt caching rides by default (top-level cache_control, see
-  // cacheControlPref): on Anthropic a cache WRITE bills 1.25x list input
-  // (reads 0.1x), so the worst case for a first-seen long prompt is 1.25x -
+  // cacheControlPref): on Anthropic a cache WRITE bills above list input
+  // (see cacheWriteFactor), so the worst case for a first-seen long prompt is
   // priced in here so the clamp stays an honest bound; every other provider
   // caches implicitly at list price or below.
   const inUsd = (inTokens / 1e6) * cost.prompt * cacheWriteFactor(body.model) * tokenizerFactor(body.model);
@@ -1272,7 +1385,7 @@ export function clampToMargin(body, tier, imageCount) {
 
 /** Per-block `cache_control` (Anthropic's explicit cache markers ride inside
  *  content blocks too): only the 5-minute ephemeral cache is priced - the 1h
- *  TTL writes at 2x input, over the 1.25x the margin clamp assumes. The
+ *  TTL writes above what the margin clamp assumes. The
  *  top-level field is checked in cacheControlPref; this closes the per-block
  *  path on every wire (security review 2026-08-19). */
 export function checkBlockCacheControl(cc, where) {
@@ -1317,7 +1430,8 @@ const PASSTHROUGH = [
  *  this and accepted "<model>:online" on nano (security review 2026-08-19). */
 export function refuseCostVariants(model) {
   const variant = String(model || "").includes(":") ? String(model).slice(String(model).indexOf(":") + 1).toLowerCase() : "";
-  if (variant === "online") throw bad(`Model variant ":online" is not offered - web search is billed per request on top of token pricing and is outside this tier's price. Use "${String(model).slice(0, String(model).indexOf(":"))}" instead (or POST /v1/grounded/chat/completions for grounded answers).`);
+  if (variant === "online") throw bad(`Model variant ":online" is not offered on this tier. Use "${String(model).slice(0, String(model).indexOf(":"))}" instead (or POST /v1/grounded/chat/completions for grounded answers).`);
+  if (/-contributor(?:$|:)/i.test(String(model || ""))) throw bad(`Model "${String(model)}" is not offered - "contributor" listings are priced for the provider's use of the request data, and a buyer's prompt is never routed there. Use "${String(model).replace(/-contributor/i, "")}" instead.`);
   if (variant === "batch") throw bad(`Model variant ":batch" is not offered - batch ids are asynchronous (24h window) and not served on a synchronous path. Use "${String(model).slice(0, String(model).indexOf(":"))}" instead.`);
 }
 /** Which routes currently sell a given server tool - used so a refusal on the
@@ -1407,6 +1521,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   if (input == null || typeof input !== "object") throw bad("Request body must be a JSON object");
 
   let model = canonicalModel(input.model);
+  const substituted = substitutedFrom(input.model);
   // Locked-model tiers (the stealth tier): the route IS the model. A buyer
   // sending a different model gets a self-explaining 400 naming where that
   // model lives, exactly like the cross-tier errors below - never a silent
@@ -1444,12 +1559,17 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   // Model-id variants that change what is BILLED, not just how it routes.
   // The allowlist's ":variant" match exists for cost-neutral routing hints
   // (:nitro, :floor); these two are not that. Live-verified 2026-08-19
-  // against OpenRouter's docs: ":online" attaches the web-search plugin at
-  // $0.005-0.007 PER REQUEST on top of tokens (outside provider.max_price and
-  // larger than the nano price by itself); ":batch" is the asynchronous batch
+  // against OpenRouter's docs: ":online" attaches the web-search plugin,
+  // billed PER REQUEST on top of tokens (outside provider.max_price);
+  // ":batch" is the asynchronous batch
   // API (24h window), not a chat completion this path can serve.
   refuseCostVariants(model);
   if (!tierAllows(tierSlug, model)) {
+    // "auto" reaches here only when the request was not gated at the auto
+    // price (no request, or FREE_MODE): name the route that serves it.
+    if (model === AUTO_MODEL && TIERS[AUTO_TIER]) {
+      throw bad(`Model "auto" is routed by the ${AUTO_TIER} tier - call ${TIERS[AUTO_TIER].route.split(" ")[1]} (price $${tierPriceLabel(TIERS[AUTO_TIER].price)}/call), or send the body here and pay the auto price the 402 quotes.`);
+    }
     const home = tierFor(model);
     throw bad(
       home
@@ -1539,11 +1659,10 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
     throw bad(`"reasoning.max_tokens" (${reasoning.max_tokens}) must be below "max_tokens" (${maxTokens}) - reasoning tokens are output tokens and the whole output is what is priced`);
   }
   // Tools are OpenAI function-calling entries ONLY. OpenRouter also serves
-  // SERVER-SIDE tool types (openrouter:subagent fans out to up to 10 worker
-  // models billed to us at their rates; openrouter:advisor consults pricier
-  // models mid-generation) whose spend is bounded by NEITHER max_tokens nor
-  // provider.max_price — a $0.003 nano call carrying one would buy upstream
-  // work the flat price never covered. The margin clamp prices tools as
+  // SERVER-SIDE tool types (openrouter:subagent fans out to worker models;
+  // openrouter:advisor consults other models mid-generation) whose spend is
+  // bounded by NEITHER max_tokens nor provider.max_price - a nano call carrying
+  // one would buy upstream work the flat price never covered. The margin clamp prices tools as
   // input tokens; only type:"function" keeps "input tokens" the whole story.
   if (body.tools !== undefined) {
     if (!Array.isArray(body.tools) || body.tools.length === 0) {
@@ -1621,12 +1740,13 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
     }
   }
   if (defaultedModel) Object.defineProperty(body, "__defaultedModel", { value: defaultedModel, enumerable: false });
+  if (substituted && body.model && !tier.lockedModel && !tier.router) Object.defineProperty(body, "__substitutedFrom", { value: substituted, enumerable: false });
   return body;
 }
 
 // ---------------------------------------------------------------------------
-// Flex service tier - OpenRouter's `service_tier: "flex"` is a 50% discount on
-// OpenAI and Google endpoints in exchange for higher latency and lower
+// Flex service tier - OpenRouter's `service_tier: "flex"` is a discounted tier
+// on OpenAI and Google endpoints in exchange for higher latency and lower
 // availability, and it NEVER falls back to the default tier on its own (a flex
 // capacity error surfaces). So every flex-eligible link is tried twice: flex
 // first, then the same model on the default tier, before the chain moves on.
@@ -1635,14 +1755,13 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
 // endpoint tag; gpt-4o(-mini)/4.1/o3 did not (flex on those would 404 and
 // cost a round-trip). scripts/test-gateway-model-ids.js checks every entry
 // against /models/{id}/endpoints, so a model that loses flex fails CI instead
-// of burning a failed attempt per call. Measured on the live catalog: the
-// image model's flex endpoints are exactly half price on every unit incl.
-// image_output ($0.000015 vs $0.00003 per token), and images are ~99% of
-// this gateway's upstream bill. OPENROUTER_FLEX=off is the escape hatch.
+// of burning a failed attempt per call. (The images route left this table on
+// 2026-09-24 with its Gemini model.) OPENROUTER_FLEX=off is the escape hatch.
 export const FLEX_MODELS = [
-  "google/gemini-2.5-flash-image", "google/gemini-2.5-flash-lite", "google/gemini-2.5-flash", "google/gemini-2.5-pro",
   "google/gemini-3.1-flash-lite", "google/gemini-3.5-flash-lite", "google/gemini-3.5-flash", "google/gemini-3.6-flash",
   "openai/gpt-5-nano", "openai/gpt-5.6-luna", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra",
+  // Both carry an "openai/flex" endpoint tag (live endpoints 2026-09-24).
+  "openai/gpt-6-luna", "openai/gpt-6-sol",
 ];
 const FLEX_ENABLED = () => String(process.env.OPENROUTER_FLEX || "on").toLowerCase() !== "off";
 export const PROVIDER_SORT_ENABLED = () => String(process.env.OPENROUTER_PROVIDER_SORT || "on").toLowerCase() !== "off";
@@ -1668,22 +1787,13 @@ export function flexAttempts(chain) {
 // to the model's priority endpoint first ("openai/fast", "anthropic/fast",
 // "google-vertex/global/priority" ...) and falls back to the default
 // endpoints when none can serve, billing whichever endpoint answered. The
-// docs (read 2026-09-18) name no multiplier; the ENDPOINT LISTS do, and this
-// is the dearest one measured that day across the pro/premium allowlists:
-//   openai/fast: 2.0x the headline on gpt-5.6-luna ($0.40/$2.40 vs $0.20/
-//     $1.20), gpt-5.6-terra (4/24 vs 2/12), gpt-5.6-sol (4/20 vs 2/10),
-//     gpt-6-astra (20/100 vs 10/50); a live priority call on luna billed
-//     exactly 2x per token and reported service_tier "priority".
-//   anthropic/fast: 2.0x on claude-opus-5 (10/50 vs 5/25); sonnet-5 and
-//     fable-5.1 have no priority endpoint (Anthropic has retired the tier for
-//     new commitments), so a priority request there falls back to default and
-//     bills default - the factor over-estimates, which is the safe direction.
-//   google */priority: 1.8x on gemini-2.5-pro (2.25/18 vs 1.25/10) and
-//     gemini-3.5-flash (2.7/16.2 vs 1.5/9).
-//   gpt-4o, gpt-4.1, o3, gpt-4o-mini: no priority endpoint at all.
-// So one factor, 2, applied to the MODEL_COST row in worstCaseUpstreamCost
-// (the row is already the dearest DEFAULT endpoint, so 2x the row covers
-// every priority endpoint read above with room), then min'd with the tier's
+// docs (read 2026-09-18) name no multiplier; the ENDPOINT LISTS do.
+// sonnet-5 and fable-5.1 have no priority endpoint, so a priority request
+// there falls back to default - the factor over-estimates, which is the safe
+// direction. gpt-4o, gpt-4.1, o3, gpt-4o-mini: no priority endpoint at all.
+// So one factor (PRIORITY_PRICE_FACTOR) is applied to the MODEL_COST row in
+// worstCaseUpstreamCost (the row is already the dearest DEFAULT endpoint, so
+// the factor covers every priority endpoint read), then min'd with the tier's
 // max_price, which rides upstream and bounds priority endpoints like any
 // other. scripts/test-gateway-model-ids.js reads every admitted model's
 // priority endpoints live and fails if one bills over factor x row.
@@ -1692,12 +1802,12 @@ export function flexAttempts(chain) {
 // flat price: the margin clamp prices the request at the priority rate, so a
 // long prompt gets a smaller max_tokens, or a 400 before any spend - never a
 // call whose worst case exceeds MARGIN x price. The budget tiers refuse it
-// naming those routes, because at 2x a nano/base call has no room left.
+// naming those routes, because a nano/base call has no room left at that rate.
 //
 // `:nitro` is the trap this closes on EVERY tier: the model-variant "admits
 // priority tier endpoints" into its throughput sort, and a live
 // gpt-5.6-luna:nitro call with no service_tier was SERVED at priority
-// (2x, measured 2026-09-18) while this file's comments still called the
+// (2026-09-18) while this file's comments still called the
 // variant "routing-only". An explicit `service_tier: "default"` disables the
 // variant's tier admission (the docs say so; verified live on
 // gpt-4o-mini:nitro), so a default attempt on a :nitro model now carries it,
@@ -1734,8 +1844,8 @@ export function validateServiceTier(input, tier) {
   if (tier.priority !== true) {
     const homes = tiersOfferingPriority();
     throw bad(
-      `The priority service tier is not offered on ${tier.route.split(" ")[1]} - the priority endpoint bills ${PRIORITY_PRICE_FACTOR}x the model's list price, which this tier's price does not cover. ` +
-      (homes.length ? `It is available at the same flat price on ${homes.join(" and ")} (the margin clamp sizes max_tokens for it).` : "It is not currently available on any tier.") +
+      `The priority service tier is not offered on ${tier.route.split(" ")[1]} - this tier's price does not cover it. ` +
+      (homes.length ? `It is available at the same flat price on ${homes.join(" and ")} (max_tokens may be sized down for it).` : "It is not currently available on any tier.") +
       ' Omit "service_tier"' + (speed === "fast" ? ' / send speed:"standard"' : "") + " to use the default tier here."
     );
   }
@@ -1744,7 +1854,7 @@ export function validateServiceTier(input, tier) {
 /** The `service_tier` an outbound attempt carries, or undefined for none:
  *  "flex" on a flex attempt, "priority" when the validated body asked for it,
  *  and "default" on a `:nitro` model whose buyer did not - the explicit value
- *  that keeps the variant a throughput sort and never a 2x endpoint. The one
+ *  that keeps the variant a throughput sort and never a priority endpoint. The one
  *  place any wire spells a service tier (pinned in test-gateway-model-ids). */
 export function serviceTierFor(model, body, flex = false) {
   if (body?.service_tier === "priority") return "priority"; // the buyer asked for fast; never downgraded to flex
@@ -1790,7 +1900,28 @@ export const REASONING_MODELS = [
   { id: "google/gemini-3.5-flash", efforts: ["minimal", "low", "medium", "high"] },
   { id: "google/gemini-3.6-flash", efforts: ["minimal", "low", "medium", "high"] },
   { id: "anthropic/claude-sonnet-5", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  // Claude Sonnet 5.5 (pro, via the claude-sonnet prefix): reasoning MANDATORY,
+  // default effort high (live catalog 2026-09-29); pro injects "low".
+  { id: "anthropic/claude-sonnet-5.5", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  // Mercury 2.5: reasoning default-on at medium, "none" supported (live 2026-09-29).
+  { id: "inception/mercury-2.5", efforts: ["none", "low", "medium", "high"] },
   { id: "anthropic/claude-opus-5", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  // Claude Opus 5.5: reasoning MANDATORY, default effort high (live catalog
+  // 2026-09-24). Same treatment as opus-5: premium leaves the model default,
+  // metered injects "low". Priced on the newer tokenizer (tokenizerFactor).
+  { id: "anthropic/claude-opus-5.5", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  // GPT-6 Luna and Sol: reasoning default-on at medium, "none" supported
+  // (live catalog 2026-09-24). Prefix rows cover the -pro twins.
+  { prefix: "openai/gpt-6-luna", efforts: ["none", "low", "medium", "high", "xhigh", "max"] },
+  { prefix: "openai/gpt-6-sol", efforts: ["none", "low", "medium", "high", "xhigh", "max"] },
+  // Grok 4.5 / 4.6 / 4.7 (pro, via the x-ai/grok prefix): reasoning MANDATORY,
+  // default effort high (live catalog 2026-09-24). Without a row a small
+  // budget is spent reasoning at "high" and comes back empty.
+  { id: "x-ai/grok-4.5", efforts: ["low", "medium", "high"] },
+  { id: "x-ai/grok-4.6", efforts: ["low", "medium", "high", "xhigh"] },
+  { id: "x-ai/grok-4.7", efforts: ["low", "medium", "high", "xhigh"] },
+  // qwen3.8-max-prime: reasoning MANDATORY, default effort xhigh (live 2026-09-24).
+  { id: "qwen/qwen3.8-max-prime", efforts: ["minimal", "low", "medium", "high", "xhigh"] },
   // GPT-6 Astra: reasoning MANDATORY (no "none"), default effort medium; the
   // prefix covers gpt-6-astra-pro, which the live catalog lists with the same
   // set. Claude Fable 5.1: adaptive thinking mandatory, default effort high.
@@ -1804,6 +1935,15 @@ export const REASONING_MODELS = [
   // (measured at 32 tokens). Supported efforts are exactly low/high/max - no
   // "minimal", no "medium" - so "lowest" resolves to "low".
   { id: "stealth/ox-alpha", efforts: ["low", "high", "max"] },
+  // Muse Glimmer 30B: reasoning.mandatory true, default_effort medium, efforts
+  // low/medium/high/xhigh (live catalog 2026-09-23). Without this row a small
+  // budget is spent reasoning at "medium" and comes back empty.
+  { prefix: "meta/muse-glimmer", efforts: ["low", "medium", "high", "xhigh"] },
+  // Muse Spark: reasoning mandatory ("cannot be disabled" on effort none), no
+  // reasoning block in the catalog, efforts minimal..xhigh accepted live
+  // 2026-09-23. At 120 max_tokens "low" spent every token reasoning and came
+  // back empty; "minimal" answered with 57 reasoning tokens.
+  { prefix: "meta/muse-spark", efforts: ["minimal", "low", "medium", "high", "xhigh"] },
 ];
 export function reasoningRowMatches(row, id) {
   const m = String(id || "").toLowerCase();
@@ -1985,16 +2125,20 @@ export function createSseUsageScrubber({ onUsage } = {}) {
  * review. `scripts/test-openrouter-attribution.js` fails if any call site in
  * src/ reaches openrouter.ai without them.
  */
-export const OPENROUTER_ATTRIBUTION = Object.freeze({
-  "HTTP-Referer": "https://agent402.tools",
-  "X-Title": "Agent402.Tools x402 gateway",
-  "X-OpenRouter-Title": "Agent402.Tools x402 gateway",
-  "X-OpenRouter-Categories": "personal-agent,api",
-});
 
 export async function fetchOpenRouter(body, { timeoutMs, signal, url = OPENROUTER_URL } = {}) {
   const key = OPENROUTER_KEY();
   if (!key) throw bad("LLM gateway not configured (OPENROUTER_API_KEY unset)", 503);
+  // Inside a report composite, the client-gone signal is aborted when the
+  // buyer's connection closed before the first byte and the charge was
+  // cancelled (src/hangup-settlement.js, src/drain-abort.js): the payment will
+  // not settle, so start no new paid call, and cut off the one in flight. The
+  // client-gone reason (a 499) is rethrown as is, so the dispatcher answers
+  // 499 and a chain walker does not treat it as a link failure. Outside such
+  // a scope this is null and nothing changes.
+  const gone = clientGoneSignal();
+  if (gone?.aborted) throw gone.reason;
+  const own = signal ?? AbortSignal.timeout(timeoutMs ?? 90_000);
   try {
     return await fetch(url, {
       method: "POST",
@@ -2004,9 +2148,10 @@ export async function fetchOpenRouter(body, { timeoutMs, signal, url = OPENROUTE
         ...OPENROUTER_ATTRIBUTION,
       },
       body: JSON.stringify(body),
-      signal: signal ?? AbortSignal.timeout(timeoutMs ?? 90_000),
+      signal: gone ? AbortSignal.any([own, gone]) : own,
     });
   } catch (e) {
+    if (gone?.aborted) throw gone.reason;
     throw bad(`Upstream request failed: ${e.message}`, 504);
   }
 }
@@ -2230,8 +2375,8 @@ export const GATEWAY_TIER_BY_PATH = Object.fromEntries(
 const OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits";
 const OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key";
 const CREDITS_CACHE_MS = 5 * 60 * 1000;
-// $15, not $5 (raised 2026-08-19): top-up is manual, and at the margin clamp
-// (upstream <= 70% of price) $5 of credits is under an hour of a busy day.
+// Default low-water (raised 2026-08-19): top-up is manual, so the alarm must
+// leave room for a busy day before the balance runs out.
 const LOW_CREDITS_USD = () => Number(process.env.OPENROUTER_LOW_CREDITS_USD) || 15;
 // The prod key carries its own USD limit (a runaway/leak backstop, set in the
 // OpenRouter dashboard, monthly reset). It is a SECOND ceiling: hitting it
@@ -2303,9 +2448,8 @@ export async function gatewayCreditsStatus() {
 // default-ON (opt out with cache:false): a byte-identical repeat within the
 // TTL is served free pre-paywall with zero freshness concerns.
 //
-// Cost discipline: caps 16k chars (~4k tokens) / 64 items per request.
-// Worst-case upstream at the caps: 3-small $0.00008, ada-002 $0.0004,
-// 3-large $0.00052 — all ≥3.8x under the $0.002 price.
+// Cost discipline: caps 16k chars (~4k tokens) / 64 items per request,
+// plus the margin clamp in validateEmbeddingsRequest.
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings";
 export const EMBEDDINGS_PATH = "/v1/embeddings";
@@ -2354,8 +2498,7 @@ export function validateEmbeddingsRequest(input) {
   const body = { model, input: items };
   // Margin clamp — same discipline as the chat tiers. The char cap alone
   // can't bound the bill: token-dense scripts pack ~2 cl100k tokens per char
-  // (rare CJK), so 16k chars ≈ 32k tokens — $0.0042 on 3-large, over the
-  // $0.002 price. There is no output knob to shrink here, so an over-budget
+  // (rare CJK), so 16k chars ≈ 32k tokens. There is no output knob to shrink here, so an over-budget
   // input gets a self-explaining 400 BEFORE any upstream spend. Exact-BPE and
   // sync → deterministic, so embeddingsCacheKey stays stable.
   const { tokens } = embeddingsUpstreamCost(body);
@@ -2426,13 +2569,12 @@ async function embeddingsHandler(input, req) {
 // /v1/rerank - reranking over OpenRouter's /rerank router (Cohere wire:
 // {query, documents[], top_n} -> {results:[{index, relevance_score,
 // document}]}). Deterministic output (a ranker, not a sampler) -> cache
-// default-ON like embeddings. One model, locked: cohere/rerank-v3.5 (live
-// probe 2026-08-19: 1 "search unit" = $0.001 upstream). Cohere's search unit
+// default-ON like embeddings. One model, locked: cohere/rerank-v3.5 (billed
+// per "search unit", live probe 2026-08-19). Cohere's search unit
 // is ONE query against up to 100 documents, with long documents split into
 // extra chunks that each count - so the caps below (<= 50 docs, <= 1,600
-// chars each, query <= 500 chars) keep every request at exactly one unit, and
-// $0.001 sits under the $0.002 price at the 70% margin bound without any
-// token math. Structured {text, image} documents are refused (image reranking
+// chars each, query <= 500 chars) keep every request at exactly one unit, so
+// the cost is fixed per call without any token math. Structured {text, image} documents are refused (image reranking
 // bills differently); strings only.
 export const RERANK_PATH = "/v1/rerank";
 export const RERANK_PRICE = 0.002;
@@ -2447,10 +2589,8 @@ const RERANK_MAX_CHUNKS = 100;     // one search unit
 export function validateRerankRequest(input) {
   if (!input || typeof input !== "object") throw bad("Body must be a JSON object: {query, documents[], top_n?}");
   // cohere/rerank-4-fast and rerank-4-pro exist upstream (live 2026-09-18) but
-  // bill $0.002 and $0.0025 per search unit - a live 4-fast call returned
-  // usage.cost 0.002, i.e. 100% of this route's price against the 70% bound -
-  // so neither is offered until the route is repriced. Refused by name.
-  if (input.model !== undefined && canonicalModel(input.model) !== RERANK_MODEL && String(input.model) !== "rerank-v3.5") throw bad(`"model" must be ${RERANK_MODEL} (the only rerank model served at $${RERANK_PRICE}; cohere/rerank-4-fast bills $0.002 per search unit upstream, the whole price, so it is not offered on this route)`);
+  // are not offered on this route. Refused by name.
+  if (input.model !== undefined && canonicalModel(input.model) !== RERANK_MODEL && String(input.model) !== "rerank-v3.5") throw bad(`"model" must be ${RERANK_MODEL} (the only rerank model served on this route)`);
   const query = input.query;
   if (typeof query !== "string" || !query.trim()) throw bad('"query" (string) is required');
   if (query.length > RERANK_MAX_QUERY_CHARS) throw bad(`"query" too long (${query.length} chars; max ${RERANK_MAX_QUERY_CHARS})`);
@@ -2467,14 +2607,13 @@ export function validateRerankRequest(input) {
   // The char caps keep ordinary text at one search unit, but Cohere chunks by
   // TOKENS (500 per chunk incl. the query; every chunk counts as a document;
   // one unit = up to 100 chunks), and CJK/code text runs ~1 token per char -
-  // 50 x 1,600 chars of it is ~200 chunks = 2 units = $0.002 = the whole
-  // price (cost audit 2026-08-19). Estimate the chunk count with the o200k
+  // 50 x 1,600 chars of it is ~200 chunks = 2 units (cost audit 2026-08-19). Estimate the chunk count with the o200k
   // tokenizer (+20% for tokenizer drift) and refuse past one unit - a
   // self-explaining 400 instead of a call that upstream bills at list.
   const qTok = Math.ceil(countTokensBounded(query) * 1.2);
   let chunks = 0;
   for (const d of documents) chunks += Math.max(1, Math.ceil((Math.ceil(countTokensBounded(d) * 1.2) + qTok) / RERANK_CHUNK_TOKENS));
-  if (chunks > RERANK_MAX_CHUNKS) throw bad(`documents + query tokenize to ~${chunks} rerank chunks (500 tokens each, query included); max ${RERANK_MAX_CHUNKS} per call (one search unit) - shorten the documents or split the set`);
+  if (chunks > RERANK_MAX_CHUNKS) throw bad(`documents + query tokenize to ~${chunks} rerank chunks (500 tokens each, query included); max ${RERANK_MAX_CHUNKS} per call - shorten the documents or split the set`);
   const body = { model: RERANK_MODEL, query, documents };
   if (input.top_n !== undefined) {
     const n = Number(input.top_n);
@@ -2527,33 +2666,23 @@ async function rerankHandler(input, req) {
 
 // ---------------------------------------------------------------------------
 // /v1/images/generations — OpenAI wire-path image generation over OpenRouter.
-// OpenRouter serves image models through chat/completions with
-// modalities: ["image","text"]; this route translates the OpenAI images API
-// to that shape and back, so any OpenAI SDK's images.generate() works by
-// changing base_url. The model is locked and n is locked to 1 — image output
-// is metered upstream, so every knob that multiplies cost is server-owned
-// (same discipline as image-gen's locked size/quality). Sampling is
-// non-deterministic → never cached; no streaming.
-//
-// Margin (two layers, same scheme as the chat tiers): flash-image output is
-// ~1300 completion tokens per image at ~$30/M list (~$0.04/image) against
-// the $0.08 price; IMAGES_MAX_TOKENS bounds the response and
-// IMAGES_MAX_PRICE rides upstream as provider.max_price so a repriced or
-// hijacked provider is refused instead of quietly eating the margin. Usage
-// accounting reports the exact bill to PostHog on every call.
+// The flagship images route. It speaks the OpenAI images wire (prompt in,
+// data[0].b64_json out, n locked to 1, response_format b64_json only) and is
+// served through OpenRouter's dedicated Image API by the same link code the
+// /v1/images/fast and /v1/images/pro tiers use (IMAGE_TIERS["v1-images"] and
+// imageTierHandler in llm-images-fast-kit.js): each link is pinned to one
+// provider at a flat per-image bound under MARGIN x price, and a live-listing
+// re-check skips a link whose provider repriced above its bound (an end-to-end
+// reprice answers 503, not charged). Until 2026-09-24 this route rode
+// google/gemini-2.5-flash-image over chat modalities; Google shuts that model
+// down on 2026-10-02. Output stays PNG 1024x1024, decodable by Jimp.
 export const IMAGES_PATH = "/v1/images/generations";
-const IMAGES_MODEL = "google/gemini-2.5-flash-image";
+export const IMAGES_MODEL = "black-forest-labs/flux.2-pro"; // first link; pinned against IMAGE_TIERS in test-images-fast-kit
 export const IMAGES_PRICE = 0.08;
 export const IMAGES_MAX_PROMPT_CHARS = 4_000;
-export const IMAGES_MAX_TOKENS = 1_600; // one image (~1300 tok) + a little text headroom
-// Worst case at these bounds: 1600 tok × $35/M = $0.056 ≤ 70% of the price.
-// `request` is deliberately near-zero: the locked model's providers charge no
-// per-request fee (OpenRouter lists prompt/completion/image-output pricing
-// only), so this bound never rejects a real provider — but a generous value
-// here would be a standing ALLOWANCE for a fee-charging provider to stack
-// $0.05/request on top of the token bill and invert the margin. Exported
-// (with the caps above) for the pricing-margin CI test.
-export const IMAGES_MAX_PRICE = { prompt: 1, completion: 35, image: 0.05, request: 0.005 };
+// Ids a caller may send in `model`: the two links, plus the retired Gemini id
+// so an existing client keeps working (the response names the model served).
+export const IMAGES_ACCEPTED_MODELS = Object.freeze(["black-forest-labs/flux.2-pro", "openai/gpt-5-image-mini", "google/gemini-2.5-flash-image"]);
 
 export function validateImagesRequest(input) {
   if (input == null || typeof input !== "object") throw bad("Request body must be a JSON object");
@@ -2562,7 +2691,7 @@ export function validateImagesRequest(input) {
   if (prompt.length > IMAGES_MAX_PROMPT_CHARS) throw bad(`Prompt too long (${prompt.length} chars). Maximum is ${IMAGES_MAX_PROMPT_CHARS}`);
   if (input.model !== undefined) {
     const m = canonicalModel(input.model);
-    if (m !== IMAGES_MODEL) throw bad(`"model" is fixed to ${IMAGES_MODEL} on this endpoint (omit it, or send that id)`);
+    if (!IMAGES_ACCEPTED_MODELS.includes(m)) throw bad(`"model" is fixed to ${IMAGES_MODEL} on this endpoint (omit it, or send that id)`);
   }
   if (input.n !== undefined && parseInt(input.n, 10) !== 1) {
     throw bad('"n" is locked to 1 - the flat price is per image; call again for more');
@@ -2570,8 +2699,9 @@ export function validateImagesRequest(input) {
   if (input.response_format !== undefined && input.response_format !== "b64_json") {
     throw bad('"response_format" must be "b64_json" - generated images are returned inline, not hosted');
   }
-  // size/quality/style have no upstream meaning for this model and no cost
-  // impact — ignored for drop-in friendliness rather than rejected.
+  // size/quality/style have no upstream meaning here (output is locked to the
+  // size the bound was measured at) and no cost impact - ignored for drop-in
+  // friendliness rather than rejected.
   const body = { prompt };
   if (input.zdr === true || input.provider?.zdr === true) body.zdr = true;
   return body;
@@ -2580,80 +2710,10 @@ export function validateImagesRequest(input) {
 async function imagesHandler(input, req) {
   gatewaySettleBreakerCheck(req);
   const { prompt, zdr } = validateImagesRequest(input);
-  const user = upstreamUserId(req);
-  const upstreamBody = {
-    model: IMAGES_MODEL,
-    messages: [{ role: "user", content: prompt }],
-    modalities: ["image", "text"],
-    max_tokens: IMAGES_MAX_TOKENS,
-    provider: { max_price: IMAGES_MAX_PRICE, ...(zdr ? { zdr: true } : {}) },
-    // OpenRouter documents `usage.include` as a no-op now (full usage is always
-    // returned). KEPT anyway: our margin telemetry and the metered meter read
-    // `usage.cost`, and dropping the field on the strength of a docs line would
-    // fail silently if the always-on behaviour is partial. Harmless if ignored.
-    usage: { include: true },
-
-    ...(user ? { user } : {}),
-  };
-  // Flex first (half price on this model's endpoints, live-verified), default
-  // second: flex never falls back on its own, and an imageless or failed flex
-  // answer must not become the buyer's 502 while the default tier would serve.
-  let data = null, servedTier = "default", lastErr = null;
-  for (const flex of flexEligible(IMAGES_MODEL) ? [true, false] : [false]) {
-    try {
-      const res = await fetchOpenRouter({ ...upstreamBody, ...(flex ? { service_tier: "flex" } : {}) }, { timeoutMs: 120_000 });
-      if (!res.ok) await throwUpstreamError(res);
-      const text = await res.text();
-      let parsed;
-      try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
-      assertUpstreamBody(parsed);
-      const imgs = parsed?.choices?.[0]?.message?.images;
-      if (!Array.isArray(imgs) || imgs.length === 0) throw bad("Upstream returned no image - retry, or rephrase the prompt", 502);
-      data = parsed; servedTier = parsed.service_tier || (flex ? "flex" : "default");
-      break;
-    } catch (e) {
-      if (![502, 503, 504].includes(e?.statusCode)) throw e;
-      lastErr = e;
-    }
-  }
-  if (!data) throw lastErr;
-  const images = data.choices[0].message.images;
-
-  // Exact upstream bill → operator telemetry, stripped before the response.
-  const usage = data.usage && typeof data.usage === "object" ? data.usage : null;
-  if (usage) {
-    const upstreamUsd = typeof usage.cost === "number" ? usage.cost : null;
-    delete usage.cost;
-    delete usage.cost_details;
-    delete usage.is_byok;
-    delete usage.cache_discount;
-    try {
-      const { capturePostHogGatewayUsage } = await import("../posthog.js");
-      capturePostHogGatewayUsage({
-        tier: "v1-images",
-        model: data.model || IMAGES_MODEL,
-        priceUsd: IMAGES_PRICE,
-        upstreamUsd,
-        promptTokens: usage.prompt_tokens,
-        completionTokens: usage.completion_tokens,
-        serviceTier: servedTier,
-      });
-    } catch { /* telemetry must never fail a served response */ }
-  }
-
-  // Translate back to the OpenAI images wire: data URI → b64_json.
-  const out = images.map((im) => {
-    const url = typeof im?.image_url?.url === "string" ? im.image_url.url : "";
-    const m = /^data:(image\/[\w.+-]+);base64,(.+)$/s.exec(url);
-    if (!m) throw bad("Upstream returned an image in an unexpected format", 502);
-    return { b64_json: m[2], media_type: m[1] };
-  });
-  return {
-    created: Math.floor(Date.now() / 1000),
-    model: data.model || IMAGES_MODEL,
-    data: out,
-    ...(usage ? { usage } : {}),
-  };
+  // Loaded at call time: the images kit imports this module, so a static
+  // import here would be a cycle.
+  const { imageTierHandler } = await import("./llm-images-fast-kit.js");
+  return imageTierHandler("v1-images", { prompt }, req, { zdr: zdr === true });
 }
 
 // ---------------------------------------------------------------------------
@@ -2674,10 +2734,8 @@ async function imagesHandler(input, req) {
 // (en_paul_cheerful…) is accepted too — remapped to its OpenAI-name
 // equivalent (or the link's alloy) if the chain walks past its model.
 // TTS bills per INPUT character upstream, so the char cap bounds the
-// worst-case bill deterministically per link — see costPerChar below:
-// $0.0352 (59% of the $0.06 price) on Voxtral down to $0.008 (13%) on
-// Kokoro, each at the model's DEAREST endpoint; even the deepest fallback
-// (MAI-Voice-2, $0.044 = 73%) clears the price. Binary responses carry no usage accounting and are never cached
+// worst-case bill deterministically per link — see costPerChar below, each
+// at the model's DEAREST endpoint; every link clears the price. Binary responses carry no usage accounting and are never cached
 // (sampled output).
 export const SPEECH_PATH = "/v1/audio/speech";
 const OPENROUTER_SPEECH_URL = "https://openrouter.ai/api/v1/audio/speech";
@@ -2696,7 +2754,7 @@ export const SPEECH_MODELS = [
   {
     id: "mistralai/voxtral-mini-tts-2603",
     aliases: ["mistralai/voxtral-mini-tts", "voxtral-mini-tts", "voxtral-mini-tts-2603"],
-    costPerChar: 0.0000176, // dearest Mistral endpoint (two at 0.000016, one at 0.0000176; 2026-09-18)
+    costPerChar: 0.0000176, // dearest endpoint (2026-09-18)
     map: { alloy: "en_paul_neutral", ash: "en_paul_confident", ballad: "gb_oliver_neutral", coral: "gb_jane_neutral", echo: "en_paul_happy", fable: "gb_oliver_cheerful", onyx: "gb_oliver_confident", nova: "gb_jane_confident", sage: "gb_jane_neutral", shimmer: "gb_jane_curious", verse: "en_paul_cheerful" },
     voices: new Set([
       "en_paul_sad", "en_paul_neutral", "en_paul_happy", "en_paul_frustrated", "en_paul_excited", "en_paul_confident", "en_paul_cheerful", "en_paul_angry",
@@ -2715,12 +2773,9 @@ export const SPEECH_MODELS = [
   {
     id: "hexgrad/kokoro-82m",
     aliases: ["kokoro-82m", "kokoro"],
-    // The DEAREST endpoint, not the one that usually serves (2026-09-18): Kokoro has
-    // DeepInfra at 0.00000062/char (default routing lands there, measured on four
-    // generation records) and Together at 0.000004/char; the catalog headline shows
-    // the dearer one and `provider.order`/`max_price` are NOT honoured on
-    // /audio/speech (measured: a Together pin still served DeepInfra), so nothing
-    // we send can keep a call off the dearer endpoint. test-gateway-model-ids pins
+    // The DEAREST endpoint, not the one that usually serves (2026-09-18):
+    // `provider.order`/`max_price` are NOT honoured on /audio/speech, so
+    // nothing we send can keep a call off the dearer endpoint. test-gateway-model-ids pins
     // every speech row against the MAX across that model's endpoints.
     costPerChar: 0.000004,
     map: { alloy: "af_alloy", ash: "am_adam", ballad: "bm_george", coral: "af_bella", echo: "am_echo", fable: "bm_fable", onyx: "am_onyx", nova: "af_nova", sage: "af_sarah", shimmer: "af_sky", verse: "am_liam" },
@@ -2738,8 +2793,8 @@ export const SPEECH_MODELS = [
   // every walk past Kokoro burned a failed round-trip. Removed; the chain is
   // five links. scripts/test-gateway-model-ids.js now checks every link live.
   {
-    // MAI-Voice-2-Flash — same four voices as MAI-Voice-2 at $15/M chars
-    // (vs $22/M): worst case $0.030 = 50% of the price. Proven by a real
+    // MAI-Voice-2-Flash — same four voices as MAI-Voice-2, cheaper per char.
+    // Proven by a real
     // authenticated buy on probe run 30971572514 (2026-08-05, 200 +
     // audio/mpeg bytes) before entering the chain.
     id: "microsoft/mai-voice-2-flash",
@@ -2750,7 +2805,7 @@ export const SPEECH_MODELS = [
   },
   {
     // Single English voice — every OpenAI name lands on Harper. Priciest
-    // link (73% of the price) and same provider as -flash, hence last: it
+    // link and same provider as -flash, hence last: it
     // only serves when five other providers AND its own flash variant fail.
     id: "microsoft/mai-voice-2",
     aliases: ["mai-voice-2"],
@@ -2868,9 +2923,13 @@ function countImages(messages) {
   return images;
 }
 
-function makeHandler(tierSlug) {
+function makeHandler(routeTier) {
   return async (input, req) => {
     gatewaySettleBreakerCheck(req);
+    // Price by model: every serving decision below reads `tierSlug`, which is
+    // the route's tier unless the body names another flat tier's model AND the
+    // request was gated at that tier's price (see servedTierFor).
+    const tierSlug = servedTierFor(routeTier, input?.model, req);
     // Availability gate (stealth tiers): the boot probe found the id gone
     // upstream, so answer BEFORE spending a round-trip on a model that no
     // longer exists. 503 is >=400, and @x402/express cancels settlement for
@@ -3003,7 +3062,7 @@ function makeHandler(tierSlug) {
     // the counts are what say WHY a margin moved).
     const recordUsage = (usage, upstreamUsd, served, serviceTier) => import("../posthog.js")
       .then(({ capturePostHogGatewayUsage }) => capturePostHogGatewayUsage({
-        tier: tierSlug, model: served, priceUsd: (TIERS[tierSlug].metered && Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0) ? req.__meteredQuoteUsd : TIERS[tierSlug].price, upstreamUsd,
+        tier: tierSlug, routeTier, model: served, priceUsd: (TIERS[tierSlug].metered && Number.isFinite(req?.__meteredQuoteUsd) && req.__meteredQuoteUsd > 0) ? req.__meteredQuoteUsd : TIERS[tierSlug].price, upstreamUsd,
         promptTokens: usage?.prompt_tokens, completionTokens: usage?.completion_tokens, serviceTier,
         serverToolCalls: usage?.server_tool_use_details?.tool_calls_executed ?? usage?.server_tool_use?.tool_calls_executed,
         serverToolSearches: usage?.server_tool_use_details?.web_search_requests ?? usage?.server_tool_use?.web_search_requests,
@@ -3094,6 +3153,10 @@ function makeHandler(tierSlug) {
           data.agent402_router = { category: routedCategory, quality: routedQuality, served: data.model || model };
         }
         if (body.__defaultedModel) data.agent402_default_model = body.__defaultedModel; // the caller sent no model; say what served
+        if (body.__substitutedFrom) data.agent402_model_substituted = { requested: body.__substitutedFrom, served: body.model, reason: "the requested model is retired upstream; its named successor served instead" };
+        // Served under another flat tier's config at that tier's price: say
+        // which, beside the standard `model` field (additive, non-stream).
+        if (tierSlug !== routeTier && data && typeof data === "object") data.agent402_tier = crossTierDisclosure(routeTier, tierSlug);
         // What this call would have cost metered, when that is materially
         // cheaper (see meteredHintFor). Additive, non-streaming only - a
         // stream has no envelope to carry it.
@@ -3101,7 +3164,9 @@ function makeHandler(tierSlug) {
           const hint = meteredHintFor(body, tierSlug, imageCount);
           if (hint) data.agent402_metered = hint;
         }
-        if (input.cache === true && !TIERS[tierSlug].noCache) {
+        // A request served under another tier's config is never cached: the
+        // pre-paywall read keys on the ROUTE tier, which refuses this model.
+        if (input.cache === true && !TIERS[tierSlug].noCache && tierSlug === routeTier) {
           // FR4-01 class: defer the cache write to AFTER settlement. @x402/express
           // settles after this handler, so writing now would cache an
           // unsettled 200. Stash on req; the route binder commits on a final 200.
@@ -3147,7 +3212,7 @@ export function meteredQuoteForProbe(probe, imageCount = 0) {
   // rawUsd is what the body would actually cost; usd is what the 402 carries
   // (the cap, over the cap). A handler MUST refuse an overCap body: the 402
   // quoted the cap, not the cost (review 2026-08-27: the Messages wire served
-  // a ~$8 Opus body for $2 because it clamped here and never refused).
+  // an over-cap body at the cap because it clamped here and never refused).
   if (usd > tier.maxQuoteUsd) return { usd: tier.maxQuoteUsd, rawUsd: usd, overCap: true, model: probe?.model };
   return { usd, rawUsd: usd, model: probe?.model };
 }
@@ -3230,7 +3295,9 @@ const INPUT_SCHEMA = {
     max_completion_tokens: { type: "integer", description: "Optional - alias of max_tokens (newer OpenAI SDKs send this)." },
     tools: { type: "array", description: 'Optional - OpenAI function tools {type:"function", function:{...}}, or a tool namespace {type:"namespace", name, tools:[...]} (flattened into its functions). The pro and premium routes also accept the bounded server tools openrouter:web_search, openrouter:web_fetch and openrouter:datetime with server-owned limits (GET /v1/models lists them); stop_server_tools_when and max_tool_calls are refused. A request with a server tool is never served from the prompt cache.' },
   },
-  required: ["model", "messages"],
+  // model is optional: every tier using this schema serves its defaultModel
+  // when none is named, so listing it as required mis-described a body we serve.
+  required: ["messages"],
 };
 
 const AUTO_INPUT_SCHEMA = {
@@ -3238,7 +3305,7 @@ const AUTO_INPUT_SCHEMA = {
     messages: INPUT_SCHEMA.properties.messages,
     model: { type: "string", description: 'Optional - omit (or send "auto") for eval-ranked server-side routing. An explicit model from the auto ranking is honored at the auto caps.' },
     quality: { type: "string", description: 'Optional routing band when the gateway picks the model: "fast" (cheapest/snappiest), "balanced" (default), "best" (strongest under the flat price). Never changes the price.' },
-    service_tier: { type: "string", description: 'Optional. "priority" (alias "fast") asks for the model\'s priority endpoint on /v1/pro and /v1/premium at the same flat price; the margin clamp prices the call at the priority rate, so max_tokens may be sized down. Refused with the reason on the other tiers; "flex" is applied by the gateway automatically and not accepted as a request.' },
+    service_tier: { type: "string", description: 'Optional. "priority" (alias "fast") asks for the model\'s priority endpoint on /v1/pro and /v1/premium at the same flat price; max_tokens may be sized down. Refused with the reason on the other tiers; "flex" is applied by the gateway automatically and not accepted as a request.' },
     max_tokens: INPUT_SCHEMA.properties.max_tokens,
   },
   required: ["messages"],
@@ -3254,7 +3321,7 @@ export const LLM_GATEWAY_TOOLS = [
     // payments.js: a `quote` makes the x402 price a per-request function of the body.
     quote: (body) => meteredQuoteUsd(body).usd,
     description:
-      `OpenAI-compatible chat completions billed per request from what the call costs: the 402 quotes exact-BPE input plus your max_tokens at the model's list price, times ${METER_MARKUP}, from $${METER_MIN_SETTLE_USD} up to a $${METERED_MAX_QUOTE_USD} per-call cap. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto and settle actual usage. Set max_tokens to what you need: it is what you pay for.`,
+      `OpenAI-compatible chat completions billed per request from what the call costs: the 402 quotes exact-BPE input plus your max_tokens, from $${METER_MIN_SETTLE_USD} up to a $${METERED_MAX_QUOTE_USD} per-call cap. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto and settle actual usage. Set max_tokens to what you need: it is what you pay for.`,
     tags: [...["llm", "ai", "inference", "chat", "gateway", "openai-compatible", "openrouter"], "metered", "pay-per-token"],
     discovery: { bodyType: "json", input: { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-4o-mini" } } },
     handler: makeHandler("v1-chat-metered"),
@@ -3266,9 +3333,9 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.003",
     description:
-      "OpenAI-compatible chat completions, nano tier: gpt-5.6-luna, gpt-5-nano, gemini flash-lite, small llama/ministral/qwen, deepseek-chat - $0.003 per call in USDC over x402, priced for high-frequency agent loops. Same wire format as /v1/chat/completions with loop-sized caps (12k chars in, 768 tokens out). Streaming supported (stream: true). No API key, no signup.",
+      "OpenAI-compatible chat completions, nano tier: gpt-6-luna (the default), gpt-5.6-luna, gpt-5-nano, gemini flash-lite, small llama/ministral/qwen, deepseek-chat - $0.003 per call in USDC over x402, priced for high-frequency agent loops. Same wire format as /v1/chat/completions with loop-sized caps (12k chars in, 768 tokens out). Streaming supported (stream: true). No API key, no signup.",
     tags: SHARED_TAGS,
-    discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-5.6-luna" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-4.1-nano" } } },
+    discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-5.6-luna" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-5.6-luna" } } },
     handler: makeHandler("v1-chat-nano"),
   },
   {
@@ -3295,7 +3362,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.03",
     description:
-      'OpenAI-compatible chat completions GROUNDED in a live web search on every call: the gateway runs an Exa search (up to 5 results) for the prompt, hands the results to the model, and returns the answer with url_citation annotations - $0.03 per call in USDC, no API key, no signup. Model is chosen server-side like the auto tier (omit "model" or send "auto"; explicit ranked models accepted); the response adds agent402_router {category, quality, served}. The sanctioned way to get live-web answers from the gateway (":online" model variants are refused elsewhere because search is billed per request). Caps 16k chars in / 1024 tokens out. Streaming supported. Never cached - the web moves.',
+      'OpenAI-compatible chat completions GROUNDED in a live web search on every call: the gateway runs an Exa search (up to 5 results) for the prompt, hands the results to the model, and returns the answer with url_citation annotations - $0.03 per call in USDC, no API key, no signup. Model is chosen server-side like the auto tier (omit "model" or send "auto"; explicit ranked models accepted); the response adds agent402_router {category, quality, served}. The sanctioned way to get live-web answers from the gateway (":online" model variants are refused elsewhere). Caps 16k chars in / 1024 tokens out. Streaming supported. Never cached - the web moves.',
     tags: [...SHARED_TAGS, "router", "grounded", "web-search", "citations"],
     discovery: {
       bodyType: "json",
@@ -3350,7 +3417,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.02",
     description:
-      "OpenAI-compatible chat completions over x402 - point any OpenAI SDK at base_url https://agent402.tools/v1 and pay per call in USDC (Base, Solana, Polygon, Arbitrum, Stellar), no API key, no signup. Budget/mid models: gpt-4o-mini, claude haiku, gemini flash, deepseek, llama, mistral, qwen. Full wire compatibility incl. tools/function-calling and response_format. GET /v1/models lists every model. Streaming supported (stream: true).",
+      "OpenAI-compatible chat completions, base tier: point any OpenAI SDK at base_url https://agent402.tools/v1 and pay per call over x402 or MPP (the 402 lists every accepted rail), no API key, no signup. Returns the standard chat.completion object (choices[].message.content, usage). Budget/mid models: gpt-4o-mini (the default when model is omitted), claude haiku, gemini flash, deepseek, llama, mistral, qwen. Full wire compatibility incl. tools/function-calling and response_format. GET /v1/models lists every model. Streaming supported (stream: true). One flat price per call up to the tier caps; /v1/metered/chat/completions quotes each call from its own size instead. Model-backed.",
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: INPUT_SCHEMA, output: { example: EXAMPLE_OUT } },
     handler: makeHandler("v1-chat"),
@@ -3362,7 +3429,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.10",
     description:
-      "OpenAI-compatible chat completions, pro tier: gpt-4o, gpt-4.1, claude sonnet, gemini pro, grok - paid per call in USDC over x402. Same wire format as /v1/chat/completions with higher input/output caps (48k chars in, 4096 tokens out).",
+      "OpenAI-compatible chat completions, pro tier: gpt-4o, gpt-4.1, gpt-6 sol, claude sonnet, gemini pro, grok - paid per call in USDC over x402. Same wire format as /v1/chat/completions with higher input/output caps (48k chars in, 4096 tokens out).",
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-4o" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-4o" } } },
     handler: makeHandler("v1-chat-pro"),
@@ -3435,8 +3502,8 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.080",
     description:
-      "OpenAI-compatible image generation over x402 - point any OpenAI SDK's images.generate() at base_url https://agent402.tools/v1 and pay $0.08 per image in USDC, no API key, no signup. Served by Gemini 2.5 Flash Image (nano banana); prompt in (up to 4k chars), inline base64 image out (response_format b64_json). One image per call (n locked to 1). Optional zdr:true routes only to zero-data-retention providers.",
-    tags: ["image-generation", "images", "text-to-image", "nano-banana", "gemini", ...SHARED_TAGS],
+      "OpenAI-compatible image generation over x402 - point any OpenAI SDK's images.generate() at base_url https://agent402.tools/v1 and pay $0.08 per image in USDC, no API key, no signup. Served by FLUX.2 Pro with GPT-5 Image Mini as the failover; prompt in (up to 4k chars), one 1024x1024 PNG out as inline base64 (response_format b64_json). One image per call (n locked to 1). Optional zdr:true routes only to zero-data-retention providers.",
+    tags: ["image-generation", "images", "text-to-image", "flux", "png", ...SHARED_TAGS],
     discovery: {
       bodyType: "json",
       input: { prompt: "A minimalist watercolor of a fox reading a newspaper in a forest clearing" },
@@ -3447,7 +3514,7 @@ export const LLM_GATEWAY_TOOLS = [
         },
         required: ["prompt"],
       },
-      output: { example: { created: 1750000000, model: IMAGES_MODEL, data: [{ b64_json: "iVBORw0KGgoAAAANSUhEUgAA…", media_type: "image/png" }], usage: { prompt_tokens: 14, completion_tokens: 1290, total_tokens: 1304 } } },
+      output: { example: { created: 1750000000, model: IMAGES_MODEL, data: [{ b64_json: "iVBORw0KGgoAAAANSUhEUgAA…", media_type: "image/png" }], usage: { prompt_tokens: 14, completion_tokens: 4096, total_tokens: 4110 } } },
     },
     handler: imagesHandler,
   },
@@ -3460,6 +3527,8 @@ export const LLM_GATEWAY_TOOLS = [
     description:
       "OpenAI-compatible text-to-speech over x402 - point any OpenAI SDK's audio.speech.create() at base_url https://agent402.tools/v1 and pay $0.06 per call in USDC, no API key, no signup. Served by Voxtral Mini TTS behind a five-model failover chain (xAI Grok Voice, Kokoro, MAI-Voice-2 Flash, MAI-Voice-2), every link proven by a real paid canary - a provider outage never becomes your failure. Up to 2,000 chars in, raw mp3 (default) or pcm bytes out - the same wire shape as OpenAI's endpoint. OpenAI voice names (alloy, nova, …) map per-model; native voice ids (e.g. en_paul_cheerful) work too. zdr:true routes only to zero-data-retention providers.",
     tags: ["tts", "text-to-speech", "speech", "audio", "voice", ...SHARED_TAGS],
+    // Raw audio bytes through the __binary sentinel, typed by response_format.
+    binaryTypes: [...new Set(Object.values(SPEECH_FORMATS))],
     discovery: {
       bodyType: "json",
       input: { input: "Agent402 serves fourteen hundred tools, paid per call.", voice: "alloy" },
@@ -3479,6 +3548,19 @@ export const LLM_GATEWAY_TOOLS = [
     handler: speechHandler,
   },
 ];
+
+// Price by model on the flat chat routes: `tierQuote` makes the x402 price
+// (payments.js) and the Tempo, Stripe and credits gates (server.js
+// quotedPriceUsd) a per-request function of the body, the home tier's price
+// when the body names another flat tier's model. Deliberately NOT `quote`:
+// that name marks a route as per-token metered to route-execute (refused),
+// /api/pricing (`quoted: true`) and the card fee gross-up, and none of those
+// apply to a flat route that still charges one of the four tier prices.
+for (const t of LLM_GATEWAY_TOOLS) {
+  if (isFlatTier(t.slug) && TIERS[t.slug].route === t.route) {
+    t.tierQuote = (body) => flatTierQuoteUsd(t.slug, body?.model);
+  }
+}
 
 // server.js's global express.json({limit:"100kb"}) runs before every /v1/*
 // route and rejects a bigger body with a 413 before a tier's own
@@ -3547,7 +3629,7 @@ export function modelsList() {
             serviceTiers: {
               flexFirst: !p.endsWith("/") && flexEligible(PREFIX_CANONICAL[p.toLowerCase()] || p),
               priority: tier.priority === true
-                ? { param: "service_tier", values: [...PRIORITY_SERVICE_TIER_VALUES], upstreamPriceFactor: PRIORITY_PRICE_FACTOR, note: `Same $${tier.price} per call. The margin clamp prices the request at ${PRIORITY_PRICE_FACTOR}x the model's rate, so a long prompt gets a smaller max_tokens or a 400 before any spend. Models with no priority endpoint are served on the default tier.` }
+                ? { param: "service_tier", values: [...PRIORITY_SERVICE_TIER_VALUES], note: `Same $${tier.price} per call. A long prompt may get a smaller max_tokens or a 400 before the call. Models with no priority endpoint are served on the default tier.` }
                 : false,
             },
           } : {}),
@@ -3576,7 +3658,7 @@ export function modelsList() {
   data.push({
     id: IMAGES_MODEL,
     object: "model",
-    owned_by: "google",
+    owned_by: IMAGES_MODEL.split("/")[0],
     x402: { tier: "v1-images", endpoint: IMAGES_PATH, priceUsd: IMAGES_PRICE, maxPromptChars: IMAGES_MAX_PROMPT_CHARS, imagesPerCall: 1 },
   });
   // The speech route is registered only under OPENROUTER_TTS_ENABLED=true
@@ -3590,5 +3672,5 @@ export function modelsList() {
       x402: { tier: "v1-audio-speech", endpoint: SPEECH_PATH, priceUsd: SPEECH_PRICE, maxInputChars: SPEECH_MAX_CHARS, voices: [...m.voices] },
     });
   }
-  return { object: "list", data, terms_of_service: "https://agent402.tools/terms", note: "Prefixes ending in /* allow the whole vendor family. Pay per call via x402 (USDC on Base, Solana, Polygon, Arbitrum, Stellar) - no API key. Bare OpenAI-style names (gpt-4o-mini) are accepted and mapped. Use constitutes acceptance of the terms_of_service (acceptable-use policy included)." };
+  return { object: "list", data, terms_of_service: "https://agent402.tools/terms", note: "Prefixes ending in /* allow the whole vendor family. Pay per call over x402 or MPP (every 402 lists the accepted rails) - no API key. Bare OpenAI-style names (gpt-4o-mini) are accepted and mapped. Use constitutes acceptance of the terms_of_service (acceptable-use policy included)." };
 }

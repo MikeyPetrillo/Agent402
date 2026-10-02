@@ -43,15 +43,10 @@ export const FILING_MODELS = [SYNTH];
 export const FILING_TIERS = {
   "filing-report": {
     price: "$0.85",
-    // Worst case, priced with the margin clamp's CONSERVATIVE opus row
-    // ($15/$75 per M, MODEL_COST["anthropic/claude-opus"]):
-    //   input  3 docs x 36,000 chars + <=40 index rows + instructions
-    //          ~= 122,000 chars ~= 35,000 tok  ->  35,000 * 15/1e6 = $0.525
-    //   output 4,200 tok                       ->   4,200 * 75/1e6 = $0.315
-    //   total  ~= $0.84, which is why the cap is set from MEASURED opus-5 spend
-    //   (p95 $0.195, max $0.311) rather than that pessimistic row.
-    // At claude-opus-5's real $5/$25 the same call is ~$0.28. Measured on live
-    // EDGAR: AAPL ~$0.17, a small-cap proxy season ~$0.20 (opus-5 list).
+    // Worst case: input 3 docs x 36,000 chars + <=40 index rows + instructions
+    // (~122,000 chars ~= 35,000 tok), output 4,200 tok. The cap is set from
+    // MEASURED synthesis spend rather than the margin clamp's pessimistic
+    // legacy-opus row.
     maxUpstreamUsd: 0.50,
     probeLimit: 40,        // filings in the fingerprint
     scanLimit: 250,        // raw rows read from the submissions index before filtering

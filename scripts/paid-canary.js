@@ -18,7 +18,10 @@
 // Exit codes: 0 = buying works (warnings allowed) · 1 = buying broken · 2 = misconfig
 //   · 3 = underfunded (settlement proven; burner empty) · 4 = green but burner low
 //   · 5 = partial-rail (tools settled; one or more chain rail legs failed)
+import { legRefusalVerdict } from "./canary-refusal-classify.js";
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
+import { isSponsorshipRowEvidence, sponsorshipRowMonth, sponsorshipRowUpdatedAt } from "../src/avm-sponsorship.js";
+import { subcentAcceptVerdict } from "./avm-canary-classify.js";
 import { readFileSync, existsSync, appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
@@ -147,13 +150,17 @@ export const TOOLS = [
   {
     // X data (2026-09-06): the app-only bearer is minted in Actions and the
     // app is pay-per-use on a PREPAID balance, so a dead bearer or an empty
-    // balance is an uncharged 503 nobody sees. One post read a day
-    // ($0.005 of X credit) keeps the rail proven on prod, not on the first
+    // balance is an uncharged 503 nobody sees. One post read a day keeps the
+    // rail proven on prod, not on the first
     // outside buyer. Post 20 is Jack's first tweet - stable forever.
     kit: "x-data",
     path: "/api/x-tweet",
     method: "POST",
     body: { id: "20" },
+    // Weekly since 2026-09-23 (operator's call): the leg never failed in its
+    // first 17 days and each read is paid from the same prepaid X balance the
+    // announce posts use. Wednesdays, away from Monday's Algorand sweep.
+    weekday: 3,
     priceUsd: 0.008,
     check: (r) => (r?.tweet?.id === "20" && /twttr/.test(String(r?.tweet?.text)) && r?.tweet?.author?.username === "jack") || `expected tweet 20 by jack, got ${JSON.stringify(r).slice(0, 100)}`,
   },
@@ -174,17 +181,6 @@ export const TOOLS = [
     check: (r) => (r?.listed === true && r?.catalog?.paidToolCount > 0 && Array.isArray(r?.flags)
       && ((r?.settlementEvidence?.base?.callsSettled > 0) || (r?.settlementEvidence?.bazaar?.calls30d > 0)))
       || `expected an indexed dossier with a priced catalog and observed settlement evidence, got ${JSON.stringify(r).slice(0, 140)}`,
-  },
-  {
-    // Options-chain rides the Yahoo relay's options endpoint (session-crumb
-    // handshake handled server-side) — a different relay path than
-    // stock-quote's chart endpoint, so this leg keeps the deployed options
-    // route continuously proven. Input is the tool's own discovery example.
-    kit: "finance",
-    path: "/api/options-chain?symbol=AAPL",
-    method: "GET",
-    priceUsd: 0.005,
-    check: (r) => (r.symbol === "AAPL" && Array.isArray(r.expirations) && r.expirations.length > 0 && Array.isArray(r.strikes) && Array.isArray(r.calls) && Array.isArray(r.puts)) || `expected AAPL chain with expirations/strikes/calls/puts, got ${JSON.stringify(r).slice(0, 100)}`,
   },
   {
     kit: "crypto",
@@ -354,7 +350,7 @@ export const TOOLS = [
     kit: "llm-messages",
     path: "/v1/nano/messages",
     method: "POST",
-    body: { model: "google/gemini-2.5-flash-lite", max_tokens: 32, messages: [{ role: "user", content: `Reply with exactly the word OK. (${EMBED_CANARY_INPUT.slice(-16)})` }] },
+    body: { model: "google/gemini-3.1-flash-lite", max_tokens: 32, messages: [{ role: "user", content: `Reply with exactly the word OK. (${EMBED_CANARY_INPUT.slice(-16)})` }] },
     priceUsd: 0.003,
     check: (r) =>
       (r.type === "message" && r.role === "assistant" && Array.isArray(r.content) && r.content.some((b) => b.type === "text" && typeof b.text === "string") &&
@@ -392,9 +388,9 @@ export const TOOLS = [
       `expected Cohere-wire results ranking the French capital first with usage.search_units 1 and no cost, got ${JSON.stringify(r).slice(0, 120)}`,
   },
   {
-    // Image generation tier — OpenAI images wire over OpenRouter (Gemini
-    // flash-image). A real base64 payload of plausible image size proves the
-    // modalities translation, the price-capped provider call, and settlement.
+    // Image generation tier - OpenAI images wire over OpenRouter's Image API
+    // (FLUX.2 Pro first). A real base64 payload of plausible image size proves the
+    // wire translation, the provider-pinned bounded call, and settlement.
     kit: "llm-image",
     path: "/v1/images/generations",
     method: "POST",
@@ -434,20 +430,6 @@ export const TOOLS = [
     check: (r) =>
       (typeof r.text === "string" && r.text.trim().length > 0 && r.model === "gpt-transcribe") ||
       `expected a non-empty transcript from gpt-transcribe, got ${JSON.stringify(r).slice(0, 120)}`,
-  },
-  {
-    // Supply-chain leg — the catalog's first PAID x402 UPSTREAM (blockscout-kit).
-    // One canary buy = two settlements: canary → us on Base, then prod's
-    // spending wallet → Blockscout ($0.002). Proves daily that the upstream
-    // wallet is funded, Blockscout's paywall still interops, and the margin
-    // guard + provenance mark survive on prod. Self-referential input: the
-    // treasury wallet's own Base profile (stable, always a verified contract).
-    kit: "supply-chain",
-    path: "/api/address-profile",
-    method: "POST",
-    body: { chain: "base", address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0" },
-    priceUsd: 0.005,
-    check: (r) => (r.address === "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0" && typeof r.isContract === "boolean" && r.untrustedContent === true) || `expected treasury profile with untrustedContent, got ${JSON.stringify(r).slice(0, 120)}`,
   },
   {
     // Derivatives leg (2026-08-22) - a keyless public upstream, so the only cost
@@ -725,10 +707,10 @@ export const CHAIN_FUNDING = [
   { key: "sei", label: "Sei", token: "0xe15fc38f6d8c56af07bbcbe3baf5708a2bf42392", rpcs: ["https://evm-rpc.sei-apis.com", "https://sei-evm-rpc.publicnode.com"] },
   { key: "optimism", label: "Optimism", token: "0x0b2c639c533813f4aa9d7837caf62653d097ff85", rpcs: ["https://mainnet.optimism.io", "https://optimism-rpc.publicnode.com"] },
   { key: "robinhood", label: "Robinhood Chain (USDG)", token: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", rpcs: ["https://rpc.mainnet.chain.robinhood.com"] },
-  // Tempo: the 2-hourly tempo-volume.yml buys ~1,000 x $0.001 a day from this
-  // burner (~$1/day), so low-water is $5 (5 days), not the $0.05 the one-buy
-  // legs use. Funded in USDC.e since 2026-08-19 (25 USDC.e; pays USDC.e-first
-  // challenges natively, no swap). PathUSD is the swap-backed reserve (1.99).
+  // Tempo: the 2-hourly tempo-volume.yml buys from this burner every day, so
+  // its low-water is higher than the one-buy legs use. Funded in USDC.e since
+  // 2026-08-19 (pays USDC.e-first challenges natively, no swap); PathUSD is the
+  // swap-backed reserve.
   { key: "tempo-usdce", label: "Tempo (USDC.e)", token: "0x20C000000000000000000000b9537d11c60E8b50", rpcs: ["https://rpc.tempo.xyz"], lowWater: 5 },
   { key: "tempo-pathusd", label: "Tempo (PathUSD)", token: "0x20c0000000000000000000000000000000000000", rpcs: ["https://rpc.tempo.xyz"], lowWater: 0 },
 ];
@@ -786,22 +768,6 @@ export function decideCanary(results, { coreKit = CORE_KIT } = {}) {
  *   • tools green + rail failures      → "partial-rail"
  *   • tools green + no rail failures   → "ok"
  */
-/**
- * Consecutive-failure rule for an upstream tool leg. `recentOk` is the
- * component's prior observations newest-first (from /api/status); this run's
- * own outcome is `ok` and is NOT in that list yet. Pages only when this run
- * failed AND the previous (pageAfter - 1) observations all failed. Fewer
- * observations than that, or none readable, never pages: an alarm that fires
- * on missing evidence is the false-positive class the status page forbids.
- */
-export function shouldPageUpstreamLeg({ ok, recentOk, pageAfter = 3 } = {}) {
-  if (ok) return false;
-  const need = Math.max(1, Number(pageAfter) || 3) - 1;
-  if (need === 0) return true;
-  if (!Array.isArray(recentOk) || recentOk.length < need) return false;
-  return recentOk.slice(0, need).every((v) => v === false);
-}
-
 export function classifyRailOutcome({ toolBroken, railFailures = [] } = {}) {
   if (toolBroken) return "broken";
   if (railFailures.length) return "partial-rail";
@@ -824,10 +790,13 @@ function railFail(key, detail) {
 // from railFailures above, which drives partial-rail paging (exit 5). This
 // array only feeds observability (POSTed to /api/status/probe by the
 // workflow's own separate step, same as the existing "settlement"
-// component), so a bug here can never change what pages Mike. Solana/
-// Algorand/Robinhood are WARN-only by design (their failures must never
-// page — see each leg's own comment), so they call noteRail() directly
-// instead of railFail(); a skipped leg (no burner key) records nothing,
+// component), so a bug here can never change what pages the operator. Solana/
+// Algorand/Robinhood WARN (noteRail only) when the facilitator's reason is the
+// shape of OUR burner being unfunded or not opted in - the failure that design
+// was about - and railFail() on any other reason, since 2026-09-21, when the AVM
+// facilitator refused sub-cent settlements on a quota all day and the WARN-only
+// leg let the run print "all rail legs settled" (canary-refusal-classify.js).
+// A skipped leg (no burner key) records nothing,
 // matching /status's "no observation is no data, never uptime" rule.
 const railStatus = [];
 function noteRail(key, ok, detail) {
@@ -926,9 +895,6 @@ async function main() {
     // /health.flags is operator-gated now (security audit A402-11); the canary
     // has no operator token, so flags is usually absent here. Only assert when
     // it IS present (e.g. a token-carrying run); otherwise skip the preflight.
-    const yr = health?.flags?.yahooRelay;
-    if (yr === true) console.log("OK    preflight /health.flags.yahooRelay=true");
-    else if (health?.flags) console.warn(`WARN  preflight: /health.flags.yahooRelay=${yr} (set YAHOO_RELAY_URL/TOKEN) — finance tool may warn`);
   } catch (e) {
     console.warn(`WARN  preflight: GET ${TARGET}/health failed: ${(e?.message || String(e)).slice(0, 120)}`);
   }
@@ -938,6 +904,12 @@ async function main() {
   // attests the settlement tx of the leg before it).
   const ctx = { lastSettledTx: null, lastSettledPath: null };
   for (const t of TOOLS) {
+    // A leg with `weekday` (0 = Sunday, UTC) buys only on that day, unless the
+    // run asks for every leg (CANARY_ALL_LEGS=1, e.g. a manual dispatch).
+    if (Number.isInteger(t.weekday) && new Date().getUTCDay() !== t.weekday && process.env.CANARY_ALL_LEGS !== "1") {
+      console.log(`SKIP  ${t.kit.padEnd(10)} ${t.path}  (weekly leg, runs on UTC weekday ${t.weekday})`);
+      continue;
+    }
     const url = `${TARGET}${t.path}`;
     const init = { method: t.method };
     const body = typeof t.body === "function" ? t.body(ctx) : t.body;
@@ -956,37 +928,6 @@ async function main() {
     } catch (e) {
       results.push({ kit: t.kit, path: t.path, status: null, shapeOk: false, transportError: true, priceUsd: t.priceUsd });
       console.warn(`WARN  ${t.kit}:${t.path} [unreachable] ${(e?.message || String(e)).slice(0, 140)}`);
-    }
-  }
-
-  // Supply-chain leg (address-profile -> Blockscout, paid from prod's spending
-  // wallet) is graded on a CONSECUTIVE rule. A tool leg is a warning by
-  // doctrine (a 5xx never charges the buyer), and that is right for a one-off
-  // upstream blip - but this leg failed a third of its runs in 2026-08
-  // ("Seller rejected the paid retry (HTTP 500)") and nothing paged, because
-  // every failure was its own blip. The previous outcomes come from /status
-  // (rail_supply-chain, written by this canary's own status step), so the
-  // rule needs no state of its own; unreachable status = no page, never a
-  // false one.
-  {
-    const leg = results.find((r) => r.kit === "supply-chain");
-    if (leg) {
-      const legOk = classifyResult(leg) === "settled";
-      const detail = legOk ? undefined : `HTTP ${leg.status ?? "none"}${typeof leg.shapeOk === "string" ? ` — ${leg.shapeOk}` : ""}`;
-      noteRail("supply-chain", legOk, detail);
-      if (!legOk) {
-        let recentOk = null;
-        try {
-          const snap = await (await fetch(`${TARGET}/api/status`, { signal: AbortSignal.timeout(20000) })).json();
-          recentOk = snap?.railComponents?.find((c) => c.key === "rail_supply-chain")?.recentOk ?? null;
-        } catch { recentOk = null; }
-        const pageAfter = Number(process.env.CANARY_UPSTREAM_PAGE_AFTER) || 3;
-        if (shouldPageUpstreamLeg({ ok: legOk, recentOk, pageAfter })) {
-          railFail("supply-chain", `address-profile failed ${pageAfter} consecutive canary runs (${detail}) — Blockscout upstream / spending wallet path is down, not a blip`);
-        } else {
-          console.warn(`WARN  supply-chain leg failed (${detail}); prior outcomes ${JSON.stringify(recentOk)} — pages after ${pageAfter} consecutive failures`);
-        }
-      }
     }
   }
 
@@ -1028,6 +969,10 @@ async function main() {
         }
         console.log(`\nOK    solana     /api/skill/decode-blob  → settled $0.05 USDC on Solana (payer ${signer.address})${tx ? `\n      tx: https://solscan.io/tx/${tx}` : "\n      (no settle receipt header found — settlement claimed by 200 only)"}`);
         noteRail("solana", true);
+      } else if (res.status === 402 && legRefusalVerdict(settleRejectReason(res.headers)) === "page") {
+        // Same rule as the Algorand leg: WARN was only ever for OUR burner's
+        // funding state. A facilitator reason of any other shape pages.
+        railFail("solana", `did NOT settle (HTTP 402, payer ${signer.address}) — facilitator reason: ${JSON.stringify(settleRejectReason(res.headers))} (not a funding/opt-in shape)`);
       } else if (res.status === 402) {
         noteRail("solana", false, `did not settle (HTTP 402, payer ${signer.address})`);
         console.warn(`\nWARN  solana leg did NOT settle (HTTP 402, payer ${signer.address}) — decoding diagnostics:`);
@@ -1122,8 +1067,12 @@ async function main() {
         noteRail("robinhood", true);
       } else if (paid.status === 402) {
         const reason = settleRejectReason(paid.headers);
+        if (legRefusalVerdict(reason) === "page") {
+          railFail("robinhood", `did NOT settle (HTTP 402, payer ${account.address}) — facilitator reason: ${JSON.stringify(reason)} (not a funding/opt-in shape)`);
+        } else {
         noteRail("robinhood", false, `did not settle (HTTP 402) — ${JSON.stringify(reason)}`);
         console.warn(`\nWARN  robinhood leg did NOT settle (HTTP 402, payer ${account.address}) — facilitator reason: ${JSON.stringify(reason)} (unfunded USDG burner, facilitator outage, or EIP-712 domain drift)`);
+        }
       } else {
         noteRail("robinhood", false, `HTTP ${paid.status}`);
         console.warn(`\nWARN  robinhood leg: HTTP ${paid.status} ${JSON.stringify(body).slice(0, 120)}`);
@@ -1150,7 +1099,7 @@ async function main() {
   //
   // MPP_CANARY_ROUNDS: runs both legs this many times per canary invocation
   // (sequential, awaited - never concurrent, so the same burner's nonce
-  // advances normally between buys). Mike's call 2026-08-13 to raise real
+  // advances normally between buys). The operator's call 2026-08-13 to raise real
   // MPP-wire settlement volume once we joined mppscan.com's directory -
   // doubling this doubles ONLY the mpp/mpp-celo legs' spend and transaction
   // count, leaving the other 30 legs' cadence and cost untouched. Each round
@@ -1421,7 +1370,7 @@ async function main() {
           // never fail the rail verdict (that was the first settle); a low
           // success rate is printed loudly so a relay/burner problem is seen.
           // Default 1: the graded settle above IS the rail proof; the ~1,000/day of
-          // Tempo volume Mike asked for rides the 2-hourly tempo-volume.yml
+          // Tempo volume the operator asked for rides the 2-hourly tempo-volume.yml
           // (scripts/tempo-volume.js, 12 x 84) so one wallet never signs hundreds
           // of credentials inside the canary's timeout. Raise here only ad hoc.
           const volumeTarget = Math.max(1, Math.min(1000, Number(process.env.TEMPO_CANARY_TX_COUNT || 1)));
@@ -1637,26 +1586,119 @@ async function main() {
       // The client-side scheme builds the transaction group itself, so it
       // needs an algod URL — mainnet AlgoNode is free and keyless.
       const algodUrl = (process.env.ALGORAND_ALGOD_URL || "https://mainnet-api.algonode.cloud").trim();
+      // Sign a 1000-round validity window, never algokit's 10-round default:
+      // ten rounds is ~28 s, and by the time the payment reaches our own AVM
+      // validity guard (src/avm-validity.js, 20 s required) about 20 s remain,
+      // so the leg flapped on latency alone (HTTP 422 on run 35717613117,
+      // 2026-09-22, recorded as an Algorand outage on /status by a green run).
+      // The weekly sweep has signed 1000 rounds for this reason since July.
+      const { AlgorandClient } = await import("@algorandfoundation/algokit-utils/algorand-client");
+      const algorandClient = AlgorandClient.fromConfig({ algodConfig: { server: algodUrl, token: "" } }).setDefaultValidityWindow(1000);
       const avmClient = disableVendorSpendControls(new AvmX402Client());
-      avmClient.register("algorand:*", new ExactAvmScheme(signer, { algodUrl }));
+      avmClient.register("algorand:*", new ExactAvmScheme(signer, { algorandClient }));
       const avmPay = wrapAvm(synthFetch, avmClient);
-      const res = await avmPay(`${TARGET}/api/hash`, {
+      // QUOTA-AWARE ROUTE CHOICE (2026-09-22). The AVM facilitator sponsors the
+      // fee on every settlement and gives our payTo a free sponsored
+      // sub-cent settlements a month; at or above $0.01 is unlimited. When the
+      // month's allowance is spent - which we did to ourselves in September and
+      // chose to wait out rather than buy Settlement Units - a $0.001 buy here
+      // fails every day until the reset, opens or re-comments a public issue
+      // every day, and marks the rail an outage on /status while it settles
+      // perfectly well at a cent. None of that is a fact about the rail. So:
+      // read the live quota; if it is exhausted, prove the rail with the one
+      // pure-CPU tool priced at $0.01 and SAY the sub-cent path is quota-bound;
+      // if that buy fails too, that IS the rail, and it pages as before. The
+      // exhaustion itself is not hidden: it is printed, and it rides the
+      // /status detail. An unreadable quota keeps the $0.001 leg, which pages
+      // on a real refusal like any other day.
+      const FACIL = (process.env.ALGORAND_FACILITATOR_URL || "https://facilitator.goplausible.xyz").replace(/\/$/, "");
+      // The payTo comes from the one-cent route: while the allowance is spent
+      // the SERVER withdraws Algorand from sub-cent 402s (src/avm-sponsorship.js),
+      // so /api/hash has no Algorand accept to read it from. That withdrawal is
+      // the server's own verdict on the quota, and counts as exhausted even
+      // when the facilitator's status cannot be read from here - but ONLY when
+      // the server SAYS it withdrew it: GET /api/rails carries the restriction
+      // {network:"algorand", status:"paused"}. A sub-cent 402 without Algorand
+      // and no such restriction (or an unreadable /api/rails) is the rail
+      // dropping out of the sub-cent offer, and pages.
+      let quota = null, subcentWithdrawn = false, subcentMissing = null;
+      try {
+        const avmAccept = async (path) => {
+          const bare = await synthFetch(`${TARGET}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+          const pr = JSON.parse(Buffer.from(bare.headers.get("payment-required") || "", "base64").toString("utf8"));
+          return (pr.accepts || []).find((a) => String(a.network || "").startsWith("algorand:")) || null;
+        };
+        const centAccept = await avmAccept("/api/solidity-scan");
+        const payTo = centAccept?.payTo;
+        const subcentAccept = centAccept ? await avmAccept("/api/hash") : null;
+        let rails = null;
+        if (centAccept && !subcentAccept) {
+          try { rails = await (await synthFetch(`${TARGET}/api/rails`, { signal: AbortSignal.timeout(10000) })).json(); } catch { rails = null; }
+        }
+        const offerVerdict = subcentAcceptVerdict({ centAccept, subcentAccept, rails });
+        subcentWithdrawn = offerVerdict === "withdrawn";
+        if (offerVerdict === "missing") subcentMissing = "the $0.001 route's 402 carries no Algorand accept while the $0.01 route's does, and GET /api/rails reports no Algorand sub-cent pause (or could not be read) - the rail has dropped out of the sub-cent offer without the server saying why";
+        if (payTo) {
+          const st = await (await fetch(`${FACIL}/sponsorship/status?wallet=${payTo}`, { signal: AbortSignal.timeout(10000) })).json();
+          quota = (st.chains || []).find((c) => c.chain === "algorand") || null;
+        }
+      } catch { quota = null; }
+      if (subcentMissing) { railFail("algorand", subcentMissing); return; }
+      // A status row last written in an EARLIER UTC month is last month's
+      // count, not this one's (the document has no month field and its
+      // counter may only roll over on the facilitator's next write), and one
+      // whose updatedTs is not a readable time cannot name its month at all -
+      // the server's own rule (src/avm-sponsorship.js sponsorshipRowMonth).
+      // Taken at its word it would route around a reset that never gets a
+      // sub-cent settle to happen on; ignored, the $0.001 buy below IS that
+      // settle, and pages if refused.
+      const quotaMonth = quota ? sponsorshipRowMonth(quota) : null;
+      const quotaNotThisMonth = !!quota && !isSponsorshipRowEvidence(quota);
+      const exhausted = subcentWithdrawn || (!!quota && !quotaNotThisMonth && Number(quota.usedMonth) >= Number(quota.quota) && Number(quota.suBalance || 0) <= 0);
+      const quotaText = quota ? `${quota.usedMonth}/${quota.quota} used, SU ${quota.suBalance}${quotaMonth === "earlier-month" ? `, row last updated ${new Date(sponsorshipRowUpdatedAt(quota)).toISOString()}, before this month` : quotaMonth === "unreadable" ? `, row's updatedTs ${JSON.stringify(String(quota.updatedTs)).slice(0, 40)} is not a readable time` : ""}` : "facilitator status unreadable";
+      // The allowance resets on the 1st. A pause still up on the 2nd or 3rd
+      // (the 3rd so one skipped daily run cannot hide it), or one the server
+      // holds while the facilitator's row is still last month's, is the reset
+      // not reaching somewhere - said loudly, never excused as "resets on the 1st".
+      const dayOfMonth = new Date().getUTCDate();
+      const pauseOutlivedReset = exhausted && (dayOfMonth === 2 || dayOfMonth === 3 || (subcentWithdrawn && quotaMonth === "earlier-month"));
+      const resetNote = pauseOutlivedReset
+        ? `still paused on day ${dayOfMonth} of the UTC month, after the reset on the 1st - check the facilitator's sponsorship status for our payTo`
+        : "resets on the 1st";
+      const leg = exhausted
+        ? { path: "/api/solidity-scan", usd: "0.01", body: { source: "pragma solidity ^0.8.0;\ncontract C { function f() external {} }" }, ok: (b) => Array.isArray(b.findings) }
+        : { path: "/api/hash", usd: "0.001", body: { text: "algorand-canary" }, ok: (b) => typeof b.hex === "string" };
+      if (exhausted) console.log(`\nalgorand leg: sub-cent sponsored quota exhausted this month (${quotaText}${subcentWithdrawn ? "; the server has withdrawn Algorand from sub-cent routes" : ""}) - proving the rail at $0.01 instead; ${pauseOutlivedReset ? "sub-cent buys should have resumed on the 1st" : "sub-cent buys resume on the 1st"}`);
+      if (pauseOutlivedReset) console.warn(`\nWARN  algorand leg: the sub-cent pause is ${resetNote} (${quotaText}). A row still dated last month means the reset has not reached it.`);
+      const res = await avmPay(`${TARGET}${leg.path}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: "algorand-canary" }),
+        body: JSON.stringify(leg.body),
       });
       const body = await res.json().catch(() => ({}));
-      if (res.status === 200 && typeof body.hex === "string") {
+      if (res.status === 200 && leg.ok(body)) {
         let tx = null;
         const receiptHdr = res.headers.get("payment-response") || res.headers.get("x-payment-response");
         if (receiptHdr) {
           try { tx = JSON.parse(Buffer.from(receiptHdr, "base64").toString("utf8"))?.transaction || null; } catch { /* best-effort */ }
         }
-        console.log(`\nOK    algorand   /api/hash  → settled $0.001 USDC on Algorand (payer ${address})${tx ? `\n      tx: https://allo.info/tx/${tx}` : "\n      (no settle receipt header found — settlement claimed by 200 only)"}`);
-        noteRail("algorand", true);
+        console.log(`\nOK    algorand   ${leg.path}  → settled $${leg.usd} USDC on Algorand (payer ${address})${exhausted ? " [sub-cent quota exhausted; rail proven at one cent]" : ""}${tx ? `\n      tx: https://allo.info/tx/${tx}` : "\n      (no settle receipt header found — settlement claimed by 200 only)"}`);
+        noteRail("algorand", true, exhausted ? `settled at $0.01; sub-cent sponsored quota exhausted this month (${quotaText}), ${resetNote}` : undefined);
       } else if (res.status === 402) {
         const reason = settleRejectReason(res.headers);
+        // WARN only for the failure the design was about (our own burner
+        // unfunded or not opted in). A refusal for any other reason pages: on
+        // 2026-09-21 this leg WARNed on `subcent_quota_exceeded` while the run
+        // printed "all rail legs settled". See canary-refusal-classify.js.
+        if (legRefusalVerdict(reason) === "page") {
+          railFail("algorand", `did NOT settle (HTTP 402, payer ${address}) — facilitator reason: ${JSON.stringify(reason)} (not a funding/opt-in shape, so this is the facilitator's decision, not our wallet's)`);
+        } else {
         noteRail("algorand", false, `did not settle (HTTP 402) — ${JSON.stringify(reason)}`);
         console.warn(`\nWARN  algorand leg did NOT settle (HTTP 402, payer ${address}) — facilitator reason: ${JSON.stringify(reason)} (unfunded or not-opted-in USDC burner, facilitator outage, or algorand missing from the live accepts)`);
+        }
+      } else if (res.status === 422) {
+        // Our own AVM validity guard refusing our own canary is our defect
+        // (a too-short signed window), never the rail's: page on it.
+        railFail("algorand", `our AVM validity guard refused the canary's payment (HTTP 422): ${JSON.stringify(body).slice(0, 160)}`);
       } else {
         noteRail("algorand", false, `HTTP ${res.status}`);
         console.warn(`\nWARN  algorand leg: HTTP ${res.status} ${JSON.stringify(body).slice(0, 120)}`);

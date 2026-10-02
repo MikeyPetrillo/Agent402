@@ -1,16 +1,13 @@
 name: Tempo MPP volume
 
-# ~200 settled Tempo MPP transactions a day at $0.001 against our own
-# cheapest route, from the canary burner (USDC.e on Tempo): 12 runs x 17.
-# Real on-chain volume for the MPP leaderboard window, the router's
-# proven-seller gate and Tempo's transfer feed. The route is pure-CPU
-# (/api/uuid), so the only cost is Tempo's buyer-side fee; the $0.001 lands
-# in our own payTo. The daily paid canary keeps the single GRADED mpp-tempo
-# settle as the rail proof; this workflow is volume, graded only on its own
-# success rate (>= 80%), and it refuses to start when the wallet is below
-# $2 so it can never drain the burner to zero itself (the canary's funding
-# sweep pages at $5 USDC.e on the same wallet - about 25 days of runway at
-# ~200/day; lowered from 12 x 84 = ~1,000/day on 2026-08-20, Mike's call).
+# Settled Tempo MPP transactions against our own cheapest route, from the
+# canary burner (USDC.e on Tempo): 12 runs x 17 a day. Real on-chain volume
+# for the MPP leaderboard window, the router's proven-seller gate and Tempo's
+# transfer feed. The route is pure-CPU (/api/uuid) and pays our own payTo.
+# The daily paid canary keeps the single GRADED mpp-tempo settle as the rail
+# proof; this workflow is volume, graded only on its own success rate
+# (>= 80%), and it refuses to start below a floor balance so it can never
+# drain the burner itself (the canary's funding sweep pages first).
 on:
   schedule:
     - cron: "41 */2 * * *"   # every 2 hours (GitHub delivers late/sparsely; that is fine for volume)
@@ -37,7 +34,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TARGET_URL: https://agent402.tools
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -74,7 +71,7 @@ jobs:
           TAIL=$(grep -E '^(tempo-volume:|REFUSING|TEMPO VOLUME UNDER|10 failures)' /tmp/tempo-volume.log 2>/dev/null | tail -n 4 || true)
           if [ "$CODE" != "0" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$(printf 'The 2-hourly Tempo MPP volume run (scripts/tempo-volume.js, ~17 x $0.001 buys of /api/uuid over tempo/charge from the canary burner) did not reach its success bar (exit %s). Exit 1 = under 80%% settled; exit 2 = refused to start (burner below $2 on Tempo, or no tempo challenge on the live 402 - TEMPO_API_KEY unset on prod?).\n\n```\n%s\n```\n\nRun: %s/%s/actions/runs/%s\nA run that settles >= 80%% closes this.' "$CODE" "$TAIL" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$(printf 'The 2-hourly Tempo MPP volume run (scripts/tempo-volume.js, ~17 buys of /api/uuid over tempo/charge from the canary burner) did not reach its success bar (exit %s). Exit 1 = under 80%% settled; exit 2 = refused to start (burner below its floor balance on Tempo, or no tempo challenge on the live 402 - TEMPO_API_KEY unset on prod?).\n\n```\n%s\n```\n\nRun: %s/%s/actions/runs/%s\nA run that settles >= 80%% closes this.' "$CODE" "$TAIL" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$(printf 'Still failing at %s (exit %s)\n\n```\n%s\n```' "$(date -u +%FT%TZ)" "$CODE" "$TAIL")"
             fi

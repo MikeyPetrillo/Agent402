@@ -4,39 +4,25 @@ import { paymentSchemeOf } from "./payer.js";
 // not the flat tier price.
 //
 // WHY. The gateway prices in flat tiers because `exact` fixes the amount in the
-// 402 before the handler runs. Measured over 30 days of `gateway_usage`, that
-// makes us 170x to 2,162x the upstream cost on the chat tiers: v1-chat charges
-// $0.02 against $0.0001 of real spend, v1-chat-pro $0.10 against ~$0.00005. An
-// agent that can hold an API key has no reason to route through that, and the
-// flat price is bad at BOTH ends - small calls are wildly overpriced, and large
-// ones hit the margin clamp, which shrinks max_tokens and hands the buyer a
-// truncated answer to defend our margin.
+// 402 before the handler runs. The flat price is bad at BOTH ends - small calls
+// pay for a large worst case, and large ones hit the margin clamp, which
+// shrinks max_tokens and hands the buyer a truncated answer.
 //
 // The `upto` scheme fixes the shape: the buyer authorizes a CEILING and the
 // seller names the settled amount afterwards, never above it. So the tier price
 // becomes a guaranteed maximum and the bill becomes the meter.
 //
-// THE MARKUP IS THE PRODUCT, and it is deliberately thin: 15%, which is the
-// margin the operator asked for. Be honest about what that does and does not
-// buy. It is cheaper than a subscription for anyone under the monthly
-// break-even. It is NOT cheaper than an agent calling OpenRouter with its own
-// key - that agent pays upstream and we pay upstream plus 15%. Anyone claiming
-// otherwise on a served page is making a claim the numbers do not support.
+// The settled amount is upstream x METER_MARKUP, floored (see below). How much
+// cheaper that is than the flat tier depends on METER_MIN_SETTLE_USD: the
+// facilitator refuses to settle small amounts, so the real multiple is
+// ceiling / max(floor, upstream x markup), per tier. Read any multiple quoted
+// publicly off these constants at the current floor, and re-read it when the
+// floor moves.
 //
-// HOW MUCH CHEAPER THAN THE FLAT TIER IS NOT OURS TO DECIDE. This once said
-// "roughly 40x cheaper", which was the markup arithmetic alone and true only in
-// a world with no floor. The binding constraint is METER_MIN_SETTLE_USD below:
-// the facilitator refuses to settle small amounts, so the real multiple is
-// ceiling / max(floor, upstream x markup), per tier. At the measured $0.001
-// floor a small call on the $0.02 base tier is 20x cheaper and on the $0.10 pro
-// tier 100x; nano at $0.003 is 3x; auto at $0.01 is 10x. Read any multiple
-// quoted publicly off these constants at the current floor, and re-read it when
-// the floor moves.
-//
-// What the buyer gets for the 15% is access without credentials and a hard
-// per-call ceiling (see below), not a lower token price.
+// What the buyer gets is access without credentials and a hard per-call
+// ceiling (see below), not a lower token price.
 export const METER_MARKUP = 1.15;
-// Every request costs us something no percentage of a $0.000003 call can cover
+// Every request carries a fixed overhead no percentage of a tiny call can cover
 // (the paywall, the settle, egress). This floor is what a request is worth
 // before any model runs.
 //
@@ -110,9 +96,8 @@ export function meteredUsd({ upstreamUsd, ceilingUsd }) {
   // Our floor (what a request is worth) and the rail's floor (what it will
   // accept) are different things and both apply.
   const metered = Math.max(METER_FLOOR_USD, METER_MIN_SETTLE_USD, up * METER_MARKUP);
-  // Never above what the buyer authorized. The margin clamp already holds
-  // upstream at or under 70% of the tier price, so metered <= 0.91 x ceiling
-  // and this cap should never bind - it is here because "should never" is not
+  // Never above what the buyer authorized. The margin clamp already bounds
+  // upstream well under the tier price, so this cap should never bind - it is here because "should never" is not
   // an argument to skip the check on something that moves money.
   // A ceiling AT OR BELOW the facilitator's floor cannot be metered: every
   // amount we could name is either above what the buyer authorized or below

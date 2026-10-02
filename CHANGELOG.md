@@ -1,283 +1,350 @@
 # Changelog
 
-## Unreleased - 2026-08-25 - First catalog retirement
+All notable user-facing changes to the Agent402 server and site. Package
+releases are listed under the server version they shipped with; each package
+carries its own version on npm.
 
-- **Retired 40 free-tier tools and 29 skill packs** that were named on no marketing surface and had zero
-  external use (paid or proof-of-work) in the preceding 30 days. Kits `encoding`, `math`, `string` and
-  `color` are gone; `date-time`, `validation`, `crypto-hash`, `util` and `text-analysis` keep only the tools
-  a live pack or the test corpus depends on. The catalog stays above 500 entries. Removed routes answer 404.
+## Unreleased
 
-## Unreleased - 2026-08-22 - Reports, monitors, prepaid credits, MPP on Tempo
+Since v2.4.0 (2026-09-18).
 
-- **Finished report products on `/v1`** - one paid call returns a complete, cited report:
-  `POST /v1/research` ($0.35) / `/v1/research/pro` ($0.65) / `/v1/research/max` ($1.10) /
-  `/v1/research/market-brief` ($0.35), `/v1/dossier` ($0.55) / `/v1/dossier/max` ($0.95),
-  `/v1/fund` ($0.25) / `/v1/fund/max` ($0.50), `/v1/domain-audit` ($0.20) / `/v1/domain-audit/pro` ($0.30),
-  `/v1/recall-report` ($0.20), `/v1/insider-report` ($0.25), `/v1/filing-report` ($0.25),
-  `/v1/token-brief` ($0.35), `/v1/ticker-pack` ($0.75),
-  `/v1/token-risk` ($0.30) / `/v1/token-risk/pro` ($0.60),
-  and the deterministic `/v1/ipo-report` ($0.05). Grounded in primary data fetched by the server
-  (EDGAR, openFDA, DNS/TLS, on-chain reads, live web search) before synthesis; wallet-only.
-- **Card front door for people** - `/reports` (Stripe Checkout, `POST /api/buy`, delivery at
-  `/r/:sessionId`; $1 a report, $2 for the deepest three, because the card price carries Stripe's
-  2.9% + $0.30 per charge while an agent paying per call pays the lower tool price for the same
-  report; a report is generated once per paid session, a failed generation is refunded),
-  `/monitors` ($3/month subscriptions: domain security, SEC filings, Solana token safety, fund 13F,
-  FDA recall, insider flow, IPO pipeline - cheap daily probes, a paid re-run and an email only on
-  change, reports at `/m/:id`, Stripe Customer Portal at `/monitors/manage`), and `/credits`
-  (prepaid $20 / $50 / $100 packs,
-  one `a402_` key, `Authorization: Bearer a402_...` on any priced route, debited only on a
-  successful response, never expires, `GET /api/credits/balance`; identity-bound routes refuse it).
-  All of it mounts only with `STRIPE_SECRET_KEY`. `agent402-mcp` 0.13.0 reads
-  `AGENT402_CREDITS_KEY`; `agent402-client` 0.7.0 takes `{ creditsKey }`.
-- **MPP everywhere** - every 402 carries `WWW-Authenticate: Payment` alongside x402; `evm`
-  credentials translate to x402 settlement, `tempo` settles natively on Tempo through Tempo's
-  relay (USDC.e or PathUSD, chain-confirmed on a relay failure), and `stripe/charge` offers cards
-  over MPP on routes priced $0.50 and up when configured. Rejected credentials answer RFC 9457
-  `application/problem+json`. The hosted MCP connector pays wallet-only tools over MPP too.
-  `agent402-tollbooth` 0.9.x gains native MPP: `createTollbooth({ x402 })` mints evm challenges
-  from your `@x402/express` middleware, `createTollbooth({ tempo })` settles on Tempo with split
-  payments and no x402 middleware at all.
-- **LLM gateway** - `POST /v1/rerank` ($0.002, Cohere wire), the Anthropic Messages wire and the
-  OpenAI Responses wire on every tier, `POST /v1/grounded/chat/completions` ($0.03, live web search
-  with `url_citation` annotations), five-model text-to-speech failover chain.
-- **MCP tool names are dotted** on both connectors - `catalog.search`, `catalog.find`,
-  `catalog.call`, `payment.info`, `server.describe`, `sellers.list`, `demand.request` plus the
-  flagships `web.search`, `web.answer`, `web.news`, `browser.render`, `market.quote`,
-  `audio.transcribe`, `memory.read`, `memory.write`; the prior snake_case names remain call aliases.
-- **Site** - dark theme by default with a light toggle; self-hosted fonts; `/reports`, `/monitors`,
-  `/credits` pages; the homepage loads no third-party script.
+### 2026-09-28
+- The JSON body of every paywall 402 also carries the PaymentRequired object
+  from the `PAYMENT-REQUIRED` header (`x402Version`, `error`, `resource`,
+  `accepts`, `extensions`), after this server's own fields. The header is
+  unchanged and stays authoritative. A refused payment's body leaves out the
+  header's one-line `error`: its `hint`, or an MPP problem's `detail`, says
+  what went wrong, and a client that reads `error` first reads that instead.
+- Packages: agent402-mcp 0.13.5 (a refused paid call reads as its reason,
+  not the offer), agent402-openclaw 0.4.4 (a refused x402 payment reaches
+  OpenClaw as one OpenAI-shaped error sentence), agent402-client 0.8.9 (a
+  failed call's text falls back to the refusal's hint).
 
-## v2.0.0 - 2026-07-14 - The 500
+### 2026-09-25
+- The tool directory (`/marketplace/tools`, `/api/index/tools`) is built once
+  per index change instead of on every page request, and the search index
+  indexes a large seller in slices; both showed as event-loop stalls.
+- Paid calls come first under load: when the event loop lags or too many
+  requests are in flight, free and discovery requests get 503 + Retry-After
+  before they are parsed, and uncached searches share a per-second CPU
+  budget across all callers. Calls to priced routes and the gateway, paid
+  or not, are never shed. Lag sheds only while the loop stays saturated;
+  requests queued behind a single slow moment are served.
+- Revenue, sales, status, proof and marketplace pages are built at most once
+  a minute on the server instead of on every request, and the revenue series
+  reads one chain at a time; these were the main event-loop stalls. Once
+  built, an expired page is served at once and rebuilt in the background.
+  The tool directory rebuilds in slices while the previous one serves, the
+  revenue series is built across several turns, and the chain strip on every
+  page is computed once per index change. The router holds about a quarter
+  less memory for the same index (shared name tokens), so memory cleanups
+  pause the server for less time.
+- `requestContract` on index rows also reads a JSON Schema the seller declares
+  beside a route in its `/.well-known/x402` manifest (`input_schema` or
+  `inputSchema`), labeled `source: "seller_manifest"`; a contract from the
+  seller's OpenAPI document still wins.
+- The index cache is written without blocking the server: each seller is
+  serialized once, in batches, where the whole cache used to be serialized
+  three times in one pass.
+- `/api/route` and `/api/find` answer faster: common words ("to", "for",
+  "the") no longer pull most of the index into every search, one request
+  scores its query once, and the index rebuild after each crawl runs in the
+  background in short slices instead of blocking the server.
+- `/api/find` no longer flags a correct answer as a miss because the query
+  carries a word no tool mentions ("claims" in "decode jwt token and extract
+  claims"): the top result counts as served when it covers at least two
+  query terms, half the query's weight, and one term in its own slug or name.
+- `crypto-indicators` takes `ohlcv` (0-100) and returns the last N OHLCV
+  candles beside the indicators, so spot close, candles and RSI/EMA arrive in
+  one call at the same price.
+- `jwt-decode` and `unit-convert` descriptions name what they already handle
+  (JWT claims and expiration; stones, kilopascals, bar, joules, btu,
+  horsepower), so searches in those words find them.
+- `stock-history` takes `indicators` (true or a list of rsi, macd, ema, sma,
+  bollinger, atr) and `points`, and returns technical analysis computed from
+  the same daily bars at the same price, with a plain summary.
+- `json-format` takes `sortKeys` and `canonical`; `canonical: true` returns
+  the RFC 8785 canonical form and its SHA-256.
+- `unit-convert` converts imperial Russian measures: versts, sazhens,
+  arshins, vershoks, poods, funts and zolotniks.
+- New `cve-lookup` ($0.005): a CVE by id, or a keyword search, with the NVD
+  description, CVSS, CWE, affected products and references, joined with the
+  EPSS exploitation probability and the CISA KEV entry. This product uses the
+  NVD API but is not endorsed or certified by the NVD.
+- Seller index: request and response contracts are read through local OpenAPI
+  references (`#/components/...`), so a FastAPI seller's required fields and
+  guaranteed response paths show as declared instead of partial.
 
-Catalog reshaped. Roughly 970 generated pairwise unit-converter endpoints
-(`/api/convert-miles-to-km` and friends) were retired in favour of the one
-parametric tool that already served every pair, `POST /api/unit-convert`, and the
-catalog was then rebuilt out to **500+ entries: 400+ tools + 100+ skill packs**.
-Retired converter routes return a teaching **410** naming the replacement route
-and handing back a ready-to-send `{ value, from, to }` body, never a 301 - an
-agent must not silently re-POST a paid call across routes. Retired tool *pages*
-do 301, since a page visit has no re-POST hazard. CI now derives counts from the
-booted server (`/health` for the total, `/api/skill-packs.json` for the packs)
-and holds a 400-entry catalog floor, so the numbers can't be gamed by editing a
-doc: `scripts/sync-count.js --check`. Full notes: `docs/releases/v2.0.0.md`.
+### 2026-09-24
+- `polymarket-search`, `polymarket-market`, `polymarket-orderbook` and
+  `polymarket-price-history` are retired. Each route answers 410 naming the
+  nearest Kalshi tool (`kalshi-markets`, `kalshi-event` or `kalshi-live-data`).
+- Model gateway: `openai/gpt-6-luna` is the nano default and leads the auto
+  router's fast band; `openai/gpt-6-sol` is served on the pro tier;
+  `anthropic/claude-opus-5.5`, the Grok 4.5 to 4.7 models and
+  `qwen/qwen3.8-max-prime` get their own cost and reasoning rows, so a small
+  budget is not spent entirely on reasoning and qwen3.8-max-prime is servable
+  on the metered route. Four DeepSeek ids the upstream removes on 2026-09-28
+  (`deepseek-v3.2`, `-v3.2-exp`, `-v3.1-terminus`, `-r1-distill-llama-70b`)
+  are refused by name with a successor named.
+- `/v1/images/generations` is served by FLUX.2 Pro (GPT-5 Image Mini as the
+  failover) ahead of Gemini 2.5 Flash Image's shutdown on 2026-10-02. The wire
+  is unchanged: one 1024x1024 PNG per call as inline base64.
+- Seller index: a route that is not in the seller's own manifest or OpenAPI
+  must answer a live 402 at least every 7 days and leaves the listing when it
+  answers 404 or 405 twice at least an hour apart; a 410 removes any route;
+  re-registering re-checks every route. `/api/index?seller=` shows
+  each route's `declared`, `source` and `lastVerifiedAt`.
+- `kalshi-markets` and `kalshi-event` return `yesBidSize` and `yesAskSize`,
+  the resting contracts at the best yes bid and ask. Kalshi retires its
+  liquidity figure on 2026-10-01 and it already reads zero on live books, so
+  `liquidityUsd` is null with a `liquidityUsdNote` wherever Kalshi publishes
+  no figure.
+- agent402-tollbooth 0.10.2: the Tempo settlement confirm used after a failed
+  relay broadcast requires the transfer's MPP memo to be bound to the
+  credential's own challenge.
 
-Because of that prune, **the tool counts quoted in the entries below predate
-v2.0.0**. They were accurate when written and are kept as history, not as current
-figures. Read `/health` and `/api/skill-packs.json` for live numbers; documented
-surfaces carry evergreen claims ("500+ tools") rather than an exact figure that
-rots on the next commit.
+### 2026-09-23
+- The model gateway serves Meta's Muse Spark (`meta/muse-spark-1.3`, `-1.2`,
+  `-1.1`) and Muse Glimmer 30B (`meta/muse-glimmer-30b`) on the base tier and
+  on every route priced by model. "Contributor" listings
+  are refused by name.
+- /guides/agent-hosts covers Muse Code (MCP over Streamable HTTP or stdio);
+  `/muse` links to it.
+- A 402 lists the MPP tempo challenge first, so a client holding Tempo funds
+  pays over Tempo; a client whose tempo credential was just refused gets the
+  evm challenge first for 30 minutes (`MPP_TEMPO_DEMOTE_MS`).
+- The hosted MCP connector answers an unpaid paid-tool call with a readable
+  tool result whose text names every way to pay and whose
+  `_meta["org.paymentauth/payment-required"]` carries the challenges, instead
+  of a bare JSON-RPC `-32042`; mppx clients pay it the same way. Refused
+  credentials still answer `-32043`, and the tasks path keeps `-32042`.
+- `/openapi.json` drops repeated per-operation boilerplate (the 402 walkthrough
+  lives once in `info.x-guidance`).
+- `/openapi.json` offers an MPP tempo payment only on routes whose 402 offers
+  one (not on wallet-identity or long-running routes), and per-request-priced
+  routes publish a dynamic price range with null offer amounts.
+- The hosted MCP connector declares the MPP methods it accepts in
+  `capabilities.experimental.payment`.
+- README: a three-line quickstart for paying over MPP and over x402.
+- Telemetry records the payment rail each call presented (x402, MPP evm,
+  MPP tempo, MPP stripe, credits, proof-of-work); the operator traffic report
+  and its daily summary line carry per-rail attempts, paid, refused, errored
+  and distinct payers.
+- CONTRIBUTING and the issue templates point sellers at
+  `POST /api/index/register` instead of a seed PR.
 
-### Shipped across the 1.x line and into v2.0.0
+### 2026-09-22
+- Say, in fields a machine reads, that `GET /api/index` is one page: `complete`
+  (false whenever a seller is absent from this response but present in the
+  index), an RFC 8288 `Link` header with first/prev/next/last, `X-Total-Count`,
+  and a note that leads with PARTIAL. `perPage` is honoured as an alias for
+  `limit`. The seller detail (`?seller=`) now declares `toolsReturned`,
+  `toolsTruncated` and `toolsCap` instead of silently cutting the tool list at
+  500. `llms.txt` no longer calls the paginated listing a snapshot of every
+  seller indexed.
+- Read a base-unit `amount` in an index listing as dollars only when the token
+  is one we recognise as dollar-pegged: a declared `decimals` no longer sizes an
+  arbitrary asset, a declaration that contradicts the chain publishes no price,
+  and a figure that cannot be written as a plain decimal is refused.
+- Retire contract-inspect, address-profile, token-info, token-holders and
+  tx-inspect; the routes answer 410, naming a replacement where one exists.
+- Read every `token-risk` token fact from keyless probes; the advertised chains
+  are now the ones the token-security probe serves (celo out, bsc in), and a
+  source that does not answer refuses 502 or 503 rather than 422.
+- Remove the `/api/chain/proxy` verb with the tool it pointed at.
+- Add `search-lite` (`GET`/`POST /api/search-lite`, $0.008): up to 5 web results
+  (title, URL, snippet) from the same index as `search`, no freshness filter.
+  A generic SERP query still resolves to `search` on `/api/route` and
+  `/api/find`.
+- Publish a `GET` query parameter in `/openapi.json` with the type its schema
+  declares when that type is `integer` or `boolean`; both were published as
+  `string` beside a numeric or boolean example.
+- Price a flat chat route by the model it is asked for: a model that another
+  flat tier serves (nano, base, pro, premium) now gets a 402 quoting that
+  tier's price and, once paid, is served under that tier's caps, allowlist and
+  failover instead of a 400. Applies to the chat, Messages, Responses and
+  Gemini wires; the answer carries `agent402_tier`. Catalog prices, `/api/pricing`
+  and `/openapi.json` are unchanged.
 
-- **Relicensed the server to AGPL-3.0** (the `client/`, `mcp/`, and `tollbooth/` npm packages
-  stay MIT). The root `LICENSE` is now the GNU Affero GPL v3, and a new `NOTICE` documents the
-  split: the self-hostable server is copyleft (run a modified version as a network service and you
-  must offer its source to users), while the buyer SDK, MCP connector, and pay-per-crawl middleware
-  remain permissively licensed so they can be embedded without obligation. The public promise that
-  `agent402-tollbooth` stays MIT is unchanged. Served copy, the README badge, docs, and the
-  machine-readable `/.well-known/x402` `license` field updated to match; `agent402-tollbooth`
-  marketing continues to read MIT. Secret-scanning (gitleaks) now runs on every push and PR.
+### 2026-09-21
+- Add `POST /v1/judge` ($0.001): typed judgments (a choice from a named set, a
+  scored scale, a probability) over a supplied state.
+- Accept alternate unit spellings in `unit-convert` (plural/singular, British
+  spellings, spaces and underscores, `statute-` prefix); unknown units still 400.
+- Add `priceKnown` to `/api/index` sellers, `/api/route` rows and seller detail;
+  `priceUsd` is unchanged.
+- Accept a seller origin on a non-default port at x402 registration, MPP
+  registration and MPP discovery.
+- Send `User-Agent: Mozilla/5.0 (compatible; Agent402-Router/1.0; +https://agent402.tools/crawler)`
+  and `X-Agent402-Via: router` on every paid call the router makes; `/crawler`
+  documents it.
+- Count a transfer that matches a wallet's published price as a settlement at
+  any size on the seller leaderboard; rows carry `settlementsAbovePerCallCeiling`
+  and `transfersSkippedOverCeiling`.
+- Accept `?limit=` as an alias of `?top=` on `GET /api/leaderboard`.
+- Fix heading order on `/reports`, `/monitors`, `/quickstart` and `/transparency`;
+  stop `/leaderboard` printing the same figure twice; trim ~6 KB of repeated nav
+  style from every page.
+- Fix the `x-tweet` documented example to a real tweet id.
+- Retired tools and skill packs answer 410 Gone with the retirement date and the
+  live replacement instead of a 404.
+- Packages: agent402-mcp 0.13.3, agent402-client 0.8.7, agent402-anthropic-tools
+  0.1.8, agent402-langchain 0.2.7, agent402-llamaindex 0.1.8,
+  agent402-openai-agents 0.1.7, agent402-openai-tools 0.1.8, agent402-strands
+  0.1.8 (corrected READMEs, descriptions and the report price ladder on npm).
 
-- **Conversion funnel: diagnose the 402→settle drop-off** (`paywall_402` + new `pow_challenge`).
-  The funnel could show *that* agents bounce at the paywall but not *why*. Two privacy-preserving
-  dimensions fix that (still counts-only - no IP/UA/wallet): (1) `paywall_402` gains `attempt`,
-  splitting every 402 into `none` (first-contact quote - no payment header: no wallet, a crawl, or
-  looked-and-left), `usdc_failed` (an `X-PAYMENT` authorization was present but rejected - a buyer
-  that *tried* and couldn't, the fixable leak), or `pow_failed` (bad/expired proof-of-work). (2) A
-  new `pow_challenge` event counts free-tier challenges *issued* (`GET /api/pow/challenge`); paired
-  with `payment_settled{rail=pow}` it yields the free-tier take rate (issued → solved), exposing
-  whether the free path is undiscovered or just too much friction. Both roll up per `(slug, …)` on
-  the existing 15-min flush so crawler sweeps can't blow the event budget; the long tail folds per
-  `attempt` so the split survives for tail slugs. CI-locked (`scripts/test-posthog-funnel.js`).
+### 2026-09-18 to 2026-09-20
+- Add Google's native `generateContent` wire on every gateway tier.
+- Add `POST /v1/audio/transcriptions` (OpenAI transcription wire, multipart).
+- Add `service_tier: "priority"` on the pro and premium tiers (2x list, sized by
+  the margin clamp); `:nitro` is pinned to the default tier.
+- Add `perp-dexs`, `perp-dex-markets` and `perp-dex-limits` on Hyperliquid
+  builder-deployed (HIP-3) dexs.
+- Add `kalshi-live-data` and `kalshi-weather-index`.
+- Add `edgar-13f-datasets` ($0.003) and `edgar-13f-dataset-head` ($0.005).
+- Restore `sol-token-holders` (was returning an empty table).
+- Move `stock-quote` and `stock-history` onto Databento DBEQ.BASIC: per-venue
+  volume is reported as `venueVolume`, `stock-history` accepts up to 250 sessions,
+  the 52-week high/low fields are gone.
+- Remove `options-chain`, `premarket-quote`, `stock-dividends`,
+  `earnings-calendar`, `dividend-calendar` and the `market-open` skill pack.
+- Stop selling prepaid card credits; existing keys keep redeeming.
+- Add CORS on the machine surfaces (`/api/`, `/v1/`, `/mcp`, `/.well-known/`,
+  `/openapi.json`, `/llms.txt`) with the payment headers exposed.
+- Point an under-funded buyer at what its balance covers on the 402
+  (`retry: "lower-price-route"`).
+- Add input aliases for 20 more required parameter names (`barcode`, `upc`,
+  `ean`, `coin`, `prompt`, `html`, `hash`, `mint`, `spec`, `payload`, ...).
+- Serve an A2A AgentCard at `/.well-known/agent-card.json` and
+  `/.well-known/agent.json`, and the ERC-8004 registration file at
+  `/.well-known/agent-registration.json`.
+- Seed Base and Algorand settlement evidence from our own crawl as well as the
+  facilitator catalogs; a seller's detail view echoes its own description and
+  tags; re-registering an origin re-reads its documents.
+- Add a Monthly bucket to `/revenue`; rebuild the per-chain marketplace pages as
+  a dense table; redact upstream error text on `/api/revenue`.
+- Add a disclaimer to `dossier`, `research-deep`, `recall-report` and
+  `crypto-indicators` output.
+- Refuse `cohere/rerank-4-fast` on `/v1/rerank` by name.
+- Fix `email-deliverability` reporting a failed DNS lookup as a missing record.
+- Ship the OFL licence files with the self-hosted fonts.
+- mppx 0.10.1.
 
-- **Buyer SDK spending caps** (`agent402-client` → **0.5.0**): the client now takes optional
-  `maxPerCallUsd`, `dailyLimitUsd`, and `maxPerHostUsd` ceilings. A paid call that would break
-  a cap is refused with `SpendingLimitError` **before any payment is signed** - a buyer-side
-  circuit breaker against a malicious or misconfigured `402` that quotes an inflated price (the
-  "wallet drain via uncapped spending" failure mode). Only settled paid calls count against the
-  rolling-24h window; blocked/failed calls and free proof-of-work calls never consume budget.
-  New `a.spendingSummary()` for observability. Default (no caps set) behaviour is unchanged.
+## v2.4.0 - 2026-09-18
 
-- **Payment-metadata minimisation, stated explicitly** (privacy + discovery manifest): an x402
-  token can carry optional annotation fields (resource URL, description, `reason`) that a buyer
-  might fill with personal data. Agent402 reads **only** the signed payer address and never
-  parses, logs, or retains those fields - now spelled out on `/privacy` and exposed
-  machine-readably at `/.well-known/x402` (`payment.dataHandling`) so a compliance-aware buyer
-  can verify posture before transacting. No behaviour change - the code already did this; this
-  documents and attests it.
+- Admit `openai/gpt-6-astra` and `anthropic/claude-fable-5.1` on the premium tier.
+- Add top-level `effort` on the Messages wire for Claude 4.7+; refuse `speed`
+  other than `standard`.
+- Move `transcribe` onto `gpt-transcribe` with a 4-minute cap; cap `tts-lite`
+  text at 800 chars.
+- Add `/api/chain/<verb>` (35 RPC verbs) and five chain reads: `chain-nonce`,
+  `chain-storage`, `chain-pending`, `chain-total-supply`, `chain-erc1155-balance`;
+  a contract revert is a 422.
+- Add `POST /api/attest` (EAS attestation on Base for a settled call) and
+  `POST /api/feedback` / `GET /api/feedback/summary`.
+- Answer `/api/route` from a candidate index; validate Exa search categories;
+  read Polymarket price history from the Data API.
+- Add `/x402-test` (`/conformance`, `/debug`), the payment-refusal diagnostic.
+- List a migrated seller once: a verified succession retires the predecessor
+  while the successor is live.
+- Read a route that answers 200 with no paywall as free; re-registration re-asks
+  every learned price.
+- Read every OpenAPI payment-annotation dialect and object-shaped manifest prices.
+- Default `GET /api/leaderboard` to `include=external`; the host's own row carries
+  `self: true`.
+- Add `POST /api/seller-dossier` ($0.05).
+- Add `sanctions-wallet` and `sanctions-name` (OFAC SDN screening).
+- Upgrade `@x402/*` to 2.26.0 and `@solana/kit` to 8.3.0; Node 22.23.2.
+- Reorder settle fallback: Solvador first where it advertises the network, then
+  PayAI.
+- Packages: agent402-mcp 0.13.2, agent402-openclaw 0.4.3, elizaos-plugin-agent402
+  0.2.3, agent402-agentkit 0.1.3, agent402-tollbooth 0.10.1 (CLI runs through the
+  npm bin symlink again), agent402-client 0.8.4 to 0.8.6, agent402-ai-sdk 0.2.7,
+  agent402-google-adk 0.1.7.
 
-- **New tool `x402-audit`** (catalog: 1,350 → **1,351** tools): grade any x402 seller's
-  externally-observable payment-security posture from a single read-only probe of its 402
-  challenge (never pays). Scores TLS transport, gated-response cache hygiene (Attack III /
-  cache leakage), error/info-leak hygiene, and payment-terms well-formedness into a letter
-  grade with per-check findings, each mapped to a failure mode from the "Five Attacks on
-  x402" analysis - and honestly notes what a black-box probe cannot see (replay/idempotency
-  and router Sybil resistance need insider or active testing). The grader is a pure,
-  deterministic function (`gradeX402Response`), so it's CI-stable; the tool is wallet-only
-  (paid surface). `GET /api/x402-audit?url=…`. CI-locked (`scripts/test-x402-audit.js`).
+## v2.3.0 - 2026-09-02
 
-- **Payment-nonce replay guard** (security hardening, M3): the x402 paywall now rejects a
-  duplicate payment authorization *before* it reaches the facilitator, and refuses a
-  concurrent replay (the same signed authorization fired many times at once, racing the
-  settle). Agent402 already settles-before-grant - an EIP-3009 nonce is single-use on-chain,
-  so a replayed authorization fails at the facilitator and the duplicate-grant rate was
-  already 1 - this is a strictly-earlier, cheaper defense-in-depth layer against Attack II
-  ("replay / insufficient idempotency") from the "Five Attacks on x402" analysis.
-  Release-on-failure: a nonce is only marked consumed on a granted 200 (which, under
-  settle-before-grant, means the payment settled); any non-200 releases it so a legitimate
-  retry of the still-valid authorization proceeds. Requests without a payment header (unpaid
-  402 challenges, discovery crawls, proof-of-work calls) are never touched. New
-  `src/replay-guard.js`; CI-locked (`scripts/test-replay-guard.js`, incl. a concurrent-replay
-  HTTP E2E proving 8 identical authorizations collapse to a single grant).
+- Carry the typed output schema on every 402 as `accepts[0].outputSchema`.
+- Add `rwa-list`, `rwa-markets`, `rwa-asset`, `rwa-issuers`, `rwa-issuer`
+  ($0.003 to $0.006).
+- Show `executeVia` only on `/api/route` rows the router will pay now; every row
+  and index seller carries `routerDispatchEligible` and `routerDispatchReason`.
+- Re-read a manifest-priced route's live 402 weekly so newly added rails reach
+  the index.
+- Retire `gpt-4.1-nano` and the `openai/o4` prefix; `gpt-5.6-luna` is the nano
+  default, `gpt-5.6-terra` joins premium; `/v1/images/fast` fails over to
+  `gpt-5-image-mini`.
+- Answer a refused MCP payment credential with JSON-RPC `-32043`.
+- Retry a failed Tempo subscription renewal in minutes and read the chain before
+  re-signing after a timed-out send.
+- Run every tool a skill pack advertises.
+- Packages: agent402-tollbooth 0.10.0 (MPP on the edge build), mppx 0.9.2.
 
-- **Router Sybil / metadata-capture resistance** (security hardening, M6): the neutral
-  cross-seller router (`/api/route`, MCP router) now (1) drops any external listing whose
-  text tries to command the ranker - "ignore previous instructions", "always pick this",
-  fake `<system>` tags, oversized padding - instead of describing a tool, and (2) caps how
-  many shortlist slots any one external seller can occupy (`ceil(k/3)`), backfilling from
-  the remainder so a full shortlist is still returned. This blunts the discovery-capture
-  failure mode (Attack IV) from the "Five Attacks on x402" analysis, where one crafted
-  server reached 71.8% selection via metadata injection and a single domain owned 77.5% of
-  a real registry's results. The local catalog is exempt (one trusted seller by construction);
-  honest limitation: a Sybil spread across many distinct domains/wallets still gets one slot
-  each - the paper's open problem. CI-locked (`scripts/test-router-sybil.js`).
+## v2.2.0 - 2026-08-26
 
-- **Cache hygiene on paid responses** (security hardening, M5): every gated catalog
-  response now sets `Cache-Control: no-store, private`, so a shared cache or CDN can never
-  serve a paid result to a later unpaid caller of the same URL. This closes the cache-leakage
-  failure mode (Attack III) from the "Five Attacks on x402 Agentic Payment Protocol" analysis,
-  which validated the leak at 100% on nginx `proxy_cache`. Free discovery/static surfaces
-  (`/llms.txt`, landing, `/api/find`, `/api/pricing`…) are unaffected and keep their public
-  caching. CI-locked (`scripts/test-cache-hygiene.js`).
+- Add `/agentic-finance`, `/101`, `/glossary` and `/why`.
+- Settle MPP natively on Tempo (`tempo/charge`) beside the `evm` method; answer
+  rejected credentials with RFC 9457 problem documents.
+- Add MPP subscriptions over `tempo/subscription`.
+- Offer cards over MPP (`stripe/charge`) on routes priced $0.50 and up.
+- Add `/mpp-marketplace`, `/api/mpp-index` and `/api/mpp-leaderboard`.
+- Pay MPP sellers on Tempo through the Smart Order Router; `agent402-client` pays
+  MPP sellers.
+- Add `/reports` (card checkout for finished reports), `/monitors` ($5/month
+  watches) and `/credits` (prepaid card credits).
+- Add the report products on `/v1`: research (three tiers), market brief,
+  dossier, ticker pack, fund, insider, filing, domain audit, recall, token risk,
+  token brief, IPO digest and LinkedIn article.
+- Add `/reports/insider/:ticker`, `/reports/fund/:manager` and
+  `/reports/dossier/:ticker`.
+- Add the metered gateway tier (`POST /v1/metered/chat/completions`): each 402
+  quotes the request; `upto` and credits buyers settle actual usage.
+- Add the Anthropic Messages and OpenAI Responses wires on every tier,
+  `POST /v1/rerank`, the grounded tier, images and video routes.
+- Rename the MCP tools to dotted names (`catalog.search`, `catalog.call`, ...);
+  the snake_case names remain call aliases.
+- Retire 40 free-tier tools and 29 skill packs with no external use in 30 days.
+- Redesign the site: light theme by default with a dark toggle, self-hosted fonts.
+- Packages: agent402-mcp 0.13.0, agent402-client 0.8.2, agent402-tollbooth 0.9.3,
+  agent402-openclaw 0.3.1, agent402-agentkit 0.1.0.
 
-- **Skill packs are now the front door**: the home page hero, page titles, meta/OG
-  descriptions, and top nav all lead with "46 skill packs - a whole agent job, one x402
-  payment" (the tool catalog reframed as the supporting long tail), with a six-pack
-  flagship showcase (financial-research, search-and-cite, onchain-analyst, seo-audit,
-  wallet-readiness, decode-blob) linking straight to `POST /api/skill/{slug}`. llms.txt
-  now tells agents up front that packs are buyable as ONE bundled x402 call - previously
-  it only advertised the free prompt-template route. Every count stays exact.
+## v2.1.0 - 2026-08-17
 
-- **Sales ledger** (`/api/sales`): every served paid/proven call is recorded at settle
-  time - slug, price, rail, settlement chain, verified EIP-3009 payer, settle tx - on the
-  persistent `/data` volume, classified internal/external (heartbeat-token traffic and
-  burner-wallet payers never count as demand). Answers the merchant question the odometer
-  can't: which tools do external wallets actually buy, and who comes back. The paid canary
-  sends the POW_SECRET-signed heartbeat token on every request so its daily real-money buys
-  are excluded from demand metrics on all rails (including Solana, where the payer isn't
-  server-visible).
-  **Since superseded:** the public `/api/sales` endpoint is now **aggregate-only** - totals,
-  the recording window, and counts, with no per-call rows, no payer addresses, and no
-  per-tool ranking. The itemized feed moved behind the operator token at
-  `/__operator/sales.json`, the analyzed per-tool layer is the paid `bestsellers` tool, and
-  the "What's selling" section this entry added to `/revenue` has been removed.
+- Redesign the homepage, `/what-is-x402`, `/sell`, `/tools`, `/leaderboard`,
+  `/skills` and `/marketplace`; add an in-browser proof-of-work demo.
+- Exclude the host's own row from the seller leaderboard.
+- Add four payment rails: Celo, Avalanche, Sei and Optimism (twelve chains).
+- Tighten the site Content-Security-Policy.
+- Answer MPP (`WWW-Authenticate: Payment`) on every 402 beside x402 (2026-07-24).
+- Add external execution to the Smart Order Router on Base and Algorand
+  (2026-07-21 to 2026-07-23).
+- Return the same 402 on HEAD as on GET.
 
-- **Four new skill packs** (catalog: 1,346 → **1,350** tools, 42 → **46** packs), aimed at
-  real agent jobs on the newest kits: `wallet-readiness` ($0.05 - USDC balances on Base +
-  Solana, gas, and a Coinbase Onramp funding link in one preflight), `onchain-analyst`
-  ($0.20 - your SQL over Coinbase's decoded Base data with the schema + a stats profile of
-  the result in the same envelope), `seo-audit` ($0.07 - reachability, TLS, robots policy
-  incl. LLM crawlers, sitemap, meta/OG, and X-Robots-Tag headers for one URL), and
-  `cheapest-rail` ($0.05 - live cross-chain gas comparison priced in dollars). All four are
-  wallet-only (every underlying tool hits the network). agent402-mcp 0.11.2 and
-  agent402-client 0.4.2 republished for the corrected catalog metadata.
+## v2.0.0 - 2026-07-14
 
-- **PostHog conversion funnel** (discovery → 402 → settlement): the env-gated PostHog stream
-  gains three funnel events - `discovery` (machine-readable surface fetches: llms.txt,
-  openapi.json, the x402 manifest, pricing, `/api/find`, index, route, and the MCP connector's
-  search/find/about tools), `paywall_402` (quotes issued; rolled up in memory per slug/window
-  so registry-crawler sweeps can't blow the event budget - `sum(count)` is the exact total),
-  and `payment_settled` (rail-attributed: usdc with the settlement chain from the x402
-  receipt, pow, heartbeat, marketplace). Privacy posture unchanged: no caller IP/UA/wallet
-  - aggregate stage counters only, conversion computed as a ratio of stage totals. A CI test
-  boots a paid-mode server against a mock facilitator (real offline 402s) and asserts the
-  exact events; an operator dashboard with stage trends, the 402→paid conversion ratio, and
-  settled-$ tracking ships alongside.
+- Retire ~970 generated pairwise unit-converter routes in favour of
+  `POST /api/unit-convert`; retired routes answer a 410 naming the replacement.
+- Rebuild the catalog to 500+ entries; CI enforces a 400-entry floor.
+- Relicense the server to AGPL-3.0; `client/`, `mcp/` and `tollbooth/` stay MIT.
+- Add `x402-audit`, the Sales ledger, the x402 Economy observatory, Onchain SQL,
+  the CDP onboarding kit, Robinhood Chain (USDG) settlement and the x402 index
+  with the Smart Order Router.
 
-- **Weekly x402 Economy report**: every observatory refresh now persists its daily settlement
-  rows into SQLite on the `/data` volume, so history compounds past the 30-day query window.
-  `/x402-economy` gains a week-over-week trend line (trailing 7 complete days vs the prior 7)
-  and `/api/x402-economy` exposes `weekly`; the daily digest workflow warms the snapshot so a
-  history row lands every day even with zero page traffic.
+## v1.3.0 - 2026-07-12
 
-- **Claims audit** (site + GitHub + packages): every public factual claim re-verified against
-  the live system. Tool counts corrected 1,338 → **1,346** across 27 files (README, wiki, npm
-  package descriptions, site pages, badges); free-tier count corrected to **1,156**
-  (was variously ~1,040/~1,100/1,158); the hardcoded GitHub star count removed from the site
-  nav; hand-written chain lists that omitted the USDG/Robinhood rail completed (landing metas,
-  pricing meta, MCP connector tool descriptions); third-party claims hedged (Cloudflare
-  gateway status, Stripe's x402 role stated as client tooling); absolutes softened ("every
-  x402 seller" → indexed sellers, "guaranteed valid JSON" → schema-enforced, "only public
-  gate" → one of the few). Packages republished for the corrected npm metadata:
-  agent402-mcp 0.11.1, agent402-client 0.4.1, agent402-tollbooth 0.4.1.
+- Add the federal-data pack and `market-pulse`.
 
-- **x402 Economy Observatory** (`/x402-economy` + `GET /api/x402-economy`): live, chain-wide
-  analytics on the x402 economy - daily gasless EIP-3009 USDC settlements on Base, unique
-  payers, volume, and the top-earning seller wallets, measured directly from decoded on-chain
-  events (Transfer + AuthorizationUsed pairs on the USDC contract) across EVERY seller, not
-  just Agent402 - including sellers no directory has indexed. Data flows through the same paid
-  `onchain-sql` tool agents can buy. 30-minute cache, per-query error resilience, graceful
-  "warming up" state without CDP keys.
+## v1.2.0 - 2026-07-05
 
-- **Onchain SQL** (`onchain-sql` $0.02 + `onchain-sql-schema` $0.002): run read-only
-  ClickHouse-dialect SQL against Coinbase's indexed, DECODED chain data - `base.events`
-  (decoded logs with parameters), `base.transactions`, `base.blocks`,
-  `base.decoded_user_operations`, `base.transaction_attributions` (builder codes), plus
-  Solana token instructions - as a pay-per-call x402 tool. Ask Base anything in one call,
-  no indexer to run; server-side grammar validation, 50k rows / 30s / 100GB-read caps,
-  optional result caching. The groundwork for the x402 Economy Observatory.
+- Add 100 skill packs.
 
-- **Solana onboarding parity**: `testnet-fund` now also drips on **Solana devnet** (USDC or
-  SOL via the CDP faucet, base58 validation, solscan devnet links) and `wallet-balances`
-  reads **Solana + Solana devnet** SPL balances (mint address in the `contract` field) -
-  the create → rehearse → fund → verify loop now covers both major rails end to end.
+## v1.1.0 - 2026-07-04
 
-- **Wallet birth-to-first-purchase E2E + non-custodial wallet guide**: a CI test generates a
-  fresh keypair inside the runner (only the address is ever printed), funds it with testnet
-  USDC via the CDP faucet, completes a REAL gasless x402 purchase against a paid-mode
-  base-sepolia server, then scans every byte of its own output and the server's full log for
-  key material in any prefix/case form - failing on any hit. The offline leg (keygen + leak
-  audit) gates every test run. A new guide, `/guides/create-agent-wallet`, documents the same
-  flow for users: keys generated locally and never transmitted, gasless payments (USDC only,
-  no ETH), testnet rehearsal via `testnet-fund`, real funding via `onramp-link`.
+- Add Stellar settlement and Stripe ACP; six chains.
 
-- **CDP onboarding kit** (`wallet-balances`, `testnet-fund`, `onramp-link`): agent-wallet
-  onboarding tools built on the Coinbase Developer Platform, reusing the same CDP keys that
-  already drive x402 settlement (no new secrets; 503 when unset). `wallet-balances` returns
-  indexed ERC-20 + native balances for any address in one call; `testnet-fund` drips Base
-  Sepolia USDC/ETH via the CDP faucet so an agent can rehearse the full x402 payment loop
-  safely - a tenth of a cent buys a full testnet dollar (local + CDP-side rate caps); `onramp-link`
-  mints a single-use Coinbase Onramp URL so a human can fund an agent's wallet with a card or
-  Apple Pay. Auth is a zero-dependency `node:crypto` JWT signer (ES256 PEM + Ed25519 base64,
-  mirroring the official SDK's claims), unit-tested offline with real signature verification
-  plus a live CI check where the secrets exist.
+## v1.0.0 - 2026-06-25
 
-- **USDG buyer support in the packages**: `agent402-mcp` 0.11.0 adds `AGENT402_NETWORKS` (restrict + order the chains the buyer pays on - `robinhood` settles USDG on chain 4663; raw CAIP-2 accepted); `agent402-client` 0.4.0 exports a zero-dep `withNetworkPreference(client, networks)`. Both throw before paying if the preference matches none of a seller's options.
-- **Tollbooth 0.4.0**: `TOLLBOOTH_ASSET` (with the existing `TOLLBOOTH_NETWORK`) lets operators charge crawlers in USDG on Robinhood Chain; defaults (USDC on Base) unchanged and regression-guarded.
-- **Network-aware Smart Order Router**: crawled sellers record every chain their 402 advertises; `/api/route?network=<name|caip2>` filters to sellers that settle there (positive-signal semantics); `/index` rows carry `networks`.
-- **/robinhood**: dedicated landing page for the USDG rail (chain params, buyer/seller recipes, on-chain proof), derived from the single rails source of truth.
-- **Revenue visibility**: `SCAN_NETWORK=robinhood` on the revenue scanner (USDG on chain 4663); the CI probe scans it when offered; a new daily **revenue-digest** workflow maintains a single per-rail takings issue.
-- **Live consolidated revenue view** (`/revenue` + `GET /api/revenue`): every rail's wallet balance and recent inbound transfers on one page - Base / Solana / Polygon / Arbitrum / Robinhood Chain read live from public RPCs (60s cache, best-effort per rail), every figure linking to its explorer proof. Replaces cycling three explorer tabs; the rails-copy CI lock asserts the view covers every configured rail. Transfers are classified with the scanners' shared rule - internal canary/test money renders dimmed and never counts as revenue.
-- **All-time revenue ledger** (`src/revenue-ledger.js`): a persistent SQLite table (on the `/data` volume, same pattern as stats) of every inbound stablecoin transfer on every rail, backfilled from the wallet's first funding via polite chunked RPC sweeps with a resumable per-chain cursor, then tailed incrementally. `SUM(external)` = true all-time revenue - the headline figure on `/revenue` and `allTime` in `/api/revenue`, with per-chain splits and sync progress. Unit-tested (idempotent rescans, wallet scoping, CI self-gate: the loop only runs where `/data` exists or `REVENUE_LEDGER=true`).
-- **Ops armor**: daily USDG canary leg (real $0.001 settlement, accepts-pinned), heartbeat rails check (pages if Base - or an intended Robinhood rail - drops from the live 402), deploy job now polls Railway to SUCCESS before verifying (no more false-green deploys), and a gating rails-copy CI lock (`src/rails.js` ↔ payments code ↔ rendered pages, incl. the topbar ticker).
-
-- **Robinhood Chain support** (chain reads + a full payment rail): added Robinhood Chain (Arbitrum Orbit / Nitro L2, EVM-equivalent, chain id 4663, AI-native RWA chain, mainnet live 2026-07-01) end to end. `tx-status` and `gas-estimate` accept `network=robinhood` against the public RPC (its canonical stablecoin is USDG / Global Dollar, not Circle USDC, so the USDC-specific tools return a clear message on that network). **x402 payments settle in USDG on Robinhood Chain**: opt in with `robinhood` in `PAYMENT_NETWORKS` + an operator-supplied `ROBINHOOD_FACILITATOR_URL`; a custom money parser resolves USDG (6 decimals, EIP-712 domain env-overridable) and settlement routes to that facilitator without disturbing the CDP (Base) / PayAI paths. Verified with a real on-chain USDG settlement.
-- **Payments hardening**: a network listed in `PAYMENT_NETWORKS` with no facilitator behind it (e.g. `robinhood` without `ROBINHOOD_FACILITATOR_URL`) is now dropped from the 402 offer instead of poisoning the challenge - previously this surfaced as HTTP 500 on every paid endpoint. Unknown `PAYMENT_NETWORKS` entries are skipped with a warning instead of crashing boot. A gating CI regression test reproduces the exact misconfig.
-- **Facilitator failure observability**: `onVerifyFailure`/`onSettleFailure` hooks log every facilitator rejection loudly (kind, network, payer, reason) - a silent settle regression now leaves a trace. Optional `PAYMENT_SETTLE_FALLBACK` re-settles via PayAI only on pre-broadcast rejections (never on timeout/5xx, so it can't double-settle).
-- **x402 Index + Smart Order Router** (`/index`, `GET /api/index`, `POST /api/route`): free, cross-seller routing layer. Crawls the local catalog plus operator seeds plus an auto-discovered set from public x402 registries (Coinbase CDP Bazaar, refreshed hourly). Picks the cheapest healthy seller for a task.
-- **Health-aware routing**: each seller carries a rolling 5-entry crawl history. Sellers whose recent crawls errored are excluded from `/api/route`; healthier sellers tiebreak ahead of cheaper-but-flaky ones at equal match score.
-- **Three-rail attribution** on `/api/stats` and `/__operator`: USDC / proof-of-work / heartbeat counts are tracked separately so the maintainer can see real external demand vs. internal probe noise. The heartbeat rail is now gated on a `POW_SECRET`-signed `X-Heartbeat-Token` (HMAC of UTC minute with ±5 min skew) - not a spoofable User-Agent - closing the audit finding from `scripts/audit-deep.mjs`.
-- **Charged-but-failed counter**: any non-200 response that left an `X-PAYMENT-RESPONSE` header is now tracked so the operator can catch handlers that errored after the buyer was charged.
-- **New kits**: `ocr-image` (pure-CPU OCR) and a deterministic `geo-*` set (distance / bbox / bearing / geohash). *Since changed:* the OCR tool is now `image-ocr`, and of the geo set only `geo-distance` remains a route (the bbox / bearing / geohash endpoints were retired).
-
-## v1.0.0 - 2026-06-12
-
-The service is feature-complete as a v1 and battle-tested end to end:
-
-- **~1,338 pay-per-call tools** live at [agent402.tools](https://agent402.tools): browser rendering/screenshots, live web search, PDFs, real-ffmpeg audio, wallet-keyed memory with cross-wallet grants and a hash-chained audit log, US open-data feeds, and ~1,040 pure-CPU utilities including ~970 unit conversions.
-- **Three payment rails**: x402 (USDC on Base, Solana, Polygon & Arbitrum; Coinbase CDP facilitator), a proof-of-work free tier (single-use, slug-scoped sha256 challenges), and a third-party marketplace bridge. *Since removed:* the marketplace bridge no longer exists; x402 (now twelve chains) and proof-of-work are the rails.
-- **MCP everywhere**: hosted streamable-HTTP connector at `agent402.tools/mcp` (authless free tier, rate-limited) + the [`agent402-mcp`](https://www.npmjs.com/package/agent402-mcp) npm server (v0.3.0) with pre-signature spend controls - both published in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402).
-- **Interop proven with real money**: Stripe's [`purl`](https://github.com/stripe/purl) x402 client parses our quotes and settles paid calls (CI-verified); marketplace roundtrip settled real USDC end to end.
-- **Operations**: CI re-tests every endpoint against its own documented example before each deploy; a heartbeat probes production every 15 minutes and decodes on-chain receipts every 6 hours to flag external customers; SQLite state on a persistent volume; graceful drain on redeploy.
-- **Hardening**: DNS-pinned SSRF guards with per-request browser re-validation, wallet-only gating of costly tools, zero `npm audit` findings (vulnerable Excel toolchain removed along with its tools), MIT-licensed and fully open source.
+- First public release: pay-per-call tools over x402 (USDC on Base, Solana,
+  Polygon and Arbitrum), a proof-of-work free tier, the hosted MCP connector and
+  the `agent402-mcp` package.

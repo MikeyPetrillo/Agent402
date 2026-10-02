@@ -137,6 +137,26 @@ async function resolveCompany({ ticker, cik }) {
   return { cik: hit.cik, name: hit.name };
 }
 
+// A buyer who sends a company NAME where a ticker goes ("Tesla", "NVIDIA")
+// used to get a bare "Unknown ticker". The map already holds every registered
+// name, so the refusal can name the likely tickers instead. Pure: exported for
+// the offline test. Matches the whole query as a leading word of the name
+// first, then anywhere in it; at most `limit` rows, shortest ticker first so a
+// parent listing beats its preferred-share classes.
+export function tickerSuggestions(map, query, limit = 3) {
+  const q = String(query || "").toUpperCase().replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  if (q.length < 3 || !map) return [];
+  const starts = [], contains = [];
+  for (const [ticker, row] of map) {
+    const name = String(row?.name || "").toUpperCase().replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+    if (!name) continue;
+    if (name === q || name.startsWith(q + " ")) starts.push({ ticker, name: row.name });
+    else if ((" " + name + " ").includes(" " + q + " ")) contains.push({ ticker, name: row.name });
+  }
+  const byLen = (a, b) => a.ticker.length - b.ticker.length || a.ticker.localeCompare(b.ticker);
+  return [...starts.sort(byLen), ...contains.sort(byLen)].slice(0, limit);
+}
+
 function clampInt(v, dflt, min, max) {
   const n = parseInt(v, 10);
   if (!Number.isFinite(n)) return dflt;
@@ -149,9 +169,9 @@ export const EDGAR_TOOLS = [
     name: "EDGAR company lookup (ticker → CIK)",
     slug: "edgar-company-lookup",
     category: "data",
-    price: "$0.002",
+    price: "$0.001",
     description:
-      "Resolve a US stock ticker (e.g. AAPL) to its SEC CIK number, the primitive every other EDGAR call needs. Returns CIK in both zero-padded (0000320193) and integer form, plus the registered company name. Backed by SEC's company_tickers.json (public domain). ?ticker=AAPL",
+      "Resolve a US stock ticker (e.g. AAPL) to its SEC CIK number, the primitive every other EDGAR call needs. Returns ticker, cik (zero-padded, 0000320193), cikInt (320193) and the registered company name. Backed by SEC's company_tickers.json (public domain). A company name sent where the ticker goes is answered with a 404 that names the likely tickers (\"Tesla\" -> TSLA). ?ticker=AAPL",
     tags: ["edgar", "sec", "cik", "ticker", "lookup", "company", "stocks", "filings"],
     discovery: {
       input: { ticker: "AAPL" },
@@ -167,7 +187,11 @@ export const EDGAR_TOOLS = [
       if (!/^[A-Z0-9.\-]{1,10}$/.test(ticker)) throw bad("ticker must be a short alphanumeric symbol (letters, digits, dot, hyphen)");
       const map = await getTickerMap();
       const hit = map.get(ticker);
-      if (!hit) throw bad(`Unknown ticker: ${ticker} - not in SEC's company_tickers.json (may be a non-SEC issuer or delisted)`, 404);
+      if (!hit) {
+        const sugg = tickerSuggestions(map, i.ticker);
+        const hint = sugg.length ? ` Did you mean ${sugg.map((x) => `${x.ticker} (${x.name})`).join(", ")}? Send the ticker.` : "";
+        throw bad(`Unknown ticker: ${ticker} - not in SEC's company_tickers.json (may be a non-SEC issuer or delisted).${hint}`, 404);
+      }
       return {
         ticker,
         cik: hit.cik,

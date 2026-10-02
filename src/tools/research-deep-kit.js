@@ -23,8 +23,8 @@ const RERANK_URL = "https://openrouter.ai/api/v1/rerank";
 // Models: all already in the gateway's live-catalog guard tables (gemini flex
 // table; claude reasoning table) so they can't silently die untested.
 const M = {
-  plan: "google/gemini-2.5-flash-lite",  // cheap planner
-  ground: "google/gemini-2.5-flash",     // grounded search + read
+  plan: "google/gemini-3.1-flash-lite",  // cheap planner (2.5-flash-lite expires upstream 2026-10-20)
+  ground: "google/gemini-3.6-flash",     // grounded search + read; reasons by default, so the call passes reasoning:low
   synthStd: "anthropic/claude-sonnet-5", // circuit-breaker downgrade only (see below)
   synthPrem: "anthropic/claude-opus-5",  // synthesis on ALL tiers
 };
@@ -37,7 +37,7 @@ const M = {
 // tells the model to finish over reaching length. Caps held at a provider-safe
 // 8,000 (Claude's standard max output); the source list is appended in code, so
 // none of this budget is spent retyping URLs.
-// ALL tiers synthesize with Opus (synthPrem). A 10-query eval (fair Opus judge +
+// ALL tiers synthesize with Opus (synthPrem). A 10-query evaluation (fair Opus judge +
 // deterministic grounding audit) showed Opus beats Sonnet on every dimension for
 // this task - citation quality, depth, would-pay, and zero fabricated numbers -
 // and the fixed per-tier upstream cap keeps it well bounded, so the entry
@@ -61,8 +61,7 @@ const MAX_QUERY_CHARS = 2000;
 // snippets and was told to treat them as its only knowledge, so "the source
 // is silent" meant "the excerpt is silent". extractArticle is the existing
 // SSRF-guarded, size-capped reader; bodies are capped so the added synthesis
-// input stays ~1.5k tokens per source (measured avg synthesis $0.107 vs caps
-// of $0.35+, so +$0.04-0.08 fits every tier).
+// input stays ~1.5k tokens per source, which fits every tier's cap.
 const BODY_CHARS = 6_000;
 const BODY_TIMEOUT_MS = 15_000;
 const BODY_CONCURRENCY = 3;
@@ -203,6 +202,7 @@ function makeResearchHandlerInner(tierSlug) {
     const toRun = subQuestions.slice(0, t.searches);
     const searchBody = (q) => ({
       model: M.ground,
+      reasoning: { effort: "low" },
       // Pull CONCRETE facts (figures, dates, named examples) with citations, so
       // the synthesis step has real specifics to ground on and never needs to
       // invent them. Each fact must carry its source.
@@ -283,7 +283,7 @@ ${t.synthFrame ? `${t.synthFrame}\n\n` : ""}Write a thorough, well-structured, w
     const sourceList = sources.map((s) => `[${s.n}] ${s.title}${s.body ? "" : " (excerpt only)"} - ${s.url}`).join("\n");
     const report = sourceList ? `${prose}\n\n## Sources\n${sourceList}` : prose;
 
-    const meta = { tier: tierSlug, searches_run: good.length, sources_consulted: byUrl.size, sources_listed: sources.length, sources_cited: audit.cited.length, sources_with_full_text: sources.filter((s) => s.body).length,
+    const meta = { disclaimer: "Research assembled from public sources and summarised by a model. Not investment, legal or professional advice. Check the cited sources before relying on any figure.", tier: tierSlug, searches_run: good.length, sources_consulted: byUrl.size, sources_listed: sources.length, sources_cited: audit.cited.length, sources_with_full_text: sources.filter((s) => s.body).length,
       citations_stripped: audit.stripped, unverified_numeric_claims: audit.unverified.length, ...(audit.unverified.length ? { unverified_numeric_claims_detail: audit.unverified } : {}), synthesis_model: synthModel };
     // Cost is NEVER returned to the buyer (same rule as the gateway).
     const pubSources = sources.map(({ body, bodyTruncated, bodyChars, ...rest }) => ({ ...rest, fullText: !!body, ...(bodyChars ? { bodyChars } : {}) }));

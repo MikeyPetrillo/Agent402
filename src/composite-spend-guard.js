@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 // stays reusable), a payer can present a verify-passing authorization, make us
 // run costly OpenRouter/search work, then dodge settlement (e.g. move the funds
 // out during the 90s window so settle fails), repeatedly, at ~zero cost to them.
-// Each iteration burns ~$0.45-0.70 of OUR upstream with no revenue.
+// Each iteration burns real upstream spend with no revenue.
 //
 // This tracks per-payer "spent-then-failed-to-settle" events and blocks a payer
 // who crosses the threshold BEFORE the next expensive run. A genuine paid 200
@@ -23,18 +23,37 @@ const blockedUntil = new Map(); // payer -> timestamp the block lifts
 // The per-key guard is evadable by rotating wallets/IPs; this bounds the total
 // unsettled upstream burn regardless of who causes it. Trips to a short pause
 // on every composite (503, nobody charged) rather than blocking any one buyer.
+//
+// Each buyer adds at most MAX_FAILS of its own failures to that count, so the
+// pause answers several buyers failing together and never one buyer alone
+// (one buyer is the per-key bound's job). A failure that is everyone's (a
+// facilitator refusing every settlement) still reaches the threshold at the
+// same number of failures, spread over a few buyers. A wallet's concurrent
+// runs are also held to what its balance covers before they start
+// (src/inflight-cover.js). A failure with no key counts as its own buyer.
 const GLOBAL_MAX_FAILS = Number(process.env.COMPOSITE_GUARD_GLOBAL_MAX_FAILS) || 12;
 const GLOBAL_PAUSE_MS = Number(process.env.COMPOSITE_GUARD_GLOBAL_PAUSE_MS) || 15 * 60_000;
-let globalFails = [];
+let globalFailKeys = new Map(); // key -> failure times inside the window
+let anonSeq = 0;
 let globalPausedUntil = 0;
+function globalFailCount(t) {
+  let n = 0;
+  for (const [k, times] of globalFailKeys) {
+    const kept = times.filter((x) => t - x < WINDOW_MS);
+    if (!kept.length) { globalFailKeys.delete(k); continue; }
+    globalFailKeys.set(k, kept);
+    n += Math.min(kept.length, MAX_FAILS);
+  }
+  return n;
+}
 // Upstream usage telemetry for composites (the most expensive calls we make,
 // invisible to the gateway's per-call margin event): running totals here, and
 // a PostHog event per run when PostHog is configured.
 const usage = { runs: 0, ok: 0, failed: 0, upstreamUsd: 0, overCap: 0, lastOverCap: null, bySlug: {} };
 
 /** Slugs whose handlers run long, expensive upstream work before settlement.
- * Every composite that fans out to metered upstream (OpenRouter synthesis, and
- * for token-risk real Blockscout x402 buys) MUST be here, or its agent path is
+ * Every composite that fans out to metered upstream (OpenRouter synthesis and
+ * the probes that feed it) MUST be here, or its agent path is
  * an unguarded upstream-drain. `scripts/test-composite-guard.js` asserts the
  * full set so a new expensive product can't ship outside the guard. */
 export const EXPENSIVE_COMPOSITE_SLUGS = new Set([
@@ -48,7 +67,11 @@ export const EXPENSIVE_COMPOSITE_SLUGS = new Set([
   "filing-report",
   // linkedin-article = the research pipeline + synthesis + image generation.
   "linkedin-article",
-  // Media tiers: one upstream call each, but a flat $0.014-$0.12 is spent BEFORE
+  // decide-execute runs a whole plan (our tools and paid outside sellers)
+  // before its own payment settles: the same spend-then-fail, drain and abort
+  // guards as a report.
+  "decide-execute",
+  // Media tiers: one upstream call each, but a flat per-call cost is spent BEFORE
   // settlement, so an unsettled repeat is free to the caller and real to us.
   // Being in this set also marks them longRunning (EVM exact only) - a 40-240 s
   // run outlives an SVM blockhash, the AVM default window and a Tempo credential.
@@ -64,8 +87,10 @@ export const EXPENSIVE_COMPOSITE_SLUGS = new Set([
  *  credential it signed. Settlement happens after the handler, so on the
  *  short-lived rails (SVM recent-blockhash, the default AVM window, a Tempo
  *  credential) the buyer's authorization can be dead by the time we answer -
- *  we would have paid the seller and earned nothing. EVM exact only. */
-export const LONG_RUNNING_SLUGS = new Set(["v1-videos", "seller-payability"]);
+ *  we would have paid the seller and earned nothing. EVM exact only.
+ *  `image-gen-premium` (2026-09-29) renders the larger frame under a 75 s
+ *  upstream bound, past what an SVM or Tempo credential reliably covers. */
+export const LONG_RUNNING_SLUGS = new Set(["v1-videos", "seller-payability", "image-gen-premium", "decide-execute"]);
 
 /** True when a route runs long enough that only EVM `exact` can settle it.
  *
@@ -82,6 +107,16 @@ export const LONG_RUNNING_SLUGS = new Set(["v1-videos", "seller-payability"]);
  *  ask; the answer simply lived somewhere it could not reach. */
 export function isLongRunningSlug(slug) {
   return EXPENSIVE_COMPOSITE_SLUGS.has(slug) || LONG_RUNNING_SLUGS.has(slug);
+}
+
+/** True when a route's handler spends before the buyer's own payment settles:
+ *  it pays an outside seller from one of this server's wallets (the tool def
+ *  carries `spendsOwnWallet: true` - route-execute's tiers, seller-payability)
+ *  or it is long-running composite work (above). A Tempo pull credential
+ *  reaches such a route only when the gate has verified its sender
+ *  (src/mpp-tempo.js, verifiedSenderRequired). */
+export function spendsBeforeSettlement(def) {
+  return !!def && (def.spendsOwnWallet === true || isLongRunningSlug(def.slug));
 }
 
 /** True if this payer is currently blocked (checked BEFORE the handler spends). */
@@ -102,12 +137,19 @@ export function compositeGuardGlobalPaused() {
   return false;
 }
 
+/** Slugs that keep the per-buyer bound but neither feed nor honour the global
+ *  pause: plan execution carries its own global ceiling, and its failures must
+ *  not be able to pause every report product for everyone. */
+export const OWN_GLOBAL_BOUND_SLUGS = new Set(["decide-execute"]);
+
 /** Record that we SPENT upstream for this payer and then did NOT settle (non-200). */
-export function recordCompositeSpendFailure(payer) {
+export function recordCompositeSpendFailure(payer, { global = true } = {}) {
   const t = Date.now();
-  globalFails = globalFails.filter((x) => t - x < WINDOW_MS);
-  globalFails.push(t);
-  if (globalFails.length >= GLOBAL_MAX_FAILS) { globalPausedUntil = t + GLOBAL_PAUSE_MS; globalFails = []; }
+  if (global) {
+    const gk = payer || `anon:${++anonSeq}`;
+    globalFailKeys.set(gk, [...(globalFailKeys.get(gk) || []), t]);
+    if (globalFailCount(t) >= GLOBAL_MAX_FAILS) { globalPausedUntil = t + GLOBAL_PAUSE_MS; globalFailKeys = new Map(); }
+  }
   if (!payer) return;
   const arr = (fails.get(payer) || []).filter((x) => t - x < WINDOW_MS);
   arr.push(t);
@@ -141,7 +183,7 @@ export function recordCompositeSpendSuccess(payer) {
 // The RAIL a report was sold on, and the price it actually sold for. Kits
 // call recordCompositeUsage with the AGENT price (their tier), which is also
 // what a card or monitor run reported until 2026-08-27 - so the composite
-// margin telemetry priced a $5 card report as $2 and could not say which door
+// margin telemetry priced a card report at the agent price and could not say which door
 // it came through at all. The card door and the monitor scheduler run the
 // same handler, so the door sets a context around the call instead of every
 // kit learning about doors. Async-local: a context set around `await h()`
@@ -202,10 +244,10 @@ export function compositeUsageSnapshot() {
 
 /** Test/ops introspection. */
 export function _compositeGuardState() {
-  return { fails: fails.size, blocked: blockedUntil.size, WINDOW_MS, MAX_FAILS, BLOCK_MS, globalFails: globalFails.length, globalPausedUntil, GLOBAL_MAX_FAILS, GLOBAL_PAUSE_MS, usage: { ...usage, upstreamUsd: Math.round(usage.upstreamUsd * 1e4) / 1e4 } };
+  return { fails: fails.size, blocked: blockedUntil.size, WINDOW_MS, MAX_FAILS, BLOCK_MS, globalFails: globalFailCount(Date.now()), globalPausedUntil, GLOBAL_MAX_FAILS, GLOBAL_PAUSE_MS, usage: { ...usage, upstreamUsd: Math.round(usage.upstreamUsd * 1e4) / 1e4 } };
 }
 export function _compositeGuardReset() {
-  fails.clear(); blockedUntil.clear(); globalFails = []; globalPausedUntil = 0;
+  fails.clear(); blockedUntil.clear(); globalFailKeys = new Map(); globalPausedUntil = 0;
   usage.runs = 0; usage.ok = 0; usage.failed = 0; usage.upstreamUsd = 0;
   usage.overCap = 0; usage.lastOverCap = null; usage.bySlug = {};
 }

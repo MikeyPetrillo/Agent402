@@ -1,10 +1,9 @@
 # agent402-langchain (Python)
 
-Turn [Agent402](https://agent402.tools)'s catalog - 500+ strong: 400+ x402
-pay-per-call tools + 80+ skill packs - into **LangChain** and **CrewAI** tools
-for Python agents.
+Turn [Agent402](https://agent402.tools)'s catalog of 500+ pay-per-call tools
+and skill packs into **LangChain** tools for Python agents.
 
-> **Agent402 is the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance)** - agents that pay and get paid on their own over the two open wires, [x402](https://agent402.tools/what-is-x402) and [MPP](https://agent402.tools/what-is-mpp) (Machine Payments Protocol). Every paid endpoint answers both on the same 402; wallet-only tools take any payment-wrapped fetch (`@x402/fetch`, or a stock `mppx` fetch).
+> **Agent402 is the applied layer of [Agentic Finance](https://agent402.tools/agentic-finance)** - agents that pay and get paid on their own over the two open wires, [x402](https://agent402.tools/what-is-x402) and [MPP](https://agent402.tools/what-is-mpp) (Machine Payments Protocol). Every paid endpoint answers both on the same 402; this package pays wallet-only tools through the `x402_fetch` callable you pass (below).
 
 Pure-CPU tools (hashing, encoding, QR, markdown, JSON, readability…) are **free**
 via built-in proof-of-work - no wallet, no API keys. Live-data tools (market
@@ -27,7 +26,7 @@ LLMs both choke on thousands of tools):
 | Tool | What it does |
 | --- | --- |
 | `agent402_find` | Resolve a plain-language task to the best tool (slug, price, schema, example) |
-| `agent402_route` | Cross-seller x402 router across the whole ecosystem |
+| `agent402_route` | Cross-seller x402 router across the sellers Agent402 indexes |
 | `agent402_call` | Call a tool by slug - auto-pays via proof-of-work (free) or your x402 fetch (paid) |
 | `agent402_about` | The service manifest (identity, payment options, trust signals) |
 

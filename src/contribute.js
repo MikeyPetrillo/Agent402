@@ -1,5 +1,6 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
+import { repoUrl } from "./repo-link.js";
 export function contributePage(baseUrl) {
   const canonical = `${baseUrl}/contribute`;
   const title = "Contribute to Agent402 - add tools, guides, and skill packs";
@@ -275,7 +276,7 @@ TARGET_URL=http://localhost:3000 node scripts/test-mcp-all.js</code></pre>
 <!-- Bottom: Questions? -->
 <div class="ct-bottom">
 <h3>Questions?</h3>
-<p>Open an issue on <a href="https://github.com/MikeyPetrillo/Agent402/issues">GitHub Issues</a> for bugs, feature requests, or contribution questions.</p>
+<p>Open an issue on <a href="${repoUrl("issues")}">GitHub Issues</a> for bugs, feature requests, or contribution questions.</p>
 <p>Browse the <a href="/guides">Guides</a> for walkthroughs, or check the <a href="/docs">Docs</a> for the full API reference.</p>
 </div>
 

@@ -45,9 +45,11 @@ eq(ATTEST_SCHEMA.split(",").length, 7, "seven fields");
   eq(createHash("sha256").update(bytes).digest("hex"), responseDigest(body), "sha256(JSON.stringify(result)) equals sha256 of the bytes res.json sent");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(!/app\.set\(\s*["']json (replacer|spaces|escape)["']/.test(server), "server.js sets no json replacer/spaces/escape (the digest assumes Express defaults)");
-  ok(server.includes('req.__responseSha256 = createHash("sha256").update(JSON.stringify(result), "utf8").digest("hex")'), "dispatcher stashes the digest of JSON.stringify(result)");
+  // `body` is the object actually sent: the handler's result, plus
+  // `ignoredParams` when the request carried shape fields the tool did not apply.
+  ok(server.includes('req.__responseSha256 = createHash("sha256").update(JSON.stringify(body), "utf8").digest("hex")'), "dispatcher stashes the digest of JSON.stringify(body), the object it sends");
   ok(server.includes("responseSha256: req.__responseSha256 || null,"), "finish hook hands the digest to recordSale");
-  ok(server.indexOf('req.__responseSha256 = createHash') < server.indexOf("res.json(result);", server.indexOf('req.__responseSha256 = createHash')), "digest is computed before res.json(result)");
+  ok(server.indexOf('req.__responseSha256 = createHash') < server.indexOf("res.json(body);", server.indexOf('req.__responseSha256 = createHash')), "digest is computed before res.json(body), from the same object");
 }
 
 // --- 3. ledger: digest recorded, lookup by tx, write-once attestation
@@ -160,14 +162,14 @@ ok(tool.discovery.inputSchema.required.includes("tx"), "tx required");
 eq(tool.discovery.bodyType, "json", "POST tool declares bodyType for the Bazaar extension (a missing one is an invalid extension at boot)");
 const pow = readFileSync(new URL("../src/pow.js", import.meta.url), "utf8");
 ok(/"attest",/.test(pow), "attest is wallet-only (never PoW: it spends gas)");
-const nonMetered = readFileSync(new URL("./test-non-metered-examples.js", import.meta.url), "utf8");
+const nonMetered = readFileSync(new URL("../src/metered-slugs.js", import.meta.url), "utf8"); // METERED_SLUGS lives in src/
 ok(/"attest",/.test(nonMetered), "attest is in METERED_SLUGS (CI has no wallet)");
 const testAll = readFileSync(new URL("./test-all.js", import.meta.url), "utf8");
 ok(testAll.includes('"/api/attest"'), "attest is in test-all's NETWORK set");
-// The tool's own worst case sits under the 70% rule: $0.005 gas ceiling on a $0.010 price.
+// The tool's own worst case (the gas ceiling) sits under the margin rule.
 eq(tool.price, "$0.050", "priced from the MEASURED 616k-gas attest, not the 150k guess");
-ok(35000 <= (50000 * 7) / 10, "gas ceiling ($0.035) under 70% of price (micro-USD, no float)");
-ok(0.0277 < 0.035, "the first live run's bounded estimate ($0.0277) clears the ceiling");
+ok(35000 <= (50000 * 7) / 10, "gas ceiling under the margin share of price (micro-USD, no float)");
+ok(0.0277 < 0.035, "the first live run's bounded estimate clears the ceiling");
 
 rmSync(dir, { recursive: true, force: true });
 console.log(`test-attest-kit: ${n} assertions ok`);

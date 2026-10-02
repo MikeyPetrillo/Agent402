@@ -47,7 +47,20 @@ const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
 
 const RUGCHECK = "https://api.rugcheck.xyz/v1";
 const DEXSCREENER = "https://api.dexscreener.com";
-const JUPITER = "https://lite-api.jup.ag";
+// Jupiter's keyless lite-api is deprecated (its cutoff is postponed, no date
+// yet); api.jup.ag takes an x-api-key. Switching is a variable change:
+// JUPITER_API_BASE=https://api.jup.ag with JUPITER_API_KEY set. Read at call
+// time so a Railway variable write needs no code change.
+const JUPITER_DEFAULT = "https://lite-api.jup.ag";
+export function jupiterBase(env = process.env) {
+  const v = String(env.JUPITER_API_BASE || "").trim().replace(/\/+$/, "");
+  return /^https:\/\/[a-z0-9.-]+$/i.test(v) ? v : JUPITER_DEFAULT;
+}
+export function jupiterHeaders(url, env = process.env) {
+  const key = String(env.JUPITER_API_KEY || "").trim();
+  // The key goes only to the Jupiter host it was issued for.
+  return key && String(url).startsWith(jupiterBase(env) + "/") ? { "x-api-key": key } : {};
+}
 
 // Well-known mints used in examples and as defaults.
 export const MINTS = {
@@ -105,6 +118,7 @@ async function upstreamJson(url, { label, method = "GET", body, notFound } = {})
         "User-Agent": UA,
         Accept: "application/json",
         ...(body ? { "Content-Type": "application/json" } : {}),
+        ...(label === "Jupiter" ? jupiterHeaders(url) : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -118,7 +132,15 @@ async function upstreamJson(url, { label, method = "GET", body, notFound } = {})
   if (res.status === 404 || res.status === 400) {
     // RugCheck answers 400 {"error":"invalid token mint"} for a non-mint
     // pubkey; Jupiter quote answers 400 TOKEN_NOT_TRADABLE. Both are "we
-    // cannot say anything about this input", not a server fault.
+    // cannot say anything about this input", not a server fault. But RugCheck
+    // also answers 400/404 {"error":"unable to generate report"} for EVERY
+    // mint while its report builder is down (measured 2026-09-25 on JUP and
+    // BONK): that is its outage, not the buyer's input, so it is a retryable
+    // 503 rather than a 422 blaming the mint.
+    const errText = await res.text().then((t) => t.slice(0, 500)).catch(() => "");
+    if (/unable to generate|temporarily|try again|timeout/i.test(errText)) {
+      throw bad(`${label} could not produce a report right now (upstream) - retry shortly`, 503);
+    }
     throw bad(notFound || `${label} has no data for that input`, 422);
   }
   if (!res.ok) throw bad(`${label} refused the request (HTTP ${res.status})`, 502);
@@ -443,7 +465,7 @@ export const SOLANA_INTEL_TOOLS = [
       const mint = takeMint(i.mint);
       const [summary, jupList] = await Promise.all([
         upstreamJson(`${RUGCHECK}/tokens/${mint}/report/summary`, { label: "RugCheck", notFound: "RugCheck has no report for that mint (not an SPL token mint?)" }),
-        upstreamJson(`${JUPITER}/tokens/v2/search?query=${encodeURIComponent(mint)}`, { label: "Jupiter" }),
+        upstreamJson(`${jupiterBase()}/tokens/v2/search?query=${encodeURIComponent(mint)}`, { label: "Jupiter" }),
       ]);
       const risks = shapeRisks(summary?.risks);
       const counts = riskCounts(risks);
@@ -816,7 +838,7 @@ export const SOLANA_INTEL_TOOLS = [
     name: "Solana token prices (Jupiter)",
     slug: "sol-price",
     category: "crypto",
-    price: "$0.002",
+    price: "$0.001",
     description:
       "USD price for up to 50 Solana token mints in one call from Jupiter's price API v3: price, 24h change, liquidity, decimals and the block the price was read at. Mints Jupiter does not price come back listed under missing rather than erroring the batch. Pass mint addresses, not tickers (resolve tickers with sol-token-search or sol-token-lookup). Keyless.",
     tags: ["solana", "price", "jupiter", "token", "spl", "batch"],
@@ -843,7 +865,7 @@ export const SOLANA_INTEL_TOOLS = [
       if (!Array.isArray(raw) || raw.length === 0) throw bad('"mints" is required: 1-50 base58 mint addresses');
       if (raw.length > 50) throw bad(`"mints" must contain at most 50 entries (got ${raw.length})`);
       const mints = [...new Set(raw.map((m) => takeMint(m, "mints[]")))];
-      const data = await upstreamJson(`${JUPITER}/price/v3?ids=${mints.join(",")}`, { label: "Jupiter" });
+      const data = await upstreamJson(`${jupiterBase()}/price/v3?ids=${mints.join(",")}`, { label: "Jupiter" });
       const prices = {};
       const missing = [];
       for (const m of mints) {
@@ -905,7 +927,7 @@ export const SOLANA_INTEL_TOOLS = [
         slippageBps = Number.parseInt(i.slippageBps, 10);
         if (!Number.isFinite(slippageBps) || slippageBps < 0 || slippageBps > 5000) throw bad('"slippageBps" must be an integer between 0 and 5000');
       }
-      const url = `${JUPITER}/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountStr}&slippageBps=${slippageBps}`;
+      const url = `${jupiterBase()}/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountStr}&slippageBps=${slippageBps}`;
       const q = await upstreamJson(url, { label: "Jupiter", notFound: "Jupiter cannot route that swap (token not tradable or no liquidity)" });
       const plan = Array.isArray(q?.routePlan) ? q.routePlan : [];
       return {
@@ -969,7 +991,7 @@ export const SOLANA_INTEL_TOOLS = [
       const query = i.query.trim();
       if (query.length > 80) throw bad('"query" must be 80 characters or fewer');
       const limit = takeLimit(i.limit, 5, 20);
-      const list = await upstreamJson(`${JUPITER}/tokens/v2/search?query=${encodeURIComponent(query)}`, { label: "Jupiter" });
+      const list = await upstreamJson(`${jupiterBase()}/tokens/v2/search?query=${encodeURIComponent(query)}`, { label: "Jupiter" });
       let rows = (Array.isArray(list) ? list : []).map(shapeJupToken).filter(Boolean);
       // Exact mint match first when the query is an address.
       if (BASE58_RE.test(query)) rows.sort((a, b) => (b.mint === query) - (a.mint === query));

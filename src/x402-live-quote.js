@@ -21,7 +21,8 @@
 // OpenAPI cannot close this: it has no place for an x402 quote. The 402 itself
 // is the source of truth, which is also why the router already reads a live 402
 // for payTo (payToFromLive402) before spending. This reads the same challenge
-// for price and networks.
+// for price, networks and the payTo per network, so the index knows where the
+// origin asks to be paid even when no manifest or registry row says so.
 //
 // Deliberately CONSERVATIVE about money: an amount we cannot price leaves the
 // price null and still records the networks, so the row becomes "payable over
@@ -32,6 +33,7 @@
  *  price rather than guess - a wrong exponent is a 1000x pricing error. */
 const USDC_DECIMALS = 6;
 import { evmDomainsOfAccepts } from "./evm-usdc-domain.js";
+import { unpackRequestContract } from "./request-contract.js";
 const USDC_NAME = /^(usdc|usd coin)$/i;
 
 /**
@@ -45,12 +47,24 @@ const USDC_NAME = /^(usdc|usd coin)$/i;
 export function acceptsFromLive402({ header, body } = {}) {
   const dig = (obj) => {
     if (!obj || typeof obj !== "object") return null;
-    if (Array.isArray(obj.accepts) && obj.accepts.length) return obj.accepts;
+    // `accepts` is the spec's name; a few sellers publish the same array as
+    // `paymentRequirements` (the v1 SDK's type name) or `requirements`, which
+    // read as "402 we cannot parse" until 2026-09-23 (73 such reads in the
+    // first hour of counting).
+    const arrayOf = (o) => {
+      for (const k of ["accepts", "paymentRequirements", "payment_requirements", "requirements"]) {
+        if (Array.isArray(o?.[k]) && o[k].length) return o[k];
+      }
+      return null;
+    };
+    const top = arrayOf(obj);
+    if (top) return top;
     // Sellers wrap the envelope: { payment: { accepts } }, { x402: { accepts } }.
-    for (const k of ["payment", "x402", "paymentRequired", "payment_required", "data"]) {
+    for (const k of ["payment", "x402", "paymentRequired", "payment_required", "data", "error"]) {
       const nested = obj[k];
-      if (nested && typeof nested === "object" && Array.isArray(nested.accepts) && nested.accepts.length) {
-        return nested.accepts;
+      if (nested && typeof nested === "object") {
+        const hit = arrayOf(nested);
+        if (hit) return hit;
       }
     }
     return null;
@@ -86,7 +100,7 @@ function isUsdc(a) {
   // the name convention is an EVM EIP-712 artifact. On Solana the mint
   // address IS the identity, so the one well-known mainnet mint is
   // recognized directly. Without this, every pure-Solana catalog priced as
-  // "networks only" forever (measured 2026-09-01: sol.blockrun's 128 routes).
+  // "networks only" forever (measured 2026-09-01: a seller's 128 routes).
   return String(a?.asset || "") === SVM_USDC_MINT;
 }
 
@@ -125,10 +139,24 @@ export function quoteFromAccepts(accepts) {
     if (Number.isFinite(n) && n >= 0) price = n / 10 ** decimals;
   }
 
+  // Every accept's payTo, keyed by its network: the same shape
+  // paymentFieldsFromAccepts gives a manifest or registry row, so a row learned
+  // from a live 402 joins the Base leaderboard scan (allPayToOrigins) and the
+  // chain join on the origin's own address like any other. A 402 that names
+  // one network twice (two assets) keeps the preferred accept's payTo, then
+  // the first seen.
+  const payToByNetwork = {};
+  for (const a of [preferred, ...list]) {
+    if (typeof a.network === "string" && a.network && typeof a.payTo === "string" && a.payTo && !payToByNetwork[a.network]) {
+      payToByNetwork[a.network] = a.payTo;
+    }
+  }
+
   return {
     price,
     networks: [...new Set(list.map((a) => a.network).filter((n) => typeof n === "string" && n))],
     payTo: typeof preferred?.payTo === "string" ? preferred.payTo : null,
+    payToByNetwork,
     asset: typeof preferred?.asset === "string" ? preferred.asset : null,
     // Which entry priced it, so a surprising number can be traced to its source.
     network: typeof preferred?.network === "string" ? preferred.network : null,
@@ -161,6 +189,130 @@ export function probeMethodsFor(tool) {
   if (stated === "GET" && tool?.methodInferred !== true) return ["GET", "POST"];
   if (stated && stated !== "GET" && stated !== "POST") return [];
   return ["GET", "POST"];
+}
+
+// A route that REQUIRES a query parameter often validates it before the
+// paywall, so an unpaid probe of the bare path gets a 400/422 and never sees the
+// 402 - and with it the price and every chain the route takes. Measured
+// 2026-09-23: a seller's three `?url=` routes stayed Base-only in our index while
+// their live 402s offered Base and Solana; the same origin's parameter-free
+// routes were read fine. Across the index, 12,143 rows declare a required query
+// parameter (507 sellers).
+//
+// The values are OURS, never the seller's example: request-contract.js keeps
+// only parameter NAMES from a seller's OpenAPI on purpose (examples carry keys
+// and third-party text). A fixed placeholder per name shape is enough to get
+// past a presence check, and the call is still unpaid, so nothing runs that the
+// bare probe would not have reached.
+const QUERY_PLACEHOLDERS = [
+  [/^(url|uri|link|href|site|website|page|endpoint|target|source|src)(_?url)?$/i, "https://example.com"],
+  [/url$|uri$/i, "https://example.com"],
+  [/^(domain|host|hostname)$/i, "example.com"],
+  [/^(email|mail)$/i, "test@example.com"],
+  [/^(ip|ip_?address)$/i, "8.8.8.8"],
+  [/^(symbol|ticker|coin|asset|token)$/i, "BTC"],
+  [/^(chain|network)$/i, "base"],
+  [/^(limit|count|n|size|page|days|top)$/i, "1"],
+];
+export function queryPlaceholderFor(name) {
+  for (const [re, v] of QUERY_PLACEHOLDERS) if (re.test(name)) return v;
+  return "test";
+}
+
+/**
+ * seller key + route as one URL text. A route is stored relative to its seller,
+ * so for a bare origin this is plain concatenation. A path seller's route AT
+ * its prefix root ("/" or "/?q=1": a Supabase edge function, a Vercel or
+ * Cloudflare function serving one paid endpoint at its own path) joins to the
+ * prefix itself, "<key>?q=1", never "<key>/?q=1": the seller lists the URL
+ * without the slash, and a function host may redirect or 404 the other one.
+ * Keys are stored normalised (no trailing slash), so this is a split, not a
+ * parse; the caller still validates the result (sellerRouteUrl).
+ */
+export function joinSellerRoute(key, route) {
+  const k = String(key || "");
+  const r = String(route || "");
+  const scheme = k.indexOf("://");
+  const slash = scheme >= 0 ? k.indexOf("/", scheme + 3) : -1;
+  const hasPrefix = slash >= 0 && slash < k.length - 1;
+  if (hasPrefix && (r === "/" || r.startsWith("/?"))) return `${k.replace(/\/+$/, "")}${r.slice(1)}`;
+  return `${k}${r}`;
+}
+
+/**
+ * The URLs an unpaid quote probe should try for one route, in order. A route
+ * whose seller declares required query parameters is tried WITH them first
+ * (placeholders, see above), then bare; every other route is tried bare only,
+ * exactly as before. A parameter the route already carries is left alone.
+ */
+export function probeTargetsFor(originUrl, tool) {
+  const bare = joinSellerRoute(originUrl, tool?.route || "");
+  const names = unpackRequestContract(tool)?.required?.query || [];
+  if (!names.length) return [bare];
+  let u;
+  try { u = new URL(bare); } catch { return [bare]; }
+  let added = 0;
+  for (const n of names) {
+    if (u.searchParams.has(n)) continue;
+    u.searchParams.set(n, queryPlaceholderFor(n));
+    added++;
+  }
+  return added ? [u.toString(), bare] : [bare];
+}
+
+// The POST twin of the query placeholders: a route whose OpenAPI declares
+// required JSON body fields often validates them before its paywall, so the
+// bare `{}` probe got a 400/422 and never saw the 402. 25% of misses in the
+// first hour of counting (2026-09-23) were such input errors. Names come from
+// request-contract.js (dotted paths, names only); every leaf gets the same
+// name-shaped placeholder the query side uses. Types are unknown, so a field
+// that wants a number may still refuse - the bare `{}` follows as before.
+export function probeBodyFor(tool) {
+  const paths = unpackRequestContract(tool)?.required?.body || [];
+  if (!paths.length) return null;
+  // Seller-supplied names walked into an object: null-prototype nodes, own-key
+  // checks only, and the prototype-addressing names refused outright, so no
+  // path can reach Object.prototype whatever request-contract lets through.
+  const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
+  const root = Object.create(null);
+  for (const path of paths) {
+    const segs = String(path).split(".");
+    if (segs.some((seg) => RESERVED.has(seg) || !seg)) continue;
+    let node = root;
+    segs.forEach((seg, i) => {
+      if (i === segs.length - 1) {
+        if (!Object.hasOwn(node, seg)) node[seg] = queryPlaceholderFor(seg);
+      } else {
+        if (!Object.hasOwn(node, seg) || typeof node[seg] !== "object" || node[seg] === null) node[seg] = Object.create(null);
+        node = node[seg];
+      }
+    });
+  }
+  return Object.keys(root).length ? JSON.stringify(root) : null;
+}
+
+/**
+ * Every unpaid request one quote probe may make for a route, in order: each
+ * target (placeholder query first, then bare) by each allowed verb, and for a
+ * POST the placeholder body before `{}`. Duplicates are dropped, so a route
+ * that declares nothing makes exactly the requests it always did.
+ */
+export function probeAttemptsFor(originUrl, tool) {
+  const filled = probeBodyFor(tool);
+  const out = [];
+  const seen = new Set();
+  for (const target of probeTargetsFor(originUrl, tool)) {
+    for (const method of probeMethodsFor(tool)) {
+      const bodies = method === "POST" ? [filled, "{}"].filter(Boolean) : [null];
+      for (const body of bodies) {
+        const k = `${method} ${target} ${body}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push({ target, method, body });
+      }
+    }
+  }
+  return out;
 }
 
 /** Is this response a usable x402 quote? 402 is the only healthy answer to an

@@ -1,15 +1,25 @@
 // Server-rendered catalogue pages and the OpenAPI spec — all generated from
 // the tool catalog so they never drift from what the API actually serves.
+import { REPO_URL } from "./repo-link.js";
 import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
 import { CHROME_HEAD_LINKS, CHROME_CSS, renderHeader, renderFooter } from "./chrome.js";
-import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbLd } from "./ledger-chrome.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { agentReportPriceRange, cardReportPriceRange } from "./report-tiers.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
-import { RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT } from "./rails.js";
-import { tempoDiscoveryInfo } from "./mpp-tempo.js";
-import { stripeDiscoveryInfo } from "./mpp-stripe.js";
+import { RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly } from "./rails.js";
+import { mppOffersFor, mppRailsPhrase, mppOfferShortProse } from "./mpp-offers.js";
+import { tempoOfferedFor, tempoDiscoveryInfo } from "./mpp-tempo.js";
+import { WALLET_ONLY_POLICY_REASON, powCostPhrase } from "./pow.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
+import { crawlIntervalLabel, discoveryIntervalLabel } from "./crawl-cadence.js";
+import { routerRankingSentence } from "./routing-proof.js";
+import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
+import { mppFlagshipRows } from "./mpp-flagship.js";
+import { PRICED_BY_MODEL_NOTE } from "./tools/llm-gateway-kit.js";
+import { PARAM_ALIASES } from "./input-aliases.js";
+import { metaTitle, metaDescription } from "./seo-meta.js";
 
 export const CATEGORIES = {
   web: { label: "Web & documents", blurb: "Read the live web: browser rendering, screenshots, article extraction, PDFs, metadata." },
@@ -33,7 +43,7 @@ export const CATEGORIES = {
   // was short by ten keys covering 195 entries (37% of the catalog), which is
   // why seller-trust and the chain-read primitives were invisible to agents.
   crypto: { label: "Crypto & onchain data", blurb: "Keyless reads across chains: token prices and metadata, order books, stablecoin peg health, wallet balances and transaction history, NFT holdings and metadata, gas snapshots." },
-  chain: { label: "Contract & address inspection", blurb: "Deeper onchain reads: verified contract source and ABI, address profiles, token holders, transaction inspection - plus the named block and log primitives (block number, block info, event logs, ERC-721 owner, contract code)." },
+  chain: { label: "Address screening", blurb: "Onchain address checks: screen any blockchain address against every digital currency address on the OFAC SDN list, with the sanctioned entity named on a match." },
   wallet: { label: "Wallet operations", blurb: "Multi-chain balance reads, testnet funding, onramp links, and SQL over onchain data. Non-custodial: the agent signs with its own key." },
   ai: { label: "AI & compute", blurb: "Inference, generation and sandboxed execution priced per call: chat tiers, image generation, text-to-speech, speech-to-text, and code execution in an isolated sandbox." },
   "skill-pack": { label: "Skill packs", blurb: "Multi-tool workflows that run server-side in one request: one payment, one settlement, and a single response with a partial-success envelope if a step fails. Cheaper to integrate than orchestrating the steps yourself." },
@@ -105,7 +115,7 @@ function head({ title: rawTitle, description: rawDescription, canonical, jsonLd,
   const description = metaDescription(rawDescription);
   const blocks = (Array.isArray(jsonLd) ? jsonLd : [jsonLd])
     .filter(Boolean)
-    .map((b) => `<script type="application/ld+json">${JSON.stringify(b)}</script>`)
+    .map((b) => `<script type="application/ld+json">${JSON.stringify(b).replace(/</g, "\\u003c")}</script>`)
     .join("\n");
   const social = image
     ? `<meta name="twitter:card" content="summary_large_image">
@@ -146,12 +156,7 @@ function exampleCall(baseUrl, tool) {
 
 function payExample(baseUrl, tool) {
   const { method, path, discovery } = tool;
-  if (method === "GET") {
-    const qs = new URLSearchParams(
-      Object.entries(discovery?.input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)])
-    ).toString();
-    return `const res = await payFetch("${baseUrl}${path}${qs ? `?${qs}` : ""}");`;
-  }
+  if (method === "GET") return `const res = await payFetch("${baseUrl}${path}${exampleQueryString(tool)}");`;
   return `const res = await payFetch("${baseUrl}${path}", {
   method: "${method}",
   headers: { "Content-Type": "application/json" },
@@ -170,11 +175,198 @@ function fmtTtl(seconds) {
   return `${Math.round(s / 86400)}d`;
 }
 
-export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0, cacheTtl = null } = {}) {
+const TOOL_TITLE_MAX = 60;
+
+/** The price as a buyer meets it: a flat "$0.001" or, for a route that quotes
+ *  each request from its body, the floor it starts at. */
+function priceWords(tool) {
+  if (tool.quoteRange && Number.isFinite(tool.quoteRange.maxUsd) && tool.quoteRange.maxUsd > tool.quoteRange.minUsd) {
+    return { short: `from ${tool.price}`, long: `quoted per request from ${tool.price}` };
+  }
+  return { short: tool.price, long: `${tool.price} per call` };
+}
+
+/** Name for a title: parentheticals dropped first, then cut at a word. */
+function titleName(name, room) {
+  let n = String(name).trim();
+  if (n.length <= room) return n;
+  const noParen = n.replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s+/g, " ").trim();
+  if (noParen.length && noParen.length <= room) return noParen;
+  n = noParen || n;
+  const cut = n.slice(0, room + 1);
+  const ws = cut.lastIndexOf(" ");
+  return (ws > room * 0.5 ? cut.slice(0, ws) : n.slice(0, room)).replace(/[\s,;:+&\-]+$/g, "");
+}
+
+/** Page title, at most 60 characters: "<Name> API - $0.001/call | Agent402",
+ *  shedding the brand, then the parenthetical, then words, never the price. */
+export function toolTitle(tool) {
+  const p = priceWords(tool).short;
+  const tail = ` API - ${p}/call`;
+  const brand = " | Agent402";
+  const full = `${tool.name}${tail}${brand}`;
+  if (full.length <= TOOL_TITLE_MAX) return full;
+  const withBrand = `${titleName(tool.name, TOOL_TITLE_MAX - tail.length - brand.length)}${tail}${brand}`;
+  const noBrand = `${titleName(tool.name, TOOL_TITLE_MAX - tail.length)}${tail}`;
+  // Keep the brand when the name survives it intact, otherwise spend the room on the name.
+  const nameIntactWithBrand = titleName(tool.name, TOOL_TITLE_MAX - tail.length - brand.length) === tool.name;
+  return nameIntactWithBrand ? withBrand : noBrand;
+}
+
+/** First sentence of a description (a period followed by a capital or the end). */
+function firstSentence(text) {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  const m = s.match(/^(.+?[.!?])(?=\s+[A-Z(`"]|$)/);
+  const out = m ? m[1] : s;
+  return /[.!?]$/.test(out) ? out : `${out}.`;
+}
+
+function cutAtWord(text, max) {
+  const s = String(text).trim();
+  if (s.length <= max) return s;
+  const head = s.slice(0, max + 1);
+  let cut = -1;
+  for (const m of head.matchAll(/[.!?](?=\s)/g)) cut = m.index + 1;
+  if (cut >= max * 0.5) return head.slice(0, cut).trim();
+  const ws = head.lastIndexOf(" ");
+  let words = (ws > 0 ? head.slice(0, ws) : head.slice(0, max)).replace(/[\s,;:\-(]+$/g, "").trim().split(" ");
+  // A cut that ends on a connecting word ("... by hash on") reads as broken.
+  while (words.length > 3 && /^(a|an|the|of|on|in|to|for|by|and|or|with|from|at|as|via|into|its)$/i.test(words.at(-1))) words.pop();
+  return words.join(" ").replace(/[\s,;:\-(]+$/g, "") + ".";
+}
+
+/** Meta description, 120-155 characters, built from the tool's own sentence
+ *  plus the price and how it is paid - different on every page because the
+ *  description, price and route are. */
+export function toolMetaDescription(tool, { computePayable = false, mpp = true } = {}) {
+  const MAX = 155, MIN = 120;
+  const p = priceWords(tool).long;
+  const pay = computePayable ? `${p} over x402, or free with proof-of-work.` : `${p} over x402${mpp ? " or MPP" : ""}.`;
+  const room = MAX - pay.length - 2;
+  let lead = String(tool.description || tool.name).replace(/\s+/g, " ").trim();
+  lead = cutAtWord(lead, room);
+  if (!/[.!?]$/.test(lead)) lead += ".";
+  let out = `${lead} ${pay}`;
+  const fillers = [
+    ` ${tool.method} ${tool.path}.`,
+    " No API key or signup.",
+    (tool.tags || []).length ? ` Tags: ${(tool.tags || []).slice(0, 4).join(", ")}.` : "",
+    ` Category: ${CATEGORIES[tool.category]?.label ?? tool.category}.`,
+  ];
+  for (const f of fillers) {
+    if (out.length >= MIN) break;
+    if (f && out.length + f.length <= MAX) out += f;
+  }
+  return out.length > MAX ? out.slice(0, MAX) : out;
+}
+
+/** Related tools: same category and shared tags score highest; skill packs
+ *  only relate to other packs. Deterministic for a given catalog. */
+export function relatedTools(tool, tools, limit = 6) {
+  const tags = new Set((tool.tags || []).map((t) => String(t).toLowerCase()));
+  const isPack = tool.category === "skill-pack";
+  return tools
+    .filter((t) => t.slug !== tool.slug && (t.category === "skill-pack") === isPack)
+    .map((t) => {
+      const shared = (t.tags || []).filter((x) => tags.has(String(x).toLowerCase())).length;
+      return { t, score: (t.category === tool.category ? 3 : 0) + shared * 2 };
+    })
+    .filter((r) => r.score > 0)
+    .sort((a, b) => b.score - a.score || a.t.slug.localeCompare(b.t.slug))
+    .slice(0, limit)
+    .map((r) => r.t);
+}
+
+/** "string", "integer (1-64)", "one of: sha256, sha512" ... from a JSON Schema property. */
+function schemaType(v = {}) {
+  let t = Array.isArray(v.type) ? v.type.join(" | ") : (v.type || (v.enum ? "string" : "any"));
+  if (t === "array" && v.items?.type) t = `array of ${v.items.type}`;
+  const bits = [];
+  if (Array.isArray(v.enum) && v.enum.length) bits.push(`one of: ${v.enum.slice(0, 12).map(String).join(", ")}${v.enum.length > 12 ? ", ..." : ""}`);
+  if (Number.isFinite(v.minimum) || Number.isFinite(v.maximum)) bits.push(`${Number.isFinite(v.minimum) ? v.minimum : ""}-${Number.isFinite(v.maximum) ? v.maximum : ""}`);
+  if (v.format) bits.push(v.format);
+  if (v.default !== undefined) bits.push(`default ${typeof v.default === "string" ? v.default : JSON.stringify(v.default)}`);
+  return bits.length ? `${t} (${bits.join("; ")})` : t;
+}
+
+function exampleValueType(v) {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return v.length && typeof v[0] === "object" && v[0] !== null ? "array of objects" : v.length ? `array of ${typeof v[0]}` : "array";
+  return typeof v;
+}
+
+function codeList(names, max = 4) {
+  const shown = names.slice(0, max).map((n) => `<code>${ledgerEsc(n)}</code>`);
+  const more = names.length > max ? ` and ${names.length - max} more` : "";
+  if (shown.length <= 1) return shown.join("") + more;
+  return more ? `${shown.join(", ")}${more}` : `${shown.slice(0, -1).join(", ")} and ${shown.at(-1)}`;
+}
+
+/** The query string a GET tool's documented input becomes, "" when it has none.
+ *  ONE builder for the curl example and the proof-of-work snippet, so the two
+ *  cannot send different inputs. */
+export function exampleQueryString(tool) {
+  const input = tool.discovery?.input ?? {};
+  const qs = new URLSearchParams(Object.entries(input).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)])).toString();
+  return qs ? `?${qs}` : "";
+}
+
+/** Content types a tool answers with as raw bytes (the route binder's
+ *  { __binary, contentType } sentinel), or null for a JSON tool. */
+export function binaryTypesOf(tool) {
+  if (Array.isArray(tool?.binaryTypes) && tool.binaryTypes.length) return tool.binaryTypes;
+  if (tool?.mimeType && tool.mimeType !== "application/json") return [tool.mimeType];
+  return null;
+}
+
+const listWords = (xs, joiner = "or") => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} ${joiner} ${xs.at(-1)}`);
+
+/** The request the proof-of-work snippet sends: { url, method, headers, body }.
+ *  Exported so a test can send exactly what the page publishes. */
+export function powSnippetRequest(baseUrl, tool) {
+  const input = tool.discovery?.input ?? {};
+  const isGet = tool.method === "GET";
+  return {
+    url: `${baseUrl}${tool.path}${isGet ? exampleQueryString(tool) : ""}`,
+    method: tool.method,
+    body: isGet ? null : JSON.stringify(input),
+  };
+}
+
+function curlExample(baseUrl, tool) {
+  const input = tool.discovery?.input ?? {};
+  if (tool.method === "GET") {
+    return `curl -i "${baseUrl}${tool.path}${exampleQueryString(tool)}"`;
+  }
+  const body = JSON.stringify(input).replace(/'/g, "'\\''");
+  return `curl -i -X ${tool.method} ${baseUrl}${tool.path} \\\n  -H "Content-Type: application/json" \\\n  -d '${body}'`;
+}
+
+export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0, cacheTtl = null, otherMethodRouted = false, mpp = true } = {}) {
+  // MPP rides the shim, which mounts only with MPP_SECRET_KEY: a self-host
+  // without it offers x402 alone, so the page names only the rails it has.
+  const orMpp = mpp ? " or MPP" : "";
   const e = ledgerEsc;
-  const title = `${tool.name} API for AI agents - ${tool.price} per call | Agent402`;
+  const title = toolTitle(tool);
   const canonical = `${baseUrl}/tools/${tool.slug}`;
   const catLabel = CATEGORIES[tool.category]?.label ?? tool.category;
+  const catHref = `/tools/category/${tool.category}`;
+  const pw = priceWords(tool);
+  const schema = tool.discovery?.inputSchema || {};
+  const props = schema.properties || {};
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  const example = tool.discovery?.output?.example;
+  const input = tool.discovery?.input ?? {};
+  // A tool that names its only networks (`onlyNetworks`, e.g. decide-execute:
+  // Base) is offered on exactly those (payments.js acceptsForItem), so the page
+  // names them (railsOrFor) rather than "EVM chains".
+  const evmOnly = x402EvmOnly(tool);
+  const binaryTypes = binaryTypesOf(tool);
+  const hasOnly = Array.isArray(tool.onlyNetworks) && tool.onlyNetworks.length > 0;
+  const evmOne = hasOnly ? railsOrFor(tool) : "USDC on an EVM chain";
+  const isPack = tool.category === "skill-pack";
+  const packSlug = isPack ? tool.slug.replace(/^skill-/, "") : null;
+
   const jsonLd = [
     {
       "@context": "https://schema.org",
@@ -182,144 +374,236 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
       name: `Agent402 ${tool.name}`,
       url: canonical,
       description: tool.description,
-      documentation: `${baseUrl}/llms.txt`,
+      documentation: `${baseUrl}/openapi.json`,
       provider: { "@type": "Organization", name: "Agent402.Tools", url: baseUrl },
       offers: {
         "@type": "Offer",
         price: tool.price.replace("$", ""),
         priceCurrency: "USD",
-        description: `${tool.price} per call, paid in ${RAILS_OR} via the x402 protocol. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
+        description: `${pw.long}, paid over x402 in ${railsOrFor(tool)}${orMpp}. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
       },
     },
     {
       "@context": "https://schema.org",
       "@type": "BreadcrumbList",
       itemListElement: [
-        { "@type": "ListItem", position: 1, name: "Agent402.Tools", item: baseUrl },
+        { "@type": "ListItem", position: 1, name: "Home", item: baseUrl },
         { "@type": "ListItem", position: 2, name: "Tools", item: `${baseUrl}/tools` },
-        { "@type": "ListItem", position: 3, name: catLabel, item: `${baseUrl}/tools#${tool.category}` },
+        { "@type": "ListItem", position: 3, name: catLabel, item: `${baseUrl}${catHref}` },
         { "@type": "ListItem", position: 4, name: tool.name, item: canonical },
       ],
     },
   ];
-  const schemaRows = Object.entries(tool.discovery?.inputSchema?.properties ?? {})
-    .map(([k, v]) => {
-      const required = (tool.discovery?.inputSchema?.required ?? []).includes(k);
-      return `<tr><td><code>${e(k)}</code>${required ? " <b>*</b>" : ""}</td><td>${e(v.type ?? "any")}</td><td>${e(v.description ?? "")}</td></tr>`;
-    })
-    .join("\n");
+
+  // --- Answer-first summary: what it does, what it costs, how to pay, where it lives.
+  const payHow = computePayable
+    ? `pay ${pw.long} over x402${orMpp}, or call it free by solving a proof-of-work challenge`
+    : evmOnly
+      ? `pay ${pw.long} over x402 with ${evmOne}${tool.identityBound ? " (the paying wallet is the identity)" : ""}`
+      : `pay ${pw.long} over x402${orMpp} (there is no free tier)`;
+  const reqPhrase = required.length
+    ? `${required.length === 1 ? "the required field" : "the required fields"} ${codeList(required)}`
+    : Object.keys(props).length ? `no required fields (${Object.keys(props).length} optional)` : "no input";
+  // A binary tool's example is a note about the bytes, not a response shape.
+  const outKeys = !binaryTypes && example && typeof example === "object" && !Array.isArray(example) ? Object.keys(example) : [];
+  const binaryPhrase = binaryTypes ? `raw bytes, not JSON, with <code>Content-Type</code> ${listWords(binaryTypes.map((t) => `<code>${ledgerEsc(t)}</code>`))}` : "";
+  const outPhrase = binaryTypes ? binaryPhrase : outKeys.length ? `a JSON object with ${codeList(outKeys, 5)}` : Array.isArray(example) ? "a JSON array" : "the result";
+  const summary = `${e(firstSentence(tool.description))} Send <code>${e(tool.method)} ${e(tool.path)}</code> with ${reqPhrase} and ${e(payHow)}. It returns ${outPhrase}.`;
+  const restOfDescription = String(tool.description).replace(/\s+/g, " ").trim().slice(firstSentence(tool.description).length).trim();
+
+  // --- Parameters table from the input schema, plus accepted alternative names.
+  const aliasFor = (name) => {
+    const alts = PARAM_ALIASES[name];
+    if (!alts || !required.includes(name)) return [];
+    return alts.filter((a) => !(a in props));
+  };
+  const paramRows = Object.entries(props).map(([k, v]) => {
+    const req = required.includes(k);
+    const alts = aliasFor(k);
+    const altNote = alts.length ? ` <span style="color:var(--faint);">Also accepted as ${alts.map((a) => `<code>${e(a)}</code>`).join(", ")}.</span>` : "";
+    return `<tr><td><code>${e(k)}</code></td><td>${e(schemaType(v))}</td><td>${req ? "yes" : "no"}</td><td>${e(v.description ?? "")}${altNote}</td></tr>`;
+  }).join("\n");
+
+  // --- Response fields from the documented example (same derivation as /openapi.json).
+  const respSchema = responseSchemaFor(tool.path, example);
+  const respRequired = new Set(respSchema.required || []);
+  const respRows = outKeys.map((k) => {
+    const v = example[k];
+    let sample = typeof v === "string" ? v : v === null || typeof v !== "object" ? JSON.stringify(v) : Array.isArray(v) ? `${v.length} item${v.length === 1 ? "" : "s"} in the example` : `${Object.keys(v).length} field${Object.keys(v).length === 1 ? "" : "s"}: ${Object.keys(v).slice(0, 6).join(", ")}`;
+    if (sample && sample.length > 80) sample = sample.slice(0, 77) + "...";
+    return `<tr><td><code>${e(k)}</code></td><td>${e(exampleValueType(v))}</td><td>${respRequired.has(k) ? "yes" : "no"}</td><td>${e(sample ?? "")}</td></tr>`;
+  }).join("\n");
+
+  // --- Errors and behavior: only statements that hold for this tool.
+  const facts = [];
+  const inputErrorBody = "<code>error</code>, <code>tool</code>, <code>expected</code>, <code>required</code> and <code>example</code>";
+  if (isPack) {
+    facts.push(`Arguments left out fall back to the pack's own defaults. Each step reports on its own; the call succeeds when at least one step does, and a run where every step fails is refused (400 when the input caused it, 502 otherwise).`);
+  } else if (required.length) {
+    facts.push(`${codeList(required, 6)} ${required.length === 1 ? "is" : "are"} required. An input the tool rejects returns an HTTP 4xx whose body carries ${inputErrorBody}, so the caller can correct it.`);
+  } else if (Object.keys(props).length) {
+    facts.push(`Every field is optional. An input the tool rejects returns an HTTP 4xx whose body carries ${inputErrorBody}.`);
+  } else {
+    facts.push(`There is no input to get wrong: any request to ${e(tool.path)} runs the tool.`);
+  }
+  // Settlement on failure, per rail this route offers. x402, MPP evm and card
+  // settle only after an under-400 answer and a credits key is debited only on
+  // a 200; a Tempo PUSH credential is a transfer already on chain before the
+  // tool runs (src/mpp-tempo.js), so a failure there is a refund owed
+  // (src/tempo-push-debts.js), not a cancelled charge.
+  const tempoHere = tempoOfferedFor(tool) && !!tempoDiscoveryInfo();
+  const notCharged = ["x402", ...(mpp ? ["MPP"] : []), ...(tool.identityBound ? [] : ["a prepaid credits key"])];
+  facts.push(`A paid call that ends in any status of 400 or above is not charged over ${listWords(notCharged)}: settlement is cancelled when the tool fails.${tempoHere ? " The exception is a Tempo push credential, a transfer the buyer sent before the call: it settles before the tool runs, so if the tool then fails the payment is recorded as a refund owed to the paying wallet." : ""}`);
+  if (computePayable) facts.push(`Free tier: no outbound network call leaves the server for this tool, so proof-of-work (${e(String(powDifficulty))} leading zero bits of sha256) pays for it.`);
+  else facts.push(`Wallet-only: this tool ${tool.modelBacked ? "runs a model, so it has no proof-of-work tier" : WALLET_ONLY_POLICY_REASON.has(tool.slug) ? `${e(WALLET_ONLY_POLICY_REASON.get(tool.slug))}, so it is metered with money and has no proof-of-work tier` : "reaches the network or stored state, so it has no proof-of-work tier"}.${tool.identityBound ? "" : " A prepaid card-credits key (<code>Authorization: Bearer a402_...</code>) also pays it."}`);
+  if (tool.modelBacked) facts.push(`Model-backed: the answer is generated by a model, so the same input can produce different wording.`);
+  if (tool.identityBound) facts.push(`Identity-bound: results are keyed to the wallet that signed the payment, so only EVM x402 payments are accepted; credits keys and Tempo are refused.`);
+  else if (tool.longRunning) facts.push(`Long-running: payment settles after the work finishes, so only EVM exact payments are offered.`);
+  if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(tool.price)} and $${e(String(tool.quoteRange.maxUsd))}.`);
+  if (typeof tool.tierQuote === "function") facts.push(e(PRICED_BY_MODEL_NOTE));
+  if (cacheTtl) facts.push(`Cached: an identical request within ${e(fmtTtl(cacheTtl))} is answered from cache with <code>X-Cache: hit</code>.`);
+  // The method alias (server.js) runs only when no catalog route of the other
+  // method shares this path: /api/memory has both, so neither page says it.
+  if (!otherMethodRouted) {
+    facts.push(tool.method === "GET"
+      ? `A <code>POST</code> with a JSON body to ${e(tool.path)} is served as this GET, with the body as the input.`
+      : `A <code>GET</code> or <code>HEAD</code> to ${e(tool.path)} returns the same 402 quote, so the price can be read without a body.`);
+  }
+  // The replay cache holds JSON answers only (it captures res.json) and only
+  // up to IDEM_MAX_BODY_BYTES; bytes and streams are never replayed.
+  if (binaryTypes) facts.push(`An <code>Idempotency-Key</code> header does not replay this tool's answer: the replay cache holds JSON answers only, so a retried paid call runs and is charged again.`);
+  else facts.push(`An <code>Idempotency-Key</code> header makes a retried paid call replay the first 200 instead of charging again (an answer larger than ${e(IDEM_MAX_BODY_LABEL)}${String(tool.path).startsWith("/v1/") ? " and a streamed response are" : " is"} not replayed).`);
+
+  // --- MCP usage.
+  const mcpArgs = JSON.stringify({ slug: tool.slug, params: input }, null, 2);
+  const mcpNote = computePayable
+    ? `On the hosted connector at <code>${e(baseUrl)}/mcp</code>, <code>catalog.call</code> runs ${e(tool.slug)} free (rate-limited, no wallet).`
+    : `The hosted connector at <code>${e(baseUrl)}/mcp</code> needs a payment for ${e(tool.slug)}; the stdio package pays it from a wallet or from <code>AGENT402_CREDITS_KEY</code>${tool.identityBound ? " (wallet only for this tool)" : ""}.`;
+
+  const aliases = (Array.isArray(tool.aliases) ? tool.aliases : []).filter((a) => a && a !== tool.slug);
+  const tagsLine = (tool.tags || []).length ? (tool.tags || []).slice(0, 8).map((t) => `<code>${e(t)}</code>`).join(" ") : "";
 
   const relatedCards = related.map((t) => {
-    const desc = t.description.length > 120 ? t.description.slice(0, 120) + "\u2026" : t.description;
-    return `<div style="background:var(--card);border:1px solid var(--hairline);padding:18px 20px;display:flex;flex-direction:column;gap:8px;">
+    const desc = t.description.length > 120 ? t.description.slice(0, 120) + "…" : t.description;
+    return `<div class="tp-card">
   <h3 style="font-size:15px;margin:0;"><a href="/tools/${e(t.slug)}" style="text-decoration:none;color:var(--ink);">${e(t.name)}</a></h3>
-  <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">${ledgerPriceLine(t)} · <code style="background:transparent;color:var(--faint);font-size:12px;">${t.method} ${e(t.path)}</code></div>
+  <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">${ledgerPriceLine(t)} · <code style="background:transparent;color:var(--faint);font-size:12px;">${e(t.method)} ${e(t.path)}</code></div>
   <p style="color:var(--muted);font-size:13px;margin:0;line-height:1.5;flex:1;">${e(desc)}</p>
-  <a href="/playground?slug=${e(t.slug)}" style="font-family:var(--font-mono);font-size:12px;color:var(--accent);text-decoration:none;font-weight:700;">try in playground →</a>
 </div>`;
   }).join("\n");
 
   // Surface which curated multi-tool workflows include this tool.
   const inPacks = SKILL_PACKS.filter((p) => (p.toolSlugs || []).includes(tool.slug));
   const packsHtml = inPacks.length
-    ? `<h2 style="font-weight:800;font-size:22px;margin:40px 0 10px;">Part of these workflows</h2>
-  <p style="color:var(--muted);font-size:15px;margin-bottom:12px;">This tool is one step in ${inPacks.length === 1 ? "a curated multi-tool workflow" : `${inPacks.length} curated multi-tool workflows`} - agents can fetch the whole sequence as an MCP prompt or call <code style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:2px 6px;font-size:13px;">${e(baseUrl)}/api/skill-packs/{slug}/prompt</code>.</p>
+    ? `<h2 class="tp-h2">Part of these workflows</h2>
+  <p class="tp-sub">${e(tool.name)} is one step in ${inPacks.length === 1 ? "this skill pack" : `these ${inPacks.length} skill packs`}, each sold as a single call:</p>
   <ul style="padding-left:20px;">${inPacks.map((p) => `<li style="margin-bottom:6px;"><a href="/skills/${e(p.slug)}" style="color:var(--accent);font-weight:700;">${e(p.title)}</a> - <span style="color:var(--muted);">${e(p.tagline)}</span></li>`).join("")}</ul>`
     : "";
 
   const methodColor = tool.method === "GET" ? "var(--green)" : "var(--accent)";
 
+  // The H1 clamp: tool names run from 3 chars ("hex") to 50+, and this H1's
+  // width shrinks continuously as the viewport narrows (single-column, no grid
+  // breakpoint to reserve a worst case against), so a fixed min-height would
+  // waste space at in-between widths or still miss the narrowest ones. A fixed
+  // 2-line box makes the height deterministic at every width; the few long
+  // names that truncate keep the full text in the title attribute and the
+  // page <title>. A JS comment, not a CSS one: the CSS block is served.
   const TOOL_PAGE_CSS = `
   .tp-wrap { max-width:1180px; margin:0 auto; padding:56px 30px; }
   .tp-crumb { font-family:var(--font-mono); font-size:13px; color:var(--faint); margin-bottom:18px; }
   .tp-crumb a { color:var(--accent); text-decoration:none; }
-  /* Tool names range from 3 chars ("hex") to 50+ ("EDGAR XBRL company-concept
-     (one tag, full history)") across 530 tools, and this H1's width shrinks
-     continuously as the viewport narrows (single-column layout, no grid
-     breakpoint to hook a "reserve the worst case" fix to like the per-chain
-     marketplace pages use) - so unlike those pages, a fixed min-height would
-     either waste a lot of space at in-between widths or still not cover the
-     true worst case at the narrowest ones. Capping to a fixed 2-line box
-     instead makes the height deterministic (max 2 lines) at EVERY viewport
-     width regardless of name length - only the small number of genuinely
-     long outlier names ever get visually truncated, and only at narrower
-     widths where 2 lines isn't enough; the full name is preserved via the
-     title attribute below and is always the actual page <title>. */
   .tp-h1 { font-family:var(--font-body); font-weight:800; font-size:38px; line-height:1; letter-spacing:-.02em; margin-bottom:10px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; text-overflow:ellipsis; }
   .tp-badge { display:inline-block; background:var(--surface); color:var(--on-dark); font-family:var(--font-mono); font-size:13px; padding:8px 16px; margin:8px 0 6px; }
-  .tp-sub { color:var(--muted); font-size:16px; line-height:1.6; max-width:720px; }
+  .tp-sub { color:var(--muted); font-size:16px; line-height:1.6; max-width:760px; }
+  .tp-lead { color:var(--ink); font-size:17px; line-height:1.6; max-width:760px; margin:14px 0 6px; }
+  .tp-sub code, .tp-lead code, .tp-facts code { background:var(--card); border:1px solid var(--hairline); font-family:var(--font-mono); padding:1px 5px; font-size:.86em; }
   .tp-h2 { font-weight:800; font-size:22px; margin:40px 0 10px; letter-spacing:-.01em; }
   .tp-table { border-collapse:collapse; width:100%; font-size:14px; }
   .tp-table td, .tp-table th { border:1px solid var(--hairline); padding:10px 12px; text-align:left; vertical-align:top; }
   .tp-table th { background:var(--card); font-weight:700; }
-  .tp-pre { background:var(--surface); color:var(--on-dark); font-family:var(--font-mono); font-size:13px; line-height:1.6; padding:18px 20px; overflow-x:auto; border:none; }
+  .tp-tw { overflow-x:auto; }
+  .tp-pre { background:var(--surface); color:var(--on-dark); font-family:var(--font-mono); font-size:13px; line-height:1.6; padding:18px 20px; overflow-x:auto; border:none; white-space:pre; }
   .tp-grid { display:grid; gap:14px; margin:20px 0; }
   @media (min-width:640px){ .tp-grid { grid-template-columns:repeat(3,1fr); } }
+  .tp-card { background:var(--card); border:1px solid var(--hairline); padding:18px 20px; display:flex; flex-direction:column; gap:8px; }
   .tp-free { display:inline-block; background:var(--green); color:#08130b; font-weight:700; font-size:11px; letter-spacing:.02em; padding:2px 8px; font-family:var(--font-mono); vertical-align:middle; }
-  .tp-callout { background:var(--card); border:1px solid var(--hairline); padding:16px 20px; margin:18px 0; font-size:15px; }
-  .tp-callout b { color:var(--accent); }
+  .tp-facts { color:var(--muted); font-size:15px; line-height:1.65; max-width:820px; padding-left:20px; }
+  .tp-facts li { margin-bottom:6px; }
+  .tp-meta { color:var(--faint); font-size:13px; font-family:var(--font-mono); margin-top:10px; }
   `;
 
   const body = `<div class="tp-wrap">
-  <div class="tp-crumb"><a href="/">Agent402</a> / <a href="/tools">tools</a> / ${e(tool.slug)}</div>
+  <nav class="tp-crumb" aria-label="Breadcrumb"><a href="/">Home</a> / <a href="/tools">Tools</a> / <a href="${e(catHref)}">${e(catLabel)}</a> / ${e(tool.name)}</nav>
   <h1 class="tp-h1" title="${e(tool.name)}">${e(tool.name)}</h1>
   <div class="tp-badge">${
     computePayable
-      ? `<span class="tp-free">FREE</span> <span style="color:var(--dk-muted);">with proof-of-work</span> · <span style="color:var(--dk-muted2);">or ${tool.price} in USDC</span>`
-      : `<span style="color:var(--on-dark);">${tool.price} per call</span> · <span style="color:var(--dk-muted);">USDC via x402</span>`
-  } · <code style="color:${methodColor};background:transparent;font-size:13px;">${tool.method}</code> <code style="color:var(--dk-muted2);background:transparent;font-size:13px;">${e(tool.path)}</code>${
-    cacheTtl ? ` · <span style="color:var(--dk-muted);" title="Server caches identical responses for ${e(fmtTtl(cacheTtl))}. Repeated calls return X-Cache: hit and don't re-hit the upstream.">Cached ${e(fmtTtl(cacheTtl))}</span>` : ""
+      ? `<span class="tp-free">FREE</span> <span style="color:var(--dk-muted);">with proof-of-work</span> · <span style="color:var(--dk-muted2);">or ${e(tool.price)} in USDC</span>`
+      : `<span style="color:var(--on-dark);">${e(pw.long)}</span> · <span style="color:var(--dk-muted);">USDC via x402</span>`
+  } · <code style="color:${methodColor};background:transparent;font-size:13px;">${e(tool.method)}</code> <code style="color:var(--dk-muted2);background:transparent;font-size:13px;">${e(tool.path)}</code>${
+    cacheTtl ? ` · <span style="color:var(--dk-muted);" title="Server caches identical responses for ${e(fmtTtl(cacheTtl))}.">Cached ${e(fmtTtl(cacheTtl))}</span>` : ""
   }</div>
-  <p class="tp-sub">${e(tool.description)}</p>
+  <p class="tp-lead">${summary}</p>
+  ${restOfDescription ? `<p class="tp-sub">${e(restOfDescription)}</p>` : ""}
+  <p class="tp-meta">Category: <a href="${e(catHref)}" style="color:var(--accent);">${e(catLabel)}</a>${tagsLine ? ` · Tags: ${tagsLine}` : ""}${aliases.length ? ` · Also found as: ${aliases.slice(0, 6).map((a) => `<code>${e(a)}</code>`).join(" ")}` : ""}${isPack ? ` · <a href="/skills/${e(packSlug)}" style="color:var(--accent);">Pack overview</a>` : ""}</p>
   <p style="margin:16px 0 0;"><a class="ml-cta" href="/playground?slug=${e(tool.slug)}" style="display:inline-block;background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:13px;text-decoration:none;padding:11px 16px;">TRY IN PLAYGROUND →</a></p>
 
-  <h2 class="tp-h2">Input</h2>
-  ${schemaRows ? `<table class="tp-table"><tr><th>Field</th><th>Type</th><th>Description</th></tr>${schemaRows}</table>` : `<p class="tp-sub">No parameters.</p>`}
+  <h2 class="tp-h2">Parameters</h2>
+  ${paramRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>${paramRows}</table></div>` : `<p class="tp-sub">${e(tool.name)} takes no parameters.</p>`}
 
-  <h2 class="tp-h2">Example output</h2>
-  <pre class="tp-pre">${e(JSON.stringify(tool.discovery?.output?.example ?? {}, null, 2))}</pre>
+  <h2 class="tp-h2">Example request</h2>
+  <pre class="tp-pre">${e(curlExample(baseUrl, tool))}</pre>
+  <p class="tp-sub">Without payment this returns <code>HTTP 402 Payment Required</code> with the exact price for ${e(tool.slug)}; any x402 v2${orMpp} client pays it and retries.</p>
 
-  <h2 class="tp-h2">Try it - see the 402 challenge (free)</h2>
-  <pre class="tp-pre">${e(exampleCall(baseUrl, tool))}</pre>
-  <p class="tp-sub">The response is <code style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:2px 6px;font-size:13px;">HTTP 402 Payment Required</code> with exact payment requirements. Any x402 v2 client pays automatically and retries:</p>
+  <h2 class="tp-h2">Example response</h2>
+  ${binaryTypes
+    ? `<p class="tp-sub">A 200 carries ${binaryPhrase}: the file itself.</p>`
+    : `<pre class="tp-pre">${e(JSON.stringify(example ?? {}, null, 2))}</pre>`}
+  ${respRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Field</th><th>Type</th><th>Always present</th><th>In the example</th></tr>${respRows}</table></div>` : ""}
+
+  <h2 class="tp-h2">From an MCP client</h2>
+  <pre class="tp-pre">catalog.call ${e(mcpArgs)}</pre>
+  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp</code>.</p>
+
+  <h2 class="tp-h2">Errors and behavior</h2>
+  <ul class="tp-facts">${facts.map((f) => `<li>${f}</li>`).join("\n")}</ul>
 
   <h2 class="tp-h2">Paid call (JavaScript agent)</h2>
-  <pre class="tp-pre">import { wrapFetchWithPayment } from "@x402/fetch";
+  <pre class="tp-pre">${e(`import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
-import { metaTitle, metaDescription } from "./seo-meta.js";
 
 const client = new x402Client();
-client.setSpendControls?.(false); // @x402/core 2.23+ refuses anything over $1 or off the pegged-asset list by default; keep your own ceiling in code instead
+client.setSpendControls?.(false); // keep your own spending ceiling in code
 registerExactEvmScheme(client, { signer: privateKeyToAccount(KEY) });
 const payFetch = wrapFetchWithPayment(fetch, client);
 
-${e(payExample(baseUrl, tool))}</pre>
+${payExample(baseUrl, tool)}`)}</pre>
 
   ${
     computePayable
       ? `<h2 class="tp-h2">No wallet? Pay with compute</h2>
-  <p class="tp-sub">This is a pure-CPU tool, so an agent without a wallet can pay with <a href="/api/pow" style="color:var(--accent);">proof-of-work</a> instead of USDC: fetch a challenge, solve the sha256 puzzle (${powDifficulty} leading zero bits - a fraction of a second of CPU, no money, no AI tokens), and resend with the <code style="background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);padding:2px 6px;font-size:13px;">X-Pow-Solution</code> header.</p>
-  <pre class="tp-pre">import { createHash } from "node:crypto";
-const lz = (b) =&gt; { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
-const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${e(tool.slug)}")).json();
+  <p class="tp-sub">Fetch a challenge, solve the sha256 puzzle (${e(String(powDifficulty))} leading zero bits, a fraction of a second of CPU), and resend with the <code>X-Pow-Solution</code> header:</p>
+  <pre class="tp-pre">${e(`import { createHash } from "node:crypto";
+const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
+const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${tool.slug}")).json();
 let n = 0;
-while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) &lt; c.difficulty) n++;
-await fetch("${baseUrl}${tool.path}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(tool.discovery?.input ?? {})})` : ""} });</pre>`
-      : `<div class="tp-callout" style="margin-top:24px"><b>Wallet-only.</b> This tool reaches the network/browser/storage, so it is paid in USDC via x402 (no proof-of-work tier).</div>`
+while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
+await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(input)})` : ""} });`)}</pre>`
+      : ""
   }
 
   ${packsHtml}
 
-  <h2 class="tp-h2">Related tools</h2>
-  <div class="tp-grid">${relatedCards}</div>
+  ${relatedCards ? `<h2 class="tp-h2">Related tools</h2>
+  <div class="tp-grid">${relatedCards}</div>` : ""}
 </div>
 ${ledgerFooterCompact()}`;
 
   return ledgerShell({
     title,
-    description: `${tool.description} ${tool.price} per call via x402 - no API key, no signup.`,
+    description: toolMetaDescription(tool, { computePayable, mpp }),
     canonical,
     baseUrl,
     activePath: "/tools",
@@ -455,7 +739,7 @@ ${ledgerFooterCompact()}`;
     canonical,
     baseUrl,
     activePath: "/tools",
-    jsonLd,
+    jsonLd: [jsonLd, breadcrumbLd(baseUrl, [["Agent402", "/"], ["Tools", "/tools"], [cat.label, `/tools/category/${catKey}`]])],
     extraCss: CAT_CSS,
     body,
   });
@@ -465,29 +749,33 @@ ${ledgerFooterCompact()}`;
 // humans/agents landing on the site. The Q&A pairs are the single source for
 // BOTH the visible HTML and the JSON-LD, so they can't drift apart. Answers may
 // contain simple inline HTML (links) — allowed in FAQPage and rendered as-is.
-const FAQ_ITEMS = [
-  { q: "Do I need an account or API key?", a: 'No. Nothing here has a signup. Payment - USDC, proof-of-work, or a prepaid card-credits key you bought at <a href="/credits">/credits</a> - is the only credential, charged per call.' },
-  { q: "Can I pay by card instead of crypto?", a: 'Yes, three ways: buy a finished report at <a href="/reports">/reports</a> ($2 to $5 by card, refunded if it fails), subscribe to a monitor at <a href="/monitors">/monitors</a> ($5 a month, cancel anytime), or buy prepaid credits at <a href="/credits">/credits</a> and call any tool with <code>Authorization: Bearer a402_…</code> - debited only when a call succeeds. The card price includes payment processing; an agent paying per call over x402 or MPP pays the lower tool price for the same report.' },
+// A function, not a constant: whether credits are on sale is read at render.
+function faqItems() {
+  const creditsOnSale = creditsSalesEnabled();
+  return [
+  { q: "Do I need an account or API key?", a: `No. Nothing here has a signup. Payment - USDC, proof-of-work, or a prepaid card-credits key${creditsOnSale ? ' you bought at <a href="/credits">/credits</a>' : " you already hold"} - is the only credential, charged per call.` },
+  { q: "Can I pay by card instead of crypto?", a: `Yes: buy a finished report at <a href="/reports">/reports</a> ($2 to $5 by card, refunded if it fails) or subscribe to a monitor at <a href="/monitors">/monitors</a> ($5 a month, cancel anytime).${creditsOnSale ? ' You can also buy prepaid credits at <a href="/credits">/credits</a> and call any tool with <code>Authorization: Bearer a402_…</code> - debited only when a call succeeds.' : " Prepaid card credits are not on sale; a credits key bought earlier still pays any tool with <code>Authorization: Bearer a402_…</code>, debited only when a call succeeds."} The card price includes payment processing; an agent paying per call over x402 or MPP pays the lower tool price for the same report.` },
   // DERIVED. Every figure in this answer was typed once and then outlived two
   // repricings: the pack ceiling was over ten times the real one and the card
   // range was quoted below its own floor, which a reader meets at checkout.
-  { q: "What does it cost?", a: `Flat per-call prices from $0.001. Most tools are $0.001 to $0.02; premium AI and media tiers run higher and multi-tool skill packs are ${PACK_PRICE_RANGE.text}; finished report products are ${agentReportPriceRange()?.text || "priced per product"} per call for an agent per report (${cardReportPriceRange(HUMAN_PRODUCTS)?.text || "priced per product"} by card at <a href="/reports">/reports</a>, where the price includes payment processing). Every price is published in <a href="/api/pricing">/api/pricing</a> and quoted exactly in every HTTP 402 response. No subscriptions. The metered model route (<code>/v1/metered</code>) quotes each request from its body before payment and settles what the call used, under that quote.` },
-  { q: "Can I use it without any money or a wallet?", a: "Yes. Most pure-CPU tools accept proof-of-work - a sub-second sha256 puzzle solved by your own CPU - and the hosted MCP connector runs that same set for free (rate-limited)." },
+  { q: "What does it cost?", a: `Flat per-call prices from $0.001. Most tools are $0.001 to $0.02; premium AI and media tiers run higher and multi-tool skill packs are ${PACK_PRICE_RANGE.text}; finished report products are ${agentReportPriceRange()?.text || "priced per product"} per call for an agent per report (${cardReportPriceRange(HUMAN_PRODUCTS)?.text || "priced per product"} by card at <a href="/reports">/reports</a>, where the price includes payment processing). Every price is published in <a href="/api/pricing">/api/pricing</a> and quoted exactly in every HTTP 402 response. Calling a tool needs no subscription. The metered model route (<code>/v1/metered</code>) quotes each request from its body before payment and settles what the call used, under that quote.` },
+  { q: "Can I use it without any money or a wallet?", a: `Yes. Most pure-CPU tools accept proof-of-work - a sha256 puzzle solved by your own CPU (${powCostPhrase()}) - and the hosted MCP connector runs that same set for free (rate-limited).` },
   { q: "What is x402?", a: 'An open HTTP payment standard built on the 402 Payment Required status code, for machine-to-machine pay-per-call payments in stablecoins, with settlement infrastructure from Coinbase. Plain-English explainer: <a href="/what-is-x402">/what-is-x402</a>.' },
   { q: "What is MPP, and does Agent402 support it?", a: 'Yes - every paid endpoint is dual-stack, and now natively via Tempo too. MPP (Machine Payments Protocol, the IETF-track Payment HTTP authentication scheme) carries the pay-per-call handshake through the web&rsquo;s standard auth headers: the 402 carries a <code>WWW-Authenticate: Payment</code> challenge, the client pays via <code>Authorization: Payment</code>, and settled responses return a signed <code>Payment-Receipt</code>. Same URL, same price either way - MPP&rsquo;s evm method settles identically to x402 (same on-chain USDC settlement), while its tempo method settles natively via Tempo&rsquo;s own relay, a genuinely separate mechanism. How the two compare: <a href="/what-is-x402">/what-is-x402</a>; the full MPP explainer: <a href="/what-is-mpp">/what-is-mpp</a>.' },
   { q: "Which blockchain and asset does it use?", a: `${RAILS_PAREN}. The buyer needs only the stablecoin - gas is sponsored by the facilitator on EVM chains.` },
-  { q: "Does using this spend my AI tokens?", a: "No. Not your tokens, ever: you never hand us a model key, and a model we run is billed to us and priced into the call. Most of the catalog is deterministic code (parsers, hashes, math, a real browser) with no model in its path. The ones that do run a model are named: the /v1 gateway tiers, the report products, and the image, speech, transcription, embedding and AI-answer tools. Proof-of-work spends your CPU; x402 spends USDC." },
+  { q: "Does using this spend my AI tokens?", a: "No. Not your tokens, ever: you never hand us a model key, and a model we run is billed to us and priced into the call. Most of the catalog is deterministic code (parsers, hashes, math, a real browser) with no model in its path. The ones that do run a model are named: the /v1 gateway tiers, the report products, Decide (<code>/api/decide</code>), the judgment model the Smart Order Router uses to pick among shortlisted tools, and the image, speech, transcription, embedding and AI-answer tools. Proof-of-work spends your CPU; x402 spends USDC." },
   { q: "Is there an OpenAI-compatible endpoint?", a: 'Yes - <code>/v1</code> is a pay-per-call OpenAI-wire LLM gateway: point any OpenAI SDK at <code>base_url https://agent402.tools/v1</code> for chat (five quality tiers, model-optional auto-routing), embeddings, and image generation. No API key, no signup - settle in USDC over x402, same as every other tool. See <a href="/pricing">/pricing</a> for the tier breakdown.' },
-  { q: "Is my data stored?", a: 'Tool inputs are processed in memory and not persisted - except the memory tools, whose purpose is storage (wallet-keyed, owner-deletable, with optional TTL). Full policy: <a href="/privacy">/privacy</a>.' },
-  { q: "How do I know the service is honest?", a: "It is fully open source; CI re-tests every endpoint against its own documented example before each deploy; and revenue settles on-chain to agent402.base.eth (the named public receiving wallet), auditable by anyone on Basescan." },
+  { q: "Is my data stored?", a: 'Tool inputs are processed in memory to compute the response. The memory tools store data by design (wallet-keyed, owner-deletable, with optional TTL). An input is otherwise kept only in the cases the privacy policy lists, such as short-lived response caches, catalog searches that find no tool, decisions bought on /api/decide (30 days), and the feedback you leave on a paid call. Full policy: <a href="/privacy">/privacy</a>.' },
+  { q: "How do I know the service is honest?", a: "It is fully open source; CI re-tests every non-metered tool against its own documented example before each deploy (the metered ones - LLM tiers, report products, search and the tools that need a third-party key - are excluded so CI never spends upstream); and revenue settles on-chain to agent402.base.eth (the named public receiving wallet), auditable by anyone on Basescan." },
   { q: "What happens if a tool fails after I pay?", a: "You are not charged. Payment settles only for a successful (under-400) response, so an error cancels settlement and no money moves. On top of that guarantee, anything which can't be served reliably is removed from the catalog rather than left to fail, and failure rates are watched by CI and a 15-minute production heartbeat." },
   { q: "Is Agent402 self-hostable and open source?", a: 'Yes - the server is open source under the AGPL-3.0 license (the client SDK, MCP connector, and tollbooth are MIT). Clone the repo and run it yourself for free, with or without payments enabled. It also ships agent402-tollbooth, an open-source pay-per-crawl gate for charging AI crawlers on your own site.' },
-  { q: "Can I find tools on other x402 sellers from here?", a: 'Yes. Agent402 is also an x402 Index + Smart Order Router: <code>POST /api/route</code> ranks tools across every x402 seller we have crawled - the local catalog plus sellers auto-discovered from public registries like the Coinbase CDP Bazaar, refreshed hourly. It filters out unhealthy sellers and tiebreaks on health then price. Browse the live marketplace at <a href="/marketplace">/marketplace</a> or fetch the JSON snapshot at <a href="/api/index">/api/index</a>. Both surfaces are free.' },
+  { q: "Can I find tools on other x402 sellers from here?", a: `Yes. Agent402 is also an x402 Index + Smart Order Router: <code>POST /api/route</code> ranks tools across every x402 seller we have crawled - the local catalog plus sellers auto-discovered from public registries like the Coinbase CDP Bazaar, which are re-read ${discoveryIntervalLabel()}, with every known seller re-probed ${crawlIntervalLabel()}. Sellers whose recent crawls errored are filtered out. ${routerRankingSentence()} Browse the live marketplace at <a href="/marketplace">/marketplace</a> or fetch the index as JSON at <a href="/api/index">/api/index</a>, which is paginated - one page at a time, with <code>?seller=&lt;host&gt;</code> for a single origin. Both surfaces are free.` },
   { q: "How do I list my own API?", a: 'For free, three ways: your origin is auto-discovered from public x402 registries (Coinbase CDP Bazaar, GoPlausible) once it&rsquo;s live and settling; paste it on <a href="/sell">/sell</a> for an immediate probe; or call <code>POST /api/index/register</code> directly. A listed seller is routable by the Smart Order Router and ranked on <a href="/leaderboard">/leaderboard</a> by real on-chain USDC volume - 0% take, settlement lands straight in your wallet.' },
-  { q: "How do I see which x402 sellers are most used?", a: '<code>GET <a href="/api/leaderboard">/api/leaderboard</a></code> returns the live on-chain ranking of every x402 seller by Base USDC settled volume - callsSettled, totalUsd, and uniqueBuyers per seller. The pipeline walks every page of the Coinbase CDP Bazaar discovery endpoint, queries <code>eth_getLogs</code> on Base USDC for each seller&rsquo;s payTo, filters per-call settlements within a $0.50 ceiling (larger inbound is funding/swaps, not buys), and aggregates. The snapshot refreshes hourly server-side. Free, like <code>/api/find</code> and <code>/api/route</code>. Use <code>?include=external</code> to exclude Agent402 itself and rank only the rest of the ecosystem.' },
-  { q: "How does the Smart Order Router decide which seller to route to?", a: "It scores tools by lexical match against your query, then ranks by seller health (computed from the last five crawl outcomes), then by price. Sellers whose recent crawls errored are excluded entirely - a buyer routed to a dead seller wastes money. Brand-new sellers with no history yet are still routable: benefit of the doubt for newcomers." },
-  { q: "Who runs Agent402?", a: 'Havok Holdings LLC - a public, contactable maintainer reachable at <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>, on <a href="https://github.com/MikeyPetrillo/Agent402">GitHub</a>, and on <a href="https://x.com/Agent402Tools">X</a>.' },
-];
+  { q: "How do I see which x402 sellers are most used?", a: '<code>GET <a href="/api/leaderboard">/api/leaderboard</a></code> returns the <b>head</b> of the live on-chain ranking of x402 sellers by Base USDC settled volume - callsSettled, totalUsd, and uniqueBuyers per seller. It is a top-N slice, not the whole board: 25 rows by default, up to 50 with <code>?top=N</code>, and the response carries <code>totalSellers</code> for how many are ranked in all, so a seller absent from the rows you were served may still be ranked below them. The pipeline walks every page of the Coinbase CDP Bazaar discovery endpoint, queries <code>eth_getLogs</code> on Base USDC for each seller&rsquo;s payTo, counts a transfer that matches a price the seller publishes and otherwise holds it to the per-call ceiling the response reports as <code>maxCallUsd</code> (larger inbound is funding/swaps, not buys), and aggregates over the window the response reports as <code>windowServed</code>. The snapshot refreshes hourly server-side. Free, like <code>/api/find</code> and <code>/api/route</code>. Use <code>?include=external</code> to exclude Agent402 itself and rank only the rest of the ecosystem.' },
+  { q: "How does the Smart Order Router decide which seller to route to?", a: `${routerRankingSentence()} Seller health is computed from the last five crawl outcomes. If none of them does, route-and-execute refuses before anything is paid. Sellers whose recent crawls errored are excluded entirely - a buyer routed to a dead seller wastes money. Brand-new sellers with no history yet are still routable: benefit of the doubt for newcomers.` },
+  { q: "Who runs Agent402?", a: `Havok Holdings LLC - a public, contactable maintainer reachable at <a href="mailto:mike@agent402.tools">mike@agent402.tools</a>, on <a href="${REPO_URL}">GitHub</a>, and on <a href="https://x.com/Agent402Tools">X</a>.` },
+  ];
+}
 
 export function faqPage(baseUrl) {
   const e = ledgerEsc;
@@ -495,6 +783,7 @@ export function faqPage(baseUrl) {
   const title = "Agent402 FAQ - x402 + MPP + MCP server for AI agents";
   const description =
     `Frequently asked questions about Agent402: pricing, proof-of-work, x402 and ${RAILS_SHORT}, the OpenAI-compatible /v1 gateway, self-serve listing, MCP, data handling, and self-hosting the open-source server.`;
+  const FAQ_ITEMS = faqItems();
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "FAQPage",
@@ -546,29 +835,58 @@ ${ledgerFooterCompact()}`;
   });
 }
 
+// Scalar types a GET query parameter is published with as declared. Everything
+// else (object, array) is documented as a string, because that is what a query
+// string carries. Only "number" passed through before, so an input schema
+// declaring "integer" or "boolean" was published as a string beside a numeric
+// or boolean `example` - an example that does not validate against the type the
+// same operation declares, on the surface a code generator reads.
+const QUERY_PARAM_TYPES = new Set(["number", "integer", "boolean"]);
+
 export function openapiSpec(baseUrl, catalog) {
   const paths = {};
+  // MPP start-here set (src/mpp-flagship.js), already filtered to routes the
+  // 402 offers tempo on. Marked per operation and indexed at the top level.
+  const mppFlagship = mppFlagshipRows(catalog);
+  const mppFlagshipBySlug = new Map(mppFlagship.map((r) => [r.slug, r]));
   for (const tool of toolList(catalog)) {
     const { method, path, discovery } = tool;
+    // Every MPP offer the live 402 makes on this route, in the order it lists
+    // them (tempo per currency, evm per chain, stripe) - read from the same
+    // predicates and env the 402 middlewares read, so the document never
+    // promises a method the 402 withholds (identity-bound and long-running
+    // routes get no tempo; evm only on MPP_CHALLENGE_NETWORKS rails that are
+    // also accepted; stripe only at or above the card minimum; nothing when a
+    // method is switched off). The prose clause and x-payment-info both read it.
+    const toolPriceUsd = Number(String(tool.price ?? "").replace(/[^0-9.]/g, "")) || 0;
+    const mppOffers = mppOffersFor({ priceUsd: toolPriceUsd, identityBound: tool.identityBound, longRunning: tool.longRunning });
+    const mppRails = mppRailsPhrase(mppOffers);
     const op = {
       operationId: `${tool.slug}${method === "GET" ? "Get" : ""}`,
-      summary: `${tool.name} (${tool.price}/call via x402)`,
-      description: `${tool.description}\n\nPrice: ${tool.price} per call, paid in ${RAILS_OR} via the x402 protocol. Unpaid requests receive HTTP 402 with payment requirements; any x402 v2 client can pay and retry automatically. Docs: ${baseUrl}/tools/${tool.slug}`,
+      summary: `${tool.name} (${tool.quoteRange ? `from ${tool.price}` : tool.price}/call via x402${mppRails ? " or MPP" : ""})`,
+      // A route that can quote MORE than its list price for some bodies says so
+      // here, in the same breath as the number. `x-price` stays the list price
+      // (it is what this route charges for the models it serves, and every
+      // other surface agrees with it); the sentence is what keeps the number
+      // from reading as a ceiling it is not.
+      // The 402 walkthrough lives ONCE in info.x-guidance; repeating it on
+      // every operation was ~20% of a 2 MB document for no new information.
+      description: `${tool.description}\n\nPrice: ${typeof tool.quote === "function" ? `quoted per request from the body, from ${tool.price}` : `${tool.price} per call`}, over x402 (${railsOrFor(tool)})${mppRails ? ` or MPP (${mppRails})` : ""}.${typeof tool.tierQuote === "function" ? ` ${PRICED_BY_MODEL_NOTE}` : ""} Docs: ${baseUrl}/tools/${tool.slug}`,
       tags: [tool.category],
       responses: {
         200: {
           description: "Success",
-          content: {
-            [tool.mimeType ?? "application/json"]:
-              tool.mimeType && tool.mimeType !== "application/json"
-                ? { schema: { type: "string", format: "binary" } }
-                : { schema: responseSchemaFor(path, discovery?.output?.example), example: discovery?.output?.example ?? {} },
-          },
+          // A binary tool answers raw bytes (one content type per format it
+          // can produce), never the JSON note its discovery example carries.
+          content: binaryTypesOf(tool)
+            ? Object.fromEntries(binaryTypesOf(tool).map((t) => [t, { schema: { type: "string", format: "binary" } }]))
+            : { "application/json": { schema: responseSchemaFor(path, discovery?.output?.example), example: discovery?.output?.example ?? {} } },
         },
-        402: { description: "Payment Required - x402 payment requirements in the response body/headers" },
+        402: { description: "Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment)" },
         400: { description: "Invalid input" },
       },
       "x-price": tool.price,
+      ...(mppFlagshipBySlug.has(tool.slug) ? { "x-mpp-flagship": { order: mppFlagshipBySlug.get(tool.slug).order, why: mppFlagshipBySlug.get(tool.slug).why } } : {}),
       "x-payment-protocol": "x402",
       // ONE x-payment-info object serves two advisory readers, each keyed on
       // its own fields (extra keys are tolerated by both):
@@ -581,59 +899,37 @@ export function openapiSpec(baseUrl, catalog) {
       //     what actually answers MPP's evm/charge wire, and src/mpp-tempo.js
       //     the tempo one.
       "x-payment-info": (() => {
-        const priceUsd = Number(String(tool.price ?? "").replace(/[^0-9.]/g, "")) || 0;
-        // Tempo is a SECOND, independent MPP method (native TIP-1034/TIP-20
-        // via Tempo's own relay, not x402-settled) — advertised here only
-        // when actually enabled, same "never advertise what we can't settle"
-        // rule mintTempoChallenge() itself enforces.
-        const tempo = tempoDiscoveryInfo();
-        // Stripe cards-over-MPP (stripe/charge via SPT): a THIRD MPP method,
-        // advertised ONLY when the gate is live AND the route clears the $0.50
-        // SPT card minimum — same "never advertise what we can't settle" rule.
-        // Dormant (no keys) -> null -> no stripe offer on any operation.
-        const stripe = stripeDiscoveryInfo();
-        const stripeOffered = stripe && priceUsd >= stripe.minUsd;
+        const priceUsd = toolPriceUsd;
+        // Per-request-priced routes (metered, priced by model) publish their
+        // range, never the catalog floor as if it were the price.
+        const range = tool.quoteRange || null;
+        const fmtUsd = (n) => String(Number(n.toFixed(6)));
+        // The route's MPP offers, computed once above from the 402's own predicates.
+        const mpp = mppOffers;
+        const firstOf = (m) => mpp.find((o) => o.method === m);
         return {
           // STRUCTURED protocol objects, not bare strings: @agentcash/discovery
           // (MPPScan's crawler, whose L3 output x402scan consumes) parses
           // structured x-payment-info with zod — an object `price` next to
           // string protocols fails the structured schema AND the legacy
           // fallback, losing both price and protocols. Each mpp entry
-          // requires non-empty method/intent/currency.
+          // requires non-empty method/intent/currency. One entry per METHOD
+          // (its preferred currency); `offers` below carries every currency.
           protocols: [
             { x402: {} },
-            { mpp: { method: "evm", intent: "charge", currency: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" } },
-            ...(tempo ? [{ mpp: { method: "tempo", intent: "charge", currency: tempo.currency } }] : []),
-            ...(stripeOffered ? [{ mpp: { method: "stripe", intent: "charge", currency: "usd" } }] : []),
+            ...["tempo", "evm", "stripe"].filter(firstOf).map((m) => ({ mpp: { method: m, intent: "charge", currency: firstOf(m).currency } })),
           ],
-          price: { mode: "fixed", currency: "USD", amount: String(tool.price ?? "").replace(/[^0-9.]/g, "") || "0" },
-          offers: [
-            {
-              intent: "charge",
-              method: "evm",
-              amount: String(Math.round(priceUsd * 1e6)),
-              currency: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-              description: `${tool.price} in USDC on Base (eip155:8453) - MPP evm charge or x402 exact; more chains in the live 402`,
-            },
-            ...(tempo
-              ? [{
-                  intent: "charge",
-                  method: "tempo",
-                  amount: String(Math.round(priceUsd * 10 ** tempo.decimals)),
-                  currency: tempo.currency,
-                  description: `${tool.price} on Tempo (chain 4217) - MPP tempo/charge, settled via Tempo's own relay (not x402)`,
-                }]
-              : []),
-            ...(stripeOffered
-              ? [{
-                  intent: "charge",
-                  method: "stripe",
-                  amount: String(Math.round(priceUsd * 100)),
-                  currency: "usd",
-                  description: `${tool.price} by card (Stripe Shared Payment Token) - MPP stripe/charge, settled to our Stripe balance; $0.50 card minimum`,
-                }]
-              : []),
-          ],
+          price: range
+            ? { mode: "dynamic", currency: "USD", min: fmtUsd(range.minUsd), max: fmtUsd(range.maxUsd) }
+            : { mode: "fixed", currency: "USD", amount: String(tool.price ?? "").replace(/[^0-9.]/g, "") || "0" },
+          offers: mpp.map((o) => ({
+            intent: o.intent,
+            method: o.method,
+            amount: range ? null : String(Math.round(priceUsd * 10 ** o.decimals)),
+            currency: o.currency,
+            ...(o.chainId ? { chainId: o.chainId } : {}),
+            description: o.description,
+          })),
         };
       })(),
     };
@@ -648,14 +944,14 @@ export function openapiSpec(baseUrl, catalog) {
         name: "Idempotency-Key",
         in: "header",
         required: false,
-        description: "Optional client-supplied key. Replaying the same key with the same payment/PoW credential and request body returns the original result instead of charging again.",
+        description: "Same key + same credential + same body replays the paid result without charging again.",
         schema: { type: "string" },
       },
       ...(isComputePayable(tool) ? [{
         name: "X-Pow-Solution",
         in: "header",
         required: false,
-        description: `Free-tier alternative to x402 payment: "<token>:<nonce>" from a solved proof-of-work challenge (GET /api/pow/challenge). Omit when paying via x402.`,
+        description: "Free alternative to paying: <token>:<nonce> from GET /api/pow/challenge.",
         schema: { type: "string" },
       }] : []),
     ];
@@ -666,7 +962,7 @@ export function openapiSpec(baseUrl, catalog) {
           in: "query",
           required: required.includes(name),
           description: schema.description,
-          schema: { type: schema.type === "number" ? "number" : "string" },
+          schema: { type: QUERY_PARAM_TYPES.has(schema.type) ? schema.type : "string" },
           ...(discovery?.input?.[name] !== undefined ? { example: discovery.input[name] } : {}),
         })),
         ...headerParams,
@@ -735,6 +1031,8 @@ export function openapiSpec(baseUrl, catalog) {
       },
     },
   };
+  // Instance-wide MPP offer, read from the same config the 402 middlewares read.
+  const mppShort = mppOfferShortProse();
   return {
     openapi: "3.1.0",
     info: {
@@ -747,14 +1045,19 @@ export function openapiSpec(baseUrl, catalog) {
         // Template literal, not a plain string: this is the spec description
         // every crawler and directory reads, and as a quoted string it shipped
         // a literal ${RAILS_OR} to production.
-        `The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: 500+ machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Every endpoint is paid per call in ${RAILS_OR} over x402, or over MPP (Machine Payments Protocol: USDC on Base/Celo, or USDC.e (and PathUSD) natively on Tempo) - no signup, no API keys - the first request returns HTTP 402 carrying both offers, an x402 or mppx client pays and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
+        `The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: 500+ machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Each priced operation is paid per call over x402 (${RAILS_OR}; identity-bound and long-running operations take EVM chains only, and each operation's description names its own rails)${mppShort ? `, or over MPP (Machine Payments Protocol: ${mppShort})` : ""} - no signup, no API keys - the first request returns HTTP 402 carrying ${mppShort ? "both offers, an x402 or mppx client pays" : "the offer, an x402 client pays"} and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
       // Email doubles as x402scan's ownership-verification signal; it is the
       // same public maintainer contact the /.well-known/x402 manifest names.
       contact: { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: baseUrl },
       // Agent-facing quickstart read by MPP/x402 discovery crawlers
       // (info.x-guidance in MPPScan's audit).
       "x-guidance":
-        "Every /api/* and /v1/* path is pay-per-call: request it unauthenticated, read the 402 (x402 PAYMENT-REQUIRED or MPP WWW-Authenticate: Payment), pay in USDC and retry - or send a prepaid card-credits key as Authorization: Bearer a402_<key> (buy at /credits; balance at GET /api/credits/balance). Find the right tool with GET /api/find?q=<task>; prices at GET /api/pricing; many tools also accept free proof-of-work (GET /api/pow).",
+        // Scoped to the operations that carry x-price: discovery paths such as
+        // /api/find, /api/route, /api/index and /api/pricing are free and are
+        // not pay-per-call. No credits sentence: credit sales are off by
+        // default (CREDITS_SALES), so "buy at /credits" is not an instruction
+        // an agent can follow.
+        "Every operation in this document that carries x-price is pay-per-call: request it unauthenticated, read the 402 (x402 PAYMENT-REQUIRED or MPP WWW-Authenticate: Payment), pay and retry. Find the right tool with GET /api/find?q=<task> and read prices at GET /api/pricing, both free; many tools also accept free proof-of-work (GET /api/pow).",
     },
     servers: [{ url: baseUrl }],
     // These exist ONLY so the openapi-resolve-refs tool's example (which
@@ -772,7 +1075,9 @@ export function openapiSpec(baseUrl, catalog) {
       securitySchemes: {
         x402: { type: "apiKey", in: "header", name: "PAYMENT-SIGNATURE", description: "x402 v2 payment payload (USDC, EIP-3009 authorization) - answer to the 402's PAYMENT-REQUIRED header." },
         mpp: { type: "http", scheme: "Payment", description: "MPP (Machine Payments Protocol) credential answering the 402's WWW-Authenticate: Payment challenge (evm/charge, tempo/charge, stripe/charge)." },
-        creditsKey: { type: "http", scheme: "bearer", bearerFormat: "a402_<key>", description: "Prepaid card credits key from /credits - the list price is held before the call and debited only on a 200." },
+        // Purchase is offered only while credits are on sale (CREDITS_SALES);
+        // a key already issued keeps working either way.
+        creditsKey: { type: "http", scheme: "bearer", bearerFormat: "a402_<key>", description: `Prepaid card credits key (Authorization: Bearer a402_<key>), accepted on any paid operation except the wallet-identity-bound ones. The list price is held before the call and debited only on a 200; read the remaining balance at GET /api/credits/balance with the same header.${creditsSalesEnabled() ? " New keys are sold at /credits." : " New credits are not on sale; a key already issued keeps working."}` },
       },
     },
     // MPP discovery (paymentauth.org draft-payment-discovery) service-level
@@ -792,6 +1097,9 @@ export function openapiSpec(baseUrl, catalog) {
     paths,
     // Top-level extension so OpenAPI consumers can enumerate workflows without
     // scanning paths. Same `promptName == slug` contract as the other surfaces.
+    // MPP start here: fast, low-priced routes that offer the tempo challenge,
+    // in the order a new MPP client might try them.
+    "x-mpp-flagship": mppFlagship.map((r) => ({ order: r.order, slug: r.slug, method: r.method, path: r.path, price: r.price, why: r.why })),
     "x-skill-packs": SKILL_PACKS.map((p) => ({
       slug: p.slug,
       title: p.title,

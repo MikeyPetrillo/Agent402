@@ -163,6 +163,40 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
      "the old literal cannot come back while a dearer tool exists");
 }
 
+// --- body prices on /, /pricing and /use-cases come from the catalog --------
+// The homepage typed "POST /v1/dossier $0.55" against an $0.85 route, /pricing
+// typed render at $0.02 against $0.01 and payments "from $0.002" against $0.001,
+// and every cost line on /use-cases had drifted. Rendered here against a catalog
+// of deliberately odd prices: a typed figure cannot match them by coincidence.
+{
+  const { ledgerHomePage } = await import("../src/ledger-home.js");
+  const { ledgerPricingPage } = await import("../src/ledger-pricing.js");
+  const { useCasesPage, useCaseCost } = await import("../src/use-cases.js");
+  const odd = {
+    "POST /v1/dossier": { slug: "dossier", price: "$9.97", category: "research" },
+    "POST /api/route/execute": { slug: "route-execute", price: "$0.077", category: "agent" },
+    "GET /api/bestsellers": { slug: "bestsellers", price: "$0.0071", category: "x402" },
+    "POST /api/render": { slug: "render", price: "$0.033", category: "web" },
+    "POST /api/screenshot": { slug: "screenshot", price: "$0.044", category: "web" },
+    "POST /api/extract": { slug: "extract", price: "$0.055", category: "web" },
+    "POST /api/x402-quote": { slug: "x402-quote", price: "$0.006", category: "payments" },
+    "POST /api/memory-write": { slug: "memory-write", price: "$0.009", category: "memory" },
+  };
+  const home = ledgerHomePage("https://agent402.tools", odd, {}, null, [], {});
+  ok(/POST \/v1\/dossier<\/span><span[^>]*>\$9\.97</.test(home), "the homepage dossier row states the catalog price");
+  ok(/POST \/api\/route\/execute<\/span><span[^>]*>\$0\.077 \+ seller</.test(home), "...and the route-execute row");
+  ok(home.includes("GET /api/bestsellers · $0.0071"), "...and the bestsellers kicker");
+  const pricing = ledgerPricingPage("https://agent402.tools", odd);
+  ok(pricing.includes("from $0.033"), "the /pricing browser row is the cheaper of render and screenshot, from the catalog");
+  ok(pricing.includes("$0.055") && pricing.includes("$0.006") && pricing.includes("$0.009"), "...and extract, payments and memory read from the catalog");
+  ok(!/>\$0\.02</.test(pricing) && !/from \$0\.002</.test(pricing), "no typed row figure survives");
+  const uc = useCasesPage("https://agent402.tools", odd);
+  const expected = useCaseCost({ calls: [["render", 20], ["extract", 20], ["memory-write", 20]], per: "per day" }, odd);
+  ok(expected && expected.startsWith("$1.94 per day"), `the use-case cost is summed from catalog prices (${expected})`);
+  ok(uc.includes(expected.slice(0, 14)), "and the page renders that computed cost");
+  ok(!/~\$/.test(uc), "no typed approximate cost line is left on /use-cases");
+}
+
 // --- payment.info's OTHER price field ---------------------------------------
 // The 2026-09-13 fix derived this tool's `reports` line and left the `prices`
 // line beside it hand-typed, where it had kept "skill packs up to $1.50"
@@ -208,7 +242,14 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
     }
     return out;
   };
-  const files = [...walk("src"), ...walk("wiki"), ...walk("docs"), ...walk("mcp"), ...walk("client"), "README.md"];
+  // Every tracked text file, not a folder list: a folder list missed
+  // skills/openclaw/agent402/SKILL.md and .cursor-plugin/plugin.json, both
+  // public and both stale (2026-09-26). What is left out is named.
+  const { execFileSync } = await import("node:child_process");
+  const NOT_SURFACES = [/^scripts\/(?!.*card.*\.js$)/, /^\.github\//, /^CLAUDE\.md$/, /(^|\/)CHANGELOG\.md$/, /(^|\/)package-lock\.json$/, /\.test\.js$|(^|\/)test[^/]*\.js$/];
+  const files = execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+    .split("\0").filter((f) => f && /\.(?:js|mjs|md|json|toml|txt|ya?ml|html)$/.test(f) && !NOT_SURFACES.some((re) => re.test(f)));
+  void walk;
   ok(files.length >= 200, `sweeping ${files.length} surfaces for retired price figures`);
 
   const { PACK_PRICE_RANGE } = await import("../src/skills.js");
@@ -218,7 +259,22 @@ for (const [name, html] of [["/reports", humanReportsPage("https://agent402.tool
     ["$0.20–$1.10", "the agent report ladder is $0.60-$2.00; derive it from REPORT_TIERS"],
     ["$1 to $2 by card", "the card ladder is $2 to $5; derive it from HUMAN_PRODUCTS"],
     ["$0.55 (`route-execute-max`)", "route-execute-pro is $3.30, so the routing tiers do not top out there"],
+    ["200+ pure-CPU", "the proof-of-work tier is the eligible list at /api/pow (166 tools on 2026-09-26); do not type a count"],
+    ["Over\n200 of the 500+ tools", "the proof-of-work tier is the eligible list at /api/pow; do not type a count"],
+    ["100 skill packs", "the pack count is live on /skills; the public copy says 70+"],
+    ["Base + 4 more chains", "the payment rails are the networks in /api/pricing, not a typed count"],
+    ["$0.003 to $0.119", `a retired pack range; the packs run ${PACK_PRICE_RANGE.text} (PACK_PRICE_RANGE)`],
+    ["200+ deterministic pure-CPU", "the proof-of-work tier is the eligible list at /api/pow; do not type a count"],
+    ["100+ **skill packs**", "the pack count is live on /skills; it was never 100+"],
   ];
+  // A markdown surface cannot derive, so a pack range it does quote must equal
+  // the derived one; a range that drifts again is reported here, not by a buyer.
+  for (const f of files.filter((x) => x.endsWith(".md"))) {
+    const text = (() => { try { return rf(join(root, f), "utf8"); } catch { return ""; } })();
+    for (const m of text.matchAll(/skill packs run (\$[0-9.]+ to \$[0-9.]+)/g)) {
+      ok(m[1] === PACK_PRICE_RANGE.text, `${f} quotes the pack range ${m[1]}, and PACK_PRICE_RANGE is ${PACK_PRICE_RANGE.text}`);
+    }
+  }
   // Control first: the sweep must report a planted figure through this path.
   const scan = (entries) => {
     const hits = [];

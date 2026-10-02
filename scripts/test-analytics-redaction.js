@@ -47,40 +47,20 @@ const populated = () => ({
   timeseries: [{ t: "2026-07-30T00:00:00Z", calls: 400 }],
 });
 
-// --- unauthenticated: reliability stays, volume goes ------------------------
-// The split is deliberate. Error rate and latency are what a buyer needs to
-// decide whether to depend on a tool, and publishing measured reliability is the
-// same argument as /status one level down. Call volume ranked by traffic is
-// demand intelligence and is what the paid bestsellers tool sells.
+// --- unauthenticated: aggregate only (2026-10-01) ---------------------------
+// The per-tool tables used to stay public as rates in alphabetical order. Even
+// then, WHICH tools made the busiest-N cut (and which were failing) was a
+// traffic-based selection, so they are now operator-only in full. Public
+// reliability lives on /status and /api/reliability.
 {
   const out = redactAnalytics(populated(), false);
   const blob = JSON.stringify(out);
-
-  // VOLUME must be gone, in every form. Each raw field is a COUNT, so counts
-  // scale with traffic and would rebuild the ranking on their own.
   ok(!blob.includes("2211") && !blob.includes("1804"), "no per-tool call count survives");
-  ok(out.topTools.every((r) => r.calls === undefined && r.cached === undefined && r.errored === undefined),
-    "no count field survives on any row");
-  // The ORDER is a ranking too: source rows arrive sorted by traffic.
-  const slugs = out.topTools.map((r) => r.slug);
-  ok(JSON.stringify(slugs) === JSON.stringify([...slugs].sort()),
-    `rows are alphabetical, not traffic-ranked (got ${slugs.join(",")})`);
-
-  // RELIABILITY must survive, as rates rather than counts.
-  const search = out.topTools.find((r) => r.slug === "search");
-  ok(Boolean(search), "per-tool rows are still present");
-  ok(typeof search.serverErrorRate === "number" && typeof search.clientErrorRate === "number",
-    "error rates survive as rates");
-  ok(search.p95_ms === 700 && search.p50_ms === 220, "latency percentiles survive untouched");
-  ok(Math.abs(search.cacheRate - 0.4) < 0.001, `cache rate is a true rate (got ${search.cacheRate})`);
-  ok(Array.isArray(out.errorTools) && out.errorTools.length === 1, "the error view survives");
-
-  // Aggregates and the honest disclosure.
+  ok(out.topTools === undefined && out.errorTools === undefined && out.toolsCount === undefined, "no per-tool table or count survives");
+  ok(!blob.includes("transcribe") && !blob.includes("defi-tvl"), "no tool name from the busiest-N selection survives");
   ok(out.totals && out.totals.calls === 9812, "aggregate totals survive redaction");
   ok(Array.isArray(out.timeseries) && out.timeseries.length === 1, "the timeseries survives redaction");
-  ok(out.toolsCount === 2, `a tool count replaces the volume table (got ${out.toolsCount})`);
-  ok(typeof out.perToolNote === "string" && /operator-only/.test(out.perToolNote),
-    "the payload states plainly that volume and ranking are withheld");
+  ok(typeof out.perToolNote === "string" && /operator-only/.test(out.perToolNote), "the payload states plainly that the tables are withheld");
 }
 
 // --- the two responses must actually differ ----------------------------------
@@ -97,8 +77,8 @@ const populated = () => ({
   // a byte-length check would assert the opposite of what it appears to.
   ok(op.includes("2211") && !pub.includes("2211"),
     "the operator payload carries call volume and the public one does not");
-  ok(opObj.topTools[0].calls !== undefined && pubObj.topTools[0].calls === undefined,
-    "the volume field exists only on the operator side");
+  ok(opObj.topTools[0].calls !== undefined && pubObj.topTools === undefined,
+    "the per-tool table exists only on the operator side");
 }
 
 // --- degenerate inputs must not throw or leak --------------------------------
@@ -108,7 +88,7 @@ const populated = () => ({
   ok(redactAnalytics(null, false) === null, "null payload is handled");
   ok(redactAnalytics(undefined, false) === undefined, "undefined payload is handled");
   const partial = redactAnalytics({ ok: true, enabled: true, topTools: [] }, false);
-  ok(Array.isArray(partial.topTools) && partial.topTools.length === 0 && partial.toolsCount === 0, "an empty table stays an empty table");
+  ok(partial.topTools === undefined && partial.enabled === true, "an empty table is withheld like a full one");
 }
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);

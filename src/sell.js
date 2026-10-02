@@ -16,9 +16,22 @@
 // new visual treatment rather than dropped for a static curl example alone.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
-import { RAILS, railKey } from "./rails.js";
+import { RAILS, railKey, RAILS_AMP } from "./rails.js";
+import { crawlIntervalLabel } from "./crawl-cadence.js";
+import { routerRankingSentence } from "./routing-proof.js";
+import { EXTERNAL_CHAIN_BY_NETWORK } from "./tools/route-execute.js";
 
-const REPO = "https://github.com/MikeyPetrillo/Agent402";
+// The chains the router can pay an outside seller on, read from route-execute's
+// own map: it pays on the chain the BUYER paid on, from that chain's spending
+// wallet, and never bridges to a seller's other chain. This page said a router
+// "settles with you on your chain" when a buyer paid on one you do not accept.
+const CHAIN_LABEL = { base: "Base", solana: "Solana", algorand: "Algorand", tempo: "Tempo" };
+const ROUTER_PAY_CHAINS = [...new Set(Object.values(EXTERNAL_CHAIN_BY_NETWORK))].map((c) => CHAIN_LABEL[c] || c);
+const listJoin = (a) => (a.length < 2 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`);
+const ROUTER_CHAIN_SENTENCE = `When the router buys on an agent's behalf it pays the seller on the chain the agent paid on, so it reaches you only on chains you accept; it holds spending wallets for ${listJoin(ROUTER_PAY_CHAINS)}.`;
+
+import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
+const REPO = REPO_URL;
 
 const COSTS = [
   ["listing fee", "$0", "green"],
@@ -45,8 +58,8 @@ const LANES = [
 const REGISTER_STEPS = [
   ["01", "Serve a 402", "Return HTTP 402 Payment Required with your price, asset, network and payTo address on the endpoints you want to charge for. Any x402 middleware does this."],
   ["02", "Register the origin", "One POST to /api/index/register. No account, no review queue, no waiting on us."],
-  ["03", "Get crawled", "The crawler reads your manifest, records your tools and advertised chains, and probes health hourly. Probes are never paid calls."],
-  ["04", "Get routed", "The Smart Order Router ranks you by match score, then rolling health, then price - and sends matching buyer tasks your way."],
+  ["03", "Get crawled", `The crawler reads your manifest at once, records your tools and advertised chains, and re-probes it ${crawlIntervalLabel()}; health is scored from those probes. Probes are never paid calls.`],
+  ["04", "Get routed", `The Smart Order Router resolves a described task to a listing. ${routerRankingSentence()} An accurate description is how you win it.`],
   ["05", "Get paid", "Buyers pay your wallet directly in USDC. Your settled volume shows up on the public on-chain leaderboard."],
 ];
 
@@ -54,7 +67,7 @@ const WHAT_WE_READ = [
   ["manifest", "/.well-known/x402"],
   ["your tools", "route · price · description"],
   ["your chains", "from the 402 challenge"],
-  ["health probe", "hourly, never paid"],
+  ["health probe", `${crawlIntervalLabel()}, never paid`],
 ];
 
 const SURFACES = [
@@ -74,11 +87,11 @@ const COMMITMENTS = [
 
 const FAQS = [
   ["What does it cost to list?", "Nothing. Listing is free, there is no signup and no review queue, and no commission is deducted from your price. Buyers pay your wallet directly and Agent402 never holds seller funds. We earn on the buyer side only, on the spread when a buyer asks the router to execute a call on their behalf."],
-  ["How do agents find my API?", "Four surfaces: the marketplace directory, the per-chain market pages, the Smart Order Router which resolves a described task to a tool, and the public on-chain leaderboard once you have settled volume. The router ranks by match score, then rolling crawl health, then price."],
+  ["How do agents find my API?", `Four surfaces: the marketplace directory, the per-chain market pages, the Smart Order Router which resolves a described task to a tool, and the public on-chain leaderboard once you have settled volume. ${routerRankingSentence()}`],
   ["What if my site is not an API?", "Use agent402-tollbooth - the pay-per-crawl mechanism is explained above under \"Charge the crawlers instead\". It ships as an open MIT middleware for Express, Next.js, Cloudflare Workers, a reverse proxy or WordPress: drop it in front of any site, no rebuild required."],
-  ["Which chains can I get paid on?", "Advertise whichever you support. Agent402 settles across twelve rails: USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar and Algorand, plus USDG on Robinhood Chain. When a buyer pays on a chain you do not accept, the router pays you on your chain and relays the result."],
+  ["Which chains can I get paid on?", `Advertise whichever you support. Agent402 itself accepts ${RAILS.length} rails: ${RAILS_AMP}. ${ROUTER_CHAIN_SENTENCE}`],
   ["How do I know what to charge, or what to build?", "Two paid intelligence tools, both half a cent a read. /api/bestsellers ranks what agents actually pay for across a 500+-tool catalog by distinct buyers, sales, revenue or buyer diversity, with a trend against the previous window. /api/demand-radar ranks what agents asked for and did not find. Neither can be reconstructed from on-chain data: settlements are public, but which tool was bought is not."],
-  ["What happens if my endpoint goes down?", "The hourly probe notices and your rolling health drops, so the router routes around you until you recover. Health is a rolling window rather than a single failure, and new sellers are not punished for having no history yet."],
+  ["What happens if my endpoint goes down?", `The probe that runs ${crawlIntervalLabel()} notices and your rolling health drops, so the router routes around you until you recover. Health is a rolling window rather than a single failure, and new sellers are not punished for having no history yet.`],
 ];
 
 function costRow([label, value, tone]) {
@@ -97,7 +110,7 @@ const formHtml = `
       <input id="reg-origin" type="url" placeholder="https://api.yourdomain.com" style="flex:1;font-family:var(--font-mono);font-size:13px;padding:9px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);">
       <button id="reg-go" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:13px;border:none;padding:9px 16px;cursor:pointer;">SUBMIT</button>
     </div>
-    <div id="reg-out" role="status" aria-live="polite" style="font-family:var(--font-mono);font-size:12.5px;color:var(--muted);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers. Unreachable sellers drop out of routing (never off the roster) until they recover.</div>
+    <div id="reg-out" role="status" aria-live="polite" style="font-family:var(--font-mono);font-size:12.5px;color:var(--muted);margin-top:8px;">Free, no account - we probe your origin's x402 surface and list you if it answers. An app served under a path on a shared host registers with that path (https://host/app/name); its documents are read from under it. Unreachable sellers drop out of routing (never off the roster) until they recover.</div>
     <p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:10px 0 0;">Speak MPP? Register your MPP server on the <a href="/mpp-marketplace#list-api" style="color:var(--muted);">MPP marketplace →</a> (one call, or <code>POST /api/mpp-index/register {"origin", "path"}</code>); dual-stack sellers our x402 crawl already sees answering MPP are picked up automatically.</p>
   </div>
   <script src="/js/reg-form.js"></script>`;
@@ -108,7 +121,7 @@ export function sellPage(baseUrl) {
   const description =
     "List your API on the open x402 index and get paid in USDC per call, straight to your wallet. Free listing, no signup, nothing deducted from your price. Or tollbooth a site so AI crawlers pay per page. See what agents already pay for.";
 
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: [REPO, "https://x.com/Agent402Tools"] };
+  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Sell", item: canonical },
@@ -216,13 +229,14 @@ table{border-collapse:collapse;width:100%}
     <div style="padding:28px;border-right:1px solid var(--hairline);background:var(--card);display:flex;flex-direction:column;">
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:16px;">01 / YOU HAVE AN API</div>
       <h3 style="font-weight:800;font-size:23px;margin:0 0 12px;color:var(--ink);">List it and get routed</h3>
-      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Return a 402 with your price, asset, network and payTo on the endpoints you want to charge for. Register the origin and the crawler reads your manifest on its next hourly pass. From then on the Smart Order Router can send you work, ranked against our own tools on the same terms.</p>
+      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Return a 402 with your price, asset, network and payTo on the endpoints you want to charge for. Register the origin and the crawler reads your manifest at once, then re-probes it ${crawlIntervalLabel()}. From then on the Smart Order Router can send you work, ranked against our own tools on the same terms.</p>
       <pre style="margin:0 0 18px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># what a buyer's agent sees
 </span>HTTP/1.1 402 Payment Required
-x402-price: 0.004
-x402-asset: USDC
-x402-network: eip155:8453
-x402-pay-to: 0xYourWallet&hellip;</pre>
+PAYMENT-REQUIRED: eyJ4NDAyVmVyc2lvbiI6Mi&hellip;
+<span style="color:var(--dk-muted3);"># base64 JSON, decoded:
+</span>{"x402Version":2,"accepts":[{"scheme":"exact",
+  "network":"eip155:8453","amount":"4000",
+  "asset":"0x833589fC&hellip;02913","payTo":"0xYourWallet&hellip;"}]}</pre>
       <a href="#register" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:13px;text-decoration:none;padding:12px 18px;align-self:flex-start;">REGISTER YOUR ORIGIN →</a>
     </div>
     <div style="padding:28px;background:var(--card);display:flex;flex-direction:column;">
@@ -260,7 +274,7 @@ x402-pay-to: 0xYourWallet&hellip;</pre>
   <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">$ POST /api/route</div>
   <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:14px;">
     <h2 style="font-weight:800;font-size:38px;line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);">How buyers reach you.</h2>
-    <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">match score → crawl health → price</span>
+    <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--faint);">match score → judged fit → price</span>
   </div>
   <p style="font-size:16.5px;line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 28px;">Four surfaces, and the router is the one that matters. A buyer describes a task, the router resolves it to a tool, and it does not care whose tool it is. New sellers get the benefit of the doubt on health rather than being buried until they have a track record.</p>
   <div class="sl-scroll" style="border:1px solid var(--hairline);background:var(--card);">
@@ -274,8 +288,8 @@ x402-pay-to: 0xYourWallet&hellip;</pre>
 
 <section style="max-width:1180px;margin:0 auto;padding:60px 30px 0;">
   <div style="font-family:var(--font-mono);font-size:13px;color:var(--accent);margin-bottom:12px;">$ GET /.well-known/x402</div>
-  <h2 style="font-weight:800;font-size:38px;line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--ink);">Get paid on your chain.</h2>
-  <p style="font-size:16.5px;line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 28px;">Advertise whichever rails you support. When a buyer pays on a chain you do not accept, the router settles with you on <em style="color:var(--ink);">your</em> chain and relays the result - so a Solana buyer is not a lost sale for a Base-only seller. Gas is sponsored by the facilitator on EVM chains, so neither side needs the native token.</p>
+  <h2 style="font-weight:800;font-size:38px;line-height:1.02;letter-spacing:-.025em;margin:0 0 16px;color:var(--ink);">Get paid on the chains you accept.</h2>
+  <p style="font-size:16.5px;line-height:1.6;color:var(--muted);max-width:720px;margin:0 0 28px;">Advertise every rail you support: each one is another set of buyers who can pay you directly. ${esc(ROUTER_CHAIN_SENTENCE)} Gas is sponsored by the facilitator on EVM chains, so neither side needs the native token.</p>
   <div style="border:1px solid var(--hairline);background:var(--card);padding:26px;">
     <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:18px;">x402 settlement rails - each links to that chain's marketplace</div>
     <div style="display:flex;flex-wrap:wrap;align-items:center;gap:18px 26px;">${railsHtml}</div>

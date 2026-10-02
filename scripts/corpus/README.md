@@ -6,7 +6,7 @@ refusals), not merely shaped. Tiers are derived from the live catalog, never dec
 
 - **T0** pure-CPU tools: every push, $0.
 - **T1** free public upstreams (SEC, FRED-less macro, openFDA, DefiLlama, Hyperliquid, CoinGecko demo, open-meteo,
-  public RPCs, Kalshi, Polymarket): nightly (`corpus-nightly.yml`), $0, upstream failures reported not fatal.
+  public RPCs, Kalshi): nightly (`corpus-nightly.yml`), $0, upstream failures reported not fatal.
 - **T2** paid upstreams (`METERED_SLUGS`): `--tier 2` by hand with the OpenRouter audit key, cheap links only.
 
 Case shape and the assertion vocabulary are documented at the top of the runner. Rules for writing a case:

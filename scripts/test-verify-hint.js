@@ -2,7 +2,8 @@
 // A rejected payment is answered in the buyer's language (src/verify-hint.js):
 // balance short vs stale authorization, on the 402, with a retry verb. Offline.
 import { unclassifiedPaymentHint } from "../src/payment-reject.js";
-import { hintFor, balanceBucket, noteVerifyFailure, hintForCredential, credentialKeyOf, credentialKeyFromHeader, verifyHintMiddleware, usdcBalanceOnBase, _testResetForTest, _inflightForTest } from "../src/verify-hint.js";
+import { encodeFunctionResult, decodeFunctionData } from "viem";
+import { hintFor, balanceBucket, noteVerifyFailure, hintForCredential, credentialKeyOf, credentialKeyFromHeader, verifyHintMiddleware, usdcBalanceOnBase, _testResetForTest, _inflightForTest, _queuedForTest, _limitsForTest, decodeBalanceMulticall, baseRpcUrls } from "../src/verify-hint.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL: ${m}`); } };
 const PAYER = "0xc59e74ed6386b2a12d892fff2509a6965a0498dc";
@@ -52,14 +53,48 @@ const C2 = cred("0x" + "cc".repeat(32));
 await noteVerifyFailure({ paymentPayload: C2, network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", reason: REVERT, priceUsd: 0.005, now, balanceReader: async () => { reads++; return 1; } });
 ok(reads === 0 && hintForCredential(credentialKeyOf(C2), { now })?.retry === "fresh-authorization", "a non-Base network never reads the Base balance; the hint still says to sign fresh");
 
-// usdcBalanceOnBase: eth_call shape, cache, unreadable -> null
+// usdcBalanceOnBase: one multicall eth_call, cache, unreadable -> null
+const AGG3 = [{ type: "function", name: "aggregate3", stateMutability: "payable",
+  inputs: [{ name: "calls", type: "tuple[]", components: [{ name: "target", type: "address" }, { name: "allowFailure", type: "bool" }, { name: "callData", type: "bytes" }] }],
+  outputs: [{ name: "returnData", type: "tuple[]", components: [{ name: "success", type: "bool" }, { name: "returnData", type: "bytes" }] }] }];
+const MC3 = "0xca11bde05977b3631167028862be2a173976ca11";
+const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+// A stub Base RPC answering aggregate3 the way Multicall3 does: balanceOf per
+// inner call, from a balance table keyed by address (default zero).
+const rpcAnswer = (body, table = {}) => {
+  const { args } = decodeFunctionData({ abi: AGG3, data: body.params[0].data });
+  const result = encodeFunctionResult({ abi: AGG3, functionName: "aggregate3", result: args[0].map((c) => {
+    const who = "0x" + c.callData.slice(-40).toLowerCase();
+    return { success: c.target.toLowerCase() === USDC, returnData: "0x" + BigInt(table[who] ?? 0).toString(16).padStart(64, "0") };
+  }) });
+  return { jsonrpc: "2.0", id: body.id, result };
+};
 _testResetForTest();
 let calls = [];
-const fetchOk = async (url, init) => { calls.push(JSON.parse(init.body)); return { json: async () => ({ jsonrpc: "2.0", id: 1, result: "0x" + (1_250_000).toString(16).padStart(64, "0") }) }; };
-const b1 = await usdcBalanceOnBase(PAYER, { fetchImpl: fetchOk, now });
-const b2 = await usdcBalanceOnBase(PAYER, { fetchImpl: fetchOk, now });
-ok(b1 === 1.25 && b2 === 1.25 && calls.length === 1 && calls[0].method === "eth_call" && calls[0].params[0].to.toLowerCase() === "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" && calls[0].params[0].data === "0x70a08231" + PAYER.slice(2).padStart(64, "0"), "balanceOf(payer) on Base USDC, decoded at 6 decimals, cached for a minute");
-ok((await usdcBalanceOnBase(PAYER, { fetchImpl: async () => { throw new Error("rpc down"); }, now: () => t + 120_000 })) === null, "an RPC failure reads as unknown, never zero");
+const fetchOk = async (url, init) => { const b = JSON.parse(init.body); calls.push(b); return { json: async () => rpcAnswer(b, { [PAYER]: 1_250_000 }) }; };
+const b1 = await usdcBalanceOnBase(PAYER, { fetchImpl: fetchOk, now, rpcUrls: ["https://rpc.test"] });
+const b2 = await usdcBalanceOnBase(PAYER, { fetchImpl: fetchOk, now, rpcUrls: ["https://rpc.test"] });
+const inner = calls[0] && decodeFunctionData({ abi: AGG3, data: calls[0].params[0].data }).args[0];
+ok(b1 === 1.25 && b2 === 1.25 && calls.length === 1 && calls[0].method === "eth_call" && calls[0].params[0].to.toLowerCase() === MC3
+  && inner.length === 1 && inner[0].target.toLowerCase() === USDC && inner[0].callData === "0x70a08231" + PAYER.slice(2).padStart(64, "0"),
+  "balanceOf(payer) on Base USDC through Multicall3, decoded at 6 decimals, cached for a minute");
+ok((await usdcBalanceOnBase(PAYER, { fetchImpl: async () => { throw new Error("rpc down"); }, now: () => t + 120_000, rpcUrls: ["https://rpc.test"] })) === null, "an RPC failure reads as unknown, never zero");
+ok(decodeBalanceMulticall(encodeFunctionResult({ abi: AGG3, functionName: "aggregate3", result: [{ success: false, returnData: "0x" }] }), 1)[0] === null, "a failed inner call reads as unknown, never zero");
+{
+  const urls = baseRpcUrls({ ALCHEMY_API_KEY: "k" });
+  ok(urls[0] === "https://mainnet.base.org" && /alchemy/.test(urls[2]) && urls.length === 3, "RPC order: two public endpoints first, Alchemy last (a forged header must not buy a metered read first)");
+  ok(baseRpcUrls({ ALCHEMY_API_KEY: "k", AGENT402_BASE_RPC: "http://127.0.0.1:1/rpc" }).join() === "http://127.0.0.1:1/rpc", "an explicit AGENT402_BASE_RPC is used alone, so a stubbed boot never reaches a public node");
+  ok(baseRpcUrls({}).length === 2 && baseRpcUrls({})[0] === "https://mainnet.base.org", "with no configuration the read still has a public fallback");
+}
+// Fallback: the first RPC answers a JSON-RPC rate-limit error, the second answers.
+{
+  _testResetForTest();
+  const seen = [];
+  const f = async (url, init) => { seen.push(url); const b = JSON.parse(init.body);
+    return { json: async () => (url === "https://a.test" ? { jsonrpc: "2.0", id: 1, error: { code: -32016, message: "over rate limit" } } : rpcAnswer(b, { [PAYER]: 2_000_000 })) }; };
+  const v = await usdcBalanceOnBase(PAYER, { fetchImpl: f, now: () => Date.now(), rpcUrls: ["https://a.test", "https://b.test"] });
+  ok(v === 2 && seen.join() === "https://a.test,https://b.test", "a rate-limited RPC falls through to the next one inside the same read");
+}
 
 // middleware: merge on a 402 that carries the SAME credential only
 _testResetForTest();
@@ -81,17 +116,76 @@ _testResetForTest();
 const r5 = mkRes(402); mw({ headers: { "payment-signature": H1 } }, r5, () => {}); r5.json({ x402Version: 2 });
 ok(r5.out.hint === undefined, "no remembered failure for this credential -> no hint (never a guess)");
 
-// concurrency bound: the fifth simultaneous balance read answers unknown at once
-_testResetForTest();
-let release; const gate = new Promise((r) => { release = r; });
-const slowFetch = async () => { await gate; return { json: async () => ({ result: "0x0" }) }; };
-const addr = (i) => "0x" + String(i).padStart(40, "0");
-const pending = [1, 2, 3, 4].map((i) => usdcBalanceOnBase(addr(i), { fetchImpl: slowFetch, now: () => Date.now() }));
-const fifthStart = Date.now();
-const fifth = await usdcBalanceOnBase(addr(5), { fetchImpl: slowFetch, now: () => Date.now() });
-ok(fifth === null && Date.now() - fifthStart < 200 && _inflightForTest() === 4, "with four reads in flight the fifth is refused immediately as unknown (never queued behind the RPC)");
-release(); await Promise.all(pending);
-ok(_inflightForTest() === 0, "in-flight count returns to zero after the reads settle");
+// --- a SETTLEMENT refused on our billing quota names the rail, not the wallet -
+// The vendor writes the settle receipt as a PAYMENT-RESPONSE header and then
+// `res.status(402).json({})`; before 2026-09-28 that `{}` was all the buyer got.
+{
+  _testResetForTest();
+  const mkSettled = (receipt) => {
+    const r = mkRes(402);
+    r.getHeader = (k) => (/^payment-response$/i.test(k) && receipt ? Buffer.from(JSON.stringify(receipt)).toString("base64") : undefined);
+    return r;
+  };
+  const ALGO = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
+  const req = { headers: { "payment-signature": H1 } };
+  const q = mkSettled({ success: false, errorReason: "subcent_quota_exceeded", errorMessage: "subcent_quota_exceeded", network: ALGO, transaction: "" });
+  mw(req, q, () => {}); q.json({ altPayment: { protocol: "proof-of-work" } });
+  ok(q.out.reason === "facilitator-quota" && q.out.retry === "other-network" && q.out.network === ALGO, `a quota-refused settlement answers reason facilitator-quota, retry other-network, and the network (got ${JSON.stringify({ reason: q.out.reason, retry: q.out.retry })})`);
+  ok(/temporarily unavailable/i.test(q.out.error) && /Algorand facilitator/.test(q.out.hint) && /not because of your wallet/.test(q.out.hint) && /Nothing was charged/.test(q.out.hint) && /another network/.test(q.out.hint), `the words name the rail as unavailable, clear the wallet, say nothing was charged and point to the other networks (got: ${q.out.hint})`);
+  ok(q.out.altPayment?.protocol === "proof-of-work" && q.headers["Retry-After"] === undefined, "the rest of the body survives, and no Retry-After invites a retry on the same rail");
+  ok(req.__paymentRejectReason === "facilitator-quota", "the paywall rollup records the class");
+  const g = mkSettled({ success: false, errorReason: "free_tier_exhausted", network: "eip155:43114" });
+  mw({ headers: { "payment-signature": H1 } }, g, () => {}); g.json({});
+  ok(g.out.reason === "facilitator-quota" && g.out.network === "eip155:43114", "an EVM facilitator's free_tier_exhausted gets the same answer, naming its network id");
+  // Control: a buyer-side settle failure is NOT relabelled as ours.
+  const f = mkSettled({ success: false, errorReason: "insufficient_funds", network: ALGO });
+  mw({ headers: { "payment-signature": H1 } }, f, () => {}); f.json({});
+  ok(f.out.reason !== "facilitator-quota" && f.out.retry !== "other-network", "a genuine settle failure (insufficient_funds) is never answered as a facilitator quota");
+  const t = mkSettled({ success: false, errorReason: "transaction_failed", errorMessage: "rpc quota exceeded", network: "eip155:43114" });
+  mw({ headers: { "payment-signature": H1 } }, t, () => {}); t.json({});
+  ok(t.out.reason !== "facilitator-quota", "nor is a payment verdict (transaction_failed) whose message happens to mention a quota");
+  _testResetForTest();
+}
+
+// BURST (reproduces 2026-09-28: ~30 distinct zero-balance wallets in one
+// minute, half read "unknown" because the fifth concurrent read was refused).
+// 42 distinct wallets at once now all read, in ONE RPC request.
+{
+  _testResetForTest();
+  const addr = (i) => "0x" + String(i).padStart(40, "0");
+  let requests = 0, concurrent = 0, peak = 0;
+  const f = async (url, init) => { requests++; concurrent++; peak = Math.max(peak, concurrent);
+    await new Promise((r) => setTimeout(r, 30)); concurrent--; const b = JSON.parse(init.body); return { json: async () => rpcAnswer(b) }; };
+  const got = await Promise.all(Array.from({ length: 42 }, (_, i) => usdcBalanceOnBase(addr(i + 1), { fetchImpl: f, now: () => Date.now(), rpcUrls: ["https://rpc.test"] })));
+  ok(got.every((v) => v === 0), `a burst of 42 distinct zero-balance wallets reads every balance as zero (unknown: ${got.filter((v) => v == null).length})`);
+  ok(requests === 1, `and costs one RPC request, not 42 (made ${requests})`);
+  ok(_inflightForTest() === 0 && _queuedForTest() === 0, "queue and in-flight count drain after the burst");
+  // Past one batch: 250 wallets -> ceil(250/100) requests, never more than the in-flight bound at once.
+  _testResetForTest(); requests = 0; peak = 0;
+  const many = await Promise.all(Array.from({ length: 250 }, (_, i) => usdcBalanceOnBase(addr(1000 + i), { fetchImpl: f, now: () => Date.now(), rpcUrls: ["https://rpc.test"] })));
+  ok(many.every((v) => v === 0) && requests === 3 && peak <= _limitsForTest.MAX_BATCHES_INFLIGHT, `250 wallets read in ${requests} requests with at most ${peak} in flight (bound ${_limitsForTest.MAX_BATCHES_INFLIGHT})`);
+}
+// BOUNDS that stop this being an amplifier: a stalled RPC never holds a
+// caller past the wait, and a flood past the queue cap answers unknown at once.
+{
+  _testResetForTest();
+  const addr = (i) => "0x" + String(i).padStart(40, "0");
+  let release; const gate = new Promise((r) => { release = r; });
+  let requests = 0;
+  const stall = async (url, init) => { requests++; await gate; return { json: async () => rpcAnswer(JSON.parse(init.body)) }; };
+  const start = Date.now();
+  const flood = Array.from({ length: 500 }, (_, i) => usdcBalanceOnBase(addr(5000 + i), { fetchImpl: stall, now: () => Date.now(), rpcUrls: ["https://rpc.test"] }));
+  const extraStart = Date.now();
+  const extra = await usdcBalanceOnBase(addr(9999), { fetchImpl: stall, now: () => Date.now(), rpcUrls: ["https://rpc.test"] });
+  ok(extra === null && Date.now() - extraStart < 100, "past the queue cap a new wallet reads unknown at once (never an unbounded queue)");
+  const r = await Promise.all(flood);
+  const took = Date.now() - start;
+  ok(r.every((v) => v === null) && took < _limitsForTest.WAIT_MS + 400, `a stalled RPC holds no caller past the wait (${took} ms, bound ${_limitsForTest.WAIT_MS})`);
+  ok(requests <= _limitsForTest.MAX_BATCHES_INFLIGHT, `a stalled RPC gets at most ${_limitsForTest.MAX_BATCHES_INFLIGHT} requests however many wallets ask (made ${requests})`);
+  release();
+  await new Promise((r) => setTimeout(r, 50));
+  _testResetForTest();
+}
 
 // --- an UNCLASSIFIED refusal is no longer silent to the buyer -------------
 // It used to be telemetry only: a developer whose client failed in a way we had

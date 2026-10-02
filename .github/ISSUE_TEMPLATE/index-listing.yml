@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         The index reads your `/.well-known/x402`, your OpenAPI document and your live 402, so most listing errors come from one of those disagreeing with another. Two URLs side by side is the whole report: what we say, and what you serve.
-        This is not the place to pitch a service or ask for a paid test call. To be listed, publish a manifest and open a seed PR (see CONTRIBUTING); routing follows settlement history, never a request.
+        This is not the place to pitch a service or ask for a paid test call. To be listed, publish a manifest and POST your origin to https://agent402.tools/api/index/register (see CONTRIBUTING); routing follows settlement history, never a request.
   - type: input
     id: origin
     attributes:

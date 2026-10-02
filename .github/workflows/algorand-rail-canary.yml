@@ -21,7 +21,7 @@ on:
         required: false
         default: "15"
       tool_max_usd:
-        description: "Per-tool price cap — skips pricier tools (default 0.25 covers 502 of 516 routes)"
+        description: "Per-tool price cap — skips pricier tools"
         required: false
         default: "0.25"
       dry:
@@ -45,7 +45,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TARGET_URL: https://agent402.tools
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -54,7 +54,7 @@ jobs:
         # step), and --ignore-scripts blocks dependency lifecycle scripts
         # entirely (audit R-07). @x402/* pinned to the server's protocol version
         # (src/payments.js runs 2.16), same posture as scripts/paid-canary.js.
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.26.0 @x402/avm@2.26.0
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/core@2.27.0 @x402/avm@2.27.0
 
       - name: Sweep the catalog on the Algorand rail
         id: sweep

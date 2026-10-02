@@ -12,9 +12,13 @@ crons = ["*/5 * * * *"]
 PROD = "https://agent402.tools"
 
 # STATUS_PROBE_TOKEN is a Worker SECRET, never a plaintext var. It is the
-# credential this Worker presents to POST /api/status/probe, and that is the
-# ONLY thing it opens - it is read in exactly one place in the server:
+# credential this Worker presents to POST /api/status/probe, and the one other
+# thing it opens is a low-difficulty proof-of-work challenge for the single
+# paid-call slug (GET /api/pow/challenge?slug=hash), whose call the server books
+# as internal. It is read in exactly one file in the server (src/server.js):
 #   wrangler secret put STATUS_PROBE_TOKEN        (must equal STATUS_PROBE_TOKEN on Railway)
+# The paid-call check sends ONLY this token, never OPERATOR_TOKEN.
+# POW_SECRET is deliberately NOT a secret here and never needs to be.
 #
 # It replaces OPERATOR_TOKEN here. That one is AGENT402_OPERATOR_TOKEN, the ROOT
 # credential, which also reaches /__operator/refunds/update (mark a refund debt

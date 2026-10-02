@@ -44,7 +44,9 @@
 // Layout: datasets/v1/dt=YYYY-MM-DD/<table>.ndjson.gz + manifest.json. The
 // date-partitioned prefix is the conventional shape for an append-only record
 // and is readable by standard tooling without an index.
-import { gzipSync } from "node:zlib";
+import { gzipSync, gzip } from "node:zlib";
+import { promisify } from "node:util";
+const gzipAsync = promisify(gzip);
 import { putObject, objectExists, getObject, backupConfigured } from "./backup.js";
 import { priceToMicroUsd } from "./x402-index.js";
 
@@ -251,7 +253,13 @@ export function buildTables({ sellers = [], baseRows = [], solanaRows = [], mppR
 }
 
 /** Serialize a table to gzip'd NDJSON. Throws past the per-table byte cap
- *  rather than uploading something unbounded. */
+ *  rather than uploading something unbounded. The daily job uses the async
+ *  twin below: gzip over every tool row held the event loop in one piece. */
+export async function serializeTableAsync(rows) {
+  const body = await gzipAsync(Buffer.from(rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""), "utf8"), { level: 6 });
+  if (body.length > MAX_TABLE_BYTES) throw new Error(`table is ${(body.length / 1e6).toFixed(1)}MB gz, over the ${MAX_TABLE_BYTES / 1e6}MB cap`);
+  return body;
+}
 export function serializeTable(rows) {
   const body = gzipSync(Buffer.from(rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""), "utf8"), { level: 6 });
   if (body.length > MAX_TABLE_BYTES) throw new Error(`table is ${(body.length / 1e6).toFixed(1)}MB gz, over the ${MAX_TABLE_BYTES / 1e6}MB cap`);
@@ -403,7 +411,7 @@ export async function runDatasetSnapshot({
 
     let bytes = 0;
     for (const [name, t] of Object.entries(tables)) {
-      const body = serializeTable(t.rows);
+      const body = await serializeTableAsync(t.rows);
       await put(`${prefix}/${name}.ndjson.gz`, body);
       bytes += body.length;
     }

@@ -15,20 +15,21 @@
 // for THAT payment at THAT time - provenance, signed by the seller.
 //
 // Money: the attestation costs Base gas from X402_UPSTREAM_BUYER_KEY (the same
-// wallet that pays Blockscout upstream). The cost is bounded three ways: a
+// wallet route-execute pays external sellers from). The cost is bounded three ways: a
 // per-attestation gas ceiling (ATTEST_MAX_GAS_USD, refused 503 before signing
 // when the estimate exceeds it, nobody charged), the Base wallet's daily
 // spend ceiling (external-spend-guard, booked before the send and corrected
 // to the estimate after), and one attestation per sale (a repeat returns the
 // existing UID and sends nothing). Settlement of THIS call runs after the
 // handler, so a failed settlement can cost one attestation's gas - the same
-// bounded exposure the Blockscout buys carry.
+// bounded exposure every paid upstream call carries.
 //
 // Schema: registered lazily on first use (one-time gas, bounded separately),
 // its UID derived exactly as EAS derives it (keccak256 of the packed schema
 // string, resolver and revocable flag - pinned against a live Base schema in
 // scripts/test-attest-kit.js). Non-revocable, no resolver, no expiry.
 import { createHash } from "node:crypto";
+import { assertSigningAllowed } from "../signing-halt.js";
 import { saleByTx, setAttestation } from "../sales-ledger.js";
 import { maySpend, noteSpend, adjustSpend } from "../external-spend-guard.js";
 import { payerFromRequest } from "../payer.js";
@@ -163,6 +164,7 @@ async function realChain() {
     return {
       address: account.address,
       async ensureSchema(uid) {
+        assertSigningAllowed("a schema registration");
         if (schemaChecked) return;
         const s = await publicClient.readContract({ address: SCHEMA_REGISTRY_ADDRESS, abi: REGISTRY_ABI, functionName: "getSchema", args: [uid] });
         if (s && s.uid && s.uid !== ZERO_BYTES32) { schemaChecked = true; return; }
@@ -202,6 +204,7 @@ async function realChain() {
         return costUsd(gas);
       },
       async attest(uid, recipient, data) {
+        assertSigningAllowed("an attestation");
         return serial(async () => {
           const hash = await walletClient.writeContract({ address: EAS_ADDRESS, abi: EAS_ABI, functionName: "attest", args: [{ schema: uid, data: { recipient, expirationTime: 0n, revocable: false, refUID: ZERO_BYTES32, data, value: 0n } }] });
           const rcpt = await publicClient.waitForTransactionReceipt({ hash, timeout: 90_000 });
@@ -307,6 +310,9 @@ export const ATTEST_TOOLS = [
     slug: "attest",
     category: "agent",
     price: "$0.050",
+    // Spends Base gas from this server's wallet inside the handler, before the
+    // buyer's payment settles. Read by spendsBeforeSettlement.
+    spendsOwnWallet: true,
     description:
       "Write an on-chain attestation (Ethereum Attestation Service on Base) that binds a call you paid for to the bytes you received: the tool slug, sha256 of the JSON response, the settlement chain and transaction, the payer, the time served and the price, signed by this server's wallet. Give it the settlement transaction from the PAYMENT-RESPONSE (or Payment-Receipt) header of any settled call; the attestation UID and its public page on base.easscan.org come back. Use it when an agent has to prove afterwards what data it acted on. Only the buyer can attest a sale: this call must be paid with a signed EVM authorization from the same wallet, and sales of wallet-scoped routes (memory, usage) are never attestable. The record is public and permanent: it names the payer and the tool. One attestation per sale (a repeat returns the existing UID); refused, uncharged, when the transaction is not a sale of this server, when the response was streamed or binary, or when Base gas would exceed the tool's own ceiling.",
     tags: ["attestation", "eas", "provenance", "receipt", "audit", "base", "x402"],

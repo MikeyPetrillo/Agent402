@@ -1,0 +1,84 @@
+name: MPP synthetic probe
+
+# Every 30 minutes: buy four of our cheapest pure-CPU tools over MPP's native
+# tempo/charge method from the canary burner (USDC.e on Tempo) and grade each
+# purchase - 200, a Payment-Receipt reference, the tool's own answer present
+# and correct, and the paid round trip under a latency bound
+# (scripts/mpp-probe.js). The daily paid canary proves the rail once a day and
+# the volume run is graded only on a rate; this catches a broken route, lost
+# receipt mirroring or a slow relay within the hour.
+#
+# Spend is bounded: at most 4 x $0.001 per run (hard cap 5) plus one retry per
+# route, into our own payTo; the script refuses to start below a floor balance.
+# Every buy carries the signed heartbeat token, so it is booked INTERNAL in the
+# stats and the sales ledger, never as outside revenue.
+on:
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+    inputs:
+      buys:
+        description: "Routes to probe this run (1-5, default 4)"
+        required: false
+        default: "4"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: mpp-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_URL: https://agent402.tools
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Install (lock-pinned; mppx + viem from the repo lock)
+        run: npm ci --ignore-scripts
+      - name: Probe MPP tempo/charge purchases
+        id: probe
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+          MPP_PROBE_MAX_BUYS: ${{ inputs.buys || '4' }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "No BURNER_KEY secret - cannot run"; echo "code=2" >> "$GITHUB_OUTPUT"; exit 0; }
+          echo "::add-mask::$BURNER_KEY"
+          set +e
+          node scripts/mpp-probe.js 2>&1 | tee /tmp/mpp-probe.log
+          CODE=${PIPESTATUS[0]}
+          set -e
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Alert (open issue) or clear (close issue)
+        # One issue per episode, auto-closed by the next passing run. Exit 2
+        # (refused to start) pages too: a silent skip is how alarms die.
+        # `always()`: a run killed by the job timeout must still page.
+        if: always()
+        run: |
+          CODE="${{ steps.probe.outputs.code }}"
+          [ -n "$CODE" ] || CODE="timeout"
+          TITLE="MPP synthetic probe FAILING"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          # Public issue body: the script's own summary lines only (route, verdict,
+          # tx hash, bucketed balance) - never the raw log.
+          TAIL=$(grep -E '^(mpp-probe:|OK |FAIL |REFUSING)' /tmp/mpp-probe.log 2>/dev/null | tail -n 8 || true)
+          if [ "$CODE" != "0" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$(printf 'The 30-minute MPP probe (scripts/mpp-probe.js: up to 4 x $0.001 pure-CPU buys over tempo/charge from the canary burner) failed (exit %s). Exit 1 = a route failed after one retry (no 200, no Payment-Receipt, a wrong or empty answer, or over the latency bound); exit 2 = refused to start (burner under its floor on Tempo, balance unreadable, no tempo challenge on the live 402, or a missing secret).\n\n```\n%s\n```\n\nRun: %s/%s/actions/runs/%s\nThe next passing run closes this.' "$CODE" "$TAIL" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$(printf 'Still failing at %s (exit %s)\n\n```\n%s\n```' "$(date -u +%FT%TZ)" "$CODE" "$TAIL")"
+            fi
+            exit 1
+          elif [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every probed MPP route passed at $(date -u +%FT%TZ)."
+          fi

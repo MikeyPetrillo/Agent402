@@ -135,7 +135,7 @@ ok(chatToGemini({}, M).candidates[0].finishReason === "FINISH_REASON_UNSPECIFIED
 // for a base-tier model answered "call /v1/chat/completions", which is correct
 // about the tier and useless to a caller holding a Google client.
 {
-  const msg = 'Model "google/gemini-2.5-flash" is served by the v1-chat tier - call /v1/chat/completions (price $0.02/call), or /v1/metered/chat/completions (the same model, quoted per request from $0.001) instead.';
+  const msg = 'Model "google/gemini-3.5-flash-lite" is served by the v1-chat tier - call /v1/chat/completions (price $0.02/call), or /v1/metered/chat/completions (the same model, quoted per request from $0.001) instead.';
   const out = repointToGeminiWire(msg);
   ok(out.includes("/v1/gemini") && out.includes("/v1/metered/gemini"), "both chat paths are re-pointed at the same tier's Gemini route");
   ok(!out.includes("chat/completions"), "no chat path survives in a message this wire returns");
@@ -158,6 +158,41 @@ ok(chatToGemini({}, M).candidates[0].finishReason === "FINISH_REASON_UNSPECIFIED
   ok(/indexOf\(GEMINI_MARK\)/.test(fn) && /endsWith\(GEMINI_SUFFIX\)/.test(fn), "it splits with linear indexOf/endsWith");
   ok(/GEMINI_PATH_MAX/.test(fn), "and bounds the length before scanning");
   ok(!/GEMINI_ALIAS_RE/.test(server), "the backtracking constant is gone, not merely unused");
+}
+
+// ---- price by model on the Gemini wire (2026-09-22) ------------------------
+// The wire hands the chat tier's own handler the translated body and the SAME
+// request, so the stash its tierQuote sets is what lets the chat handler serve
+// the model's home tier. The model it prices must be the one it translates.
+{
+  const byT = (t) => LLM_GEMINI_TOOLS.find((x) => x.slug === `${t}-gemini`);
+  const baseG = byT("v1-chat"), nanoG = byT("v1-chat-nano");
+  const OPUS = "anthropic/claude-opus-5";
+  const contents = [{ role: "user", parts: [{ text: "hi" }] }];
+  ok(typeof baseG.tierQuote === "function" && typeof baseG.quote !== "function" && typeof byT("v1-chat-auto").tierQuote !== "function" && typeof byT("v1-chat-metered").tierQuote !== "function", "flat Gemini routes carry tierQuote (never quote); auto and metered do not");
+  ok(baseG.tierQuote({ model: "models/claude-opus-5", contents }) === TIERS["v1-chat-premium"].price && baseG.tierQuote({ contents }) === TIERS["v1-chat"].price, "base Gemini route: a premium model (Google-shaped path form) quotes premium; the tier default keeps base");
+  ok(nanoG.tierQuote({ model: OPUS, contents }) === TIERS["v1-chat-premium"].price, "nano Gemini route + premium model quotes premium");
+  process.env.OPENROUTER_API_KEY = "test-key";
+  const pbmReal = globalThis.fetch;
+  let pbmSeen = [];
+  globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); pbmSeen.push(b); return { ok: true, status: 200, text: async () => JSON.stringify({ id: "g", model: b.model, choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } }), headers: { get: () => "application/json" } }; };
+  const reqAt = (usd) => ({ header: () => undefined, headers: {}, ip: "127.0.0.1", ...(usd == null ? {} : { __meteredQuoteUsd: usd }) });
+  try {
+    pbmSeen = [];
+    const out = await baseG.handler({ model: OPUS, contents }, reqAt(0.5)).catch((e) => ({ threw: `${e?.statusCode} ${e?.message}` }));
+    ok(JSON.stringify(pbmSeen[0]?.provider?.max_price) === JSON.stringify(TIERS["v1-chat-premium"].maxPrice) && out.agent402_tier?.served === "v1-chat-premium" && out.agent402_tier?.route === "/v1/gemini", `served as premium through the chat handler, disclosed on this wire (${JSON.stringify(out.agent402_tier)})`);
+    pbmSeen = [];
+    let e = null; try { await baseG.handler({ model: OPUS, contents }, reqAt(0.02)); } catch (x) { e = x; }
+    ok(e?.statusCode === 400 && e.message.includes("/v1/premium/gemini") && pbmSeen.length === 0, "gated at the base price: the 400 re-pointed at the premium Gemini route, nothing sent upstream");
+    // model "auto" (2026-09-29): quoted and served as the auto tier, router disclosure carried on this wire
+    ok(baseG.tierQuote({ model: "auto", contents }) === TIERS["v1-chat-auto"].price && baseG.tierQuote({ model: "models/auto", contents }) === TIERS["v1-chat-auto"].price, "model \"auto\" (body or Google-shaped path) quotes the auto price");
+    pbmSeen = [];
+    const au = await baseG.handler({ model: "auto", contents, generationConfig: { maxOutputTokens: 3000 } }, reqAt(TIERS["v1-chat-auto"].price));
+    ok(pbmSeen[0]?.max_tokens <= TIERS["v1-chat-auto"].maxTokens && au.agent402_router?.quality === "balanced" && au.agent402_tier?.served === "v1-chat-auto" && au.agent402_tier?.route === "/v1/gemini", `auto body served under auto caps with agent402_router (${pbmSeen[0]?.model}, max_tokens ${pbmSeen[0]?.max_tokens})`);
+    pbmSeen = [];
+    let ae = null; try { await baseG.handler({ model: "auto", contents }, undefined); } catch (x) { ae = x; }
+    ok(ae?.statusCode === 400 && ae.message.includes("/v1/auto/gemini") && pbmSeen.length === 0, "not gated at the auto price: 400 re-pointed at /v1/auto/gemini, nothing sent upstream");
+  } finally { globalThis.fetch = pbmReal; delete process.env.OPENROUTER_API_KEY; }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

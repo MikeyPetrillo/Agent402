@@ -16,7 +16,7 @@ Full explainer with structured data: https://agent402.tools/agentic-finance
 | Agents | Autonomous software with a wallet: MCP-connected assistants, crawlers, research and trading agents | buyers and, increasingly, sellers |
 | Applied layer | Discovery, routing, pricing, reliability, receipts, transparency | **Agent402**: tools, index, router, tollbooth |
 | Payment protocols | x402 (HTTP 402 with machine-readable requirements), MPP (the Payment HTTP auth scheme) | the wire |
-| Rails and money | USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, Algorand; USDG on Robinhood Chain; native Tempo | twelve rails |
+| Rails and money | USDC on Base, Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, Algorand; USDG on Robinhood Chain; native Tempo | twelve chains over x402, plus Tempo over MPP |
 
 ## Where Agent402 sits
 

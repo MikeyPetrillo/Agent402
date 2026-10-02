@@ -116,22 +116,24 @@ work as call aliases):
 - `route_and_execute(task, params, maxUsd)` - reach a tool OUTSIDE this
   catalog: Agent402 resolves a proven external x402 seller, pays it on your
   behalf, and relays the result marked `untrustedContent`. Needs a funded
-  wallet. Flat routing fee by rung: $0.01 for an underlying seller at
-  $0.005 or less, $0.05 up to $0.04, $0.55 up to $0.50.
+  wallet. A flat routing fee by rung, one rung per band of underlying
+  price (`route-execute`, `-plus`, `-max`, `-pro`); `GET /api/pricing`
+  lists each rung's fee and ceiling.
 
-Pure-CPU tools (200+ of them - hashing, encoding, parsing, regex, date
+Pure-CPU tools (150+ of them - hashing, encoding, parsing, regex, date
 math, validators, converters, geo math) are free via proof-of-work and
-need no wallet. Paid tools (browser rendering, web search, PDF tooling,
-live data, crypto reads) mostly cost $0.001-$0.02 in USDC on Base (or
-Solana/Polygon/Arbitrum/Monad/Celo/Avalanche/Sei/Optimism/Stellar/Algorand
- - plus USDG on Robinhood Chain, 12 chains in all); multi-tool skill packs
-run up to $1.50; the finished report products under `/v1` (deep research,
-company dossier, 13F fund report, domain audit, FDA recall, insider flow,
-SEC filings, Solana token brief, token risk) cost $0.20 to $1.10 and are the
-same reports people buy by card for $1 to $2 at
-`https://agent402.tools/reports` (the card price includes payment processing;
-an agent paying per call pays the lower tool price for the same report). See `https://agent402.tools/api/pricing`
-for exact prices.
+need no wallet; `GET /api/pow` lists them. Paid tools (browser rendering,
+web search, PDF tooling, live data, crypto reads) start at $0.001 per call
+in USDC over x402 on Base or any other chain the 402 lists (Solana, Polygon,
+Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, Algorand, and
+USDG on Robinhood Chain), over MPP, or from a prepaid card credits key.
+Multi-tool skill packs cost the sum of the tools they run, less a bundle
+discount. The finished report products under `/v1` (deep research, company
+dossier, 13F fund report, domain audit, FDA recall, insider flow, SEC
+filings, Solana token brief, token risk) are the same reports people buy by
+card at `https://agent402.tools/reports`; the card price includes payment
+processing, so an agent paying per call pays less for the same report.
+`https://agent402.tools/api/pricing` has every current price.
 
 ## Verifying it works
 

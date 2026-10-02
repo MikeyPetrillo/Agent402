@@ -66,6 +66,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   // funded.
   "sanctions-wallet",
   "sanctions-name",
+  "cve-lookup",  // cve-kit.js (egress: NVD, EPSS, CISA KEV)
   "defi-yields", "defi-yield-history", "defi-protocols", "defi-protocol", "defi-chains", "defi-chain-tvl-history", "stablecoins", "stablecoin-supply-history", "defi-fees", "defi-dex-volume",  // defi-kit.js (egress)
   "crypto-news", "crypto-indicators", "crypto-market-pulse",  // crypto-signals-kit.js (egress)
   "site-map", "site-crawl",  // crawl-kit.js (egress)
@@ -82,7 +83,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "memory-write", "memory-read", "memory-incr", "memory-cas", "memory-grant", "memory-revoke",
   "memory-grants", "memory-log", "memory-remember", "memory-recall", "memory-forget",
   "http-check", "tls-cert", "whois", "robots-check", "sitemap",
-  "email-validate", "ip-info", "search", "search-news", "search-images", "search-videos", "search-suggest", "answer",
+  "email-validate", "ip-info", "search", "search-lite", "search-news", "search-images", "search-videos", "search-suggest", "answer",
   "llm-context",  // llm-context-kit.js - spends the Brave subscription per call (never PoW-eligible)
   "pdf-info", "pdf-merge", "pdf-extract-pages", "pdf-rotate", "images-to-pdf",
   "pdf-to-markdown",
@@ -108,8 +109,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "edgar-insider-trades", "edgar-13f-holdings", "edgar-recent-ipos", "edgar-search",
   "edgar-13f-datasets", "edgar-13f-dataset-head",  // sec.gov bulk 13F data sets (index page + bounded Range reads) - 2026-09-18
   "company-financials",
-  "stock-quote", "stock-history", "earnings-calendar",
-  "options-chain", "premarket-quote", "stock-dividends", "dividend-calendar",
+  "stock-quote", "stock-history",
   "crypto-price", "crypto-market", "crypto-history", "crypto-trending", "crypto-global",
   "crypto-orderbook", "stablecoin-peg",
   // Composite research tools fan out to multiple paid upstreams; PoW would
@@ -118,9 +118,6 @@ export const WALLET_ONLY_SLUGS = new Set([
   // 9.9.9.9) or a paid upstream (crt.sh, target site, Team Cymru). PoW would
   // let one client farm our egress; keep them wallet-only.
   "a2a-card-fetch",
-  // Blockscout kit: every call BUYS upstream data over x402 with the server's
-  // spending wallet — PoW would let one client drain the upstream buyer.
-  "contract-inspect", "address-profile", "token-info", "token-holders", "tx-inspect",
   // sql-guard MINTS an Ed25519 execution certificate with SQL_CERT_SIGNING_KEY.
   // Left PoW-eligible it was a free, unlimited signing oracle for our own
   // certifying identity: anyone could obtain unbounded signed certificates for
@@ -209,10 +206,8 @@ export const WALLET_ONLY_SLUGS = new Set([
   // shares the per-IP quota with defi-tvl). All wallet-only for the same
   // reasons as their underlying upstreams.
   "dex-pair", "dex-pool", "dex-quote", "dex-top-pools",
-  // Prediction-market-kit: Polymarket Gamma + CLOB + Kalshi. All keyless but
-  // all hit external HTTP; PoW would let one client farm the per-IP rate
-  // limits we share with everyone else.
-  "polymarket-search", "polymarket-market", "polymarket-orderbook", "polymarket-price-history",
+  // Prediction-market-kit: Kalshi. Keyless but external HTTP; PoW would let
+  // one client farm the per-IP rate limits we share with everyone else.
   "kalshi-markets", "kalshi-event", "kalshi-live-data", "kalshi-weather-index",
   // MEV + L2 kit: Flashbots relay (keyless, per-IP rate-limited), DeFiLlama
   // (per-IP shared with defi-tvl), and Alchemy (compute-unit quota shared with
@@ -236,7 +231,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "image-ocr",
   // Skill packs (bundled execution endpoints) — premium + standard tiers
   // orchestrate paid-upstream tools (EDGAR / FRED / Alchemy / Brave /
-  // Yahoo / CoinGecko / DefiLlama / DNS resolvers / Chromium). PoW would
+  // Databento / CoinGecko / DefiLlama / DNS resolvers / Chromium). PoW would
   // turn one free request into N paid sub-calls. Light-tier packs that
   // call at least one wallet-only tool must also be listed here — the
   // skill runner calls handlers in-process, bypassing the route paywall.
@@ -259,7 +254,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "skill-location-intel", "skill-dns-network-ops", "skill-status-snapshot",
   "skill-schema-evolution",
   // Premium dossier packs (2026-07): multi-tool chains hitting paid upstreams
-  // (EDGAR, Brave Search, Yahoo, CoinGecko, DNS resolvers).
+  // (EDGAR, Brave Search, Databento, CoinGecko, DNS resolvers).
   "skill-company-dossier", "skill-domain-intel", "skill-crypto-dossier",
   // Strategy additions (2026-07): every underlying tool hits the network
   // (CDP-indexed balances/SQL, live gas RPCs, page fetches) — wallet-only.
@@ -290,7 +285,6 @@ export const WALLET_ONLY_SLUGS = new Set([
   // (skill-schema-guard is pure CPU and stays PoW-eligible):
   "skill-contract-audit",    // calls contract-source + selector-lookup + tx-simulate (all wallet-only)
   "skill-tx-forensics",      // calls tx-status + evm-rpc + calldata-decode + selector-lookup (all wallet-only)
-  "skill-market-open",       // calls stock-quote + premarket-quote + options-chain + stock-dividends + earnings-calendar (all wallet-only)
   "skill-entity-enrich",     // calls wikidata-entity + lei-lookup + edgar-company-lookup + whois + tech-stack + favicon-grab (all wallet-only)
   "skill-feed-watch",        // calls feed-parse + extract (both wallet-only)
   "skill-subtitle-pipeline", // calls transcribe (wallet-only — OpenAI upstream credit)
@@ -325,8 +319,8 @@ export const WALLET_ONLY_SLUGS = new Set([
   // domain-audit composites (src/tools/domain-audit-kit.js) — live network
   // probes (egress) + Opus synthesis; egressing + metered, never PoW-eligible.
   "domain-audit", "domain-audit-pro",
-  // token-risk composites (src/tools/token-risk-kit.js) — buy Blockscout token/
-  // holder data over x402 (upstream spend) + Opus synthesis; never PoW-eligible.
+  // token-risk composites (src/tools/token-risk-kit.js) - keyless token-security,
+  // DEX and verification probes (egress) + Opus synthesis; never PoW-eligible.
   "token-risk", "token-safety", "token-risk-pro",
   // dossier-kit: company due-diligence dossier, fans out to EDGAR + grounded
   // web search + Opus synthesis - metered upstream, never free-tier/PoW.
@@ -341,6 +335,10 @@ export const WALLET_ONLY_SLUGS = new Set([
   // rated, so a PoW call has no standing to write one. (The TALLY,
   // feedback-summary, is counts only and stays free.)
   "feedback",
+  // Typed judgment: a paid third-party model per call, so never PoW-payable.
+  "judge",
+  "decide",
+  "decide-execute",
   // Image generation kit: every call burns real upstream inference credit
   // (OpenAI GPT Image API). Same rationale as LLM proxy.
   "image-gen", "image-gen-hd", "image-gen-premium",
@@ -368,6 +366,16 @@ export const WALLET_ONLY_SLUGS = new Set([
   "wallet-balances", "testnet-fund", "onramp-link", "onchain-sql", "onchain-sql-schema",
 ]);
 
+/** Wallet-only slugs that make no network call and read no stored state: they
+ *  are wallet-only by POLICY (see the comments in WALLET_ONLY_SLUGS above), so
+ *  the tool page states that reason instead of the network/state one. Each
+ *  value is completed by the page with ", so it is metered with money and has
+ *  no proof-of-work tier". */
+export const WALLET_ONLY_POLICY_REASON = new Map([
+  ["sql-guard", "is pure computation, but it can mint an execution certificate signed with this server's key"],
+  ["action-gate", "is pure computation, but its verdict is what a caller relies on before a real action"],
+]);
+
 /** A tool is compute-payable (PoW-eligible) if it is pure-CPU and ~free to serve. */
 export function isComputePayable(tool) {
   return !WALLET_ONLY_SLUGS.has(tool.slug);
@@ -391,6 +399,20 @@ const SECRET = process.env.POW_SECRET || randomBytes(32).toString("hex");
 // snappy. Higher difficulties have brutal tail latency (difficulty 20 p90 ≈ 12s)
 // because solving is a memoryless random search. Tune via POW_DIFFICULTY.
 export const POW_DIFFICULTY = clampInt(process.env.POW_DIFFICULTY, 16, 8, 28);
+/**
+ * What one solve costs, said one way on every page and derived from the live
+ * difficulty. Measured with the published client solver (client/index.js
+ * solvePow) at difficulty 16 on a laptop: median 22 ms, p99 150 ms over 300
+ * solves. Pages had stated it four ways ("a few seconds", "about a second",
+ * "a few hundred milliseconds", "sub-second"). Above 17 bits the tail grows
+ * fast enough that "a fraction of a second" stops being true, so the phrase
+ * changes with the difficulty rather than staying a typed claim.
+ */
+export function powCostPhrase(difficulty = POW_DIFFICULTY) {
+  const hashes = (2 ** difficulty).toLocaleString("en-US");
+  const time = difficulty <= 17 ? "a fraction of a second of CPU on a laptop" : "a few seconds of CPU or more";
+  return `about ${hashes} sha256 hashes on average, ${time}`;
+}
 const TTL_SECONDS = clampInt(process.env.POW_TTL_SECONDS, 300, 30, 3600);
 
 function sign(payload) {
@@ -410,25 +432,62 @@ function leadingZeroBits(buf) {
   return bits;
 }
 
+// --- Status-probe challenge ---------------------------------------------------
+// The Cloudflare status Worker (workers/status-probe) observes the paid-call
+// path end to end: challenge, solve, unlock, payload. It is sized to the
+// tightest Workers CPU limit (10 ms per invocation), which a normal 16-bit solve
+// would blow many times over, and it deliberately does not hold POW_SECRET, so
+// it cannot mark its call as ours with a heartbeat token. What it walks is
+// therefore NOT the buyer's challenge (difficulty, TTL and token shape all
+// differ below); the GitHub heartbeat still walks the buyer's, and /status
+// judges paid-call per observer so a success here cannot clear a failure
+// there (stateFromSources in src/status-store.js).
+//
+// So a caller presenting STATUS_PROBE_TOKEN (checked in server.js, the only
+// reader of that variable) is issued, for PROBE_POW_SLUG ONLY, a challenge at
+// PROBE_POW_DIFFICULTY whose signed payload carries PROBE_MARK. The mark is
+// inside the HMAC, so it cannot be added to a normal token or stripped from a
+// probe token, and the difficulty cannot be lowered on either. A marked token
+// redeems on PROBE_POW_SLUG and nowhere else, once, within PROBE_TTL_SECONDS,
+// and verifySolution reports it as the probe's so the dispatcher books the
+// call as internal exactly like the heartbeat's. Nothing about it reaches a
+// paid route or an operator surface.
+//
+// 4 bits = 16 hashes expected. Sized against the Worker's measured SHA-256
+// cost (see the budget note in workers/status-probe/src/index.js), not for
+// abuse resistance: the token is what stands between a stranger and this
+// challenge, and the Worker refuses to solve anything harder than it can.
+export const PROBE_POW_SLUG = "hash";
+export const PROBE_POW_DIFFICULTY = 4;
+const PROBE_TTL_SECONDS = 120;
+const PROBE_MARK = "probe";
+
 /**
  * Issue a signed, single-use challenge. `slug` strictly scopes the token to
  * one tool so a challenge can't be retargeted at a different route.
+ * `{ probe: true }` issues the status probe's challenge (see above); it is
+ * refused for any slug but PROBE_POW_SLUG.
  */
-export function issueChallenge(slug) {
+export function issueChallenge(slug, { probe = false } = {}) {
+  if (probe && slug !== PROBE_POW_SLUG) throw new Error(`the status-probe challenge is issued for "${PROBE_POW_SLUG}" only`);
+  const difficulty = probe ? PROBE_POW_DIFFICULTY : POW_DIFFICULTY;
+  const ttl = probe ? Math.min(PROBE_TTL_SECONDS, TTL_SECONDS) : TTL_SECONDS;
   const challenge = randomBytes(16).toString("hex");
-  const exp = Math.floor(Date.now() / 1000) + TTL_SECONDS;
-  const payload = `${challenge}.${exp}.${POW_DIFFICULTY}.${slug}`;
+  const exp = Math.floor(Date.now() / 1000) + ttl;
+  const payload = probe
+    ? `${challenge}.${exp}.${difficulty}.${slug}.${PROBE_MARK}`
+    : `${challenge}.${exp}.${difficulty}.${slug}`;
   const token = `${payload}.${sign(payload)}`;
   // Opportunistically prune expired replay rows (cheap, indexed by exp).
   pruneStmt.run(Math.floor(Date.now() / 1000));
   return {
     algorithm: "sha256",
     challenge,
-    difficulty: POW_DIFFICULTY,
+    difficulty,
     slug,
-    rule: `Find an integer nonce such that sha256("${challenge}:" + nonce) has at least ${POW_DIFFICULTY} leading zero bits.`,
+    rule: `Find an integer nonce such that sha256("${challenge}:" + nonce) has at least ${difficulty} leading zero bits.`,
     expiresAt: exp,
-    ttlSeconds: TTL_SECONDS,
+    ttlSeconds: ttl,
     submitHeader: "X-Pow-Solution",
     submitFormat: "<token>:<nonce>",
     // You HASH one field and SEND a different one. Everything above describes
@@ -446,7 +505,9 @@ export function issueChallenge(slug) {
 
 /**
  * Verify a submitted "<token>:<nonce>" against the route's slug. Returns
- * { ok: true } on success (and consumes the challenge), or { ok:false, reason }.
+ * { ok: true, probe } on success (and consumes the challenge), or
+ * { ok:false, reason }. `probe` is true only for a status-probe token, which the
+ * caller books as internal traffic.
  */
 export function verifySolution(headerValue, slug) {
   if (typeof headerValue !== "string" || !headerValue) return { ok: false, reason: "missing solution" };
@@ -457,7 +518,11 @@ export function verifySolution(headerValue, slug) {
   if (!nonce) return { ok: false, reason: "missing nonce" };
 
   const parts = token.split(".");
-  if (parts.length !== 5) {
+  // Five parts is a normal token; six is a status-probe token, whose fifth part
+  // must be the probe mark (it sits inside the signed payload, so it is checked
+  // by the signature below as well).
+  const isProbe = parts.length === 6 && parts[4] === PROBE_MARK;
+  if (parts.length !== 5 && !isProbe) {
     // THE FREE TIER'S ONE SHARP EDGE, named instead of shrugged at.
     //
     // The challenge response carries two different strings: `challenge` (the
@@ -475,8 +540,11 @@ export function verifySolution(headerValue, slug) {
         : "malformed token - submit the `token` field from the challenge response verbatim, as `<token>:<nonce>`",
     };
   }
-  const [challenge, expStr, diffStr, tokSlug, sig] = parts;
-  const payload = `${challenge}.${expStr}.${diffStr}.${tokSlug}`;
+  const [challenge, expStr, diffStr, tokSlug] = parts;
+  const sig = parts[parts.length - 1];
+  const payload = isProbe
+    ? `${challenge}.${expStr}.${diffStr}.${tokSlug}.${PROBE_MARK}`
+    : `${challenge}.${expStr}.${diffStr}.${tokSlug}`;
 
   // 1. Signature (constant-time).
   const expected = sign(payload);
@@ -491,6 +559,9 @@ export function verifySolution(headerValue, slug) {
   // 3. Scope: token must be for exactly this tool (wildcards are not issued
   //    and not accepted — legacy "*" tokens fail here by design).
   if (tokSlug !== slug) return { ok: false, reason: `challenge scoped to "${tokSlug}", not "${slug}"` };
+  // A probe token is only ever issued for PROBE_POW_SLUG; refuse one naming any
+  // other slug even if it carried a valid signature (belt to the issuer's check).
+  if (isProbe && tokSlug !== PROBE_POW_SLUG) return { ok: false, reason: "a status-probe challenge redeems on its own slug only" };
 
   // 4. Proof of work (difficulty is fixed in the signed token — cannot be downgraded).
   const difficulty = parseInt(diffStr, 10);
@@ -505,7 +576,7 @@ export function verifySolution(headerValue, slug) {
   }
   // Prune here too, so a solve-heavy/issue-light workload can't grow the table.
   pruneStmt.run(Math.floor(Date.now() / 1000));
-  return { ok: true };
+  return { ok: true, probe: isProbe };
 }
 
 // --- Heartbeat token --------------------------------------------------------

@@ -5,6 +5,12 @@
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
+import { MAX_FULL_PER_SUB_30D, MIN_FULL_GAP_MS } from "./monitor-scheduler.js";
+
+// The per-subscription report cap, read from the scheduler that enforces it.
+// The blurbs promise a fresh report on change; past this many in 30 days, or a
+// second change inside the gap, the scheduler sends an alert email instead.
+const CAP_NOTE = `Each monitor delivers up to ${MAX_FULL_PER_SUB_30D} full reports in any 30 days, the first one included. A change past that arrives as an alert email naming what changed, without a new report, and so does a domain or token change within ${Math.round(MIN_FULL_GAP_MS / 3_600_000)} hours of the last report.`;
 
 // `prefill` = {product, target} from the query string (see the /monitors route).
 // It ONLY fills the form in: the deep link a delivered report or a delivery
@@ -34,10 +40,12 @@ export function monitorsPage(baseUrl = "https://agent402.tools", prefill = null)
   <section class="hero">
     <div class="eyebrow">Recurring monitoring · cancel anytime</div>
     <h1>Set it once. <em>We watch it for you.</em></h1>
-    <p class="lede">Standing reports that re-run on their own and email you the moment something changes. <b>No account</b> beyond your card, self-serve cancel any time.</p>
+    <p class="lede">Standing reports that re-run on their own and email you when something changes. <b>No account</b> beyond your card, self-serve cancel any time.</p>
   </section>
   <section>
+    <h2 class="sr-section">Every monitor you can subscribe to</h2>
     <div class="products">${cards}</div>
+    <p class="note">${esc(CAP_NOTE)}</p>
     <p class="note">Monthly subscription · card via Stripe · cancel anytime from the link in your email · one-off reports at <a href="/reports" style="color:var(--ink);">/reports</a></p>
   </section>
 </div>

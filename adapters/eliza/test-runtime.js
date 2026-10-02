@@ -64,7 +64,12 @@ const tgz = join(work, sh("npm pack --silent", { cwd: HERE }).split("\n").pop())
 sh(`mv ${JSON.stringify(join(HERE, tgz.split("/").pop()))} ${JSON.stringify(tgz)}`);
 if (!existsSync(join(work, "package.json"))) writeFileSync(join(work, "package.json"), JSON.stringify({ name: "a402-eliza-host", private: true, type: "module" }));
 const want = `@elizaos/core@${CORE} @elizaos/plugin-sql@${CORE} @elizaos/plugin-bootstrap@${CORE}`;
-if (!existsSync(join(work, "node_modules", "@elizaos", "plugin-bootstrap"))) {
+// Decide on the same evidence the reconcile below writes: a work dir left by an
+// earlier session can carry node_modules without the elizaOS packages declared
+// in its package.json, and the later `npm i` then prunes them (measured
+// 2026-09-22: ENOENT on @elizaos/core/package.json after a stale tmpdir).
+const declared = (() => { try { return JSON.parse(readFileSync(join(work, "package.json"), "utf8")).dependencies || {}; } catch { return {}; } })();
+if (!declared["@elizaos/core"] || !existsSync(join(work, "node_modules", "@elizaos", "plugin-bootstrap"))) {
   console.log(`installing ${want} into ${work} (once; set ELIZA_RUNTIME_DIR to reuse)`);
   sh(`npm i --no-audit --no-fund --ignore-scripts --silent ${want}`, { cwd: work, stdio: ["ignore", "pipe", "inherit"] });
 }

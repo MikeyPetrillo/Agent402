@@ -18,6 +18,18 @@
 // Common proxy limits sit at 8 KB per header and 16 KB total.
 
 const TARGET = process.env.TARGET_URL || "http://127.0.0.1:3000";
+// This sweep walks every priced route on PRODUCTION on every CI run.
+// Unmarked, PostHog filed each of those 402s as an outside buyer's first look
+// (measured 2026-09-22). So it names itself and, when the lane holds POW_SECRET, carries the same
+// signed X-Heartbeat-Token the canary sends, which is what marks a request
+// synthetic on every accounting surface.
+const SWEEP_UA = "agent402-ci-sweep/1.0 (+https://agent402.tools/crawler)";
+const heartbeatHeaders = () => {
+  const secret = (process.env.POW_SECRET || "").trim();
+  if (!secret) return {};
+  const minute = Math.floor(Date.now() / 60_000);
+  return { "X-Heartbeat-Token": createHmac("sha256", secret).update(`heartbeat:${minute}`).digest("base64url").slice(0, 32) };
+};
 // PROJECTION (2026-09-10). This test measures PRODUCTION, and the extensions
 // on a 402 are built from THIS tree's catalog, so a change that grows the
 // challenge was caught on the run after it shipped - and the fix for it was
@@ -133,7 +145,7 @@ async function worker() {
     try {
       res = await fetch(`${TARGET}${t.path}`, {
         method: t.method,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "user-agent": SWEEP_UA, ...heartbeatHeaders() },
         body: t.method === "POST" ? "{}" : undefined,
         signal: AbortSignal.timeout(20000),
       });

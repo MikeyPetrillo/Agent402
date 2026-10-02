@@ -2,7 +2,7 @@
 // chain navigation — the hover dropdown AND the mobile hamburger menu.
 // Regression this pins: the old ">9 → slice(0,7)" nav ceiling silently
 // dropped Stellar, Algorand, and Robinhood from both menus the moment the
-// 10th rail shipped (found by Mike on a phone, 2026-07-22, not by CI).
+// 10th rail shipped (found by the operator on a phone, 2026-07-22, not by CI).
 import { ledgerShell, setNavIndexProvider } from "../src/ledger-chrome.js";
 
 let failed = 0;

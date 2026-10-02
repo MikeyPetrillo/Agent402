@@ -1,3 +1,0 @@
-B20 just activated on Base — both registry features now return true, verifiable with one eth_call to 0x8453…0001.
-
-6 B20 tools live: token info, verify, new-token discovery, Transfer+Memo pairing. From $0.001/call via x402, or free with proof-of-work. agent402.tools

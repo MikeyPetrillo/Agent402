@@ -10,8 +10,9 @@ import { createServer } from "node:http";
 import { Fetch as MppFetch, evm } from "mppx/client";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { Agent402 } from "../client/index.js";
+import { getFreePorts } from "./lib/free-port.js";
 
-const PORT = 3081; const FAC_PORT = 3082;
+const [PORT, FAC_PORT] = await getFreePorts(2);
 const B = `http://127.0.0.1:${PORT}`;
 const TREASURY = "0x000000000000000000000000000000000000dEaD";
 const TX = `0x${"cd".repeat(32)}`;

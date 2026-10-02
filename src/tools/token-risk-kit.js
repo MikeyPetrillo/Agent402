@@ -11,28 +11,41 @@
 // mechanisms, social-engineering scams, or future malicious upgrades, and a
 // clean report is not an endorsement. The synthesis prompt enforces this framing.
 //
-// Composes existing tools in-process. token-info + token-holders buy from
-// Blockscout's Pro API over x402 (real upstream spend; 503 without the server's
-// upstream-buyer wallet), contract-source + solidity-scan are free (Sourcify +
-// a local ruleset). Settlement-safe (throws >=400 on total failure), WALLET_ONLY,
-// not cached. Synthesis gated on OPENROUTER_API_KEY.
+// Every probe is keyless and read in-process: GoPlus token_security (name,
+// symbol, total supply, holder count and the top holders with their share of
+// supply, plus the control-plane flags), DexScreener pairs (price, liquidity,
+// volume), and Sourcify through contract-source / contract-abi, with
+// solidity-scan as a local ruleset. Nothing is bought per call except the
+// synthesis. Settlement-safe (throws >=400 on total failure), WALLET_ONLY, not
+// cached. Synthesis gated on OPENROUTER_API_KEY.
 import { fetchOpenRouter, throwUpstreamError, bad, upstreamUserId } from "./llm-gateway-kit.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
-import { BLOCKSCOUT_TOOLS } from "./blockscout-kit.js";
 import { CONTRACT_TOOLS } from "./contract-kit.js";
 
 // Keyless control-plane facts the report used to disclaim as "not visible
 // here": GoPlus token_security (honeypot, proxy, mintable, hidden owner, taxes,
-// pausable, blacklist, LP holders, DEX liquidity) and DexScreener pairs. Plus
-// Blockscout's address profile (proxy type / implementation) and the Sourcify
-// ABI (the privileged function names ARE the owner privileges). Measured on
-// BRETT/Base 2026-08-26: every field below answered.
-const GOPLUS_CHAIN_IDS = { base: 8453, ethereum: 1, polygon: 137, arbitrum: 42161, optimism: 10, bsc: 56, gnosis: 100, celo: 42220 };
-const DEXSCREENER_CHAINS = { base: "base", ethereum: "ethereum", polygon: "polygon", arbitrum: "arbitrum", optimism: "optimism", bsc: "bsc", gnosis: "gnosischain", celo: "celo" };
+// pausable, blacklist, LP holders, DEX liquidity) and DexScreener pairs, plus
+// the Sourcify ABI (the privileged function names ARE the owner privileges).
+// Measured on BRETT/Base 2026-08-26: every field below answered.
+// Celo (42220) is NOT here, and that is the whole list's rule: an advertised
+// chain must be one the token-security probe actually serves. GoPlus answers
+// code 2022 "The main chain is not supported" for it, and since that probe
+// became the only source of supply and holders every Celo call could only
+// refuse. It was advertised while the explorer legs carried it, and left with
+// them on 2026-09-22. bsc arrived the same day - it was never in the explorer
+// map and GoPlus serves it. The three maps below are pinned equal in
+// scripts/test-report-inputs.js so a chain can never be offered by one and
+// missing from another.
+export const GOPLUS_CHAIN_IDS = { base: 8453, ethereum: 1, polygon: 137, arbitrum: 42161, optimism: 10, bsc: 56, gnosis: 100 };
+export const DEXSCREENER_CHAINS = { base: "base", ethereum: "ethereum", polygon: "polygon", arbitrum: "arbitrum", optimism: "optimism", bsc: "bsc", gnosis: "gnosischain" };
 const KEYLESS_TIMEOUT_MS = 12_000;
+// A non-2xx from a keyless probe is a fact about the SOURCE, never about the
+// caller's token: both probes answer 200 with an empty result when they hold
+// no record, so there is no status here that means "your address is wrong".
+// 422 is reserved for that answer and minted only where it is read.
 async function getJson(url) {
   const res = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(KEYLESS_TIMEOUT_MS) });
-  if (!res.ok) throw bad(`upstream HTTP ${res.status}`, res.status >= 500 ? 502 : 422);
+  if (!res.ok) throw bad(`upstream HTTP ${res.status}`, res.status === 429 ? 503 : 502);
   return res.json();
 }
 const flag = (v) => (v === "1" || v === 1 || v === true ? true : v === "0" || v === 0 || v === false ? false : null);
@@ -46,7 +59,13 @@ export async function probeGoPlus({ chain, address }) {
 }
 export function shapeGoPlus(r) {
   const num = (v) => (v == null || v === "" ? null : Number(v));
+  // GoPlus lists a token's top holders (up to 10) with `percent` as a fraction
+  // of total supply; the report reads concentration from these rows.
+  const pctOf = (v) => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Math.round(Number(v) * 1e6) / 1e4);
   return {
+    tokenName: r.token_name || null, tokenSymbol: r.token_symbol || null,
+    totalSupply: r.total_supply == null || r.total_supply === "" ? null : String(r.total_supply),
+    topHolders: Array.isArray(r.holders) ? r.holders.slice(0, 10).map((h) => ({ address: h.address || null, tag: h.tag || null, isContract: flag(h.is_contract), percent: pctOf(h.percent), locked: flag(h.is_locked) })) : [],
     openSource: flag(r.is_open_source), proxy: flag(r.is_proxy), mintable: flag(r.is_mintable), honeypot: flag(r.is_honeypot),
     ownerAddress: r.owner_address || null, ownerRenounced: /^0x0{40}$/i.test(String(r.owner_address || "")) ? true : (r.owner_address ? false : null),
     hiddenOwner: flag(r.hidden_owner), canTakeBackOwnership: flag(r.can_take_back_ownership), ownerChangeBalance: flag(r.owner_change_balance),
@@ -66,7 +85,7 @@ export async function probeDexPairs({ chain, address }) {
   if (!c) throw bad(`DexScreener does not cover ${chain}`, 422);
   const arr = await getJson(`https://api.dexscreener.com/token-pairs/v1/${c}/${address}`);
   const pairs = (Array.isArray(arr) ? arr : []).map((p) => ({
-    dex: p.dexId || null, pair: p.pairAddress || null, quote: p.quoteToken?.symbol || null, priceUsd: p.priceUsd != null ? Number(p.priceUsd) : null,
+    dex: p.dexId || null, pair: p.pairAddress || null, baseAddress: p.baseToken?.address || null, quote: p.quoteToken?.symbol || null, priceUsd: p.priceUsd != null ? Number(p.priceUsd) : null,
     liquidityUsd: Number(p.liquidity?.usd) || 0, volume24h: Number(p.volume?.h24) || 0, volume1h: Number(p.volume?.h1) || 0,
     buys24h: Number(p.txns?.h24?.buys) || 0, sells24h: Number(p.txns?.h24?.sells) || 0, buys1h: Number(p.txns?.h1?.buys) || 0, sells1h: Number(p.txns?.h1?.sells) || 0,
     fdv: p.fdv != null ? Number(p.fdv) : null, marketCap: p.marketCap != null ? Number(p.marketCap) : null, createdAt: p.pairCreatedAt ? new Date(Number(p.pairCreatedAt)).toISOString() : null,
@@ -86,26 +105,28 @@ export function privilegedFunctions(abi) {
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
 const SYNTH = "anthropic/claude-opus-5";
-const GROUND = "google/gemini-2.5-flash";
+const GROUND = "google/gemini-3.6-flash"; // grounded web search + read. gemini-3.6-flash since 2026-09-23 (2.5-flash expires upstream 2026-10-20); it reasons by default, so the search call passes reasoning:low - measured: default spent 460 of 600 tokens thinking, low returned the full cited answer at the same cost.
 export const TOKEN_RISK_MODELS = [SYNTH, GROUND];
 
 export const TOKEN_RISK_TIERS = {
-  "token-risk": { price: "$0.60", maxUpstreamUsd: 0.35, holders: 20, scan: false, web: 0, synthMaxTokens: 3500, words: "~1,200" },
-  "token-risk-pro": { price: "$0.85", maxUpstreamUsd: 0.5, holders: 50, scan: true, web: 1, synthMaxTokens: 5000, words: "~1,900" },
+  "token-risk": { price: "$0.60", maxUpstreamUsd: 0.35, scan: false, web: 0, synthMaxTokens: 3500, words: "~1,200" },
+  "token-risk-pro": { price: "$0.85", maxUpstreamUsd: 0.5, scan: true, web: 1, synthMaxTokens: 5000, words: "~1,900" },
 };
 
 const ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
 const PROBE_TIMEOUT_MS = 22_000;
 const SEARCH_TIMEOUT_MS = 45_000;
 const SYNTH_TIMEOUT_MS = 120_000;
-// Chains covered by BOTH the holder/token probes and Sourcify source verification.
-const CHAINS = new Set(["base", "ethereum", "polygon", "arbitrum", "optimism", "bsc", "gnosis", "celo"]);
+// Chains covered by BOTH the token-security probe and Sourcify source
+// verification. Advertised here, keyed in GOPLUS_CHAIN_IDS and DEXSCREENER_CHAINS,
+// and named by the 400 below: one list, three uses, so the contract a buyer
+// reads on /openapi.json is the one the handler enforces.
+export const CHAINS = new Set(["base", "ethereum", "polygon", "arbitrum", "optimism", "bsc", "gnosis"]);
+const CHAINS_PROSE = `${[...CHAINS].join(", ")} (default base)`;
 const fmtUsdLoose = (v) => (v == null || !Number.isFinite(Number(v)) ? "unknown" : Number(v) >= 1e6 ? `$${(Number(v) / 1e6).toFixed(2)}M` : Number(v) >= 1e3 ? `$${(Number(v) / 1e3).toFixed(1)}k` : `$${Number(v).toFixed(0)}`);
 
-let _all = null;
-const allTools = () => (_all ||= [...BLOCKSCOUT_TOOLS, ...CONTRACT_TOOLS]);
 function H(slug) {
-  const t = allTools().find((x) => x.slug === slug);
+  const t = CONTRACT_TOOLS.find((x) => x.slug === slug);
   if (!t) throw bad(`token-risk: missing dependency '${slug}'`, 500);
   return t.handler;
 }
@@ -116,20 +137,18 @@ async function chat(body, timeoutMs, user) {
 }
 const costOf = (d) => Number(d?.usage?.cost) || 0;
 const textOf = (d) => (d?.choices?.[0]?.message?.content || "").trim();
+// `status` rides back because a caller has to tell "the source answered and
+// held nothing" (422) from "the source did not answer" (502/503/504, or no
+// status at all for a timeout or a socket error). Those need opposite words.
 async function settle(p, timeoutMs) {
   try {
     const data = timeoutMs ? await Promise.race([p, new Promise((_, r) => setTimeout(() => r(bad("timeout", 504)), timeoutMs))]) : await p;
     return { ok: true, data };
-  } catch (e) { return { ok: false, error: e?.message || String(e) }; }
+  } catch (e) { return { ok: false, error: e?.message || String(e), status: Number(e?.statusCode) || null }; }
 }
-// share of total supply as a percentage (BigInt-safe on raw integer strings).
-function shareOf(valueStr, totalStr) {
-  try {
-    const v = BigInt(String(valueStr)), t = BigInt(String(totalStr));
-    if (t <= 0n || v < 0n) return null;
-    return Number((v * 1000000n) / t) / 10000;
-  } catch { return null; }
-}
+// The statuses that mean "not this buyer's fault"; anything else a probe
+// reports is normalised to 503 rather than relayed.
+const UNAVAILABLE_STATUS = new Set([502, 503, 504]);
 // Best-effort extraction of Solidity source text from contract-source output,
 // whatever shape it returns the files in.
 function extractSource(cs) {
@@ -144,57 +163,75 @@ function extractSource(cs) {
 }
 const fmtPct = (n) => (n == null ? "?" : `${n.toFixed(2)}%`);
 // Burn / dead addresses hold supply that is out of circulation. They are EOAs
-// (no bytecode) so token-holders reports isContract=false; without this they'd
-// be labeled a large "wallet", misreading burned supply as concentration risk.
+// (no bytecode) so a holder list reports them as non-contracts; without this
+// they'd be labeled a large "wallet", misreading burned supply as concentration risk.
 function isBurn(a) {
   const s = String(a || "").toLowerCase().replace(/^0x/, "");
   return /^0{40}$/.test(s) || /^0*0*dead$/.test(s) || /0{6,}dead$/.test(s) || s === "000000000000000000000000000000000000dead";
 }
 const holderType = (r) => (r.burn ? "burn/dead" : r.isContract ? "contract" : "EOA");
 
-function makeTokenRiskHandlerInner(tierSlug) {
+// `deps` is the test seam: the keyless probes, the in-process contract tools
+// and the model call can each be replaced so the handler runs offline.
+function makeTokenRiskHandlerInner(tierSlug, deps = {}) {
   const t = TOKEN_RISK_TIERS[tierSlug];
+  const goplus = deps.probeGoPlus || probeGoPlus;
+  const dexPairs = deps.probeDexPairs || probeDexPairs;
+  const tool = deps.tool || H;
+  const ask = deps.chat || chat;
   return async (input, req) => {
     if (!input || typeof input !== "object") throw bad('Body must be a JSON object: {"address": "0x…", "chain": "base"}');
     const address = String(input.address ?? input.token ?? "").trim();
     if (!ADDR_RE.test(address)) throw bad('"address" must be a token contract address (0x + 40 hex chars)');
     const chain = String(input.chain ?? "base").trim().toLowerCase();
-    if (!CHAINS.has(chain)) throw bad(`"chain" must be one of: ${[...CHAINS].join(", ")} (default base)`);
+    if (!CHAINS.has(chain)) throw bad(`"chain" must be one of: ${CHAINS_PROSE}`);
     const user = safeUser(req);
 
     // 1) ON-CHAIN PROBES (parallel, each non-fatal).
-    const [infoR, holdersR, srcR, gpR, dexR, profR, abiR] = await Promise.all([
-      settle(H("token-info")({ chain, address }), PROBE_TIMEOUT_MS),
-      settle(H("token-holders")({ chain, address, limit: t.holders }), PROBE_TIMEOUT_MS),
-      settle(H("contract-source")({ address, network: chain }), PROBE_TIMEOUT_MS),
-      settle(probeGoPlus({ chain, address }), PROBE_TIMEOUT_MS),
-      settle(probeDexPairs({ chain, address }), PROBE_TIMEOUT_MS),
-      settle(H("address-profile")({ chain, address }), PROBE_TIMEOUT_MS),
-      settle(H("contract-abi")({ address, network: chain }), PROBE_TIMEOUT_MS),
+    const [srcR, gpR, dexR, abiR] = await Promise.all([
+      settle(tool("contract-source")({ address, network: chain }), PROBE_TIMEOUT_MS),
+      settle(goplus({ chain, address }), PROBE_TIMEOUT_MS),
+      settle(dexPairs({ chain, address }), PROBE_TIMEOUT_MS),
+      settle(tool("contract-abi")({ address, network: chain }), PROBE_TIMEOUT_MS),
     ]);
-    const info = infoR.ok ? infoR.data : null;
-    const holdersData = holdersR.ok ? holdersR.data : null;
     const src = srcR.ok ? srcR.data : null;
     const gp = gpR.ok ? gpR.data : null;
     const dex = dexR.ok ? dexR.data : null;
-    const prof = profR.ok ? profR.data : null;
     const abiInfo = abiR.ok ? privilegedFunctions(abiR.data?.abi) : null;
+    const holders = Array.isArray(gp?.topHolders) ? gp.topHolders : [];
+    // An OUTAGE IS NOT THE BUYER'S MISTAKE. The token-security probe is the
+    // only source of supply and holders, so when it fails there is no report to
+    // sell either way - but a rate limit, an upstream error or a timeout must
+    // say the source is down, not tell a buyer to check an address that is
+    // correct. 422 from the probe is its considered answer ("no record for this
+    // token", "chain not covered"); every other outcome is the source itself.
+    // Both are >= 400, so settlement is cancelled and nobody pays; what differs
+    // is the words and the class a monitor files it under.
+    if (!gp && gpR.status !== 422) {
+      throw bad(`The token-security source is unavailable (${gpR.error}), so the risk report for "${address}" on ${chain} could not be produced. Not charged; try again shortly.`,
+        UNAVAILABLE_STATUS.has(gpR.status) ? gpR.status : 503);
+    }
     // Minimum evidence: a RISK report needs on-chain token facts (supply) or the
-    // holder distribution - verified source alone (free Sourcify) is not a risk
+    // holder distribution, and the token-security record is where both come
+    // from. Verified source (Sourcify) or DEX pairs alone are not a risk
     // assessment and must not be sold as one. Not charged.
-    if (!info && !holdersData) throw bad(`Could not read token "${address}" on ${chain} (token and holder probes both failed${src ? "; only the contract source was readable" : ""}). Confirm the address and chain. Not charged.`, 422);
+    if (!gp || (gp.totalSupply == null && !holders.length)) {
+      const why = gp ? "the token-security record carried neither supply nor holders" : `the token-security probe failed: ${gpR.error}`;
+      const also = [src ? "the contract source" : null, dex ? "the DEX pairs" : null].filter(Boolean);
+      throw bad(`Could not read token "${address}" on ${chain} (${why}${also.length ? `; only ${also.join(" and ")} ${also.length > 1 ? "were" : "was"} readable` : ""}). Confirm the address and chain. Not charged.`, 422);
+    }
 
-    const totalSupply = info?.totalSupply ?? null;
-    const holders = Array.isArray(holdersData?.holders) ? holdersData.holders : [];
+    const totalSupply = gp.totalSupply;
     const ranked = holders.map((h) => ({
       address: h.address || null,
-      isContract: !!h.isContract,
+      isContract: h.isContract === true,
       burn: isBurn(h.address),
-      name: h.name || null,
-      share: totalSupply ? shareOf(h.value, totalSupply) : null,
+      name: h.tag || null,
+      locked: h.locked === true,
+      share: h.percent,
     }));
     const top1 = ranked[0]?.share ?? null;
-    const top10 = ranked.slice(0, 10).reduce((a, r) => a + (r.share || 0), 0) || null;
+    const top10 = Math.round(ranked.slice(0, 10).reduce((a, r) => a + (r.share || 0), 0) * 1e4) / 1e4 || null;
     const verified = src ? !!src.verified : null;
 
     // 2) PRO: static scan of the verified source + one web reputation check.
@@ -203,26 +240,31 @@ function makeTokenRiskHandlerInner(tierSlug) {
     if (t.scan && verified) {
       const source = extractSource(src);
       if (source.trim()) {
-        const r = await settle(H("solidity-scan")({ source }), PROBE_TIMEOUT_MS);
+        const r = await settle(tool("solidity-scan")({ source }), PROBE_TIMEOUT_MS);
         if (r.ok) scan = r.data; else scanErr = r.error;
       } else scanErr = "verified source text was not extractable from the verification record";
     }
     if (t.web) {
-      const q = `${info?.name || address} ${info?.symbol || ""} token ${chain} scam OR rug OR honeypot OR audit reputation`.trim();
-      const wr = await chat({ model: GROUND, messages: [{ role: "user", content: `Search the web for the reputation of this crypto token and answer with SPECIFIC facts and citations - any scam/rug/honeypot reports, audits, or notable coverage. If you find nothing credible, say so. Token: ${q}` }], max_tokens: 600, plugins: [{ id: "web", engine: "exa", max_results: 5 }] }, SEARCH_TIMEOUT_MS, user).catch(() => null);
+      const q = `${gp.tokenName || address} ${gp.tokenSymbol || ""} token ${chain} scam OR rug OR honeypot OR audit reputation`.trim();
+      const wr = await ask({ model: GROUND, reasoning: { effort: "low" }, messages: [{ role: "user", content: `Search the web for the reputation of this crypto token and answer with SPECIFIC facts and citations - any scam/rug/honeypot reports, audits, or notable coverage. If you find nothing credible, say so. Token: ${q}` }], max_tokens: 600, plugins: [{ id: "web", engine: "exa", max_results: 5 }] }, SEARCH_TIMEOUT_MS, user).catch(() => null);
       if (wr) { web = { answer: textOf(wr), sources: (wr?.choices?.[0]?.message?.annotations || []).map((a) => a?.url_citation || a).filter((c) => c?.url).map((c) => ({ title: String(c.title || c.url).slice(0, 160), url: String(c.url) })) }; spent += costOf(wr); }
     }
 
     // 3) GROUNDING BLOCKS.
-    const infoBlock = info
-      ? `Name ${info.name || "?"} (${info.symbol || "?"}), type ${info.type || "?"}, decimals ${info.decimals ?? "?"}. Total supply ${totalSupply ?? "unknown"}. Holder count ${info.holders ?? "?"}. Market cap ${info.circulatingMarketCap ?? "unknown"}. Price (exchange rate) ${info.exchangeRate ?? "unknown"}; 24h transfers ${info.transfers24h ?? "unknown"}.`
-      : `token-info probe FAILED: ${infoR.error}`;
+    // A DexScreener pair's price, market cap and FDV describe its BASE token, so
+    // only a pair that lists this token as the base can supply them; the
+    // deepest pair for a stablecoin usually quotes it (AERO/USDC is AERO's price).
+    const top = dex?.pairs?.find((p) => String(p.baseAddress || "").toLowerCase() === address.toLowerCase()) || null;
+    const infoBlock = `Name ${gp.tokenName || "?"} (${gp.tokenSymbol || "?"}). Total supply ${totalSupply ?? "unknown"} (whole tokens, per GoPlus). Holder count ${gp.holderCount ?? "unknown"}. ` +
+      (top
+        ? `Market (deepest DEX pair with this token as base): price ${top.priceUsd != null ? `$${top.priceUsd}` : "unknown"}, market cap ${fmtUsdLoose(top.marketCap)}, FDV ${fmtUsdLoose(top.fdv)}.`
+        : `Market price and cap were NOT checked (${dex ? "no listed DEX pair has this token as its base" : "the DexScreener probe failed"}).`);
     const verifyBlock = src
       ? (verified ? `Source is VERIFIED (${src.match || "match"}) - compiler ${src.compiler?.version || "?"}, verified at ${src.verifiedAt || "?"}.` : "Source is NOT VERIFIED on Sourcify - the contract's code cannot be independently reviewed. This is a notable risk signal (though some legitimate contracts are unverified).")
       : `contract-source probe FAILED: ${srcR.error}`;
     const holderBlock = ranked.length
-      ? `Top holders (share of total supply; [burn/dead] = out of circulation, [contract] = pool/bridge/staking/etc., [EOA] = externally-owned wallet):\n` + ranked.slice(0, t.holders).map((r, i) => `${i + 1}. ${r.address || "?"} - ${fmtPct(r.share)} [${holderType(r)}]${r.name ? ` (${r.name})` : ""}`).join("\n") + `\nConcentration: top holder ${fmtPct(top1)}, top 10 ${fmtPct(top10)} of supply (this includes any burn/dead and pool/contract holders - weigh those differently from wallet concentration).`
-      : `token-holders probe ${holdersR.ok ? "returned no holders" : `FAILED: ${holdersR.error}`}.`;
+      ? `Top holders as listed by GoPlus (up to 10; share of total supply; [burn/dead] = out of circulation, [contract] = pool/bridge/staking/etc., [EOA] = externally-owned wallet):\n` + ranked.map((r, i) => `${i + 1}. ${r.address || "?"} - ${fmtPct(r.share)} [${holderType(r)}]${r.locked ? " LOCKED" : ""}${r.name ? ` (${r.name})` : ""}`).join("\n") + `\nConcentration: top holder ${fmtPct(top1)}, top ${Math.min(ranked.length, 10)} ${fmtPct(top10)} of supply (this includes any burn/dead and pool/contract holders - weigh those differently from wallet concentration).`
+      : "The token-security record listed no holders; holder concentration was NOT checked.";
     const scanBlock = t.scan
       ? (scan ? `Static pattern scan (heuristic, not an audit) of the verified source: ${scan.summary ? JSON.stringify(scan.summary) : `${(scan.findings || []).length} findings`}. Findings: ${(scan.findings || []).slice(0, 25).map((f) => `${f.severity || "?"}: ${f.title || f.rule || f.pattern || "finding"}${f.line ? ` (line ${f.line})` : ""}`).join("; ") || "none"}.`
               : `Static scan not run: ${scanErr || "source unavailable"}.`)
@@ -230,13 +272,11 @@ function makeTokenRiskHandlerInner(tierSlug) {
     const webBlock = web ? `WEB REPUTATION: ${web.answer || "(no answer)"}` : "";
     const yn = (v) => (v === true ? "YES" : v === false ? "no" : "unknown");
     const pctS = (v) => (v == null ? "unknown" : `${Number(v).toFixed(2)}%`);
+    // No "the token-security probe failed" arm here or in the liquidity block:
+    // past the refusal above `gp` is always present, and a branch that can
+    // never run is a claim nothing checks.
     const controlBlock = [
-      gp
-        ? `GoPlus token_security (keyless, checked): open source ${yn(gp.openSource)}; PROXY (upgradeable) ${yn(gp.proxy)}; MINTABLE ${yn(gp.mintable)}; HONEYPOT ${yn(gp.honeypot)}; owner ${gp.ownerAddress || "unknown"} (renounced ${yn(gp.ownerRenounced)}, owner holds ${pctS(gp.ownerPct)}); hidden owner ${yn(gp.hiddenOwner)}; can take back ownership ${yn(gp.canTakeBackOwnership)}; owner can change balances ${yn(gp.ownerChangeBalance)}; buy tax ${pctS(gp.buyTaxPct)}, sell tax ${pctS(gp.sellTaxPct)}; cannot sell all ${yn(gp.cannotSellAll)}; transfers pausable ${yn(gp.transferPausable)}; blacklist ${yn(gp.blacklist)}; whitelist ${yn(gp.whitelist)}; slippage modifiable ${yn(gp.slippageModifiable)}; trading cooldown ${yn(gp.tradingCooldown)}; anti-whale ${yn(gp.antiWhale)} (modifiable ${yn(gp.antiWhaleModifiable)}); selfdestruct ${yn(gp.selfdestruct)}; external calls ${yn(gp.externalCall)}; creator ${gp.creatorAddress || "unknown"} holds ${pctS(gp.creatorPct)}${gp.fakeToken?.value ? `; FLAGGED AS A FAKE of ${gp.fakeToken.trueTokenAddress || "another token"}` : ""}${gp.trustList ? "; on GoPlus trust list" : ""}.`
-        : `GoPlus token_security probe FAILED (${gpR.error}) - honeypot/proxy/mintable/owner-privilege flags were NOT checked; say so.`,
-      prof
-        ? `Blockscout address profile: contract ${yn(prof.isContract)}, verified ${yn(prof.isVerified)}, proxy type ${prof.proxyType || "none reported"}${prof.implementations?.length ? `, implementation(s) ${prof.implementations.map((x) => x.address || x).join(", ")}` : ""}, creator ${prof.creatorAddress || "unknown"}${prof.isScam ? ", FLAGGED is_scam by Blockscout" : ""}.`
-        : `Blockscout address profile probe FAILED (${profR.error}).`,
+      `GoPlus token_security (keyless, checked): open source ${yn(gp.openSource)}; PROXY (upgradeable) ${yn(gp.proxy)}; MINTABLE ${yn(gp.mintable)}; HONEYPOT ${yn(gp.honeypot)}; owner ${gp.ownerAddress || "unknown"} (renounced ${yn(gp.ownerRenounced)}, owner holds ${pctS(gp.ownerPct)}); hidden owner ${yn(gp.hiddenOwner)}; can take back ownership ${yn(gp.canTakeBackOwnership)}; owner can change balances ${yn(gp.ownerChangeBalance)}; buy tax ${pctS(gp.buyTaxPct)}, sell tax ${pctS(gp.sellTaxPct)}; cannot sell all ${yn(gp.cannotSellAll)}; transfers pausable ${yn(gp.transferPausable)}; blacklist ${yn(gp.blacklist)}; whitelist ${yn(gp.whitelist)}; slippage modifiable ${yn(gp.slippageModifiable)}; trading cooldown ${yn(gp.tradingCooldown)}; anti-whale ${yn(gp.antiWhale)} (modifiable ${yn(gp.antiWhaleModifiable)}); selfdestruct ${yn(gp.selfdestruct)}; external calls ${yn(gp.externalCall)}; creator ${gp.creatorAddress || "unknown"} holds ${pctS(gp.creatorPct)}${gp.fakeToken?.value ? `; FLAGGED AS A FAKE of ${gp.fakeToken.trueTokenAddress || "another token"}` : ""}${gp.trustList ? "; on GoPlus trust list" : ""}.`,
       abiInfo
         ? `ABI (Sourcify): ${abiInfo.total} functions, ${abiInfo.writable} state-changing; PRIVILEGED functions present: ${abiInfo.privileged.length ? abiInfo.privileged.join(", ") : "none of the known owner-privilege names"}. (A privileged function is a capability, not proof of use - who can call it is the owner question above.)`
         : `ABI probe ${abiR.ok ? "returned no ABI" : `FAILED (${abiR.error})`} - the contract's function surface was NOT inspected.`,
@@ -245,9 +285,7 @@ function makeTokenRiskHandlerInner(tierSlug) {
       dex
         ? `DexScreener: ${dex.totalPairs} pair(s), combined liquidity ${fmtUsdLoose(dex.liquidityUsd)}, 24h volume ${fmtUsdLoose(dex.volume24h)}, 24h transactions ${dex.txns24h}. Deepest pairs: ${dex.pairs.slice(0, 5).map((p) => `${p.dex} ${p.quote || "?"} pair ${p.pair} liquidity ${fmtUsdLoose(p.liquidityUsd)}, 24h vol ${fmtUsdLoose(p.volume24h)}, buys/sells 24h ${p.buys24h}/${p.sells24h}, 1h ${p.buys1h}/${p.sells1h}${p.createdAt ? `, created ${p.createdAt.slice(0, 10)}` : ""}${p.hasProfile ? ", profile yes" : ", profile NO"}`).join("; ") || "none"}.`
         : `DexScreener probe FAILED (${dexR.error}) - liquidity and trading activity were NOT checked; say so.`,
-      gp
-        ? `LP (GoPlus): ${gp.lpHolderCount ?? "unknown"} LP holders; LP locked ${pctS(gp.lpLockedPct)} of LP supply; top LP holders ${gp.lpTopHolders.map((h) => `${h.address}${h.tag ? ` (${h.tag})` : ""} ${h.percent}%${h.locked ? " LOCKED" : ""}`).join("; ") || "none listed"}; DEX liquidity per GoPlus ${gp.dexes.map((d) => `${d.name} ${fmtUsdLoose(d.liquidityUsd)}`).join(", ") || "none listed"}.`
-        : "",
+      `LP (GoPlus): ${gp.lpHolderCount ?? "unknown"} LP holders; LP locked ${pctS(gp.lpLockedPct)} of LP supply; top LP holders ${gp.lpTopHolders.map((h) => `${h.address}${h.tag ? ` (${h.tag})` : ""} ${h.percent}%${h.locked ? " LOCKED" : ""}`).join("; ") || "none listed"}; DEX liquidity per GoPlus ${gp.dexes.map((d) => `${d.name} ${fmtUsdLoose(d.liquidityUsd)}`).join(", ") || "none listed"}.`,
     ].filter(Boolean).join("\n");
 
     // 4) SYNTHESIZE - evidence-based, NEVER a definitive safe/scam verdict.
@@ -267,7 +305,7 @@ Write a clear, structured report of up to ${t.words} words: SNAPSHOT (what the t
 === SOURCE VERIFICATION ===\n${verifyBlock}
 === HOLDER CONCENTRATION ===\n${holderBlock}${t.scan ? `\n=== STATIC SCAN ===\n${scanBlock}` : ""}${t.web && webBlock ? `\n=== WEB REPUTATION ===\n${webBlock}` : ""}`;
 
-    const sd = await chat({ model: SYNTH, messages: [{ role: "user", content: synthPrompt }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user);
+    const sd = await ask({ model: SYNTH, messages: [{ role: "user", content: synthPrompt }], max_tokens: t.synthMaxTokens, reasoning: { enabled: false } }, SYNTH_TIMEOUT_MS, user);
     spent += costOf(sd);
     const prose = textOf(sd);
     if (!prose) throw bad("Token risk synthesis produced nothing - not charged", 502);
@@ -278,7 +316,7 @@ Write a clear, structured report of up to ${t.words} words: SNAPSHOT (what the t
     if (ranked.length) tables.push({
       name: "holders", label: "Top holders",
       columns: ["Rank", "Address", "Share of supply", "Type", "Label"],
-      rows: ranked.map((r, i) => [String(i + 1), r.address || "", fmtPct(r.share), holderType(r), r.name || ""]),
+      rows: ranked.map((r, i) => [String(i + 1), r.address || "", fmtPct(r.share), holderType(r), [r.name, r.locked ? "locked" : null].filter(Boolean).join(", ")]),
     });
     if (scan?.findings?.length) tables.push({
       name: "scan-findings", label: "Static scan findings",
@@ -289,11 +327,11 @@ Write a clear, structured report of up to ${t.words} words: SNAPSHOT (what the t
     const sources = (web?.sources || []).map((s, i) => ({ n: i + 1, ...s }));
     const meta = {
       tier: tierSlug, address, chain,
-      name: info?.name ?? null, symbol: info?.symbol ?? null,
-      verified_source: verified, holder_count: info?.holders ?? null,
+      name: gp.tokenName ?? null, symbol: gp.tokenSymbol ?? null,
+      verified_source: verified, holder_count: gp.holderCount ?? null,
       top1_share_pct: top1, top10_share_pct: top10,
       scan_findings: scan?.findings?.length ?? null,
-      probes: { tokenInfo: infoR.ok, holders: holdersR.ok, source: srcR.ok, scan: !!scan },
+      probes: { tokenSecurity: gpR.ok, dexPairs: dexR.ok, source: srcR.ok, abi: abiR.ok, scan: !!scan },
       synthesis_model: SYNTH,
       disclaimer: "Evidence-based on-chain risk signals only. Not financial advice, not a guarantee, not exhaustive. On-chain analysis cannot detect off-chain or social scams.",
     };
@@ -309,7 +347,7 @@ const SCHEMA = {
   required: ["address"],
   properties: {
     address: { type: "string", description: "Token contract address (0x + 40 hex)." },
-    chain: { type: "string", description: "Chain: base (default), ethereum, polygon, arbitrum, optimism, bsc, gnosis, or celo." },
+    chain: { type: "string", description: `Chain, one of: ${CHAINS_PROSE}.` },
     format: { type: "string", enum: ["markdown", "json"], description: "Response shape (default markdown report)." },
   },
 };
@@ -331,7 +369,7 @@ export const TOKEN_RISK_TOOLS = [
   },
   {
     route: "POST /v1/token-risk/pro", name: "Token & contract risk report - PRO (static scan + reputation)", slug: "token-risk-pro", category: "llm", price: TOKEN_RISK_TIERS["token-risk-pro"].price,
-    description: "The deeper tier: everything in the standard report plus a deterministic static-pattern scan of the verified source (tx.origin auth, delegatecall, selfdestruct, unchecked calls, reentrancy surface, etc. - heuristic triage, not a formal audit), more holders, and a web reputation check. Still evidence, never a verdict. USDC (x402/MPP). Not cached.",
+    description: "The deeper tier: everything in the standard report plus a deterministic static-pattern scan of the verified source (tx.origin auth, delegatecall, selfdestruct, unchecked calls, reentrancy surface, etc. - heuristic triage, not a formal audit) and a web reputation check. Still evidence, never a verdict. USDC (x402/MPP). Not cached.",
     tags: ["crypto", "token", "risk", "rug", "static-analysis", "solidity", "reputation", "contract", "onchain", "agent", "premium"],
     discovery: { bodyType: "json", input: { address: "0x4200000000000000000000000000000000000006", chain: "base" }, inputSchema: SCHEMA, output: { example: { ...OUT_EXAMPLE, meta: { ...OUT_EXAMPLE.meta, tier: "token-risk-pro" } } } },
     handler: makeTokenRiskHandler("token-risk-pro"),
@@ -342,8 +380,8 @@ export const TOKEN_RISK_TOOLS = [
 // the return site; a failed run (thrown >= 400, not charged) is recorded here
 // so the burn on failures is visible too (spend unknown at this point -> 0).
 const priceUsdOf = (t) => Number(String(t?.price ?? "").replace(/[^0-9.]/g, "")) || null;
-export function makeTokenRiskHandler(tierSlug) {
-  const run = makeTokenRiskHandlerInner(tierSlug);
+export function makeTokenRiskHandler(tierSlug, deps) {
+  const run = makeTokenRiskHandlerInner(tierSlug, deps);
   return async (input, req) => {
     try { return await run(input, req); }
     catch (e) { try { recordCompositeUsage({ slug: tierSlug, upstreamUsd: 0, ok: false, priceUsd: priceUsdOf(TOKEN_RISK_TIERS[tierSlug]) }); } catch { /* never mask the real error */ } throw e; }

@@ -24,6 +24,15 @@
 //     never silently skipped.
 //   * synthetic rows (canary/heartbeat self-harm) are held by default -
 //     refunding our own burner is churn. REFUND_INCLUDE_SYNTHETIC=true opts in.
+//   * a buyer who disconnected (http 499) on a route whose effect outlives the
+//     answer (hasLastingEffect in src/hangup-forgiveness.js: the route-execute
+//     tiers, memory writes, attest, feedback) is held for review by default:
+//     the effect was delivered before the socket closed. A reviewer who has
+//     read those rows releases them with REFUND_INCLUDE_LASTING_HANGUPS=true.
+//   * a disconnect booked because the hang-up forgiveness budget was spent
+//     (a repeat hang-up: payer, IP or service budget), or one recorded before
+//     the reason was stored, is held the same way; REFUND_INCLUDE_REPEAT_HANGUPS
+//     =true releases them.
 //   * a chain without an implemented sender or a configured key HOLDS its
 //     rows and says so. The debt stays on the ledger; nothing is written off.
 //   * marking paid requires the outbound tx hash, enforced server-side too.
@@ -36,6 +45,7 @@
 // sender lands with the planned Solana spending wallet.
 
 import { createHash, createHmac } from "node:crypto";
+import { hasLastingEffect } from "../src/hangup-forgiveness.js";
 
 // This repo is PUBLIC, so every Actions log is world-readable. The project's
 // standing rule for buyer identities is "counts only, never addresses - a
@@ -137,6 +147,39 @@ export function familyOf(network) {
   return "unknown";
 }
 
+// The status the serving code books a disconnect under (recordHangupDebt in
+// src/server.js). A debt recorded on it is a buyer who left before the first
+// byte; every other status is an answer that failed.
+export const HANGUP_STATUS = 499;
+export const LASTING_HANGUP_HOLD =
+  "disconnected after a route whose effect was already delivered - review, then set include_lasting_hangups to repay";
+
+// A disconnect that was not forgiven because a forgiveness BUDGET was spent
+// (src/hangup-forgiveness.js): this wallet, this IP, or the whole service had
+// already abandoned its window's worth of runs. That is what a repeat hang-up
+// looks like - leave before the answer, get charged, get refunded, repeat - so
+// repaying one is a reviewer's decision, the same as a lasting-effect
+// disconnect. A disconnect booked before the reason was stored (hangupReason
+// NULL) cannot be told apart from one, so it is held the same way; a
+// disconnect whose ticket was granted but lost the race to a settle already in
+// flight, or that never had a ticket, is an ordinary debt.
+export const REPEAT_HANGUP_REASONS = Object.freeze(["payer budget", "ip budget", "global budget"]);
+export const REPEAT_HANGUP_HOLD =
+  "disconnected past the hang-up forgiveness budget (or before the reason was recorded) - review, then set include_repeat_hangups to repay";
+
+/** A disconnect booked because a forgiveness budget was spent, or one whose
+ *  reason predates the column (see planRefunds). */
+export function isRepeatHangup(row) {
+  if (Number(row?.httpStatus) !== HANGUP_STATUS) return false;
+  const reason = typeof row?.hangupReason === "string" ? row.hangupReason.trim() : "";
+  return !reason || REPEAT_HANGUP_REASONS.includes(reason);
+}
+
+/** A disconnect on a route whose effect outlives the answer (see planRefunds). */
+export function isLastingEffectHangup(row) {
+  return Number(row?.httpStatus) === HANGUP_STATUS && hasLastingEffect(row?.slug);
+}
+
 /**
  * Pure planner: decide what to send and what to hold, with reasons. Exported
  * for the offline test - the dangerous mistakes (skipping caps, refunding the
@@ -149,6 +192,8 @@ export function planRefunds(rawRows, {
   minRefundUsd = MIN_REFUND,
   onlyChain = "",
   includeSynthetic = false,
+  includeLastingHangups = false,
+  includeRepeatHangups = false,
   senders = {},              // family -> truthy when a key+implementation exists
 } = {}) {
   // Normalized ONCE at intake so familyOf, the accepts lookup and the row the
@@ -165,6 +210,18 @@ export function planRefunds(rawRows, {
     if (row.status && row.status !== "owed") continue;
     if (onlyChain && row.network !== onlyChain) { hold("filtered by chain", row); continue; }
     if (row.synthetic && !includeSynthetic) { hold("synthetic (our own canary - opt in to refund it)", row); continue; }
+    // A disconnect on a route whose effect outlives the answer: the handler
+    // had already acted (a purchase from an outside seller on our wallet, a
+    // memory write, an attestation, a stored verdict) when the socket closed,
+    // the same reason the serving side never forgives these hang-ups. Repaying
+    // one is a reviewer's decision, so these rows stay owed, are listed in
+    // their own bucket, and are repaid only when the run opts in. Held before
+    // the caps, so they take no share of this run's budget.
+    if (!includeLastingHangups && isLastingEffectHangup(row)) { hold(LASTING_HANGUP_HOLD, row); continue; }
+    // A repeat hang-up (the forgiveness budget was spent) is held the same
+    // way and for the same reason: each refund would turn the next abandoned
+    // run into a free one. Also before the caps.
+    if (!includeRepeatHangups && !isLastingEffectHangup(row) && isRepeatHangup(row)) { hold(REPEAT_HANGUP_HOLD, row); continue; }
     if (!row.payer) { hold("no payer recorded - resolve manually (void with a note)", row); continue; }
     const usd = Number(row.priceUsd) || 0;
     if (usd <= 0) { hold("zero amount - void with a note", row); continue; }
@@ -192,20 +249,30 @@ export function planRefunds(rawRows, {
 
 /** Fetch our own live 402 and index the accepts by network - the asset source. */
 async function liveAcceptsByNetwork() {
-  const res = await fetch(`${TARGET}/api/hash`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "refund-run" }),
-  });
-  if (res.status !== 402) throw new Error(`expected a 402 from ${TARGET}/api/hash, got ${res.status}`);
-  const hdr = res.headers.get("payment-required");
-  if (!hdr) throw new Error("402 carried no payment-required header");
-  const body = JSON.parse(Buffer.from(hdr, "base64").toString("utf8"));
+  const accepts402 = async (path, body) => {
+    const res = await fetch(`${TARGET}${path}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (res.status !== 402) throw new Error(`expected a 402 from ${TARGET}${path}, got ${res.status}`);
+    const hdr = res.headers.get("payment-required");
+    if (!hdr) throw new Error("402 carried no payment-required header");
+    return JSON.parse(Buffer.from(hdr, "base64").toString("utf8")).accepts || [];
+  };
   const byNet = {};
-  for (const a of body.accepts || []) if (!byNet[a.network]) byNet[a.network] = a;
+  for (const a of await accepts402("/api/hash", { text: "refund-run" })) if (!byNet[a.network]) byNet[a.network] = a;
+  // A rail the sub-cent route does not offer right now (Algorand, while the
+  // facilitator's sponsored sub-cent allowance is spent - src/avm-sponsorship.js)
+  // is still read from a one-cent route, so its debts stay payable instead of
+  // holding for want of an asset id. Same treasury payTo, same asset.
+  try {
+    for (const a of await accepts402("/api/solidity-scan", {})) if (!byNet[a.network]) byNet[a.network] = a;
+  } catch { /* the sub-cent accepts above are the floor */ }
   return byNet;
 }
 
-// payTo is per-SLUG, not per-network. The self-funding routes (route-execute
-// and the Blockscout tools) settle to the SPENDING wallet, not the treasury,
+// payTo is per-SLUG, not per-network. The self-funding routes (route-execute,
+// and the explorer-data tools until their 2026-09-22 retirement) settle to the
+// SPENDING wallet, not the treasury,
 // so verifying every row against /api/hash's treasury payTo made those debts
 // permanently unverifiable - and they are the routes most likely to
 // charged-fail, since they spend upstream on the buyer's behalf. Probing the
@@ -240,6 +307,19 @@ export function ourPayToSet(accepts, env = process.env) {
 
 // ---- chain senders (each returns the outbound tx id) ----
 
+// The memo an EVM refund carries. ERC-20 transfer() has no memo argument, so
+// the text rides as a UTF-8 suffix after the ABI-encoded arguments: the token
+// ignores trailing calldata, and explorers show it under the transaction's
+// input data (Basescan decodes it as UTF-8). Names the settlement it repays
+// when the row holds a real transaction hash (public on chain already).
+export function refundMemo(row) {
+  const ev = String(row?.evidence || "").trim();
+  return /^0x[0-9a-fA-F]{64}$/.test(ev) ? `agent402 refund for ${ev}` : "agent402 refund";
+}
+export function refundMemoHex(row) {
+  return "0x" + Buffer.from(refundMemo(row), "utf8").toString("hex");
+}
+
 async function sendEvm(row, accepts) {
   const { createWalletClient, http, publicActions, defineChain } = await import("viem");
   const { privateKeyToAccount } = await import("viem/accounts");
@@ -260,7 +340,9 @@ async function sendEvm(row, accepts) {
   // future asset would refund a millionth (or a million times) the debt.
   const decimals = await client.readContract({ address: token, abi: erc20, functionName: "decimals" });
   const amount = BigInt(Math.round(row.priceUsd * 10 ** Number(decimals)));
-  const hash = await client.writeContract({ address: token, abi: erc20, functionName: "transfer", args: [row.payer, amount] });
+  const { encodeFunctionData, concat } = await import("viem");
+  const data = concat([encodeFunctionData({ abi: erc20, functionName: "transfer", args: [row.payer, amount] }), refundMemoHex(row)]);
+  const hash = await client.sendTransaction({ to: token, data });
   return hash;
 }
 
@@ -349,14 +431,20 @@ async function main() {
     maxPerPayerUsd: MAX_PER_PAYER,
     minRefundUsd: MIN_REFUND,
     includeSynthetic: /^(1|true|yes)$/i.test(process.env.REFUND_INCLUDE_SYNTHETIC || ""),
+    includeLastingHangups: /^(1|true|yes)$/i.test((process.env.REFUND_INCLUDE_LASTING_HANGUPS || "").trim()),
+    includeRepeatHangups: /^(1|true|yes)$/i.test((process.env.REFUND_INCLUDE_REPEAT_HANGUPS || "").trim()),
     senders,
   });
+  // Each line names the response status the debt was recorded on, so a
+  // reviewer reading the dry run can tell a failed answer from a buyer who
+  // disconnected (499) before approving a live run.
+  const what = (r) => `${r.slug}${r.httpStatus ? `, http ${r.httpStatus}` : ""}${r.hangupReason ? `, ${r.hangupReason}` : ""}`;
   for (const [reason, rows] of Object.entries(plan.held)) {
     console.log(`\nHELD (${reason}): ${rows.length}`);
-    for (const r of rows) console.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${tag(r.payer)} (${r.slug})`);
+    for (const r of rows) console.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${tag(r.payer)} (${what(r)})`);
   }
   console.log(`\nTO SEND: ${plan.send.length} refund(s), $${plan.totalUsd} total`);
-  for (const r of plan.send) console.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${tag(r.payer)} (${r.slug})`);
+  for (const r of plan.send) console.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${tag(r.payer)} (${what(r)})`);
 
   if (!LIVE) { console.log("\nDRY RUN - no money moved. Set REFUND_LIVE=true to execute."); return; }
   if (!plan.send.length) { console.log("nothing to send."); return; }

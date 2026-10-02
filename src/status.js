@@ -24,12 +24,13 @@
 //        three probes and 100% of three thousand are different claims.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import {
-  probeRows, latestByComponent, earliestObservation, totalObservations, statusPersistent,
-  uptimeFrom, dailyFrom, incidentsFrom, stateFrom,
+  probeRows, probeCounts, latestByComponent, latestBySource, earliestObservation, totalObservations, statusPersistent,
+  uptimeFrom, dailyFrom, incidentsFrom, stateFrom, stateFromSources,
 } from "./status-store.js";
 import { RAILS } from "./rails.js";
 
-const REPO = "https://github.com/MikeyPetrillo/Agent402";
+import { REPO_URL } from "./repo-link.js";
+const REPO = REPO_URL;
 const HEARTBEAT_RUNS = `${REPO}/actions/workflows/heartbeat.yml`;
 const CANARY_RUNS = `${REPO}/actions/workflows/paid-canary.yml`;
 const DAY = 86400000;
@@ -45,15 +46,28 @@ const DAY = 86400000;
 // every 24 and drag the whole page to "degraded" — a threshold mismatch
 // masquerading as an incident.
 const QUARTER_HOURLY = 45 * 60_000; // ~3 missed observations at the 5-15 min cadence
-// paid-call is the one component NO independent observer covers. The Cloudflare
-// cron probe (workers/status-probe) deliberately skips it: solving the 16-bit
-// PoW needs POW_SECRET on a second platform, and without that token every probe
-// would be counted as genuine external free-tier demand and corrupt the
-// free-tier series on /revenue. So its only observer is the GitHub heartbeat,
-// whose real delivery cadence is ~hourly (measured 2026-07-27: 60-72 min).
-// Sizing it at 45 min would report "unknown" on a healthy paid path every time
-// GitHub is merely late, and drag the whole page to "degraded" with it.
-const HOURLY_OBSERVER = 3 * 3600_000; // ~3 missed hourly heartbeat runs
+// paid-call has two observers, and they do NOT walk the same path. The GitHub
+// heartbeat walks the challenge a buyer is issued (full difficulty, the buyer's
+// TTL, the normal token). The Cloudflare cron probe (workers/status-probe)
+// walks the probe-only challenge from src/pow.js every 5 minutes: low
+// difficulty, a shorter TTL, a marked token with its own verify branch. So a
+// newer success from one says nothing about the other's path, and newest-row-
+// wins would let the Worker's 5-minute "ok" overwrite a failure only the
+// buyer's path has (a difficulty or TTL misconfiguration, a regression in the
+// normal verify branch). paid-call is therefore judged per source
+// (stateFromSources in src/status-store.js): a failure either observer records
+// stands until that SAME observer sees the path work again or its reading goes
+// stale. Each source is aged against its own cadence: the heartbeat's row
+// against HOURLY_OBSERVER, sized to its real delivery, which is far sparser
+// than its schedule; the Worker's against QUARTER_HOURLY, since it runs every 5
+// minutes. When the Worker cannot observe honestly (no STATUS_PROBE_TOKEN on
+// the server, a server that predates the probe challenge) it records nothing,
+// its reading ages out, and the heartbeat's alone decides.
+const HOURLY_OBSERVER = 3 * 3600_000; // the heartbeat's real cadence (see above)
+// The `source` each observer records under (heartbeat-probe.sh and the Worker's
+// run()). Pinned against both in scripts/test-status-store.js, because a
+// renamed source would silently fall back to the component-wide bound.
+export const PAID_CALL_SOURCES = Object.freeze({ heartbeat: "heartbeat", worker: "cloudflare-cron" });
 const DAILY = 26 * 3600_000; // a day plus slack for a late scheduled run
 
 // Per-rail components (rail_base, rail_stellar, ...), derived from RAILS
@@ -80,18 +94,7 @@ export const RAIL_COMPONENTS = [
   {
     key: "rail_mpp-tempo",
     label: "Tempo (native MPP)",
-    blurb: "Real PathUSD settlement over Tempo's own MPP relay, proven daily by the paid canary.",
-    staleAfterMs: DAILY,
-  },
-  // Not a chain: the catalog's paid UPSTREAM (blockscout-kit pays Blockscout
-  // from our spending wallet). Its canary leg failed a third of the time in
-  // 2026-08 and paged nobody, because a tool leg is a warning: the buyer is
-  // never charged on a 5xx. The consecutive-failure rule in the canary reads
-  // this row's recent observations, so the row is what makes it pageable.
-  {
-    key: "rail_supply-chain",
-    label: "Blockscout upstream (paid)",
-    blurb: "address-profile buying its Blockscout upstream from the spending wallet, proven daily by the paid canary.",
+    blurb: "Real USDC.e settlement over Tempo's own MPP relay, proven daily by the paid canary.",
     staleAfterMs: DAILY,
   },
 ];
@@ -99,7 +102,15 @@ export const RAIL_COMPONENTS = [
 export const COMPONENTS = [
   { key: "api", label: "Tool serving", blurb: "The paid API answering requests: /health reachable and the catalog mounted.", staleAfterMs: QUARTER_HOURLY },
   { key: "catalog", label: "Catalog", blurb: "Every tool route mounted and advertised on /api/pricing.", staleAfterMs: QUARTER_HOURLY },
-  { key: "paid-call", label: "Paid call path", blurb: "A real end-to-end purchase from our own wallet: challenge, payment, unlock, payload. A miss here means our canary could not buy, never that a customer was charged.", staleAfterMs: HOURLY_OBSERVER },
+  {
+    key: "paid-call",
+    label: "Paid call path",
+    blurb: "A real end-to-end call through the proof-of-work path: challenge, solve, unlock, payload. The GitHub heartbeat walks the challenge a buyer without a wallet is issued; the Cloudflare probe walks a low-difficulty probe challenge every 5 minutes. A failure either one records stands until that same observer sees the path work again. A miss here means our probe could not complete a call, never that a customer was charged.",
+    staleAfterMs: HOURLY_OBSERVER,
+    // Judged per source, not newest-row-wins (see HOURLY_OBSERVER above).
+    perSource: true,
+    sourceStaleAfterMs: { [PAID_CALL_SOURCES.heartbeat]: HOURLY_OBSERVER, [PAID_CALL_SOURCES.worker]: QUARTER_HOURLY },
+  },
   { key: "mcp", label: "MCP connector", blurb: "The hosted /mcp endpoint agents connect through.", staleAfterMs: QUARTER_HOURLY },
   { key: "paywall", label: "Paywall engaged", blurb: "Paid tools still answer 402 when unpaid, so nothing is given away by accident.", staleAfterMs: QUARTER_HOURLY },
   { key: "rails", label: "Payment rails", blurb: "The chains advertised in a live 402 challenge.", staleAfterMs: QUARTER_HOURLY },
@@ -161,25 +172,42 @@ export function overallState(components, railComponents = []) {
 // STRIP_DAYS must stay a key of WINDOWS - the footer reads windows[`${STRIP_DAYS}d`]
 // and a value with no matching row renders undefined. Pinned in test-status-store.
 export const STRIP_DAYS = 30;
-export function statusSnapshot({ baseUrl = "", nowMs = Date.now(), historyDays = STRIP_DAYS, live = {} } = {}) {
-  const latest = new Map(latestByComponent().map((r) => [r.component, r]));
+// The store reads a snapshot is built from. Injectable so a test can build the
+// same page from a reference implementation of the reads and compare the two
+// (scripts/test-status-store-scale.js); production always uses the store.
+const STORE_READS = Object.freeze({ probeRows, probeCounts, latestByComponent, latestBySource, earliestObservation, totalObservations, statusPersistent });
+export function statusSnapshot({ baseUrl = "", nowMs = Date.now(), historyDays = STRIP_DAYS, live = {}, store = STORE_READS } = {}) {
+  const latest = new Map(store.latestByComponent().map((r) => [r.component, r]));
   const since = nowMs - historyDays * DAY;
+  // Rows read once per component and render; the incidents below reuse api's.
+  const rowsByKey = new Map();
 
   // Shared shape between the core components and the per-rail breakdown below
   // - same store functions, same windows, same daily-bar computation, so a
   // rail row means exactly the same thing as any other component row.
   const toComponent = (c) => {
-    const rows = probeRows(c.key, since);
+    const rows = store.probeRows(c.key, since);
+    rowsByKey.set(c.key, rows);
     const windows = {};
-    for (const w of WINDOWS) windows[w.key] = uptimeFrom(rows.filter((r) => r.ts >= nowMs - w.ms));
+    // `rows` reach back historyDays (the strip). A window longer than that is
+    // counted over its own span, so each window prints its own denominator.
+    for (const w of WINDOWS) {
+      if (w.ms <= historyDays * DAY) { windows[w.key] = uptimeFrom(rows.filter((r) => r.ts >= nowMs - w.ms)); continue; }
+      if (typeof store.probeCounts === "function") {
+        const { observed, up } = store.probeCounts(c.key, nowMs - w.ms);
+        windows[w.key] = { observed, up, down: observed - up, pct: observed ? +((up / observed) * 100).toFixed(4) : null };
+      } else windows[w.key] = uptimeFrom(store.probeRows(c.key, nowMs - w.ms));
+    }
     return {
       key: c.key,
       label: c.label,
       blurb: c.blurb,
       observed: rows.length,
-      current: stateFrom(latest.get(c.key), { nowMs, staleAfterMs: c.staleAfterMs }),
+      current: c.perSource
+        ? stateFromSources(store.latestBySource(c.key), { nowMs, staleAfterMs: c.staleAfterMs, sourceStaleAfterMs: c.sourceStaleAfterMs })
+        : stateFrom(latest.get(c.key), { nowMs, staleAfterMs: c.staleAfterMs }),
       // Newest first, last five: lets a prober apply a consecutive-failure rule
-      // without any state of its own (the paid canary's upstream legs).
+      // without any state of its own.
       recentOk: rows.slice(-5).reverse().map((r) => !!r.ok),
       windows,
       daily: dailyFrom(rows, { days: historyDays, nowMs }),
@@ -193,8 +221,8 @@ export function statusSnapshot({ baseUrl = "", nowMs = Date.now(), historyDays =
   const railComponents = RAIL_COMPONENTS.map(toComponent);
 
   // Incidents come from the availability component: the one with full history.
-  const incidents = incidentsFrom(probeRows("api", since)).slice(0, 25);
-  const firstObs = earliestObservation();
+  const incidents = incidentsFrom(rowsByKey.get("api") ?? store.probeRows("api", since)).slice(0, 25);
+  const firstObs = store.earliestObservation();
 
   return {
     service: "Agent402.Tools",
@@ -202,11 +230,11 @@ export function statusSnapshot({ baseUrl = "", nowMs = Date.now(), historyDays =
     overall: overallState(components, railComponents),
     measurement: {
       observer: "Two independent observers outside production: a Cloudflare cron probe and the GitHub Actions heartbeat",
-      cadence: "every 5 minutes (Cloudflare), plus the GitHub heartbeat for the paid-call path",
+      cadence: "every 5 minutes (Cloudflare), plus the GitHub heartbeat",
       verify: HEARTBEAT_RUNS,
       measuringSince: firstObs ? new Date(firstObs).toISOString() : null,
-      totalObservations: totalObservations(),
-      persistent: statusPersistent(),
+      totalObservations: store.totalObservations(),
+      persistent: store.statusPersistent(),
       note:
         "Availability is what an outside observer recorded, not a self-report. A day with no " +
         "observation is reported as no data rather than uptime, and a component whose latest " +
@@ -475,7 +503,7 @@ export function statusPage(baseUrl, stats, snap) {
 
 <section>
 <h1 class="st-h1">Service status</h1>
-<p class="st-sub">Availability is measured from outside this server, so an outage is witnessed by something that stays up when we do not. <a href="${esc(HEARTBEAT_RUNS)}" rel="noopener">Every probe run is public</a>.</p>
+<p class="st-sub">Availability is measured from outside this server, so an outage is witnessed by something that stays up when we do not. <a href="${esc(HEARTBEAT_RUNS)}" rel="noopener">Every heartbeat run is public</a>.</p>
 
 <div class="hero">
   <span class="dot ${DOT[snap.overall]}"></span>
@@ -510,10 +538,11 @@ ${liveSection(snap.live, stats)}
 <h2 id="method">How this is measured</h2>
 <div class="method">
 <ul>
-<li><b>The observer sits outside the service.</b> A GitHub Actions workflow probes production every 15 minutes and records what it saw; this page only stores and renders those observations.</li>
+<li><b>The observers sit outside the service.</b> A Cloudflare cron probe checks production every 5 minutes and a GitHub Actions heartbeat checks it again; each records what it saw, and this page only stores and renders those observations.</li>
 <li><b>An outage appears as a gap.</b> When production is down the probe cannot report in either, so the record shows missing observations rather than a tidy row of failures. Gaps are never counted as uptime.</li>
 <li><b>Percentages carry their denominator.</b> 100% of three probes is a weaker claim than 100% of three thousand, and the page shows which one you are reading.</li>
 <li><b>Stale means unknown, not healthy.</b> A component whose most recent observation has aged out is reported as not measured.</li>
+<li><b>One observer cannot clear another's failure.</b> The two observers walk different proof-of-work challenges on the paid call path, so a failure either one records stands until that same observer sees the path work again.</li>
 <li><b>Payment is proven with real money.</b> A daily canary buys tools across every supported chain and settles genuine USDC. <a href="${esc(CANARY_RUNS)}" rel="noopener">Runs are public</a>.</li>
 <li><b>Incidents are derived, not authored.</b> The table above is computed from failed probes, so a bad day cannot be edited out.</li>
 </ul>

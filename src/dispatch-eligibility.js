@@ -22,6 +22,7 @@
 //   listed -> crawl ready -> payment networks known -> settlement observed
 //   -> router dispatch eligible.
 // The output is a boolean plus a reason string, never a bare boolean.
+import { baseUnprovenAllowanceUsd } from "./base-unproven.js";
 import { meetsRouterGate } from "./settlement-proof.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail } from "./evm-usdc-domain.js";
 
@@ -44,7 +45,8 @@ export const DISPATCH_REASONS = Object.freeze({
   crawl_failed: "the last crawl of this origin did not succeed, so nothing is routed to it",
   network_unknown: "the crawl learned no payment network (the paid route answered something other than a 402 to the unpaid probe), so the router cannot tell which chain to pay on",
   no_supported_route: "the seller advertises no chain this host holds a spending wallet for",
-  settlement_required: "on Base the router pays only sellers with on-chain settlement history above the floor from enough distinct payers",
+  settlement_required: "on Base the router pays sellers with on-chain settlement history above the floor from enough distinct payers; a seller below it is tried only under the small unproven ceiling when its verdict carries unprovenTier",
+  settlement_self_funded: "on Base the router counts only settlement the seller did not fund itself: a payment made with USDC that the wallet it pays had sent the payer earlier is the seller's own money coming home and does not count, and without those payments this seller's history is below the floor; payments made with the payers' own money still count",
   settlement_checked_at_pay_time: "on this chain proven-ness is read from the chain at pay time (recent inbound USDC to the seller's own payTo); a thin history may still be tried under the small unproven allowance",
   price_unknown: "no seller price is known for this route, and the router never spends against an unknown price",
   url_template: "the route is an unsubstituted path template; the router never spends against it",
@@ -54,56 +56,87 @@ export const DISPATCH_REASONS = Object.freeze({
   eligible: "the router will pay this seller on a buyer's behalf",
   local_catalog: "this host's own tool; no external payment is involved",
 });
-const REASON_PRECEDENCE = ["crawl_failed", "network_unknown", "no_supported_route", "url_template", "price_unknown", "usdc_domain_mismatch", "gateway_rail_unsupported", "delivery_failing", "settlement_required"];
+const REASON_PRECEDENCE = ["crawl_failed", "network_unknown", "no_supported_route", "url_template", "price_unknown", "usdc_domain_mismatch", "gateway_rail_unsupported", "delivery_failing", "settlement_self_funded", "settlement_required"];
 // `detail` values a settlement_required verdict can carry beyond the gate's
 // own sentence. Documented in the legend under routerDispatchDetail.
 export const DISPATCH_DETAILS = Object.freeze({
-  evidence_payto_mismatch: "the settlement history this origin inherits belongs to a wallet its own 402 does not ask to be paid at, so it does not count for this origin",
-  evidence_payto_unverified: "the settlement history this origin inherits belongs to a specific wallet and the origin's own Base payTo could not be read, so it does not count until the live 402 names that wallet",
+  evidence_payto_mismatch: "the settlement history that clears the floor for this origin was measured at a wallet its own 402 does not ask to be paid at; each wallet's history counts only where that wallet is paid, so it does not count for this origin",
+  evidence_payto_unverified: "the settlement history that clears the floor for this origin was measured at a specific wallet and the origin's own Base payTo could not be read, so it does not count until the live 402 names that wallet",
+  evidence_payto_shared: "the wallet this origin's 402 asks to be paid at is listed by this host as a settlement contract shared by many sellers, so that wallet's own settlement history is credited to none of them; only settlement measured on this origin's own URLs counts toward the floor",
 });
 
 const evmKey = (a) => (typeof a === "string" && /^0x[0-9a-f]{40}$/i.test(a) ? a.toLowerCase() : null);
 
 /**
- * SHARED-WALLET EVIDENCE COUNTS ONLY WHERE THE MONEY WOULD GO (2026-09-03).
+ * SETTLEMENT EVIDENCE COUNTS ONLY WHERE THE MONEY WOULD GO (2026-09-03), ONE
+ * WALLET AT A TIME (2026-09-28).
  *
  * The x402 leaderboard groups origins by payTo: every origin whose registry
- * listing names wallet W sits in W's row and, until now, inherited W's whole
- * settlement count. Naming a wallet is a claim anyone can write into a
+ * listing names wallet W sits in W's row and, until 2026-09-03, inherited W's
+ * whole settlement count. Naming a wallet is a claim anyone can write into a
  * listing, so a fresh origin could name a heavily-paid third-party wallet,
  * clear the Base floor on that wallet's history, and then serve a live 402
- * that asks to be paid somewhere else. The chain-join belt (provenPayToMatches)
- * could not see it: it only binds an origin whose OWN advertised address was
- * observed settling, and the attacker's own address had no history at all -
- * "unknown", and unknown does not refuse.
+ * that asks to be paid somewhere else.
  *
- * So: evidence that reached an origin through a shared-wallet row is BOUND
- * to that row's wallets, and counts for the origin only when the address the
- * origin's live 402 asks us to pay is one of them. An origin whose OWN
- * evidence (the committed seed, or the chain join on its own advertised
- * address) already clears the gate keeps today's behavior - nothing about it
- * was inherited. "Unreadable live payTo" is not a match either: the evidence
- * belongs to a specific wallet, and we cannot confirm this origin is paid at
- * it.
+ * So every figure an origin is credited with is kept against the wallet it
+ * was measured at (src/evidence-binding.js), and the gate asks one question of
+ * the address the origin's live 402 asks us to pay: does THAT wallet's own
+ * evidence clear the floor? The 2026-09-03 form checked the live address
+ * against the UNION of the credited wallets beside a MAX of their counts,
+ * which let an origin credited with a busy wallet clear the floor and then be
+ * paid at any other wallet it had been credited with, however thin that
+ * wallet's own history. "Unreadable live payTo" is not a match either.
  *
- * @param {object} o.evidence   { payTos: Set|Array of wallets the inherited
- *                              evidence belongs to, ownSettled, ownPayers }
+ * @param {object} o.evidence   { byWallet: Map(wallet -> { settled, payers }) }
  *                              (undefined/null = no binding information: the
  *                              gate result stands as before)
  * @param {string|null} o.livePayTo  the Base address the origin's own 402
  *                              asks to be paid at (live probe at resolve
  *                              time; the crawled advertised address at label
  *                              time); null = unreadable
+ * @returns {{ bound, ok, verdict, payTos }} payTos = the wallets whose own evidence clears
  */
 export function evidencePayToVerdict({ evidence, livePayTo, minSettled = 50, minPayers = 3 } = {}) {
   if (!evidence || typeof evidence !== "object") return { bound: false, ok: true, verdict: "no_binding_information" };
-  const own = meetsRouterGate({ settled: Number(evidence.ownSettled || 0), payers: evidence.ownPayers, minSettled, minPayers });
-  if (own.ok) return { bound: false, ok: true, verdict: "own_evidence_clears_the_gate" };
-  const payTos = [...(evidence.payTos instanceof Set ? evidence.payTos : Array.isArray(evidence.payTos) ? evidence.payTos : [])].map(evmKey).filter(Boolean);
+  // No evidence skips the binding: every figure the gate reads is kept against
+  // a wallet (the committed seed, a count with no wallet, stopped counting on
+  // 2026-09-28).
+  const byWallet = evidence.byWallet instanceof Map ? evidence.byWallet : new Map();
+  const payTos = [];
+  for (const [w0, v] of byWallet) {
+    const w = evmKey(w0);
+    if (w && meetsRouterGate({ settled: Number(v?.settled || 0), payers: v?.payers, minSettled, minPayers }).ok) payTos.push(w);
+  }
   const live = evmKey(livePayTo);
   if (!live) return { bound: true, ok: false, verdict: "evidence_payto_unverified", payTos };
   if (!payTos.includes(live)) return { bound: true, ok: false, verdict: "evidence_payto_mismatch", payTos, livePayTo: live };
   return { bound: true, ok: true, verdict: "evidence_payto_match", payTos, livePayTo: live };
+}
+
+/** Would the history WITHHELD at a listed shared wallet (plus what is credited
+ *  there) have cleared the floor? At the live wallet when it is known, else at
+ *  the wallet with the largest withheld history. Label wording only: it never
+ *  makes anything eligible. */
+function sharedHistoryWouldClear({ evidence, livePayTo, minSettled, minPayers }) {
+  return heldHistoryWouldClear(evidence?.withheld, { evidence, livePayTo, minSettled, minPayers });
+}
+/** Would history NOT credited (withheld at a shared wallet, or disregarded as
+ *  self-funded) have cleared the floor, merged with what is credited at the
+ *  same wallet? At the live wallet when known, else at any such wallet.
+ *  Label wording only: it never makes anything eligible. */
+function heldHistoryWouldClear(heldSet, { evidence, livePayTo, minSettled, minPayers, liveOnly = false }) {
+  const held = heldSet?.byWallet;
+  if (!(held instanceof Map) || !held.size) return false;
+  const live = evmKey(livePayTo);
+  if (liveOnly && !live) return false;
+  const candidates = live ? (held.has(live) ? [live] : []) : [...held.keys()];
+  for (const w of candidates) {
+    const h = held.get(w) || {};
+    const own = evidence.byWallet instanceof Map ? evidence.byWallet.get(w) : null;
+    const payers = [h.payers, own?.payers].filter((p) => p !== undefined && p !== null).map(Number);
+    if (meetsRouterGate({ settled: Math.max(Number(h.settled) || 0, Number(own?.settled) || 0), payers: payers.length ? Math.max(...payers) : undefined, minSettled, minPayers }).ok) return true;
+  }
+  return false;
 }
 
 /** The spending chains a seller's advertised networks map to (deduped, ordered by first appearance). */
@@ -139,7 +172,7 @@ export function spendChainsOf(networks = []) {
  *                                     because history is about the past and this is about the last real payment.
  *                                     Omit/null = nothing recorded (the ordinary case).
  */
-export function dispatchEligibility({ routable, networks = [], settled = 0, payers, priceUsd, urlTemplate = false, spendChains = ["base"], minSettled = 50, minPayers = 3, local = false, evidence, livePayTo = null, usdcDomain = null, deliveryFailing = null } = {}) {
+export function dispatchEligibility({ routable, networks = [], settled = 0, payers, priceUsd, urlTemplate = false, spendChains = ["base"], minSettled = 50, minPayers = 3, local = false, evidence, livePayTo = null, usdcDomain = null, deliveryFailing = null, unprovenMaxUsd = baseUnprovenAllowanceUsd() } = {}) {
   if (local) return { eligible: true, reason: "local_catalog", chains: {} };
   const byChain = {};
   const advertised = spendChainsOf(networks);
@@ -191,12 +224,36 @@ export function dispatchEligibility({ routable, networks = [], settled = 0, paye
       if (domain.verdict === "wrong_domain") { byChain[c] = { eligible: false, reason: "usdc_domain_mismatch", detail: usdcDomainMismatchDetail(domain), advertisedName: domain.advertisedName, expectedName: domain.expectedName }; continue; }
       const gate = meetsRouterGate({ settled: basis.settled, payers, minSettled, minPayers });
       byChain[c] = gate.ok ? { eligible: true, reason: "eligible" } : { eligible: false, reason: "settlement_required", detail: gate.reason };
-      // Inherited (shared-wallet) evidence counts only where the money goes:
-      // a gate cleared on a wallet's history needs the origin's own 402 to
-      // pay THAT wallet. Own evidence clearing the gate skips this entirely.
+      // A wallet listed as shared credits nobody with its own history. Say so
+      // rather than let "below the settlement floor" read as "never paid", but
+      // only when that withheld history would have cleared the floor at the
+      // wallet this origin's 402 names (the largest one when unknown).
+      if (!gate.ok && sharedHistoryWouldClear({ evidence, livePayTo, minSettled, minPayers })) byChain[c].detail = "evidence_payto_shared";
+      // Self-funded payments do not count. When they are what stands between
+      // this seller and the floor, the reason says so.
+      if (!gate.ok && heldHistoryWouldClear(evidence?.selfFunded, { evidence, livePayTo, minSettled, minPayers })) byChain[c] = { eligible: false, reason: "settlement_self_funded", detail: gate.reason };
+      // Evidence counts only where the money goes: a gate cleared on a
+      // wallet's history needs the origin's own 402 to pay THAT wallet, and
+      // that wallet's own evidence has to clear the floor.
       if (gate.ok && evidence !== undefined && evidence !== null) {
         const v = evidencePayToVerdict({ evidence, livePayTo, minSettled, minPayers });
-        if (v.bound && !v.ok) byChain[c] = { eligible: false, reason: "settlement_required", detail: v.verdict };
+        if (v.bound && !v.ok) {
+          const selfFunded = v.verdict === "evidence_payto_mismatch" && heldHistoryWouldClear(evidence?.selfFunded, { evidence, livePayTo, minSettled, minPayers, liveOnly: true });
+          byChain[c] = selfFunded
+            ? { eligible: false, reason: "settlement_self_funded", detail: v.verdict }
+            : { eligible: false, reason: "settlement_required", detail: v.verdict === "evidence_payto_mismatch" && sharedHistoryWouldClear({ evidence, livePayTo, minSettled, minPayers }) ? "evidence_payto_shared" : v.verdict };
+        }
+      }
+      // UNPROVEN TIER (src/base-unproven.js): below the floor and nothing
+      // else wrong, at a price within the ceiling. Still not eligible - the
+      // router tries it only after every proven candidate - but the row says
+      // it can be tried, so a new seller reads the truth about its listing.
+      // A detail naming a wallet problem (shared, mismatched, unverified)
+      // is something else wrong, and so is a self-funded history.
+      const b = byChain[c];
+      if (b.reason === "settlement_required" && !Object.hasOwn(DISPATCH_DETAILS, b.detail || "") && unprovenMaxUsd > 0 && Number(priceUsd) > 0 && Number(priceUsd) <= unprovenMaxUsd) {
+        b.unprovenTier = true;
+        b.unprovenMaxUsd = unprovenMaxUsd;
       }
     } else {
       // solana / algorand / tempo: the router TRIES these; proven-ness is a
@@ -224,6 +281,7 @@ export function dispatchLegend({ spendChains = ["base"] } = {}) {
   const chains = Array.isArray(spendChains) && spendChains.length ? spendChains.map(String) : ["base"];
   return {
     routerSpendChains: chains,
+    corrections: "every field here is a reading of public data (the seller's own manifest and 402 challenges, and on-chain settlements) taken at the scan time shown, so it can be stale or, where wallets fold to the wrong operator, wrong. A seller who believes a row misreads them can write to mike@agent402.tools and we will re-scan and correct or withdraw it. Listing is free and unreviewed, and so is delisting: an origin that stops serving x402 drops out on its own.",
     routerDispatchByChain: `one entry per chain this host holds a spending wallet for (${chains.join(", ")}) that the seller also advertises, each with the router's verdict there. A chain missing from this map is one this host cannot pay on at all, whatever the seller's networks list says; it is never an eligibility verdict about that chain. A seller advertising only chains outside that set reads routerDispatchReason no_supported_route.`,
     routable: "the last crawl of this origin succeeded (manifest, OpenAPI or a live 402 was read). It is crawl readiness, never a promise that the router will pay the seller.",
     health: "a score from the last crawl outcomes of this origin; 1 = every recent crawl succeeded.",
@@ -232,11 +290,14 @@ export function dispatchLegend({ spendChains = ["base"] } = {}) {
     networksInferred: "present and true on a route row that observed no accepts of its own and inherited the chains its seller advertises elsewhere (other routes, or the Bazaar's settled view); the router still pins the chain from the live 402 before it signs.",
     routerDispatchEligible: "true when this host's Smart Order Router will pay the seller on a buyer's behalf right now on at least one chain it holds a spending wallet for.",
     routerDispatchReason: DISPATCH_REASONS,
+    "routerDispatchByChain.base.unprovenTier": "present and true on a Base verdict of settlement_required when the floor is the only thing in the way and this route's price is within unprovenMaxUsd: the router may still pay the seller, but only after every proven seller for the task, only at the wallet its own live 402 names, never above that ceiling, and flagged unproven on the buyer's receipt. Absent when the ceiling is switched off.",
+    "routerDispatchReason.settlement_self_funded": "measured from the chain by this host: the wallet's own outbound USDC transfers are read beside its inbound payments, in chain order. USDC the wallet sent a payer is set against that payer's later payments to it, first in first out, until it is spent: that much of those payments is self-funded, and a payment at least half covered this way does not count as a settlement. Money a payer sends the wallet that is too large to count as a call pays that back first, and a later transfer returning it covers nothing. A transfer the seller makes to a payer that fits inside that payer's own earlier payments not yet refunded is a refund: the refunded payments, newest first, are not counted at all, neither as settlements nor as self-funded, and only what is left over covers later payments, up to its own amount. Third-party counts of the same wallet include the same payments, so they are reduced by the payments found self-funded and by the payers that paid only with the wallet's own money, over the days those counts cover; where more than half of the dollars a wallet received were self-funded, they are not counted at all.",
     evmDomainByNetwork: "the EIP-712 domain (asset + extra.name) each of the seller's EVM accepts advertised on its 402; the router label refuses a Base accept whose name is not the token's own (usdc_domain_mismatch) because no stock x402 signature under it can verify.",
-    routerDispatchDetail: { ...DISPATCH_DETAILS, _note: "settlement_required may carry one of these in routerDispatchByChain.base.detail beside the gate's own sentence; settlement history inherited through a shared payTo counts for an origin only when the origin's own 402 pays that wallet, which the router checks live before it signs" },
+    routerDispatchDetail: { ...DISPATCH_DETAILS, _note: "settlement_required may carry one of these in routerDispatchByChain.base.detail beside the gate's own sentence; settlement history is kept per wallet and counts for an origin only when the wallet its own 402 asks to be paid at clears the floor on that wallet's own history, which the router checks live before it signs and again on the payment it signs; a wallet this host lists as a settlement contract shared by many sellers credits its own history to none of them" },
     executeVia: "present only on a row the router will pay right now: the route-execute tier (and price) that runs it. Its absence on a priced row is deliberate.",
     executeViaWhenEligible: "the route-execute tier this row WOULD run under once its seller is dispatch-eligible; not callable through the router today.",
-    executeViaCallableNow: "true on rows carrying executeVia, false on rows carrying executeViaWhenEligible. A buyer agent should key on this, never on the presence of a tier name.",
+    executeViaCallableNow: "true on rows carrying executeVia, false on rows carrying executeViaWhenEligible. A buyer agent should key on this, never on the presence of a tier name. A row in the Base unproven tier is callable now too and carries executeViaLane: \"unproven\" (tried after every proven seller for the task, within routerDispatchByChain.base.unprovenMaxUsd).",
+    executeViaLane: "\"unproven\" when the row is dispatched through the Base unproven tier rather than as a proven seller.",
     "routerDispatchReason.delivery_failing": "this host paid this seller on this chain and the call did not deliver, so we stopped routing to them until the memo expires or a call succeeds. The verdict is published because it is a statement about what WE do; the underlying observation (the status they answered, how long it took) is deliberately NOT published, because that is a specific adverse claim about a named third party and every other figure on these pages is a count or a gate verdict. A seller who wants to know what we saw can ask us.",
   };
 }

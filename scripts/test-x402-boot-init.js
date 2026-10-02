@@ -6,7 +6,7 @@
 // (attachBackgroundInitHandler in @x402/core/http). We drive the init ourselves
 // so a facilitator problem at boot degrades paid routes to 500 (the pre-2.25
 // contract) instead of crash-looping the container. Offline, no network.
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { createGuardedInit, withGuardedInit } from "../src/x402-boot-init.js";
 
 let pass = 0;
@@ -15,7 +15,11 @@ const tick = () => new Promise((r) => setImmediate(r));
 
 // ---- 1. the vendor really does exit on the fatal classes (so the guard is load-bearing) ----
 {
-  const core = readFileSync(new URL("../node_modules/@x402/core/dist/esm/chunk-UF6R7D6H.mjs", import.meta.url), "utf8")
+  // The chunk holding attachBackgroundInitHandler has a content-hashed name
+  // that changes on every vendor release, so read every esm chunk.
+  const distDir = new URL("../node_modules/@x402/core/dist/esm/", import.meta.url);
+  const core = readdirSync(distDir).filter((f) => f.endsWith(".mjs"))
+    .map((f) => readFileSync(new URL(f, distDir), "utf8")).join("\n")
     + readFileSync(new URL("../node_modules/@x402/express/dist/esm/index.mjs", import.meta.url), "utf8");
   ok(/function attachBackgroundInitHandler[\s\S]{0,400}process\.exit\(1\)/.test(core),
     "vendor: attachBackgroundInitHandler calls process.exit(1) (the behaviour this module exists to keep away from prod)");

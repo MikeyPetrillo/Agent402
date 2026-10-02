@@ -1,5 +1,5 @@
 {
-  "about": "Paid-upstream tools (tier 2): OpenRouter/OpenAI wires, Brave, E2B, Blockscout, FRED, the browser worker. Skipped on a keyless boot; run weekly with the audit key (--tier 2). Cheap links only.",
+  "about": "Paid-upstream tools (tier 2): OpenRouter/OpenAI wires, Brave, E2B, FRED, the browser worker. Skipped on a keyless boot; run weekly with the audit key (--tier 2). Cheap links only.",
   "cases": [
     {
       "slug": "search",
@@ -19,6 +19,129 @@
         "populated": [
           "results[0].url",
           "results[0].title"
+        ]
+      }
+    },
+    {
+      "slug": "search-lite",
+      "name": "a two-result sample",
+      "input": {
+        "q": "federal reserve",
+        "count": 2
+      },
+      "requires": "BRAVE_API_KEY",
+      "expect": {
+        "equals": {
+          "untrustedContent": true
+        },
+        "minCount": {
+          "results": 1
+        },
+        "maxCount": {
+          "results": 2
+        },
+        "populated": [
+          "results[0].url",
+          "results[0].title"
+        ]
+      }
+    },
+    {
+      "slug": "search-lite",
+      "name": "a count above 5 is refused, not clamped",
+      "input": {
+        "q": "federal reserve",
+        "count": 6
+      },
+      "expect": {
+        "status": 400
+      }
+    },
+    {
+      "slug": "search-lite",
+      "name": "numResults is read as count (6 is refused, not sent upstream)",
+      "input": {
+        "query": "federal reserve",
+        "numResults": 6
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "count"
+        }
+      }
+    },
+    {
+      "slug": "search-lite",
+      "name": "max_results is read as count (9 is refused, not sent upstream)",
+      "input": {
+        "query": "federal reserve",
+        "max_results": 9
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "count"
+        }
+      }
+    },
+    {
+      "slug": "search",
+      "name": "include_domains reaches the domain filter (a path is refused before any spend)",
+      "input": {
+        "query": "federal reserve",
+        "include_domains": [
+          "federalreserve.gov/newsevents"
+        ]
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "not a hostname"
+        }
+      }
+    },
+    {
+      "slug": "search-news",
+      "name": "a domain in both lists is refused before any spend",
+      "input": {
+        "query": "federal reserve",
+        "includeDomains": [
+          "reuters.com"
+        ],
+        "exclude_domains": [
+          "reuters.com"
+        ]
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "both"
+        }
+      }
+    },
+    {
+      "slug": "search",
+      "name": "a domain-filtered search names its filter",
+      "input": {
+        "query": "federal reserve",
+        "num_results": 3,
+        "include_domains": [
+          "federalreserve.gov"
+        ]
+      },
+      "requires": "BRAVE_API_KEY",
+      "expect": {
+        "equals": {
+          "domainFilter.includeDomains": [
+            "federalreserve.gov"
+          ]
+        },
+        "minCount": {
+          "results": 1
+        },
+        "populated": [
+          "results[0].url"
         ]
       }
     },
@@ -250,26 +373,6 @@
           "error.message": "boom",
           "error.name": "ValueError"
         }
-      }
-    },
-    {
-      "slug": "contract-inspect",
-      "name": "WETH on base",
-      "input": {
-        "chain": "base",
-        "address": "0x4200000000000000000000000000000000000006"
-      },
-      "requires": "X402_UPSTREAM_BUYER_KEY",
-      "expect": {
-        "equals": {
-          "isVerified": true
-        },
-        "gte": {
-          "abiEntries": 5
-        },
-        "populated": [
-          "name"
-        ]
       }
     },
     {

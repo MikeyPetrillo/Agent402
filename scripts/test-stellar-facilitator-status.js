@@ -1,6 +1,5 @@
 // The Stellar facilitator's fee account is the one spending wallet we run
-// that had no low-water alarm (found 2026-08-31 at 5.906 XLM, ~250 more
-// settlements). This pins the alarm's contract, and in particular the two
+// that had no low-water alarm (found 2026-08-31). This pins the alarm's contract, and in particular the two
 // ways a balance alarm fails FLATTERINGLY: reporting "ok" when it could not
 // actually read a balance, and reporting "ok" off a stranger's endpoint.
 import assert from "node:assert/strict";

@@ -22,11 +22,8 @@ import { markUntrusted } from "./provenance.js";
 // The upstream bills per POST RETURNED, not per request, so the page size is
 // the real cost lever: a 100-post page at our per-call price would be sold far
 // below cost. Priced 2026-08-27 against X's published pay-per-use rate card
-// ($0.005 per post read, $0.010 per user read; resources deduplicated within a
-// UTC day, so repeats cost us nothing): a 10-post page is $0.05 upstream, so
-// the search and timeline tools sell at $0.08 (upstream <= 70% of price, the
-// gateway's own margin rule) with the page capped at 10; a single post read
-// is $0.008, a user read $0.015, a 10-username lookup $0.15.
+// (per post read and per user read; resources deduplicated within a UTC day),
+// under the gateway's own margin rule, with the page capped at 10.
 const X_MAX_POSTS_PER_CALL = () => Math.max(5, Math.min(100, parseInt(process.env.X_MAX_POSTS_PER_CALL || "10", 10) || 10));
 const X_MAX_USERS_PER_LOOKUP = 10;
 
@@ -93,10 +90,9 @@ function takeBool(raw, field) {
 
 // --- upstream --------------------------------------------------------------
 // ---- daily upstream spend cap ----------------------------------------------
-// X's pay-per-use plan draws down a PREPAID balance (about $12 when the
-// tools went live, 2026-09-06) and that same balance pays for our own posts,
-// so buyers must not be able to drain it. Every read is priced BEFORE the
-// call at X's card ($0.005 per post, $0.010 per user), refused 503 (uncharged)
+// X's pay-per-use plan draws down a PREPAID balance and that same balance
+// pays for our own posts, so buyers must not be able to drain it. Every read
+// is priced BEFORE the call at X's card, refused 503 (uncharged)
 // once the UTC day's booked spend would pass X_DATA_DAILY_MAX_USD, and booked
 // AFTER the call at what X actually returned (it bills per item returned).
 // In memory: a restart resets the day, like the other spend guards; the
@@ -152,7 +148,7 @@ async function xGet(path, params = {}) {
   const estimate = estimateXReadUsd(path, params);
   if (cap > 0 && xSpendToday() + estimate > cap) {
     xSpend.refused++;
-    throw bad(`X data tools have reached today's upstream spend cap ($${cap.toFixed(2)} per UTC day) - retry after 00:00 UTC. Nothing was charged for this request.`, 503);
+    throw bad(`X data tools have reached today's usage cap - retry after 00:00 UTC. Nothing was charged for this request.`, 503);
   }
   const url = new URL(X_API + path);
   for (const [k, v] of Object.entries(params)) {
@@ -315,7 +311,7 @@ export const X_DATA_TOOLS = [
       inputSchema: {
         properties: {
           query: { type: "string", description: "X search query (max 512 chars). Supports X operators: from:user, #tag, lang:en, -is:retweet, has:links." },
-          max_results: { type: "number", description: "Tweets per page, up to 10 (default 10). The upstream bills per post returned, so the page size is capped." },
+          max_results: { type: "number", description: "Tweets per page, up to 10 (default 10)." },
           sort_order: { type: "string", description: "recency (default) or relevancy." },
           next_token: { type: "string", description: "Pagination token from a previous response." },
         },
@@ -406,7 +402,7 @@ export const X_DATA_TOOLS = [
         properties: {
           id: { type: "string", description: "Numeric X user id. Provide id OR username." },
           username: { type: "string", description: "X username (resolved to an id first). Provide id OR username." },
-          max_results: { type: "number", description: "Tweets per page, 5-10 (default 10). The upstream bills per post returned, so the page size is capped." },
+          max_results: { type: "number", description: "Tweets per page, 5-10 (default 10)." },
           exclude_retweets: { type: "boolean", description: "Drop retweets (default false)." },
           exclude_replies: { type: "boolean", description: "Drop replies (default false)." },
           since_id: { type: "string", description: "Only tweets with an id greater than this." },
@@ -481,7 +477,7 @@ export const X_DATA_TOOLS = [
     tags: [...SHARED_TAGS, "tweet", "status"],
     discovery: {
       bodyType: "json",
-      input: { id: "1800000000000000000" },
+      input: { id: "20" },
       inputSchema: {
         properties: {
           id: { type: "string", description: "Numeric tweet id (the trailing number of a status URL)." },

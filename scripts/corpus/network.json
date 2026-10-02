@@ -447,6 +447,85 @@
       }
     },
     {
+      "slug": "extract",
+      "name": "a one-element urls list reads that page (common contents-API shape)",
+      "input": {
+        "urls": [
+          "https://en.wikipedia.org/wiki/HTTP_402"
+        ],
+        "formats": [
+          "markdown"
+        ],
+        "onlyMainContent": true
+      },
+      "expect": {
+        "populated": [
+          "title",
+          "markdown"
+        ],
+        "gt": {
+          "wordCount": 100
+        },
+        "equals": {
+          "untrustedContent": true
+        }
+      }
+    },
+    {
+      "slug": "extract",
+      "name": "a format the tool does not produce is named in ignoredParams",
+      "input": {
+        "urls": [
+          "https://en.wikipedia.org/wiki/HTTP_402"
+        ],
+        "formats": [
+          "markdown",
+          "html"
+        ]
+      },
+      "expect": {
+        "populated": [
+          "markdown"
+        ],
+        "equals": {
+          "ignoredParams": [
+            "formats"
+          ]
+        }
+      }
+    },
+    {
+      "slug": "extract",
+      "name": "a one-element urls list is the url (scheme check reached, not a missing-url 400)",
+      "input": {
+        "urls": [
+          "ftp://example.com/x"
+        ]
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "^(?!Missing)"
+        }
+      }
+    },
+    {
+      "slug": "extract",
+      "name": "several urls are refused with the one-per-call explanation",
+      "input": {
+        "urls": [
+          "https://en.wikipedia.org/wiki/HTTP_402",
+          "https://en.wikipedia.org/wiki/HTTP"
+        ]
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "one per call"
+        }
+      }
+    },
+    {
       "slug": "a2a-card-fetch",
       "name": "a site with no agent card is a self-explaining 404",
       "input": {

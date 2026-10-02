@@ -71,6 +71,8 @@ const DOC_SNIPPETS = {
   "src/quickstart.js": "quickstart page: code blocks",
   "src/skill-md.js": "SKILL.md text: code blocks",
   "src/ledger-docs.js": "/docs page: code blocks",
+  "src/integration-pages.js": "integration pages: code blocks",
+  "src/learn.js": "learn pages: code blocks",
   "src/x402-spend-controls.js": "the helper's own comment names the class",
   "examples/hello-agent402.js": "commented-out example",
 };

@@ -59,7 +59,9 @@ try {
   globalThis.fetch = stub({ "GET /v1/orders": 200, "POST /v1/orders": 402 });
   const post = [learnedRow({ route: "/v1/orders", method: "POST", slug: "orders", price: 0.002 })];
   await enrichLiveQuotes(post, ORIGIN, { ignoreBudget: true });
-  ok(post[0].price === 0.002 && post[0].quoteSource !== "live-200", "a POST-declared row is not retired by a GET answering 200 (the POST still quotes 402)");
+  // Priced from the POST's own 402 ($0.001 in this stub; since #1460 a live
+  // quote replaces a differing held price), never retired by the GET 200.
+  ok(post[0].price === 0.001 && post[0].quoteSource !== "live-200", "a POST-declared row is not retired by a GET answering 200 (the POST still quotes 402)");
 
   // --- 3. carry-forward keeps the retirement over a Bazaar-priced rebuild, exact verb only, inside the window
   const prev = { tools: [{ route: "/v1/discovery", method: "GET", price: null, paid: false, quoteSource: "live-200", quoteRetiredAt: Date.now() - 3_600_000, quoteObservedAt: Date.now() - 3_600_000 }] };

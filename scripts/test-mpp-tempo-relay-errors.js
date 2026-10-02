@@ -102,5 +102,64 @@ dead.close();
 ok(!e.ok, "socket-destroyed: rejected");
 ok(/relay \/v1\/mpp\/validate NETWORK ERROR after \d+ms/.test(e.error), `socket-destroyed: the failure is labelled a NETWORK ERROR with elapsed ms, not a missing verdict (got: ${e.error.slice(0, 120)})`);
 
+// Scenario 4: bounded retry (2026-09-24). VALIDATE is non-mutating, so a
+// dropped connection or a 503 is retried and the second answer wins.
+{
+  let calls = 0;
+  const flaky = createServer((req, res) => {
+    let body = ""; req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      calls++;
+      if (calls === 1) return req.socket.destroy();                       // first: dropped
+      if (calls === 2) { res.writeHead(503); return res.end("busy"); }   // second: busy
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ success: true }));
+    });
+  });
+  await new Promise((r) => flaky.listen(0, r));
+  process.env.TEMPO_API_BASE_URL = `http://127.0.0.1:${flaky.address().port}`;
+  process.env.TEMPO_RELAY_VALIDATE_ATTEMPTS = "3";
+  __testResetMethodCache();
+  const v = await validateTempoCredential(credentialFor("zeta.test"));
+  ok(calls === 3, `validate: a dropped connection and a 503 are retried (relay saw ${calls} calls)`);
+  ok(!/NETWORK ERROR/.test(String(v.error || "")), "validate: the final answer is the relay's, not the transient failure");
+  // Every attempt fails at the transport: bounded, then classified unreachable.
+  calls = 0;
+  const allDead = createServer((req) => { req.on("data", () => {}); req.on("end", () => { calls++; req.socket.destroy(); }); });
+  await new Promise((r) => allDead.listen(0, r));
+  process.env.TEMPO_API_BASE_URL = `http://127.0.0.1:${allDead.address().port}`;
+  process.env.TEMPO_RELAY_VALIDATE_ATTEMPTS = "2";
+  __testResetMethodCache();
+  const dead2 = await validateTempoCredential(credentialFor("eta.test"));
+  ok(calls === 2 && !dead2.ok && dead2.cls === "relay-unreachable" && /attempts 2/.test(dead2.error), `validate: bounded at 2 attempts, then relay-unreachable (calls ${calls}, cls ${dead2.cls})`);
+
+  // BROADCAST moves money: a failure AFTER the bytes were sent is NEVER retried.
+  // (mppx's broadcastCredential re-validates first, so the stub answers
+  // validate and drops only the broadcast.)
+  let broadcasts = 0;
+  const dropBroadcast = createServer((req, res) => {
+    req.on("data", () => {});
+    req.on("end", () => {
+      if (req.url.endsWith("/validate")) { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ success: true })); }
+      broadcasts++; req.socket.destroy();
+    });
+  });
+  await new Promise((r) => dropBroadcast.listen(0, r));
+  process.env.TEMPO_API_BASE_URL = `http://127.0.0.1:${dropBroadcast.address().port}`;
+  __testResetMethodCache();
+  const b1 = await broadcastTempoCredential(credentialFor("theta.test"));
+  ok(broadcasts === 1 && !b1.ok, `broadcast: a connection dropped after the request was sent is not retried (relay saw ${broadcasts} broadcast)`);
+  allDead.close(); flaky.close(); dropBroadcast.close();
+
+  // ...but a connect-phase failure (nothing reached the relay) is retried once.
+  const closedPort = await new Promise((r) => { const s = createServer(); s.listen(0, () => { const p = s.address().port; s.close(() => r(p)); }); });
+  const { __testRelayFetch } = await import("../src/mpp-tempo.js");
+  const b2 = await __testRelayFetch(`http://127.0.0.1:${closedPort}/v1/mpp/broadcast`, { method: "POST", body: "{}" });
+  ok(b2.error && b2.trace.relayAttempts === 2 && b2.trace.connectPhase === true && /\/v1\/mpp\/broadcast NETWORK ERROR .*ECONNREFUSED \(attempts 2\)/.test(b2.trace.relayError), `broadcast: a refused connection (request never sent) is retried once (${b2.trace.relayError})`);
+  const { isConnectPhaseError } = await import("../src/mpp-tempo.js");
+  ok(isConnectPhaseError({ cause: { code: "UND_ERR_CONNECT_TIMEOUT" } }) && !isConnectPhaseError({ cause: { code: "UND_ERR_SOCKET" } }) && !isConnectPhaseError({ name: "TimeoutError" }), "connect-phase codes are the only broadcast retry trigger");
+  delete process.env.TEMPO_RELAY_VALIDATE_ATTEMPTS;
+}
+
 console.log(`\nAll ${pass} assertions passed`);
 process.exit(0);

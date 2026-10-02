@@ -1,12 +1,12 @@
-# Pay-per-crawl walkthrough - observe → bots → enforce in 30 minutes
+# Pay-per-crawl walkthrough - observe → bots → enforce in 30 minutes of work
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-A copy/paste recipe for taking a real site from **"I have no idea who's crawling me"** to **"AI agents pay me per request"** in three deploys. Total elapsed time: ~30 minutes; total written code: ~5 lines.
+A copy/paste recipe for taking a real site from **"I have no idea who's crawling me"** to **"AI agents pay me per request"** in three deploys. Hands-on time: ~30 minutes, plus the observation windows between phases; total written code: ~5 lines.
 
 This is the safe rollout. Each phase is reversible by changing one flag and redeploying.
 
-- **Phase 1 (10 min): Observe.** Deploy in observe mode - no enforcement, no risk. Watch the [dashboard](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth#dashboard) for 24h to see what's actually crawling you.
+- **Phase 1 (10 min): Observe.** Deploy in observe mode - no enforcement, no risk. Watch the [dashboard](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth#analytics) for 24h to see what's actually crawling you.
 - **Phase 2 (10 min): Charge known bots.** Flip to `mode: "bots"`. Real AI crawlers get 402. Humans and search engines pass.
 - **Phase 3 (10 min): Charge everyone non-human.** Flip to `mode: "strict"` (or `"all"`, which charges browsers too) once your dashboard says it's safe.
 
@@ -15,7 +15,7 @@ This is the safe rollout. Each phase is reversible by changing one flag and rede
 ## Prereqs
 
 - A Node 20+ runtime in front of your site (`agent402-tollbooth` declares `engines.node >= 20`) (Express, or a Cloudflare Worker, or a Next.js middleware - all supported).
-- A wallet address to receive USDC on Base (or Solana, Polygon, Arbitrum, Monad, Celo, Avalanche, Sei, Optimism, Stellar, Algorand). (Or skip it entirely and accept proof-of-work only - no wallet needed.)
+- A wallet address to receive USDC on a chain your x402 facilitator settles. The reverse-proxy CLI builds settlement for USDC on Base, Polygon, Arbitrum, Optimism, Avalanche, Celo, Sei and Monad; other rails take the library API with the matching x402 scheme. (Or skip it entirely and accept proof-of-work only - no wallet needed.)
 - ~30 minutes.
 
 ## Phase 1: Observe (10 minutes)
@@ -103,7 +103,7 @@ Redeploy. Now:
 
 - Humans visit free.
 - Search-engine crawlers (Googlebot etc.) pass.
-- AI crawlers see a 402 whose body is exactly this shape:
+- AI crawlers see a 402. With no `x402` middleware passed (the config above), its body is exactly this shape:
   ```json
   {
     "error": "Payment Required",
@@ -117,7 +117,7 @@ Redeploy. Now:
   }
   ```
   Two things to code against rather than assume: the gate emits **no `x402Version` field**, and `maxAmountRequired` / `asset` are echoed **verbatim from your config** (the `price` string and the `asset` symbol), not converted to base units or a token address. `accepts` is an empty array when no `payTo` is set, leaving proof-of-work as the only rail.
-- An agent that wants the page either signs an x402 USDC transaction (any standard x402 client does this - [`agent402-client`](https://www.npmjs.com/package/agent402-client), `@x402/fetch`, AWS Bedrock AgentCore Payments, …), or solves the proof-of-work for free.
+- **The config above advertises a USDC quote and settles nothing:** with `payTo` alone, a request carrying a payment is answered with a fresh 402, so proof-of-work is the only rail that opens the page. To take USDC, pass your `@x402/express` `paymentMiddleware(...)` as `x402:` (see [[Pay-per-crawl]]), or run the reverse proxy with `TOLLBOOTH_PAYTO` + `TOLLBOOTH_FACILITATOR_URL`. With that in place the 402 also carries the middleware's `PAYMENT-REQUIRED` header and MPP challenges, and any standard x402 client ([`agent402-client`](https://www.npmjs.com/package/agent402-client), `@x402/fetch`, …) can pay it.
 
 **Verify it's working:**
 
@@ -130,10 +130,10 @@ curl -A "ClaudeBot/1.0" https://yoursite.com/article
 
 # Watch real settlement
 curl -H "Authorization: Bearer $TOLLBOOTH_ADMIN_TOKEN" https://yoursite.com/__stats
-# the x402Paid / powSolved counters should start incrementing within hours
+# powSolved counts proof-of-work unlocks; x402Paid / mppPaid count settled payments once an x402 middleware is wired
 ```
 
-USDC settles to your `payTo` wallet directly on Base via the standard x402 facilitator - no Stripe, no Merchant-of-Record, no holding period. You can verify any payment on [Basescan](https://basescan.org/address/0xYourWalletHere#tokentxns).
+With an x402 middleware wired, USDC settles to your `payTo` wallet directly on-chain through your facilitator, with no holding period. You can verify any payment on [Basescan](https://basescan.org/address/0xYourWalletHere#tokentxns).
 
 **Leave it here for a week** before considering Phase 3. The bot list catches the vast majority of revenue; charging everything is mostly upside-on-the-margins and downside-on-edge-cases.
 
@@ -157,17 +157,17 @@ Read these two carefully, because the names are less intuitive than they look. F
 
 An explicit `charge(req)` / `free(req)` predicate wins over whichever mode is set, so client-specific allowlists do not require a mode change.
 
-**Backstop:** in either mode, adaptive proof-of-work means the page is still reachable for free; the cost is just CPU time. So you're not actually locking anyone out - you're just making cheap bulk scraping economically unattractive.
+**Backstop:** in either mode, the proof-of-work rail (on by default; `adaptive: true` raises its difficulty with load) means the page is still reachable for free; the cost is just CPU time. So you're not actually locking anyone out - you're just making cheap bulk scraping economically unattractive.
 
 ## Deploying somewhere other than Express
 
 The same gate runs **at the edge** with no Node, no servers:
 
 - **Cloudflare Workers** - see [`tollbooth/deploy/cloudflare/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/cloudflare). One `wrangler deploy`, KV namespace for durable stats and replay protection.
-- **Next.js middleware** - see [`tollbooth/deploy/nextjs/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs). One file in `middleware.ts`.
+- **Next.js middleware** - see [`tollbooth/deploy/nextjs/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/nextjs). One file, `middleware.js`.
 - **Docker reverse proxy** - see [`tollbooth/deploy/docker/`](https://github.com/MikeyPetrillo/Agent402/tree/main/tollbooth/deploy/docker). Wrap any backend regardless of language.
 
-All three share the same Web-Crypto core and the same observe → bots → all/strict flow.
+The Worker and Next.js templates share the edge build's Web-Crypto core; the Docker template runs the Node reverse proxy (`npx agent402-tollbooth`). All three follow the same observe → bots → all/strict flow.
 
 ## What can go wrong (and how to roll back)
 

@@ -77,11 +77,16 @@ export function createMcpMppLoopback({ port, host = "127.0.0.1", fetchImpl = fet
   // `timeoutMs` may be overridden PER CALL: a task-shaped composite run outlives
   // the default 60s bound (30s to 4 min), and the loopback is the paid request,
   // so cutting it short would abort work the buyer is waiting for.
-  return async function payCall({ def, params, credentialHeader, ip, signal, idempotencyKey, timeoutMs: callTimeoutMs } = {}) {
+  return async function payCall({ def, params, credentialHeader, ip, signal, idempotencyKey, timeoutMs: callTimeoutMs, heartbeatToken } = {}) {
     const [method, path] = String(def.route || "POST /").split(" ");
     const m = (method || "POST").toUpperCase();
     let url = base + path;
     const headers = { Accept: "application/json, */*", "X-Forwarded-For": String(ip || "127.0.0.1"), "X-Agent402-Via": "mcp" };
+    // Our own signed probe marker, forwarded verbatim from the MCP request so a
+    // synthetic check over the connector is booked as internal, exactly as it
+    // is on a direct HTTP call. The paid route verifies it (isSyntheticRequest);
+    // forwarding grants nothing a caller could not already send directly.
+    if (typeof heartbeatToken === "string" && heartbeatToken && heartbeatToken.length <= 64) headers["X-Heartbeat-Token"] = heartbeatToken;
     if (credentialHeader) headers.Authorization = credentialHeader;
     if (idempotencyKey) headers["Idempotency-Key"] = String(idempotencyKey);
     let body;

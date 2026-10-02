@@ -103,6 +103,8 @@ try {
   writeFileSync(OUT, png);
   const resultHash = "sha256:" + createHash("sha256").update(JSON.stringify(data.result ?? null)).digest("hex");
   console.log(`wrote ${OUT} (${png.length} bytes)${PREVIEW ? " [preview tag rendered]" : ""}`);
+  // The shared headless browser rasterizeSvg opens keeps the process alive.
+  process.exit(0);
   console.log(`resultHash ${resultHash}`);
 } catch (e) {
   console.error(`render failed: ${e?.message || e}`);

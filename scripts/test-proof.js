@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 process.env.SALES_LEDGER_DB = join(mkdtempSync(join(tmpdir(), "a402-proof-")), "sales.db");
 const { recordSale, proofFeed } = await import("../src/sales-ledger.js");
-const { proofPage, txLink } = await import("../src/proof.js");
+const { proofPage, txLink, proofUsd } = await import("../src/proof.js");
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
@@ -30,11 +30,19 @@ ok(f.internal.latest.atPrecision === "second", "our own canary row keeps the exa
 ok(!JSON.stringify(f).includes("\"hash\""), "flat-route sales never enter the metered feed");
 recordSale({ slug: "v1-chat-metered", priceUsd: 0.004, rail: "usdc", network: "base", payer: "0x" + "4".repeat(40), tx: "0x" + "d".repeat(64), synthetic: false, wire: "x402", quoteUsd: 0.004 });
 f = proofFeed();
-ok(f.external.count === 2 && f.external.latest.tx === "0x" + "d".repeat(64) && f.external.quotedUsd === 0.0071, "aggregates sum settled and quoted; latest is the newest row only");
+ok(f.external.count === 2 && f.external.latest.settledUsd === 0.004 && f.external.quotedUsd === 0.0071, "aggregates sum settled and quoted; latest is the newest row only");
+ok(f.external.latest.tx === null && f.external.latest.txWithheld === true && !JSON.stringify(f).includes("d".repeat(64)) && !JSON.stringify(f).includes("c".repeat(64)), "an outside buyer's settle tx is never published (it names the payer on chain)");
 ok(f.external.buyers7d === 2 && f.external.settlements7d === 2 && !("buyers7d" in f.internal), "7-day external buyer + settlement COUNTS ride the feed (never a roster); the internal side carries none");
 html = proofPage("https://agent402.tools", f);
-ok(html.includes("basescan.org/tx/0x" + "d".repeat(64)) && /LATEST EXTERNAL/.test(html) && /our own daily canary/i.test(html), "page links the settle tx and labels the internal row as ours");
+ok(html.includes("basescan.org/tx/0x" + "b".repeat(64)) && !html.includes("d".repeat(64)) && /not published/.test(html) && /LATEST EXTERNAL/.test(html) && /our own daily canary/i.test(html), "page links only our canary's settle tx and says why the external one is withheld");
 ok(/:00 UTC \(to the hour\)/.test(html), "page shows the external time to the hour and says so");
 ok(!html.includes("0x" + "4".repeat(40)), "page shows no payer");
 ok(txLink("solana", "sig") === "https://solscan.io/tx/sig" && txLink("unknown", "x") === null && txLink("base", null) === null, "txLink maps known networks and refuses unknown ones");
+{
+  const cases = [[0.66234, "$0.6623"], [0.158387, "$0.1584"], [0.001215, "$0.001215"], [0.001, "$0.001"], [12.3456, "$12.35"], [1, "$1.00"], [0.1, "$0.10"], [0, "$0.00"]];
+  const bad = cases.filter(([n, want]) => proofUsd(n) !== want);
+  ok(!bad.length, `one money format: 2 decimals from $1, up to 4 from $0.01, 4 significant below (${bad.map(([n]) => `${n} -> ${proofUsd(n)}`).join(", ") || "all match"})`);
+  const page = proofPage("https://agent402.tools", { external: { count: 1, settledUsd: 0.158387, quotedUsd: 0.66234, quotedCount: 1, latest: { settledUsd: 0.158387, quoteUsd: 0.66234, network: "base", at: "2026-10-02T10:00:00.000Z", atPrecision: "hour", txWithheld: true } }, internal: { count: 0, latest: null } });
+  ok(!/\$0\.\d{5,}/.test(page.replace(/\$0\.00\d+/g, "")) && page.includes("$0.1584") && page.includes("$0.6623"), "the page prints no raw 5- or 6-decimal floats above a cent");
+}
 console.log(`\n${pass} passed`);

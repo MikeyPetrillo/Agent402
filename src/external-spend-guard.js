@@ -1,3 +1,4 @@
+import { readFileSync, writeFileSync, renameSync } from "node:fs";
 // Bound what a single buyer can make us spend upstream before they have paid us.
 //
 // THE HOLE. @x402/express runs the handler FIRST and settles AFTER, and a <400
@@ -88,6 +89,66 @@ export const WALLET_CHAINS = ["base", "solana", "algorand", "tempo"];
 
 // chain -> [{ id, usd, at }]  (settled and unsettled alike; ages out at 24 h)
 const chainLedger = new Map();
+
+// --- persistence for the CHAIN ledger (2026-09-20) ---------------------------
+//
+// The per-payer ledger above stays in memory ON PURPOSE: it bounds UNSETTLED
+// spend over a ten-minute window, so a restart losing it is correct behaviour.
+//
+// The chain ledger makes a TWENTY-FOUR HOUR claim, and a claim that resets on
+// every restart is not a daily ceiling - it is a ceiling per restart. This
+// service deploys several times a day and every deploy zeroed the day's spend,
+// so the intended $25/chain bound could be exceeded by ordinary operations with
+// no bug triggered and nothing on disk to show it afterwards.
+//
+// Write-behind on a short debounce so the signing path never waits on disk, and
+// tmp+rename so a crash mid-write cannot leave a torn file. A load failure
+// starts the day at zero spent and says so LOUDLY: refusing to boot would turn
+// a corrupt file into an outage, but the permissive direction must never be
+// silent.
+const CHAIN_LEDGER_FILE = (process.env.WALLET_DAILY_LEDGER_FILE || "/data/wallet-daily-spend.json").trim();
+let persistTimer = null;
+
+function loadChainLedger() {
+  try {
+    const raw = JSON.parse(readFileSync(CHAIN_LEDGER_FILE, "utf8"));
+    const now = Date.now();
+    let restored = 0;
+    for (const [chain, rows] of Object.entries(raw?.chains || {})) {
+      // Re-filter against the window rather than trusting the file's own view
+      // of time: a file written before a clock change must not extend the day.
+      const fresh = (Array.isArray(rows) ? rows : []).filter(
+        (r) => r && Number.isFinite(Number(r.usd)) && now - Number(r.at || 0) < WALLET_DAY_MS,
+      );
+      if (fresh.length) { chainLedger.set(chain, fresh); restored += fresh.length; }
+    }
+    if (restored) console.log(`[spend-guard] restored ${restored} in-window spend record(s) from ${CHAIN_LEDGER_FILE}`);
+  } catch (e) {
+    if (e?.code !== "ENOENT") {
+      console.warn(`[spend-guard] could not read ${CHAIN_LEDGER_FILE} (${e?.code || e?.message}); `
+        + "THE DAY STARTS AT ZERO SPENT - the 24h ceiling is not enforced against earlier spend in this window");
+    }
+  }
+}
+
+function persistChainLedgerSoon() {
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    try {
+      const chains = Object.fromEntries([...chainLedger.entries()]);
+      const tmp = `${CHAIN_LEDGER_FILE}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ chains, at: Date.now() }));
+      renameSync(tmp, CHAIN_LEDGER_FILE);
+    } catch (e) {
+      // Bookkeeping must never break a spend decision that already happened.
+      console.warn(`[spend-guard] persist failed (${e?.code || e?.message}) - the in-memory ceiling still holds`);
+    }
+  }, 2000);
+  persistTimer.unref?.();
+}
+
+loadChainLedger();
 
 const chainKeyOf = (chain) => (typeof chain === "string" && chain.trim() ? chain.trim().toLowerCase() : null);
 
@@ -215,6 +276,7 @@ export function noteSpend(payer, usd, opts = undefined) {
     const rows = pruneChain(ck, now);
     rows.push({ id, usd: amount, at: now });
     chainLedger.set(ck, rows);
+    persistChainLedgerSoon();
   }
   return { payer: k, id, chain: ck };
 }
@@ -242,7 +304,7 @@ export function adjustSpend(handle, usd) {
     if (row && actual < row.usd) row.usd = actual;
   };
   if (handle.payer) lower(ledger.get(handle.payer));
-  if (handle.chain) lower(chainLedger.get(handle.chain));
+  if (handle.chain) { lower(chainLedger.get(handle.chain)); persistChainLedgerSoon(); }
 }
 
 /**

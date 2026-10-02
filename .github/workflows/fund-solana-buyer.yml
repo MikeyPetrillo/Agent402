@@ -3,7 +3,7 @@ name: Fund Solana spending wallet (one-time)
 # Moves a small amount of USDC on Solana from the CI canary burner to the
 # DEDICATED SVM spending wallet behind Solana external routing
 # (src/solana-buyer.js). The destination is COMPILED into the script - there
-# is no address input at all - and the amount is hard-capped at $5 in code.
+# is no address input at all - and the amount is hard-capped in code.
 # Dispatch-only and DRY by default: `send: true` is the only thing that
 # broadcasts. The refund-approval environment gate means every run, including
 # one dispatched from a modified branch, waits for the operator's click.
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       usd:
-        description: "USDC to send (script refuses anything over $5)"
+        description: "USDC to send (the script enforces a hard cap)"
         required: true
         default: "3"
       send:
@@ -32,11 +32,11 @@ jobs:
     environment: refund-approval
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v5.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
       - name: Install the Solana client (pinned to the versions the repo tree proves)
-        run: npm install --no-save --ignore-scripts @solana/kit@8.3.0 @solana-program/token@0.16.1
+        run: npm install --no-save --ignore-scripts @solana/kit@8.4.0 @solana-program/token@0.17.0
       - name: Fund
         env:
           SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}

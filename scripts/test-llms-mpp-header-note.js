@@ -2,7 +2,7 @@
 // prompted by issue #794): an external client hard-failed with
 // "no_supported_rail" because it only recognized the MPP `WWW-Authenticate:
 // Payment` scheme and never checked for the real x402 `PAYMENT-REQUIRED`
-// header present on the SAME response. Mike's fix in the issue thread was a
+// header present on the SAME response. The operator's fix in the issue thread was a
 // one-off reply; this locks the same guidance into the machine-readable
 // surface so the next client author sees it before hitting the same wall.
 //

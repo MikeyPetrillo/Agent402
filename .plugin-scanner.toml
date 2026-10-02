@@ -1,0 +1,28 @@
+# Configuration for hashgraph-online/ai-plugin-scanner, which grades this
+# repository for the awesome-ai-plugins catalog (their PR #414 review, 2026-09-22).
+#
+# Only test files are excluded, and only because of a naming mismatch: the
+# scanner's own secret rule already exempts test files, but recognizes them by
+# `test_*`, `*.test.*`, `*.spec.*` or `*_test.*`, while this repository names
+# them `scripts/test-*.js`. The globs below are that same intent spelled our way.
+# Sixty of the seventy-six "hardcoded secret" findings on the first scan were
+# fixtures in these files (a JWT-decode example, Cloudflare's published Turnstile
+# test key, the USDC contract address).
+#
+# scripts/agent-e2e.js is the same kind of file under another name: the
+# end-to-end harness that buys every tool with a fixed example input. Its one
+# match is the TOTP tool's input, the standard base32 example secret from the
+# authenticator documentation, which the test needs verbatim.
+#
+# No rule is disabled. Secrets on this repository are checked by gitleaks as a
+# required CI check on every push, with an allowlist pinned to literals.
+[scanner]
+ignore_paths = [
+  "scripts/test-*.js",
+  "scripts/test-*.sh",
+  "scripts/agent-e2e.js",
+  "tollbooth/*.test.js",
+  "facilitator/test.js",
+  "openclaw/test.js",
+  "adapters/*/test*.js",
+]

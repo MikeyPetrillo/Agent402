@@ -32,21 +32,28 @@ function walk(dir) {
   }
   return out;
 }
-const files = walk(SRC);
+const files = [...walk(SRC), ...walk(join(ROOT, "services"))];
 const rel = (p) => p.slice(ROOT.length + 1);
 
 // --- 1. the shared constant exists and carries the app name -------------------
+const attribution = readFileSync(join(SRC, "openrouter-attribution.js"), "utf8");
 const gateway = readFileSync(join(SRC, "tools/llm-gateway-kit.js"), "utf8");
-ok(/export const OPENROUTER_ATTRIBUTION = Object\.freeze\(\{/.test(gateway), "llm-gateway-kit exports a frozen OPENROUTER_ATTRIBUTION");
+ok(/export const OPENROUTER_ATTRIBUTION = Object\.freeze\(\{/.test(attribution), "src/openrouter-attribution.js exports a frozen OPENROUTER_ATTRIBUTION");
+ok(/export \{ OPENROUTER_ATTRIBUTION \}/.test(gateway), "llm-gateway-kit re-exports it for the kits that import it from there");
 for (const h of ["HTTP-Referer", "X-Title", "X-OpenRouter-Title"]) {
-  ok(new RegExp(`"${h}":`).test(gateway.slice(gateway.indexOf("OPENROUTER_ATTRIBUTION"), gateway.indexOf("OPENROUTER_ATTRIBUTION") + 600)), `the constant sets ${h}`);
+  ok(new RegExp(`"${h}":`).test(attribution), `the constant sets ${h}`);
 }
 
 // --- 2. no call site hardcodes the headers instead of using the constant ------
 const hardcoded = files.filter((f) => /"X-Title"\s*:/.test(readFileSync(f, "utf8")) && !/OPENROUTER_ATTRIBUTION = Object\.freeze/.test(readFileSync(f, "utf8")));
 ok(hardcoded.length === 0, `no file hardcodes X-Title outside the shared constant${hardcoded.length ? ` - ${hardcoded.map(rel).join(", ")}` : ""}`);
 const gatewayHardcodes = (gateway.match(/"X-Title"\s*:/g) || []).length;
-ok(gatewayHardcodes === 1, `llm-gateway-kit states X-Title exactly once, in the constant (found ${gatewayHardcodes})`);
+ok(gatewayHardcodes === 0, `llm-gateway-kit states no X-Title of its own (found ${gatewayHardcodes})`);
+// A file outside src/tools that talks to openrouter.ai directly (the decide
+// service) must spread the constant into its request headers.
+const directCallers = files.filter((f) => !f.includes(`${join("src", "tools")}`) && /["'`]https:\/\/openrouter\.ai/.test(readFileSync(f, "utf8")) && !/OPENROUTER_ATTRIBUTION = Object\.freeze/.test(readFileSync(f, "utf8")));
+const unlabelled = directCallers.filter((f) => !/headers:\s*\{\s*\.\.\.OPENROUTER_ATTRIBUTION/.test(readFileSync(f, "utf8")));
+ok(unlabelled.length === 0, `every direct OpenRouter caller outside the kits sends the attribution headers${unlabelled.length ? ` - ${unlabelled.map(rel).join(", ")}` : ` (${directCallers.map(rel).join(", ") || "none"})`}`);
 
 // --- 3. every openrouter.ai fetch is attributed --------------------------------
 // A call site either goes through fetchOpenRouter (which spreads the constant)

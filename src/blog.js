@@ -1,7 +1,51 @@
 import { routingProofSentence } from "./routing-proof.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
+import { REPO_URL } from "./repo-link.js";
 export const BLOG_POSTS = [
+  {
+    slug: "decide-plans-for-agents",
+    date: "2026-10-01",
+    title: "Decide: describe the job, get a plan your agent can run",
+    excerpt: "One call turns a plain-language job into a call-ready plan over this catalog and outside x402 sellers: which tools, in what order, with inputs filled in, backups for each step, and steps wired to each other. Run it yourself or have Agent402 run it. A real two-step run on mainnet, end to end.",
+    body: `<p>An agent that needs something done in the world faces a long list of paid APIs. Which one does the job? What inputs does it take? What if the first choice is down, or needs a value only another call can produce? Guessing costs money: every wrong call is a paid call.</p>
+
+<p><strong><a href="/decide">Decide</a></strong> answers those questions in one request. Describe the job in plain words and get back a plan: the steps, the tool for each step with backups in order, inputs that fit each tool's schema, and which steps depend on which. It plans over this catalog and over outside x402 sellers (including sellers that also accept MPP) whose route answered a live 402 in the last seven days. Anything no indexed tool covers is listed as a gap instead of being papered over.</p>
+
+<h2>A real run, start to finish</h2>
+
+<p>Today we gave Decide this job, paying from our own test wallet on Base:</p>
+
+<blockquote><p>Find the Ethereum address for vitalik.eth, then show which tokens that address holds on Base.</p></blockquote>
+
+<p>The plan came back with two steps. Step 1 resolves the ENS name, with <code>vitalik.eth</code> filled in from the job. Step 2 reads token balances on Base, and its address input is written as <code>{{step 1}}</code>: the plan knows the address does not exist yet and will come from step 1.</p>
+
+<p>Then we sent the plan to <code>POST /api/decide/execute</code>, which runs it on the buyer's behalf. Step 1, an outside x402 seller, returned <code>0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045</code>. Execute put that address into step 2, another outside x402 seller, which returned the wallet's holdings on Base: about 3.13 ETH, 43.29 USDC, 0.20 WETH and a handful of other tokens. Both steps succeeded, the run finished in about eight seconds, and it stayed inside its budget.</p>
+
+<p>The agent paid once for the plan and once for the run. The plan's fee came back as credit toward running it, the run charged both outside sellers' prices plus a disclosed routing fee, and the part of the budget it did not use came back as credit too. Both payments settled on Base: the <a href="https://basescan.org/tx/0xbb9a93aaed27794e8019d855c9f49fa8a998f6671b9feec198460055b2a6a74c">plan</a> and the <a href="https://basescan.org/tx/0x268742f84f5116c3712dc0c9f51e47ae4e29b0c0244a04afd90d8b0aebc71ace">run</a>.</p>
+
+<h2>How it chooses</h2>
+
+<p>A plan is only useful if you can trust why each tool is in it. Every tool, ours and every outside seller's, is scored by one formula: fit to the step, observed reliability, price, how well its inputs are described, and a freshness pass mark. The weights are the same for everyone and the formula has no term for who sells a tool. Every tool in a plan carries <code>firstParty</code>, so you always see whose it is. Fit is judged by a fast judgment model that sees the same bounded description for every tool, and outside listing text is treated as data, never as instructions.</p>
+
+<h2>Steps that feed each other</h2>
+
+<p>Real jobs chain. An ENS lookup feeds a balance read; a search feeds an extraction; a filing number feeds a filing reader. When a step needs a value an earlier step produces, the plan writes <code>{{step N}}</code> and lists the dependency. Run it yourself and replace the reference with the matching field. Run it through Agent402 and the value is filled in for you: from a field with the input's own name, or the one address or IP the earlier step returned. When the value cannot be named without guessing, the step is skipped and nothing is paid for it.</p>
+
+<h2>Running a plan through Agent402</h2>
+
+<ul>
+  <li>The decision fee comes back as a credit worth all of it, valid for 24 hours, toward running that plan.</li>
+  <li>Our tools run at list price. Outside tools are paid on your behalf at the seller's price plus a disclosed routing fee.</li>
+  <li>Backups run in order. A backup that names an input differently gets it under its own name.</li>
+  <li>Spend stops at your budget, and a run where no step succeeds is not charged.</li>
+  <li>Every step comes back with its own receipt.</li>
+</ul>
+
+<h2>Connect</h2>
+
+<p>Decide is three routes: <code>POST /api/decide</code> for a plan, <code>POST /api/decide/execute</code> to run one, and <code>POST /api/decide/feedback</code> (free) to report whether a step worked, which feeds future rankings. Pay per request in USDC over x402 or MPP, or with prepaid card credits. On the hosted MCP connector they are the <code>decide</code> tools; add it with <code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code>. Prices by depth, the full method and the FAQ are on the <a href="/decide">Decide page</a>, and the reference is on the <a href="${REPO_URL}/wiki/Decide">wiki</a>.</p>`,
+  },
   {
     slug: "what-is-agentic-finance-aifi",
     date: "2026-08-18",
@@ -71,7 +115,9 @@ export const BLOG_POSTS = [
     date: "2026-06-15",
     title: "Why we built Agent402",
     excerpt: "Agents need deterministic tools they can trust. We built Agent402 to give them exactly that - no API keys, no rate-limit games, just x402 micropayments for every call.",
-    body: `<p>Most tool APIs were designed for human developers: sign up, get an API key, read the docs, handle auth, manage quotas. That friction is invisible to a person, but it's a wall for an autonomous agent.</p>
+    body: `<p><em>Correction (2026-10-02): this post described the catalog as it stood in June 2026. It now also sells model-backed products (the /v1 model gateway, the report products, media and answer tools), each marked <code>modelBacked</code> on <a href="/api/pricing">/api/pricing</a>; the determinism described below is true of the utility tools.</em></p>
+
+<p>Most tool APIs were designed for human developers: sign up, get an API key, read the docs, handle auth, manage quotas. That friction is invisible to a person, but it's a wall for an autonomous agent.</p>
 
 <p>We built Agent402 around a simple idea: <strong>every tool should be callable with a single HTTP request and a micropayment</strong>. No registration, no API keys, no OAuth flows. The x402 protocol makes this possible - the agent's wallet <em>is</em> its identity, and payment <em>is</em> authorization.</p>
 
@@ -79,7 +125,7 @@ export const BLOG_POSTS = [
 
 <p>An agent that calls a tool needs to know what it will get back. If a "summarize" endpoint silently calls an LLM, the output varies on every call. That makes testing impossible, caching meaningless, and debugging a nightmare.</p>
 
-<p>Every Agent402 tool is deterministic: same input, same output, every time. This means agents can cache results, retry safely, and CI can verify every tool automatically. Our test suite literally calls every tool with its example input and checks the response - 500+ tools, zero LLM variance.</p>
+<p>The utility tools are deterministic: same input, same output, every time. This means agents can cache results, retry safely, and CI can verify them automatically. Our test suite calls each tool with its example input and checks the response.</p>
 
 <h2>Why x402 over API keys?</h2>
 
@@ -105,7 +151,9 @@ export const BLOG_POSTS = [
     date: "2026-06-17",
     title: "How the proof-of-work free tier works",
     excerpt: "Every pure-CPU tool on Agent402 is free if you solve a small proof-of-work challenge. Here's how it works, why we built it, and what it means for agents.",
-    body: `<p>Agent402 has over a thousand tools, and most of them are pure CPU - no external API calls, no network I/O, just computation. Things like JSON formatting, hash generation, regex matching, unit conversion, and text analysis.</p>
+    body: `<p><em>Correction (2026-10-02): the catalog is 500+ tools, not over a thousand; free-tier tools are listed at their USDC price on <a href="/api/pricing">/api/pricing</a> with <code>computePayable: true</code>, not at $0.000; and <code>agent402-client</code> solves the challenge with <code>node:crypto</code>, not Web Crypto.</em></p>
+
+<p>Agent402 has 500+ tools, and many of them are pure CPU - no external API calls, no network I/O, just computation. Things like JSON formatting, hash generation, regex matching, unit conversion, and text analysis.</p>
 
 <p>For these tools, we offer a <strong>proof-of-work free tier</strong>: instead of paying USDC, the caller solves a small computational challenge. It's the same idea as Hashcash (the precursor to Bitcoin mining), adapted for API access control.</p>
 
@@ -131,18 +179,20 @@ export const BLOG_POSTS = [
 
 <h2>Browser-side solving</h2>
 
-<p>The PoW challenge is designed to be solvable in the browser using Web Crypto. The <code>agent402-client</code> SDK handles this automatically - it detects a 402 response, solves the challenge, and retries, all transparently. For agents using the MCP integration, the hosted server at <code>/mcp</code> handles PoW internally.</p>
+<p>The PoW challenge is plain sha256, so it is solvable anywhere: the <a href="/playground">playground</a> solves it in the browser with Web Crypto, and the <code>agent402-client</code> SDK solves it in Node with <code>node:crypto</code>. The SDK handles this automatically - it detects a 402 response, solves the challenge, and retries, all transparently. For agents using the MCP integration, the hosted server at <code>/mcp</code> handles PoW internally.</p>
 
 <h2>Which tools are free?</h2>
 
-<p>Any tool that runs purely on the server's CPU without making external network requests is PoW-eligible. Tools that call upstream APIs (web search, rendering, geocoding) require payment because they have a real marginal cost. The tool catalog marks each tool's pricing - <code>$0.000</code> means PoW-eligible.</p>`,
+<p>Any tool that runs purely on the server's CPU without making external network requests is PoW-eligible. Tools that call upstream APIs (web search, rendering, geocoding) require payment because they have a real marginal cost. Each PoW-eligible tool carries <code>computePayable: true</code> on <a href="/api/pricing">/api/pricing</a>, next to the USDC price a wallet pays for it.</p>`,
   },
   {
     slug: "catalog-milestone",
     date: "2026-06-20",
     title: "500+ tools and counting",
-    excerpt: "The Agent402 catalog passed the 500-tool mark - every one deterministic, tested in CI, callable with one HTTP request. What categories exist, how we got here, and what's coming next.",
-    body: `<p>The Agent402 catalog passed the 500-tool mark. Every one of those tools is deterministic, tested in CI, and callable with a single HTTP request. Here's a look at what's in the box.</p>
+    excerpt: "The Agent402 catalog passed the 500-tool mark - every one priced per call and callable with one HTTP request. What categories exist, how we got here, and what's coming next.",
+    body: `<p><em>Correction (2026-10-02): this post called every tool deterministic. The utility tools are; the catalog also holds model-backed tools (the /v1 model gateway, report products, media and answer tools), each marked <code>modelBacked</code> on <a href="/api/pricing">/api/pricing</a>.</em></p>
+
+<p>The Agent402 catalog passed the 500-tool mark. Each tool is priced per call and callable with a single HTTP request, and every tool CI can run without a third-party key is tested against its own example on every CI run. Here's a look at what's in the box.</p>
 
 <p><em>Note (updated 2026-08-18): this post originally counted every catalog entry, including hundreds of near-duplicate pairwise converters that were later collapsed into a handful of parameterized tools. The catalog is quoted as an evergreen "500+ tools" everywhere now; the exact live number is always at <a href="/api/pricing">/api/pricing</a> and <a href="/health">/health</a>.</em></p>
 
@@ -189,16 +239,18 @@ export const BLOG_POSTS = [
 
 <h2>Hosted MCP endpoint</h2>
 
-<p>The simplest way to connect: point your MCP client at <code>https://agent402.tools/mcp</code>. This endpoint exposes four tools:</p>
+<p><em>Correction (2026-10-02): the connector's tools were renamed to dotted names (the old names still answer as aliases), and paid tools on the hosted connector are paid with an MPP credential in the call's <code>_meta</code>, not an x402 header. The list and the payment sentence below are updated.</em></p>
+
+<p>The simplest way to connect: point your MCP client at <code>https://agent402.tools/mcp</code>. This endpoint exposes catalog tools plus a set of flagship tools:</p>
 
 <ul>
-  <li><strong>search_tools</strong> - find tools by keyword or task description</li>
-  <li><strong>find_tool</strong> - resolve a specific tool by name or slug</li>
-  <li><strong>call_tool</strong> - execute any tool with input parameters</li>
-  <li><strong>about_agent402</strong> - get platform info and capabilities</li>
+  <li><strong>catalog.search</strong> - find tools by keyword or task description</li>
+  <li><strong>catalog.find</strong> - resolve a task to the best-matching tool</li>
+  <li><strong>catalog.call</strong> - execute any tool with input parameters</li>
+  <li><strong>server.describe</strong> - get platform info and capabilities</li>
 </ul>
 
-<p>The hosted endpoint handles PoW challenges internally, so pure-CPU tools are effectively free through MCP. Paid tools require an x402 payment header on the <code>call_tool</code> request.</p>
+<p>The hosted endpoint handles PoW challenges internally, so pure-CPU tools are effectively free through MCP. A wallet-only tool called on the connector answers with an MPP payment challenge (JSON-RPC error <code>-32042</code>); an MPP client pays it by sending the credential in the call's <code>_meta["org.paymentauth/credential"]</code>.</p>
 
 <h2>Claude Code setup</h2>
 
@@ -212,7 +264,7 @@ export const BLOG_POSTS = [
   }
 }</code></pre>
 
-<p>Once connected, Claude Code can search through all 500+ tools, find the right one for a task, and call it - all through the standard MCP protocol. The <code>search_tools</code> and <code>find_tool</code> commands help the agent discover relevant tools without needing to know the full catalog.</p>
+<p>Once connected, Claude Code can search through all 500+ tools, find the right one for a task, and call it - all through the standard MCP protocol. The <code>catalog.search</code> and <code>catalog.find</code> tools help the agent discover relevant tools without needing to know the full catalog.</p>
 
 <h2>npm package (local / stdio)</h2>
 
@@ -237,7 +289,7 @@ export const BLOG_POSTS = [
 
 <p>Beyond MCP, we publish framework-specific adapters for direct integration: OpenAI, Anthropic SDK, Vercel AI SDK, LangChain, LlamaIndex, Google ADK, OpenAI Agents, and AWS Strands. Each adapter wraps Agent402 tools in the framework's native tool format, so you can drop them into existing agent code without protocol translation.</p>
 
-<p>All adapters and the MCP package are open source and published on npm. Check the <a href="https://github.com/MikeyPetrillo/Agent402">GitHub repo</a> for the latest versions.</p>`,
+<p>All adapters and the MCP package are open source and published on npm. Check the <a href="${REPO_URL}">GitHub repo</a> for the latest versions.</p>`,
   },
 ];
 

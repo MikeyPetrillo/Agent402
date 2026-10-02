@@ -166,7 +166,7 @@ const HEADER = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [REAL_ACCEP
 // A pure-Solana v2 accept carries no extra.name, so the name-based USDC check
 // priced every such catalog as "networks only" forever - and the enricher
 // then locked the row (networks learned, price null, not a candidate again
-// for 7 days). Measured on sol.blockrun's 128 routes.
+// for 7 days). Measured on a seller's 128 routes.
 {
   const { quoteFromAccepts } = await import("../src/x402-live-quote.js");
   const sol = { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", amount: "7500", asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", payTo: "J28Fii2VFnJcavvaeEfsKc628htk3mnrZKubD7WsGStW", extra: { feePayer: "x" } };

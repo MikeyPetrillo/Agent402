@@ -8,7 +8,7 @@
 //   post / link    1200 x 627  (LinkedIn: "1.91:1 ratio (1200 x 627)")
 //   feed square    1200 x 1200 and feed portrait 1080 x 1350 (common feed sizes)
 //   in-article     1200 x 675  (16:9, under the 3 MB file cap)
-// Each image is generated once (the budget image tier, ~$0.014 upstream) and
+// Each image is generated once (the budget image tier) and
 // crop-to-filled to every size in-process, so the buyer gets files, not a
 // prompt. Facts in the article link to their sources (LinkedIn's editor keeps
 // links; it has no [n] citations), and a numbered source list is appended.
@@ -31,9 +31,9 @@ function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } c
 
 const SYNTH = "anthropic/claude-opus-5";
 export const LINKEDIN_MODELS = [SYNTH];
-// Upstream worst case: research base cap $0.35 + synthesis (measured opus-5
-// max $0.311 on the report kits, this one is shorter) + 2 budget images at
-// $0.014 (the images-fast tier's bound) = under $0.65 with headroom.
+// Upstream worst case: research base cap + synthesis (measured on the report
+// kits; this one is shorter) + 2 budget images at the images-fast tier's
+// bound, all under maxUpstreamUsd.
 export const LINKEDIN_TIERS = {
   "linkedin-article": { price: "$1.10", maxUpstreamUsd: 0.65, researchTier: "research", maxImages: 2, synthMaxTokens: 6000 },
 };

@@ -116,5 +116,21 @@ ok(docsSidebarScript.includes("ml-docs-mobile-toggle"), "the sidebar script also
   ok(a === b, "docsLayoutHtml is a pure function of its inputs");
 }
 
+// --- every wiki page carries its own description, never a markdown banner,
+// and internal links skip the capitalised URLs that 301 elsewhere ----------
+{
+  const descs = new Map();
+  for (const slug of docsSlugs()) {
+    const html = docsPage(BASE_URL, slug);
+    const d = (html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
+    ok(d.length >= 40 && !/^&gt;|\*\*|\[\[/.test(d), `${slug}: description is plain prose (${d.slice(0, 50)})`);
+    ok(!descs.has(d), `${slug}: description is unique${descs.has(d) ? ` (same as ${descs.get(d)})` : ""}`);
+    descs.set(d, slug);
+    ok(!/href="\/docs\/(Adapters|Home)"/.test(html), `${slug}: no internal link to a redirecting docs URL`);
+  }
+  const t1 = (docsPage(BASE_URL, "API-Reference").match(/<title>([^<]*)/) || [])[1];
+  ok(t1 && t1 !== "API Reference - Agent402 Docs", "the API-Reference guide's title differs from /docs/api");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

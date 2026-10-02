@@ -125,6 +125,63 @@ const GATE = { secretKey: SECRET, realm: REALM, priceFor };
   s.close();
 }
 
+// F) client gone before the handler's answer could be sent. The route mimics
+// the dispatcher: it reserves a hang-up forgiveness ticket when the handler
+// starts. WITH a granted ticket the card is NOT captured
+// (src/hangup-settlement.js), the credential stays spent, and the hang-up hook
+// sees an undelivered end with no settlement on it. WITHOUT one (the budget is
+// spent) the card IS captured and the hook sees the settled charge server.js
+// books as owed. A connected control is captured once.
+{
+  const { createHangupSettlementHook, clientGoneBeforeFirstByte } = await import("../src/hangup-settlement.js");
+  const { reserveHangupForgiveness, settleHangupTicket, hangupForgiven, _resetHangupForgiveness } = await import("../src/hangup-forgiveness.js");
+  _resetHangupForgiveness();
+  // A card charge is at least $0.50, above the default per-key budget ($0.25),
+  // so by default a Stripe hang-up is never forgiven: it is captured and
+  // booked as owed. The gate's forgiven branch is exercised under a wider
+  // budget set for this case only.
+  const savedKeyBudget = process.env.HANGUP_FORGIVE_KEY_USD;
+  delete process.env.HANGUP_FORGIVE_KEY_USD;
+  const byDefault = {}; reserveHangupForgiveness(byDefault, { keys: ["ip:stripe-default"], priceUsd: 0.5 });
+  ok(!hangupForgiven(byDefault) && byDefault.__a402HangupTicket.reason === "over per-key budget", `gate F: under the default budget a $0.50 card charge takes no forgiveness ticket (${byDefault.__a402HangupTicket.reason})`);
+  _resetHangupForgiveness();
+  process.env.HANGUP_FORGIVE_KEY_USD = "1";
+  const replay = new Map();
+  const replayGuard = { begin: async (k) => (replay.has(k) ? replay.get(k) : (replay.set(k, "inflight"), "ok")), settle: async (k) => { replay.set(k, "consumed"); }, release: async (k) => { replay.delete(k); } };
+  let captures = 0, handlerRuns = 0;
+  const undelivered = [];
+  const app = express();
+  app.use(createHangupSettlementHook({ onUndelivered: (req, res, kind) => undelivered.push({ kind, stripeSettled: req.stripeSettled === true, status: res.statusCode, receipt: res.getHeader("Payment-Receipt") || null }) }));
+  app.use(createStripeGate({ ...GATE, replayGuard, validate: async () => ({ ok: true, validation: {} }), settle: async () => { captures++; return { ok: true, receipt: { method: "stripe", status: "success", reference: `pi_test_gone_${captures}`, timestamp: new Date().toISOString() } }; } }));
+  app.post("/paid", (req, res) => {
+    handlerRuns++;
+    if (req.headers["x-grant"] === "1") reserveHangupForgiveness(req, { keys: ["ip:stripe-f"], priceUsd: 0.5 });
+    res.once("close", () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) }));
+    setTimeout(() => res.status(200).json({ late: true }), 400);
+  });
+  const { s, url } = await listen(app);
+  const cred = credFor();
+  const warned = [];
+  const w0 = console.warn; console.warn = (...a) => { warned.push(a.join(" ")); };
+  try {
+    await fetch(`${url}/paid`, { method: "POST", headers: { Authorization: cred, "x-grant": "1" }, signal: AbortSignal.timeout(100) }).catch(() => null);
+    await new Promise((r) => setTimeout(r, 700));
+  } finally { console.warn = w0; }
+  ok(captures === 0, `gate F: with a forgiveness ticket, a buyer gone before the handler answered is NOT captured (captures ${captures})`);
+  ok(undelivered.length === 1 && undelivered[0].kind === "end" && !undelivered[0].stripeSettled && undelivered[0].receipt === null && undelivered[0].status === 499, `gate F: the hang-up hook sees the undelivered end once, with no settlement on it (${JSON.stringify(undelivered)})`);
+  ok(warned.some((w) => /\[mpp-stripe\] client gone before the handler's answer could be sent[^\n]*not captured, not charged/.test(w)), "gate F: the gate says it did not capture");
+  const again = await fetch(`${url}/paid`, { method: "POST", headers: { Authorization: cred } });
+  ok(again.status !== 200 && handlerRuns === 1 && captures === 0, `gate F: the same credential is still spent and cannot run the handler again (status ${again.status}, handler runs ${handlerRuns})`);
+  await fetch(`${url}/paid`, { method: "POST", headers: { Authorization: credFor() }, signal: AbortSignal.timeout(100) }).catch(() => null);
+  await new Promise((r) => setTimeout(r, 700));
+  ok(captures === 1 && undelivered.length === 2 && undelivered[1].stripeSettled && !!undelivered[1].receipt, `gate F: WITHOUT a ticket the hang-up is captured and the hook sees the settled charge (captures ${captures}, ${JSON.stringify(undelivered[1])})`);
+  const served = await fetch(`${url}/paid`, { method: "POST", headers: { Authorization: credFor(), "x-grant": "1" } });
+  ok(served.status === 200 && captures === 2 && undelivered.length === 2, "gate F: a connected buyer is captured once; the hook stays quiet");
+  s.close();
+  _resetHangupForgiveness();
+  if (savedKeyBudget === undefined) delete process.env.HANGUP_FORGIVE_KEY_USD; else process.env.HANGUP_FORGIVE_KEY_USD = savedKeyBudget;
+}
+
 // ---- wiring pin: server.js MUST bypass the x402 paywall for a validated
 // stripe request, exactly like req.tempoSettling. Without it a real card
 // payment is 402'd by the paywall and never served (the gate here runs with
@@ -133,7 +190,8 @@ const GATE = { secretKey: SECRET, realm: REALM, priceFor };
 {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/req\.tempoSettling\s*\|\|\s*req\.stripeSettling/.test(src) || /req\.stripeSettling\s*\|\|\s*req\.tempoSettling/.test(src), "wiring: server.js bypasses the x402 paywall for req.stripeSettling (like req.tempoSettling)");
+  // Own-property checks since 2026-09-24 (a polluted prototype made every request look settled).
+  ok(/ownTrue\(req, "tempoSettling"\)\s*\|\|\s*ownTrue\(req, "stripeSettling"\)/.test(src), "wiring: server.js bypasses the x402 paywall for an own req.stripeSettling (like req.tempoSettling)");
 }
 
 // ---- the REAL pre-handler validate, unstubbed (2026-08-26 live finding) ----

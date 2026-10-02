@@ -27,6 +27,7 @@ const PATHS = [
   "/docs/Architecture", "/revenue", "/docs/adapters/openai", "/docs/webhooks",
   "/", "/marketplace", "/tools", "/sell", "/leaderboard", "/skills", "/what-is-x402",
   "/status", "/pricing", "/playground", "/integrations", "/markets", "/security", "/company",
+  "/learn", "/learn/x402", "/integrations/mcp",
 ];
 
 for (const path of PATHS) {

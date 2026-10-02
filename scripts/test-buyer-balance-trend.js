@@ -8,7 +8,7 @@
 // The hard part is the TRANSIENT dip that settlement ordering guarantees: we pay
 // the seller during the handler and collect afterwards. An alarm that cannot
 // tell that from a drain would page on every healthy call.
-import { noteBuyerBalance } from "../src/tools/blockscout-kit.js";
+import { noteBuyerBalance, upstreamBuyerStatus } from "../src/upstream-buyer-status.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -72,6 +72,16 @@ const fresh = (v) => noteBuyerBalance(v, { reset: true });
   fresh(50);
   const seq = [20, 20, 20].map((v) => noteBuyerBalance(v));
   ok(seq[2] === "draining", "a manual withdrawal alarms too - indistinguishable on purpose");
+}
+
+{
+  // Keyless boot: the status reads "unconfigured" and never throws, so
+  // /api/gateway-status and the heartbeat see a word, not an error.
+  const saved = process.env.X402_UPSTREAM_BUYER_KEY;
+  delete process.env.X402_UPSTREAM_BUYER_KEY;
+  const st = await upstreamBuyerStatus();
+  ok(st.configured === false && st.status === "unconfigured" && st.attests === "balance-only", "keyless upstreamBuyerStatus is unconfigured and says it attests the balance only");
+  if (saved !== undefined) process.env.X402_UPSTREAM_BUYER_KEY = saved;
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

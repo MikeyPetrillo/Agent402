@@ -26,6 +26,8 @@ import {
   getJsonAcross, ALGORAND_INDEXER_BASES,
 } from "./revenue-live.js";
 import { usdcDeltaForOwner, payerFromMeta, isExternalPayment } from "../scripts/revenue-scan-solana.js";
+import { externalTempoPayments } from "./sales-ledger.js";
+import { createBlockClock, rpcHeaderReader, dateFromAnchors } from "./block-clock.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DB_PATH = process.env.REVENUE_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/tmp", "agent402-revenue.db");
@@ -78,6 +80,9 @@ CREATE INDEX IF NOT EXISTS idx_transfers_ext ON transfers (wallet, external, cha
 -- history: 2.05 s of the boot event loop on prod (first-import CPU profile,
 -- 2026-08-25). This index answers it as an ordered scan of 8 rows.
 CREATE INDEX IF NOT EXISTS idx_transfers_recent ON transfers (chain, wallet, block DESC, when_ts DESC);
+-- The buyer figures fold external Tempo settlements in from the sales ledger
+-- and skip any whose tx is already a transfer here; this answers that lookup.
+CREATE INDEX IF NOT EXISTS idx_transfers_txhash ON transfers (tx_hash);
 CREATE TABLE IF NOT EXISTS cursors (
   chain      TEXT NOT NULL,
   wallet     TEXT NOT NULL,
@@ -145,17 +150,57 @@ function reclassifyAll() {
 }
 reclassifyAll();
 
+/**
+ * Dates a row that carries no timestamp (rows recorded before syncEvmChain
+ * stored one, or whose block lookup failed). It interpolates between the
+ * chain's own DATED rows on either side, and steps from the nearest one at the
+ * chain's table rate only past the ends. Anchoring on the chain's own
+ * timestamps is what keeps a legacy row's date right after a block-time
+ * change: the old method stepped back from the cursor head at a fixed 2 s per
+ * block, which after Base's move to 200 ms blocks would file every legacy row
+ * days too early. The cursor (when caught up) is one more anchor. Returns a
+ * function block -> ms | null; the anchors are read lazily, once.
+ */
+export function undatedRowDater(chain, wallet, { anchorsFor = datedAnchors } = {}) {
+  let anchors = null;
+  return (block) => {
+    if (block == null) return null;
+    if (!anchors) anchors = anchorsFor(chain, wallet);
+    return dateFromAnchors(Number(block), anchors, BLOCK_MS[chain] || 2000);
+  };
+}
+function datedAnchors(chain, wallet) {
+  const pts = db.prepare("SELECT block, MIN(when_ts) AS ts FROM transfers WHERE chain = ? AND when_ts IS NOT NULL AND block IS NOT NULL GROUP BY block ORDER BY block").all(chain)
+    .map((r) => [Number(r.block), Number(r.ts) * 1000]);
+  const cur = getCursor.get(chain, wallet);
+  if (cur?.caught_up && cur.next_block != null && cur.updated_ts && (!pts.length || cur.next_block > pts[pts.length - 1][0])) {
+    pts.push([Number(cur.next_block), cur.updated_ts * 1000]);
+  }
+  return pts;
+}
+
 /** Record one transfer (idempotent — the PK dedupes replays/rescans). */
 export function recordTransfer(row) {
   upsertTransfer.run({ when_ts: null, payer: null, ...row, external: row.external ? 1 : 0 });
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const startBlockFor = (chain, head) => {
+/** Where a NEW cursor starts: the first block at or after the ledger epoch,
+ *  found by block timestamp (src/block-clock.js). A block count at an assumed
+ *  rate starts too late once a chain's blocks get faster (Base Denim: 2 s to
+ *  200 ms), silently skipping the oldest revenue; the timestamp search is right
+ *  either side of that change. Falls back to the rate estimate when no header
+ *  can be read. `getHeader` is injectable for tests. */
+export async function startBlockFor(chain, head, { getHeader = null, epochMs = LEDGER_EPOCH_MS } = {}) {
   const env = parseInt(process.env[`REVENUE_LEDGER_FROM_${chain.toUpperCase()}`] || "", 10);
   if (Number.isFinite(env)) return Math.max(0, env);
-  return Math.max(0, head - Math.ceil((Date.now() - LEDGER_EPOCH_MS) / (BLOCK_MS[chain] || 2000)));
-};
+  const estimate = Math.max(0, head - Math.ceil((Date.now() - epochMs) / (BLOCK_MS[chain] || 2000)));
+  try {
+    const reader = getHeader || rpcHeaderReader((m, p) => rpcCall(EVM[chain].rpcs, m, p, 6000));
+    const at = await createBlockClock(reader, { fallbackMsPerBlock: BLOCK_MS[chain] || 2000 }).blockAtOrAfter(Math.floor(epochMs / 1000), { headNumber: head });
+    return at.source === "chain" ? at.block : Math.min(estimate, at.block);
+  } catch { return estimate; }
+}
 
 /** getLogs window for one chain's ledger sync. Chains whose RPCs enforce a
  *  tighter range declare chunkBlocks (Sei: 1,900) — both other scanners
@@ -241,7 +286,7 @@ async function syncEvmChain(chain, wallet, { maxChunks = 20 } = {}) {
   const c = EVM[chain];
   const head = parseInt(await rpcCall(c.rpcs, "eth_blockNumber", [], 6000), 16);
   const cur = getCursor.get(chain, wallet);
-  let next = cur?.next_block ?? startBlockFor(chain, head);
+  let next = cur?.next_block ?? await startBlockFor(chain, head);
   // Capped at 9,000 blocks like the other two scanners (revenue-scan.js and
   // the live view's recentInbound) — Alchemy rejects getLogs ranges over 10k
   // on some chains (Robinhood, verified 2026-07-08). Without the cap, any
@@ -588,7 +633,7 @@ export function ledgerRecent(chain, wallets, { limit = 8 } = {}) {
     const rows = db.prepare(
       `SELECT tx_hash, block, when_ts, payer, usd, asset, external
          FROM transfers WHERE chain = ? AND wallet IN (${placeholders})
-        ORDER BY COALESCE(block, 0) DESC, COALESCE(when_ts, 0) DESC
+        ORDER BY block DESC, when_ts DESC
         LIMIT ?`
     ).all(chain, ...list, Math.max(1, Math.min(50, limit)));
     return rows.map((r) => ({
@@ -608,6 +653,26 @@ export function ledgerRecent(chain, wallets, { limit = 8 } = {}) {
     // there, and returning [] routes the caller to it.
     return [];
   }
+}
+
+/** The newest settle one of OUR wallets paid into `wallets` on `chain`
+ *  (a canary or volume run): not external, payer known, call-sized. The
+ *  capped `ledgerRecent` page can hold only outside buyers on a busy rail,
+ *  so the rail's proof row reads this instead. Null when none is recorded. */
+export function ledgerNewestOwn(chain, wallets) {
+  const norm = (w) => (/^0x[0-9a-fA-F]{40}$/.test(String(w)) ? String(w).toLowerCase() : String(w));
+  const list = (Array.isArray(wallets) ? wallets : [wallets]).filter(Boolean).map(norm);
+  if (!chain || !list.length) return null;
+  try {
+    const placeholders = list.map(() => "?").join(",");
+    const r = db.prepare(
+      `SELECT tx_hash, block, when_ts, usd FROM transfers
+        WHERE chain = ? AND wallet IN (${placeholders}) AND external = 0 AND payer IS NOT NULL AND usd > 0 AND usd <= ?
+        ORDER BY block DESC, when_ts DESC LIMIT 1`
+    ).get(chain, ...list, MAX_CALL_USD);
+    if (!r) return null;
+    return { usd: Number(r.usd), txHash: r.tx_hash, block: r.block ?? null, when: r.when_ts ? new Date(r.when_ts * 1000).toISOString() : null };
+  } catch { return null; }
 }
 
 // Tx hashes this ledger has actually SEEN ON-CHAIN, for reconciling against the
@@ -664,14 +729,17 @@ export function ledgerSummary(wallets) {
   let allTimeExternalCount = 0;
   let allTimeInboundUsd = 0;
   let allTimeInboundCount = 0;
+  // External = classified external AND at least the dust floor (a transfer
+  // under the cheapest catalog price paid for no call). Inbound keeps every
+  // transfer: it is throughput, ours and dust included.
   const q = db.prepare(`SELECT
       COUNT(*) AS n, COALESCE(SUM(usd), 0) AS usd,
-      COALESCE(SUM(CASE WHEN external = 1 THEN usd END), 0) AS extUsd,
-      COALESCE(SUM(external), 0) AS extN
+      COALESCE(SUM(CASE WHEN external = 1 AND usd + ${DUST_EPSILON} >= ? THEN usd END), 0) AS extUsd,
+      COALESCE(SUM(CASE WHEN external = 1 AND usd + ${DUST_EPSILON} >= ? THEN 1 ELSE 0 END), 0) AS extN
     FROM transfers WHERE chain = ? AND wallet = ?`);
   for (const [chain, wallet] of walletPairs(wallets)) {
     if (!wallet) continue;
-    const t = q.get(chain, wallet);
+    const t = q.get(payerDustFloorUsd, payerDustFloorUsd, chain, wallet);
     const cur = getCursor.get(chain, wallet);
     // Two wallets on one chain (treasury + spending) ACCUMULATE into one row.
     const p = per[chain] || (per[chain] = { externalUsd: 0, externalCount: 0, inboundUsd: 0, inboundCount: 0, caughtUp: true, syncedAt: null });
@@ -686,9 +754,17 @@ export function ledgerSummary(wallets) {
     allTimeInboundUsd += t.usd;
     allTimeInboundCount += t.n;
   }
+  // Tempo is not a scanned chain, so its external settlements come from the
+  // sales ledger (deduped against the transfers above). The on-chain figures
+  // keep their meaning; the combined pair is what /revenue headlines.
+  let tempoCount = 0, tempoUsd = 0;
+  for (const r of tempoExternalRows()) { tempoCount++; tempoUsd += r.usd; }
   return {
     allTimeExternalUsd: Number(allTimeExternalUsd.toFixed(6)),
     allTimeExternalCount,
+    tempoExternal: { count: tempoCount, usd: Number(tempoUsd.toFixed(6)), source: "sales ledger, Tempo MPP settlements (tempo/charge and tempo/subscription), external rows only" },
+    allTimeExternalWithTempoCount: allTimeExternalCount + tempoCount,
+    allTimeExternalWithTempoUsd: Number((allTimeExternalUsd + tempoUsd).toFixed(6)),
     // ALL settled inbound transfers, our own canary/volume/test wallets
     // included — the /revenue throughput band's number. Never presented as
     // revenue: throughput proves the rails, external proves the demand.
@@ -715,15 +791,35 @@ let loopStarted = false;
 // an x402 one, so the wire cannot be derived here). When supplied, each bucket
 // also carries its MPP subset, letting the chart filter by wire. Absent or
 // empty, the extra fields are all zero and the series behaves exactly as before.
-export function ledgerDaily(wallets, mppTx = null) {
+// `withScope` returns { days, scope } instead of the bare array. Opt-in, so
+// every existing caller keeps the array it has always been handed and only
+// /api/revenue/daily - the one surface that PUBLISHES this series - has to
+// carry the disclosure.
+//
+// THREE FILTERS, NONE OF THEM DISCLOSED, until 2026-09-22. This series drops
+// undateable rows, internal transfers over MAX_CALL_USD, and everything before
+// REVENUE_DAILY_START - and then /revenue headlines it as "every settled
+// on-chain transaction, ours included". Measured on prod that day: the days
+// sum to 42,951 transactions / $571.82 against /api/revenue's own allTime of
+// 43,665 / $664.70, and 24 of the missing rows are real outside customers who
+// paid before the chart's epoch. Both sibling series (/api/calls/daily,
+// /api/sales) carry recordingSince; this one was the odd one out, so anyone
+// reconciling us found two of our own numbers disagreeing by $92.89 with
+// nothing in either response to explain it.
+export function ledgerDaily(wallets, mppTx = null, { withScope = false } = {}) {
+  // Counted while filtering, never re-derived: a disclosure computed from a
+  // second pass can drift from the filter it describes.
+  let droppedUndateable = 0;
+  const droppedOverCap = { transactions: 0, usd: 0 };
+  const droppedDust = { transactions: 0, usd: 0 };
   const isMpp = (h) => {
     if (!mppTx || !mppTx.size || !h) return false;
     return mppTx.has(h) || (/^0x[0-9a-fA-F]+$/.test(h) && mppTx.has(h.toLowerCase()));
   };
-  const rows = db.prepare("SELECT chain, wallet, block, when_ts, usd, external, tx_hash FROM transfers WHERE wallet = ?");
+  const rows = db.prepare("SELECT chain, wallet, block, when_ts, usd, external, tx_hash FROM transfers WHERE chain = ? AND wallet = ?");
   const chains = walletPairs(wallets);
   // Settled-to split: rows received by the SOR spending wallet (self-funding
-  // slugs: route-execute tiers + Blockscout kit) vs the treasury. On-chain
+  // slugs: the route-execute tiers) vs the treasury. On-chain
   // truth by receiving wallet - the /revenue SOR filter reads these fields.
   const sorWallets = new Set([
     ...(wallets.baseExtraWallets || []).filter(Boolean).map((w) => w.toLowerCase()),
@@ -733,15 +829,12 @@ export function ledgerDaily(wallets, mppTx = null) {
   const byDay = new Map(); // "YYYY-MM-DD|chain" -> {extUsd, extTx, intUsd, intTx}
   for (const [chain, wallet] of chains) {
     if (!wallet) continue;
-    const cur = getCursor.get(chain, wallet);
-    const anchorBlock = cur?.next_block ?? null;
-    const anchorMs = cur?.updated_ts ? cur.updated_ts * 1000 : Date.now();
-    const cadence = BLOCK_MS[chain] || 2000;
-    for (const t of rows.all(wallet)) {
+    const dateOf = undatedRowDater(chain, wallet);
+    for (const t of rows.all(chain, wallet)) {
       if (t.chain !== chain) continue;
       let ms = t.when_ts ? t.when_ts * 1000 : null;
-      if (ms == null && t.block != null && anchorBlock != null) ms = anchorMs - (anchorBlock - t.block) * cadence;
-      if (ms == null) continue; // undateable row — skip rather than guess
+      if (ms == null) ms = dateOf(t.block);
+      if (ms == null) { droppedUndateable++; continue; } // undateable row — skip rather than guess
       const day = new Date(ms).toISOString().slice(0, 10);
       const key = `${day}|${chain}`;
       const b = byDay.get(key) || {
@@ -751,7 +844,12 @@ export function ledgerDaily(wallets, mppTx = null) {
       };
       const mpp = isMpp(t.tx_hash);
       const sor = sorWallets.has(wallet);
-      if (t.external) {
+      if (t.external && belowDust(t.usd)) {
+        // Under the cheapest catalog price: paid for no call. Out of the
+        // external series exactly as ledgerSummary leaves it out of the
+        // external totals (the payer dust floor), and NAMED in the scope.
+        droppedDust.transactions += 1; droppedDust.usd += t.usd;
+      } else if (t.external) {
         b.extUsd += t.usd; b.extTx += 1;
         if (mpp) { b.extMppUsd += t.usd; b.extMppTx += 1; }
         if (sor) { b.extSorUsd += t.usd; b.extSorTx += 1; }
@@ -759,6 +857,11 @@ export function ledgerDaily(wallets, mppTx = null) {
         b.intUsd += t.usd; b.intTx += 1;
         if (mpp) { b.intMppUsd += t.usd; b.intMppTx += 1; }
         if (sor) { b.intSorUsd += t.usd; b.intSorTx += 1; }
+      } else {
+        // An internal transfer larger than a call: treasury funding, not
+        // traffic. Correctly excluded from a per-call series, and correctly
+        // NAMED rather than silently missing from the totals.
+        droppedOverCap.transactions += 1; droppedOverCap.usd += t.usd;
       }
       byDay.set(key, b);
     }
@@ -767,7 +870,19 @@ export function ledgerDaily(wallets, mppTx = null) {
   // adds a flat run of near-zero bars — start the series at June 15 unless
   // the operator overrides.
   const start = process.env.REVENUE_DAILY_START || "2026-06-15";
-  return [...byDay.values()]
+  const all = [...byDay.values()];
+  // The ledger's own earliest dated day, before the epoch cuts it - so the
+  // response can say what it is NOT showing rather than only where it starts.
+  let firstDay = null;
+  const droppedPreEpoch = { transactions: 0, usd: 0 };
+  for (const b of all) {
+    if (firstDay === null || b.day < firstDay) firstDay = b.day;
+    if (b.day < start) {
+      droppedPreEpoch.transactions += b.extTx + b.intTx;
+      droppedPreEpoch.usd += b.extUsd + b.intUsd;
+    }
+  }
+  const days = all
     .filter((b) => b.day >= start)
     .map((b) => ({
       ...b,
@@ -775,6 +890,32 @@ export function ledgerDaily(wallets, mppTx = null) {
       extMppUsd: Number(b.extMppUsd.toFixed(6)), intMppUsd: Number(b.intMppUsd.toFixed(6)),
     }))
     .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.chain.localeCompare(b.chain)));
+  if (!withScope) return days;
+  const usd = (n) => Number(Number(n).toFixed(6));
+  const excluded = {
+    beforeSeriesStart: { transactions: droppedPreEpoch.transactions, usd: usd(droppedPreEpoch.usd) },
+    internalOverMaxCallUsd: { transactions: droppedOverCap.transactions, usd: usd(droppedOverCap.usd), maxCallUsd: MAX_CALL_USD },
+    externalUnderDustFloor: { transactions: droppedDust.transactions, usd: usd(droppedDust.usd), dustFloorUsd: payerDustFloorUsd },
+    undateable: { transactions: droppedUndateable },
+  };
+  // Derived from the counters, never asserted: an empty ledger is complete, and
+  // one dropped row is not.
+  const complete = excluded.beforeSeriesStart.transactions === 0
+    && excluded.internalOverMaxCallUsd.transactions === 0
+    && excluded.externalUnderDustFloor.transactions === 0
+    && excluded.undateable.transactions === 0;
+  return {
+    days,
+    scope: {
+      recordingSince: firstDay,
+      seriesStart: start,
+      complete,
+      excluded,
+      note: complete
+        ? `This series covers every dated transfer in the ledger from ${start}.`
+        : `This series starts ${start} and is NOT the whole ledger: ${excluded.beforeSeriesStart.transactions} transactions ($${excluded.beforeSeriesStart.usd}) settled before it, ${excluded.internalOverMaxCallUsd.transactions} internal transfers over $${MAX_CALL_USD} are excluded as treasury funding rather than calls, ${excluded.externalUnderDustFloor.transactions} outside transfers ($${excluded.externalUnderDustFloor.usd}) under the $${payerDustFloorUsd} dust floor are excluded because they cannot have paid for a call, and ${excluded.undateable.transactions} rows carry no usable date. /api/revenue allTime is the unfiltered total; the two will not reconcile without this object.`,
+    },
+  };
 }
 
 /**
@@ -815,38 +956,118 @@ export function weekStartOf(day) {
   return d.toISOString().slice(0, 10);
 }
 
+/** A payer as one buyer identity across rails: EVM addresses are
+ *  case-insensitive and fold to lowercase (so a wallet paying on Base and on
+ *  Tempo is one buyer); base58/Stellar/Algorand stay case-exact (src/payer.js). */
+function buyerKey(raw) {
+  if (!raw) return null;
+  return /^0x[0-9a-fA-F]{40}$/.test(raw) ? raw.toLowerCase() : raw;
+}
+
+/** The EVM address inside a Tempo payer, whether stored bare or as a did:pkh
+ *  (`did:pkh:eip155:4217:0x...`). Anything else is unattributable. */
+function tempoPayerKey(raw) {
+  const m = String(raw || "").match(/0x[0-9a-fA-F]{40}/);
+  return m ? m[0].toLowerCase() : null;
+}
+
+/** Lowercased tx hashes from `txs` that already appear in the transfers table. */
+function onchainTxSet(txs) {
+  const found = new Set();
+  if (!txs.length) return found;
+  const q = db.prepare("SELECT 1 FROM transfers WHERE tx_hash = ? OR tx_hash = ? LIMIT 1");
+  for (const tx of txs) {
+    const s = String(tx);
+    if (q.get(s, s.toLowerCase())) found.add(s.toLowerCase());
+  }
+  return found;
+}
+
+/**
+ * External Tempo MPP settlements from the sales ledger (tempo/charge and
+ * tempo/subscription), minus any whose tx is already a transfer in this
+ * ledger, so a payment is never counted by both sources. Only Tempo: MPP over
+ * Base/Celo settles as an ordinary on-chain transfer and is already here.
+ */
+function tempoExternalRows() {
+  const tempo = externalTempoPayments();
+  const onchain = onchainTxSet(tempo.map((r) => r.tx).filter(Boolean));
+  return tempo.filter((r) => !(r.tx && onchain.has(String(r.tx).toLowerCase())));
+}
+
+/**
+ * Every EXTERNAL payment the buyer figures count, as {day, payer|null}: the
+ * on-chain inbound transfers this ledger scans, plus external Tempo MPP
+ * settlements from the sales ledger (Tempo is not a scanned chain). Internal
+ * classification is each source's own, never re-derived here. A Tempo row
+ * whose tx is also in the transfers table is skipped, so no payment is
+ * counted twice. Undateable on-chain rows are skipped rather than guessed.
+ */
+// The daily, weekly and monthly buyer series, concentration and retention
+// each read this full history. A caller building several of them at once
+// reads it ONCE (externalPaymentEventsFor) and passes `{ events }` to each;
+// a figure asked for on its own reads fresh.
+// A DUST FLOOR FOR "A WALLET THAT PAID US".
+//
+// A transfer smaller than the cheapest price we sell cannot have paid for a
+// call. Address-poisoning sends exactly that: a sub-cent transfer from a
+// lookalike of a wallet we really trade with, so the lookalike lands in our
+// history. Measured on /revenue: a $0.00001 transfer from an address mimicking
+// the CI burner's first and last characters counted as an outside paying
+// agent. The floor is DERIVED from the catalog (server.js sets it to the
+// cheapest priced tool at boot), never a typed address list, so it catches the
+// next lookalike too. Unset (0) means no floor, which is what tests and
+// scripts that do not boot the catalog get.
+let payerDustFloorUsd = 0;
+const DUST_EPSILON = 1e-9;
+/** Set the floor: the cheapest price in the catalog, in USD. */
+export function setPayerDustFloorUsd(usd) {
+  const n = Number(usd);
+  payerDustFloorUsd = Number.isFinite(n) && n > 0 ? n : 0;
+}
+/** The current floor (0 = none). */
+export function getPayerDustFloorUsd() { return payerDustFloorUsd; }
+const belowDust = (usd) => payerDustFloorUsd > 0 && !(Number(usd) + DUST_EPSILON >= payerDustFloorUsd);
+
+export function externalPaymentEventsFor(wallets) { return readExternalPaymentEvents(wallets); }
+function externalPaymentEvents(wallets, events) { return events || readExternalPaymentEvents(wallets); }
+function readExternalPaymentEvents(wallets) {
+  const out = [];
+  const rows = db.prepare("SELECT chain, wallet, block, when_ts, external, payer, usd FROM transfers WHERE chain = ? AND wallet = ?");
+  for (const [chain, wallet] of walletPairs(wallets)) {
+    if (!wallet) continue;
+    const dateOf = undatedRowDater(chain, wallet);
+    for (const t of rows.all(chain, wallet)) {
+      if (t.chain !== chain || !t.external) continue;
+      // Under the cheapest catalog price: not a payment for a call (see the
+      // dust floor above), so not a paying agent.
+      if (belowDust(t.usd)) continue;
+      let ms = t.when_ts ? t.when_ts * 1000 : null;
+      if (ms == null) ms = dateOf(t.block);
+      if (ms == null) continue;
+      out.push({ day: new Date(ms).toISOString().slice(0, 10), payer: buyerKey(t.payer || null) });
+    }
+  }
+  for (const r of tempoExternalRows()) {
+    if (!Number.isFinite(r.ts)) continue;
+    out.push({ day: new Date(r.ts).toISOString().slice(0, 10), payer: tempoPayerKey(r.payer) });
+  }
+  return out;
+}
+
 /** Per-day payer sets + first-seen map + unattributed counts, across ALL
  *  history. Shared by the daily and weekly buyer series so the two can never
  *  disagree about who a buyer is or when they were first seen. */
-function buyerDaySets(wallets) {
-  const rows = db.prepare("SELECT chain, wallet, block, when_ts, usd, external, payer FROM transfers WHERE wallet = ?");
-  const chains = walletPairs(wallets);
+function buyerDaySets(wallets, events) {
   const byDay = new Map(); // day -> Set(payer)
   const unattributed = new Map(); // day -> count
   const firstSeen = new Map(); // payer -> earliest day ever, across ALL history
-
-  for (const [chain, wallet] of chains) {
-    if (!wallet) continue;
-    const cur = getCursor.get(chain, wallet);
-    const anchorBlock = cur?.next_block ?? null;
-    const anchorMs = cur?.updated_ts ? cur.updated_ts * 1000 : Date.now();
-    const cadence = BLOCK_MS[chain] || 2000;
-    for (const t of rows.all(wallet)) {
-      if (t.chain !== chain || !t.external) continue;
-      let ms = t.when_ts ? t.when_ts * 1000 : null;
-      if (ms == null && t.block != null && anchorBlock != null) ms = anchorMs - (anchorBlock - t.block) * cadence;
-      if (ms == null) continue; // undateable row — skip rather than guess
-      const day = new Date(ms).toISOString().slice(0, 10);
-      // EVM addresses are case-insensitive; base58/Stellar are NOT (see
-      // src/payer.js — never lowercase those or two buyers merge into one).
-      const raw = t.payer || null;
-      if (!raw) { unattributed.set(day, (unattributed.get(day) || 0) + 1); continue; }
-      const payer = /^0x[0-9a-fA-F]{40}$/.test(raw) ? raw.toLowerCase() : raw;
-      if (!byDay.has(day)) byDay.set(day, new Set());
-      byDay.get(day).add(payer);
-      const prev = firstSeen.get(payer);
-      if (!prev || day < prev) firstSeen.set(payer, day);
-    }
+  for (const { day, payer } of externalPaymentEvents(wallets, events)) {
+    if (!payer) { unattributed.set(day, (unattributed.get(day) || 0) + 1); continue; }
+    if (!byDay.has(day)) byDay.set(day, new Set());
+    byDay.get(day).add(payer);
+    const prev = firstSeen.get(payer);
+    if (!prev || day < prev) firstSeen.set(payer, day);
   }
 
   const start = process.env.REVENUE_DAILY_START || "2026-06-15";
@@ -854,8 +1075,8 @@ function buyerDaySets(wallets) {
   return { byDay, unattributed, firstSeen, allDays, start };
 }
 
-export function ledgerBuyersDaily(wallets) {
-  const { byDay, unattributed, firstSeen, allDays, start } = buyerDaySets(wallets);
+export function ledgerBuyersDaily(wallets, { events } = {}) {
+  const { byDay, unattributed, firstSeen, allDays, start } = buyerDaySets(wallets, events);
   const seen = new Set();
   const out = [];
   for (const day of allDays) {
@@ -891,8 +1112,8 @@ export function ledgerBuyersDaily(wallets) {
  * compare a two-day week against seven-day ones. A buyer is `new` in the week
  * of their first-ever payment across all history, whatever the chart epoch.
  */
-export function ledgerBuyersWeekly(wallets) {
-  const { byDay, unattributed, firstSeen, allDays, start } = buyerDaySets(wallets);
+export function ledgerBuyersWeekly(wallets, { events } = {}) {
+  const { byDay, unattributed, firstSeen, allDays, start } = buyerDaySets(wallets, events);
   const seen = new Set();
   const weeks = new Map(); // monday -> { set, fresh, unattributed, days }
   for (const day of allDays) {
@@ -943,8 +1164,8 @@ export function ledgerBuyersWeekly(wallets) {
  * full ones. A buyer is `new` in the month of their first-ever payment across
  * all history, whatever the chart epoch.
  */
-export function ledgerBuyersMonthly(wallets) {
-  const { byDay, unattributed, firstSeen, allDays, start } = buyerDaySets(wallets);
+export function ledgerBuyersMonthly(wallets, { events } = {}) {
+  const { byDay, unattributed, firstSeen, allDays, start } = buyerDaySets(wallets, events);
   const seen = new Set();
   const months = new Map();
   for (const day of allDays) {
@@ -995,30 +1216,51 @@ export function ledgerBuyersMonthly(wallets) {
  * expensive call would otherwise masquerade as concentration. Counts and
  * percentages only, never addresses.
  */
-export function ledgerBuyerConcentration(wallets) {
-  const rows = db.prepare("SELECT chain, wallet, block, when_ts, external, payer FROM transfers WHERE wallet = ?");
-  const chains = walletPairs(wallets);
+// TWO "buyers" FIELDS, TWO POPULATIONS, ONE RESPONSE.
+//
+// /api/revenue/daily serves `concentration.buyers` and `retention.buyers` side
+// by side. Measured on prod 2026-09-22 they read 495 and 496 - one apart,
+// identically named, and neither said why: concentration starts at
+// REVENUE_DAILY_START (2026-06-15) while retention is deliberately all-time,
+// so the extra buyer is simply someone who paid before the chart's epoch. A
+// third figure, the host entry's own `allTime.buyers`, read 443 on the same
+// day over a different source again (the sales ledger, from 2026-07-03, card
+// and credits included). Three true numbers, three scopes, none stated.
+//
+// Both figures here read the on-chain transfers ledger plus the sales ledger's
+// external Tempo MPP settlements (Tempo is not a scanned chain), so they are
+// blind to card and prepaid-credits buyers by construction, and they skip a
+// payment whose payer is not exposed (SVM and Stellar rows carry none) or
+// whose date cannot be established. Every one of those is a reason
+// the number is a floor rather than a total, and a consumer cannot infer any
+// of it from `buyers: 495`. /revenue renders it as "distinct agents have paid
+// us", which is the reading this scope object exists to correct.
+const BUYER_SCOPE = ({ since }) => ({
+  scope: {
+    since: since || null,
+    source: "on-chain inbound transfers to our own wallets, plus Tempo MPP settlements (tempo/charge and tempo/subscription) from the sales ledger; external rows only, one buyer per wallet across rails",
+    excludes: [
+      "card and prepaid-credits buyers (they settle no on-chain transfer to us)",
+      "settlements whose payer is not exposed (Solana, Stellar, and any Tempo settlement recorded without a payer)",
+      "transfers whose date could not be established",
+      ...(payerDustFloorUsd > 0 ? [`transfers under $${payerDustFloorUsd} (the cheapest catalog price), which cannot have paid for a call`] : []),
+    ],
+    note: since
+      ? `Distinct wallets counted from ${since}; a floor, not a lifetime total of everyone who has paid us.`
+      : "Distinct wallets over the whole scanned ledger; a floor, not a total of everyone who has paid us.",
+  },
+});
+
+export function ledgerBuyerConcentration(wallets, { events } = {}) {
   const start = process.env.REVENUE_DAILY_START || "2026-06-15";
   const counts = new Map();
   let payments = 0;
-  for (const [chain, wallet] of chains) {
-    if (!wallet) continue;
-    const cur = getCursor.get(chain, wallet);
-    const anchorBlock = cur?.next_block ?? null;
-    const anchorMs = cur?.updated_ts ? cur.updated_ts * 1000 : Date.now();
-    const cadence = BLOCK_MS[chain] || 2000;
-    for (const t of rows.all(wallet)) {
-      if (t.chain !== chain || !t.external || !t.payer) continue;
-      let ms = t.when_ts ? t.when_ts * 1000 : null;
-      if (ms == null && t.block != null && anchorBlock != null) ms = anchorMs - (anchorBlock - t.block) * cadence;
-      if (ms == null) continue;
-      if (new Date(ms).toISOString().slice(0, 10) < start) continue;
-      const payer = /^0x[0-9a-fA-F]{40}$/.test(t.payer) ? t.payer.toLowerCase() : t.payer;
-      counts.set(payer, (counts.get(payer) || 0) + 1);
-      payments++;
-    }
+  for (const { day, payer } of externalPaymentEvents(wallets, events)) {
+    if (!payer || day < start) continue;
+    counts.set(payer, (counts.get(payer) || 0) + 1);
+    payments++;
   }
-  if (!payments) return { buyers: 0, payments: 0, topSharePct: null, top5SharePct: null };
+  if (!payments) return { buyers: 0, payments: 0, topSharePct: null, top5SharePct: null, ...BUYER_SCOPE({ since: start }) };
   const sorted = [...counts.values()].sort((a, b) => b - a);
   const pct = (n) => Math.round((n / payments) * 1000) / 10;
   return {
@@ -1026,6 +1268,9 @@ export function ledgerBuyerConcentration(wallets) {
     payments,
     topSharePct: pct(sorted[0]),
     top5SharePct: pct(sorted.slice(0, 5).reduce((a, b) => a + b, 0)),
+    // The window and the exclusions, beside the number rather than in a
+    // comment - see BUYER_SCOPE.
+    ...BUYER_SCOPE({ since: start }),
   };
 }
 
@@ -1057,31 +1302,17 @@ export function ledgerBuyerConcentration(wallets) {
  * long-standing buyer as new the moment the window moved. Counts and
  * percentages only - a roster of who pays us is a customer list.
  */
-export function ledgerBuyerRetention(wallets) {
-  const rows = db.prepare("SELECT chain, wallet, block, when_ts, external, payer FROM transfers WHERE wallet = ?");
-  const chains = walletPairs(wallets);
+export function ledgerBuyerRetention(wallets, { events } = {}) {
   const days = new Map();  // payer -> Set(day)
   const calls = new Map(); // payer -> payment count
-  for (const [chain, wallet] of chains) {
-    if (!wallet) continue;
-    const cur = getCursor.get(chain, wallet);
-    const anchorBlock = cur?.next_block ?? null;
-    const anchorMs = cur?.updated_ts ? cur.updated_ts * 1000 : Date.now();
-    const cadence = BLOCK_MS[chain] || 2000;
-    for (const t of rows.all(wallet)) {
-      if (t.chain !== chain || !t.external || !t.payer) continue;
-      let ms = t.when_ts ? t.when_ts * 1000 : null;
-      if (ms == null && t.block != null && anchorBlock != null) ms = anchorMs - (anchorBlock - t.block) * cadence;
-      if (ms == null) continue; // undateable row - skipped, never guessed
-      // EVM is case-insensitive; base58/Stellar are NOT (src/payer.js).
-      const payer = /^0x[0-9a-fA-F]{40}$/.test(t.payer) ? t.payer.toLowerCase() : t.payer;
-      if (!days.has(payer)) days.set(payer, new Set());
-      days.get(payer).add(new Date(ms).toISOString().slice(0, 10));
-      calls.set(payer, (calls.get(payer) || 0) + 1);
-    }
+  for (const { day, payer } of externalPaymentEvents(wallets, events)) {
+    if (!payer) continue;
+    if (!days.has(payer)) days.set(payer, new Set());
+    days.get(payer).add(day);
+    calls.set(payer, (calls.get(payer) || 0) + 1);
   }
   const buyers = days.size;
-  if (!buyers) return { buyers: 0, oneDay: 0, oneDayOneCall: 0, returned: 0, oneDayPct: null, returnedPct: null };
+  if (!buyers) return { buyers: 0, oneDay: 0, oneDayOneCall: 0, returned: 0, oneDayPct: null, returnedPct: null, ...BUYER_SCOPE({ since: null }) };
   let oneDay = 0, oneDayOneCall = 0;
   for (const [payer, set] of days) {
     if (set.size > 1) continue;
@@ -1096,6 +1327,9 @@ export function ledgerBuyerRetention(wallets) {
     returned: buyers - oneDay,
     oneDayPct: pct(oneDay),
     returnedPct: pct(buyers - oneDay),
+    // All-time here, windowed in concentration: the same field name over two
+    // different populations is why both now carry their own scope.
+    ...BUYER_SCOPE({ since: null }),
   };
 }
 

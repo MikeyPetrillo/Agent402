@@ -2,15 +2,9 @@
 // upstream cost on BOTH rails, card and agent.
 //
 // This guard exists because the previous prices were set against the kits'
-// DECLARED `maxUpstreamUsd` figures, which were fiction. Measured on PostHog
-// `$ai_generation` over 30 days (114 opus-5 synthesis calls, the model every
-// report kit uses):
-//
-//     avg $0.107   p95 $0.195   MAX $0.311
-//
-// Every declared cap at the time ($0.13 to $0.34) sat at or BELOW the p95, and
-// three products (recall $0.25, domain-audit $0.30, token-risk $0.30) were
-// priced BELOW the observed maximum, i.e. a worst-case run lost money. A cap
+// DECLARED `maxUpstreamUsd` figures, which sat below the measured distribution
+// of synthesis spend (30 days of `$ai_generation`), and some products were
+// priced below the observed maximum, i.e. a worst-case run lost money. A cap
 // under the real distribution is worse than cosmetic: research-deep is the one
 // kit that reads its own field, and it downgrades the synthesis model when
 // spend exceeds it, so a fictional cap silently degrades the product too.
@@ -39,16 +33,15 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { conso
 // Measured, 30 days of $ai_generation. See the header.
 export const MEASURED_OPUS_MAX_USD = 0.311;
 export const MEASURED_OPUS_P95_USD = 0.195;
-// One planning call on gemini-2.5-flash, measured max $0.0103, budget two.
+// Planning calls: measured worst case, budgeted for two.
 const PLANNING_USD = 0.021;
 // Worst case for a report that runs ONE opus synthesis.
 const ONE_SYNTH_WORST = MEASURED_OPUS_MAX_USD + PLANNING_USD;
 // Stripe's published card fee.
 const stripeNet = (usd) => usd - (0.029 * usd + 0.30);
 // The margin floor both rails must clear at worst case. Set to what the current
-// ladder actually achieves (40-42%), NOT to a looser number that would let a
-// price regress: at 30% a $1 card price for a base report still passed, and $1
-// was one of the prices this file exists to rule out.
+// ladder actually achieves, NOT to a looser number that would let a price
+// regress.
 const MIN_MARGIN = 0.40;
 
 const usd = (s) => Number(String(s).replace(/[^0-9.]/g, ""));
@@ -66,7 +59,7 @@ for (const [slug, t] of Object.entries(TIERS)) {
   // ticker-pack runs three syntheses; its cap is derived from its parts.
   const floor = slug === "ticker-pack" ? 3 * MEASURED_OPUS_MAX_USD * 0.9 : MEASURED_OPUS_MAX_USD;
   ok(cap >= floor - 1e-9,
-    `${slug}: declared cap $${cap} is at or above the measured worst case $${floor.toFixed(3)} (a cap under the real distribution both misprices the product and, in research-deep, downgrades the model on a normal run)`);
+    `${slug}: declared cap is at or above the measured worst case (a cap under the real distribution both misprices the product and, in research-deep, downgrades the model on a normal run)`);
 }
 
 // 2. AGENT rail (x402 / MPP, no fixed fee): price must clear the cap.
@@ -74,19 +67,18 @@ for (const [slug, t] of Object.entries(TIERS)) {
   const price = usd(t.price), cap = Number(t.maxUpstreamUsd);
   const margin = (price - cap) / price;
   ok(margin >= MIN_MARGIN,
-    `${slug}: agent price $${price.toFixed(2)} keeps ${(margin * 100).toFixed(0)}% at worst-case upstream $${cap} (floor ${MIN_MARGIN * 100}%)`);
+    `${slug}: agent price clears the margin floor at worst-case upstream`);
 }
 
-// 3. CARD rail: Stripe's 2.9% + $0.30 comes out BEFORE the report is paid for.
-//    This is the leg that was under water: a $1 charge nets $0.671, and a deep
-//    report's worst case is most of that.
+// 3. CARD rail: the card fee comes out BEFORE the report is paid for. This is
+//    the leg that was under water on the lowest card prices.
 for (const [key, p] of Object.entries(HUMAN_PRODUCTS)) {
   const t = TIERS[p.slug];
   if (!t) continue;
   const gross = p.price / 100, net = stripeNet(gross), cap = Number(t.maxUpstreamUsd);
   const margin = (net - cap) / gross;
   ok(margin >= MIN_MARGIN,
-    `${key}: card $${gross.toFixed(2)} nets $${net.toFixed(3)} after Stripe, leaving ${(margin * 100).toFixed(0)}% over worst-case upstream $${cap}`);
+    `${key}: card price clears the margin floor after the card fee at worst-case upstream`);
 }
 
 // 4. MONITORS: one monthly fee funds up to MAX_FULL_PER_SUB_30D paid runs, so
@@ -98,20 +90,18 @@ for (const [key, m] of Object.entries(MONITOR_PRODUCTS)) {
   const worst = MAX_FULL_PER_SUB_30D * cap;
   // A subscription's risk is REPEAT fulfilment, so a percentage floor is the
   // wrong shape here: one month's fee must cover twice its worst-case month.
-  // At a 40% floor alone a $3/mo monitor still passed on the base tier by a
-  // cent, which is not a margin anyone should run a recurring product on.
   ok(net >= 2 * worst,
-    `${key}: $${gross.toFixed(2)}/mo nets $${net.toFixed(3)}, at least twice the ${MAX_FULL_PER_SUB_30D}-run worst case ($${worst.toFixed(2)})`);
+    `${key}: monthly fee net of card fees covers at least twice the ${MAX_FULL_PER_SUB_30D}-run worst case`);
 }
 
 // 5. The card price must never sit below the agent price for the same report:
-//    the card buyer also pays Stripe's fee, so an equal price is a worse deal
+//    the card buyer also pays the card fee, so an equal price is a worse deal
 //    for us on every sale.
 for (const [key, p] of Object.entries(HUMAN_PRODUCTS)) {
   const t = TIERS[p.slug];
   if (!t) continue;
   ok(stripeNet(p.price / 100) >= usd(t.price),
-    `${key}: card net $${stripeNet(p.price / 100).toFixed(3)} is at or above the agent price $${usd(t.price).toFixed(2)} for the same work`);
+    `${key}: card price net of the card fee is at or above the agent price $${usd(t.price).toFixed(2)} for the same work`);
 }
 
 // 6. The card ladder must MIRROR the agent ladder. Hand-setting it shipped a

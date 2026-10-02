@@ -4,10 +4,9 @@
 // against REAL upstreams with its own documented example, and grade what comes
 // back the way the sweeps grade everything else.
 //
-// NOT a CI script. It spends real money (about $11 for a full pass on 2026-08-29,
-// through the dedicated OpenRouter audit key so the spend is labelled) and needs
-// the prod keys in the booting server's environment. Recipe in CLAUDE.md
-// ("Broken-tool audit with PRODUCTION KEYS").
+// NOT a CI script. It spends real money and needs the upstream keys in the
+// booting server's environment (use a dedicated audit key for OpenRouter so
+// the spend is labelled). Boot FREE_MODE with those keys on a free port, then:
 //
 //   TARGET_URL=http://127.0.0.1:PORT node scripts/audit-metered.mjs [--only slug,slug] [--out file.json]
 //
@@ -28,9 +27,9 @@ const OUT = arg("out", "");
 const PER_CALL_MS = Number(process.env.AUDIT_PER_CALL_MS || 300_000);
 const CONCURRENCY = Number(process.env.AUDIT_CONCURRENCY || 2);
 
-// The metered list is the sweep's own exclusion set, read from its source so
-// the two cannot drift.
-const src = readFileSync(new URL("./test-non-metered-examples.js", import.meta.url), "utf8");
+// The metered list is the sweep's own exclusion set (src/metered-slugs.js),
+// read from its source so the two cannot drift.
+const src = readFileSync(new URL("../src/metered-slugs.js", import.meta.url), "utf8");
 const m = src.match(/METERED_SLUGS = new Set\(\[([\s\S]*?)\]\)/);
 const METERED = [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
 

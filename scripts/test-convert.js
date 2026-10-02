@@ -306,6 +306,19 @@ try {
   try { proc.kill("SIGKILL"); } catch {}
 }
 
+// Imperial Russian measures (wish-board demand 2026-09-21): defined against
+// the English foot and the funt, pood = 40 funt.
+{
+  const uc = KIT2.find((t) => t.slug === "unit-convert").handler;
+  const near = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(b));
+  ok(near(uc({ value: 1, from: "verst", to: "meters" }).result, 1066.8), "1 verst = 1066.8 m (singular alias)");
+  ok(near(uc({ value: 1, from: "versts", to: "sazhens" }).result, 500), "1 verst = 500 sazhens");
+  ok(near(uc({ value: 1, from: "sazhens", to: "arshins" }).result, 3), "1 sazhen = 3 arshins");
+  ok(near(uc({ value: 1, from: "arshins", to: "vershoks" }).result, 16), "1 arshin = 16 vershoks");
+  ok(near(uc({ value: 1, from: "pood", to: "funts" }).result, 40), "1 pood = 40 funts");
+  ok(near(uc({ value: 1, from: "poods", to: "kilograms" }).result, 16.3806872), "1 pood = 16.3806872 kg");
+  ok(near(uc({ value: 96, from: "zolotniks", to: "funts" }).result, 1), "96 zolotniks = 1 funt");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.error("convert: FAILURES"); process.exit(1); }
 console.log("convert: unit table + engine + graceful retirement VERIFIED");

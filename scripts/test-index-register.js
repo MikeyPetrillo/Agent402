@@ -12,13 +12,53 @@ ok(validateOriginInput("http://example.com").error != null, "http rejected");
 ok(validateOriginInput("https://example.com/api").error != null, "path rejected");
 ok(validateOriginInput("https://example.com?x=1").error != null, "query rejected");
 ok(validateOriginInput("https://user:pw@example.com").error != null, "userinfo rejected");
-ok(validateOriginInput("https://example.com:8443").error != null, "non-443 port rejected");
+// A port is CARRIED, not refused and not silently dropped. Both halves matter:
+// dropping it would store https://host and crawl port 443, which is a different
+// service or none, and that is what this door used to avoid by refusing
+// outright. `u.host` gives the third answer - keep it.
+ok(validateOriginInput("https://example.com:8443").origin === "https://example.com:8443", "a non-default port is kept");
+ok(validateOriginInput("https://Example.COM:8443/").origin === "https://example.com:8443", "ported origin normalizes case and trailing slash");
+// WHATWG URL drops a scheme's default port, so these are the same seller and
+// must not become two rows in the index.
+ok(validateOriginInput("https://example.com:443").origin === "https://example.com", "an explicit :443 collapses to the bare origin");
+ok(validateOriginInput("https://example.com:443", { selfOrigin: "https://example.com" }).error != null, "and is caught by the self-origin check");
+// A different port on our own host is a different service, so it is NOT us.
+ok(validateOriginInput("https://agent402.tools:8443", { selfOrigin: "https://agent402.tools" }).origin === "https://agent402.tools:8443", "a ported twin of our own host is not the local catalog");
+ok(validateOriginInput("https://example.com:8443/api").error != null, "a path is still refused on a ported origin");
+ok(validateOriginInput("http://example.com:8443").error != null, "http is still refused on a ported origin");
 ok(validateOriginInput("https://localhost").error != null, "dotless host rejected");
 ok(validateOriginInput("not a url").error != null, "garbage rejected");
 ok(validateOriginInput("https://agent402.tools", { selfOrigin: "https://agent402.tools" }).error != null, "own origin rejected");
 
 // --- registerOrigin with injected crawler ---
 __testResetSubmitted();
+
+// END TO END ON A PORT. The unit assertions above prove the normaliser keeps
+// one; this proves the thing that actually costs a seller something, which is
+// that the port reaches the crawler. Storing https://host and then fetching
+// port 443 of that host would pass every assertion above and still index the
+// wrong service.
+{
+  const seen = [];
+  const crawl = async (o) => { seen.push(o); return { manifest: { name: "Ported" }, tools: [{ slug: "t", route: "/v1/x" }], error: null, history: [true] }; };
+  // Through the SAME two steps the register route takes, in the same order:
+  // registerOrigin trusts its argument, so handing it a literal here would
+  // prove only that it passes a string along and would survive the normaliser
+  // being reverted.
+  const submit = async (raw) => {
+    const v = validateOriginInput(raw, { selfOrigin: "https://agent402.tools" });
+    if (v.error) return { error: v.error };
+    return registerOrigin(v.origin, { crawl });
+  };
+  const r = await submit("https://Ported.example:8443/");
+  ok(seen[0] === "https://ported.example:8443", "the crawler is handed the origin WITH its port");
+  ok(r.listed === true && r.origin === "https://ported.example:8443", "and the ported origin is listed under its own key");
+  // Same host, default port: a different seller, not a re-registration of the
+  // one above.
+  const plain = await submit("https://ported.example");
+  ok(seen[1] === "https://ported.example", "the bare host is crawled separately");
+  ok(plain.origin === "https://ported.example", "and keyed separately from its ported twin");
+}
 
 // A RE-REGISTRATION RE-READS THE DOCUMENTS (2026-09-18). Until this date the
 // known-origin branch ran only the live-402 quote enrichment, so a seller who

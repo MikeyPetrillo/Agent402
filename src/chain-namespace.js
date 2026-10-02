@@ -54,7 +54,6 @@ export const CHAIN_VERB_ROUTES = new Map(Object.entries({
   "network-info": "/api/chain-info",
   "nft-metadata": "/api/nft-metadata",
   "nft-owner": "/api/erc721-owner",
-  "proxy": "/api/address-profile",
   "receipt": "/api/tx-receipt",
   "rpc": "/api/evm-rpc",
   "source": "/api/contract-source",
@@ -146,19 +145,27 @@ export function chainNamespaceMap() {
  * everywhere else, so folding them into a tool's aliases would assert a claim
  * that fights the rest of the catalog.
  *
- * `proxy` means an EIP-1967 implementation pointer here and an LLM proxy in
- * most of our other descriptions; measured 2026-09-12, folding it put
- * address-profile behind llm, llm-pro and llm-premium for the bare word and
- * would have dragged the LLM tiers down for it in return. The URL still
- * answers - it is the search claim that is withdrawn. Name any addition here
- * with its reason, the way the sweep skiplists do.
+ * Empty since 2026-09-22. Its one entry, `proxy`, meant an EIP-1967
+ * implementation pointer here and an LLM proxy in most of our other
+ * descriptions; it pointed at a tool retired that day and left the namespace
+ * with it (chain-storage reads the implementation slot by its key). Name any
+ * addition here with its reason, the way the sweep skiplists do.
  */
-export const VERBS_NOT_FOLDED = new Set(["proxy"]);
+export const VERBS_NOT_FOLDED = new Set([]);
 
-export function chainVerbAliasesByRoute() {
+/**
+ * Route -> the verbs folded into that tool's search aliases.
+ *
+ * `notFolded` is a parameter, not a closed-over constant, because the live set
+ * is empty: with no exception to exercise, the withholding branch below is
+ * reachable from no caller and a mutation deleting it passes every suite. The
+ * test hands in a fixture set to keep the mechanism pinned, so the day a verb
+ * needs withholding again the behaviour is already proven.
+ */
+export function chainVerbAliasesByRoute(notFolded = VERBS_NOT_FOLDED) {
   const out = new Map();
   for (const [verb, route] of CHAIN_VERB_ROUTES) {
-    if (VERBS_NOT_FOLDED.has(verb)) continue;
+    if (notFolded.has(verb)) continue;
     if (!out.has(route)) out.set(route, []);
     out.get(route).push(verb);
   }

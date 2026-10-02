@@ -69,3 +69,49 @@ site-audit-report.json
 .DS_Store
 **/.DS_Store
 .tmp-*/
+
+# Legal audit working papers. A self-authored catalogue of known issues does not
+# belong in a public repository: publishing it removes any argument the issues
+# were unknown, and it is the first document opposing counsel would reach for.
+# These live in the operator's private notes directory instead.
+LEGAL_RISK_AUDIT.md
+SECRETS_TO_ROTATE.md
+FINAL_LIABILITY_AUDIT.md
+TOOLS_REPORTS_INTEGRATIONS_INVENTORY.md
+REPO_STRATEGY.md
+OWNER_ACTION_ITEMS.md
+RESIDUAL_RISK.md
+
+# Working papers and scratch space. Neither directory is tracked and nothing has
+# leaked through them; these patterns exist so a stray `git add -A` cannot start.
+# Both are conventional names for exactly the material that must never ship, and
+# the entry above records that an unexamined `git add -A` has reached this public
+# repository once already (2026-08-29). Stage explicit paths.
+private/
+scratchpad/
+
+# Local research notes and screenshots (never committed)
+research/
+
+# Backups, editor and OS junk
+*.bak
+*.orig
+*.rej
+*.swp
+*.swo
+*~
+*.tmp
+Thumbs.db
+.idea/
+.vscode/
+
+# Test and run output
+coverage/
+.nyc_output/
+*.dump
+*.heapsnapshot
+*.cpuprofile
+/sweep.json
+
+# Internal review notes: cost and margin figures, never committed.
+docs/internal/

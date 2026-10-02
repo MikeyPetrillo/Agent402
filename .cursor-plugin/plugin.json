@@ -1,28 +1,26 @@
 {
   "$schema": "https://raw.githubusercontent.com/cursor/plugins/main/schemas/plugin.schema.json",
   "name": "agent402",
-  "displayName": "Agent402",
-  "version": "0.4.0",
-  "description": "Open-source MCP server with 500+ deterministic tools + 100 skill packs — web search, headless Chromium, PDFs, OCR, images, live data, x402 payments helpers, and ~210 pure-CPU utilities. Free to self-host or pay per call in USDC on Base + 4 more chains (+ USDG on Robinhood Chain).",
+  "displayName": "Agent402.Tools",
+  "version": "2.4.0",
+  "description": "Open-source MCP server: 500+ tools AI agents call and pay for per request, in USDC over x402 or MPP, by prepaid card credits, or free via proof-of-work for pure-compute tools. Web search and rendering, PDFs, OCR, SEC filings, market and crypto data, and utilities. Most tools are deterministic code; model-backed tools are marked as such.",
   "author": {
     "name": "Havok Holdings LLC"
   },
   "homepage": "https://agent402.tools",
   "repository": "https://github.com/MikeyPetrillo/Agent402",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "keywords": [
     "mcp",
     "x402",
+    "mpp",
     "tools",
     "agents",
     "web-search",
     "pdf",
     "ocr",
     "payments",
-    "usdc",
-    "solana",
-    "robinhood-chain",
-    "usdg"
+    "usdc"
   ],
   "tags": [
     "mcp",

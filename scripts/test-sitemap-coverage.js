@@ -52,6 +52,25 @@ try {
     ok(xml.includes(loc), `sitemap lists ${path} (loc=${loc})`);
   }
 
+  // Category pages: every category the catalog uses, in the index and the monolith.
+  {
+    const { CATEGORIES } = await import("../src/pages.js");
+    const pricing = await (await fetch(`${BASE}/api/pricing`)).json();
+    const rows = pricing.endpoints || [];
+    const used = new Set(rows.map((r) => r.category).filter((c) => CATEGORIES[c]));
+    const idx = await (await fetch(`${BASE}/sitemapindex.xml`)).text();
+    ok(idx.includes("/sitemap-categories.xml</loc>"), "sitemap index lists the categories sub-sitemap");
+    const cats = await (await fetch(`${BASE}/sitemap-categories.xml`)).text();
+    const missing = [...used].filter((c) => !cats.includes(`/tools/category/${c}</loc>`) || !xml.includes(`/tools/category/${c}</loc>`));
+    ok(used.size > 5 && missing.length === 0, `every used category is in the sitemaps (${used.size} categories${missing.length ? `; missing ${missing.join(",")}` : ""})`);
+    for (const m of cats.matchAll(/<loc>[^<]*(\/tools\/category\/[^<]+)<\/loc>/g)) {
+      const r = await fetch(`${BASE}${m[1]}`, { redirect: "manual" });
+      if (r.status !== 200) ok(false, `${m[1]} answers 200 (got ${r.status})`);
+    }
+    const robots = await (await fetch(`${BASE}/robots.txt`)).text();
+    ok(/Sitemap: \S+\/sitemapindex\.xml/.test(robots), "robots.txt lists the sitemap index");
+  }
+
   // Skill packs — every pack must appear.
   ok(SKILL_PACKS.length > 0, `source: SKILL_PACKS is non-empty (got ${SKILL_PACKS.length})`);
   const missingSkills = [];

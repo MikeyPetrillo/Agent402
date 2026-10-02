@@ -199,6 +199,19 @@
       btn.disabled = false; btn.textContent = label;
     });
   }
+  // The letterhead above the body already prints the report's title, and every
+  // report body opens with that same title as its own "# " heading, so each
+  // page showed it twice. Drop the body's leading heading when it names the
+  // same thing (compared on letters and digits only: the stored title is the
+  // heading with its dashes and casing normalised). A different heading is
+  // content and stays.
+  function titleKey(t) { return String(t || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ""); }
+  function withoutLeadingTitle(md, title) {
+    var text = String(md || "");
+    var m = /^\s*# +([^\n]*)\n?/.exec(text);
+    if (!m || !titleKey(title) || titleKey(m[1]) !== titleKey(title)) return text;
+    return text.slice(m[0].length);
+  }
   function renderDone(s) {
     setAllowedHosts(Array.isArray(s.sources) && s.sources.length ? s.sources : null);
     var base = slugify(s.title);
@@ -260,7 +273,7 @@
       }).join(" ");
       return '<div class="rpt-image"><div class="rpt-meta">' + esc(im.slot || "image") + (im.alt ? " · " + esc(im.alt) : "") + "</div>" + prev + '<div class="report-actions no-print">' + files + "</div></div>";
     }).join("") + "</div>" : "";
-    app.innerHTML = actions + mon + '<div class="report" id="report-body">' + head + mdToHtml(s.report || "") + imgHtml + "</div>" + upgradeBlock(s);
+    app.innerHTML = actions + mon + '<div class="report" id="report-body">' + head + mdToHtml(withoutLeadingTitle(s.report, s.title)) + imgHtml + "</div>" + upgradeBlock(s);
     var imgBtns = app.querySelectorAll(".dl-img");
     for (var k = 0; k < imgBtns.length; k++) {
       imgBtns[k].addEventListener("click", function (e) {

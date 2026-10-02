@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "agent402": {
+      "command": "npx",
+      "args": ["-y", "agent402-mcp"]
+    }
+  }
+}

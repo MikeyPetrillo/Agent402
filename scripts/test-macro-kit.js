@@ -158,6 +158,32 @@ if (process.env.FRED_API_KEY) {
   }
 }
 
+// --- FRED refusing OUR key is our configuration (503), and a "." month is
+// reported, not silently dropped. Stubbed upstream, forced key. ---
+{
+  const realFetch = globalThis.fetch, realKey = process.env.FRED_API_KEY;
+  process.env.FRED_API_KEY = "0123456789abcdef0123456789abcdef";
+  try {
+    let keyCalls = 0;
+    globalThis.fetch = async () => (keyCalls++, new Response(JSON.stringify({ error_code: 400, error_message: "Bad Request.  The value for variable api_key is not a 32 character alpha-numeric lower-case string." }), { status: 400, headers: { "content-type": "application/json" } }));
+    try { await h("unemployment-rate")({ months: 3 }); ok(false, "a rejected FRED key should throw"); }
+    catch (e) { ok(e.statusCode === 503 && /our configuration/.test(e.message), `a rejected FRED key is a 503 naming our configuration, not a 422 (got ${e.statusCode})`); }
+    ok(keyCalls === 1, `a rejected key is not retried: retrying cannot fix it (upstream calls: ${keyCalls})`);
+    globalThis.fetch = async () => new Response(JSON.stringify({ observations: [
+      { date: "2026-08-01", value: "4.1" }, { date: "2026-07-01", value: "4.1" }, { date: "2025-10-01", value: "." }, { date: "2025-09-01", value: "4.4" },
+    ] }), { status: 200, headers: { "content-type": "application/json" } });
+    const r = await h("unemployment-rate")({ months: 4 });
+    ok(r.months === 3 && r.history[0].date === "2025-09-01" && r.current === 4.1, "unemployment-rate keeps chronological order and the real values");
+    ok(Array.isArray(r.missingDates) && r.missingDates[0] === "2025-10-01" && /3 of the 4 months/.test(r.note || ""), "a month FRED published as \".\" is listed in missingDates with a note");
+    globalThis.fetch = async () => new Response(JSON.stringify({ observations: [{ date: "2026-09-22", value: "3.88" }] }), { status: 200, headers: { "content-type": "application/json" } });
+    const f = await h("fed-funds")({ days: 1 });
+    ok(f.current === 3.88 && f.missingDates === undefined, "no missingDates field when nothing is missing");
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.FRED_API_KEY; else process.env.FRED_API_KEY = realKey;
+  }
+}
+
 console.log(`\nvalidation asserts failed: ${assertFail} | live ok: ${liveOk} | live upstream-errors (tolerated): ${liveErr}`);
 if (assertFail > 0 || liveOk === 0) { console.error("macro-kit: FAILED"); process.exit(1); }
 console.log("macro-kit: OK");

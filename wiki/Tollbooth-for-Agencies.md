@@ -3,9 +3,9 @@
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
 A playbook for agencies (boutique → mid-market) that want to add **"we'll
-help you opt out of AI training, and you're already set up to monetize the
-moment buyer-side x402 lands at OpenAI / Anthropic / Perplexity"** to their
-service menu - without locking clients into a single CDN.
+put a price on AI crawling of your site, and settle it straight to your
+wallet"** to their service menu - with a gate that is not tied to any one host
+or CDN.
 
 > If you're a publisher with one or two sites, the install page at
 > [agent402.tools/tollbooth](https://agent402.tools/tollbooth) is enough.
@@ -13,20 +13,17 @@ service menu - without locking clients into a single CDN.
 
 ## The pitch (to your client)
 
-In 2024-2025 every major news publisher, SaaS, e-commerce, and DTC brand
-quietly discovered that **AI training crawlers had been eating their content
-for years**. The mainstream managed options mean single-vendor lock-in
-priced as a CDN add-on. Tollbooth is the open,
-portable alternative:
+Tollbooth is an open, self-hostable pay-per-crawl gate:
 
-- **Block AI training scrapers today** (no AI vendor cooperation required -
-  PoW is a free deterrent).
-- **Be ready to monetize** the instant OpenAI / Anthropic / Perplexity ship
-  buyer-side x402 (USDC settles direct to the publisher's wallet - *no
-  Stripe, no merchant of record, no agency in the middle of the money*).
+- **Put a cost on AI crawling today**: known AI crawlers get a 402 and must
+  pay or solve a proof-of-work, with no cooperation needed from the crawler's
+  operator.
+- **Get paid by agents that pay**: any x402 or MPP client can settle the 402,
+  and USDC settles direct to the publisher's wallet (*no merchant of record,
+  no agency in the middle of the money*).
 - **Portable across hosts**: Express, Next.js middleware, a reverse proxy,
-  a Cloudflare Worker, Deno or Bun. WordPress plugin in beta. Move a client
-  off a locked-in managed toll, the gate moves with them.
+  a Cloudflare Worker, Deno or Bun. WordPress plugin in beta. When a client
+  changes hosts, the gate moves with them.
 
 ## Pricing & partner economics
 
@@ -36,7 +33,9 @@ portable alternative:
 | Sites | 1 | 25 | 100 | Unlimited |
 | Retention | 30d | 90d | 1y | Custom |
 
-Annual prepay = 16% off (2 months free). Full pricing and waitlist at
+Annual prepay = 16% off (2 months free). Tollbooth Cloud is on a waitlist
+and not yet launched: the plan features below describe what the plans are
+built to include. Full pricing and waitlist at
 [agent402.tools/tollbooth/cloud](https://agent402.tools/tollbooth/cloud).
 
 **Partner program**: 20% lifetime recurring on every Team or Agency plan
@@ -44,12 +43,6 @@ you refer. Paid via Stripe - *not* USDC - so the protocol's non-custodial
 promise stays clean (we never touch the publisher's settled funds, and
 neither does your kickback). Apply via the **partner-program** link on
 the Cloud page.
-
-**Two-sided kicker**: any wallet running a verified Tollbooth install
-earns **1.5× bonus Agent402.tools credit** per dollar of settled USDC. Your
-clients can spend it on the [500+ paid tools](https://agent402.tools/tools)
-they'd otherwise be paying API vendors for - useful for client deliverables
-(content extraction, SERP scraping, geocoding, OCR, PDF tooling, …).
 
 ## A 5-step deployment playbook for many sites
 
@@ -99,24 +92,26 @@ app.use(createTollbooth({
   payTo: process.env.CLIENT_USDC_WALLET,
   price: "$0.002",
   observe: true,                                  // Phase 1
-  statsSink: httpStatsSink({
-    url: "https://stats.your-agency.com/ingest",
+  // One collector URL per site (the path is your multi-site tag);
+  // the token is sent as Authorization: Bearer and requires https.
+  statsSink: httpStatsSink("https://stats.your-agency.com/ingest/client-acme", {
     token: process.env.TOLLBOOTH_INGEST_TOKEN,
-    siteId: "client-acme",                        // tag for multi-site rollup
   }),
 }));
 ```
 
 The wire format is documented in
 [`tollbooth/sinks.js`](https://github.com/MikeyPetrillo/Agent402/blob/main/tollbooth/sinks.js)
-- it's minute-level aggregate counters per `siteId`, never per-request
-data. You can ingest into Postgres, ClickHouse, BigQuery, or just keep it
-in KV.
+- batched POSTs of `{ incr: { field: n, … }, ts }` (aggregate counter
+deltas, flushed every 2 seconds by default), never per-request data, and a
+GET on the same URL returns the aggregated snapshot. Store it wherever you
+like.
 
 ### Step 4 · Set per-client alert thresholds
 
-Cloud Team and Agency tiers let you set per-site alert rules without code.
-The defaults you'll want for most clients:
+The Cloud Team and Agency plans are built to set per-site alert rules
+without code (waitlist; until launch, alert from your own stats sink). The
+defaults you'll want for most clients:
 
 - **Spike alert**: charged requests in last hour > 5× the trailing-7-day
   median → email + Slack. Catches a new crawler campaign before it racks
@@ -129,7 +124,7 @@ The defaults you'll want for most clients:
 
 ### Step 5 · Monthly client report
 
-The Cloud Team plan ships a monthly PDF per `siteId` with:
+The Cloud Team plan is built to produce a monthly PDF per site (waitlist) with:
 
 - Total requests, classified bot %, top 5 bot user-agents
 - USDC settled this month, lifetime USDC settled (linked to a Basescan
@@ -149,18 +144,19 @@ or the `/__tollbooth/stats` endpoint on your own deployment.
 | Client stack | Recommended deployment |
 |---|---|
 | **Node / Express** | `app.use(createTollbooth(...))` directly. ~5 min. |
-| **Next.js** | `middleware.ts` template at `tollbooth/deploy/nextjs`. ~5 min. |
+| **Next.js** | `middleware.js` template at `tollbooth/deploy/nextjs`. ~5 min. |
 | **Anything behind Cloudflare** | Cloudflare Worker template at `tollbooth/deploy/cloudflare`. ~10 min, KV-backed, no origin change. |
-| **WordPress** | `agent402-tollbooth-wp` plugin (beta - see `tollbooth/deploy/wordpress`). Upload, activate, paste your wallet, done. |
-| **Any other backend** | Run the package as a reverse proxy: `TOLLBOOTH_UPSTREAM=https://origin.example.com agent402-tollbooth`. Drop into a Docker compose. |
+| **WordPress** | The Agent402 Tollbooth plugin (beta - see `tollbooth/deploy/wordpress`). Upload, activate, paste your wallet, done. |
+| **Any other backend** | Run the package as a reverse proxy: `TOLLBOOTH_UPSTREAM=https://origin.example.com npx agent402-tollbooth`. Drop into a Docker compose. |
 | **Static (Netlify / Vercel)** | Sit a Cloudflare Worker in front. The Worker template works unchanged. |
 
 The portability is the agency selling point: your install playbook is
 *the same gate on any of the above stacks*, just a different deploy
-target. You're not selling a CDN - you're selling AI-crawl monetization
-that survives a hosting migration.
+target. What you sell is AI-crawl monetization that survives a hosting migration.
 
-## White-label setup (Agency plan)
+## White-label setup (Agency plan, on the waitlist)
+
+As the Agency plan is built to work at launch:
 
 1. Create a CNAME record: `tollbooth.your-agency.com → cloud.agent402.tools`.
 2. In the Agency dashboard, register the subdomain. We provision a TLS

@@ -7,14 +7,14 @@
 # Dockerfile USER. See the Security-Model wiki page for the full checklist.
 #
 # Base image pinned by DIGEST for reproducible builds and CVE traceability
-# (audit: "mutable deployment artifacts"). node:22-slim = 22.23.2-slim, the
-# 2026-07-29 Node security release (two HIGH http2 CVEs, undici 6.28), published
-# 2026-08-25; the previous pin was 22.23.1 from 2026-07-14 and sat two months
-# behind it. Re-pin after a deliberate base bump with:
+# (audit: "mutable deployment artifacts"). node:22-slim = 22.23.3-slim, the
+# image published 2026-09-23 (re-pinned 2026-09-24); the previous pin was
+# 22.23.2-slim from 2026-08-25. All four Dockerfiles share this digest.
+# Re-pin after a deliberate base bump with:
 #   docker pull node:22-slim
 #   docker inspect --format='{{index .RepoDigests 0}}' node:22-slim
 # (or, without docker: registry.hub.docker.com/v2/repositories/library/node/tags/22-slim -> .digest)
-FROM node:22-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
+FROM node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -57,9 +57,12 @@ RUN npm ci --omit=dev && npx playwright install --with-deps chromium \
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 
 COPY src ./src
+# The decide service (a separate Railway service started with
+# `node services/decide/server.js`) ships in the same image.
+COPY services ./services
 # start.js is the shared-image dispatcher; worker/ is the secretless browser+media
-# worker it boots when WORKER_MODE=true. Both services run THIS image (railway.toml
-# pins every service to Dockerfile); WORKER_MODE unset → the main API server.
+# worker it boots when WORKER_MODE=true. Both services run THIS image (Railway
+# builds with a root Dockerfile whenever one exists); WORKER_MODE unset → the main API server.
 COPY start.js ./
 COPY worker ./worker
 # Only the two scripts the SERVER actually uses at runtime, never the whole

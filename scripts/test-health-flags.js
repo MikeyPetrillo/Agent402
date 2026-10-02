@@ -2,7 +2,7 @@
 // Each documented flag is a published contract — a UI tile, a canary preflight,
 // a memory-page lookup. The memory entry `project_yahoo_relay_envvar_flap.md`
 // captured exactly this failure mode: an env var silently went missing and
-// `flags.yahooRelay` flipped from true to undefined, which downstream consumers
+// A health flag that vanishes silently is the failure this pins; downstream consumers
 // (paid-canary preflight) had to learn to defend against.
 //
 // This test boots a FREE_MODE server and locks the published flag contract:
@@ -69,9 +69,7 @@ try {
   const REQUIRED_FLAGS = [
     "leadsDb",
     "operatorToken",
-    "sentry",
     "posthog",
-    "yahooRelay",
     "statsPersistent",
     "memoryPersistent",
     "llmGateway",

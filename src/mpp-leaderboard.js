@@ -28,7 +28,22 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { timedSync } from "./boot-timing.js";
 import { redactSecrets } from "./tools/redact.js";
 import { mppIndexSnapshot } from "./mpp-index.js";
-import { TEMPO_USDC, tempoMinSettled, tempoRpc, primeTempoInboundCount } from "./tempo-buyer.js";
+import { TEMPO_USDC, tempoMinSettled, tempoMinPayers, tempoRpc, primeTempoInboundCount } from "./tempo-buyer.js";
+import { OUR_EVM_WALLETS } from "./revenue-live.js";
+
+// The payers that count toward the proven floor (2026-09-28): not the
+// recipient paying itself, not our own wallets (the Tempo spending wallet pays
+// the sellers it routes to). The public `payers` column stays the raw count.
+export function evidencePayerCount(payerSet, recipient, ours = OUR_EVM_WALLETS) {
+  const self = String(recipient || "").toLowerCase();
+  let n = 0;
+  for (const p of payerSet || []) {
+    const k = String(p || "").toLowerCase();
+    if (!k || k === self || ours.has(k)) continue;
+    n++;
+  }
+  return n;
+}
 import { tempoFeedEnabled, emptyFeedState, syncTempoTransfers, feedStats, feedHistoryDays, persistFeedStateAsync, loadFeedState, feedCovers } from "./tempo-transfers.js";
 
 // Transfer-feed window when the Tempo data API is the source (a time window,
@@ -189,20 +204,27 @@ export async function computeMppLeaderboard({ snapshot = mppIndexSnapshot(), rpc
     for (const d of Object.keys(mergedDays)) if (d < cutoff) delete mergedDays[d];
     const nextHistory = { cursor: history?.cursor ?? null, gaps: history?.gaps || 0, days: mergedDays };
     const floor = tempoMinSettled();
+    const minPayers = tempoMinPayers();
     const ranked = rows.map((r) => {
       const st = fstats.get(r.recipient.toLowerCase()) || { transfers: 0, payers: new Set(), volumeAtomic: 0n };
+      // Unknown when the feed kept only counts for part of the window: judged
+      // on the count, as before, and never primed (the pay-time gate then
+      // reads the chain itself).
+      const evPayers = st.payersPartial ? undefined : evidencePayerCount(st.payers, r.recipient);
+      const proven = st.transfers >= floor && (evPayers === undefined || evPayers >= minPayers);
       return {
         recipient: r.recipient, sellers: r.sellers, intents: r.intents, self: !!r.self,
         transfers: st.transfers, payers: st.payers.size,
         volumeUsdc: Number(st.volumeAtomic) / 1e6,
         d7: historySum(nextHistory, r.recipient, 7, now),
         d30: historySum(nextHistory, r.recipient, 30, now),
-        proven: st.transfers >= floor,
-        routable: st.transfers >= floor && r.intents.includes("charge"),
+        proven,
+        routable: proven && r.intents.includes("charge"),
+        evidencePayers: evPayers,
       };
     }).sort((a, b) => b.d7.transfers - a.d7.transfers || b.transfers - a.transfers || b.volumeUsdc - a.volumeUsdc || a.recipient.localeCompare(b.recipient))
       .map((r, i) => ({ rank: i + 1, ...r }));
-    for (const r of ranked) primeTempoInboundCount(r.recipient, r.transfers, now);
+    for (const r of ranked) if (r.evidencePayers !== undefined) primeTempoInboundCount(r.recipient, r.transfers, now, r.evidencePayers);
     const active = ranked.filter((r) => r.transfers > 0 || r.d30.transfers > 0);
     return {
       generatedAt: now,
@@ -241,20 +263,24 @@ export async function computeMppLeaderboard({ snapshot = mppIndexSnapshot(), rpc
   }
   const nextHistory = foldHistory(history || emptyHistory(), new Map([...stats].map(([k, st]) => [k, st.logs])), { latest, from, now });
   const floor = tempoMinSettled();
+  const minPayers = tempoMinPayers();
   const ranked = rows.map((r) => {
     const st = stats.get(r.recipient);
+    const evPayers = evidencePayerCount(st.payers, r.recipient);
+    const proven = st.transfers >= floor && evPayers >= minPayers;
     return {
       recipient: r.recipient, sellers: r.sellers, intents: r.intents, self: !!r.self,
       transfers: st.transfers, payers: st.payers.size,
       volumeUsdc: Number(st.volumeAtomic) / 1e6,
       d7: historySum(nextHistory, r.recipient, 7, now),
       d30: historySum(nextHistory, r.recipient, 30, now),
-      proven: st.transfers >= floor,                                   // on-chain floor met
-      routable: st.transfers >= floor && r.intents.includes("charge"), // ...and the router can actually pay it
+      proven,                                     // on-chain floor met: transfers AND distinct payers
+      routable: proven && r.intents.includes("charge"), // ...and the router can actually pay it
+      evidencePayers: evPayers,
     };
   }).sort((a, b) => b.d7.transfers - a.d7.transfers || b.transfers - a.transfers || b.volumeUsdc - a.volumeUsdc || a.recipient.localeCompare(b.recipient))
     .map((r, i) => ({ rank: i + 1, ...r }));
-  for (const r of ranked) primeTempoInboundCount(r.recipient, r.transfers, now);
+  for (const r of ranked) primeTempoInboundCount(r.recipient, r.transfers, now, r.evidencePayers);
   const active = ranked.filter((r) => r.transfers > 0 || r.d30.transfers > 0);
   const histDays = Object.keys(nextHistory.days).length;
   return {
@@ -341,9 +367,12 @@ export function refreshMppLeaderboard(opts = {}) {
 
 /** Synchronous read for pages/APIs. `stale` is computed at read time so a
  *  scheduler that stopped firing shows as stale, not as fresh forever. */
+// provenMinPayers rides beside provenFloor at READ time: "proven" needs both
+// the transfer floor and distinct non-self payers (tempo-buyer's gate), and a
+// page that quotes only the floor states a rule the router does not apply.
 export function mppLeaderboardSnapshot(now = Date.now()) {
-  if (!current) return { generatedAt: 0, window: null, chain: "tempo", chainId: 4217, asset: "USDC.e", assetAddress: TEMPO_USDC, provenFloor: tempoMinSettled(), recipients: 0, activeRecipients: 0, totals: { transfers: 0, volumeUsdc: 0 }, rows: [], stale: true, lastError: null };
-  return { ...current, stale: !current.generatedAt || now - current.generatedAt > MPP_LB_STALE_MS };
+  if (!current) return { generatedAt: 0, window: null, chain: "tempo", chainId: 4217, asset: "USDC.e", assetAddress: TEMPO_USDC, provenFloor: tempoMinSettled(), provenMinPayers: tempoMinPayers(), recipients: 0, activeRecipients: 0, totals: { transfers: 0, volumeUsdc: 0 }, rows: [], stale: true, lastError: null };
+  return { ...current, provenMinPayers: tempoMinPayers(), stale: !current.generatedAt || now - current.generatedAt > MPP_LB_STALE_MS };
 }
 
 export function startMppLeaderboard({ self = null, delayMs = 120_000 } = {}) {

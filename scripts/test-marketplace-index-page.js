@@ -34,18 +34,19 @@ function chainCard(html, slug) {
   const html = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] } });
 
   ok(html.includes("Markets by chain"), "the new 'Markets by chain' section renders");
-  // Base: LOCAL + SellerA + SellerB all advertise a Base network -> 3 sellers, 5+3+8=16 tools.
+  // Base: SellerA + SellerB advertise a Base network -> 2 sellers (the host is
+  // in no seller count), 5+3+8=16 tools (the host's catalog included).
   const baseCard = chainCard(html, "base");
-  ok(baseCard && /<span[^>]*color:var\(--green\)[^>]*>3</.test(baseCard), "Base card shows the real seller count (3), not a hardcoded design number");
+  ok(baseCard && /<span[^>]*color:var\(--green\)[^>]*>2</.test(baseCard), "Base card shows the real seller count (2, host excluded), not a hardcoded design number");
   ok(baseCard && />16</.test(baseCard), "Base card shows the real summed tool count (16), computed from marketSellers/toolCount");
-  // Solana: LOCAL (qualifies on every chain by design - see marketSellers'
-  // own comment) + SellerB -> 2 sellers.
+  // Solana: SellerB only -> 1 seller (the host qualifies on every chain but is
+  // in no seller count).
   const solCard = chainCard(html, "solana");
-  ok(solCard && /<span[^>]*color:var\(--green\)[^>]*>2</.test(solCard), "Solana card shows the real seller count (2: LOCAL + SellerB)");
-  // Celo: no external seller advertises it, but LOCAL still qualifies on
-  // every chain - so the real floor here is 1, never a fabricated 0.
+  ok(solCard && /<span[^>]*color:var\(--green\)[^>]*>1</.test(solCard), "Solana card shows the real seller count (1: SellerB; host excluded)");
+  // Celo: no external seller advertises it, so the real count is 0 (the host
+  // is in no seller count), and the card still renders.
   const celoCard = chainCard(html, "celo");
-  ok(celoCard && /<span[^>]*color:var\(--green\)[^>]*>1</.test(celoCard), "a chain with no external sellers still shows the real local-only count (1), not 0 or omitted");
+  ok(celoCard && /<span[^>]*color:var\(--green\)[^>]*>0</.test(celoCard), "a chain with no external sellers shows 0, still rendered, never omitted");
   ok((html.match(/href="\/[a-z]+" title="[^"]+ x402 marketplace"/g) || []).length === 12, "all 12 chain cards render, one per CHAIN_PAGES entry");
 }
 
@@ -55,7 +56,7 @@ function chainCard(html, slug) {
 // verification, plus a pre-existing 5th, untouched instance in the nav
 // dropdown (src/ledger-chrome.js) - fixed both.
 {
-  const sellers = [LOCAL];
+  const sellers = [LOCAL, { origin: "https://c1.example", displayName: "C1", homepage: "https://c1.example", local: false, toolCount: 1, routable: true, networks: ["eip155:42220"], payToByNetwork: { "eip155:42220": "0xc1" } }];
   const html = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] } });
   const celoCard = chainCard(html, "celo");
   ok(celoCard && /seller<\/span>/.test(celoCard) && !/sellers<\/span>/.test(celoCard), "a chain card with exactly 1 seller reads the singular 'seller', never '1 sellers'");
@@ -81,7 +82,7 @@ function chainCard(html, slug) {
 {
   const sellers = [LOCAL, ...Array.from({ length: 4 }, (_, i) => ({ origin: `https://s${i}.example`, displayName: `S${i}`, homepage: `https://s${i}.example`, local: false, toolCount: 1, routable: true, networks: ["eip155:8453"], payToByNetwork: { "eip155:8453": `0x${i}` } }))];
   const html = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] } });
-  ok(html.includes("5 sellers on Base alone"), "hero subhead cites the real, live-computed Base seller count (5), not the design's frozen 1,494");
+  ok(html.includes("4 independent sellers on Base alone"), "hero subhead cites the real, live-computed Base seller count (4, host excluded), not the design's frozen 1,494");
 }
 
 // --- real 4-stat row, including the new TOOL LISTINGS card -------------------
@@ -89,7 +90,7 @@ function chainCard(html, slug) {
   const sellers = [LOCAL, { origin: "https://c.example", displayName: "C", homepage: "https://c.example", local: false, toolCount: 12, routable: true, networks: ["eip155:8453"], payToByNetwork: {} }];
   const html = marketPage(null, BASE_URL, { snapshot: { sellers }, leaderboardSnap: { leaderboard: [] } });
   ok(html.includes("TOOL LISTINGS"), "the new TOOL LISTINGS stat card renders");
-  ok(/TOOL LISTINGS<\/div><div[^>]*>20</.test(html), "TOOL LISTINGS sums real toolCount across every seller (8+12=20)");
+  ok(/TOOL LISTINGS<\/div><div[^>]*>12</.test(html) && /advertised by other sellers/.test(html), "TOOL LISTINGS sums other sellers' toolCount (12); the host's 8 sit on their own card, as the host card says NOT COUNTED");
   ok(html.includes("SELLERS LISTED"), "the existing SELLERS LISTED card is preserved");
   ok(html.includes("CHAINS SUPPORTED"), "the existing CHAINS SUPPORTED card is preserved");
 }
@@ -105,10 +106,15 @@ function chainCard(html, slug) {
 {
   const html = marketPage(null, BASE_URL, { snapshot: { sellers: [LOCAL] }, leaderboardSnap: { leaderboard: [] } });
   ok(html.includes("About this index."), "FAQ section heading renders");
+  // The invariant is the 1:1 match, not the literal number. Pinning the count
+  // meant every added answer failed this test with nothing wrong, which trains
+  // an author to bump a number rather than check the pairing - and the pairing
+  // is what matters: a JSON-LD question with no visible answer is the shape
+  // Google penalises. The floor keeps a collapsed FAQ from passing as "equal".
   const faqVisibleCount = (html.match(/<article style="padding:22px 0/g) || []).length;
-  ok(faqVisibleCount === 4, `visible FAQ carries exactly 4 questions (got ${faqVisibleCount})`);
   const faqLdCount = (html.match(/"@type":"Question"/g) || []).length;
-  ok(faqLdCount === 4, `FAQPage JSON-LD carries exactly 4 questions, matching the visible content 1:1 (got ${faqLdCount})`);
+  ok(faqVisibleCount >= 4, `visible FAQ is populated (got ${faqVisibleCount})`);
+  ok(faqLdCount === faqVisibleCount, `FAQPage JSON-LD matches the visible content 1:1 (${faqLdCount} vs ${faqVisibleCount})`);
   ok(html.includes('"@type":"Dataset"') && html.includes('"@type":"DataDownload"'), "Dataset + DataDownload JSON-LD present");
   const chainListMatch = html.match(/"@id":"https:\/\/agent402\.tools\/marketplace#chains"[\s\S]*?"itemListElement":(\[[\s\S]*?\])\}/);
   const chainListCount = chainListMatch ? (chainListMatch[1].match(/"@type":"ListItem"/g) || []).length : 0;
@@ -171,6 +177,21 @@ function chainCard(html, slug) {
   ok(!/mlr-dispatch/.test(unl), "a seller the handler did not label gets NO badge (never a guessed one)");
   const loc = html.slice(html.indexOf("THIS HOST") - 400, html.indexOf("THIS HOST") + 400);
   ok(!/mlr-dispatch/.test(loc), "the host's own row carries no dispatch badge");
+}
+
+// --- origins indexed + tool listings: one function with the standing band ----
+{
+  const { standingCountsExcludingHost, standingBand } = await import("../src/standing.js");
+  const ext = Array.from({ length: 60 }, (_, i) => ({ origin: `https://t${i}.example`, displayName: `T${i}`, homepage: `https://t${i}.example`, local: false, toolCount: 7, routable: true, networks: ["eip155:8453"], payToByNetwork: {} }));
+  const sellers = [LOCAL, ...ext];
+  const snapshot = { sellers, totals: { sellers: sellers.length, tools: sellers.reduce((a, s) => a + (s.toolCount || 0), 0) } };
+  const c = standingCountsExcludingHost(snapshot);
+  const html = marketPage(null, BASE_URL, { snapshot, leaderboardSnap: { leaderboard: [] } });
+  const band = standingBand({ ...c });
+  ok(new RegExp(`TOOL LISTINGS</div><div[^>]*>${c.listings.toLocaleString("en-US")}<`).test(html) && band.includes(`${c.listings.toLocaleString("en-US")} tool listings`), `/marketplace TOOL LISTINGS and the standing band print one figure (${c.listings})`);
+  ok(html.includes(`${c.sellers.toLocaleString("en-US")} origins indexed`) && band.includes(`${c.sellers.toLocaleString("en-US")} seller origins indexed`), `/marketplace origins indexed and the standing band print one figure (${c.sellers})`);
+  const src = (await import("node:fs")).readFileSync(new URL("../src/market-page.js", import.meta.url), "utf8");
+  ok(/standingCountsExcludingHost\(snapshot\)/.test(src), "marketPageAll reads standingCountsExcludingHost, the band's own function");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

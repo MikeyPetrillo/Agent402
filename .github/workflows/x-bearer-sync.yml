@@ -2,12 +2,11 @@
 # that already live in Actions (the announce workflow's OAuth 1.0a app) and
 # write it to Railway as X_BEARER_TOKEN, which is the rollout switch for the
 # five x-data tools (x-search-recent, x-user, x-user-tweets, x-tweet,
-# x-users-lookup). The app is on X's pay-per-use plan; the tools are priced
-# above X's per-read rates (2026-08-27). The bearer never touches a log:
+# x-users-lookup). The bearer never touches a log:
 # it is masked the moment it exists and travels only in the GraphQL body.
 #
-# Writing a variable makes Railway redeploy MAIN's head (the var-write race
-# in CLAUDE.md), so dispatch this only when main is what should be live.
+# Writing a variable makes Railway redeploy MAIN's head, so dispatch this only
+# when main is what should be live.
 name: X bearer sync
 
 on:

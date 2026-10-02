@@ -24,9 +24,9 @@ const ok = (c, m) => { assert.ok(c, m); n++; };
 // --- the cost table: list prices, longest prefix, cached rate, unknown errs HIGH
 {
   const u = { prompt_tokens: 1_000_000, completion_tokens: 1_000_000 };
-  ok(openaiCostUsd("gpt-4o", u) === 12.5, "gpt-4o: $2.50 in + $10 out per 1M");
-  ok(openaiCostUsd("gpt-4.1", u) === 10, "gpt-4.1: $2 + $8");
-  ok(openaiCostUsd("gpt-4o-mini", u) === 0.75, "gpt-4o-mini: $0.15 + $0.60");
+  ok(openaiCostUsd("gpt-4o", u) === 12.5, "gpt-4o: list input + output rates");
+  ok(openaiCostUsd("gpt-4.1", u) === 10, "gpt-4.1: list rates");
+  ok(openaiCostUsd("gpt-4o-mini", u) === 0.75, "gpt-4o-mini: list rates");
   ok(openaiCostUsd("gpt-4.1-mini-2025-04-14", u) === 2, "a dated id resolves by LONGEST prefix (mini, not 4.1)");
   ok(openaiCostUsd("gpt-4o-2024-08-06", u) === 12.5, "gpt-4o dated id");
   ok(openaiCostUsd("o3-mini", u) === 5.5 && openaiCostUsd("o3", u) === 10, "o3 family");

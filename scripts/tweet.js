@@ -27,19 +27,16 @@
 //
 // Exit codes: 0 posted (or dry-run/verify OK), 1 usage/credential/length error, 2 API error.
 
-import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
+import { X_TWEETS_URL, pct, oauthHeader, xCredentialsFromEnv } from "../src/x-oauth.js";
 
-const API_URL = "https://api.twitter.com/2/tweets";
+const API_URL = X_TWEETS_URL;
 
-const cred = (...names) => {
-  for (const n of names) if (process.env[n]) return process.env[n];
-  return "";
-};
-const CONSUMER_KEY = cred("X_API_KEY", "TWITTER_API_KEY");
-const CONSUMER_SECRET = cred("X_API_SECRET", "TWITTER_API_SECRET");
-const ACCESS_TOKEN = cred("X_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN");
-const ACCESS_SECRET = cred("X_ACCESS_SECRET", "TWITTER_ACCESS_SECRET");
+const CREDS = xCredentialsFromEnv();
+const CONSUMER_KEY = CREDS.consumerKey;
+const CONSUMER_SECRET = CREDS.consumerSecret;
+const ACCESS_TOKEN = CREDS.accessToken;
+const ACCESS_SECRET = CREDS.accessSecret;
 const DRY = process.env.DRY_RUN === "1";
 
 // ---- args -----------------------------------------------------------------
@@ -72,39 +69,11 @@ function resolveText(args) {
 }
 
 // ---- OAuth 1.0a (HMAC-SHA1, three-legged, user context) -------------------
-// RFC 3986 percent-encoding (encodeURIComponent leaves !*'() — encode them too).
-const pct = (s) =>
-  encodeURIComponent(s).replace(/[!*'()]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
-
-function authHeader(method, url, bodyParams = {}) {
-  const oauth = {
-    oauth_consumer_key: CONSUMER_KEY,
-    oauth_nonce: crypto.randomBytes(32).toString("hex"),
-    oauth_signature_method: "HMAC-SHA1",
-    oauth_timestamp: String(Math.floor(Date.now() / 1000)),
-    oauth_token: ACCESS_TOKEN,
-    oauth_version: "1.0",
-  };
-  // Signature base string. For a JSON body only the oauth_* params (and any
-  // query params — none here) are signed; for form-encoded bodies (the v1.1
-  // media upload) the body params must be included too.
-  const all = { ...oauth, ...bodyParams };
-  const paramString = Object.keys(all)
-    .sort()
-    .map((k) => `${pct(k)}=${pct(all[k])}`)
-    .join("&");
-  const base = [method.toUpperCase(), pct(url), pct(paramString)].join("&");
-  const signingKey = `${pct(CONSUMER_SECRET)}&${pct(ACCESS_SECRET)}`;
-  oauth.oauth_signature = crypto.createHmac("sha1", signingKey).update(base).digest("base64");
-
-  const header =
-    "OAuth " +
-    Object.keys(oauth)
-      .sort()
-      .map((k) => `${pct(k)}="${pct(oauth[k])}"`)
-      .join(", ");
-  return header;
-}
+// The signing lives in src/x-oauth.js, shared with the server's queue poster
+// (src/tweet-queue.js) so the two can never sign differently. For a JSON body
+// only the oauth_* params are signed; the form-encoded media upload passes its
+// body params in as well.
+const authHeader = (method, url, bodyParams = {}) => oauthHeader(method, url, CREDS, bodyParams);
 
 // Upload an image via the v1.1 media endpoint (form-encoded base64 — the same
 // signed-form pattern as profile-image updates); returns a media_id string for

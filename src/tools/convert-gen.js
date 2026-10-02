@@ -20,11 +20,15 @@ export const UNIT_CATEGORIES = {
     meters: 1, kilometers: 1000, centimeters: 0.01, millimeters: 0.001, micrometers: 1e-6, nanometers: 1e-9,
     miles: 1609.344, yards: 0.9144, feet: 0.3048, inches: 0.0254, "nautical-miles": 1852,
     "light-years": 9.4607304725808e15, "astronomical-units": 1.495978707e11, furlongs: 201.168,
+    // Imperial Russian measures (defined against the English foot from 1835).
+    versts: 1066.8, sazhens: 2.1336, arshins: 0.7112, vershoks: 0.04445,
   } },
   mass: { base: "grams", tags: ["mass", "weight"], units: {
     grams: 1, kilograms: 1000, milligrams: 0.001, micrograms: 1e-6, tonnes: 1e6,
     pounds: 453.59237, ounces: 28.349523125, stones: 6350.29318, carats: 0.2, grains: 0.06479891,
     "us-tons": 907184.74, "uk-tons": 1016046.9088,
+    // Imperial Russian: 1 funt = 409.51718 g, 1 pood = 40 funt, 1 zolotnik = 1/96 funt.
+    poods: 16380.6872, funts: 409.51718, zolotniks: 4.265803958,
   } },
   volume: { base: "liters", tags: ["volume", "capacity"], units: {
     liters: 1, milliliters: 0.001, "cubic-meters": 1000, "cubic-centimeters": 0.001,

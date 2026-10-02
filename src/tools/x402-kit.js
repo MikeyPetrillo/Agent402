@@ -230,7 +230,7 @@ export const X402_TOOLS = [
         example: {
           asOf: "2026-07-12T00:00:00.000Z", window: "last 24h", sortedBy: "usd",
           ecosystem: { sellersIndexed: 1479, toolsIndexed: 33779, toolsCapPerSeller: 50 },
-          topProviders: [{ rank: 1, provider: "blockrun.ai", usdSettled: 294.55, calls: 353970, buyers: 163, callsPerBuyer: 2171, homepage: "https://blockrun.ai" }],
+          topProviders: [{ rank: 1, provider: "seller.example", usdSettled: 120.5, calls: 10000, buyers: 250, callsPerBuyer: 40, homepage: "https://seller.example" }],
           topToolCategories: [{ category: "crypto", sellersOffering: 446, tools: 3353 }],
         },
       },
@@ -323,7 +323,8 @@ export const X402_TOOLS = [
       let body = null;
       try { const t = await boundedText(res); body = t ? JSON.parse(t) : null; } catch { /* may be empty/non-JSON/oversized */ }
       // x402 v1 put the payment requirements in the 402 body; v2 moved them to
-      // the base64-encoded PAYMENT-REQUIRED header (the body is `{}`). Decode
+      // the base64-encoded PAYMENT-REQUIRED header, and many v2 sellers send a
+      // `{}` body (this server mirrors the header's object into its body). Decode
       // whichever the seller speaks — without the header path this tool returns
       // an empty quote for every v2 seller, including this server itself.
       let accepts = Array.isArray(body?.accepts) && body.accepts.length ? body.accepts : undefined;
@@ -371,9 +372,11 @@ export const X402_TOOLS = [
       "Check the confirmation status of a transaction by hash on Base/Polygon/Arbitrum/Optimism/Ethereum/Monad/Celo/Avalanche/Sei/Robinhood Chain: success / failed / pending / not found, with block, from, to, gas used. Read-only. ?hash=0x…&network=base",
     tags: ["transaction", "status", "receipt", "confirmation", "multichain", "robinhood", "usdg"],
     discovery: {
-      input: { hash: "0x0000000000000000000000000000000000000000000000000000000000000000", network: "base" },
+      // A real Base transaction, so the documented call returns the shown
+      // answer (an all-zero hash answers status "not_found").
+      input: { hash: "0x2f1fecade9bd945e7817c11e5a34cafe6b349dd8c92a7587efed1de476bddfeb", network: "base" },
       inputSchema: { properties: { hash: { type: "string", description: "0x transaction hash" }, network: NETWORK_PARAM }, required: ["hash"] },
-      output: { example: { hash: "0x…", status: "success", network: "base", blockNumber: 18000000, from: "0x…", to: "0x…", gasUsed: 51000 } },
+      output: { example: { hash: "0x2f1fecade9bd945e7817c11e5a34cafe6b349dd8c92a7587efed1de476bddfeb", network: "base", status: "success", blockNumber: 50829610, from: "0x…", to: "0x…", gasUsed: 91958 } },
     },
     handler: async (i) => {
       if (!isTxHash(i.hash)) throw bad("hash must be a 0x transaction hash (32 bytes)");
@@ -392,9 +395,9 @@ export const X402_TOOLS = [
     },
   },
   {
-    route: "GET /api/gas-estimate", name: "Gas price", slug: "gas-estimate", category: "payments", price: "$0.002",
+    route: "GET /api/gas-estimate", name: "Gas price", slug: "gas-estimate", category: "payments", price: "$0.001",
     description:
-      "Current gas price (gwei and wei) on Base, Polygon, Arbitrum, Optimism, Ethereum, Monad, Celo, Avalanche, Sei, or Robinhood Chain - for an agent budgeting a transaction. Read-only. ?network=base",
+      "Current gas price on Base, Polygon, Arbitrum, Optimism, Ethereum, Monad, Celo, Avalanche, Sei, or Robinhood Chain - for an agent budgeting a transaction: returns network, gasPriceGwei and gasPriceWei (decimal strings) from the chain's own eth_gasPrice, the node's suggested all-in price per gas unit. Multiply by the gas a transaction uses (21000 for a plain transfer) for its fee. Read-only. ?network=base",
     tags: ["gas", "gas-price", "fees", "gwei", "multichain", "robinhood", "usdg"],
     discovery: {
       input: { network: "base" },
@@ -414,7 +417,9 @@ export const X402_TOOLS = [
       "Confirm a USDC payment actually settled: given a tx hash (and network), returns whether it succeeded and the USDC transfers it contains (from, to, amount). Optionally check it paid a specific address at least a minimum amount. Read-only proof of payment. ?hash=0x…&network=base&to=0x…&min=0.001",
     tags: ["x402", "verify", "settlement", "receipt", "usdc", "proof", "multichain"],
     discovery: {
-      input: { hash: "0x0000000000000000000000000000000000000000000000000000000000000000", network: "base" },
+      // A real settled USDC payment on Base, with `min` so the answer carries
+      // `matched` as shown (an all-zero hash answers pending_or_not_found).
+      input: { hash: "0x09f85fcf1844d85277b8cce528efc8d25c6df632b1fed1c8337f078901a69562", network: "base", min: 0.001 },
       inputSchema: {
         properties: {
           hash: { type: "string", description: "0x transaction hash" },
@@ -424,7 +429,7 @@ export const X402_TOOLS = [
         },
         required: ["hash"],
       },
-      output: { example: { hash: "0x…", network: "base", settled: true, status: "success", transfers: [{ from: "0x…", to: "0x…", usdc: "0.001" }], matched: true } },
+      output: { example: { hash: "0x09f85fcf1844d85277b8cce528efc8d25c6df632b1fed1c8337f078901a69562", network: "base", settled: true, status: "success", transfers: [{ from: "0x…", to: "0x…", usdc: "0.01" }], matched: true } },
     },
     handler: async (i) => {
       if (!isTxHash(i.hash)) throw bad("hash must be a 0x transaction hash (32 bytes)");
@@ -590,6 +595,7 @@ export const X402_TOOLS = [
             organicScore: 0.1135, avgTicketUsd: 0.011635,
           }],
           wow: { available: false, note: "no persisted snapshot ~7 days old yet - week-over-week deltas activate automatically as history accrues" },
+          freshness: { asOf: "2026-07-14T00:00:00.000Z", stale: false, staleFromDisk: false, refreshFailing: false, lastRefreshAt: "2026-07-14T00:00:00.000Z", note: "measured by the scan named in asOf" },
           snapshotAsOf: "2026-07-14T00:00:00.000Z", generatedAt: "2026-07-14T00:00:05.000Z",
         },
       },
@@ -799,6 +805,34 @@ export function computeTrending(snap, input = {}, { selfWallet = "", history = [
     snapshotAsOf: snap?.asOf || null,
     generatedAt: new Date().toISOString(),
     ...(snap?.warming ? { warming: true } : {}),
+    // A DEGRADED BOARD WAS SOLD AS THE LIVE WINDOW. `warming` has always ridden
+    // out (the board has no rows yet), but the two states where the board has
+    // rows that are not current did not: `staleFromDisk`, set when boot serves
+    // the persisted snapshot rather than a scan, and `cache.lastError`, set when
+    // a refresh failed and the previous snapshot keeps serving. Both fields
+    // existed on the snapshot this function reads and both were dropped here, so
+    // a buyer paying for a "momentum radar" got hours-old rows labelled with the
+    // live window and nothing to tell them apart from a fresh read. The rows are
+    // still worth serving - refusing would be worse - but the answer has to say
+    // what it is, in a field, not in the description.
+    freshness: {
+      asOf: snap?.asOf || null,
+      // Rows exist but are not from a current scan.
+      stale: !!(snap?.staleFromDisk || snap?.cache?.lastError),
+      staleFromDisk: !!snap?.staleFromDisk,
+      // Whether the last refresh ATTEMPT failed, not what it said: the error
+      // text is a third party's words about our infrastructure and the public
+      // leaderboard already redacts it for that reason.
+      refreshFailing: !!snap?.cache?.lastError,
+      lastRefreshAt: snap?.cache?.lastTriedAt ?? null,
+      note: snap?.warming
+        ? "the on-chain board has not finished its first scan on this server, so an empty list here is not a reading about the ecosystem"
+        : snap?.staleFromDisk
+          ? "these rows were restored from the last persisted scan at boot, not measured in this window - treat asOf as their age"
+          : snap?.cache?.lastError
+            ? "the last refresh of the on-chain board failed, so these rows are the previous successful scan - treat asOf as their age"
+            : "measured by the scan named in asOf",
+    },
   };
 }
 
@@ -888,6 +922,26 @@ export function computeDemandRadar(agg, input = {}) {
       };
     })
     .filter((r) => r.count >= minCount && (!qualifiedOnly || r.qualified));
+
+  // THE HOLLOW ANSWER REFUSES NOW, instead of being sold. From 2026-07-21 to
+  // 2026-09-06 this tool answered HTTP 200 with real totals and `radar: []` to
+  // 193 settlements from 17 wallets, because the handler asked the wish board
+  // for the beacon envelope (no cluster rows) while the envelope's counts came
+  // from the board itself. Every guard passed: the keys were all present, and
+  // an empty radar is excused as "cold boot" on a CI boot that really is cold.
+  //
+  // The shape is decidable here, with no knowledge of why: a cluster's count is
+  // always at least 1, so at DEFAULT filters the row count equals the cluster
+  // count. Reporting N clusters and returning none is therefore never an answer
+  // about demand - it is this function being handed a board it cannot see. A
+  // >= 400 cancels settlement, so refusing costs the buyer nothing and surfaces
+  // the defect in hours rather than six weeks.
+  if (!rows.length && Number(agg?.distinctClusters) > 0 && minCount <= 1 && !qualifiedOnly) {
+    throw Object.assign(
+      new Error(`the demand board reports ${Number(agg.distinctClusters)} clusters but returned no rows to rank, so this answer would be empty for a reason that is ours, not a reading about demand - not charged, please retry`),
+      { statusCode: 502 }
+    );
+  }
 
   const lastMs = (r) => Date.parse(r.lastSeen || "") || 0;
   rows.sort(

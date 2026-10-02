@@ -14,14 +14,10 @@
 // tool reaches the network and is WALLET-ONLY (metered upstream quota; never
 // PoW-eligible).
 //
-// Pricing verified against exa.ai/pricing on 2026-09-13: search $7/1k
-// requests (base, up to 10 results; +$1/1k per result beyond 10), answer
-// $5/1k, contents $1/1k pages PER CONTENT TYPE. The free tier carries $10 of
-// credits (observed on a real account 2026-09-13 - exa.ai/pricing also
-// advertises a $20 signup bonus, which did NOT appear, so budget on the $10),
-// which is why this can ship and be measured before anyone spends anything.
-// At $10 the daily cap matters: the default $1/day would exhaust the balance
-// in ten days, so set EXA_DAILY_MAX_USD lower on a free account.
+// Pricing verified against exa.ai/pricing on 2026-09-13: search is billed per
+// request (base covers up to 10 results, a surcharge per result beyond),
+// answer per request, contents per page PER CONTENT TYPE. On a small free
+// credit balance, set EXA_DAILY_MAX_USD lower than the default.
 // Result counts are capped at 10 so a call cannot silently cross into the
 // per-result surcharge band.
 //
@@ -37,9 +33,9 @@
 //   2. Set EXA_CREDITS_USD on Railway to the NEW funded total. That is what
 //      `exaAllowance` measures remaining against; leaving it stale is how the
 //      alarm goes quiet while the account empties.
-//   3. Optionally raise EXA_DAILY_MAX_USD - the default $1/day is a brake, and
-//      since every call nets about half a cent, a cap that fires under real
-//      demand is costing revenue rather than saving money.
+//   3. Optionally raise EXA_DAILY_MAX_USD - the default is a brake, and a cap
+//      that fires under real demand is costing revenue rather than saving
+//      money.
 // The spend counter lives in memory and resets on deploy, so `remainingUsd` is
 // an UPPER bound. Top up on "low"; never wait for it to reach zero.
 //
@@ -53,7 +49,7 @@ const USER_AGENT = "agent402-exa/1";
 const SHARED_TAGS = ["web", "search", "exa"];
 
 // Result/page caps. These are the COST lever, not a UX nicety: Exa's base
-// price covers 10 results, and every result past that bills $1/1k on top, so
+// price covers 10 results, and every result past that bills a surcharge, so
 // an uncapped numResults turns a fixed-price tool into an open tab.
 const MAX_RESULTS = 10;
 const MAX_URLS = 10;
@@ -90,6 +86,7 @@ function requireKey() {
 // exactly like the other spend guards, and the prepaid balance is the outer
 // bound.
 const EXA_SEARCH_USD = 0.007;   // per request, <= 10 results
+const EXA_INSTANT_USD = 0.004;  // per request, type "instant", <= 10 results
 const EXA_ANSWER_USD = 0.005;   // per request
 const EXA_CONTENT_USD = 0.001;  // per page, per content type
 const EXA_DAILY_MAX_USD = () => { const n = Number(process.env.EXA_DAILY_MAX_USD); return Number.isFinite(n) && n >= 0 ? n : 1; };
@@ -110,11 +107,11 @@ const EXA_DAILY_MAX_USD = () => { const n = Number(process.env.EXA_DAILY_MAX_USD
 const EXA_CREDITS_USD = () => { const n = Number(process.env.EXA_CREDITS_USD); return Number.isFinite(n) && n > 0 ? n : null; };
 const EXA_LOW_FRACTION = () => { const n = Number(process.env.EXA_LOW_FRACTION); return Number.isFinite(n) && n > 0 && n < 1 ? n : 0.25; };
 const lifetime = { micro: 0, since: Date.now() };
-const spend = { day: "", micro: 0, refused: 0 };
+const spend = { day: "", micro: 0, refused: 0, calls: 0 };
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 const spentToday = (now = Date.now()) => {
   const d = utcDay(now);
-  if (spend.day !== d) { spend.day = d; spend.micro = 0; spend.refused = 0; }
+  if (spend.day !== d) { spend.day = d; spend.micro = 0; spend.refused = 0; spend.calls = 0; }
   return spend.micro / 1e6;
 };
 
@@ -124,7 +121,8 @@ export function estimateExaUsd(path, body = {}) {
     const n = Math.max(1, Number(body.numResults) || MAX_RESULTS);
     // Content types requested alongside a search bill per returned page.
     const types = ["text", "highlights", "summary"].filter((k) => body?.contents?.[k]).length;
-    return EXA_SEARCH_USD + n * types * EXA_CONTENT_USD;
+    const base = path === "/search" && body?.type === "instant" ? EXA_INSTANT_USD : EXA_SEARCH_USD;
+    return base + n * types * EXA_CONTENT_USD;
   }
   if (path === "/answer") return EXA_ANSWER_USD;
   if (path === "/contents") {
@@ -158,7 +156,11 @@ export function exaSpendStatus(now = Date.now()) {
     status: cap > 0 && spent >= cap ? "capped" : "ok",
   };
 }
-export function _exaSpendReset() { spend.day = ""; spend.micro = 0; spend.refused = 0; }
+/** Calls our Exa tools sent today. The index crawlers also read api.exa.ai
+ *  (Exa is an indexed x402 and MPP seller), unpaid, so a host-level count of
+ *  that domain is not this number. */
+export function exaCallsToday(now = Date.now()) { spentToday(now); return spend.calls; }
+export function _exaSpendReset() { spend.day = ""; spend.micro = 0; spend.refused = 0; spend.calls = 0; }
 export function _exaSpendBook(usd) { spentToday(); spend.micro += Math.round(usd * 1e6); lifetime.micro += Math.round(usd * 1e6); }
 
 /**
@@ -196,7 +198,7 @@ async function exaPost(path, body) {
   if (cap > 0 && spentToday() + estimate > cap) {
     spend.refused++;
     throw bad(
-      `Exa tools have reached today's upstream spend cap ($${cap.toFixed(2)} per UTC day) - retry after 00:00 UTC. Nothing was charged for this request.`,
+      `Exa tools have reached today's usage cap - retry after 00:00 UTC. Nothing was charged for this request.`,
       503,
     );
   }
@@ -204,6 +206,7 @@ async function exaPost(path, body) {
   // still have been billed, and a guard that only books on success is a guard
   // a timeout walks straight through.
   _exaSpendBook(estimate);
+  spend.calls++;
 
   let res;
   try {
@@ -253,7 +256,7 @@ function takeNumResults(raw) {
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1) throw bad(`"numResults" must be a whole number of 1 or more`);
   if (n > MAX_RESULTS) {
-    throw bad(`"numResults" is capped at ${MAX_RESULTS} on this tool - Exa bills per result beyond ten, so a larger page would cost more than this call's price`);
+    throw bad(`"numResults" is capped at ${MAX_RESULTS} on this tool`);
   }
   return n;
 }
@@ -325,7 +328,7 @@ export const EXA_TOOLS = [
         properties: {
           query: { type: "string", description: "What to search for, in natural language (max 1000 chars)." },
           numResults: { type: "number", description: `Results to return, 1 to ${MAX_RESULTS} (default ${MAX_RESULTS}).` },
-          type: { type: "string", description: "auto (default), neural, or keyword." },
+          type: { type: "string", description: "auto (default), neural, keyword, fast, or instant (lowest latency, some depth traded for speed)." },
           category: { type: "string", description: `Optional Exa category filter: ${EXA_CATEGORIES.join(", ")} ("research paper" is accepted as an alias of "publication"; Exa retired pdf, github and tweet on 2026-07-23 and they are refused with this list).` },
           includeDomains: { type: "array", description: "Only return results from these domains." },
           excludeDomains: { type: "array", description: "Never return results from these domains." },
@@ -351,7 +354,7 @@ export const EXA_TOOLS = [
       const body = { query, numResults };
       if (i.type !== undefined && i.type !== null && i.type !== "") {
         const t = String(i.type);
-        if (!["auto", "neural", "keyword", "fast"].includes(t)) throw bad('"type" must be auto, neural, keyword or fast');
+        if (!["auto", "neural", "keyword", "fast", "instant"].includes(t)) throw bad('"type" must be auto, neural, keyword, fast or instant');
         body.type = t;
       }
       const category = takeCategory(i.category);
@@ -383,6 +386,7 @@ export const EXA_TOOLS = [
     name: "Exa grounded answer",
     slug: "exa-answer",
     category: "web",
+    modelBacked: true, // the answer text is generated: read by server.js's MODEL_BACKED_SLUGS
     price: "$0.010",
     description:
       "Ask a question and get a written answer with the sources it was drawn from. Exa searches its index, reads the pages and composes the answer, returning the citation list (title, URL, published date) alongside it so every claim can be checked. Model-backed: the answer text is generated, the citations are retrieved.",
@@ -393,7 +397,7 @@ export const EXA_TOOLS = [
       inputSchema: {
         properties: {
           query: { type: "string", description: "The question to answer (max 1000 chars)." },
-          text: { type: "boolean", description: "Include the full page text of each citation (bills extra per page; default false)." },
+          text: { type: "boolean", description: "Include the full page text of each citation (default false)." },
         },
         required: ["query"],
       },
@@ -441,7 +445,7 @@ export const EXA_TOOLS = [
       inputSchema: {
         properties: {
           urls: { type: "array", description: `Absolute http(s) URLs to read, 1 to ${MAX_URLS}.` },
-          highlights: { type: "boolean", description: "Also return the passages most relevant to `query` (bills extra per page)." },
+          highlights: { type: "boolean", description: "Also return the passages most relevant to `query`." },
           query: { type: "string", description: "Focuses the highlights; ignored unless highlights is true." },
         },
         required: ["urls"],
@@ -458,7 +462,7 @@ export const EXA_TOOLS = [
     },
     handler: async (i) => {
       if (!Array.isArray(i.urls) || i.urls.length === 0) throw bad('"urls" is required - an array of absolute http(s) URLs');
-      if (i.urls.length > MAX_URLS) throw bad(`"urls" is capped at ${MAX_URLS} per call - Exa bills per page read`);
+      if (i.urls.length > MAX_URLS) throw bad(`"urls" is capped at ${MAX_URLS} per call`);
       const urls = i.urls.map((u, n) => takeUrl(u, `urls[${n}]`));
       const body = { urls, text: true };
       if (i.highlights === true) {

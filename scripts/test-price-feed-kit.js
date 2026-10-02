@@ -34,6 +34,27 @@ await throws(h("price-coingecko")({ ids: [] }), 400, "price-coingecko: empty ids
 await throws(h("price-coingecko")({ ids: [""] }), 400, "price-coingecko: empty string id");
 await throws(h("price-coingecko")({ ids: ["has spaces"] }), 400, "price-coingecko: invalid slug chars");
 await throws(h("price-coingecko")({ ids: Array.from({ length: 26 }, () => "bitcoin") }), 400, "price-coingecko: >25 ids");
+await throws(h("price-coingecko")({ ids: " , " }), 400, "price-coingecko: blank comma string");
+
+// A comma string is accepted like an array, and every row carries CoinGecko's
+// own last_updated_at as ISO (stubbed upstream, no network).
+{
+  const realFetch = globalThis.fetch;
+  let asked = "";
+  globalThis.fetch = async (url) => {
+    asked = String(url);
+    return new Response(JSON.stringify({ solana: { usd: 114.7, last_updated_at: 1790261400 }, cardano: { usd: 0.24, last_updated_at: 1790261410 } }),
+      { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const r = await h("price-coingecko")({ ids: "solana, cardano" });
+    ok(r.count === 2 && r.prices[0].id === "solana" && r.prices[1].id === "cardano", "price-coingecko: comma string ids accepted in order");
+    ok(asked.includes("ids=solana,cardano") && asked.includes("include_last_updated_at=true"), "price-coingecko: asks for last_updated_at");
+    ok(r.prices[0].lastUpdated === new Date(1790261400 * 1000).toISOString(), "price-coingecko: lastUpdated is ISO from last_updated_at");
+    const one = await h("price-coingecko")({ ids: "solana" });
+    ok(one.count === 1 && one.prices[0].price === 114.7, "price-coingecko: single id as a string");
+  } finally { globalThis.fetch = realFetch; }
+}
 
 // defi-tvl
 await throws(h("defi-tvl")({}), 400, "defi-tvl: missing protocol");

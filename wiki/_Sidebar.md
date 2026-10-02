@@ -12,6 +12,7 @@
 - [[MCP Connector]]
 - [[Adapters]]
 - [[AWS Bedrock AgentCore]]
+- [[Decide]] - describe a job, get a plan
 - [[Tool Catalog]]
 - [[Skill Packs|Skill-Packs]]
 - [[x402 Index and Router|x402-Index-and-Router]]

@@ -10,6 +10,7 @@
 //
 // Offline - no server, no network.
 import { readFileSync } from "node:fs";
+import vm from "node:vm";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -21,7 +22,9 @@ ok(!!m, "found buyersTrend() source in assets/js/revenue-chart.js");
 // Reconstruct it standalone, injecting `state` as a parameter instead of a
 // closure variable so fixture rows can be supplied directly.
 const fnSrc = m[0].replace("function buyersTrend()", "function buyersTrend(state)");
-const buyersTrend = new Function(`return (${fnSrc})`)();
+// Compiled in a fresh context from our own browser script, so the test drives
+// the exact code the page ships.
+const buyersTrend = vm.runInNewContext(`(${fnSrc})`);
 
 function rows(counts, startDay = "2026-06-01") {
   const start = new Date(startDay + "T00:00:00Z");

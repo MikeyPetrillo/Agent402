@@ -213,7 +213,7 @@ const A = "0xAbCdEf0123456789AbCdEf0123456789AbCdEf01";
     "route-execute books the tier cap as the worst-case exposure, against the chain wallet too");
   ok(/adjustSpend\(\s*spendHandle\s*,\s*underlyingUsd\s*\)/.test(src),
     "route-execute corrects the exposure down to the amount actually quoted");
-  ok(src.indexOf("adjustSpend(spendHandle") > src.indexOf("const underlyingUsd"),
+  ok(src.indexOf("adjustSpend(spendHandle, underlyingUsd)") > src.indexOf("const underlyingUsd"),
     "the correction happens AFTER the real quote is known, never before");
   ok(/allowed\.code\s*===\s*"wallet_daily_ceiling"/.test(src) && /paused for everyone/.test(src),
     "route-execute tells the buyer a wallet_daily_ceiling refusal is a global pause, not their own limit");
@@ -261,7 +261,7 @@ const noEnv = () => { for (const k of Object.keys(process.env)) if (k.startsWith
 
 {
   // An unattributable payer with a chain is RECORDED against the chain (the
-  // Blockscout buys have no request and so no payer).
+  // attest gas spend has no payer of its own).
   __reset(); noEnv();
   const h = noteSpend(null, 0.005, { chain: "base" });
   ok(h && h.payer === null && h.chain === "base" && typeof h.id === "number",
@@ -348,18 +348,18 @@ const noEnv = () => { for (const k of Object.keys(process.env)) if (k.startsWith
     `the default daily wallet ceiling ($${__config.DEFAULT_WALLET_DAILY_MAX_USD}) covers the largest tier's underlying cap ($${biggest})`);
 }
 
-// --- Blockscout buys book against the Base wallet too --------------------------
-// They do not go through route-execute, so the kit books itself: worst case
-// before the buy, corrected to the quote after, chain "base", refused 503 when
-// the wallet has hit its day.
+// --- attest's gas spend books against the Base wallet too -------------------
+// It does not go through route-execute, so the kit books itself: worst case
+// before the send, corrected to the estimate after, chain "base", refused 503
+// when the wallet has hit its day.
 {
-  const src = await readFile(new URL("../src/tools/blockscout-kit.js", import.meta.url), "utf8");
-  ok(/maySpend\(\s*null\s*,\s*capUsd\s*,\s*\{\s*chain:\s*"base"\s*\}\s*\)/.test(src), "blockscout-kit checks the Base wallet's daily ceiling before every paid attempt");
-  ok(/noteSpend\(\s*null\s*,\s*capUsd\s*,\s*\{\s*chain:\s*"base"\s*\}\s*\)/.test(src), "blockscout-kit books the margin-guard cap against the Base wallet");
-  ok(/adjustSpend\(\s*spendHandle\s*,\s*paid\.quote\.usd\s*\)/.test(src), "blockscout-kit corrects the booking down to the seller's quote");
-  ok(src.indexOf("noteSpend(null, capUsd") < src.indexOf("await payX402(url, opts)") && src.indexOf("adjustSpend(spendHandle") > src.indexOf("await payX402(url, opts)"),
-    "booked before the buy, corrected after it");
-  ok(/,\s*503\)/.test(src.slice(src.indexOf("async function payBlockscoutOnce"))), "a ceiling refusal there is a 503 (a >= 400 cancels the buyer's settlement)");
+  const src = await readFile(new URL("../src/tools/attest-kit.js", import.meta.url), "utf8");
+  ok(/maySpend\(\s*null\s*,\s*MAX_GAS_USD\(\)\s*,\s*\{\s*chain:\s*"base"\s*\}\s*\)/.test(src), "attest checks the Base wallet's daily ceiling before signing");
+  ok(/noteSpend\(\s*null\s*,\s*MAX_GAS_USD\(\)\s*,\s*\{\s*chain:\s*"base"\s*\}\s*\)/.test(src), "attest books the gas ceiling against the Base wallet");
+  ok(/adjustSpend\(\s*handle\s*,\s*estimate\s*\)/.test(src), "attest corrects the booking down to the estimate");
+  ok(src.indexOf("noteSpend(null, MAX_GAS_USD()") < src.indexOf("chain.attest(") && src.indexOf("adjustSpend(handle, estimate)") < src.indexOf("chain.attest("),
+    "booked and corrected before the attestation is sent");
+  ok(/Attestations are briefly paused[^\n]*,\s*503\)/.test(src), "a ceiling refusal there is a 503 (a >= 400 cancels the buyer's settlement)");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

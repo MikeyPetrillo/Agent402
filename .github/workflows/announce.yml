@@ -64,7 +64,7 @@ on:
         required: false
         default: ""
       reply_to:
-        description: "Optional id of a post to reply to (tweet.js --reply-to) - threads the new post under it. Own posts only on the free tier."
+        description: "Optional id of a post to reply to (tweet.js --reply-to) - threads the new post under it. Own posts (or posts mentioning us) only."
         required: false
         default: ""
       force:

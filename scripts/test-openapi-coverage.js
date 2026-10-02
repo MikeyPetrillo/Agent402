@@ -90,19 +90,29 @@ try {
   ok(priced === 20, `first 20 catalog tools carry x-price in the spec (got ${priced}/20)`);
 
   // MPP discovery dialect (paymentauth.org draft-payment-discovery; MPPScan
-  // crawls it): the same x-payment-info object must carry an `offers` array
-  // whose evm charge offer prices the tool in ATOMIC USDC units matching
-  // x-price dollars — drift here would advertise wrong prices to MPP agents.
+  // crawls it): the same x-payment-info object carries an `offers` array, one
+  // entry per challenge the live 402 makes (src/mpp-offers.js), each pricing
+  // the tool in the SMALLEST unit of its currency - drift here would
+  // advertise wrong prices to MPP agents. Which methods appear depends on
+  // what this instance has switched on (none on a keyless boot, whose 402
+  // carries no Payment challenge either); scripts/test-mpp-discovery-parity.js
+  // boots with MPP on and matches every route against its own 402.
   ok(spec["x-service-info"]?.docs?.llms?.endsWith("/llms.txt"), "x-service-info.docs.llms points at /llms.txt (MPP discovery)");
-  let mppOffers = 0;
+  const DECIMALS = { evm: 6, tempo: 6, stripe: 2 };
+  let mppChecked = 0;
+  const offerDrift = [];
   for (const tool of catalog.slice(0, 20)) {
     const op = Object.values(spec.paths[tool.path] || {})[0];
-    const offer = op?.["x-payment-info"]?.offers?.[0];
-    if (!offer || offer.intent !== "charge" || offer.method !== "evm") continue;
+    const info = op?.["x-payment-info"];
+    if (!info || info.price?.mode !== "fixed") continue;
     const dollars = Number(String(op["x-price"]).replace(/[^0-9.]/g, ""));
-    if (offer.amount === String(Math.round(dollars * 1e6))) mppOffers++;
+    for (const offer of info.offers || []) {
+      mppChecked++;
+      const want = String(Math.round(dollars * 10 ** (DECIMALS[offer.method] ?? 6)));
+      if (offer.intent !== "charge" || offer.amount !== want) offerDrift.push(`${tool.slug}: ${offer.method} ${offer.amount} vs ${want}`);
+    }
   }
-  ok(mppOffers === 20, `first 20 catalog tools carry an MPP evm charge offer with atomic-USDC amount matching x-price (got ${mppOffers}/20)`);
+  ok(offerDrift.length === 0, `every MPP offer on the first 20 catalog tools prices x-price in its currency's smallest unit (${mppChecked} offers checked)${offerDrift.length ? ` - ${offerDrift.slice(0, 5).join("; ")}` : ""}`);
 
   // Every $ref anywhere in the spec must resolve against the spec root.
   // Tool examples may embed specs whose refs point at #/components/... —

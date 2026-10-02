@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   recordWish, getWishesAggregate, WISH_THRESHOLD,
-  clusterQualifies, QUALIFY_MIN_SPAN_MS, QUALIFY_MIN_CALLERS, WISH_SERVED_MIN_SCORE, callerHash, annotateServed,
+  clusterQualifies, QUALIFY_MIN_SPAN_MS, QUALIFY_MIN_CALLERS, WISH_SERVED_MIN_SCORE, callerHash, annotateServed, annotateServedAsync,
   __testSetFilePath, __testSetLineCap, __testState, __testReset, WISH_STALE_DAYS,
 } from "../src/wish.js";
 
@@ -172,10 +172,17 @@ function freshFile(tag) {
   // An explicit wish from the same caller is a different source and still counts.
   const d = recordWish({ need: "translate english to spanish", source: "api", ip: "203.0.113.9" });
   ok(d.recorded === true && getWishesAggregate({ detailed: true }).clusters[0].count === 4, "an explicit api wish from that caller still records (dedupe is find-miss only)");
-  // Served floor: a weak match must not mark a cluster served.
+  // The floor still decides whether a match is worth REPORTING; it no longer
+  // decides whether the catalog "serves" the wish. That verdict is gone: the
+  // resolver scores name similarity, not whether a tool answers a need, and on
+  // the live board it marked fx-historical (foreign exchange) as serving
+  // "historical technical evidence website" and image-dominant-color as
+  // serving a url-metadata request at a score of 98.3.
   const rows = [{ text: "todo task manager" }, { text: "extract tables from pdf" }];
   annotateServed(rows, (t) => (t.startsWith("todo") ? { slug: "fund-report", score: 5 } : { slug: "pdf-extract-pages", score: 75 }), WISH_SERVED_MIN_SCORE);
-  ok(!rows[0].served && rows[1].served?.slug === "pdf-extract-pages", `WISH_SERVED_MIN_SCORE (${WISH_SERVED_MIN_SCORE}) keeps a score-5 match from reading as served`);
+  ok(!rows[0].closestMatch, `a score-5 match is below WISH_SERVED_MIN_SCORE (${WISH_SERVED_MIN_SCORE}) and is not reported at all`);
+  ok(rows[1].closestMatch?.slug === "pdf-extract-pages" && rows[1].closestMatch.score === 75, "a strong match is reported with its score so the reader can judge it");
+  ok(!rows[0].served && !rows[1].served, "no cluster is marked served: the annotation reports evidence, never a verdict");
 }
 
 // --- qualification, end-to-end through recordWish + getWishesAggregate ---
@@ -251,11 +258,33 @@ for (const f of tmpFiles) {
   ];
   const scores = { "minia2a": { slug: "a2a-card-fetch", score: 3 }, "quantum teleport tool": { slug: "hash", score: 1 } };
   const out = annotateServed(clusters, (t) => scores[t] || null, 3);
-  ok(out[0].served && out[0].served.slug === "a2a-card-fetch", "a tag-strength match marks the cluster served");
-  ok(!out[1].served, "a weak description-only match does not mark served");
-  ok(!out[2].served, "no match leaves the cluster untouched");
+  ok(out[0].closestMatch?.slug === "a2a-card-fetch", "a match at or above the floor is reported");
+  ok(!out[1].closestMatch, "a match below the floor is not reported");
+  ok(!out[2].closestMatch, "no match leaves the cluster untouched");
   const throwing = annotateServed([{ text: "x" }], () => { throw new Error("boom"); }, 3);
-  ok(throwing.length === 1 && !throwing[0].served, "a throwing scoreFn never breaks annotation");
+  ok(throwing.length === 1 && !throwing[0].closestMatch, "a throwing scoreFn never breaks annotation");
+
+  // The regression this fixes, stated as the live cases that exposed it. Each
+  // of these scored well ABOVE the floor and was rendered to the operator as
+  // "served - not outstanding demand", which deleted a real demand signal.
+  // Reporting the score instead is what lets a reader tell 109 from 47.
+  const wrong = [
+    [{ text: "historical technical evidence website" }, { slug: "fx-historical", score: 47 }],
+    [{ text: "index url metadata api at example" }, { slug: "image-dominant-color", score: 98 }],
+    [{ text: "idempotency replay protection" }, { slug: "skill-brand-protection", score: 45 }],
+  ];
+  for (const [row, top] of wrong) {
+    annotateServed([row], () => top, WISH_SERVED_MIN_SCORE);
+    ok(!row.served, `"${row.text.slice(0, 28)}" is never claimed as served by ${top.slug}`);
+    ok(row.closestMatch?.score === top.score, "its score is carried so a reader can judge the match");
+  }
+
+  // A high score must not become a verdict by another name: nothing in the
+  // annotation may set `served`, at any score.
+  const strong = [{ text: "convert us gallons to liters" }];
+  annotateServed(strong, () => ({ slug: "unit-convert", score: 109 }), WISH_SERVED_MIN_SCORE);
+  ok(!strong[0].served && strong[0].closestMatch.score === 109,
+    "even an obviously correct match is reported as evidence rather than asserted as served");
 }
 
 
@@ -350,6 +379,28 @@ for (const f of tmpFiles) {
   ok(board.distinctClusters === 2 && board.liveClusters === 1, "the total still counts everything - hiding is a view, never a deletion");
   ok(board.totalWishes === 9, "and every signal is still counted, including the hidden cluster's");
   ok(getWishesAggregate({ detailed: false }).distinctClusters === 2, "the public beacon's totals are unchanged by the view filter");
+}
+
+// The operator board annotates up to 500 clusters, one catalog search each.
+// The async form must give the same annotations and hand the loop back
+// between clusters instead of holding it for the whole board.
+{
+  const busy = (ms) => { const end = performance.now() + ms; while (performance.now() < end) { /* spin */ } };
+  const scoreFn = (t) => { busy(2); return { slug: `tool-${t.length}`, score: t.length % 2 ? 60 : 1 }; };
+  const mk = () => Array.from({ length: 60 }, (_, i) => ({ text: "wish ".repeat(1 + (i % 7)).trim() }));
+  const syncRows = annotateServed(mk(), scoreFn, 45);
+  let worst = 0, last = performance.now(), live = true;
+  const tick = () => { const now = performance.now(); worst = Math.max(worst, now - last); last = now; if (live) setImmediate(tick); };
+  setImmediate(tick);
+  const t0 = performance.now();
+  const asyncRows = await annotateServedAsync(mk(), scoreFn, 45);
+  const total = performance.now() - t0;
+  // The gap since the ticker last ran counts too: a loop that never yields
+  // starves the ticker entirely, and without this it would score 0 ms.
+  worst = Math.max(worst, performance.now() - last);
+  live = false;
+  ok(JSON.stringify(asyncRows) === JSON.stringify(syncRows), "the async annotator writes exactly what the sync one does");
+  ok(total > 100 && worst < 40, `the async annotator yields while it works (longest hold ${worst.toFixed(1)} ms over ${total.toFixed(0)} ms)`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

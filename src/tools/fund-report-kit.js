@@ -19,7 +19,7 @@ import { get13fHoldings, resolveManager } from "./edgar-kit.js";
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
 const SYNTH = "anthropic/claude-opus-5";
-const GROUND = "google/gemini-2.5-flash";
+const GROUND = "google/gemini-3.6-flash"; // grounded web search + read. gemini-3.6-flash since 2026-09-23 (2.5-flash expires upstream 2026-10-20); it reasons by default, so the search call passes reasoning:low - measured: default spent 460 of 600 tokens thinking, low returned the full cited answer at the same cost.
 
 export const FUND_TIERS = {
   "fund-report": { price: "$0.60", maxUpstreamUsd: 0.35, topN: 15, changeRows: 20, searches: 2, synthMaxTokens: 4500, words: "~1,500" },
@@ -163,6 +163,7 @@ function makeFundHandlerInner(tierSlug) {
     ].slice(0, t.searches);
     const searchBody = (q) => ({
       model: GROUND,
+      reasoning: { effort: "low" },
       messages: [{ role: "user", content: `Search the web and answer with SPECIFIC, verifiable facts - figures, dates, named positions - each with a citation. Do not state a number unless a source supports it. Question: ${q}` }],
       max_tokens: 700,
       plugins: [{ id: "web", engine: "exa", max_results: 5 }],

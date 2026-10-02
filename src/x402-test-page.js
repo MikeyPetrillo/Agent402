@@ -15,6 +15,7 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REJECTION_REASONS } from "./payment-reject.js";
 
+import { repoUrl } from "./repo-link.js";
 // The cheapest real route we sell: pure CPU, a fraction of a cent, no upstream
 // to burn. A conformance probe should cost the buyer nothing to get wrong and
 // almost nothing to get right.
@@ -51,17 +52,20 @@ export function x402TestPage(baseUrl) {
   <h2 style="font-weight:800;font-size:30px;letter-spacing:-.02em;margin:0 0 16px;color:var(--ink);">1. Get a challenge</h2>
   <p style="font-size:16px;line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">Any paid route answers one. This is the cheapest: pure computation, no upstream.</p>
   ${pre(`curl -sD - -X POST ${baseUrl}${PROBE_PATH} \\\n  -H 'content-type: application/json' \\\n  -d '{"text":"hello"}'`)}
-  <p style="font-size:16px;line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">The terms are in the <code>PAYMENT-REQUIRED</code> response header as base64 JSON, which is where the x402 v2 spec puts them; the body is <code>{}</code> by design. MPP clients get <code>WWW-Authenticate: Payment</code> challenges on the same response.</p>
+  <p style="font-size:16px;line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">The terms are in the <code>PAYMENT-REQUIRED</code> response header as base64 JSON, which is where the x402 v2 spec puts them, and the JSON body carries the same object, so a client that reads either one finds the offer. The header is authoritative. MPP clients get <code>WWW-Authenticate: Payment</code> challenges on the same response.</p>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:36px 30px 0;">
   <h2 style="font-weight:800;font-size:30px;letter-spacing:-.02em;margin:0 0 16px;color:var(--ink);">2. Pay it, and read the refusal</h2>
-  <p style="font-size:16px;line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">Retry with your client's <code>PAYMENT-SIGNATURE</code> header. If it is wrong, the 402 body carries a <code>reason</code>, a <code>hint</code> in words, and a <code>retry</code> telling you what kind of change is needed. Here is a real one:</p>
+  <p style="font-size:16px;line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">Retry with your client's <code>PAYMENT-SIGNATURE</code> header. If it is wrong, the 402 body carries a <code>reason</code>, a <code>hint</code> in words, and a <code>retry</code> telling you what kind of change is needed, ahead of the same offer the header carries. The header's one-line <code>error</code> is left out of a refusal's body, so a client that reads <code>error</code> first reads the hint instead. Here is a real one, with the offer trimmed. A route that also takes proof-of-work puts an <code>altPayment</code> pointer first.</p>
   ${pre(`{
-  "error": "Payment rejected",
   "reason": "unsupported-scheme",
   "hint": "Scheme \\"lightning\\" is not offered on this route. Offered: exact, upto.",
-  "retry": "choose-offered-option"
+  "retry": "choose-offered-option",
+  "x402Version": 2,
+  "resource": { ... },
+  "accepts": [ ... ],
+  "extensions": { ... }
 }`)}
   <p style="font-size:16px;line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">Field <em>names</em> are echoed so you can compare them; values never are. A payment header is a credential.</p>
 </section>
@@ -76,6 +80,7 @@ export function x402TestPage(baseUrl) {
 <section style="max-width:1180px;margin:0 auto;padding:36px 30px 0;">
   <h2 style="font-weight:800;font-size:30px;letter-spacing:-.02em;margin:0 0 16px;color:var(--ink);">3. When it works</h2>
   <p style="font-size:16px;line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">You get a 200, the tool's answer, and a <code>PAYMENT-RESPONSE</code> receipt naming the settlement transaction, verifiable on the chain you paid on without asking us. At that point your client is integrated with the whole catalog: the same credential pays for 500+ tools, five model tiers on three wires, embeddings, images, speech and finished reports.</p>
+  <p style="font-size:16px;line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 18px;">If a receipt says a payment settled and the call still failed to deliver, that payment is recorded as owed and repaid to the paying wallet after review. Check any payment by its settlement transaction at <code>GET /api/refunds/lookup?tx=&lt;hash&gt;</code>: free, and it answers with the refund status and, once sent, our refund transaction.</p>
   <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:8px;">
     <a href="/api/pricing" style="${mono}color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">every route and price →</a>
     <a href="/.well-known/x402" style="${mono}color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding-bottom:1px;">the service manifest →</a>
@@ -89,7 +94,7 @@ export function x402TestPage(baseUrl) {
     <h2 style="font-weight:800;font-size:30px;line-height:1.05;letter-spacing:-.025em;margin:0 0 14px;color:var(--on-dark);">If the refusal looks wrong, it may be ours.</h2>
     <p style="font-size:16px;line-height:1.6;color:var(--dk-muted2);margin:0 0 24px;max-width:640px;">A refusal we cannot classify is as likely to be a defect on this server as a fault in your client, and we would rather hear about it than have you work around it. Two of the classes in the table above exist because someone outside told us their client was being refused for a reason that turned out to be ours.</p>
     <div style="display:flex;gap:11px;flex-wrap:wrap;">
-      <a href="https://github.com/MikeyPetrillo/Agent402/issues/new" style="background:var(--accent);color:var(--on-accent);${mono}font-weight:700;font-size:14px;text-decoration:none;padding:14px 24px;">TELL US →</a>
+      <a href="${repoUrl("issues/new")}" style="background:var(--accent);color:var(--on-accent);${mono}font-weight:700;font-size:14px;text-decoration:none;padding:14px 24px;">TELL US →</a>
       <a href="/status" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--on-dark);${mono}font-weight:700;font-size:14px;text-decoration:none;padding:13px 24px;">UPTIME, MEASURED OUTSIDE</a>
     </div>
   </div>

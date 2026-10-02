@@ -8,6 +8,7 @@ import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 import { RAILS_SHORT } from "./rails.js";
 
+import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 
 const TABS = [
@@ -48,7 +49,7 @@ export function ledgerCatalogPage(baseUrl, catalog, skillPacks) {
   const title = `${fmtNum(count)} pay-per-call tools for AI agents - the Agent402 catalog`;
   const description = `${fmtNum(count)} tools an AI agent can call and pay for per request in USDC. ${fmtNum(freeCount)} run free on proof-of-work. No signup, no API keys. Browse by category, or describe a task and let the router resolve it.`;
 
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, sameAs: [`https://github.com/MikeyPetrillo/Agent402`, "https://x.com/Agent402Tools"] };
+  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, sameAs: ORG_SAME_AS };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Our tools", item: canonical },

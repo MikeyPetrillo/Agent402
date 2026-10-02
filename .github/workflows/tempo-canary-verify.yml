@@ -14,13 +14,18 @@ permissions:
 
 on:
   workflow_dispatch:
+    inputs:
+      calls:
+        description: 'Optional JSON array of {"method","path","body"} to buy (1-10); default is one GET /api/uuid'
+        required: false
+        default: ""
 
 jobs:
   buy:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -30,4 +35,5 @@ jobs:
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
           POW_SECRET: ${{ secrets.POW_SECRET }}
+          CANARY_CALLS: ${{ inputs.calls }}
         run: node scripts/tempo-canary-verify.js

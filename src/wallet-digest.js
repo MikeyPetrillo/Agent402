@@ -50,9 +50,10 @@ const money = (n) => `$${Number(n || 0).toFixed(Number(n || 0) >= 1 ? 2 : 4)}`;
  * @param {(payer:string, opts:{days:number})=>{totals:{calls:number,paidUsd:number},bySlug:{slug:string,calls:number,usd:number}[],byNetwork:Record<string,{calls:number,usd:number}>}} deps.usage
  * @param {(keyId:string)=>number|null|Promise<number|null>} [deps.creditsBalance] USD balance for a credits key id, null when unknown
  * @param {(p:{address:string,message:string,signature:string})=>Promise<boolean>} deps.verifySignature EIP-191 personal_sign check
+ * @param {(payer:string)=>Array<{tx:string|null,status:string,amountUsd:number|null,chain:string|null,refundTx:string|null,refundTxUrl:string|null,refundedAt:string|null,recordedAt:string|null}>|Promise<Array>} [deps.refunds] the wallet's own refund rows (wallet kind only)
  * @param {(key:string)=>string|null} [deps.creditsKeyId] resolves a presented credits key to its id (null = unknown key)
  */
-export function createWalletDigest({ storePath = defaultDigestStorePath(), sendEmail, secret = "", baseUrl = "https://agent402.tools", now = () => Date.now(), log = console.log, usage, creditsBalance = null, verifySignature, creditsKeyId = null, onEvent = null } = {}) {
+export function createWalletDigest({ storePath = defaultDigestStorePath(), sendEmail, secret = "", baseUrl = "https://agent402.tools", now = () => Date.now(), log = console.log, usage, refunds = null, creditsBalance = null, verifySignature, creditsKeyId = null, onEvent = null } = {}) {
   let store = load();
   let ticking = false;
 
@@ -193,22 +194,40 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
     const payer = rec.kind === "credits" ? rec.payer.slice("credits:".length) : rec.payer;
     const u = await usage(payer, { days: 7 });
     const calls = Number(u?.totals?.calls || 0);
-    if (!calls && rec.sends > 0) return null; // quiet week after the first digest: nothing sent
+    // Refunds for this wallet: anything still owed or being sent, plus any
+    // recorded or paid this week. A Base refund arrives as a plain transfer
+    // with no memo, so this is where the buyer learns which payment it repays.
+    let refundRows = [];
+    if (rec.kind !== "credits" && typeof refunds === "function") {
+      try {
+        const since = now() - DIGEST_PERIOD_MS;
+        const inWeek = (iso) => iso && Date.parse(iso) >= since;
+        refundRows = ((await refunds(payer)) || []).filter((r) => r.status === "owed" || r.status === "sending" || inWeek(r.refundedAt) || inWeek(r.recordedAt)).slice(0, 10);
+      } catch { refundRows = []; }
+    }
+    if (!calls && !refundRows.length && rec.sends > 0) return null; // quiet week after the first digest: nothing sent
     const top = (u?.bySlug || []).slice().sort((a, b) => (b.usd || 0) - (a.usd || 0) || (b.calls || 0) - (a.calls || 0)).slice(0, 5);
     const chains = Object.entries(u?.byNetwork || {}).sort((a, b) => (b[1].usd || 0) - (a[1].usd || 0)).slice(0, 4);
     let balanceUsd = null;
     if (rec.kind === "credits" && typeof creditsBalance === "function") { try { balanceUsd = await creditsBalance(payer); } catch { balanceUsd = null; } }
-    return { calls, paidUsd: Number(u?.totals?.paidUsd || 0), top, chains, balanceUsd };
+    return { calls, paidUsd: Number(u?.totals?.paidUsd || 0), top, chains, balanceUsd, refunds: refundRows };
   }
 
   async function sendDigest(rec, d) {
     const unsub = link(rec.id, "unsubscribe");
     const who = rec.kind === "credits" ? "your credits key" : `${rec.payer.slice(0, 6)}…${rec.payer.slice(-4)}`;
-    const subject = d.calls ? `Agent402 this week: ${d.calls} call${d.calls === 1 ? "" : "s"}, ${money(d.paidUsd)}` : "Agent402 this week: no calls yet";
+    const subject = d.calls ? `Agent402 this week: ${d.calls} call${d.calls === 1 ? "" : "s"}, ${money(d.paidUsd)}` : (Array.isArray(d.refunds) && d.refunds.length ? "Agent402 this week: a refund update" : "Agent402 this week: no calls yet");
     const topText = d.top.length ? d.top.map((t) => `  ${t.slug}: ${t.calls} call${t.calls === 1 ? "" : "s"}, ${money(t.usd)}`).join("\n") : "  (no calls this week)";
     const chainText = d.chains.length ? d.chains.map(([n, v]) => `  ${n}: ${v.calls} call${v.calls === 1 ? "" : "s"}, ${money(v.usd)}`).join("\n") : "";
     const balanceText = d.balanceUsd == null ? "" : `\nCredits balance: ${money(d.balanceUsd)}. Top up: ${baseUrl}/credits\n`;
-    const text = `Spend for ${who} on Agent402, last 7 days:\n\nCalls: ${d.calls}\nPaid: ${money(d.paidUsd)}\n\nTop tools:\n${topText}\n${chainText ? `\nChains:\n${chainText}\n` : ""}${balanceText}\nFull history (paid, wallet-keyed): ${baseUrl}/tools/my-usage\n\nUnsubscribe: ${unsub}`;
+    const refundList = Array.isArray(d.refunds) ? d.refunds : [];
+    const refundLine = (r) => r.status === "paid"
+      ? `refunded ${money(r.amountUsd)} on ${r.chain || "chain"}${r.refundTxUrl ? `: ${r.refundTxUrl}` : r.refundTx ? `: ${r.refundTx}` : ""}`
+      : `${r.status === "sending" ? "refund being sent" : "refund owed"}: ${money(r.amountUsd)} on ${r.chain || "chain"}`;
+    const refundText = refundList.length
+      ? `\nRefunds:\n${refundList.map((r) => `  ${refundLine(r)}${r.tx ? ` (for payment ${r.tx})` : ""}`).join("\n")}\nLook up any payment: ${baseUrl}/api/refunds/lookup?tx=<settlement tx>\n`
+      : "";
+    const text = `Spend for ${who} on Agent402, last 7 days:\n\nCalls: ${d.calls}\nPaid: ${money(d.paidUsd)}\n\nTop tools:\n${topText}\n${chainText ? `\nChains:\n${chainText}\n` : ""}${balanceText}${refundText}\nFull history (paid, wallet-keyed): ${baseUrl}/tools/my-usage\n\nUnsubscribe: ${unsub}`;
     const rows = d.top.map((t) => `<tr><td style="padding:4px 10px 4px 0;font-family:ui-monospace,Menlo,monospace;font-size:13px;">${esc(t.slug)}</td><td style="padding:4px 10px;text-align:right;">${t.calls}</td><td style="padding:4px 0;text-align:right;">${money(t.usd)}</td></tr>`).join("");
     const chainRows = d.chains.map(([n, v]) => `<tr><td style="padding:4px 10px 4px 0;font-family:ui-monospace,Menlo,monospace;font-size:13px;">${esc(n)}</td><td style="padding:4px 10px;text-align:right;">${v.calls}</td><td style="padding:4px 0;text-align:right;">${money(v.usd)}</td></tr>`).join("");
     const html = shell(`<h2 style="margin:0 0 6px;font-size:18px;">Your week on Agent402</h2>
@@ -216,6 +235,7 @@ export function createWalletDigest({ storePath = defaultDigestStorePath(), sendE
 <p style="font-size:22px;margin:0 0 16px;"><b>${d.calls}</b> call${d.calls === 1 ? "" : "s"} &middot; <b>${money(d.paidUsd)}</b></p>
 ${rows ? `<h3 style="font-size:14px;margin:16px 0 6px;">Top tools</h3><table style="border-collapse:collapse;">${rows}</table>` : "<p>No calls this week.</p>"}
 ${chainRows ? `<h3 style="font-size:14px;margin:16px 0 6px;">Chains</h3><table style="border-collapse:collapse;">${chainRows}</table>` : ""}
+${refundList.length ? `<h3 style="font-size:14px;margin:16px 0 6px;">Refunds</h3><ul style="margin:0;padding-left:18px;">${refundList.map((r) => `<li>${esc(refundLine(r).replace(/: https?:\/\/\S+$/, ""))}${r.status === "paid" && r.refundTxUrl ? ` (<a href="${esc(r.refundTxUrl)}">refund tx</a>)` : ""}${r.tx ? ` <span style="font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#5C6963;">for ${esc(r.tx.slice(0, 10))}…</span>` : ""}</li>`).join("")}</ul><p style="margin:6px 0 0;font-size:13px;color:#5C6963;">Look up any payment at ${esc(baseUrl)}/api/refunds/lookup?tx=&lt;settlement tx&gt;</p>` : ""}
 ${d.balanceUsd == null ? "" : `<p style="margin:16px 0 0;">Credits balance: <b>${money(d.balanceUsd)}</b> &middot; <a href="${esc(baseUrl)}/credits">top up</a></p>`}
 <p style="margin:18px 0 0;font-size:13px;color:#5C6963;">Full history, paid and wallet-keyed: <a href="${esc(baseUrl)}/tools/my-usage">my-usage</a>. <a href="${esc(unsub)}">Unsubscribe</a>.</p>`);
     return sendEmail({ to: rec.email, subject, html, text, headers: { "List-Unsubscribe": `<${unsub}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } });

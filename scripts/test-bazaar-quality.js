@@ -2,7 +2,8 @@
 // distinct payers ride from the Bazaar feed into the index (per resource + per
 // origin), into /api/find external results (field + tiebreak), and into the
 // SOR gate as positive evidence (folded as MAX in server.js). Offline.
-import { routeQuery, bazaarItemToTool, bazaarQualityFor, bazaarQualityEntries, _setBazaarQualityForTest, _cacheForTests, indexSnapshot } from "../src/x402-index.js";
+import { readFileSync } from "node:fs";
+import { routeQuery, bazaarItemToTool, bazaarQualityFor, bazaarQualityEntries, _setBazaarQualityForTest, _cacheForTests, indexSnapshot, foldBazaarQuality } from "../src/x402-index.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -34,6 +35,69 @@ ok(local && local.bazaar === undefined, "local rows never carry a bazaar object"
 const snap = indexSnapshot(ctx);
 const b = (snap.sellers || []).find((s) => s.origin === "https://b.example");
 ok(b && b.bazaar?.payers30d === 50 && b.bazaar?.calls30d === 3, "index snapshot sellers expose bazaar quality");
+
+// 4. `curated` (2026-09-29): the bulk feed now carries Coinbase's editorial
+// flag per item. Folded per origin, served on index rows, and read by the
+// router ONLY as the last tie-break: after match, health, payers and price.
+{
+  const m = new Map();
+  foldBazaarQuality(m, "https://c.example", { l30DaysTotalCalls: 5, l30DaysUniquePayers: 1 }, null, { curated: false });
+  ok(m.get("https://c.example").curated === false, "fold: an uncurated resource reads curated false");
+  foldBazaarQuality(m, "https://c.example", { l30DaysTotalCalls: 5, l30DaysUniquePayers: 1 }, null, { curated: true });
+  foldBazaarQuality(m, "https://c.example", { l30DaysTotalCalls: 5, l30DaysUniquePayers: 1 }, null);
+  ok(m.get("https://c.example").curated === true, "fold: any curated resource marks the origin, and a later plain one does not clear it");
+  ok(Object.keys(m.get("https://c.example")).includes("curated"), "fold: curated is an enumerable field (served on index rows)");
+  const src = readFileSync(new URL("../src/x402-index.js", import.meta.url), "utf8");
+  ok(/curated: item\.curated === true && isBazaarDiscoveryUrl\(source\.url\)/.test(src), "fold: curated is read from the Coinbase feed only, never from an open registry's own item");
+}
+{
+  const seedP = (origin, slug, price, health = 1) => cache.set(origin, { manifest: { name: origin, homepage: origin }, openapiSummary: null, tools: [{ seller: origin, method: "POST", route: `/api/${slug}`, slug, name: slug, description: `${slug} a thing`, category: "x", tags: [slug], price }], fetchedAt: Date.now(), error: null, history: health === 1 ? [1, 1, 1, 1, 1] : [1, 0, 0, 0, 0] });
+  const run = (q) => routeQuery({ query: q, top: 10, include: "external", ...ctx }).results.filter((x) => x.seller.startsWith("https://"));
+  cache.clear();
+  // equal on everything: the curated seller first (its origin sorts second in cache order)
+  seedP("https://plain.example", "geocode", 0.003); seedP("https://cur.example", "geocode", 0.003);
+  _setBazaarQualityForTest("https://plain.example", { calls30d: 1, payers30d: 5, lastCalledAt: null, payTos: [], curated: false });
+  _setBazaarQualityForTest("https://cur.example", { calls30d: 1, payers30d: 5, lastCalledAt: null, payTos: [], curated: true });
+  let rr = run("geocode");
+  ok(rr[0]?.seller === "https://cur.example", `equal match, health, payers and price: the Bazaar-curated seller orders first (got ${rr.map((x) => x.seller).join(", ")})`);
+  ok(rr[0].bazaar?.curated === true && rr[1].bazaar?.curated === false, "route rows expose curated beside the payer counts");
+  {
+    const { routeTiebreakLabels } = await import("../src/route-order.js");
+    const w = rr[0].why || {};
+    ok(JSON.stringify(w.tiebreaks) === JSON.stringify(routeTiebreakLabels()) && w.tiebreaks.some((l) => /payers/.test(l)) && w.tiebreaks.some((l) => /curated/.test(l)), `why.tiebreaks names payers and curated, from route-order.js (got ${JSON.stringify(w.tiebreaks)})`);
+    ok(w.bazaarPayers30d === 5 && w.bazaarCurated === true && rr[1].why?.bazaarCurated === false, "why carries the payer count and curated flag the row was sorted on");
+  }
+  const idx = indexSnapshot(ctx).sellers.find((x) => x.origin === "https://cur.example");
+  ok(idx?.bazaar?.curated === true, "index rows expose curated");
+  // CONTROL: without the flag the same pair keeps cache order.
+  _setBazaarQualityForTest("https://cur.example", { calls30d: 1, payers30d: 5, lastCalledAt: null, payTos: [], curated: false });
+  rr = routeQuery({ query: "geocode a thing", top: 10, include: "external", ...ctx }).results.filter((x) => x.seller.startsWith("https://"));
+  ok(rr[0]?.seller === "https://plain.example", "control: with neither curated, cache order decides");
+  // never over more payers
+  cache.clear();
+  seedP("https://paid.example", "translate", 0.003); seedP("https://cur2.example", "translate", 0.003);
+  _setBazaarQualityForTest("https://paid.example", { calls30d: 1, payers30d: 9, lastCalledAt: null, payTos: [], curated: false });
+  _setBazaarQualityForTest("https://cur2.example", { calls30d: 1, payers30d: 3, lastCalledAt: null, payTos: [], curated: true });
+  ok(run("translate")[0]?.seller === "https://paid.example", "curated never lifts a seller over one more wallets paid");
+  // never over cheaper
+  cache.clear();
+  seedP("https://cur3.example", "summarize", 0.005); seedP("https://cheap.example", "summarize", 0.002);
+  _setBazaarQualityForTest("https://cheap.example", { calls30d: 1, payers30d: 5, lastCalledAt: null, payTos: [], curated: false });
+  _setBazaarQualityForTest("https://cur3.example", { calls30d: 1, payers30d: 5, lastCalledAt: null, payTos: [], curated: true });
+  ok(run("summarize")[0]?.seller === "https://cheap.example", "curated never lifts a seller over a cheaper equal");
+  // never over healthier
+  cache.clear();
+  seedP("https://cur4.example", "whois", 0.003, 0); seedP("https://healthy.example", "whois", 0.003);
+  _setBazaarQualityForTest("https://healthy.example", { calls30d: 1, payers30d: 5, lastCalledAt: null, payTos: [], curated: false });
+  _setBazaarQualityForTest("https://cur4.example", { calls30d: 1, payers30d: 5, lastCalledAt: null, payTos: [], curated: true });
+  ok(run("whois")[0]?.seller === "https://healthy.example", "curated never lifts a seller over a healthier one");
+  // never over a better match
+  cache.clear();
+  seedP("https://exact.example", "weather", 0.003); seedP("https://cur5.example", "weather-extra", 0.003);
+  _setBazaarQualityForTest("https://exact.example", { calls30d: 1, payers30d: 5, lastCalledAt: null, payTos: [], curated: false });
+  _setBazaarQualityForTest("https://cur5.example", { calls30d: 1, payers30d: 5, lastCalledAt: null, payTos: [], curated: true });
+  ok(run("weather")[0]?.seller === "https://exact.example", "curated never lifts a seller over a better-matched one");
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

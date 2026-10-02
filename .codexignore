@@ -1,0 +1,14 @@
+# Files Codex leaves out of the installed plugin. The plugin is the MCP
+# server config (.mcp.json) and its manifest; the server itself installs from
+# npm (agent402-mcp), so the service source, tests and CI are not shipped.
+scripts/
+src/
+facilitator/
+workers/
+tollbooth/
+client/
+adapters/
+openclaw/
+wiki/
+assets/
+.github/

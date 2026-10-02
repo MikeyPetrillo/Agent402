@@ -15,8 +15,8 @@
 //
 //   node scripts/test-seller-dossier.js
 import { strict as assert } from "node:assert";
-import { readFileSync } from "node:fs";
-import { buildSellerDossierTool, composeSellerDossier } from "../src/tools/seller-dossier.js";
+import { buildSellerDossierTool, composeSellerDossier, hostOf } from "../src/tools/seller-dossier.js";
+import { buildEvidenceBinding } from "../src/evidence-binding.js";
 
 let passed = 0, failed = 0;
 const check = (name, fn) => {
@@ -70,7 +70,7 @@ const thresholds = { sorThreshold: 50, sorPayers: 3, sorCap: 0.005 };
 const base = (over = {}) => composeSellerDossier({
   host: "seller.example", detail: DETAIL, entry: ENTRY,
   dispatch: { routerDispatchEligible: false, routerDispatchReason: "settlement_required", routerDispatchByChain: { base: { eligible: false, reason: "settlement_required" } } },
-  evidenceBinding: { payTos: new Set(), ownSettled: 12, ownPayers: 4 },
+  evidenceBinding: { payTos: new Set([WALLET]), ownSettled: 12, ownPayers: 4 },
   leaderboardRow: { callsSettled: 12, uniqueBuyers: 4, totalUsd: 0.18, wallets: [WALLET], window: "24h" },
   bazaar: { calls30d: 30, payers30d: 5, lastCalledAt: "2026-09-07T20:00:00.000Z", payTos: [WALLET] },
   solana: null, mpp: null, refusals: [], registration: { first_seen: NOW - 30 * DAY, last_routable_seen: NOW - DAY, last_settled_seen: null },
@@ -139,13 +139,32 @@ check("own chain evidence is reported as own, and an empty inherited set names n
   assert.deepEqual(r.wallets.base.inheritedFrom, []);
   assert.equal(r.wallets.base.inheritedNote, null);
 });
+check("a single-wallet seller's binding (built by the real builder) inherits nothing", () => {
+  const binding = buildEvidenceBinding({ chainProven: new Map([["https://seller.example", { payTo: WALLET, settled: 80, payers: 6 }]]) }).get("https://seller.example");
+  assert.ok(binding.payTos.has(WALLET), "the builder names the origin's own wallet in payTos");
+  const r = base({ evidenceBinding: binding });
+  assert.deepEqual(r.wallets.base.inheritedFrom, []);
+  assert.equal(r.wallets.base.inheritedNote, null);
+  // A second wallet beside the own one is still named as inherited.
+  const r2 = base({ evidenceBinding: { ...binding, payTos: new Set([WALLET, OTHER]) } });
+  assert.deepEqual(r2.wallets.base.inheritedFrom, [OTHER]);
+});
 check("inherited-wallet evidence is named as inherited, never folded into own", () => {
   const r = base({ evidenceBinding: { payTos: new Set([OTHER]), ownSettled: 0, ownPayers: undefined }, dispatch: { routerDispatchEligible: false, routerDispatchReason: "settlement_required", routerDispatchDetail: "evidence_payto_mismatch" } });
   assert.deepEqual(r.wallets.base.inheritedFrom, [OTHER]);
   assert.equal(r.wallets.base.ownEvidence.settled, 0);
   assert.equal(r.wallets.base.ownEvidence.payers, null, "undefined breadth is null (unknown), never 0");
   assert.match(r.wallets.base.inheritedNote, /inherited|other listings/);
-  assert.ok(r.flags.some((f) => /belongs to a wallet its live 402 does not pay/.test(f)));
+  assert.ok(r.flags.some((f) => /measured at a wallet its live 402 does not pay/.test(f)));
+});
+check("the per-wallet evidence is listed wallet by wallet, and the Base detail is read from the dispatch row itself", () => {
+  const r = base({
+    evidenceBinding: { payTos: new Set([OTHER, WALLET]), byWallet: new Map([[OTHER, { settled: 5000, payers: 40 }], [WALLET, { settled: 1, payers: 1 }]]), clearing: new Set([OTHER]), ownSettled: 0, ownPayers: undefined },
+    dispatch: { routerDispatchEligible: false, routerDispatchReason: "settlement_required", routerDispatchByChain: { base: { eligible: false, reason: "settlement_required", detail: "evidence_payto_mismatch" } } },
+  });
+  assert.deepEqual(r.wallets.base.evidenceByWallet, [{ wallet: OTHER, settled: 5000, payers: 40, clearsFloor: true }, { wallet: WALLET, settled: 1, payers: 1, clearsFloor: false }]);
+  assert.equal(r.wallets.routerDispatchDetail, "evidence_payto_mismatch");
+  assert.ok(r.flags.some((f) => /measured at a wallet its live 402 does not pay/.test(f)), "the flag fires from routerDispatchByChain.base.detail too");
 });
 check("a shared advertised wallet names the other claimants and flags the withheld evidence", () => {
   const r = base({ sharedClaims: { [WALLET]: ["https://seller.example", "https://other.example", "https://third.example"] } });
@@ -214,7 +233,7 @@ check("crawl failure, robots block, failed paywall probe and injected listing te
   assert.ok(r.flags.some((f) => /did not respond/.test(f)));
   assert.ok(r.flags.some((f) => /paywall probe failed/.test(f)));
   assert.ok(r.flags.some((f) => /crawl health 0\.20/.test(f)));
-  assert.ok(r.flags.some((f) => /prompt-injection shape/.test(f)));
+  assert.ok(r.flags.some((f) => /imperative-instruction pattern/.test(f) && /excluded from routing/.test(f)));
   assert.equal(r.identity.listingTextLooksInjected, true);
   assert.equal(r.identity.robotsBlocked, true);
 });
@@ -330,8 +349,6 @@ check("a delivery failure publishes the chain and the date, never the status or 
 // into this tool. The bound is asserted in TIME, because a correctness-only
 // check passes against the regex too and would not have caught it.
 check("hostOf is linear on a pathological input", () => {
-  const src = readFileSync(new URL("../src/tools/seller-dossier.js", import.meta.url), "utf8");
-  const hostOf = new Function("return " + src.match(/function hostOf[\s\S]*?\n}/)[0].replace(/^function hostOf/, "function"))();
   assert.equal(hostOf("https://Proof.Example.com/x/y"), "proof.example.com");
   assert.equal(hostOf("a.b/c"), "a.b");
   assert.equal(hostOf(""), "");
@@ -340,6 +357,74 @@ check("hostOf is linear on a pathological input", () => {
   hostOf("/".repeat(200_000));
   const ms = Date.now() - t;
   assert.ok(ms < 250, `200k slashes took ${ms}ms`);
+});
+
+// A LOADING INDEX IS A FACT ABOUT US, NOT ABOUT THE SELLER.
+//
+// The no-detail branch answers "not in our index - never crawled, so we hold
+// no evidence either way", which is a strong claim about a third party. The
+// cache it reads can simply be mid-load: the warm start reads the volume for
+// seconds after every boot, and a cold volume waits minutes for its first
+// crawl. Sold at $0.05 that is a wrong answer about a seller we crawl every
+// thirty minutes. A >= 400 cancels settlement, so the refusal is free to the
+// buyer - and it is exactly what a mutation removing it must fail.
+check("a still-loading index refuses the PAID path instead of selling never-crawled", () => {
+  const t = build({ getIndexReadiness: () => ({ ready: false, state: "first-crawl", retryAfterSeconds: 60 }) });
+  let err = null;
+  try { t.handler({ origin: "unknown.example" }); } catch (e) { err = e; }
+  assert.ok(err, "the paid path refuses while the index is loading");
+  assert.equal(err.statusCode, 503);
+  assert.equal(err.retryAfter, 60);
+  assert.match(String(err.message), /still loading/i);
+  // Never charged, and never a claim about the seller.
+  assert.ok(!/never crawled/i.test(String(err.message)));
+});
+
+check("a seller we DO hold is answered normally while the index loads", () => {
+  // The refusal is scoped to the absence, not to the request: withholding a
+  // record we already have would be its own overreach.
+  const t = build({ getIndexReadiness: () => ({ ready: false, state: "warm-start", retryAfterSeconds: 5 }) });
+  const r = t.handler({ origin: "seller.example" });
+  assert.equal(r.listed, true);
+});
+
+check("the operator gets the record plus the caveat as a field, never the 503", () => {
+  const t = build({ getIndexReadiness: () => ({ ready: false, state: "first-crawl", retryAfterSeconds: 60 }) });
+  const r = t.handler({ origin: "unknown.example" }, { operator: true });
+  assert.equal(r.listed, false);
+  assert.equal(r.indexLoading, true);
+  assert.equal(r.indexState, "first-crawl");
+  assert.equal(r.retryAfterSeconds, 60);
+  assert.match(String(r.indexLoadingNote), /fact about this boot/i);
+  // The reason must NOT claim never-crawled while we are still looking.
+  assert.match(String(r.reason), /\byet\b/i);
+  assert.ok(!/never crawled/i.test(String(r.reason)));
+});
+
+check("the operator flag is NOT reachable from the request body", () => {
+  // If a buyer could set it they would pay $0.05 for the hollow answer this
+  // refusal exists to stop them being sold.
+  const t = build({ getIndexReadiness: () => ({ ready: false, state: "first-crawl", retryAfterSeconds: 60 }) });
+  let err = null;
+  try { t.handler({ origin: "unknown.example", __operator: true, operator: true }); } catch (e) { err = e; }
+  assert.ok(err, "a body flag does not buy the operator path");
+  assert.equal(err.statusCode, 503);
+});
+
+check("a ready index still says never-crawled, so the refusal did not replace the answer", () => {
+  const t = build({ getIndexReadiness: () => ({ ready: true, state: "ready", retryAfterSeconds: 0 }) });
+  const r = t.handler({ origin: "unknown.example" });
+  assert.equal(r.listed, false);
+  assert.match(String(r.reason), /not in our index/i);
+  assert.ok(!r.indexLoading);
+});
+
+// No readiness source injected at all (an older wiring): the tool must answer
+// exactly as it always did rather than refusing everything.
+check("with no readiness source the tool answers as before", () => {
+  const r = build().handler({ origin: "unknown.example" });
+  assert.equal(r.listed, false);
+  assert.match(String(r.reason), /not in our index/i);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -85,6 +85,78 @@ function badRequest(message) {
   return err;
 }
 
+/** Seconds from a Retry-After header, delta-seconds or HTTP-date, bounded to a
+ *  day and to something a caller can act on. null when it says nothing. */
+export function retryAfterSeconds(header) {
+  const raw = String(header ?? "").trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) {
+    const n = Number(raw);
+    return n > 0 && n <= 86400 ? n : null;
+  }
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at)) return null;
+  const secs = Math.ceil((at - Date.now()) / 1000);
+  return secs > 0 && secs <= 86400 ? secs : null;
+}
+
+/** The host of a URL, for an error message. Never throws, never returns a path
+ *  or a query - a refused URL can carry a caller's token in either. */
+function safeHostOf(u) {
+  try { return new URL(String(u)).host; } catch { return null; }
+}
+
+/** Turn an upstream HTTP failure into OUR status, with the attribution on it.
+ *
+ * NOT EVERY UPSTREAM 4xx IS THE CALLER'S URL BEING WRONG, and for a year every
+ * one of them was answered with the sentence "check the URL is correct and
+ * publicly reachable". Two whole classes are not about the caller's input:
+ *
+ *   429/408 - the host is throttling or timing out THIS SERVER. The URL is
+ *   fine, the caller can change nothing, and the right move is to retry: the
+ *   exact opposite of what the old message told them to do. Our own
+ *   programmatic pages already special-cased this one layer up ("an EDGAR RATE
+ *   LIMIT is never treated as unresolvable"), which is the tell that the
+ *   misclassification was known and fixed at the instance, not the class.
+ *
+ *   401/403/407/451 - access, not addressing. Often it is OUR egress that is
+ *   refused, not the caller's link; this repo documents three hosts that block
+ *   our IPs outright while serving everyone else. A buyer told to check a URL
+ *   that is correct and publicly reachable concludes their input is broken, or
+ *   that we are.
+ *
+ * `attribution` is the machine-readable half ("caller" | "upstream" |
+ * "upstream-access"); the route binder in server.js reads it to decide whether
+ * echoing the tool's input schema back would be help or a lie.
+ *
+ * Pure so it unit-tests with no socket and no DNS, like probe-classify.js.
+ */
+export function upstreamFailure(upstreamStatus, { retryAfter = null, host = null } = {}) {
+  const where = host || "the host";
+  if (upstreamStatus === 429 || upstreamStatus === 408) {
+    return Object.assign(
+      new Error(`The host rate-limited or timed out this server (HTTP ${upstreamStatus}) - the URL is fine, this is throttling at ${where}; retry${retryAfter ? ` in ${retryAfter}s` : " later"}`),
+      { statusCode: 503, upstreamStatus, attribution: "upstream", ...(retryAfter ? { retryAfter } : {}) }
+    );
+  }
+  if ([401, 403, 407, 451].includes(upstreamStatus)) {
+    return Object.assign(
+      new Error(`The host refused this server's request (HTTP ${upstreamStatus}) - this is access, not a bad URL: the resource may require credentials we do not hold, or the host may block this server's requests while serving yours`),
+      { statusCode: 422, upstreamStatus, attribution: "upstream-access" }
+    );
+  }
+  if (upstreamStatus >= 400 && upstreamStatus < 500) {
+    return Object.assign(
+      new Error(`Source URL returned HTTP ${upstreamStatus} - check the URL is correct and publicly reachable`),
+      { statusCode: 422, upstreamStatus, attribution: "caller" }
+    );
+  }
+  return Object.assign(
+    new Error(`Source URL's host returned HTTP ${upstreamStatus} - upstream issue, try again later`),
+    { statusCode: 502, upstreamStatus, attribution: "upstream" }
+  );
+}
+
 /**
  * A DNS lookup that rejects any resolved private/loopback/metadata address.
  * Used as the connect-time `lookup` for the SSRF dispatcher below: because the
@@ -226,7 +298,14 @@ export async function retryTransient(fn, { retries = 1, backoffMs = 300 } = {}) 
     } catch (e) {
       lastErr = e;
       const sc = e?.statusCode;
-      if (attempt < retries && (sc === 504 || sc === 502 || sc === 503)) {
+      // A 429 is now a 503 (it is the host throttling us, not the caller's URL
+      // being wrong), and a 503 is retryable here - but retrying a rate-limit
+      // immediately is the one case where a retry makes the upstream's problem
+      // worse. Excluded by upstream status, not by our own, so the rest of the
+      // 503 family keeps its retry.
+      const throttled = e?.upstreamStatus === 429;
+      // noRetry: a deterministic refusal wearing a 503 (e.g. our own key rejected).
+      if (attempt < retries && !throttled && !e?.noRetry && (sc === 504 || sc === 502 || sc === 503)) {
         await new Promise((r) => setTimeout(r, backoffMs));
         continue;
       }
@@ -309,19 +388,10 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
   // both cases the message names the upstream status so the agent knows what to
   // do next (fix the URL vs. retry later).
   if (!response.ok) {
-    const upstreamStatus = response.status;
-    if (upstreamStatus >= 400 && upstreamStatus < 500) {
-      throw Object.assign(
-        new Error(
-          `Source URL returned HTTP ${upstreamStatus} - check the URL is correct and publicly reachable`
-        ),
-        { statusCode: 422, upstreamStatus }
-      );
-    }
-    throw Object.assign(
-      new Error(`Source URL's host returned HTTP ${upstreamStatus} - upstream issue, try again later`),
-      { statusCode: 502, upstreamStatus }
-    );
+    throw upstreamFailure(response.status, {
+      retryAfter: retryAfterSeconds(response.headers.get("retry-after")),
+      host: safeHostOf(response.url),
+    });
   }
 
   const reader = response.body.getReader();

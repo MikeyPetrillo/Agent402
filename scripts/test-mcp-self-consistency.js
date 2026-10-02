@@ -274,7 +274,14 @@ assert(await routeExists("/base"), "control: a template-literal route the source
 // The #705 class, in the direction that bit us: implemented but undiscoverable.
 // A tool an agent cannot see may as well not exist, and our own text was
 // telling agents to call one.
+// A branch whose tool is listed only when its feature is configured is checked
+// only on a server where that feature is on (decide.feedback needs the decide
+// service; its paid siblings are absent from the catalog without it).
+const decidePricing = await (await fetch(`${TARGET}/api/pricing`)).json().catch(() => ({}));
+const decideLive = JSON.stringify(decidePricing).includes("/api/decide");
+const FEATURE_GATED = new Map([["decide.feedback", decideLive]]);
 for (const names of handlerBranches) {
+  if (names.every((n) => FEATURE_GATED.has(n) && !FEATURE_GATED.get(n))) { console.log(`skip - [${names.join(", ")}] is feature-gated and the feature is off on this server`); continue; }
   assert(
     names.some((n) => listedNames.has(n)),
     `CallTool branch [${names.join(", ")}] is reachable under an advertised name (a capability no client can discover is dead code)`,

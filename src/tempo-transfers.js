@@ -166,6 +166,10 @@ export function feedStats(state, recipients, { windowMs = 24 * 3600e3, now = Dat
       const e = bucket[r]; if (!e) continue;
       st.transfers += e.t;
       try { st.volumeAtomic += BigInt(e.v); } catch { /* skip amount */ }
+      // An hour folded while the recipient was untracked kept its count and
+      // not its senders: the distinct-payer figure is then a lower bound, not
+      // a measurement (the proven floor reads it as unknown).
+      if (e.t > 0 && !Array.isArray(e.p)) st.payersPartial = true;
       for (const p of e.p || []) st.payers.add(p);
     }
   }

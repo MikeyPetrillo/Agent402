@@ -22,9 +22,9 @@
 // string match found one of them. And every rule is pinned in BOTH
 // directions below, because a rule that flags honest engineering prose gets
 // suppressed by the next author and becomes decoration.
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
-// Naming a seller is not framing: "blockrun's middleware tolerated it" is
+// Naming a seller is not framing: "a seller's middleware tolerated it" is
 // mechanism, and the routing fixes need it. What these match is the ARGUMENT
 // - us measured against them, or the market reasoning behind a decision.
 const RULES = [
@@ -76,12 +76,42 @@ const RULES = [
     re: /\b(strategic plan|go-to-market|our moat|the moat|positioning play)\b/i,
     why: "states strategy rather than what the change does",
   },
+  {
+    // A figure with a token and a holding verb: "the burner holds 386 ALGO and
+    // $10.66 USDC" shipped in a public commit body on 2026-09-21. Balances are
+    // on-chain-public, but the sentence hands them over with the wallet's role
+    // attached; they live in CLAUDE.local.md for that reason.
+    name: "wallet balance disclosure",
+    re: /\b(holds|holding|balance (?:is|of|at|sits at)|funded with|topped up (?:to|with))\b[^.\n]{0,40}\$?\d[\d,]*(?:\.\d+)?\s*(ALGO|USDC(?:\.e)?|USDG|ETH|XLM|SOL|PathUSD|USD)\b/i,
+    why: "publishes a wallet balance with its role attached (figures belong in CLAUDE.local.md)",
+  },
+  {
+    // "the key ... is still valid" and "rotation was declined" shipped in a
+    // public commit body the same day. Whether to rotate is an operator
+    // decision; recording it in public history is a disclosure about a live
+    // credential and belongs in the private notes.
+    name: "credential rotation decision",
+    re: /\b(declined to rotate|rotation (?:was )?declined|not rotated|still valid|without rotating|chose not to rotate)\b/i,
+    why: "records a decision about a live credential in public history",
+  },
 ];
+
+// The subject line: short and imperative is the repo standard from 2026-09-22.
+// Merge commits and bot bumps carry their own generated subjects and are
+// exempt; everything else is held to the conventional 72 characters.
+export const SUBJECT_MAX = 72;
+export function subjectTooLong(message) {
+  const subject = String(message || "").split("\n")[0];
+  if (/^(Merge |Bump |Revert ")/.test(subject)) return false;
+  return subject.length > SUBJECT_MAX;
+}
 
 function messages(range) {
   // \x00 between commits: a message body contains blank lines, so no
   // line-based separator can split them reliably.
-  const raw = execSync(`git log --format=%B%x00 ${range}`, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  // The range is passed as an argument, never through a shell: it arrives from
+  // the environment (COMMIT_RANGE) and a shell would expand anything in it.
+  const raw = execFileSync("git", ["log", "--format=%B%x00", range], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   return raw.split("\0").map((m) => m.trim()).filter(Boolean);
 }
 
@@ -123,9 +153,11 @@ const MUST_FAIL = [
   ["a rival board's top row is a gateway wallet with sixteen vendors behind it", "the 2026-09-11 seller sweep"],
   ["The busiest seller on x402scan by buyer count sells one thing", "the 2026-09-12 namespace commit"],
   ["Position #1 from the strategic plan: own the cross-seller discovery", "the June squash commits"],
+  ["Not a funding problem: the burner holds 386 ALGO and $10.66 USDC, and the rail is advertised and settling now.", "the 2026-09-21 balance disclosure"],
+  ["F-2 recommended rotating a key. The owner declined and set a usage alert instead; if the key did leak before the path closed, it is still valid.", "the 2026-09-21 rotation note"],
 ];
 const MUST_PASS = [
-  ["SVM payload builder fetches a blockhash when the accept omits one\n\nblockrun's stock middleware tolerated it; api.xfuel.app's own verifier refused it.", "names sellers as mechanism"],
+  ["SVM payload builder fetches a blockhash when the accept omits one\n\nacme's stock middleware tolerated it; api.xfuel.app's own verifier refused it.", "names sellers as mechanism"],
   ["bound the paywall probe; it was competing with it for the runner's network", "'competing' in the technical sense"],
   ["chain names live in one place (this can't drift into a second, competing list)", "a competing LIST, not a competitor"],
   ["Insider flow report + watch, market/competitor brief; card sales ledgered", "market/competitor brief is a product we sell"],
@@ -137,6 +169,9 @@ const MUST_PASS = [
   ["Say \"another seller\" in the shared-hosting threat model\n\nThe comment described the victim as a competitor's listing. The party\nbeing starved is another seller in the index.", "a commit quoting the wording it REMOVES"],
   ["Stop naming a real competitor in the live MCP about/description", "a commit removing the framing"],
   ["Drop market framing from a served source file\n\nThe repo rule is technical mechanism only: no market framing, no\ncompetitors, no positioning.", "a commit FIXING this class must be able to name it"],
+  ["Read the wallet's USDC balance from the chain before refusing a payment", "a balance READ is mechanism, no figure"],
+  ["The canary burner is funded with USDC on Base and pays the treasury $0.001 a leg", "a funding description with a price, not a balance"],
+  ["Set the rotated ALCHEMY_API_KEY on Railway and delete the old one", "a rotation performed, not declined"],
 ];
 
 const isMain = import.meta.url === `file://${process.argv[1]}`;
@@ -154,8 +189,12 @@ if (isMain) {
   try { msgs = messages(range); } catch (e) {
     console.log(`commit-message framing: range ${range} unreadable (${String(e.message).slice(0, 60)}) - nothing to scan`);
   }
+  ok(subjectTooLong("[test] The daily Algorand leg proves the rail at one cent while the sub-cent quota is spent"), "control: a 91-char subject is too long");
+  ok(!subjectTooLong("Merge pull request #1441 from MikeyPetrillo/canary-algorand-quota-aware-with-a-long-name"), "a merge commit's generated subject is exempt");
+  ok(!subjectTooLong("[test] Add priceKnown to index, route and seller rows"), "a short imperative subject passes");
   for (const m of msgs) {
     const v = violations(m);
+    if (subjectTooLong(m)) v.push({ rule: "subject length", why: `over ${SUBJECT_MAX} characters; keep the subject short and imperative, put the mechanism in the body`, line: m.split("\n")[0].slice(0, 120) });
     const subject = m.split("\n")[0].slice(0, 70);
     ok(v.length === 0, `commit "${subject}"\n    ${v.map((x) => `${x.rule}: ${x.why}\n      ${x.line}`).join("\n    ")}`);
   }

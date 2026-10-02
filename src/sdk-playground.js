@@ -2,7 +2,7 @@
 // snippets. Provides pre-filled examples that run against the live API
 // using the playground's PoW solver.
 //
-// Security note: new Function() is intentional — this is a user-facing code
+// Security note: the Function constructor is intentional here. This is a user-facing code
 // playground (like CodePen/JSFiddle). Code runs entirely in the user's browser
 // and never reaches the server. The callTool wrapper authenticates via PoW.
 

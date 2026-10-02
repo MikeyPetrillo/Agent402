@@ -156,5 +156,22 @@ if (!res || !res.ok) {
   }
 }
 
+// The withholding mechanism itself, driven by a FIXTURE set. VERBS_NOT_FOLDED
+// is empty today, so the loop above runs zero times and the `continue` branch
+// is exercised by nothing: without this, deleting it passes the suite. Hand in
+// a set instead, so the behaviour is proven before it is next needed.
+{
+  const all = [...chainVerbAliasesByRoute().values()].flat();
+  const victim = all[0];
+  ok(typeof victim === "string" && victim.length > 0, "there is at least one folded verb to withhold in the fixture");
+  const withheld = chainVerbAliasesByRoute(new Set([victim]));
+  const after = [...withheld.values()].flat();
+  ok(!after.includes(victim), `a withheld verb ("${victim}") is kept out of the folded aliases`);
+  ok(after.length === all.length - 1 && all.filter((v) => v !== victim).every((v) => after.includes(v)),
+    "withholding one verb drops exactly that verb and folds every other");
+  ok(chainRouteFor(victim) !== null, "a withheld verb still resolves to its route: the exception is to the search claim, never the namespace");
+  ok([...chainVerbAliasesByRoute().values()].flat().includes(victim), "the live set is unchanged by the fixture call");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 assert.equal(fail, 0);

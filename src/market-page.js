@@ -10,11 +10,13 @@
 // seller, "unavailable" rather than zeros on a failed scan, truncation
 // floors, javascript: href neutralization, testnet exclusion, >12-seller
 // compact roster, per-seller activity switching via ?seller=.
-import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, decideLive } from "./ledger-chrome.js";
+import { x402RailsFor } from "./rails.js";
 import { CATEGORIES } from "./pages.js";
 import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { discoveryNote } from "./discovery-note.js";
 import { hostCardHtml } from "./host-entry.js";
+import { standingCountsExcludingHost } from "./standing.js";
 
 // Seller-roster row styles hoisted to classes. A busy chain (e.g. Base) renders
 // 1000+ roster rows; when each row carried its 6 styles inline the page ballooned
@@ -55,6 +57,11 @@ const usd = (n) => {
 
 /** Per-chain identity + copy. Add a chain here (not a new route) once it has
  *  a live page. Ordered to match src/rails.js (primary rail first). */
+import { marketTerminalHtml, TERMINAL_CSS, compactUsd, trendOf } from "./market-terminal.js";
+import { crawlIntervalLabel, discoveryIntervalLabel } from "./crawl-cadence.js";
+import { routerRankingSentence } from "./routing-proof.js";
+
+import { repoUrl } from "./repo-link.js";
 export const CHAIN_PAGES = {
   base: {
     chainName: "Base",
@@ -67,7 +74,6 @@ export const CHAIN_PAGES = {
     asset: "USDC",
     settleLatency: "~2 seconds",
     facilitatorLabel: "Coinbase CDP",
-    gasNote: "sponsored",
     explorerUrl: "basescan.org",
     explorerWalletUrl: (wallet) => `https://basescan.org/address/${wallet}#tokentxns`,
     networkParam: "base",
@@ -78,7 +84,7 @@ export const CHAIN_PAGES = {
     isNetwork: (n) => n === "eip155:8453",
     honestyNetworkPhrase: "the Base network",
     canaryLine: "A paid canary buys tools over the Base rail daily (facilitator: Coinbase CDP) - uptime proven with real settlements, not pings.",
-    sellParagraphHtml: `Accept the Base CAIP-2 network (<code>eip155:8453</code>) in your 402 challenge - the Coinbase CDP facilitator verifies and settles, gas sponsored, and a listed origin is picked up by the CDP Bazaar too. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">Open a seed request</a>.`,
+    sellParagraphHtml: `Accept the Base CAIP-2 network (<code>eip155:8453</code>) in your 402 challenge - the Coinbase CDP facilitator verifies and settles, and a listed origin is picked up by the CDP Bazaar too. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="${repoUrl("issues")}" rel="noopener">Open a seed request</a>.`,
   },
   solana: {
     chainName: "Solana",
@@ -88,7 +94,6 @@ export const CHAIN_PAGES = {
     asset: "USDC",
     settleLatency: "~1 second",
     facilitatorLabel: "Coinbase CDP (PayAI fallback)",
-    gasNote: "fee-sponsored",
     explorerUrl: "solscan.io",
     explorerWalletUrl: (wallet) => `https://solscan.io/account/${wallet}`,
     networkParam: "solana",
@@ -99,7 +104,7 @@ export const CHAIN_PAGES = {
     isNetwork: (n) => n === "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
     honestyNetworkPhrase: "the Solana network",
     canaryLine: "A paid canary buys tools over the Solana rail daily (facilitator: Coinbase CDP first, PayAI as fallback) - uptime proven with real settlements, not pings.",
-    sellParagraphHtml: `Accept the Solana CAIP-2 network (<code>solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp</code>) in your 402 challenge using the <a href="https://www.npmjs.com/package/@x402/svm" rel="noopener"><code>@x402/svm</code></a> server scheme - the PayAI facilitator verifies and settles, fees sponsored. Your payTo wallet needs an existing USDC associated token account before it can receive payments (send it any amount of USDC once to create one). Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">Open a seed request</a>.`,
+    sellParagraphHtml: `Accept the Solana CAIP-2 network (<code>solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp</code>) in your 402 challenge using the <a href="https://www.npmjs.com/package/@x402/svm" rel="noopener"><code>@x402/svm</code></a> server scheme - the PayAI facilitator verifies and settles. Your payTo wallet needs an existing USDC associated token account before it can receive payments (send it any amount of USDC once to create one). Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="${repoUrl("issues")}" rel="noopener">Open a seed request</a>.`,
   },
   polygon: {
     chainName: "Polygon",
@@ -109,7 +114,6 @@ export const CHAIN_PAGES = {
     asset: "USDC",
     settleLatency: "~2 seconds",
     facilitatorLabel: "Coinbase CDP (PayAI fallback)",
-    gasNote: "sponsored",
     explorerUrl: "polygonscan.com",
     explorerWalletUrl: (wallet) => `https://polygonscan.com/address/${wallet}#tokentxns`,
     networkParam: "polygon",
@@ -119,7 +123,7 @@ export const CHAIN_PAGES = {
     isNetwork: (n) => n === "eip155:137",
     honestyNetworkPhrase: "the Polygon network",
     canaryLine: "A paid canary buys tools over the Polygon rail daily (facilitator: Coinbase CDP first, PayAI as fallback) - uptime proven with real settlements, not pings.",
-    sellParagraphHtml: `Accept the Polygon CAIP-2 network (<code>eip155:137</code>) in your 402 challenge - the PayAI facilitator verifies and settles, gas sponsored. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">Open a seed request</a>.`,
+    sellParagraphHtml: `Accept the Polygon CAIP-2 network (<code>eip155:137</code>) in your 402 challenge - the PayAI facilitator verifies and settles. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="${repoUrl("issues")}" rel="noopener">Open a seed request</a>.`,
   },
   arbitrum: {
     chainName: "Arbitrum",
@@ -129,7 +133,6 @@ export const CHAIN_PAGES = {
     asset: "USDC",
     settleLatency: "~2 seconds",
     facilitatorLabel: "Coinbase CDP (PayAI fallback)",
-    gasNote: "sponsored",
     explorerUrl: "arbiscan.io",
     explorerWalletUrl: (wallet) => `https://arbiscan.io/address/${wallet}#tokentxns`,
     networkParam: "arbitrum",
@@ -140,7 +143,7 @@ export const CHAIN_PAGES = {
     isNetwork: (n) => n === "eip155:42161",
     honestyNetworkPhrase: "the Arbitrum network",
     canaryLine: "A paid canary buys tools over the Arbitrum rail daily (facilitator: Coinbase CDP first, PayAI as fallback) - uptime proven with real settlements, not pings.",
-    sellParagraphHtml: `Accept the Arbitrum CAIP-2 network (<code>eip155:42161</code>) in your 402 challenge - the PayAI facilitator verifies and settles, gas sponsored. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">Open a seed request</a>.`,
+    sellParagraphHtml: `Accept the Arbitrum CAIP-2 network (<code>eip155:42161</code>) in your 402 challenge - the PayAI facilitator verifies and settles. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="${repoUrl("issues")}" rel="noopener">Open a seed request</a>.`,
   },
   monad: {
     chainName: "Monad",
@@ -150,7 +153,6 @@ export const CHAIN_PAGES = {
     asset: "USDC",
     settleLatency: "~1 second",
     facilitatorLabel: "molandak",
-    gasNote: "sponsored",
     explorerUrl: "monadscan.com",
     explorerWalletUrl: (wallet) => `https://monadscan.com/address/${wallet}#tokentxns`,
     networkParam: "monad",
@@ -160,7 +162,7 @@ export const CHAIN_PAGES = {
     isNetwork: (n) => n === "eip155:143",
     honestyNetworkPhrase: "the Monad network",
     canaryLine: "A paid canary buys tools over the Monad rail daily (facilitator: molandak) - uptime proven with real settlements, not pings.",
-    sellParagraphHtml: `Accept the Monad CAIP-2 network (<code>eip155:143</code>) in your 402 challenge - the molandak facilitator verifies and settles native Circle USDC, gas sponsored. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">Open a seed request</a>.`,
+    sellParagraphHtml: `Accept the Monad CAIP-2 network (<code>eip155:143</code>) in your 402 challenge - the molandak facilitator verifies and settles native Circle USDC. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="${repoUrl("issues")}" rel="noopener">Open a seed request</a>.`,
   },
   celo: {
     chainName: "Celo",
@@ -172,7 +174,6 @@ export const CHAIN_PAGES = {
     asset: "USDC",
     settleLatency: "~1 second",
     facilitatorLabel: "Celo",
-    gasNote: "sponsored",
     explorerUrl: "celoscan.io",
     explorerWalletUrl: (wallet) => `https://celoscan.io/address/${wallet}#tokentxns`,
     networkParam: "celo",
@@ -182,7 +183,7 @@ export const CHAIN_PAGES = {
     isNetwork: (n) => n === "eip155:42220",
     honestyNetworkPhrase: "the Celo network",
     canaryLine: "A paid canary buys tools over the Celo rail daily (facilitator: x402.celo.org) - uptime proven with real settlements, not pings.",
-    sellParagraphHtml: `Accept the Celo CAIP-2 network (<code>eip155:42220</code>) in your 402 challenge - the <a href="https://x402.celo.org" rel="noopener">Celo facilitator</a> verifies and settles native Circle USDC, gas sponsored. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">Open a seed request</a>.`,
+    sellParagraphHtml: `Accept the Celo CAIP-2 network (<code>eip155:42220</code>) in your 402 challenge - the <a href="https://x402.celo.org" rel="noopener">Celo facilitator</a> verifies and settles native Circle USDC. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="${repoUrl("issues")}" rel="noopener">Open a seed request</a>.`,
   },
   avalanche: {
     chainName: "Avalanche",
@@ -192,7 +193,6 @@ export const CHAIN_PAGES = {
     asset: "USDC",
     settleLatency: "~2 seconds",
     facilitatorLabel: "PayAI",
-    gasNote: "sponsored",
     explorerUrl: "snowtrace.io",
     explorerWalletUrl: (wallet) => `https://snowtrace.io/address/${wallet}`,
     networkParam: "avalanche",
@@ -202,7 +202,7 @@ export const CHAIN_PAGES = {
     isNetwork: (n) => n === "eip155:43114",
     honestyNetworkPhrase: "the Avalanche network",
     canaryLine: "A paid canary buys tools over the Avalanche rail daily (facilitator: PayAI) - uptime proven with real settlements, not pings.",
-    sellParagraphHtml: `Accept the Avalanche CAIP-2 network (<code>eip155:43114</code>) in your 402 challenge - the PayAI facilitator verifies and settles native Circle USDC, gas sponsored. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">Open a seed request</a>.`,
+    sellParagraphHtml: `Accept the Avalanche CAIP-2 network (<code>eip155:43114</code>) in your 402 challenge - the PayAI facilitator verifies and settles native Circle USDC. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="${repoUrl("issues")}" rel="noopener">Open a seed request</a>.`,
   },
   sei: {
     chainName: "Sei",
@@ -212,7 +212,6 @@ export const CHAIN_PAGES = {
     asset: "USDC",
     settleLatency: "~1 second",
     facilitatorLabel: "PayAI",
-    gasNote: "sponsored",
     explorerUrl: "seiscan.io",
     explorerWalletUrl: (wallet) => `https://seiscan.io/address/${wallet}?chain=pacific-1`,
     networkParam: "sei",
@@ -222,7 +221,7 @@ export const CHAIN_PAGES = {
     isNetwork: (n) => n === "eip155:1329",
     honestyNetworkPhrase: "the Sei network",
     canaryLine: "A paid canary buys tools over the Sei rail daily (facilitator: PayAI) - uptime proven with real settlements, not pings.",
-    sellParagraphHtml: `Accept the Sei CAIP-2 network (<code>eip155:1329</code>) in your 402 challenge - the PayAI facilitator verifies and settles native Circle USDC, gas sponsored. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">Open a seed request</a>.`,
+    sellParagraphHtml: `Accept the Sei CAIP-2 network (<code>eip155:1329</code>) in your 402 challenge - the PayAI facilitator verifies and settles native Circle USDC. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="${repoUrl("issues")}" rel="noopener">Open a seed request</a>.`,
   },
   optimism: {
     chainName: "Optimism",
@@ -232,7 +231,6 @@ export const CHAIN_PAGES = {
     asset: "USDC",
     settleLatency: "~2 seconds",
     facilitatorLabel: "Solvador",
-    gasNote: "sponsored",
     explorerUrl: "optimistic.etherscan.io",
     explorerWalletUrl: (wallet) => `https://optimistic.etherscan.io/address/${wallet}`,
     networkParam: "optimism",
@@ -243,7 +241,7 @@ export const CHAIN_PAGES = {
     isNetwork: (n) => n === "eip155:10",
     honestyNetworkPhrase: "the Optimism network",
     canaryLine: "A paid canary buys tools over the Optimism rail daily (facilitator: Solvador) - uptime proven with real settlements, not pings.",
-    sellParagraphHtml: `Accept the Optimism CAIP-2 network (<code>eip155:10</code>) in your 402 challenge - the Solvador facilitator verifies and settles native Circle USDC, gas sponsored. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">Open a seed request</a>.`,
+    sellParagraphHtml: `Accept the Optimism CAIP-2 network (<code>eip155:10</code>) in your 402 challenge - the Solvador facilitator verifies and settles native Circle USDC. Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="${repoUrl("issues")}" rel="noopener">Open a seed request</a>.`,
   },
   stellar: {
     chainName: "Stellar",
@@ -253,7 +251,6 @@ export const CHAIN_PAGES = {
     asset: "USDC",
     settleLatency: "~5 seconds",
     facilitatorLabel: "Agent402 (self-hosted, OpenZeppelin fallback)",
-    gasNote: "sponsored",
     explorerUrl: "stellar.expert",
     explorerWalletUrl: (wallet) => `https://stellar.expert/explorer/public/account/${wallet}`,
     networkParam: "stellar",
@@ -263,7 +260,7 @@ export const CHAIN_PAGES = {
     isNetwork: (n) => typeof n === "string" && n.startsWith("stellar") && !n.includes("test"),
     honestyNetworkPhrase: "a Stellar network",
     canaryLine: "A paid canary buys tools over the Stellar rail daily (facilitator: our own open-source Soroban facilitator, with OpenZeppelin as the settlement fallback) - uptime proven with real settlements, not pings.",
-    sellParagraphHtml: `Accept x402 payments with a <code>stellar:pubnet</code> accept in your 402 challenge - the <a href="https://developers.stellar.org/docs/build/agentic-payments/x402/built-on-stellar" rel="noopener">Built on Stellar facilitator</a> (OpenZeppelin) verifies and settles, gas sponsored. Use <a href="https://www.npmjs.com/package/@x402/stellar" rel="noopener"><code>@x402/stellar</code></a> for the wire, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">Open a seed request</a>.`,
+    sellParagraphHtml: `Accept x402 payments with a <code>stellar:pubnet</code> accept in your 402 challenge - the <a href="https://developers.stellar.org/docs/build/agentic-payments/x402/built-on-stellar" rel="noopener">Built on Stellar facilitator</a> (OpenZeppelin) verifies and settles. Use <a href="https://www.npmjs.com/package/@x402/stellar" rel="noopener"><code>@x402/stellar</code></a> for the wire, or <a href="/tollbooth"><code>agent402-tollbooth</code></a> to paywall an existing site. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="${repoUrl("issues")}" rel="noopener">Open a seed request</a>.`,
   },
   algorand: {
     chainName: "Algorand",
@@ -273,7 +270,6 @@ export const CHAIN_PAGES = {
     asset: "USDC",
     settleLatency: "~3 seconds",
     facilitatorLabel: "GoPlausible",
-    gasNote: "fee-sponsored",
     explorerUrl: "allo.info",
     explorerWalletUrl: (wallet) => `https://allo.info/account/${wallet}`,
     networkParam: "algorand",
@@ -285,8 +281,8 @@ export const CHAIN_PAGES = {
     // a testnet id that happens not to contain "test".
     isNetwork: (n) => typeof n === "string" && n.startsWith("algorand:wGHE2Pwd"),
     honestyNetworkPhrase: "the Algorand mainnet network",
-    canaryLine: "A paid canary buys tools over the Algorand rail daily (facilitator: GoPlausible, fees sponsored) - uptime proven with real settlements, not pings.",
-    sellParagraphHtml: `Accept the Algorand mainnet CAIP-2 network in your 402 challenge using the <a href="https://www.npmjs.com/package/@x402/avm" rel="noopener"><code>@x402/avm</code></a> server SDK - the GoPlausible facilitator verifies and settles, fees sponsored. Your payTo wallet must be opted in to ASA <code>31566704</code> (USDC) before it can receive payments. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="https://github.com/MikeyPetrillo/Agent402/issues" rel="noopener">Open a seed request</a>.`,
+    canaryLine: "A paid canary buys tools over the Algorand rail daily (facilitator: GoPlausible) - uptime proven with real settlements, not pings.",
+    sellParagraphHtml: `Accept the Algorand mainnet CAIP-2 network in your 402 challenge using the <a href="https://www.npmjs.com/package/@x402/avm" rel="noopener"><code>@x402/avm</code></a> server SDK - the GoPlausible facilitator verifies and settles. Your payTo wallet must be opted in to ASA <code>31566704</code> (USDC) before it can receive payments. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free. Want a guaranteed crawl? <a href="${repoUrl("issues")}" rel="noopener">Open a seed request</a>.`,
   },
   robinhood: {
     chainName: "Robinhood Chain",
@@ -296,7 +292,6 @@ export const CHAIN_PAGES = {
     asset: "USDG",
     settleLatency: "~2 seconds",
     facilitatorLabel: "operator-configured",
-    gasNote: "sponsored",
     explorerUrl: "robinhoodchain.blockscout.com",
     explorerWalletUrl: (wallet) => `https://robinhoodchain.blockscout.com/address/${wallet}`,
     networkParam: "robinhood",
@@ -310,6 +305,36 @@ export const CHAIN_PAGES = {
     sellParagraphHtml: `Accept the Robinhood Chain CAIP-2 network (<code>eip155:4663</code>) in your 402 challenge, asset USDG (Global Dollar) - set <code>PAYMENT_NETWORKS=…,robinhood</code> plus your own <code>ROBINHOOD_FACILITATOR_URL</code> (the rail settles through an operator-supplied facilitator, not CDP or PayAI). Use <a href="https://www.npmjs.com/package/@x402/evm" rel="noopener"><code>@x402/evm</code></a> for the server-side scheme (EIP-712 domain <code>"Global Dollar"</code>, version <code>"1"</code>), or <a href="/tollbooth"><code>agent402-tollbooth</code></a> (<code>TOLLBOOTH_NETWORK=eip155:4663 TOLLBOOTH_ASSET=USDG</code>). The <a href="/guides/usdg-payments-robinhood-chain">full integration guide</a> covers chain parameters and how to recognize a settlement on Blockscout. Then serve <code>/.well-known/x402</code> - list it on /sell (free) and the index crawler picks it up; ranking is health-based, listing is free.`,
   },
 };
+
+// The x402 seller leaderboard (src/leaderboard.js) reads Base USDC only. A
+// seller's payTo on another EVM chain is usually the same address, so joining
+// another chain's roster to it would show Base settlements under that chain's
+// name. Per-seller settlement figures render on the chain the board measures
+// and nowhere else.
+export const LEADERBOARD_CHAIN = "base";
+
+/** How many catalog tools take payment on `caip2`, by the same rules the 402
+ *  builder applies (src/payments.js acceptsForItem): a tool that names its
+ *  networks (`onlyNetworks`) takes only those; identity-bound and
+ *  long-running tools take the EVM rails only. `defs` = the priced catalog. */
+export function catalogPayableOn(defs, caip2) {
+  const list = Array.isArray(defs) ? defs : [];
+  // The same rule the live 402 applies (rails.js x402RailsFor), so the page
+  // cannot count a tool the 402 withholds on this chain, plus why each
+  // withheld tool is withheld, so the sentence names the real reason.
+  let payable = 0, evmOnly = 0;
+  const pinned = new Map(); // "Base" -> tools offered on those chains only
+  for (const d of list) {
+    const rails = x402RailsFor(d);
+    if (rails.some((r) => r.caip2 === caip2)) { payable++; continue; }
+    const only = Array.isArray(d?.onlyNetworks) && d.onlyNetworks.length;
+    if (only) {
+      const names = rails.map((r) => r.name).join(", ") || "other chains";
+      pinned.set(names, (pinned.get(names) || 0) + 1);
+    } else evmOnly++;
+  }
+  return { payable, total: list.length, excluded: { evmOnly, pinned: [...pinned].map(([networks, count]) => ({ networks, count })) } };
+}
 
 /** Sellers with a rail on this chain: the local catalog always qualifies
  *  (every local tool's 402 offers this chain); remote sellers qualify when
@@ -414,19 +439,53 @@ function agoLabel(ms) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+/** Our own newest settle on a rail: revenue-live's lastInbound (carried
+ *  across scan windows, marked internal), else the newest transfer in the
+ *  rail's recent rows that one of our wallets paid. Never an outside buyer's:
+ *  a transaction hash resolves to its payer on chain. */
+export function ownLatestSettle(rail) {
+  if (rail?.lastInbound?.internal === true) return rail.lastInbound;
+  return (Array.isArray(rail?.recent) ? rail.recent : []).find((t) => t && t.when && t.internal === true) || null;
+}
+
 // Rail-manifest "daily canary" status — derived from the same `rail` object
 // the page already fetched (no new network calls). A settlement younger than
 // 36h reads as proof of life; anything older or missing reads "unavailable"
 // rather than a stale check mark.
 function canaryManifestStatus(rail) {
-  // lastInbound survives scan windows aging past a settle (see revenue-live's
-  // carry-forward); recent[0] stays as the fallback for older snapshots.
-  const latest = rail?.lastInbound || rail?.recent?.[0] || null;
+  // Our own newest settle on the rail (see ownLatestSettle). An outside
+  // buyer's transfer is never read here: this row is the CANARY's status.
+  const latest = ownLatestSettle(rail);
   const ts = latest?.when ? Date.parse(latest.when) : NaN;
   if (!latest || !Number.isFinite(ts)) return { text: "unavailable", color: "var(--muted)" };
   const ageMs = Date.now() - ts;
   if (ageMs < 0 || ageMs >= 36 * 3600_000) return { text: "unavailable", color: "var(--muted)" };
   return { text: `✓ settled ${agoLabel(ageMs)}`, color: "var(--green)" };
+}
+
+// The SELLERS LISTED card's caption: the host is not counted (its own card
+// says so), and hosts merge into one seller only where the Base leaderboard
+// groups their wallets, so the figure is origins after that merge.
+function sellersListedNote(merged, origins) {
+  return `${merged ? "hosts settling to one Base wallet group merged" : "one per origin"} &middot; host not counted &middot; ${Number(origins).toLocaleString("en-US")} origins indexed`;
+}
+
+// "N of the M tools in the catalog take USDC on X": derived from the same
+// rules the 402 builder applies (catalogPayableOn). Without the figures it
+// claims no count.
+function payableSentence(p, C) {
+  const n = Number(p?.payable), t = Number(p?.total);
+  if (Number.isFinite(n) && Number.isFinite(t) && t > 0) {
+    if (n === t) return `Every one of the <a href="/tools">${t.toLocaleString("en-US")} tools in the catalog</a> takes ${esc(C.asset)} on ${esc(C.chainName)}`;
+    const x = p.excluded || {};
+    const k = (c) => c.toLocaleString("en-US");
+    const why = [
+      ...(x.evmOnly ? [`${k(x.evmOnly)} identity-bound or long-running tool${x.evmOnly === 1 ? " settles" : "s settle"} on the EVM rails only`] : []),
+      ...(Array.isArray(x.pinned) ? x.pinned : []).map((g) => `${k(g.count)} tool${g.count === 1 ? " is" : "s are"} offered on ${esc(g.networks)} only`),
+    ];
+    return `${n.toLocaleString("en-US")} of the <a href="/tools">${t.toLocaleString("en-US")} tools in the catalog</a> take ${esc(C.asset)} on ${esc(C.chainName)}${why.length ? ` (${why.join("; ")})` : ""}`;
+  }
+  return `Tools in the <a href="/tools">catalog</a> take ${esc(C.asset)} on ${esc(C.chainName)}`;
 }
 
 // Activity section — x402scan-style Transactions / Volume / Buyers cards
@@ -491,8 +550,8 @@ export function marketActivityHtml(chainKey, activity, selected) {
 // payTo wallets, not just the one advertised on this chain, so a router whose
 // real volume lives on a second wallet isn't undercounted. When a seller has no
 // leaderboard row (too small / off-chain-window), we fall back to the scoped
-// on-chain scan's totals; that scan caps at 10k transfers, so a capped total is
-// rendered as a floor ("N+"). The on-chain scan still powers the 30-day Activity
+// on-chain scan's totals; that scan is bounded by a time budget rather than a
+// record count now, so a total it did not finish is rendered as a floor ("N+"). The on-chain scan still powers the 30-day Activity
 // charts below regardless — that's where its per-address precision belongs.
 export function sellerCardHtml(chainKey, seller, sel, activity, stat, payTo, windowLabel) {
   const C = CHAIN_PAGES[chainKey];
@@ -561,7 +620,7 @@ export function marketPanelHtml(chainKey, { snapshot, activity, selectedSeller, 
     : null;
   const payTo = picked ? (Object.entries(picked.payToByNetwork || {}).find(([net]) => C.isNetwork(net))?.[1] || null) : null;
   let stat = null;
-  if (payTo) {
+  if (payTo && chainKey === LEADERBOARD_CHAIN) {
     const rows = Array.isArray(leaderboardSnap?.leaderboard) ? leaderboardSnap.leaderboard : [];
     const hit = rows.find((r) => (r.wallets && r.wallets.length ? r.wallets : [r.wallet]).some((w) => String(w).toLowerCase() === String(payTo).toLowerCase()));
     if (hit) stat = { calls: hit.callsSettled || 0, usd: hit.totalUsd || 0, buyers: hit.uniqueBuyers || 0 };
@@ -571,8 +630,10 @@ export function marketPanelHtml(chainKey, { snapshot, activity, selectedSeller, 
 
 export function marketPage(chainKey, baseUrl, opts = {}) {
   if (chainKey == null) return marketPageAll(baseUrl, opts);
-  const { snapshot, rail, activity, selectedSeller, wallet, leaderboardSnap, all = false, host = null } = opts;
+  const { snapshot, rail, activity, selectedSeller, wallet, leaderboardSnap, all = false, host = null, payable = null } = opts;
   const C = CHAIN_PAGES[chainKey];
+  const measured = chainKey === LEADERBOARD_CHAIN;
+  const lbWindow = leaderboardSnap?.windowLabel || null;
   const effectiveWallet = wallet || C.wallet;
   // Stellar/Algorand ship a committed public default wallet in CHAIN_PAGES;
   // the EVM + Solana rails don't (WALLET_ADDRESS/SOLANA_WALLET_ADDRESS are
@@ -582,6 +643,9 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   const walletExplorerUrl = effectiveWallet ? C.explorerWalletUrl(effectiveWallet) : `https://${C.explorerUrl}`;
   const sellers = marketSellers(chainKey, snapshot);
   const tools = marketTools(chainKey, snapshot);
+  // The page's seller count, from the same function the nav and the
+  // /marketplace grid read (host excluded; merged only where the roster merges).
+  const sellerCount = marketOperatorCount(chainKey, snapshot, leaderboardSnap);
 
   // Per-seller settlement stats for the roster (#tx column) and the seller card,
   // joined from the leaderboard snapshot by the seller's payTo on THIS chain.
@@ -589,7 +653,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   // other chains fall back to the scoped activity scan (which the seller card
   // uses directly). Match against every wallet the leaderboard grouped together.
   const statByWallet = new Map();
-  (Array.isArray(leaderboardSnap?.leaderboard) ? leaderboardSnap.leaderboard : []).forEach((r, i) => {
+  (measured && Array.isArray(leaderboardSnap?.leaderboard) ? leaderboardSnap.leaderboard : []).forEach((r, i) => {
     // `gid` = the leaderboard ROW this wallet belongs to. Two roster hosts are
     // the same economic seller iff their payTos resolve to the same gid — this
     // catches both a shared payTo address AND distinct wallets the leaderboard
@@ -680,10 +744,13 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   const low = prices.length ? Math.min(...prices) : 0.001;
   const high = prices.length ? Math.max(...prices) : 0.5;
   const groups = categoryGroups(tools);
-  const latest = rail?.recent?.[0] || null;
+  // Our own newest settle (canary or volume run), never an outside buyer's:
+  // a transaction hash resolves to its payer on chain.
+  const own = ownLatestSettle(rail);
+  const latest = own && own.tx ? own : null;
 
   const receiptHtml = latest
-    ? `<p style="margin:8px 0 0;">Latest settlement: <strong>${usd(latest.usd)} ${esc(C.asset)}</strong> · <a href="${esc(latest.tx)}" rel="noopener">on-chain receipt</a>${latest.when ? ` · ${esc(latest.when)}` : ""}</p>`
+    ? `<p style="margin:8px 0 0;">Our latest own settlement (canary): ${latest.usd != null ? `<strong>${usd(latest.usd)} ${esc(C.asset)}</strong> · ` : ""}<a href="${esc(latest.tx)}" rel="noopener">on-chain receipt</a>${latest.when ? ` · ${esc(latest.when)}` : ""}</p>`
     : `<p style="margin:8px 0 0;color:var(--muted);">live receipts temporarily unavailable - settlements remain verifiable at <a href="${esc(walletExplorerUrl)}" rel="noopener">${esc(C.explorerUrl)}</a></p>`;
 
 
@@ -726,9 +793,9 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
 
   const statsHtml = `
   <div class="ml-2col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 0;">
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:26px;font-weight:800;">${rosterSellers.length.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">distinct payees &middot; ${sellers.length.toLocaleString("en-US")} endpoints indexed</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:26px;font-weight:800;">${sellerCount.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">${sellersListedNote(measured, sellers.filter((s) => !s.local).length)}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">TOOLS (THIS HOST)</div><div style="font-size:26px;font-weight:800;">${tools.length.toLocaleString("en-US")}</div></div>
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">LATEST SETTLE</div><div style="font-size:26px;font-weight:800;">${latest ? usd(latest.usd) : "-"}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">OUR LATEST SETTLE</div><div style="font-size:26px;font-weight:800;">${latest && latest.usd != null ? usd(latest.usd) : "-"}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">our own canary or volume run</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">PRICE FLOOR</div><div style="font-size:26px;font-weight:800;">${usd(low)}</div></div>
   </div>`;
 
@@ -784,7 +851,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
         ${manifestRow("asset", esc(C.asset))}
         ${manifestRow("settle latency", esc(C.settleLatency))}
         ${manifestRow("facilitator", esc(C.facilitatorLabel))}
-        ${manifestRow("gas", esc(C.gasNote))}
+        ${manifestRow("buyer gas", "none, the buyer only signs")}
         <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">explorer</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><a href="${esc(walletExplorerUrl)}" rel="noopener" style="font-weight:700;color:var(--accent);text-decoration:none;">${esc(C.explorerUrl)} →</a></div>
         <div style="display:flex;align-items:baseline;gap:8px;"><span style="color:var(--muted);">daily canary</span><span style="flex:1;border-bottom:1.5px dotted var(--dash);transform:translateY(-4px);"></span><span style="font-weight:700;color:${canary.color};">${esc(canary.text)}</span></div>
       </div>
@@ -816,12 +883,12 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
           <button type="submit" style="border:none;border-left:1px solid var(--hairline);background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:12px;padding:0 16px;cursor:pointer;">FIND →</button>
         </form>
         <div style="display:flex;flex-wrap:wrap;gap:14px;font-family:var(--font-mono);font-size:12.5px;">
-          <a href="/guides/smart-order-router" style="color:var(--accent);text-decoration:none;font-weight:700;">auto-route a task →</a>
+          <a href="/guides/smart-order-router" style="color:var(--accent);text-decoration:none;font-weight:700;">auto-route a task →</a>${decideLive() ? `<a href="/decide" style="color:var(--accent);text-decoration:none;font-weight:700;">plan a multi-step job →</a>` : ""}
           <a href="/playground" style="color:var(--muted);text-decoration:none;">try playground</a>
           <a href="#sellers" style="color:var(--muted);text-decoration:none;">browse sellers</a>
         </div>
       </div>
-      <p style="font-size:13px;color:var(--faint);margin:10px 0 0;">An open index of the whole ${esc(C.chainName)} x402 economy - this host plus every independent seller the hourly crawl finds (CDP Bazaar included). Not a walled market: other venues' listings appear here too.</p>
+      <p style="font-size:13px;color:var(--faint);margin:10px 0 0;">An open index of the whole ${esc(C.chainName)} x402 economy - this host plus every independent seller the crawl finds (CDP Bazaar included), each re-probed ${crawlIntervalLabel()}. Not a walled market: other venues' listings appear here too.</p>
       ${receiptHtml}
       <p style="font-size:13px;line-height:1.45;color:var(--faint);margin:4px 0 0;min-height:56px;">${C.canaryLine}</p>
     </div>
@@ -831,9 +898,54 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   ${marketFilterBar(chainKey, baseUrl)}
   ${statsHtml}`;
 
+  // --- terminal roster -----------------------------------------------------
+  // The dense surface renders a single 26px row per seller rather than a card,
+  // so the transfer cost of a row collapsed and the old 100-row cap (sized for
+  // cards, where a full Base roster was a 700KB page) is the wrong number for
+  // it. Measured on this markup: 400 rows is 293KB raw and 18KB gzipped, and
+  // the DOM cost of holding them is what the windowing in
+  // assets/js/market-terminal.js exists to absorb. The cap is still a cap -
+  // Base lists well over a thousand sellers - and ?all=1 still opts out.
+  const TERMINAL_ROW_CAP = 400;
+  const terminalPool = all ? rosterSellers : rosterSellers.slice(0, TERMINAL_ROW_CAP);
+  const terminalRows = terminalPool.map((s) => {
+    const st = sellerStat(s) || {};
+    return {
+      // `host` in scope is the host-card figures object, never a string.
+      host: s.local ? (hostOf(baseUrl) || "this host") : hostOf(s.homepage).toLowerCase(),
+      href: s.local ? `/${chainKey}#detail` : null,
+      calls: st.calls || 0, usd: st.usd || 0, buyers: st.buyers || 0,
+      tools: Number(s.toolCount) || (s.local ? tools.length : 0),
+      routable: !!(s.local || s.routable),
+      local: !!s.local,
+    };
+  });
+  // Ticker rows are the busiest sellers this page already lists, with the
+  // direction taken from the selected seller's own daily series when it is the
+  // one in scope. A seller we hold no series for carries no arrow rather than
+  // a fabricated one.
+  const activityTrend = activity && Array.isArray(activity.buckets) ? trendOf(activity.buckets.map((b) => b.tx)) : null;
+  const tickerRows = terminalRows.filter((r) => r.calls > 0).slice(0, 14).map((r) => ({
+    host: r.host,
+    value: compactUsd(r.usd),
+    dir: selHost && r.host === selHost && activityTrend ? activityTrend.dir : "flat",
+    pct: selHost && r.host === selHost && activityTrend ? activityTrend.pct : null,
+  }));
+  const terminalNote = [
+    selHost
+      ? `all inbound ${C.asset} to this seller's advertised x402 payTo - may include non-x402 transfers`
+      : `all inbound ${C.asset} settlements to this host's ${C.chainName} wallet`,
+    activity && activity.truncated ? "scan stopped at its time budget - totals are a floor" : "",
+  ].filter(Boolean).join(" \u00b7 ");
+  const terminalHtml = marketTerminalHtml({
+    chainName: C.chainName, asset: C.asset, rows: terminalRows, totalSellers: sellerCount, measured, selectedHost: selHost,
+    activity, scopeLabel: selHost ? String(selHost).toUpperCase() : "THIS HOST",
+    noteText: terminalNote, ticker: tickerRows,
+  });
+
   const rosterHtml = `
-  <h2 id="sellers" style="font-size:21px;font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Sellers settling on ${esc(C.chainName)}</h2>
-  <p style="font-size:13px;color:var(--faint);margin:-6px 0 12px;">pick a seller to scope the activity charts · THIS HOST = run by agent402 · every other seller is independent, found by the open crawl · tx = settled calls, last 7 days on-chain</p>
+  <h2 id="sellers" style="font-size:21px;font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Sellers accepting ${esc(C.chainName)}</h2>
+  <p style="font-size:13px;color:var(--faint);margin:-6px 0 12px;">pick a seller to scope the activity charts · THIS HOST = run by agent402 · every other seller is independent, found by the open crawl · ${measured ? `tx = settled calls on ${esc(C.chainName)}${lbWindow ? `, last ${esc(lbWindow)}` : ""}, from the seller leaderboard` : `per-seller settlement counts are measured on ${esc(CHAIN_PAGES[LEADERBOARD_CHAIN].chainName)} only, so this roster shows none for ${esc(C.chainName)}; pick a seller to scan its ${esc(C.chainName)} wallet`}</p>
   ${compact
     ? `<div style="display:flex;flex-direction:column;gap:8px;">${sellersHtml}</div>`
     : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;">${sellersHtml}</div>`}
@@ -861,6 +973,17 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   const body = `
 <div style="max-width:1080px;margin:0 auto;padding:36px 24px;">
   <section>${headerHtml}</section>
+  <!-- Two surfaces over the same sellers, deliberately, because they answer
+       different questions. The terminal is the INDEX: every seller on the rail
+       as one comparable row, sortable, searchable and keyboard-navigable, for
+       "who is here and how do they compare". The roster below is the per-seller
+       DISCLOSURE: the leaderboard join, collapsed sibling endpoints ("+N more"),
+       the MPP badge, dispatch eligibility and its legend - facts that need a
+       sentence rather than a column, and that the dense grid would have to drop
+       or truncate. Folding those into the terminal rows is the remaining step;
+       until it is done, deleting the roster would quietly lose them. -->
+  <section aria-label="Market terminal">${terminalHtml}</section>
+
   <section>
     <div id="market-panel" data-chain="${esc(chainKey)}">${marketPanelHtml(chainKey, { snapshot, activity, selectedSeller, leaderboardSnap })}</div>
 
@@ -869,7 +992,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
 
   <section>
     <h2 style="font-size:21px;font-weight:800;margin:40px 0 10px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Buy tools with ${esc(C.asset)} on ${esc(C.chainName)}</h2>
-    <p style="font-size:14.5px;color:var(--muted);margin:0 0 10px;max-width:70ch;">Every one of the <a href="/tools">500+ tools in the catalog</a> takes ${esc(C.asset)} on ${esc(C.chainName)}, from ${usd(low)} to ${usd(high)} a call${groups.length ? `, across ${groups.map((g) => esc(g.label.toLowerCase())).slice(0, 6).join(", ")} and more` : ""}. The catalog page carries the category browser; this page is the chain's ledger.</p>
+    <p style="font-size:14.5px;color:var(--muted);margin:0 0 10px;max-width:70ch;">${payableSentence(payable, C)}, from ${usd(low)} to ${usd(high)} a call${groups.length ? `, across ${groups.map((g) => esc(g.label.toLowerCase())).slice(0, 6).join(", ")} and more` : ""}. The catalog page carries the category browser; this page is the chain's ledger.</p>
     <p style="font-family:var(--font-mono);font-size:13px;background:var(--card-zebra);padding:10px 14px;margin:0;">agents: GET ${esc(baseUrl)}/api/route?q=&lt;task&gt;&amp;network=${esc(C.networkParam)}</p>
   </section>
 
@@ -878,6 +1001,7 @@ export function marketPage(chainKey, baseUrl, opts = {}) {
   <p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-top:28px;">machine-readable: <a href="/api/route?q=hash&amp;network=${esc(C.networkParam)}">/api/route?network=${esc(C.networkParam)}</a> · <a href="/.well-known/x402">/.well-known/x402</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/api/reliability">/api/reliability</a></p>
 </div>
 <script src="/js/market-seller-switch.js"></script>
+<script src="/js/market-terminal.js"></script>
 ${ledgerFooterCompact()}`;
 
   return ledgerShell({
@@ -887,7 +1011,7 @@ ${ledgerFooterCompact()}`;
     baseUrl,
     activePath: `/${chainKey}`,
     jsonLd,
-    extraCss: ROSTER_CSS,
+    extraCss: ROSTER_CSS + TERMINAL_CSS,
     body,
   });
 }
@@ -963,7 +1087,10 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
     for (const w of (r.wallets && r.wallets.length ? r.wallets : [r.wallet])) if (w) statByWallet.set(String(w).toLowerCase(), stat);
   });
   // Unlike the per-chain view (one network via C.isNetwork), an all-chains
-  // seller may have a payTo on any of several networks - check them all.
+  // seller may have a payTo on any of several networks - check them all. The
+  // figures are the WALLET's settlements on Base (the board reads Base only),
+  // and the roster caption says so: an address advertised on another chain is
+  // the same key holder, so its Base settlements are that seller's.
   // THIS HOST joins by the route-supplied wallet (the leaderboard's default
   // view includes our own row) — we present ourselves with the same on-chain
   // numbers as every other seller, not a blank cell.
@@ -1087,7 +1214,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
 
   const rosterHtml = `
   <h2 id="sellers" style="font-size:21px;font-weight:800;margin:40px 0 14px;border-bottom:1px solid var(--hairline);padding-bottom:8px;">Every seller, every chain</h2>
-  <p style="font-size:13px;color:var(--faint);margin:-6px 0 12px;">THIS HOST = run by agent402 · every other seller is independent, found by the open crawl · Chain shows where each seller settles · Tools shows settled tx, last 7 days on-chain</p>
+  <p style="font-size:13px;color:var(--faint);margin:-6px 0 12px;">THIS HOST = run by agent402 · every other seller is independent, found by the open crawl · Chain shows the networks each seller's 402 advertises · tx = settled calls on Base${leaderboardSnap?.windowLabel ? `, last ${esc(leaderboardSnap.windowLabel)}` : ""}, from the seller leaderboard</p>
   <div style="display:flex;flex-direction:column;gap:8px;">${rows}</div>
   ${capNote}
   ${honesty}`;
@@ -1101,12 +1228,17 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   // marketOperatorCount's own comment already warns about, so this row
   // stays about the DIRECTORY (who/what is listed), the economy strip stays
   // about SETTLEMENT (what moved on chain) - never merged into one card.
-  const totalToolListings = sellers.reduce((sum, s) => sum + (Number(s.toolCount) || 0), 0);
+  // Other sellers only: our own tools have their own card, and the host card
+  // above says the host is in no count.
+  // The same function the standing band reads (src/standing.js), so "seller
+  // origins indexed" and "tool listings" are one figure on every surface.
+  const standingCounts = standingCountsExcludingHost(snapshot);
+  const totalToolListings = standingCounts.listings;
 
   const statsHtml = `
   <div class="ml-2col ml-4col" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 0;">
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:26px;font-weight:800;">${rosterSellers.length.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">distinct payees &middot; ${sellers.length.toLocaleString("en-US")} endpoints indexed</div></div>
-    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">TOOL LISTINGS</div><div style="font-size:26px;font-weight:800;">${totalToolListings.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">advertised &middot; ours and every other seller</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">SELLERS LISTED</div><div style="font-size:26px;font-weight:800;">${marketOperatorCount(null, snapshot, leaderboardSnap).toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">${sellersListedNote(true, standingCounts.sellers)}</div></div>
+    <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">TOOL LISTINGS</div><div style="font-size:26px;font-weight:800;">${totalToolListings.toLocaleString("en-US")}</div><div style="font-family:var(--font-mono);font-size:10.5px;color:var(--faint);margin-top:2px;">advertised by other sellers</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">CHAINS SUPPORTED</div><div style="font-size:26px;font-weight:800;">${Object.keys(CHAIN_PAGES).length}</div></div>
     <div style="border:1px solid var(--hairline);background:var(--card);padding:14px 16px;"><div style="font-family:var(--font-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;">TOOLS (THIS HOST)</div><div style="font-size:26px;font-weight:800;">${(sellers.find((s) => s.local)?.toolCount || 0).toLocaleString("en-US")}</div></div>
   </div>`;
@@ -1119,7 +1251,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   const headerHtml = `
   <div>
     <h1 style="font-size:34px;font-weight:800;letter-spacing:-.02em;margin:0 0 8px;">The x402 marketplace.</h1>
-    <p style="font-size:16.5px;color:var(--muted);margin:0;max-width:640px;">The open index of paid APIs for agentic commerce - ${baseSellerCount.toLocaleString("en-US")} sellers on Base alone, theirs as well as ours, with what they charge and what they have actually settled.</p>
+    <p style="font-size:16.5px;color:var(--muted);margin:0;max-width:640px;">The open index of paid APIs for agentic commerce - ${baseSellerCount.toLocaleString("en-US")} independent sellers on Base alone besides this host, with what they charge and what they have actually settled.</p>
     <div style="margin:18px 0 0;padding:16px 18px;border:1px solid var(--hairline);background:var(--card);max-width:640px;">
       <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--faint);margin-bottom:10px;">START HERE · BUYER PATH</div>
       <form action="/tools" method="get" class="mkt-search-wrap" style="display:flex;gap:0;background:var(--paper);margin-bottom:12px;">
@@ -1128,12 +1260,17 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
         <button type="submit" style="border:none;border-left:1px solid var(--hairline);background:var(--surface);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:12px;padding:0 16px;cursor:pointer;white-space:nowrap;">FIND →</button>
       </form>
       <div style="display:flex;flex-wrap:wrap;gap:14px;font-family:var(--font-mono);font-size:12.5px;">
-        <a href="/guides/smart-order-router" style="color:var(--accent);text-decoration:none;font-weight:700;">auto-route a task →</a>
+        <a href="/guides/smart-order-router" style="color:var(--accent);text-decoration:none;font-weight:700;">auto-route a task →</a>${decideLive() ? `<a href="/decide" style="color:var(--accent);text-decoration:none;font-weight:700;">plan a multi-step job →</a>` : ""}
         <a href="/playground" style="color:var(--muted);text-decoration:none;">try playground</a>
         <a href="#sellers" style="color:var(--muted);text-decoration:none;">browse all sellers</a>
       </div>
     </div>
     <p style="font-size:13px;color:var(--faint);margin:10px 0 0;">Describe the job, not the tool name - FIND searches every tool and shows live results. Resolving is free (<span style="color:var(--muted);">GET /api/find</span>), you only pay to execute. This is the neutral x402 index: every seller, not just ours.</p>
+    <div style="margin:12px 0 0;padding:12px 18px;border:1px solid var(--hairline);background:var(--card);max-width:640px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+      <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--faint);">SELLER PATH</span>
+      <span style="font-size:13.5px;color:var(--muted);flex:1;min-width:220px;">Selling an x402 API? Listing is free, takes no signup, and deducts nothing from your price.</span>
+      <a href="/sell" style="font-family:var(--font-mono);font-size:12.5px;font-weight:700;color:var(--accent);text-decoration:none;white-space:nowrap;">list your API →</a>
+    </div>
     ${statsHtml}
   </div>`;
 
@@ -1167,7 +1304,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
     <div style="padding:26px;border-right:1px solid var(--hairline);background:var(--card);">
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:14px;">$ POST /api/route</div>
       <h2 style="font-weight:800;font-size:22px;margin:0 0 14px;color:var(--ink);">Or skip the browsing</h2>
-      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 16px;">Describe the task and the Smart Order Router resolves it to a tool - from this index, ours or anyone else's - then runs it. It ranks by match score, then rolling crawl health, then price, and it will pay an external seller on your behalf.</p>
+      <p style="font-size:14.5px;line-height:1.6;color:var(--muted);margin:0 0 16px;">Describe the task and the Smart Order Router resolves it to a tool - from this index, ours or anyone else's - then runs it. ${esc(routerRankingSentence())} It will pay an external seller on your behalf.</p>
       <pre style="margin:0 0 14px;background:var(--surface);border:1px solid var(--dark-border);color:var(--on-dark);padding:14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># free to resolve, you only pay to execute
 </span>curl 'https://agent402.tools/api/find?q=ocr+an+image'</pre>
       <a href="/guides/smart-order-router" style="font-family:var(--font-mono);font-size:12.5px;color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">how the router ranks →</a>
@@ -1178,17 +1315,18 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
       <div style="display:flex;flex-direction:column;">${[
         "Discovery: the Coinbase CDP Bazaar plus our own crawler, plus anyone who self-registers at POST /api/index/register.",
         "We read each seller's manifest for its tools, routes and prices, and its live 402 challenge for the chains it accepts.",
-        "An hourly probe records whether the manifest and challenge still respond. Probes are never paid calls.",
+        `A probe ${crawlIntervalLabel()} records whether the manifest and challenge still respond. Probes are never paid calls.`,
         "Rolling health feeds the Smart Order Router, which breaks ties on health rather than price alone and routes around sellers that are down.",
       ].map((body_, i) => `<div style="display:grid;grid-template-columns:26px 1fr;gap:12px;padding:11px 0;border-bottom:1px solid var(--hairline);"><span style="font-family:var(--font-mono);font-size:12px;color:var(--accent);">${String(i + 1).padStart(2, "0")}</span><span style="font-size:13.5px;line-height:1.55;color:var(--muted);">${esc(body_)}</span></div>`).join("")}</div>
-      <p style="font-size:13px;line-height:1.6;color:var(--faint);margin:14px 0 0;">No editorial gate, no pay-for-placement, and no removal on request unless a seller stops serving. A seller that goes dark drops out on its own.</p>
+      <p style="font-size:13px;line-height:1.6;color:var(--faint);margin:14px 0 0;">No editorial gate and no pay-for-placement. A row can be corrected or withdrawn on request (see below), and a seller that stops answering is marked unreachable.</p>
     </div>
   </div>`;
 
   const MARKET_FAQS = [
     { q: "What is an x402 marketplace?", a: "A directory of services that accept x402 payments, so an AI agent can find something to buy and pay for it in one round trip without an account. This index lists every seller it can crawl, not only our own tools, and publishes the tool counts, settlement chains and crawl health it observes." },
-    { q: "How does a seller get listed?", a: "By serving x402 challenges and registering its origin with POST /api/index/register, or by appearing in the Coinbase CDP Bazaar, which the crawler reads on its hourly pass. Listing is free, there is no review queue, and there is no pay-for-placement." },
+    { q: "How does a seller get listed?", a: `By serving x402 challenges and registering its origin with POST /api/index/register, which crawls it at once, or by appearing in the Coinbase CDP Bazaar, which the crawler re-reads ${discoveryIntervalLabel()}. Listing is free, there is no review queue, and there is no pay-for-placement.` },
     { q: "What does crawl health mean?", a: "A rolling success rate across recent crawls of a seller's manifest and 402 challenge. One bad hour does not delist anyone, and a new seller is not penalised for having no history. The Smart Order Router uses it to break ties and to route around sellers that are down." },
+    { q: "My listing is wrong. How do I correct or remove it?", a: "Write to mike@agent402.tools. Every figure here is a reading of public data - the seller's own manifest and 402 challenges, plus on-chain settlements - taken at the scan time shown, so it can go stale or fold to the wrong operator. We re-scan and correct or withdraw a row on request." },
     { q: "Why do tool counts and settled volume disagree?", a: "Tool counts are what a seller advertises; settled volume is what buyers actually paid for. A large catalog with no settlements has not found buyers yet, and a small catalog with heavy volume has found exactly the right one. Both numbers are shown so you can see the difference." },
   ];
   const faqHtml = MARKET_FAQS.map((f) => `<article style="padding:22px 0;border-bottom:1px solid var(--hairline);"><h3 style="font-weight:800;font-size:17.5px;margin:0 0 10px;color:var(--ink);">${esc(f.q)}</h3><p style="font-size:15px;line-height:1.65;color:var(--muted);margin:0;">${esc(f.a)}</p></article>`).join("");
@@ -1202,7 +1340,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   <div style="margin:48px 0 0;background:var(--surface);border:1px solid var(--hairline);padding:40px 36px;position:relative;overflow:hidden;">
     <div style="position:relative;">
       <h2 style="font-weight:800;font-size:30px;letter-spacing:-.02em;margin:0 0 12px;color:var(--on-dark);">Add your API to the index.</h2>
-      <p style="font-size:15.5px;line-height:1.6;color:var(--dk-muted2);margin:0 0 22px;max-width:520px;">Free, no signup, nothing deducted. Serve a 402, register the origin, and the crawler picks you up on the next hourly pass.</p>
+      <p style="font-size:15.5px;line-height:1.6;color:var(--dk-muted2);margin:0 0 22px;max-width:520px;">Free, no signup, nothing deducted. Serve a 402 and register the origin: the crawler reads it at once and re-probes it ${crawlIntervalLabel()}.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;">
         <a href="/sell" style="background:var(--accent);color:var(--on-accent);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:13px 22px;">List your API - free →</a>
         <a href="/leaderboard" style="background:transparent;border:1.5px solid var(--dark-border2);color:var(--on-dark);font-family:var(--font-mono);font-weight:700;font-size:14px;text-decoration:none;padding:12px 22px;">SEE THE LEADERBOARD</a>
@@ -1236,7 +1374,7 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
       "@type": "Dataset",
       "@id": `${baseUrl}/marketplace#dataset`,
       name: "x402 seller index",
-      description: "Hourly crawl of every discoverable x402 seller: origin, advertised tools with route and price, settlement networks from the 402 challenge, last successful fetch and rolling crawl health. Discovery is the Coinbase CDP Bazaar plus Agent402's own crawler.",
+      description: `Crawl of every discoverable x402 seller, re-probed ${crawlIntervalLabel()}: origin, advertised tools with route and price, settlement networks from the 402 challenge, last successful fetch and rolling crawl health. Discovery is the Coinbase CDP Bazaar plus Agent402's own crawler.`,
       license: "https://www.gnu.org/licenses/agpl-3.0.html",
       isAccessibleForFree: true,
       variableMeasured: [
@@ -1272,9 +1410,9 @@ function marketPageAll(baseUrl, { snapshot, leaderboardSnap, economySnap, all = 
   <section>${chainGridSection}</section>
   <section>${economyStripHtml(economySnap)}</section>
   <section>${routerAndMethodSection}</section>
-  <section>${faqSection}</section>
+  <section>${closingCta}</section>
   <section>
-    ${closingCta}
+    ${faqSection}
     <p style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin-top:28px;">machine-readable: <a href="/.well-known/x402">/.well-known/x402</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/api/reliability">/api/reliability</a></p>
   </section>
 </div>
@@ -1292,23 +1430,26 @@ ${ledgerFooterCompact()}`;
   });
 }
 
-/** Operator-level seller count for a chain page (null = all chains): the same
- *  leaderboard-group collapse the rosters render, WITHOUT building rows —
- *  hosts settling to one leaderboard group count once, everything ungrouped
- *  counts individually. Exists so the nav dropdown and the page's SELLERS
- *  LISTED card speak the same unit (operators): the dropdown used raw origin
- *  counts (e.g. Base 1,554) while the page's deduped roster showed 843, which
- *  read as a bug from the outside. Endpoints stay disclosed on the rows
- *  ("+N more endpoints"), never hidden. */
+/** The ONE per-chain seller count: the nav dropdown, the /marketplace
+ *  "Markets by chain" grid, the hero subhead and each page's SELLERS LISTED
+ *  card and terminal roster total all read it, so two surfaces never quote
+ *  different numbers for one chain. The host is never counted (its own card
+ *  says so). Hosts collapse into one seller only where the page collapses
+ *  them: on the leaderboard chain (Base) and in the all-chains view, hosts
+ *  whose payTo sits in one leaderboard wallet group count once, because the
+ *  leaderboard measures Base wallets. Every other chain page lists one row
+ *  per origin, and this count is that row count. `chainKey` null = the
+ *  all-chains view. */
 export function marketOperatorCount(chainKey, snapshot, leaderboardSnap) {
-  const sellers = chainKey ? marketSellers(chainKey, snapshot) : marketSellersAll(snapshot);
+  const sellers = (chainKey ? marketSellers(chainKey, snapshot) : marketSellersAll(snapshot)).filter((s) => !s.local);
+  const merges = !chainKey || chainKey === LEADERBOARD_CHAIN;
+  if (!merges) return sellers.length;
   const gidByWallet = new Map();
   (Array.isArray(leaderboardSnap?.leaderboard) ? leaderboardSnap.leaderboard : []).forEach((r, i) => {
     for (const w of (r.wallets && r.wallets.length ? r.wallets : [r.wallet])) if (w) gidByWallet.set(String(w).toLowerCase(), `lb${i}`);
   });
   const C = chainKey ? CHAIN_PAGES[chainKey] : null;
   const gidOf = (s) => {
-    if (s.local) return null;
     const entries = Object.entries(s.payToByNetwork || {});
     const pay = C
       ? (entries.find(([net]) => C.isNetwork(net))?.[1] || null)

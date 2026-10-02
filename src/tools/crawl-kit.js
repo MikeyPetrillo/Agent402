@@ -44,7 +44,8 @@ import { parseRobots, robotsAllows } from "./kit.js";
 import { markUntrusted } from "./provenance.js";
 
 export const CRAWL_USER_AGENT = "Agent402Bot/1.0 (+https://agent402.tools)";
-const ROBOTS_UA_TOKEN = "Agent402Bot";
+// The robots.txt user-agent product token (RFC 9309) this crawler matches on.
+const ROBOTS_UA_PRODUCT = "Agent402Bot";
 
 const MAX_REDIRECTS = 5;
 const MAX_URL_LEN = 2048;
@@ -591,7 +592,7 @@ async function siteCrawlRun(input) {
   const robotsAllowed = (u) => {
     if (!robotsGroups) return true;
     const p = new URL(u);
-    return robotsAllows(robotsGroups, ROBOTS_UA_TOKEN, p.pathname + p.search).allowed;
+    return robotsAllows(robotsGroups, ROBOTS_UA_PRODUCT, p.pathname + p.search).allowed;
   };
   if (!robotsAllowed(startUrl)) throw bad("robots.txt disallows the start URL for Agent402Bot", 422);
 

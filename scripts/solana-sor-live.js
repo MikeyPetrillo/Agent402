@@ -16,12 +16,12 @@ const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SPENDER = process.env.SOLANA_SPENDING_ADDRESS || "8KqQG8MefNvQEQmp9gBjov39DXcWsUpSeqjL9pPCGKKE";
 const ROUTE_ALLOWED = new Set(["/api/route/execute", "/api/route/execute-plus", "/api/route/execute-pro"]);
 // Defaults = the combination PROVEN on chain 2026-09-02 (tx 4a2GPKp6...): the
-// task text ranks sol.blockrun.ai's /api/v1/exa/search first (its rows are
+// task text ranks a seller's /api/v1/exa/search first (its rows are
 // named by path, so path-shaped text is what matches), $0.012 fits the
-// execute-plus cap, and the route pays blockrun's shared Solana payTo, which
+// execute-plus cap, and the route pays a seller's shared Solana payTo, which
 // clears the proven-seller gate by thousands. The old default ("list supported
 // rpc chains") matched no Solana seller at all, and "us stock price" resolves
-// to blockrun's Pyth-backed feed, which 502s on every ticker since Pyth went
+// to a seller's Pyth-backed feed, which 502s on every ticker since Pyth went
 // keyed (2026-08-26) - 23 red runs on 2026-09-01 proved the seller's upstream,
 // not our rail.
 const ROUTE = process.env.ROUTE || "/api/route/execute-plus";

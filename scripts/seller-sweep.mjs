@@ -50,12 +50,16 @@ const maxAtomic = BigInt(Math.round(MAX_USD * 1e6));
 // --- candidates: from OUR OWN index, cheapest priced Base route per origin ---
 const ourHost = (() => { try { return new URL(TARGET).host.toLowerCase(); } catch { return ""; } })();
 const sellers = [];
-for (let p = 0; p < 40; p++) {
-  const r = await fetch(`${TARGET}/api/index?page=${p}&perPage=100`, { signal: AbortSignal.timeout(60_000) });
+// Page until the SERVER says there are no more, never a hard page count: this
+// loop used to stop at 40 pages of 100 and silently missed every seller past
+// 4,000 (there are 4,473). It also passed `perPage`, which the handler did not
+// read, so it got the 100 default by luck rather than by asking.
+for (let p = 0; ; p++) {
+  const r = await fetch(`${TARGET}/api/index?page=${p}&limit=250`, { signal: AbortSignal.timeout(60_000) });
   const d = await r.json();
   const s = d.sellers || [];
   sellers.push(...s);
-  if (!s.length) break;
+  if (!s.length || d.complete || p >= (d.lastPage ?? 0)) break;
 }
 // Route rows live on the seller DETAIL projection, not the list page, so
 // candidates are chosen in two stages: page the list for routable Base

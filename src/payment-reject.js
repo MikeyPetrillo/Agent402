@@ -2,7 +2,9 @@
 //
 // @x402/express answers every rejected payment with a bare `res.status(402)
 // .json({})` - the reason is discarded inside the middleware and never reaches
-// us or the buyer. Our only hooks (onVerifyFailure / onAfterVerify) fire at the
+// us or the buyer. (This server then copies the PAYMENT-REQUIRED offer into
+// that body, src/payment-required-body.js, so it carries the offer; it still
+// carries no reason unless src/verify-hint.js names one.) Our only hooks (onVerifyFailure / onAfterVerify) fire at the
 // FACILITATOR stage, so anything refused before that - a header that will not
 // decode, a scheme or chain we do not sell on, an amount under the price, an
 // expired authorization, a payload built against different requirements - is
@@ -22,8 +24,10 @@
 // the facilitator's own hint (src/verify-hint.js) is the better answer whenever
 // the payment actually reached it.
 
-/** Decode a base64(url) JSON header. Null on anything unreadable. */
-function decodeB64Json(value) {
+/** Decode a base64(url) JSON header. Null on anything unreadable. Shared
+ *  with src/payment-required-body.js, so the 402 body mirror reads the header
+ *  with the same decoder the classifier uses. */
+export function decodeB64Json(value) {
   try {
     const s = String(value || "").trim();
     if (!s) return null;
@@ -60,7 +64,68 @@ export const REJECTION_REASONS = Object.freeze([
   { reason: "wrong-recipient", means: "The authorization pays an address this route did not advertise." },
   { reason: "authorization-expired", means: "validBefore has already passed. Signing well ahead of sending, or a clock adrift, will do it." },
   { reason: "unclassified", means: "It decoded and still matched nothing, in a way this server has no name for. The refusal lists the field NAMES received so you can compare them yourself, and we would like to hear about it: an unclassified refusal is as likely to be our defect as yours." },
+  { reason: "facilitator-quota", means: "The payment verified and the call ran, then the facilitator for that network refused to settle it under a billing quota on this server's own account. Nothing was charged and nothing is wrong with your wallet. Ask the route for a fresh 402 without paying and pay on another network it lists." },
 ]);
+
+/**
+ * A facilitator refusing to SETTLE for a quota or billing reason on OUR
+ * account: PayAI's `free_tier_exhausted`, the Algorand facilitator's
+ * `subcent_quota_exceeded` (its monthly allowance of sponsored sub-cent
+ * settlements for our payTo), a prepaid-credits wall. Such a refusal says
+ * nothing about the buyer's wallet - but the call behind it was served and
+ * never charged, so it is NOT free to ignore. ONE definition: payments.js logs
+ * with it, the 402 body below names it, and the settle breaker words its 429
+ * with it. Only the one refusal whose offer is actually withdrawn from the
+ * next 402 (src/avm-sponsorship.js isWithdrawnSubcentRefusal) is kept off a
+ * buyer's count; every other billing refusal still counts in both breakers
+ * and the composite guard, because their bounds are all that stop it looping.
+ */
+export const FACILITATOR_BILLING_REFUSAL = /free_tier_exhausted|subcent_quota_exceeded|quota[_ ]exceeded|payment[_ ]required.*credit/i;
+export function isFacilitatorBillingRefusal(text) {
+  return FACILITATOR_BILLING_REFUSAL.test(String(text || ""));
+}
+
+/** An errorReason that is already a specific verdict about the PAYMENT or the
+ *  chain (insufficient_funds, invalid_*, transaction_failed, ..._expired).
+ *  Words in its errorMessage - an RPC's "quota exceeded", say - cannot turn
+ *  such a verdict into a refusal on our account. Exported so the Algorand
+ *  sub-cent gate (src/avm-sponsorship.js) applies the same rule before it
+ *  pauses the rail or exempts a refusal. */
+const PAYMENT_VERDICT_REASON = /^(insufficient_|invalid_|transaction_)|_expired$/i;
+export function isPaymentVerdictReason(reason) {
+  return PAYMENT_VERDICT_REASON.test(String(reason || ""));
+}
+
+/** A decoded settle receipt (PAYMENT-RESPONSE) that failed on billing grounds:
+ *  the errorReason names it, or - only when the reason is generic, as a thrown
+ *  non-2xx settle leaves it - the errorMessage does. */
+export function isBillingRefusalReceipt(receipt) {
+  if (!receipt || typeof receipt !== "object" || receipt.success !== false) return false;
+  const reason = String(receipt.errorReason || "");
+  if (isFacilitatorBillingRefusal(reason)) return true;
+  if (isPaymentVerdictReason(reason)) return false;
+  return isFacilitatorBillingRefusal(String(receipt.errorMessage || ""));
+}
+
+const RAIL_FAMILY_NAMES = { algorand: "Algorand", solana: "Solana", stellar: "Stellar" };
+
+/**
+ * The 402 a buyer gets when settlement failed on OUR billing quota, said in
+ * their terms. Before this the body was `{}` and the settle breaker then
+ * blamed their wallet ("Recent payments from this wallet failed to settle") -
+ * measured 2026-09-28: one outside buyer served 175 times, refused 325 times,
+ * with nothing wrong on their side. Null for every other settle outcome.
+ * A settle refusal carries PAYMENT-RESPONSE and no PAYMENT-REQUIRED header,
+ * so the 402 body mirror (src/payment-required-body.js) adds no offer to it.
+ */
+export function classifySettlementRefusal(paymentResponseHeader) {
+  const receipt = decodeB64Json(paymentResponseHeader);
+  if (!isBillingRefusalReceipt(receipt)) return null;
+  const network = typeof receipt.network === "string" && receipt.network ? receipt.network : null;
+  const name = network ? (RAIL_FAMILY_NAMES[network.split(":")[0]] || network) : "this network's";
+  return { reason: "facilitator-quota", retry: "other-network", network,
+    detail: `The ${name} facilitator refused to settle this payment under a billing quota on this server's account, not because of your wallet. Nothing was charged. Request this route again without payment for its current accepts and pay on another network listed there.` };
+}
 
 export function advertisedAccepts(paymentRequiredHeader) {
   const env = decodeB64Json(paymentRequiredHeader);

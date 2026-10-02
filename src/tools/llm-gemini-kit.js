@@ -31,6 +31,7 @@
 // be a buyer believing they set something they did not.
 import {
   TIERS, canonicalModel, bad, meteredQuoteForProbe, validateRequest, LLM_GATEWAY_TOOLS,
+  isFlatTier, flatTierQuoteUsd,
 } from "./llm-gateway-kit.js";
 
 /** Tier slug -> the fixed catalog path for that tier's Gemini route.
@@ -165,7 +166,7 @@ export function geminiToChat(input, model) {
     ["thinking_config", "reasoning depth is set per tier on this gateway; see GET /v1/models"],
   ]) if (gc?.[k] !== undefined) throw bad(`"generationConfig.${k}" is not supported on this route - ${why}.`);
   const n = gc?.candidateCount ?? gc?.candidate_count;
-  if (n !== undefined && n !== 1) throw bad('"generationConfig.candidateCount" must be 1 on this route - more candidates multiply the upstream cost of one paid call.');
+  if (n !== undefined && n !== 1) throw bad('"generationConfig.candidateCount" must be 1 on this route.');
 
   const chat = { model, messages };
   const maxOut = gc?.maxOutputTokens ?? gc?.max_output_tokens;
@@ -310,7 +311,13 @@ export function makeGeminiHandler(tierSlug) {
       if (e && typeof e.message === "string") e.message = repointToGeminiWire(e.message);
       throw e;
     }
-    return chatToGemini(data, model);
+    const out = chatToGemini(data, model);
+    // Price by model: the chat handler served another flat tier's config
+    // because this request was gated at that tier's price; say so here too.
+    if (data?.agent402_tier) out.agent402_tier = { ...data.agent402_tier, route: GEMINI_PATH_BY_TIER[tierSlug] };
+    // model "auto" (routed by the auto tier): carry the router's disclosure too.
+    if (data?.agent402_router) out.agent402_router = data.agent402_router;
+    return out;
   };
 }
 
@@ -321,7 +328,7 @@ const EXAMPLE_IN = {
 const EXAMPLE_OUT = {
   candidates: [{ content: { role: "model", parts: [{ text: "x402 is an HTTP-native way for agents to pay per request with USDC." }] }, finishReason: "STOP", index: 0 }],
   usageMetadata: { promptTokenCount: 14, candidatesTokenCount: 18, totalTokenCount: 32 },
-  modelVersion: "google/gemini-2.5-flash",
+  modelVersion: "google/gemini-3.5-flash-lite",
 };
 const INPUT_SCHEMA = {
   type: "object",
@@ -345,6 +352,9 @@ export const LLM_GEMINI_TOOLS = Object.entries(GEMINI_PATH_BY_TIER).map(([tierSl
     category: "llm",
     price: tier.metered ? `$${tier.price.toFixed(3)}` : `$${tier.price.toFixed(3)}`,
     ...(tier.metered ? { quote: (body) => meteredGeminiQuoteUsd(body).usd } : {}),
+    // Price by model on a flat route: the same model this wire hands the chat
+    // handler (modelOf), so the gate's price and the served tier agree.
+    ...(isFlatTier(tierSlug) ? { tierQuote: (body) => flatTierQuoteUsd(tierSlug, modelOf(body, tierSlug)) } : {}),
     description: `Google's native generateContent wire on the ${TIER_LABEL[tierSlug]} tier. Send Gemini's own request shape (contents, systemInstruction, generationConfig, function declarations) and get Gemini's own response shape (candidates, usageMetadata) back. Point a Google GenAI SDK at this gateway and pay per request with USDC, no account. Also answers the Google-shaped path /v1beta/models/<model>:generateContent.`,
     tags: ["llm", "gemini", "google", "generatecontent", "chat"],
     discovery: { bodyType: "json", inputSchema: INPUT_SCHEMA, input: EXAMPLE_IN, output: { example: EXAMPLE_OUT } },

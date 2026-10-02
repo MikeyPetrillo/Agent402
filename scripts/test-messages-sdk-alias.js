@@ -92,23 +92,23 @@ try {
   // catalog route or the 402 would quote the tier default instead of the model
   // the SDK asked for. Two different models must quote two different prices.
   const gBody = { contents: [{ role: "user", parts: [{ text: "hi" }] }], generationConfig: { maxOutputTokens: 64 } };
-  const gFlash = await post("/v1/metered/v1beta/models/google%2Fgemini-2.5-flash:generateContent", gBody);
+  const gFlash = await post("/v1/metered/v1beta/models/google%2Fgemini-3.5-flash-lite:generateContent", gBody);
   ok(gFlash.status === 402, `Google-shaped path -> the metered Gemini 402 (got ${gFlash.status})`);
   const gFlash402 = decode402(gFlash);
   const gBig = decode402(await post("/v1/metered/v1beta/models/openai%2Fgpt-4o:generateContent", gBody));
   ok(gFlash402 && gBig && Number(amountOf(gBig)) !== Number(amountOf(gFlash402)),
     `the model in the PATH drives the quote (${amountOf(gFlash402)} vs ${amountOf(gBig)} base units)`);
-  const gDirect = decode402(await post("/v1/metered/gemini", { ...gBody, model: "google/gemini-2.5-flash" }));
+  const gDirect = decode402(await post("/v1/metered/gemini", { ...gBody, model: "google/gemini-3.5-flash-lite" }));
   ok(gDirect && amountOf(gDirect) === amountOf(gFlash402), "the fixed route and the Google-shaped alias quote the same price for the same call");
-  const gBase = await post("/v1beta/models/google%2Fgemini-2.5-flash:generateContent", gBody);
+  const gBase = await post("/v1beta/models/google%2Fgemini-3.5-flash-lite:generateContent", gBody);
   ok(gBase.status === 402, `the un-prefixed Google path maps to the BASE tier (got ${gBase.status})`);
   // The model segment may contain a slash: Google's own names are bare and ours
-  // are vendor-prefixed, so a buyer writing "google/gemini-2.5-flash" into an
+  // are vendor-prefixed, so a buyer writing "google/gemini-3.5-flash-lite" into an
   // SDK produces an extra path segment. Encoded or not, both must route - a
   // bare 404 there tells them nothing. (Found by driving it: the first cut
   // matched [^/]+ and 404'd the unencoded form.)
-  const gSlash = await post("/v1/metered/v1beta/models/google/gemini-2.5-flash:generateContent", gBody);
-  const gEnc = await post("/v1/metered/v1beta/models/google%2Fgemini-2.5-flash:generateContent", gBody);
+  const gSlash = await post("/v1/metered/v1beta/models/google/gemini-3.5-flash-lite:generateContent", gBody);
+  const gEnc = await post("/v1/metered/v1beta/models/google%2Fgemini-3.5-flash-lite:generateContent", gBody);
   ok(gSlash.status === 402 && gEnc.status === 402, `a vendor-prefixed model routes encoded or not (${gSlash.status}, ${gEnc.status})`);
   ok(amountOf(decode402(gSlash)) === amountOf(decode402(gEnc)), "both spellings quote the same price, so neither is read as a different model");
 

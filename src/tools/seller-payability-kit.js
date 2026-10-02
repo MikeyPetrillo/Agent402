@@ -20,24 +20,23 @@
 // inferred from the index.
 //
 // MONEY. The upstream is the seller's own price, capped by `maxUsd` (default
-// $0.01, hard ceiling MAX_SPEND_USD) and re-checked by payX402 against the
+// DEFAULT_MAX_USD, hard ceiling MAX_SPEND_USD) and re-checked by payX402 against the
 // accept it actually signs, so a seller cannot quote one price and charge
 // another. WE PAY NO GAS: the EIP-3009 transfer is broadcast by the SELLER's
 // facilitator, not by us (an earlier draft of this comment said "plus Base
-// gas" and was wrong). So $0.10 a check against at most $0.02 of upstream,
-// and the margin holds at the 70% bound.
+// gas" and was wrong). So the per-check cap keeps the margin rule.
 //
 // WHY A CALLER CANNOT FARM US - stated with its precondition, because the
 // first version of this paragraph quietly assumed the part that can fail.
 // Pointing the tool at your own endpoint to collect our payment loses money
-// for the attacker ONLY IF our own $0.10 settles: they pay $0.10 to receive at
-// most $0.02. The state worth naming is the one where it does NOT settle -
+// for the attacker ONLY IF our own payment settles: they pay the tool price to
+// receive at most the per-check cap. The state worth naming is the one where it does NOT settle -
 // @x402/express runs this handler and settles afterwards, so a buyer whose
 // payment verifies and then fails to settle gets each check free. Four things
 // bound that, and the 2026-09-11 review exists because three of them were
 // named here before they were actually bound:
 //   - the settle-failure breaker runs BEFORE this handler for every
-//     wallet-only slug and refuses at 3 failures per 15 min, so ~$0.06;
+//     wallet-only slug and refuses after a few failures per window;
 //   - the Base wallet's rolling daily ceiling bounds a caller who rotates
 //     wallets or IPs, which is what defeats every per-payer guard;
 //   - the per-call cap is enforced against the accept actually SIGNED, not
@@ -47,22 +46,28 @@
 // The target must also pass the SSRF guard and answer a real 402. The seller's
 // response body is third-party text, so it is truncated and marked untrusted.
 import { markUntrusted } from "./provenance.js";
+import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
 import { maySpend as realMaySpend, noteSpend as realNoteSpend, adjustSpend as realAdjustSpend } from "../external-spend-guard.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail } from "../evm-usdc-domain.js";
 import { payerFromRequest } from "../payer.js";
 import { acceptsFromLive402, quoteFromAccepts } from "../x402-live-quote.js";
+import { readTextCapped } from "../capped-body.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
 /** Hard ceiling on what one check may spend upstream, whatever `maxUsd` asks
- *  for. The price is $0.10; this keeps the worst case inside the margin rule
+ *  for. This keeps the worst case inside the margin rule
  *  even when a caller asks for the maximum. */
 export const MAX_SPEND_USD = 0.02;
 const DEFAULT_MAX_USD = 0.01;
 const BODY_SLICE = 2000;
 const PROBE_TIMEOUT_MS = 15_000;
+// The unpaid call's body is read to decode a v1 402 and to show a slice. The
+// URL is the caller's choice, so the body's size is too: it is streamed and
+// reading stops here, whatever the endpoint sends.
+const BARE_BODY_MAX_BYTES = 256 * 1024;
 const PAY_TIMEOUT_MS = 45_000;
 // The whole handler's budget, threaded into the payer as both its per-fetch
 // timeout and its refusal wait (2026-09-11 review).
@@ -196,18 +201,20 @@ export function buildSellerPayabilityTool({
     // attribution, NOT a money hole, and the first draft of this comment
     // overstated it. The real bounds on an uncharged spend here were already
     // in place and still are - the settle-failure breaker runs BEFORE this
-    // handler for every wallet-only slug and refuses at 3 failures per 15 min
-    // (so at most ~$0.06), and the Base wallet's $25/day chain ceiling is what
-    // actually bounds a caller rotating wallets or IPs. The per-payer ceiling
-    // is $6 against a $0.02 cap, so it would not have refused until call 301.
+    // handler for every wallet-only slug and refuses after a few failures per
+    // window, and the Base wallet's daily chain ceiling is what actually bounds
+    // a caller rotating wallets or IPs. The per-payer ceiling is far above one
+    // check's cap, so it alone would refuse only after many calls.
     // Keep it anyway: it costs three lines, it puts this route in
     // exposureSnapshot() beside route-execute, and it is the bound that starts
     // mattering the moment the cap is raised or the breaker is retuned.
     //
     // Tempo buyers have no x402 header (the gate strips it), hence the
-    // fallback chain; the IP last so nobody is unkeyed.
+    // fallback chain; the IP last so nobody is unkeyed. The Tempo key is the
+    // sender the gate VERIFIED (null when unproven, so the IP applies), never
+    // the credential's client-supplied `source`.
     const spendPayer = payerFromRequest(req)
-      || (req?.mppTempoPayer ? `tempo:${req.mppTempoPayer}` : null)
+      || (req?.mppTempoSender ? `tempo:${req.mppTempoSender}` : null)
       || (req?.ip ? `ip:${req.ip}` : null);
     const allowed = maySpend(spendPayer, maxUsd, { chain: spendChain });
     if (!allowed?.ok) {
@@ -221,6 +228,15 @@ export function buildSellerPayabilityTool({
     if (spendHandle && req && typeof req === "object") req.__externalSpend = spendHandle;
 
     const t0 = now();
+    // The paid leg's deadline is DEADLINE_MS, or sooner when the buyer's own
+    // EVM authorization ends first (its validBefore less the facilitator's
+    // settle rule and a margin, src/evm-validity.js): a paid leg that outlives
+    // it has paid a seller for a payment that can no longer settle. A short
+    // window gets a shorter paid leg; a stock client (300 s) keeps the full
+    // 55 s. The unpaid call spends nothing and keeps its own timeout, and the
+    // seller is paid only if enough of the window is left after it (below).
+    const credentialMs = evmCredentialBudgetMs(req, { nowMs: t0 });
+    const deadlineMs = credentialMs != null && credentialMs < DEADLINE_MS ? Math.max(0, credentialMs) : DEADLINE_MS;
     // LEG 1: the bare call. What a buyer's client sees before it pays.
     let bare = { status: null, error: null };
     let challenge = { readable: false, reason: "no 402 was returned" };
@@ -232,7 +248,7 @@ export function buildSellerPayabilityTool({
         redirect: "manual",
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       });
-      const text = await res.text().catch(() => "");
+      const text = await readTextCapped(res, BARE_BODY_MAX_BYTES).catch(() => "");
       bare = { status: res.status, contentType: (res.headers.get("content-type") || "").slice(0, 80) || null, error: null };
       if (res.status === 402) challenge = readChallenge({ header: res.headers.get("payment-required"), body: text.slice(0, 64_000) });
       bare.bodySlice = text.slice(0, 400);
@@ -251,6 +267,14 @@ export function buildSellerPayabilityTool({
     const payable = bare.status === 402 && challenge.readable;
     const overCap = payable && quoted != null && quoted > maxUsd;
     if (payable && !overCap) {
+      // The seller is paid only while the buyer's authorization can still
+      // settle after it answers; otherwise nothing is signed and nothing is
+      // charged (504), and the day's booking is given back.
+      const settleableMs = evmCredentialSettleableMs(req, { nowMs: now() });
+      if (settleableMs != null && settleableMs < EVM_SELLER_ALLOWANCE_MS) {
+        adjustSpend(spendHandle, 0);
+        throw bad("Too little of your payment authorization's life is left to pay the seller and still settle this check (EVM credentials expire at their validBefore, and must still be valid 6 s after the check ends). Nothing was spent and nothing is charged. Retry with a fresh authorization: a stock client signs 300 s ahead.", 504);
+      }
       const t1 = now();
       try {
         const out = await pay(url, {
@@ -259,9 +283,10 @@ export function buildSellerPayabilityTool({
           ...(method === "POST" ? { body: body ?? {} } : {}),
           chain: spendChain,
           // Both bounds carry the request's REMAINING budget, so no leg of the
-          // payer can push the handler past DEADLINE_MS.
-          timeoutMs: Math.max(1_000, Math.min(PAY_TIMEOUT_MS, DEADLINE_MS - (now() - t0))),
-          refusalMaxWaitMs: Math.max(0, DEADLINE_MS - (now() - t0)),
+          // payer can push the handler past its deadline.
+          timeoutMs: Math.max(1_000, Math.min(PAY_TIMEOUT_MS, deadlineMs - (now() - t0))),
+          refusalMaxWaitMs: Math.max(0, deadlineMs - (now() - t0)),
+          ...(evmSellerSignBy(req, { nowMs: now() }) != null ? { signBy: evmSellerSignBy(req, { nowMs: now() }) } : {}),
         });
         paid = { status: 200 };
         receipt = out?.receipt ?? null;
@@ -284,23 +309,28 @@ export function buildSellerPayabilityTool({
         // rejected the credential a stock client produces, which is the
         // single most useful thing this check can tell a seller.
         payError = String(e?.message || e).slice(0, 300);
-        paid = { status: e?.statusCode === 402 || /refused the payment/i.test(payError) ? 402 : (e?.statusCode ?? null) };
+        // A paid request that got no answer has no status to report.
+        paid = { status: e?.paidUnanswered === true ? null : e?.statusCode === 402 || /refused the payment/i.test(payError) ? 402 : (e?.statusCode ?? null) };
         settled = false;
         // Nothing was signed unless the payer says it committed, so give the
         // day's budget back rather than holding the worst case for the window.
+        // A committed attempt keeps what it signed (`signedUsd`), the most
+        // the credential can move.
         if (e?.committed !== true) adjustSpend(spendHandle, 0);
+        else if (e?.signedUsd != null && Number.isFinite(Number(e.signedUsd))) adjustSpend(spendHandle, Number(e.signedUsd));
       }
       payMs = now() - t1;
     } else {
       // No payment was attempted at all - a 200, a non-402, an unreadable
       // challenge or an over-cap quote. This is the COMMON outcome for a tool
       // whose job is diagnosing sellers, and the worst-case booking would
-      // otherwise hold $0.02 of the chain's day for the full window on every
-      // such check, quietly starving route-execute and the supply-chain buys.
+      // otherwise hold the per-check cap against the chain's day for the full window on every
+      // such check, quietly starving route-execute and attest.
       adjustSpend(spendHandle, 0);
     }
 
     const flags = payabilityFlags({ bare, challenge, domains, paid, receipt, settled });
+    if (paid && paid.status !== 200 && deadlineMs < DEADLINE_MS) flags.unshift(`this check ran inside your payment authorization's remaining life (about ${Math.round(deadlineMs / 1000)} s of the usual ${DEADLINE_MS / 1000} s), so a slow seller may have been cut short - sign a longer window (a stock client signs 300 s ahead) to give it the full time`);
     if (overCap) flags.unshift(`the seller quotes $${quoted}, above the $${maxUsd} cap this check was asked to spend, so no payment was attempted - raise maxUsd (up to $${MAX_SPEND_USD}) to buy it`);
 
     return markUntrusted({
@@ -325,6 +355,9 @@ export function buildSellerPayabilityTool({
     slug: "seller-payability",
     aliases: ["payability-check", "can-i-pay-this", "seller-payment-check", "x402-payability"],
     category: "x402",
+    // Pays the seller from our own Base wallet inside the handler, before the
+    // buyer's payment settles. Read by spendsBeforeSettlement.
+    spendsOwnWallet: true,
     price: "$0.10",
     description:
       "Buy one call from an x402 seller endpoint right now and report exactly what happened: the unpaid call's status, the 402 decoded (accepts, chains, payTo, asset, price), whether the accept's EIP-712 domain name matches the token it names (the defect that silently makes a whole catalog unpayable), whether a stock client's signed payment was accepted, the settlement receipt and transaction, a slice of the response body, and the time each leg took. Ends in plain-English flags, never a score. This is the live counterpart to seller-dossier, which reports what we already know: this one spends real USDC from our own wallet to find out. Point it at your own endpoint before you launch, or at a seller you are about to route money to. Up to $0.02 of the seller's price per check.",

@@ -13,6 +13,7 @@ import { docsLayoutHtml, DOCS_LAYOUT_CSS, docPrevNextHtml, DOCS_SEARCH_SCRIPT } 
 import { RAILS_PAREN } from "./rails.js";
 import { toolList } from "./pages.js";
 import { isComputePayable } from "./pow.js";
+import { decideConfig } from "./decide/config.js";
 
 const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 
@@ -127,7 +128,20 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
       </div>
       </section>
 
-      <!-- ENDPOINTS -->
+      ${catalog["POST /api/decide"] ? (() => { const c = decideConfig(); return `<!-- DECIDE -->
+      <section>
+      <h2 id="decide" style="font-family:var(--font-body);font-weight:800;font-size:32px;letter-spacing:-.02em;margin:0 0 14px;">Decide - a plan for any job.</h2>
+      <p style="font-size:15.5px;line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 12px;">Describe a job and get a call-ready plan over this catalog and indexed x402/MPP sellers with a recent live 402. Each step names its tool, endpoint, price and fallbacks, with params that validate against the tool's input schema. Needs no indexed tool covers come back as gaps.</p>
+      <p style="font-size:15.5px;line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 12px;">Every candidate is scored by one formula with the same weights: fit, observed reliability, price, schema quality and a freshness pass mark, with no term for who sells the tool. An outside tool is eligible when a live 402 was seen in the last ${Math.round(c.liveWithinHours / 24)} days and its input schema is known. Every tool in a plan carries <code>firstParty</code>, so you always see whose tool it is.</p>
+      <p style="font-size:15.5px;line-height:1.55;color:var(--muted);max-width:640px;margin:0 0 18px;">The decide fee comes back as a credit, valid ${c.credit.ttlHours} hours, toward running that plan with <code>/api/decide/execute</code>. First-party steps run at list price; third-party steps are paid on your behalf at the seller's price plus a ${c.routingFeePct}% routing fee. Spend stops at your budget, and any unspent amount returns as credit until the decision's window closes.</p>
+      <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:13px;margin-bottom:44px;">
+        <div style="display:grid;grid-template-columns:60px 1fr auto;gap:14px;padding:12px 18px;border-bottom:1px solid var(--hairline);"><span style="color:var(--accent);font-weight:700;">POST</span><span>/api/decide</span><span style="color:var(--faint);">quick $${c.prices.quick} &middot; plan $${c.prices.plan} &middot; full $${c.prices.full}</span></div>
+        <div style="display:grid;grid-template-columns:60px 1fr auto;gap:14px;padding:12px 18px;border-bottom:1px solid var(--hairline);"><span style="color:var(--accent);font-weight:700;">POST</span><span>/api/decide/execute</span><span style="color:var(--faint);">plan budget less credit</span></div>
+        <div style="display:grid;grid-template-columns:60px 1fr auto;gap:14px;padding:12px 18px;"><span style="color:var(--accent);font-weight:700;">POST</span><span>/api/decide/feedback</span><span style="color:var(--faint);">free</span></div>
+      </div>
+      </section>
+
+`; })() : ""}      <!-- ENDPOINTS -->
       <section>
       <h2 id="endpoints" style="font-family:var(--font-body);font-weight:800;font-size:32px;letter-spacing:-.02em;margin:0 0 18px;">Reference endpoints.</h2>
       <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:13px;">

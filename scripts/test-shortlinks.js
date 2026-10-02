@@ -93,7 +93,7 @@ try {
     // executeViaCallableNow says so (outside buyer-agent readout, second pass).
     const rows = rt.results;
     ok(rows.every((r) => !(r.executeVia !== undefined && r.executeViaWhenEligible !== undefined)), "no route row carries both executeVia and executeViaWhenEligible");
-    ok(rows.filter((r) => r.executeVia !== undefined).every((r) => r.routerDispatchEligible === true && r.executeViaCallableNow === true), "executeVia appears only on dispatch-eligible rows, with executeViaCallableNow true");
+    ok(rows.filter((r) => r.executeVia !== undefined).every((r) => r.executeViaCallableNow === true && (r.routerDispatchEligible === true || (r.executeViaLane === "unproven" && r.routerDispatchByChain?.base?.unprovenTier === true))), "executeVia appears only on rows the router pays now (eligible, or the Base unproven lane), with executeViaCallableNow true");
     ok(rows.filter((r) => r.executeViaWhenEligible !== undefined).every((r) => r.routerDispatchEligible === false && r.executeViaCallableNow === false), "a non-eligible row carries executeViaWhenEligible + executeViaCallableNow false, never executeVia");
     ok(rows.filter((r) => r.seller === "self" && r.priceUsd !== undefined).some((r) => r.executeVia !== undefined && r.executeViaCallableNow === true) || rows.every((r) => r.executeVia === undefined), "local priced rows keep executeVia (they are always dispatchable)");
     ok(typeof rt.dispatchLegend.executeViaCallableNow === "string" && /key on this/.test(rt.dispatchLegend.executeViaCallableNow), "the legend explains executeViaCallableNow");
@@ -114,12 +114,64 @@ try {
   for (const p of ["/.well-known/x402.json", "/.well-known/x402-services.json"]) { const r = await fetch(`${base}${p}`); const j = await r.json(); ok(r.status === 200 && j && typeof j === "object" && Object.keys(j).length > 3, `${p} serves the x402 manifest`); }
   for (const p of ["/swagger.json", "/api-docs/openapi.json"]) { const r = await fetch(`${base}${p}`, { redirect: "manual" }); ok(r.status === 301 && r.headers.get("location") === "/openapi.json", `${p} -> /openapi.json`); }
   for (const p of ["/v1", "/v1/info", "/v1/metered"]) { const r = await fetch(`${base}${p}`); const j = await r.json(); ok(r.status === 200 && j.ok === true && /\/v1\/models$/.test(j.models) && /\/v1\/metered\/chat\/completions$/.test(j.metered?.chat), `GET ${p} answers the gateway index`); }
-  const gone = await fetch(`${base}/api/soundex`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  // soundex was a real tool, retired 2026-08-25: it answers 410 (src/retired-tools.js).
+  // A path that was never a tool keeps the helpful 404.
+  const retired = await fetch(`${base}/api/soundex`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  ok(retired.status === 410 && (await retired.json()).slug === "soundex", `a retired tool answers 410 (got ${retired.status})`);
+  const gone = await fetch(`${base}/api/phonetic-hash`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
   const goneBody = await gone.json();
-  ok(gone.status === 404 && goneBody.error === "not-found" && /retired|closest live tools/.test(goneBody.hint) && /\/api\/find\?q=soundex/.test(goneBody.find) && Array.isArray(goneBody.suggestions), `an unknown /api path answers a helpful 404 with find + suggestions (got ${gone.status})`);
+  ok(gone.status === 404 && goneBody.error === "not-found" && /retired|closest live tools/.test(goneBody.hint) && /\/api\/find\?q=phonetic%20hash/.test(goneBody.find) && Array.isArray(goneBody.suggestions), `an unknown /api path answers a helpful 404 with find + suggestions (got ${gone.status})`);
   const big = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "x".repeat(150_000) }] }) });
   const bigBody = await big.json();
   ok(big.status === 413 && /metered/.test(bigBody.hint) && /\/v1\/metered\/chat\/completions$/.test(bigBody.metered), `a 413 on a flat LLM tier points at the metered tier (got ${big.status})`);
+  // Trailing-slash page URLs 301 to the slashless form; machine routes do not.
+  {
+    const r1 = await fetch(`${base}/docs/`, { redirect: "manual" });
+    ok(r1.status === 301 && new URL(r1.headers.get("location") || "", base).pathname === "/docs", `/docs/ -> /docs (got ${r1.status} ${r1.headers.get("location")})`);
+    const r2 = await fetch(`${base}/tools/hash/?a=1&b=2`, { redirect: "manual" });
+    ok(r2.status === 301 && (r2.headers.get("location") || "").endsWith("/tools/hash?a=1&b=2"), "trailing slash redirect keeps the query string");
+    const r3 = await fetch(`${base}/`, { redirect: "manual" });
+    ok(r3.status === 200, "/ itself is not redirected");
+    const r4 = await rawGet("/api/pricing/", { Host: "agent402.test" });
+    ok(r4.status !== 301, `/api/ paths are not slash-redirected (got ${r4.status})`);
+    const r5 = await rawGet("//evil.example/", { Host: "agent402.test" });
+    ok(!(r5.location || "").startsWith("//"), `a //host/ path never yields a protocol-relative Location (got ${r5.location})`);
+    const r6 = await rawGet("/%5Cevil.example/", { Host: "agent402.test" });
+    const r7 = await rawGet("/\\evil.example/", { Host: "agent402.test" });
+    for (const r of [r6, r7]) {
+      const loc = r.location || "";
+      ok(!loc || !/evil/.test(new URL(loc, base).hostname), `a backslash path never redirects off-site (got ${r.status} ${loc})`);
+    }
+  }
+  // Capitalised wiki URLs with a native lowercase page 301 there, exact case only.
+  {
+    const a = await fetch(`${base}/docs/Adapters`, { redirect: "manual" });
+    ok(a.status === 301 && a.headers.get("location") === "/docs/adapters", "/docs/Adapters -> /docs/adapters");
+    const b = await fetch(`${base}/docs/adapters`, { redirect: "manual" });
+    ok(b.status === 200, "/docs/adapters answers 200 (no redirect loop)");
+    const h = await fetch(`${base}/docs/Home`, { redirect: "manual" });
+    ok(h.status === 301 && h.headers.get("location") === "/docs", "/docs/Home -> /docs");
+    const g = await fetch(`${base}/docs/Getting-Started`, { redirect: "manual" });
+    ok(g.status === 200, "other wiki pages still render");
+  }
+  // A skill pack's /tools/skill-<pack> page canonicalises to /skills/<pack>,
+  // and the two carry different descriptions.
+  {
+    const { SKILL_PACKS } = await import("../src/skills.js");
+    const canon = (h) => (h.match(/<link rel="canonical" href="([^"]+)"/) || [])[1];
+    const desc = (h) => (h.match(/<meta name="description" content="([^"]*)"/) || [])[1];
+    let same = 0, wrong = 0;
+    for (const p of SKILL_PACKS) {
+      const t = await (await fetch(`${base}/tools/skill-${p.slug}`)).text();
+      const k = await (await fetch(`${base}/skills/${p.slug}`)).text();
+      if (canon(t) !== `http://agent402.test/skills/${p.slug}` || canon(k) !== `http://agent402.test/skills/${p.slug}`) wrong++;
+      if (desc(t) === desc(k)) same++;
+    }
+    ok(wrong === 0, `every /tools/skill-<pack> page canonicalises to /skills/<pack> (${wrong} wrong of ${SKILL_PACKS.length})`);
+    ok(same === 0, `skill pack pages carry a different description from their catalog page (${same} identical)`);
+    const hash = await (await fetch(`${base}/tools/hash`)).text();
+    ok(canon(hash) === "http://agent402.test/tools/hash", "an ordinary tool page keeps its own canonical");
+  }
   const alias = await fetch(`${base}/install.sh`, { redirect: "manual" });
   ok(alias.status === 302 && alias.headers.get("location") === "/install", "/install.sh redirects to /install");
   ok(/^MCP_URL="https:\/\/x\.test\/mcp"$/m.test(installScript("https://x.test/")) && !/x\.test\/\//.test(installScript("https://x.test/")), "base URL trailing slash handled");

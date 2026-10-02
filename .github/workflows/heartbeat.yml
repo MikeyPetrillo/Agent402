@@ -58,7 +58,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -168,7 +168,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The OpenRouter balance behind the /v1 gateway is below the low-water mark (OPENROUTER_LOW_CREDITS_USD, default \$15) OR the production key's own monthly USD limit has under 25% left (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is cancelled, so buyers are NOT charged but every /v1 sale is lost until it is topped up. Top up credits: https://openrouter.ai/settings/credits (manual - the programmatic top-up API is gone). Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402)."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The OpenRouter balance behind the /v1 gateway is below its configured low-water mark (OPENROUTER_LOW_CREDITS_USD) OR the production key's own monthly limit is nearly used (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is cancelled, so buyers are NOT charged but every /v1 sale is lost until it is topped up. Top up credits: https://openrouter.ai/settings/credits (manual - the programmatic top-up API is gone). Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402)."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -201,7 +201,7 @@ jobs:
           RESP=$(curl -s --max-time 15 "https://agent402-facilitator-production.up.railway.app/health" 2>/dev/null || echo '{}')
           LOW=$(echo "$RESP" | jq -r '.low // "unknown"' 2>/dev/null || echo unknown)
           BALANCE=$(echo "$RESP" | jq -r '.xlmBalance // "unknown"' 2>/dev/null || echo unknown)
-          echo "facilitator XLM balance: $BALANCE (low=$LOW)"
+          echo "facilitator XLM balance low=$LOW"
           # Unreadable is logged LOUDLY, never silently treated as "fine" -
           # a silent skip is exactly what kept the charged-failure alarm dead
           # for months (same doctrine as the canary burner watch below).
@@ -212,12 +212,12 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$LOW" = "true" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The standalone Stellar facilitator's signer (facilitator/) is below its low-balance mark (FACILITATOR_LOW_BALANCE_XLM, default 5 XLM). It pays the network fee on every settlement it handles, so an empty balance means real settlement failures. Balance: $BALANCE XLM. Top up the signer address at \`/health\` on the facilitator service."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The standalone Stellar facilitator's signer (facilitator/) is below its configured low-water mark (FACILITATOR_LOW_BALANCE_XLM). It pays the network fee on every settlement it handles, so an empty balance means real settlement failures. Top up the signer address at \`/health\` on the facilitator service."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ) ($BALANCE XLM)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
           elif [ "$LOW" = "false" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ) ($BALANCE XLM)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
           fi
 
       # Bazaar listing validation - Coinbase's keyless, read-only
@@ -250,12 +250,9 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every flagship route validates again at $(date -u +%FT%TZ)."
           fi
 
-      # Canary burner balance watch — the 2026-07-27 lesson: the Base burner
-      # hit $0.000 mid-sweep, the canary filed it as a settlement outage, and
-      # the public status page said OUTAGE while buyers settled fine. The
-      # canary now classifies that correctly, but the better outcome is never
-      # getting there: warn while there is still a week of runway. Public RPC,
-      # no keys; unreadable balance warns loudly rather than silently passing.
+      # Canary burner balance watch: an empty burner once read as a settlement
+      # outage on the status page. Warn before it runs dry. Public RPC, no keys;
+      # an unreadable balance warns loudly rather than silently passing.
       - name: Canary burner balance watch (Base USDC)
         if: always()
         continue-on-error: true
@@ -267,69 +264,71 @@ jobs:
           DATA="0x70a08231000000000000000000000000${BURNER#0x}"
           BAL=$(curl -s --max-time 15 https://mainnet.base.org -H 'Content-Type: application/json'             -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_call\",\"params\":[{\"to\":\"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913\",\"data\":\"$DATA\"},\"latest\"]}"             | jq -re '.result' 2>/dev/null) || { echo "::warning::burner balance UNREADABLE — not silently skipping, investigate"; exit 0; }
           USD=$(node -e "console.log((parseInt('$BAL',16)/1e6).toFixed(4))")
-          echo "canary burner Base USDC: \$$USD (warn under \$$WARN_USD)"
+          echo "canary burner Base USDC read"
           TITLE="Canary burner LOW (Base)"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           LOW=$(node -e "console.log($USD < $WARN_USD ? 1 : 0)")
           if [ "$LOW" = "1" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The paid canary's Base burner ($BURNER) is at \$$USD USDC, under the \$$WARN_USD low-water mark (repo var CANARY_BURNER_LOW_USD). The daily tools sweep spends ~\$0.15-0.30/run; top up before it runs dry — an empty burner now files as a funding issue rather than an outage, but a funded one is better."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The paid canary's Base burner ($BURNER) is below its configured low-water mark (repo var CANARY_BURNER_LOW_USD). Top up before it runs dry — an empty burner now files as a funding issue rather than an outage, but a funded one is better."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low: \$$USD at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: \$$USD on Base at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: balance back above the low-water mark at $(date -u +%FT%TZ)."
           fi
 
-      # PayAI credit watch. PayAI repriced on 2026-09-21 12:00 UTC: a settlement
-      # costs the chain's gas x 1.3 in credits ($0.001/credit; Avalanche 0.09,
-      # Sei 0.43, Base 2.12, Polygon 3.98, Arbitrum 6.08) and the free allowance
-      # is 1,000 credits PER RECEIVING WALLET, LIFETIME - not monthly, so this
-      # counter never resets. PayAI is FIRST-TRIED only for Avalanche and Sei
-      # (CDP is first for Base/Polygon/Arbitrum/Solana), so those two rails are
-      # what draws it down; a settle-fallback hop onto PayAI also meters and is
-      # not visible here (a lower bound, as before). Counted from the on-chain
-      # ledger (/api/revenue/daily, ext+int - the canary spends credits too)
-      # since the pricing start. With PAYAI_API_KEY_ID/SECRET on Railway the
-      # account bills prepaid credits past the allowance and the durable fix for
-      # a high reading is a top-up at merchant.payai.network; without keys the
-      # rails go dark on 403 free_tier_exhausted (Solvador catches Avalanche on
-      # a clean rejection, nothing catches Sei). A missing/unparseable field is
-      # logged LOUDLY and never silently treated as "fine".
-      - name: PayAI credit watch (1,000 free credits, lifetime, per receiving wallet)
+      # PayAI credit watch. PayAI bills settlements in credits weighted per
+      # chain against an allowance per receiving wallet that does not reset.
+      # PayAI is first-tried only for Avalanche and Sei, so those rails draw it
+      # down; fallback hops onto PayAI are not visible here (a lower bound).
+      # Counted from the on-chain ledger since the pricing start. A missing or
+      # unparseable field is logged loudly, never treated as "fine".
+      - name: PayAI credit watch (allowance per receiving wallet)
         if: always()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           THRESH: ${{ vars.PAYAI_QUOTA_WARN || 800 }}
+          # Credits per exact settlement, by rail. Read live from PayAI's own
+          # published table (facilitator.payai.network/pricing) on every run.
+          # When it is unreadable the step uses the repo variable
+          # PAYAI_FALLBACK_WEIGHTS (JSON {"avalanche":n,"sei":n}); vendor rates
+          # are never committed. With neither, it warns and skips the watch.
+          PAYAI_FALLBACK_WEIGHTS: ${{ vars.PAYAI_FALLBACK_WEIGHTS }}
         run: |
           CUT=2026-09-21
-          CREDITS=$(curl -s --max-time 20 "$PROD/api/revenue/daily" | jq -e --arg cut "$CUT" \
-            '[.days[] | select(.day >= $cut) | select(.chain=="avalanche" or .chain=="sei") | (.extTx + .intTx) * (if .chain=="avalanche" then 0.09 else 0.43 end)] | add // 0 | . * 100 | round / 100') \
+          # CAIP-2 ids of the two rails PayAI is first-tried on.
+          LIVE=$(curl -s --max-time 15 -H 'Accept: application/json' https://facilitator.payai.network/pricing | jq -ce \
+            '[.rates[]? | select(.scheme=="exact" and (.transferMethod // "eip3009")=="eip3009")] as $r
+             | {avalanche: ($r[] | select(.network=="eip155:43114") | .credits | tonumber),
+                sei: ($r[] | select(.network=="eip155:1329") | .credits | tonumber)}
+             | select(.avalanche != null and .sei != null and .avalanche > 0 and .sei > 0)' 2>/dev/null | head -1 || true)
+          if [ -n "$LIVE" ]; then WEIGHTS="$LIVE"; SRC=live
+          elif [ -n "$PAYAI_FALLBACK_WEIGHTS" ] && echo "$PAYAI_FALLBACK_WEIGHTS" | jq -e '(.avalanche > 0) and (.sei > 0)' >/dev/null 2>&1; then WEIGHTS="$PAYAI_FALLBACK_WEIGHTS"; SRC=fallback; echo "::warning::PayAI live pricing table unreadable - using the PAYAI_FALLBACK_WEIGHTS repo variable"
+          else echo "::warning::PayAI credit watch skipped - the live pricing table is unreadable and no PAYAI_FALLBACK_WEIGHTS repo variable is set. Investigate."; exit 0; fi
+          echo "PayAI credit weights ($SRC): $WEIGHTS"
+          CREDITS=$(curl -s --max-time 20 "$PROD/api/revenue/daily" | jq -e --arg cut "$CUT" --argjson w "$WEIGHTS" \
+            '[.days[] | select(.day >= $cut) | select(.chain=="avalanche" or .chain=="sei") | (.extTx + .intTx) * $w[.chain]] | add // 0 | . * 100 | round / 100') \
             || { echo "::warning::PayAI credit watch UNREADABLE - /api/revenue/daily missing or unparseable. NOT skipping silently: investigate."; exit 0; }
-          echo "PayAI credits spent since $CUT (Avalanche 0.09 + Sei 0.43 per settle): $CREDITS / 1000 free, lifetime (warn at $THRESH)"
+          echo "PayAI weighted credits since $CUT: $CREDITS (warn at $THRESH)"
           TITLE="PayAI credit allowance HIGH"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if awk -v c="$CREDITS" -v t="$THRESH" 'BEGIN { exit !(c >= t) }'; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Weighted PayAI credits spent on Avalanche + Sei settlements since $CUT reached $CREDITS of the 1,000 free credits (lifetime, per receiving wallet; warn threshold $THRESH). Past the allowance PayAI bills prepaid credits when PAYAI_API_KEY_ID/SECRET are set (top up at merchant.payai.network) and answers 403 free_tier_exhausted when they are not (Sei goes dark; Avalanche falls to Solvador on a clean rejection). Fallback hops onto PayAI meter too and are not counted here - this is a lower bound. Pricing: docs.payai.network/x402/facilitators/pricing."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Weighted PayAI credits spent on Avalanche + Sei settlements since $CUT reached the warn threshold (repo var PAYAI_QUOTA_WARN). Past the allowance PayAI bills prepaid credits when PAYAI_API_KEY_ID/SECRET are set (top up at merchant.payai.network) and refuses settlement when they are not. Fallback hops onto PayAI are not counted here - this is a lower bound."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still high: $CREDITS / 1000 free credits at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still high at $(date -u +%FT%TZ)."
             fi
           elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: weighted PayAI credits since $CUT read $CREDITS (below $THRESH) at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: weighted PayAI credits back below the threshold at $(date -u +%FT%TZ)."
           fi
 
-      # CDP settlement metering watch. Measured 2026-08-28: 3,677 settlements
-      # in 30 days on the chains CDP is tried FIRST for (Base, Solana, Polygon,
-      # Arbitrum) against a documented 1,000/month free tier, so the account is
-      # metered and has been for a while. That is a few dollars a month, not a
-      # problem, but nothing was watching the BIG rail while a step watched the
-      # small one, and CDP's billing gate answers `payment-method-required` on
-      # /settle when an account cannot be charged - which would take Base down.
-      # Informational at CDP_METERED_WARN (default 20,000 = ~$20/month); the
-      # real alarm for a billing lapse is the paid canary failing a rail leg.
-      - name: CDP settlement metering watch (1k/month free, then $0.001/tx)
+      # CDP settlement metering watch. CDP's billing gate answers
+      # `payment-method-required` on /settle when an account cannot be charged,
+      # which would take Base down. Informational at CDP_METERED_WARN; the real
+      # alarm for a billing lapse is the paid canary failing a rail leg.
+      - name: CDP settlement metering watch
         if: always()
         continue-on-error: true
         env:
@@ -343,23 +342,23 @@ jobs:
             echo "WARNING: CDP metering count unreadable from /api/revenue/daily - not treating that as fine"
             exit 0
           fi
-          BILLED=$(( COUNT > 1000 ? COUNT - 1000 : 0 ))
-          echo "CDP-first-chain settles, rolling 30d: $COUNT (1000 free, ~$BILLED billed at \$0.001 = \$$(( BILLED / 1000 )).$(printf '%03d' $(( BILLED % 1000 ))))"
+          echo "CDP-first-chain settles, rolling 30d: $COUNT (warn at $THRESH)"
           TITLE="CDP settlement metering HIGH"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$COUNT" -ge "$THRESH" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Rolling 30-day settlements on CDP-first chains (Base/Solana/Polygon/Arbitrum): $COUNT, of which ~$BILLED are billed at \$0.001 each beyond the 1,000/month free tier. Check the CDP account has a working payment method: a billing lapse answers payment-method-required on /settle and takes the Base rail down. Threshold: repo var CDP_METERED_WARN."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "Rolling 30-day settlements on CDP-first chains (Base/Solana/Polygon/Arbitrum): $COUNT. Check the CDP account has a working payment method: a billing lapse answers payment-method-required on /settle and takes the Base rail down. Threshold: repo var CDP_METERED_WARN."
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still high: $COUNT settles, ~$BILLED billed, at $(date -u +%FT%TZ)."
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still high: $COUNT settles at $(date -u +%FT%TZ)."
             fi
           elif [ -n "$OPEN" ]; then
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: rolling 30-day count back to $COUNT at $(date -u +%FT%TZ)."
           fi
 
-      # x402 spending-wallet check — same pattern as gateway credits above:
-      # when the upstream buyer wallet (blockscout-kit) runs dry the tools go
-      # dark quietly (502s, buyers never charged), so alarm on "low" first.
+      # x402 spending-wallet check - same pattern as gateway credits above:
+      # when the upstream buyer wallet (src/upstream-buyer-status.js) runs dry
+      # the paths that spend from it refuse quietly (buyers never charged), so
+      # alarm on "low" first.
       # "unknown"/"unconfigured" never page.
       - name: Upstream buyer wallet check (alarm on low x402 spending balance)
         if: always()
@@ -371,7 +370,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 upstream spending wallet (X402_UPSTREAM_BUYER_KEY) behind the blockscout-kit tools is below the low-water mark (UPSTREAM_BUYER_LOW_USD, default \$0.50). When it empties, contract-inspect/address-profile fail 502 (buyers are never charged, but the tools go dark). Top up: send USDC on Base to the upstream buyer address (see CLAUDE.md env docs)."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 upstream spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD). When it empties, route-execute external buys and seller-payability refuse (buyers are never charged, but those paths go dark). attest signs from the same wallet but pays Base gas in ETH, which this alarm reads nothing about. Top up: send USDC on Base to the upstream buyer address."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -381,8 +380,7 @@ jobs:
 
       # Algorand spending-wallet check — same pattern as the Base wallet above:
       # this wallet pays external Algorand sellers for the SOR (route-execute
-      # settles to the TREASURY during the challenge window, so the float is a
-      # one-way drain until self-funding flips on post-October). optedIn:false
+      # settles to the TREASURY, so this wallet only drains). optedIn:false
       # also buckets as "low" — an un-opted-in wallet can't pay at all.
       # "unknown"/"unconfigured" never page.
       - name: Upstream call budget elevated
@@ -442,7 +440,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD, default \$0.50) — or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address (see CLAUDE.md env docs)."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD) — or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -463,7 +461,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Solana x402 spending wallet (SOLANA_UPSTREAM_BUYER_KEY) behind the SOR's Solana external routing is below the low-water mark (SOLANA_UPSTREAM_BUYER_LOW_USD, default \$0.50). When it empties, Solana external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Solana to the SVM spending wallet address (see CLAUDE.md env docs)."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Solana x402 spending wallet (SOLANA_UPSTREAM_BUYER_KEY) behind the SOR's Solana external routing is below the low-water mark (SOLANA_UPSTREAM_BUYER_LOW_USD). When it empties, Solana external routing fails 502 (buyers are never charged, but the path goes dark). Top up: send USDC on Solana to the SVM spending wallet address."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -484,7 +482,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Tempo spending wallet (TEMPO_UPSTREAM_BUYER_KEY) behind the SOR's MPP external routing is below the low-water mark (TEMPO_UPSTREAM_BUYER_LOW_USD, default \$0.50) in USDC.e on Tempo. When it empties, MPP external routing fails (buyers are never charged, but the path goes dark). Top up: send USDC on Tempo (0x20C0...8b50) to the Tempo spending wallet address (see CLAUDE.md env docs)."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The Tempo spending wallet (TEMPO_UPSTREAM_BUYER_KEY) behind the SOR's MPP external routing is below the low-water mark (TEMPO_UPSTREAM_BUYER_LOW_USD) in USDC.e on Tempo. When it empties, MPP external routing fails (buyers are never charged, but the path goes dark). Top up: send USDC on Tempo (0x20C0...8b50) to the Tempo spending wallet address."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -494,9 +492,8 @@ jobs:
 
       # The Stellar facilitator's own fee-paying account. It pays the
       # transaction fee on EVERY Stellar settlement, and until 2026-08-31 it
-      # was the one spending wallet we run with no alarm on it. Settlement is
-      # cheap (0.00235 XLM each), so this is a slow alarm: it exists because an
-      # empty fee account does not look like an outage - settlements simply
+      # was the one spending wallet we run with no alarm on it. This is a slow
+      # alarm: it exists because an empty fee account does not look like an outage - settlements simply
       # stop landing and the rail reads as a payment failure - not because the
       # balance is ever close. "unknown"/"unconfigured" never page - the
       # facilitator URL can point at a third party whose /health is not this.
@@ -510,7 +507,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$STATUS" = "low" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The self-hosted Stellar facilitator's signing account is below its low-water mark (FACILITATOR_LOW_BALANCE_XLM on the agent402-facilitator service, default 1 XLM, roughly 425 settlements at the observed 0.00235 XLM each). That account pays the transaction fee on every Stellar settlement, so when it empties, Stellar settlements stop landing - buyers are never charged, but the rail goes dark and the paid canary reports it as a rail failure rather than as an empty wallet. Top up: send XLM to the address on the facilitator's GET /health (signerAddress). Auto-closes when the balance recovers."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The self-hosted Stellar facilitator's signing account is below its low-water mark (FACILITATOR_LOW_BALANCE_XLM on the agent402-facilitator service). That account pays the transaction fee on every Stellar settlement, so when it empties, Stellar settlements stop landing - buyers are never charged, but the rail goes dark and the paid canary reports it as a rail failure rather than as an empty wallet. Top up: send XLM to the address on the facilitator's GET /health (signerAddress). Auto-closes when the balance recovers."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi
@@ -567,6 +564,90 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: wrong-credential rate back under the threshold at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
           fi
 
+      # Server tweet queue (src/tweet-queue.js): one word on /api/gateway-status.
+      # halted / no_credentials / refused / in_doubt page; ok and off close;
+      # retrying and unknown do neither. The status Worker runs the same check
+      # every five minutes under the same title, so the two never duplicate.
+      - name: Tweet queue check (alarm when the server poster needs attention)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.tweetQueue.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "tweet queue: $WORD"
+          TITLE="Tweet queue needs attention (server poster)"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            halted|no_credentials|refused|in_doubt)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports tweetQueue.status=$WORD. in_doubt: a post may not have reached X and its one retry is used - read /__operator/tweet-queue.json for the ids, check X, re-queue a missing post under a new id and remove the old id from TWEET_QUEUE. refused: X answered 401/402/403 (credentials or API balance). no_credentials: an X_* key is missing on Railway. halted: TWEET_QUEUE is not a JSON array, the state file on /data cannot be read, or there is no volume. Auto-closes when the word is ok." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok|off)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: tweet queue reads $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
+      # Transactional email (src/email.js): one word on /api/gateway-status,
+      # recorded from real sends and kept on the volume. exhausted / failing
+      # page; ok closes; unknown and unconfigured do neither. Built 2026-10-01
+      # after the provider's prepaid credits ran out and every report link,
+      # credits key and alert confirmation stopped sending with no trace.
+      - name: Email send check (alarm when transactional email is refused)
+        if: always()
+        continue-on-error: true
+        run: |
+          WORD=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.email.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "email: $WORD"
+          TITLE="Transactional email is not sending"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          case "$WORD" in
+            exhausted|failing)
+              if [ -z "$OPEN" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports email.status=$WORD. exhausted: the provider refused the last send for credits or quota - top up the email provider's prepaid credits. failing: another refusal; the provider's error code is on the operator read of /api/gateway-status and in the [email] log line. Report links, credits keys, alert confirmations and monitor emails do not reach buyers while this is open. Auto-closes when a send is delivered." >/dev/null 2>&1 || echo "issue create failed"
+              else
+                gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+            ok)
+              if [ -n "$OPEN" ]; then
+                gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: email reads ok at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
+              fi
+              ;;
+          esac
+
+      # Serving health: event-loop stalls, 5xx and paid-call error rates, and
+      # load shedding, from /__operator/serving-health.json (counts only). Two
+      # readings 30 s apart must agree, because a deploy's no-container window
+      # produces one bad reading on its own.
+      - name: Serving health check (alarm on stalls, paid-call errors, 5xx or shedding)
+        if: always()
+        continue-on-error: true
+        env:
+          OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+        run: |
+          if [ -z "$OP_TOKEN" ]; then echo "no operator token; skipping"; exit 0; fi
+          read1() { curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/__operator/serving-health.json"; }
+          J=$(read1); S1=$(echo "$J" | jq -r '.status // "unknown"' 2>/dev/null || echo unknown)
+          if [ "$S1" = "degraded" ]; then sleep 30; J=$(read1); fi
+          STATUS=$(echo "$J" | jq -r '.status // "unknown"' 2>/dev/null || echo unknown)
+          SUMMARY=$(echo "$J" | jq -r '"reasons=\(.reasons|join(",")) loopP99=\(.loop.p99LastMinuteMs)ms stalls1h=\(.loop.stalls1h) maxStall=\(.loop.maxStall1hMs)ms responses1h=\(.responses1h.total) 5xx=\(.responses1h.s5xx) paid=\(.responses1h.paid) paid5xx=\(.responses1h.paid5xx) shed=\(.shed.shed)"' 2>/dev/null || echo "unreadable")
+          echo "serving health: $STATUS ($SUMMARY)"
+          TITLE="Serving health DEGRADED"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "degraded" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/__operator/serving-health.json reported degraded on two readings 30 s apart: $SUMMARY. Thresholds are in the response. Check [loop-stats], [loop-lag] and [stall-profile] lines in the Railway log. Auto-closes when it reads ok." >/dev/null 2>&1 || echo "issue create failed"
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still degraded at $(date -u +%FT%TZ): $SUMMARY" >/dev/null 2>&1 || true
+            fi
+          elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ): $SUMMARY" >/dev/null 2>&1 || true
+          fi
+
       # Postgres reachability (leads + analytics). Both databases were DOWN from
       # 2026-07-02 to 2026-08-25 and nothing paged: the app degrades quietly when
       # they are gone, which is right for buyers and exactly why it went
@@ -610,6 +691,74 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: leads=$LEADS analytics=$ANALYTICS at $(date -u +%FT%TZ)."
           fi
 
+      # Daily MPP reconciliation (src/mpp-reconcile.js): chain transfers to our
+      # Tempo recipient vs the sales ledger vs the refund ledger, plus the MPP
+      # evm leg and Stripe SPT rows. The public field carries status WORDS only;
+      # the itemized rows (tx hash, slug, amount, category - never a payer) are
+      # read from the operator route when the token is present. Single retry:
+      # a reading taken inside our own deploy window is {} and reads unknown,
+      # so only a second "mismatch" pages.
+      - name: MPP reconciliation check (alarm when the chain and our books disagree)
+        if: always()
+        continue-on-error: true
+        env:
+          OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+        run: |
+          read_rec() { curl -s --max-time 20 "$PROD/api/gateway-status" 2>/dev/null | jq -r '.mppReconcile.status // "unknown"' 2>/dev/null || echo unknown; }
+          STATUS=$(read_rec)
+          if [ "$STATUS" = "mismatch" ]; then echo "mpp reconcile: first read mismatch - re-reading in 30s before paging"; sleep 30; STATUS=$(read_rec); fi
+          echo "mpp reconcile: $STATUS"
+          TITLE="MPP reconciliation MISMATCH"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ "$STATUS" = "mismatch" ]; then
+            CATS=$(curl -s --max-time 20 "$PROD/api/gateway-status" | jq -r '[.mppReconcile.categories // {} | to_entries[] | select(.value=="mismatch") | .key] | join(", ")' 2>/dev/null || echo "")
+            DAY=$(curl -s --max-time 20 "$PROD/api/gateway-status" | jq -r '.mppReconcile.day // "?"' 2>/dev/null || echo "?")
+            ROWS=""
+            if [ -n "$OP_TOKEN" ]; then
+              ROWS=$(curl -s --max-time 20 -H "Authorization: Bearer $OP_TOKEN" "$PROD/__operator/mpp-reconcile.json" \
+                | jq -r '[.day.mismatches[]? | select(.category != "charged_failed") | .category] | group_by(.) | map("- \(.[0]): \(length)") | .[]' 2>/dev/null || echo "")
+            fi
+            BODY=$(printf 'The daily MPP reconciliation for %s found records that disagree (categories: %s). Each category is defined in src/mpp-reconcile.js: served_unpaid = booked as settled over Tempo with no transfer on chain; paid_unrecorded = a transfer to our recipient with no sales row; amount_mismatch / wrong_currency / duplicate_tx / missing_tx / evm_unverified / stripe_mismatch as named.\n\n%s\n\nFull detail: GET /__operator/mpp-reconcile.json (operator token). Re-run a day: POST /__operator/mpp-reconcile/run?day=YYYY-MM-DD. Closes when a reconciliation reads ok.' "$DAY" "${CATS:-see the operator route}" "${ROWS:-(counts need the operator token)}")
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still mismatched at $(date -u +%FT%TZ) (day $DAY; categories: ${CATS:-?})."
+            fi
+          elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the MPP reconciliation reads ok at $(date -u +%FT%TZ)."
+          fi
+
+      # A paid-but-failed MPP call: settle succeeded and the response was not a
+      # 200, so the refund ledger holds a debt. Read LIVE from the refund ledger
+      # (last 24 h), not from the daily run. Same single retry.
+      - name: MPP paid-but-failed check (alarm on any charged-but-failed MPP call in the last day)
+        if: always()
+        continue-on-error: true
+        env:
+          OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+        run: |
+          read_cf() { curl -s --max-time 20 "$PROD/api/gateway-status" 2>/dev/null | jq -r '.mppReconcile.chargedFailedStatus // "unknown"' 2>/dev/null || echo unknown; }
+          CF=$(read_cf)
+          if [ "$CF" = "charged_failed" ]; then echo "mpp charged-failed: first read positive - re-reading in 30s before paging"; sleep 30; CF=$(read_cf); fi
+          echo "mpp charged-failed: $CF"
+          TITLE="MPP paid-but-failed call"
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ "$CF" = "charged_failed" ]; then
+            ROWS=""
+            if [ -n "$OP_TOKEN" ]; then
+              ROWS=$(curl -s --max-time 20 -H "Authorization: Bearer $OP_TOKEN" "$PROD/__operator/mpp-reconcile.json" \
+                | jq -r '"last 24h: \(.status.chargedFailed24h.total // "?") (\(.status.chargedFailed24h.external // "?") external, \(.status.chargedFailed24h.internal // "?") internal)"' 2>/dev/null || echo "")
+            fi
+            BODY=$(printf 'An MPP call (Tempo, Stripe SPT or the MPP evm wire) settled and was then answered with a non-200 in the last 24 hours, so the buyer paid and did not get their answer. The debt is on the refund ledger; see GET /__operator/refunds.json and the [mpp-tempo]/[mpp-stripe] CHARGED-BUT-NOT-SERVED log line for the cause.\n\n%s\n\nCloses when the 24-hour count is back to zero.' "${ROWS:-(counts need the operator token)}")
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still present at $(date -u +%FT%TZ). ${ROWS}"
+            fi
+          elif [ "$CF" = "ok" ] && [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: no charged-but-failed MPP call in the last 24 hours at $(date -u +%FT%TZ)."
+          fi
+
       # The spending wallet should never go DOWN, so a fall is worth more than
       # a floor. Everything that spends from it also settles into it
       # (SELF_FUNDING_SLUGS), and every execution tier charges more than it can
@@ -630,11 +779,12 @@ jobs:
             if [ -z "$OPEN" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 upstream spending wallet has fallen below its high-water mark across several consecutive reads.
 
-          That wallet is SELF-FUNDING: every tool that spends from it also settles into it, and every execution tier charges more than it can spend (worst case +\$0.005 / +\$0.01 / +\$0.05 / +\$0.30 per call). Its balance should only rise. A sustained fall means one of:
+          The route-execute tiers are SELF-FUNDING: they settle into this wallet and each charges more than it can spend, so their traffic can only raise the balance. A sustained fall means one of:
 
           1. A manual withdrawal - close this issue if that was you.
-          2. Upstream spend whose revenue never arrived: a buyer's payment verified and then failed to settle, which is the drain the per-payer ceiling in src/external-spend-guard.js bounds. Check /__operator/stats and the route-execute receipts.
-          3. Something we do not understand, which is why this alarm exists.
+          2. seller-payability or attest, which spend from this wallet without settling into it (seller-payability probes external sellers; attest pays Base gas in ETH). A slow trickle from those is expected and sits inside the tolerance; a sustained fall is not.
+          3. Upstream spend whose revenue never arrived: a buyer's payment verified and then failed to settle, which is the drain the per-payer ceiling in src/external-spend-guard.js bounds. Check /__operator/stats and the route-execute receipts.
+          4. Something we do not understand, which is why this alarm exists.
 
           Balances are deliberately not published on /api/gateway-status; read the wallet directly to see the number."
             else

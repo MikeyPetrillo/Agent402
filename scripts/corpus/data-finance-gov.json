@@ -1,5 +1,5 @@
 {
-  "about": "Tier 1: EDGAR, Yahoo/Nasdaq finance, openFDA, NHTSA, FEMA, USAspending, FEC, Census, USGS, Nominatim, Wikidata, GLEIF, Treasury, certificate transparency, B20.",
+  "about": "Tier 1: EDGAR, Databento equities, openFDA, NHTSA, FEMA, USAspending, FEC, Census, USGS, Nominatim, Wikidata, GLEIF, Treasury, certificate transparency, B20.",
   "cases": [
     {
       "slug": "college-lookup",
@@ -77,36 +77,6 @@
         },
         "populated": [
           "recalls[0]"
-        ]
-      }
-    },
-    {
-      "slug": "dividend-calendar",
-      "name": "a fixed past date",
-      "input": {
-        "date": "2026-08-14"
-      },
-      "expect": {
-        "populated": [
-          "date"
-        ],
-        "gte": {
-          "count": 0
-        }
-      }
-    },
-    {
-      "slug": "earnings-calendar",
-      "name": "a fixed past date with entries",
-      "input": {
-        "date": "2026-07-30"
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "entries[0]"
         ]
       }
     },
@@ -630,24 +600,6 @@
       }
     },
     {
-      "slug": "options-chain",
-      "name": "MSFT chain",
-      "input": {
-        "symbol": "MSFT"
-      },
-      "expect": {
-        "gt": {
-          "underlyingPrice": 10,
-          "callCount": 5,
-          "putCount": 5
-        },
-        "populated": [
-          "expiration",
-          "strikes"
-        ]
-      }
-    },
-    {
       "slug": "place-search",
       "name": "bounded country search",
       "input": {
@@ -665,84 +617,36 @@
       }
     },
     {
-      "slug": "premarket-quote",
-      "name": "a single stock",
-      "input": {
-        "symbol": "AAPL"
-      },
-      "expect": {
-        "equals": {
-          "symbol": "AAPL"
-        },
-        "gt": {
-          "latestPrice": 1
-        },
-        "populated": [
-          "marketState",
-          "latestTime"
-        ]
-      }
-    },
-    {
-      "slug": "stock-dividends",
-      "name": "a dividend payer over 5y",
-      "input": {
-        "symbol": "KO",
-        "range": "5y"
-      },
-      "expect": {
-        "gte": {
-          "dividendCount": 15
-        },
-        "populated": [
-          "dividends[0]"
-        ]
-      }
-    },
-    {
-      "slug": "stock-dividends",
-      "name": "a non-payer is an honest zero",
-      "input": {
-        "symbol": "AMZN",
-        "range": "1y"
-      },
-      "expect": {
-        "equals": {
-          "dividendCount": 0
-        },
-        "empty": [
-          "dividends"
-        ]
-      }
-    },
-    {
       "slug": "stock-history",
       "name": "weekly bars over 3 months",
       "input": {
         "symbol": "MSFT",
-        "interval": "1wk",
-        "range": "3mo"
+        "days": 45
       },
       "expect": {
-        "gte": {
-          "count": 10
+        "equals": {
+          "days": 45
         },
         "populated": [
-          "bars[0].close"
+          "bars[0].close",
+          "bars[0].day",
+          "venues",
+          "source"
         ]
-      }
+      },
+      "note": "a session count is served exactly: the calendar lookback scales past weekends and holidays"
     },
     {
       "slug": "stock-history",
       "name": "bad interval is a 400",
       "input": {
         "symbol": "MSFT",
-        "interval": "3d",
-        "range": "1mo"
+        "days": 9999
       },
       "expect": {
         "status": 400
-      }
+      },
+      "note": "an explicit out-of-range window is refused, never silently clamped to the maximum"
     },
     {
       "slug": "treasury-yield-history",

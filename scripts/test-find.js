@@ -278,6 +278,20 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   ok(viaTag.results[0].slug === "keep", `tag-only query resolves (got ${viaTag.results[0]?.slug})`);
   ok(viaTag.rarestTermCovered === true,
     `a match that lives only in a TAG counts as covered - the check reads the catalog record, not the API response, which omits tags (rarest=${viaTag.rarestTerm})`);
+
+  // An incidental word no tool mentions must not turn a right answer into a
+  // miss. 346 of 359 live board clusters on 2026-09-25 were queries like
+  // "decode jwt token and extract claims" where the top hit was the tool.
+  const J = { ...C, "POST /api/jwt-decode": { name: "JWT decode", slug: "jwt-decode", category: "encoding", price: "$0.001", description: "Decode a JWT and extract its header and payload.", tags: ["jwt", "token"], discovery: {} } };
+  const incidental = findTools(J, "decode jwt token and extract claims", { baseUrl: "https://agent402.tools" });
+  ok(incidental.results[0].slug === "jwt-decode" && incidental.rarestTerm === "claims", `the rarest term is an incidental word (${incidental.rarestTerm})`);
+  ok(incidental.rarestTermCovered === true, `...and the top hit covering most of the query in its own name counts as served (share ${incidental.coverageShare})`);
+  // Description-only overlap is not enough: the covered terms must touch the
+  // top hit's slug or name.
+  const D = { ...C, "POST /api/jobs": { name: "Unemployment rate", slug: "unemployment-rate", category: "macro", price: "$0.005", description: "US jobs data: unemployment rate and payrolls.", tags: ["labor"], discovery: {} } };
+  const descOnly = findTools(D, "excel data jobs", { baseUrl: "https://agent402.tools" });
+  ok(descOnly.rarestTermCovered === false, `a description-only overlap with an uncovered defining word stays a miss (top ${descOnly.results[0]?.slug})`);
+  ok(f("call my mother").rarestTermCovered === false, "one covered word is still a miss (call my mother)");
 }
 
 // --- The catalog must answer in the ASKER's vocabulary ----------------------
@@ -363,6 +377,62 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
     `"answer this question with citations…" → answer (got ${top1("answer this question with citations: what is x402?")})`);
   ok(top1("latest news about the Federal Reserve") === "search-news",
     `"latest news about…" → search-news (got ${top1("latest news about the Federal Reserve")})`);
+}
+
+// A wish-board phrase (2026-09-25) that missed the uuid tool: "time" and
+// "captcha" outranked it until uuid carried its identifier aliases and tags.
+{
+  const { KIT } = await import("../src/tools/kit.js");
+  const kitCatalog = Object.fromEntries(KIT.map((t) => [t.route, t]));
+  const first = (q) => findTools(kitCatalog, q, { baseUrl: "https://agent402.tools", powSlugs: new Set() }).results?.[0]?.slug;
+  ok(first("generate time-ordered unique identifiers") === "uuid", `"generate time-ordered unique identifiers" -> uuid (got ${first("generate time-ordered unique identifiers")})`);
+  ok(first("uuid v7") === "uuid", `"uuid v7" -> uuid (got ${first("uuid v7")})`);
+  // A curated alias scores like a word of the slug (2026-09-25): at +1 in the
+  // haystack "md5" ranked hash below hex/checksum although hash carries it.
+  ok(first("compute md5 hex digest of a string") === "hash", `"compute md5 hex digest of a string" -> hash (got ${first("compute md5 hex digest of a string")})`);
+}
+{
+  // A multi-word alias counts only when EVERY word is in the query: one generic
+  // word ("chat", "image") must not let an alias outrank a tool's own name.
+  const cat = {
+    "POST /api/a": { name: "Chat completions - pro tier", slug: "v1-chat-pro", category: "ai", price: "$0.1", description: "Pro chat.", tags: ["chat"], discovery: { example: {} } },
+    "POST /api/b": { name: "Nano chat", slug: "v1-chat-nano", aliases: ["chat-completions-nano-tier"], category: "ai", price: "$0.003", description: "Nano chat.", tags: ["chat"], discovery: { example: {} } },
+    "POST /api/c": { name: "Wayback snapshot", slug: "archive-snapshot", aliases: ["website-history"], category: "web", price: "$0.003", description: "Archived page.", tags: ["archive"], discovery: { example: {} } },
+    "POST /api/d": { name: "Crypto history", slug: "crypto-history", category: "crypto", price: "$0.003", description: "Price history for a coin.", tags: ["crypto"], discovery: { example: {} } },
+    "POST /api/e": { name: "Uptime check", slug: "http-check", category: "web", price: "$0.001", description: "Is a website up right now.", tags: ["uptime"], discovery: { example: {} } },
+  };
+  const top = (q) => findTools(cat, q, { baseUrl: "https://agent402.tools", powSlugs: new Set() }).results?.[0]?.slug;
+  ok(top("chat completions pro tier") === "v1-chat-pro", `a partial alias match does not beat the tool's own name (got ${top("chat completions pro tier")})`);
+  ok(top("website history") === "archive-snapshot", `a full multi-word alias match counts (got ${top("website history")})`);
+  ok(top("is my website up") === "http-check", `one word of a multi-word alias ("website") earns nothing (got ${top("is my website up")})`);
+}
+
+// The demand board's most repeated find-miss (2026-09-20..25): price, OHLCV
+// candles and RSI/EMA for BTC and ETH in one call. crypto-indicators answers
+// all of it (ohlcv option), but its name said none of those words and the
+// searches were recorded as misses. Driven against the REAL crypto kits so a
+// description or tag edit that loses the match fails here.
+{
+  const { CRYPTO_SIGNALS_TOOLS } = await import("../src/tools/crypto-signals-kit.js");
+  const { DERIVATIVES_TOOLS } = await import("../src/tools/derivatives-kit.js");
+  const { CRYPTO_MARKETS_TOOLS } = await import("../src/tools/crypto-markets-kit.js");
+  const { PRICE_FEED_TOOLS } = await import("../src/tools/price-feed-kit.js");
+  const real = {};
+  for (const t of [...CRYPTO_TOOLS, ...CRYPTO_SIGNALS_TOOLS, ...DERIVATIVES_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...PRICE_FEED_TOOLS]) real[`${t.method || "POST"} ${t.route}`] = t;
+  const find = (q) => findTools(real, q, {});
+  for (const q of [
+    "btc eth cryptocurrency price ohlcv candles rsi ema",
+    "get bitcoin and ethereum live spot price and ohlcv candles for rsi ema",
+    "get live bitcoin and ethereum spot price and rsi ema indicators",
+    "btc eth crypto spot price and ohlcv candles rsi ema indicators",
+  ]) {
+    const r = find(q);
+    ok(r.results[0]?.slug === "crypto-indicators" && r.rarestTermCovered, `"${q}" -> crypto-indicators, served (got ${r.results[0]?.slug}, covered=${r.rarestTermCovered})`);
+  }
+  const plain = find("get live bitcoin and ethereum cryptocurrency spot price usd");
+  ok(plain.results[0]?.slug === "crypto-price" && plain.rarestTermCovered, `a price-only ask stays on crypto-price, served (got ${plain.results[0]?.slug})`);
+  ok(find("bitcoin price").results[0]?.slug === "crypto-price", "a bare price ask is not pulled onto the indicators tool");
+  ok(find("perp klines for btc 1h").results[0]?.slug === "perp-klines", "a klines ask still reaches perp-klines");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -28,16 +28,21 @@ import {
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
-  MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, challengeIdFromMeta,
+  MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, MCP_PAYMENT_REQUIRED_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, challengeIdFromMeta,
 } from "./mcp-mpp.js";
 import {
   TASKS_EXTENSION, TASK_INVALID_PARAMS, TASK_MISSING_CAPABILITY, TASK_INTERNAL_ERROR,
   mcpTasksEnabled, clientDeclaresTasks, createTaskStore, createTaskResult, detailedTask, taskAck, isTaskMethod,
 } from "./mcp-tasks.js";
 import { EXPENSIVE_COMPOSITE_SLUGS } from "./composite-spend-guard.js";
+import { tempoEnabled } from "./mpp-tempo.js";
+import { mppFlagshipRows, mppFlagshipOffersPhrase } from "./mpp-flagship.js";
+import { stripeEnabled } from "./mpp-stripe.js";
 import { findTools, findRelatedSellers, applyFrontDoorTerms } from "./find.js";
+import { partialFields, clampFields } from "./partial-answer.js";
 import { routableSellerSummaries } from "./x402-index.js";
 import { logSafe } from "./log-safe.js";
+import { withoutPaymentRequired } from "./payment-required-body.js";
 import { recordWish } from "./wish.js";
 import { capturePostHogDiscovery } from "./posthog.js";
 import { rankBy as rankLeaderboard } from "./leaderboard.js";
@@ -65,7 +70,10 @@ import {
   MAX_CALLS_PER_WINDOW,
 } from "./rate-limit.js";
 
-const VERSION = "0.3.0";
+// The connector is the server, so it reports the server's build rather than
+// a hand-typed number ("0.3.0" sat here unchanged from 2026-06-12 to
+// 2026-09-22 beside the stdio package's 0.13.x on the same serverInfo text).
+const VERSION = `build-${(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT_SHA || "dev").slice(0, 7)}`;
 
 // Mirrors server.js's FIND_WEAK_SCORE: an empty result set, or a top score
 // below this, reads as "the catalog probably doesn't have this" — the
@@ -103,6 +111,43 @@ const MCP_REQ_DEADLINE_MS = Number(process.env.AGENT402_MCP_REQ_DEADLINE_MS) || 
 // terminate before releasing its in-flight slot (audit F14). Bounds a wedged
 // handler so it can't hold a slot forever.
 const MCP_DRAIN_MS = Number(process.env.AGENT402_MCP_DRAIN_MS) || 5_000;
+// A blocking paid call's loopback ends this long before the request deadline,
+// so the tool result (not a transport error) is what the caller sees.
+const PAID_LOOPBACK_TIMEOUT_MS = Math.max(1_000, MCP_REQ_DEADLINE_MS - 2_500);
+// What a caller is told when a PAID call was cut off on this connector. When
+// the connector stops waiting it closes its loopback request, and a paid
+// request whose connection closes before the first response byte is not
+// settled while it holds a hang-up forgiveness ticket
+// (src/hangup-settlement.js); a handler that had not started never runs.
+// Without a ticket (the budget is spent), or for a close that lands while
+// the settle call itself is in flight, the charge goes through and is
+// recorded as owed and refunded. The connector cannot tell which happened at
+// the moment it gives up, so "not charged" would not be a promise it can keep.
+export const PAID_CUTOFF_TEXT = "The call may still have completed and been charged. If it was, the charge is recorded as owed in our refund ledger and repaid after review. Check any payment by its settlement transaction, free, at GET /api/refunds/lookup?tx=<hash>: it answers whether a refund is recorded and, once sent, our refund transaction. Do not retry blindly: a retry is a new paid call.";
+export const UNPAID_CUTOFF_TEXT = "No payment was presented, so nothing was charged.";
+// The RFC 9457 members of a 402 problem document, and nothing else. A paywall
+// 402 body also carries the full PaymentRequired offer (it mirrors the
+// PAYMENT-REQUIRED header, src/payment-required-body.js); the error data, the
+// soft-ask _meta and a task record carry the problem only, and the offer
+// reaches an MPP client through the challenges beside it. A plain unpaid 402
+// has no `type`, so it is not a problem document.
+const PROBLEM_MEMBERS = Object.freeze(["type", "title", "status", "detail", "hint", "details", "instance"]);
+export function problemOf(j) {
+  if (!j || typeof j !== "object" || Array.isArray(j) || typeof j.type !== "string") return undefined;
+  const out = {};
+  for (const k of PROBLEM_MEMBERS) if (j[k] !== undefined) out[k] = j[k];
+  return out;
+}
+
+/** The tool-result text for a call this connector stopped waiting on.
+ *  `paid` = a payment credential rode along on the call; only without one is
+ *  "nothing was charged" certain. */
+export function connectorCutoffText({ label, seconds, paid, route = null, error = null }) {
+  const money = paid ? PAID_CUTOFF_TEXT : UNPAID_CUTOFF_TEXT;
+  const where = route ? `${route} over HTTP` : "the tool's HTTP route directly";
+  if (error != null) return `${label}: the call could not be completed (${String(error).slice(0, 120)}). ${money}${paid ? "" : " Retry shortly."}`;
+  return `${label}: the call did not finish within ${seconds}s on this connector and the connector stopped waiting. ${money} ${paid ? "For long calls, use" : "Retry, or call"} ${where}, which has no connector deadline.`;
+}
 // How long a task-eligible composite may run before we answer with a task
 // handle instead of blocking. Sized well under MCP_REQ_DEADLINE_MS so the
 // synchronous answer always fits, and well over the time a paywall needs to
@@ -126,7 +171,16 @@ let mcpInFlight = 0;
 let sharedTaskStore = null;
 /** Test seam: how many task stores this process holds (must be at most one). */
 export function _sharedTaskStoreForTest() { return sharedTaskStore; }
-export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null }) {
+/** The MPP methods the hosted connector can settle a paid tool call with. */
+export function mcpPaymentMethods() {
+  return {
+    evm: { intents: ["charge"] },
+    ...(tempoEnabled() ? { tempo: { intents: ["charge"] } } : {}),
+    ...(stripeEnabled() ? { stripe: { intents: ["charge"] } } : {}),
+  };
+}
+
+export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null }) {
   const scoped = profile?.metaTools === false;
   const HIDDEN_WHEN_SCOPED = new Set([META_MCP_NAMES.search_tools, META_MCP_NAMES.find_tool, META_MCP_NAMES.call_tool, META_MCP_NAMES.request_tool, META_MCP_NAMES.list_top_sellers]);
   const listable = (arr) => (scoped ? arr.filter((t) => !HIDDEN_WHEN_SCOPED.has(t.name)) : arr);
@@ -139,6 +193,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     if (Number.isFinite(n) && def?.slug) packPriceIndex.set(String(def.slug).toLowerCase(), n);
   }
   const toolPriceUsd = (slug) => packPriceIndex.get(String(slug).toLowerCase()) ?? null;
+  // MPP start-here set (src/mpp-flagship.js) as served by this connector's
+  // catalog, prices read from it. Surfaced in payment.info.
+  const mppStartHere = mppFlagshipRows(catalog).map((r) => ({ slug: r.slug, method: r.method, path: r.path, url: `${baseUrl}${r.path}`, price: r.price, why: r.why }));
   const tools = new Map(); // slug -> { def, free }
   for (const def of Object.values(catalog)) {
     tools.set(def.slug, { def, free: isComputePayable(def) });
@@ -245,8 +302,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     return keys.length ? ` Returns { ${keys.join(", ")} }.` : "";
   };
 
-  // Returns { rows, topScore } — topScore feeds the "did this actually match
-  // anything useful" check for the request_tool hint (see search_tools below).
+  // Most rows one catalog.search answer carries. A ranking, so a ceiling is
+  // right; publishing it beside the rows is what stops the ceiling being read
+  // as the match count.
+  const SEARCH_LIMIT_MAX = 25;
+
+  // Returns { rows, topScore, matched } — topScore feeds the "did this actually
+  // match anything useful" check for the request_tool hint (see search_tools
+  // below), and `matched` is how many tools scored at all, which is the number
+  // the answer was silently withholding.
   function searchTools(query, limit = 10) {
     const q = String(query || "");
     const terms = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
@@ -266,14 +330,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       if (score > 0) scored.push([score, def, free]);
     }
     scored.sort((a, b) => b[0] - a[0]);
-    const rows = scored.slice(0, Math.min(Number(limit) || 10, 25)).map(([, def, free]) => ({
+    const rows = scored.slice(0, Math.min(Number(limit) || 10, SEARCH_LIMIT_MAX)).map(([, def, free]) => ({
       slug: def.slug,
       price: def.price,
-      access: free ? "free here (rate-limited)" : "paid (USDC via x402 / MPP, or prepaid card credits - agent402-mcp with AGENT_KEY or AGENT402_CREDITS_KEY)",
+      access: free ? "free here (rate-limited)" : "paid (USDC via x402 / MPP - agent402-mcp with AGENT_KEY, or a prepaid credits key already issued as AGENT402_CREDITS_KEY)",
       description: def.description.length > 200 ? `${def.description.slice(0, 200)}…` : def.description,
       inputSchema: schemaOf(def),
     }));
-    return { rows, topScore: scored[0]?.[0] ?? 0 };
+    return { rows, topScore: scored[0]?.[0] ?? 0, matched: scored.length };
   }
 
   function walletRequiredText(def) {
@@ -282,11 +346,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       ...(mppLoopback ? [`Pay it RIGHT HERE over MPP: call again with an MPP credential in _meta["org.paymentauth/credential"] - mppx's McpClient.wrap() does this automatically (USDC on Base/Celo via evm.charge, or native Tempo via tempo.charge); the receipt comes back in _meta["org.paymentauth/receipt"].`] : []),
       `Or from Claude/any MCP client: run the npm server with a funded Base wallet -`,
       `npx agent402-mcp with env AGENT_KEY=0x<private key> (USDC on Base/Polygon/Arbitrum, or USDG on Robinhood Chain via AGENT402_NETWORKS=robinhood) and/or SOLANA_AGENT_KEY=<base58 secret> (USDC on Solana); spend caps: AGENT402_MAX_PER_CALL, AGENT402_BUDGET.`,
-      `Or without a wallet: buy prepaid card credits at ${baseUrl}/credits and run npx agent402-mcp with AGENT402_CREDITS_KEY=a402_... (or send Authorization: Bearer a402_... over HTTP). Or call it over HTTP with any x402 client. Docs: ${baseUrl}/tools/${def.slug}`,
+      `Already hold a prepaid credits key? Run npx agent402-mcp with AGENT402_CREDITS_KEY=a402_... (or send Authorization: Bearer a402_... over HTTP); new credits are not on sale. Or call it over HTTP with any x402 client. Docs: ${baseUrl}/tools/${def.slug}`,
     ].join(" ");
   }
 
-  function buildServer(ip, signal) {
+  function buildServer(ip, signal, heartbeatToken = null) {
     const server = new Server(
       {
         name: profile?.serverName || "agent402",
@@ -306,8 +370,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // advertised when the extension is armed AND paid calls are actually
           // possible here - a task only exists to carry a PAID composite run.
           ...(tasks ? { extensions: { [TASKS_EXTENSION]: {} } } : {}),
+          // MPP transport-mcp "MCP Capability Advertisement": the methods a
+          // paid tool call here can be settled with, read from the gates that
+          // are actually live. Only when the MPP loopback exists - without it a
+          // paid call here cannot be settled at all.
+          ...(mppLoopback ? { experimental: { payment: { methods: mcpPaymentMethods() } } } : {}),
         },
-        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl),
+        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"] }),
       },
     );
 
@@ -381,7 +450,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           title: "Run an Agent402 tool",
           annotations: { title: "Run an Agent402 tool", ...SAFE },
           description:
-            `Run an Agent402 tool by slug (discover slugs with catalog.find or catalog.search; params must match that tool's inputSchema). The ${freeCount} pure-CPU tools execute free on this hosted connector (rate-limited, no wallet - proof-of-work covers them) and return the tool's JSON result. Wallet-only tools (live search/answer, browser render, market data, STT, durable memory) return a paid-access setup guide instead - this connector holds no wallet. An unknown slug returns an error pointing back to catalog.search.`,
+            `Run an Agent402 tool by slug (discover slugs with catalog.find or catalog.search; params must match that tool's inputSchema). The ${freeCount} pure-CPU tools execute free on this hosted connector (rate-limited, no wallet - proof-of-work covers them) and return the tool's JSON result. Wallet-only tools (live search/answer, browser render, market data, STT, durable memory) ${mppLoopback ? "answer with a payment ask that is payable right here over MPP (the challenges ride in _meta[\"org.paymentauth/payment-required\"], and the text names every other way to pay)" : "return a paid-access setup guide instead"} - this connector holds no wallet of its own. An unknown slug returns an error pointing back to catalog.search.`,
           inputSchema: {
             type: "object",
             properties: {
@@ -414,7 +483,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             : `[wallet-required, ${def.price}/call]`;
           const walletNote = free
             ? ""
-            : " This hosted connector holds no wallet: pay it here over MPP, or run npx agent402-mcp with a funded wallet (AGENT_KEY) or prepaid card credits (AGENT402_CREDITS_KEY), or any x402 client.";
+            : " This hosted connector holds no wallet: pay it here over MPP, or run npx agent402-mcp with a funded wallet (AGENT_KEY) or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 client.";
           const outSchema = FLAGSHIP_OUTPUT_SCHEMAS[slug]
             || outputSchemaFromExample(def.discovery?.output?.example);
           return {
@@ -459,6 +528,33 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           inputSchema: { type: "object", properties: {}, additionalProperties: false },
           outputSchema: META_OUTPUT_SCHEMAS["server.describe"],
         },
+        ...(decideFeedback ? [{
+          name: "decide.feedback",
+          title: "Report how a decide plan step went",
+          annotations: { title: "Report how a decide plan step went", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+          description: "[free] Report whether one step of a decide.plan decision worked (success or failure, optional 1-5 quality and latency). Needs the decisionId and feedbackToken that decide.plan returned; one verdict per step, a later report replaces it. Reports feed tool reliability in future rankings.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              decisionId: { type: "string" },
+              feedbackToken: { type: "string" },
+              step: { type: "integer", minimum: 1 },
+              outcome: { type: "string", enum: ["success", "failure"] },
+              quality: { type: "integer", minimum: 1, maximum: 5 },
+              latencyMs: { type: "integer", minimum: 0 },
+              toolId: { type: "string", description: "Optional: a fallback you used instead of the step's primary tool" },
+            },
+            required: ["decisionId", "feedbackToken", "step", "outcome"],
+            additionalProperties: false,
+          },
+          outputSchema: {
+            type: "object",
+            properties: {
+              ok: { type: "boolean" }, decisionId: { type: "string" }, step: { type: "integer" },
+              toolId: { type: "string" }, outcome: { type: "string" }, replaced: { type: "boolean" },
+            },
+          },
+        }] : []),
         ...(getLeaderboard ? [{
           // Dotted Smithery Naming (sellers.list). Prior snake/digit names
           // remain CallTool aliases via resolveListedName.
@@ -490,9 +586,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
      *
      *  SETTLEMENT IS UNMOVED. The loopback IS the paid request; a task just lets
      *  it outlive the MCP HTTP response that handed back the handle. Money still
-     *  settles after the handler, only on a <400, on that same request. So a
-     *  failed, cancelled, timed-out or restart-orphaned task produced no 200 and
-     *  therefore CANCELLED settlement: the buyer is not charged. */
+     *  settles after the handler, only on a <400, on that same request. A
+     *  failed or restart-orphaned run produced no 200 and therefore CANCELLED
+     *  settlement. A cancelled or timed-out wait only stops THIS connector
+     *  waiting: the paid request runs on and settles on a <400, and a charge
+     *  that never reached the buyer is owed in the refund ledger. */
     async function payOverMpp(entry, reqParams, args, isNamed, ip, signal) {
       const meta = reqParams?._meta;
       const credentialHeader = credentialHeaderFromMeta(meta);
@@ -512,7 +610,30 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // so answer synchronously exactly as a blocking call would.
       }
 
-      const r = await mppLoopback({ def: entry.def, params, credentialHeader, ip, signal, idempotencyKey });
+      // The paid loopback must end BEFORE this connector's own request
+      // deadline. When the deadline won, the transport answered a JSON-RPC
+      // -32603 that MCP hosts render as a bare "Error occurred during tool
+      // execution", and the loopback was cut mid-flight. Bounded here, the
+      // caller gets a tool result naming what happened instead.
+      let r;
+      try {
+        r = await mppLoopback({ def: entry.def, params, credentialHeader, ip, signal, idempotencyKey, timeoutMs: PAID_LOOPBACK_TIMEOUT_MS, heartbeatToken });
+      } catch (err) {
+        const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
+        onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: true, statusCode: timedOut ? 504 : 502, errorMessage: timedOut ? "paid loopback timed out" : "paid loopback failed", inputKeys: Object.keys(params || {}) });
+        console.warn(`[mcp] tools/call failed class=${timedOut ? "paid-timeout" : "paid-loopback-error"} tool=${entry.def.slug} after=${Date.now() - startedAt}ms`);
+        // "Not charged" is only true when no payment credential rode along:
+        // with one, the server-side request may have settled after this
+        // connector stopped waiting.
+        const paid = Boolean(credentialHeader);
+        return {
+          content: [{ type: "text", text: connectorCutoffText({
+            label: `Agent402 (${entry.def.slug})`, seconds: Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000), paid,
+            route: entry.def.route, error: timedOut ? null : (err?.message || err),
+          }) }],
+          isError: true,
+        };
+      }
       return translateMppResponse(entry, meta, params, startedAt, isNamed, r);
     }
 
@@ -520,7 +641,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
      *  blocking path and the task path, so a task result is byte-identical to
      *  what the blocking call would have returned (an ext-tasks MUST). Throws
      *  McpError(-32042) for a payment ask. */
-    function translateMppResponse(entry, meta, params, startedAt, isNamed, r) {
+    function translateMppResponse(entry, meta, params, startedAt, isNamed, r, { softAsk = true } = {}) {
       if (r.status === 402) {
         const challenges = challengesFromHeader(r.headers.get("www-authenticate"));
         if (!challenges.length) {
@@ -528,7 +649,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // fall back to the paid-access instructions rather than an empty ask.
           return { content: [{ type: "text", text: walletRequiredText(entry.def) }], isError: true };
         }
-        const problem = r.json && typeof r.json === "object" && typeof r.json.type === "string" ? r.json : undefined;
+        const problem = problemOf(r.json);
         // mppx's wire: -32042 (no credential presented) / -32043 (the caller
         // PRESENTED a credential and it was refused) + {httpStatus, challenges,
         // problem?}. The code keys on whether a credential rode in _meta, not on
@@ -536,11 +657,30 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // credential's problem says why; a first ask carries only the
         // challenges. Price rides inside each challenge's request.amount.
         const presented = Boolean(credentialHeaderFromMeta(meta));
-        throw new McpError(presented ? MCP_PAYMENT_VERIFICATION_FAILED_CODE : MCP_PAYMENT_REQUIRED_CODE, problem?.detail || `Payment Required: ${entry.def.price} per call (pay with an MPP credential in _meta["org.paymentauth/credential"])`, { httpStatus: 402, challenges, ...(problem ? { problem } : {}) });
+        // A FIRST ask is answered as a tool result, not a JSON-RPC error:
+        // MCP hosts that do not speak MPP show -32042 as a bare "Error occurred
+        // during tool execution". The result carries readable instructions, and
+        // the same challenges ride in _meta["org.paymentauth/payment-required"],
+        // which mppx's McpClient (0.8+) pays exactly like the error. The
+        // connector is stateless, so a capability declared at initialize cannot
+        // be consulted here. A REFUSED credential keeps -32043, and a caller
+        // on the tasks path (which declares that extension per request) keeps
+        // -32042, which is how a task records a payment ask.
+        if (!presented && softAsk) {
+          return {
+            content: [{ type: "text", text: walletRequiredText(entry.def) }],
+            isError: true,
+            _meta: { [MCP_PAYMENT_REQUIRED_META]: { httpStatus: 402, challenges, ...(problem ? { problem } : {}) } },
+          };
+        }
+        // The message is what a host that does not speak MPP shows its user,
+        // so a first ask carries every other way to pay, not only the MPP one.
+        // Code and data are unchanged: an MPP client reads those, never the text.
+        throw new McpError(presented ? MCP_PAYMENT_VERIFICATION_FAILED_CODE : MCP_PAYMENT_REQUIRED_CODE, problem?.detail || `Payment Required: ${walletRequiredText(entry.def)}`, { httpStatus: 402, challenges, ...(problem ? { problem } : {}) });
       }
       if (r.status >= 400) {
         onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: true, statusCode: r.status, errorMessage: String(r.json?.error || r.text || r.status).slice(0, 200), inputKeys: Object.keys(params || {}) });
-        const detail = r.json ? JSON.stringify(r.json) : String(r.text || "").slice(0, 500);
+        const detail = r.json ? JSON.stringify(withoutPaymentRequired(r.json)) : String(r.text || "").slice(0, 500);
         return { content: [{ type: "text", text: `Agent402 (${entry.def.slug}) HTTP ${r.status}${r.status >= 400 && r.status < 500 ? " - not charged" : " - not charged (settlement runs only after a successful handler)"}: ${detail}` }], isError: true };
       }
       onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: false });
@@ -593,7 +733,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const controller = new AbortController();
       const run = mppLoopback({
         def: entry.def, params, credentialHeader, ip,
-        signal: controller.signal, idempotencyKey,
+        signal: controller.signal, idempotencyKey, heartbeatToken,
         timeoutMs: tasks.RUN_TIMEOUT_MS,
       });
       // Never leave an unhandled rejection while the gate window races.
@@ -608,16 +748,17 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // Finished inside the window. Hand the outcome back to the blocking path
         // rather than making the client poll for something already done.
         if (gate.e) throw gate.e;
-        return translateMppResponse(entry, meta, params, startedAt, isNamed, gate.r);
+        return translateMppResponse(entry, meta, params, startedAt, isNamed, gate.r, { softAsk: false });
       }
 
       const rec = tasks.create({ slug: entry.def.slug, controller });
       if (!rec) {
-        // Durability failed, so we cannot promise a handle. Abort the run (a
-        // non-200 cancels settlement, nobody is charged) and say so.
+        // Durability failed, so we cannot promise a handle. Stop waiting on the
+        // run and say so. The run has already cleared the paywall and keeps
+        // going server-side, so it may still settle.
         try { controller.abort(); } catch { /* already aborted */ }
         return {
-          content: [{ type: "text", text: `Agent402 could not durably record this ${entry.def.slug} run, so it was cancelled before completing. You were not charged. Retry shortly.` }],
+          content: [{ type: "text", text: `Agent402 could not durably record this ${entry.def.slug} run, so it cannot hand back a result. ${PAID_CUTOFF_TEXT}` }],
           isError: true,
         };
       }
@@ -628,13 +769,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           if (aborted && tasks.get(rec.taskId)?.status === "cancelled") return; // cancel() already wrote the terminal state
           onServed(entry.def.slug, { latencyMs: Date.now() - startedAt, errored: true, statusCode: 504, errorMessage: aborted ? "task run aborted" : "task run failed", inputKeys: Object.keys(params || {}) });
           // Never relay an upstream/internal error body to the buyer.
-          tasks.fail(rec.taskId, { code: TASK_INTERNAL_ERROR, message: aborted ? "The run was stopped before it completed." : "The run did not complete." },
-            "The run did not complete. You were not charged: payment settles only on a delivered result.");
+          tasks.fail(rec.taskId, { code: TASK_INTERNAL_ERROR, message: aborted ? "The connector stopped waiting for the run." : "The run did not complete." },
+            `The run's result did not reach this connector. ${PAID_CUTOFF_TEXT}`);
           return;
         }
         let out;
         try {
-          out = translateMppResponse(entry, meta, params, startedAt, isNamed, r);
+          out = translateMppResponse(entry, meta, params, startedAt, isNamed, r, { softAsk: false });
         } catch (err) {
           // A 402 decided after the gate window (a slow verify). It is a
           // JSON-RPC error on the underlying request, so the task FAILED - and
@@ -665,7 +806,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // surfaces emit in server.js; env-gated no-op without PostHog.
           capturePostHogDiscovery({ surface: "mcp:catalog.search" });
           const q = args.query ?? "";
-          const { rows: results, topScore } = searchTools(q, args.limit);
+          const { rows: results, topScore, matched } = searchTools(q, args.limit);
           // Multi-tool workflows that match the same query — surface them so an
           // agent asking "audit a domain" sees the whole security-audit pack
           // (callable in ONE payment via skill-<slug>, or step-by-step via
@@ -686,6 +827,17 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           }
           return mcpJsonResult({
             results,
+            // THE CEILING HAS TO ANNOUNCE ITSELF, and on this surface most of
+            // all: the consumer is an agent, which reads fields and not prose.
+            // `limit: 50` silently served 10 rows and the envelope carried
+            // nothing to separate "ten tools can do this" from "ten is our
+            // maximum" - the same silence that had a seller's checker read one
+            // page of /api/index as the whole index (2026-09-22). /api/find and
+            // /api/route grew topMax the same day; the two MCP tools serving
+            // the identical rankings to agents did not.
+            limitMax: SEARCH_LIMIT_MAX,
+            ...partialFields(matched, results.length),
+            ...clampFields(args.limit, SEARCH_LIMIT_MAX, "limit"),
             ...(workflows.length ? { workflows, workflowsUsage: "One call: catalog.call { slug: 'skill-' + workflows[i].slug, params: { …promptArgs } } (or POST workflows[i].route) runs every step for the single price in workflows[i].price. To orchestrate the steps yourself instead: prompts/get { name: workflows[i].promptName, arguments: { …promptArgs } } - that bills each underlying tool separately." } : {}),
             ...(weak ? { hint: WISH_HINT_TEXT } : {}),
             usage: 'catalog.call {"slug": …, "params": …}',
@@ -739,10 +891,23 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           return mcpJsonResult({
             task: r.query,
             results,
+            // findTools already computes and publishes these on /api/find; this
+            // envelope rebuilt itself row by row and dropped both, so the HTTP
+            // caller learned the ranking was cut and the agent did not. Passed
+            // through rather than recomputed, so the two surfaces cannot drift.
+            topMax: r.topMax,
+            truncated: !!r.truncated,
+            returned: results.length,
+            // Passed THROUGH from findTools, never recomputed here: recomputing
+            // is how the HTTP caller learned the ranking was cut and the agent
+            // did not. `matched` is the number an agent concluding "no tool
+            // exists for this" has to see.
+            matched: r.matched,
+            complete: r.complete,
             ...(r.packs?.length ? { workflows: r.packs, workflowsUsage: "One call: catalog.call { slug: 'skill-' + workflows[i].slug, params: { …promptArgs } } (or POST workflows[i].route) runs every step for the single price in workflows[i].price. To orchestrate the steps yourself instead: prompts/get { name: workflows[i].promptName, arguments: { …promptArgs } } - that bills each underlying tool separately." } : {}),
             ...(relatedSellers ? { relatedSellers } : {}),
             ...(weak && !relatedSellers ? { hint: WISH_HINT_TEXT } : {}),
-            usage: "Run catalog.call with the chosen {slug, params}. Free results execute here; paid tools are payable here over MPP or via the agent402-mcp npm server (wallet or prepaid card credits).",
+            usage: "Run catalog.call with the chosen {slug, params}. Free results execute here; paid tools are payable here over MPP or via the agent402-mcp npm server (a wallet, or a prepaid credits key already issued).",
           });
         }
         if (name === "demand.request") {
@@ -795,11 +960,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               })),
             },
             clientsSeenSinceBoot: Object.fromEntries([...mcpClients].sort((a, b) => b[1] - a[1]).slice(0, 20)),
-            paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or prepaid card credits (AGENT402_CREDITS_KEY, buy at ${baseUrl}/credits), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo. No signup, no API key; most tools $0.001–$0.02/call, LLM gateway tiers $0.002–$0.50, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
+            paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo. No signup, no API key; most tools $0.001–$0.02/call, LLM gateway tiers $0.002–$0.50, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
             ...(getLeaderboard ? { ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog." } : {}),
             missingATool: "Call demand.request (or POST /api/wish) with what you needed. We cluster and track demand - repeated requests get built.",
             docs: `${baseUrl}/llms.txt`,
           });
+        }
+        if (name === "decide.feedback" && decideFeedback) {
+          try { return mcpJsonResult(decideFeedback(args, { ip })); }
+          catch (err) { return { content: [{ type: "text", text: err.statusCode && err.statusCode < 500 ? err.message : "feedback failed" }], isError: true }; }
         }
         if (name === "sellers.list" && getLeaderboard && args.wire === "mpp") {
           // The MPP leaderboard (src/mpp-leaderboard.js) - same row discipline
@@ -894,16 +1063,16 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         if (name === "payment.info") {
           return mcpJsonResult({
             connector: "hosted free tier - no wallet is held on this connector (authless)",
-            credits: { how: "prepaid card credits: buy a pack at /credits, then Authorization: Bearer a402_<key> on any paid HTTP route, or AGENT402_CREDITS_KEY on the agent402-mcp npm server; the list price is held before the call and debited only on success", buy: `${baseUrl}/credits`, balance: `${baseUrl}/api/credits/balance` },
+            credits: { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid HTTP route except the wallet-identity-bound ones, or AGENT402_CREDITS_KEY on the agent402-mcp npm server; the list price is held before the call and debited only on success", balance: `${baseUrl}/api/credits/balance` },
             // DERIVED, never typed. This block quoted the pre-2026-08-23 ladder
             // for three weeks - every figure understated 1.7x to 3.4x - and an
             // agent budgeting from a machine surface under-budgets, pays, and
             // is refused. llms.txt was right the whole time because it derives
             // its numbers; this does the same now.
-            reports: { what: `finished, cited report products with a data appendix - ${reportLadder().agentLadder} - the same endpoints over x402/MPP or by card`, human: `${baseUrl}/reports`, humanPricing: `people pay ${reportLadder().cardLadder} by card; the card price includes payment processing (2.9% + $0.30 a charge), so an agent paying per call pays the lower tool price above for the same report`, monitors: `${baseUrl}/monitors`, monitorPricing: reportLadder().monthlySentence },
+            reports: { what: `finished, cited report products with a data appendix - ${reportLadder().agentLadder} - the same endpoints over x402/MPP or by card`, human: `${baseUrl}/reports`, humanPricing: `people pay ${reportLadder().cardLadder} by card; the card price includes payment processing, so an agent paying per call pays the lower tool price above for the same report`, monitors: `${baseUrl}/monitors`, monitorPricing: reportLadder().monthlySentence },
             freeTier: {
               pureCpuToolsFree: freeCount,
-              how: "pure-CPU tools run free here (rate-limited); wallet-only tools are payable on this connector over MPP (JSON-RPC -32042 carries the challenges; send the credential in _meta[\"org.paymentauth/credential\"], receipt returns in _meta[\"org.paymentauth/receipt\"] - mppx's McpClient.wrap() handles it) or via the npm server with a wallet",
+              how: "pure-CPU tools run free here (rate-limited); wallet-only tools are payable on this connector over MPP (the first ask is a tool result whose challenges ride in _meta[\"org.paymentauth/payment-required\"]; on the tasks path the ask is JSON-RPC error -32042, and a presented credential that is refused is -32043; send the credential in _meta[\"org.paymentauth/credential\"], receipt returns in _meta[\"org.paymentauth/receipt\"] - mppx's McpClient.wrap() handles it) or via the npm server with a wallet",
               proofOfWork: "a walletless client can solve a proof-of-work puzzle instead of paying on eligible tools",
             },
             pay: {
@@ -921,6 +1090,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               prices: `most tools $0.001–$0.02 per call, LLM gateway tiers $0.002–$0.50 (the metered tier is quoted per request), multi-tool skill packs ${PACK_PRICE_RANGE.text}, report products ${agentReportPriceRange()?.text || "priced per product"} - see each tool's exact price in catalog.search results`,
               llmGateway: `the /v1 OpenAI-compatible endpoints (chat nano $0.003, auto $0.01, embeddings $0.002) settle the same way - point any OpenAI SDK at ${baseUrl}/v1 through an x402-paying fetch; no API key, the wallet is the account`,
             },
+            ...(mppStartHere.length ? { mppStartHere: { what: `fast, low-priced routes that ${mppFlagshipOffersPhrase()}: a good first call for a new MPP client (call by slug with catalog.call, or pay the HTTP route with mppx)`, routes: mppStartHere, more: `${baseUrl}/what-is-mpp#start-here` } } : {}),
             spendControls: { perCall: "AGENT402_MAX_PER_CALL caps any single call", totalBudget: "AGENT402_BUDGET caps cumulative spend for the session" },
             balanceAndHistory: {
               balance: "check a wallet's USDC balance via catalog.call with slug wallet-balances (multi-chain) or wallet-balance (single)",
@@ -1019,16 +1189,42 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // always has enough information in the original tool description, but
           // it ignored it. Echo the expected shape + a working example back so
           // the next attempt can fix itself without another search_tools call.
+          //
+          // ...EXCEPT WHEN THE FAILURE WAS NOT THE INPUT. Every error took this
+          // branch, including an upstream that refused or throttled US, and to
+          // an agent "here is the expected shape, call again" reads as one
+          // instruction: reshape the input and retry. It would retry into a host
+          // that is rate-limiting us, and conclude its own input was wrong about
+          // a subject it got right. Same envelope, same defect, one surface over
+          // from the HTTP route binder - which is the reason to fix the class
+          // here rather than the instance there.
+          const upstreamStatus = Number.isInteger(handlerErr?.upstreamStatus) ? handlerErr.upstreamStatus : null;
+          const attribution = typeof handlerErr?.attribution === "string" ? handlerErr.attribution
+            : upstreamStatus ? "upstream" : null;
+          const fromUpstream = attribution === "upstream" || attribution === "upstream-access";
+          const status = handlerErr.statusCode || 500;
           const hint = {
             error: handlerErr.message,
             tool: entry.def.slug,
-            expected: entry.def.discovery?.inputSchema?.properties || {},
-            required: entry.def.discovery?.inputSchema?.required || [],
-            example: entry.def.discovery?.input || {},
-            callWith: {
-              name: META_MCP_NAMES.call_tool,
-              arguments: { slug: entry.def.slug, params: entry.def.discovery?.input || {} },
-            },
+            ...(upstreamStatus ? { upstreamStatus } : {}),
+            ...(attribution ? { attribution } : {}),
+            ...(Number.isInteger(handlerErr?.retryAfter) ? { retryAfterSeconds: handlerErr.retryAfter } : {}),
+            ...(fromUpstream || status >= 500
+              ? {
+                whoseFault: "not your input - a third party this tool depends on refused or failed our request, and you were not charged",
+                nextStep: attribution === "upstream"
+                  ? "retry the SAME call later; changing the input will not help"
+                  : "this resource is not reachable by this server; a different source may be, but the same call will keep failing",
+              }
+              : {
+                expected: entry.def.discovery?.inputSchema?.properties || {},
+                required: entry.def.discovery?.inputSchema?.required || [],
+                example: entry.def.discovery?.input || {},
+                callWith: {
+                  name: META_MCP_NAMES.call_tool,
+                  arguments: { slug: entry.def.slug, params: entry.def.discovery?.input || {} },
+                },
+              }),
           };
           return { content: [{ type: "text", text: JSON.stringify(hint, null, 2) }], isError: true };
         }
@@ -1173,7 +1369,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       // Client disconnect: abort in-flight handler work AND close the transport
       // (F14) — not just close the transport while the handler keeps running.
       res.on("close", () => { ac.abort(); try { transport.close(); } catch { /* already closing */ } });
-      await buildServer(ip, ac.signal).connect(transport);
+      await buildServer(ip, ac.signal, typeof req.headers["x-heartbeat-token"] === "string" ? req.headers["x-heartbeat-token"] : null).connect(transport);
       run = transport.handleRequest(req, res, req.body);
       // R-11/F14: per-request deadline. On fire, abort the handler and close the
       // transport so it settles, then (in finally) await that settle before the
@@ -1188,7 +1384,28 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       await Promise.race([run, deadline]);
     } catch (err) {
       if (!res.headersSent) {
-        res.status(err.__deadline ? 504 : 500).json({ jsonrpc: "2.0", error: { code: -32603, message: err.message }, id: req.body?.id ?? null });
+        // A tools/call that fails at the TRANSPORT used to be a JSON-RPC
+        // -32603 ("mcp request deadline exceeded"), which MCP hosts show as a
+        // bare "Error occurred during tool execution" with no reason. For a
+        // tool call the answer is a tool RESULT that says what happened; other
+        // methods keep the JSON-RPC error. Every such failure is logged.
+        const method = String(req.body?.method || "?");
+        const tool = logSafe(String(req.body?.params?.name || ""), 60);
+        const cls = err.__deadline ? "deadline" : "internal";
+        console.warn(`[mcp] ${logSafe(method, 40)} failed class=${cls}${tool ? ` tool=${tool}` : ""}`);
+        if (method === "tools/call" && req.body?.id != null) {
+          // Only a call that carried no payment credential is certainly
+          // uncharged; a paid call may have settled server-side.
+          let paid = false;
+          try { paid = Boolean(credentialHeaderFromMeta(req.body?.params?._meta)); } catch { paid = false; }
+          const label = `Agent402${tool ? ` (${tool})` : ""}`;
+          const text = err.__deadline
+            ? connectorCutoffText({ label, seconds: Math.round(MCP_REQ_DEADLINE_MS / 1000), paid })
+            : `${label}: the connector hit an internal error handling this call (${String(err?.message || err).slice(0, 120)}). ${paid ? PAID_CUTOFF_TEXT : `${UNPAID_CUTOFF_TEXT} Retry shortly.`}`;
+          res.status(200).json({ jsonrpc: "2.0", id: req.body.id, result: { content: [{ type: "text", text }], isError: true } });
+        } else {
+          res.status(err.__deadline ? 504 : 500).json({ jsonrpc: "2.0", error: { code: -32603, message: err.message }, id: req.body?.id ?? null });
+        }
       }
     } finally {
       if (deadlineTimer) clearTimeout(deadlineTimer);

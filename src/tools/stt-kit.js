@@ -7,16 +7,14 @@
 //   transcribe-pro  $0.10  - gpt-transcribe  (10 min max)
 //
 // The per-tier duration cap is a MARGIN bound, not just a UX limit: OpenAI
-// bills $0.0045/min for gpt-transcribe, so an unchecked 25 MB file (~26 min
-// at 128 kbps mp3) would cost more upstream than the tool charges. Duration
-// is probed locally (header parse, no upstream call) and enforced BEFORE the
-// file is sent to OpenAI. The cap is sized so worst case stays under
-// STT_MARGIN (70%) of the price: 4 min x $0.0045 = $0.018 = 60% of $0.03
-// (5 min would be 75%); 10 min = $0.045 = 45% of $0.10. Pinned in
-// scripts/test-stt-cap.js.
+// bills per audio minute, so an unchecked 25 MB file (~26 min at 128 kbps
+// mp3) would cost more upstream than the tool charges. Duration is probed
+// locally (header parse, no upstream call) and enforced BEFORE the file is
+// sent to OpenAI. The cap is sized so worst case stays under STT_MARGIN of
+// the price. Pinned in scripts/test-stt-cap.js.
 //
 // transcribe-pro moved gpt-4o-transcribe -> gpt-transcribe 2026-08-04
-// (OpenAI's 2026-07-28 release, 25% cheaper and the recommended replacement).
+// (OpenAI's 2026-07-28 release and the recommended replacement).
 // transcribe moved gpt-4o-mini-transcribe -> gpt-transcribe 2026-09-18: OpenAI
 // shuts down gpt-4o-mini-transcribe, gpt-4o-transcribe and whisper-1 on
 // 2027-02-26 and names gpt-transcribe the successor. The two tiers now run
@@ -43,7 +41,7 @@ const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
  *  x price. A model missing here fails that test rather than being assumed free. */
 export const UPSTREAM_USD_PER_MINUTE = Object.freeze({ "gpt-transcribe": 0.0045 });
 /** Worst-case upstream spend may not exceed this share of the tier price - the
- *  same 70% bound the LLM gateway's margin clamp holds. */
+ *  same bound the LLM gateway's margin clamp holds. */
 export const STT_MARGIN = 0.7;
 export const STT_TIERS = Object.freeze({
   transcribe:       Object.freeze({ model: "gpt-transcribe", maxMinutes: 4, priceUsd: 0.03 }),
@@ -219,7 +217,7 @@ export const STT_TOOLS = [
   {
     route: "POST /api/transcribe",
     name: "Speech-to-text",
-    slug: "transcribe",
+    slug: "transcribe", aliases: ["speech-to-text", "stt", "transcription"],
     category: "ai",
     price: "$0.030",
     description:

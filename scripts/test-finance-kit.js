@@ -1,143 +1,157 @@
-// Finance-kit tests — same shape as test-edgar-kit.js: strict on validation
-// (offline, deterministic) and tolerant of upstream errors on live calls.
-// Fails only if an assertion breaks or every live call fails (which would
-// indicate our integration is broken, not Yahoo/Nasdaq's).
+// Finance-kit tests: strict and offline on validation and on the pure
+// consolidation step, tolerant of upstream errors on the live calls.
 //
-// Upstreams reverse-engineered against undocumented JSON, so live-call
-// tolerance matters more here than in EDGAR-kit — Yahoo has broken twice
-// in the last 5 years (May 2023 crumb migration, 2021 schema flip). If the
-// live block is reporting many tolerated errors but assertions pass, that's
-// our signal to add a fallback before the next regression hits.
-import { FINANCE_TOOLS, assertListedExpiration } from "../src/tools/finance-kit.js";
+// Live calls are gated on DATABENTO_API_KEY and are therefore SKIPPED in CI,
+// which holds no key on purpose: a Databento query is billed by the bytes it
+// returns, and a sweep that buys market data on every push is the CI-spend
+// leak we have now had three times (Brave, E2B, CoinGecko). Without a key the
+// suite instead asserts the honest 503 - the tools must say they are not
+// configured, never blame the caller's input.
+//
+// The consolidation assertions are the ones that matter most. DBEQ.BASIC is
+// three venues, not the consolidated tape, so a bar per venue has to be folded
+// into one: extremes across venues, volume SUMMED and labelled partial, and
+// open/close taken from the venue that actually traded the most. Getting that
+// wrong produces a confident-looking quote built on one thin venue.
+import { FINANCE_TOOLS, stockAnalysis } from "../src/tools/finance-kit.js";
+import { consolidate, databentoEnabled } from "../src/tools/databento.js";
 
 const h = (slug) => FINANCE_TOOLS.find((t) => t.slug === slug).handler;
 let assertFail = 0, liveOk = 0, liveErr = 0;
 const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; console.error(`ASSERT FAIL - ${m}`); } };
 
-// --- deterministic validation (no network) ---
+// --- the kit is exactly the two licensed tools ---
+{
+  const slugs = FINANCE_TOOLS.map((t) => t.slug).sort();
+  ok(JSON.stringify(slugs) === JSON.stringify(["stock-history", "stock-quote"]),
+    `finance-kit serves only the licensed tools (got ${slugs.join(", ")})`);
+  ok(FINANCE_TOOLS.every((t) => /Databento/.test(t.description) && /venueVolume/.test(t.description)),
+    "each description names the source and the venue-partial volume");
+  ok(!/yahoo/i.test(JSON.stringify(FINANCE_TOOLS)), "no surface of this kit still names the unlicensed provider");
+  ok(FINANCE_TOOLS.every((t) => {
+    const keys = Object.keys(t.discovery.output.example);
+    return keys.includes("source") && keys.includes("venues") && keys.includes("note");
+  }), "every published example carries the source, the venues and the caveat");
+}
+
+// --- deterministic validation (no network, no key needed) ---
 for (const [slug, args, label] of [
   ["stock-quote", {}, "stock-quote rejects missing symbol"],
   ["stock-quote", { symbol: "" }, "stock-quote rejects empty symbol"],
   ["stock-quote", { symbol: "BAD SYMBOL!" }, "stock-quote rejects symbol with spaces/punctuation"],
   ["stock-quote", { symbol: "A".repeat(17) }, "stock-quote rejects 17-char symbol"],
   ["stock-history", {}, "stock-history rejects missing symbol"],
-  ["stock-history", { symbol: "AAPL", interval: "30s" }, "stock-history rejects invalid interval"],
-  ["stock-history", { symbol: "AAPL", range: "decade" }, "stock-history rejects invalid range"],
-  ["earnings-calendar", { date: "20260622" }, "earnings-calendar rejects YYYYMMDD date"],
-  ["earnings-calendar", { date: "June 22, 2026" }, "earnings-calendar rejects human-readable date"],
-  ["options-chain", {}, "options-chain rejects missing symbol"],
-  ["options-chain", { symbol: "AAPL", expiration: "07/17/2026" }, "options-chain rejects US-format expiration"],
-  ["options-chain", { symbol: "BAD SYMBOL!" }, "options-chain rejects invalid symbol"],
-  ["premarket-quote", {}, "premarket-quote rejects missing symbol"],
-  ["stock-dividends", {}, "stock-dividends rejects missing symbol"],
-  ["stock-dividends", { symbol: "AAPL", range: "decade" }, "stock-dividends rejects invalid range"],
-  ["dividend-calendar", { date: "20260714" }, "dividend-calendar rejects YYYYMMDD date"],
+  ["stock-history", { symbol: "AAPL", days: 0 }, "stock-history rejects days 0"],
+  ["stock-history", { symbol: "AAPL", days: 9999 }, "stock-history rejects an over-wide window"],
+  ["stock-history", { symbol: "AAPL", days: 251 }, "stock-history rejects one session past the advertised maximum"],
+  ["stock-history", { symbol: "AAPL", days: 1.5 }, "stock-history rejects a fractional days"],
+  ["stock-history", { symbol: "AAPL", indicators: ["rsi", "vwap"] }, "stock-history rejects vwap (three-venue volume) and unknown indicators"],
+  ["stock-history", { symbol: "AAPL", indicators: true, points: 0 }, "stock-history rejects points 0"],
 ]) {
   try { await h(slug)(args); ok(false, label); }
   catch (e) { ok(e.statusCode === 400, label + ` (got ${e.statusCode})`); }
 }
 
-// --- options-chain expiration guard (pure, offline) ---
-// Yahoo answers an unlisted `date` with 200 + empty calls/puts instead of an
-// error; the guard is what turns that into a 422 before a buyer pays for an
-// empty chain. Rollover dates (2026-02-31 → Date.parse silently makes it
-// March 3) can never appear in a listed set, so the same check catches them.
+// --- stockAnalysis(): indicators over daily bars (pure, offline) ---
 {
-  const listed = ["2026-07-17", "2026-07-24", "2026-08-21"];
-  try { assertListedExpiration("2026-07-24", listed, "AAPL"); ok(true, "assertListedExpiration accepts a listed expiry"); }
-  catch (e) { ok(false, `assertListedExpiration accepts a listed expiry (threw ${e.statusCode})`); }
-  for (const [date, label] of [
-    ["2027-07-16", "assertListedExpiration 422s an unlisted expiry"],
-    ["2026-02-31", "assertListedExpiration 422s a Date.parse-rollover date"],
-  ]) {
-    try { assertListedExpiration(date, listed, "AAPL"); ok(false, label); }
-    catch (e) { ok(e.statusCode === 422 && e.message.includes("2026-07-17"), label + ` (got ${e.statusCode})`); }
-  }
-  // Long-dated underlyings: the message caps the listed dates at 12 + "…".
-  const many = Array.from({ length: 20 }, (_, k) => `2026-08-${String(k + 1).padStart(2, "0")}`);
-  try { assertListedExpiration("2099-01-01", many, "SPY"); ok(false, "assertListedExpiration caps message at 12 dates"); }
-  catch (e) {
-    ok(e.statusCode === 422 && e.message.includes("…") && e.message.includes("2026-08-12") && !e.message.includes("2026-08-13"),
-      "assertListedExpiration caps message at 12 dates");
-  }
+  const bars = Array.from({ length: 60 }, (_, k) => {
+    const c = 100 + k * 0.5 + (k % 3);
+    return { day: new Date(Date.UTC(2026, 5, 1 + k)).toISOString().slice(0, 10), open: c - 0.3, high: c + 1, low: c - 1, close: c, venueVolume: 1000 + k };
+  });
+  const a = stockAnalysis(bars, new Set(["rsi", "macd", "ema", "sma", "bollinger", "atr"]), 3);
+  ok(a.sessions === 60 && a.lastClose === bars.at(-1).close, `analysis reads the returned bars (${a.sessions} sessions, lastClose ${a.lastClose})`);
+  ok(typeof a.indicators.rsi.value === "number" && a.indicators.rsi.series.length === 3 && typeof a.indicators.macd.histogram === "number", "RSI and MACD computed with the requested series points");
+  ok(a.indicators.ema.ema200 === null && (a.notes || []).some((n) => /ema200/.test(n)), "EMA200 on 60 sessions is null and says why");
+  ok(a.summary.trend === "above" && /EMA50/.test(a.summary.text), `a rising series reads above EMA50 (${a.summary.text})`);
+  ok(!("vwap" in a.indicators) && /not investment advice/.test(a.disclaimer), "no VWAP, and the disclaimer rides with it");
 }
 
-// --- live calls (tolerant of upstream rate-limiting / breakage) ---
+// --- consolidate(): the three-venue fold (pure, offline) ---
+{
+  // ts_event is nanoseconds since the epoch, inside the record header.
+  const ns = String(Date.UTC(2026, 8, 18) * 1e6);
+  const rows = [
+    // A thin venue that happens to print the session's extremes.
+    { hd: { ts_event: ns }, open: 100_000000000, high: 111_000000000, low: 90_000000000, close: 101_000000000, volume: 10 },
+    // The venue that actually traded: its open/close are the honest ones.
+    { hd: { ts_event: ns }, open: 104_000000000, high: 106_000000000, low: 103_000000000, close: 105_000000000, volume: 900 },
+    { hd: { ts_event: ns }, open: 104_500000000, high: 105_000000000, low: 102_000000000, close: 104_000000000, volume: 90 },
+  ];
+  const bars = consolidate(rows);
+  ok(bars.length === 1, `consolidate folds one session's venue bars into one bar (got ${bars.length})`);
+  const b = bars[0];
+  ok(b.high === 111 && b.low === 90, `high/low are the extremes across venues (got ${b.high}/${b.low})`);
+  ok(b.close === 105 && b.open === 104, `open/close come from the highest-volume venue, not the extreme one (got ${b.open}/${b.close})`);
+  ok(b.venueVolume === 1000, `venue volume SUMS the venues (got ${b.venueVolume})`);
+  ok(!("volume" in b), "the summed figure is never called `volume`: it is three venues, not the tape");
+  ok(/^\d{4}-\d{2}-\d{2}$/.test(b.day), `each bar carries a plain session date (got ${b.day})`);
+}
+{
+  // Two sessions stay two bars, newest last.
+  const bars = consolidate([
+    { hd: { ts_event: String(Date.UTC(2026, 8, 18) * 1e6) }, open: 3e9, high: 4e9, low: 3e9, close: 4e9, volume: 7 },
+    { hd: { ts_event: String(Date.UTC(2026, 8, 17) * 1e6) }, open: 1e9, high: 2e9, low: 1e9, close: 2e9, volume: 5 },
+  ]);
+  ok(bars.length === 2 && bars[0].day < bars[1].day, "sessions stay separate and ascend by date whatever order they arrive in");
+  ok(consolidate([]).length === 0, "an empty response consolidates to no bars, never a fabricated one");
+}
+
+// --- live calls, only with a key ---
 async function live(slug, args, check, label) {
   try {
     const r = await h(slug)(args);
-    if (check(r)) { liveOk++; console.log(`ok - ${label}: ${JSON.stringify(r).slice(0, 140)}`); }
+    if (check(r)) { liveOk++; console.log(`ok - ${label}: ${JSON.stringify(r).slice(0, 160)}`); }
     else { assertFail++; console.error(`ASSERT FAIL - ${label}: unexpected shape ${JSON.stringify(r).slice(0, 240)}`); }
   } catch (e) {
     liveErr++;
-    console.warn(`warn - ${label}: upstream error (${e.statusCode || "?"}) ${e.message} — tolerated`);
+    console.warn(`warn - ${label}: upstream error (${e.statusCode || "?"}) ${e.message} - tolerated`);
   }
 }
 
-// Apple is the canonical live-quote test — extreme liquidity, always reports
-// a price during US market hours and the last close out of hours. Currency
-// must be USD; price must be > 0.
-await live("stock-quote", { symbol: "AAPL" },
-  (r) => r.symbol === "AAPL" && r.currency === "USD" && typeof r.price === "number" && r.price > 0,
-  "stock-quote AAPL");
+if (!databentoEnabled()) {
+  // No key: prove the refusal is OURS and says so. A 4xx here would be the
+  // tool blaming a perfectly good ticker for our own missing configuration.
+  for (const [slug, args] of [["stock-quote", { symbol: "AAPL" }], ["stock-history", { symbol: "AAPL", days: 5 }]]) {
+    try { await h(slug)(args); ok(false, `${slug} 503s with no key`); }
+    catch (e) {
+      ok(e.statusCode === 503 && /not configured/i.test(e.message),
+        `${slug} 503s "not configured" with no key (got ${e.statusCode}: ${e.message})`);
+    }
+  }
+  console.log("\nlive calls skipped: DATABENTO_API_KEY unset (CI holds no market-data key by design)");
+  console.log(`validation asserts failed: ${assertFail}`);
+  if (assertFail > 0) { console.error("finance-kit: FAILED"); process.exit(1); }
+  console.log("finance-kit: OK");
+} else {
+  await live("stock-quote", { symbol: "AAPL" },
+    (r) => r.symbol === "AAPL" && r.currency === "USD" && typeof r.price === "number" && r.price > 0 &&
+      typeof r.venueVolume === "number" && typeof r.note === "string" && /venue/i.test(r.note),
+    "stock-quote AAPL");
 
-// Index symbol (^GSPC = S&P 500) exercises the non-equity path — Yahoo
-// returns the same chart shape but with `instrumentType: "INDEX"`. No bars
-// expected from the chart endpoint with our minimal range, but the meta
-// block populates.
-await live("stock-quote", { symbol: "^GSPC" },
-  (r) => r.symbol === "^GSPC" && typeof r.price === "number" && r.price > 0,
-  "stock-quote ^GSPC (S&P 500 index)");
+  // An unknown ticker is the caller's input, so it must be a 4xx naming the
+  // cause, never an upstream 502 that reads as our outage.
+  try { await h("stock-quote")({ symbol: "ZZZZQQ" }); ok(false, "stock-quote 4xxs an unknown symbol"); }
+  catch (e) { ok(e.statusCode >= 400 && e.statusCode < 500, `stock-quote 4xxs an unknown symbol (got ${e.statusCode})`); }
 
-// Daily bars over the last month — should always return 18-23 trading-day
-// bars (rough month). We just assert > 5 to ride out month-boundary edge
-// cases when the range slides over a holiday week.
-await live("stock-history", { symbol: "AAPL", interval: "1d", range: "1mo" },
-  (r) => r.symbol === "AAPL" && r.interval === "1d" && Array.isArray(r.bars) && r.bars.length > 5 && r.bars.every((b) => typeof b.close === "number"),
-  "stock-history AAPL 1d/1mo");
+  // Asks for exactly 30 SESSIONS. Calendar slack has to cover weekends and
+  // holidays or a 30-session ask quietly returns 29 - which is what it did
+  // before the slack was scaled.
+  await live("stock-history", { symbol: "AAPL", days: 30 },
+    (r) => r.symbol === "AAPL" && Array.isArray(r.bars) && r.bars.length === 30 && r.days === 30 &&
+      r.bars.every((b) => typeof b.close === "number" && /^\d{4}-\d{2}-\d{2}$/.test(b.day)),
+    "stock-history AAPL 30d");
 
-// Earnings calendar — Nasdaq's API serves all dates including weekends
-// (which return empty). Pick today; if there's nothing reporting today the
-// API still returns 200 with an empty rows array, which our handler
-// surfaces as count: 0. Either populated or empty is a valid pass.
-const today = new Date().toISOString().slice(0, 10);
-await live("earnings-calendar", { date: today },
-  (r) => r.date === today && typeof r.count === "number" && Array.isArray(r.entries),
-  `earnings-calendar ${today}`);
+  // The advertised maximum must be one a buyer can actually spend. The
+  // upstream cost guard is separate from the input check, so a generous
+  // documented limit can sit on top of a query that is always refused -
+  // which is exactly what 365 did, refused from about 90 sessions up.
+  const maxDays = Number(/1 to (\d+)/.exec(
+    FINANCE_TOOLS.find((t) => t.slug === "stock-history").discovery.inputSchema.properties.days.description)[1]);
+  await live("stock-history", { symbol: "AAPL", days: maxDays },
+    (r) => r.days === maxDays && r.bars.length === maxDays,
+    `stock-history serves its own advertised maximum (${maxDays} sessions)`);
 
-// Options chain — AAPL always has listed options with dozens of expirations.
-// Exercises the cookie+crumb handshake (the endpoint 401s without it), the
-// nearest-expiry default, and the call/put projection.
-await live("options-chain", { symbol: "AAPL" },
-  (r) => r.symbol === "AAPL" && Array.isArray(r.expirations) && r.expirations.length > 3 &&
-    Array.isArray(r.calls) && r.calls.length > 0 && typeof r.calls[0].strike === "number" &&
-    Array.isArray(r.puts) && r.puts.length > 0,
-  "options-chain AAPL (nearest expiry)");
-
-// Pre/post-market quote — SPY trades 04:00-20:00 ET so the extended series is
-// almost always populated; out-of-hours the latest bar is simply the last
-// session print. Assert the session label is one of the enumerated values.
-await live("premarket-quote", { symbol: "SPY" },
-  (r) => r.symbol === "SPY" && typeof r.latestPrice === "number" && r.latestPrice > 0 &&
-    ["pre", "regular", "post", "closed", "unknown"].includes(r.latestSession) &&
-    typeof r.regularMarketPrice === "number",
-  "premarket-quote SPY");
-
-// Dividend history — AAPL has paid quarterly since 2012: a 5y window always
-// holds ~20 dividends. Splits may be empty (last AAPL split 2020-08 falls out
-// of a rolling 5y window) — only the array shape is asserted.
-await live("stock-dividends", { symbol: "AAPL" },
-  (r) => r.symbol === "AAPL" && Array.isArray(r.dividends) && r.dividends.length >= 10 &&
-    r.dividends.every((d) => typeof d.amount === "number" && /^\d{4}-\d{2}-\d{2}$/.test(d.date)) &&
-    Array.isArray(r.splits),
-  "stock-dividends AAPL 5y");
-
-// Dividend calendar — same Nasdaq API family as earnings-calendar; weekends
-// return an empty rows array which surfaces as count: 0 (a valid answer).
-await live("dividend-calendar", { date: today },
-  (r) => r.date === today && typeof r.count === "number" && Array.isArray(r.entries),
-  `dividend-calendar ${today}`);
-
-console.log(`\nvalidation asserts failed: ${assertFail} | live ok: ${liveOk} | live upstream-errors (tolerated): ${liveErr}`);
-if (assertFail > 0 || liveOk === 0) { console.error("finance-kit: FAILED"); process.exit(1); }
-console.log("finance-kit: OK");
+  console.log(`\nvalidation asserts failed: ${assertFail} | live ok: ${liveOk} | live upstream-errors (tolerated): ${liveErr}`);
+  if (assertFail > 0 || liveOk === 0) { console.error("finance-kit: FAILED"); process.exit(1); }
+  console.log("finance-kit: OK");
+}

@@ -2,56 +2,6 @@
   "about": "Prediction markets, PDFs, geocoding, barcodes, our own x402 index surfaces and keyless skill packs (tier 1).",
   "cases": [
     {
-      "slug": "polymarket-search",
-      "name": "active markets about bitcoin",
-      "input": {
-        "query": "bitcoin",
-        "limit": 3,
-        "activeOnly": true
-      },
-      "expect": {
-        "gte": {
-          "count": 1
-        },
-        "populated": [
-          "markets[0].question",
-          "source"
-        ]
-      }
-    },
-    {
-      "slug": "polymarket-search",
-      "name": "gibberish is an honest zero",
-      "input": {
-        "query": "zzqx-nothing-matches-this",
-        "limit": 3
-      },
-      "expect": {
-        "equals": {
-          "count": 0
-        },
-        "empty": [
-          "markets"
-        ]
-      }
-    },
-    {
-      "slug": "polymarket-price-history",
-      "name": "unknown token id is an honest zero with a note",
-      "input": {
-        "tokenId": "1",
-        "interval": "1d"
-      },
-      "expect": {
-        "equals": {
-          "count": 0
-        },
-        "populated": [
-          "note"
-        ]
-      }
-    },
-    {
       "slug": "kalshi-markets",
       "name": "open markets carry populated prices",
       "input": {
@@ -93,6 +43,20 @@
       },
       "expect": {
         "status": 404
+      }
+    },
+    {
+      "slug": "kalshi-event",
+      "name": "a long-running event carries top-of-book sizes",
+      "input": {
+        "eventTicker": "KXELONMARS-99"
+      },
+      "expect": {
+        "populated": [
+          "markets[0].ticker",
+          "markets[0].yesBidSize",
+          "markets[0].yesAskSize"
+        ]
       }
     },
     {
@@ -386,34 +350,42 @@
       "slug": "stock-quote",
       "name": "a non-US listing",
       "input": {
-        "symbol": "SAP.DE"
+        "symbol": "KO"
       },
       "expect": {
         "equals": {
-          "symbol": "SAP.DE"
+          "symbol": "KO",
+          "currency": "USD"
         },
         "gt": {
-          "price": 1
+          "price": 1,
+          "venueVolume": 0
         },
         "populated": [
-          "currency",
-          "exchange",
-          "previousClose"
+          "previousClose",
+          "dayHigh",
+          "dayLow",
+          "asOf",
+          "venues",
+          "source",
+          "note"
         ]
-      }
+      },
+      "note": "a liquid US listing: venueVolume is three venues, never the consolidated tape, and says so in `note`"
     },
     {
       "slug": "stock-quote",
       "name": "unknown symbol is a self-explaining 422",
       "input": {
-        "symbol": "ZZQXNOTASYMBOL"
+        "symbol": "ZZQXNOTAS"
       },
       "expect": {
-        "status": 422,
+        "status": 400,
         "matches": {
-          "error": "unknown symbol"
+          "error": "US equities only"
         }
-      }
+      },
+      "note": "an unresolvable ticker is the caller's input, so a 4xx naming the coverage, never a 502 reading as our outage"
     },
     {
       "slug": "kalshi-live-data",

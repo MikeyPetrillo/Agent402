@@ -36,9 +36,12 @@ app.listen(3000);
 
 ```bash
 TOLLBOOTH_UPSTREAM=https://your-site.com node tollbooth/index.js
-# ...and to take money over x402 AND MPP from env alone (0.8.0):
+# ...and to take money over x402 AND MPP from env alone (0.8.0). This one
+# settles on Base Sepolia (testnet); for mainnet, set TOLLBOOTH_NETWORK and
+# point TOLLBOOTH_FACILITATOR_URL at a facilitator that settles that network:
 TOLLBOOTH_UPSTREAM=https://your-site.com TOLLBOOTH_PAYTO=0xYourWallet \
-TOLLBOOTH_FACILITATOR_URL=https://x402.org/facilitator npx agent402-tollbooth
+TOLLBOOTH_NETWORK=base-sepolia TOLLBOOTH_FACILITATOR_URL=https://x402.org/facilitator \
+npx agent402-tollbooth
 ```
 
 ```bash
@@ -52,6 +55,11 @@ curl -A "ClaudeBot/1.0" localhost:4021/article   # bot   -> 402 Payment Required
   crawler (GPTBot, ClaudeBot, CCBot, PerplexityBot, Bytespider, Google-Extended,
   …). Classic search indexers (Googlebot, Bingbot) are **not** charged, so SEO
   stays free. Override with `botUserAgents`, or a custom `charge(req)` predicate.
+- **This host's own router** is not a crawler: when it buys from you on a
+  buyer's behalf it identifies itself with `User-Agent: Mozilla/5.0 (compatible;
+  Agent402-Router/1.0; +https://agent402.tools/crawler)` and
+  `X-Agent402-Via: router`, and pays your quote. See
+  [agent402.tools/crawler](https://agent402.tools/crawler).
 - **Free rail (proof-of-work):** works out of the box, no wallet. A crawler
   solves a single-use, resource-bound sha256 puzzle and retries with
   `X-Pow-Solution: <token>:<nonce>` - the same hardened scheme the main server
@@ -83,7 +91,7 @@ From env on the CLI: `TOLLBOOTH_TEMPO_API_KEY`, `TOLLBOOTH_TEMPO_RECIPIENT` (def
 
 ## Get paid into a Coinbase Business account
 
-Coinbase Business accounts receive x402 payments from AI agents. Set `TOLLBOOTH_PAYTO` to the account's USDC (Base) receive address and `TOLLBOOTH_CDP_API_KEY_ID` / `TOLLBOOTH_CDP_API_KEY_SECRET` (a CDP API key; `npm i @coinbase/x402`) and the CLI settles every payment through Coinbase's facilitator into that account (no fee is taken from the payment itself; Coinbase's facilitator is free for the first 1,000 settlements a month and $0.001 each after). Guide with an Express example: [agent402.tools/guides/coinbase-business-get-paid-by-agents](https://agent402.tools/guides/coinbase-business-get-paid-by-agents).
+Coinbase Business accounts receive x402 payments from AI agents. Set `TOLLBOOTH_PAYTO` to the account's USDC (Base) receive address and `TOLLBOOTH_CDP_API_KEY_ID` / `TOLLBOOTH_CDP_API_KEY_SECRET` (a CDP API key; `npm i @coinbase/x402`) and the CLI settles every payment through Coinbase's facilitator into that account (no fee is taken from the payment itself). Guide with an Express example: [agent402.tools/guides/coinbase-business-get-paid-by-agents](https://agent402.tools/guides/coinbase-business-get-paid-by-agents).
 
 ## Beyond UA detection (the cat-and-mouse answer)
 
@@ -172,8 +180,7 @@ for the multi-site playbook, partner program, and Cloud pricing.
 
 ## Why it exists
 
-The big platforms shipped pay-per-crawl as a closed, fiat, you-must-be-on-our-CDN
-feature. This is the open, crypto-native, run-it-yourself version, built on the
+The tollbooth is an open, run-it-yourself pay-per-crawl gate built on the
 same 402 + proof-of-work machinery as the rest of Agent402. It turns the project
 into both sides of the x402 economy: agents buy capabilities, and sites charge
 agents.

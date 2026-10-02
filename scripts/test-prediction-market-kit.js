@@ -4,14 +4,14 @@
 //
 // Pattern matches scripts/test-dex-kit.js:
 //   • Catalog envelope + input validation always runs (no key, no network).
-//   • Pure-CPU helpers (asNumber, parseJsonArray, shape*) covered with vectors.
-//   • Live calls are opt-in (Polymarket Gamma + CLOB + Kalshi all keyless,
+//   • Pure-CPU helpers (asNumber, shape*) covered with vectors.
+//   • Live calls are opt-in (Kalshi is keyless,
 //     but live tests share the rate-limit pool so CI doesn't burn them).
 
 import { PREDICTION_MARKET_TOOLS, __test } from "../src/tools/prediction-market-kit.js";
 
 import { readFileSync } from "node:fs";
-const { asNumber, parseJsonArray, shapeMarket, shapeKalshiMarket, shapeKalshiLiveData, shapeWeatherPoint, shapeWeatherCalibration, WEATHER_CITIES, polyList } = __test;
+const { asNumber, shapeKalshiMarket, shapeKalshiLiveData, shapeWeatherPoint, shapeWeatherCalibration, WEATHER_CITIES } = __test;
 
 const h = (slug) => PREDICTION_MARKET_TOOLS.find((t) => t.slug === slug).handler;
 let fail = 0, pass = 0;
@@ -20,9 +20,9 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 // ----------------------------------------------------------------------------
 // Catalog envelope
 // ----------------------------------------------------------------------------
-ok(PREDICTION_MARKET_TOOLS.length === 8, `8 tools exported (got ${PREDICTION_MARKET_TOOLS.length})`);
+ok(PREDICTION_MARKET_TOOLS.length === 4, `4 tools exported (got ${PREDICTION_MARKET_TOOLS.length})`);
 
-const expectedSlugs = ["polymarket-search", "polymarket-market", "polymarket-orderbook", "polymarket-price-history", "kalshi-markets", "kalshi-event", "kalshi-live-data", "kalshi-weather-index"];
+const expectedSlugs = ["kalshi-markets", "kalshi-event", "kalshi-live-data", "kalshi-weather-index"];
 for (const slug of expectedSlugs) {
   ok(!!PREDICTION_MARKET_TOOLS.find((t) => t.slug === slug), `slug present: ${slug}`);
 }
@@ -47,39 +47,6 @@ ok(asNumber(null) === null, "asNumber: null → null");
 ok(asNumber("not-a-number") === null, "asNumber: bad string → null");
 ok(asNumber(undefined, 42) === 42, "asNumber: fallback honored");
 
-ok(JSON.stringify(parseJsonArray('["a","b"]')) === '["a","b"]', "parseJsonArray: JSON string → array");
-ok(JSON.stringify(parseJsonArray(["a", "b"])) === '["a","b"]', "parseJsonArray: already-array → passthrough");
-ok(JSON.stringify(parseJsonArray("not json")) === "[]", "parseJsonArray: bad string → []");
-ok(JSON.stringify(parseJsonArray(null)) === "[]", "parseJsonArray: null → []");
-
-// Polymarket shape — the Gamma API quirk is that outcomes/prices/tokenIds
-// arrive as JSON-encoded strings inside the payload. shapeMarket parses them.
-const raw = {
-  id: "12345",
-  slug: "test-market",
-  question: "Will X happen?",
-  description: "Resolves YES if X.",
-  endDate: "2026-12-31T23:59:00Z",
-  active: true,
-  closed: false,
-  archived: false,
-  volume: "98765.43",
-  liquidity: "12345.67",
-  outcomes: '["Yes","No"]',
-  outcomePrices: '["0.62","0.38"]',
-  clobTokenIds: '["7290","8390"]',
-  events: [{ slug: "test-event" }],
-};
-const shaped = shapeMarket(raw);
-ok(shaped.id === "12345", "shapeMarket: id passthrough");
-ok(shaped.volume === 98765.43, "shapeMarket: volume parsed to number");
-ok(shaped.liquidity === 12345.67, "shapeMarket: liquidity parsed to number");
-ok(JSON.stringify(shaped.outcomes) === '["Yes","No"]', "shapeMarket: outcomes JSON-string → array");
-ok(JSON.stringify(shaped.prices) === "[0.62,0.38]", "shapeMarket: prices JSON-string → number array");
-ok(JSON.stringify(shaped.clobTokenIds) === '["7290","8390"]', "shapeMarket: clobTokenIds parsed");
-ok(shaped.eventSlug === "test-event", "shapeMarket: eventSlug from events[0]");
-ok(shaped.venue === "polymarket", "shapeMarket: venue tag");
-ok(shaped.venueUrl === "https://polymarket.com/market/test-market", "shapeMarket: venueUrl built from slug");
 
 // Kalshi shape
 const kraw = {
@@ -131,93 +98,20 @@ ok(kzero.yesBid === 0 && kzero.volume === 0, "a genuinely untraded market reads 
 const kmissing = shapeKalshiMarket({ ticker: "M-26" });
 ok(kmissing.yesBid === null && kmissing.volume === null, "an absent field is still null, never a fabricated 0");
 
-// Polymarket's gamma list endpoints are past their own sunset (deprecation and
-// sunset: Fri, 01 May 2026 in HTTP HEADERS ONLY, nothing in their docs). We
-// call `/markets/keyset`, which returns an OBJECT with a markets array, and we
-// still accept the legacy bare array so a rollback cannot empty these tools.
-ok(polyList({ markets: [{ id: "1" }], next_cursor: "x" }).length === 1, "polyList reads the keyset object shape");
-ok(polyList([{ id: "1" }, { id: "2" }]).length === 2, "polyList still reads the legacy bare array");
-ok(polyList(null).length === 0 && polyList({}).length === 0 && polyList("nope").length === 0, "polyList never throws on an unexpected payload");
-{
-  const src = readFileSync(new URL("../src/tools/prediction-market-kit.js", import.meta.url), "utf8");
-  ok(!/POLY_GAMMA\}\/markets\?/.test(src), "no list call still points at the deprecated /markets endpoint");
-  ok((src.match(/markets\/keyset/g) || []).length >= 3, "every list call site uses /markets/keyset");
-}
-
-// polymarket-search reads TWO sources and keeps ONE predicate (2026-09-12).
-// The volume-ordered scan alone could not find "bitcoin" in the first 3,000
-// active markets (Fed and football own that list), so Gamma's own keyword index
-// is consulted first - but it is FUZZY (a gibberish query comes back with a
-// Copa America event), so our exact substring match still decides. These four
-// properties are what keep that combination honest.
-{
-  const realFetch = globalThis.fetch;
-  const json = (body) => ({ ok: true, status: 200, headers: { get: (k) => (k.toLowerCase() === "content-type" ? "application/json" : null) }, json: async () => body, text: async () => JSON.stringify(body) });
-  const market = (id, question, extra = {}) => ({ id, question, slug: `m-${id}`, description: "", active: true, closed: false, outcomes: '["Yes","No"]', outcomePrices: '["0.5","0.5"]', clobTokenIds: "[]", ...extra });
-
-  // 1. an index result our predicate does not match is DROPPED, and one it
-  //    matches is served - their fuzziness must never become our wrong answer.
-  let keysetCalls = 0;
-  globalThis.fetch = async (url) => {
-    const u = String(url);
-    if (u.includes("/public-search")) {
-      return json({ events: [{ slug: "ev", markets: [market("1", "Will Bitcoin close above $90k?"), market("2", "Copa America winner?")] }] });
-    }
-    keysetCalls++;
-    return json({ markets: [], next_cursor: null });
-  };
-  let r = await h("polymarket-search")({ query: "bitcoin", limit: 3 });
-  ok(r.count === 1 && r.markets[0].id === "1", "a keyword-index row that matches our own predicate is served");
-  ok(!JSON.stringify(r).includes("Copa America"), "a fuzzy index row that does NOT match the query is dropped, not returned as a result");
-  ok(r.searchedKeywordIndex === true, "the answer says the keyword index was consulted");
-  ok(r.markets[0].eventSlug === "ev", "a market nested in a search event still reports its event slug");
-
-  // 2. enough matches from the index means the scan never runs - and an
-  //    unrun scan may NOT claim it exhausted the active list.
-  keysetCalls = 0;
-  globalThis.fetch = async (url) => {
-    if (String(url).includes("/public-search")) {
-      return json({ events: [{ slug: "ev", markets: [market("1", "Bitcoin A"), market("2", "Bitcoin B")] }] });
-    }
-    keysetCalls++;
-    return json({ markets: [], next_cursor: null });
-  };
-  r = await h("polymarket-search")({ query: "bitcoin", limit: 2 });
-  ok(r.count === 2 && keysetCalls === 0, "a common term costs one request: the index filled the page and the volume scan never ran");
-  ok(r.searchExhausted === false, "a scan that never ran does NOT claim it read the whole active list");
-
-  // 3. the index is a bonus, never a dependency: if it fails the tool degrades
-  //    to yesterday's volume scan instead of emptying. A DIFFERENT query than
-  //    the cases above on purpose: fetchJson serves a stale cached body when a
-  //    call fails, so reusing a URL an earlier case primed would test the cache
-  //    rather than the fallback.
-  globalThis.fetch = async (url) => {
-    if (String(url).includes("/public-search")) throw new Error("index down");
-    return json({ markets: [market("9", "Dogecoin on the volume list")], next_cursor: null });
-  };
-  r = await h("polymarket-search")({ query: "dogecoin", limit: 3 });
-  ok(r.count === 1 && r.markets[0].id === "9", "a failed keyword index falls through to the volume scan");
-  ok(r.searchedKeywordIndex === false, "...and the answer says the index was not read");
-  ok(r.searchExhausted === true, "a scan that reached the end of the list may say so");
-
-  // 4. the same market from both sources is one result.
-  globalThis.fetch = async (url) => {
-    if (String(url).includes("/public-search")) return json({ events: [{ slug: "ev", markets: [market("7", "Bitcoin dupe")] }] });
-    return json({ markets: [market("7", "Bitcoin dupe"), market("8", "Bitcoin other")], next_cursor: null });
-  };
-  r = await h("polymarket-search")({ query: "bitcoin", limit: 5 });
-  ok(r.count === 2 && new Set(r.markets.map((m) => m.id)).size === 2, "a market returned by both sources is counted once");
-
-  // 5. a closed market is never served under the default activeOnly.
-  globalThis.fetch = async (url) => {
-    if (String(url).includes("/public-search")) return json({ events: [{ slug: "ev", markets: [market("3", "Bitcoin settled", { active: false, closed: true })] }] });
-    return json({ markets: [], next_cursor: null });
-  };
-  r = await h("polymarket-search")({ query: "bitcoin", limit: 3 });
-  ok(r.count === 0 && /No active Polymarket market matched/.test(r.note), "a closed market from the index is filtered out, and the zero stays honest");
-
-  globalThis.fetch = realFetch;
-}
+// Kalshi retires liquidity_dollars on 2026-10-01, and it already reads 0 on
+// markets with a live book. liquidityUsd is Kalshi's own figure only when it
+// carries one; otherwise null with a reason. Depth is the top-of-book size, in
+// contracts, under its own names, never relabelled as "liquidity".
+const kbook = shapeKalshiMarket({ ticker: "B-26", liquidity_dollars: "0.0000", yes_bid_size_fp: "471.53", yes_ask_size_fp: "323.10" });
+ok(kbook.yesBidSize === 471.53 && kbook.yesAskSize === 323.1, "top-of-book sizes come from the *_size_fp fields");
+ok(kbook.liquidityUsd === null && /yesBidSize/.test(kbook.liquidityUsdNote || ""),
+  "a zero liquidity_dollars beside a live book is null with a note, not a false 0");
+const kgone = shapeKalshiMarket({ ticker: "G-26", yes_bid_size_fp: "10.00" });
+ok(kgone.liquidityUsd === null && typeof kgone.liquidityUsdNote === "string", "after removal the field reads null and says why");
+const kempty = shapeKalshiMarket({ ticker: "E-26", liquidity_dollars: "0.0000", yes_bid_size_fp: "0.00", yes_ask_size_fp: "0.00" });
+ok(kempty.liquidityUsd === 0 && kempty.yesBidSize === 0 && !("liquidityUsdNote" in kempty), "an empty book with a zero figure still reads 0");
+ok(kn.liquidityUsdNote === undefined, "a nonzero legacy figure is kept with no note");
+ok(kmissing.yesBidSize === null, "an absent size field is null");
 
 // ----------------------------------------------------------------------------
 // Input validation — all 6 tools
@@ -229,26 +123,6 @@ async function throws(promise, status, label) {
     else { fail++; console.error(`ASSERT FAIL - ${label}: expected ${status}, got ${e.statusCode} (${e.message})`); }
   }
 }
-
-// polymarket-search
-await throws(h("polymarket-search")({}), 400, "polymarket-search: missing query");
-await throws(h("polymarket-search")({ query: "" }), 400, "polymarket-search: empty query");
-await throws(h("polymarket-search")({ query: "   " }), 400, "polymarket-search: whitespace query");
-await throws(h("polymarket-search")({ query: 123 }), 400, "polymarket-search: non-string query");
-
-// polymarket-market
-await throws(h("polymarket-market")({}), 400, "polymarket-market: missing both slug+id");
-await throws(h("polymarket-market")({ slug: "", id: "" }), 400, "polymarket-market: empty slug+id");
-
-// polymarket-orderbook
-await throws(h("polymarket-orderbook")({}), 400, "polymarket-orderbook: missing tokenId");
-await throws(h("polymarket-orderbook")({ tokenId: "" }), 400, "polymarket-orderbook: empty tokenId");
-await throws(h("polymarket-orderbook")({ tokenId: "0xabc" }), 400, "polymarket-orderbook: non-decimal tokenId");
-await throws(h("polymarket-orderbook")({ tokenId: "not-a-number" }), 400, "polymarket-orderbook: word tokenId");
-
-// polymarket-price-history
-await throws(h("polymarket-price-history")({}), 400, "polymarket-price-history: missing tokenId");
-await throws(h("polymarket-price-history")({ tokenId: "abc" }), 400, "polymarket-price-history: bad tokenId");
 
 // kalshi-markets
 await throws(h("kalshi-markets")({ status: "invalid-status" }), 400, "kalshi-markets: bad status");
@@ -264,21 +138,6 @@ await throws(h("kalshi-event")({ eventTicker: "   " }), 400, "kalshi-event: whit
 if (process.env.PREDICTION_LIVE_TEST === "1") {
   console.log("\n--- live tests ---");
   try {
-    const search = await h("polymarket-search")({ query: "election", limit: 3 });
-    ok(typeof search.count === "number", `live polymarket-search: count returned (${search.count})`);
-    ok(Array.isArray(search.markets), `live polymarket-search: markets array (len=${search.markets.length})`);
-    if (search.markets.length) {
-      const first = search.markets[0];
-      ok(typeof first.question === "string", `live polymarket-search: first.question is string`);
-      ok(Array.isArray(first.clobTokenIds), `live polymarket-search: clobTokenIds array`);
-      // Try orderbook on the first market's first token
-      if (first.clobTokenIds[0]) {
-        const ob = await h("polymarket-orderbook")({ tokenId: first.clobTokenIds[0], depth: 3 });
-        ok(typeof ob.tokenId === "string", `live polymarket-orderbook: tokenId returned`);
-        ok(Array.isArray(ob.bids) && Array.isArray(ob.asks), `live polymarket-orderbook: bids+asks arrays`);
-      }
-    }
-
     const km = await h("kalshi-markets")({ status: "open", limit: 3 });
     ok(typeof km.count === "number", `live kalshi-markets: count returned (${km.count})`);
     ok(Array.isArray(km.markets), `live kalshi-markets: markets array`);
@@ -286,57 +145,6 @@ if (process.env.PREDICTION_LIVE_TEST === "1") {
     console.error(`LIVE ERR: ${e.message}`);
     fail++;
   }
-}
-
-// ----------------------------------------------------------------------------
-// polymarket-price-history moved to the Data API v2 (2026-09-04 upstream;
-// 2026-09-18 here). Probed live: v2 answers `{data:[{timestamp, price,
-// resolution_seconds}]}` and REFUSES the legacy `market=` param; the CLOB
-// route still answers `{history:[{t, p}]}`. The tool asks v2 with `tokenId`
-// + `bucketSeconds`, and falls back to the CLOB when v2 fails or answers a
-// shape the reader does not know (the polyList rule). Distinct token ids per
-// case: fetchJson serves a stale cached body when a call fails, so reusing a
-// URL an earlier case primed would test the cache, not the fallback.
-// Mutation check: remove the `data` branch of polyHistoryPoints and case 1
-// falls back to the CLOB (source flips) instead of reading v2; remove the
-// fallback and cases 2 and 3 throw.
-{
-  const { polyHistoryPoints } = __test;
-  const realFetch = globalThis.fetch;
-  const json = (body, status = 200) => ({ ok: status < 400, status, headers: { get: (k) => (k.toLowerCase() === "content-type" ? "application/json" : null) }, json: async () => body, text: async () => JSON.stringify(body) });
-  const v2Doc = { data: [{ timestamp: 1789653600, price: 0.745, resolution_seconds: 3600 }, { timestamp: 1789657200, price: 0.755, resolution_seconds: 3600 }], pagination: { limit: 2, offset: 0, has_more: true } };
-  const legacyDoc = { history: [{ t: 1789653613, p: 0.745 }, { t: 1789657213, p: 0.765 }] };
-  // Pure reader: both shapes, one output.
-  ok(JSON.stringify(polyHistoryPoints(v2Doc)) === JSON.stringify([{ timestamp: 1789653600, price: 0.745 }, { timestamp: 1789657200, price: 0.755 }]), "polyHistoryPoints reads the v2 {data:[{timestamp, price}]} shape");
-  ok(JSON.stringify(polyHistoryPoints(legacyDoc)) === JSON.stringify([{ timestamp: 1789653613, price: 0.745 }, { timestamp: 1789657213, price: 0.765 }]), "polyHistoryPoints reads the legacy {history:[{t, p}]} shape");
-  ok(polyHistoryPoints({ result: [] }) === null && polyHistoryPoints(null) === null, "an unrecognised document reads as null, never as an empty series");
-
-  // 1. v2 answers: served from v2, the wire carries tokenId + bucketSeconds and never `market=`.
-  let urls = [];
-  globalThis.fetch = async (url) => { urls.push(String(url)); return json(v2Doc); };
-  let r = await h("polymarket-price-history")({ tokenId: "1000000000000000000001", interval: "1d", fidelity: 60 });
-  ok(urls.length === 1 && urls[0].startsWith("https://data-api.polymarket.com/v2/prices-history?") && urls[0].includes("tokenId=1000000000000000000001") && urls[0].includes("bucketSeconds=3600") && !urls[0].includes("market="), `v2 is asked first with tokenId + bucketSeconds (${urls[0]})`);
-  ok(r.source === "polymarket-data-api" && r.count === 2 && r.first === 0.745 && r.last === 0.755 && r.max === 0.755, "the v2 document is shaped into the same points/min/max/first/last contract");
-  ok(r.truncated === true, "a v2 page with has_more says truncated");
-
-  // 2. v2 down (5xx twice - fetchJson retries once) -> the CLOB route serves.
-  urls = [];
-  globalThis.fetch = async (url) => { urls.push(String(url)); return new URL(String(url)).hostname === "data-api.polymarket.com" ? json({ error: "down" }, 500) : json(legacyDoc); };
-  r = await h("polymarket-price-history")({ tokenId: "1000000000000000000002", interval: "1d" });
-  ok(r.source === "polymarket-clob" && r.count === 2 && r.last === 0.765, "a failing v2 falls back to the legacy CLOB route (source says so)");
-  ok(urls.some((u) => u.startsWith("https://clob.polymarket.com/prices-history?market=1000000000000000000002")), "the legacy route is asked in its own dialect (market=)");
-  ok(r.truncated === false, "the legacy document never claims a next page");
-
-  // 3. v2 answers 200 with a shape the reader does not know -> fallback, not an empty answer.
-  globalThis.fetch = async (url) => (new URL(String(url)).hostname === "data-api.polymarket.com" ? json({ prices: [[1, 0.5]] }) : json(legacyDoc));
-  r = await h("polymarket-price-history")({ tokenId: "1000000000000000000003", interval: "1h" });
-  ok(r.source === "polymarket-clob" && r.count === 2, "a v2 document of an unknown shape degrades to the CLOB route instead of emptying the tool");
-
-  // 4. both empty: the honest note, no throw.
-  globalThis.fetch = async () => json({ data: [] });
-  r = await h("polymarket-price-history")({ tokenId: "1000000000000000000004" });
-  ok(r.count === 0 && typeof r.note === "string" && r.source === "polymarket-data-api", "an empty v2 series is an answer with the no-history note");
-  globalThis.fetch = realFetch;
 }
 
 // ----------------------------------------------------------------------------

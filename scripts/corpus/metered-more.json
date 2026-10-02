@@ -1,5 +1,5 @@
 {
-  "about": "Tier 2, the rest: LLM wires on every tier, Blockscout and Alchemy reads, FRED, Brave, report composites and media. Report composites ($0.10-0.65 upstream each) and image/video/TTS links are gated behind CORPUS_REPORTS=1 / CORPUS_MEDIA=1 so a weekly keyed run stays under a couple of dollars unless asked.",
+  "about": "Tier 2, the rest: LLM wires on every tier, Alchemy reads, FRED, Brave, report composites and media. Report composites and image/video/TTS links are gated behind CORPUS_REPORTS=1 / CORPUS_MEDIA=1, since each spends on a paid upstream.",
   "cases": [
     {
       "slug": "attest",
@@ -193,74 +193,6 @@
         "minCount": {
           "audio": 1000
         }
-      }
-    },
-    {
-      "slug": "address-profile",
-      "name": "WETH on base is a verified contract",
-      "input": {
-        "chain": "base",
-        "address": "0x4200000000000000000000000000000000000006"
-      },
-      "requires": "X402_UPSTREAM_BUYER_KEY",
-      "expect": {
-        "equals": {
-          "isContract": true,
-          "isVerified": true
-        }
-      }
-    },
-    {
-      "slug": "token-holders",
-      "name": "USDC on base has holders",
-      "input": {
-        "chain": "base",
-        "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "limit": 3
-      },
-      "requires": "X402_UPSTREAM_BUYER_KEY",
-      "expect": {
-        "gt": {
-          "holderCount": 1000
-        },
-        "count": {
-          "holders": 3
-        }
-      }
-    },
-    {
-      "slug": "token-info",
-      "name": "WETH on base",
-      "input": {
-        "chain": "base",
-        "address": "0x4200000000000000000000000000000000000006"
-      },
-      "requires": "X402_UPSTREAM_BUYER_KEY",
-      "expect": {
-        "equals": {
-          "symbol": "WETH",
-          "decimals": "18"
-        },
-        "gt": {
-          "holders": 1000
-        }
-      }
-    },
-    {
-      "slug": "tx-inspect",
-      "name": "a settled x402 payment",
-      "input": {
-        "chain": "base",
-        "hash": "0x09f85fcf1844d85277b8cce528efc8d25c6df632b1fed1c8337f078901a69562"
-      },
-      "requires": "X402_UPSTREAM_BUYER_KEY",
-      "expect": {
-        "matches": {
-          "status": "ok|success|1"
-        },
-        "populated": [
-          "method"
-        ]
       }
     },
     {
@@ -938,7 +870,7 @@
       "slug": "v1-chat-nano-messages",
       "name": "nano anthropic wire",
       "input": {
-        "model": "google/gemini-2.5-flash-lite",
+        "model": "google/gemini-3.1-flash-lite",
         "max_tokens": 16,
         "messages": [
           {

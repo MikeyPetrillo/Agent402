@@ -10,7 +10,10 @@
 // the protocols' own homes.
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
+import { powCostPhrase } from "./pow.js";
+import { LEARN_BY_GLOSSARY_ID, learnBySlug } from "./learn.js";
 
+import { REPO_URL, ORG_SAME_AS } from "./repo-link.js";
 // { id, name, alt?: [names], def, see: [[href, label]] } - keep `def` a single
 // plain-text paragraph: it is rendered verbatim AND emitted as the DefinedTerm
 // description in JSON-LD, so no markup.
@@ -58,7 +61,7 @@ export const GLOSSARY = [
     def: "A server that answers ONE 402 with both an x402 offer and an MPP challenge for the same resource at the same price, and accepts either credential on the retry. A stock x402 client and a stock mppx client both work unmodified against it. Every paid route on Agent402 is dual-stack, and the open-source tollbooth adds it to any site.",
     see: [["/what-is-mpp#live", "where MPP settles today"], ["/sell", "sell dual-stack"]] },
   { id: "proof-of-work-tier", name: "Proof-of-work tier (free tier)", alt: ["PoW tier", "free tier"],
-    def: "Agent402's no-wallet path: a pure-CPU tool can be paid for with a short proof-of-work solve instead of money. The solve is signed, single-use and scoped to the tool, so it costs the caller a few hundred milliseconds of compute and the operator nothing. Tools that spend money upstream (search, LLM gateway, browser) are wallet-only.",
+    def: `Agent402's no-wallet path: a pure-CPU tool can be paid for with a short proof-of-work solve instead of money. The solve is signed, single-use and scoped to the tool, so it costs the caller ${powCostPhrase()} and the operator nothing. Tools that spend money upstream (search, LLM gateway, browser) are wallet-only.`,
     see: [["/blog/proof-of-work-free-tier", "why a free tier"], ["/pricing", "which tools are free"]] },
   { id: "smart-order-router", name: "Smart Order Router (SOR)", alt: ["route-and-execute", "cross-seller routing"],
     def: `One call that resolves a task to the best seller across the whole ecosystem - Agent402's own catalog or any indexed external seller - pays that seller on the agent's behalf on the same chain the agent paid on, and relays the result with a receipt. ${routingProofSentence()}`,
@@ -73,7 +76,7 @@ export const GLOSSARY = [
     def: "Pricing where every request carries its own payment - fractions of a cent to a few cents - instead of a subscription, a quota or an API key. It is what makes an agent's spend legible (one receipt per call) and what lets a seller earn from a single request by a stranger with no onboarding.",
     see: [["/pricing", "how Agent402 prices"], ["/tools", "500+ priced tools"]] },
   { id: "deterministic-tool", name: "Deterministic tool", alt: ["deterministic endpoint"],
-    def: "A tool whose output is a pure function of its input: same request, same answer, every time, with no language model in the serving path. Determinism is what lets an agent cache, retry safely and verify a paid answer, and what lets a catalog be tested end to end (every Agent402 tool answers its own documented example in CI).",
+    def: "A tool whose output is a pure function of its input: same request, same answer, every time, with no language model in the serving path. Determinism is what lets an agent cache, retry safely and verify a paid answer, and what lets a catalog be tested end to end (every Agent402 tool that CI can run without a third-party key answers its own documented example there; the metered tools that need one are left out of that sweep so CI never spends upstream).",
     see: [["/tools", "the catalog"], ["/blog/why-we-built-agent402", "why deterministic"]] },
   { id: "idempotency-key", name: "Idempotency key", alt: ["Idempotency-Key header", "paid retry"],
     def: "A caller-chosen header that lets a paid request be retried without paying twice: the seller stores the first settled answer under the key and replays it to an identical retry. Agent402 commits the cached body only after settlement succeeds, so an unsettled attempt is never replayed as if it were paid.",
@@ -82,7 +85,7 @@ export const GLOSSARY = [
     def: "The open standard AI assistants use to discover and call tools. Agent402 exposes its catalog as a hosted MCP connector and an npm stdio server, so an assistant can find a tool, read its price and call it - paying over x402 or MPP, or with a proof-of-work solve on the free tier - without a human creating an account.",
     see: [["/docs#add", "add to Claude"], ["/blog/building-with-mcp", "building with MCP"]] },
   { id: "tempo", name: "Tempo", alt: ["tempo method", "Tempo chain"],
-    def: "The payments-focused chain that is MPP's native settlement method (chain id 4217, TIP-20 tokens such as PathUSD and USDC.e). Its tempo/charge credentials are validated and broadcast through Tempo's own relay rather than an EIP-3009 facilitator, so a server that speaks it natively holds no signing key of its own. Agent402 accepts it and, through the router, pays other Tempo sellers over it.",
+    def: "The payments-focused chain that is MPP's native settlement method (chain id 4217, TIP-20 tokens such as PathUSD and USDC.e). Its tempo/charge credentials are validated and broadcast through Tempo's own relay rather than an EIP-3009 facilitator, so accepting a tempo/charge payment needs no signing key on the server. Agent402 accepts it, and holds Tempo keys for two other jobs: sponsoring gas on monitor subscriptions paid over MPP, and paying other Tempo sellers through the router.",
     see: [["/what-is-mpp#compare", "MPP settlement methods"], ["/mpp-marketplace", "sellers on the MPP wire"]] },
 ];
 
@@ -92,7 +95,7 @@ export function glossaryPage(baseUrl) {
   const description =
     "Plain-English definitions of the vocabulary of Agentic Finance (AIFI): x402, MPP, HTTP 402, payment requirements and challenges, facilitators, EIP-3009, receipts, settlement, wallets as identity, rails, dual-stack, the proof-of-work free tier, the Smart Order Router, the tollbooth, and more. Each term links to the page that goes deep.";
 
-  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ["https://github.com/MikeyPetrillo/Agent402", "https://x.com/Agent402Tools"] };
+  const orgLd = { "@type": "Organization", "@id": `${baseUrl}/#organization`, name: "Agent402", url: baseUrl, logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` }, sameAs: ORG_SAME_AS };
   const breadcrumbLd = { "@type": "BreadcrumbList", itemListElement: [
     { "@type": "ListItem", position: 1, name: "Agent402", item: `${baseUrl}/` },
     { "@type": "ListItem", position: 2, name: "Agentic Finance (AIFI)", item: `${baseUrl}/agentic-finance` },
@@ -124,7 +127,9 @@ export function glossaryPage(baseUrl) {
 
   const termsHtml = GLOSSARY.map((t) => {
     const alt = t.alt?.length ? `<div style="font-family:var(--font-mono);font-size:12px;color:var(--faint);margin:0 0 12px;">also: ${t.alt.map(esc).join(" · ")}</div>` : "";
-    const see = t.see?.length ? `<div style="font-family:var(--font-mono);font-size:12.5px;margin-top:14px;">${t.see.map(([href, label]) => `<a href="${esc(href)}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);margin-right:16px;">${esc(label)} →</a>`).join("")}</div>` : "";
+    const learn = LEARN_BY_GLOSSARY_ID[t.id] ? learnBySlug(LEARN_BY_GLOSSARY_ID[t.id]) : null;
+    const seeList = [...(learn ? [[`/learn/${learn.slug}`, `${learn.term}, explained`]] : []), ...(t.see || [])];
+    const see = seeList.length ? `<div style="font-family:var(--font-mono);font-size:12.5px;margin-top:14px;">${seeList.map(([href, label]) => `<a href="${esc(href)}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);margin-right:16px;">${esc(label)} →</a>`).join("")}</div>` : "";
     return `<article id="${esc(t.id)}" class="gl-term gl-row" style="display:grid;grid-template-columns:300px 1fr;gap:28px;padding:26px 24px;border-bottom:1px solid var(--hairline);">
       <div><h2 style="font-weight:800;font-size:21px;line-height:1.15;margin:0 0 8px;color:var(--ink);"><dfn style="font-style:normal;">${esc(t.name)}</dfn></h2>${alt}<a href="#${esc(t.id)}" style="font-family:var(--font-mono);font-size:11px;color:var(--faint);text-decoration:none;">#${esc(t.id)}</a></div>
       <div><p style="font-size:16px;line-height:1.65;color:var(--muted);margin:0;">${esc(t.def)}</p>${see}</div>
@@ -141,7 +146,7 @@ export function glossaryPage(baseUrl) {
       <div>
         <h1 style="font-weight:800;font-size:52px;line-height:.96;letter-spacing:-.035em;margin:0 0 24px;color:var(--ink);">The <span style="color:var(--accent);">Agentic Finance</span> glossary</h1>
         <p style="font-size:19px;line-height:1.5;color:var(--on-dark2);margin:0 0 20px;"><strong style="color:var(--ink);font-weight:700;">Every term the agentic-finance stack uses, defined once.</strong> From the HTTP status code that started it to the facilitators, receipts and routers built on top. Each entry links to the page that goes deep, and each has its own anchor so any page can point at a definition instead of restating it.</p>
-        <p style="font-size:16px;line-height:1.6;color:var(--muted);margin:0;">Start with <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">what Agentic Finance (AIFI) is</a>, then the two wires: <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">x402</a> and <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">MPP</a>.</p>
+        <p style="font-size:16px;line-height:1.6;color:var(--muted);margin:0;">Start with <a href="/agentic-finance" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">what Agentic Finance (AIFI) is</a>, then the two wires: <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">x402</a> and <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">MPP</a>. Longer explainers with real headers are in <a href="/learn" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Learn</a>.</p>
       </div>
       <div style="border:1px solid var(--hairline);background:var(--card);padding:16px 18px 12px;">
         <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;color:var(--faint);margin-bottom:12px;">${GLOSSARY.length} TERMS</div>

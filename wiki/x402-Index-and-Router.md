@@ -10,10 +10,10 @@ shouldn't cost money, by the same logic as `/api/find`):
 
 | Surface | What it returns |
 |---|---|
-| `GET /marketplace` | HTML dashboard: every seller indexed, tool count, network, last-fetched time, rolling health, discovery sources. (`GET /index` is the old path and now answers `301 → /marketplace`; follow redirects or just use `/marketplace`.) |
-| `GET /api/index` | JSON snapshot of the same data: per-seller `health`, `routable`, rolling `history`, totals |
-| `POST /api/route` | Smart Order Router / neutral x402 discovery API: `{ query, top, include }` → top-N matching tools across sellers, ranked by match score, then health, then price. `include` = `all` (default) / `external` (exclude Agent402 itself) / `local` |
-| `GET /api/leaderboard` | On-chain ranking of every seller by **Base USDC settled volume** - see [[x402-Leaderboard]] |
+| `GET /marketplace` | HTML dashboard over the indexed sellers: tool count, network, last-fetched time, rolling health, discovery sources. (`GET /index` is the old path and now answers `301 → /marketplace`; follow redirects or just use `/marketplace`.) |
+| `GET /api/index` | The same data as JSON, **one page at a time** (250 max): per-seller `health`, `routable`, totals. `complete: false` and a `Link` header with `rel="next"` while sellers remain, `sellerCount` for the total. `?seller=<host>` returns ONE origin unpaged, with its rolling `history` |
+| `POST /api/route` | Smart Order Router / neutral x402 discovery API: `{ query, top, include }` → top-N matching tools across sellers, ranked by match score, then health, then distinct payers over the last 30 days, then price, then the curated flag (the order each result lists in `why.tiebreaks`); when the judgment model is enabled it reorders the top of that list (at most two rows per seller, plus the best matches from the local catalog) so the listing that actually does the task comes first, the cheapest among equally good ones, and reports it in `judged`. `include` = `all` (default) / `external` (exclude Agent402 itself) / `local` |
+| `GET /api/leaderboard` | Top N of the on-chain ranking of sellers by **Base USDC settled volume** (25 default, 50 ceiling, `totalSellers` for the full count) - see [[x402-Leaderboard]] |
 
 And one **paid** executing surface built on the same resolver:
 
@@ -69,7 +69,7 @@ A buyer routed to a dead seller wastes money. The router takes that seriously:
 - **Excluded:** a seller whose last `HEALTH_WINDOW` (5) crawl outcomes include any errors is **not routable** and is skipped by `/api/route`.
 - **Brand new:** sellers with no history yet *are* routable - benefit of the doubt for newcomers.
 - **Ranked:** at equal match score, healthier sellers rank first. Then cheaper wins.
-- **Snapshot:** `GET /api/index` exposes every seller's `health` (0..1), `routable` flag, and rolling `history` so an operator can audit the decisions.
+- **Snapshot:** `GET /api/index` exposes each seller's `health` (0..1) and `routable` flag, a page at a time. The rolling `history` those are derived from is on the single-origin view, `GET /api/index?seller=<host>`, so an operator can audit the decisions for any seller they name; the bulk listing withholds it deliberately, and says so rather than returning it empty.
 
 The unit tests for these guarantees live in [`scripts/test-router-health.js`](https://github.com/MikeyPetrillo/Agent402/blob/main/scripts/test-router-health.js)
 (eight scenarios, offline - they seed the in-memory cache directly via a test
@@ -173,7 +173,9 @@ Returns an **object**, not a bare array. The matches are in `results`:
   seller, so a buyer can address the right seller directly. `url` is the full
   callable endpoint.
 - `price` is whatever the seller published (a number or a string); **`priceUsd`
-  is the normalized number** to compare on.
+  is the normalized number** to compare on, and **`priceKnown`** says whether
+  that number could actually be read from what the seller published. When it is
+  `false`, `priceUsd` is a placeholder and must not be compared.
 - `routerDispatchEligible` / `routerDispatchReason` say whether this host's
   router will pay the seller on your behalf right now and why not otherwise
   (`crawl_failed`, `network_unknown`, `no_supported_route`, `url_template`,
@@ -196,7 +198,7 @@ Returns an **object**, not a bare array. The matches are in `results`:
 - **Neutral discovery layer.** `include:"external"` lets buyers explicitly route to non-Agent402 sellers. We list because we trust the ranking, not because we'd rig it for ourselves - and that makes the same endpoint usable as a public discovery API for the whole protocol, not just our catalog.
 - **One integration, the whole ecosystem.** A buyer that integrates Agent402's `agent402-client` SDK or the hosted `/mcp` connector already has access to 500+ local tools *and* can route across every other x402 seller without per-seller wiring.
 - **Discoverability that compounds.** Sellers don't have to register with Agent402 - appearing in any public x402 registry is enough. The Index pulls them in automatically.
-- **Trust signals are checkable.** Health scores are derived from real crawl outcomes, not self-reports. The full `history` is in `/api/index` for anyone to verify. Agent402 advertises this surface in its own [`/.well-known/x402` manifest](https://agent402.tools/.well-known/x402) under the `discovery` field so other indexes and agents can find the router programmatically.
+- **Trust signals are checkable.** Health scores are derived from real crawl outcomes, not self-reports. The `history` they are computed from is in `/api/index?seller=<host>` for anyone to verify, one origin at a time. Agent402 advertises this surface in its own [`/.well-known/x402` manifest](https://agent402.tools/.well-known/x402) under the `discovery` field so other indexes and agents can find the router programmatically.
 
 ## Related
 

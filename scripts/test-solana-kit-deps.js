@@ -1,5 +1,5 @@
 // Pins for the @solana/kit 8 install shape (2026-09-18, kit 5.5.1 -> 8.3.0 with
-// @solana-program/token 0.16.1 + compute-budget 0.18.1).
+// @solana-program/token 0.16.1 + compute-budget 0.18.1; 0.17.0 + 0.19.0 since 2026-09-24).
 //
 // @x402/svm 2.26 still depends on kit-5-peered program packages (token ^0.9.0,
 // compute-budget ^0.11.0, token-2022 ^0.6.1) while peering kit >=5.1.0, so a

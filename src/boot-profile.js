@@ -54,3 +54,13 @@ if (on) {
     stop.unref();
   } catch (e) { console.warn("[boot] cpu profile unavailable:", String(e?.message || e).slice(0, 120)); }
 }
+
+// Stall attribution (src/stall-profiler.js) is OFF by default. Running it
+// continuously cost a 1.1-1.6 s event-loop block every minute on production
+// (2026-09-25): stopping a 60 s CPU profile and scanning it is synchronous.
+// STALL_PROFILER=on restores the rolling windows; otherwise an operator takes
+// one short window on demand (POST /__operator/stall-profile).
+if (process.env.STALL_PROFILER === "on") {
+  const t = setTimeout(() => { import("./stall-profiler.js").then((m) => m.startStallProfiler()).catch(() => {}); }, 90_000);
+  t.unref();
+}

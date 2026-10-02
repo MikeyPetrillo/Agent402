@@ -1,0 +1,11 @@
+{
+  "name": "agent402-live",
+  "private": true,
+  "type": "module",
+  "description": "Live payment visualizer for x402 (Base) and MPP (Tempo). Read-only, separate service.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  }
+}

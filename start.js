@@ -11,5 +11,11 @@
 // privilege-drop entrypoint (A402-01) still owns PID 1 and the server still
 // receives SIGTERM directly for the graceful drain. WORKER_MODE unset →
 // byte-identical main-server boot.
-const workerMode = /^(1|true|yes|on)$/i.test((process.env.WORKER_MODE || "").trim());
-await import(workerMode ? "./worker/server.js" : "./src/server.js");
+// DECIDE_MODE=true boots the decide service (services/decide) the same way.
+const on = (v) => /^(1|true|yes|on)$/i.test((v || "").trim());
+if (on(process.env.DECIDE_MODE)) {
+  const { boot } = await import("./services/decide/server.js");
+  await boot().catch((e) => { console.error("[decide] boot failed:", e); process.exit(1); });
+} else {
+  await import(on(process.env.WORKER_MODE) ? "./worker/server.js" : "./src/server.js");
+}

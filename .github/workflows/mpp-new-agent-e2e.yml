@@ -1,0 +1,54 @@
+name: MPP new-agent end-to-end (dispatch-only)
+
+# A brand-new agent's first session on the Tempo MPP rail, against production:
+# a FRESH wallet funded from the canary burner (<= $0.30 USDC.e on Tempo),
+# discovery from /llms.txt, /openapi.json, a live 402 and the /mcp connector,
+# the published mppx quickstart run as written, a list of paid tools (capped at
+# $0.25 total, $0.01 each), one deliberately bad body, and the leftover sent
+# back to the burner. Every request carries the heartbeat token, so every sale
+# is booked as internal. See scripts/mpp-new-agent-e2e.js.
+#
+# Money leaves a spending wallet for a new address, so the job runs in the
+# `spending` environment (the operator's approval click), like the other
+# dispatch workflows that move burner funds.
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      fund_usd:
+        description: "USDC.e to fund the fresh wallet with (cap 0.30)"
+        required: false
+        default: "0.30"
+      budget_usd:
+        description: "Total spend cap for the buys (cap 0.25)"
+        required: false
+        default: "0.25"
+
+concurrency:
+  # Two runs would race the burner's nonces on the funding transfer.
+  group: mpp-new-agent-e2e
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    environment: spending
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Install (lock-pinned; mppx, viem and the MCP SDK from the repo lock)
+        run: npm ci --ignore-scripts
+      - name: New agent, fresh wallet, first session
+        env:
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+          TARGET_URL: https://agent402.tools
+          # Every input rides an env var, never shell interpolation (N-03).
+          FUND_USD: ${{ inputs.fund_usd }}
+          BUDGET_USD: ${{ inputs.budget_usd }}
+        run: node scripts/mpp-new-agent-e2e.js

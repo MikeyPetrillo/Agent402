@@ -257,13 +257,15 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
       res.setHeader("payment-required", Buffer.from(JSON.stringify({ x402Version: 2, error: "payment required", accepts })).toString("base64"));
       res.end("{}"); return;
     }
+    // The seller's payment layer refusing: its offer comes back with the 402.
     res.statusCode = 402;
+    res.setHeader("payment-required", Buffer.from(JSON.stringify({ x402Version: 2, error: "payment_payload_invalid", accepts: [] })).toString("base64"));
     res.end(JSON.stringify({ error: { message: "Payment could not be settled: payment_payload_invalid", code: "payment_payload_invalid" } }));
   });
   await new Promise((r) => refuser.listen(0, "127.0.0.1", r));
   const refuserUrl = `http://127.0.0.1:${refuser.address().port}/v1/chat/completions`;
   const refuserOrigin = `http://127.0.0.1:${refuser.address().port}`;
-  const buy = (notDebited) => payX402(refuserUrl, { maxAtomic: "10000", chain: "solana", trusted: true, sellerProof: async () => 25, notDebited }).then(() => null, (e) => e);
+  const buy = (notDebited) => payX402(refuserUrl, { maxAtomic: "10000", chain: "solana", trusted: true, sellerProof: async () => 25, notDebited, memoizeDelivery: true }).then(() => null, (e) => e);
 
   let asked = null;
   const heldBefore = _spentThisWindow();
@@ -273,7 +275,9 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   ok(refuserPaidAttempts === 1, "a 402 that does NOT name X-PAYMENT (payment_payload_invalid) gets no header-name resend - one paid attempt");
   ok(asked && typeof asked.wallet === "string" && Number.isInteger(asked.sinceUnix) && asked.sinceUnix <= Math.floor(Date.now() / 1000), "the chain check is asked about OUR wallet since the moment the header went out");
   ok(asked.blockhash === "GfVcyD4kkTrj4bKc7WA9sZCin9JDbdT4Zkd3EittNR1W" && Number.isFinite(asked.maxWaitMs) && asked.maxWaitMs > 0, "the chain check is told the blockhash the credential was signed against (so it can wait for THAT to expire) and the wait bound");
-  ok(sellerRefusedRecently(refuserOrigin, "solana") && sellerRefusedRecently(refuserOrigin, "solana").status === 402, "the refusing seller is memoized for this chain");
+  ok(!sellerRefusedRecently(refuserOrigin, "solana"), "one refusal is recorded and benches nothing yet");
+  await buy(async () => ({ debited: false, observed: 0, expired: true }));
+  ok(sellerRefusedRecently(refuserOrigin, "solana") && sellerRefusedRecently(refuserOrigin, "solana").status === 402, "the second benches the refusing route for this chain");
   ok(!sellerRefusedRecently(refuserOrigin, "base"), "the memo is per chain - the same seller on Base is untouched");
   __resetSellerRefusalsForTest();
   // refuse-then-settle-late (2026-09-03): "no debit" while the blockhash is
@@ -293,7 +297,8 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   ok(e3 && e3.committed === true, "unreadable chain -> post-commit stance kept (fail closed)");
   ok(!sellerRefusedRecently(refuserOrigin, "solana"), "and nothing memoized on an unreadable chain");
   // Memo TTL: a seller that fixes its rail is retried after the window.
-  noteSellerRefusal("https://fixed.example", "solana", 402);
+  noteSellerRefusal("https://fixed.example/x", "solana", 402);
+  noteSellerRefusal("https://fixed.example/x", "solana", 402);
   ok(sellerRefusedRecently("https://fixed.example", "solana") !== null, "a fresh memo is visible");
   ok(sellerRefusedRecently("https://fixed.example", "solana", Date.now() + 7 * 3600 * 1000) === null, "and gone after the TTL (6 h default)");
   refuser.close();
@@ -447,7 +452,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   ok(p.payload && typeof p.payload.transaction === "string" && p.payload.transaction.length > 0,
     "the payload still carries the signed base64 wire transaction");
   // The v2 wrap must match the STOCK client's: `resource` + `extensions` from
-  // the 402 ride beside `accepted`. blockrun's stock middleware tolerated
+  // the 402 ride beside `accepted`. a seller's stock middleware tolerated
   // their absence; xfuel's own verifier answered payment_payload_invalid to an
   // otherwise identical transaction (2026-09-02).
   const resource = { url: "https://seller.example/v1/chat/completions", description: "chat", mimeType: "application/json" };
@@ -499,7 +504,7 @@ const DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
   ok((await sellerServesModel(`${base}/v1/chat/completions`, "gpt-4o-mini", t)).verdict === "not-served", "a readable list without the model -> not-served (the xfuel shape)");
   ok((await sellerServesModel(`${base}/v1/chat/completions`, "theta/glm_5_3", t)).verdict === "served", "a listed model -> served");
   ok(hits === 1, "the list was read ONCE for both verdicts (cached per list URL)");
-  ok((await sellerServesModel(`${base}/wide/v1/chat/completions`, "gpt-4o-mini", t)).verdict === "served", "prefix-listed model -> served (the blockrun shape)");
+  ok((await sellerServesModel(`${base}/wide/v1/chat/completions`, "gpt-4o-mini", t)).verdict === "served", "prefix-listed model -> served");
   ok((await sellerServesModel(`${base}/empty/v1/chat/completions`, "gpt-4o-mini", t)).verdict === "unknown", "an EMPTY list is unknown, never a refusal");
   ok((await sellerServesModel(`${base}/html/v1/chat/completions`, "gpt-4o-mini", t)).verdict === "unknown", "an unparseable list is unknown");
   ok((await sellerServesModel(`${base}/nolist/v1/chat/completions`, "gpt-4o-mini", t)).verdict === "unknown", "a 404 list is unknown (fail open)");

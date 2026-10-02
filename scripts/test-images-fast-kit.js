@@ -16,7 +16,7 @@ const {
   validateImageTierRequest, validateVideosRequest, linkRepriced, mediaMarginTable, withinMargin,
   VIDEOS_MODEL, VIDEOS_PRICE, VIDEOS_DURATION_SECONDS, VIDEOS_WORST_CASE_USD, _resetListingCacheForTest,
 } = await import("../src/tools/llm-images-fast-kit.js");
-const { MARGIN } = await import("../src/tools/llm-gateway-kit.js");
+const { MARGIN, IMAGES_MODEL, LLM_GATEWAY_TOOLS } = await import("../src/tools/llm-gateway-kit.js");
 const { _testEventsForTest } = await import("../src/posthog.js");
 
 let pass = 0, fail = 0;
@@ -36,12 +36,16 @@ for (const [tier, t] of Object.entries(IMAGE_TIERS)) {
   ok(t.chain.length === 2 && t.chain.every((l) => l.model && l.provider && typeof l.worstCaseUsd === "number" && l.listed?.unit && typeof l.listed.maxCostUsd === "number"), `${tier}: primary + one failover, each with a provider pin, a bound and a listed-price check`);
   // Compare NUMBERS, not trimmed strings: a chain of trailing-zero replaces is
   // both fragile ("$10" would become "$1") and reads as a sanitizer.
-  ok(Math.abs(Number(t.price) - Number(String(bySlug(tier).price).replace(/^\$/, ""))) < 1e-9, `${tier}: tool price matches the tier price`);
+  // v1-images is the flagship /v1/images/generations route, whose tool lives in the gateway kit.
+  const tool = bySlug(tier) || LLM_GATEWAY_TOOLS.find((x) => x.slug === tier);
+  ok(Math.abs(Number(t.price) - Number(String(tool.price).replace(/^\$/, ""))) < 1e-9, `${tier}: tool price matches the tier price`);
 }
+ok(IMAGE_TIERS["v1-images"].chain[0].model === IMAGES_MODEL && IMAGE_TIERS["v1-images"].path === "/v1/images/generations", "the /v1/images/generations links: first link is the model /v1/models advertises");
+ok(IMAGE_TIERS["v1-images"].chain.every((l) => l.model !== "google/gemini-2.5-flash-image" && (l.params.output_format === "png" || l.model === "openai/gpt-5-image-mini")), "the route keeps its documented PNG output on every link (gpt-5-image-mini answers PNG natively)");
 const table = mediaMarginTable();
-ok(table.length === 5 && table.every((r) => withinMargin(r.price, r.worst)), `margin: every link's bound is <= ${MARGIN * 100}% of its tier price (${table.map((r) => `${r.model}@$${r.price}:$${r.worst}`).join(", ")})`);
-ok(!withinMargin(0.02, 0.0141) && withinMargin(0.02, 0.014), "withinMargin compares in micro-dollars (70% of $0.02 is exactly $0.014, not a float near-miss)");
-ok(Math.abs(VIDEOS_WORST_CASE_USD - 0.03 * VIDEOS_DURATION_SECONDS) < 1e-9 && VIDEOS_WORST_CASE_USD <= VIDEOS_PRICE * MARGIN + 1e-9, "video bound = listed $0.03/s x locked 4 s = $0.12 under 70% of $0.20");
+ok(table.length === 7 && table.every((r) => withinMargin(r.price, r.worst)), `margin: every link's bound is within the margin share of its tier price (${table.map((r) => `${r.model}@$${r.price}`).join(", ")})`);
+ok(!withinMargin(0.02, 0.0141) && withinMargin(0.02, 0.014), "withinMargin compares in micro-dollars (an exact boundary is equal, not a float near-miss)");
+ok(Math.abs(VIDEOS_WORST_CASE_USD - 0.03 * VIDEOS_DURATION_SECONDS) < 1e-9 && VIDEOS_WORST_CASE_USD <= VIDEOS_PRICE * MARGIN + 1e-9, "video worst case is fixed by the locked 4 s duration and stays within bound");
 
 // ---- image validation ----
 ok(validateImageTierRequest({ prompt: " a fox " }, "v1-images-fast").prompt === "a fox", "prompt trims and validates");

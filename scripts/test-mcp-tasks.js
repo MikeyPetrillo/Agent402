@@ -190,7 +190,7 @@ const brokeGot = await rpc("tasks/get", { taskId: broke.result.taskId, _meta: CL
 ok(brokeGot.result?.status === "failed", "a run that throws is expressed as a FAILED task");
 ok(brokeGot.result?.error && typeof brokeGot.result.error.code === "number", "a failed task carries a JSON-RPC error object");
 ok(!/socket hang up/.test(JSON.stringify(brokeGot.result)), "the internal error body is NEVER relayed to the buyer");
-ok(/not charged/i.test(String(brokeGot.result?.statusMessage || "")), "a failed task states the buyer was not charged");
+ok(/may still have completed and been charged/.test(String(brokeGot.result?.statusMessage || "")) && /recorded as owed in our refund ledger and repaid after review/.test(String(brokeGot.result?.statusMessage || "")) && !/automatic/i.test(String(brokeGot.result?.statusMessage || "")) && !/not charged/i.test(String(brokeGot.result?.statusMessage || "")), "a run whose result never reached the connector says it may have been charged and that a charge is owed back after review (the paid request settles server-side)");
 
 // (c) a 402 that arrives AFTER the gate window still fails loudly, with the ask.
 plan = { research: { delayMs: 400, res: jsonRes(402, { type: "https://paymentauth.org/problems/verification-failed", detail: "nope" }, { "www-authenticate": CHALLENGE_HEADER }) } };
@@ -227,10 +227,11 @@ const cancelAck = await rpc("tasks/cancel", { taskId: toCancel.result.taskId, _m
 ok(cancelAck.result?.resultType === "complete", "tasks/cancel acknowledges with resultType:\"complete\"");
 ok(Object.keys(cancelAck.result).length === 1, "the cancel ack is empty apart from the discriminator");
 await sleep(120);
-ok(cancelCall.aborted === true, "cancelling ABORTS the paid run - a non-200 cancels settlement, so a cancelled task never charges");
+ok(cancelCall.aborted === true, "cancelling stops the connector waiting on the paid run");
 const cancelled = await rpc("tasks/get", { taskId: toCancel.result.taskId, _meta: CLIENT_CAPS });
 ok(cancelled.result?.status === "cancelled", "the cancelled task reports the cancelled status");
-ok(/not charged/i.test(String(cancelled.result?.statusMessage || "")), "the cancelled task states the buyer was not charged");
+ok(/may still have completed and been charged/.test(String(cancelled.result?.statusMessage || "")) && !/not charged/i.test(String(cancelled.result?.statusMessage || "")), "the cancelled task says the run may still have been charged (the paid request settles server-side), never \"not charged\"");
+ok(/recorded as owed in our refund ledger and repaid after review/.test(String(cancelled.result?.statusMessage || "")) && !/automatic/i.test(String(cancelled.result?.statusMessage || "")), "...and that such a charge is repaid after review, never promised as automatic");
 await sleep(300);
 const stillCancelled = await rpc("tasks/get", { taskId: toCancel.result.taskId, _meta: CLIENT_CAPS });
 ok(stillCancelled.result?.status === "cancelled", "a terminal task never transitions again, even if the run reports back late");

@@ -1,9 +1,0 @@
-{
- "buyerUsd": "0.005",
- "upstreamUsd": "0.002",
- "marginUsd": "0.003",
- "buyerTx": "0xb8a8474440e86e97fee78f01ace14b94e16c4cbd0f969308a674248fbdd6b3ae",
- "upstreamTx": "0x0101340c6423deb810d58313f08935df04a9db49b08884141dcd865bd6b1c1d0",
- "dataLabel": "vitalik.eth on Ethereum",
- "resultLine": "vitalik.eth \u00b7 6.63 ETH \u00b7 profile intact end to end"
-}

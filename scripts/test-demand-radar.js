@@ -159,18 +159,31 @@ const agg = (clusters, over = {}) => ({
   ok(WALLET_ONLY_SLUGS.has("x402-trending"), "sibling paid-intelligence layer x402-trending still wallet-only (sanity)");
 }
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
-
-// --- the handler must ask for the DETAILED aggregate: the beacon-only default
-// carries no cluster rows, and the paid radar was empty for six weeks because
-// of exactly this call (2026-07-21 to 2026-09-06). Pinned from source.
+// --- the handler must ask for the DETAILED aggregate, and a board it cannot
+// see must REFUSE. The paid radar was empty for six weeks (2026-07-21 to
+// 2026-09-06, 193 settlements) because the handler read the beacon envelope,
+// which carries counts and no cluster rows. This block used to sit AFTER the
+// process.exit() below and therefore never ran once - its source pin still
+// named `limit: 500` long after the handler moved to the whole board, and a
+// guard that cannot execute is a certificate for nothing. It asserts the
+// refusal now, not the hollow envelope it used to reproduce.
 {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/tools/x402-kit.js", import.meta.url), "utf8");
-  const ok2 = (c, m) => { if (!c) { console.error("FAIL -", m); process.exit(1); } console.log("ok -", m); };
-  ok2(src.includes("computeDemandRadar(getWishesAggregate({ limit: 500, detailed: true }), i)"), "demand-radar handler reads the detailed aggregate (cluster rows), not the public beacon");
-  const beacon = computeDemandRadar({ distinctClusters: 1055, totalWishes: 4010, threshold: 5, qualifiedClusters: 1 }, { minCount: 1 });
-  ok2(beacon.matchedClusters === 0 && beacon.distinctClusters === 1055, "a beacon-only aggregate yields the hollow envelope the buyer saw (1055 clusters, 0 rows)");
+  ok(/computeDemandRadar\(getWishesAggregate\(\{ limit: [0-9_]+, detailed: true \}\), i\)/.test(src), "demand-radar handler reads the detailed aggregate (cluster rows), not the public beacon");
+  let threw = null;
+  try { computeDemandRadar({ distinctClusters: 1055, totalWishes: 4010, threshold: 5, qualifiedClusters: 1 }, { minCount: 1 }); }
+  catch (e) { threw = e; }
+  ok(threw && threw.statusCode === 502, `a beacon-only aggregate (1055 clusters, no rows) REFUSES 502 instead of selling the hollow envelope (got ${threw ? threw.statusCode : "a 200"})`);
+  ok(threw && /not charged/.test(threw.message) && /1055/.test(threw.message), "the refusal says nobody was charged and names what the board claimed");
+  // ...and the honest empties still answer 200: a genuinely empty board, and a
+  // filter the CALLER chose that matched nothing.
+  ok(computeDemandRadar({ distinctClusters: 0, totalWishes: 0, threshold: 5, clusters: [] }, {}).matchedClusters === 0, "a genuinely empty board still answers (0 clusters, 0 rows)");
+  const filtered = computeDemandRadar(agg([cl("only", 1, { api: 1 })]), { minCount: 9 });
+  ok(filtered.matchedClusters === 0 && filtered.distinctClusters === 1, "a caller's own minCount filtering everything out is an answer, not a refusal");
+  const qOnly = computeDemandRadar(agg([cl("only", 1, { api: 1 })]), { qualifiedOnly: true });
+  ok(qOnly.matchedClusters === 0, "qualifiedOnly matching nothing is an answer, not a refusal");
 }
 
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

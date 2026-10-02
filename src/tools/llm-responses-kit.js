@@ -24,7 +24,8 @@
 // code_interpreter, image_generation) are refused: their spend is bounded by
 // neither max_output_tokens nor provider.max_price. Function tools only.
 import {
-  TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor, meteredQuoteForProbe, costFor,
+  substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor, meteredQuoteForProbe, costFor,
+  isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
   defaultReasoningFor, validateReasoning,
@@ -32,7 +33,7 @@ import {
   assertUpstreamBody,
 } from "./llm-gateway-kit.js";
 
-import { METER_MARKUP, METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
+import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 import { flattenNamespaceForResponses, attributeNamespaces } from "./tool-namespaces.js";
 const OPENROUTER_RESPONSES_URL = "https://openrouter.ai/api/v1/responses";
@@ -106,13 +107,15 @@ export function validateResponsesRequest(input, tierSlug) {
   if (input.background === true) throw bad('"background" responses are not served (no server-side state)');
   const isRouted = tier.router === true && (!canonicalModel(input.model) || canonicalModel(input.model) === "auto");
   let model = canonicalModel(input.model);
+  const substituted = substitutedFrom(input.model);
   let defaultedModel = null;
   if (!isRouted) {
     refuseCostVariants(model);
     if (!model && tier.defaultModel) { model = tier.defaultModel; defaultedModel = model; } // see llm-messages-kit: serve the tier default, never refuse a missing model
     if (!model) throw bad(`"model" is required (e.g. openai/gpt-4o-mini). This tier serves: ${tier.prefixes?.slice(0, 6).join(", ") || "see /v1/models"}`);
     if (!tierAllows(tierSlug, model)) {
-      const home = tierFor(model);
+      // "auto" when not gated at the auto price: name the auto route.
+      const home = model === AUTO_MODEL ? AUTO_TIER : tierFor(model);
       // RESPONSES_PATH_BY_TIER is an explicit map: a chat tier with no
       // Responses twin would render as "served on undefined". Fall back to
       // that tier's real chat route.
@@ -224,7 +227,7 @@ export function validateResponsesRequest(input, tierSlug) {
   const routedQuality = isRouted ? (input.quality === undefined ? "balanced" : String(input.quality)) : null;
   if (isRouted && !AUTO_RANKINGS[routedQuality]) throw bad('"quality" must be "fast", "balanced", or "best"');
   const chain = isRouted ? [...AUTO_RANKINGS[routedQuality][routedCategory]] : [model, ...(tier.fallbacks || []).filter((m) => m !== model)];
-  return { body, probe, imageCount: acc.images, isRouted, routedCategory, routedQuality, chain, defaultedModel, namespaceOf };
+  return { body, probe, imageCount: acc.images, isRouted, routedCategory, routedQuality, chain, defaultedModel, substituted: isRouted ? null : substituted, namespaceOf };
 }
 
 /** status incomplete for max_output_tokens with no text/function output =
@@ -243,12 +246,16 @@ function stripBilling(usage) {
   return upstreamUsd;
 }
 
-export function makeResponsesHandler(tierSlug) {
+export function makeResponsesHandler(routeTier) {
   return async function responsesHandler(input, req) {
     // Settle-failure breaker first: refuse (nobody charged) before any upstream call.
     gatewaySettleBreakerCheck(req);
+    // Price by model (chat-wire parity): `tierSlug` is the route's tier unless
+    // the body names another flat tier's model and the request was gated at
+    // that tier's price; then that tier's whole config serves it.
+    const tierSlug = servedTierFor(routeTier, input?.model, req);
     const tier = TIERS[tierSlug];
-    const { body, probe, imageCount, isRouted, routedCategory, routedQuality, chain, defaultedModel, namespaceOf } = validateResponsesRequest(input, tierSlug);
+    const { body, probe, imageCount, isRouted, routedCategory, routedQuality, chain, defaultedModel, substituted, namespaceOf } = validateResponsesRequest(input, tierSlug);
     const structured = body.text?.format?.type === "json_schema" || body.text?.format?.type === "json_object";
     // Metered belt (chat + Messages wire parity): an over-cap body is refused
     // before any upstream call (the 402 quoted the cap, not the cost), and
@@ -291,7 +298,7 @@ export function makeResponsesHandler(tierSlug) {
     };
     const recordUsage = (usage, upstreamUsd, served, serviceTier) => import("../posthog.js")
       .then(({ capturePostHogGatewayUsage }) => capturePostHogGatewayUsage({
-        tier: `${tierSlug}:responses`, model: served, priceUsd: quotedUsd ?? tier.price, upstreamUsd,
+        tier: `${tierSlug}:responses`, routeTier: `${routeTier}:responses`, model: served, priceUsd: quotedUsd ?? tier.price, upstreamUsd,
         promptTokens: usage?.input_tokens, completionTokens: usage?.output_tokens, serviceTier, defaulted: !!defaultedModel,
       })).catch(() => {});
     const attempts = attemptsFor(chain, body);
@@ -345,6 +352,8 @@ export function makeResponsesHandler(tierSlug) {
         await recordUsage(data.usage, upstreamUsd, data.model || model, data.service_tier || (flex ? "flex" : "default"));
         if (routerNote) data.agent402_router = { ...routerNote, served: data.model || model };
         if (defaultedModel) data.agent402_default_model = defaultedModel;
+        if (substituted) data.agent402_model_substituted = { requested: substituted, served: body.model, reason: "the requested model is retired upstream; its named successor served instead" };
+        if (tierSlug !== routeTier) data.agent402_tier = { ...crossTierDisclosure(routeTier, tierSlug), route: RESPONSES_PATH_BY_TIER[routeTier] };
         if (namespaceOf) attributeNamespaces(data.output, namespaceOf);
         // Metered settlement sentinel (chat-wire parity): the route binder
         // settles actual x markup for upto/credits buyers and strips this
@@ -387,7 +396,7 @@ const INPUT_SCHEMA = {
 function describe(tierSlug) {
   const t = TIERS[tierSlug];
   if (tierSlug === "v1-chat-metered") {
-    return `OpenAI Responses API billed per request from what the call costs: the 402 quotes exact-BPE input (instructions + input items + tools) plus your max_output_tokens at the model's list price, times ${METER_MARKUP}, never under $${METER_MIN_SETTLE_USD}; an upto (Permit2) or credits buyer settles actual usage under that quote. Point the OpenAI SDK's responses.create(), the OpenAI Agents SDK, or OpenAI Codex CLI's model_providers base_url at https://agent402.tools/v1/metered. Any model the flat tiers serve (GET /v1/models); function tools only; store is always false.`;
+    return `OpenAI Responses API billed per request from what the call costs: the 402 quotes exact-BPE input (instructions + input items + tools) plus your max_output_tokens, never under $${METER_MIN_SETTLE_USD}; an upto (Permit2) or credits buyer settles actual usage under that quote. Point the OpenAI SDK's responses.create(), the OpenAI Agents SDK, or OpenAI Codex CLI's model_providers base_url at https://agent402.tools/v1/metered. Any model the flat tiers serve (GET /v1/models); function tools only; store is always false.`;
   }
   const base = `OpenAI Responses API over x402 - point the OpenAI SDK's responses.create() (or the OpenAI Agents SDK) at base_url https://agent402.tools${RESPONSES_PATH_BY_TIER[tierSlug].replace(/\/responses$/, "")} and pay ${priceString(tierSlug)} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Responses wire. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported; function tools and tool namespaces yes (a namespace is flattened into its functions; function_call items carry a namespace field on non-streamed output), server-side tools (web_search, file_search, computer, mcp) no; no stored conversation state (send the full input each call).`;
   const dflt = t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel} (named back in agent402_default_model); the price does not change.` : "";
@@ -403,6 +412,8 @@ export const LLM_RESPONSES_TOOLS = Object.entries(RESPONSES_PATH_BY_TIER).map(([
   description: describe(tierSlug),
   tags: tierSlug === "v1-chat-metered" ? ["llm", "ai", "inference", "openai-compatible", "responses-api", "agents-sdk", "codex", "gateway", "openrouter", "metered", "pay-per-token"] : ["llm", "ai", "inference", "openai-compatible", "responses-api", "agents-sdk", "gateway", "openrouter"],
   ...(tierSlug === "v1-chat-metered" ? { quote: (body) => meteredResponsesQuoteUsd(body).usd } : {}),
+  // Price by model on a flat route (see LLM_GATEWAY_TOOLS in the gateway kit).
+  ...(isFlatTier(tierSlug) ? { tierQuote: (body) => flatTierQuoteUsd(tierSlug, body?.model) } : {}),
   discovery: {
     bodyType: "json",
     // A tier whose default model reasons before it speaks (it carries

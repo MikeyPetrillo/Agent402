@@ -2,14 +2,14 @@
 // Tempo MPP volume runner - buys our own cheapest route over MPP's native
 // tempo/charge method N times from the canary burner (USDC.e on Tempo).
 //
-// Why a separate scheduled run and not the daily canary: Mike wants steady
+// Why a separate scheduled run and not the daily canary: the operator wants steady
 // settled Tempo volume at $0.001 (real on-chain volume for the MPP
 // leaderboard window, the router's proven-seller gate and Tempo's transfer
 // feed). One wallet cannot sign many credentials in parallel safely
 // (nonces), so buys are sequential - too long for the canary job at any
 // real volume. tempo-volume.yml runs this every 2 hours with
 // TEMPO_VOLUME_TX=17 (12 x 17 = ~200/day; lowered from 84 = ~1,000/day on
-// 2026-08-20, Mike's call); the daily canary keeps its ONE graded
+// 2026-08-20, the operator's call); the daily canary keeps its ONE graded
 // mpp-tempo settle as the rail proof (its volume knob stays at 1).
 //
 // Every buy is a fresh 402 -> tempo challenge -> credential -> settle
@@ -19,9 +19,9 @@
 //
 // Exit 0 when >= TEMPO_VOLUME_MIN_SUCCESS (default 80%) settled; 1 otherwise;
 // 2 when the preflight (balance / challenge) refuses to start. Balance
-// guard: refuses to run below TEMPO_VOLUME_MIN_BALANCE_USD (default $2) so a
-// draining wallet is never ground to zero by the volume runner itself - the
-// canary's funding sweep pages at $5 USDC.e (~25 days at 200/day) for the same wallet.
+// guard: refuses to run below TEMPO_VOLUME_MIN_BALANCE_USD so a draining
+// wallet is never ground to zero by the volume runner itself - the canary's
+// funding sweep pages at its own low-water mark for the same wallet.
 import { createHmac } from "node:crypto";
 import { privateKeyToAccount } from "viem/accounts";
 

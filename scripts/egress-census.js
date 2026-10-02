@@ -28,7 +28,7 @@ import { join } from "node:path";
 const METERED = [
   ["api.search.brave.com", "BRAVE_API_KEY", "Brave Search"],
   // NB this host serves TWO different things: the BILLED SQL API (via the
-  // onchain-sql tool, ~$0.0083/query, the source of the $245/mo invoice) and the
+  // onchain-sql tool, billed per query) and the
   // FREE x402 Bazaar discovery directory that the index crawler reads. A
   // host-level census cannot tell them apart, so a crawler doing its job reads
   // as paid queries. Check the attributed caller: x402-index.js / leaderboard.js
@@ -43,7 +43,6 @@ const METERED = [
   // "we could not look" when we could.
   ["api.neynar.com", ["NEYNAR_API_KEY", "WARPCAST_API_KEY"], "Neynar"],
   ["g.alchemy.com", "ALCHEMY_API_KEY", "Alchemy RPC"],
-  ["blockscout.com", "X402_UPSTREAM_BUYER_KEY", "Blockscout Pro"],
 ];
 
 const LOG = join(tmpdir(), `egress-census-${process.pid}.log`);

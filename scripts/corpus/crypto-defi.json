@@ -1,5 +1,5 @@
 {
- "about": "Tier 1: chain reads, CoinGecko demo, DefiLlama, Hyperliquid, Deribit, Solana public APIs, Polymarket, RWAs. pace: CoinGecko's demo plan is a 30/min shared bucket, so cases from this file start no closer than 3 s apart.",
+ "about": "Tier 1: chain reads, CoinGecko demo, DefiLlama, Hyperliquid, Deribit, Solana public APIs, RWAs. pace: CoinGecko's demo plan is a 30/min shared bucket, so cases from this file start no closer than 3 s apart.",
  "cases": [
   {
    "slug": "block-info",
@@ -911,27 +911,6 @@
     "gt": {
      "mid": 100
     }
-   }
-  },
-  {
-   "slug": "polymarket-market",
-   "name": "unknown slug is a 404",
-   "input": {
-    "slug": "zzq-no-such-market-slug"
-   },
-   "expect": {
-    "status": 404
-   }
-  },
-  {
-   "slug": "polymarket-orderbook",
-   "name": "unknown token is a 404",
-   "input": {
-    "tokenId": "1",
-    "depth": 3
-   },
-   "expect": {
-    "status": 404
    }
   },
   {

@@ -501,7 +501,7 @@ export const NETWORK_TOOLS2 = [
     category: "network",
     price: "$0.005",
     description:
-      "Search public Certificate Transparency logs (via crt.sh) for every cert issued to a domain. Returns the cert list plus a deduped subdomain set extracted from the SANs - the fastest way to enumerate subdomains for a security audit. Free upstream, no key required.",
+      "Search public Certificate Transparency logs for every cert issued to a domain. Two independent public CT search services are queried, the second only if the first is slow or fails, and `source` names the one that answered (their coverage windows differ). Returns the cert list plus a deduped subdomain set extracted from the SANs - the fastest way to enumerate subdomains for a security audit. No key required.",
     tags: ["security", "ssl", "tls", "certificates", "subdomain-discovery", "audit"],
     discovery: {
       bodyType: "json",
@@ -536,6 +536,7 @@ export const NETWORK_TOOLS2 = [
               notAfter: "2027-02-14T23:59:59",
             },
           ],
+          source: "crt.sh",
           queriedAt: "2026-06-19T22:00:00.000Z",
         },
       },
@@ -621,7 +622,7 @@ export const NETWORK_TOOLS2 = [
     route: "POST /api/asn-info",
     name: "ASN + IP geolocation",
     slug: "asn-info",
-    aliases: ["ip-geolocation", "geoip", "ip-lookup"],
+    aliases: ["ip-geolocation", "geoip", "ip-lookup", "geolocate-ip", "ip-location"],
     category: "network",
     price: "$0.001",
     description:

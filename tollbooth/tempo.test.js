@@ -154,8 +154,18 @@ server.close();
 
   const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
   const chReq = (amount = "1000") => b64url(JSON.stringify({ amount, currency: TEMPO_USDC_E, recipient: RECIPIENT, methodDetails: { chainId: 4217 } }));
-  const cred = (over = {}) => ({ challenge: { request: over.request ?? chReq() }, payload: over.payload ?? { type: "transaction", signature: SUBMITTED } });
-  const receiptFor = ({ status = "0x1", token = TEMPO_USDC_E, to = RECIPIENT, amount = 1000n } = {}) => ({ status, logs: [{ address: token, topics: [TRANSFER, `0x${"0".repeat(64)}`, `0x${to.slice(2).toLowerCase().padStart(64, "0")}`], data: `0x${amount.toString(16).padStart(64, "0")}` }] });
+  const CH_ID = "ch-tempo-confirm-test";
+  const cred = (over = {}) => ({ challenge: { id: over.id ?? CH_ID, request: over.request ?? chReq() }, payload: over.payload ?? { type: "transaction", signature: SUBMITTED } });
+  const { encode: encodeMemo } = await import("../node_modules/mppx/dist/tempo/Attribution.js");
+  const memoFor = (id) => encodeMemo({ challengeId: id, serverId: "site.test", clientId: "buyer" });
+  const TRANSFER_WITH_MEMO = "0x57bc7354aa85aed339e000bccffabbc529466af35f0772c8f8ee1145927de7f0";
+  const receiptFor = ({ status = "0x1", token = TEMPO_USDC_E, to = RECIPIENT, amount = 1000n, memo = memoFor(CH_ID), withMemoEvent = true } = {}) => {
+    const topicsTo = `0x${to.slice(2).toLowerCase().padStart(64, "0")}`, data = `0x${amount.toString(16).padStart(64, "0")}`;
+    return { status, logs: [
+      { address: token, topics: [TRANSFER, `0x${"0".repeat(64)}`, topicsTo], data },
+      ...(withMemoEvent ? [{ address: token, topics: [TRANSFER_WITH_MEMO, `0x${"0".repeat(64)}`, topicsTo, memo], data }] : []),
+    ] };
+  };
   const stubFetch = (map) => async (u, init) => { const q = JSON.parse(init.body); const r = map[q.params[0]] ?? null; return { ok: true, json: async () => ({ result: r }) }; };
 
   const found = await confirmTempoSettlement(cred(), { rpcUrl: "http://stub", fetchImpl: stubFetch({ [REAL_TXID]: receiptFor() }), attempts: 1 });
@@ -167,6 +177,8 @@ server.close();
   ok(await confirmTempoSettlement(cred({ request: chReq("5000") }), { rpcUrl: "http://stub", fetchImpl: stubFetch({ [REAL_TXID]: receiptFor({ amount: 1000n }) }), attempts: 1 }) === null, "confirm: an on-chain amount below the challenge amount never confirms");
   ok(await confirmTempoSettlement(cred({ payload: { type: "hash", hash: "0xab" } }), { rpcUrl: "http://stub", fetchImpl: stubFetch({ [REAL_TXID]: receiptFor() }), attempts: 1 }) === null, "confirm: a non-transaction payload derives nothing -> null");
   ok(await confirmTempoSettlement(cred(), { rpcUrl: "http://stub", fetchImpl: async () => { throw new Error("rpc down"); }, attempts: 1 }) === null, "confirm: RPC failure -> null, never throws");
+  ok(await confirmTempoSettlement(cred(), { rpcUrl: "http://stub", fetchImpl: stubFetch({ [REAL_TXID]: receiptFor({ memo: memoFor("another-challenge") }) }), attempts: 1 }) === null, "confirm: a settled transfer bound to a DIFFERENT challenge never confirms");
+  ok(await confirmTempoSettlement(cred(), { rpcUrl: "http://stub", fetchImpl: stubFetch({ [REAL_TXID]: receiptFor({ withMemoEvent: false }) }), attempts: 1 }) === null, "confirm: a plain Transfer with no MPP memo never confirms");
 
   // Gate: relay says failed, chain says settled -> buyer SERVED.
   const failRelay = { async validate() { return { ok: true }; }, async broadcast() { return { ok: false, error: "relay HTTP 200 invalid_payment" }; } };

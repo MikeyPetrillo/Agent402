@@ -4,7 +4,6 @@ name: Paid-path canary
 # *buying* still settles end-to-end — the heartbeat only exercises the free
 # proof-of-work path, so a paywall/facilitator/settlement regression would go
 # unnoticed. Repeated failure opens a GitHub issue; recovery closes it.
-# Cost: ~$0.001/day of dust from the test burner.
 on:
   schedule:
     # THREE attempts, not one. GitHub delivers scheduled workflows on a
@@ -17,6 +16,17 @@ on:
     #
     # The `gate` job below makes the extra attempts free: whichever lands first
     # does the buy, the others see a recent success and stop before spending.
+    #
+    # SIX attempts, every four hours, since 2026-09-30: three attempts in one
+    # afternoon left a hole. Their deliveries clustered 18:00-01:00 UTC, so a
+    # purchase made at noon (a dispatch) was skipped by every attempt that
+    # evening, the last one at 00:28 saw it 12 h old, and nothing arrived again
+    # before the observation passed /status's 26 h line - the page read
+    # degraded with buying healthy (#1533). Spread around the clock, with the
+    # gate's 18 h window, the next buy lands by ~22 h plus delivery drift.
+    - cron: "17 1 * * *"
+    - cron: "17 5 * * *"
+    - cron: "17 9 * * *"
     - cron: "17 13 * * *"
     - cron: "17 17 * * *"
     - cron: "17 21 * * *"
@@ -78,19 +88,21 @@ jobs:
             exit 0
           fi
           echo "last proven purchase: ${AGE}ms ago (state=$STATE)"
-          # 20h, not 24h: deliveries drift by hours, and a 24h window would let
+          # 18h, not 24h: deliveries drift by hours, and a 24h window would let
           # a late run suppress the next day's on-time one, quietly halving the
-          # cadence instead of protecting it.
+          # cadence instead of protecting it. With an attempt every 4h, the
+          # first one past 18h buys, so the observation stays under /status's
+          # 26h staleness line even with two hours of delivery drift.
           #
           # state must be operational, not merely fresh: a recent observation
           # that recorded a FAILED purchase is not proof that buying works, and
           # suppressing the next attempt on the strength of it would turn the
           # three-attempt design into one attempt to fail per day.
-          if [ "$STATE" = "operational" ] && [ "$AGE" -lt 72000000 ]; then
-            echo "a real purchase settled within 20h - skipping this redundant attempt (not a failure)"
+          if [ "$STATE" = "operational" ] && [ "$AGE" -lt 64800000 ]; then
+            echo "a real purchase settled within 18h - skipping this redundant attempt (not a failure)"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "no proven purchase in the last 20h - this attempt will buy"
+            echo "no proven purchase in the last 18h - this attempt will buy"
           fi
 
   canary:
@@ -118,7 +130,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TARGET_URL: https://agent402.tools
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -144,7 +156,7 @@ jobs:
           LOCKV() { node -p "require('./package-lock.json').packages['node_modules/$1'].version"; }
           VIEM=$(LOCKV viem); STELLAR=$(LOCKV @stellar/stellar-sdk); SOLKIT=$(LOCKV @solana/kit)
           echo "lock-pinned: viem@$VIEM @stellar/stellar-sdk@$STELLAR @solana/kit@$SOLKIT"
-          npm install --no-save --ignore-scripts @x402/fetch@2.26.0 @x402/core@2.26.0 @x402/evm@2.26.0 @x402/svm@2.26.0 @x402/stellar@2.26.0 "@stellar/stellar-sdk@$STELLAR" "@solana/kit@$SOLKIT" "viem@$VIEM"
+          npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 @x402/svm@2.27.0 @x402/stellar@2.27.0 "@stellar/stellar-sdk@$STELLAR" "@solana/kit@$SOLKIT" "viem@$VIEM"
           echo "installed viem: $(node -p "require('viem/package.json').version") mppx: $(node -p "require('./node_modules/mppx/package.json').version")"
       - name: Buy one tool from production (real USDC)
         id: canary
@@ -161,7 +173,7 @@ jobs:
             echo "result=noconfig" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "::add-mask::$BURNER_KEY"
-          # Optional Solana leg — buys the $0.05 decode-blob skill pack paying
+          # Optional Solana leg — buys the decode-blob skill pack paying
           # USDC on Solana (sized to clear explorer dust filters; deterministic,
           # pure-CPU, no upstream cost). Informational (warns, never pages);
           # silently skipped when the SOLANA_BURNER_KEY secret is unset.

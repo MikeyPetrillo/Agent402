@@ -26,7 +26,8 @@
 import { JSDOM } from "jsdom";
 import { ssrfDispatcher, safeFetch, assertPublicUrl, isSsrfBlock, retryTransient } from "./fetch-guard.js";
 
-const USER_AGENT = "Mozilla/5.0 (compatible; Agent402/1.0; +https://github.com/MikeyPetrillo/Agent402)";
+import { REPO_URL } from "../repo-link.js";
+const USER_AGENT = "Mozilla/5.0 (compatible; Agent402/1.0; +${REPO_URL})";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -240,7 +241,7 @@ export const WEB_TOOLS = [
   {
     route: "POST /api/archive-snapshot",
     name: "Wayback Machine snapshot",
-    slug: "archive-snapshot",
+    slug: "archive-snapshot", aliases: ["wayback", "website-history", "site-history"],
     category: "web",
     price: "$0.003",
     description:

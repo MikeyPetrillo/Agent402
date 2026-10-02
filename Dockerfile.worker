@@ -8,7 +8,7 @@
 # secret is present, so the isolation can't be silently undone.
 #
 # Base pinned by DIGEST (matches the main image). Re-pin after a deliberate bump.
-FROM node:22-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3
+FROM node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
 
 WORKDIR /app
 ENV NODE_ENV=production

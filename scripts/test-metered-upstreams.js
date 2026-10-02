@@ -51,6 +51,7 @@ const ALLOWED = {
   "leaderboard.js": { why: "leaderboard scan", bound: /CACHE|TTL|cached/i },
   "x402-index.js": { why: "registry discovery poll", bound: /DISCOVERY_INTERVAL_MS/ },
   "server.js": { why: "wallet activity scan", bound: /SQL_SCAN_DAILY_BUDGET/ },
+  "verify-hint.js": { why: "payer balance read after a refused payment; public nodes first, the keyed provider last", bound: /MAX_BATCHES_INFLIGHT/ },
   // A file may NAME a metered host without ever calling it - upstream-budgets
   // declares the per-vendor daily call budgets and matches egress-meter rows by
   // hostname, so the host strings are the subject of the bound, not a request.

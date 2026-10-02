@@ -4,7 +4,9 @@
 // branding, and "back to home" behavior are identical site-wide.
 //
 // Classes are prefixed `site-` so they don't collide with page-specific CSS
-// that lives in landing.js, pages.js, guides.js, etc.
+// that lives in pages.js, guides.js, etc.
+
+import { REPO_URL } from "./repo-link.js";
 
 export const CHROME_HEAD_LINKS = `<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="icon" type="image/png" sizes="512x512" href="/logo.png">
@@ -64,7 +66,7 @@ export function renderHeader(currentPath = "", extraLinks = []) {
   <a class="site-brand" href="/"><span class="glyph">402</span> Agent402</a>
   <span class="spacer"></span>
   ${links}
-  <a class="gh" href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub ★</a>
+  <a class="gh" href="${REPO_URL}" rel="noopener">GitHub ★</a>
   <a class="gh" href="https://x.com/Agent402Tools" rel="noopener">𝕏</a>
 </div></nav>`;
 }
@@ -99,7 +101,6 @@ export function renderFooter() {
       <a href="/marketplace">Marketplace</a>
       <a href="/leaderboard">Leaderboard</a>
       <a href="/marketplace#economy">Economy</a>
-      <a href="/analytics">Analytics</a>
       <a href="/playground">Playground</a>
       <a href="/community">Community</a>
     </div>
@@ -117,10 +118,10 @@ export function renderFooter() {
     <div class="ft-legal">
       <a href="/privacy">Privacy</a><span class="sep">·</span>
       <a href="/terms">Terms</a><span class="sep">·</span>
-      <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">GitHub</a><span class="sep">·</span>
+      <a href="${REPO_URL}" rel="noopener">GitHub</a><span class="sep">·</span>
       <a href="https://x.com/Agent402Tools" rel="noopener">𝕏 @Agent402Tools</a>
     </div>
-    <div class="ft-tag">Agent402 - open-source x402 + MCP server. Built by <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">Havok Holdings LLC</a>.</div>
+    <div class="ft-tag">Agent402 - open-source x402 + MCP server. Built by <a href="${REPO_URL}" rel="noopener">Havok Holdings LLC</a>.</div>
   </div>
 </footer>`;
 }

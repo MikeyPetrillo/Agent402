@@ -1,5 +1,20 @@
 # Tweet queue: posts APPROVED copy on a schedule with no local session involved.
 #
+# REPLACED BY THE SERVER QUEUE once that is enabled. src/tweet-queue.js posts
+# the same JSON from the Railway variable TWEET_QUEUE on the hour, because
+# GitHub delivers this schedule sparsely (slots posted hours late or aged out).
+# At cutover the operator disables this workflow BEFORE the server starts
+# posting:   gh workflow disable tweet-queue.yml
+# so exactly one poster runs. The two keep separate posted-id records (the
+# Actions cache here, /data on the server), so running both would leave only
+# X's duplicate-text refusal between them. The server's FIRST run (no state
+# file) posts nothing already due, since this workflow may have posted it; set
+# TWEET_QUEUE_POST_AFTER (ISO time) on Railway to move that line. Kept, not
+# deleted, as the fallback:
+# re-enable it (gh workflow enable) only after TWEET_QUEUE_POSTING=off is set
+# on Railway. The server refuses items that carry a card (its operator read
+# lists them by id); post those through announce.yml with its card input.
+#
 # The queue is the repo SECRET `TWEET_QUEUE`: a JSON array of
 # {id, when: "YYYY-MM-DDTHH:00:00Z", text, card?}. A secret is not a commit,
 # so tweet copy never enters the tree (the standing rule); it cannot be read

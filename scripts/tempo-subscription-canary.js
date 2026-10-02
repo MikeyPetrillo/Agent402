@@ -129,18 +129,30 @@ const manageUrl = (extra = "") =>
 
 // Always try to cancel, whatever happens next: a canary that leaves a live
 // standing authorization behind on every failed run is its own slow leak.
+// The cancel is VERIFIED, not assumed: the server closes a canary record at
+// once, so the answer must say status "canceled". Before 2026-09-24 this only
+// logged the HTTP status, and a cancel that left the record `active` (the
+// server honoured the paid period, which nothing ever refreshed for a canary)
+// went unnoticed on almost every run. A server boot sweep is the backstop.
 let canceled = false;
+let cancelVerified = false;
 async function cleanup() {
   if (canceled) return;
   canceled = true;
-  try {
-    const c = await fetch(`${TARGET}/api/mpp/monitors/${encodeURIComponent(sub.subId)}/cancel`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "X-Heartbeat-Token": hb() },
-      body: JSON.stringify({ token: sub.manageToken }),
-    });
-    console.log(`cleanup: cancel returned ${c.status}`);
-  } catch (e) { console.warn(`cleanup: cancel threw ${e?.message || e}`); }
+  for (let attempt = 1; attempt <= 2 && !cancelVerified; attempt++) {
+    try {
+      const c = await fetch(`${TARGET}/api/mpp/monitors/${encodeURIComponent(sub.subId)}/cancel`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "X-Heartbeat-Token": hb() },
+        body: JSON.stringify({ token: sub.manageToken }),
+      });
+      const j = await c.json().catch(() => null);
+      console.log(`cleanup: cancel attempt ${attempt} returned ${c.status} status=${j?.status ?? "?"}`);
+      if (c.ok && j?.status === "canceled") cancelVerified = true;
+    } catch (e) { console.warn(`cleanup: cancel attempt ${attempt} threw ${e?.message || e}`); }
+    if (!cancelVerified && attempt < 2) await sleep(3_000);
+  }
+  if (!cancelVerified) console.warn("WARN  cleanup: the canary subscription is NOT confirmed canceled; the server's canary sweep will close it (POST /__operator/mpp-subscriptions/sweep-canaries)");
 }
 
 // Anything unexpected from here on must still cancel: an uncaught throw would
@@ -198,6 +210,7 @@ if (!after.lastChargeTx || after.lastChargeTx === sub.lastChargeTx) {
        `(activation tx ${sub.lastChargeTx}, now ${after.lastChargeTx || "(none)"}). The counter moved without provable payment.`);
 }
 if (after.status !== "active") fail(`renewal left status ${after.status}, expected active`);
+if (!cancelVerified) fail("the renewal settled but the canary subscription was not confirmed canceled - a standing authorization stays open until the server's canary sweep closes it");
 
 console.log(`RENEWED - period ${after.lastChargedPeriod} pulled with no buyer present, tx ${after.lastChargeTx}`);
 

@@ -42,8 +42,12 @@ const typesOf = (s) => new Set(Array.isArray(s?.type) ? s.type.map(String) : s?.
 /** A name we are willing to publish. Anything else is dropped rather than
  *  escaped or truncated: we are not obliged to relay every string a seller
  *  wrote, and a name that does not look like a name is not evidence. */
+// Names that address an object's prototype rather than a property on it. The
+// charset allowlist passes them, and a caller that walks these names into an
+// object (probeBodyFor did) writes onto Object.prototype for the whole process.
+const RESERVED_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 export function safeName(n) {
-  return typeof n === "string" && SAFE_NAME.test(n) ? n : null;
+  return typeof n === "string" && SAFE_NAME.test(n) && !RESERVED_NAMES.has(n) ? n : null;
 }
 
 function hasUnsupported(node, state = { seen: 0 }, depth = 0) {
@@ -74,6 +78,23 @@ function requiredBodyPaths(schema, prefix = "", depth = 0, out = [], state = { t
     if (isRecord(child) && typesOf(child).has("object")) requiredBodyPaths(child, path, depth + 1, out, state);
   }
   return { paths: out, truncated: state.truncated };
+}
+
+// Optional inputs a buyer MAY send, by location: query parameters and the
+// JSON body's top-level properties. Kept beside the required names so a
+// planner can fill a parameter the seller declared but did not require (a
+// route whose inputs are all optional is not a route that takes no input).
+const OPTIONAL_LOCATIONS = ["query", "body"];
+function optionalBodyNames(schema, required) {
+  const out = [];
+  if (!isRecord(schema?.properties)) return out;
+  for (const raw of Object.keys(schema.properties)) {
+    const n = safeName(raw);
+    if (!n || required.includes(raw)) continue;
+    if (out.length >= MAX_PER_LOCATION) break;
+    out.push(n);
+  }
+  return out;
 }
 
 /**
@@ -107,6 +128,17 @@ export function requestContractOf(operation) {
     }
     if (names.length) required[loc] = names;
   }
+  const optional = {};
+  {
+    const names = [];
+    for (const p of Array.isArray(operation.parameters) ? operation.parameters : []) {
+      if (!isRecord(p) || p.required === true || String(p.in) !== "query") continue;
+      const n = safeName(p.name);
+      if (!n || names.includes(n) || names.length >= MAX_PER_LOCATION) continue;
+      names.push(n);
+    }
+    if (names.length) optional.query = names;
+  }
 
   const body = operation.requestBody;
   if (isRecord(body)) {
@@ -122,20 +154,77 @@ export function requestContractOf(operation) {
       const walk = requiredBodyPaths(schema);
       if (walk.truncated) partial = true;
       else if (walk.paths.length) required.body = walk.paths;
+      const opt = optionalBodyNames(schema, Array.isArray(schema.required) ? schema.required : []);
+      if (opt.length) optional.body = opt;
     }
   }
 
   const any = Object.keys(required).length > 0;
   const state = any ? (partial ? "partial" : "declared") : (partial ? "partial" : "absent");
-  return { state, source: "seller_openapi", required, runtimeVerified: false };
+  return { state, source: "seller_openapi", required, ...(Object.keys(optional).length ? { optional } : {}), runtimeVerified: false };
 }
 
-/** Compact tuple for the crawl cache. `absent` and `unknown` store nothing:
- *  the projection reconstructs "unknown" from the missing row, which is the
- *  honest default for a row we have no evidence about. */
+/**
+ * The same contract, read from a JSON Schema a seller declares beside a route
+ * in its /.well-known/x402 manifest (`input_schema` / `inputSchema`). The
+ * manifest does not say where the fields go, so a GET/HEAD/DELETE route's
+ * top-level required names are query parameters and any other verb's are the
+ * JSON body (nested required objects walked, as on the OpenAPI side).
+ */
+function looksLikeJsonSchema(schema) {
+  if (Array.isArray(schema.required)) return true;
+  // A composed schema is still a schema; it reads as partial below.
+  if (Object.keys(schema).some((k) => UNSUPPORTED.has(k))) return true;
+  if (isRecord(schema.properties) && Object.values(schema.properties).every(isRecord)) return true;
+  return typesOf(schema).has("object") && schema.properties === undefined;
+}
+
+export function requestContractFromInputSchema(schema, method = "POST") {
+  const unknown = { state: "unknown", source: "seller_manifest", required: {}, runtimeVerified: false };
+  if (!isRecord(schema)) return unknown;
+  // Only a JSON Schema is evidence. A map of field names to prose (issue
+  // #1503's first manifest) has no `required` list and would otherwise read
+  // as "requires nothing", which is a claim the seller never made.
+  if (!looksLikeJsonSchema(schema)) return unknown;
+  if (hasUnsupported(schema)) return { state: "partial", source: "seller_manifest", required: {}, runtimeVerified: false };
+  const required = {};
+  let partial = false;
+  const optionalNames = optionalBodyNames(schema, Array.isArray(schema.required) ? schema.required : []);
+  const isQuery = ["GET", "HEAD", "DELETE"].includes(String(method).toUpperCase());
+  const optional = optionalNames.length ? { [isQuery ? "query" : "body"]: optionalNames } : null;
+  if (isQuery) {
+    const names = [];
+    for (const raw of Array.isArray(schema.required) ? schema.required : []) {
+      const n = safeName(typeof raw === "string" ? raw.trim() : "");
+      if (!n) { partial = true; continue; }
+      if (names.length >= MAX_PER_LOCATION) { partial = true; break; }
+      if (!names.includes(n)) names.push(n);
+    }
+    if (names.length) required.query = names;
+  } else {
+    const walk = requiredBodyPaths(schema);
+    if (walk.truncated) partial = true;
+    else if (walk.paths.length) required.body = walk.paths;
+  }
+  const any = Object.keys(required).length > 0;
+  return { state: any ? (partial ? "partial" : "declared") : (partial ? "partial" : "absent"), source: "seller_manifest", required, ...(optional ? { optional } : {}), runtimeVerified: false };
+}
+
+const SOURCES = new Set(["seller_openapi", "seller_manifest"]);
+
+/** Compact tuple for the crawl cache. `unknown` stores nothing, so a row with
+ *  no tuple is one we have no evidence about. `absent` IS stored: a route the
+ *  seller declared as needing no input is a different answer from a route the
+ *  seller said nothing about, and a row without the field cannot tell them
+ *  apart. */
 export function packRequestContract(c) {
-  if (!c || c.state === "absent" || c.state === "unknown") return null;
-  return [c.state, c.required];
+  if (!c || c.state === "unknown") return null;
+  const required = c.state === "absent" ? {} : c.required;
+  // A fourth element carries optional names (the source is then always
+  // written). A third element names a source other than OpenAPI; two elements
+  // stay the OpenAPI form every cache written before it holds.
+  if (isRecord(c.optional) && Object.keys(c.optional).length) return [c.state, required, c.source || "seller_openapi", c.optional];
+  return c.source && c.source !== "seller_openapi" ? [c.state, required, c.source] : [c.state, required];
 }
 
 export function unpackRequestContract(t) {
@@ -148,9 +237,11 @@ export function unpackRequestContract(t) {
     return null;
   }
   const v = descriptor && "value" in descriptor ? descriptor.value : undefined;
-  if (!Array.isArray(v) || v.length !== 2) return null;
+  if (!Array.isArray(v) || v.length < 2 || v.length > 4) return null;
   const [state, required] = v;
-  if (state !== "declared" && state !== "partial") return null;
+  const source = v.length >= 3 ? v[2] : "seller_openapi";
+  if (!SOURCES.has(source)) return null;
+  if (state !== "declared" && state !== "partial" && state !== "absent") return null;
   if (!isRecord(required)) return null;
   const clean = {};
   for (const loc of [...LOCATIONS, "body"]) {
@@ -163,7 +254,30 @@ export function unpackRequestContract(t) {
       .filter(Boolean).slice(0, MAX_PER_LOCATION);
     if (safe.length) clean[loc] = safe;
   }
-  return { state, source: "seller_openapi", required: clean, runtimeVerified: false };
+  // An absent contract carries no required names; one that arrives with them
+  // is not what we wrote.
+  if (state === "absent" && Object.keys(clean).length) return null;
+  const optional = {};
+  if (v.length === 4) {
+    if (!isRecord(v[3])) return null;
+    for (const loc of OPTIONAL_LOCATIONS) {
+      const names = Array.isArray(v[3][loc]) ? v[3][loc] : null;
+      if (!names) continue;
+      const safe = names.map((n) => safeName(n)).filter((n) => n && !(clean[loc] || []).includes(n)).slice(0, MAX_PER_LOCATION);
+      if (safe.length) optional[loc] = safe;
+    }
+  }
+  return { state, source, required: clean, ...(Object.keys(optional).length ? { optional } : {}), runtimeVerified: false };
+}
+
+/** How much a stored tuple tells a buyer: 0 nothing, 1 "requires nothing",
+ *  2 required names (or a declaration we could only partly read). A merge
+ *  that fills gaps must not let a "requires nothing" block a list of names. */
+export function requestContractStrength(t) {
+  if (!Array.isArray(t)) return 0;
+  // Optional names (a fourth element) are more to go on than none at the same state.
+  const base = t[0] === "absent" ? 1 : (t[0] === "declared" || t[0] === "partial") ? 2 : 0;
+  return base && t.length === 4 ? base + 0.5 : base;
 }
 
 /** Spread into a public tool row, or nothing. */

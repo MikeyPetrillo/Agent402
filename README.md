@@ -12,6 +12,7 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 
 [![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
 [![Wellknown](https://wellknown.network/agents/agent402-mcp/badge.svg)](https://wellknown.network/agents/agent402-mcp)
+[![MCP Queen operational grade](https://mcpqueen.com/badge/io.github.MikeyPetrillo/agent402.svg)](https://mcpqueen.com/s/io.github.MikeyPetrillo/agent402)
 [![CodeQL](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml)
 [![Secret scan](https://github.com/MikeyPetrillo/Agent402/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/secret-scan.yml)
 [![npm](https://img.shields.io/npm/v/agent402-mcp?label=agent402-mcp)](https://www.npmjs.com/package/agent402-mcp)
@@ -33,8 +34,8 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > ecosystem**:
 >
 > - **Find** - [`/api/find?q={task}`](https://agent402.tools/api/find) resolves a task description to the best-matching tools (route, price, schema, ready example).
-> - **Route** - [`POST /api/route`](https://agent402.tools/api/route) is the **neutral Smart Order Router**: rank tools across every x402 seller crawled (auto-discovered from the Coinbase CDP Bazaar), health-aware, with `include=external` to exclude us.
-> - **Leaderboard** - [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) is the **public on-chain ranking** of every x402 seller by **Base USDC settled volume** - calls served, totalUsd, unique buyers per seller. Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate by `payTo`. Hourly snapshot.
+> - **Route** - [`POST /api/route`](https://agent402.tools/api/route) is the **neutral Smart Order Router**: rank tools across every x402 seller crawled (auto-discovered from the Coinbase CDP Bazaar), health-aware, with `include=external` to exclude us. The response returns the top N and carries `matched` for how many scored.
+> - **Leaderboard** - [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) is the **public on-chain ranking** of x402 sellers by **Base USDC settled volume** - calls served, totalUsd, unique buyers per seller. It returns the **top N, never the whole board** (25 by default, 50 the ceiling; `totalSellers` carries the full count). Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate by `payTo`. Hourly snapshot.
 >
 > Plus the catalog - **500+ strong: search/answer as the MCP front door, then
 > 500+ tools and curated skill packs** (multi-tool workflows callable as MCP
@@ -48,17 +49,14 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 > [agent402.tools/reports](https://agent402.tools/reports) (company dossier, 13F fund
 > report, insider flow, market brief, deep research, FDA recall, domain audit)
 > are $2 to $5, **monitors** that re-run on change at
-> [/monitors](https://agent402.tools/monitors) are $5 a month, and **prepaid
-> credits** at [/credits](https://agent402.tools/credits) are one `a402_` key
-> that pays every tool by card (`Authorization: Bearer a402_…`, debited per
-> successful call; supported by `agent402-mcp` via `AGENT402_CREDITS_KEY` and
-> `agent402-client` via `{ creditsKey }`). The card price includes payment
-> processing: Stripe charges 2.9% + $0.30 per charge, so under about a dollar
-> the fee costs more than the report. An agent paying per call pays the lower
-> tool price for the same report.
+> [/monitors](https://agent402.tools/monitors) are $5 a month, and a **prepaid
+> credits** key already issued keeps paying per successful call
+> (`Authorization: Bearer a402_…`; new credits are not on sale). The card price includes payment
+> processing. An agent paying per call pays the lower tool price for the same
+> report.
 >
 > **Two payment wires, one URL.** Every paid endpoint accepts **x402**
-> (`PAYMENT-SIGNATURE`, USDC on 12 chains) **and MPP** (Machine Payments
+> (`PAYMENT-SIGNATURE`, USDC on 11 chains or USDG on Robinhood Chain) **and MPP** (Machine Payments
 > Protocol, the IETF-track `Payment` HTTP auth scheme co-authored by Tempo and
 > Stripe): the same 402 carries both, an [`mppx`](https://www.npmjs.com/package/mppx)
 > client pays out of the box, and MPP settles on Base and Celo (USDC), natively
@@ -81,13 +79,13 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 [![npm](https://img.shields.io/npm/v/agent402-openai-agents?label=openai-agents)](https://www.npmjs.com/package/agent402-openai-agents)
 [![npm](https://img.shields.io/npm/v/agent402-agentkit?label=agentkit)](https://www.npmjs.com/package/agent402-agentkit)
 
-**500+ strong - live web search and cited answers as the MCP front door, then ready-to-use web tools and multi-tool skill packs for your AI agent, from one server. Every one tested, priced, and settled on-chain; every one earns its place. Browser
-rendering, web search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, deterministic stats, forecasting, and options/bond pricing (Black-Scholes, YTM), compression, and 200+ pure-CPU utilities.** Run it yourself for free in 30 seconds (MCP **or**
+**500+ strong - live web search and cited answers as the MCP front door, then ready-to-use web tools and multi-tool skill packs for your AI agent, from one server. Every one priced per call and settled on-chain. Browser
+rendering, web search, PDFs, images, OCR, live financial/crypto/macro data, SEC EDGAR, deterministic stats, forecasting, and options/bond pricing (Black-Scholes, YTM), compression, and 150+ pure-CPU utilities.** Run it yourself for free in 30 seconds (MCP **or**
 plain HTTP, no API keys, no signup - the free tier and x402/MPP payments never
-need a key; only the optional prepaid card credits use one bearer key), connect
+need a key; only a prepaid credits key already issued is a bearer key), connect
 it to Claude/ChatGPT/any MCP client, and add your own tools in a few lines.
-Every utility tool is deterministic - **no LLM in the serving path** - and
-re-tested against its own example before every release. The model-backed
+No language model writes a utility tool's answer, and every tool CI can run
+without a third-party key is re-tested against its own example before every release. The model-backed
 surfaces are explicit and priced as such: the `/v1` gateway (metered under a
 quoted ceiling, or flat tiers) and the finished report products (`/v1/research`, `/v1/dossier`, ... below).
 
@@ -98,6 +96,8 @@ quoted ceiling, or flat tiers) and the finished report products (`/v1/research`,
 > **by default everything runs free.**
 
 🟢 **Hosted demo: [agent402.tools](https://agent402.tools)** · 📖 **[Wiki](https://github.com/MikeyPetrillo/Agent402/wiki)** · 📦 **[npm](https://www.npmjs.com/package/agent402-mcp)** · 🔌 **[MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.MikeyPetrillo/agent402)** · 🧩 **[Smithery](https://smithery.ai/servers/mike-kq9d/agent402)**
+
+[![HOL Registry](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fplugin%3Fslug%3Dmikeypetrillo%252Fagent402%26metric%3Dstatus%26style%3Dflat)](https://hol.org/registry/plugins/mikeypetrillo%2Fagent402)
 
 ## Run it yourself in 30 seconds
 
@@ -136,24 +136,46 @@ curl -s -X POST localhost:3000/api/hash -H 'content-type: application/json' \
 
 Boots straight from the repo's `railway.toml` + `Dockerfile`. Optional plugins are auto-detected via env: add **Redis** → `REDIS_URL` enables the upstream response cache (`X-Cache: hit|miss`), add **Postgres** → `DATABASE_URL` enables the public `/api/analytics` dashboard and the tollbooth waitlist. No env vars required to boot in free mode.
 
+## Pay per call from a wallet
+
+Every paid route answers `402` with both an x402 offer and MPP challenges, so either client pays it. No API key, no signup: the wallet is the account.
+
+**MPP** (USDC.e or PathUSD on Tempo, listed first in the 402, or USDC on Base or Celo) with [`mppx`](https://www.npmjs.com/package/mppx):
+
+```js
+import { Mppx, tempo, evm } from "mppx/client";
+const account = (await import("viem/accounts")).privateKeyToAccount(process.env.AGENT_KEY);
+const res = await Mppx.create({ methods: [tempo.charge({ account }), evm.charge({ account })] }).fetch("https://agent402.tools/api/uuid");
+```
+
+**x402** (USDC on Base and other chains) with [`@x402/fetch`](https://www.npmjs.com/package/@x402/fetch):
+
+```js
+import { wrapFetchWithPayment } from "@x402/fetch"; import { x402Client } from "@x402/core/client"; import { registerExactEvmScheme } from "@x402/evm/exact/client";
+const client = new x402Client(); registerExactEvmScheme(client, { signer: (await import("viem/accounts")).privateKeyToAccount(process.env.AGENT_KEY) });
+const res = await wrapFetchWithPayment(fetch, client)("https://agent402.tools/api/uuid");
+```
+
+More: [Paying with MPP](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-with-MPP) · [Paying with x402](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-with-x402).
+
 ## What's in the catalog (500+ tools)
 
-> **Every tool earns its place: deterministic, tested against its own example on every CI
-> run, priced to market, settled on-chain.** CI holds a 400-entry catalog floor and
+> **Every tool earns its place: priced to market and settled on-chain, and every tool
+> CI can run without a third-party key is tested against its own example on every CI run.** CI holds a 400-entry catalog floor and
 > verifies the “500+” claim against the running catalog (`scripts/sync-count.js --check`).
 > The catalog grows only when a tool is worth calling.
 
 | | Examples |
 |---|---|
 | **Browser & web** | `render` (headless Chromium, executes JS), `screenshot`, `extract` (article→markdown), `meta` |
-| **Live search & answers** | `search` (real web index), `answer` (web answer with citations), `search-news`/`search-images`/`search-videos` variants, `search-suggest`, `multi-search` |
+| **Live search & answers** | `search` (real web index), `search-lite` (a quick 5-result sample), `answer` (web answer with citations), `search-news`/`search-images`/`search-videos` variants, `search-suggest`, `multi-search` |
 | **PDFs & media** | `pdf-to-markdown`, `pdf-merge`, `pdf-extract-pages`, `pdf-rotate`, `images-to-pdf`, `audio-convert`, `audio-normalize` (EBU R128, real ffmpeg) |
 | **Images** | `image-resize`, `image-convert`, `image-thumbnail`, `barcode-decode` (jimp/zxing, pure-CPU) |
 | **OCR** | `image-ocr` (text out of any image - pure-CPU, no model) |
 | **Geo** | `geo-distance` (haversine, pure-CPU), `geocode`, `reverse-geocode`, `place-search`, `geo-lookup` |
 | **Live data** | `fx-rate` (ECB), `barcode-lookup` (Open Food Facts), `gov-data` (data.gov), `weather-forecast`/`weather-alerts`, `earthquakes` (USGS) |
-| **Finance & crypto** | `stock-quote`/`stock-history`/`earnings-calendar` (Yahoo), `crypto-price`/`crypto-market`/`crypto-history`/`crypto-trending`/`crypto-global` (CoinGecko) |
-| **Crypto derivatives & options** | `perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`, `perp-open-interest`, `perp-klines`, `perp-orderbook` (live perpetuals: mark/oracle price, funding, OI, candles, depth); `options-summary`, `crypto-options-chain`, `options-ticker`, `options-volume` (options book, IV and greeks, onchain options volume) - $0.002 to $0.005 a call, no exchange account |
+| **Finance & crypto** | `stock-quote`/`stock-history` (Databento, three-venue consolidation), `crypto-price`/`crypto-market`/`crypto-history`/`crypto-trending`/`crypto-global` (CoinGecko) |
+| **Crypto derivatives & options** | `perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`, `perp-open-interest`, `perp-klines`, `perp-orderbook` (live perpetuals: mark/oracle price, funding, OI, candles, depth); `options-summary`, `crypto-options-chain`, `options-ticker`, `options-volume` (options book, IV and greeks, onchain options volume) - $0.001 to $0.005 a call, no exchange account |
 | **DeFi & stablecoins** | `defi-yields` (screen pools by chain, project, TVL and stablecoin-only), `defi-yield-history`, `defi-protocols`, `defi-protocol`, `defi-chains`, `defi-chain-tvl-history`, `defi-fees`, `defi-dex-volume`, `stablecoins`, `stablecoin-supply-history` - $0.001 to $0.003 a call |
 | **Solana token intel** | `sol-token-safety` (authorities, liquidity, holder concentration, graded), `sol-token-report` (full risk write-up), `sol-token-holders`, `sol-token-pairs`, `sol-token-search`, `sol-trending`, `sol-price`, `sol-swap-quote`, `sol-token-lookup` - the due-diligence pass an agent needs before it touches a mint |
 | **Crypto market coverage** | `crypto-news`, `crypto-indicators` (RSI, MACD, moving averages, computed here), `crypto-market-pulse`, `coin-profile`, `coin-history`, `coin-ohlc`, `coin-market-chart-range`, `coin-categories`, `coin-price-by-contract` (price by token ADDRESS, no coin id needed), `global-defi`, `exchanges`, `exchange-tickers`, `exchange-rates`, `coin-search`, `coins-list` - plus tokenized real-world assets from the same CoinGecko key: `rwa-list`, `rwa-markets`, `rwa-asset`, `rwa-issuers`, `rwa-issuer` (tokenized stocks, ETFs and commodities with onchain market data and the issuers behind them) |
@@ -174,7 +196,7 @@ Boots straight from the repo's `railway.toml` + `Dockerfile`. Optional plugins a
 | **Chain reads** | `block-number`, `chain-info`, `block-info`, `contract-code`, `erc721-owner`, `event-logs` - keyless JSON-RPC reads with multi-endpoint failover on Ethereum/Base/Polygon/Arbitrum/Optimism, from $0.001 |
 | **SQL policy** | `sql-guard` ($0.004 - pass/warn/block verdict with named risks on a SQL statement, plus an Ed25519 execution certificate when a signing key is configured), `sql-cert-verify` ($0.001 - verifies that certificate against the exact statement) |
 | **x402 seller intelligence** | Three rungs on the same question, cheapest first. `seller-trust` (`GET /api/x402/seller-trust`, $0.005) - the router's gate field by field: indexed, manifest parses, chains advertised, settled calls observed, would we spend buyer money there. `seller-dossier` (`POST /api/seller-dossier`, $0.05) - the assembled record: every price with its provenance, advertised wallets against the wallets actually paid, settlement evidence per source, the dispatch verdict per chain with its reason, and what happened the times our router paid it. `seller-payability` (`POST /api/seller-payability`, $0.10) - buys one real call right now and reports every leg, including whether the accept's EIP-712 domain matches the token it names. The first two are offline reads of what we already know; the third spends USDC to find out |
-| **200+ pure-CPU utilities** | hashing, JWT, base58, JSON⇄CSV/YAML, `token-count`, `text-chunk`, `json-validate`, text stats, cron math, validators, unit conversions across 13 categories (one parametric tool) |
+| **150+ pure-CPU utilities** | hashing, JWT, base58, JSON⇄CSV/YAML, `token-count`, `text-chunk`, `json-validate`, text stats, cron math, validators, unit conversions across 13 categories (one parametric tool) |
 
 Full schemas live in [`/openapi.json`](https://agent402.tools/openapi.json); a
 machine-readable catalog is at [`/api/pricing`](https://agent402.tools/api/pricing)
@@ -186,22 +208,22 @@ so an agent skips the token-heavy "search around to find a tool" step.
 ## LLM gateway (`/v1`) - chat, embeddings, rerank, images, speech & finished reports, pay per call
 
 Point any OpenAI SDK at `base_url = https://agent402.tools/v1` and pay per call in
-USDC over x402 or MPP - no API key, no signup, no account (or pay by card with a
-prepaid credits key, see [For humans](#for-humans-reports-monitors-and-prepaid-credits)):
+USDC over x402 or MPP - no API key, no signup, no account (a prepaid credits key
+already issued also works, see [For humans](#for-humans-reports-monitors-and-prepaid-credits)):
 
 | Endpoint | Price | Serves |
 |---|---|---|
 | `POST /v1/nano/chat/completions` | $0.003 | nano models - priced for high-frequency agent loops |
 | `POST /v1/auto/chat/completions` | $0.01 | **no model needed** - deterministic eval-ranked routing (code / reasoning / long / general), optional `quality: fast \| balanced \| best` at the same price, decision disclosed via `agent402_router` |
 | `POST /v1/chat/completions` | $0.02 | budget/mid models (gpt-4o-mini, claude haiku, gemini flash, deepseek, llama…) |
-| `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-4o, gpt-4.1, claude sonnet, gemini pro, grok) |
+| `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-4o, gpt-4.1, gpt-6 sol, claude sonnet, gemini pro, grok) |
 | `POST /v1/premium/chat/completions` | $0.50 | frontier (gpt-5 and gpt-6 astra, o3 and o4-mini, claude opus and claude fable 5.1) |
 | `POST /v1/grounded/chat/completions` | $0.03 | the auto router plus a live web search on every call - answers carry OpenAI-wire `url_citation` annotations; never cached |
 | `POST /v1/{nano,auto,pro,premium}/messages`, `POST /v1/messages` | tier price | the **Anthropic Messages wire** on every tier (same allowlist, caps and failover as the chat route); `effort` (low to max) is the depth control on Claude 4.7+, older Claude takes `thinking.budget_tokens` |
 | `POST /v1/{nano,auto,pro,premium}/responses`, `POST /v1/responses` | tier price | the **OpenAI Responses wire** on every tier (function tools only, no server state) |
 | `POST /v1/embeddings` | $0.002 | OpenAI embeddings, batch up to 64 inputs - identical repeats are **free** (deterministic output, cache default-on) |
 | `POST /v1/rerank` | $0.002 | Cohere-compatible rerank (`{query, documents[], top_n}`), up to 50 documents, cache default-on |
-| `POST /v1/images/generations` | $0.08 | image generation (Gemini 2.5 Flash Image) - OpenAI images wire, inline base64 out |
+| `POST /v1/images/generations` | $0.08 | image generation (FLUX.2 Pro, 1024x1024 PNG) - OpenAI images wire, inline base64 out |
 | `POST /v1/images/fast` | $0.02 | budget text-to-image, same OpenAI images wire, about two seconds a picture |
 | `POST /v1/images/pro` | $0.05 | higher-fidelity text-to-image, one picture a call |
 | `POST /v1/videos/generations` | $0.20 | text-to-video: one silent 4-second 720p clip, MP4 inline base64, 16:9 or 9:16 |
@@ -231,14 +253,14 @@ synthesis; `ipo-report` is fully deterministic (no model at all):
 | `POST /v1/insider-report` | $0.60 | insider flow report from parsed Form 4 filings (`{ticker}`) |
 | `POST /v1/filing-report` | $0.85 | latest SEC filing read and summarized with the facts that moved (`{ticker}`) |
 | `POST /v1/token-brief` | $0.60 | Solana token due-diligence brief from on-chain and market evidence (`{mint}`) |
-| `POST /v1/ticker-pack` | $2.00 | one ticker, three reports: dossier, insider flow and 13F holders |
+| `POST /v1/ticker-pack` | $2.00 | one ticker in one report: dossier, insider flow and holders |
 | `POST /v1/token-risk` · `/v1/token-risk/pro` | $0.60 · $0.85 | token and contract risk report from on-chain evidence (`{address, chain}`) |
 | `POST /v1/ipo-report` | $0.05 | IPO pipeline digest, S-1 + 424B4 from EDGAR full-text search (`{days, keyword}`), deterministic |
 
 Reports are wallet-only (x402 / MPP / prepaid credits, never proof-of-work) and
 take a few minutes to generate. The same reports are sold to people by card at
-[agent402.tools/reports](https://agent402.tools/reports) for $1, or $2 for the
-three biggest. The card price includes payment processing; an agent paying per
+[agent402.tools/reports](https://agent402.tools/reports) for $2 to $5 depending
+on depth. The card price includes payment processing; an agent paying per
 call over x402 or MPP pays the lower tool price for the same report.
 
 Two companion tools close the loop: `POST /api/route/execute` ($0.01, with
@@ -262,12 +284,35 @@ enables it with `STRIPE_SECRET_KEY`, otherwise these pages simply do not mount):
 | Page | What you get |
 |---|---|
 | [agent402.tools/reports](https://agent402.tools/reports) | Buy any finished report from the table above by card (`POST /api/buy`) for $2 to $5 (the deepest tiers and the ticker pack sit at the top of that range; current prices on the page), delivered at `/r/<session>` - no wallet, no account. The card price includes payment processing; an agent paying per call pays the lower tool price for the same report. A report is generated only against a Stripe-verified paid session, once; a failed generation is refunded automatically. |
-| [agent402.tools/monitors](https://agent402.tools/monitors) | $5/month subscriptions that re-run a report when something changes and email you: **domain security monitor** (free daily re-probe, full paid re-run on a security change, a certificate inside 14 days of expiry, or every 30 days), **SEC filing watch** (new filing), **Solana token safety watch** (changed safety facts), **fund 13F watch** (new filing), **FDA recall watch** (new recall number), **insider flow watch** (new Form 4), **IPO pipeline watch** (weekly digest). Reports land at `/m/<id>`; manage or cancel through the Stripe Customer Portal at `/monitors/manage`. |
-| [agent402.tools/credits](https://agent402.tools/credits) | Prepaid credits in $20 / $50 / $100 packs. You get one `a402_…` key (shown once on the thanks page and emailed); send it as `Authorization: Bearer a402_…` on any priced route and the call is paid from the balance - **debited only on a successful response**, integer micro-dollars so sub-cent prices are exact, never expires. `GET /api/credits/balance` (same header) reads the balance; a 402 with `{reason, balanceUsd, topup}` means insufficient. Identity-bound tools (`/api/memory*`, `my-usage`) refuse credits because the payment is the identity there; pay those over an x402 rail. |
+| [agent402.tools/monitors](https://agent402.tools/monitors) | $5/month subscriptions that re-run a report when something changes and email you (up to 4 full reports in any 30 days; a change past that arrives as an alert email): **domain security monitor** (free daily re-probe, full paid re-run on a security change, a certificate inside 14 days of expiry, or every 30 days), **SEC filing watch** (new filing), **Solana token safety watch** (changed safety facts), **fund 13F watch** (new filing), **FDA recall watch** (new recall number), **insider flow watch** (new Form 4), **IPO pipeline watch** (weekly digest). Reports land at `/m/<id>`; manage or cancel through the Stripe Customer Portal at `/monitors/manage`. |
+| [agent402.tools/credits](https://agent402.tools/credits) | Prepaid credits: not on sale. A key already issued (`a402_…`) keeps working; send it as `Authorization: Bearer a402_…` on any priced route and the call is paid from the balance - **debited only on a successful response**, integer micro-dollars so sub-cent prices are exact, never expires. `GET /api/credits/balance` (same header) reads the balance; a 402 with `{reason, balanceUsd, topup}` means insufficient. Identity-bound tools (`/api/memory*`, `my-usage`) refuse credits because the payment is the identity there; pay those over an x402 rail. |
 
-The credits key is understood by the SDKs: `agent402-mcp` reads
-`AGENT402_CREDITS_KEY` and `agent402-client` takes `{ creditsKey }`, so a wallet-less
-agent can still call every wallet-only tool by card.
+An issued credits key is understood by the SDKs: `agent402-mcp` reads
+`AGENT402_CREDITS_KEY` and `agent402-client` takes `{ creditsKey }`.
+
+## Decide - describe the job, get the plan
+
+`POST /api/decide` turns a plain-language task into a call-ready plan: which tools, from this
+catalog and from outside x402 sellers whose 402 was verified in the last week, in what order, with
+fallbacks, inputs that validate against each tool's schema, and cost and latency estimates.
+Priced by depth: quick (one best tool), plan (steps and fallbacks) and full (plus a compiled
+prompt), from $0.005 per decision over x402 or MPP.
+
+```bash
+curl -X POST https://agent402.tools/api/decide \
+  -H "Content-Type: application/json" \
+  -d '{"task":"Check whether wallet 0xd8dA...6045 is on a sanctions list, then list its recent token transfers on Base","depth":"plan"}'
+```
+
+- **Neutral ranking.** One formula scores every candidate (fit, observed reliability, price,
+  schema quality, freshness) with no term for who sells the tool, and every step says whether
+  the tool is ours (`firstParty`).
+- **The fee comes back.** The decision fee is returned as a 24-hour credit toward
+  `POST /api/decide/execute`, which runs the plan: our tools directly, outside steps paid on your
+  behalf at the seller's price plus a disclosed 5% routing fee. Spend stops at the budget,
+  fallbacks are tried in order, and a run where no step succeeds is not charged.
+- **On MCP** the same pair is `decide.plan` and `decide.execute`; `decide.feedback` (free) records
+  whether a step worked. Page: [agent402.tools/decide](https://agent402.tools/decide).
 
 ## Skill packs - 70+ multi-tool workflows
 
@@ -303,10 +348,10 @@ refreshed hourly) and exposes them through three free surfaces - same logic as
 | Surface | What |
 |---|---|
 | [`GET /api/find?q={task}`](https://agent402.tools/api/find) | Resolve a task to the best-matching tools (route, price, schema, ready example) |
-| [`POST /api/route`](https://agent402.tools/api/route) | Smart Order Router: `{ query, top, include }` → ranked tools across sellers (match score, then **health**, then price). `include=external` excludes Agent402 itself |
-| [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) | **On-chain ranking** of every x402 seller by Base USDC settled volume (callsSettled, totalUsd, uniqueBuyers per seller). Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate. Hourly snapshot |
+| [`POST /api/route`](https://agent402.tools/api/route) | Smart Order Router: `{ query, top, include }` → ranked tools across sellers (match score, then **health**, then price; a judgment model then moves the listing that actually does the task to the top, cheapest among equally good ones, reported in `judged`). `include=external` excludes Agent402 itself |
+| [`GET /api/leaderboard`](https://agent402.tools/api/leaderboard) | **On-chain ranking** of x402 sellers by Base USDC settled volume (callsSettled, totalUsd, uniqueBuyers per seller). **Top N only** - 25 default, 50 ceiling, `totalSellers` for the full count. Pipeline: Bazaar → `eth_getLogs` → per-call ceiling → aggregate. Hourly snapshot |
 | [`/marketplace`](https://agent402.tools/marketplace) | Public HTML dashboard: every seller, tool count, network, last-fetched, rolling health |
-| [`GET /api/index`](https://agent402.tools/api/index) | JSON snapshot of the same data (totals, per-seller health/routable flags) |
+| [`GET /api/index`](https://agent402.tools/api/index) | The seller index as JSON (totals, per-seller health/routable flags). **Paginated** - one page of 250 max, `complete: false` and a `Link` header with `rel="next"` while more remain, `sellerCount` for the total. One origin, unpaged and with its crawl history: `?seller=<host>` |
 | [`/stellar`](https://agent402.tools/stellar) · [`/algorand`](https://agent402.tools/algorand) | Per-chain marketplace pages: sellers and tools settling on that rail specifically |
 
 ```bash
@@ -333,6 +378,16 @@ router (a buyer routed to a dead seller wastes money). Healthier sellers also
 break ties at equal match score and price, so flaky-but-cheap sellers lose to
 reliable ones. Brand-new sellers (no history yet) get the benefit of the doubt.
 
+**Judged fit:** the lexical score rewards a listing whose name repeats the task's
+words, so one seller's twenty narrow routes could out-rank a general tool that
+does the job. A judgment model now reads a shortlist - at most two rows per
+seller, plus the best matches from the local catalog - and moves the listing that
+actually does the task to the top; when several do it equally well, the cheapest
+wins. It never adds a seller the settlement gate did not admit, it can say "none
+of these" (route-execute then refuses before anything is paid), and it fails open
+to the lexical order. The tools themselves still run no model; this is only how
+the router chooses.
+
 Operators get **3-rail attribution** on the dashboard ([`/api/stats`](https://agent402.tools/api/stats),
 `/__operator`, token-gated - it answers 404 without the operator token): USDC vs. proof-of-work vs.
 heartbeat-probe traffic are counted separately - and the heartbeat rail is gated
@@ -358,9 +413,23 @@ import { Agent402 } from "agent402-client";
 const a = new Agent402();                       // free tier (proof-of-work)
 const out = await a.call("hash", { text: "hello world", algo: "sha256" });
 
-// no wallet? pay wallet-only tools by card with a prepaid credits key from /credits
+// a prepaid credits key already issued pays wallet-only tools (new credits are not on sale)
 const b = new Agent402({ creditsKey: "a402_..." });
 ```
+
+## Live payments view (`services/live`)
+
+A separate, read-only service that draws x402 payments on Base and MPP payments on Tempo as they settle. It reads public chain RPCs and public discovery listings, holds the last hour in memory, and fans out to browsers over one server-sent event stream; it shares no process, database or key with the API. Hosted at https://live.agent402.tools.
+
+Run it locally (Node 22+, no dependencies):
+
+```bash
+cd services/live
+PORT=8090 node server.js      # then open http://localhost:8090
+node test.js                  # offline tests
+```
+
+Optional settings: `LIVE_BASE_RPCS` and `LIVE_TEMPO_RPCS` (comma-separated RPC URLs), `LIVE_INCLUDE_UNLISTED=1` (also count Base payments to wallets no discovery listing names), `LIVE_INTERNAL_PAYERS` (payer wallets to label as test traffic), `LIVE_MAX_PAYMENT_USD` (default 50).
 
 ## Plug into your agent framework (zero-dep adapters)
 
@@ -469,7 +538,7 @@ of the box for either method; set `MPP_SECRET_KEY` to enable the shim on your
 own instance. Same URL either way - the buyer's client picks the dialect.
 
 Agents without a wallet still use every pure-CPU tool by solving a single-use
-sha256 proof-of-work (sub-second; the MCP servers do it automatically). Details:
+sha256 proof-of-work (a fraction of a second on a laptop; the MCP servers do it automatically). Details:
 [wiki: Paying with x402](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-with-x402)
 · [Paying with MPP](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-with-MPP)
 · [Paying with Compute](https://github.com/MikeyPetrillo/Agent402/wiki/Paying-with-Compute).
@@ -478,13 +547,13 @@ sha256 proof-of-work (sub-second; the MCP servers do it automatically). Details:
 
 Every claim links to the surface that proves it (the one-page version: [agent402.tools/why](https://agent402.tools/why)).
 
-1. **Pay for what the model used, with the ceiling quoted first.** The metered gateway (`POST /v1/metered/chat/completions`) quotes each 402 from the request's own body; a wallet paying `upto` settles actual usage under that ceiling, provider discounts such as prompt-cache reads pass through at cost, and every settled x402 or MPP response carries a receipt.
+1. **Pay for what the model used, with the ceiling quoted first.** The metered gateway (`POST /v1/metered/chat/completions`) quotes each 402 from the request's own body; a wallet paying `upto` settles actual usage under that ceiling, provider discounts such as prompt-cache reads pass through, and every settled x402 or MPP response carries a receipt; a JSON answer bought with an EVM wallet can be attested on Base by that wallet (`POST /api/attest`).
 2. **A failed call is not charged, and the response proves it.** Settlement runs after the handler and an error status cancels it, so a response with no payment receipt, or a receipt marked `success:false`, moved no money; a retry carrying the same `Idempotency-Key` and the same payment credential replays the paid answer instead of paying again; the one residual case (a settled receipt on an error response) is detected by our own alarm and recorded as a debt in a refund ledger, never written off silently.
-3. **One key buys everything.** The same wallet or credits key pays for five LLM tiers on three wires (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools, wallet-keyed memory and finished reports.
-4. **No wallet required.** [Prepaid credits by card](https://agent402.tools/credits), cards over MPP and card checkout for reports sit beside USDC or USDG on twelve chains and native MPP on Tempo.
-5. **Finished work, ready to use.** Dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a LinkedIn article package, grounded in primary sources with a data appendix; [monitors](https://agent402.tools/monitors) probe daily for free and re-run the paid report when the facts change.
+3. **One key buys everything.** The same wallet pays for five LLM tiers on three wires (OpenAI chat, OpenAI Responses, Anthropic Messages), embeddings, rerank, images, video, speech, transcription, grounded answers with citations, 500+ tools and finished reports, and an EVM wallet also keys its own memory.
+4. **No wallet required.** Proof-of-work pays for the pure-CPU tools, cards over MPP pay routes priced at $0.50 or more, and [card checkout](https://agent402.tools/reports) sells the finished reports, beside USDC or USDG on twelve chains and native MPP on Tempo.
+5. **Finished work, ready to use.** Dossiers, insider flow, 13F holdings, filing reports, IPO digests, domain audits, token risk, deep research, market briefs, recall watch and a LinkedIn article package, grounded in live sources, most with a downloadable data appendix; [monitors](https://agent402.tools/monitors) check for free on a schedule and re-run the paid report when the facts change, up to 4 full reports in any 30 days.
 6. **We buy on your behalf.** `POST /api/route/execute` resolves a task to the best seller across the ecosystem, pays them from our wallet and relays the result under one receipt. Sellers are routable on proven on-chain settlement, with one bounded exception for a zero-history Solana seller under a small per-call ceiling.
-7. **Everything is checkable.** Uptime observed by two probes outside production ([`/status`](https://agent402.tools/status)), a real-money canary through every rail daily, transactions published by rail and wire ([`/revenue`](https://agent402.tools/revenue)), open source and self-hostable. The deterministic tools run no model; the ones that do are named (the /v1 tiers, the report products, and the image, speech, transcription, embedding and AI-answer tools). The operator is identified on-chain: Agent402 is agent 94639 in the ERC-8004 Identity Registry on Base, resolving to [`/.well-known/agent-registration.json`](https://agent402.tools/.well-known/agent-registration.json), with an A2A agent card at [`/.well-known/agent-card.json`](https://agent402.tools/.well-known/agent-card.json).
+7. **Everything is checkable.** Uptime observed by two probes outside production ([`/status`](https://agent402.tools/status)), a real-money canary through every rail daily, transactions published by rail and wire ([`/revenue`](https://agent402.tools/revenue)), open source and self-hostable. The deterministic tools run no model; the ones that do are named (the /v1 tiers, the report products, the image, speech, transcription, embedding and AI-answer tools, the Decide planner, and the judgment model that can pick among the router's shortlisted candidates). The operator is identified on-chain: Agent402 is agent 94639 in the ERC-8004 Identity Registry on Base, resolving to [`/.well-known/agent-registration.json`](https://agent402.tools/.well-known/agent-registration.json), with an A2A agent card at [`/.well-known/agent-card.json`](https://agent402.tools/.well-known/agent-card.json).
 
 ## Why it's solid
 
@@ -518,7 +587,7 @@ working tools, so you don't have to build the catalog yourself.
 
 - **Want the protocol or an SDK?** → [coinbase/x402](https://github.com/coinbase/x402).
 - **Want a server you can run *today* that actually does things over x402 + MCP?** → you're here.
-- Self-hostable, deterministic, free via proof-of-work without a wallet, and
+- Self-hostable, free via proof-of-work without a wallet, and
   non-custodial on the payment tools (your agent signs with its own key and we hold no crypto
   balance for it; prepaid card credits are a held balance and are named as one).
 
@@ -558,7 +627,7 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 | Path | What |
 |---|---|
 | `src/server.js` | Express app + the tool catalog (routes, prices, schemas, discovery) |
-| `src/tools/` | The tool kits (web, PDF, media, images, live data, crypto/x402, 200+ pure-CPU utilities) - **add tools here** |
+| `src/tools/` | The tool kits (web, PDF, media, images, live data, crypto/x402, 150+ pure-CPU utilities) - **add tools here** |
 | `src/mcp-http.js` | Hosted MCP connector (streamable HTTP, authless free tier) |
 | `src/pow.js` | Proof-of-work tier (signed, single-use, slug-scoped challenges) |
 | `src/payments.js` | Optional x402 v2 wiring: USDC on Base/Solana/Polygon/Arbitrum/Monad/Celo/Avalanche/Sei/Optimism/Stellar/Algorand + USDG on Robinhood Chain (12 chains), CDP facilitator, Bazaar discovery |

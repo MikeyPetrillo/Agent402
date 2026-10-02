@@ -14,12 +14,9 @@
 //
 // PRICING, CONFIRMED 2026-09-18 (Brave's pricing page, read that day): LLM
 //   Context bills as an ordinary Search request on the same subscription our
-//   `search` tool consumes, $0.005 per call, no separate plan. Priced at $0.02
-//   like `search`, `search-news` and `search-images`, so the margin is the one
-//   we already accept on every Brave-backed tool. Until that read this block
-//   said the billing unit was UNCONFIRMED and the price was chosen to be safe
-//   under either reading; the reasoning still holds, the uncertainty is gone.
-//   Re-price from the invoice if Brave ever lists LLM Context as its own line.
+//   `search` tool consumes, no separate plan, so it is priced like `search`,
+//   `search-news` and `search-images`. Re-price from the invoice if Brave ever
+//   lists LLM Context as its own line.
 //
 // Cost hygiene: every outbound call is metered through the SAME Brave meter
 // the search kit uses (`meterBraveCall`), so /__operator/stats and the

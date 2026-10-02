@@ -171,6 +171,19 @@ ok(box && box.getAttribute("data-product") === "research-monitor", "a research r
 r = await renderReport({ ...doneDomain, kind: "dossier", slug: "dossier", input: "AAPL" });
 box = r.doc.getElementById("upsell");
 ok(box && box.getAttribute("data-product") === "filing-monitor" && box.getAttribute("data-target") === "AAPL", "a dossier offers the filing watch for its ticker");
+// The title prints once: the letterhead carries it, so a body that opens with
+// the same heading drops that heading; a different heading is content.
+{
+  const h1s = (d) => [...d.querySelectorAll("#report-body h1")].map((h) => h.textContent);
+  let t = await renderReport({ ...doneDomain, kind: "dossier", title: "NVIDIA CORP (NVDA): Company Due-Diligence Dossier", report: "# NVIDIA CORP (NVDA) \u2014 Company Due-Diligence Dossier\n\n## SNAPSHOT\n\nText." });
+  ok(h1s(t.doc).length === 1 && t.doc.querySelectorAll("#report-body h2").length === 1, `a body heading that repeats the title (dash and all) is dropped (h1s: ${JSON.stringify(h1s(t.doc))})`);
+  t = await renderReport({ ...doneDomain, title: "Berkshire Hathaway Inc: 13F Holdings", report: "# BERKSHIRE HATHAWAY INC: 13F HOLDINGS\n\nText." });
+  ok(h1s(t.doc).length === 1, "...and one that differs only in casing");
+  t = await renderReport({ ...doneDomain, title: "example.com", report: "# Security audit\n\nGrade A." });
+  ok(h1s(t.doc).length === 2 && h1s(t.doc)[1] === "Security audit", "a leading heading that is NOT the title stays");
+  t = await renderReport({ ...doneDomain, title: "Report", report: "Intro.\n\n# Report\n\nMore." });
+  ok(h1s(t.doc).length === 2, "only a LEADING heading is considered; a later one is content");
+}
 r = await renderReport({ ...doneDomain, monitor: { label: "Domain security monitor", target: "example.com", reason: "change", changes: [] } });
 ok(!r.doc.getElementById("upsell"), "a monitor delivery never up-sells the monitor the reader already pays for");
 

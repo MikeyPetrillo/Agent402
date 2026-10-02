@@ -11,4 +11,4 @@ contact_links:
     about: Report privately, see SECURITY.md
   - name: List your own x402 seller
     url: https://github.com/MikeyPetrillo/Agent402/blob/main/CONTRIBUTING.md#list-your-x402-seller
-    about: Publish a manifest and open a seed PR. Pitches and paid-test requests are not issues and are closed without comment.
+    about: Publish a manifest and POST your origin to https://agent402.tools/api/index/register (no PR needed). Pitches and paid-test requests are not issues and are closed without comment.

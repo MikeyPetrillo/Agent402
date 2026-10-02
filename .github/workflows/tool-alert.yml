@@ -9,8 +9,10 @@ name: Tool self-check
 # stays down); recovery closes the issue. Same pattern as heartbeat.yml, but for
 # per-tool correctness rather than overall server liveness.
 #
-# No secrets: /api/selfcheck is a free, unpaywalled surface and the check runs
-# server-side (calling handlers directly — no payment, no organic traffic needed).
+# /api/selfcheck is a free, unpaywalled surface and the check runs server-side
+# (calling handlers directly, no payment). Public callers get a run cached up to
+# 30 minutes; this job sends the probe-only STATUS_PROBE_TOKEN with ?fresh=1, so
+# it reads a run at most 5 minutes old. Without the secret it reads the cache.
 on:
   schedule:
     - cron: "*/30 * * * *"
@@ -35,6 +37,7 @@ jobs:
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
+      PROBE_TOKEN: ${{ secrets.STATUS_PROBE_TOKEN }}
     steps:
       - name: Poll /api/selfcheck
         id: check
@@ -42,7 +45,11 @@ jobs:
           # Fetch the self-check result. A network/HTTP failure reaching the
           # endpoint is NOT a tool failure (overall outages are heartbeat's job),
           # so on an unreadable response we skip quietly rather than false-alert.
-          RESP="$(curl -s --max-time 60 "$PROD/api/selfcheck" || true)"
+          if [ -n "$PROBE_TOKEN" ]; then
+            RESP="$(curl -s --max-time 60 -H "X-Operator-Token: $PROBE_TOKEN" "$PROD/api/selfcheck?fresh=1" || true)"
+          else
+            RESP="$(curl -s --max-time 60 "$PROD/api/selfcheck" || true)"
+          fi
           OK="$(echo "$RESP" | jq -r '.ok // empty' 2>/dev/null || echo "")"
           if [ -z "$OK" ]; then
             echo "self-check endpoint unreadable (prod outage is heartbeat's domain) — skipping"

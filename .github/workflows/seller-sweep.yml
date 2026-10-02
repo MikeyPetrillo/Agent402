@@ -48,7 +48,7 @@ jobs:
     environment: spending
     timeout-minutes: 300  # the full sweep is ~2,244 sellers at ~4.7s each
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -74,7 +74,7 @@ jobs:
             echo "::add-mask::$BURNER_KEY"
           fi
           cd /tmp/sweep && env -i PATH="$PATH" HOME="$HOME" \
-            BURNER_KEY="$BURNER_KEY" AGENT402_OPERATOR_TOKEN="$AGENT402_OPERATOR_TOKEN" SWEEP_LIMIT="$SWEEP_LIMIT" SWEEP_OFFSET="$SWEEP_OFFSET" SWEEP_MAX_USD="$SWEEP_MAX_USD" \
+            BURNER_KEY="$BURNER_KEY" AGENT402_OPERATOR_TOKEN="${AGENT402_OPERATOR_TOKEN}" SWEEP_LIMIT="$SWEEP_LIMIT" SWEEP_OFFSET="$SWEEP_OFFSET" SWEEP_MAX_USD="$SWEEP_MAX_USD" \
             SWEEP_TOTAL_USD="$SWEEP_TOTAL_USD" SWEEP_LIVE="$SWEEP_LIVE" SWEEP_OUT=/tmp/sweep/sweep.json \
             node seller-sweep.mjs
       - name: Keep the verdicts

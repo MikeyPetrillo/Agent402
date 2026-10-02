@@ -2,7 +2,7 @@
 //
 // Why this exists: gateway/composite upstream costs were PostHog-only, and a
 // keyless boot (local audit, FREE_MODE CI) recorded NOTHING - the shape that
-// let an $11.04 OpenRouter day read as $0.0276. The meter now writes to the
+// let a real OpenRouter day read as near zero. The meter now writes to the
 // stats DB inside the same capture funnels, BEFORE the PostHog active() gate,
 // so cost is recorded whenever the process serves. These tests pin that
 // ordering by running with NO PostHog key at all.

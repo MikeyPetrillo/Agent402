@@ -17,6 +17,20 @@
 // hold a Tempo signing key: the relay broadcasts on our behalf, we only
 // supply a receiving address.
 //
+// A buyer whose connection closes before the handler's answer could be sent
+// is not broadcast while the run holds a hang-up forgiveness ticket
+// (src/hangup-settlement.js): the gate checks for it after the handler and
+// before the broadcast, answers 499, and keeps the credential spent so it
+// cannot buy a second run. Without a ticket, and for a close that lands while
+// the broadcast itself is in flight, the charge goes through and server.js
+// books it as owed in the refund ledger.
+//
+// Two credential kinds pay (credential.payload.type): "transaction" (PULL, a
+// signed transaction the relay broadcasts after the handler, as above) and
+// "hash" (PUSH, a transfer the buyer already sent). A push transfer is on
+// chain before the request arrives, so the gate finalizes it BEFORE the
+// handler and every undelivered answer on it is booked as owed.
+//
 // Scope: the one-shot `tempo.charge()` method only. Tempo also has a
 // stateful session/channel protocol (TIP-1034, for pay-per-token streaming)
 // — deliberately out of scope here; see the approved plan.
@@ -24,7 +38,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { mppProblem, markMppProblem, sendMppProblem } from "./mpp-problem.js";
 import { Challenge, Credential, Method, Receipt } from "mppx";
 import { tempo } from "mppx/server";
-import { mppChallengesSuppressed } from "./mpp-fallback.js";
+import { mppChallengesSuppressed, clientFingerprint } from "./mpp-fallback.js";
+import { TxEnvelopeTempo, SignatureEnvelope, KeyAuthorization } from "ox/tempo";
+import { encodeFunctionData, decodeFunctionResult } from "viem";
+import { Abis, Addresses } from "viem/tempo";
+import { chargeCancelledForClientGone, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
+import { tempoPushSender } from "./tempo-confirm.js";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
 
@@ -113,26 +132,77 @@ export function tempoDiscoveryInfo() {
 // broadcastCredential. This replaces an earlier temporary double-request
 // probe (same information, one relay round trip instead of two).
 const relayTrace = new AsyncLocalStorage();
-async function relayFetch(input, init) {
+
+// Bounded relay retry (2026-09-24). Relay calls have hit UND_ERR_CONNECT_TIMEOUT
+// (undici's 10 s connect bound) and ended in a bare 402 after 10-22 s.
+//   - VALIDATE is non-mutating, so ANY transport failure, a per-attempt
+//     timeout, or a 502/503/504 is retried, up to TEMPO_RELAY_VALIDATE_ATTEMPTS
+//     (default 2, max 3), each attempt bounded by TEMPO_RELAY_VALIDATE_TIMEOUT_MS.
+//   - BROADCAST moves money, so it is retried ONCE and only for a failure that
+//     provably happened before the request left this process: a connect-phase
+//     error (the TCP/TLS connection was never established, so the relay never
+//     saw the bytes). mppx also sends an idempotency-key on every broadcast. Any
+//     other broadcast failure keeps today's path: chain-truth confirm, then 402.
+const CONNECT_PHASE_CODES = new Set(["UND_ERR_CONNECT_TIMEOUT", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH"]);
+function transportCode(e) {
+  return String(e?.cause?.code || e?.code || e?.cause?.cause?.code || e?.name || "");
+}
+/** True when a fetch failure provably happened before any request bytes were
+ *  sent (exported for tests). */
+export function isConnectPhaseError(e) {
+  return CONNECT_PHASE_CODES.has(String(e?.cause?.code || "")) || CONNECT_PHASE_CODES.has(String(e?.code || "")) || CONNECT_PHASE_CODES.has(String(e?.cause?.cause?.code || ""));
+}
+function validateAttempts() {
+  const n = Number(process.env.TEMPO_RELAY_VALIDATE_ATTEMPTS);
+  return Number.isInteger(n) && n >= 1 ? Math.min(n, 3) : 2;
+}
+function validateTimeoutMs() {
+  const n = Number(process.env.TEMPO_RELAY_VALIDATE_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 6000;
+}
+function pathOf(input) {
+  try { return new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url).pathname; } catch { return ""; }
+}
+
+async function relayFetch(input, init = {}) {
   const store = relayTrace.getStore();
+  const path = pathOf(input);
+  const isValidate = /\/v1\/mpp\/validate$/.test(path);
+  const isBroadcast = /\/v1\/mpp\/broadcast$/.test(path);
+  const maxAttempts = isValidate ? validateAttempts() : isBroadcast ? 2 : 1;
   const started = Date.now();
   let res;
-  try {
-    res = await globalThis.fetch(input, init);
-  } catch (e) {
-    // The fetch itself failed — no HTTP verdict at all (socket closed by the
-    // relay, reset, DNS, abort). mppx reports this as the same bare "Payment
-    // verification failed" as a business rejection; the elapsed time is the
-    // tell (a relay-side deadline closes the socket after a fixed wait).
-    // Measured live 2026-08-18: broadcast=21816ms then this path.
-    if (store) {
-      let path = "";
-      try { path = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url).pathname; } catch { /* unlabelled */ }
-      store.relayError = `relay ${path || "?"} NETWORK ERROR after ${Date.now() - started}ms: ${String(e?.cause?.code || e?.cause?.message || e?.message || e).slice(0, 160)}`;
+  for (let attempt = 1; ; attempt++) {
+    if (store) store.relayAttempts = attempt;
+    try {
+      const signals = [];
+      if (init.signal) signals.push(init.signal);
+      if (isValidate) signals.push(AbortSignal.timeout(validateTimeoutMs()));
+      res = await globalThis.fetch(input, signals.length ? { ...init, signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals) } : init);
+      if (isValidate && attempt < maxAttempts && (res.status === 502 || res.status === 503 || res.status === 504)) {
+        try { await res.arrayBuffer(); } catch { /* drained */ }
+        await new Promise((r) => setTimeout(r, 200));
+        continue;
+      }
+      break;
+    } catch (e) {
+      const retryable = attempt < maxAttempts && (isValidate || (isBroadcast && isConnectPhaseError(e)));
+      if (retryable) { await new Promise((r) => setTimeout(r, 200)); continue; }
+      // The fetch itself failed — no HTTP verdict at all (socket closed by the
+      // relay, reset, DNS, abort). mppx reports this as the same bare "Payment
+      // verification failed" as a business rejection; the elapsed time is the
+      // tell (a relay-side deadline closes the socket after a fixed wait).
+      // Measured live 2026-08-18: broadcast=21816ms then this path.
+      if (store) {
+        store.networkError = true;
+        store.connectPhase = isConnectPhaseError(e);
+        store.relayError = `relay ${path || "?"} NETWORK ERROR after ${Date.now() - started}ms: ${String(transportCode(e) || e?.cause?.message || e?.message || e).slice(0, 160)} (attempts ${attempt})`;
+      }
+      throw e;
     }
-    throw e;
   }
   if (!store) return res;
+  if (res.status >= 500 || res.status === 429 || res.status === 401 || res.status === 403) store.relayUnavailable = res.status;
   let body = "";
   try { body = (await res.clone().text()).replace(/\s+/g, " ").slice(0, 400); } catch { body = "(unreadable body)"; }
   // Non-2xx is always a verdict worth keeping. A 2xx is ALSO one when it says
@@ -184,6 +254,107 @@ function buyerReason(e) {
   const code = e?.details && typeof e.details === "object" && typeof e.details.code === "string" ? e.details.code.slice(0, 60) : null;
   const message = String(e?.message || e || "Payment verification failed.").replace(/[\r\n]+/g, " ").slice(0, 120);
   return code ? `${message} (${code})` : message;
+}
+
+/** One reason class per relay / verify refusal, and the buyer-facing words for
+ *  it. The raw relay body is READ here to pick the class (pattern match) and is
+ *  never copied out: `detail` and `hint` are fixed strings from this table, so
+ *  the buyerReason safety rule (no upstream body in a public 402) holds. The
+ *  2026-09-20 first-session refusal said only "Payment verification failed"
+ *  while the relay had said "memo is not bound to this challenge"; the buyer
+ *  could not act on the first and could on the second. Exported for tests. */
+export const TEMPO_REFUSAL_CLASSES = Object.freeze({
+  "relay-unreachable": {
+    kind: "internal-payment-error", status: 503, retryAfter: 5,
+    detail: "The Tempo payment relay could not be reached, so the credential was not checked and nothing was charged.",
+    hint: "Retry the same request in a few seconds with a fresh challenge. Nothing was broadcast.",
+  },
+  "relay-unavailable": {
+    kind: "internal-payment-error", status: 503, retryAfter: 30,
+    detail: "The Tempo payment relay is not accepting requests from this server right now, so the credential was not checked and nothing was charged.",
+    hint: "Retry shortly, or pay over another method offered in the WWW-Authenticate header (x402 USDC or MPP evm/charge).",
+  },
+  "memo-unbound": {
+    kind: "verification-failed", status: 402,
+    detail: "The transfer's memo is not bound to this challenge: it must carry this server's realm fingerprint and a value derived from the challenge id you are paying.",
+    hint: "Sign against the tempo challenge in the 402 you were just issued (realm agent402.tools). A challenge fetched earlier, one from another origin, or a hand-built memo will not match. Request the resource again and pay the fresh challenge.",
+  },
+  "transfer-mismatch": {
+    kind: "verification-failed", status: 402,
+    detail: "The signed transaction does not contain a transfer of exactly the challenge amount, in the challenge currency, to the challenge recipient.",
+    hint: "Pay request.amount (base units) of request.currency to request.recipient exactly as the challenge states; do not round the amount or pay in another token.",
+  },
+  "insufficient-funds": {
+    kind: "verification-failed", status: 402,
+    detail: "The paying wallet does not hold enough of the challenge currency on Tempo (chain 4217) to cover the amount and fee.",
+    hint: "Fund the wallet with the challenge currency (USDC.e) on Tempo mainnet, or pay over another method in the WWW-Authenticate header.",
+  },
+  expired: {
+    kind: "payment-expired", status: 402,
+    detail: "The credential's validity window closed before it could be checked.",
+    hint: "Request the resource again and send the signed credential promptly; do not reuse a credential signed earlier.",
+  },
+  replay: {
+    kind: "invalid-challenge", status: 402,
+    detail: "This credential or its transaction was already used.",
+    hint: "Request the resource again for a fresh challenge and sign a new credential; a credential pays for one request only.",
+  },
+  "simulation-failed": {
+    kind: "verification-failed", status: 402,
+    detail: "The signed transaction failed simulation on Tempo, so it would not settle.",
+    hint: "Check the wallet's balance and that the transaction pays the challenge exactly, then pay a fresh challenge.",
+  },
+  "policy-denied": {
+    kind: "verification-failed", status: 402,
+    detail: "The Tempo relay declined this payment under its own policy.",
+    hint: "Pay over another method offered in the WWW-Authenticate header.",
+  },
+  unknown: {
+    kind: "verification-failed", status: 402,
+    detail: "Payment verification failed.",
+    hint: "Request the resource again and pay the fresh challenge; if it keeps failing, pay over another method in the WWW-Authenticate header.",
+  },
+});
+
+export function classifyTempoRefusal(e) {
+  const trace = e?.__relayTrace || {};
+  const code = e?.details && typeof e.details === "object" && typeof e.details.code === "string" ? e.details.code : "";
+  const raw = String(trace.relayError || "");
+  const text = `${String(e?.message || "")} ${code} ${raw}`.toLowerCase();
+  if (trace.networkError) return "relay-unreachable";
+  if (trace.relayUnavailable) return "relay-unavailable";
+  if (/memo is not bound/.test(text)) return "memo-unbound";
+  if (/already[ _]used|already been used|already been submitted|nonce too low/.test(text)) return "replay";
+  if (/insufficient[ _]funds|insufficient balance|exceeds balance/.test(text)) return "insufficient-funds";
+  if (/\bexpired\b|validbefore|valid before/.test(text)) return "expired";
+  if (/no matching (payment call|transfer)/.test(text)) return "transfer-mismatch";
+  if (/simulation[ _]failed|reverted/.test(text)) return "simulation-failed";
+  if (/policy[ _]denied|screen[ _]rejected/.test(text)) return "policy-denied";
+  if (/temporarily[ _]unavailable/.test(text)) return "relay-unavailable";
+  return "unknown";
+}
+
+/** The problem document for a refusal class. The class also rides in
+ *  `details.reason` so a client can switch on it without parsing prose. */
+export function tempoRefusalProblem(cls, fallbackReason) {
+  const c = TEMPO_REFUSAL_CLASSES[cls] || TEMPO_REFUSAL_CLASSES.unknown;
+  const detail = cls === "unknown" && fallbackReason
+    ? `Payment verification failed: ${String(fallbackReason).slice(0, 160)}`
+    : c.detail;
+  return mppProblem(c.kind, detail, { status: c.status, hint: c.hint, details: { reason: cls in TEMPO_REFUSAL_CLASSES ? cls : "unknown", charged: false } });
+}
+
+// Operator log line for EVERY refused Tempo credential: reason class, route,
+// amount and timings. Never the payer address or any credential material; the
+// relay's own words (describeRelayFailure) ride along with addresses masked.
+function maskAddresses(s) {
+  return String(s || "").replace(/did:pkh:[^\s"']+/gi, "did:pkh:<masked>").replace(/0x[0-9a-fA-F]{40}(?![0-9a-fA-F])/g, "0x<addr>");
+}
+export function logTempoRefusal(req, { cls, amountAtomic = null, timings = {}, detail = "" } = {}) {
+  const t = Object.entries(timings).filter(([, v]) => Number.isFinite(v)).map(([k, v]) => `${k}=${v}ms`).join(" ");
+  const line = `[mpp-tempo] refused class=${cls} route="${req?.method || "?"} ${req?.path || "?"}" amount=${amountAtomic == null ? "?" : String(amountAtomic)}${t ? ` ${t}` : ""}${detail ? ` detail=${maskAddresses(detail).slice(0, 400)}` : ""}`;
+  console.warn(line);
+  return line;
 }
 
 // The configured Method.Server is cheap to hold but not free to rebuild per
@@ -269,6 +440,22 @@ export function tempoReplayKey(authorizationHeader) {
   }
 }
 
+/** How long a push credential's sender read may take before it names
+ *  nobody (the same bound tempoPushSender applies to its RPC call). */
+export const PUSH_SENDER_WAIT_MS = 3000;
+
+/** The transaction hash a PUSH credential names (lowercased), else null.
+ *  The evidence a refund-owed row for an unclaimed push transfer is keyed on. */
+export function pushHashOf(authorizationHeader) {
+  try {
+    const p = Credential.deserialize(authorizationHeader)?.payload;
+    const h = p?.type === "hash" ? String(p.hash || "").toLowerCase() : "";
+    return /^0x[0-9a-f]{64}$/.test(h) ? h : null;
+  } catch {
+    return null;
+  }
+}
+
 /** True when `authorizationHeader` deserializes to a WELL-FORMED credential
  *  bound to a `method: "tempo"` challenge — used to decide whether a request
  *  belongs on the Tempo path at all before doing anything mutating. Never
@@ -337,18 +524,283 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
   let amount;
   try { amount = BigInt(String(r.amount)); } catch { return bad("challenge amount is not an integer base-units string"); }
   if (amount < expected) return bad(`challenge amount ${amount} is below this route's price ${expected}`);
+  // Only the two credential kinds that pay: a signed transaction for the
+  // relay to broadcast (pull), or the hash of a transfer the buyer already
+  // sent (push). A "proof" credential moves no money and is valid only for a
+  // zero-amount challenge, which this server never mints; refusing it here
+  // costs the caller nothing.
+  const payloadType = credential?.payload?.type;
+  if (payloadType !== "transaction" && payloadType !== "hash") return bad(`credential payload type ${JSON.stringify(payloadType ?? null)} does not pay this challenge`);
   // CLASSIFICATION-GRADE payer only (sales ledger / telemetry / internal-vs-
-  // external), never identity: `source` is client-supplied (did:pkh) and this
-  // server does not recover the tx signer to verify it. Spoofing it to a
-  // burner address only hides the spoofer's own purchases from OUR revenue
-  // stats; identity-bound routes refuse tempo credentials outright, so it can
-  // never touch memory/my-usage. Same trust tier as the facilitator settle
-  // receipt fallback in payer.js. Added 2026-08-20 — before this, tempo sales
-  // recorded payer null and a self-funded test wallet classified as external.
+  // external), never identity and never a per-buyer key: `source` is
+  // client-supplied (did:pkh) and is not checked against the signer. Spoofing
+  // it to a burner address only hides the spoofer's own purchases from OUR
+  // revenue stats; identity-bound routes refuse tempo credentials outright,
+  // so it can never touch memory/my-usage; and every per-buyer bound keys on
+  // the verified sender (inspectTempoSender below) instead. Same trust tier as
+  // the facilitator settle receipt fallback in payer.js. Added 2026-08-20 —
+  // before this, tempo sales recorded payer null and a self-funded test wallet
+  // classified as external.
   const src = String(credential?.source || "");
   const m = /^did:pkh:eip155:\d+:(0x[0-9a-fA-F]{40})$/.exec(src);
   const payerHint = m ? m[1].toLowerCase() : null;
-  return { ok: true, challenge: ch, amountAtomic: amount, expectedAtomic: expected, payerHint };
+  // A route whose handler spends before the buyer's payment settles (it pays
+  // an outside seller from our own wallet, or runs long upstream work) takes a
+  // pull credential only from a sender the gate can verify (see the gate).
+  const verifiedSenderRequired = item.verifiedSenderRequired === true;
+  return { ok: true, challenge: ch, amountAtomic: amount, expectedAtomic: expected, payerHint, payloadType, verifiedSenderRequired };
+}
+
+// ---------------------------------------------------------------------------
+// The sender of a pull credential, and whether it is VERIFIED.
+//
+// A Tempo transaction names its sender in more than one way, and only some of
+// them are proven by the signature. Decoding the transaction (ox
+// TxEnvelopeTempo.deserialize) yields a `from` that is:
+//   - for a secp256k1 envelope, the address recovered from the signature over
+//     the sender's sign payload (proven);
+//   - for a p256 / webAuthn envelope, the address of the public key the
+//     envelope CARRIES (proven only once that signature is checked against
+//     that key);
+//   - for a keychain envelope, the account the envelope NAMES (the signature
+//     is by an access key; the account is proven only if that key is active
+//     for it on chain, or if the transaction itself carries the account's
+//     own authorization of that key and the chain holds no record of the key:
+//     the first use of a new access key, before any transaction installed it);
+//   - for a multisig envelope, the account it names;
+//   - and, whatever the envelope, an address placed in the fee-payer slot,
+//     taken as written.
+// A per-buyer bound keys on a sender only when it is VERIFIED here; otherwise
+// it keys on the client IP (the callers' own fallback), never on an
+// unverified sender.
+// ---------------------------------------------------------------------------
+const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+const lcAddress = (a) => (typeof a === "string" && ADDRESS_RE.test(a) ? a.toLowerCase() : null);
+const PRIMITIVE_ENVELOPES = new Set(["secp256k1", "p256", "webAuthn"]);
+
+/** Does a key authorization carried inline by a keychain transaction prove
+ *  that `account` authorized `accessKey`? It must authorize exactly that key,
+ *  for the key type that signed, on Tempo mainnet (or chain 0, which the
+ *  protocol reads as every chain), unexpired at `now`, bound to no other
+ *  account, and be signed by the account's OWN key (a primitive signature
+ *  that recovers to the account and verifies). Offline; never throws. */
+function inlineAuthorizationProves(ka, { account, accessKey, keyType, now }) {
+  try {
+    if (!ka || lcAddress(ka.address) !== accessKey || ka.type !== keyType) return false;
+    const chainId = BigInt(ka.chainId);
+    if (chainId !== BigInt(TEMPO_MAINNET_CHAIN_ID) && chainId !== 0n) return false;
+    if (ka.expiry != null && !(Number(ka.expiry) > Math.floor(now / 1000))) return false;
+    if (ka.account !== undefined && lcAddress(ka.account) !== account) return false;
+    const s = ka.signature;
+    if (!s || !PRIMITIVE_ENVELOPES.has(s.type)) return false;
+    const payload = KeyAuthorization.getSignPayload(ka);
+    if (lcAddress(SignatureEnvelope.extractAddress({ payload, signature: s })) !== account) return false;
+    return SignatureEnvelope.verify(s, { address: account, payload }) === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Who a pull credential says paid, and what its signature proves.
+ *  Returns { claimed, verified, envelope, keychain, reason }:
+ *    claimed  - the sender the transaction names (NEVER a key for a bound);
+ *    verified - the same address once the signature proves it, else null;
+ *    keychain - { account, accessKey, inlineAuthorization } for a keychain
+ *               envelope whose access key signature verifies; whether that
+ *               key is authorized for the account is an on-chain read
+ *               (verifyTempoKeychainSender), so the account is not verified
+ *               here. inlineAuthorization is true when the transaction also
+ *               carries the account's own authorization of that key
+ *               (inlineAuthorizationProves), which the read accepts only
+ *               while the chain holds no record of the key. Else null.
+ *  Offline and synchronous; never throws. Exported for tests. */
+export function inspectTempoSender(authorizationHeader, { now = Date.now() } = {}) {
+  const out = { claimed: null, verified: null, envelope: null, keychain: null, reason: "" };
+  let payload;
+  try { payload = Credential.deserialize(authorizationHeader)?.payload; } catch { return { ...out, reason: "credential does not decode" }; }
+  if (payload?.type !== "transaction" || typeof payload.signature !== "string") return { ...out, reason: "not a pull credential" };
+  const raw = payload.signature;
+  if (!/^0x7[68](?:[0-9a-fA-F]{2})+$/.test(raw)) return { ...out, reason: "not a Tempo transaction" };
+  let tx;
+  try { tx = TxEnvelopeTempo.deserialize(raw); } catch { return { ...out, reason: "transaction does not decode" }; }
+  const sig = tx?.signature;
+  out.claimed = lcAddress(tx?.from);
+  out.envelope = typeof sig?.type === "string" ? sig.type : null;
+  if (!out.claimed || !sig) return { ...out, reason: "transaction names no sender" };
+  try {
+    const signPayload = TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx));
+    if (PRIMITIVE_ENVELOPES.has(sig.type)) {
+      // SignatureEnvelope.verify binds the address itself for all three types
+      // (recovery for secp256k1, the carried key's address for p256/webAuthn);
+      // the recovered-signer compare is kept beside it as a belt.
+      const signer = lcAddress(SignatureEnvelope.extractAddress({ payload: signPayload, signature: sig }));
+      if (signer === out.claimed && SignatureEnvelope.verify(sig, { address: out.claimed, payload: signPayload })) return { ...out, verified: out.claimed, reason: "signature" };
+      return { ...out, reason: "the signature does not prove the named sender" };
+    }
+    if (sig.type === "keychain") {
+      const account = lcAddress(sig.userAddress);
+      if (account !== out.claimed) return { ...out, reason: "the keychain account is not the named sender" };
+      const inner = sig.inner;
+      if (!inner || !PRIMITIVE_ENVELOPES.has(inner.type)) return { ...out, reason: "unsupported access key signature" };
+      // Keychain V2 binds the account into what the access key signs; V1 does not.
+      const keyPayload = sig.version === "v1" ? signPayload : TxEnvelopeTempo.getSignPayload(TxEnvelopeTempo.from(tx), { from: account });
+      const accessKey = lcAddress(SignatureEnvelope.extractAddress({ payload: keyPayload, signature: inner }));
+      if (!accessKey || !SignatureEnvelope.verify(inner, { address: accessKey, payload: keyPayload })) return { ...out, reason: "the access key signature does not verify" };
+      // Signed by the account's own key: that proves the account outright.
+      if (accessKey === account) return { ...out, verified: account, reason: "signature" };
+      if (!tx.keyAuthorization) return { ...out, keychain: { account, accessKey, inlineAuthorization: false }, reason: "access key authorization not checked" };
+      const inlineAuthorization = inlineAuthorizationProves(tx.keyAuthorization, { account, accessKey, keyType: inner.type, now });
+      return { ...out, keychain: { account, accessKey, inlineAuthorization }, reason: inlineAuthorization ? "access key authorized in this transaction" : "the key authorization it carries does not prove the account" };
+    }
+  } catch {
+    return { ...out, reason: "the signature does not verify" };
+  }
+  return { ...out, reason: `${out.envelope || "unknown"} envelope` };
+}
+
+/** The VERIFIED sender of a pull credential when its signature alone proves
+ *  it (lowercased address), else null: a push credential, anything that does
+ *  not decode, a keychain or multisig envelope, or a sender the signature
+ *  does not prove. A keychain sender is verified only through
+ *  verifyTempoKeychainSender (an on-chain read). Never throws. Exported for
+ *  tests. */
+export function tempoSenderOf(authorizationHeader) {
+  return inspectTempoSender(authorizationHeader).verified;
+}
+
+function accessKeyTimeoutMs() {
+  const n = Number(process.env.TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 10_000) : 2500;
+}
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+/** What the AccountKeychain precompile holds for `accessKey` on `account`:
+ *  one eth_call (getKey), the read mppx's own isActiveAccessKey makes.
+ *    "active"     - present, unrevoked, unexpired;
+ *    "absent"     - no record at all (an empty key id, not revoked);
+ *    "revoked", "expired", "mismatch" (a record for another key id);
+ *    "unreadable" - a timeout, an RPC error, a malformed address or result.
+ *  Never throws. Exported for tests. */
+export async function tempoAccessKeyState({ account, accessKey } = {}, {
+  rpcUrl = process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz",
+  fetchImpl = globalThis.fetch,
+  timeoutMs = accessKeyTimeoutMs(),
+  now = Date.now(),
+} = {}) {
+  const acct = lcAddress(account);
+  const key = lcAddress(accessKey);
+  if (!acct || !key) return "unreadable";
+  try {
+    const data = encodeFunctionData({ abi: Abis.accountKeychain, functionName: "getKey", args: [acct, key] });
+    const res = await fetchImpl(rpcUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: Addresses.accountKeychain, data }, "latest"] }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return "unreadable";
+    const body = await res.json();
+    if (!body || body.error || typeof body.result !== "string") return "unreadable";
+    const k = decodeFunctionResult({ abi: Abis.accountKeychain, functionName: "getKey", data: body.result });
+    const keyId = lcAddress(k?.keyId);
+    if (!keyId || typeof k.isRevoked !== "boolean") return "unreadable";
+    if (k.isRevoked) return "revoked";
+    if (keyId === key) return BigInt(k.expiry) > BigInt(Math.floor(now / 1000)) ? "active" : "expired";
+    return keyId === ZERO_ADDRESS ? "absent" : "mismatch";
+  } catch {
+    return "unreadable";
+  }
+}
+
+/** Is `accessKey` an active (present, unrevoked, unexpired) access key of
+ *  `account` on Tempo? tempoAccessKeyState read as a yes/no; fails closed.
+ *  Exported for tests. */
+export async function tempoAccessKeyActive(keychain = {}, opts = {}) {
+  return (await tempoAccessKeyState(keychain, opts)) === "active";
+}
+
+/** A cached, deduplicated and concurrency-bounded keychain check. Resolves to
+ *  the account (lowercased) when its access key is active on chain, or when
+ *  the chain holds no record of the key and the credential carries the
+ *  account's own authorization of it (keychain.inlineAuthorization, checked
+ *  offline by inspectTempoSender); else null. A revoked, expired or
+ *  unreadable key is never accepted. Never rejects. `check` resolves to a
+ *  tempoAccessKeyState word (true reads as "active"). An active key is
+ *  remembered for `ttlMs`, any other state for `negativeTtlMs`; a remembered
+ *  "absent" is not reused for a credential WITHOUT an inline authorization
+ *  (the key may have been installed since), which reads again. Past
+ *  `maxInFlight` concurrent reads the answer is null without a read
+ *  (unverified, never a guess). Exported for tests. */
+export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlMs = 60_000, negativeTtlMs = 15_000, maxInFlight = 16, maxEntries = 5000 } = {}) {
+  const cache = new Map(); // "account:key" -> { state, until }
+  const inFlight = new Map(); // "account:key" -> Promise<state>
+  const stateOf = (v) => (v === true || v === "active" ? "active" : typeof v === "string" ? v : "inactive");
+  return async function verifyKeychainSender(keychain, now = Date.now()) {
+    const account = lcAddress(keychain?.account);
+    const accessKey = lcAddress(keychain?.accessKey);
+    if (!account || !accessKey) return null;
+    const inline = keychain.inlineAuthorization === true;
+    const decide = (state) => (state === "active" || (state === "absent" && inline) ? account : null);
+    const k = `${account}:${accessKey}`;
+    const hit = cache.get(k);
+    if (hit && hit.until > now && (hit.state !== "absent" || inline)) return decide(hit.state);
+    let p = inFlight.get(k);
+    if (!p) {
+      if (inFlight.size >= maxInFlight) return null;
+      p = Promise.resolve().then(() => check({ account, accessKey })).then(stateOf, () => "unreadable");
+      inFlight.set(k, p);
+      p.then((state) => {
+        inFlight.delete(k);
+        cache.delete(k);
+        if (cache.size >= maxEntries) cache.delete(cache.keys().next().value);
+        cache.set(k, { state, until: Date.now() + (state === "active" ? ttlMs : negativeTtlMs) });
+      });
+    }
+    return decide(await p);
+  };
+}
+const verifyTempoKeychainSenderDefault = createKeychainSenderVerifier();
+/** The production keychain check (TEMPO_RPC_URL, cached). */
+export function verifyTempoKeychainSender(keychain) {
+  return verifyTempoKeychainSenderDefault(keychain);
+}
+
+/** Reason class + buyer words for a binding refusal (checked before any relay
+ *  call). The detail is the binding check's own sentence (our words, never an
+ *  upstream body); the class and hint make it actionable. Exported for tests. */
+export function bindingRefusal(reason) {
+  const r = String(reason || "");
+  const fresh = "Request the resource again for a fresh challenge from this server and pay that one.";
+  if (/does not deserialize/.test(r)) return { cls: "malformed", kind: "malformed-credential", detail: "Credential is malformed: the Authorization: Payment value does not decode.", hint: undefined };
+  if (/HMAC/.test(r)) return { cls: "not-minted-here", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}.`, hint: `The challenge id is not one this server issued (a challenge copied from another server, or edited). ${fresh}` };
+  if (/realm/.test(r)) return { cls: "wrong-realm", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}.`, hint: fresh };
+  if (/expired/.test(r)) return { cls: "expired", kind: "payment-expired", detail: `Challenge is invalid: ${r}.`, hint: `Challenges are valid for a few minutes. ${fresh}` };
+  if (/currency/.test(r)) return { cls: "wrong-currency", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}.`, hint: `Pay one of the currencies named in this server's tempo challenges (USDC.e first). ${fresh}` };
+  if (/recipient/.test(r)) return { cls: "wrong-recipient", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}.`, hint: `The challenge must name this server's Tempo payTo as recipient. ${fresh}` };
+  if (/chainId/.test(r)) return { cls: "wrong-chain", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}.`, hint: `Tempo payments here are on Tempo mainnet (chain 4217). ${fresh}` };
+  if (/amount .* below/.test(r)) return { cls: "amount-too-low", kind: "payment-insufficient", detail: `Challenge is invalid: ${r}.`, hint: `A challenge is priced for the route it was issued on; pay the challenge from this route's own 402. ${fresh}` };
+  if (/not an integer/.test(r)) return { cls: "malformed-amount", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}.`, hint: fresh };
+  if (/identity bound|runs longer/.test(r)) return { cls: "method-unsupported", kind: "method-unsupported", detail: `Challenge is invalid: ${r}.`, hint: undefined };
+  if (/payload type/.test(r)) return { cls: "malformed", kind: "malformed-credential", detail: `Credential is malformed: ${r}.`, hint: "Pay the tempo challenge with a signed transaction or the hash of the transfer you sent." };
+  if (/no price/.test(r)) return { cls: "no-price", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}.`, hint: "This route is free; call it without a payment." };
+  return { cls: "invalid-challenge", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}. Request the resource again for a fresh challenge.`, hint: undefined };
+}
+
+/** The refusal a pull credential meets on a route that requires a verified
+ *  sender (checkTempoCredentialBinding's verifiedSenderRequired) when its
+ *  signer is not proven. Answered before any relay call; nothing charged.
+ *  Exported for tests. */
+export const TEMPO_SENDER_UNVERIFIED = Object.freeze({
+  cls: "sender-unverified",
+  kind: "verification-failed",
+  detail: "This route accepts a Tempo pull credential only when its signature proves the paying account: signed by the account's own key, or by an access key that is active for that account on Tempo or that the transaction authorizes with the account's own key. This credential's signer could not be verified, so it was not sent for validation and nothing was charged.",
+  hint: "Pay with a credential signed by the account's key, or by an access key that is active on chain or carries the account's authorization for it, or pay this route over another method offered in the WWW-Authenticate header.",
+});
+
+/** Best-effort amount (base units) from a credential, for the refusal log only. */
+function amountOfCredential(authorizationHeader) {
+  try { return String(Credential.deserialize(authorizationHeader)?.challenge?.request?.amount ?? "?"); } catch { return "?"; }
 }
 
 /** Non-mutating check (credential shape, relay pre-validation). The HMAC /
@@ -363,7 +815,7 @@ export async function validateTempoCredential(authorizationHeader) {
     // mppx's VerificationFailedError.message is ALWAYS the bare "Payment
     // verification failed." — the relay's verdict is elsewhere; see
     // describeRelayFailure for where.
-    return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e) };
+    return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e), cls: classifyTempoRefusal(e) };
   }
 }
 
@@ -375,7 +827,7 @@ export async function broadcastTempoCredential(authorizationHeader) {
     const [receipt] = await withRelayTrace(() => Method.broadcastCredential([tempoMethod()], authorizationHeader));
     return { ok: true, receipt };
   } catch (e) {
-    return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e) };
+    return { ok: false, error: describeRelayFailure(e), reason: buyerReason(e), cls: classifyTempoRefusal(e) };
   }
 }
 
@@ -403,6 +855,12 @@ export function tempoTxFromReceiptHeader(header) {
 }
 
 // Test-only hook: force the memoized method to rebuild on the next call.
+/** Test seam: the relay fetch wrapper under a fresh trace. */
+export async function __testRelayFetch(url, init) {
+  const trace = {};
+  try { return { res: await relayTrace.run(trace, () => relayFetch(url, init)), trace }; }
+  catch (error) { return { error, trace }; }
+}
 export function __testResetMethodCache() {
   cachedMethod = null;
   cachedKey = "";
@@ -420,6 +878,49 @@ export function __testResetMethodCache() {
  *  the route's price via `priceFor` (server.js supplies a CATALOG lookup) —
  *  never invents a price, and mints nothing for a route it can't price.
  *  Returns null (mount nothing) when tempoEnabled() is false. */
+/** Whether a route is offered a tempo challenge at all. ONE predicate, read by
+ *  the 402 appender below and by the /openapi.json discovery offers, so the
+ *  document never promises a method the live 402 withholds. Identity-bound
+ *  routes are paid with the payer AS the identity and a tempo credential
+ *  carries no verified payer; long-running routes outlive a pull credential. */
+export function tempoOfferedFor(item) {
+  return !!item && !item.identityBound && !item.longRunning;
+}
+
+// Challenge ORDER. mppx picks the first challenge it has a method for (ties on
+// its own preference weights break on header order) and never falls back to
+// the next one when a credential is refused. So the tempo challenge leads the
+// header - an agent holding Tempo funds and a Base wallet pays over Tempo -
+// EXCEPT for a client whose tempo credential the relay just refused (an empty
+// Tempo balance is the common case): that client would pick tempo again on
+// every retry and never reach the Base challenge it can pay. For a while after
+// such a refusal it gets the old order, evm first. Keyed like the wrong-domain
+// steering (ip + User-Agent); an empty User-Agent is never keyed.
+const TEMPO_DEMOTE_MS = Number(process.env.MPP_TEMPO_DEMOTE_MS || 30 * 60 * 1000);
+const TEMPO_DEMOTE_MAX = 2000;
+const tempoDemoted = new Map(); // fingerprint -> expiresAt
+export function noteTempoRefusal(req, now = Date.now()) {
+  const key = clientFingerprint(req);
+  if (!key) return false;
+  if (tempoDemoted.size >= TEMPO_DEMOTE_MAX) {
+    for (const [k, exp] of tempoDemoted) if (exp <= now) tempoDemoted.delete(k);
+    if (tempoDemoted.size >= TEMPO_DEMOTE_MAX) tempoDemoted.delete(tempoDemoted.keys().next().value);
+  }
+  tempoDemoted.set(key, now + TEMPO_DEMOTE_MS);
+  return true;
+}
+export function tempoLeads(req, now = Date.now()) {
+  const key = clientFingerprint(req);
+  if (!key) return true;
+  const exp = tempoDemoted.get(key);
+  if (!exp) return true;
+  if (exp <= now) { tempoDemoted.delete(key); return true; }
+  return false;
+}
+/** Test seam only. */
+export function _resetTempoDemotion() { tempoDemoted.clear(); }
+export function tempoDemotionStatus() { return { demotedClients: tempoDemoted.size, ttlMs: TEMPO_DEMOTE_MS }; }
+
 export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
   if (!tempoEnabled()) return null;
   return function tempoChallengeAppender(req, res, next) {
@@ -435,7 +936,7 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
           // Identity-bound routes (wallet-keyed memory, my-usage) are paid
           // with the payer AS the identity; a tempo credential carries no
           // verified payer, so no tempo challenge is offered for them.
-          if (item && !item.identityBound && !item.longRunning) {
+          if (tempoOfferedFor(item)) {
             const header = mintTempoChallenge({
               priceUsd: item.priceUsd,
               description: item.description,
@@ -444,7 +945,7 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
             });
             if (header) {
               const existing = res.getHeader("WWW-Authenticate");
-              res.setHeader("WWW-Authenticate", existing ? `${existing}, ${header}` : header);
+              res.setHeader("WWW-Authenticate", !existing ? header : tempoLeads(req) ? `${header}, ${existing}` : `${existing}, ${header}`);
             }
           }
         }
@@ -478,7 +979,7 @@ export function createTempoChallengeAppender({ realm, secretKey, priceFor }) {
  *  free handler executions before Tempo's relay rejects the (N-1) duplicate
  *  broadcasts at settlement time — the same "Five Attacks on x402" Attack II
  *  class replay-guard.js documents, just unguarded on this second path. */
-export function createTempoGate({ validate = validateTempoCredential, broadcast = broadcastTempoCredential, confirmSettlement = null, replayGuard, secretKey, realm, priceFor } = {}) {
+export function createTempoGate({ validate = validateTempoCredential, broadcast = broadcastTempoCredential, confirmSettlement = null, replayGuard, secretKey, realm, priceFor, preValidate = null, verifyKeychainSender = verifyTempoKeychainSender, pushSender = tempoPushSender, onPushNotClaimed = null, onPushInputRefused = null, pushClaimAllowed = null } = {}) {
   if (!tempoEnabled()) return null;
   // Fail CLOSED on the binding inputs: a gate that cannot verify "we minted
   // this challenge for this price" must not exist, because its existence is
@@ -489,7 +990,19 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
   }
   return function tempoGate(req, res, next) {
     const auth = req.headers.authorization;
-    if (!isTempoCredential(auth)) return next();
+    const tStart = Date.now();
+    if (!isTempoCredential(auth)) {
+      // A "Payment" credential that does not even deserialize belongs to no
+      // gate (the evm shim cannot read it either) and used to leave no line at
+      // all - the 2026-09-20 553 ms refusal. Log it; evm credentials, which
+      // deserialize fine, are the shim's to judge and are not logged here.
+      if (typeof auth === "string" && /^payment\s/i.test(auth)) {
+        let undecodable = false;
+        try { Credential.deserialize(auth); } catch { undecodable = true; }
+        if (undecodable) logTempoRefusal(req, { cls: "malformed", timings: { total: Date.now() - tStart } });
+      }
+      return next();
+    }
 
     // Binding FIRST, before any relay round trip: is this a challenge we
     // minted, unexpired, for our payTo, in a currency we offer, on Tempo
@@ -497,39 +1010,107 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
     // to a fresh 402 exactly like an invalid evm credential.
     const binding = checkTempoCredentialBinding(auth, { secretKey, realm, priceFor, method: req.method, path: req.path, req });
     if (!binding.ok) {
-      console.warn(`[mpp-tempo] credential rejected before validate(): ${binding.reason}`);
       // Not a tempo credential at all -> not our verdict to give (the evm
       // shim ahead of us already judged it). Everything else is a rejection
-      // of OUR challenge binding: say so in the 402's problem+json body.
+      // of OUR challenge binding: say so in the 402's problem+json body, with
+      // a reason class and a next step.
       if (binding.reason !== "not a tempo/charge challenge") {
-        const kind = /does not deserialize/.test(binding.reason) ? "malformed-credential"
-          : /amount .* below/.test(binding.reason) ? "payment-insufficient"
-          : "invalid-challenge";
-        markMppProblem(req, res, mppProblem(kind, kind === "malformed-credential" ? "Credential is malformed: the Authorization: Payment value does not decode." : `Challenge is invalid: ${binding.reason}. Request the resource again for a fresh challenge.`));
+        const b = bindingRefusal(binding.reason);
+        logTempoRefusal(req, { cls: b.cls, amountAtomic: amountOfCredential(auth), timings: { total: Date.now() - tStart }, detail: `before validate: ${binding.reason}` });
+        markMppProblem(req, res, mppProblem(b.kind, b.detail, { hint: b.hint, details: { reason: b.cls, charged: false } }));
       }
       return next();
     }
 
-    const t0 = Date.now();
-    validate(auth).then(async (v) => {
+    // The request's own input is checked BEFORE the relay round trip. A paid
+    // call whose body the handler would refuse with a 400 used to spend ~1.2 s
+    // on relay validation first (2026-09-23, a first paid call): nothing was
+    // charged, but the buyer waited for a verdict the input had already
+    // decided. Only a credential that has already passed the binding check
+    // reaches this, so an unpaid request still gets its 402 first - the same
+    // order as x402, where an unpaid bad body is a 402 and a paid one reaches
+    // the handler's 400. Answered here: nothing validated, nothing broadcast.
+    // Not for a PUSH credential: its transfer is already on chain, so "not
+    // charged" would be false. It is input-checked below, after the relay has
+    // confirmed the transfer and BEFORE the hash is claimed.
+    if (typeof preValidate === "function" && binding.payloadType !== "hash") {
+      let bad = null;
+      try { bad = preValidate(req); } catch { bad = null; }
+      if (bad && bad.status >= 400 && bad.status < 500) {
+        logTempoRefusal(req, { cls: "input-invalid", amountAtomic: binding.amountAtomic, timings: { total: Date.now() - tStart }, detail: String(bad.body?.error || "").slice(0, 160) });
+        res.setHeader("Cache-Control", "no-store");
+        return res.status(bad.status).json({ ...bad.body, charged: false });
+      }
+    }
+
+    // WHO PAID (pull credentials only; a push transfer is on chain before
+    // this request and is finalized before the handler). The signature proves
+    // a primitive-key sender outright. A keychain sender is proven by an
+    // on-chain read of its access key (active, or absent with the account's
+    // own authorization carried inline), started here beside relay validation.
+    // A route that spends before the buyer's payment settles
+    // (verifiedSenderRequired) waits for that proof and refuses a pull
+    // credential without it, before any relay call. Every other route keys its
+    // bounds on the keychain account only if the read has answered by the time
+    // validation has, else on the client IP: no added latency, and never an
+    // unverified sender.
+    const isPull = binding.payloadType === "transaction";
+    const senderInfo = isPull ? inspectTempoSender(auth) : null;
+    const signedSender = senderInfo?.verified || null;
+    let keychainSender = null;
+    let keychainRead = null;
+    if (isPull && !signedSender && senderInfo.keychain && typeof verifyKeychainSender === "function") {
+      keychainRead = Promise.resolve().then(() => verifyKeychainSender(senderInfo.keychain)).then((a) => lcAddress(a), () => null);
+      keychainRead.then((a) => { keychainSender = a; });
+    }
+    const SENDER_REFUSED = Symbol("sender-refused");
+    let t0 = Date.now();
+    const senderGate = isPull && binding.verifiedSenderRequired && !signedSender
+      ? (keychainRead || Promise.resolve(null)).then((a) => !!a)
+      : Promise.resolve(true);
+    senderGate.then((allowed) => {
+      if (!allowed) {
+        logTempoRefusal(req, { cls: TEMPO_SENDER_UNVERIFIED.cls, amountAtomic: binding.amountAtomic, timings: { total: Date.now() - tStart }, detail: `before validate: ${senderInfo?.envelope || "?"} envelope, ${senderInfo?.reason || "no sender"}${keychainRead ? "; the chain read did not vouch for the key" : ""}` });
+        noteTempoRefusal(req);
+        markMppProblem(req, res, mppProblem(TEMPO_SENDER_UNVERIFIED.kind, TEMPO_SENDER_UNVERIFIED.detail, { hint: TEMPO_SENDER_UNVERIFIED.hint, details: { reason: TEMPO_SENDER_UNVERIFIED.cls, charged: false } }));
+        next();
+        return SENDER_REFUSED;
+      }
+      t0 = Date.now();
+      return validate(auth);
+    }).then(async (v) => {
+      if (v === SENDER_REFUSED) return;
       const tValidated = Date.now();
       if (!v.ok) {
         // Loud on ambiguity, same doctrine as facilitator-diagnostics.js —
         // an unlogged rejection here is exactly what made the 2026-08-17
         // live-verify failure undiagnosable from Railway logs alone.
-        // v.error is already truncated to 300 chars by validateTempoCredential
-        // and is the relay/mppx SDK's own message, never a secret we hold.
-        console.warn(`[mpp-tempo] credential rejected by validate(): ${v.error || "(no error detail)"}`);
+        const cls = v.cls || "unknown";
+        logTempoRefusal(req, { cls, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: tValidated - tStart }, detail: v.error || "(no error detail)" });
+        const c = TEMPO_REFUSAL_CLASSES[cls] || TEMPO_REFUSAL_CLASSES.unknown;
+        if (c.status === 503) {
+          // The relay could not be reached (or refused OUR key) before the
+          // credential was checked: not the buyer's fault, nothing charged,
+          // retryable. A 503 with Retry-After says that; a bare 402 after a
+          // 10-22 s wait said "your payment failed". No demotion: the buyer's
+          // Tempo credential was never judged.
+          res.setHeader("Retry-After", String(c.retryAfter || 5));
+          return sendMppProblem(res, tempoRefusalProblem(cls));
+        }
+        // This client's next 402 lists the evm challenge first (see tempoLeads).
+        noteTempoRefusal(req);
         // Fall through to a fresh 402 (same as an invalid evm credential) -
-        // whose body now says verification-failed with the relay's reason.
-        markMppProblem(req, res, mppProblem("verification-failed", `Payment verification failed: ${String(v.reason || "the Tempo relay rejected the credential").slice(0, 160)}`));
+        // whose body now says verification-failed with the reason class.
+        markMppProblem(req, res, tempoRefusalProblem(cls, v.reason));
         return next();
       }
 
       // Claim the credential's identity BEFORE the handler runs — the whole
       // point is to close the concurrent-replay window, not just the
-      // sequential one. Release-on-failure (handler fails, broadcast fails)
-      // so a legitimate retry of the still-valid credential still works.
+      // sequential one. Released only when the handler itself fails (>= 400,
+      // nothing of value produced) so a legitimate retry of the still-valid
+      // credential still works; once a handler has produced a <400 the
+      // credential stays spent whatever happens next.
       // Mark the request as paid over MPP/tempo BEFORE the handler runs, so
       // handlers that route by the buyer's payment rail (route-execute's
       // chain-matched external leg) can see it - a tempo credential carries
@@ -538,14 +1119,26 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // Classification-grade payer for the sales ledger (see the binding
       // check's payerHint comment) — read at the recordSale site in server.js.
       req.mppTempoPayer = binding.payerHint || null;
+      // The VERIFIED sender (see inspectTempoSender; null for a push
+      // credential and for any sender the signature or the chain did not
+      // prove), which per-buyer bounds key on instead of the hint. With null,
+      // every bound falls back to the client IP.
+      req.mppTempoSender = signedSender || keychainSender || null;
+      // The payer the sales ledger and a refund-owed row name: a sender the
+      // signature, the keychain read or (push) the chain proved, never the
+      // client-written `source` hint. Filled in once the payment settles;
+      // null when nothing proved one (the row then names nobody, and a manual
+      // refund reads the payer off the transaction the row records).
+      req.mppTempoLedgerPayer = req.mppTempoSender;
       const replayKey = replayGuard ? tempoReplayKey(auth) : null;
       if (replayGuard && replayKey) {
         const verdict = await replayGuard.begin(replayKey);
         if (verdict !== "ok") {
+          logTempoRefusal(req, { cls: "replay", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `replay guard: ${verdict}` });
           // Spec shape for a spent/in-flight credential: 402 + fresh challenge
           // (the outbound tempo hook appends one at writeHead) + problem+json
           // invalid-challenge - not a bare 409 an MPP client cannot act on.
-          return sendMppProblem(res, mppProblem("invalid-challenge", `Challenge is invalid: this credential was already used or is in flight (${verdict}). Request the resource again for a fresh challenge.`));
+          return sendMppProblem(res, mppProblem("invalid-challenge", `Challenge is invalid: this credential was already used or is in flight (${verdict}).`, { hint: TEMPO_REFUSAL_CLASSES.replay.hint, details: { reason: "replay", charged: false } }));
         }
       }
       const releaseReplay = () => { if (replayGuard && replayKey) replayGuard.release(replayKey).catch(() => {}); };
@@ -564,6 +1157,114 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // idempotency seeding, telemetry). Security review 2026-08-19.
       for (const h of ["payment-signature", "x-payment", "payment-identifier", "x-pow-solution"]) delete req.headers[h];
 
+      // PUSH credential: the buyer already SENT the transfer (mppx push mode,
+      // chosen by a json-rpc account: sendTransaction first, then the hash as
+      // the credential), and validate just confirmed it pays this challenge.
+      // The money moved before this request arrived, so nothing is left to
+      // decide after the handler: finalize now (the relay claims the hash, so
+      // it can never pay for a second request), mark the request settled, and
+      // let the handler answer directly. An answer that is not delivered - a
+      // handler >= 400, or a buyer gone before the first byte - is then a
+      // charge on a settled payment, and server.js books it as owed. Before
+      // this, such a credential was never finalized and never booked: a real
+      // transfer with no record, and a buyer told nothing was charged.
+      if (binding.payloadType === "hash") {
+        // The input check, now that the relay has confirmed the transfer and
+        // BEFORE finalize claims it. A body the handler would refuse used to
+        // be finalized first and then booked as a charged failure and an owed
+        // refund. Nothing is claimed yet, so the same credential still pays
+        // for this request once the body is corrected (until the challenge
+        // expires): say so, and release the replay key so it can.
+        // Bounded here as well as inside tempoPushSender: an injected reader
+        // gets the same ceiling, and a read past it names nobody.
+        const readPushSender = async () => {
+          if (typeof pushSender !== "function") return null;
+          let timer = null;
+          try {
+            const bound = new Promise((resolve) => { timer = setTimeout(() => resolve(null), PUSH_SENDER_WAIT_MS); timer.unref?.(); });
+            return lcAddress(await Promise.race([Promise.resolve().then(() => pushSender(auth)), bound]));
+          } catch { return null; } finally { if (timer) clearTimeout(timer); }
+        };
+        const pushHash = pushHashOf(auth);
+        req.mppTempoPushHash = pushHash;
+        const pushAmountUsd = Number(binding.amountAtomic) / 10 ** envDecimals();
+        if (typeof preValidate === "function") {
+          let bad = null;
+          try { bad = preValidate(req); } catch { bad = null; }
+          if (bad && bad.status >= 400 && bad.status < 500) {
+            releaseReplay();
+            // Until it is claimed we hold the buyer's money for nothing, and
+            // they may never come back: book it as owed now. A later claim
+            // that is served voids the row (see src/tempo-push-debts.js).
+            let owed = false;
+            if (typeof onPushInputRefused === "function") {
+              const payer = await readPushSender();
+              try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, status: bad.status })) === true; } catch { owed = false; }
+            }
+            logTempoRefusal(req, { cls: "input-invalid", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `push credential, transfer not claimed (${owed ? "booked as owed until claimed" : "no debt booked"}): ${String(bad.body?.error || "").slice(0, 160)}` });
+            res.setHeader("Cache-Control", "no-store");
+            return res.status(bad.status).json({ ...bad.body, charged: false, transferClaimed: false, payment: `The transfer you sent has not been claimed. Send this request again with a corrected body and the same credential before the challenge expires (${binding.challenge?.expires || "see the challenge"}) and it pays for that request.${owed ? " Until then it is recorded as owed to the sender." : ""}` });
+          }
+        }
+        // A transfer whose debt is already being refunded (or was) no longer
+        // pays for a request: claiming it now would serve AND refund it.
+        if (typeof pushClaimAllowed === "function" && pushHash) {
+          let allowed = true;
+          try { allowed = (await pushClaimAllowed(pushHash)) !== false; } catch { allowed = true; }
+          if (!allowed) {
+            settleReplay();
+            logTempoRefusal(req, { cls: "push-refunded", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `push transfer ${pushHash} is refunded or being refunded` });
+            return sendMppProblem(res, mppProblem("invalid-challenge", "The transfer this credential names has been refunded (or is being refunded), so it no longer pays for a request.", { status: 402, hint: "Request the resource again and pay the fresh challenge.", details: { reason: "refunded", transferClaimed: false } }));
+          }
+        }
+        const tFinal0 = Date.now();
+        const f = await broadcast(auth);
+        if (!f.ok) {
+          const fcls = f.cls || "unknown";
+          logTempoRefusal(req, { cls: `finalize:${fcls}`, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, finalize: Date.now() - tFinal0, total: Date.now() - tStart }, detail: f.error || "" });
+          const fc = TEMPO_REFUSAL_CLASSES[fcls] || TEMPO_REFUSAL_CLASSES.unknown;
+          if (fc.status === 503) {
+            // The relay could not be reached: the hash is NOT claimed, so the
+            // same credential can be presented again.
+            releaseReplay();
+            res.setHeader("Retry-After", String(fc.retryAfter || 5));
+            return sendMppProblem(res, mppProblem(fc.kind, "The Tempo payment relay could not be reached to claim the transfer you sent. It has not been claimed, so it still pays for this request.", { status: 503, hint: "Retry the same request with the same credential in a few seconds.", details: { reason: fcls, transferClaimed: false } }));
+          }
+          settleReplay();
+          // The relay confirmed a transfer paying this challenge to our
+          // recipient, and it was not claimed for this request. Unless the
+          // relay says the hash was already claimed (it paid for an earlier
+          // request), that transfer is money we hold for nothing delivered:
+          // book it as owed before answering, keyed on the hash.
+          let owed = false;
+          if (fcls !== "replay" && typeof onPushNotClaimed === "function") {
+            const payer = await readPushSender();
+            const hash = pushHash;
+            try { owed = (await onPushNotClaimed(req, { hash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, cls: fcls })) === true; } catch { owed = false; }
+            console.warn(`[mpp-tempo] CHARGED-BUT-NOT-SERVED: push transfer confirmed by the relay could not be claimed (${req.method} ${req.path} tx=${hash || "?"} reason=${fcls}) - ${owed ? "recorded as owed in the refund ledger" : "NOT recorded"}`);
+          }
+          return sendMppProblem(res, mppProblem(fc.kind, `The transfer this credential names could not be claimed for this request: ${fc.detail}${owed ? " The transfer was received and is recorded as owed to the sender." : ""}`, { status: 402, hint: fc.hint, details: { reason: fcls, ...(owed ? { refundOwed: true } : {}) } }));
+        }
+        const receiptHeader = tempoReceiptHeader(f.receipt);
+        if (receiptHeader) res.setHeader("Payment-Receipt", receiptHeader);
+        // THE HANDLER NEVER WAITS ON THE SENDER READ (2026-09-28). It is one
+        // Tempo RPC round trip (bounded at PUSH_SENDER_WAIT_MS) and was awaited
+        // here, so an honest buyer waited on it whenever the RPC was slow. It
+        // now runs beside the handler; only the bookings that name the payer
+        // (the sale, a debt) wait for it, at finish (server.js
+        // whenTempoLedgerPayerKnown). A read that fails or times out leaves
+        // the payer null, as before.
+        req.mppTempoLedgerPayerRead = readPushSender().then((p) => {
+          if (p) req.mppTempoLedgerPayer = p;
+          req.mppTempoLedgerPayerReadDone = true;
+          return p;
+        });
+        settleReplay();
+        req.tempoSettled = true;
+        console.log(`[mpp-tempo] settled push credential before the handler ${req.method} ${req.path} tx=${f.receipt?.reference || "?"} [validate=${tValidated - t0}ms finalize=${Date.now() - tFinal0}ms]`);
+        return next();
+      }
+
       // Buffering mechanics verified against node_modules/@x402/express's
       // own paymentVerified branch (dist/esm/index.mjs) rather than
       // reinvented: while res.end is overridden to only buffer, Node's real
@@ -580,6 +1281,14 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // writeHead threw ERR_HTTP_HEADERS_SENT AFTER broadcast - buyer charged,
       // response never finished (found by the 2026-08-18 security review).
       const originalFlushHeaders = typeof res.flushHeaders === "function" ? res.flushHeaders.bind(res) : null;
+      // A client that hangs up before the handler's answer could be sent is
+      // NOT broadcast while the run holds a granted forgiveness ticket
+      // (src/hangup-settlement.js): the buyer could not have received
+      // anything, so nothing is charged, and the credential stays spent so it
+      // cannot buy a second run. Without a ticket (the budget is spent) the
+      // credential is broadcast as usual and the undelivered charge is booked
+      // as owed in the refund ledger; so is a close that lands while the
+      // broadcast itself is in flight. Same rule as every other rail.
       let bufferedCalls = [];
       let settled = false;
       let endCalled;
@@ -623,6 +1332,18 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         releaseReplay();
         return;
       }
+      // The buyer left before anything could reach them and the run holds a
+      // forgiveness ticket: do not broadcast. The credential stays spent (it
+      // cannot buy a second run); the 499 goes through the hang-up hook's
+      // res.end wrapper. Without a ticket, fall through to the broadcast.
+      if (chargeCancelledForClientGone(req)) {
+        bufferedCalls = [];
+        restore();
+        settleReplay();
+        console.warn(`[mpp-tempo] client gone before the handler's answer could be sent (${req.method} ${req.path}) - not broadcast, not charged`);
+        try { res.removeHeader("Content-Length"); res.statusCode = 499; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ error: CLIENT_GONE_TEXT, charged: false })); } catch { /* socket already gone */ }
+        return;
+      }
       const tHandled = Date.now();
       let b = await broadcast(auth);
       const tBroadcast = Date.now();
@@ -659,14 +1380,31 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         // slow relay broadcast races the credential's own expiry — a
         // "settlement failed" here is as likely to be OUR latency as the
         // relay's verdict, and only the numbers tell them apart.
-        console.warn(`[mpp-tempo] broadcast failed AFTER a successful handler (${req.method} ${req.path}) — buyer answered 402, not charged by us: ${b.error} [${timing}]`);
+        console.warn(`[mpp-tempo] broadcast failed AFTER a successful handler (${req.method} ${req.path}) — buyer answered 402, not charged by us: ${maskAddresses(b.error)} [${timing}]`);
+        const bcls = b.cls || "unknown";
+        logTempoRefusal(req, { cls: `broadcast:${bcls}`, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, handler: tHandled - tValidated, broadcast: tBroadcast - tHandled, total: Date.now() - tStart } });
         bufferedCalls = [];
         restore();
-        sendMppProblem(res, mppProblem("verification-failed", `Payment verification failed: Tempo settlement was not accepted (${String(b.reason || "no relay detail").slice(0, 160)}).`));
-        releaseReplay();
+        // Never a 503 here: after a failed broadcast whose outcome the chain
+        // could not confirm, the spec answer is 402 + a fresh challenge. The
+        // class still says why (e.g. relay-unreachable: retry, nothing landed
+        // that the chain can see).
+        const bc = TEMPO_REFUSAL_CLASSES[bcls] || TEMPO_REFUSAL_CLASSES.unknown;
+        const bkind = bc.status === 503 ? "verification-failed" : bc.kind;
+        const bdetail = bcls === "unknown" && b.reason ? `Tempo settlement was not accepted (${String(b.reason).slice(0, 160)}).` : `Tempo settlement was not accepted: ${bc.detail.replace(/,? so the credential was not checked and nothing was charged\./, ". Nothing settled that the chain can see.")}`;
+        sendMppProblem(res, mppProblem(bkind, bdetail, { hint: bc.status === 503 ? "Request the resource again and pay a fresh challenge in a moment; this credential was not settled." : bc.hint, details: { reason: bcls } }));
+        // The handler already ran and produced a <400 for this credential, so
+        // it stays spent: presenting it again must not run the handler again.
+        // The 402 above carries a fresh challenge to pay instead.
+        settleReplay();
         return;
       }
       console.log(`[mpp-tempo] settled ${req.method} ${req.path} tx=${b.receipt?.reference || "?"} [${timing}]`);
+      // A keychain sender whose chain read had not answered when the bounds
+      // were keyed has usually answered by now (the handler and the broadcast
+      // took longer): the ledger takes it. Never waited for, so no added
+      // latency; a read still pending leaves the row naming nobody.
+      if (!req.mppTempoLedgerPayer && keychainSender) req.mppTempoLedgerPayer = keychainSender;
       const receiptHeader = tempoReceiptHeader(b.receipt);
       restore();
       if (receiptHeader) res.setHeader("Payment-Receipt", receiptHeader);

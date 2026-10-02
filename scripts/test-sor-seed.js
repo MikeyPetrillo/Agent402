@@ -1,4 +1,5 @@
-// Validates the committed SOR proven-seller seed (durable reliability floor).
+// Validates the committed SOR seed list: a discovery hint, never gate evidence
+// (the gate side of that is pinned in test-sor-payto-binding.js).
 //   node scripts/test-sor-seed.js
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

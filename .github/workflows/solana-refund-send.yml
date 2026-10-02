@@ -13,7 +13,7 @@ name: Solana refund send (one-time)
 # that the destination must be PROVEN on-chain to have paid us. `evidence` is a
 # settlement signature, re-derived from the chain against our payTo, which is
 # read from our own live 402 rather than hardcoded. An address that never paid
-# us cannot be refunded, whoever dispatches this. There is also a hard $25
+# us cannot be refunded, whoever dispatches this. There is also a hard
 # ceiling compiled into the script that no input can raise, and every guard
 # runs BEFORE the signing key is read.
 on:
@@ -33,7 +33,7 @@ on:
         required: false
         default: ""
       max_usd:
-        description: "Ceiling for this run (the script refuses anything over $2 regardless)"
+        description: "Ceiling for this run (the script also enforces its own hard ceiling)"
         required: false
         default: "2"
       reclaim_sending:
@@ -65,7 +65,7 @@ jobs:
     environment: refund-approval
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v5.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
       - name: Install the Solana client (pinned to the versions the repo tree proves)
@@ -74,7 +74,7 @@ jobs:
         # script code executed. Pinned to the exact versions in the repo's own
         # node_modules - the ones every local verification of this script ran
         # against - same doctrine as the canary's lock-pinned client installs.
-        run: npm install --no-save --ignore-scripts @solana/kit@8.3.0 @solana-program/token@0.16.1
+        run: npm install --no-save --ignore-scripts @solana/kit@8.4.0 @solana-program/token@0.17.0
       - name: Send
         env:
           SOLANA_BURNER_KEY: ${{ secrets.SOLANA_BURNER_KEY }}

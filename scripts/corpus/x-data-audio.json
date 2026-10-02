@@ -1,5 +1,5 @@
 {
-  "about": "Tier 2 (env-gated): the five X tools, tts-lite, and seller-payability. X BILLS PER ITEM RETURNED - $0.005 a post, $0.010 a user - so a full pass here costs about $0.135 upstream and every case takes the smallest page the tool allows. That cost is why there is ONE case per tool and no paging cases. Every shape was read from a live call on 2026-09-13 before being asserted; tts-lite returns JSON with base64 audio, not raw bytes, which a guess would have got wrong.",
+  "about": "Tier 2 (env-gated): the five X tools, tts-lite, and seller-payability. X bills per item returned, so every case takes the smallest page the tool allows, there is ONE case per tool and no paging cases. Every shape was read from a live call on 2026-09-13 before being asserted; tts-lite returns JSON with base64 audio, not raw bytes, which a guess would have got wrong.",
   "cases": [
     {
       "slug": "x-tweet", "name": "the first tweet ever posted, by id", "requires": "X_BEARER_TOKEN",

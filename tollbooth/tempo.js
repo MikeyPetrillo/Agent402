@@ -323,12 +323,25 @@ export function candidateTxIds(signedTx) {
   return out;
 }
 
-const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+// TIP-20 TransferWithMemo(address indexed from, address indexed to, uint256 amount, bytes32 indexed memo)
+const TRANSFER_WITH_MEMO_TOPIC = keccak256Hex(Buffer.from("TransferWithMemo(address,address,uint256,bytes32)"));
+const MPP_TAG = keccak256Hex(Buffer.from("mpp")).slice(2, 10);
+
+/** Is this bytes32 memo an MPP attribution memo bound to `challengeId`?
+ *  Mirrors mppx tempo/Attribution.js verifyChallengeBinding: TAG, version
+ *  0x01, and bytes 25..31 = keccak256(challengeId)[0..6]. */
+export function memoBoundToChallenge(memo, challengeId) {
+  const hex = String(memo || "").toLowerCase().replace(/^0x/, "");
+  if (hex.length !== 64 || typeof challengeId !== "string" || !challengeId) return false;
+  if (hex.slice(0, 8) !== MPP_TAG || hex.slice(8, 10) !== "01") return false;
+  return hex.slice(50, 64) === keccak256Hex(Buffer.from(challengeId)).slice(2, 16);
+}
 
 /** Did this credential's transaction settle despite the relay's verdict?
  *  Returns { txId } when a candidate receipt exists, succeeded (status 0x1),
- *  and carries the challenge's transfer (currency + recipient + >= amount) —
- *  else null. Polls briefly (a just-mined tx may not be indexed when the
+ *  and carries the challenge's transfer (currency + recipient + >= amount) as
+ *  a TransferWithMemo whose MPP memo is bound to THIS challenge's id - else
+ *  null. Polls briefly (a just-mined tx may not be indexed when the
  *  relay answers). Never throws. */
 export async function confirmTempoSettlement(credential, { rpcUrl, fetchImpl = globalThis.fetch, attempts = 4, delayMs = 2000 } = {}) {
   try {
@@ -357,8 +370,9 @@ export async function confirmTempoSettlement(credential, { rpcUrl, fetchImpl = g
         if (!receipt || receipt.status !== "0x1") continue;
         for (const log of receipt.logs || []) {
           if (String(log.address || "").toLowerCase() !== currency) continue;
-          if ((log.topics || [])[0] !== TRANSFER_TOPIC) continue;
+          if ((log.topics || [])[0] !== TRANSFER_WITH_MEMO_TOPIC) continue;
           if (`0x${String(log.topics[2] || "").slice(-40)}`.toLowerCase() !== recipient) continue;
+          if (!memoBoundToChallenge(log.topics[3], credential?.challenge?.id)) continue;
           let value;
           try { value = BigInt(log.data); } catch { continue; }
           if (value >= minAmount) return { txId };

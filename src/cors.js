@@ -67,6 +67,11 @@ export const CORS_EXPOSE_HEADERS = [
   "Mcp-Session-Id",
   "Mcp-Protocol-Version",
   "Last-Event-Id",
+  // Paging, so a BROWSER consumer can read it too: without these two exposed,
+  // fetch() from a page sees the body and not the fact that the body is one
+  // page of many, which is the misreading /api/index kept inviting.
+  "Link",
+  "X-Total-Count",
 ];
 
 /**

@@ -1,6 +1,6 @@
 // Moderation kit — x402-paywalled content moderation via OpenAI.
-// Checks text for harmful content categories. Upstream cost is $0 (free API),
-// so the $0.002 price is 100% margin. Env-gated: missing OPENAI_API_KEY → 503.
+// Checks text for harmful content categories. Env-gated: missing
+// OPENAI_API_KEY → 503.
 
 import { redactSecrets } from "./redact.js";
 

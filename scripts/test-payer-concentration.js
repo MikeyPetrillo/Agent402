@@ -25,7 +25,7 @@ const pm = (o) => new Map(Object.entries(o));
 
 // --- the shape that started this: minority of calls, supermajority of dollars
 {
-  // BlockRun's real 7d shape, rounded: one wallet 41% of calls, 95% of dollars.
+  // A real seller's 7d shape, rounded: one wallet 41% of calls, 95% of dollars.
   const m = pm({ whale: { calls: 41, usd: 94.7 }, a: { calls: 30, usd: 2.6 }, b: { calls: 29, usd: 2.7 } });
   const r = payerConcentration(m, 100, 100);
   eq(r.topPayerCallsShare, 0.41, "call share reported");

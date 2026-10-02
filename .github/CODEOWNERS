@@ -22,7 +22,6 @@
 /Dockerfile                    @MikeyPetrillo
 /Dockerfile.mcp                @MikeyPetrillo
 /docker-entrypoint.sh          @MikeyPetrillo
-/railway.toml                  @MikeyPetrillo
 /scripts/deploy-quiet-gate.js  @MikeyPetrillo
 
 # Payment middleware, settlement identity, replay + idempotency

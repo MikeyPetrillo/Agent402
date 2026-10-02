@@ -2,7 +2,7 @@
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-All endpoints live at `https://agent402.tools` (hosted instance) or your self-hosted root. Discovery endpoints are free and unpaywalled. Tool endpoints require payment (x402 or proof-of-work) unless `FREE_MODE=true`.
+All endpoints live at `https://agent402.tools` (hosted instance) or your self-hosted root. Discovery endpoints are free and unpaywalled. Tool endpoints require payment (x402, MPP, a prepaid credits key, or proof-of-work on the pure-CPU tools) unless `FREE_MODE=true`.
 
 ## Discovery endpoints
 
@@ -38,7 +38,7 @@ can point at a whole workflow instead of one tool.
 
 ### `POST /api/route`
 
-Cross-seller Smart Order Router. Finds the cheapest healthy tool for a task across Agent402 and every x402 seller crawled from the Coinbase CDP Bazaar.
+Cross-seller Smart Order Router. Ranks the tools that match a task across Agent402 and the x402 sellers it has indexed: candidates are shortlisted by how well they match the task, then ordered by crawl health, by distinct payers over the last 30 days and by price; each row's `why.tiebreaks` names the order applied. The response returns the top N and carries `matched` for how many scored.
 
 ```bash
 curl -X POST https://agent402.tools/api/route \
@@ -65,7 +65,7 @@ curl https://agent402.tools/api/pricing
 | `GET /.well-known/agent-registration.json` | Our ERC-8004 registration file: agent **94639** in the identity registry at `eip155:8453:0x8004A169FB4a3325136EB29fA0ceB6D2e539a432`, owned by the wallet our 402s name as payTo. Lists every way to reach us and declares `x402Support` |
 | `GET /api/reliability` | Uptime and health report |
 | `GET /api/stats` | Aggregate call counts, revenue, cache statistics |
-| `GET /api/leaderboard?top={n}&include={all\|external}&sort={usd\|calls}` | On-chain ranking of x402 sellers by Base USDC volume |
+| `GET /api/leaderboard?top={n}&include={all\|external}&sort={usd\|calls}` | On-chain ranking of x402 sellers by Base USDC volume (`limit` is an alias of `top`) |
 | `GET /health` | Liveness probe. The **public** body is only `{ "ok": true, "meta": { "toolCount": <n>, "build": "<short sha>" } }`. Process uptime and the operating-mode flags are **operator-only** and appear on the authenticated response, not here |
 
 ## Tool invocation
@@ -131,7 +131,7 @@ Outcome-priced reports on the same 402: `POST /v1/research` ($0.60; `/pro` $0.85
 
 ### Card front door and credits
 
-`/reports`, `/monitors` and `/credits` are HTML pages backed by Stripe Checkout (`POST /api/buy`, `POST /api/subscribe`, `POST /api/credits/checkout`; each answers `503` when the instance has no Stripe key). A report bought by card is $2, $3 for the pro tiers, $4 for research max, dossier max and the LinkedIn article, and $5 for the ticker pack: the card price includes payment processing, and an agent paying per call pays the lower tool price for the same report. A monitor is $5 a month. A paid report renders at `/r/<session>`, a monitor report at `/m/<id>`. A prepaid credits key pays any priced catalog route with `Authorization: Bearer a402_…` (the response carries `X-Credits-Balance`; insufficient or unknown keys get `402` with `{ reason, balanceUsd, topup }`; identity-bound routes answer `402` `reason: "identity-bound"`), and `GET /api/credits/balance` with the same header returns the balance.
+`/reports`, `/monitors` and `/credits` are HTML pages backed by Stripe Checkout (`POST /api/buy`, `POST /api/subscribe`, `POST /api/credits/checkout`; each answers `503` when the instance has no Stripe key, and the credits checkout also answers `503` while new credits are not on sale, which is the default unless the operator sets `CREDITS_SALES=on`; keys already issued keep working). Each report's card price is listed on `/reports` and each monitor's monthly price on `/monitors`: the card price includes payment processing, and an agent paying per call pays the lower tool price for the same report. A paid report renders at `/r/<session>`, a monitor report at `/m/<id>`. A prepaid credits key pays any priced catalog route with `Authorization: Bearer a402_…` (the response carries `X-Credits-Balance`; insufficient or unknown keys get `402` with `{ reason, balanceUsd, topup }`; identity-bound routes answer `402` `reason: "identity-bound"`), and `GET /api/credits/balance` with the same header returns the balance.
 
 ### OpenAI wire paths
 
@@ -171,7 +171,8 @@ curl -i -X POST https://agent402.tools/api/hash \
   -H 'Content-Type: application/json' \
   -d '{"text":"hello"}'
 # HTTP/2 402
-# {"x402Version":2,"accepts":[{"price":"1000","network":"eip155:8453",...}]}
+# payment-required: eyJ4NDAyVmVyc2lvbiI6Mi... (base64 JSON, authoritative)
+# {"altPayment":{...},"x402Version":2,"error":"Payment required","resource":{...},"accepts":[{"scheme":"exact","network":"eip155:8453","amount":"1000",...}],"extensions":{...}}
 ```
 
 See [[Paying with x402]] for full code examples in JavaScript and with Stripe's `purl`.
@@ -197,7 +198,7 @@ Challenges are single-use, short-lived, and scoped to exactly one slug. See [[Pa
 
 ## Idempotency
 
-Send an `Idempotency-Key` header to enable idempotent requests. If the same key is seen again for the same method, path, and payment credential, the server replays the cached result without re-charging.
+Send an `Idempotency-Key` header to enable idempotent requests. If the same key is seen again for the same method, path, payment credential and request body, the server replays the cached result without re-charging.
 
 ```bash
 curl -X POST https://agent402.tools/api/hash \
@@ -207,7 +208,7 @@ curl -X POST https://agent402.tools/api/hash \
   -d '{"text":"hello"}'
 ```
 
-Cache key formula: `sha256(METHOD + path + Idempotency-Key + gate-credential)`. Without the header, every request is treated as unique.
+Cache key formula: `sha256(METHOD + path + Idempotency-Key + gate-credential + sha256(body))`. Without the header, every request is treated as unique.
 
 The cache is **settlement-aware**: a response body is captured when the handler produces it but is only committed to the cache once the *final* status is `200`, i.e. after settlement succeeded. A `200` whose settlement then failed (and therefore became a `402`) is never cached and never replayed. Streamed responses are never replayable.
 
@@ -232,11 +233,11 @@ All errors return a JSON body with an `error` string field.
 | Code | Meaning |
 |---|---|
 | `400` | Bad request -- missing or invalid input parameters |
-| `402` | Payment required -- x402 quote in the `payment-required` header (MPP challenges in `WWW-Authenticate: Payment`); for a prepaid credits key, a JSON body with `reason` (`insufficient`, `unknown`, `disabled`, `identity-bound`) and `topup` |
+| `402` | Payment required -- x402 quote in the `payment-required` header, mirrored as the same object in the JSON body (MPP challenges in `WWW-Authenticate: Payment`); for a prepaid credits key, a JSON body with `reason` (`insufficient`, `unknown`, `disabled`, `identity-bound`) and `topup` |
 | `404` | Tool not found |
 | `409` | Conflict -- the request cannot be served as asked, and the body says how to fix it. Two cases: an execution tier too small for the resolved tool (retry on the rung named in the error, or call the tool directly), and external routing on a chain with no spending wallet (the error names the chains that are supported) |
 | `413` | Payload too large -- for the memory tools, the namespace quota is full: either the per-namespace key count (`MEMORY_MAX_NS_KEYS`, default 10,000) or the total-value byte budget (`MEMORY_MAX_NS_BYTES`, default 32 MB). Delete keys or shrink values |
-| `422` | Unprocessable -- the payment itself is structurally unusable. On Algorand, a signed transaction whose validity window cannot outlive the tool is rejected *before* the handler runs, so a dead transaction can never leave you refunded while our upstream spend is burned. Re-sign with a longer validity window |
+| `422` | Unprocessable -- the payment itself is structurally unusable. On Algorand, a signed transaction whose validity window cannot outlive the tool is rejected *before* the handler runs, so a dead transaction is never started. Re-sign with a longer validity window |
 | `429` | Rate limited -- retry after the `Retry-After` header value |
 | `500` | Internal server error |
 | `502` | Bad gateway -- upstream dependency failed |

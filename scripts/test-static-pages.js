@@ -34,6 +34,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // a 200 with a wrong-but-valid HTML body would pass a content-type check.
 const PAGES = [
   { path: "/privacy",     titleSubstr: "Privacy" },
+  { path: "/faq",         titleSubstr: "FAQ" },
   { path: "/terms",       titleSubstr: "Terms" },
   { path: "/shop",        titleSubstr: "shop" },
   { path: "/leaderboard", titleSubstr: "Leaderboard" },
@@ -58,6 +59,9 @@ const PAGES = [
   { path: "/reports/sample/dossier", titleSubstr: "sample" },
   { path: "/proof",       titleSubstr: "Receipts" },
   { path: "/glossary",    titleSubstr: "glossary" },
+  { path: "/learn",       titleSubstr: "Learn" },
+  { path: "/learn/mpp",   titleSubstr: "MPP" },
+  { path: "/integrations/tollbooth", titleSubstr: "agent402-tollbooth" },
   { path: "/101",         titleSubstr: "101" },
   { path: "/mpp-marketplace", titleSubstr: "MPP marketplace" },
   { path: "/",            titleSubstr: "Agent402" },
@@ -89,6 +93,11 @@ try {
     ok(titleMatch != null, `${path} has a <title> tag`);
     const title = titleMatch?.[1] ?? "";
     ok(title.toLowerCase().includes(titleSubstr.toLowerCase()), `${path} title contains '${titleSubstr}' (got '${title}')`);
+    if (path === "/shop") {
+      // Every slug a shop goal lists must be a live catalog slug; the page
+      // prints a "no longer in the catalog" note when one is not.
+      ok(!/no longer in the catalog/.test(body), "/shop lists only slugs the catalog serves");
+    }
     if (path === "/marketplace") {
       // The unified marketplace surface (the old /index and /marketplaces 301
       // here) — its nav/footer must not link the retired standalone paths.
@@ -152,12 +161,29 @@ try {
 // rather than looking for the syntax of an unrendered one.
 {
   const bad = [];
-  for (const p of PAGES) {
+  // Every page the sitemaps list, not only the hand-picked set above.
+  const paths = new Set(PAGES.map((p) => p.path));
+  for (const sm of ["/sitemap-pages.xml", "/sitemap-guides.xml"]) {
+    const xml = await (await fetch(`${BASE}${sm}`)).text().catch(() => "");
+    for (const m of xml.matchAll(/<loc>https?:\/\/[^/<]+(\/[^<]*)<\/loc>/g)) paths.add(m[1]);
+  }
+  for (const path of paths) {
+    const p = { path };
     const html = await (await fetch(`${BASE}${p.path}`)).text().catch(() => "");
-    const hits = [...String(html).matchAll(/\$\{[A-Za-z0-9_.()\[\] ]{1,60}\}/g)].map((m) => m[0]);
+    // Code samples legitimately teach shell `${VAR}` syntax; scan the rest.
+    const prose = String(html).replace(/<(pre|code)\b[\s\S]*?<\/\1>/gi, "");
+    const hits = [...prose.matchAll(/\$\{[A-Za-z0-9_.()\[\] ]{1,60}\}/g)].map((m) => m[0]);
     if (hits.length) bad.push(`${p.path}: ${[...new Set(hits)].slice(0, 3).join(" ")}`);
   }
   ok(bad.length === 0, `no page ships an uninterpolated template placeholder${bad.length ? ` - ${bad.join(" | ")}` : ""}`);
+}
+
+// --- sitemap pages no menu reaches still get a site-wide link ---------------
+{
+  const html = await (await fetch(`${BASE}/pricing`)).text();
+  for (const p of ["/faq", "/compare", "/use-cases", "/community", "/digest", "/shop", "/badges", "/SKILL.md", "/docs/webhooks"]) {
+    ok(html.includes(`href="${p}"`), `footer links ${p}`);
+  }
 }
 
   console.log(`\n${pass} passed (${PAGES.length} pages + error template)`);

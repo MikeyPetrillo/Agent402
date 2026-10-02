@@ -26,8 +26,8 @@ const MIN_SELLERS_TO_FRAME = 50;
 
 /**
  * @param {object} f
- *  sellers   distinct seller origins in the index
- *  listings  tool listings across them
+ *  sellers   distinct seller origins in the index, the host left out
+ *  listings  tool listings across them, the host's own left out
  *  settled   settlements observed through these gates, ours included
  *  rails     how many payment rails settle here
  *
@@ -36,6 +36,28 @@ const MIN_SELLERS_TO_FRAME = 50;
  * $N is ours" to a list of COUNTS (sellers, listings, settlements, rails) - a
  * dollar figure with no dollar total to be "of", which read as a non sequitur.
  */
+/**
+ * The band's seller and listing counts with the HOST LEFT OUT. The index
+ * totals count the local row (always sellers[0], local:true) and its tools,
+ * and the band says the host is excluded from every count, so the band reads
+ * its figures through this. Pure.
+ */
+export function standingCountsExcludingHost(snapshot) {
+  const list = Array.isArray(snapshot?.sellers) ? snapshot.sellers : [];
+  const local = list.find((x) => x && x.local) || null;
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  // indexSnapshot's totals are sellers.length and the summed toolCount; a
+  // snapshot without totals (a fixture, a partial build) derives them the
+  // same way rather than reading zero.
+  const t = snapshot?.totals && Number.isFinite(Number(snapshot.totals.sellers))
+    ? snapshot.totals
+    : { sellers: list.length, tools: list.reduce((sum, x) => sum + n(x?.toolCount), 0) };
+  return {
+    sellers: Math.max(0, n(t.sellers) - (local ? 1 : 0)),
+    listings: Math.max(0, n(t.tools) - (local ? n(local.toolCount) : 0)),
+  };
+}
+
 export function standingBand({ sellers, listings, settled, rails } = {}) {
   // A COLD OR HALF-LOADED INDEX MUST SAY NOTHING.
   //

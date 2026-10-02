@@ -3,12 +3,9 @@
 // Every other spending wallet we run has one (upstreamBuyer, upstreamBuyerAvm,
 // upstreamBuyerTempo, subscriptionFeePayer, the canary burners). This one did
 // not, and it is the account that pays the transaction fee on EVERY Stellar
-// settlement: measured 2026-08-31 it held 5.906 XLM with nothing watching it.
+// settlement, and it had nothing watching it (2026-08-31).
 //
-// Settlements are CHEAP, so this is a slow alarm, not an urgent one: the
-// observed fee_charged is 23,501 stroops = 0.00235 XLM (about $0.0007), so
-// 5.906 XLM is roughly 2,500 settlements, or ~800 even if every one of them
-// paid the raised inclusion bid in full. The point of the alarm is that an
+// Settlements are CHEAP, so this is a slow alarm, not an urgent one. The point of the alarm is that an
 // empty fee account does not look like an outage - settlements simply stop
 // landing and the canary reports a rail failure - not that it is close to
 // empty. Size FACILITATOR_LOW_BALANCE_XLM to give real lead time rather than

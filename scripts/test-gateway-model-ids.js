@@ -15,8 +15,10 @@
 // silent green that let every one of those ship.
 import { readFileSync } from "node:fs";
 import {
-  TIERS, AUTO_RANKINGS, SPEECH_MODELS, MODEL_COST, FLEX_MODELS, REASONING_MODELS, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
+  TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, MODEL_COST, FLEX_MODELS, REASONING_MODELS, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
+  IMAGES_MODEL,
 } from "../src/tools/llm-gateway-kit.js";
+import { IMAGE_TIERS } from "../src/tools/llm-images-fast-kit.js";
 import { PRIMARY_PREFERENCE } from "../openclaw/models.js";
 
 // STEALTH listings (stealth/ox-alpha) are the ONE id class this guard must not
@@ -43,11 +45,12 @@ async function catalog(url, minEntries) {
   if (!Array.isArray(j?.data) || j.data.length < minEntries) throw new Error(`${url} -> implausible catalog (${j?.data?.length} entries)`);
   return j.data;
 }
-let models, speech;
+let models, speech, imageModels;
 try {
-  [models, speech] = await Promise.all([
+  [models, speech, imageModels] = await Promise.all([
     catalog("https://openrouter.ai/api/v1/models", 100),
     catalog("https://openrouter.ai/api/v1/models?output_modalities=speech", 5),
+    catalog("https://openrouter.ai/api/v1/images/models", 10),
   ]);
 } catch (e) {
   console.error(`FAIL - could not read the live OpenRouter catalog (${e.message}); refusing to report green`);
@@ -55,6 +58,7 @@ try {
 }
 const ids = new Set(models.map((m) => m.id));
 const speechIds = new Set(speech.map((m) => m.id));
+const imageIds = new Set(imageModels.map((m) => m.id));
 console.log(`live catalog: ${ids.size} models, ${speechIds.size} speech models`);
 
 // 1. Every advertised concrete prefix resolves to at least one live id under
@@ -82,10 +86,20 @@ for (const [slug, tier] of Object.entries(TIERS)) {
 {
   // Exempt: family wildcards, the TTS chain (speech catalog), and the OpenAI-
   // direct embeddings ids (no "/": not OpenRouter ids at all).
-  const listed = modelsList().data.map((m) => m.id).filter((id) => !id.endsWith("*") && id.includes("/") && !speechIds.has(id));
+  // Image ids (the /v1/images/generations link) live in the IMAGE catalog, not
+  // the chat list; they are graded against it just below.
+  const listed = modelsList().data.map((m) => m.id).filter((id) => !id.endsWith("*") && id.includes("/") && !speechIds.has(id) && !imageIds.has(id));
   const notExact = listed.filter((id) => !ids.has(id) && !isStealth(id));
   ok(notExact.length === 0, `every id on /v1/models is an exact live upstream id${notExact.length ? ` (not ids: ${notExact.join(", ")})` : ""}`);
 }
+// 1c. Every image link (/v1/images/generations, /fast, /pro) is live in the
+//     image catalog, and the model /v1/models advertises for the images route
+//     is the first link.
+for (const [slug, t] of Object.entries(IMAGE_TIERS)) {
+  const dead = t.chain.filter((l) => !imageIds.has(l.model)).map((l) => l.model);
+  ok(dead.length === 0, `${slug}: every image link is live in the image catalog${dead.length ? ` (dead: ${dead.join(", ")})` : ""}`);
+}
+ok(IMAGE_TIERS["v1-images"]?.chain[0]?.model === IMAGES_MODEL, `/v1/models advertises the images route's first link (${IMAGES_MODEL})`);
 // 2. Auto-router rankings are exact ids and must all be live.
 for (const [q, byCat] of Object.entries(AUTO_RANKINGS)) {
   for (const [cat, list] of Object.entries(byCat)) {
@@ -98,10 +112,8 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
 // 1b. Every speech row's costPerChar is at or above the DEAREST live endpoint
 //     for that model, not the catalog headline. TTS bills per INPUT char, so
 //     this row IS the worst-case bound the $0.06 chain and the $0.005 lite tier
-//     are priced under, and the headline can be any one endpoint: Kokoro's
-//     headline read 0.000004 (Together) while DeepInfra served at 0.00000062,
-//     and Voxtral's headline read 0.000016 while one Mistral endpoint bills
-//     0.0000176. Provider pinning is not honoured on /audio/speech (measured
+//     are priced under, and the headline can be any one endpoint, not the
+//     dearest. Provider pinning is not honoured on /audio/speech (measured
 //     2026-09-18), so the max is the only honest bound. Nothing here noticed
 //     until an audit did (tts-lite was loss-making at its old cap).
 {
@@ -126,14 +138,12 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
 //    tier's max_price bound (an endpoint above the bound is refused by the
 //    provider.max_price every flat-tier call carries). The catalog HEADLINE is
 //    one endpoint's price and was what this rule compared against until
-//    2026-09-18: gpt-5.6-sol's headline read $2/$10 while its azure/us and
-//    azure/eu endpoints billed $5.5/$33 inside the premium bound, and every
-//    Claude model's regional endpoints bill 10% over the headline - so the
-//    clamp was letting through ~2.75x the tokens the bound allowed on a sol
-//    fallback. Same shape as the speech rule above (1b).
+//    2026-09-18: regional endpoints inside the tier bound billed well above
+//    the headline on some models, so the clamp was letting through more
+//    tokens than the bound allowed on a fallback. Same shape as the speech rule above (1b).
 //
 //    Endpoints tagged "*/fast" or "*/priority" are the PRIORITY service tier
-//    (openai/fast, anthropic/fast: 2x list; google */priority: 1.8x). Since
+//    (billed at a multiple of list). Since
 //    2026-09-18 a wire sends service_tier "priority" ONLY through the shared
 //    serviceTierFor() helper, and only when validateServiceTier() accepted it
 //    on a tier flagged `priority: true` (pro, premium), where the clamp prices
@@ -151,7 +161,11 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
     .map((f) => readFileSync(new URL(`../src/tools/${f}`, import.meta.url), "utf8"));
   const all = wires.concat(readFileSync(new URL("../src/tools/llm-images-fast-kit.js", import.meta.url), "utf8")).join("\n");
   ok(wires.every((src) => /service_tier:\s*serviceTierFor\(/.test(src) && /validateServiceTier\(input, tier\)/.test(src)), "every chat/messages/responses wire sets its outbound service_tier through serviceTierFor() and validates the buyer's through validateServiceTier()");
-  ok(!/service_tier:\s*["'`]priority["'`]/.test(all.replace(/^\s*\/\/.*$/gm, "")) && /service_tier:\s*["']flex["']/.test(all), 'no wire spells service_tier "priority" outside the helper (the images route\'s flex literal is the control)');
+  // Control: the comment-stripped scan still sees the wires' own service_tier
+  // fields (the images route's flex literal was the control until that route
+  // moved to the Image API on 2026-09-24).
+  const code = all.replace(/^\s*\/\/.*$/gm, "");
+  ok(!/service_tier:\s*["'`]priority["'`]/.test(code) && (code.match(/service_tier:\s*serviceTierFor\(/g) || []).length >= 3, 'no wire spells service_tier "priority" outside the helper (control: the scan sees every wire\'s serviceTierFor field)');
   const kit = wires[0];
   ok(/if \(\/:nitro\$\/i\.test\(String\(model \|\| ""\)\)\) return "default";/.test(kit) && /body\?\.service_tier === "priority"\) return "priority"/.test(kit), 'serviceTierFor: an explicit "default" on :nitro, "priority" only from a validated body');
   ok(JSON.stringify(Object.entries(TIERS).filter(([, t]) => t.priority === true).map(([s]) => s)) === '["v1-chat-pro","v1-chat-premium"]', "priority is offered on pro and premium only (the tiers rule 4 checks priority endpoints for)");
@@ -181,20 +195,25 @@ let endpointReads = 0, headlineOnly = 0, priorityExcluded = 0, priorityChecked =
   const queue = [...admitted];
   const worker = async () => {
     for (let m = queue.shift(); m; m = queue.shift()) {
-      const slug = tierFor(m.id);
-      const tier = TIERS[slug];
       const eps = await endpointPrices(m.id);
+      if (eps) endpointReads++; else headlineOnly++;
+      // Grade the row under EVERY tier that admits the model, each against its
+      // own bound. tierFor() alone returns the FIRST home, and a family prefix
+      // on a budget tier ("qwen/" on base) filtered out an endpoint above that
+      // bound - while the metered tier admits the same id under a far wider
+      // bound and sends the row itself as provider.max_price, so a row under
+      // the dearest endpoint made the model unservable there (qwen3.8-max-prime,
+      // 2026-09-24: every metered call refused upstream).
+      for (const slug of Object.keys(TIERS).filter((s) => tierAllows(s, m.id))) {
+      const tier = TIERS[slug];
       let prices = [];
       let priorityPrices = [];
       if (eps) {
-        endpointReads++;
         // Priority endpoints: bounded by factor x row on the tiers that sell
         // the priority knob, excluded (never routed to) everywhere else.
         if (tier.priority === true) priorityPrices = eps.filter((e) => PRIORITY_TAG.test(e.tag));
         else priorityExcluded += eps.filter((e) => PRIORITY_TAG.test(e.tag)).length;
         prices = eps.filter((e) => !PRIORITY_TAG.test(e.tag));
-      } else {
-        headlineOnly++;
       }
       const hp = Number(m.pricing?.prompt) * 1e6, hc = Number(m.pricing?.completion) * 1e6;
       if (Number.isFinite(hp) && Number.isFinite(hc)) prices.push({ tag: "headline", p: hp, c: hc });
@@ -219,6 +238,7 @@ let endpointReads = 0, headlineOnly = 0, priorityExcluded = 0, priorityChecked =
           under.push(`${m.id} PRIORITY endpoint ${e.tag} $${e.p}/$${e.c} over ${PRIORITY_PRICE_FACTOR}x the table row $${table.prompt}/$${table.completion} (${slug} sells service_tier priority at that factor)`);
         }
       }
+      }
     }
   };
   await Promise.all(Array.from({ length: 6 }, worker));
@@ -234,6 +254,16 @@ const expiryOf = (m) => m.expiration_date || m.deprecation_date || null;
 const watched = new Set([...Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()), ...Object.values(TIERS).flatMap((t) => t.fallbacks || [])]);
 const expiring = models.filter((m) => watched.has(m.id) && expiryOf(m) && Date.parse(expiryOf(m)) < soon).map((m) => `${m.id} (${expiryOf(m)})`);
 ok(expiring.length === 0, `no ranked/fallback model expires within 14 days${expiring.length ? ` (${expiring.join(", ")})` : ""}`);
+// 5a. RETIRING_MODELS maps ids the upstream is removing to a successor. An
+//     entry must describe an id the upstream really is removing (it carries
+//     an expiration date), and its named successor must be live and admitted;
+//     an id already gone upstream is reported, and its entry stays.
+for (const [id, r] of Object.entries(RETIRING_MODELS)) {
+  const m = models.find((x) => x.id === id);
+  if (!m) { warn(`RETIRING_MODELS: ${id} is gone upstream - its entry stays, mapping callers to ${r.use}`); continue; }
+  ok(!!expiryOf(m), `RETIRING_MODELS: ${id} carries an upstream expiration date (${expiryOf(m) || "none - a refusal with no retirement behind it"})`);
+  ok(ids.has(r.use) && !!tierFor(r.use), `RETIRING_MODELS: ${id}'s named successor ${r.use} is live and admitted`);
+}
 // 5b. DEFAULTS have no horizon: a tier's defaultModel is what a caller who names
 //     no model is served, and OpenClaw's PRIMARY_PREFERENCE is what `setup`
 //     writes into a user's config. A chain can walk past an expiring link; a

@@ -46,7 +46,8 @@ console.log("\n=== A. Authorization ===");
   // handshake is unavailable and the gate fails CLOSED (still no paid output) —
   // acceptable. Only a 200 here is a real payment bypass, and that hard-FAILs.
   ok("A1", "paid slug w/o payment is NOT served (402, or fail-closed; never 200)", r.status !== 200, `got ${r.status}`);
-  // x402 v2: payment requirements are in the PAYMENT-REQUIRED header (base64 JSON), not the body.
+  // x402 v2: payment requirements are in the PAYMENT-REQUIRED header (base64 JSON), which is
+  // authoritative; this server also mirrors the same object into the JSON body. Read the header.
   const pr = r.headers.get("payment-required");
   let parsed = null;
   try { parsed = JSON.parse(Buffer.from(pr || "", "base64").toString("utf8")); } catch {}

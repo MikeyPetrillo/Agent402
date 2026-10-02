@@ -164,7 +164,7 @@ Write a clear, well-structured report of up to ${t.words} words with these secti
       columns: ["Feed", "Initiated", "Terminated", "Class", "Status", "Firm", "Product", "Reason", "Distribution", "Quantity", "Lots", "Recall number", "Event"],
       rows: pr.items.map((x) => [x.kind, x.recallInitiated || "", x.terminated || "", x.classification || "", x.status || "", x.firm || "", x.product || "", x.reason || "", x.distribution || "", x.quantity || "", x.lots || "", x.recallNumber || "", x.eventId || ""]),
     }];
-    const meta = { tier: tierSlug, query, scope, records: pr.items.length, records_total: pr.totalAll, totals_by_feed: pr.totals, events_shown: pr.events, by_feed: byKind, by_class: byClass, ongoing, feeds: pr.status, recall_numbers: pr.ids.length, sources_cited: numbered.length, synthesis_model: SYNTH,
+    const meta = { disclaimer: "A summary of public FDA enforcement records. Not medical advice and not a safety determination. Check the FDA record and the manufacturer before acting on it.", tier: tierSlug, query, scope, records: pr.items.length, records_total: pr.totalAll, totals_by_feed: pr.totals, events_shown: pr.events, by_feed: byKind, by_class: byClass, ongoing, feeds: pr.status, recall_numbers: pr.ids.length, sources_cited: numbered.length, synthesis_model: SYNTH,
       disclaimer: "FDA enforcement records as published by openFDA; not medical or legal advice. Verify the named product and lot against the FDA record." };
     const out = { report, query, sources: numbered, tables, meta };
     recordCompositeUsage({ slug: tierSlug, upstreamUsd: spent, ok: true, priceUsd: priceUsdOf(RECALL_TIERS[tierSlug]) });

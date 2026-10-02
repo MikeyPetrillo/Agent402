@@ -1,8 +1,11 @@
 # gitleaks config for Agent402. Extends the default ruleset (which catches
-# real high-signal secrets: OpenAI sk- keys, GitHub tokens, AWS keys, private
-# keys, mnemonics, etc.) plus a contextual EVM-private-key rule below, and
-# allowlists the structural false positives this repo carries by design, so CI
-# stays green until a GENUINELY new secret lands.
+# real high-signal secrets: OpenAI sk- keys, GitHub tokens, AWS keys, PEM
+# private keys, JWTs, Stripe keys, etc.) plus two repo rules below - a
+# contextual EVM-private-key rule and a contextual BIP39-mnemonic rule (the
+# default ruleset carries NO mnemonic rule; measured 2026-09-22 with a planted
+# 25-word phrase that no default version flagged) - and allowlists the
+# structural false positives this repo carries by design, so CI stays green
+# until a GENUINELY new secret lands.
 #
 # Coverage: secret-scan.yml now scans FULL GIT HISTORY (`--log-opts=--all`,
 # fetch-depth 0), not just the working tree. A redacted full-history scan
@@ -25,8 +28,19 @@ useDefault = true
 [[rules]]
 id = "evm-private-key-contextual"
 description = "EVM private key adjacent to key-ish context (not a bare tx hash/nonce)"
-regex = '''(?i)(private[_-]?key|burner[_-]?key|priv[_-]?key|secret[_-]?key|\bpk\b)['"` \t]{0,4}[:=]['"` \t]{0,4}(0x)?[0-9a-fA-F]{64}\b'''
-keywords = ["private", "burner", "privkey", "secretkey", "pk"]
+regex = '''(?i)(private[_-]?key|burner[_-]?key|priv[_-]?key|secret[_-]?key|buyer[_-]?key|wallet[_-]?key|payer[_-]?key|agent[_-]?key|evm[_-]?key|signing[_-]?key|\bpk\b)['"` \t]{0,4}[:=]['"` \t]{0,4}(0x)?[0-9a-fA-F]{64}\b'''
+keywords = ["private", "burner", "privkey", "secretkey", "buyer_key", "wallet_key", "payer_key", "agent_key", "evm_key", "signing_key", "pk"]
+
+# Contextual BIP39 mnemonic (2026-09-22). The default ruleset has no mnemonic
+# rule at all, and this repo handles four mnemonic-named variables (the AVM
+# spending wallet, the canary burner, the refund signer, an operator script).
+# Match 12-25 lowercase words assigned to a mnemonic-named variable; a bare
+# word run is not matched (prose would flood it).
+[[rules]]
+id = "mnemonic-contextual"
+description = "BIP39 mnemonic (12-25 words) assigned to a mnemonic-named variable"
+regex = '''(?i)mnemonic[a-z0-9_-]*['"` \t]{0,4}[:=]['"` \t]{0,4}(?:[a-z]{3,8}[ \n]+){11,24}[a-z]{3,8}'''
+keywords = ["mnemonic"]
 
 [allowlist]
 description = "Agent402 known false positives: on-chain addresses, demo JWTs, test fixtures"
@@ -52,13 +66,16 @@ paths = [
 # history purge.
 commits = [
   '''70fcc5171d8b1d4d8170933db665974f1ce91bbf''',
-  # 2026-08-26: a test fixture carried a literal "-----BEGIN EC PRIVATE KEY-----"
-  # header around the body "test" (no key material) for one commit; the fixture
+  # 2026-08-26: a test fixture carried a literal EC private-key PEM header
+  # around the body "test" (no key material) for one commit; the fixture
   # now generates a throwaway EC key at runtime, so no PEM is committed.
   '''e95783d17c66ade88f7a0b257ad218f50826e16a''',
 ]
 # Matched against each finding's captured secret.
 regexes = [
+  # scripts/test-tempo-sender.js: an IDENTIFIER, not a value - the variable
+  # holding a p256 key generated at runtime (P256.randomPrivateKey()).
+  '''^newP256RootKey$''',
   # EVM contract/wallet addresses are public identifiers, never secrets. This
   # is 40 hex chars precisely; a real EVM private key is 64 hex and is NOT
   # covered here, so it would still fire.
@@ -71,6 +88,10 @@ regexes = [
   '''0xe15fc38f6d8c56af07bbcbe3baf5708a2bf423''',
   # The leak-guard test's own canary tokens (e.g. fredv2-LEAKCANARY0000).
   '''LEAKCANARY''',
+  # keccak256("AuthorizationUsed(address,bytes32)"): USDC's public EIP-3009
+  # event topic (services/live reads it from the chain). An event signature
+  # hash, not a credential; the generic rule fires on the AUTH in its name.
+  '''98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5''',
   # test-leaderboard-redaction.js's fake Alchemy key as first committed
   # (2026-08-18, commit b68a6ac8) before it was renamed to the LEAKCANARY
   # convention; a fake with no live counterpart, kept only so the full-history
@@ -105,10 +126,28 @@ regexes = [
   '''7140dibdnow9c7btw4xxxxx''',
   '''1800000000000000001''',
   '''1800000000000000002''',
+  # 2026-09-24 test fixtures with no live counterpart (checked against the real
+  # keys): a placeholder FRED key in test-macro-kit.js, and the string
+  # test-mpp-tempo-shim.js proves is never relayed to a buyer.
+  '''0123456789abcdef0123456789abcdef''',
+  '''tempo-api-key-SECRET-123''',
+  # The fixture JWTs, allowlisted by their PAYLOADS (2026-09-22). This used to
+  # be a stopword on the HS256 header, which is the first segment of EVERY
+  # HS256 token: a planted Supabase-shaped service_role key was flagged by the
+  # default rules and hidden by this config. Each entry is the header plus the
+  # start of one fixture payload: {"sub":"agent402",...} (the decode-jwt worked
+  # example in kit.js / kit2.js / skills.js), {"sub":"1234567890",...} (the
+  # jwt.io demo token), {"sub":"x","exp":1...} (corpus cases) and
+  # {"sub":"webhook",...} (a retired skills.js fixture still in history).
+  '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiJhZ2VudDQwMiIs''',
+  '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiIxMjM0NTY3ODkw''',
+  '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiJ4IiwiZXhw''',
+  '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiJ3ZWJob29rIiwi''',
+  # src/tools/mev-and-l2-kit.js mev-block-payment example: the builder and
+  # proposer BLS PUBLIC keys of Ethereum block 26104983, as the relay data API
+  # publishes them. Public identifiers, never secrets; pinned exactly.
+  '''0x89057b5818abfca92fb9d38ea74dfab0f6f58630b6138e4f73da26666295e047cb18d353a134c5fad672eba231ff610c''',
+  '''0xb6ab19ca47a0b0f67e95e4cbb772fd8feff2a4f481eb494a06d54308f7fa959ee87889e2ffbe34ee8d466ed47a7d5dbd''',
 ]
-# The standard demo JWT ({"alg":"HS256","typ":"JWT"} header) used as the
-# decode-jwt tool's worked example in kit.js / kit2.js / skills.js. Stopwords
-# match when the secret contains the substring.
-stopwords = [
-  '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9''',
-]
+# No stopwords: the former HS256-header stopword hid every HS256 JWT (see the
+# fixture regexes above).

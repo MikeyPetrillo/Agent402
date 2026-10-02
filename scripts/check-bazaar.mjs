@@ -43,13 +43,19 @@ for (const file of files) {
           let actual = typeof v;
           if (Array.isArray(v)) actual = "array";
           else if (v === null) actual = "null";
-          if (expected === "integer" && actual === "number" && Number.isInteger(v)) continue;
-          if (expected === "number" && actual === "number") continue;
-          if (expected === actual) continue;
+          // JSON Schema allows a UNION of types. This compared with === and so
+          // failed every union against its own valid example; no tool used one
+          // until /v1/judge, whose `state` is genuinely string-or-object-or-array.
+          // Narrowing a schema to satisfy a checker would publish a contract less
+          // accurate than the one the handler honours.
+          const allowed = Array.isArray(expected) ? expected : [expected];
+          if (allowed.includes("integer") && actual === "number" && Number.isInteger(v)) continue;
+          if (allowed.includes("number") && actual === "number") continue;
+          if (allowed.includes(actual)) continue;
           issues.push({
             file,
             route: t.route,
-            problem: `input.${prop} is ${actual} (value ${JSON.stringify(v)}) but schema says type:${expected}`,
+            problem: `input.${prop} is ${actual} (value ${JSON.stringify(v)}) but schema says type:${allowed.join("|")}`,
           });
         }
       }

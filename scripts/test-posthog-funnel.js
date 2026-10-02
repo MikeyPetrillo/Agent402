@@ -20,6 +20,7 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
+import { getFreePorts } from "./lib/free-port.js";
 
 process.env.POSTHOG_TEST_CAPTURE = "1";
 const {
@@ -168,6 +169,13 @@ ok(got[0].properties.rail === "usdc" && got[0].properties.network === "eip155:84
 ok(got[1].properties.rail === "pow" && got[1].properties.network === null, "PoW settlement has no chain");
 ok(ourKeys(got[0].properties) === "network,paid,priceUsd,rail,slug,synthetic",
   "settlement properties are exactly {slug, rail, network, priceUsd, paid, synthetic} — no payer identity");
+// A settlement paid by one of OUR wallets says so, whatever headers it sent:
+// sweeps that send no token carried synthetic=false.
+capturePostHogSettlement({ slug: "hash", rail: "usdc", network: "eip155:8453", priceUsd: 0.001, synthetic: false, ownWallet: true });
+{
+  const own = take();
+  ok(own.length === 1 && own[0].properties.ownWallet === true && own[0].properties.synthetic === false, "an own-wallet settlement carries ownWallet:true beside synthetic");
+}
 
 // `paid` is the fix for a real misreading, so assert the distinction it draws
 // rather than just its presence. `synthetic` means OUR OWN traffic, NOT free:
@@ -245,7 +253,7 @@ ok(got.length === 51 && goneOther?.properties.routes === 10 && goneTotal === 120
   `60 retired routes flush as 50 rows + one _other (10 routes) with the exact total (got ${got.length} rows, other routes ${goneOther?.properties.routes}, total ${goneTotal})`);
 
 // --- integration: the real funnel through a paid-mode server ----------------------
-const FAC_PORT = 3082, PORT = 3081, B = `http://127.0.0.1:${PORT}`;
+const [FAC_PORT, PORT] = await getFreePorts(2), B = `http://127.0.0.1:${PORT}`;
 // Mock facilitator: /supported advertises the exact scheme on Base so the
 // middleware's kind sync succeeds and real 402 challenges build offline.
 const facilitator = createServer((req, res) => {
@@ -359,7 +367,7 @@ try {
 // 3. ENV GUARD — initPostHog must refuse a dev/test boot even with a key
 // present (the 2026-07-13 incident: a local sweep with a copied .env put a
 // burst of "not configured" tool_errors in prod telemetry). Docker sets
-// NODE_ENV=production (verified: railway.toml builder=DOCKERFILE →
+// NODE_ENV=production (verified: Railway builds from the root Dockerfile →
 // Dockerfile ENV), so every real deployment activates; POSTHOG_FORCE=true is
 // the bare-metal escape hatch. Fresh subprocess per combo — module state
 // caches the decision.

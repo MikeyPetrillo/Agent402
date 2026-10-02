@@ -17,12 +17,15 @@ const dir = mkdtempSync(join(tmpdir(), "wd-"));
 let clock = Date.parse("2026-09-03T00:00:00Z");
 const sent = [];
 const usageByPayer = {};
+const refundsByPayer = {};
+const refundAsks = [];
 const keys = { a402_livekey: "k1abc" };
 const balances = { k1abc: 12.5 };
 const engine = createWalletDigest({
   storePath: join(dir, "digest.json"), secret: "test-secret", baseUrl: "https://t.example", now: () => clock, log: () => {},
   sendEmail: async (m) => { sent.push(m); return true; },
   usage: (payer, { days }) => usageByPayer[payer] || { totals: { calls: 0, paidUsd: 0 }, bySlug: [], byNetwork: {} },
+  refunds: (payer) => { refundAsks.push(payer); return refundsByPayer[payer] || []; },
   creditsBalance: (keyId) => balances[keyId] ?? null,
   creditsKeyId: (key) => keys[key] || null,
   verifySignature: ({ address, message, signature }) => verifyMessage({ address, message, signature }),
@@ -80,6 +83,25 @@ sent.length = 0;
 t = await engine.tick();
 ok(t.due === 2 && t.sent === 1 && t.quiet === 1 && sent.every((m) => m.to !== "buyer@example.com"), "a quiet week after the first digest sends nothing to that subscriber (the credits key had calls and got its digest)");
 ok(Date.parse(new Date(recW.lastSentAt).toISOString()) === clock, "a quiet week still advances the clock (no catch-up flood later)");
+// ---- refunds ride the wallet's digest (a Base refund is a memo-less transfer)
+{
+  clock += DIGEST_PERIOD_MS + 1000; sent.length = 0; refundAsks.length = 0;
+  const iso = (ms) => new Date(ms).toISOString();
+  const PAYTX = "0x" + "ab".repeat(32), RFTX = "0x" + "cd".repeat(32);
+  refundsByPayer[wallet.toLowerCase()] = [
+    { tx: PAYTX, status: "paid", amountUsd: 0.005, chain: "base", refundTx: RFTX, refundTxUrl: `https://basescan.org/tx/${RFTX}`, refundedAt: iso(clock - 3600_000), recordedAt: iso(clock - 7200_000) },
+    { tx: "0x" + "ef".repeat(32), status: "owed", amountUsd: 0.01, chain: "polygon", refundTx: null, refundTxUrl: null, refundedAt: null, recordedAt: iso(clock - 60 * 86_400_000) },
+    { tx: "0x" + "12".repeat(32), status: "paid", amountUsd: 0.02, chain: "base", refundTx: "0x" + "34".repeat(32), refundTxUrl: null, refundedAt: iso(clock - 40 * 86_400_000), recordedAt: iso(clock - 41 * 86_400_000) },
+  ];
+  t = await engine.tick();
+  const wr = sent.find((m) => m.to === "buyer@example.com");
+  ok(wr && /refund update/.test(wr.subject), `a week with no calls but a refund still sends, with its own subject (${wr?.subject})`);
+  ok(wr && wr.text.includes(`https://basescan.org/tx/${RFTX}`) && wr.text.includes(PAYTX) && /refund owed: \$0\.0100 on polygon/.test(wr.text), "the digest names this week's paid refund with our refund tx and the payment it repays, plus any refund still owed");
+  ok(wr && !wr.text.includes("0x" + "34".repeat(32)), "a refund paid weeks ago is not repeated");
+  ok(wr && /\/api\/refunds\/lookup\?tx=/.test(wr.text) && /refund tx/.test(wr.html), "the digest points at the free lookup and links the refund tx in HTML");
+  ok(!refundAsks.some((p) => /^credits:|^k1abc$/.test(p)), "a credits-key digest never asks for on-chain refunds");
+  refundsByPayer[wallet.toLowerCase()] = [];
+}
 // ---- unsubscribe
 ok(engine.unsubscribe(recW.id, "bad").ok === false, "a bad unsubscribe token is refused");
 ok(engine.unsubscribe(recW.id, engine.sign(recW.id, "unsubscribe")).ok === true && recW.email === null && recW.status === "unsubscribed", "unsubscribe drops the address");

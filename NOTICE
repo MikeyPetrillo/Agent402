@@ -22,5 +22,10 @@ one in the directory tree.
                             agent402-anthropic-tools, agent402-google-adk,
                             agent402-strands, and the Python agent402-langchain)
 
+  * Fonts in assets/fonts/ are third-party, each under the
+    SIL Open Font License 1.1. Their copyright notices, full licence texts
+    and upstream sources are in assets/fonts/licenses/ and
+    assets/fonts/README.md, as OFL 1.1 condition 2 requires.
+
 Third-party components retain their own licenses; see src/data/LICENSE.md and
 the notices in individual source files.

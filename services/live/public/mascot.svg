@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 80" width="64" height="80">
+  <title>Agent402 courier</title>
+  <!-- antenna -->
+  <line x1="32" y1="4" x2="32" y2="12" stroke="#1d2b3a" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="32" cy="4" r="3.2" fill="#9ef0b0" stroke="#1d2b3a" stroke-width="1.5"/>
+  <!-- head -->
+  <rect x="14" y="11" width="36" height="26" rx="10" fill="#e8f1ee" stroke="#1d2b3a" stroke-width="2.5"/>
+  <rect x="19" y="16" width="26" height="15" rx="7" fill="#1d2b3a"/>
+  <circle cx="27" cy="23.5" r="3" fill="#9ef0b0"/>
+  <circle cx="37" cy="23.5" r="3" fill="#9ef0b0"/>
+  <path d="M28 28 q4 3 8 0" stroke="#9ef0b0" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+  <!-- cap brim -->
+  <path d="M13 15 q19 -9 38 0" stroke="#0f5e43" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <!-- body -->
+  <rect x="18" y="38" width="28" height="24" rx="8" fill="#0f5e43" stroke="#1d2b3a" stroke-width="2.5"/>
+  <!-- satchel strap and bag -->
+  <path d="M20 40 L44 58" stroke="#c98b2b" stroke-width="3" stroke-linecap="round"/>
+  <rect x="38" y="52" width="12" height="10" rx="3" fill="#c98b2b" stroke="#1d2b3a" stroke-width="2"/>
+  <!-- arm holding the coin -->
+  <path d="M19 45 q-8 2 -9 9" stroke="#1d2b3a" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <circle cx="9" cy="57" r="8" fill="#f4c542" stroke="#1d2b3a" stroke-width="2.2"/>
+  <text x="9" y="60.5" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" font-weight="700" fill="#1d2b3a">$</text>
+  <!-- legs -->
+  <rect x="22" y="61" width="7" height="13" rx="3" fill="#1d2b3a"/>
+  <rect x="35" y="61" width="7" height="13" rx="3" fill="#1d2b3a"/>
+  <rect x="20" y="72" width="11" height="5" rx="2.5" fill="#1d2b3a"/>
+  <rect x="33" y="72" width="11" height="5" rx="2.5" fill="#1d2b3a"/>
+</svg>

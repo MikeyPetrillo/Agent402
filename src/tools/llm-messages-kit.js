@@ -29,13 +29,14 @@
 // Anthropic-native per-block cache_control passes through untouched).
 import { createHash } from "node:crypto";
 import {
-  TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor,
+  substitutedFrom, TIERS, AUTO_RANKINGS, classifyPrompt, canonicalModel, tierAllows, tierFor,
+  isFlatTier, flatTierQuoteUsd, servedTierFor, crossTierDisclosure, AUTO_MODEL, AUTO_TIER,
   clampToMargin, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, throwUpstreamError, streamOpenRouterTo, bad, MAX_IMAGES,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, costFor,
   assertUpstreamBody, reasoningProfile, REASONING_EFFORTS,
 } from "./llm-gateway-kit.js";
-import { METER_MARKUP, METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
+import { METER_MIN_SETTLE_USD, setMeterSentinel } from "../gateway-meter.js";
 import { gatewaySettleBreakerCheck } from "../gateway-settle-breaker.js";
 
 const OPENROUTER_MESSAGES_URL = "https://openrouter.ai/api/v1/messages";
@@ -150,6 +151,7 @@ export function validateMessagesRequest(input, tierSlug) {
   // model: required unless the tier routes; allowlisted per tier like the chat wire
   const isRouted = tier.router === true && (!canonicalModel(input.model) || canonicalModel(input.model) === "auto");
   let model = canonicalModel(input.model);
+  const substituted = substitutedFrom(input.model);
   let defaultedModel = null;
   if (!isRouted) {
     refuseCostVariants(model);
@@ -159,7 +161,8 @@ export function validateMessagesRequest(input, tierSlug) {
     if (!model && tier.defaultModel) { model = tier.defaultModel; defaultedModel = model; }
     if (!model) throw bad(`"model" is required (e.g. anthropic/claude-sonnet-5). This tier serves: ${tier.prefixes?.slice(0, 6).join(", ") || "see /v1/models"}`);
     if (!tierAllows(tierSlug, model)) {
-      const home = tierFor(model);
+      // "auto" when not gated at the auto price: name the auto route.
+      const home = model === AUTO_MODEL ? AUTO_TIER : tierFor(model);
       // Not every chat tier has a Messages twin (MESSAGES_PATH_BY_TIER is an
       // explicit map, not a derivation) - a tier added to TIERS alone would
       // otherwise be advertised here at a path that does not exist. Point at
@@ -289,8 +292,8 @@ export function validateMessagesRequest(input, tierSlug) {
     body.effort = effort;
   }
   // `speed: "fast"` (Anthropic's spelling) and `service_tier: "priority"` /
-  // "fast" both request the priority endpoint (anthropic/fast bills 2x the
-  // headline: $10/$50 on opus-5, live endpoints 2026-09-18). Offered on the
+  // "fast" both request the priority endpoint (billed above the headline,
+  // live endpoints 2026-09-18). Offered on the
   // tiers flagged `priority` at the same flat price - the clamp prices the
   // probe at PRIORITY_PRICE_FACTOR - and refused with the reason elsewhere,
   // never dropped. Sent upstream as service_tier (one spelling); OpenRouter
@@ -305,7 +308,7 @@ export function validateMessagesRequest(input, tierSlug) {
   const routedQuality = isRouted ? (input.quality === undefined ? "balanced" : String(input.quality)) : null;
   if (isRouted && !AUTO_RANKINGS[routedQuality]) throw bad('"quality" must be "fast", "balanced", or "best"');
   const chain = isRouted ? [...AUTO_RANKINGS[routedQuality][routedCategory]] : [model, ...(tier.fallbacks || []).filter((m) => m !== model)];
-  return { body, probe, imageCount: acc.images, isRouted, routedCategory, routedQuality, chain, defaultedModel };
+  return { body, probe, imageCount: acc.images, isRouted, routedCategory, routedQuality, chain, defaultedModel, substituted: isRouted ? null : substituted };
 }
 
 /** stop_reason max_tokens with nothing said = the cap was spent (thinking ate
@@ -323,12 +326,16 @@ function stripBilling(usage) {
   return upstreamUsd;
 }
 
-export function makeMessagesHandler(tierSlug) {
+export function makeMessagesHandler(routeTier) {
   return async function messagesHandler(input, req) {
     // Settle-failure breaker first: refuse (nobody charged) before any upstream call.
     gatewaySettleBreakerCheck(req);
+    // Price by model (chat-wire parity): `tierSlug` is the route's tier unless
+    // the body names another flat tier's model and the request was gated at
+    // that tier's price; then that tier's whole config serves it.
+    const tierSlug = servedTierFor(routeTier, input?.model, req);
     const tier = TIERS[tierSlug];
-    const { body, probe, imageCount, isRouted, routedCategory, routedQuality, chain, defaultedModel } = validateMessagesRequest(input, tierSlug);
+    const { body, probe, imageCount, isRouted, routedCategory, routedQuality, chain, defaultedModel, substituted } = validateMessagesRequest(input, tierSlug);
     // Metered belt (same as the chat wire): the price this request was gated
     // at must cover the body actually being served; a mismatch is refused 400
     // (settlement cancelled, hold released, nothing spent).
@@ -379,7 +386,7 @@ export function makeMessagesHandler(tierSlug) {
     };
     const recordUsage = (usage, upstreamUsd, served, serviceTier) => import("../posthog.js")
       .then(({ capturePostHogGatewayUsage }) => capturePostHogGatewayUsage({
-        tier: `${tierSlug}:messages`, model: served, priceUsd: quotedUsd ?? tier.price, upstreamUsd,
+        tier: `${tierSlug}:messages`, routeTier: `${routeTier}:messages`, model: served, priceUsd: quotedUsd ?? tier.price, upstreamUsd,
         promptTokens: usage?.input_tokens, completionTokens: usage?.output_tokens, serviceTier, defaulted: !!defaultedModel,
       })).catch(() => {});
     const attempts = attemptsFor(chain, body);
@@ -434,6 +441,8 @@ export function makeMessagesHandler(tierSlug) {
         await recordUsage(data.usage, upstreamUsd, data.model || model, data.usage?.service_tier || (flex ? "flex" : "default"));
         if (routerNote) data.agent402_router = { ...routerNote, served: data.model || model };
         if (defaultedModel) data.agent402_default_model = defaultedModel; // the caller sent no model; say what served
+        if (substituted) data.agent402_model_substituted = { requested: substituted, served: body.model, reason: "the requested model is retired upstream; its named successor served instead" };
+        if (tierSlug !== routeTier) data.agent402_tier = { ...crossTierDisclosure(routeTier, tierSlug), route: MESSAGES_PATH_BY_TIER[routeTier] };
         // Metered settlement sentinel (chat-wire parity): the route binder
         // settles actual x markup for upto/credits buyers and strips this
         // before the body leaves. A non-number means "no meter", never "free".
@@ -471,7 +480,7 @@ function describe(tierSlug) {
   const dflt = t.defaultModel ? ` Omit "model" and the tier serves ${t.defaultModel} (named back in agent402_default_model); the price does not change.` : "";
   const price = priceString(tierSlug);
   if (tierSlug === "v1-chat-metered") {
-    return `Anthropic Messages API billed per request from what the call costs: the 402 quotes exact-BPE input (system + messages + tools) plus your max_tokens at the model's list price, times ${METER_MARKUP}, from ${price} up to a $${t.maxQuoteUsd} per-call cap. Point the Anthropic SDK (or any Messages-format client) at base_url https://agent402.tools/v1/metered. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto, credits or card and settle actual usage. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
+    return `Anthropic Messages API billed per request from what the call costs: the 402 quotes exact-BPE input (system + messages + tools) plus your max_tokens, from ${price} up to a $${t.maxQuoteUsd} per-call cap. Point the Anthropic SDK (or any Messages-format client) at base_url https://agent402.tools/v1/metered. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto, credits or card and settle actual usage. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
   }
   const base = `Anthropic Messages API over x402 - point the Anthropic SDK (or Claude Code / the Agent SDK) at base_url https://agent402.tools${MESSAGES_PATH_BY_TIER[tierSlug].replace(/\/messages$/, "")} and pay ${price} per call in USDC, no API key, no signup. Same models, caps and price as this tier's /chat/completions route; any model here is served through the Messages wire (Claude natively, others translated). Depth: \`effort\` (low..max) on Claude 4.7+, thinking.budget_tokens on older Claude. Up to ${t.maxInputChars.toLocaleString("en-US")} input chars and ${t.maxTokens} output tokens; streaming supported.`;
   return tierSlug === "v1-chat-auto"
@@ -484,7 +493,7 @@ function describe(tierSlug) {
 // where the tier serves Claude, the tier's cheapest chat example otherwise.
 const EXAMPLE_MODEL_BY_TIER = {
   "v1-chat-metered": "anthropic/claude-haiku-4.5",
-  "v1-chat-nano": "google/gemini-2.5-flash-lite",
+  "v1-chat-nano": "google/gemini-3.1-flash-lite",
   "v1-chat": "anthropic/claude-haiku-4.5",
   "v1-chat-pro": "anthropic/claude-sonnet-5",
   "v1-chat-premium": "anthropic/claude-opus-5",
@@ -500,6 +509,8 @@ export const LLM_MESSAGES_TOOLS = Object.entries(MESSAGES_PATH_BY_TIER).map(([ti
   price: priceString(tierSlug),
   // payments.js: a `quote` makes the x402 price a per-request function of the body.
   ...(tierSlug === "v1-chat-metered" ? { quote: (body) => meteredMessagesQuoteUsd(body).usd } : {}),
+  // Price by model on a flat route (see LLM_GATEWAY_TOOLS in the gateway kit).
+  ...(isFlatTier(tierSlug) ? { tierQuote: (body) => flatTierQuoteUsd(tierSlug, body?.model) } : {}),
   description: describe(tierSlug),
   tags: tierSlug === "v1-chat-metered" ? [...TAGS, "metered", "pay-per-token"] : TAGS,
   discovery: {

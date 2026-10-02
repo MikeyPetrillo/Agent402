@@ -12,7 +12,7 @@ name: Mint Bazaar rows (buy + verify the unlisted tools)
 #
 # Dispatch-only, `spending` environment, so each run takes operator approval.
 # Dry by default: `live: true` is what sends money. The two route-execute tiers
-# ($0.55 and $3.30, which also spend the SPENDING wallet at an outside seller)
+# (which also spend the SPENDING wallet at an outside seller)
 # need `expensive: true` on top.
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ on:
         type: boolean
         default: false
       expensive:
-        description: "Also buy route-execute-pro ($3.30) and -max ($0.55)"
+        description: "Also buy route-execute-pro and -max"
         type: boolean
         default: false
       only:
@@ -39,7 +39,7 @@ jobs:
     environment: spending
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -64,5 +64,5 @@ jobs:
           [ "$MINT_EXPENSIVE" = "true" ] && ARGS="$ARGS --expensive"
           [ -n "$MINT_ONLY" ] && ARGS="$ARGS --only $MINT_ONLY"
           cd /tmp/mint && env -i PATH="$PATH" HOME="$HOME" \
-            BURNER_KEY="$BURNER_KEY" POW_SECRET="$POW_SECRET" \
+            BURNER_KEY="$BURNER_KEY" POW_SECRET="${POW_SECRET}" \
             node mint-bazaar-rows.js $ARGS

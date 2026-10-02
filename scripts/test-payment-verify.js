@@ -266,8 +266,8 @@ const run = (over = {}, rpcOpts = {}) => verifyInboundPayment({
 }
 
 
-// 16. SELF-FUNDING ROUTES SETTLE TO A DIFFERENT WALLET. route-execute and the
-//     Blockscout tools pay into the SPENDING wallet, not the treasury, so
+// 16. SELF-FUNDING ROUTES SETTLE TO A DIFFERENT WALLET. route-execute (and the
+//     explorer-data tools retired 2026-09-22) pay into the SPENDING wallet, not the treasury, so
 //     verifying every row against one /api/hash payTo made exactly those debts
 //     unverifiable forever - and they are the routes most likely to
 //     charged-fail, since they spend upstream on the buyer's behalf.

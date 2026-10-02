@@ -19,7 +19,7 @@ import express from "express";
 import { readFileSync } from "node:fs";
 import { keccak256 } from "viem";
 import { Challenge, Credential } from "mppx";
-import { candidateTxIds, confirmTempoSettlement } from "../src/tempo-confirm.js";
+import { candidateTxIds, confirmTempoSettlement, tempoPushSender } from "../src/tempo-confirm.js";
 
 let pass = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { console.error("FAIL:", m); process.exit(1); } };
@@ -57,23 +57,38 @@ const TREASURY = "0xAbF4FABd7C416fb67202e5F9002389fc75E2a9d0";
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const pad32 = (addr) => "0x" + addr.slice(2).toLowerCase().padStart(64, "0");
 
+// The challenge id of the most recent buildCredential(): arguments evaluate
+// left to right, so a receiptFor() written after buildCredential() in the same
+// call is bound to that credential's challenge.
+let lastChallengeId = null;
+const { encode: encodeMemo } = await import("../node_modules/mppx/dist/tempo/Attribution.js");
+const memoFor = (challengeId) => encodeMemo({ challengeId, serverId: "agent402.tools", clientId: "buyer" });
+const TRANSFER_WITH_MEMO_TOPIC = "0x57bc7354aa85aed339e000bccffabbc529466af35f0772c8f8ee1145927de7f0";
 function buildCredential(o = {}) {
   const challenge = Challenge.from({
     realm: o.realm ?? "agent402.tools",
     method: "tempo",
     intent: "charge",
-    expires: new Date(Date.now() + 60_000),
+    expires: new Date(Date.now() + (o.ttlMs ?? 60_000)),
     request: { amount: o.amount ?? "1000", currency: o.currency ?? CURRENCY, decimals: 6, recipient: o.recipient ?? TREASURY, methodDetails: { chainId: 4217 } },
     secretKey: SECRET,
   });
+  lastChallengeId = challenge.id;
   return Credential.serialize({ challenge, payload: o.payload ?? { type: "transaction", signature: SUBMITTED } });
 }
 
-function receiptFor(txId, { status = "0x1", token = CURRENCY, to = TREASURY, amount = 1000n } = {}) {
+// A TIP-20 transferWithMemo emits Transfer and TransferWithMemo; the confirm
+// reads the memo event. `memo` defaults to one bound to the last credential.
+function receiptFor(txId, { status = "0x1", token = CURRENCY, to = TREASURY, amount = 1000n, memo = memoFor(lastChallengeId), withMemoEvent = true } = {}) {
+  const from = pad32("0x24E6A249111aE0CC8ea09f487A114f7e7Ef15e12");
+  const data = "0x" + amount.toString(16).padStart(64, "0");
   return {
     status,
     transactionHash: txId,
-    logs: [{ address: token, topics: [TRANSFER_TOPIC, pad32("0x24E6A249111aE0CC8ea09f487A114f7e7Ef15e12"), pad32(to)], data: "0x" + amount.toString(16).padStart(64, "0") }],
+    logs: [
+      { address: token, topics: [TRANSFER_TOPIC, from, pad32(to)], data },
+      ...(withMemoEvent ? [{ address: token, topics: [TRANSFER_WITH_MEMO_TOPIC, from, pad32(to), memo], data }] : []),
+    ],
   };
 }
 
@@ -107,6 +122,16 @@ function stubFetch(receipts, log = []) {
 
   const underpaid = await confirmTempoSettlement(buildCredential({ amount: "5000" }), { fetchImpl: stubFetch({ [REAL_TXID]: receiptFor(REAL_TXID, { amount: 1000n }) }), attempts: 1 });
   ok(underpaid === null, "confirm: an on-chain amount below the challenge amount never confirms");
+
+  // Bound to THIS challenge: a settled transfer made for another purchase
+  // must not vouch for a fresh challenge (its bytes can be re-attached).
+  const otherCred = buildCredential({ ttlMs: 120_000 }); const otherMemo = memoFor(lastChallengeId);
+  const stolen = await confirmTempoSettlement(buildCredential(), { fetchImpl: stubFetch({ [REAL_TXID]: receiptFor(REAL_TXID, { memo: otherMemo }) }), attempts: 1 });
+  ok(otherCred && stolen === null, "confirm: a settled transfer whose memo is bound to a DIFFERENT challenge never confirms");
+  const noMemo = await confirmTempoSettlement(buildCredential(), { fetchImpl: stubFetch({ [REAL_TXID]: receiptFor(REAL_TXID, { withMemoEvent: false }) }), attempts: 1 });
+  ok(noMemo === null, "confirm: a plain Transfer with no MPP memo never confirms");
+  const untagged = await confirmTempoSettlement(buildCredential(), { fetchImpl: stubFetch({ [REAL_TXID]: receiptFor(REAL_TXID, { memo: "0x" + "00".repeat(25) + memoFor(lastChallengeId).slice(-14) }) }), attempts: 1 });
+  ok(untagged === null, "confirm: a memo carrying the right nonce but no MPP tag never confirms");
 
   const rpcDown = await confirmTempoSettlement(buildCredential(), { fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({}) }), attempts: 1 });
   ok(rpcDown === null, "confirm: RPC failure -> null, fails closed, never throws");
@@ -219,6 +244,45 @@ async function listen(app) {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/confirmSettlement:\s*confirmTempoSettlement/.test(src), "wiring: server.js passes confirmSettlement: confirmTempoSettlement to createTempoGate");
   ok(/from "\.\/tempo-confirm\.js"/.test(src), "wiring: server.js imports tempo-confirm.js");
+}
+
+// ---------------------------------------------------------------------------
+// tempoPushSender: the sender of a PUSH credential's transfer, read from the
+// chain. The credential's `source` is client-written; the ledger and refund
+// rows name this instead, or nobody.
+// ---------------------------------------------------------------------------
+{
+  const CUR = "0x20c000000000000000000000b9537d11c60e8b50";
+  const TO = "0x000000000000000000000000000000000000dead";
+  const FROM = "0x7777777777777777777777777777777777777777";
+  const ch = Challenge.from({ realm: "r.example", method: "tempo", intent: "charge", expires: new Date(Date.now() + 60_000), request: { amount: "1000", currency: CUR, decimals: 6, recipient: TO, methodDetails: { chainId: 4217 } }, secretKey: "k" });
+  const HASH = `0x${"cd".repeat(32)}`;
+  const cred = (o = {}) => Credential.serialize({ challenge: ch, payload: o.payload ?? { hash: HASH, type: "hash" }, source: "did:pkh:eip155:4217:0x1111111111111111111111111111111111111111" });
+  const tag = keccak256(new TextEncoder().encode("mpp")).slice(2, 10);
+  const memoFor = (id) => `0x${tag}01${"0".repeat(40)}${keccak256(new TextEncoder().encode(id)).slice(2, 16)}`;
+  const pad = (a) => `0x${"0".repeat(24)}${a.slice(2)}`;
+  const log = (o = {}) => ({ address: o.address ?? CUR, topics: [TRANSFER_WITH_MEMO_TOPIC, pad(o.from ?? FROM), pad(o.to ?? TO), o.memo ?? memoFor(ch.id)], data: `0x${(o.value ?? 1000n).toString(16).padStart(64, "0")}` });
+  let answer = null; const asked = [];
+  const fetchImpl = async (_url, init) => { const b = JSON.parse(init.body); asked.push(b.params[0]); if (answer instanceof Error) throw answer; return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: answer })); };
+  const run = (c = cred()) => tempoPushSender(c, { rpcUrl: "http://stub", fetchImpl });
+  answer = { status: "0x1", logs: [log()] };
+  ok(await run() === FROM && asked.at(-1) === HASH, "push sender: the TransferWithMemo sender of the named transaction, not the credential's source");
+  answer = { status: "0x1", logs: [log({ memo: memoFor("another-challenge") })] };
+  ok(await run() === null, "push sender: a transfer bound to another challenge names nobody");
+  answer = { status: "0x1", logs: [log({ to: "0x000000000000000000000000000000000000beef" })] };
+  ok(await run() === null, "push sender: a transfer to another recipient names nobody");
+  answer = { status: "0x1", logs: [log({ value: 999n })] };
+  ok(await run() === null, "push sender: an underpaying transfer names nobody");
+  answer = { status: "0x1", logs: [log({ address: "0x20c0000000000000000000000000000000000001" })] };
+  ok(await run() === null, "push sender: a transfer in another token names nobody");
+  answer = { status: "0x0", logs: [log()] };
+  ok(await run() === null, "push sender: a reverted transaction names nobody");
+  answer = null;
+  ok(await run() === null, "push sender: no receipt names nobody");
+  answer = new Error("down");
+  ok(await run() === null, "push sender: an RPC failure names nobody (never throws)");
+  const n = asked.length;
+  ok(await run(cred({ payload: { signature: "0x76ab", type: "transaction" } })) === null && await tempoPushSender("Payment junk", { fetchImpl }) === null && asked.length === n, "push sender: a pull credential or junk is not read at all");
 }
 
 console.log(`\n${pass} passed, 0 failed`);

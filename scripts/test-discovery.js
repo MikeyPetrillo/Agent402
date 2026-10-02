@@ -45,6 +45,31 @@ ok(m.payment.proofOfWork.difficultyBits === 20, "pow difficulty");
 ok(m.payment.proofOfWork.eligibleTools === 1, "pow eligible count");
 ok(m.payment.dataHandling?.readsPaymentMetadata === false && m.payment.dataHandling?.retainsPaymentMetadata === false,
   "dataHandling attests payment-metadata minimisation");
+// The fields read off a payment are named in full. The list once named only
+// authorization.from while the server also reads the payment-identifier
+// extension, the Solana transaction's signers, the Tempo credential source and
+// the payer in the facilitator's settlement receipt, and keeps the payer per sale.
+{
+  const reads = (m.payment.dataHandling?.readsOnly || []).join(" | ");
+  for (const [needle, what] of [["authorization.from", "the EIP-3009 payer"], ["payment-identifier", "the idempotency extension"], ["Solana", "the Solana signers"], ["Tempo", "the Tempo credential source"], ["settlement receipt", "the facilitator receipt payer"]]) {
+    ok(reads.includes(needle), `dataHandling.readsOnly names ${what}`);
+  }
+  ok(/payer/.test(String(m.payment.dataHandling?.retains || "")), "dataHandling says the sales ledger keeps the payer of a sale");
+}
+// The heartbeat figure is the interval of the observer that actually keeps it:
+// the Cloudflare cron in workers/status-probe/wrangler.toml. It said 15, the
+// GitHub schedule's REQUEST, which GitHub delivers far less often.
+{
+  const { readFileSync } = await import("node:fs");
+  const toml = readFileSync(new URL("../workers/status-probe/wrangler.toml", import.meta.url), "utf8");
+  const cron = toml.match(/crons\s*=\s*\["\*\/(\d+) \* \* \* \*"\]/);
+  ok(cron, "the status-probe worker declares a minute-interval cron");
+  ok(m.trust?.productionHeartbeatMinutes === Number(cron[1]), `productionHeartbeatMinutes matches the worker cron (${m.trust?.productionHeartbeatMinutes} vs ${cron[1]})`);
+  // The crawl cadence is the crawler's timer, not a typed figure ("crawl: 300"
+  // stood here while the crawler ran every 1800 s).
+  const { CRAWL_INTERVAL_SECONDS } = await import("../src/crawl-cadence.js");
+  ok(m.discovery?.refreshSeconds?.crawl === CRAWL_INTERVAL_SECONDS && CRAWL_INTERVAL_SECONDS > 300, `refreshSeconds.crawl is the crawler's own interval (${m.discovery?.refreshSeconds?.crawl} vs ${CRAWL_INTERVAL_SECONDS})`);
+}
 
 ok(m.capabilities.tools === 3, "capability tool count");
 const webCat = m.capabilities.categories.find((c) => c.key === "web");
@@ -93,5 +118,38 @@ JSON.parse(JSON.stringify(r));
 // No-wallet reliability must not fabricate a proof link.
 const r2 = reliabilityReport({ baseUrl: BASE, network: "base", wallet: null, stats });
 ok(r2.onchain.revenueProof === null, "no wallet -> null reliability proof");
+
+// ---- the CI guarantee's metered count is derived, never typed ----
+{
+  const { meteredSkip, METERED_SLUGS } = await import("../src/metered-slugs.js");
+  const { readFileSync } = await import("node:fs");
+  const metered = [...METERED_SLUGS][0];
+  const cat = {
+    "POST /api/a": { slug: "a", price: "$0.001" },
+    [`POST /api/${metered}`]: { slug: metered, price: "$0.02" },
+    "POST /api/skill/pk": { slug: "skill-pk", price: "$0.01" },
+    "POST /api/skill/clean": { slug: "skill-clean", price: "$0.01" },
+    "GET /api/free": { slug: "free", price: "$0" },
+  };
+  const packs = [{ slug: "pk", toolSlugs: ["a", metered] }, { slug: "clean", toolSlugs: ["a"] }];
+  const ms = meteredSkip(cat, packs);
+  ok(ms.metered === 2 && ms.total === 4, `meteredSkip counts the metered slug and the pack reaching it, over priced routes only (got ${JSON.stringify(ms)})`);
+  const claim = reliabilityReport({ baseUrl: BASE, network: "base", wallet: WALLET, stats, meteredSkip: ms }).guarantees[0].claim;
+  ok(/2 of this server's 4 priced routes/.test(claim), `the CI guarantee states the derived count (${claim})`);
+  ok(!/\$\{/.test(claim), "no unrendered template in the claim");
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/meteredSkip: meteredSkip\(CATALOG, SKILL_PACKS\)/.test(server), "/api/reliability passes the live catalog's count");
+  const sweep = readFileSync(new URL("./test-non-metered-examples.js", import.meta.url), "utf8");
+  const flatM = JSON.stringify(m);
+  ok(/0 of 3 priced routes here/.test(flatM), "the manifest's testedBeforeEveryDeploy carries the derived metered count");
+  const salesWas = process.env.CREDITS_SALES;
+  delete process.env.CREDITS_SALES;
+  const off = JSON.stringify(serviceManifest({ baseUrl: BASE, network: "base", networks: ["base"], wallet: WALLET, catalog: CATALOG, toolCount: 3, powSlugs: POW, prices: PRICES }));
+  process.env.CREDITS_SALES = "on";
+  const on = JSON.stringify(serviceManifest({ baseUrl: BASE, network: "base", networks: ["base"], wallet: WALLET, catalog: CATALOG, toolCount: 3, powSlugs: POW, prices: PRICES }));
+  if (salesWas === undefined) delete process.env.CREDITS_SALES; else process.env.CREDITS_SALES = salesWas;
+  ok(/credits \(not on sale; issued keys still spend\)/.test(off) && /credits \(sold at \/credits\)/.test(on), "nonCustodial states the credit sales state from creditsSalesEnabled()");
+  ok(/import \{ METERED_SLUGS, meteredPackSlugs \} from "\.\.\/src\/metered-slugs\.js"/.test(sweep) && !/METERED_SLUGS = new Set\(/.test(sweep), "the sweep reads the same list (no second copy in scripts/)");
+}
 
 console.log("test-discovery: OK");

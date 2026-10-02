@@ -1,5 +1,9 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
+import { REPO_URL, repoUrl } from "./repo-link.js";
+import { INTEGRATIONS } from "./integration-pages.js";
+// Derived from the integrations table: one entry per published framework adapter under adapters/.
+const ADAPTER_COUNT = INTEGRATIONS.filter((i) => String(i.dir || "").startsWith("adapters/")).length;
 // Real, free-to-read outputs of the product (assets/samples), never placeholders.
 const SHOWCASE_PROJECTS = [
   { title: "Company due-diligence dossier: NVDA", description: "Filings, financial trend, insider and institutional activity, litigation and risk themes, 20 cited sources. Read the real report at /reports/sample/dossier.", badge: "Live sample", href: "/reports/sample/dossier" },
@@ -23,7 +27,7 @@ export function communityPage(baseUrl) {
 
   const statCards = [
     { value: "500+", label: "tools" },
-    { value: "8", label: "framework adapters" },
+    { value: String(ADAPTER_COUNT), label: "framework adapters" },
     { value: "Open source", label: "AGPL-3.0 licensed" },
     { value: "x402", label: "protocol" },
   ];
@@ -32,7 +36,7 @@ export function communityPage(baseUrl) {
     {
       title: "GitHub",
       description: "Source code, issues, and pull requests. Star the repo and follow development.",
-      href: "https://github.com/MikeyPetrillo/Agent402",
+      href: REPO_URL,
       linkText: "View repository",
     },
     {
@@ -65,7 +69,7 @@ export function communityPage(baseUrl) {
     {
       title: "Report a bug",
       description: "Found something broken? Open an issue on GitHub with reproduction steps.",
-      href: "https://github.com/MikeyPetrillo/Agent402/issues",
+      href: repoUrl("issues"),
       linkText: "Open an issue",
     },
   ];

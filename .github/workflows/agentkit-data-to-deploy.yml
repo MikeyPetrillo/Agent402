@@ -2,11 +2,10 @@ name: AgentKit data-to-deploy live proof
 
 # Runs examples/agentkit-data-to-deploy/agent.js against production with the
 # canary burner: an AgentKit ViemWalletProvider buys the live ETH price from
-# agent402.tools over x402 (crypto-price, $0.01 USDC on Base), then deploys
+# agent402.tools over x402 (crypto-price, USDC on Base), then deploys
 # Agent402PriceSnapshot to Base mainnet carrying the price and the payment tx.
-# Costs $0.01 USDC plus Base gas for one small contract (measured under
-# $0.001). The paying client refuses any payee but the Agent402 treasury
-# (AGENT402_PAYEES) and any call over $0.02 (maxPerCallUsd in agent.js). Installs the PINNED tree in scripts/agentkit-live/ (never resolve a
+# The paying client refuses any payee but the Agent402 treasury
+# (AGENT402_PAYEES) and any call over its per-call cap (maxPerCallUsd in agent.js). Installs the PINNED tree in scripts/agentkit-live/ (never resolve a
 # third-party tree fresh beside a funded key). Dispatch-only.
 on:
   workflow_dispatch:
@@ -28,7 +27,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22

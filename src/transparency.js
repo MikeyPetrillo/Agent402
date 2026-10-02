@@ -5,6 +5,7 @@
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 import { MAX_CALL_USD } from "./revenue-live.js";
 
+import { REPO_URL, REPO_SLUG, repoUrl } from "./repo-link.js";
 const TOKEN_CA = "0x380344a48378df060EB24fF6B8Acb511E14B8BA3";
 const LAUNCHER = "0x7cC76f7c351e341b50FA60012b4ABC886868A945";
 const CLAIM_WALLET = "0x6bf262e27ac17e8fa4416bd5d01cc7fb7715775e";
@@ -27,8 +28,8 @@ export async function repoTraffic() {
   try {
     const hdrs = { Authorization: `Bearer ${token}`, "User-Agent": "agent402-transparency" };
     const [c, v] = await Promise.all([
-      fetch("https://api.github.com/repos/MikeyPetrillo/Agent402/traffic/clones", { headers: hdrs, signal: AbortSignal.timeout(10000) }),
-      fetch("https://api.github.com/repos/MikeyPetrillo/Agent402/traffic/views", { headers: hdrs, signal: AbortSignal.timeout(10000) }),
+      fetch(`https://api.github.com/repos/${REPO_SLUG}/traffic/clones`, { headers: hdrs, signal: AbortSignal.timeout(10000) }),
+      fetch(`https://api.github.com/repos/${REPO_SLUG}/traffic/views`, { headers: hdrs, signal: AbortSignal.timeout(10000) }),
     ]);
     if (!c.ok || !v.ok) throw new Error(`traffic ${c.status}/${v.status}`);
     const cj = await c.json(); const vj = await v.json();
@@ -91,7 +92,7 @@ export function transparencyPage(baseUrl, traffic = null) {
 
 <section>
 <div class="tp-body">
-<p>Agent402.Tools is an <a href="https://github.com/MikeyPetrillo/Agent402" rel="noopener">open-source</a> x402 + MCP
+<p>Agent402.Tools is an <a href="${REPO_URL}" rel="noopener">open-source</a> x402 + MCP
 tool server. When something material happens around the project, on-chain or off, it gets documented
 here, with receipts a reader can verify independently. Nothing on this page asks for trust; every factual
 claim links to an immutable on-chain record.</p>
@@ -106,8 +107,10 @@ ${traffic ? `<h2>GitHub adoption</h2>
 <p>Honest caveat: clone counts include CI systems and crawlers, so the unique-cloner figure is the
 steadier signal, and none of these numbers identify anyone - GitHub reports counts only. The license
 terms that travel with every clone are in the
-<a href="https://github.com/MikeyPetrillo/Agent402/blob/main/LICENSE" rel="noopener">AGPL-3.0 license</a>:
+<a href="${repoUrl("blob/main/LICENSE")}" rel="noopener">AGPL-3.0 license</a>:
 run a modified copy as a network service and you must publish your source.</p>` : ""}
+
+<h2 class="sr-section">Disclosures in full</h2>
 
 <details class="tp-fold">
 <summary>A community member independently launched a token using the project's name ($AGENT402, on Robinhood Chain). It was not created, issued, endorsed, or controlled by Agent402. Full record and on-chain receipts - click to expand.</summary>

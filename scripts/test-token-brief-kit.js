@@ -129,11 +129,9 @@ async function throws(p, status, label) {
   ok(TOKEN_BRIEF_TOOLS.length === 1, "kit exports exactly one tool");
   ok(t.route === "POST /v1/token-brief", `route is POST /v1/token-brief (${t.route})`);
   ok(t.slug === "token-brief", "slug is token-brief");
-  // Price is asserted against the MEASURED cost, not a hardcoded string: the
-  // all-in cost of one report is $0.117 (2026-08-22 OpenRouter export, 186
-  // reports), and the worst single synthesis call ever recorded is $0.311.
-  ok(Number(String(t.price).replace(/^\$/, "")) > TOKEN_BRIEF_TIERS["token-brief"].maxUpstreamUsd, `price ${t.price} is above the declared upstream cap $${TOKEN_BRIEF_TIERS["token-brief"].maxUpstreamUsd}`);
-  ok(Number(String(t.price).replace(/^\$/, "")) >= 0.35, `price ${t.price} clears the worst synthesis call we have ever measured ($0.311)`);
+  // Price is asserted against the MEASURED cost, not a hardcoded string.
+  ok(Number(String(t.price).replace(/^\$/, "")) > TOKEN_BRIEF_TIERS["token-brief"].maxUpstreamUsd, `price ${t.price} is above the declared upstream cap`);
+  ok(Number(String(t.price).replace(/^\$/, "")) >= 0.35, `price ${t.price} clears the worst synthesis call we have ever measured`);
   ok(typeof t.handler === "function", "handler is a function");
   ok(t.discovery?.input?.mint === MINT, "documented example input is a base58 mint");
   ok(t.discovery?.inputSchema?.required?.includes("mint"), "schema requires mint");

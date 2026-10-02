@@ -98,7 +98,7 @@ const listen = (app) => new Promise((res) => { const s = app.listen(0, () => res
   const decide = (v) => (re.test((v || "").trim()) ? "worker" : "api");
   ok(decide("true") === "worker" && decide("1") === "worker" && decide("on") === "worker", "WORKER_MODE=true/1/on -> worker/server.js");
   ok(decide("") === "api" && decide(undefined) === "api" && decide("false") === "api", "WORKER_MODE unset/false -> src/server.js (main byte-identical)");
-  ok(/import\(\s*workerMode\s*\?\s*["']\.\/worker\/server\.js["']\s*:\s*["']\.\/src\/server\.js["']\s*\)/.test(src), "start.js imports (not spawns) the selected server so the gosu entrypoint keeps PID 1");
+  ok(/import\([\s\S]{0,80}?["']\.\/worker\/server\.js["']\s*:\s*["']\.\/src\/server\.js["']\s*\)/.test(src) && /import\(["']\.\/services\/decide\/server\.js["']\)/.test(src) && !/child_process|spawn\(|fork\(/.test(src), "start.js imports (not spawns) the selected server so the gosu entrypoint keeps PID 1");
 }
 
 // --- 5. Boot-guard secret detection: catches real secrets, not infra vars ---

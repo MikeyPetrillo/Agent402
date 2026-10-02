@@ -30,7 +30,7 @@ import { IMAGE_TOOLS } from "../src/tools/image-kit.js";
 import { KIT2 } from "../src/tools/kit2.js";
 import { DATA_TOOLS } from "../src/tools/data-kit.js";
 import { CHAIN_TOOLS } from "../src/tools/chain-kit.js";
-import { TOOLS as CANARY_LEGS, shouldPageUpstreamLeg } from "./paid-canary.js";
+import { TOOLS as CANARY_LEGS } from "./paid-canary.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -43,7 +43,6 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const NEW_TOOLS = [
   ...["contract-source", "contract-abi", "solidity-scan", "calldata-decode", "selector-lookup", "tx-simulate", "address-label"].map((s) => [s, CONTRACT_TOOLS, "contract-kit"]),
   ...["crypto-orderbook", "stablecoin-peg"].map((s) => [s, CRYPTO_TOOLS, "crypto-kit"]),
-  ...["options-chain", "premarket-quote", "stock-dividends", "dividend-calendar"].map((s) => [s, FINANCE_TOOLS, "finance-kit"]),
   ...["lei-lookup", "wikidata-entity", "gravatar-check", "github-repo", "favicon-grab"].map((s) => [s, ENRICH_TOOLS, "enrich-kit"]),
   ...["search-videos"].map((s) => [s, SEARCH_TOOLS, "search-kit"]),
   ...["archive-snapshot", "feed-parse", "unshorten-url"].map((s) => [s, WEB_TOOLS, "web-kit"]),
@@ -105,6 +104,7 @@ pass++; console.log(`ok - all ${CANARY_LEGS.length} canary legs are well-shaped 
 const legFor = (route) => CANARY_LEGS.find((l) => l.path === route || l.path.startsWith(`${route}?`));
 const xt = legFor("/api/x-tweet");
 ok(!!xt && xt.method === "POST" && xt.body?.id === "20", "canary has an x-tweet leg (POST, post 20) - the X bearer + prepaid balance are proven daily on prod, not by the first buyer");
+if (xt) ok(Number.isInteger(xt.weekday) && xt.weekday >= 0 && xt.weekday <= 6, "x-tweet leg is weekly (weekday 0-6): it draws the prepaid X balance the announce posts share");
 if (xt) ok(xt.priceUsd === advertised(X_DATA_TOOLS, "x-tweet"), `x-tweet leg priceUsd (${xt?.priceUsd}) matches the kit's advertised price ($${advertised(X_DATA_TOOLS, "x-tweet")})`);
 const sq = legFor("/api/stock-quote");
 ok(!!sq, "canary has a stock-quote leg");
@@ -113,15 +113,6 @@ const tr = CANARY_LEGS.find((l) => l.kit === "transcribe");
 const STT_EXAMPLE_URL = STT_TOOLS.find((t) => t.slug === "transcribe")?.discovery?.input?.url;
 const trExample = STT_EXAMPLE_URL;
 ok(!!tr && tr.priceUsd === 0.03 && tr.body?.url === trExample, `transcribe leg exists at $0.03 and buys the tool's own documented example, a spoken clip (got ${tr ? `$${tr.priceUsd} ${tr.body?.url}` : "no leg"})`);
-const oc = legFor("/api/options-chain");
-ok(!!oc, "canary has an options-chain leg (relay path continuously proven)");
-if (oc) {
-  ok(oc.method === "GET" && oc.path.includes("symbol=AAPL"), "options-chain leg uses the tool's own discovery example (GET symbol=AAPL)");
-  ok(oc.priceUsd === advertised(FINANCE_TOOLS, "options-chain"), `options-chain leg priceUsd (${oc?.priceUsd}) matches the kit's advertised price ($${advertised(FINANCE_TOOLS, "options-chain")})`);
-  const happy = { symbol: "AAPL", expirations: ["2026-07-17"], strikes: [230], calls: [{}], puts: [{}] };
-  ok(oc.check(happy) === true, "options-chain leg check accepts the documented happy-path shape");
-  ok(typeof oc.check({ symbol: "AAPL" }) === "string", "options-chain leg check rejects a chain-less response");
-}
 
 // The Ox leg is the only standing proof of two things a stub cannot show: that
 // our `provider.max_price` bound admits a $0-priced endpoint (if it refused the
@@ -131,7 +122,7 @@ if (oc) {
 // answers 503 "no longer served" and drops from /v1/models), so the canary
 // carries NO leg for it any more - a leg that can only warn is noise, and
 // its 2026-08-27 warning was one of five nobody read. Retiring the route
-// itself (OX_ALPHA_ENABLED=off) is a Railway variable, Mike's call.
+// itself (OX_ALPHA_ENABLED=off) is a Railway variable, the operator's call.
 ok(!legFor("/v1/ox/chat/completions"), "no Ox Alpha leg while the stealth model is gone upstream");
 
 // The render leg is the only one that exercises the secretless browser/media
@@ -206,6 +197,56 @@ if (sd) {
     "MPP legs drive the native WWW-Authenticate → Authorization: Payment wire");
   ok(/Payment-Receipt|payment-receipt/.test(canarySrc),
     "MPP legs assert the settled Payment-Receipt header");
+  // The Algorand leg is QUOTA-AWARE (2026-09-22). The facilitator meters
+  // sponsored sub-cent settlements per payTo per month; when the month's
+  // allowance is spent the $0.001 leg fails every day until the reset and
+  // says nothing true about the rail. It reads the live quota, proves the
+  // rail at $0.01 when exhausted, says so, and still pages when that fails.
+  ok(/sponsorship\/status\?wallet=\$\{payTo\}/.test(canarySrc), "the Algorand leg reads the facilitator's live sub-cent quota for our payTo");
+  ok(/const exhausted = subcentWithdrawn \|\| \(!!quota && !quotaNotThisMonth && Number\(quota\.usedMonth\) >= Number\(quota\.quota\) && Number\(quota\.suBalance \|\| 0\) <= 0\)/.test(canarySrc), "...and treats the month as exhausted when used >= quota with no purchased SUs, or when the server itself has withdrawn Algorand from sub-cent routes");
+  // The status row carries no month field: a row last written in an EARLIER
+  // UTC month is last month's count, and taken at its word on the 1st it
+  // routes the leg around a reset that never gets a sub-cent settle to happen
+  // on; a row whose updatedTs is not a readable time cannot name its month
+  // either. The leg applies the server's own rule (one definition), and says
+  // so loudly when a pause outlives the reset instead of "resets on the 1st".
+  ok(/import \{ isSponsorshipRowEvidence, sponsorshipRowMonth, sponsorshipRowUpdatedAt \} from "\.\.\/src\/avm-sponsorship\.js"/.test(canarySrc) && /const quotaNotThisMonth = !!quota && !isSponsorshipRowEvidence\(quota\)/.test(canarySrc),
+    "a status row from an earlier UTC month, or with an unreadable updatedTs, is not read as this month's exhaustion (the server's own rule, imported)");
+  ok(/const pauseOutlivedReset = exhausted && \(dayOfMonth === 2 \|\| dayOfMonth === 3 \|\| \(subcentWithdrawn && quotaMonth === "earlier-month"\)\)/.test(canarySrc) && /if \(pauseOutlivedReset\) console\.warn\(`\\nWARN  algorand leg: the sub-cent pause is \$\{resetNote\}/.test(canarySrc),
+    "a pause still up on the 2nd or 3rd of the month (or held while the facilitator's row is last month's) is WARNed");
+  ok(/noteRail\("algorand", true, exhausted \? `settled at \$0\.01; sub-cent sponsored quota exhausted this month \(\$\{quotaText\}\), \$\{resetNote\}`/.test(canarySrc),
+    "...and the /status detail carries the same words instead of 'resets on the 1st'");
+  // While the allowance is spent the server withdraws Algorand from sub-cent
+  // 402s (src/avm-sponsorship.js), so the payTo must come from a one-cent route
+  // or the leg reads nothing, takes the $0.001 path and pages on a rail that
+  // is fine.
+  ok(/const centAccept = await avmAccept\("\/api\/solidity-scan"\)/.test(canarySrc) && /const subcentAccept = centAccept \? await avmAccept\("\/api\/hash"\) : null/.test(canarySrc),
+    "the Algorand payTo is read from the one-cent route, and the sub-cent route's offer beside it");
+  // ...but a sub-cent 402 without Algorand counts as the server's own
+  // exhausted verdict ONLY when GET /api/rails says the server withdrew it.
+  // Anything else is the rail dropping out of the sub-cent offer, and pages.
+  ok(/import \{ subcentAcceptVerdict \} from "\.\/avm-canary-classify\.js"/.test(canarySrc)
+    && /rails = await \(await synthFetch\(`\$\{TARGET\}\/api\/rails`/.test(canarySrc)
+    && /const offerVerdict = subcentAcceptVerdict\(\{ centAccept, subcentAccept, rails \}\)/.test(canarySrc)
+    && /subcentWithdrawn = offerVerdict === "withdrawn"/.test(canarySrc)
+    && /if \(offerVerdict === "missing"\) subcentMissing = /.test(canarySrc)
+    && /if \(subcentMissing\) \{ railFail\("algorand", subcentMissing\); return; \}/.test(canarySrc),
+    "a missing sub-cent Algorand accept is excused only when /api/rails reports the pause; otherwise railFail");
+  {
+    const { subcentAcceptVerdict } = await import("./avm-canary-classify.js");
+    const acc = { network: "algorand:x", payTo: "P" };
+    const paused = { restrictions: [{ network: "algorand", status: "paused" }] };
+    ok(subcentAcceptVerdict({ centAccept: acc, subcentAccept: acc, rails: null }) === "offered", "sub-cent route offers Algorand: offered");
+    ok(subcentAcceptVerdict({ centAccept: acc, subcentAccept: null, rails: paused }) === "withdrawn", "missing on the sub-cent route with /api/rails reporting the pause: withdrawn (excused)");
+    ok(subcentAcceptVerdict({ centAccept: acc, subcentAccept: null, rails: { restrictions: [] } }) === "missing", "missing with /api/rails reporting NO pause: a rail failure");
+    ok(subcentAcceptVerdict({ centAccept: acc, subcentAccept: null, rails: null }) === "missing", "missing with /api/rails unreadable: a rail failure, never excused");
+    ok(subcentAcceptVerdict({ centAccept: acc, subcentAccept: null, rails: { restrictions: [{ network: "algorand", status: "open" }] } }) === "missing", "missing with a non-paused Algorand row: a rail failure");
+    ok(subcentAcceptVerdict({ centAccept: null, subcentAccept: null, rails: paused }) === "no-rail", "no Algorand on the one-cent route either: nothing to compare");
+  }
+  ok(/exhausted\s*\?\s*\{ path: "\/api\/solidity-scan", usd: "0\.01"/.test(canarySrc), "when exhausted it proves the rail at $0.01 on the one pure-CPU tool at that price");
+  ok(/: \{ path: "\/api\/hash", usd: "0\.001"/.test(canarySrc), "...and otherwise keeps the $0.001 sub-cent buy, which is the path real buyers take");
+  ok(/sub-cent sponsored quota exhausted this month/.test(canarySrc), "the exhaustion is SAID, in the log and on the /status detail - re-routing must never hide it");
+  ok(/railFail\(\s*["']algorand["']/.test(canarySrc), "a refusal of whichever buy it made still pages through railFail");
   ok(/railFail\(\s*["']mpp["']/.test(canarySrc),
     "Base MPP failures go through railFail (not WARN-only) so a dead shim fails the run");
   ok(/railFail\(\s*["']mpp-celo["']/.test(canarySrc),
@@ -314,21 +355,24 @@ if (sd) {
     "partial-rail detail must not claim buying could not complete a USDC purchase");
 }
 
-// Supply-chain (Blockscout upstream) leg: a consecutive-failure rule, so a
-// third of runs failing (2026-08) pages while a single blip still does not.
+// The supply-chain leg (and its consecutive-failure paging rule) left with the
+// five retired explorer tools on 2026-09-22. Nothing may bring the leg or its
+// status row back half-wired: a leg with no catalog route buys a 410 daily.
 {
-  ok(shouldPageUpstreamLeg({ ok: true, recentOk: [false, false, false] }) === false, "a run that settled never pages, whatever came before");
-  ok(shouldPageUpstreamLeg({ ok: false, recentOk: [false, false, true] }) === true, "this run + two prior failures = three consecutive -> page");
-  ok(shouldPageUpstreamLeg({ ok: false, recentOk: [false, true, false] }) === false, "a success inside the window breaks the streak");
-  ok(shouldPageUpstreamLeg({ ok: false, recentOk: [false] }) === false, "too few prior observations never page (missing evidence is not evidence)");
-  ok(shouldPageUpstreamLeg({ ok: false, recentOk: null }) === false, "status unreachable never pages");
-  ok(shouldPageUpstreamLeg({ ok: false, recentOk: [], pageAfter: 1 }) === true, "pageAfter=1 pages on this run alone");
   const canarySrc2 = readFileSync(join(ROOT, "scripts", "paid-canary.js"), "utf8");
-  ok(/noteRail\("supply-chain"/.test(canarySrc2) && /railFail\("supply-chain"/.test(canarySrc2) && /rail_supply-chain/.test(canarySrc2),
-    "the canary records the supply-chain leg on /status and pages it through railFail");
+  ok(!/"supply-chain"|\/api\/address-profile/.test(canarySrc2), "the canary carries no supply-chain leg for the retired address-profile route");
   const statusSrc = readFileSync(join(ROOT, "src", "status.js"), "utf8");
-  ok(/key: "rail_supply-chain"/.test(statusSrc) && /recentOk/.test(statusSrc),
-    "status.js carries the rail_supply-chain component and exposes recentOk for the rule");
+  ok(!/rail_supply-chain/.test(statusSrc), "status.js carries no rail_supply-chain component for a leg that no longer runs");
+}
+
+// The daily Algorand leg signs the sweep's 1000-round window (2026-09-22): ten
+// rounds left ~20 s at our own validity guard and the leg flapped on latency.
+{
+  const psrc = readFileSync(new URL("../scripts/paid-canary.js", import.meta.url), "utf8");
+  const leg = psrc.slice(psrc.indexOf("ALGORAND_ALGOD_URL"), psrc.indexOf("ALGORAND_ALGOD_URL") + 1600);
+  ok(/setDefaultValidityWindow\(1000\)/.test(leg), "the daily Algorand leg signs a 1000-round validity window");
+  ok(/new ExactAvmScheme\(signer, \{ algorandClient \}\)/.test(leg), "...through the algokit client that carries it");
+  ok(/res\.status === 422[\s\S]{0,400}railFail\("algorand"/.test(psrc), "a 422 from our own validity guard pages instead of warning");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -228,6 +228,19 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   await unbound.handler({ task: "summarize a twitter thread", include: "external", params: { circuit: "c" } }, {});
   ok(paidWith?.opts && "provenPayTo" in paidWith.opts && paidWith.opts.provenPayTo === null,
     "external ON: no proven address forwards an explicit null (UNKNOWN), never a missing key");
+  ok(paidWith?.opts && "evidenceWallets" in paidWith.opts && paidWith.opts.evidenceWallets === null,
+    "external ON: a candidate with no bound evidence forwards evidenceWallets null, never a missing key");
+
+  // The same caller-path rule for the EVIDENCE wallets (2026-09-28): the payer
+  // refuses an accept outside them, which is inert unless this forwards them.
+  paidWith = null;
+  const evidenceBound = buildRouteExecuteTool({
+    getCatalog: () => CATALOG, tier: { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 },
+    resolveExternal: async () => ({ ...EXT, evidenceWallets: [proven] }), payExternal, externalEnabled: () => true,
+  });
+  await evidenceBound.handler({ task: "summarize a twitter thread", include: "external", params: { circuit: "c" } }, {});
+  ok(Array.isArray(paidWith?.opts?.evidenceWallets) && paidWith.opts.evidenceWallets[0] === proven,
+    "external ON: the resolver's evidenceWallets reach payExternal, so the spend re-checks the accept it signs");
 
   // over-cap external is refused (not paid): resolver returns a $0.60 tool > $0.50 cap
   paidWith = null;
@@ -268,12 +281,12 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
 
 
 // --- the spending wallet's alarm must cover the biggest call ------------------
-// $0.50 was right when only Blockscout ($0.002/call) spent from that wallet.
+// A small floor was right when only a sub-cent data purchase spent from that wallet.
 // A tier that can spend $3.00 in one call makes "ok" mean "has at least $0.50"
 // for a wallet that cannot cover a single call - the alarm would stay green
 // right up to the failure it exists to prevent. Nothing else reports this.
 {
-  const { BUYER_LOW_DEFAULT_USD } = await import("../src/tools/blockscout-kit.js");
+  const { BUYER_LOW_DEFAULT_USD } = await import("../src/upstream-buyer-status.js");
   const { EXEC_TIERS: TIERS } = await import("../src/tools/route-execute.js");
   const biggest = Math.max(...TIERS.map((t) => t.underlyingMaxUsd));
   ok(BUYER_LOW_DEFAULT_USD >= biggest,
@@ -374,6 +387,31 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     const r = await mk(pay, async () => A).handler({ task: "t", include: "external" }, {});
     ok(calls.length === 1 && r.receipt.seller === A.seller, "a single resolved object (legacy shape) is paid normally");
   }
+}
+
+// ---- price by model leaves route-execute unchanged (2026-09-22) ------------
+// A flat chat route prices a body that names another flat tier's model at that
+// tier (tierQuote), but it is NOT a `quote` route: route-execute still
+// dispatches it within the tier cap, and because the executor calls the
+// handler with no request (no gated price), the model never crosses tiers - a
+// $0.05 routing fee can never buy a $0.50 premium call.
+{
+  const { EXEC_TIERS } = await import("../src/tools/route-execute.js");
+  const { LLM_GATEWAY_TOOLS } = await import("../src/tools/llm-gateway-kit.js");
+  const chat = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat");
+  const cat = { [chat.route]: chat };
+  const plus = buildRouteExecuteTool({ getCatalog: () => cat, baseUrl: "https://agent402.tools", tier: EXEC_TIERS.find((t) => t.slug === "route-execute-plus") });
+  const savedKey = process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENROUTER_API_KEY;
+  try {
+    ok(typeof chat.tierQuote === "function" && typeof chat.quote !== "function", "the flat chat route carries tierQuote, not quote");
+    let e = null;
+    try { await plus.handler({ slug: "v1-chat", params: { model: "anthropic/claude-opus-5", messages: [{ role: "user", content: "hi" }] } }); } catch (x) { e = x; }
+    ok(e?.statusCode === 400 && /served by the v1-chat-premium tier/.test(e.message), `a premium model through route-execute-plus is dispatched and keeps the 400, never served as premium (${e?.statusCode})`);
+    e = null;
+    try { await plus.handler({ slug: "v1-chat", params: { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "hi" }] } }); } catch (x) { e = x; }
+    ok(e?.statusCode === 503 && /not configured/.test(e.message), `a base model is still dispatched to the flat handler (reached its upstream key check: ${e?.statusCode})`);
+  } finally { if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey; }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

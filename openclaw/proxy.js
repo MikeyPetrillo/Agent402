@@ -20,6 +20,15 @@
 // own 402->pay retry), which does NOT make two client calls one payment.
 // Streams pass through byte for byte.
 //
+// Refusals: a refused paid call's 402 from an x402 v2 seller carries the whole
+// payment offer in its JSON body (Agent402 mirrors its PAYMENT-REQUIRED header
+// there) beside the refusal's own reason, hint and retry. OpenClaw's model
+// client builds its error message from `error.message`, else from the whole
+// body, so relaying that body put kilobytes of accepts and schemas into the
+// agent's error text in place of the one sentence that says what to fix. Such
+// a body is answered in the OpenAI error shape instead (refusalAsOpenAIError);
+// every other upstream body passes through byte for byte.
+//
 // Loopback only, and browser-hostile on purpose: any web page can POST to
 // 127.0.0.1 with a "simple" no-cors request, and this proxy spends the
 // user's key, so a request carrying an Origin header (browsers always send
@@ -47,6 +56,27 @@ function readBody(req, limit = MAX_BODY) {
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
+}
+
+// The x402 offer keys a refusal body may carry beside its own fields.
+const OFFER_KEYS = ["x402Version", "resource", "accepts", "extensions"];
+const text = (v) => (typeof v === "string" && v.trim() ? v : null);
+
+/** An upstream error body that carries an x402 offer (a numeric x402Version),
+ *  as an OpenAI-shaped error: the explanation (a problem's detail, else the
+ *  hint, else the error sentence) as error.message, the retry class or reason as
+ *  error.code, the refusal's own fields beside it, and no offer. Null for any
+ *  other body, which the caller relays unchanged. */
+export function refusalAsOpenAIError(status, doc) {
+  if (!doc || typeof doc !== "object" || Array.isArray(doc) || typeof doc.x402Version !== "number") return null;
+  const ours = { ...doc };
+  for (const k of OFFER_KEYS) delete ours[k];
+  const { error, ...fields } = ours;
+  const message = text(fields.detail) || text(fields.hint) || text(error) || text(fields.title) || `Agent402 answered HTTP ${status}`;
+  return {
+    error: { message, type: status === 402 ? "payment_required" : "upstream_error", code: text(fields.retry) || text(fields.reason) || null },
+    ...fields,
+  };
 }
 
 const json = (res, status, obj, headers = {}) => {
@@ -102,7 +132,7 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
           return json(res, 400, { error: { message: `Unknown model "${requested}". Use "auto" or an id from GET /v1/models (${table.size} available).`, type: "invalid_request_error", code: "model_not_found" } });
         }
         if (!paid) {
-          return json(res, 402, { error: { message: "No payment method configured. Set AGENT402_CREDITS_KEY (buy a pack by card at agent402.tools/credits) or configure an x402 wallet (agent402-openclaw setup --wallet).", type: "payment_required", code: "agent402_unconfigured" }, topup: `${upstream}/credits`, priceUsd: route.priceUsd });
+          return json(res, 402, { error: { message: "No payment method configured. Run `agent402-openclaw setup` to generate an x402 wallet, set AGENT402_WALLET_KEY, or set AGENT402_CREDITS_KEY to a credits key already issued.", type: "payment_required", code: "agent402_unconfigured" }, topup: `${upstream}/credits`, priceUsd: route.priceUsd });
         }
         const outbound = { ...body };
         if (requested === AUTO_ID) delete outbound.model; else outbound.model = route.id;
@@ -113,6 +143,18 @@ export async function startProxy({ upstream = DEFAULT_UPSTREAM, creditsKey = nul
         stats.forwarded++;
         const passthrough = {};
         for (const h of ["content-type", "x-credits-balance", "payment-receipt", "x-cache", "cache-control"]) { const v = up.headers.get(h); if (v) passthrough[h] = v; }
+        if (!up.ok && /json/i.test(passthrough["content-type"] || "")) {
+          const raw = await up.text();
+          let doc = null;
+          try { doc = JSON.parse(raw); } catch { /* not JSON after all: relayed as sent */ }
+          const mapped = refusalAsOpenAIError(up.status, doc);
+          if (mapped) {
+            const { "content-type": _ct, ...rest } = passthrough;
+            return json(res, up.status, mapped, rest);
+          }
+          res.writeHead(up.status, passthrough);
+          return res.end(raw);
+        }
         res.writeHead(up.status, passthrough);
         if (!up.body) return res.end();
         const reader = up.body.getReader();

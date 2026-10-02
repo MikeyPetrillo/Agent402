@@ -34,14 +34,10 @@ import { join } from "node:path";
 import { sendReportReadyEmail } from "./email.js";
 
 // The products the human door sells by card. The CARD price is not the agent
-// price: Stripe takes 2.9% + $0.30 per charge, so a $1 charge nets $0.671 and a
-// $2 charge nets $1.642. The card price must clear the fee AND the report's
-// MEASURED worst-case upstream, which is $0.33 for one opus-5 synthesis and
-// $1.20 for the three-synthesis pack (PostHog $ai_generation, 30 days: opus-5
-// avg $0.107, p95 $0.195, max $0.311). A $1 card price left the deep tiers
-// under water once the fee came out, so the floor is $2, $3 for the max tiers
-// and $4 for the pack. Agents paying over x402 or MPP have no fixed fee and pay
-// the tier price in the kit, which is set to the same measured worst case.
+// price: the card processor takes a percentage plus a fixed fee per charge, and
+// the card price must clear that fee AND the report's MEASURED worst-case
+// upstream. Agents paying over x402 or MPP have no fixed fee and pay the tier
+// price in the kit.
 // cheap agent tools stay crypto/agent-only. `slug` maps to the paid endpoint's
 // handler so humans and agents run the identical pipeline.
 // The CARD ladder is DERIVED from the agent tier, never typed per product.
@@ -51,9 +47,8 @@ import { sendReportReadyEmail } from "./email.js";
 // prices, so the page offered an upgrade that cost the same as not upgrading.
 // Deriving it means the card ladder mirrors the work ladder by construction.
 //
-// The floor is set by Stripe, not by cost: 2.9% + $0.30 means a $1 charge nets
-// $0.671, and the deep tiers eat most of that. Every rung below clears its
-// measured worst-case upstream by well over 40% (scripts/test-report-margins.js).
+// The floor is set by the card processor's fixed fee. Every rung below clears
+// its measured worst-case upstream (scripts/test-report-margins.js).
 // Read lazily through a tiny shim rather than importing the tier registry at
 // module scope: that registry imports every report kit, and this module is
 // imported by pages the kits do not know about.

@@ -23,6 +23,7 @@
 //   • Failed crawls log a stale marker; they never crash the process.
 //   • The router uses the same lexical scoring shape as /api/find so rankings
 //     are consistent whether a buyer searches local-only or cross-seller.
+import { resolveLocalRefs } from "./openapi-deref.js";
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { timedSync } from "./boot-timing.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
@@ -32,23 +33,27 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 // ever re-enabled. Only http(s) becomes a link; anything else renders inert.
 const safeHref = (u) => (/^https?:\/\//i.test(String(u || "")) ? esc(u) : "#");
 import { safeFetch } from "./tools/fetch-guard.js";
+import { readTextCapped } from "./capped-body.js";
 import { parseRobots, robotsAllows } from "./tools/kit.js";
+import { partialFields, clampFields } from "./partial-answer.js";
 import { responseContractOf, packResponseContract, responseContractProjection } from "./response-contract.js";
 import { deliveryProjection } from "./response-observation.js";
-import { requestContractOf, packRequestContract, requestContractProjection } from "./request-contract.js";
+import { requestContractOf, requestContractFromInputSchema, packRequestContract, requestContractProjection, requestContractStrength } from "./request-contract.js";
 import { toolList } from "./pages.js";
 import { fetchAllBazaarItems, isBazaarDiscoveryUrl } from "./bazaar-pager.js";
 import { RAILS, railKey, truncateCaip2 } from "./rails.js";
 import { CHAIN_PAGES, marketSellers } from "./market-page.js";
 import { WELL_KNOWN_PATH, discoveryNote } from "./discovery-note.js";
-import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, isQuoteResponse } from "./x402-live-quote.js";
-import { evmDomainsOfAccepts } from "./evm-usdc-domain.js";
+import { judgeFreeResponse } from "./tool-judge.js";
+import { acceptsFromLive402, quoteFromAccepts, probeMethodsFor, probeAttemptsFor, isQuoteResponse, joinSellerRoute } from "./x402-live-quote.js";
+import { evmDomainsOfAccepts, EVM_TOKEN_DOMAINS } from "./evm-usdc-domain.js";
 import { queryTerms, isCjkTerm, splitTokens } from "./query-terms.js";
 import { summarize, fmtUsd, fmtPct } from "./economy.js";
-import { rankBy, canonicalHost, getLeaderboardSnapshot } from "./leaderboard.js";
+import { rankBy, canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
 import { routeExecuteHint } from "./tools/route-execute.js";
-import { sellerRegistrationFirstSeen, recordSellerRegistrationSeen, getSellerRegistrations } from "./stats.js";
+import { sellerRegistrationFirstSeen, recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration } from "./stats.js";
 
+import { REPO_URL } from "./repo-link.js";
 // RAILS caip2 -> CHAIN_PAGES key, same join the homepage's by-chain strip uses
 // (see ledger-home.js) so /index's own row derives the same way: page
 // availability from CHAIN_PAGES, live seller counts from marketSellers() run
@@ -106,15 +111,11 @@ const INDEX_ROW_CAP = 100;
 // see it, versus five minutes, and the churn signals downstream all read in
 // days). Raise the interval BEFORE raising any seed cap: the cap is linear,
 // this is the multiplier.
-const CRAWL_INTERVAL_MS = 30 * 60 * 1000; // 30 min — gentle on third-party sellers
-const DISCOVERY_INTERVAL_MS = 60 * 60 * 1000; // 1 hr — registries don't change fast
+// 30 min crawl, 1 hr discovery: defined in src/crawl-cadence.js so the pages
+// that quote the cadence read the same constants without importing this file.
+import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS } from "./crawl-cadence.js";
+import { routeTiebreakLabels } from "./route-order.js";
 
-/**
- * Human label for the crawl cadence, DERIVED from CRAWL_INTERVAL_MS so served
- * copy cannot drift from the timer. Page prose that states a cadence is a
- * factual claim about our own behaviour toward third parties - the same class
- * as a price quoted in prose - so it is generated, never typed.
- */
 // A seller manifest is third-party JSON: `capabilities.tools` may be a number
 // or anything else (a string reached a marketplace attribute unescaped, review
 // 2026-08-28). Only a non-negative integer counts; everything else is 0.
@@ -123,14 +124,6 @@ function manifestToolCount(manifest) {
   return Number.isInteger(n) && n >= 0 && n < 1_000_000 ? n : 0;
 }
 
-export function crawlIntervalLabel() {
-  const mins = Math.round(CRAWL_INTERVAL_MS / 60000);
-  if (mins % 60 === 0 && mins >= 60) {
-    const h = mins / 60;
-    return h === 1 ? "every hour" : `every ${h} hours`;
-  }
-  return `every ${mins} minutes`;
-}
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_OPENAPI_BYTES = 12 * 1024 * 1024; // Agent402's own is ~5 MB; allow headroom
 const MAX_DISCOVERY_BYTES = 64 * 1024 * 1024;
@@ -146,15 +139,218 @@ const HEALTH_WINDOW = 5; // last N crawl outcomes per seller — drives health-a
 // one stale, a delete marks stale, a clear resets. Entries are replaced,
 // never mutated, so identity is the whole invalidation rule here as it is
 // for the per-entry memos.
+// REMOVED ORIGINS (operator lever, see removeOrigin below). Declared ahead of
+// the stores it guards so every write path can consult it: the cache, both
+// seed sets and the Bazaar maps refuse a removed origin at the write itself,
+// which covers every discovery source at once instead of one check per source.
+const removedOrigins = new Map(); // origin key -> { origin, removedAt, note }
+
+// ---------------------------------------------------------------------------
+// PATH-SCOPED SELLERS (2026-10-01). A seller hosted under a path prefix on a
+// shared host (`https://host/app/<name>`, whose /.well-known/x402 and
+// /openapi.json answer under that prefix while the host root 404s) is its own
+// seller. Its KEY is the origin plus the normalised prefix; a bare origin's key
+// is the origin exactly as before, so nothing about an existing seller changes.
+//
+// The invariants:
+//   * every discovery document is read UNDER the prefix (key + path), and a
+//     document a redirect served from outside the prefix is not the seller's;
+//   * a path seller's routes are stored RELATIVE to its prefix, so the callable
+//     URL stays `seller + route` everywhere it is built;
+//   * a manifest or OpenAPI row that names a route outside the prefix is
+//     dropped, never attributed - otherwise one app on a shared host could
+//     claim another app's routes;
+//   * robots.txt stays per HOST, read at the root, and its rules are matched
+//     against the full path on that host.
+// ---------------------------------------------------------------------------
+export const SELLER_PREFIX_MAX_CHARS = 200;
+export const SELLER_PREFIX_MAX_SEGMENTS = 8;
+const SELLER_PREFIX_SEGMENT_RE = /^[A-Za-z0-9._~!$&'()*+,;=:@-]+$/;
+
+/**
+ * Normalise a submitted seller URL into a key. Lowercased scheme and host, a
+ * non-default port carried, the path case preserved and its trailing slash
+ * dropped. Refused: query, fragment, credentials, any percent-encoding (one
+ * prefix, one spelling), dot segments, empty segments, and a prefix over
+ * SELLER_PREFIX_MAX_CHARS or SELLER_PREFIX_MAX_SEGMENTS. Returns
+ * { key, origin, prefix } or { error }.
+ */
+export function normalizeSellerKey(raw, { protocols = ["https:"] } = {}) {
+  const str = String(raw || "").trim();
+  let u;
+  try { u = new URL(str); } catch { return { error: "origin must be a valid URL" }; }
+  if (!protocols.includes(u.protocol)) return { error: "origin must be https" };
+  if (u.username || u.password) return { error: "origin must not contain credentials" };
+  if (u.search || u.hash || /[?#]/.test(str)) return { error: "submit the origin, optionally with a path prefix, but no query or fragment" };
+  const origin = `${u.protocol}//${u.host.toLowerCase()}`;
+  // WHATWG URL resolves "." and ".." before we see the path, so the raw text is
+  // checked: a prefix that only means something after resolution is refused.
+  const rawPath = str.slice(str.indexOf(u.host) + u.host.length).replace(/^:\d+/, "");
+  if (/%/.test(rawPath)) return { error: "the path prefix must not be percent-encoded" };
+  if (/(^|\/)\.{1,2}(\/|$)/.test(rawPath) || /\\/.test(rawPath)) return { error: "the path prefix must not contain dot segments" };
+  let prefix = u.pathname.replace(/\/+$/, "");
+  if (prefix === "") return { key: origin, origin, prefix: "" };
+  if (prefix.length > SELLER_PREFIX_MAX_CHARS) return { error: `the path prefix is longer than ${SELLER_PREFIX_MAX_CHARS} characters` };
+  const segments = prefix.slice(1).split("/");
+  if (segments.length > SELLER_PREFIX_MAX_SEGMENTS) return { error: `the path prefix has more than ${SELLER_PREFIX_MAX_SEGMENTS} segments` };
+  if (segments.some((s) => !s || !SELLER_PREFIX_SEGMENT_RE.test(s))) return { error: "the path prefix has an empty or unsupported segment" };
+  return { key: `${origin}${prefix}`, origin, prefix };
+}
+
+/** { origin, prefix } of a stored seller key; prefix is "" for a bare origin.
+ *  Keys are normalised on the way in, so this is a split, not a parse. */
+export function sellerKeyParts(key) {
+  const s = String(key || "");
+  const scheme = s.indexOf("://");
+  const slash = scheme >= 0 ? s.indexOf("/", scheme + 3) : -1;
+  if (slash < 0) return { origin: s, prefix: "" };
+  const prefix = s.slice(slash).replace(/\/+$/, "");
+  return { origin: s.slice(0, slash), prefix: prefix === "/" ? "" : prefix };
+}
+export const sellerPrefixOf = (key) => sellerKeyParts(key).prefix;
+export const sellerHostRootOf = (key) => sellerKeyParts(key).origin;
+
+/** The absolute URL of a seller's route, or null when the joined text would
+ *  leave the seller (a route like "@other.host/x" or "//other.host" read as an
+ *  authority, or a path outside a path seller's prefix). Every probe that joins
+ *  seller + route text builds its URL here, so a crawled route can never aim a
+ *  fetch at a different host than the seller it was listed under. */
+export function sellerRouteUrl(key, route) {
+  const r = String(route || "");
+  if (!r.startsWith("/") || r.startsWith("//")) return null;
+  let u;
+  try { u = new URL(joinSellerRoute(key, r)); } catch { return null; }
+  if (u.username || u.password) return null;
+  return isUnderSeller(u.href, key) ? u.href : null;
+}
+
+/** Is this absolute URL served by the seller - same scheme+host+port and, for a
+ *  path seller, at or under its prefix (a segment boundary, never a substring:
+ *  /app/x does not own /app/x2)? */
+export function isUnderSeller(url, key) {
+  let u;
+  try { u = new URL(String(url)); } catch { return false; }
+  const { origin, prefix } = sellerKeyParts(key);
+  if (`${u.protocol}//${u.host.toLowerCase()}` !== origin.toLowerCase()) return false;
+  if (!prefix) return true;
+  return u.pathname === prefix || u.pathname.startsWith(`${prefix}/`);
+}
+
+/** A host-absolute path, as a route of this seller: unchanged for a bare
+ *  origin; for a path seller, relative to the prefix, or null when it lies
+ *  outside it. */
+export function scopeRouteToSeller(key, hostPath) {
+  const prefix = sellerPrefixOf(key);
+  const p = String(hostPath ?? "");
+  if (!prefix) return p;
+  const [path, query] = [p.split("?")[0], p.includes("?") ? p.slice(p.indexOf("?")) : ""];
+  if (path === prefix) return `/${query}`;
+  if (!path.startsWith(`${prefix}/`)) return null;
+  return path.slice(prefix.length) + query;
+}
+
+/** Scope parsed rows to their seller: routes made prefix-relative, rows
+ *  outside the prefix dropped. A no-op for a bare origin, so every existing
+ *  seller's rows are returned untouched.
+ *
+ *  The prefix ROOT ("/" or "/?q=1") is kept only when the row declares payment
+ *  (a price, or accepts that named a chain). The root of a path seller is
+ *  usually its landing page or the function's own index, and an unpriced row
+ *  there is not a tool; but a function host often serves ONE paid endpoint at
+ *  its own path (GET <prefix>?package=react answers 402), and dropping that row
+ *  left the seller listed with no route, no chains and nothing to probe. */
+export function rowDeclaresPayment(r) {
+  return priceToMicroUsd(r?.price) > 0 || (Array.isArray(r?.networks) && r.networks.length > 0) || r?.paid === true;
+}
+// Rows already made prefix-relative (a Bazaar row converted in
+// bazaarItemToTool, which a single-resource manifest reuses) carry this mark,
+// so a second pass cannot read their relative route as host-absolute and drop
+// it. A Symbol, so it never reaches JSON or the persisted cache.
+const SCOPED_ROW = Symbol("scopedToSeller");
+export function scopeRowsToSeller(rows, key) {
+  if (!sellerPrefixOf(key) || !Array.isArray(rows)) return rows;
+  const out = [];
+  for (const r of rows) {
+    if (!r || typeof r.route !== "string") continue;
+    if (r[SCOPED_ROW]) { out.push(r); continue; }
+    const route = scopeRouteToSeller(key, r.route);
+    if (route == null) continue;
+    if ((route === "/" || route.startsWith("/?")) && !rowDeclaresPayment(r)) continue;
+    out.push({ ...r, route, [SCOPED_ROW]: true });
+  }
+  return out;
+}
+
+/** host origin -> path-seller keys on it (longest prefix first), from every
+ *  seed and cache key that carries a prefix. Built once per discovery pass. */
+function pathSellersByHost() {
+  const out = new Map();
+  const add = (k) => {
+    if (typeof k !== "string" || !sellerPrefixOf(k)) return;
+    const o = sellerHostRootOf(k);
+    const list = out.get(o) || [];
+    if (!list.includes(k)) list.push(k);
+    out.set(o, list);
+  };
+  for (const k of submittedSeeds) add(k);
+  for (const k of discoveredSeeds) add(k);
+  for (const k of cache.keys()) add(k);
+  for (const list of out.values()) list.sort((a, b) => b.length - a.length);
+  return out;
+}
+/** The path seller whose prefix covers this URL, else null. */
+function pathSellerOwning(url, hostOrigin, byHost) {
+  const list = byHost.get(hostOrigin);
+  if (!list) return null;
+  for (const k of list) if (isUnderSeller(url, k)) return k;
+  return null;
+}
+
+function removalKeyOf(raw) {
+  const n = normalizeSellerKey(raw, { protocols: ["http:", "https:"] });
+  if (!n.error) return n.key;
+  // Anything that is not a seller key (a URL with a query, say) still keys on
+  // its host, as it always did.
+  try {
+    const u = new URL(String(raw || "").trim());
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return `${u.protocol}//${u.host.toLowerCase()}`;
+  } catch { return null; }
+}
+/** Has the operator removed this origin from the index? Exact origin (scheme +
+ *  host + port); a removed bare origin also covers every path seller on it. */
+export function isRemovedOrigin(origin) {
+  if (removedOrigins.size === 0) return false;
+  const k = removalKeyOf(origin);
+  if (!k) return false;
+  return removedOrigins.has(k) || removedOrigins.has(sellerHostRootOf(k));
+}
+class GuardedSet extends Set {
+  add(v) { return isRemovedOrigin(v) ? this : super.add(v); }
+}
+class GuardedMap extends Map {
+  set(k, v) { return isRemovedOrigin(k) ? this : super.set(k, v); }
+}
+
+// Bumped on every cache mutation, so per-query derivations of the whole cache
+// (the alias set, a scored ranking) can be memoized exactly: entries are
+// replaced, never mutated, so an unchanged version means an unchanged cache.
+let cacheVersion = 0;
+/** Changes whenever the crawl cache does; readers memoize derived views on it. */
+export function indexCacheVersion() { return cacheVersion; }
 class IndexCache extends Map {
-  set(origin, v) { routeIndexNoteSet(origin, super.get(origin), v); return super.set(origin, v); }
-  delete(origin) { if (super.has(origin)) routeIndexNoteSet(origin, super.get(origin), null); return super.delete(origin); }
-  clear() { super.clear(); routeIndexReset(); }
+  set(origin, v) {
+    if (isRemovedOrigin(origin)) { this.delete(origin); return this; }
+    cacheVersion++;
+    routeIndexNoteSet(origin, super.get(origin), v); return super.set(origin, v);
+  }
+  delete(origin) { if (super.has(origin)) { cacheVersion++; routeIndexNoteSet(origin, super.get(origin), null); } return super.delete(origin); }
+  clear() { cacheVersion++; super.clear(); routeIndexReset(); }
 }
 const cache = new IndexCache();
 // Set of origins auto-discovered from public x402 registries (distinct from
 // the env-configured seed list so we can show provenance separately on /index).
-const discoveredSeeds = new Set();
+const discoveredSeeds = new GuardedSet();
 
 // --- self-serve listing (POST /api/index/register) ---------------------------
 // Origins submitted through the public register endpoint. Persisted to /data
@@ -162,7 +358,7 @@ const discoveredSeeds = new Set();
 // volume (same posture as stats). All probing goes through crawlSeller() —
 // this module never fetches a submitted origin directly.
 export const SUBMITTED_SEEDS_FILE = "/data/submitted-seeds.json";
-const submittedSeeds = new Set();
+const submittedSeeds = new GuardedSet();
 
 // Manual-submission ceiling — a fetch-amplifier guard: every successful probe
 // is re-crawled on every cycle forever, so unbounded submissions become
@@ -271,6 +467,144 @@ function persistSuccessions() {
   } catch { /* best-effort - no volume in local/dev */ }
 }
 
+// What decides that a listed route exists. A seller's listing is merged from
+// their own documents (well-known manifest, OpenAPI, agents.json, llms.txt),
+// registry rows (minted by any past settled payment and never retired
+// upstream) and what earlier live 402s taught us. The merge only adds, so
+// before this a route the seller removed stayed listed through the registry
+// row, and re-registering could not clear it. The rule now:
+//   - a route the seller's own documents declare is listed (row.declared);
+//   - any other route must answer a live 402 (or be observed free) at least
+//     every LIVE_PROOF_MAX_AGE_MS, and is dropped when its own verb answers
+//     404, 405 or 410;
+//   - a 410 on the row's own verb drops even a declared route: the seller is
+//     saying it is gone.
+// A 404/405 must be seen twice, at least MISS_CONFIRM_MS apart, before the
+// route is dropped: one reading taken mid-deploy is not a retirement. A
+// seller who re-registers clears every mark on their origin.
+// A dropped route is remembered so the next crawl's merge cannot restore it.
+// A "miss" mark hides only undeclared rows, so a route the seller declares
+// again is listed again at once; a "410" mark hides the route either way. Both
+// lapse after GONE_ROUTE_TTL_MS, and the route is probed afresh.
+export const GONE_ROUTES_FILE = "/data/x402-gone-routes.json";
+export const GONE_ROUTE_TTL_MS = 30 * 24 * 3600 * 1000;
+const GONE_ROUTES_MAX = 20_000;
+const goneRoutes = new Map(); // "origin METHOD /route" -> { at, kind: "410" | "miss" | "pending" }
+export const MISS_CONFIRM_MS = 3600 * 1000;
+export const LIVE_PROOF_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+const goneKey = (origin, method, route) => `${origin} ${String(method || "GET").toUpperCase()} ${route}`;
+
+export function loadGoneRoutes() {
+  try {
+    const obj = JSON.parse(readFileSync(GONE_ROUTES_FILE, "utf8"));
+    for (const [k, v] of Object.entries(obj || {})) {
+      if (goneRoutes.size >= GONE_ROUTES_MAX) break;
+      if (typeof k === "string" && v && Number(v.at) > 0) goneRoutes.set(k, { at: Number(v.at), kind: ["410", "miss", "pending"].includes(v.kind) ? v.kind : "miss" });
+    }
+  } catch { /* absent file / no volume - in-memory only */ }
+}
+
+function persistGoneRoutes() {
+  try {
+    const tmp = `${GONE_ROUTES_FILE}.tmp`;
+    writeFileSync(tmp, JSON.stringify(Object.fromEntries(goneRoutes)));
+    renameSync(tmp, GONE_ROUTES_FILE);
+  } catch { /* best-effort - no volume in local/dev */ }
+}
+
+export function markRouteGone(origin, method, route, { at = Date.now(), kind = "410" } = {}) {
+  const k = goneKey(origin, method, route);
+  goneRoutes.delete(k);
+  while (goneRoutes.size >= GONE_ROUTES_MAX) goneRoutes.delete(goneRoutes.keys().next().value);
+  goneRoutes.set(k, { at, kind: ["410", "miss", "pending"].includes(kind) ? kind : "miss" });
+  persistGoneRoutes();
+}
+
+function clearGoneMark(origin, method, route) {
+  if (goneRoutes.delete(goneKey(origin, method, route))) persistGoneRoutes();
+}
+
+/** Clear every mark on an origin (a re-registration). Returns how many. */
+export function clearGoneMarks(origin) {
+  const prefix = `${origin} `;
+  let n = 0;
+  for (const k of [...goneRoutes.keys()]) if (k.startsWith(prefix)) { goneRoutes.delete(k); n++; }
+  if (n) persistGoneRoutes();
+  return n;
+}
+
+/** The live mark for a route, or null. Expired marks are removed. */
+export function goneMark(origin, method, route, now = Date.now()) {
+  const k = goneKey(origin, method, route);
+  const m = goneRoutes.get(k);
+  if (!m) return null;
+  if (now - m.at > GONE_ROUTE_TTL_MS) { goneRoutes.delete(k); return null; }
+  return m;
+}
+export function isRouteGone(origin, method, route, now = Date.now()) {
+  const m = goneMark(origin, method, route, now);
+  return m != null && m.kind !== "pending";
+}
+
+// Removes rows marked gone from `tools` IN PLACE (callers read the array they
+// passed). A "miss" mark hides only a row the seller does not declare.
+// Returns how many were removed.
+export function dropGoneRoutes(tools, origin, now = Date.now()) {
+  if (!Array.isArray(tools) || !goneRoutes.size) return 0;
+  let n = 0;
+  for (let i = tools.length - 1; i >= 0; i--) {
+    const t = tools[i];
+    if (!t || typeof t.route !== "string") continue;
+    const m = goneMark(origin, t.method, t.route, now);
+    if (m && (m.kind === "410" || (m.kind === "miss" && t.declared === false))) { tools.splice(i, 1); n++; }
+  }
+  return n;
+}
+
+const pathOf = (r) => String(r || "").split("?")[0];
+const SOURCE_LABELS = { bazaar: "registry", manifest: "manifest" };
+export function listingBasisProjection(t) {
+  const at = liveProofAt(t);
+  return {
+    ...(typeof t?.declared === "boolean" ? { declared: t.declared } : {}),
+    ...(t?.provenance ? { source: SOURCE_LABELS[t.provenance] || t.provenance } : {}),
+    ...(at > 0 ? { lastVerifiedAt: new Date(at).toISOString() } : {}),
+  };
+}
+/** Stamp `declared` on every row: true when the seller's own documents name
+ *  the route (exact path, or an OpenAPI template it instantiates, or the same
+ *  template), false otherwise. `declaredRoutes` is any list of { route }. */
+export function stampDeclared(tools, declaredRoutes = []) {
+  if (!Array.isArray(tools)) return tools;
+  const exact = new Set();
+  const templates = [];
+  for (const d of declaredRoutes || []) {
+    const r = pathOf(d?.route);
+    if (!r) continue;
+    exact.add(r);
+    if (r.includes("{")) templates.push(r);
+  }
+  for (const t of tools) {
+    if (!t || typeof t.route !== "string") continue;
+    const r = pathOf(t.route);
+    t.declared = exact.has(r) || templates.some((tpl) => routeMatchesTemplate(tpl, r));
+  }
+  return tools;
+}
+
+/** When a row last proved it is for sale by answering us: a live 402, a
+ *  live-verified chain list, or an observed free answer. 0 when never. */
+export function liveProofAt(t) {
+  const learnedAt = (t?.quoteSource === "live-402" || t?.quoteSource === "live-200") ? Number(t?.quoteObservedAt) || 0 : 0;
+  return Math.max(Number(t?.liveProvenAt) || 0, Number(t?.networksVerifiedAt) || 0, Number(t?.freeObservedAt) || 0, learnedAt);
+}
+/** An undeclared row whose last live proof is older than the window. */
+export function needsLiveProof(t, now = Date.now()) {
+  return t?.declared === false && now - liveProofAt(t) > LIVE_PROOF_MAX_AGE_MS;
+}
+
+export function _resetGoneRoutes() { goneRoutes.clear(); }
+
 /**
  * Record a VERIFIED succession. Refuses the two shapes that would hide a
  * seller entirely rather than deduplicate one:
@@ -280,6 +614,7 @@ function persistSuccessions() {
 export function recordSuccession(oldOrigin, newOrigin) {
   const a = String(oldOrigin || ""), b = String(newOrigin || "");
   if (!a || !b) return false;
+  if (isRemovedOrigin(a) || isRemovedOrigin(b)) return false;
   // Walk the chain from the claimant: if it leads back to the predecessor,
   // this would close a loop and both origins would drop out of every listing.
   // The walk starts AT the claimant, so hop zero is the self-succession case
@@ -328,6 +663,117 @@ export function revokeSuccession(oldOrigin) {
 /** Every recorded succession, for an operator surface. Counts and origins only. */
 export function listSuccessions() {
   return [...successions.entries()].map(([from, r]) => ({ from, to: r.to, recordedAt: r.at || null }));
+}
+
+// ---------------------------------------------------------------------------
+// REMOVAL: an operator lever that takes ONE origin out of the index and the
+// router for good. Every other exit from the index is automatic and reversible
+// by the seller (a release after 30 dark days, a succession the marker backs);
+// this one is deliberate, keyed on an exact origin, persisted, and consulted
+// at every write path (see GuardedSet / GuardedMap / IndexCache above), so no
+// registry, Bazaar row, warm start or re-crawl can bring the origin back.
+// Undo is restoreOrigin, which only lifts the block: the owner re-registers.
+export const REMOVED_ORIGINS_FILE = "/data/removed-origins.json";
+export const REMOVED_ORIGIN_ERROR = "origin removed at the owner's request";
+const REMOVED_ORIGINS_MAX = 5_000;
+const removedFile = () => process.env.REMOVED_ORIGINS_FILE || REMOVED_ORIGINS_FILE;
+
+/**
+ * Strict form for the operator route: a bare http(s) origin, nothing else.
+ * No name matching, no wildcards, no path. Returns the key or null.
+ */
+export function strictOriginKey(raw) {
+  const str = String(raw || "").trim();
+  if (!str || str.length > 300 || /[*\s]/.test(str)) return null;
+  let u;
+  try { u = new URL(str); } catch { return null; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  if (u.username || u.password) return null;
+  if (u.search || u.hash) return null;
+  if (!u.hostname.includes(".")) return null;
+  // A path seller is removed by its exact key; a bare origin as before.
+  if (u.pathname && u.pathname !== "/") {
+    const n = normalizeSellerKey(str, { protocols: ["http:", "https:"] });
+    return n.error ? null : n.key;
+  }
+  return `${u.protocol}//${u.host.toLowerCase()}`;
+}
+
+export function loadRemovedOrigins() {
+  try {
+    const arr = JSON.parse(readFileSync(removedFile(), "utf8"));
+    for (const r of Array.isArray(arr) ? arr : []) {
+      if (removedOrigins.size >= REMOVED_ORIGINS_MAX) break;
+      const k = strictOriginKey(r?.origin);
+      if (!k) continue;
+      removedOrigins.set(k, { origin: k, removedAt: Number(r.removedAt) || 0, note: typeof r.note === "string" ? r.note.slice(0, 500) : "" });
+    }
+  } catch { /* absent file / no volume - in-memory only */ }
+  // A removal loaded after the stores were filled (a hand edit, a test) must
+  // still take effect: purge whatever is already held.
+  for (const k of removedOrigins.keys()) purgeOrigin(k);
+  return removedOrigins.size;
+}
+
+function persistRemovedOrigins() {
+  // tmp+rename: a truncated file here reads as "nothing removed", which would
+  // quietly bring every removed origin back on the next boot.
+  try {
+    const f = removedFile();
+    const tmp = `${f}.tmp`;
+    writeFileSync(tmp, JSON.stringify([...removedOrigins.values()], null, 2));
+    renameSync(tmp, f);
+  } catch { /* best-effort - no volume in local/dev */ }
+}
+
+// Drop every piece of state keyed on this origin. Returns what was held.
+function purgeOrigin(key) {
+  const held = { cache: false, submitted: false, discovered: false, successions: 0 };
+  // A bare-origin key also purges every path seller on that host.
+  const match = (o) => { const k = removalKeyOf(o); return k === key || (!sellerPrefixOf(key) && k != null && sellerHostRootOf(k) === key); };
+  for (const o of [...submittedSeeds]) if (match(o)) { submittedSeeds.delete(o); held.submitted = true; }
+  for (const o of [...discoveredSeeds]) if (match(o)) { discoveredSeeds.delete(o); held.discovered = true; }
+  for (const o of [...cache.keys()]) if (match(o)) { cache.delete(o); held.cache = true; }
+  for (const o of [...bazaarToolsByOrigin.keys()]) if (match(o)) bazaarToolsByOrigin.delete(o);
+  for (const o of [...bazaarQualityByOrigin.keys()]) if (match(o)) bazaarQualityByOrigin.delete(o);
+  for (const [from, r] of [...successions]) if (match(from) || match(r.to)) { successions.delete(from); held.successions++; }
+  for (const o of [...successionScanAt.keys()]) if (match(o)) successionScanAt.delete(o);
+  for (const k of [...forcedCrawlAt.keys()]) if (match(k)) forcedCrawlAt.delete(k);
+  try { clearOriginProbeState(key); } catch { /* best-effort */ }
+  try { deleteSellerRegistration(key); } catch { /* best-effort */ }
+  return held;
+}
+
+/**
+ * Remove one origin from the index and the router, permanently.
+ * Returns { removed, origin, removedAt, held } or { error }.
+ */
+export function removeOrigin(raw, { note = "" } = {}) {
+  const key = strictOriginKey(raw);
+  if (!key) return { error: "pass an exact origin such as https://seller.example (scheme and host, optional port and path prefix, no query, no wildcard)" };
+  if (!removedOrigins.has(key) && removedOrigins.size >= REMOVED_ORIGINS_MAX) return { error: `removed list is full (${REMOVED_ORIGINS_MAX})` };
+  const rec = removedOrigins.get(key) || { origin: key, removedAt: Date.now(), note: String(note || "").slice(0, 500) };
+  removedOrigins.set(key, rec);
+  persistRemovedOrigins();
+  const held = purgeOrigin(key);
+  persistSubmittedSeeds();
+  if (held.successions) persistSuccessions();
+  console.log(`[x402-index] origin removed by operator: ${key}`);
+  return { removed: true, origin: key, removedAt: rec.removedAt, held };
+}
+
+/** Lift a removal. Seeds are NOT re-added; the owner can register again. */
+export function restoreOrigin(raw) {
+  const key = strictOriginKey(raw);
+  if (!key) return { error: "pass an exact origin" };
+  if (!removedOrigins.delete(key)) return { restored: false, origin: key };
+  persistRemovedOrigins();
+  return { restored: true, origin: key };
+}
+
+/** Every removed origin, newest first, for the operator surface. */
+export function listRemovedOrigins() {
+  return [...removedOrigins.values()].sort((a, b) => (b.removedAt || 0) - (a.removedAt || 0));
 }
 
 /**
@@ -462,21 +908,59 @@ export function supersededOrigins(cacheMap = cache) {
 }
 
 /** Test hook: clear submitted-seed state between test cases. */
-export function __testResetSubmitted() { submittedSeeds.clear(); successions.clear(); successionScanAt.clear(); cache.clear(); }
+export function __testResetSubmitted() { submittedSeeds.clear(); successions.clear(); successionScanAt.clear(); cache.clear(); removedOrigins.clear(); }
 
 /** Test hook: put entries in the crawl cache so cache-dependent paths can be driven. */
 export function __testSeedCache(entries = []) { for (const [o, e] of entries) cache.set(o, e); }
 
 /** Validate a raw submitted origin. Returns { origin } (normalized) or { error }. */
-export function validateOriginInput(raw, { selfOrigin } = {}) {
+export function validateOriginInput(raw, { selfOrigin, allowPath = false } = {}) {
   let u;
   try { u = new URL(String(raw || "").trim()); } catch { return { error: "origin must be a valid URL" }; }
+  // A path seller (2026-10-01): only where the caller opts in, so the MPP index
+  // and every other caller keep requiring a bare origin.
+  if (allowPath && u.pathname && u.pathname !== "/") {
+    if (u.protocol !== "https:") return { error: "origin must be https" };
+    if (!u.hostname.includes(".")) return { error: "origin must be a public hostname" };
+    const n = normalizeSellerKey(raw);
+    if (n.error) return { error: n.error };
+    if (selfOrigin && n.origin === String(selfOrigin).toLowerCase().replace(/\/+$/, "")) return { error: "this host is already the local catalog" };
+    return { origin: n.key };
+  }
   if (u.protocol !== "https:") return { error: "origin must be https" };
   if (u.username || u.password) return { error: "origin must not contain credentials" };
-  if (u.port && u.port !== "443") return { error: "origin must use the default https port" };
+  // A NON-DEFAULT PORT IS CARRIED, not refused (2026-09-21). The normaliser
+  // below builds the origin from `u.host`, which includes a port when there is
+  // one and omits it when it is 443, because WHATWG URL drops a scheme's
+  // default port on parse. So `https://host:443` and `https://host` normalise
+  // to the same key and `https://host:8443` keeps its own.
+  //
+  // This door used to refuse a port, and the reason it gave (that supporting
+  // one meant reshaping a persisted key across a dozen modules) was wrong. The
+  // rest of the index was already port-safe and had been all along: the
+  // discovery normaliser `extractOrigin` has always used `u.host`, crawls build
+  // URLs with `new URL(path, origin)` or by concatenation onto the whole origin,
+  // `canonicalHost` and the payTo grouping read `u.host`, the persisted cache
+  // treats the origin as an opaque key, and the display sites strip the scheme
+  // and print whatever is left. Six ported origins were sitting in the live
+  // index when this was measured, three of them routable, every one of them
+  // arrived through discovery. Registration was the only door that refused one.
+  //
+  // NOT an SSRF control, which is worth saying because it looked like one.
+  // Every outbound crawl goes through safeFetch -> assertPublicUrl, which
+  // resolves the host and refuses private addresses and never inspects the
+  // port, so the port was never what bounded the reach. What a port does add is
+  // a crude prober: registering an origin reports whether that host:port speaks
+  // TLS and HTTP. That was already true of 443 on any public host, the hosts
+  // are public either way, and registration is rate limited per IP and
+  // globally, so the honest trade is to accept a real seller's port rather than
+  // guard a fact anyone can read with nmap.
+  //
+  // `operatorKey` still groups by hostname alone, deliberately: two ports on
+  // one host are one operator and share one crawl budget.
   if ((u.pathname && u.pathname !== "/") || u.search || u.hash) return { error: "submit the bare origin (no path or query)" };
   if (!u.hostname.includes(".")) return { error: "origin must be a public hostname" };
-  const origin = `https://${u.hostname.toLowerCase()}`;
+  const origin = `https://${u.host.toLowerCase()}`;
   if (selfOrigin && origin === String(selfOrigin).toLowerCase()) return { error: "this host is already the local catalog" };
   return { origin };
 }
@@ -583,7 +1067,9 @@ async function readMarker(origin, fetchImpl) {
     // retired by whoever it redirects to. Same rule every domain-control check
     // uses (ACME http-01, site-verification files): the proof fetch may not be
     // satisfied off-host.
-    if (res.finalUrl && !sameOrigin(res.finalUrl, origin)) return null;
+    // A path seller's marker must also come from under its own prefix: another
+    // app on the same host is not the seller.
+    if (res.finalUrl && !(sellerPrefixOf(origin) ? isUnderSeller(res.finalUrl, origin) : sameOrigin(res.finalUrl, origin))) return null;
     return JSON.parse(String(res.html).slice(0, 4000));
   } catch { return null; }
 }
@@ -591,25 +1077,42 @@ async function readMarker(origin, fetchImpl) {
 const sameOrigin = (a, b) => {
   try { return new URL(a).origin.toLowerCase() === new URL(b).origin.toLowerCase(); } catch { return false; }
 };
+// Does the URL a marker names (`named`) name the seller keyed `sellerKey`? For a
+// bare-origin seller it compares as an origin, exactly as before. For a path
+// seller the normalised key must be identical, so a marker naming the host
+// does not name an app on it.
+const sameSeller = (named, sellerKey) => {
+  if (!sellerPrefixOf(sellerKey)) return sameOrigin(named, sellerKey);
+  const x = normalizeSellerKey(named, { protocols: ["http:", "https:"] });
+  return !x.error && x.key === sellerKey;
+};
 
 /** Both origins must name the other, so neither can be annexed by the other. */
 export async function verifySuccessionMarkers(claimant, predecessor, { fetchImpl } = {}) {
   const [mNew, mOld] = await Promise.all([readMarker(claimant, fetchImpl), readMarker(predecessor, fetchImpl)]);
   if (!mNew || !mOld) return { ok: false, reason: `serve a JSON document at ${SUCCESSION_PATH} on BOTH origins: {"succeeds":"<old origin>"} on the new one and {"succeededBy":"<new origin>"} on the old one` };
-  if (!sameOrigin(mNew.succeeds || "", predecessor)) return { ok: false, reason: `${SUCCESSION_PATH} on the new origin must name the old origin as "succeeds"` };
-  if (!sameOrigin(mOld.succeededBy || "", claimant)) return { ok: false, reason: `${SUCCESSION_PATH} on the old origin must name the new origin as "succeededBy"` };
+  if (!sameSeller(mNew.succeeds || "", predecessor)) return { ok: false, reason: `${SUCCESSION_PATH} on the new origin must name the old origin as "succeeds"` };
+  if (!sameSeller(mOld.succeededBy || "", claimant)) return { ok: false, reason: `${SUCCESSION_PATH} on the old origin must name the new origin as "succeededBy"` };
   return { ok: true, via: "cross-served markers" };
 }
 
 export async function succeedsOrigin(claimant, predecessor, { fetchImpl } = {}) {
   const a = cache.get(claimant), b = cache.get(predecessor);
   if (!a || !b || a.error || b.error) return { ok: false, reason: "one of the two origins is not in the index - register it first" };
+  // Markers first: they are the only proof that retires the predecessor, and a
+  // seller who migrates keeps the same payout wallet, so checking the wallet
+  // first answered "shared payout wallet" for exactly the sellers who had also
+  // served valid markers, and their old listing was never retired (reported
+  // by a seller 2026-10-02). The wallet still answers when no markers are up.
+  const markers = await verifySuccessionMarkers(claimant, predecessor, { fetchImpl });
+  if (markers.ok) return markers;
   const shared = sharesPayTo(claimant, predecessor);
   if (shared) return { ok: true, via: "shared payout wallet", ...shared };
-  return verifySuccessionMarkers(claimant, predecessor, { fetchImpl });
+  return markers;
 }
 
 export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
+  if (isRemovedOrigin(origin) || (replaces && isRemovedOrigin(replaces))) return { listed: false, origin, removed: true, error: REMOVED_ORIGIN_ERROR };
   // Evaluated lazily: the claimant has to be in the cache before its payTo can
   // be compared, so this is re-read at each record site rather than up front.
   const checkSuccession = async () => {
@@ -640,10 +1143,11 @@ export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
     // "register again" useless as a seller's lever: a catalog stuck unpriced
     // (and therefore unroutable) had no way to ask for pricing except waiting
     // for the shared cycle budget to reach its rotation slot - measured
-    // 2026-09-01, sol.blockrun's 128 routes across four attempts. Registering
+    // 2026-09-01, one seller's 128 routes across four attempts. Registering
     // is an explicit, rate-limited request (5/hour/IP), so it now re-runs the
     // live-402 quote enrichment for THIS origin, budget-exempt and bounded by
     // the same per-origin cap; probeDue backoffs still apply per route.
+    let reread = false, repriced = false, routesProbed = 0;
     try {
       // RE-READ THE DOCUMENTS FIRST. Until 2026-09-18 this branch ran only the
       // quote enrichment, so "register again" was a lever over PRICE and
@@ -669,14 +1173,32 @@ export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
       // A re-registration inside the window still re-prices (the lever's
       // original job, and free of third-party fetches beyond the seller's own
       // 402s) and still answers listed - it simply does not re-read documents.
+      // A re-registration is the seller asking us to look again: every route
+      // this origin had dropped or was about to drop is re-checked from scratch.
+      clearGoneMarks(origin);
       if (forcedCrawlDue(origin)) {
         noteForcedCrawl(origin);
         clearOriginProbeState(origin);
+        reread = true;
         if (crawl) await crawl(origin); else await crawlSeller(origin);
       }
       const fresh = cache.get(origin);
       const tools = Array.isArray(fresh?.tools) && fresh.tools.length ? fresh.tools : existing.tools;
-      await enrichLiveQuotes(tools, origin, { ignoreBudget: true });
+      // The re-price is bounded AT THE ORIGIN too (2026-09-28). ignoreBudget
+      // makes every live-verified route a candidate, and a successful probe
+      // clears that route's backoff, so without a window each call re-asked up
+      // to REPRICE_MAX_PER_CALL routes on two or three verbs - and anyone may
+      // call it about anyone. A seller who fixes a price, domain or payTo is
+      // re-read on the first call and again once the window passes; an origin
+      // also has an hourly route allowance across calls.
+      if (repriceDue(origin)) {
+        const allowance = repriceAllowance(origin);
+        if (allowance > 0) {
+          noteReprice(origin);
+          await enrichLiveQuotes(tools, origin, { ignoreBudget: true, maxProbes: allowance, onProbed: (n) => { routesProbed = n; spendRepriceAllowance(origin, n); } });
+          repriced = true;
+        }
+      }
       // The route pool memoizes DECORATED tools by entry-object identity
       // (remotePoolMemo), so prices learned into the existing entry are
       // invisible until the object is replaced - a fresh spread busts the
@@ -689,11 +1211,18 @@ export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
     // ecosystem seller as one of ours if recorded here.
     succession = await checkSuccession();
     if (submittedSeeds.has(origin)) recordSellerRegistrationSeen(origin, { settled: originHasSettled(origin), inheritFirstSeenFrom: succession?.ok ? replaces : null });
-    return { listed: true, origin, seller: sellerSummary(origin, cache.get(origin) || existing), ...(succession ? { succession } : {}) };
+    return { listed: true, origin, seller: sellerSummary(origin, cache.get(origin) || existing), reverify: reverifyReport(origin, { reread, repriced, routesProbed }), ...(succession ? { succession } : {}) };
   }
   // Cap applies only to origins that would grow the submitted set. An origin
   // already on the list (retrying after a prior failure) is not new growth,
   // so it's exempt — it can still probe and update its own entry at cap.
+  if (!submittedSeeds.has(origin) && isEphemeralTunnelOrigin(origin)) {
+    let tunnels = 0;
+    for (const o of submittedSeeds) if (isEphemeralTunnelOrigin(o)) tunnels++;
+    if (tunnels >= tunnelSubmissionCap(submittedSeedsCap)) {
+      return { listed: false, origin, error: "tunnel submissions are full - quick-tunnel hostnames change every session, so their share of submission slots is capped; register a stable hostname, or retry after tunnel slots free up (a tunnel slot is released 3 days after its last successful probe)" };
+    }
+  }
   if (!submittedSeeds.has(origin) && submittedSeeds.size >= submittedSeedsCap) {
     return { listed: false, origin, error: "submission list is full - slots free up after 30 days with no successful probe; open a GitHub issue to get seeded sooner" };
   }
@@ -720,18 +1249,47 @@ export async function registerOrigin(origin, { crawl, replaces = null } = {}) {
 // so this needs no new payTo-matching plumbing. Best-effort: any shape
 // surprise in the snapshot (still warming, scan error) reads as "not yet
 // observed settling", never a throw.
+// The set of hosts that have settled, built once per leaderboard snapshot
+// object. Each lookup used to walk every leaderboard row and parse every
+// origin in it, once per submitted seed, twice per crawl cycle: measured
+// 0.4-2.5 s of blocked event loop at the 2,000-seed cap (2026-09-25).
+// Keyed on the snapshot's row ARRAY: getLeaderboardSnapshot() spreads a new
+// wrapper object per call, while the rows array is shared until a refresh.
+const settledHostsMemo = new WeakMap(); // leaderboard rows array -> Set<host>
+function settledHostsOf(snap) {
+  const rows = snap?.leaderboard;
+  if (!Array.isArray(rows)) return new Set();
+  let set = settledHostsMemo.get(rows);
+  if (set) return set;
+  set = new Set();
+  for (const row of rows) {
+    if (!((row.callsSettled || 0) > 0)) continue;
+    for (const o of row.origins || []) { const h = canonicalHost(o); if (h) set.add(h); }
+  }
+  settledHostsMemo.set(rows, set);
+  return set;
+}
 function originHasSettled(origin) {
+  // A path seller is one app on a shared host: another app on the same host
+  // settling says nothing about it, so it matches only listings at or under its
+  // own prefix. A bare origin keeps the host match.
+  if (sellerPrefixOf(origin)) {
+    try {
+      const rows = getLeaderboardSnapshot()?.leaderboard || [];
+      return rows.some((row) => (row.callsSettled || 0) > 0 && (row.origins || []).some((o) => isUnderSeller(o, origin)));
+    } catch {
+      return false;
+    }
+  }
   const host = canonicalHost(origin);
   if (!host) return false;
   try {
-    const snap = getLeaderboardSnapshot();
-    return (snap?.leaderboard || []).some(
-      (row) => (row.callsSettled || 0) > 0 && (row.origins || []).some((o) => canonicalHost(o) === host)
-    );
+    return settledHostsOf(getLeaderboardSnapshot()).has(host);
   } catch {
     return false;
   }
 }
+export function __originHasSettledForTest(origin) { return originHasSettled(origin); }
 
 function sellerSummary(origin, v) {
   return {
@@ -749,7 +1307,7 @@ const discoveryStatus = new Map(); // name -> { url, fetchedAt, resources, origi
 // entries. Used as a fallback for sellers whose /.well-known/x402 endpoint
 // 404s (the bulk of the unhealthy cohort — they only ever published settled
 // resources, never a manifest). Map<origin, Array<tool>>.
-const bazaarToolsByOrigin = new Map();
+const bazaarToolsByOrigin = new GuardedMap();
 // Per-origin Bazaar `quality` (Coinbase-measured 30-day calls + unique payers,
 // last call time), aggregated from the discovery feed's per-resource objects:
 // calls summed, unique payers MAX across resources (a seller-level unique
@@ -758,9 +1316,40 @@ const bazaarToolsByOrigin = new Map();
 // evidence source next to our own on-chain scan: a Base seller Coinbase has
 // watched being paid by N distinct wallets this month is proven for the SOR
 // gate whether or not our scan has caught up, and /api/find can rank on it.
-const bazaarQualityByOrigin = new Map();
+const bazaarQualityByOrigin = new GuardedMap();
 export function bazaarQualityFor(origin) {
   return bazaarQualityByOrigin.get(String(origin || "").replace(/\/$/, "")) || null;
+}
+/**
+ * The Bazaar payer count a ranking tie-break may read for one origin
+ * (2026-09-28). The Bazaar counts every settled payment, including the ones a
+ * seller funded itself; at a wallet whose received dollars were mostly
+ * self-funded (src/seller-funding.js) those counts are the same self-payments,
+ * so the slice measured at that wallet is left out. Null when nothing measured
+ * remains: unmeasured, never zero.
+ *
+ * ONLY AN ORIGIN MEASURED AT A CIRCULAR WALLET IS TOUCHED. Every other origin
+ * reads its payers30d exactly as before, whatever other wallets are circular:
+ * another seller's verdict must never move this one's rank (the first cut
+ * replaced every split origin's figure with its Base split, which dropped the
+ * payers of its non-Base resources as soon as any wallet anywhere was
+ * circular). For an origin that IS measured at a circular wallet, what stays
+ * is the largest figure measured anywhere else: its other Base wallets, and
+ * its resources declaring no Base payTo at all (`payersOffBase`), which cannot
+ * be paid at that wallet.
+ */
+export function rankingPayersOf(q, circular = null) {
+  if (!q || typeof q !== "object") return null;
+  if (!circular || typeof circular.has !== "function" || !circular.size) return q.payers30d ?? null;
+  const isCircular = (w) => circular.has(String(w).toLowerCase());
+  const split = q.byPayTo && typeof q.byPayTo === "object" ? Object.entries(q.byPayTo) : [];
+  const measuredAtCircular = split.some(([w]) => isCircular(w)) || (Array.isArray(q.payTos) ? q.payTos : []).some(isCircular);
+  if (!measuredAtCircular) return q.payers30d ?? null;
+  let best = null;
+  for (const [w, v] of split) if (!isCircular(w)) best = Math.max(best ?? 0, Number(v?.payers) || 0);
+  const off = Number(q.payersOffBase);
+  if (off > 0) best = Math.max(best ?? 0, off);
+  return best;
 }
 export function bazaarQualityEntries() { return [...bazaarQualityByOrigin.entries()]; }
 export function _setBazaarQualityForTest(origin, q) { if (q) bazaarQualityByOrigin.set(origin, q); else bazaarQualityByOrigin.delete(origin); }
@@ -770,18 +1359,48 @@ export function _setBazaarQualityForTest(origin, q) { if (q) bazaarQualityByOrig
 // a quality count is Coinbase's measurement of settlements at that resource's
 // payTo, and it must not clear the Base floor for an origin whose live 402
 // asks to be paid somewhere else.
-const BAZAAR_QUALITY_MAX_PAYTOS = 8;
-function foldBazaarQuality(map, origin, q, basePayTo = null) {
+//
+// `byPayTo` (2026-09-28): the same counts split by the Base payTo each
+// counted resource declares, under the same cap: calls summed, payers the MAX
+// across that wallet's resources. The router keeps its evidence PER WALLET
+// (src/evidence-binding.js), so a count measured at one wallet can never clear
+// the floor for a payment to another. NON-ENUMERABLE on purpose: this object
+// is served as-is as `bazaar` on public index and route rows, and the split is
+// router input, not a column.
+//
+// `payersOffBase` (2026-09-28, non-enumerable for the same reason): the largest
+// payer count among the origin's resources that declare NO Base payTo. Those
+// cannot be paid at any Base wallet, so no Base wallet's verdict applies to
+// them (rankingPayersOf).
+//
+// `curated` (2026-09-29): true when any of the origin's resources carries the
+// Bazaar's own `curated: true` flag, which the bulk discovery feed now serves
+// per item (it used to appear on the search endpoint only). Read ONLY from the
+// Coinbase feed (`fromCoinbase`): an open registry's item could set the same
+// key about itself. Coinbase's editorial mark, reported as theirs; the router
+// reads it as its LAST tie-break, after match, health, payers and price.
+export const BAZAAR_QUALITY_MAX_PAYTOS = 8;
+export function foldBazaarQuality(map, origin, q, basePayTo = null, { curated = false } = {}) {
   if (!q || typeof q !== "object") return;
   const calls = Number(q.l30DaysTotalCalls) || 0, payers = Number(q.l30DaysUniquePayers) || 0;
   const last = typeof q.lastCalledAt === "string" ? q.lastCalledAt : null;
-  const cur = map.get(origin) || { calls30d: 0, payers30d: 0, lastCalledAt: null, payTos: [] };
+  const cur = map.get(origin) || { calls30d: 0, payers30d: 0, lastCalledAt: null, payTos: [], curated: false };
+  cur.curated = cur.curated === true || curated === true;
+  if (!cur.byPayTo || typeof cur.byPayTo !== "object") Object.defineProperty(cur, "byPayTo", { value: {}, enumerable: false, writable: true, configurable: true });
+  if (!Object.hasOwn(cur, "payersOffBase")) Object.defineProperty(cur, "payersOffBase", { value: 0, enumerable: false, writable: true, configurable: true });
   cur.calls30d += calls;
   cur.payers30d = Math.max(cur.payers30d, payers);
   if (last && (!cur.lastCalledAt || last > cur.lastCalledAt)) cur.lastCalledAt = last;
   const w = typeof basePayTo === "string" && /^0x[0-9a-f]{40}$/i.test(basePayTo) ? basePayTo.toLowerCase() : null;
+  if (!w) cur.payersOffBase = Math.max(cur.payersOffBase, payers);
   if (!Array.isArray(cur.payTos)) cur.payTos = [];
   if (w && !cur.payTos.includes(w) && cur.payTos.length < BAZAAR_QUALITY_MAX_PAYTOS) cur.payTos.push(w);
+  if (w && calls > 0 && (Object.hasOwn(cur.byPayTo, w) || Object.keys(cur.byPayTo).length < BAZAAR_QUALITY_MAX_PAYTOS)) {
+    const at = cur.byPayTo[w] || { calls: 0, payers: 0 };
+    at.calls += calls;
+    at.payers = Math.max(at.payers, payers);
+    cur.byPayTo[w] = at;
+  }
   map.set(origin, cur);
 }
 
@@ -850,7 +1469,7 @@ export const seedList = () => {
     .map((s) => s.trim().replace(/\/+$/, ""))
     .filter((s) => /^https?:\/\//i.test(s));
   // committed defaults + env seeds (both operator-curated), then auto-discovered.
-  return [...new Set([...DEFAULT_SEEDS, ...envSeeds, ...discoveredSeeds])];
+  return [...new Set([...DEFAULT_SEEDS, ...envSeeds, ...discoveredSeeds])].filter((o) => !isRemovedOrigin(o));
 };
 
 function extractOrigin(rawUrl) {
@@ -964,10 +1583,14 @@ async function discoverOneSource(source, selfOrigin) {
     const toolsByOrigin = synthesize ? new Map() : null;
     const qualityByOrigin = toolsByOrigin ? new Map() : null;
     let droppedTestnet = 0, droppedJunk = 0;
+    // A registry row under a known path seller's prefix belongs to that seller,
+    // not to its shared host (which would list every app on the host as one).
+    const pathSellers = pathSellersByHost();
     for (const item of list) {
       const url = item.resource || item.resourceUrl || item.url || item.endpoint || item.homepage;
-      const origin = extractOrigin(url);
-      if (!origin || origin === selfOrigin) continue;
+      const hostOrigin = extractOrigin(url);
+      if (!hostOrigin || hostOrigin === selfOrigin) continue;
+      const origin = pathSellerOwning(url, hostOrigin, pathSellers) || hostOrigin;
       // strict sources (open registries): drop testnet-only listings and
       // placeholder origins before they reach the index.
       if (source.strict) {
@@ -982,7 +1605,7 @@ async function discoverOneSource(source, selfOrigin) {
           arr.push(t);
           toolsByOrigin.set(origin, arr);
         }
-        if (qualityByOrigin && item.quality) foldBazaarQuality(qualityByOrigin, origin, item.quality, t?.payToByNetwork?.["eip155:8453"] || null);
+        if (qualityByOrigin && item.quality) foldBazaarQuality(qualityByOrigin, origin, item.quality, t?.payToByNetwork?.["eip155:8453"] || null, { curated: item.curated === true && isBazaarDiscoveryUrl(source.url) });
       }
     }
     if (toolsByOrigin) {
@@ -1057,7 +1680,11 @@ export function priceToMicroUsd(p) {
     if (Number.isFinite(Number(p.amountMinor)) && String(p.currency || "USD").toUpperCase() === "USD") {
       return Math.round(Number(p.amountMinor) * 1e4); // cents -> micro-dollars
     }
-    return priceToMicroUsd(p.display ?? p.price ?? p.amount ?? null);
+    // `amount` beside payment context (decimals / asset / an MPP currency) is
+    // BASE UNITS, the same rule parseManifestPrice reads it by: the million-
+    // fold overquote arrives here too whenever a row stores its price object.
+    const amount = p.amount != null && atomicContext(p) ? atomicAmountToDollars(p, p.amount) : p.amount;
+    return priceToMicroUsd(p.display ?? p.price ?? amount ?? null);
   }
   if (typeof p !== "string") return null;
 
@@ -1094,6 +1721,43 @@ function urlTemplateProjection(t) {
     urlTemplate: true,
     pathParams: [...route.matchAll(URL_TEMPLATE_RE_G)].map((m) => m[1] || m[2] || m[3]).filter(Boolean),
   };
+}
+
+/** Can we actually READ a price for this route?
+ *
+ *  `/api/route` has published `priceUsd` since long before this, computed by
+ *  parsePrice, which returns 0 for anything it cannot parse. So a route whose
+ *  price we failed to read is advertised at zero - "free" - and a consumer has
+ *  no way to tell that from a genuinely free route. Measured live 2026-09-21:
+ *  16 of 286 distinct external rows read priceUsd 0, and 14 of them carry
+ *  `price: null`, meaning we never read a price at all. The other two are
+ *  "$free" and really are free.
+ *
+ *  The file already knew. priceToMicroUsd's own comment, three lines below
+ *  parsePrice, says its null is deliberate and "never parsePrice's 0, which
+ *  would publish 'free' for 'we could not read it'". The right reader existed
+ *  and this surface kept calling the wrong one.
+ *
+ *  NOT FIXED BY CHANGING priceUsd. Someone is reading that field today and a
+ *  0 turning into null breaks them; publishing a wrong number is our mistake
+ *  to disclose, not theirs to absorb. So priceUsd keeps its meaning exactly,
+ *  on every surface, and this says whether to believe it. `priceKnown: false`
+ *  means we could not read a price and the 0 is our ignorance, not the
+ *  seller's price.
+ *
+ *  Uses priceToMicroUsd rather than a second parser, so "known" here means the
+ *  same thing the crawler means when it compares a declaration to a learned
+ *  quote - including the object shapes ({usd}, {amountMinor}) that parsePrice
+ *  reads as zero. */
+function priceKnownProjection(t) {
+  // `freeObserved`: the route answered an unpaid GET with a 200 - no paywall on
+  // it when we last looked, which is a fact about the route, not ignorance.
+  // Additive and only present when true.
+  return { priceKnown: priceToMicroUsd(t?.price) != null, ...(isObservedFree(t) ? { freeObserved: true } : {}) };
+}
+function isObservedFree(t, now = Date.now()) {
+  const at = Number(t?.freeObservedAt || t?.quoteRetiredAt);
+  return t?.quoteSource === "live-200" && Number.isFinite(at) && at > 0 && now - at < QUOTE_MAX_AGE_MS;
 }
 
 function priceConflictProjection(t) {
@@ -1247,12 +1911,25 @@ export function bazaarItemToTool(item, originUrl) {
   // `resource` = CDP Bazaar; `resourceUrl` = GoPlausible's AVM registry.
   const resource = item.resource || item.resourceUrl || item.url;
   if (typeof resource !== "string" || !resource.startsWith(originUrl)) return null;
+  // A segment boundary after the key: "https://host" must not own
+  // "https://hostile.example/...", nor a path seller "/app/x" own "/app/x2".
+  if (!isUnderSeller(resource, originUrl)) return null;
   const pay = paymentFieldsFromAccepts(item.accepts);
   let pathStr = "/";
   try {
     pathStr = new URL(resource).pathname || "/";
   } catch {
     /* keep "/" */
+  }
+  // A path seller's routes are relative to its prefix.
+  const scopedHere = Boolean(sellerPrefixOf(originUrl));
+  if (scopedHere) {
+    const scoped = scopeRouteToSeller(originUrl, pathStr);
+    // The prefix root is kept for a registry row that carries payment terms:
+    // such a row is minted by a settled payment, so it is a paid route, not a
+    // landing page (see scopeRowsToSeller).
+    if (scoped == null || (scoped === "/" && !rowDeclaresPayment(pay))) return null;
+    pathStr = scoped;
   }
   const tags = Array.isArray(item.tags) ? item.tags : [];
   const methodInferred = !(typeof item.method === "string" && item.method);
@@ -1270,6 +1947,7 @@ export function bazaarItemToTool(item, originUrl) {
     tags,
     ...pay,
     provenance: "bazaar",
+    ...(scopedHere ? { [SCOPED_ROW]: true } : {}),
     // Coinbase-measured 30-day usage of THIS resource (null when absent).
     quality: item.quality && typeof item.quality === "object"
       ? { calls30d: Number(item.quality.l30DaysTotalCalls) || 0, payers30d: Number(item.quality.l30DaysUniquePayers) || 0, lastCalledAt: typeof item.quality.lastCalledAt === "string" ? item.quality.lastCalledAt : null }
@@ -1302,14 +1980,23 @@ export function openapiBasePath(openapi, originUrl) {
     (origin && candidates.find((u) => { try { return new URL(u).origin === origin; } catch { return false; } })) ||
     candidates.find((u) => u.startsWith("/")) ||
     candidates[0];
-  if (!pick) return "";
+  // A path seller whose document names no server: its paths are relative to
+  // the prefix it is served under (the rows are then scoped back to it). A
+  // document naming another server is honoured and scoped as usual.
+  if (!pick) return sellerPrefixOf(originUrl);
   let path;
-  try { path = new URL(pick, origin || "https://x.invalid").pathname; } catch { return ""; }
+  // A relative server URL resolves against where the document is served: for a
+  // path seller that is its prefix, for a bare origin the root (as before).
+  const docBase = sellerPrefixOf(originUrl) ? `${originUrl}/` : (origin || "https://x.invalid");
+  try { path = new URL(pick, docBase).pathname; } catch { return ""; }
   path = path.replace(/\/+$/, "");
   return path === "/" ? "" : path;
 }
 
 export function normaliseOpenapiTools(openapi, originUrl) {
+  return scopeRowsToSeller(normaliseOpenapiToolsUnscoped(openapi, originUrl), originUrl);
+}
+function normaliseOpenapiToolsUnscoped(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
   const documentDistinguishesPaidOperations = openapiHasPaymentSignal(openapi);
@@ -1355,6 +2042,25 @@ export function normaliseOpenapiTools(openapi, originUrl) {
         category: tags[0] || "other",
         tags,
         price: pay.price,
+        // An x-price in the origin's OWN OpenAPI is the origin declaring a
+        // price, so stamp the anchor here rather than only in the Bazaar merge.
+        //
+        // Without it the anti-ratchet correction is inert: it re-probes a route
+        // whose learned price disagrees with the declaration, and with no
+        // declaration there is nothing to disagree with. Measured across 41
+        // indexed sellers carrying priced rows, 38 had no anchor at all - so
+        // the correction built in August and again in September was dead for
+        // about 93% of them, silently, because a stale price is invisible to us
+        // and visible only to the seller reading their own listing. All three
+        // reports of it arrived by email for exactly that reason.
+        //
+        // Same normalisation as the manifest path: an x-price is usually a
+        // display string ("$0.032"), and a bare Number() on that yields NaN and
+        // skips the stamp without a sound.
+        ...(() => {
+          const micro = priceToMicroUsd(pay.price);
+          return micro != null && micro > 0 ? { originDeclaredPrice: microUsdToPrice(micro) } : {};
+        })(),
         ...(pay.networks.length ? { networks: pay.networks } : {}),
         ...(Object.keys(pay.payToByNetwork).length ? { payToByNetwork: pay.payToByNetwork } : {}),
         // In a document that distinguishes paid operations, an unannotated
@@ -1371,7 +2077,7 @@ export function normaliseOpenapiTools(openapi, originUrl) {
         // handler.
         ...(() => {
           try {
-            const packed = packResponseContract(responseContractOf(op));
+            const packed = packResponseContract(responseContractOf(resolveLocalRefs(op, openapi)));
             return packed ? { responseContract: packed } : {};
           } catch { return {}; }
         })(),
@@ -1379,7 +2085,7 @@ export function normaliseOpenapiTools(openapi, originUrl) {
         // must cost this operation its tuple, never the seller their listing.
         ...(() => {
           try {
-            const packed = packRequestContract(requestContractOf(op));
+            const packed = packRequestContract(requestContractOf(resolveLocalRefs(op, openapi)));
             return packed ? { requestContract: packed } : {};
           } catch { return {}; }
         })(),
@@ -1441,6 +2147,7 @@ function mergeManifestToolRows(a, b) {
   const named = (n, route) => n && n !== route && !String(n).startsWith("/");
   return {
     ...prefer,
+    ...(requestContractStrength(other.requestContract) > requestContractStrength(prefer.requestContract) ? { requestContract: other.requestContract } : {}),
     name: named(prefer.name, prefer.route) ? prefer.name : (named(other.name, other.route) ? other.name : prefer.name),
     description: prefer.description || other.description || "",
     price: prefer.price || other.price || null,
@@ -1463,7 +2170,7 @@ function mergeManifestToolRows(a, b) {
  * `amount` / `maxAmountRequired` on an ACCEPT-SHAPED entry are ATOMIC UNITS of
  * the asset, never dollars. Reading them as a scalar price published the
  * seller's own listing at a million times its real figure - measured live
- * 2026-09-15 on graded.sh, whose `/v1/topup` costs $0.10 and read **$100000**
+ * 2026-09-15 on one seller, whose $0.10 route read **$100000**
  * in the index (`resources: [{scheme, network, asset, amount: "100000", ...}]`,
  * six-decimal USDC). An entry that names a network, an asset or a scheme is
  * quoting the x402 accept shape and its amount goes through the accepts
@@ -1478,8 +2185,137 @@ function acceptShaped(raw) {
       || typeof raw.payTo === "string" || typeof raw.maxAmountRequired === "string" || Array.isArray(raw.accepts));
 }
 
+/**
+ * An AMOUNT beside PAYMENT CONTEXT is base units of a token, never dollars
+ * (2026-09-22). Two live shapes still read atomic figures as dollars after the
+ * 2026-09-15 fix, because that one recognised the accept shape at the ENTRY
+ * level only:
+ *   - a manifest price OBJECT, `price: { amount: "3000", asset: <Base USDC>,
+ *     decimals: 6, display: "$0.003" }`, was listed at $3000 (the object path
+ *     took `amount` as dollars and never read `decimals`, `asset` or `display`);
+ *   - MPP's discovery shape in an OpenAPI operation, `x-payment-info: {
+ *     amount: "5000", currency: <Tempo USDC.e>, method: "tempo", intent:
+ *     "charge", offers: [...] }`, was listed at $5000 instead of $0.005.
+ * Payment context is `decimals`, an `asset`, or a `currency` beside an MPP
+ * `method`/`intent`. A bare `currency: "USDC"` beside an amount is NOT context:
+ * catalogues publish `{ amount: "0.032", currency: "USDC" }` meaning dollars.
+ * A fractional figure is never base units, so it keeps its dollar reading.
+ * Decimals are the declared ones, else 6 for the stablecoins every rail here
+ * settles in (USDC on any chain, Tempo USDC.e and PathUSD), else NOTHING: a
+ * token we cannot size is a price we do not publish (the live-402 probe learns
+ * it), because a wrong exponent is the same million-fold error by another road.
+ */
+const SIX_DECIMAL_TICKER = /^(usdc|usd coin|usdc\.e|pathusd)$/i;
+// Each id as its chain publishes it, lowercased HERE rather than by hand: the
+// first cut typed the Solana mint out in lower case and got one letter wrong,
+// which reads as "we cannot size this token" and publishes no price at all.
+const SIX_DECIMAL_ASSETS = new Set([
+  ...EVM_TOKEN_DOMAINS.filter((d) => d.symbol === "USDC").map((d) => d.asset),
+  "0x20C000000000000000000000b9537d11c60E8b50", // Tempo USDC.e
+  "0x20c0000000000000000000000000000000000000", // Tempo PathUSD
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // Solana USDC mint
+].map((a) => a.toLowerCase()));
+/** Six, when this object names a token we RECOGNISE as dollar-pegged. Null
+ *  otherwise, which is the whole gate: sizing an amount by decimals only turns
+ *  base units into DOLLARS if the token is a dollar. */
+function dollarPeggedDecimalsOf(obj) {
+  for (const id of [obj?.asset, obj?.currency, obj?.asset_address, obj?.assetAddress, obj?.symbol, obj?.extra?.name]) {
+    if (typeof id !== "string" || !id.trim()) continue;
+    const v = id.trim();
+    if (SIX_DECIMAL_TICKER.test(v) || SIX_DECIMAL_ASSETS.has(v.toLowerCase())) return 6;
+  }
+  return null;
+}
+function declaredDecimalsOf(obj) {
+  const d = obj?.decimals;
+  if (typeof d === "number" && Number.isInteger(d) && d >= 0 && d <= 36) return d;
+  if (typeof d === "string" && /^\s*\d{1,2}\s*$/.test(d) && Number(d) <= 36) return Number(d);
+  return null;
+}
+/** Decimals to divide an amount by, or null to publish no price at all.
+ *
+ *  A DECLARED `decimals` used to be enough on its own, which made the seller's
+ *  own field the whole rule for ANY asset: `{ amount: "5000", decimals: 18,
+ *  asset: <some token> }` published 0.000000000000005 as a DOLLAR price of a
+ *  token that is not a dollar, and the same field set to 2 would have published
+ *  $50. Decimals say how to READ an amount, never what it is worth, so the
+ *  token has to be one we recognise as dollar-pegged first; anything else is a
+ *  price the live-402 probe learns rather than one we invent.
+ *
+ *  A declaration that CONTRADICTS the chain (USDC is six decimals on every rail
+ *  we settle) is not a tie we get to break: publish nothing. */
+function tokenDecimalsOf(obj) {
+  const pegged = dollarPeggedDecimalsOf(obj);
+  if (pegged == null) return null;
+  const declared = declaredDecimalsOf(obj);
+  if (declared != null && declared !== pegged) return null;
+  return pegged;
+}
+/** An asset IDENTIFIER - an EVM address, a Solana mint, a CAIP-19 id - rather
+ *  than a ticker. Payment context is the identifier: a ticker is a word a
+ *  catalogue writes beside a dollar figure. */
+function looksLikeAssetIdentifier(v) {
+  if (typeof v !== "string") return false;
+  const id = v.trim();
+  if (/^0x[0-9a-fA-F]{40}$/.test(id) || /^0x[0-9a-fA-F]{64}$/.test(id)) return true;
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(id)) return true; // base58 mint
+  return id.includes(":") && /[/:][^\s:/]{6,}$/.test(id);   // caip-19 and friends
+}
+function atomicContext(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
+  if (obj.decimals != null) return true;
+  // A TICKER IS NOT PAYMENT CONTEXT, in whichever field it is written. The rule
+  // was applied to `currency` and not to `asset`, so one declaration read three
+  // ways: `{ amount: 2, currency: "USDC" }` was $2, `{ amount: 2, symbol:
+  // "USDC" }` was $2, and `{ amount: 2, asset: "USDC" }` was $0.000002 - a
+  // millionfold under-quote on a seller's listing, arrived at from the same
+  // sentence. An asset field carrying a real identifier still states base
+  // units, which is what an x402 accept carries and what every case this
+  // machinery was built for looks like.
+  if (looksLikeAssetIdentifier(obj.asset)) return true;
+  return typeof obj.currency === "string" && !!obj.currency.trim()
+    && (typeof obj.method === "string" || typeof obj.intent === "string");
+}
+/** The dollar figure an amount in atomic context stands for: a number, the
+ *  fractional figure itself when it cannot be base units, or null for a token
+ *  whose decimals we cannot know. */
+function atomicAmountToDollars(obj, amount) {
+  const whole = typeof amount === "number" ? (Number.isInteger(amount) && amount >= 0)
+    : (typeof amount === "string" && /^\s*\d+\s*$/.test(amount));
+  if (!whole) {
+    const frac = typeof amount === "number" ? Number.isFinite(amount) && amount >= 0
+      : (typeof amount === "string" && /^\s*\d*\.\d+\s*$/.test(amount));
+    return frac ? amount : null;
+  }
+  const decimals = tokenDecimalsOf(obj);
+  if (decimals == null) return null;
+  const usd = Number(String(amount).trim()) / 10 ** decimals;
+  // Only a figure that writes out as a plain decimal. JS renders anything from
+  // 1e21 up (and below 1e-6) in exponent notation, and every price reader
+  // downstream takes a STRING: "$1e+21" parses to null in our own reader and to
+  // some unrelated number in any reader that strips punctuation. A price we
+  // cannot write down is a price we do not publish.
+  if (!Number.isFinite(usd) || /e/i.test(String(usd))) return null;
+  return usd;
+}
+/** An explicit DOLLAR label (`display`, `amountLabel`) the seller wrote for
+ *  humans: preferred over any figure we would have to convert. Taken only when
+ *  it reads as one dollar amount ("$0.003", "0.003 USDC"), never a sentence. */
+function dollarLabelOf(obj) {
+  for (const v of [obj?.display, obj?.amountLabel]) {
+    if ((typeof v === "string" || typeof v === "number") && priceToMicroUsd(v) != null) return v;
+  }
+  return null;
+}
+
 function parseManifestPrice(raw) {
-  let p = raw?.price_usd ?? raw?.priceUsd ?? raw?.price ?? (acceptShaped(raw) ? null : raw?.amount) ?? null;
+  let p = raw?.price_usd ?? raw?.priceUsd ?? raw?.price ?? null;
+  // An entry whose own amount sits beside payment context: a label first,
+  // else base units. Accept-shaped entries keep their old rule (the accepts
+  // reader prices them); MPP-shaped ones (currency + method/intent) had none.
+  if (p == null && raw?.amount != null && !acceptShaped(raw)) {
+    p = atomicContext(raw) ? (dollarLabelOf(raw) ?? atomicAmountToDollars(raw, raw.amount)) : raw.amount;
+  }
   // A `price` that is an OBJECT is a richer, entirely legitimate manifest shape:
   // the seller carries scheme/network/asset/payTo per resource and puts the
   // figure inside it. We only read scalars, so such a manifest normalised to
@@ -1494,7 +2330,12 @@ function parseManifestPrice(raw) {
   // survives a future edit to that key list, and noted because no mutation can
   // kill it - the test asserts the OUTCOME (an array declares nothing) instead.
   if (p && typeof p === "object" && !Array.isArray(p)) {
-    p = p.amountUsd ?? p.priceUsd ?? p.price_usd ?? p.amountLabel ?? p.amount ?? p.value ?? null;
+    const o = p;
+    p = o.amountUsd ?? o.priceUsd ?? o.price_usd ?? dollarLabelOf(o) ?? null;
+    if (p == null) {
+      const fig = o.amount ?? o.value;
+      if (fig != null) p = atomicContext(o) ? atomicAmountToDollars(o, fig) : fig;
+    }
   }
   if (typeof p === "number" && Number.isFinite(p)) return `$${p}`;
   if (typeof p === "string" && p.trim()) return p.trim().startsWith("$") ? p.trim() : `$${p.trim()}`;
@@ -1579,12 +2420,57 @@ function catalogueEntryAccepts(raw, fallback) {
   return fallback;
 }
 
-/** The service-wide `payment` block, read as one accept. Empty when absent. */
+/** Does this address have the shape of a wallet on this network's family?
+ *  A service-wide block names ONE payTo beside a LIST of networks, and an EVM
+ *  address paired with a Solana network (or the reverse) is not a wallet
+ *  anyone can be paid at there. A family we do not recognise is not refused:
+ *  every consumer validates the shape again before any RPC call. */
+function payToFitsNetwork(network, addr) {
+  if (typeof addr !== "string" || !addr.trim()) return false;
+  const n = String(network || "").toLowerCase();
+  if (n.startsWith("eip155:")) return /^0x[0-9a-fA-F]{40}$/.test(addr);
+  if (n.startsWith("solana")) return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
+  if (n.startsWith("stellar")) return /^G[A-Z2-7]{55}$/.test(addr);
+  if (n.startsWith("algorand")) return /^[A-Z2-7]{58}$/.test(addr);
+  return true;
+}
+
+/**
+ * The `payment.x402` shape: `{ networks: ["base"], primaryNetwork, payTo,
+ * currency }` - one wallet for the whole service, declared once, beside a
+ * catalogue whose `resources` are bare URL strings that carry no payment
+ * terms at all. It was read for the seller's display network and nothing
+ * else, so the payTo it declares never reached a row: live 2026-09-22, a
+ * seller whose every resource is a bare string sat in the index with an
+ * empty payToByNetwork, invisible to the Base scan (allPayToOrigins) and so
+ * unable to clear the settlement floor however many outside buyers paid it.
+ * One accept per declared network, shorthand normalised ("base" ->
+ * eip155:8453), the payTo attached only where its shape fits the network.
+ * The same block at the top level of `payment` (no `x402` key) is read too.
+ */
+function manifestX402BlockAccepts(p) {
+  const x = (p.x402 && typeof p.x402 === "object" && !Array.isArray(p.x402)) ? p.x402
+    : (Array.isArray(p.networks) ? p : null);
+  if (!x) return [];
+  const payTo = typeof x.payTo === "string" ? x.payTo.trim() : (typeof x.pay_to === "string" ? x.pay_to.trim() : "");
+  const nets = [...new Set(
+    [...(Array.isArray(x.networks) ? x.networks : []), x.network, x.primaryNetwork]
+      .filter((v) => typeof v === "string" && v.trim())
+      .map((v) => normalizeNetwork(v.trim())),
+  )].slice(0, 16);
+  return nets.map((network) => ({
+    scheme: typeof x.scheme === "string" ? x.scheme : "exact",
+    network,
+    ...(payToFitsNetwork(network, payTo) ? { payTo } : {}),
+  }));
+}
+
+/** The service-wide `payment` block, read as accepts. Empty when absent. */
 function manifestPaymentAccepts(manifest) {
   const p = manifest?.payment;
   if (!p || typeof p !== "object") return [];
   const network = p.network || p.chain;
-  if (typeof network !== "string" || !network) return [];
+  if (typeof network !== "string" || !network) return manifestX402BlockAccepts(p);
   return [{
     scheme: p.scheme || "exact",
     network,
@@ -1600,10 +2486,22 @@ function manifestPaymentAccepts(manifest) {
 }
 
 export function normaliseManifestTools(manifest, originUrl) {
+  return scopeRowsToSeller(normaliseManifestToolsUnscoped(manifest, originUrl), originUrl);
+}
+function normaliseManifestToolsUnscoped(manifest, originUrl) {
   if (!manifest || typeof manifest !== "object") return [];
   let origin;
-  try { origin = new URL(originUrl); } catch { return []; }
-  const catalogues = ["tools", "resources", "endpoints", "services"]
+  // Relative entries resolve against where the manifest is served: a path
+  // seller's prefix, or the root of a bare origin.
+  try { origin = new URL(sellerPrefixOf(originUrl) ? `${originUrl}/` : originUrl); } catch { return []; }
+  // `resourceCatalog` is the same dialect one key over: one seller publishes
+  // `resources` as bare URL strings (no price anywhere) and the real rows,
+  // with prices, in `resourceCatalog`. Reading only the canonical array left
+  // both of their rows unpriced and unanchored, which is how a $0.032 route
+  // sat in the index at $0.002 across two re-registrations. Rows merge by
+  // route, and a price already taken from an earlier catalogue wins, so this
+  // can only FILL a gap and never overwrite what the canonical array declared.
+  const catalogues = ["tools", "resources", "endpoints", "services", "resourceCatalog"]
     .map((k) => manifest[k])
     .filter((v) => Array.isArray(v) && v.length);
   if (!catalogues.length) {
@@ -1634,7 +2532,7 @@ export function normaliseManifestTools(manifest, originUrl) {
 
   for (const list of catalogues) {
     for (const raw of list.slice(0, 1000)) {
-      let ref = "", name = "", description = "", price = null;
+      let ref = "", name = "", description = "", price = null, inputSchema = null;
       const methodList = [];
       // What this entry says about money, from its own accepts / flat payment
       // fields, falling back to the service-wide block. A thin string entry
@@ -1650,6 +2548,9 @@ export function normaliseManifestTools(manifest, originUrl) {
         name = String(raw.name || raw.title || raw.operationId || "").trim();
         description = String(raw.summary || raw.description || "").trim();
         price = parseManifestPrice(raw);
+        // The input schema a seller declares beside the route (issue #1503).
+        inputSchema = raw.input_schema && typeof raw.input_schema === "object" ? raw.input_schema
+          : (raw.inputSchema && typeof raw.inputSchema === "object" ? raw.inputSchema : null);
         if (raw.method && MANIFEST_HTTP_METHODS.has(String(raw.method).toUpperCase())) {
           methodList.push(String(raw.method).toUpperCase());
         } else if (Array.isArray(raw.methods)) {
@@ -1685,7 +2586,7 @@ export function normaliseManifestTools(manifest, originUrl) {
           // A manifest entry that names no verb is published as GET, the wire
           // default - but SAY SO, so a later merge with rows that observed the
           // real verb (OpenAPI, a live 402) can correct it instead of trusting a
-          // default as a declaration. Until 2026-09-02 minia2a.uk's two entries
+          // default as a declaration. Until 2026-09-02 one seller's two entries
           // per path (ids x402_ip_geo_get / x402_ip_geo_post, no method) both
           // published as GET; a seller whose POST route rejects GET would have
           // been listed as GET, answered 405 to every buyer, and been recorded
@@ -1701,6 +2602,7 @@ export function normaliseManifestTools(manifest, originUrl) {
           // one derived from atomic units: it is the seller's own wording and
           // it is what `originDeclaredPrice` is stamped from below.
           price: price ?? (pay && pay.price != null ? `$${pay.price}` : null),
+          ...(() => { const packed = inputSchema ? packRequestContract(requestContractFromInputSchema(inputSchema, method || "GET")) : null; return packed ? { requestContract: packed } : {}; })(),
           ...(pay ? { networks: pay.networks, stellarPayTo: pay.stellarPayTo,
             algorandPayTo: pay.algorandPayTo, payToByNetwork: pay.payToByNetwork,
             ...(pay.evmDomainByNetwork ? { evmDomainByNetwork: pay.evmDomainByNetwork } : {}) } : {}),
@@ -1744,6 +2646,23 @@ export function normaliseManifestTools(manifest, originUrl) {
     // the reporter's own live manifest).
     const micro = priceToMicroUsd(t.price);
     if (micro != null && micro > 0 && !(Number(t.originDeclaredPrice) > 0)) t.originDeclaredPrice = microUsdToPrice(micro);
+  }
+  // Drop a row whose METHOD we guessed when another row declares a method for
+  // the same route. A bare `resources` string ("https://origin/x402/thing")
+  // carries no verb, so it is inferred as GET; if a richer catalogue entry for
+  // that same route states POST, keeping both publishes the endpoint twice and
+  // sends half the buyers to a verb the seller answers 405 to. The seller
+  // reported exactly this duplicate from their own compatibility array and
+  // worked around it by deleting theirs - reading `resourceCatalog` would have
+  // re-created it from a different key.
+  //
+  // Only the INFERRED row is dropped, and only when a declared sibling exists:
+  // a seller who genuinely serves GET and POST on one route declares both, and
+  // neither is inferred, so both survive.
+  const declaredRoutes = new Set();
+  for (const t of byKey.values()) if (!t.methodInferred && t.route) declaredRoutes.add(String(t.route));
+  for (const [k, t] of [...byKey.entries()]) {
+    if (t.methodInferred && t.route && declaredRoutes.has(String(t.route))) byKey.delete(k);
   }
   return [...byKey.values()];
 }
@@ -1925,6 +2844,11 @@ export function mergeManifestIntoTools(manifestTools = [], existing = []) {
     }
     if (!hit.stellarPayTo && m.stellarPayTo) hit.stellarPayTo = m.stellarPayTo;
     if (!hit.algorandPayTo && m.algorandPayTo) hit.algorandPayTo = m.algorandPayTo;
+    // Blank-fill: a contract read from the seller's OpenAPI outranks one read
+    // from a manifest schema.
+    // A manifest's names also fill an OpenAPI "requires nothing": an operation
+    // documented with no parameters says less than a schema listing fields.
+    if (requestContractStrength(m.requestContract) > requestContractStrength(hit.requestContract)) hit.requestContract = m.requestContract;
   };
   for (const [path, entries] of groups) {
     const indices = indicesByPath.get(path) || [];
@@ -1996,6 +2920,9 @@ export function mergeManifestIntoTools(manifestTools = [], existing = []) {
 // Anything less structured is left unread on purpose. A thin listing is a
 // recoverable problem; a fabricated one is not.
 export function normaliseLlmsTxtTools(text, originUrl) {
+  return scopeRowsToSeller(normaliseLlmsTxtToolsUnscoped(text, originUrl), originUrl);
+}
+function normaliseLlmsTxtToolsUnscoped(text, originUrl) {
   if (typeof text !== "string" || !text) return [];
   let originHost = "";
   try { originHost = new URL(originUrl).host.toLowerCase(); } catch { return []; }
@@ -2058,7 +2985,7 @@ export function normaliseLlmsTxtTools(text, originUrl) {
 // descends one object level and normalises "$"); an ATOMIC amount
 // (`amountAtomic`, `x-x402-price-atomic`, or the accepts-shaped `amount`) is
 // read through `paymentFieldsFromAccepts`, i.e. divided by the asset's
-// decimals - the 2026-09-15 graded.sh lesson: an atomic "1000000" read as
+// decimals - the 2026-09-15 lesson: an atomic "1000000" read as
 // dollars is a thousand-fold overquote on the seller's own listing;
 // `priceMicros` is micro-dollars. `x-payment-required: true` marks the op
 // PAID with the price unknown so the live-402 probe learns the figure;
@@ -2146,6 +3073,15 @@ export function openapiOperationPayment(op) {
     // that one as dollars for exactly this reason).
     if (!out.price && v.amountAtomic != null) takeAtomic(v, v.amountAtomic);
     if (!out.price && acceptShaped(v) && v.amount != null) takeAtomic(v, v.amount);
+    // MPP's discovery shape lists its terms under `offers`; when the top level
+    // states no amount, the first offer is the price and carries the same
+    // base-units rule (parseManifestPrice reads currency + method/intent).
+    if (!out.price && Array.isArray(v.offers)) {
+      for (const offer of v.offers.slice(0, 5)) {
+        takePrice(parseManifestPrice(offer));
+        if (out.price) break;
+      }
+    }
     const net = addNetwork(v.network ?? v.network_default ?? v.chain ?? null);
     if (net && typeof v.payTo === "string" && v.payTo) out.payToByNetwork[net] = v.payTo;
     if (Array.isArray(v.accepts)) {
@@ -2253,6 +3189,9 @@ export function openapiHasPaymentSignal(openapi) {
  *  concrete URLs instantiate a templated path (see mergeOpenapiIntoBazaar);
  *  never to list tools. */
 export function openapiAllOperationRoutes(openapi, originUrl) {
+  return scopeRowsToSeller(openapiAllOperationRoutesUnscoped(openapi, originUrl), originUrl);
+}
+function openapiAllOperationRoutesUnscoped(openapi, originUrl) {
   if (!openapi || typeof openapi !== "object" || !openapi.paths) return [];
   const base = openapiBasePath(openapi, originUrl);
   const httpMethods = new Set(["get", "post", "put", "patch", "delete", "options", "head"]);
@@ -2494,7 +3433,7 @@ function paywallProbeDue() {
 // stranger's server". A route that gets priced is never probed again (it has a
 // price); one that cannot be priced backs off through probeDue like every
 // other path. See the #645 note below on why per-PATH backoff matters.
-const LIVE_QUOTE_PROBES_PER_CRAWL = 5;
+const LIVE_QUOTE_PROBES_PER_CRAWL = Number(process.env.LIVE_QUOTE_PROBES_PER_CRAWL || 15);
 // GLOBAL ceiling per crawl CYCLE, not just per seller. Three per seller sounds
 // gentle until you multiply: roughly a third of indexed rows carry no price, so
 // a per-seller-only limit fires thousands of outbound requests every cycle
@@ -2517,10 +3456,10 @@ const LIVE_QUOTE_PROBES_PER_CRAWL = 5;
 // budget was consumed by whoever came first, a full rotation took hours, and a
 // seller with a few dozen routes would have waited most of a day to be priced.
 // At 4000 every unpriced seller is reached every cycle, so a 30-route seller is
-// fully priced in about half an hour, and each of them still sees at most five
-// requests per cycle. The env override remains for throttling if a real cost
+// fully priced in about half an hour, and each of them still sees at most
+// LIVE_QUOTE_PROBES_PER_CRAWL requests per cycle. The env override remains for throttling if a real cost
 // ever shows up.
-const LIVE_QUOTE_PROBES_PER_CYCLE = Number(process.env.LIVE_QUOTE_PROBES_PER_CYCLE || 4000);
+const LIVE_QUOTE_PROBES_PER_CYCLE = Number(process.env.LIVE_QUOTE_PROBES_PER_CYCLE || 10000);
 let liveQuoteBudget = LIVE_QUOTE_PROBES_PER_CYCLE;
 let crawlCycle = 0;   // rotates the per-cycle visiting order so the budget is fair
 
@@ -2539,7 +3478,26 @@ let crawlCycle = 0;   // rotates the per-cycle visiting order so the budget is f
  * probe that cannot produce a quote leaves the row exactly as it was.
  */
 /**
- * Carry forward quotes we already learned from a live 402.
+ * Was this row's verification stamp earned by this row's own verb?
+ *
+ * The probe records the verb whose 402 it read (networksVerifiedMethod) beside
+ * every networksVerifiedAt it writes, so a stamp is evidence about that verb's
+ * row and no other. A stamp that names no verb was written before 2026-09-28,
+ * when carry-forward still unioned one verb's read into a declared sibling on
+ * the same path: the other verb's chains, its stamp and its Base payTo, filed
+ * as the sibling's own. Such a stamp cannot be told from one the row earned, so
+ * it is not carried as a verified read, and the row takes one fresh read of its
+ * own (networksNeedLiveVerify, quoteIsStale) instead of keeping it for good.
+ */
+function stampIsOwn(r) {
+  return Number(r?.networksVerifiedAt) > 0
+    && typeof r?.networksVerifiedMethod === "string"
+    && r.networksVerifiedMethod.toUpperCase() === String(r?.method || "GET").toUpperCase();
+}
+
+/**
+ * Carry forward quotes (and verified chain reads) we already learned from a
+ * live 402.
  *
  * Every crawl REBUILDS `tools` from the seller's catalogue, and the catalogue is
  * exactly the surface that has no price - that is the whole reason the live
@@ -2549,32 +3507,88 @@ let crawlCycle = 0;   // rotates the per-cycle visiting order so the budget is f
  * zero forever and the feature looked like it worked while achieving nothing.
  * Observed live - two routes priced, then zero after the next crawl.
  *
- * Keyed by ROUTE only, deliberately: learning a quote can CORRECT the method
- * (a catalogue that said GET for a POST-only endpoint), so a method-qualified
- * key would miss the row it just fixed.
+ * Learning a quote can CORRECT the method (a catalogue that said GET for a
+ * POST-only endpoint), which is why a route-only fallback sits beside the
+ * method-qualified key: without it the key would miss the row it just fixed.
  */
 export function carryForwardLearnedQuotes(tools, prev) {
   // Keyed by METHOD + route, with a route-only fallback for the price and
   // networks. Until 2026-09-02 the map was keyed by route alone and the
   // remembered row's VERB was stamped onto every current row on that route,
-  // so a path with GET and POST (minia2a.uk: 86 such paths in the first 500
+  // so a path with GET and POST (one seller: 86 such paths in the first 500
   // rows) came out as two GETs - the POST operation mislabelled, and a seller
   // whose POST route rejects GET would answer 405 to every buyer we sent and
   // be recorded as broken by us. A remembered verb may only replace a verb
   // the current row INFERRED (a manifest or llms.txt entry that named none);
   // a declared verb is the seller's own statement and stands.
+  //
+  // Two kinds of remembered row. A LEARNED QUOTE (live-402, or the live-200
+  // retirement of one) carries its price, chains, payTo and verb. A VERIFIED
+  // READ is a row whose chains a live 402 confirmed (networksVerifiedAt) while
+  // its PRICE stayed the origin's own declaration: such a row is deliberately
+  // never re-stamped live-402 (the 2026-08-29 ratchet fix), so until
+  // 2026-09-28 the first probe-less rebuild after the read copied its chains
+  // and payTo once, without the verification stamp, and the second rebuild
+  // found nothing "learned" to carry at all. Every origin-priced seller whose
+  // document names no chains flapped between settlement_required and
+  // network_unknown, and the payTo the Base scan reads flapped with it. A
+  // verified read now carries its chains, payTo, domain observation, verb
+  // correction and verification stamp - never a price, never a quoteSource -
+  // so the origin's price still wins and the weekly re-verify
+  // (networksNeedLiveVerify) keeps its own clock. A verified read is admitted
+  // only when its stamp names its own verb (stampIsOwn): a stamp written before
+  // the verb was recorded may be another verb's read, and carrying it would
+  // keep that verb's chains and Base payTo on this row for good.
+  const learnedQuote = (r) => r?.quoteSource === "live-402" || r?.quoteSource === "live-200";
+  const verifiedRead = (r) => stampIsOwn(r) && Array.isArray(r?.networks) && r.networks.length > 0;
   const learnedExact = new Map();
   const learnedByRoute = new Map();
   for (const t of prev?.tools || []) {
-    if ((t?.quoteSource !== "live-402" && t?.quoteSource !== "live-200") || typeof t.route !== "string") continue;
-    learnedExact.set(`${String(t.method || "GET").toUpperCase()} ${t.route}`, t);
-    if (!learnedByRoute.has(t.route)) learnedByRoute.set(t.route, t);
+    if (typeof t?.route !== "string" || !(learnedQuote(t) || verifiedRead(t))) continue;
+    // A learned quote is never displaced by a verified read on the same key,
+    // so admitting verified reads cannot change which row the older rules
+    // pick; among learned quotes the previous order stands (last wins on the
+    // exact key, first wins on the route).
+    const key = `${String(t.method || "GET").toUpperCase()} ${t.route}`;
+    const heldExact = learnedExact.get(key);
+    if (!heldExact || learnedQuote(t) || !learnedQuote(heldExact)) learnedExact.set(key, t);
+    const heldRoute = learnedByRoute.get(t.route);
+    if (!heldRoute || (!learnedQuote(heldRoute) && learnedQuote(t))) learnedByRoute.set(t.route, t);
   }
   if (!learnedExact.size) return tools;
   for (const t of tools) {
     const exact = learnedExact.get(`${String(t.method || "GET").toUpperCase()} ${t.route}`);
     const hit = exact || learnedByRoute.get(t.route);
     if (!hit) continue;
+    const fromQuote = learnedQuote(hit);
+    // A route-level hit may change a current row's verb in exactly two cases:
+    // the row INFERRED its verb (named none), or the hit is a recorded
+    // CORRECTION of this very verb (the probe saw it fail and the other answer).
+    const correctsVerb = !exact && hit.method && hit.method !== t.method
+      && (t.methodInferred === true || hit.methodCorrectedFrom === String(t.method || "GET").toUpperCase());
+    // A read is evidence about ITS OWN row: the same verb, or the verb it
+    // recorded correcting (or the verb an inferred row adopts from it). A
+    // sibling verb on the path was never read, so a verified read carries
+    // nothing to it, and a learned quote carries it only the route-level price
+    // and, onto a row with no chains of its own, the chains (see below).
+    const ownRead = Boolean(exact) || correctsVerb;
+    if (!fromQuote && !ownRead) continue;
+    // ...and the hit's chains, stamp, payTo and domain are this row's own only
+    // when its stamp was earned by its own verb (stampIsOwn). A verified read
+    // is admitted only on that condition; a learned quote may still carry a
+    // stamp written before the verb was recorded, and an exact key does not
+    // prove that stamp is this verb's: until 2026-09-28 carry-forward itself
+    // filed a sibling verb's read on this row, under this row's key.
+    const readIsOwn = ownRead && stampIsOwn(hit);
+    const hitRead = Number(hit.networksVerifiedAt) > 0 && Array.isArray(hit.networks) && hit.networks.length > 0;
+    const rowHasChains = Array.isArray(t.networks) && t.networks.length > 0;
+    // A read that would have been this row's by key but cannot be attributed
+    // to its verb, on a row with chains of its own: its chains, payTo and
+    // domain are withheld below, so the row must be read again to get them
+    // back (a row with no chains takes the chains and payTo by the older
+    // price-and-networks rule and loses only the stamp).
+    const withheldRead = ownRead && !readIsOwn && hitRead && rowHasChains;
+    if (exact && Number(hit.liveProvenAt) > 0) t.liveProvenAt = hit.liveProvenAt;
     if (hit.quoteSource === "live-200") {
       // A RETIREMENT is carried the way a quote is: the rebuilt row (which the
       // Bazaar merge may have priced again from its settlement snapshot) reads
@@ -2585,6 +3599,10 @@ export function carryForwardLearnedQuotes(tools, prev) {
       if (exact && !(Number(t.originDeclaredPrice) > 0) && Number(hit.quoteRetiredAt) > 0 && Date.now() - Number(hit.quoteRetiredAt) < QUOTE_MAX_AGE_MS) {
         t.price = null; t.paid = false;
         t.quoteSource = "live-200"; t.quoteRetiredAt = hit.quoteRetiredAt; t.quoteObservedAt = hit.quoteObservedAt;
+      } else if (exact && !(Number(t.originDeclaredPrice) > 0) && !(Number(t.price) > 0) && isObservedFree(hit)) {
+        // An observed-free route carries its observation across the rebuild.
+        t.paid = false;
+        t.quoteSource = "live-200"; t.freeObservedAt = hit.freeObservedAt; t.quoteObservedAt = hit.quoteObservedAt;
       }
       continue;
     }
@@ -2595,37 +3613,97 @@ export function carryForwardLearnedQuotes(tools, prev) {
     // amount was filling the fresh row and then being re-stamped "live-402",
     // which made a nine-day-old price look freshly observed).
     const originPricedThisCrawl = Number(t.originDeclaredPrice) > 0;
-    if (!(Number(t.price) > 0) && !originPricedThisCrawl && Number(hit.price) > 0) {
+    // Only a learned QUOTE fills a price: a verified read's price was the
+    // origin's own declaration, and if the origin has stopped declaring it the
+    // honest state is "unpriced" (a probe candidate), not a remembered figure
+    // relabelled as learned.
+    if (fromQuote && !(Number(t.price) > 0) && !originPricedThisCrawl && Number(hit.price) > 0) {
       t.price = hit.price;
       t.quoteCarriedForward = true;
-      if (hit.quoteObservedAt) t.quoteObservedAt = hit.quoteObservedAt;
+      // A quote whose read was withheld is carried without its age, so
+      // quoteIsStale reads it as due once ("never stamped: refresh once") and
+      // the next probe restores what was withheld, stamped with its own verb.
+      // (An origin-priced row is due through networksNeedLiveVerify instead,
+      // and a row already priced carries no age from the hit in any case.)
+      if (hit.quoteObservedAt && !withheldRead) t.quoteObservedAt = hit.quoteObservedAt;
     }
-    if (!(Array.isArray(t.networks) && t.networks.length) && Array.isArray(hit.networks) && hit.networks.length) {
+    // Did this row just take its chains from the hit? A row with no chains of
+    // its own takes a learned quote's chains through the route fallback (the
+    // older price-and-networks rule); the domain and payTo below describe those
+    // chains, so they ride with them.
+    let tookChains = false;
+    // The chains this crawl's own documents named for the row, before any
+    // remembered chain joins them (see the record after these branches).
+    const ownChains = Array.isArray(t.networks) ? [...t.networks] : [];
+    if (!rowHasChains && Array.isArray(hit.networks) && hit.networks.length) {
       t.networks = [...hit.networks];
-    } else if (Number(hit.networksVerifiedAt) > 0 && Array.isArray(hit.networks) && hit.networks.length) {
+      tookChains = true;
+      // The verification stamp travels with the chains it verified, onto the
+      // row it belongs to (same verb, or the verb it recorded correcting),
+      // with the verb that earned it. This branch used to drop it, so the next
+      // rebuild saw an unverified row.
+      if (readIsOwn) { t.networksVerifiedAt = hit.networksVerifiedAt; t.networksVerifiedMethod = hit.networksVerifiedMethod.toUpperCase(); }
+    } else if (readIsOwn && Array.isArray(hit.networks) && hit.networks.length) {
       // A VERIFIED live read outranks a manifest claim: union the chains the
       // 402 actually offered into the freshly rebuilt (manifest-shaped) row,
       // and carry when they were verified so the weekly re-read keeps its clock.
+      // Own row only, like the stamp above. A declared sibling verb that
+      // already names chains in the seller's document was never read: until
+      // 2026-09-28 it took the other verb's chains and stamp here, and, once
+      // verified reads were carried, kept them rebuild after rebuild as its own
+      // "verified read" - hidden from its own weekly read, and listing the
+      // other verb's chains (and, below, its Base payTo) as the sibling's.
+      // Rows written that way are still in the persisted cache, stamped with
+      // no verb, which is why the gate is readIsOwn and not ownRead.
       t.networks = [...new Set([...(t.networks || []), ...hit.networks])];
       t.networksVerifiedAt = hit.networksVerifiedAt;
+      t.networksVerifiedMethod = hit.networksVerifiedMethod.toUpperCase();
     }
+    // Remember which of the row's chains its documents named, whenever a
+    // remembered chain has joined them: a later live re-read keeps those and
+    // replaces the rest with what the 402 offers then (applyLiveNetworks), so
+    // a chain the seller withdraws from its 402 leaves the row instead of
+    // being carried forever. Kept when already present: a row object reused
+    // unchanged from an earlier crawl (an OpenAPI 304) already holds its own.
+    if (!Array.isArray(t.documentedNetworks) && (t.networks || []).some((n) => !ownChains.includes(n))) t.documentedNetworks = ownChains;
+    // The domain observation and the payTo describe the chains of the read
+    // they came from, so they ride only where those chains do: onto the read's
+    // own row, or onto a row that just took the hit's chains.
+    const carriesPayment = readIsOwn || tookChains;
     // The domain observation rides with the verified read it came from: a
     // manifest-shaped rebuild has no accepts of its own, and without this the
     // label would forget a wrong-domain seller on every crawl.
-    if (!t.evmDomainByNetwork && hit.evmDomainByNetwork && typeof hit.evmDomainByNetwork === "object") t.evmDomainByNetwork = { ...hit.evmDomainByNetwork };
-    // A route-level hit may change a current row's verb in exactly two cases:
-    // the row INFERRED its verb (named none), or the hit is a recorded
-    // CORRECTION of this very verb (the probe saw it fail and the other answer).
-    // A learned verb that simply answered on its own row is not evidence about
-    // a sibling verb - that reading is what mislabelled minia2a's POST rows.
-    if (!exact && hit.method && hit.method !== t.method
-        && (t.methodInferred === true || hit.methodCorrectedFrom === String(t.method || "GET").toUpperCase())) {
+    if (carriesPayment && !t.evmDomainByNetwork && hit.evmDomainByNetwork && typeof hit.evmDomainByNetwork === "object") t.evmDomainByNetwork = { ...hit.evmDomainByNetwork };
+    // The payTo the live 402 named rides forward the same way, per network,
+    // filling a GAP only: a manifest-shaped rebuild names no wallet on a
+    // bare-string resource, and without this every crawl would forget the one
+    // address the Base scan needs. A network the rebuilt row already carries a
+    // payTo for keeps it (the origin's own current document, read this crawl).
+    if (carriesPayment && hit.payToByNetwork && typeof hit.payToByNetwork === "object") {
+      const remembered = Object.entries(hit.payToByNetwork).filter(([, addr]) => typeof addr === "string" && addr);
+      // The spread ORDER is the whole rule: what this crawl read from the
+      // origin wins, the remembered address fills the rest. Filtering the
+      // remembered entries as well would make each guard unkillable by the
+      // other, so a test could not tell either of them from a no-op.
+      if (remembered.length) t.payToByNetwork = { ...Object.fromEntries(remembered), ...(t.payToByNetwork || {}) };
+    }
+    // Verb change: see correctsVerb above. A learned verb that simply answered
+    // on its own row is not evidence about a sibling verb - that reading is
+    // what mislabelled one seller's POST rows.
+    if (correctsVerb) {
       if (hit.methodCorrectedFrom) t.methodCorrectedFrom = hit.methodCorrectedFrom;
       t.method = hit.method; t.methodInferred = false;
+      // The live proof belongs to the verb that answered, so it travels with
+      // the correction the way the verification stamp does. Carried on exact
+      // hits only until 2026-09-28, which lost it on the first rebuild of every
+      // corrected row (the rebuilt row states the wrong verb, so it never
+      // matches exactly).
+      if (Number(hit.liveProvenAt) > 0) t.liveProvenAt = hit.liveProvenAt;
     }
     // Only claim "live-402" for a price this crawl is actually standing behind:
-    // a row the origin priced today is origin-declared, not live-learned.
-    if (!originPricedThisCrawl) t.quoteSource = "live-402";
+    // a row the origin priced today is origin-declared, not live-learned, and a
+    // verified read never carried a learned price at all.
+    if (fromQuote && !originPricedThisCrawl) t.quoteSource = "live-402";
   }
   return tools;
 }
@@ -2653,7 +3731,7 @@ export function quoteIsStale(t, now = Date.now()) {
 // A manifest-priced, manifest-networked row was never read live: the crawler
 // had nothing to LEARN (price and chains both present), so a seller who added
 // a rail to their 402 middleware and not to their manifest stayed listed
-// single-chain forever (angel.finereli.com, 2026-09-02: live 402 offers Base
+// single-chain forever (2026-09-02: live 402 offers Base
 // AND Algorand, manifest says Base, our row said Base; reported by the seller
 // on issue #1178). One live read, then a weekly one, unions what the 402
 // actually offers into the row. Learned quotes have their own clock
@@ -2665,6 +3743,18 @@ export function networksNeedLiveVerify(t, now = Date.now()) {
   if (!(Array.isArray(t.networks) && t.networks.length)) return false;
   const at = Number(t.networksVerifiedAt);
   if (!Number.isFinite(at) || at <= 0) return true;
+  // A stamp that names no verb, or another verb, is no read of this row's own
+  // (stampIsOwn): carry-forward no longer passes such a stamp on, and a row
+  // still holding one is read rather than left to the clock.
+  if (!stampIsOwn(t)) return true;
+  // The stamp's clock covers a row whose PRICE is the origin's own declaration
+  // (a live 402 is the other price source, and it returned above). A priced
+  // row carrying a stamp but neither is a row whose price came from somewhere
+  // no read looked at: the origin stopped declaring and the rebuild took a
+  // registry's settlement snapshot, while carry-forward kept the stamp of the
+  // read made beside the old declaration. Before verified reads were carried
+  // such a row had no stamp and was read on the next crawl; it still is.
+  if (!(Number(t.originDeclaredPrice) > 0)) return true;
   return now - at >= NETWORKS_VERIFY_AGE_MS;
 }
 
@@ -2676,10 +3766,10 @@ export function priceDisagreesWithOrigin(t) {
 }
 
 /** Per-crawl quote-probe cap for one origin. The polite steady-state is
- * LIVE_QUOTE_PROBES_PER_CRAWL (5) - but an origin with ZERO priced tools is
+ * LIVE_QUOTE_PROBES_PER_CRAWL - but an origin with ZERO priced tools is
  * wholly invisible to routing (the resolver only pays priced rows), and at 5
  * per 30-min cycle a new 128-route seller stays unroutable for half a day
- * (measured live 2026-09-01: sol.blockrun registered, proven on-chain, and
+ * (measured live 2026-09-01: a seller registered, proven on-chain, and
  * unroutable for hours while the rotation crept). A catalog with nothing
  * priced gets a one-time burst - the seller REGISTERED to be found, and a
  * single burst on a new listing is what they asked for - then drops to the
@@ -2689,7 +3779,7 @@ export function quoteProbeCapFor(tools) {
   const priced = list.filter((t) => Number(t?.price) > 0).length;
   const unpriced = list.length - priced;
   // "Zero priced" was the first predicate and it missed the live case: a
-  // registry merge had already priced a handful of sol.blockrun's 128 rows,
+  // registry merge had already priced a handful of one seller's 128 rows,
   // so the burst never fired and the catalog stayed 90% invisible. The state
   // that starves a seller is OVERWHELMINGLY unpriced, not perfectly unpriced:
   // burst while at least 20 rows are unpriced and priced rows are under a
@@ -2700,8 +3790,110 @@ export function quoteProbeCapFor(tools) {
   return LIVE_QUOTE_PROBES_PER_CRAWL;
 }
 
-export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false } = {}) {
+/**
+ * Write the payTo a live 402 named, per network, onto an index row. The live
+ * read REPLACES what the row held for each network it names (the 402 is the
+ * current word on where the origin is paid) and leaves networks it does not
+ * name alone; a network the read withdrew from the row loses its payTo in
+ * applyLiveNetworks, which runs first.
+ * Always a fresh object: manifest rows on one path can share one
+ * payToByNetwork, and writing into it would move a sibling's address too.
+ */
+function applyLivePayTo(row, payToByNetwork) {
+  if (!row || !payToByNetwork || typeof payToByNetwork !== "object") return;
+  const live = Object.entries(payToByNetwork).filter(([net, addr]) => typeof net === "string" && net && typeof addr === "string" && addr);
+  if (!live.length) return;
+  row.payToByNetwork = { ...(row.payToByNetwork || {}), ...Object.fromEntries(live) };
+}
+
+/**
+ * Write the chains a live 402 offered onto an index row. The row keeps every
+ * chain its own documents name (`documentedNetworks`, recorded by
+ * carryForwardLearnedQuotes; a row without the record holds only documented
+ * chains and live reads already folded in, all of which are kept) and takes
+ * the offered set for the rest: a chain an earlier read found and this one
+ * does not is withdrawn, with its payTo. Until 2026-09-28 the read was a pure
+ * union, so a chain the seller removed from its 402 stayed listed, with its
+ * old wallet, for as long as the route was indexed. A read that names no
+ * chain says nothing about chains and changes none. Fresh objects only, like
+ * applyLivePayTo: rows on one path can share their arrays.
+ */
+function applyLiveNetworks(row, liveNetworks) {
+  if (!row || !Array.isArray(liveNetworks) || !liveNetworks.length) return;
+  const before = Array.isArray(row.networks) ? row.networks : [];
+  const documented = Array.isArray(row.documentedNetworks) ? row.documentedNetworks : before;
+  const after = [...new Set([...documented, ...liveNetworks])];
+  row.networks = after;
+  if (!Array.isArray(row.documentedNetworks) && after.some((n) => !documented.includes(n))) row.documentedNetworks = [...documented];
+  const withdrawn = before.filter((n) => !after.includes(n));
+  if (withdrawn.length && row.payToByNetwork && typeof row.payToByNetwork === "object") {
+    const kept = { ...row.payToByNetwork };
+    for (const n of withdrawn) delete kept[n];
+    row.payToByNetwork = kept;
+  }
+}
+
+// WHY a live-402 read learned nothing, counted. Across the index about half of
+// all rows miss a chain the seller offers and ~30% have no price (measured
+// 2026-09-23); the required-query-parameter case explained only part of it, and
+// nothing recorded why the rest fail. Each missed route is filed under the
+// outcome of its FIRST attempt (the primary target and verb), and every attempt
+// is counted by verb and status, so the dominant cause can be read off prod
+// instead of guessed. Counts only: no URL, no origin, no body.
+const quoteProbeStats = { since: Date.now(), probed: 0, learned: 0, free: 0, missed: 0, missByFirst: {}, attempts: {} };
+function bump(map, key) { map[key] = (map[key] || 0) + 1; }
+export function probeFailureCode(err) {
+  const name = String(err?.name || "");
+  const code = String(err?.cause?.code || err?.code || "");
+  if (name === "TimeoutError" || name === "AbortError" || /TIMEOUT/.test(code)) return "timeout";
+  if (/ENOTFOUND|EAI_AGAIN/.test(code)) return "dns";
+  if (/ECONNRESET|UND_ERR_SOCKET/.test(code)) return "reset";
+  if (/ECONNREFUSED/.test(code)) return "refused";
+  if (/CERT|SSL|TLS|ERR_TLS/i.test(code + " " + String(err?.message || ""))) return "tls";
+  if (Number(err?.statusCode) === 400 || /private|public|blocked|not allowed/i.test(String(err?.message || ""))) return "ssrf-blocked";
+  return "error";
+}
+// Up to 20 unreadable-402 shapes, newest kept: host + route + the key names
+// of the decoded header and body and the first 160 characters of the body.
+// Operator surface only; it exists to name the next format we fail to read.
+const unreadable402Samples = [];
+function sampleUnreadable402(originUrl, route, header, body) {
+  const keysOf = (txt, b64) => {
+    try { const o = JSON.parse(b64 ? Buffer.from(String(txt).trim(), "base64").toString("utf8") : String(txt)); return o && typeof o === "object" ? Object.keys(o).slice(0, 12) : typeof o; } catch { return txt ? "unparseable" : null; }
+  };
+  let host = ""; try { host = new URL(originUrl).host; } catch { /* keep blank */ }
+  unreadable402Samples.push({ host, route: String(route).slice(0, 120), headerKeys: header ? keysOf(header, true) : null, bodyKeys: keysOf(body, false), body: String(body || "").slice(0, 160) });
+  if (unreadable402Samples.length > 20) unreadable402Samples.shift();
+}
+export function quoteProbeStatsSnapshot() {
+  const top = (m) => Object.fromEntries(Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 25));
+  return { since: new Date(quoteProbeStats.since).toISOString(), probed: quoteProbeStats.probed, learned: quoteProbeStats.learned, free: quoteProbeStats.free, missed: quoteProbeStats.missed, missByFirst: top(quoteProbeStats.missByFirst), attempts: top(quoteProbeStats.attempts), unreadable402Samples: [...unreadable402Samples] };
+}
+let quoteProbeSummaryAt = Date.now();
+function maybeLogQuoteProbeSummary(now = Date.now()) {
+  if (now - quoteProbeSummaryAt < 60 * 60_000) return;
+  quoteProbeSummaryAt = now;
+  const s = quoteProbeStatsSnapshot();
+  console.log(`[x402-index] live-402 probe outcomes since ${s.since}: probed ${s.probed}, learned ${s.learned}, missed ${s.missed}; misses by first attempt ${JSON.stringify(s.missByFirst)}`);
+}
+
+/** Write a live-402 price onto a row: fills a gap, and replaces a held price
+ *  that differs (logged with both figures, so a correction is never silent). */
+export function adoptLivePrice(row, livePrice, originUrl = "") {
+  if (!row || livePrice == null) return;
+  const live = priceToMicroUsd(livePrice);
+  if (!(live > 0)) return;
+  const held = priceToMicroUsd(row.price);
+  if (held === live) return;
+  if (held > 0) console.log(`[x402-index] live-402 price: ${originUrl}${row.route} ${microUsdToPrice(held)} -> ${microUsdToPrice(live)} (the route's own 402)`);
+  row.price = livePrice;
+  delete row.quoteCarriedForward;
+}
+
+export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false, maxProbes = null, onProbed = null } = {}) {
   if (!Array.isArray(tools) || !tools.length) return tools;
+  dropGoneRoutes(tools, originUrl);
+  if (!tools.length) return tools;
   const candidates = tools.filter(
     (t) => t
       && typeof t.route === "string" && t.route.startsWith("/")
@@ -2715,7 +3907,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false 
       // was && - both had to be missing - so a probe that learned networks
       // but could not price (the Solana isUsdc gap) LOCKED the row unpriced
       // for the 7-day staleness window: networks known, price null, never
-      // probed again (measured 2026-09-01, sol.blockrun).
+      // probed again (measured 2026-09-01).
       && ((!(Number(t.price) > 0) || !(Array.isArray(t.networks) && t.networks.length)) || priceDisagreesWithOrigin(t) || quoteIsStale(t) || networksNeedLiveVerify(t)
         // An explicit re-registration ("price my catalog NOW") also re-asks
         // every route whose price is NOT the origin's own declaration - a
@@ -2723,13 +3915,35 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false 
         // (2026-09-15): a seller made a route free, re-registered, and the
         // 0.001 learned two weeks earlier stood because a priced row was never
         // a candidate until its 7-day clock ran out.
-        || (ignoreBudget && Number(t.price) > 0 && !(Number(t.originDeclaredPrice) > 0)))
+        || (ignoreBudget && Number(t.price) > 0 && !(Number(t.originDeclaredPrice) > 0))
+        // ...and every route whose held price differs from the origin's own
+        // declaration AT ALL. The automatic crawl waits for a 2x drift
+        // (QUOTE_DRIFT_FACTOR) to stay polite; a seller who re-registers is
+        // asking us to look now, and a 1.67x gap is still a wrong price.
+        || (ignoreBudget && Number(t.price) > 0 && Number(t.originDeclaredPrice) > 0
+          && priceToMicroUsd(t.price) !== priceToMicroUsd(t.originDeclaredPrice))
+        // ...and every route whose chains, payTo and EIP-712 domain came from
+        // a past live read. The price of an origin-priced row is the origin's
+        // own and needs no re-ask, but those three fields are the 402's, and
+        // carry-forward keeps a verified read across rebuilds, so the automatic
+        // crawl re-reads them only on the weekly networksNeedLiveVerify clock.
+        // A seller who fixed a wrong USDC domain (the fix we ask them to make,
+        // then re-register) or moved its payout wallet would otherwise keep the
+        // old observation for up to a week, with the router skipping them on it
+        // and the Base scan reading the old wallet.
+        || (ignoreBudget && Number(t.networksVerifiedAt) > 0 && Array.isArray(t.networks) && t.networks.length > 0))
+      // (An undeclared route needs no clause of its own here: the staleness
+      // tests above re-ask every priced row within the same 7 days that
+      // needsLiveProof measures, off the same timestamps.)
+      // A route observed free inside the quote window is left alone by the
+      // automatic crawl; an explicit re-registration still re-asks it.
+      && (ignoreBudget || !isObservedFree(t))
       && probeMethodsFor(t).length                       // never PUT/PATCH/DELETE
       && probeDue(originUrl, `quote:${t.route}`),
   );
   // NEVER-ATTEMPTED rows first. The first rotation attempt indexed a window
   // into a list that SHRINKS as rows price, so some rows landed in skipped
-  // windows on every pass (sol.blockrun's stock routes, three passes running,
+  // windows on every pass (one seller's stock routes, three passes running,
   // 50 of 114 priced around them). Rows a probe has already touched carry
   // quoteObservedAt - putting untouched rows ahead means each pass drains new
   // ground before re-visiting networks-only learns, and coverage completes in
@@ -2740,20 +3954,48 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false 
   // 128-route seller with 45 priced drains 5/pass over a dozen passes. The
   // automatic crawl keeps the gentle cap. Untouched rows first either way, so
   // each pass makes new ground.
+  //
+  // quoteObservedAt alone does not say "touched": a row the rebuild priced
+  // from a registry snapshot keeps a learned quote's stamp but not its age,
+  // so it is due on every crawl and reads as never attempted. A stamp naming
+  // the row's own verb (stampIsOwn) is the other record of a read, so such a
+  // row goes behind the rows that hold neither. Those include a learned quote
+  // whose read was withheld (carryForwardLearnedQuotes: a stamp naming no
+  // verb, on a row with chains of its own), which keeps no payTo until its
+  // own read. Ranked level with the snapshot rows, a cap's worth of those
+  // ahead in array order took every crawl's probes and that read never came.
+  // Rows with an age still go last, as before.
+  const readRank = (t) => (t.quoteObservedAt ? 2 : stampIsOwn(t) ? 1 : 0);
   const repriceCap = Number(process.env.REPRICE_MAX_PER_CALL || "120");
-  const cap = ignoreBudget ? repriceCap : Math.min(quoteProbeCapFor(tools), liveQuoteBudget);
+  let cap = ignoreBudget ? repriceCap : Math.min(quoteProbeCapFor(tools), liveQuoteBudget);
+  // A caller-supplied ceiling (the re-registration's per-origin hourly
+  // allowance) can only LOWER the cap, never raise it.
+  if (maxProbes != null && Number.isFinite(Number(maxProbes))) cap = Math.min(cap, Math.max(0, Math.floor(Number(maxProbes))));
   const rotated = [...candidates]
-    .sort((a, b) => (a.quoteObservedAt ? 1 : 0) - (b.quoteObservedAt ? 1 : 0))
+    .sort((a, b) => readRank(a) - readRank(b))
     .slice(0, Math.max(0, cap));
+  if (typeof onProbed === "function") { try { onProbed(rotated.length); } catch { /* accounting only */ } }
   if (!rotated.length) return tools;
   if (!ignoreBudget) liveQuoteBudget -= rotated.length;
 
   const { assertPublicUrl, ssrfDispatcher } = await import("./tools/fetch-guard.js");
   const dropped = new Set();
   for (const tool of rotated) {
-    const target = `${originUrl}${tool.route}`;
     let learned = null;
-    for (const method of probeMethodsFor(tool)) {
+    let freeObserved = false;
+    let gone = false;
+    let firstOutcome = null;
+    const own = String(tool.method || "GET").toUpperCase();
+    const statusByMethod = {};
+    // Every answer per verb, a thrown attempt recorded as 0: a verb "refused"
+    // only when every attempt on it said so (see the sibling branch below).
+    const answersByMethod = {};
+    const note = (method, outcome) => {
+      const k = `${method} ${outcome}`;
+      bump(quoteProbeStats.attempts, k);
+      if (!firstOutcome) firstOutcome = k;
+    };
+    probe: for (const { target, method, body: reqBody } of probeAttemptsFor(originUrl, tool)) {
       try {
         // Crawled URLs are external data and could DNS-rebind between crawl and
         // now: validate then pin, exactly as probePaywall does.
@@ -2761,7 +4003,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false 
         const res = await fetch(target, {
           method,
           headers: { Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
-          ...(method === "POST" ? { body: "{}" } : {}),
+          ...(method === "POST" ? { body: reqBody } : {}),
           dispatcher: ssrfDispatcher,
           redirect: "manual",
           signal: AbortSignal.timeout(8000),
@@ -2775,6 +4017,9 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false 
         // Every other status still falls through to POST, because that is what
         // discovers a POST-only seller: a 404 or 405 on GET is expected there
         // and is the whole reason the second method is tried.
+        note(method, String(res.status));
+        statusByMethod[method] = res.status;
+        (answersByMethod[method] ||= []).push(res.status);
         if (method === "GET" && res.status === 200) {
           // The route answered WITHOUT a paywall. If the price we hold was
           // learned (a past 402, or a Bazaar settlement snapshot) rather than
@@ -2789,56 +4034,200 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false 
             const was = tool.price;
             tool.price = null; tool.paid = false;
             tool.quoteSource = "live-200"; tool.quoteRetiredAt = Date.now(); tool.quoteObservedAt = Date.now();
+            tool.liveProvenAt = Date.now();
             delete tool.quoteCarriedForward;
             console.log(`[x402-index] live-200: ${originUrl}${tool.route} answered GET 200 with no paywall; retired the learned price ${was}`);
+          } else if (String(tool.method || "GET").toUpperCase() === "GET" && !(Number(tool.price) > 0) && !(Number(tool.originDeclaredPrice) > 0)) {
+            // An UNPRICED row that answers 200 is a free route (health, docs,
+            // previews, free data: 36 of 36 in a 2026-09-23 sample). Until now
+            // it stayed "price unknown" and was re-probed every crawl - ~640
+            // probes an hour, 37% of all misses. Stamp it free; the automatic
+            // crawl leaves it alone for the quote window, a re-registration
+            // re-asks.
+            // Only when the body is the route working, not an error page (src/tool-judge.js).
+            const raw = (await readTextCapped(res, 2000).catch(() => "")).slice(0, 2000);
+            const bodyText = looksLikeListingInjection(raw) ? null : raw;   // text written to steer a judgment is not sent
+            const verdict = bodyText == null ? null : await judgeFreeResponse(bodyText, res.headers.get("content-type") || "");
+            if (verdict === "free") {
+              tool.paid = false;
+              tool.quoteSource = "live-200"; tool.freeObservedAt = Date.now(); tool.quoteObservedAt = Date.now();
+              freeObserved = true;
+            } else {
+              note(method, verdict === "error" ? "200-error-body" : "200-unsure");
+            }
           }
-          break;
+          break probe;
         }
+        // 410 on the row's own verb: the seller retired this route.
+        if (res.status === 410 && method === own) { gone = true; break probe; }
         if (!isQuoteResponse(res.status)) continue;   // 404 on GET is expected for a POST-only seller
         // The quote lives in the header for x402 v2 and in the body for several
         // real sellers; read a bounded slice of both and let the parser decide.
-        const body = await res.text().catch(() => "");
-        const quote = quoteFromAccepts(
-          acceptsFromLive402({ header: res.headers.get("payment-required"), body: body.slice(0, 64_000) }),
-        );
-        if (quote) { learned = { ...quote, method }; break; }
-      } catch { /* unreachable, blocked, or malformed - try the next method */ }
+        const body = await readTextCapped(res, 64_000).catch(() => "");
+        // Networks normalised ONCE, as paymentFieldsFromAccepts does for a
+        // manifest or registry row: a v1-style 402 that names "base" must key
+        // its payTo under eip155:8453, or allPayToOrigins (which reads that
+        // key) never sees the wallet and the Base scan never credits it.
+        const live = acceptsFromLive402({ header: res.headers.get("payment-required"), body: body.slice(0, 64_000) });
+        const quote = quoteFromAccepts(Array.isArray(live)
+          ? live.map((a) => (a && typeof a.network === "string" ? { ...a, network: normalizeNetwork(a.network) } : a))
+          : live);
+        if (quote) { learned = { ...quote, method }; break probe; }
+        // A 402 whose accepts we could not turn into a quote. An MPP-only
+        // seller answers with a Payment challenge and no x402 accepts at all:
+        // counted apart, because it is not a parser gap. The rest are sampled
+        // (shape only) so the next format we fail to read can be named.
+        const mppOnly = /^Payment\b/i.test(String(res.headers.get("www-authenticate") || "").trim());
+        note(method, mppOnly ? "402-mpp-only" : "402-unreadable");
+        if (!mppOnly) sampleUnreadable402(originUrl, tool.route, res.headers.get("payment-required"), body);
+      } catch (err) {
+        note(method, probeFailureCode(err));
+        (answersByMethod[method] ||= []).push(0);
+        /* unreachable, blocked, or malformed - try the next method */
+      }
     }
-    noteProbeOutcome(originUrl, `quote:${tool.route}`, Boolean(learned));
+    if (gone) {
+      markRouteGone(originUrl, own, tool.route, { kind: "410" });
+      dropped.add(tool);
+      quoteProbeStats.probed++;
+      console.log(`[x402-index] live-410: ${originUrl}${tool.route} answered ${own} 410 Gone; dropped the row`);
+      continue;
+    }
+    // An undeclared route whose own verb answered "no such route" is not for
+    // sale. Only a definitive answer counts: a timeout, 5xx, 429, 401/403 or a
+    // 400 on our probe body says nothing. A row whose verb was inferred must
+    // miss on every verb tried; a URL template is never probed literally.
+    const MISS = new Set([404, 405, 410]);
+    // The quote belongs to the row of the verb that answered. When that is not
+    // the stated verb and the seller ALSO declares the answering verb on this
+    // route, the declared sibling takes the read, and the stated row keeps
+    // nothing from it (see the sibling branch below).
+    const answered = learned?.method ? String(learned.method).toUpperCase() : own;
+    const sibling = learned && answered !== own
+      ? tools.find((o) => o !== tool && o.route === tool.route && String(o.method || "").toUpperCase() === answered)
+      : null;
+    // Did the stated verb itself refuse, definitively, on every attempt? Only
+    // then does the sibling branch drop the stated row. The length test is a
+    // belt: probeMethodsFor always tries the stated verb first, so no current
+    // path reaches it, but an empty list would otherwise read as a refusal.
+    const statedRefused = Boolean(sibling) && (answersByMethod[own] || []).length > 0
+      && answersByMethod[own].every((st) => MISS.has(st));
+    if (learned || freeObserved) {
+      const proven = sibling || tool;
+      proven.liveProvenAt = Date.now();
+      clearGoneMark(originUrl, sibling ? answered : own, tool.route);
+    }
+    const missCandidate = !learned && !freeObserved && tool.declared === false && !String(tool.route).includes("{") && MISS.has(statusByMethod[own]);
+    // An inferred POST is only ever probed with POST; before calling a guessed
+    // verb's miss a miss, ask the route once with a read-only GET.
+    if (missCandidate && tool.methodInferred && statusByMethod.GET === undefined) {
+      try {
+        // seller + route, as every other probe builds it: a path seller's routes
+        // are relative to its prefix, which URL resolution against the key drops.
+        const target = sellerRouteUrl(originUrl, tool.route);
+        if (!target) throw new Error("route outside the seller");
+        await assertPublicUrl(target);
+        const r = await fetch(target, { method: "GET", headers: { Accept: "application/json" }, dispatcher: ssrfDispatcher, redirect: "manual", signal: AbortSignal.timeout(8000) });
+        statusByMethod.GET = r.status;
+        await r.body?.cancel?.().catch?.(() => {});
+      } catch { statusByMethod.GET = 0; }
+    }
+    if (missCandidate
+        && (!tool.methodInferred || Object.values(statusByMethod).every((st) => MISS.has(st)))) {
+      // First sighting: remember it and keep the row. Confirmed only by a
+      // second miss at least MISS_CONFIRM_MS later.
+      const prior = goneMark(originUrl, own, tool.route);
+      if (!prior || prior.kind !== "pending" || Date.now() - prior.at < MISS_CONFIRM_MS) {
+        if (!prior || prior.kind !== "pending") markRouteGone(originUrl, own, tool.route, { kind: "pending" });
+        noteProbeOutcome(originUrl, `quote:${tool.route}`, false);
+        quoteProbeStats.probed++;
+        console.log(`[x402-index] live-miss (first): ${originUrl}${tool.route} answered ${own} ${statusByMethod[own]}; kept until a second miss`);
+        continue;
+      }
+      markRouteGone(originUrl, own, tool.route, { kind: "miss" });
+      dropped.add(tool);
+      quoteProbeStats.probed++;
+      console.log(`[x402-index] live-miss: ${originUrl}${tool.route} is not in the seller's documents and answered ${own} ${statusByMethod[own]}; dropped the row`);
+      continue;
+    }
+    // A quote that went to a declared sibling taught the stated row nothing
+    // about itself, so the route backs off like any probe that learned nothing
+    // (the stated row stays a candidate, and without this it would be asked
+    // again, both verbs, on every crawl). The sibling was just read and is not
+    // due again for days; a successful read of its own clears the backoff.
+    noteProbeOutcome(originUrl, `quote:${tool.route}`, Boolean(learned) && !sibling);
+    quoteProbeStats.probed++;
+    if (learned) quoteProbeStats.learned++;
+    else if (freeObserved) quoteProbeStats.free++;
+    else { quoteProbeStats.missed++; bump(quoteProbeStats.missByFirst, firstOutcome || "none"); }
     if (!learned) continue;
+    if (sibling) {
+      // The stated verb did not answer a quote, and the seller ALSO declares
+      // the verb that did on this route: the read is the sibling's, and only
+      // the sibling is written. The stated row is dropped only when its own
+      // verb refused definitively (404/405/410 on every attempt): an OpenAPI
+      // that lists GET and POST on one path where only POST is real, a
+      // declaration the seller does not honour, which would send buyers a verb
+      // that 405s. Any other answer (a 400 from a route that validates its
+      // input before the paywall, 401/403, 5xx, a timeout) says nothing about
+      // whether the stated verb is for sale, so the row stays exactly as it
+      // was. Until 2026-09-28 any non-402 dropped it, and the drop writes no
+      // gone mark, so a declared product left the index on every crawl and
+      // came back on every rebuild.
+      adoptLivePrice(sibling, learned.price, originUrl);
+      applyLiveNetworks(sibling, learned.networks);
+      if (learned.evmDomainByNetwork) sibling.evmDomainByNetwork = { ...learned.evmDomainByNetwork };
+      applyLivePayTo(sibling, learned.payToByNetwork);
+      // The stamp names the verb whose 402 was read (stampIsOwn), here the
+      // sibling's own.
+      sibling.networksVerifiedAt = Date.now();
+      sibling.networksVerifiedMethod = answered;
+      if (statedRefused) {
+        dropped.add(tool);
+        console.log(`[x402-index] live-402: ${originUrl}${tool.route} refuses ${own} and answers ${answered}; the seller declares both, dropping the ${own} row (sibling kept; ${own} answered ${answersByMethod[own].join(",")})`);
+      } else {
+        console.log(`[x402-index] live-402: ${originUrl}${tool.route} answers ${answered}, not ${own} (${(answersByMethod[own] || []).map((st) => st || "failed").join(",") || "not asked"}); the quote went to the declared ${answered} row and the ${own} row was left as it was`);
+      }
+      continue;
+    }
     // Price may be null for an asset we refuse to guess at; the networks alone
     // still move the row from payable:"unknown" to payable:"x402", which is the
     // honest and useful half of the answer.
-    if (learned.price != null && !(Number(tool.price) > 0)) tool.price = learned.price;
-    if (learned.networks?.length) tool.networks = [...new Set([...(tool.networks || []), ...learned.networks])];
+    // The live 402 is what a buyer is actually asked to pay, so it is the
+    // current word on the price as well as the chains. This used to fill an
+    // EMPTY price only, which made every re-probe of a priced row - a drift
+    // against the origin's declaration, a stale learned quote, an explicit
+    // re-registration - read the right amount and keep the old one (issue
+    // #1460, 2026-09-23: a seller re-registered at $0.005 and seven routes
+    // still showed the $0.003 learned earlier).
+    adoptLivePrice(tool, learned.price, originUrl);
+    applyLiveNetworks(tool, learned.networks);
     // The live 402 is the current word on which EIP-712 domain each EVM
     // accept advertises: it replaces any older observation on the row.
     if (learned.evmDomainByNetwork) tool.evmDomainByNetwork = { ...learned.evmDomainByNetwork };
+    // And on where the origin asks to be paid. Until 2026-09-22 this was the
+    // one field of the 402 the probe threw away: a seller whose manifest names
+    // its wallet nowhere a resource reads it (bare-string resources) was listed
+    // with an EMPTY payToByNetwork, so allPayToOrigins never offered that
+    // wallet to the Base scan and no volume of outside buyers could ever move
+    // it past the settlement floor. The address the origin's OWN 402 names is
+    // the address the router would pay, so it is own evidence, never inherited
+    // (src/evidence-binding.js binds only registry and leaderboard wallets).
+    applyLivePayTo(tool, learned.payToByNetwork);
     // The live 402 was read: the row's chains are verified as of now, whatever
-    // the manifest claimed (the union above never drops a manifest chain).
+    // the manifest claimed (applyLiveNetworks never drops a documented chain).
+    // The stamp names the verb that answered, which is this row's verb once
+    // the correction below applies (stampIsOwn).
     tool.networksVerifiedAt = Date.now();
+    tool.networksVerifiedMethod = answered;
     if (learned.method && learned.method !== tool.method) {
-      // The stated verb did not answer a quote and this one did. When the
-      // seller ALSO declares the answering verb on this route (an OpenAPI that
-      // lists GET and POST on one path, where only POST is real), the stated
-      // row is a declaration the seller does not honour: correcting it would
-      // leave two identical rows on the path, and keeping it would send buyers
-      // a verb that 405s. Drop it; the sibling already represents the route.
-      const stated = String(tool.method || "GET").toUpperCase();
-      const sibling = tools.find((o) => o !== tool && o.route === tool.route && String(o.method || "").toUpperCase() === learned.method);
-      if (sibling) {
-        if (learned.price != null && !(Number(sibling.price) > 0)) sibling.price = learned.price;
-        if (learned.networks?.length) sibling.networks = [...new Set([...(sibling.networks || []), ...learned.networks])];
-        if (learned.evmDomainByNetwork) sibling.evmDomainByNetwork = { ...learned.evmDomainByNetwork };
-        sibling.networksVerifiedAt = Date.now();
-        dropped.add(tool);
-        console.log(`[x402-index] live-402: ${originUrl}${tool.route} refuses ${stated} and answers ${learned.method}; the seller declares both, dropping the ${stated} row (sibling kept)`);
-        continue;
-      }
-      // Otherwise a CORRECTION, recorded as such so the next crawl's
+      // The stated verb did not answer a quote and this one did, and no
+      // sibling row declares the answering verb (that case took the branch
+      // above): a CORRECTION, recorded as such so the next crawl's
       // carry-forward can re-apply it to the freshly rebuilt row (which will
       // state the wrong verb again) without ever touching a row whose own verb
       // was never probed.
+      const stated = own;
       tool.methodCorrectedFrom = stated;
       tool.method = learned.method; tool.methodInferred = false;
     }
@@ -2857,6 +4246,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false 
   // Two call sites ignore the return value and read the array they passed, so
   // a dropped row must leave the array itself, not just the returned copy.
   if (dropped.size) for (let i = tools.length - 1; i >= 0; i--) if (dropped.has(tools[i])) tools.splice(i, 1);
+  maybeLogQuoteProbeSummary();
   return tools;
 }
 
@@ -2888,7 +4278,8 @@ async function probePaywall(tools) {
   const pick = paid.find((t) => String(t.method || "GET").toUpperCase() === "GET") || paid[0];
   if (!pick) return null;
   const method = String(pick.method || "GET").toUpperCase();
-  const target = `${pick.seller}${pick.route}`;
+  const target = sellerRouteUrl(pick.seller, pick.route);
+  if (!target) return null;
   try {
     const { assertPublicUrl, ssrfDispatcher } = await import("./tools/fetch-guard.js");
     // Same guard as the router's live probe: crawled URLs are external data and
@@ -2992,7 +4383,75 @@ export function noteForcedCrawl(originUrl, now = Date.now()) {
   }
   forcedCrawlAt.set(originUrl, now);
 }
-export function __resetForcedCrawlForTest() { forcedCrawlAt.clear(); }
+export function __resetForcedCrawlForTest() { forcedCrawlAt.clear(); repriceAt.clear(); repriceSpend.clear(); }
+
+// The same bound for the re-registration's live-402 re-price: a window per
+// origin, and an hourly allowance of route probes per origin across calls.
+// A restart forgets both, which at worst allows one extra pass per origin.
+const repriceAt = new Map();      // origin -> last re-price start
+const repriceSpend = new Map();   // origin -> [{ at, n }]
+const REPRICE_COOLDOWN_MS = Math.max(60_000, Number(process.env.INDEX_REPRICE_COOLDOWN_MS || 10 * 60_000));
+const REPRICE_MAX_PER_ORIGIN_HOUR = Math.max(1, Number(process.env.INDEX_REPRICE_MAX_PER_ORIGIN_HOUR || 240));
+const HOUR_MS = 3600_000;
+function trimMap(map, keep) {
+  if (map.size <= 2000) return;
+  for (const [k, v] of map) if (!keep(v)) map.delete(k);
+  if (map.size > 2000) map.clear();
+}
+export function __shiftRecheckClocksForTest(ms) {
+  for (const [k, t] of repriceAt) repriceAt.set(k, t - ms);
+  for (const [k, t] of forcedCrawlAt) forcedCrawlAt.set(k, t - ms);
+  for (const rows of repriceSpend.values()) for (const r of rows) r.at -= ms;
+}
+export function repriceDue(originUrl, now = Date.now()) {
+  const at = repriceAt.get(originUrl);
+  return !at || now - at >= REPRICE_COOLDOWN_MS;
+}
+function noteReprice(originUrl, now = Date.now()) {
+  trimMap(repriceAt, (t) => now - t < REPRICE_COOLDOWN_MS);
+  repriceAt.set(originUrl, now);
+}
+function spentThisHour(originUrl, now = Date.now()) {
+  const rows = (repriceSpend.get(originUrl) || []).filter((r) => now - r.at < HOUR_MS);
+  if (rows.length) repriceSpend.set(originUrl, rows); else repriceSpend.delete(originUrl);
+  return rows.reduce((a, r) => a + r.n, 0);
+}
+export function repriceAllowance(originUrl, now = Date.now()) {
+  return Math.max(0, REPRICE_MAX_PER_ORIGIN_HOUR - spentThisHour(originUrl, now));
+}
+function spendRepriceAllowance(originUrl, n, now = Date.now()) {
+  if (!(n > 0)) return;
+  trimMap(repriceSpend, (rows) => rows.some((r) => now - r.at < HOUR_MS));
+  const rows = repriceSpend.get(originUrl) || [];
+  rows.push({ at: now, n });
+  repriceSpend.set(originUrl, rows);
+}
+// What the register answer says about the re-check it did (or did not) run,
+// so a seller whose call landed inside a window knows when to try again
+// rather than reading a silent no-op as "the fix did not take".
+function reverifyReport(originUrl, { reread, repriced, routesProbed }, now = Date.now()) {
+  const left = (at, win) => (at ? Math.max(0, Math.ceil((at + win - now) / 1000)) : 0);
+  const rereadAfter = reread ? 0 : left(forcedCrawlAt.get(originUrl), FORCED_CRAWL_COOLDOWN_MS);
+  const repriceAfter = repriced ? 0 : left(repriceAt.get(originUrl), REPRICE_COOLDOWN_MS);
+  const allowance = repriceAllowance(originUrl, now);
+  const parts = [];
+  parts.push(reread ? "documents re-read now" : `documents were re-read recently; the next re-read is available in ${rereadAfter}s`);
+  if (repriced) parts.push(`${routesProbed} route(s) re-checked against their live 402 now`);
+  else if (allowance <= 0) parts.push(`this origin's hourly re-check allowance (${REPRICE_MAX_PER_ORIGIN_HOUR} routes) is spent; it refills over the hour`);
+  else parts.push(`routes were re-checked recently; the next re-check is available in ${repriceAfter}s`);
+  return {
+    documentsReread: reread,
+    routesRechecked: repriced,
+    routesProbed: repriced ? routesProbed : 0,
+    rereadCooldownSeconds: Math.round(FORCED_CRAWL_COOLDOWN_MS / 1000),
+    recheckCooldownSeconds: Math.round(REPRICE_COOLDOWN_MS / 1000),
+    nextRereadInSeconds: rereadAfter,
+    nextRecheckInSeconds: repriceAfter,
+    recheckAllowancePerHour: REPRICE_MAX_PER_ORIGIN_HOUR,
+    recheckAllowanceLeft: allowance,
+    note: `${parts.join("; ")}. The crawler also re-reads every listed origin on its own cycle.`,
+  };
+}
 
 export function clearOriginProbeState(originUrl) {
   let cleared = 0;
@@ -3047,14 +4506,17 @@ const ROBOTS_UA = "Agent402";
 // assertPublicUrl rejects an unresolvable host before any request is made -
 // which is exactly how the first version of the test passed its fail-open cases
 // and proved nothing about the blocking ones.
-async function robotsGroupsFor(originUrl, fetchText) {
+async function robotsGroupsFor(sellerKey, fetchText) {
+  // robots.txt is a HOST document: a path seller reads its host's root file,
+  // and every seller on one host shares one cached read.
+  const originUrl = sellerHostRootOf(sellerKey);
   const hit = robotsCache.get(originUrl);
   if (hit && Date.now() - hit.at < ROBOTS_TTL_MS) return hit.groups;
   let groups = [];
   try {
     const text = fetchText
       ? await fetchText(`${originUrl}/robots.txt`)
-      : (await safeFetch(`${originUrl}/robots.txt`, { maxBytes: ROBOTS_MAX_BYTES })).html;
+      : (await crawlFetch(`${originUrl}/robots.txt`, { maxBytes: ROBOTS_MAX_BYTES })).html;
     groups = parseRobots(String(text || ""));
   } catch {
     groups = [];   // unreachable, 404, oversize: nothing to honour
@@ -3079,7 +4541,7 @@ export async function robotsForbids(originUrl, path, { fetchText, manifestPublis
   // (RFC 8615) a seller publishes for the sole purpose of being fetched by
   // payment-discovery clients. An API host's blanket Disallow: / - a common
   // default - otherwise permanently hides the very document the seller serves
-  // to be found: measured live 2026-09-01 on sol.blockrun.ai (manifest 200,
+  // to be found: measured live 2026-09-01 on one seller (manifest 200,
   // robots Disallow /, entry stuck as textless registry synthesis, invisible
   // to every route query). Everything else the crawler touches - llms.txt,
   // homepages, tool probes - stays robots-honoured.
@@ -3088,7 +4550,7 @@ export async function robotsForbids(originUrl, path, { fetchText, manifestPublis
   // /openapi.json at the same origin is read even under a BLANKET Disallow.
   // The manifest is the seller's opt-in to machine discovery, and the OpenAPI
   // is the document that NAMES the routes the manifest lists as bare
-  // "POST /api/v1/exa/search" strings. Without it, sol.blockrun.ai's 128
+  // "POST /api/v1/exa/search" strings. Without it, that seller's 128
   // routes carried their path as their name and could not match ordinary
   // task text ("web search" finds nothing in "/api/v1/search"), while the
   // seller's own OpenAPI called that route "Grok Live Search" with a
@@ -3102,12 +4564,23 @@ export async function robotsForbids(originUrl, path, { fetchText, manifestPublis
   if (path === WELL_KNOWN_PATH) return null;
   const groups = await robotsGroupsFor(originUrl, fetchText);
   if (!groups.length) return null;
-  const verdict = robotsAllows(groups, ROBOTS_UA, path);
+  // Rules match the path on the HOST, so a path seller's documents are checked
+  // at their full location under its prefix.
+  const verdict = robotsAllows(groups, ROBOTS_UA, `${sellerPrefixOf(originUrl)}${path}`);
   if (verdict.allowed) return null;
   if (manifestPublished && path === OPENAPI_PATH && !robotsNamesUs(groups)) return null;
   return verdict.matchedRule || "Disallow";
 }
 export function __resetRobotsCacheForTest() { robotsCache.clear(); }
+
+// The crawl's document reads (robots.txt and every per-origin probe) go through
+// this one binding. It is the guarded safeFetch in production; a test swaps it
+// for a stub so the real crawl pipeline can be driven without a network (a
+// stubbed global fetch would exercise nothing, because safeFetch resolves the
+// host before it fetches).
+let crawlFetch = (url, opts) => safeFetch(url, opts);
+export function __setCrawlFetchForTest(fn) { crawlFetch = typeof fn === "function" ? fn : (url, opts) => safeFetch(url, opts); }
+export async function __crawlSellerForTest(originUrl) { return crawlSeller(originUrl); }
 
 /** Fetch `path` on `originUrl` unless it is backed off, recording the outcome.
  *  Every per-origin probe in the crawl goes through here so a new one cannot be
@@ -3132,7 +4605,13 @@ async function probePath(originUrl, path, { manifestPublished = false, ...opts }
     // RFC 9110 allows a 304 to omit the ETag it matched on, so overwriting them
     // with a null read would disable revalidation from the second cycle on.
     const stored = validatorFor(originUrl, path);
-    const res = await safeFetch(`${originUrl}${path}`, { ...opts, validators: stored, allowNotModified: true });
+    const res = await crawlFetch(`${originUrl}${path}`, { ...opts, validators: stored, allowNotModified: true });
+    // A path seller's document must be served from under its own prefix. A
+    // redirect to another path on the same host is another app's document,
+    // and reading it as this seller's would attribute that app to it.
+    if (sellerPrefixOf(originUrl) && res.finalUrl && !isUnderSeller(res.finalUrl, originUrl)) {
+      throw new Error(`${path} was redirected outside the seller's path prefix`);
+    }
     noteProbeOutcome(originUrl, path, true);
     if (res.notModified) {
       if (res.validators) rememberValidator(originUrl, path, res.validators);
@@ -3294,6 +4773,9 @@ async function crawlSeller(originUrl) {
     tools = mergeManifestIntoTools(normaliseManifestTools(manifest, originUrl), tools);
     tools = dropDeclaredFreeEndpoints(tools, manifest);
     tools = dropUnvouchedNonProductRoutes(tools, (bazaarToolsByOrigin.get(originUrl) || []).map((t) => t.route));
+    // Which routes the seller's own documents name; the rest must prove
+    // themselves live (see stampDeclared / needsLiveProof).
+    stampDeclared(tools, [...normaliseManifestTools(manifest, originUrl), ...(openapiRoutes || []), ...(openapiTools || [])]);
     // Keep what earlier crawls already learned, THEN spend the probe budget on
     // routes we still know nothing about.
     tools = carryForwardLearnedQuotes(tools, prev);
@@ -3318,6 +4800,7 @@ async function crawlSeller(originUrl) {
       // WHICH surface produced this catalogue. Everything below is a fallback,
       // and a seller cannot fix a gap they cannot see — see discoveryNote().
       discoveryPath: WELL_KNOWN_PATH,
+      fallbackErrors: undefined,
       // Not this seller's turn: carry the last reading forward rather than
       // dropping it — null must mean "never probed", not "not probed today".
       paywall: paywallProbeDue() ? await probePaywall(tools) : (prev?.paywall ?? null),
@@ -3349,6 +4832,12 @@ async function crawlSeller(originUrl) {
     let openapi = null;
     let openapiTools = [];
     let openapiPath = null;
+    // WHY each fallback surface gave nothing. The record's `error` names only
+    // the manifest's failure, so a seller whose /openapi.json we could not
+    // read (or read and could not use) saw "probe backed off: /.well-known/x402"
+    // and nothing about the file that actually decided the listing.
+    const fallbackErrors = [];
+    const noteFallback = (path, e) => fallbackErrors.push({ path, error: String(e?.message || e).slice(0, 160) });
     try {
       const openapiRes = await fetchOpenapi();
       const parsed = JSON.parse(openapiRes.html);
@@ -3356,9 +4845,11 @@ async function crawlSeller(originUrl) {
         openapi = parsed;
         openapiTools = normaliseOpenapiTools(parsed, originUrl);
         if (openapiTools.length) openapiPath = "/openapi.json";
-      }
-    } catch {
+        else noteFallback("/openapi.json", "no paid operation could be read from it");
+      } else noteFallback("/openapi.json", "no payment annotation on any operation");
+    } catch (e) {
       /* no openapi either — Bazaar-only seller */
+      noteFallback("/openapi.json", e);
     }
     // 3. /agents.json. Reported by a seller (#645) who served a COMPLETE
     //    catalogue there - 17 endpoints with prices and schemas - while our
@@ -3378,8 +4869,9 @@ async function crawlSeller(originUrl) {
           const fromAgents = normaliseOpenapiTools(parsed, originUrl);
           if (fromAgents.length) { openapi = openapi || parsed; openapiTools = fromAgents; openapiPath = "/agents.json"; }
         }
-      } catch {
+      } catch (e) {
         /* no agents.json either */
+        noteFallback("/agents.json", e);
       }
     }
     // 4. /llms.txt. The other half of the #645 ask. Last because it is prose:
@@ -3395,8 +4887,9 @@ async function crawlSeller(originUrl) {
         const llmsRes = await probePath(originUrl, "/llms.txt", { maxBytes: MAX_OPENAPI_BYTES });
         const fromLlms = normaliseLlmsTxtTools(llmsRes.html, originUrl);
         if (fromLlms.length) { openapiTools = fromLlms; openapiPath = "/llms.txt"; }
-      } catch {
+      } catch (e) {
         /* no llms.txt either */
+        noteFallback("/llms.txt", e);
       }
     }
     const tools = dropUnvouchedNonProductRoutes(
@@ -3406,6 +4899,7 @@ async function crawlSeller(originUrl) {
       bazaarTools.map((t) => t.route)
     );
     if (tools.length) {
+      stampDeclared(tools, [...openapiTools, ...(openapi ? openapiAllOperationRoutes(openapi, originUrl) : [])]);
       // Same enrichment as the manifest path. A seller discovered through the
       // FALLBACK surfaces is even less likely to have published a price, so
       // skipping it here would leave the worst-served sellers unpriced.
@@ -3431,6 +4925,7 @@ async function crawlSeller(originUrl) {
         // /agents.json. A seller told to fix their discovery path needs to know
         // which path we did read, not merely that it was not the standard one.
         discoveryPath: openapiPath,
+        fallbackErrors: openapiTools.length ? undefined : fallbackErrors,
         // A CRAWL COMPLETING IS NOT A SELLER ANSWERING, and this line is where
         // that distinction was half-applied. `originResponded` below already
         // says the truth (openapi-fallback = their document answered;
@@ -3477,6 +4972,7 @@ async function crawlSeller(originUrl) {
       // explanation - the same "absence reported as absence" rule the discovery
       // gap and /status already follow.
       robotsBlocked: Boolean(e?.robotsBlocked) || undefined,
+      fallbackErrors,
       fetchedAt: Date.now(),
       history: rollHistory(prev, false),
     });
@@ -3558,9 +5054,64 @@ function isRoutable(entry) {
 // key, and a dropped entry's memo goes with it.
 const slugSetMemo = new WeakMap();
 const serviceKeyMemo = new WeakMap();
+const canonicalPayeesOf = (tools) => Object.entries(allPayTosByNetwork(tools))
+  .sort(([a], [b]) => a.localeCompare(b))
+  .map(([network, values]) => [network, [...values].map((value) => String(value).toLowerCase()).sort()]);
+// The full tool contract + payees of one entry, memoized by identity. Built
+// here rather than inside computeAliasOriginsBase so the route index can
+// prime it in the background as each re-crawled entry lands.
+function exactServiceKeyOf(v) {
+  if (!v || typeof v !== "object") return null;
+  if (serviceKeyMemo.has(v)) return serviceKeyMemo.get(v);
+  const tools = v.tools || [];
+  const payees = canonicalPayeesOf(tools);
+  let key = null;
+  if (tools.length && payees.length) {
+    const contracts = tools.map((t) => [
+      String(t.method || "GET").toUpperCase(),
+      String(t.route || ""),
+      String(t.slug || ""),
+      String(t.price ?? ""),
+      t.paid === false ? "free" : "paid-or-unknown",
+      [...(t.networks || [])].map(String).sort(),
+    ]).map((c) => [JSON.stringify(c), c]).sort((a, b) => a[0].localeCompare(b[0])).map((p) => p[1]);
+    key = JSON.stringify({ payees, contracts });
+  }
+  serviceKeyMemo.set(v, key);
+  return key;
+}
+
+// The cache-derived part of the alias set walks every entry (4,360 on prod,
+// ~150 ms measured per /api/route query). It changes only when the cache does,
+// so for the live cache it is memoized on cacheVersion; the superseded origins
+// depend on the successions map as well and are folded in fresh on each call.
+let aliasBaseMemo = { version: -1, base: null, at: 0 };
+const ALIAS_CRAWL_STALE_MS = 60_000;
 export function computeAliasOrigins(cacheMap) {
+  let base;
+  // While a crawl runs, every cache.set bumps the version and would force a
+  // full walk per reader; the last set (at most ALIAS_CRAWL_STALE_MS old) is
+  // reused until the cycle ends. The superseded fold below is always fresh.
+  const fresh = aliasBaseMemo.base && cacheMap === cache && (aliasBaseMemo.version === cacheVersion || (crawlInFlight && Date.now() - aliasBaseMemo.at < ALIAS_CRAWL_STALE_MS));
+  if (fresh) base = aliasBaseMemo.base;
+  else {
+    base = computeAliasOriginsBase(cacheMap);
+    if (cacheMap === cache) aliasBaseMemo = { version: cacheVersion, base, at: Date.now() };
+  }
+  const aliases = new Set(base);
+  // A superseded origin hides for the same reason a redirect alias does: it is
+  // the same seller counted twice. Folded in here so the four consumers of this
+  // set (index listing, remote pool, route query, seller roster) all honour it
+  // without a second exclusion to keep in step.
+  for (const o of supersededOrigins(cacheMap)) aliases.add(o);
+  return aliases;
+}
+function computeAliasOriginsBase(cacheMap) {
   const byHost = new Map(); // canonical host -> { origin, v }
   for (const [origin, v] of cacheMap) {
+    // A path seller shares its host with other sellers, so it is never the
+    // host's primary, and never folded into one by host (see the loop below).
+    if (sellerPrefixOf(origin)) continue;
     const h = canonicalHost(origin);
     if (h && !byHost.has(h)) byHost.set(h, { origin, v });
   }
@@ -3572,6 +5123,7 @@ export function computeAliasOrigins(cacheMap) {
   };
   const aliases = new Set();
   for (const [origin, v] of cacheMap) {
+    if (sellerPrefixOf(origin)) continue;
     const ownHost = canonicalHost(origin);
     // A manifest served from another origin by permanent redirect is stronger
     // evidence than a homepage field: the seller pointed the old hostname at
@@ -3597,29 +5149,7 @@ export function computeAliasOrigins(cacheMap) {
   // one non-Railway origin has the same complete tool contract and the same
   // payees as one or more `*.up.railway.app` origins. Shared wallets alone do
   // not collapse anything, and two custom origins remain distinct.
-  const canonicalPayees = (tools) => Object.entries(allPayTosByNetwork(tools))
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([network, values]) => [network, [...values].map((value) => String(value).toLowerCase()).sort()]);
-  const exactServiceKey = (v) => {
-    if (!v || typeof v !== "object") return null;
-    if (serviceKeyMemo.has(v)) return serviceKeyMemo.get(v);
-    const tools = v.tools || [];
-    const payees = canonicalPayees(tools);
-    let key = null;
-    if (tools.length && payees.length) {
-      const contracts = tools.map((t) => [
-        String(t.method || "GET").toUpperCase(),
-        String(t.route || ""),
-        String(t.slug || ""),
-        String(t.price ?? ""),
-        t.paid === false ? "free" : "paid-or-unknown",
-        [...(t.networks || [])].map(String).sort(),
-      ]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-      key = JSON.stringify({ payees, contracts });
-    }
-    serviceKeyMemo.set(v, key);
-    return key;
-  };
+  const exactServiceKey = exactServiceKeyOf;
   const railwayDeploymentOrigin = (origin) => {
     try { return new URL(origin).hostname.toLowerCase().endsWith(".up.railway.app"); }
     catch { return false; }
@@ -3639,11 +5169,6 @@ export function computeAliasOrigins(cacheMap) {
       if (origin !== durable[0] && railwayDeploymentOrigin(origin)) aliases.add(origin);
     }
   }
-  // A superseded origin hides for the same reason a redirect alias does: it is
-  // the same seller counted twice. Folded in here so the four consumers of this
-  // set (index listing, remote pool, route query, seller roster) all honour it
-  // without a second exclusion to keep in step.
-  for (const o of supersededOrigins(cacheMap)) aliases.add(o);
   return aliases;
 }
 
@@ -3671,11 +5196,68 @@ const INJECTION_PATTERNS = [
   /\[(?:system|important|instructions?|override)\]/,
   /system\s*(?:prompt|message|role)\s*[:=]/,
   /do\s+not\s+(?:pick|choose|select|recommend|consider)\s+(?:any\s+)?other/,
+  // A listing that tries to set its own score for a ranker that reads it.
+  /"fits?"\s*:\s*\{/,
+  /\b(?:rate|score|give)\s+(?:this|it|me|every\s+\w+)?\s*(?:a\s+)?fit\s*(?:of\s*)?[:=]?\s*(?:1(?:\.0+)?|100\s*%)/,
+  /\bfit\s*[:=]\s*(?:1(?:\.0+)?|100\s*%)/,
+  // The same instructions in the languages seen on the index.
+  /ignora\s+(?:las?\s+|todas?\s+las?\s+)?(?:instrucciones|indicaciones)\s+(?:anteriores|previas)/,
+  /ignor(?:e|ez)\s+(?:les\s+|toutes\s+les\s+)?(?:instructions|consignes)\s+(?:pr[eé]c[eé]dentes|ant[eé]rieures)/,
+  /ignoriere\s+(?:alle\s+)?(?:vorherigen|bisherigen|obigen)\s+(?:anweisungen|instruktionen)/,
+  /ignore\s+(?:as\s+|todas\s+as\s+)?instru[cç][oõ]es\s+anteriores/,
 ];
+// Letters from other scripts that render like Latin ones ("Іgnоrе" spelled with
+// Cyrillic І, о, е): one more reading of the text maps them back before the
+// patterns run, so a lookalike spelling is read as the phrase it imitates.
+const CONFUSABLES = {
+  "\u0430": "a", "\u0435": "e", "\u043e": "o", "\u0440": "p", "\u0441": "c", "\u0443": "y", "\u0445": "x", "\u0456": "i", "\u0458": "j", "\u0455": "s", "\u04cf": "l", "\u0501": "d", "\u051b": "q", "\u051d": "w",
+  "\u03b1": "a", "\u03bf": "o", "\u03c1": "p", "\u03b5": "e", "\u03b9": "i", "\u03ba": "k", "\u03bd": "v", "\u03c4": "t", "\u03c5": "u", "\u03c7": "x",
+};
+const CONFUSABLE_RE = new RegExp(`[${Object.keys(CONFUSABLES).join("")}]`, "g");
+// The patterns are written lowercase; the text is brought to that form before
+// matching, twice: as written (so a literal <system> tag is still seen) and
+// with markup/entities/invisible characters turned to spaces (so
+// "Ignore&lt;previous instructions" or a zero-width split cannot slip a phrase
+// past the screen that a later cleaning step would reassemble).
+// Plain printable ASCII with no markup, entity or backtick characters: NFKC,
+// entity decoding, invisible-character handling and the lookalike map are all
+// identity on it, so the four forms below reduce to the lowercased text and its
+// whitespace-collapsed copy. Nearly every listing is this, and the full path
+// costs several times more per listing across an index of tens of thousands.
+const PLAIN_LISTING = /^[\t\n\r\x20-\x7e]*$/;
+const MARKUP_CHARS = /[&<>`*~|]/;
+function injectionForms(text) {
+  const raw = String(text || "");
+  if (PLAIN_LISTING.test(raw) && !MARKUP_CHARS.test(raw)) {
+    const lower = raw.toLowerCase();
+    if (!/[\t\n\r]| {2}/.test(lower)) return [lower];
+    return [lower, lower.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ")];
+  }
+  const decoded = raw.normalize("NFKC")
+    .replace(/&(?:lt|gt|amp|quot|apos|nbsp|#\d{1,6}|#x[0-9a-f]{1,6});/gi, (m) => {
+      const e = m.toLowerCase();
+      return e === "&lt;" ? "<" : e === "&gt;" ? ">" : e === "&amp;" ? "&" : " ";
+    })
+    .toLowerCase();
+  // Invisible characters are DELETED (a zero-width split inside a word must
+  // rejoin it); markup punctuation becomes a space. Underscores are left as
+  // they are: identifiers like max_priority_fee are honest listing text.
+  // An invisible character may split a word (delete it) or two words (read it
+  // as a space): both readings are checked.
+  const INVIS = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff\u00ad]/g;
+  const flatten = (x) => x.replace(/[\u0000-\u001f\u007f-\u009f<>`*~|]/g, " ").replace(/\s+/g, " ");
+  const forms = [decoded.replace(INVIS, ""), flatten(decoded.replace(INVIS, "")), flatten(decoded.replace(INVIS, " "))];
+  if (CONFUSABLE_RE.test(decoded)) { CONFUSABLE_RE.lastIndex = 0; forms.push(flatten(decoded.replace(INVIS, "").replace(CONFUSABLE_RE, (c) => CONFUSABLES[c]))); }
+  CONFUSABLE_RE.lastIndex = 0;
+  return forms;
+}
+// One alternation of every pattern: the same any-match answer as testing them
+// in turn (none carries a flag or a lastIndex), in one pass over the text.
+const INJECTION_ANY = new RegExp(INJECTION_PATTERNS.map((re) => `(?:${re.source})`).join("|"));
 export function looksLikeListingInjection(text) {
   const t = String(text || "");
   if (t.length > 8000) return true; // no honest listing is a novel; oversized = padding an attack
-  for (const re of INJECTION_PATTERNS) if (re.test(t)) return true;
+  for (const form of injectionForms(t)) if (INJECTION_ANY.test(form)) return true;
   return false;
 }
 
@@ -3683,6 +5265,11 @@ let crawlerTimer = null;
 let firstCrawlTimer = null;
 let discoveryTimer = null;
 let crawlInFlight = false;
+// How many crawl cycles have RUN TO COMPLETION. Read only by indexReadiness()
+// below, to tell "we hold no row for that seller" apart from "we have not
+// finished reading the index yet" - two answers a lookup used to give with the
+// same 404.
+let crawlsCompleted = 0;
 
 // Bounded worker pool. With thousands of discovered sellers we can't fan out
 // every crawl in parallel — the unbounded `Promise.allSettled(seeds.map(...))`
@@ -3759,6 +5346,8 @@ export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_
   return origins.filter((o) => due.has(o));
 }
 
+/** True while a crawl cycle is running (every entry is being replaced). */
+export function crawlInProgress() { return !!crawlInFlight; }
 async function runCrawl() {
   if (crawlInFlight) return; // overlapping runs would just rate-limit each other
   crawlInFlight = true;
@@ -3799,8 +5388,34 @@ async function runCrawl() {
     releaseDeadSubmissions(cycleOkFraction(due));
   } finally {
     crawlInFlight = false;
+    crawlsCompleted += 1;
   }
 }
+
+// Quick-tunnel services hand out a random hostname per session, so a tunnel
+// origin that stops answering is gone for good: the next session is a new
+// hostname. Measured 2026-10-02: 1,753 of 2,432 self-serve registrations were
+// such hostnames, arriving 100-150 a day, which kept the submission door full
+// while a 30-day release drained it far slower. Named services only - a
+// tenant's own domain or a stable platform subdomain is never one of these.
+export const EPHEMERAL_TUNNEL_SUFFIXES = [
+  "lhr.life", "localhost.run", "trycloudflare.com", "loca.lt", "tunnelmole.net",
+  "ngrok-free.app", "ngrok-free.dev", "ngrok.app", "ngrok.io", "ngrok.dev",
+  "serveo.net", "serveousercontent.com", "pinggy.link", "pinggy.io",
+];
+export function isEphemeralTunnelOrigin(origin) {
+  let host;
+  try { host = new URL(origin).hostname.toLowerCase(); } catch { return false; }
+  return EPHEMERAL_TUNNEL_SUFFIXES.some((sfx) => host.endsWith(`.${sfx}`));
+}
+// A gone tunnel hostname never comes back, so its slot is released after days,
+// not a month, and a past settlement does not hold it: the seller, if still
+// selling, is already on a new hostname.
+const TUNNEL_RELEASE_AFTER_MS = Number(process.env.INDEX_TUNNEL_RELEASE_AFTER_DAYS || 3) * 86_400_000;
+// At most this share of the submission slots may be tunnel hostnames, so live
+// tunnels cannot fill the door for sellers on stable hostnames.
+const TUNNEL_SUBMISSION_SHARE = Number(process.env.INDEX_TUNNEL_SUBMISSION_SHARE || 0.25);
+export function tunnelSubmissionCap(cap) { return Math.floor(cap * (TUNNEL_SUBMISSION_SHARE >= 0 && TUNNEL_SUBMISSION_SHARE <= 1 ? TUNNEL_SUBMISSION_SHARE : 0.25)); }
 
 // How long an origin may go without a single successful crawl before its
 // submission slot is released. 30 days is deliberately far past any outage a
@@ -3836,6 +5451,7 @@ export function selectReleasableOrigins({
   hasSettled = () => false,
   now = Date.now(),
   maxIdleMs = RELEASE_AFTER_MS,
+  tunnelMaxIdleMs = TUNNEL_RELEASE_AFTER_MS,
   cycleOkFraction = null,
   minCycleOkFraction = 0.5,
 } = {}) {
@@ -3853,12 +5469,13 @@ export function selectReleasableOrigins({
     // A seller who has ever been PAID through us is not a stale submission,
     // however long they have been down. Money is a stronger claim on a slot
     // than liveness, and releasing one would quietly drop a real counterparty.
-    if (row.last_settled_seen || hasSettled(origin)) continue;
+    const tunnel = isEphemeralTunnelOrigin(origin);
+    if (!tunnel && (row.last_settled_seen || hasSettled(origin))) continue;
     // No successful probe ever recorded falls back to first_seen, so a row
     // that predates this column cannot be immortal.
     const lastOk = Number(row.last_routable_seen || row.first_seen || 0);
     if (!lastOk) continue;
-    if (now - lastOk < maxIdleMs) continue;
+    if (now - lastOk < (tunnel ? tunnelMaxIdleMs : maxIdleMs)) continue;
     out.push(origin);
   }
   return out;
@@ -3921,7 +5538,8 @@ function releaseDeadSubmissions(okFraction) {
   persistSubmittedSeeds();
   // Loud on purpose: this is the only path that removes a listing, so it must
   // never happen quietly. seller_registrations still holds every one of them.
-  console.log(`[x402-index] released ${releasable.length} submission slot(s) after ${Math.round(RELEASE_AFTER_MS / 86400000)}d with no successful probe: ${releasable.slice(0, 10).join(", ")}${releasable.length > 10 ? ", ..." : ""}`);
+  const tunnels = releasable.filter(isEphemeralTunnelOrigin).length;
+  console.log(`[x402-index] released ${releasable.length} submission slot(s) with no successful probe (${tunnels} quick-tunnel after ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)}d, ${releasable.length - tunnels} after ${Math.round(RELEASE_AFTER_MS / 86400000)}d): ${releasable.slice(0, 10).join(", ")}${releasable.length > 10 ? ", ..." : ""}`);
   return releasable.length;
 }
 
@@ -3978,6 +5596,49 @@ export const INDEX_CACHE_NDJSON_FILE = process.env.INDEX_CACHE_NDJSON_FILE || IN
 let warmStartInProgress = false;
 export function indexWarmStartInProgress() { return warmStartInProgress; }
 
+/** Is the index in a state where "we hold no row for that origin" is a FACT
+ *  about the origin, or only a fact about this process?
+ *
+ *  There are three ways to hold no row for a seller who is perfectly well
+ *  indexed, and until 2026-09-22 all three answered `404 seller not found in
+ *  the index` - the same sentence as a genuine absence:
+ *    - the incremental warm-start is still reading the NDJSON off the volume
+ *      (~2 s after every boot, and every deploy is a fresh boot);
+ *    - the volume carries no cache at all (first deploy of a new volume, an
+ *      unreadable file), so the cache is empty until the first crawl lands -
+ *      the first cycle is deferred 30 s and a full pass takes minutes;
+ *    - the crawler is switched off entirely (X402_INDEX_CRAWL=off: CI, and any
+ *      test that needs to attribute outbound traffic).
+ *  The consumer is a seller's automated checker, which reads "not found" as
+ *  "we are not listed" - the same misreading the paging fix of the same day was
+ *  written for, one branch away in the same handler.
+ *
+ *  `state`: "ready" | "warm-start" | "first-crawl" | "disabled".
+ *  `ready` is false for the two states where the answer will change on its own. */
+export function indexReadiness() {
+  return readinessOf({ warmStarting: warmStartInProgress, sellers: cache.size, crawlsCompleted, crawlerRunning: !!crawlerTimer });
+}
+
+/** The decision above, as a pure function, for the same reason src/index-paging.js
+ *  exists: a CI boot is ALWAYS in one state (crawler off, cache empty), so every
+ *  branch that matters here - the two that answer "ask again" - is unreachable
+ *  from a booted test, and a guard that can only exercise the reachable branch
+ *  is a certificate for the half that never broke. */
+export function readinessOf({ warmStarting = false, sellers = 0, crawlsCompleted: crawls = 0, crawlerRunning = false } = {}) {
+  if (warmStarting) return { ready: false, state: "warm-start", sellers, crawlsCompleted: crawls, retryAfterSeconds: 5 };
+  if (sellers === 0 && crawls === 0) {
+    // Nothing loaded and nothing crawled. Whether that resolves on its own is
+    // the difference between "ask again" and "this server holds no index": with
+    // the crawler running it is the deferred first cycle (30 s, minutes to
+    // complete) and waiting fixes it; with the crawler off nothing will ever
+    // arrive, so a caller must be told that rather than told to retry forever.
+    return crawlerRunning
+      ? { ready: false, state: "first-crawl", sellers: 0, crawlsCompleted: crawls, retryAfterSeconds: 60 }
+      : { ready: true, state: "disabled", sellers: 0, crawlsCompleted: crawls, retryAfterSeconds: 0 };
+  }
+  return { ready: true, state: "ready", sellers, crawlsCompleted: crawls, retryAfterSeconds: 0 };
+}
+
 /** Best-effort persist of the crawl cache. No-op without a /data volume. */
 // WHAT THE PERSISTED CACHE KEEPS, AND WHY IT IS SLIM (2026-08-25). The file
 // had grown to 91.4 MB on prod: full seller manifests (a /.well-known/x402 doc
@@ -4020,16 +5681,33 @@ function slimToolForPersist(t) {
   return out;
 }
 
-/** The entries to persist: slim projections of every non-errored origin. */
+/** An errored entry that still carries the catalogue an earlier good crawl
+ *  produced. crawlSeller keeps that catalogue on a failure on purpose ("so a
+ *  transient outage doesn't drop the seller from the Index"), so it must
+ *  survive a restart too; an origin that never produced one has nothing to
+ *  carry and is still left for the crawl to re-decide. */
+export function heldLastGood(v) {
+  return Boolean(v?.error) && Array.isArray(v.tools) && v.tools.length > 0;
+}
+
+/** The entries to persist: slim projections of every origin that holds a
+ *  catalogue (an errored one keeps its error and history, so it warm-starts
+ *  as the same unhealthy, unroutable listing it was before the restart). */
 function persistedEntries() {
   const out = [];
   for (const [origin, v] of cache.entries()) {
-    if (v?.error) continue; // don't re-seed failures; let the crawl re-decide
+    // A failure with nothing to show is not re-seeded; the crawl re-decides.
+    // A failure that still holds its last good catalogue is. Dropping those
+    // made one failed crawl before a restart delete the listing outright,
+    // and the per-operator crawl cap can take hours to bring it back
+    // (2026-10-02: five path sellers on one shared host vanished this way).
+    if (v?.error && !heldLastGood(v)) continue;
     out.push([origin, {
       manifest: slimManifestForPersist(v.manifest),
       tools: Array.isArray(v.tools) ? v.tools.map(slimToolForPersist) : [],
       fetchedAt: v.fetchedAt ?? null,
-      error: null,
+      error: v.error ? String(v.error).slice(0, 300) : null,
+      ...(v.error && Array.isArray(v.fallbackErrors) && v.fallbackErrors.length ? { fallbackErrors: v.fallbackErrors.slice(0, 5) } : {}),
       source: v.source ?? null,
       // Same class as `payment` above: published by /api/index, never
       // persisted, so it read null for every warm-started origin.
@@ -4042,10 +5720,14 @@ function persistedEntries() {
   return out;
 }
 
-/** Async persist for the crawler's own cycle: the stringify is still one
- *  synchronous pass, but the write no longer blocks, and overlapping cycles
- *  never write twice. */
+/** Async persist for the crawler's own cycle. Each origin is stringified ONCE,
+ *  in batches with an event-loop turn between them, and both files are built
+ *  from those lines: the whole-cache stringify, a second stringify per origin
+ *  to size the log line and a third for the NDJSON lines used to run as one
+ *  synchronous block (~220 ms for 52 MB locally, seconds on the production
+ *  container). Overlapping cycles never write twice. */
 let persistInFlight = false;
+const PERSIST_BATCH = 50;
 export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
   if (persistInFlight) return false;
   persistInFlight = true;
@@ -4053,28 +5735,34 @@ export async function persistIndexCacheAsync(file = INDEX_CACHE_FILE) {
     if (cache.size === 0) return false;
     const entries = persistedEntries();
     if (!entries.length) return false;
+    const savedAt = Date.now();
     const t0 = performance.now();
-    const json = JSON.stringify({ savedAt: Date.now(), entries });
+    const lines = new Array(entries.length);
+    for (let i = 0; i < entries.length; i++) {
+      lines[i] = JSON.stringify(entries[i]);
+      if ((i + 1) % PERSIST_BATCH === 0) await new Promise((r) => setImmediate(r));
+    }
     const ms = Math.round(performance.now() - t0);
+    const bytes = lines.reduce((n, l) => n + l.length + 1, 0);
     // Always say how big it is, and which origins carry it: the file was 91 MB
     // before the slim projection and 48 MB after, and what remains is tool
     // arrays. Naming the five largest origins each cycle is how the next cut
     // gets sized from data instead of a guess.
-    const top = entries.map(([o, v]) => [o, JSON.stringify(v).length]).sort((a, b) => b[1] - a[1]).slice(0, 5);
-    console.log(`[x402-index] persisted ${(json.length / 1_048_576).toFixed(1)} MB for ${entries.length} origins in ${ms}ms; largest: ` +
+    const top = entries.map(([o], i) => [o, lines[i].length]).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    console.log(`[x402-index] persisted ${(bytes / 1_048_576).toFixed(1)} MB for ${entries.length} origins in ${ms}ms; largest: ` +
       top.map(([o, n]) => `${o} ${(n / 1024).toFixed(0)}KB/${(cache.get(o)?.tools || []).length} tools`).join(", "));
     const { writeFile, rename } = await import("node:fs/promises");
     // NDJSON for the incremental loader: header line, then one [origin, entry]
     // per line. Written to a temp path and renamed so a crash mid-write can
     // never leave a half file for the next boot to read.
     const ndFile = file === INDEX_CACHE_FILE ? INDEX_CACHE_NDJSON_FILE : file.replace(/\.json$/, "") + ".ndjson";
-    const lines = [JSON.stringify({ savedAt: Date.now(), format: "ndjson-v1", origins: entries.length })];
-    for (const e of entries) lines.push(JSON.stringify(e));
-    await writeFile(`${ndFile}.tmp`, lines.join("\n") + "\n");
+    const header = JSON.stringify({ savedAt, format: "ndjson-v1", origins: entries.length });
+    await writeFile(`${ndFile}.tmp`, header + "\n" + lines.join("\n") + "\n");
     await rename(`${ndFile}.tmp`, ndFile);
     // The legacy single-JSON file stays current too, for the sync loader and
-    // for anything that copies it (backups exclude cache files anyway).
-    await writeFile(file, json);
+    // for anything that copies it (backups exclude cache files anyway). Built
+    // from the same lines: byte-identical to JSON.stringify({ savedAt, entries }).
+    await writeFile(file, `{"savedAt":${savedAt},"entries":[${lines.join(",")}]}`);
     return true;
   } catch { return false; }
   finally { persistInFlight = false; }
@@ -4176,10 +5864,14 @@ function _loadPersistedIndexCache(file = INDEX_CACHE_FILE) {
 const ROUTE_INDEX_WARM_DELAY_MS = Number(process.env.ROUTE_INDEX_WARM_DELAY_MS || 30_000);
 export function startCrawler(opts = {}) {
   if (crawlerTimer) return;
+  // Removals load FIRST, so no seed, warm-started entry or first crawl can
+  // bring a removed origin back before the block is in place.
+  loadRemovedOrigins();
   loadSubmittedSeeds();
   // Successions survive a restart or they stop hiding the duplicate they were
   // recorded to hide, and the seller is listed twice again on the next boot.
   loadSuccessions();
+  loadGoneRoutes();
   // Warm start: the NDJSON twin incrementally when it exists (its own log
   // line says how long and the longest turn), else the legacy JSON in one
   // synchronous parse. The first crawl is deferred below, so the fill has
@@ -4263,6 +5955,8 @@ function buildLocalEntry({ baseUrl, catalog, prices, network, toolCount, walletN
     category: t.category,
     tags: t.tags || [],
     price: prices?.[t.slug] ?? parsePrice(t.price),
+    // The same field every remote row carries, so one rule reads every row.
+    priceKnown: priceToMicroUsd(t.price) != null,
   }));
   return {
     origin: LOCAL_SELLER,
@@ -4438,8 +6132,8 @@ export function mppDualStackOrigins() {
 /**
  * Every EVM payTo any known origin advertises on `network`, mapped to the
  * origins advertising it: crawled cache entries (routable or not, error or
- * not - a seller whose probe failed still told us its address) plus the
- * registry-synthesized tools (the Bazaar lists payTo per resource, so a
+ * not - a seller whose probe failed still told us its address, and since
+ * 2026-09-22 so did its own live 402) plus the registry-synthesized tools (the Bazaar lists payTo per resource, so a
  * Bazaar-listed seller we could never crawl is still attributable). The
  * discovery-gap report matched merchants against ROUTABLE sellers only, so
  * every known-but-unroutable origin counted as a blind spot. Attribution and
@@ -4463,6 +6157,30 @@ export function allPayToOrigins(network = "eip155:8453") {
   return out;
 }
 
+/** The listing prices our own crawl knows per payTo on `network`: Map(lowercased
+ *  wallet -> Set(micro-dollars)). Read by the Base leaderboard for wallets the
+ *  Bazaar does not list (sellers found through our crawl, PayAI's catalog and
+ *  self-registration), whose transfers could otherwise never be matched to a
+ *  price the seller publishes. Crawled rows only: a Bazaar-listed wallet keeps
+ *  the Bazaar's own prices (mergeCrawledWallets does not touch those rows).
+ *  A route marked free, or with no readable price, contributes nothing. */
+export function allPayToPrices(network = "eip155:8453") {
+  const out = new Map();
+  for (const v of cache.values()) {
+    for (const t of v?.tools || []) {
+      const addr = t?.payToByNetwork?.[network];
+      if (typeof addr !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(addr) || t.paid === false) continue;
+      const micro = priceToMicroUsd(t.price);
+      if (!(micro > 0)) continue;
+      const k = addr.toLowerCase();
+      let set = out.get(k);
+      if (!set) { set = new Set(); out.set(k, set); }
+      set.add(micro);
+    }
+  }
+  return out;
+}
+
 /** Solana twin of allPayToOrigins: mainnet-label payTos (base58) -> origins.
  *  The Solana leaderboard's scan list (src/solana-leaderboard.js). */
 export const SOLANA_MAINNET_LABELS = new Set(["solana:5eykt4usfv8p8njdtrepy1vzqkqzkvdp", "solana", "solana-mainnet", "solana-mainnet-beta"]);
@@ -4482,7 +6200,23 @@ export function allSolanaPayToOrigins() {
   return out;
 }
 
+// Rebuilt from the whole crawl cache (alias detection plus a projection of
+// every routable seller), and read two or more times by every /api/find and
+// /api/route call. On production's cache that rebuild is far from free, and a
+// burst of searches spent the event loop on it (2026-09-25: 3-18 s stalls that
+// timed out payment relays). Memoized briefly; a change in the cache size
+// invalidates at once, and the TTL bounds how stale a changed entry can read.
+const ROUTABLE_SUMMARY_TTL_MS = Number(process.env.ROUTABLE_SUMMARY_TTL_MS) || 30_000;
+let routableSummaryMemo = null; // { at, size, out }
 export function routableSellerSummaries() {
+  const now = Date.now();
+  if (routableSummaryMemo && routableSummaryMemo.size === cache.size && now - routableSummaryMemo.at < ROUTABLE_SUMMARY_TTL_MS) return routableSummaryMemo.out;
+  const out = buildRoutableSellerSummaries();
+  routableSummaryMemo = { at: now, size: cache.size, out: Object.freeze(out) };
+  return routableSummaryMemo.out;
+}
+export function __resetRoutableSummaryMemoForTest() { routableSummaryMemo = null; }
+function buildRoutableSellerSummaries() {
   const out = [];
   const aliasOrigins = computeAliasOrigins(cache);
   for (const [origin, v] of cache.entries()) {
@@ -4502,6 +6236,7 @@ export function routableSellerSummaries() {
     out.push({
       origin,
       host,
+      ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
       toolCount: v.tools?.length || manifestToolCount(v.manifest),
       // Did the origin ever answer us, or is this a registry listing about it?
       originResponded: v.originResponded !== false,
@@ -4510,10 +6245,13 @@ export function routableSellerSummaries() {
       // inert on whichever surface happens to render.
       discoveryPath: v.discoveryPath || null,
       // payTo per advertised network, so callers can join an origin to on-chain
-      // settlements it received. Sourced ONLY from facilitator discovery-registry
-      // items (bazaarItemToRow) - a seller's own crawled manifest never
-      // contributes one - so this carries exactly the same trust as the
-      // leaderboard's registry-declared payTo, no more.
+      // settlements it received. Read from every surface that states one: the
+      // origin's OWN live 402 (enrichLiveQuotes), its manifest accepts or
+      // service-wide payment block, and facilitator discovery-registry items.
+      // The first two are the origin's own word about where it is paid, which
+      // is the address the router would pay and therefore own evidence; a
+      // wallet an origin merely NAMES in someone else's listing stays bound to
+      // that listing (src/evidence-binding.js decides what it may inherit).
       //
       // Omitting it silently broke the router's chain-derived proven-ness join:
       // baseNetworkPayTo() returned null for every seller, so the evidence
@@ -4560,17 +6298,33 @@ export function allPayTosByNetwork(tools) {
   }, {});
 }
 
+// How many of a seller's tools one detail response carries. Bounded because a
+// single origin can publish thousands and this endpoint is free; the number is
+// published on the response so the bound is never mistaken for the catalogue.
+export const SELLER_TOOLS_CAP = 500;
+
 export function sellerDetail(originOrHost) {
-  const q = String(originOrHost || "").trim().toLowerCase().slice(0, 253);
-  if (!q) return null;
-  const hostOf = (u) => { try { return new URL(u).host.toLowerCase(); } catch { return ""; } };
+  // One matcher for every lookup (findSellerKey): an exact key, or a host. A
+  // path seller is found by its prefixed URL.
+  const key = findSellerKey(originOrHost);
+  if (!key) return null;
   for (const [origin, v] of cache.entries()) {
-    if (origin.toLowerCase() !== q && hostOf(origin) !== q) continue;
+    if (origin !== key) continue;
     return {
       origin,
+      // Present only for a path seller, so a bare origin's detail is unchanged.
+      ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
       displayName: v.manifest?.name || origin.replace(/^https?:\/\//, ""),
       homepage: v.manifest?.homepage || origin,
-      toolCount: v.tools?.length || manifestToolCount(v.manifest),
+      // The routes this lookup returns, counted. It used to fall back to the
+      // manifest's own capabilities.tools when we held no rows, so a seller
+      // whose one route we had dropped read "toolCount 1, toolsReturned 0".
+      // The seller's own figure is still published, under its own name, when
+      // it differs from what we hold.
+      toolCount: (v.tools || []).length,
+      ...(manifestToolCount(v.manifest) > 0 && manifestToolCount(v.manifest) !== (v.tools || []).length
+        ? { declaredToolCount: manifestToolCount(v.manifest), declaredToolCountNote: "the tool count the seller's own manifest states (capabilities.tools); toolCount is the routes this index holds and returns" }
+        : {}),
       ...(v.tools?.some((t) => t.paid !== undefined)
         ? { paidToolCount: v.tools.filter((t) => t.paid !== false).length }
         : {}),
@@ -4602,8 +6356,14 @@ export function sellerDetail(originOrHost) {
       // file has twice shipped a field present on two of three, which is
       // inert on whichever surface happens to render.
       discoveryPath: v.discoveryPath || null,
-      // payTo per advertised network. Registry-sourced only (bazaarItemToTool);
-      // a seller's own crawled manifest never contributes one. Omitting it made
+      // Why each fallback surface (openapi, agents.json, llms.txt) gave
+      // nothing on the last crawl that fell back; absent when the manifest or
+      // a fallback served the catalogue. A backed-off path says so, and an
+      // explicit re-registration at /sell clears every backoff.
+      ...(Array.isArray(v.fallbackErrors) && v.fallbackErrors.length ? { fallbackErrors: v.fallbackErrors } : {}),
+      // payTo per advertised network, from the origin's own live 402 and its
+      // own documents as well as from a registry listing about it (see the
+      // same field on routableSellerSummaries). Omitting it made
       // advertisedPayToEvidence inert: server.js passes THIS object as `seller`,
       // so baseNetworkPayTo() read undefined and the paid seller-trust tool
       // reported "advertises no payTo" for every seller, including the many that
@@ -4619,7 +6379,39 @@ export function sellerDetail(originOrHost) {
       // network - the router label's evidence for usdc_domain_mismatch.
       evmDomainByNetwork: evmDomainUnion(v.tools),
       routable: isRoutable(v),
-      tools: (v.tools || []).slice(0, 500).map((t) => ({
+      // THE AUDIT TRAIL, on the one surface that promised it. The listing page
+      // strips `history` on purpose (the bulk snapshot is the crawl-and-score
+      // work, and shipping every origin's in one unauthenticated GET gives a
+      // competing router it for free), and server.js's own comment says the
+      // field is "kept for the single-seller drill-down" - it never was. So
+      // three published claims were false in the most expensive direction:
+      // the wiki told an operator that the bulk listing published each
+      // seller's rolling history for auditing, and that the history behind our
+      // health scores was there for anyone to verify. Neither was true on any
+      // public surface, and a seller who went looking for it found nothing and
+      // could not tell "withheld" from "we
+      // hold none". One origin's own five crawl outcomes are not the bulk this
+      // was ever protecting: it is their result, about their origin, on the
+      // surface we tell them to self-diagnose with. `healthWindow` rides with
+      // it because a bare [1,0,1] is its own quiet contract - a reader cannot
+      // otherwise tell a short history from a truncated one.
+      history: Array.isArray(v.history) ? v.history.slice(-HEALTH_WINDOW) : [],
+      healthWindow: HEALTH_WINDOW,
+      listingLegend: "Per tool: declared = your own manifest, OpenAPI, agents.json or llms.txt names the route; source = manifest, or registry for a row minted by a settled payment (omitted for rows read from your OpenAPI, agents.json or llms.txt); lastVerifiedAt = when the route last answered us live. A route you do not declare must answer a live 402 at least every 7 days, and leaves the listing when its method answers 404 or 405 twice at least an hour apart, or 410 once. A 410 removes even a declared route. Re-registering at /sell re-checks every route now.",
+      historyLegend: `the last ${HEALTH_WINDOW} crawl outcomes, oldest first: 1 = the manifest parsed, 0 = it did not. Fewer than ${HEALTH_WINDOW} entries means we have crawled this origin that many times, not that entries were dropped. Paywall liveness is measured separately and reported as \`paywall\`.`,
+      // THE CAP HAS TO ANNOUNCE ITSELF. This list has been cut at 500 with
+      // nothing saying so, on the one surface we tell a seller to use to check
+      // what we hold for them ("?seller=<host> ... returns its full row").
+      // Measured 2026-09-22: one indexed origin declares 3,638 tools and got
+      // 500 back, so a seller auditing their own catalogue here would conclude
+      // we had lost 3,138 of their routes. Same defect as the listing page that
+      // read as the whole index, one branch away in the same handler, and the
+      // count beside it (toolCount) was right the whole time - which is exactly
+      // what makes the silence convincing.
+      toolsReturned: Math.min((v.tools || []).length, SELLER_TOOLS_CAP),
+      toolsTruncated: (v.tools || []).length > SELLER_TOOLS_CAP,
+      toolsCap: SELLER_TOOLS_CAP,
+      tools: (v.tools || []).slice(0, SELLER_TOOLS_CAP).map((t) => ({
         method: t.method || null,
         route: t.route || null,
         slug: t.slug || null,
@@ -4636,7 +6428,8 @@ export function sellerDetail(originOrHost) {
         description: t.description || null,
         tags: Array.isArray(t.tags) && t.tags.length ? t.tags : undefined,
         price: t.price ?? null,
-        ...priceConflictProjection(t),
+        ...priceKnownProjection(t),
+      ...priceConflictProjection(t),
         ...urlTemplateProjection(t),
         ...(t.paid !== undefined ? { paid: t.paid } : {}),
         // What the seller's own OpenAPI guarantees on success. Omitted rather
@@ -4648,6 +6441,11 @@ export function sellerDetail(originOrHost) {
         // the observer recorded under.
         ...deliveryProjection(origin, t.method, t.route),
         networks: t.networks || undefined,
+        // Why this row is listed, so a seller can check a listing without
+        // asking us: whether their own documents declare it, where the row
+        // came from, and when it last answered us live. An undeclared row
+        // that stops answering leaves the listing (see stampDeclared).
+        ...listingBasisProjection(t),
       })),
     };
   }
@@ -4681,6 +6479,7 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
   const aliasOrigins = computeAliasOrigins(cache);
   const remote = [...cache.entries()].filter(([origin]) => !isSelfOrigin(origin) && !aliasOrigins.has(origin)).map(([origin, v]) => ({
     origin,
+    ...(sellerPrefixOf(origin) ? { pathPrefix: sellerPrefixOf(origin) } : {}),
     displayName: v.manifest?.name || origin.replace(/^https?:\/\//, ""),
     homepage: v.manifest?.homepage || origin,
     network: v.manifest?.payment?.x402?.primaryNetwork || v.manifest?.payment?.primaryNetwork || null,
@@ -4751,7 +6550,7 @@ export function indexSnapshot({ baseUrl, catalog, prices, network, toolCount, wa
     evmDomainByNetwork: evmDomainUnion([...(bazaarToolsByOrigin.get(origin) || []), ...(v.tools || [])]),
   }));
   // Collapse http/https duplicates of the same host into one seller. A registry
-  // can list the same origin under both schemes (algo.netintel.dev appeared as
+  // can list the same origin under both schemes (one origin appeared as
   // both http:// and https://), which crawled as two cache entries and rendered
   // as two identical rows. Keep one per host: prefer https, then the routable /
   // higher-tool-count entry, and union networks + wallets so nothing is lost.
@@ -4884,17 +6683,33 @@ const ROUTE_NETWORKS = {
 // replaced on re-crawl, never mutated. What was tens of thousands of spread
 // copies, regex passes and price parses per query is now a lookup.
 const remotePoolMemo = new WeakMap(); // entry -> decorated paid tools
-const toolStaticsMemo = new WeakMap(); // tool (local or decorated) -> { slug, name, hay, injected, priceRank }
+// Per-tool records live on the tool object under non-enumerable symbol keys
+// (never serialized, never copied by a spread) rather than in WeakMaps keyed
+// by 100k+ tools: V8 marks WeakMap entries as ephemerons, which lengthened
+// every full GC, and a lookup is slower than a property read. A tool that is
+// not extensible (a frozen catalog object) falls back to the WeakMap.
+const TOOL_STATICS = Symbol("toolStatics");
+const TOOL_HOME = Symbol("routeHome");
+const toolStaticsMemo = new WeakMap(); // fallback for non-extensible tools only
+function setHidden(obj, key, value) {
+  if (!Object.isExtensible(obj)) return false;
+  Object.defineProperty(obj, key, { value, writable: true, configurable: true, enumerable: false });
+  return true;
+}
 function decoratedRemoteTools(v) {
-  let d = remotePoolMemo.get(v);
+  const d = remotePoolMemo.get(v);
   if (d) return d;
+  return decorateRemoteToolsStep(v, Infinity);
+}
+// Seller-level facts every decorated row of one entry shares.
+function decorationContext(v) {
   // Seller-level payment networks: the union of every chain this seller's
   // OWN crawled 402s advertise plus the Bazaar's settled view of the same
   // origin - the same union the /api/index seller row carries. A route the
   // seller documents in OpenAPI (priced, so a buy candidate) has no accepts
   // of its own until a probe reaches it, and until 2026-09-02 such a row
-  // ranked with `networks: []`: api.strale.io's /x402/v2/image-to-text
-  // (3,769 settled calls that month) read as network_unknown and the router
+  // ranked with `networks: []`: one seller's priced route
+  // (thousands of settled calls that month) read as network_unknown and the router
   // never dispatched to it, while the seller's manifest rows beside it said
   // Base. So a row with NO observed accepts inherits its seller's known
   // networks, flagged `networksInferred`; a row that observed its own keeps
@@ -4910,25 +6725,55 @@ function decoratedRemoteTools(v) {
   // no accepts of its own reads the seller's (a wrong name is set once, in the
   // seller's middleware, so every route on the origin carries it).
   const sellerDomains = evmDomainUnion([...(v.tools || []), ...(sellerOrigin ? (bazaarToolsByOrigin.get(sellerOrigin) || []) : [])]);
-  d = (v.tools || [])
+  return { sellerNets, hasDomains: Object.keys(sellerDomains).length > 0, sellerDomains, home: v.manifest?.homepage, name: v.manifest?.name, health: healthScore(v) };
+}
+function decorateRow(t, c) {
+  return {
+    ...t,
+    ...(!(Array.isArray(t.networks) && t.networks.length) && c.sellerNets.length ? { networks: c.sellerNets, networksInferred: true } : {}),
+    ...(!t.evmDomainByNetwork && c.hasDomains ? { evmDomainByNetwork: c.sellerDomains } : {}),
+    sellerHome: c.home || t.seller,
+    sellerName: c.name || t.seller,
+    health: c.health,
+  };
+}
+// Decorate an entry's rows, stopping once `until` passes: returns the pool
+// when complete (and memoizes it), null when time ran out (progress is kept,
+// the next call resumes). One 80,000-row seller decorated in one pass held
+// the loop 33 ms locally and 185 ms on a CI runner (2026-10-02); the index
+// slices call this so the decoration is cut into slices too.
+const decoratePartial = new WeakMap();
+function decorateRemoteToolsStep(v, until = Infinity) {
+  const memo = remotePoolMemo.get(v);
+  if (memo) return memo;
+  let p = decoratePartial.get(v);
+  if (!p) { p = { i: 0, out: [], c: decorationContext(v) }; decoratePartial.set(v, p); }
+  const tools = v.tools || [];
+  for (; p.i < tools.length; p.i++) {
+    if ((p.i & 255) === 0 && until !== Infinity && p.i > 0 && performance.now() >= until) return null;
+    const t = tools[p.i];
     // paid:false = the seller's own doc says this operation is free.
     // It lists on the marketplace, but it is never a BUY candidate —
     // route-execute would 402-dance against an endpoint that never
     // quotes, and "cheapest tool" rankings would fill with $0 rows.
-    .filter((t) => t.paid !== false)
-    .map((t) => ({
-      ...t,
-      ...(!(Array.isArray(t.networks) && t.networks.length) && sellerNets.length ? { networks: sellerNets, networksInferred: true } : {}),
-      ...(!t.evmDomainByNetwork && Object.keys(sellerDomains).length ? { evmDomainByNetwork: sellerDomains } : {}),
-      sellerHome: v.manifest?.homepage || t.seller,
-      sellerName: v.manifest?.name || t.seller,
-      health: healthScore(v),
-    }));
-  remotePoolMemo.set(v, d);
-  return d;
+    if (t.paid === false) continue;
+    p.out.push(decorateRow(t, p.c));
+  }
+  decoratePartial.delete(v);
+  remotePoolMemo.set(v, p.out);
+  return p.out;
+}
+const NO_ALIASES = Object.freeze([]); // shared by the 100k+ tools with none
+const tokenIntern = new Map();
+const TOKEN_INTERN_MAX = 500_000; // past it, tokens are kept as they come
+function internToken(tok) {
+  const hit = tokenIntern.get(tok);
+  if (hit !== undefined) return hit;
+  if (tokenIntern.size < TOKEN_INTERN_MAX) tokenIntern.set(tok, tok);
+  return tok;
 }
 function toolStatics(t) {
-  let st = toolStaticsMemo.get(t);
+  let st = t[TOOL_STATICS] || toolStaticsMemo.get(t);
   if (st) return st;
   const hay = `${t.name} ${t.description} ${t.category} ${(t.tags || []).join(" ")}`.toLowerCase();
   st = {
@@ -4953,7 +6798,7 @@ function toolStatics(t) {
     // (max over slug + aliases per term, never additive). Our asn-info IS an IP
     // geolocation tool but its slug says neither word, so "ip geolocation"
     // routed to a $0.05 external seller above our $0.003 one (2026-08-28).
-    aliases: Array.isArray(t.aliases) ? t.aliases.map((a) => String(a).toLowerCase()).filter(Boolean) : [],
+    aliases: Array.isArray(t.aliases) && t.aliases.length ? t.aliases.map((a) => String(a).toLowerCase()).filter(Boolean) : NO_ALIASES,
     // The row's own NAME in slug form ("Cron next runs" -> cron-next-runs) is an
     // implicit alias: a query that covers every word of the name is an exact
     // match for the name. Applied to EVERY row, ours and the index's alike. It
@@ -4966,18 +6811,49 @@ function toolStatics(t) {
   // Every name the slug rule scores: slug, curated aliases, the name in slug
   // form. Built once here rather than per row per query.
   st.names = [st.slug, ...st.aliases, ...(st.nameSlug ? [st.nameSlug] : [])];
-  st.nameToks = st.names.map((n) => splitTokens(n));
-  toolStaticsMemo.set(t, st);
+  // Tokens are interned: the same few thousand words ("json", "price", "api")
+  // repeat across 100k+ tools, and a private copy of each per tool was the
+  // single largest thing the router held (63 MB of 164 MB on the
+  // production-sized fixture, 2026-09-25).
+  st.nameToks = st.names.map((n) => splitTokens(n).map(internToken));
+  if (!setHidden(t, TOOL_STATICS, st)) toolStaticsMemo.set(t, st);
   return st;
 }
 // Whole-token test for a SHORT term (the "ip" rule) without tokenizing the
 // row: `splitTokens(str).includes(term)` is true exactly when `str` carries the
 // term bounded by non-token characters or the string's ends, because a term
 // is itself one run of token characters. Compiled once per term per query.
-function wholeTokenMatcher(term) {
-  const esc = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`(?:^|[^\\p{L}\\p{N}])${esc}(?:$|[^\\p{L}\\p{N}])`, "u");
-  return (str) => re.test(str);
+//
+// Implemented as indexOf plus a boundary check rather than the equivalent
+// `(?:^|[^\p{L}\p{N}])term(?:$|[^\p{L}\p{N}])` Unicode regex: same answer,
+// but the regex was 15% of routeQuery's CPU on a stopword-heavy query, run
+// against every candidate's full description (2026-09-25).
+const TOKEN_CHAR = /[\p{L}\p{N}]/u;
+function isTokenCodePoint(cp) {
+  if (cp < 128) return (cp >= 48 && cp <= 57) || (cp >= 65 && cp <= 90) || (cp >= 97 && cp <= 122);
+  return TOKEN_CHAR.test(String.fromCodePoint(cp));
+}
+function tokenCharBefore(str, i) {
+  if (i <= 0) return false;
+  const lo = str.charCodeAt(i - 1);
+  if (lo >= 0xdc00 && lo <= 0xdfff && i >= 2) {
+    const hi = str.charCodeAt(i - 2);
+    if (hi >= 0xd800 && hi <= 0xdbff) return isTokenCodePoint(str.codePointAt(i - 2));
+  }
+  return isTokenCodePoint(lo);
+}
+function tokenCharAt(str, i) {
+  return i < str.length && isTokenCodePoint(str.codePointAt(i));
+}
+export function wholeTokenMatcher(term) {
+  const len = term.length;
+  if (!len) return () => false;
+  return (str) => {
+    for (let i = str.indexOf(term); i !== -1; i = str.indexOf(term, i + 1)) {
+      if (!tokenCharBefore(str, i) && !tokenCharAt(str, i + len)) return true;
+    }
+    return false;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -5014,41 +6890,94 @@ function wholeTokenMatcher(term) {
 // share passes ROUTE_INDEX_REBUILD_STALE_SHARE - a few hundred milliseconds
 // a few times per crawl cycle, instead of on every query.
 // ---------------------------------------------------------------------------
-const ROUTE_INDEX_REBUILD_STALE_SHARE = 0.3;
+const ROUTE_INDEX_REBUILD_STALE_SHARE = 0.15;
 const ROUTE_INDEX_TERM_CACHE_MAX = 4096;
 const routeIdx = {
   postings: new Map(), // token -> tool[] (decorated remote pool objects)
-  toolHome: new WeakMap(), // tool -> { origin, v, pos }
   indexed: new WeakSet(), // entries whose pool is in `postings`
   indexedTools: 0,
   staleTools: 0,
   pending: new Map(), // origin -> entry awaiting indexing
   termCache: new Map(), // long term -> matching vocabulary tokens
   builds: 0,
-  queryStamp: 0, // per-query dedupe stamp written onto toolHome records
+  queryStamp: 0, // per-query dedupe stamp written onto each tool's home record
+  shadow: null, // background rebuild in progress (see routeIndexStartShadow)
+  partial: null, // live entry being indexed across slices { origin, v, pos }
 };
 function routeIndexNoteSet(origin, prev, next) {
   if (prev === next) return;
   if (prev && routeIdx.indexed.has(prev)) { routeIdx.staleTools += (remotePoolMemo.get(prev) || []).length; routeIdx.indexed.delete(prev); }
-  if (next && typeof next === "object") routeIdx.pending.set(origin, next);
+  if (next && typeof next === "object") { routeIdx.pending.set(origin, next); routeIndexScheduleDrain(); }
   else routeIdx.pending.delete(origin);
+}
+// The crawler replaces entries one at a time as its fetches land. Draining
+// them in the background, in short slices, keeps the pending queue near empty,
+// so a query rarely has to index a backlog inline (a full cycle's backlog was
+// ~1 s on the query that met it). A query still drains whatever is left, so a
+// result never misses a seller that was set before it.
+let routeDrainScheduled = false;
+function routeIndexScheduleDrain() {
+  if (routeDrainScheduled) return;
+  routeDrainScheduled = true;
+  setImmediate(function drainSlice() {
+    const until = performance.now() + ROUTE_INDEX_SLICE_MS;
+    while (performance.now() < until) {
+      if (!routeIdx.partial) {
+        const first = routeIdx.pending.entries().next().value;
+        if (!first) break;
+        const [origin, v] = first;
+        routeIdx.pending.delete(origin);
+        if (cache.get(origin) !== v || routeIdx.indexed.has(v)) continue;
+        routeIdx.partial = { origin, v, pos: 0 };
+      }
+      if (!routeIndexAdvancePartial(until)) break; // out of time inside one seller
+    }
+    if (routeIdx.partial || routeIdx.pending.size) setImmediate(drainSlice);
+    else routeDrainScheduled = false;
+  });
 }
 function routeIndexReset() {
   routeIdx.postings = new Map();
-  routeIdx.toolHome = new WeakMap();
   routeIdx.indexed = new WeakSet();
   routeIdx.indexedTools = 0;
   routeIdx.staleTools = 0;
   routeIdx.pending.clear();
   routeIdx.termCache.clear();
+  routeIdx.shadow = null; // an in-flight background rebuild is abandoned
+  routeIdx.partial = null;
 }
-function routeIndexAddEntry(origin, v) {
-  const pool = decoratedRemoteTools(v);
-  const { postings, toolHome } = routeIdx;
-  for (let pos = 0; pos < pool.length; pos++) {
+// Continue the live index's partly indexed entry until `until`. Returns true
+// when the entry is finished (or no longer live), false when time ran out.
+function routeIndexAdvancePartial(until = Infinity) {
+  const p = routeIdx.partial;
+  if (!p) return true;
+  if (cache.get(p.origin) !== p.v) { routeIdx.partial = null; return true; }
+  const next = routeIndexAddEntry(p.origin, p.v, routeIdx, p.pos, until);
+  if (next !== -1) { p.pos = next; return false; }
+  routeIdx.partial = null;
+  if (routeIdx.shadow) routeIdx.shadow.late.push([p.origin, p.v]);
+  routeIdx.termCache.clear();
+  return true;
+}
+function newRouteIndexShard() {
+  return { postings: new Map(), indexed: new WeakSet(), indexedTools: 0 };
+}
+// Index one entry's tools from `from`, stopping (and returning the position to
+// resume at) once `until` passes; returns -1 when the entry is complete. The
+// time check sits inside the entry because one seller can carry thousands of
+// tools: the production stall profiler caught a single 4,000-tool entry
+// holding the loop for 1.3 s (2026-09-25).
+function routeIndexAddEntry(origin, v, target = routeIdx, from = 0, until = Infinity) {
+  const pool = decorateRemoteToolsStep(v, until);
+  if (!pool) return from; // decoration ran out of time: resume here next slice
+  const { postings } = target;
+  for (let pos = from; pos < pool.length; pos++) {
+    if (pos > from && (pos & 63) === 0 && until !== Infinity && performance.now() >= until) return pos;
     const t = pool[pos];
     const st = toolStatics(t);
-    toolHome.set(t, { origin, v, pos });
+    // The home record is a property of the tool (its entry and position in
+    // that entry's pool), the same whichever shard indexes it.
+    t[TOOL_HOME] ? Object.assign(t[TOOL_HOME], { origin, v, pos }) : setHidden(t, TOOL_HOME, { origin, v, pos });
     // Tokens of the haystack (name, description, category, tags) plus those
     // of every scored name (slug, aliases, name-as-slug), deduplicated per
     // tool so one tool sits once in each posting.
@@ -5059,8 +6988,10 @@ function routeIndexAddEntry(origin, v) {
       if (list) list.push(t); else postings.set(tok, [t]);
     }
   }
-  routeIdx.indexed.add(v);
-  routeIdx.indexedTools += pool.length;
+  target.indexed.add(v);
+  target.indexedTools += pool.length;
+  exactServiceKeyOf(v); // primes the alias-set memo off the query path
+  return -1;
 }
 /** Build the /api/route candidate index now instead of on the first query.
  *  On a prod-sized pool the first build is ~1 s of synchronous work; before
@@ -5068,22 +6999,81 @@ function routeIndexAddEntry(origin, v) {
  *  outside review, 2026-09-18). startCrawler schedules it 30 s after the
  *  warm start, past the post-listen stall. Idempotent: a built index is a
  *  no-op here, and a later mutation still drains on the next query. */
-export function warmRouteIndex() { routeIndexSync(); return routeIdx.indexedTools; }
-function routeIndexSync() {
+export function warmRouteIndex() { routeIndexSync({ sync: true }); return routeIdx.indexedTools; }
+// A pool this small rebuilds inline (a few ms); a larger one rebuilds in the
+// background, in slices, while the current index keeps answering.
+const ROUTE_INDEX_INLINE_REBUILD_MAX_TOOLS = 20000;
+const ROUTE_INDEX_SLICE_MS = 12;
+// Every crawl cycle (30 min) replaces every entry, so the stale share passes
+// its threshold three or four times per cycle. A synchronous rebuild of the
+// prod pool is ~1 s here and 2 s+ on prod, and it ran INSIDE whichever buyer
+// query tripped it - blocking every other request, payment relays included,
+// for that long. The rebuild now runs as a shadow index filled in slices of
+// ~12 ms between event-loop turns; queries keep reading the current index
+// (its stale postings are filtered by liveness, as always) until the shadow
+// is complete and swapped in.
+function routeIndexStartShadow() {
+  if (routeIdx.shadow) return;
+  const shadow = { ...newRouteIndexShard(), entries: [...cache].filter(([, v]) => v && typeof v === "object"), i: 0, late: [], cur: null };
+  routeIdx.shadow = shadow;
+  const step = () => {
+    if (routeIdx.shadow !== shadow) return; // reset or superseded
+    const until = performance.now() + ROUTE_INDEX_SLICE_MS;
+    while (performance.now() < until) {
+      if (!shadow.cur) {
+        if (shadow.i >= shadow.entries.length) break;
+        const [origin, v] = shadow.entries[shadow.i++];
+        if (cache.get(origin) !== v) continue;
+        shadow.cur = { origin, v, pos: 0 };
+      }
+      const next = routeIndexAddEntry(shadow.cur.origin, shadow.cur.v, shadow, shadow.cur.pos, until);
+      if (next === -1) shadow.cur = null; else { shadow.cur.pos = next; break; }
+    }
+    if (shadow.cur || shadow.i < shadow.entries.length) { setImmediate(step); return; }
+    // Entries the current index took from `pending` while the shadow was
+    // being filled were set after its snapshot: carry the live ones over.
+    for (const [origin, v] of shadow.late) if (cache.get(origin) === v && !shadow.indexed.has(v)) routeIndexAddEntry(origin, v, shadow);
+    let stale = 0;
+    for (const [origin, v] of [...shadow.entries, ...shadow.late]) {
+      if (shadow.indexed.has(v) && cache.get(origin) !== v) { stale += (remotePoolMemo.get(v) || []).length; shadow.indexed.delete(v); }
+    }
+    routeIdx.postings = shadow.postings;
+    routeIdx.indexed = shadow.indexed;
+    routeIdx.indexedTools = shadow.indexedTools;
+    routeIdx.staleTools = stale;
+    routeIdx.termCache.clear();
+    routeIdx.shadow = null;
+    routeIdx.builds++;
+  };
+  setImmediate(step);
+}
+function routeIndexSync({ sync = false } = {}) {
   const total = routeIdx.indexedTools + routeIdx.staleTools;
   if (routeIdx.staleTools > 0 && routeIdx.staleTools >= total * ROUTE_INDEX_REBUILD_STALE_SHARE) {
-    routeIndexReset();
-    routeIdx.builds++;
-    for (const [origin, v] of cache) if (v && typeof v === "object") routeIndexAddEntry(origin, v);
-    return;
+    if (sync || total <= ROUTE_INDEX_INLINE_REBUILD_MAX_TOOLS) {
+      routeIndexReset();
+      routeIdx.builds++;
+      for (const [origin, v] of cache) if (v && typeof v === "object") routeIndexAddEntry(origin, v);
+      return;
+    }
+    routeIndexStartShadow();
   }
+  // A query finishes the live index's partly indexed entry first, so it never
+  // ranks a seller with only some of its rows in the postings.
+  if (routeIdx.partial) routeIndexAdvancePartial();
   if (!routeIdx.pending.size) return;
   for (const [origin, v] of routeIdx.pending) {
     if (cache.get(origin) !== v) continue; // replaced again before we got to it
+    if (routeIdx.indexed.has(v)) continue; // already indexed (a swapped-in shadow took it)
     routeIndexAddEntry(origin, v);
+    if (routeIdx.shadow) routeIdx.shadow.late.push([origin, v]);
   }
   routeIdx.pending.clear();
   routeIdx.termCache.clear(); // new vocabulary may match a cached term
+}
+/** Test hook: resolves once no background rebuild is in flight. */
+export async function _routeIndexSettledForTest() {
+  while (routeIdx.shadow) await new Promise((r) => setImmediate(r));
 }
 // Vocabulary tokens a term selects: itself for a short term (whole-token rule),
 // every token containing it for a long one (substring rule). Candidate
@@ -5101,7 +7091,7 @@ function routeIndexTokensFor(term, short) {
   return out;
 }
 export function _routeIndexStatsForTest() {
-  return { vocabulary: routeIdx.postings.size, indexedTools: routeIdx.indexedTools, staleTools: routeIdx.staleTools, pending: routeIdx.pending.size, builds: routeIdx.builds };
+  return { vocabulary: routeIdx.postings.size, indexedTools: routeIdx.indexedTools, staleTools: routeIdx.staleTools, pending: routeIdx.pending.size, builds: routeIdx.builds, rebuilding: !!routeIdx.shadow, partial: !!routeIdx.partial };
 }
 
 // The local pool is rebuilt from the catalog on every query (buildLocalEntry
@@ -5127,28 +7117,97 @@ function localPoolFor(args) {
   return built;
 }
 
-export function routeQuery({ query, top, include, networkFilter, strictNetwork = false, baseUrl, catalog, prices, network, toolCount, walletName }) {
+// Most rows one /api/route answer carries. A ranking, so a ceiling is right;
+// publishing it beside the rows is what stops the ceiling reading as the count.
+export const ROUTE_TOP_MAX = 25;
+
+// Words that carry no capability. They still SCORE (every rule below reads
+// every term), but they do not SELECT candidates when the query has any other
+// term: "to", "for" and "the" sit in most of the 110k+ descriptions ("for" and
+// "the" by substring - format, forecast, ethereum), so selecting on them put
+// tens of thousands of rows through scoring on every query, measured 0.5-3 s
+// per /api/route on prod. A row that matches ONLY such words is not an answer
+// to a task that names anything else. A query made of nothing but these words
+// selects on all of them, as before.
+const ROUTE_NONSELECTING_TERMS = new Set([
+  "a", "an", "the", "to", "of", "for", "in", "on", "at", "by", "and", "or", "with", "from", "into", "via", "as",
+  "is", "are", "be", "it", "its", "this", "that", "i", "me", "my", "we", "our", "you", "your",
+  "get", "do", "does", "can", "how", "what", "want", "need", "please", "some", "any", "all", "using", "use",
+]);
+// A caller that asks the same query several times in one synchronous turn
+// (/api/route: its page, then a 50-row shortlist) passes one `scoredMemo`
+// object to every call and the ranking is scored once. Scoped to the caller,
+// so nothing a later request sees can be stale.
+// routeQuery runs synchronously; routeQueryAsync runs the SAME steps and hands
+// the event loop back every few milliseconds while it scores candidates. A
+// query whose words are common in seller descriptions scores tens of thousands
+// of rows, which held the thread 0.5-2 s on prod (2026-09-25); the free
+// discovery surfaces use the async form so one such query no longer stalls
+// every other request. Both drive routeQuerySteps, so their answers cannot
+// differ. Yields happen only after candidates are collected from the index
+// (collection stamps shared per-tool records and must not interleave).
+export function routeQuery(args) {
+  const steps = routeQuerySteps(args);
+  let r = steps.next();
+  while (!r.done) r = steps.next();
+  return r.value;
+}
+
+const yieldToLoop = () => new Promise((r) => setImmediate(r));
+// `onBusy(ms)` is called once per slice with the time that slice held the
+// thread, so a caller's CPU budget is charged while the query runs, not only
+// when it ends (a burst of queries would otherwise all pass a budget check
+// that none of them had charged yet).
+export async function routeQueryAsync(args, { sliceMs = 8, onBusy = null } = {}) {
+  const steps = routeQuerySteps(args);
+  let sliceStart = performance.now();
+  let r = steps.next();
+  while (!r.done) {
+    const now = performance.now();
+    if (now - sliceStart >= sliceMs) {
+      if (onBusy) onBusy(now - sliceStart);
+      await yieldToLoop();
+      sliceStart = performance.now();
+    }
+    r = steps.next();
+  }
+  if (onBusy) onBusy(performance.now() - sliceStart);
+  return r.value;
+}
+
+// Rows scored between chances to yield. Small enough that a slice overruns
+// its budget by well under a millisecond, large enough that the generator
+// hop is noise.
+const ROUTE_SCORE_YIELD_ROWS = 256;
+function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = false, baseUrl, catalog, prices, network, toolCount, walletName, scoredMemo = null }) {
   const q = String(query || "").slice(0, 500);
   // Unicode-aware (src/query-terms.js): a CJK query used to tokenize to
   // nothing and answer zero rows (reported from outside 2026-09-10).
   const terms = queryTerms(q, { max: 32 });
   const termSet = new Set(terms);
-  const k = Math.min(Math.max(parseInt(top, 10) || 5, 1), 25);
+  // The ceiling has to announce itself. ?top=100 returned 25 rows with
+  // `count: 25` and nothing else, so a caller reads "25 matched" where the truth
+  // is "25 is our maximum" - the same silence that let a seller read one page of
+  // /api/index as the whole index (2026-09-22). The leaderboard learned this on
+  // 2026-08-28 (?top=1000 quietly served 50) and grew `truncated` +
+  // `topRequested`; this surface never got the same treatment.
+  const k = Math.min(Math.max(parseInt(top, 10) || 5, 1), ROUTE_TOP_MAX);
   const inc = VALID_INCLUDE.has(include) ? include : "all";
   // ?network=robinhood (or a raw CAIP-2) keeps only tools whose crawled 402
   // advertises that chain. Positive-signal filter: local tools and sellers
   // whose crawl source carries no accepts (networks unknown) are kept — the
   // filter is "exclude sellers known NOT to settle there", not a guarantee.
   const wantNet = networkFilter ? (ROUTE_NETWORKS[String(networkFilter).trim().toLowerCase()] || String(networkFilter).trim()) : null;
-  if (!terms.length) return { query: q, count: 0, results: [], sellers: 0, include: inc, ...(wantNet ? { network: wantNet } : {}) };
+  // The same envelope on the empty answer: a consumer must not have to learn
+  // one shape for a hit and another for a miss.
+  if (!terms.length) return { query: q, count: 0, results: [], sellers: 0, sellersMatched: 0, include: inc, topMax: ROUTE_TOP_MAX, truncated: false, ...partialFields(0, 0), ...(wantNet ? { network: wantNet } : {}) };
 
   // Always include the local catalog (we trust ourselves), plus every crawled
   // seller's tools — but only from sellers whose last crawl succeeded. A buyer
   // routed to a currently-broken seller would just lose the call, so we'd
   // rather rank fewer trustworthy options than more flaky ones.
-  const localPool = inc === "external"
-    ? []
-    : localPoolFor({ baseUrl, catalog, prices, network, toolCount, walletName }).pool;
+  const localRef = inc === "external" ? null : localPoolFor({ baseUrl, catalog, prices, network, toolCount, walletName });
+  const localPool = localRef ? localRef.pool : [];
   const aliasOrigins = inc === "local" ? null : computeAliasOrigins(cache);
   // Same self-exclusion as indexSnapshot/routableSellerSummaries: the crawler
   // can discover and cache the real agent402.tools origin regardless of this
@@ -5193,14 +7252,26 @@ export function routeQuery({ query, top, include, networkFilter, strictNetwork =
   // query instead of once per sort COMPARISON: on a pool where a common term
   // matches tens of thousands of rows, the comparator ran bazaarQualityFor()
   // (a regex + map read) hundreds of thousands of times per query.
-  const selfQuality = (bazaarQualityFor(baseUrl) || bazaarQualityFor(SELF_BAZAAR_ORIGIN))?.payers30d ?? null;
+  const selfQ = bazaarQualityFor(baseUrl) || bazaarQualityFor(SELF_BAZAAR_ORIGIN);
+  const selfQuality = selfQ?.payers30d ?? null;
+  const selfCurated = selfQ?.curated === true;
+  const curatedBySeller = new Map();
+  const curatedOf = (seller) => {
+    let c = curatedBySeller.get(seller);
+    if (c === undefined) { c = bazaarQualityFor(seller)?.curated === true; curatedBySeller.set(seller, c); }
+    return c;
+  };
   const payersBySeller = new Map();
+  // Self-funded Bazaar counts never break a tie (rankingPayersOf above).
+  const circular = getLeaderboardCircularWallets();
   const payersOf = (seller) => {
     let p = payersBySeller.get(seller);
-    if (p === undefined) { p = bazaarQualityFor(seller)?.payers30d ?? null; payersBySeller.set(seller, p); }
+    if (p === undefined) { p = rankingPayersOf(bazaarQualityFor(seller), circular.wallets); payersBySeller.set(seller, p); }
     return p;
   };
-  const scored = [];
+  const memoKey = scoredMemo ? JSON.stringify([q, inc, wantNet, !!strictNetwork, baseUrl, cacheVersion, circular.version]) : null;
+  const memoHit = !!scoredMemo && scoredMemo.key === memoKey && scoredMemo.local === localRef;
+  const scored = memoHit ? scoredMemo.scored : [];
   // The four text-match rules, per row. Same rules and weights as before the
   // candidate index; the index only decides which rows are worth asking.
   const scoreRow = (t) => {
@@ -5237,7 +7308,7 @@ export function routeQuery({ query, top, include, networkFilter, strictNetwork =
     // checkable by anyone instead of merely stated (asked for in #645).
     if (score > 0) {
       const isLocal = t.seller === LOCAL_SELLER;
-      scored.push([score, t, { slug: mSlug, name: mName, text: mText }, st.priceRank, isLocal, isLocal ? selfQuality : payersOf(t.seller)]);
+      scored.push([score, t, { slug: mSlug, name: mName, text: mText }, st.priceRank, isLocal, isLocal ? selfQuality : payersOf(t.seller), isLocal ? selfCurated : curatedOf(t.seller)]);
     }
   };
   // Local rows first (a few hundred; scanned outright), then the remote pool's
@@ -5246,8 +7317,10 @@ export function routeQuery({ query, top, include, networkFilter, strictNetwork =
   // same way. A candidate is a tool whose entry is the LIVE one for its origin
   // (a stale posting from a replaced entry is skipped here) and whose seller
   // passes the same routable / alias / self filters as before.
-  for (const t of localPool) scoreRow(t);
-  if (inc !== "local") {
+  const selecting = Array.from({ length: nTerms }, (_, k) => !ROUTE_NONSELECTING_TERMS.has(terms[k]));
+  if (!selecting.some(Boolean)) selecting.fill(true);
+  if (!memoHit) for (const t of localPool) scoreRow(t);
+  if (!memoHit && inc !== "local") {
     routeIndexSync();
     // Which entries are in the pool this query: the routable / alias / self
     // filters, decided once per ENTRY (a seller's 500 candidate rows used to
@@ -5257,12 +7330,13 @@ export function routeQuery({ query, top, include, networkFilter, strictNetwork =
     const entryOk = new Map();
     const byEntry = new Map(); // live entry -> candidate tools (unordered)
     for (let k = 0; k < nTerms; k++) {
+      if (!selecting[k]) continue;
       for (const tok of routeIndexTokensFor(terms[k], shortTerm[k])) {
         const list = routeIdx.postings.get(tok);
         if (!list) continue;
         for (let i = 0; i < list.length; i++) {
           const t = list[i];
-          const home = routeIdx.toolHome.get(t);
+          const home = t[TOOL_HOME];
           if (!home || home.stamp === stamp) continue;
           home.stamp = stamp;
           let ok = entryOk.get(home.v);
@@ -5283,11 +7357,22 @@ export function routeQuery({ query, top, include, networkFilter, strictNetwork =
       }
     }
     if (byEntry.size) {
+      // Cache order is fixed here, before any yield: the async driver may let
+      // a crawl write the cache between slices, and the order rows are pushed
+      // in decides how ties resolve.
+      const ordered = [];
       for (const v of cache.values()) {
         const arr = byEntry.get(v);
         if (!arr) continue;
-        if (arr.length > 1) arr.sort((a, b) => routeIdx.toolHome.get(a).pos - routeIdx.toolHome.get(b).pos);
-        for (let i = 0; i < arr.length; i++) scoreRow(arr[i]);
+        if (arr.length > 1) arr.sort((a, b) => a[TOOL_HOME].pos - b[TOOL_HOME].pos);
+        ordered.push(arr);
+      }
+      let sinceYield = 0;
+      for (const arr of ordered) {
+        for (let i = 0; i < arr.length; i++) {
+          scoreRow(arr[i]);
+          if (++sinceYield >= ROUTE_SCORE_YIELD_ROWS) { sinceYield = 0; yield; }
+        }
       }
     }
   }
@@ -5314,6 +7399,10 @@ export function routeQuery({ query, top, include, networkFilter, strictNetwork =
       if (qb !== qa) return qb - qa;
     }
     if (a[3] !== b[3]) return a[3] - b[3];
+    // Bazaar-curated (Coinbase's editorial flag), only among rows equal on
+    // match, health, payers AND price: it can order two equals, never lift a
+    // seller over a better-matched, healthier, more-paid or cheaper one.
+    if (a[6] !== b[6]) return a[6] ? -1 : 1;
     return (a[1].slug || "").length - (b[1].slug || "").length;
   };
   // ONE global sort over the whole scored array, deliberately. A bucket-per-
@@ -5324,7 +7413,10 @@ export function routeQuery({ query, top, include, networkFilter, strictNetwork =
   // the comparison sequence, and a different array shape gives a different
   // sequence. Keeping the exact call the ranking was pinned on keeps the
   // published order byte-identical; the sort is a few ms of the query.
-  scored.sort((a, b) => (b[0] !== a[0] ? b[0] - a[0] : tiebreak(a, b)));
+  if (!memoHit) {
+    scored.sort((a, b) => (b[0] !== a[0] ? b[0] - a[0] : tiebreak(a, b)));
+    if (scoredMemo) Object.assign(scoredMemo, { key: memoKey, scored, local: localRef });
+  }
 
   // Per-seller diversity cap (M6, "Five Attacks on x402" Attack IV — Sybil /
   // metadata capture). Ranking is already sorted best-first; naively taking the
@@ -5367,9 +7459,21 @@ export function routeQuery({ query, top, include, networkFilter, strictNetwork =
     picked.push(entry);
   }
 
+  // WHO MATCHED, not who survived the cut. `sellersSeen` counts origins present
+  // in THIS page and was the only seller number in the answer, so a caller
+  // reading `sellers: 16` beside `count: 25` took 16 for the sellers that can
+  // serve the task. The same misreading as the 250-of-4,473 index page, one
+  // field over.
+  const sellersScored = new Set(scored.map((e) => e[1].seller));
+  // The diversity cap SUPPRESSES higher-scoring rows on purpose (a single
+  // domain owned 77.5% of a real registry's results, which is why it exists).
+  // That is a reordering the caller cannot see and would not expect from a
+  // ranking, so it has to be stated: `leftover` is non-empty exactly when a row
+  // was pushed down for its seller rather than for its score.
+  const diversityCapped = capApplies && leftover.length > 0;
   const sellersSeen = new Set();
   let anyExternal = false;
-  const results = picked.map(([score, t, matched]) => {
+  const results = picked.map(([score, t, matched, , , payers30d, curated]) => {
     sellersSeen.add(t.seller);
     // F09: name/description/sellerName on an EXTERNAL result are seller-
     // controlled text. Regex filtering + the diversity cap above are secondary
@@ -5386,7 +7490,9 @@ export function routeQuery({ query, top, include, networkFilter, strictNetwork =
       name: t.name,
       method: t.method,
       route: t.route,
-      url: t.seller === LOCAL_SELLER ? `${baseUrl}${t.route}` : `${t.seller}${t.route}`,
+      // The joined text as written (a template keeps its {param}); sellerRouteUrl
+      // only validates it, since its URL-parsed form percent-encodes the braces.
+      url: t.seller === LOCAL_SELLER ? `${baseUrl}${t.route}` : joinSellerRoute(t.seller, t.route),
       // A crawled OpenAPI path can carry template segments the seller never
       // substitutes ("/stock/{symbol}"). Handing an agent that URL as if it
       // were callable wastes its money and its time - measured 2026-08-28,
@@ -5396,6 +7502,7 @@ export function routeQuery({ query, top, include, networkFilter, strictNetwork =
       ...urlTemplateProjection(t),
       price: t.price,
       priceUsd: parsePrice(t.price),
+      ...priceKnownProjection(t),
       ...priceConflictProjection(t),
       // "x402" = we have positive evidence this is payable in-protocol (a price,
       // or a registry accepts entry someone settled against). "unknown" = we
@@ -5435,7 +7542,13 @@ export function routeQuery({ query, top, include, networkFilter, strictNetwork =
         // after score, so saying which kind of number this is matters.
         healthSource: external ? "crawl" : "self-asserted",
         priceRank: (() => { const r = priceRank(t.price); return Number.isFinite(r) ? r : null; })(),
-        tiebreaks: ["score", "health", "cheapest known price", "shorter slug"],
+        // The two Bazaar-measured tiebreak inputs this row was sorted on (null
+        // payers = no measurement, which the sort skips rather than reading as 0).
+        bazaarPayers30d: Number.isFinite(payers30d) ? payers30d : null,
+        bazaarCurated: curated === true,
+        // The order the sort applies, from src/route-order.js (pinned to the
+        // comparator by test-route-order.js).
+        tiebreaks: routeTiebreakLabels(),
       },
       category: t.category,
       description: t.description,
@@ -5459,6 +7572,21 @@ export function routeQuery({ query, top, include, networkFilter, strictNetwork =
   });
   return {
     query: q, include: inc, count: results.length, sellers: sellersSeen.size, results,
+    // `count` and `sellers` keep their exact meaning and their exact values -
+    // renaming a live field is a second, worse break. These ride alongside.
+    ...partialFields(scored.length, results.length),
+    ...clampFields(top, ROUTE_TOP_MAX, "top"),
+    sellersMatched: sellersScored.size,
+    ...(diversityCapped ? {
+      diversityCapped: true,
+      perSellerCap,
+      diversityNote: `at most ${perSellerCap} rows per seller in the first pass, so a higher-scoring row from a seller already at the cap can rank below a lower-scoring row from another seller - raise ?top to raise the cap`,
+    } : {}),
+    // `count` is what THIS answer carries, never what matched. A caller that
+    // asked for more than the ceiling must be able to tell the two apart:
+    // topMax is the ceiling, truncated says the ranking was cut by it.
+    topMax: ROUTE_TOP_MAX,
+    truncated: picked.length >= k && scored.length > picked.length,
     // We run this index and we also sell on it. Rather than assert neutrality,
     // publish the parts that are literally true and the parts where the host
     // has an edge, so anyone can check both against the source.
@@ -5489,7 +7617,7 @@ export function routeQuery({ query, top, include, networkFilter, strictNetwork =
         "our own health is self-asserted as 1 because the crawler never probes itself; external health is measured from crawl outcomes. Every result reports why.healthSource so the two are distinguishable",
       ],
       excludeHost: 'include=external removes our catalog from the ranking entirely',
-      source: "https://github.com/MikeyPetrillo/Agent402",
+      source: REPO_URL,
     },
     ...(anyExternal ? { containsUntrustedContent: true } : {}),
     ...(wantNet ? { network: wantNet } : {}),
@@ -5625,6 +7753,25 @@ export function whatAgentsBuyHtml(buyRows) {
 
 
 /** Internal helper for tests. */
+/** Counts only (no values): how much crawl data the index holds, for the
+ *  operator heap read. Walks entries once; no stringify. */
+export function indexMemoryFigures() {
+  let entries = 0, tools = 0, openapiTools = 0, openapiRoutes = 0, fullManifests = 0, manifestResources = 0, slimManifests = 0;
+  for (const v of cache.values()) {
+    if (!v || typeof v !== "object") continue;
+    entries++;
+    tools += Array.isArray(v.tools) ? v.tools.length : 0;
+    openapiTools += Array.isArray(v.openapiTools) ? v.openapiTools.length : 0;
+    openapiRoutes += Array.isArray(v.openapiRoutes) ? v.openapiRoutes.length : 0;
+    if (v.manifest?.slimmed) slimManifests++;
+    else if (v.manifest && typeof v.manifest === "object") {
+      fullManifests++;
+      const r = v.manifest.resources || v.manifest.endpoints || v.manifest.tools;
+      if (Array.isArray(r)) manifestResources += r.length;
+    }
+  }
+  return { entries, tools, openapiTools, openapiRoutes, fullManifests, slimManifests, manifestResources, internedTokens: tokenIntern.size, routeIndexedTools: routeIdx.indexedTools };
+}
 export function _cacheForTests() {
   return cache;
 }
@@ -5648,14 +7795,50 @@ export function crawlToolsByOrigin() {
   return out;
 }
 
-export function sellerEntry(originOrHost) {
-  const q = String(originOrHost || "").trim().toLowerCase().slice(0, 253);
-  if (!q) return null;
-  const hostOf = (u) => { try { return new URL(u).host.toLowerCase(); } catch { return ""; } };
-  for (const [origin, v] of cache.entries()) {
-    if (origin.toLowerCase() === q || hostOf(origin) === q) return { origin, ...v };
+/** Every routable outside seller's buy candidates, under the router's own
+ *  seller filter (routable, not an alias or superseded origin, not this host,
+ *  not removed at the owner's request). A generator, so the decision index
+ *  export can yield between entries instead of holding the loop. */
+export function* routableRemoteEntries({ baseUrl = "" } = {}) {
+  const aliases = computeAliasOrigins(cache);
+  const selfBase = String(baseUrl || "").replace(/\/+$/, "").toLowerCase();
+  const isSelf = (origin) => {
+    const o = String(origin).replace(/\/+$/, "").toLowerCase();
+    return (selfBase && o === selfBase) || o === "https://agent402.tools";
+  };
+  for (const [origin, v] of cache) {
+    if (!v || typeof v !== "object" || !isRoutable(v) || aliases.has(origin) || isSelf(origin) || isRemovedOrigin(origin)) continue;
+    yield [origin, decoratedRemoteTools(v)];
   }
-  return null;
+}
+
+export function sellerEntry(originOrHost) {
+  const origin = findSellerKey(originOrHost);
+  return origin ? { origin, ...cache.get(origin) } : null;
+}
+
+/**
+ * The cache key a lookup names: an exact key (scheme optional, trailing slash
+ * ignored, case-insensitive), or a bare host. A host names its bare-origin
+ * seller when it has one; with only path sellers on it, the first of them. A
+ * lookup carrying a path names exactly that path seller and nothing else.
+ */
+export function findSellerKey(originOrHost) {
+  // 512, not 253: a path seller's key is host plus a prefix of up to
+  // SELLER_PREFIX_MAX_CHARS characters.
+  const q = String(originOrHost || "").trim().toLowerCase().slice(0, 512).replace(/\/+$/, "");
+  if (!q) return null;
+  const noScheme = (s) => s.replace(/^https?:\/\//, "");
+  const hasScheme = /^https?:\/\//.test(q);
+  const qBare = noScheme(q);
+  const hostOf = (u) => { try { return new URL(u).host.toLowerCase(); } catch { return ""; } };
+  let hostHit = null;
+  for (const origin of cache.keys()) {
+    const k = origin.toLowerCase();
+    if (hasScheme ? k === q : noScheme(k) === qBare) return origin;
+    if (hostOf(origin) === qBare && (!hostHit || (sellerPrefixOf(hostHit) && !sellerPrefixOf(origin)))) hostHit = origin;
+  }
+  return qBare.includes("/") ? null : hostHit;
 }
 
 // ---------------------------------------------------------------------------
@@ -5680,6 +7863,17 @@ export function sellerEntry(originOrHost) {
  * reachable — the same bar /api/index/register enforces on the way in, so the
  * catalog cannot advertise something registration would have refused.
  */
+// A directory search built each row's lowercase search text on every request
+// (112k rows: ~120 ms per search locally). Rows are rebuilt, never mutated, so
+// the text is kept per row object.
+// A symbol key: never serialized, and a WeakMap over 112k rows measured slower
+// than the rebuild it saves.
+const DIRECTORY_HAY = Symbol("directoryHay");
+function directoryHayOf(t) {
+  let h = t[DIRECTORY_HAY];
+  if (h === undefined) { h = `${t.name} ${t.description} ${t.route} ${t.sellerName} ${(t.tags || []).join(" ")}`.toLowerCase(); t[DIRECTORY_HAY] = h; }
+  return h;
+}
 export function allIndexedTools({ search = "", category = "", network = "", offset = 0, limit = 100, excludeOrigin = "", ourTools = [], source = "" } = {}) {
   // One index of the whole ecosystem WITH provenance on every row. Ours are
   // NOT floated to the top: 515 of them would fill the first six pages and bury
@@ -5690,20 +7884,20 @@ export function allIndexedTools({ search = "", category = "", network = "", offs
   // help anyone choose. `excludeOrigin` still drops our crawled self-listing
   // (we publish to the Bazaar, so the crawler finds us) so ours appear exactly
   // once, from the authoritative catalog rather than a stale crawl of it.
-  const rows = interleaveBySeller([...ourTools, ...flattenedThirdPartyTools(excludeOrigin)]);
+  const rows = interleavedIndexRows(ourTools, excludeOrigin);
   const q = String(search || "").trim().toLowerCase();
   const terms = q ? queryTerms(q, { max: 8 }) : [];
   const cat = String(category || "").trim().toLowerCase();
   const net = String(network || "").trim().toLowerCase();
 
   const src = String(source || "").trim().toLowerCase();
-  const filtered = rows.filter((t) => {
+  const filtered = !terms.length && !cat && !net && !src ? rows : rows.filter((t) => {
     if (src === "ours" && !t.ours) return false;
     if (src === "third-party" && t.ours) return false;
     if (cat && String(t.category || "").toLowerCase() !== cat) return false;
     if (net && !(t.networks || []).some((n) => String(n).toLowerCase().includes(net))) return false;
     if (!terms.length) return true;
-    const hay = `${t.name} ${t.description} ${t.route} ${t.sellerName} ${(t.tags || []).join(" ")}`.toLowerCase();
+    const hay = directoryHayOf(t);
     return terms.every((term) => hay.includes(term));
   });
 
@@ -5711,8 +7905,8 @@ export function allIndexedTools({ search = "", category = "", network = "", offs
   const lim = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 500);
   return {
     total: rows.length,
-    ours: rows.filter((t) => t.ours).length,
-    thirdParty: rows.filter((t) => !t.ours).length,
+    ours: rows.oursCount,
+    thirdParty: rows.length - rows.oursCount,
     matched: filtered.length,
     offset: off,
     limit: lim,
@@ -5720,6 +7914,51 @@ export function allIndexedTools({ search = "", category = "", network = "", offs
     results: filtered.slice(off, off + lim),
   };
 }
+
+// The flattened, interleaved directory, rebuilt only when the crawl cache has
+// changed (at most every 2 min while a crawl is replacing entries).
+// /marketplace/tools and /api/index/tools rebuilt it on EVERY page request:
+// the production stall profiler measured 1.4 s per build (2026-09-25), and a
+// crawler walking the pages paid it per page. Only the filter and the slice
+// run per request now.
+let indexRowsMemo = { key: null, at: 0, rows: null };
+// A directory this small rebuilds inline (a few ms); a larger one is served
+// stale while a background rebuild runs in slices (the production build was
+// 1.5-1.8 s of one synchronous turn, 2026-09-25).
+const INDEX_ROWS_INLINE_MAX = 20000;
+let indexRowsRebuild = null;
+function interleavedIndexRows(ourTools, excludeOrigin) {
+  const now = Date.now();
+  const key = `${excludeOrigin}|${ourTools.length}`;
+  const m = indexRowsMemo;
+  // Unchanged cache: reuse for up to 5 min (Bazaar rows can change without a
+  // cache write). Mid-crawl: reuse for up to 2 min whatever the version says.
+  if (m.rows && m.key === key && ((m.version === cacheVersion && now - m.at < 300_000) || (crawlInFlight && now - m.at < 120_000))) return m.rows;
+  if (m.rows && m.key === key && m.rows.length > INDEX_ROWS_INLINE_MAX) {
+    if (!indexRowsRebuild) {
+      const version = cacheVersion;
+      indexRowsRebuild = (async () => {
+        try {
+          const flat = await flattenedThirdPartyToolsAsync(excludeOrigin);
+          await yieldTurn();
+          const rows = interleaveBySeller([...ourTools, ...flat]);
+          rows.oursCount = rows.filter((t) => t.ours).length;
+          if (indexRowsMemo === m) indexRowsMemo = { key, at: Date.now(), rows, version };
+        } catch (e) {
+          console.warn(`[x402-index] directory rebuild failed: ${String(e?.message || e).slice(0, 120)}`);
+        } finally { indexRowsRebuild = null; }
+      })();
+    }
+    return m.rows;
+  }
+  const rows = interleaveBySeller([...ourTools, ...flattenedThirdPartyTools(excludeOrigin)]);
+  rows.oursCount = rows.filter((t) => t.ours).length;
+  indexRowsMemo = { key, at: now, rows, version: cacheVersion };
+  return rows;
+}
+const yieldTurn = () => new Promise((r) => setImmediate(r));
+/** Test hook: wait for an in-flight background directory rebuild. */
+export async function _indexRowsSettledForTest() { while (indexRowsRebuild || flatRebuild) await (indexRowsRebuild || flatRebuild); }
 
 /** Round-robin the rows across sellers, described first.
  *
@@ -5732,6 +7971,9 @@ export function allIndexedTools({ search = "", category = "", network = "", offs
  *
  *  Described rows lead: a row with no description cannot help anyone choose,
  *  so those sink rather than being hidden. */
+// One collator instead of String#localeCompare per comparison: same order,
+// a fraction of the cost on a 100k-row sort.
+const collate = new Intl.Collator().compare;
 function interleaveBySeller(rows) {
   const pass = (subset) => {
     const bySeller = new Map();
@@ -5741,8 +7983,8 @@ function interleaveBySeller(rows) {
       bySeller.get(k).push(r);
     }
     const groups = [...bySeller.entries()]
-      .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
-      .map(([, list]) => list.sort((a, b) => String(a.route).localeCompare(String(b.route))));
+      .sort((a, b) => collate(String(a[0]), String(b[0])))
+      .map(([, list]) => list.sort((a, b) => collate(String(a.route), String(b.route))));
     const out = [];
     for (let i = 0; out.length < subset.length; i++) {
       let moved = false;
@@ -5755,6 +7997,69 @@ function interleaveBySeller(rows) {
   };
   return [...pass(rows.filter((r) => r.described)), ...pass(rows.filter((r) => !r.described))];
 }
+
+function flatRowsForEntry(origin, v, self, seen, out) {
+  if (!origin.startsWith("https:")) return; // same bar as /api/index/register
+  const normOrigin = origin.replace(/\/+$/, "").toLowerCase();
+  if (self && normOrigin === self) return;
+  if (normOrigin === "https://agent402.tools") return;
+  if (v?.error) return;
+  if (healthScore(v) <= 0) return;
+  const sellerName = v?.manifest?.name || origin.replace(/^https?:\/\//, "");
+  for (const t of v?.tools || []) {
+    const route = t?.route || "/";
+    const key = `${t?.method || "POST"} ${origin}${route}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const description = String(t?.description || "").trim();
+    out.push({
+      ours: false,
+      seller: origin,
+      sellerName,
+      name: String(t?.name || route),
+      route,
+      method: t?.method || "POST",
+      url: origin + route,
+      description,
+      described: description.length >= 12,
+      category: t?.category || "other",
+      tags: Array.isArray(t?.tags) ? t.tags.slice(0, 6) : [],
+      // Was `typeof t.price === "number" ? t.price : null`, which silently
+      // nulled every price stored as a string - and manifest and llms.txt
+      // catalogues store them as "$0.002". parsePrice is what every other
+      // surface uses; using a different rule here made the same tool look
+      // priced on /api/route and unpriced on /api/index/tools.
+      priceUsd: parsePrice(t?.price),
+      // Both spellings, deliberately. /api/route served `price` and
+      // `priceUsd`, this surface served only `priceUsd`, and /api/find served
+      // only `price`. A consumer that learned one surface got `undefined` on
+      // the next and could not tell it from "no price" - which is exactly how
+      // a measurement taken during this audit came out wrong.
+      price: t?.price ?? null,
+      ...priceKnownProjection(t),
+    ...priceConflictProjection(t),
+      // The identifier a caller needs to actually invoke the tool. Present on
+      // /api/route and /api/find, missing here, on the surface that lists all
+      // 65k third-party rows.
+      slug: t?.slug || null,
+      // Added to /api/route earlier today and to nothing else, which is the
+      // inert-field defect this file's own header warns about, committed the
+      // same afternoon as a fix for it. It belongs wherever a tool row is
+      // served.
+      payable: payabilityOf(t),
+      // Same evidence as seller detail and /api/route. Added to all three at
+      // once on purpose - this file's own header records shipping a field on
+      // two of three surfaces twice, where it is inert on whichever one the
+      // caller happens to read.
+      ...responseContractProjection(t),
+      ...requestContractProjection(t),
+      // The loop's own origin/route, which are what this surface keys on -
+      // t.seller is not set on every row source.
+      ...deliveryProjection(origin, t?.method, route),
+      networks: Array.isArray(t?.networks) ? t.networks : [],
+    });
+  }
+  }
 
 let flatCache = { at: 0, rows: [], self: "" };
 const FLAT_TTL_MS = 60_000;
@@ -5785,73 +8090,43 @@ function flattenedThirdPartyTools(excludeOrigin = "") {
   const self = String(excludeOrigin || "").replace(/\/+$/, "").toLowerCase();
   if (flatCache.self !== self) flatCache = { at: 0, rows: [], self };
   if (Date.now() - flatCache.at < FLAT_TTL_MS && flatCache.rows.length) return flatCache.rows;
+  if (flatCache.self === self && flatCache.rows.length > INDEX_ROWS_INLINE_MAX) {
+    // Large and stale: serve it and rebuild in the background.
+    flattenedThirdPartyToolsAsync(excludeOrigin);
+    return flatCache.rows;
+  }
   const out = [];
   const seen = new Set();
-  for (const [origin, v] of cache.entries()) {
-    if (!origin.startsWith("https:")) continue; // same bar as /api/index/register
-    const normOrigin = origin.replace(/\/+$/, "").toLowerCase();
-    if (self && normOrigin === self) continue;
-    if (normOrigin === "https://agent402.tools") continue;
-    if (v?.error) continue;
-    if (healthScore(v) <= 0) continue;
-    const sellerName = v?.manifest?.name || origin.replace(/^https?:\/\//, "");
-    for (const t of v?.tools || []) {
-      const route = t?.route || "/";
-      const key = `${t?.method || "POST"} ${origin}${route}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const description = String(t?.description || "").trim();
-      out.push({
-        ours: false,
-        seller: origin,
-        sellerName,
-        name: String(t?.name || route),
-        route,
-        method: t?.method || "POST",
-        url: origin + route,
-        description,
-        described: description.length >= 12,
-        category: t?.category || "other",
-        tags: Array.isArray(t?.tags) ? t.tags.slice(0, 6) : [],
-        // Was `typeof t.price === "number" ? t.price : null`, which silently
-        // nulled every price stored as a string - and manifest and llms.txt
-        // catalogues store them as "$0.002". parsePrice is what every other
-        // surface uses; using a different rule here made the same tool look
-        // priced on /api/route and unpriced on /api/index/tools.
-        priceUsd: parsePrice(t?.price),
-        // Both spellings, deliberately. /api/route served `price` and
-        // `priceUsd`, this surface served only `priceUsd`, and /api/find served
-        // only `price`. A consumer that learned one surface got `undefined` on
-        // the next and could not tell it from "no price" - which is exactly how
-        // a measurement taken during this audit came out wrong.
-        price: t?.price ?? null,
-        ...priceConflictProjection(t),
-        // The identifier a caller needs to actually invoke the tool. Present on
-        // /api/route and /api/find, missing here, on the surface that lists all
-        // 65k third-party rows.
-        slug: t?.slug || null,
-        // Added to /api/route earlier today and to nothing else, which is the
-        // inert-field defect this file's own header warns about, committed the
-        // same afternoon as a fix for it. It belongs wherever a tool row is
-        // served.
-        payable: payabilityOf(t),
-        // Same evidence as seller detail and /api/route. Added to all three at
-        // once on purpose - this file's own header records shipping a field on
-        // two of three surfaces twice, where it is inert on whichever one the
-        // caller happens to read.
-        ...responseContractProjection(t),
-        ...requestContractProjection(t),
-        // The loop's own origin/route, which are what this surface keys on -
-        // t.seller is not set on every row source.
-        ...deliveryProjection(origin, t?.method, route),
-        networks: Array.isArray(t?.networks) ? t.networks : [],
-      });
-    }
-  }
-  out.sort((a, b) => (b.described - a.described) || a.sellerName.localeCompare(b.sellerName) || a.route.localeCompare(b.route));
+  for (const [origin, v] of cache.entries()) flatRowsForEntry(origin, v, self, seen, out);
+  return finishFlat(out, self);
+}
+function finishFlat(out, self) {
+  // No sort: every consumer groups or counts (interleaveBySeller orders the
+  // rows itself), and a 100k-row sort was most of a rebuild's longest turn.
   flatCache = { at: Date.now(), rows: out, self };
   return out;
 }
+// The same flatten, yielding the event loop every few milliseconds.
+let flatRebuild = null;
+function flattenedThirdPartyToolsAsync(excludeOrigin = "") {
+  if (flatRebuild) return flatRebuild;
+  const self = String(excludeOrigin || "").replace(/\/+$/, "").toLowerCase();
+  flatRebuild = (async () => {
+    try {
+      const out = [];
+      const seen = new Set();
+      let until = performance.now() + 8;
+      for (const [origin, v] of [...cache.entries()]) {
+        flatRowsForEntry(origin, v, self, seen, out);
+        if (performance.now() >= until) { await yieldTurn(); until = performance.now() + 8; }
+      }
+      await yieldTurn();
+      return finishFlat(out, self);
+    } finally { flatRebuild = null; }
+  })();
+  return flatRebuild;
+}
+
 
 /** Category rollup for the catalog's filter chips. */
 export function indexedToolCategories(excludeOrigin = "") {
@@ -5861,12 +8136,13 @@ export function indexedToolCategories(excludeOrigin = "") {
 }
 
 export function _resetFlatCacheForTest() { flatCache = { at: 0, rows: [], self: "" }; }
-// KNOWN ROUTER LIMITATION (found 2026-09-01, sol.blockrun): the resolver's
+export function _resetIndexRowsForTest() { indexRowsMemo = { key: null, at: 0, rows: null }; }
+// KNOWN ROUTER LIMITATION (found 2026-09-01): the resolver's
 // liveness probe sends an empty `{}` and treats only HTTP 402 as "live". A
 // seller that VALIDATES the request body BEFORE issuing its 402 (returning
 // 400/422 with no challenge on an empty body) therefore fails the probe and
 // is never routed to, even though it is a perfectly good paid endpoint - its
-// GET-shaped siblings resolve fine. sol.blockrun's /chat/completions is the
+// GET-shaped siblings resolve fine. One seller's /chat/completions is the
 // live example (400 on {}, no payment-required header to distinguish it from
 // a genuine bad request). Fixing this needs a probe that sends a
 // shape-plausible body per the tool's input schema, or a seller convention

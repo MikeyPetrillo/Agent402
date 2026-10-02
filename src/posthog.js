@@ -1,20 +1,15 @@
 // PostHog product analytics + error tracking — opt-in, no-op without an API key.
 //
-// Mirrors src/sentry.js (and the cache.js / analytics-db.js pattern): if
+// Same pattern as cache.js / analytics-db.js: if
 // POSTHOG_API_KEY is unset, every export here is a safe no-op so the server
 // boots and serves identically. Set the key and the next deploy starts
 // streaming error events to PostHog.
-//
-// Why this exists alongside Sentry: PostHog's free tier is ~200x larger
-// (1M events/mo vs ~5k) and combines error tracking with product analytics in
-// a single tool. The Sentry adapter stays as scaffolding — both can be turned
-// on together, or only one. Both are env-gated and independent.
 //
 // Privacy posture matches the rest of the project:
 //   - No caller IP, wallet, payment, body, headers, or query values are sent.
 //   - distinctId is a fixed server-side identifier (we have no end-user — the
 //     "user" of a tool error is the catalog operator, not the calling agent).
-//   - shape tag is keys-only ("b:url", "q:format") — same scrubbing as Sentry.
+//   - shape tag is keys-only ("b:url", "q:format").
 //   - Human page traffic ($pageview / $pageleave / $web_vitals) is captured
 //     client-side by the cookieless posthog-js snippet in src/ledger-chrome.js,
 //     ingested first-party through the /e reverse proxy in src/server.js. This
@@ -126,9 +121,8 @@ export function posthogEnabled() {
   return enabled;
 }
 
-// Capture a tool-handler error as a PostHog event. Properties mirror the
-// Sentry tags (slug, status, errorClass, shape) so a single privacy-preserving
-// payload feeds both backends. Never blocks, never throws.
+// Capture a tool-handler error as a PostHog event (slug, status, errorClass,
+// keys-only shape). Never blocks, never throws.
 export function capturePostHogToolError({ slug, status, message, shape, synthetic, probe }) {
   if (!active()) return;
   // Probe calls (a 4xx where the caller sent zero meaningful input keys) are
@@ -175,7 +169,7 @@ export function capturePostHogToolError({ slug, status, message, shape, syntheti
 const ROLLED_UP_SLUG_RE = /^_/;
 let discoveryCallCounts = new Map(); // "slug|synthetic|cached|errored|status" -> { ..., count, latencySum }
 
-export function capturePostHogToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe, payer, refusalReason }) {
+export function capturePostHogToolCall({ slug, latencyMs, cached, errored, status, synthetic, probe, payer, refusalReason, rail }) {
   if (!active()) return;
   if (ROLLED_UP_SLUG_RE.test(String(slug || ""))) {
     try {
@@ -203,13 +197,16 @@ export function capturePostHogToolCall({ slug, latencyMs, cached, errored, statu
     // is groupable; the caller's message and values never leave the process.
     ...(refusalReason ? { refusalReason } : {}),
     ...(payer ? { payer } : {}),
+    // The payment rail the request presented (src/payment-rail.js), so error
+    // rate and latency split by x402 / MPP / credits / proof-of-work.
+    ...(rail ? { rail } : {}),
   });
 }
 
 // Capture one internal skill-pack step — a tool handler invoked in-process by
 // the skill runner. These calls NEVER appear in the tool_call stream (the
 // runner bypasses the HTTP route), which made pack-driven upstream spend
-// (Brave answer at ~$0.061/call, measured 2026-07-22) invisible to the
+// (Brave answer, measured 2026-07-22) invisible to the
 // PostHog-vs-provider cost reconciliations. Volume/ok/latency only, no inputs.
 export function capturePostHogPackStep({ pack, slug, ok, ms }) {
   if (!active()) return;
@@ -342,6 +339,13 @@ export function capturePostHogPaywall({ slug, priceUsd, powEligible, synthetic, 
     const key = `${slug}|${synthetic ? 1 : 0}|${att}|${rsn || "-"}|${shp || "-"}`;
     const cur = paywallCounts.get(key) || {
       slug: String(slug || "unknown"),
+      // The price the CALLER was quoted, which is no longer one number per
+      // route: a metered route quotes per request, and a flat chat route
+      // quotes the home tier of the model in the body. A rollup row can only
+      // carry one, so it carries the FIRST of the window for this key - a
+      // representative quote, never a route-wide price. It is deliberately not
+      // part of `key`: a continuously varying amount there would make the key
+      // space unbounded, which is the failure this rollup exists to prevent.
       priceUsd: Number(priceUsd) || 0,
       powEligible: !!powEligible,
       synthetic: !!synthetic,
@@ -453,9 +457,16 @@ function flushPowChallengeRollup() {
 // Zeroing it instead was considered and rejected: it would silently restate
 // history mid-series and delete the subsidy number, while fixing none of the
 // broken dashboards, which count events rather than summing price.
-export function capturePostHogSettlement({ slug, rail, network, priceUsd, synthetic, payer, clientUa, wire }) {
+export function capturePostHogSettlement({ slug, rail, network, priceUsd, synthetic, payer, clientUa, wire, ownWallet }) {
   if (!active()) return;
   capture("payment_settled", {
+    // `synthetic` stays the signed-token fact. `ownWallet` is the payer being
+    // one of our own wallets whatever headers it sent: own-wallet settlements
+    // from sweeps that send no token carried synthetic=false, so an
+    // "external" query that filtered on synthetic alone counted them as
+    // customers. Present only when true, so every other
+    // settlement's property set is unchanged.
+    ...(ownWallet ? { ownWallet: true } : {}),
     slug: String(slug || "unknown"),
     rail: String(rail || "unknown"),
     network: network ? String(network) : null,
@@ -668,7 +679,7 @@ export function capturePostHogCompositeUsage({ slug, upstreamUsd, ok, priceUsd, 
   } catch { /* never throw */ }
 }
 
-export function capturePostHogGatewayUsage({ tier, model, priceUsd, upstreamUsd, promptTokens, completionTokens, serviceTier, serverToolCalls, serverToolSearches, defaulted }) {
+export function capturePostHogGatewayUsage({ tier, routeTier, model, priceUsd, upstreamUsd, promptTokens, completionTokens, serviceTier, serverToolCalls, serverToolSearches, defaulted }) {
   // Server-side spend meter runs BEFORE the PostHog gate: cost must be
   // recorded even when telemetry is off (see recordUpstreamSpend's header).
   if (upstreamUsd != null) meterSpend("gateway", upstreamUsd);
@@ -676,12 +687,16 @@ export function capturePostHogGatewayUsage({ tier, model, priceUsd, upstreamUsd,
   const price = Number(priceUsd) || 0;
   const upstream = Number(upstreamUsd) || 0;
   capture("gateway_usage", {
+    // `tier` is the tier that SERVED (and was paid for); `routeTier` is the
+    // route the request arrived on. They differ only when a flat route was
+    // asked for another flat tier's model and priced at that tier.
     tier: String(tier || "unknown"),
+    routeTier: String(routeTier || tier || "unknown"),
     model: String(model || ""),
     // The caller named no model and the tier's default served (2026-08-28) -
     // the measure of whether defaulting recovers real calls or only probes.
     defaulted: !!defaulted,
-    // Which OpenRouter service tier actually served ("flex" = the 50% tier,
+    // Which OpenRouter service tier actually served ("flex" = the discounted tier,
     // "default" otherwise) - the measurement behind the flex-first policy.
     serviceTier: String(serviceTier || "default"),
     priceUsd: price,
@@ -707,4 +722,23 @@ export async function shutdownPostHog() {
   try {
     await client.shutdown();
   } catch { /* swallow */ }
+}
+
+// Did a judged /api/route answer lead to a purchase? (src/route-conversion.js)
+// Counts only: never a query, an ip or a payer.
+export function capturePostHogRouteConversion({ judged, topOurs, boughtTop, viaRouteExecute, slug, minutes }) {
+  if (!active()) return;
+  capture("route_conversion", {
+    judged: String(judged || "none"),
+    topOurs: !!topOurs,
+    boughtTop: !!boughtTop,
+    viaRouteExecute: !!viaRouteExecute,
+    slug: String(slug || "unknown").slice(0, 80),
+    minutes: Number(minutes) || 0,
+  });
+}
+// One event per flush window per judged-kind, carrying `count` (sum it).
+export function capturePostHogRouteAnswers({ judged, topOurs, count }) {
+  if (!active()) return;
+  capture("route_answers", { judged: String(judged || "none"), topOurs: !!topOurs, count: Number(count) || 0 });
 }

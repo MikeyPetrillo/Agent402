@@ -29,7 +29,6 @@ on:
     # Daily. Proven end to end on 2026-08-23 (activation tx 0xaaf92954...,
     # renewal tx 0x2d32927a...), which is what promotes it from dispatch-only:
     # scheduling a rail before it is green just pages every morning.
-    # ~2 x $0.01 to our own payTo plus a few tenths of a cent of PathUSD gas.
     - cron: "37 6 * * *"
 
 concurrency:
@@ -43,7 +42,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22

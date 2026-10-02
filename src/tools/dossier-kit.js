@@ -19,7 +19,7 @@ import { FINANCE_TOOLS } from "./finance-kit.js";
 function safeUser(req) { try { return req ? upstreamUserId(req) : undefined; } catch { return undefined; } }
 
 const SYNTH = "anthropic/claude-opus-5"; // synthesis on both tiers (see research-deep eval)
-const GROUND = "google/gemini-2.5-flash"; // grounded web search + read
+const GROUND = "google/gemini-3.6-flash"; // grounded web search + read. gemini-3.6-flash since 2026-09-23 (2.5-flash expires upstream 2026-10-20); it reasons by default, so the search call passes reasoning:low - measured: default spent 460 of 600 tokens thinking, low returned the full cited answer at the same cost.
 
 // synthMaxTokens carries headroom over the word target (measured ~2.3 output
 // tokens/word for dense cited markdown; a 6,000 cap truncated a "~2,500 word"
@@ -333,6 +333,7 @@ function makeDossierHandlerInner(tierSlug) {
     ].slice(0, t.searches);
     const searchBody = (q) => ({
       model: GROUND,
+      reasoning: { effort: "low" },
       messages: [{ role: "user", content: `Search the web and answer with SPECIFIC, verifiable facts - figures, dates, named events, quotes - each with a citation. Do not state a number unless a source supports it. Question: ${q}` }],
       max_tokens: 800,
       plugins: [{ id: "web", engine: "exa", max_results: 5 }],
@@ -435,6 +436,7 @@ Write a thorough, well-structured dossier of up to ${t.words} words, with these 
     });
 
     const meta = {
+      disclaimer: "Research and analysis from public filings and public sources. Not investment advice and not a recommendation to buy, sell or hold any security. Verify against the primary filings before acting.",
       tier: tierSlug, company, ticker,
       filings_10k: (k10.ok && k10.data?.filings?.length) || 0,
       filings_10q: (q10.ok && q10.data?.filings?.length) || 0,

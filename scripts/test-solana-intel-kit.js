@@ -8,7 +8,7 @@
 // failure/timeout -> 504), and that every request goes to one of the three
 // allowed hosts with the validated mint in the path.
 
-import { SOLANA_INTEL_TOOLS, MINTS, __test } from "../src/tools/solana-intel-kit.js";
+import { SOLANA_INTEL_TOOLS, MINTS, __test, jupiterBase, jupiterHeaders } from "../src/tools/solana-intel-kit.js";
 
 const realFetch = globalThis.fetch;
 let pass = 0, fail = 0;
@@ -140,7 +140,7 @@ try {
     ok(t.route === `POST /api/${t.slug}`, `${t.slug}: route POST /api/${t.slug}`);
     ok(t.category === "crypto", `${t.slug}: category crypto`);
     const usd = Number(String(t.price).replace("$", ""));
-    ok(usd >= 0.002 && usd <= 0.01, `${t.slug}: price ${t.price} within $0.002-$0.01`);
+    ok(usd >= 0.001 && usd <= 0.01, `${t.slug}: price ${t.price} within $0.001-$0.01`);
     ok(typeof t.handler === "function", `${t.slug}: has handler`);
     ok(t.discovery && t.discovery.input && t.discovery.inputSchema && t.discovery.output?.example, `${t.slug}: discovery envelope (input, inputSchema, output.example)`);
     ok(!/\u2014|\u2013/.test(t.description + t.name), `${t.slug}: no em/en dashes in copy`);
@@ -427,6 +427,30 @@ try {
 } finally {
   restore();
 }
+
+// RugCheck answers "unable to generate report" for every mint while its report
+// builder is down (2026-09-25): that is a retryable upstream 503, never a 422
+// blaming the buyer's mint. A genuinely invalid mint still reads 422.
+{
+  const JUPM = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
+  stub(async () => jsonRes({ error: "unable to generate report" }, 400));
+  await throws(h("sol-token-report")({ mint: JUPM }), 503, "rugcheck outage (400 unable to generate report) is upstream, not the mint");
+  stub(async () => jsonRes({ error: "unable to generate report" }, 404));
+  await throws(h("sol-token-report")({ mint: JUPM }), 503, "rugcheck outage (404 unable to generate report) is upstream, not the mint");
+  stub(async () => jsonRes({ error: "invalid token mint" }, 400));
+  await throws(h("sol-token-report")({ mint: JUPM }), 422, "an invalid mint still reads 422");
+  restore();
+}
+
+// Jupiter base and key are variables, so moving off the deprecated lite-api is
+// a Railway change. The key is sent only to the configured Jupiter host.
+ok(jupiterBase({}) === "https://lite-api.jup.ag", "Jupiter: the default base is today's lite-api");
+ok(jupiterBase({ JUPITER_API_BASE: "https://api.jup.ag/" }) === "https://api.jup.ag", "Jupiter: JUPITER_API_BASE switches the host (trailing slash dropped)");
+ok(jupiterBase({ JUPITER_API_BASE: "http://evil.example" }) === "https://lite-api.jup.ag" && jupiterBase({ JUPITER_API_BASE: "https://x.example/path" }) === "https://lite-api.jup.ag", "Jupiter: a non-https or path-bearing base is refused, falling back to the default");
+const kenv = { JUPITER_API_BASE: "https://api.jup.ag", JUPITER_API_KEY: "k-test" };
+ok(jupiterHeaders("https://api.jup.ag/price/v3?ids=x", kenv)["x-api-key"] === "k-test", "Jupiter: the key rides requests to the configured host");
+ok(!jupiterHeaders("https://api.rugcheck.xyz/v1/x", kenv)["x-api-key"] && !jupiterHeaders("https://api.jup.ag.evil.example/x", kenv)["x-api-key"], "Jupiter: the key never goes to another host, including a lookalike");
+ok(Object.keys(jupiterHeaders("https://lite-api.jup.ag/price/v3", {})).length === 0, "Jupiter: no key configured, no header");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

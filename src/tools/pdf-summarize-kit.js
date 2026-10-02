@@ -9,7 +9,7 @@
 // by slug, call the handler directly). This reuses that tier's existing
 // margin clamp, model fallback chain, and pricing safety instead of
 // re-implementing upstream LLM calling from scratch: the inner handler's own
-// clampToMargin bounds worst-case upstream spend to ~70% of ITS $0.02 price
+// clampToMargin bounds worst-case upstream spend against ITS own price
 // regardless of what this tool charges, which is what actually keeps this
 // tool's own price safe, not anything reimplemented here. No second payment
 // happens - the inner call is pure code reuse, not a nested paywall; only

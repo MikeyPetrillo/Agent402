@@ -7,7 +7,8 @@
 // case-folding an address on a case-sensitive rail.
 process.env.REFUND_DB_DIR = process.env.TMPDIR || "/tmp";
 import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, refundTotals, __resetRefunds } from "../src/refund-ledger.js";
-import { planRefunds, familyOf, ourPayToSet } from "./refund-run.js";
+import { planRefunds, familyOf, ourPayToSet, LASTING_HANGUP_HOLD, isLastingEffectHangup, REPEAT_HANGUP_HOLD, isRepeatHangup, refundMemo, refundMemoHex } from "./refund-run.js";
+import { LASTING_EFFECT_SLUG_LIST } from "../src/hangup-forgiveness.js";
 import { readFileSync } from "node:fs";
 
 let pass = 0, fail = 0;
@@ -234,6 +235,12 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
   ok(/createHmac\(/.test(src), "the log tag is KEYED - an unsalted digest over an enumerable buyer set is confirmable, not private");
   ok(/createHash\(/.test(src) && /payer:\$\{/.test(src.replace(/\\/g, "")) === false || /tag\(/.test(src),
     "addresses are logged through a non-reversible tag");
+  // The asset/payTo source falls back to a one-cent route for any rail the
+  // sub-cent 402 does not offer right now (Algorand while the facilitator's
+  // sponsored sub-cent allowance is spent), so those debts do not hold for
+  // want of an asset id - and it only FILLS gaps, never overrides the first.
+  ok(/accepts402\("\/api\/solidity-scan", \{\}\)\) if \(!byNet\[a\.network\]\) byNet\[a\.network\] = a;/.test(src),
+    "a rail missing from the sub-cent 402 is read from the one-cent route, filling gaps only");
 }
 
 
@@ -309,6 +316,142 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
   ok([...s2.get("eip155:8453")].includes("0x7706d81e18ad403bcd6e9a0616b288e16744121a"),
     "the EVM spending wallet is folded");
   ok(s2.get("eip155:8453").size === 2, "both EVM wallets are accepted, not one replacing the other");
+}
+
+// 22. A DISCONNECT ON A ROUTE WHOSE EFFECT WAS DELIVERED IS A REVIEW, NOT A
+//     REFUND. The serving side books a buyer who closed the socket before the
+//     first byte as http 499 (recordHangupDebt), and never forgives one on a
+//     route whose effect outlives the answer (hasLastingEffect): the router
+//     tiers had already paid an outside seller from our wallet, a memory write
+//     or an attestation had already landed. Those rows stay owed and are
+//     listed in their own bucket; only an explicit opt-in repays them.
+{
+  const hang = (over) => mk({ status: "owed", httpStatus: 499, ...over });
+  const p = planRefunds([
+    hang({ id: 1, slug: "route-execute-plus", priceUsd: 0.05, payer: "0xR1" }),
+    hang({ id: 2, slug: "route-execute", priceUsd: 0.01, payer: "0xR2" }),
+  ], { senders: SENDERS });
+  ok(p.send.length === 0 && (p.held[LASTING_HANGUP_HOLD] || []).length === 2,
+    `a route-execute disconnect is held in its own bucket by default (sent ${p.send.length}, held ${(p.held[LASTING_HANGUP_HOLD] || []).length})`);
+  ok(/include_lasting_hangups/.test(LASTING_HANGUP_HOLD), "the bucket names the input that releases it");
+
+  const every = planRefunds(LASTING_EFFECT_SLUG_LIST.map((slug, i) => hang({ id: 100 + i, slug, payer: `0xL${i}`, priceUsd: 0.001 })), { senders: SENDERS });
+  ok(every.send.length === 0 && (every.held[LASTING_HANGUP_HOLD] || []).length === LASTING_EFFECT_SLUG_LIST.length,
+    `every lasting-effect slug is held on a disconnect (${LASTING_EFFECT_SLUG_LIST.length} slugs, one list shared with the serving side)`);
+  ok(isLastingEffectHangup({ slug: "route-execute", httpStatus: "499" }), "a status that arrives as text still reads as a disconnect");
+
+  // Controls: the honest paths are exactly as before.
+  const honest = planRefunds([
+    mk({ id: 10, slug: "route-execute", httpStatus: 500, payer: "0xH1", priceUsd: 0.01 }),  // an answer that failed
+    mk({ id: 11, slug: "route-execute", payer: "0xH2", priceUsd: 0.01 }),                   // no status recorded
+    hang({ id: 12, slug: "hash", payer: "0xH3", hangupReason: "settled in flight" }),       // a disconnect on an ordinary route
+    hang({ id: 13, slug: "memory-read", payer: "0xH4", hangupReason: "no ticket" }),        // a reader leaves nothing behind
+  ], { senders: SENDERS });
+  ok(honest.send.map((r) => r.id).join(",") === "10,11,12,13" && !honest.held[LASTING_HANGUP_HOLD],
+    `a failed answer, an unrecorded status and a disconnect on an ordinary route all plan to send (${honest.send.map((r) => r.id)})`);
+
+  // Opted in, the same rows plan to send, still under every cap.
+  const optIn = planRefunds([
+    hang({ id: 20, slug: "route-execute-plus", priceUsd: 0.05, payer: "0xO1" }),
+    hang({ id: 21, slug: "memory-write", payer: "0xO2" }),
+  ], { senders: SENDERS, includeLastingHangups: true });
+  ok(optIn.send.length === 2 && !optIn.held[LASTING_HANGUP_HOLD], "with include_lasting_hangups the held rows plan to send");
+  const optInCapped = planRefunds([hang({ id: 22, slug: "route-execute-max", priceUsd: 0.55, payer: "0xO3" })],
+    { senders: SENDERS, includeLastingHangups: true, maxEachUsd: 0.25 });
+  ok(optInCapped.send.length === 0 && (optInCapped.held["over per-refund cap $0.25"] || []).length === 1,
+    "opting in does not lift the per-refund cap");
+
+  // Lifting a cap does not release them: the hold is its own rule.
+  const lifted = planRefunds([hang({ id: 30, slug: "route-execute-max", priceUsd: 0.55, payer: "0xM1" })],
+    { senders: SENDERS, maxEachUsd: 1, maxTotalUsd: 100, maxPerPayerUsd: 100 });
+  ok(lifted.send.length === 0 && (lifted.held[LASTING_HANGUP_HOLD] || []).length === 1,
+    "raising max_each_usd does not release a held disconnect");
+
+  // Held before the caps, so a held row takes no share of the budget.
+  const budget = planRefunds([
+    hang({ id: 40, slug: "route-execute", priceUsd: 0.25, payer: "0xSAME" }),
+    mk({ id: 41, slug: "hash", httpStatus: 502, priceUsd: 0.25, payer: "0xSAME" }),
+  ], { senders: SENDERS, maxPerPayerUsd: 0.25, maxTotalUsd: 0.25 });
+  ok(budget.send.map((r) => r.id).join(",") === "41",
+    "a held disconnect does not use up the wallet's or the run's budget for an honest debt");
+}
+
+// 23. A REPEAT HANG-UP IS A REVIEW, NOT A REFUND. A disconnect is booked as
+//     owed (http 499) only when no forgiveness ticket covered it; when the
+//     reason is a spent budget (this wallet, this IP, the whole service), the
+//     caller had already abandoned its window's worth of runs, and repaying
+//     each debt would make every further abandoned run free. Held in its own
+//     bucket, before the caps, released only by an explicit opt-in.
+{
+  const hang = (over) => mk({ status: "owed", httpStatus: 499, ...over });
+  const p = planRefunds([
+    hang({ id: 1, slug: "v1-images-pro", priceUsd: 0.05, payer: "0xP1", hangupReason: "payer budget" }),
+    hang({ id: 2, slug: "v1-images-pro", priceUsd: 0.05, payer: "0xP2", hangupReason: "ip budget" }),
+    hang({ id: 3, slug: "hash", priceUsd: 0.001, payer: "0xP3", hangupReason: "global budget" }),
+    hang({ id: 4, slug: "hash", priceUsd: 0.001, payer: "0xP4" }),   // booked before the reason was stored
+  ], { senders: SENDERS });
+  ok(p.send.length === 0 && (p.held[REPEAT_HANGUP_HOLD] || []).map((r) => r.id).join(",") === "1,2,3,4",
+    `budget-denied and reasonless disconnects are held in their own bucket (sent ${p.send.map((r) => r.id)}, held ${(p.held[REPEAT_HANGUP_HOLD] || []).map((r) => r.id)})`);
+  ok(/include_repeat_hangups/.test(REPEAT_HANGUP_HOLD), "the bucket names the input that releases it");
+  ok(!isRepeatHangup({ httpStatus: 500, hangupReason: "payer budget" }), "only a disconnect (499) can be a repeat hang-up");
+
+  // Controls: every other disconnect is an ordinary debt, as before.
+  const honest = planRefunds([
+    hang({ id: 10, slug: "hash", payer: "0xH1", hangupReason: "settled in flight" }),
+    hang({ id: 11, slug: "hash", payer: "0xH2", hangupReason: "no ticket" }),
+    hang({ id: 12, slug: "v1-images-pro", priceUsd: 0.05, payer: "0xH3", hangupReason: "over per-key budget" }),
+    hang({ id: 13, slug: "hash", payer: "0xH4", hangupReason: "disabled" }),
+    mk({ id: 14, slug: "hash", httpStatus: 502, payer: "0xH5" }),
+  ], { senders: SENDERS });
+  ok(honest.send.map((r) => r.id).join(",") === "10,11,12,13,14" && !honest.held[REPEAT_HANGUP_HOLD],
+    `in-flight, ticketless, over-key, disabled and failed-answer debts all plan to send (${honest.send.map((r) => r.id)})`);
+
+  // A lasting-effect disconnect stays in its own bucket whatever its reason.
+  const lasting = planRefunds([hang({ id: 20, slug: "route-execute", payer: "0xL1", hangupReason: "lasting effect" }),
+    hang({ id: 21, slug: "memory-write", payer: "0xL2" })], { senders: SENDERS });
+  ok((lasting.held[LASTING_HANGUP_HOLD] || []).length === 2 && !lasting.held[REPEAT_HANGUP_HOLD],
+    "a lasting-effect disconnect is held under its own reason, not counted twice");
+
+  // Opted in, they plan to send, still under every cap; lifting a cap alone does not.
+  const optIn = planRefunds([
+    hang({ id: 30, slug: "hash", payer: "0xO1", hangupReason: "payer budget" }),
+    hang({ id: 31, slug: "v1-images-pro", priceUsd: 0.5, payer: "0xO2", hangupReason: "ip budget" }),
+  ], { senders: SENDERS, includeRepeatHangups: true, maxEachUsd: 0.25 });
+  ok(optIn.send.map((r) => r.id).join(",") === "30" && (optIn.held["over per-refund cap $0.25"] || []).length === 1,
+    "with include_repeat_hangups they plan to send, and the per-refund cap still applies");
+  const lifted = planRefunds([hang({ id: 40, slug: "hash", payer: "0xM1", hangupReason: "global budget" })],
+    { senders: SENDERS, maxEachUsd: 1, maxTotalUsd: 100, maxPerPayerUsd: 100 });
+  ok((lifted.held[REPEAT_HANGUP_HOLD] || []).length === 1, "raising the caps does not release a repeat hang-up");
+  const shared = planRefunds([
+    hang({ id: 50, slug: "hash", priceUsd: 0.25, payer: "0xSAME", hangupReason: "payer budget" }),
+    mk({ id: 51, slug: "hash", httpStatus: 502, priceUsd: 0.25, payer: "0xSAME" }),
+  ], { senders: SENDERS, maxPerPayerUsd: 0.25, maxTotalUsd: 0.25 });
+  ok(shared.send.map((r) => r.id).join(",") === "51", "a held repeat hang-up takes no share of the wallet's or the run's budget");
+
+  // The ledger stores the reason, and only a bounded string.
+  __resetRefunds();
+  recordRefundOwed({ slug: "hash", network: "eip155:8453", payer: "0xRR", priceUsd: 0.001, tx: "0xreason1", httpStatus: 499, hangupReason: "payer budget" });
+  recordRefundOwed({ slug: "hash", network: "eip155:8453", payer: "0xRR", priceUsd: 0.001, tx: "0xreason2", httpStatus: 502 });
+  const stored = listRefunds({ status: "owed" });
+  ok(stored.find((r) => r.evidence === "0xreason1")?.hangupReason === "payer budget"
+    && stored.find((r) => r.evidence === "0xreason2")?.hangupReason === null,
+    "the ledger keeps a disconnect's reason and leaves every other debt's NULL");
+}
+
+// ---- EVM refunds carry a UTF-8 memo after the transfer arguments ----
+{
+  const tx = "0x" + "ab".repeat(32);
+  ok(refundMemo({ evidence: tx }) === `agent402 refund for ${tx}` && refundMemo({ evidence: "0xpayer|research|123" }) === "agent402 refund", "the memo names the settlement tx only when the row holds a real transaction hash");
+  ok(Buffer.from(refundMemoHex({ evidence: tx }).slice(2), "hex").toString("utf8") === `agent402 refund for ${tx}`, "the memo hex decodes back to the same UTF-8 text");
+  const { encodeFunctionData, decodeFunctionData, concat } = await import("viem");
+  const abi = [{ type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "bool" }] }];
+  const to = "0x" + "11".repeat(20);
+  const data = concat([encodeFunctionData({ abi, functionName: "transfer", args: [to, 600000n] }), refundMemoHex({ evidence: tx })]);
+  const d = decodeFunctionData({ abi, data });
+  ok(d.functionName === "transfer" && d.args[0].toLowerCase() === to && d.args[1] === 600000n, "transfer calldata with the memo suffix still decodes to the same recipient and amount");
+  const src = readFileSync(new URL("./refund-run.js", import.meta.url), "utf8");
+  const send = src.slice(src.indexOf("async function sendEvm"), src.indexOf("async function sendStellar"));
+  ok(/concat\(\[encodeFunctionData\(\{ abi: erc20, functionName: "transfer"[^\n]*refundMemoHex\(row\)\]\)/.test(send) && /sendTransaction\(\{ to: token, data \}\)/.test(send) && !/writeContract/.test(send), "the EVM sender sends the transfer with the memo suffix appended");
 }
 
 __resetRefunds();

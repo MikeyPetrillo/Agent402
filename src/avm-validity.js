@@ -2,7 +2,7 @@
 //
 // Settlement runs AFTER the handler (@x402/express v2.16), so a buyer whose
 // signed Algorand txn expires mid-handler is never charged — but our upstream
-// spend (OpenAI, Blockscout, …) is already burned by the time the facilitator
+// spend (OpenAI, OpenRouter, …) is already burned by the time the facilitator
 // rejects the dead txn. algokit's DEFAULT validity window is 10 rounds (~28s),
 // so any tool slower than that fails deterministically for default-configured
 // buyers: proven live by image-gen-premium (~60s of gpt-image-2) in sweep run
@@ -26,7 +26,10 @@ const AVG_ROUND_SECONDS = 2.8;
 // better for both sides.
 const DEFAULT_REQUIRED_SECONDS = 20;
 export const SLOW_TOOL_SECONDS = {
-  "image-gen-premium": 90, // gpt-image-2 medium: ~40-60s typical, 60s upstream cap
+  "image-gen-premium": 90, // gpt-image-2 medium 1536: ~35-50s typical, 75s upstream cap
+  // A decision is answered within its depth budget (at most 26s) plus the
+  // service call's margin; the signed window must outlive that.
+  "decide": 35,
   // Long-running composites (2-4 min; see payments.js `longRunning`). Not
   // advertised on Algorand at all, but a hand-built payment to the route must
   // still be refused up front rather than burn the upstream run.

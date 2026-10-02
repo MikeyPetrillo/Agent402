@@ -162,9 +162,8 @@ ok(e2bStale.length === 0, `no stale E2B_ROUTES entries${e2bStale.length ? ` (fou
 //
 // The price is flat for 2-5 queries, but every query was a separate BILLED
 // upstream request, so ["x","x","x","x","x"] cost five Brave calls for one
-// $0.08 sale. A margin leak on honest duplicates and a free 5x multiplier for
-// anyone who noticed. Search is the tool we genuinely pay per call for, so
-// this is real money, not hygiene.
+// sale - a leak on honest duplicates and a free multiplier for anyone who
+// noticed. Search is billed per call, so this is real money, not hygiene.
 {
   const src = readFileSync(new URL("../src/tools/search.js", import.meta.url), "utf8");
   const handler = src.slice(src.indexOf('slug: "multi-search"'));
@@ -241,7 +240,7 @@ ok(!/caller = "unknown"/.test(searchSrc),
 //    them from BOTH catalog sweeps. If a future change lists them for the
 //    sweeps, this fails first.
 {
-  const nonMetered = readFileSync(new URL("./test-non-metered-examples.js", import.meta.url), "utf8");
+  const nonMetered = readFileSync(new URL("../src/metered-slugs.js", import.meta.url), "utf8"); // METERED_SLUGS lives in src/
   for (const slug of ["exa-search", "exa-answer", "exa-contents"]) {
     ok(new RegExp(`"${slug}"`).test(nonMetered), `${slug} is in METERED_SLUGS, so neither catalog sweep can buy it`);
   }

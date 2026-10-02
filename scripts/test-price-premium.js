@@ -93,5 +93,37 @@ await (async () => {
   check("quote(): chain premiums apply on top of the quote", () => assert.equal(premiumPrice, priceWithPremium("$0.058011", "eip155:10")));
 })();
 
+// ---- price by model: a flat chat route's tierQuote (2026-09-22) ------------
+await (async () => {
+  const { LLM_GATEWAY_TOOLS, TIERS } = await import("../src/tools/llm-gateway-kit.js");
+  const base = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat");
+  const nano = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-nano");
+  const rails = { evmCaip2: ["eip155:8453", "eip155:10"], svmCaip2: [], stellarCaip2: [], avmCaip2: [], walletAddress: "0x" + "a".repeat(40), solanaWallet: null, stellarWallet: null, algorandWallet: null, uptoCaip2: ["eip155:8453"] };
+  const a = acceptsForItem(base, rails);
+  const priceFor = async (item, body, network = "eip155:8453", scheme = "exact") => {
+    const req = { body };
+    const opt = acceptsForItem(item, rails).find((o) => o.network === network && o.scheme === scheme);
+    // A static price (a route that lost its price function) is returned as is, so the checks below fail by name.
+    return { price: typeof opt.price === "function" ? await opt.price({ adapter: { req, getBody: () => req.body } }) : opt.price, req };
+  };
+  const opus = { model: "anthropic/claude-opus-5", messages: [{ role: "user", content: "hi" }] };
+  const mini = { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "hi" }] };
+  const up = await priceFor(base, opus);
+  const same = await priceFor(base, mini);
+  const upUpto = await priceFor(base, opus, "eip155:8453", "upto");
+  const upPremium = await priceFor(base, opus, "eip155:10");
+  const nanoUp = await priceFor(nano, opus);
+  const junkOpt = acceptsForItem(base, rails).find((o) => o.network === "eip155:8453");
+  const junk = typeof junkOpt.price === "function" ? await junkOpt.price({ adapter: { req: {}, getBody: () => { throw new Error("no body"); } } }) : junkOpt.price;
+  check("tierQuote(): a flat route advertises a price FUNCTION on every option (exact + upto)", () => assert.ok(a.every((o) => typeof o.price === "function")));
+  check("tierQuote(): base route + premium model resolves the premium price", () => assert.equal(up.price, "$0.5"));
+  check("tierQuote(): the resolved price is stashed for the handler and the upto ceiling", () => assert.equal(up.req.__meteredQuoteUsd, TIERS["v1-chat-premium"].price));
+  check("tierQuote(): base route + base model resolves the base price, unchanged", () => { assert.equal(same.price, "$0.02"); assert.equal(same.req.__meteredQuoteUsd, 0.02); });
+  check("tierQuote(): the upto ceiling is the same home-tier price", () => assert.equal(upUpto.price, "$0.5"));
+  check("tierQuote(): chain premiums apply on top of the home-tier price", () => assert.equal(upPremium.price, priceWithPremium("$0.5", "eip155:10")));
+  check("tierQuote(): nano route + premium model resolves the premium price", () => assert.equal(nanoUp.price, "$0.5"));
+  check("tierQuote(): an unreadable body falls back to the route's catalog price, never throws", () => assert.equal(junk, "$0.02"));
+})();
+
 console.log(failures ? `\nFAILED (${failures})` : "\nall passed");
 process.exit(failures ? 1 : 0);

@@ -101,12 +101,17 @@ try { db.exec("ALTER TABLE sales ADD COLUMN response_sha256 TEXT"); } catch { /*
 try { db.exec("ALTER TABLE sales ADD COLUMN attest_uid TEXT"); } catch { /* exists */ }
 try { db.exec("ALTER TABLE sales ADD COLUMN attest_tx TEXT"); } catch { /* exists */ }
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_sales_tx ON sales (tx)"); } catch { /* exists */ }
+// wire and ts carried no index of their own, so the MPP/Tempo aggregates
+// (WHERE wire IN ...) and the window totals (WHERE ts >= ?, MIN(ts)) scanned
+// the whole table on every /revenue and /api/stats build (2026-09-25 audit).
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_sales_wire_ts ON sales (wire, ts)"); } catch { /* exists */ }
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_sales_ts ON sales (ts)"); } catch { /* exists */ }
 
 // Boot-time reclassification (2026-08-20): `internal` is decided at record
 // time, so a wallet that JOINS the burner/test set later leaves stale
 // external rows behind. Idempotent sweep: any row whose recorded payer is in
 // today's burner set is ours. Plus a small tx-hash allowlist for payer-less
-// rows the sweep can't reach: AgentCore/Privy validation buys from Mike's
+// rows the sweep can't reach: AgentCore/Privy validation buys from the operator's
 // test wallet 0x24e6a249… made BEFORE the same-day mppTempoPayer fix, when
 // tempo settles recorded payer NULL (04:11 and 12:58 UTC self-buys — the
 // wallet is in OUR_EVM_WALLETS, so every buy AFTER the fix classifies
@@ -239,7 +244,7 @@ const qIntRecent = db.prepare(`
 // canary's Base+Celo native-wire legs.
 const qMppRecent = db.prepare(`
   SELECT ts, slug, price_usd, rail, network, payer, tx, internal
-  FROM sales WHERE wire IN ('mpp', 'mpp-tempo', 'mpp-stripe')
+  FROM sales WHERE wire IN ('mpp', 'mpp-tempo', 'mpp-stripe', 'mpp-tempo-subscription')
   ORDER BY ts DESC LIMIT ?`);
 // PUBLIC aggregate sources (cost audit 2026-08-19): the public view used to be
 // derived from the 30 NEWEST rows, so once the Tempo volume runner started
@@ -260,12 +265,17 @@ const CAIP_TO_RAIL = {
 const canonRail = (network) => CAIP_TO_RAIL[String(network || "").toLowerCase()] || (network || "unknown");
 
 const qMppTotals = db.prepare(`
-  SELECT network, internal, COUNT(*) AS n, MIN(ts) AS first_ts, MAX(ts) AS last_ts
-  FROM sales WHERE wire IN ('mpp', 'mpp-tempo', 'mpp-stripe')
+  SELECT network, internal, COUNT(*) AS n, SUM(price_usd) AS usd, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+  FROM sales WHERE wire IN ('mpp', 'mpp-tempo', 'mpp-stripe', 'mpp-tempo-subscription')
   GROUP BY network, internal`);
-const qMppRecentExternal = db.prepare(`
-  SELECT ts, network, tx FROM sales WHERE wire IN ('mpp', 'mpp-tempo', 'mpp-stripe') AND internal = 0
-  ORDER BY ts DESC LIMIT ?`);
+// Our own (internal) MPP settlements, newest per network: the only hashes the
+// public view lists. Partitioned per network so the Tempo volume runner's
+// volume cannot crowd a Base or Celo canary hash out of the list.
+const qMppRecentOwnByNetwork = db.prepare(`
+  SELECT ts, network, tx FROM (
+    SELECT ts, network, tx, ROW_NUMBER() OVER (PARTITION BY network ORDER BY ts DESC) AS rn
+    FROM sales WHERE wire IN ('mpp', 'mpp-tempo', 'mpp-stripe', 'mpp-tempo-subscription') AND internal = 1 AND tx IS NOT NULL
+  ) WHERE rn <= 12 ORDER BY ts DESC`);
 // Every MPP tx hash, for joining the wire onto the on-chain revenue ledger
 // (separate db) so the chart can filter by wire. Unbounded by design: the
 // series spans the whole chart window, not just the recent list. Widened to
@@ -368,18 +378,44 @@ const qPayerByNetwork = db.prepare(`
 // for the per-rail host entry on the chain marketplace pages (2026-08-28).
 // Same PAYING_RAILS / internal=0 line the summary draws; CAIP-2 ids collapse
 // to the friendly rail key like everywhere else.
+//
+// A DISTINCT COUNT CANNOT BE SUMMED, and this grouped by the RAW network while
+// the answer is keyed by the CANONICAL rail. The same chain is recorded under
+// two spellings - "base" and "eip155:8453", "celo" and "eip155:42220" (the
+// reason canonRail exists at all: the MPP board once rendered Celo as two
+// rows) - so a wallet that paid under both spellings of ONE rail arrived as
+// two grouped rows and `buyers` added them. Reproduced 2026-09-22: one wallet,
+// one rail, two spellings, and the /base host card reports 2 distinct buyers
+// against a true 1. Exactly the shape we decline to publish about anybody
+// else: a third-party index summed a per-resource unique-payer metric across
+// our resources and reported 701 payers against our real 158, and
+// foldBazaarQuality folds payers with MAX for this reason, with the reason
+// written beside it.
+//
+// So the payers are counted, never added: one row per (rail, payer) and a set
+// per canonical rail. Row count is bounded by buyers x rails, and NULL payers
+// (SVM/Stellar rows carry none) are skipped exactly as COUNT(DISTINCT) did -
+// they still count toward settlements, never toward buyers.
 const qExternalByNetwork = db.prepare(`
-  SELECT network, COUNT(*) AS n, COUNT(DISTINCT payer) AS buyers
+  SELECT network, COUNT(*) AS n
   FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
   GROUP BY network`);
+const qExternalByNetworkPayers = db.prepare(`
+  SELECT DISTINCT network, payer
+  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?`);
 export function externalByNetwork({ days = 30 } = {}) {
   const since = Date.now() - days * 86_400_000;
   const out = {};
-  for (const r of qExternalByNetwork.all(since)) {
+  const row = (key) => out[key] || (out[key] = { settlements: 0, buyers: 0 });
+  for (const r of qExternalByNetwork.all(since)) row(canonRail(r.network)).settlements += r.n;
+  const payersByRail = new Map();
+  for (const r of qExternalByNetworkPayers.all(since)) {
     const key = canonRail(r.network);
-    const cur = out[key] || (out[key] = { settlements: 0, buyers: 0 });
-    cur.settlements += r.n; cur.buyers += r.buyers; // buyers summed only across CAIP aliases of ONE rail
+    let set = payersByRail.get(key);
+    if (!set) payersByRail.set(key, (set = new Set()));
+    set.add(r.payer);
   }
+  for (const [key, set] of payersByRail) row(key).buyers = set.size;
   return out;
 }
 const qPayerRecent = db.prepare(`
@@ -625,6 +661,25 @@ export function mppTxHashes() {
   return out;
 }
 
+// Every MPP-wire row in a time window, for the daily reconciliation job
+// (src/mpp-reconcile.js). Includes the Tempo subscription charges, which pay
+// the same recipient. The payer rides along ONLY because the EVM leg's
+// on-chain check needs it (from == payer); the reconciler never copies it
+// into its summary. Bounded by `limit`.
+const qMppWindow = db.prepare(`
+  SELECT id, ts, slug, price_usd, quote_usd, rail, network, payer, tx, internal, wire
+  FROM sales WHERE wire IN ('mpp', 'mpp-tempo', 'mpp-stripe', 'mpp-tempo-subscription') AND ts >= ? AND ts < ?
+  ORDER BY id ASC LIMIT ?`);
+export function mppLedgerRows(sinceMs, untilMs = Date.now(), { limit = 50_000 } = {}) {
+  try {
+    return qMppWindow.all(Number(sinceMs) || 0, Number(untilMs) || Date.now(), limit).map((r) => ({
+      id: r.id, ts: r.ts, slug: r.slug, priceUsd: Number(r.price_usd) || 0,
+      quoteUsd: r.quote_usd == null ? null : Number(r.quote_usd), rail: r.rail, network: r.network || null,
+      payer: r.payer || null, tx: r.tx || null, internal: !!r.internal, wire: r.wire || null,
+    }));
+  } catch { return []; }
+}
+
 /** Recent MPP-wire settlements (Authorization: Payment) with on-chain tx + payer. */
 export function mppSales({ limit = 30, detailed = false } = {}) {
   const rows = qMppRecent.all(Math.min(Math.max(1, limit | 0), 100));
@@ -646,18 +701,19 @@ export function mppSales({ limit = 30, detailed = false } = {}) {
     let count = 0, externalCount = 0, firstTs = null, lastTs = null;
     for (const t of totals) {
       const n = canonRail(t.network);
-      const e = rails[n] || (rails[n] = { count: 0, external: 0, internal: 0, lastAt: null, lastExternalAt: null, txs: [], txsInternal: false });
+      const e = rails[n] || (rails[n] = { count: 0, external: 0, externalUsd: 0, internal: 0, lastAt: null, lastExternalAt: null, txs: [], txsInternal: false });
       e.count += t.n; count += t.n;
-      if (t.internal) e.internal += t.n; else { e.external += t.n; externalCount += t.n; if (!e.lastExternalAt || t.last_ts > Date.parse(e.lastExternalAt)) e.lastExternalAt = new Date(t.last_ts).toISOString(); }
+      if (t.internal) e.internal += t.n; else { e.external += t.n; e.externalUsd = +(e.externalUsd + Number(t.usd || 0)).toFixed(6); externalCount += t.n; if (!e.lastExternalAt || t.last_ts > Date.parse(e.lastExternalAt)) e.lastExternalAt = new Date(t.last_ts).toISOString(); }
       if (!e.lastAt || t.last_ts > Date.parse(e.lastAt)) e.lastAt = new Date(t.last_ts).toISOString();
       if (firstTs === null || t.first_ts < firstTs) firstTs = t.first_ts;
       if (lastTs === null || t.last_ts > lastTs) lastTs = t.last_ts;
     }
-    // Recent on-chain proof: external rows first; a rail with no external
-    // settle yet shows its newest internal (canary) hashes, flagged as such.
-    const ext = qMppRecentExternal.all(Math.min(Math.max(1, limit | 0), 100));
-    for (const r of ext) { const e = rails[canonRail(r.network)]; if (e && r.tx && e.txs.length < 12) e.txs.push(r.tx); }
-    for (const r of rows) { const e = rails[canonRail(r.network)]; if (e && e.external === 0 && r.tx && e.txs.length < 12) { e.txs.push(r.tx); e.txsInternal = true; } }
+    // On-chain proof: OUR OWN settlements only (daily canary, Tempo volume
+    // runner). An outside buyer's tx hash resolves to that buyer's wallet on
+    // chain, so publishing it would publish who pays us; outside settlements
+    // are counted above and never listed.
+    const own = qMppRecentOwnByNetwork.all();
+    for (const r of own) { const e = rails[canonRail(r.network)]; if (e && e.txs.length < 12) { e.txs.push(r.tx); e.txsInternal = true; } }
     return {
       persistent: salesPersistent,
       count,
@@ -668,13 +724,16 @@ export function mppSales({ limit = 30, detailed = false } = {}) {
       byNetwork: Object.fromEntries(Object.entries(rails).map(([n, e]) => [n, e.count])),
       externalCount,
       internalCount: count - externalCount,
-      txs: ext.map((r) => r.tx).filter(Boolean),
+      txs: own.map((r) => r.tx),
+      txsInternal: true,
       // Per-rail slice of the same evidence (all-time count, external/internal
       // split, newest settlement, recent external hashes) so /revenue can give
       // each MPP rail its own card and link every hash to the RIGHT explorer.
-      // Still aggregate: no tool, no price, no payer, no per-tx timestamp.
+      // Still aggregate: no tool, no per-call price, no payer, no per-tx
+      // timestamp. externalUsd is the rail's all-time outside total, the same
+      // aggregate the x402 table shows per chain.
       rails,
-      note: "Aggregate view, all-time. internal = settlements paid by our own wallets (daily canary, Tempo volume runner); external = everyone else. Per-settlement tool/price rows are operator-only; the tx hashes resolve on-chain for independent verification.",
+      note: "Aggregate view, all-time. internal = settlements paid by our own wallets (daily canary, Tempo volume runner); external = everyone else. Per-settlement tool/price rows are operator-only. The tx hashes are our own settlements only and resolve on-chain for independent verification; outside buyers' hashes are never listed, because a hash names its payer on chain.",
     };
   }
   return {
@@ -722,6 +781,37 @@ const qCard = db.prepare(`
   FROM sales WHERE internal = 0 AND rail IN ('card', 'credits') AND ts >= ?`);
 const qCardSubs = db.prepare(`
   SELECT COUNT(*) AS n FROM sales WHERE internal = 0 AND rail = 'card' AND wire = 'stripe-subscription' AND ts >= ?`);
+// Decide (the paid planner) and its execute route, for the /revenue monitor.
+// Counts, dollars and DISTINCT payers only, per slug x internal: never a
+// per-call row (the mppSales lesson). Paying rails only, so a proof-of-work
+// or trial row never reads as a sale. Uncapped aggregates by design (feeds
+// distinct counts; see test-capped-counts).
+const DECIDE_SLUGS = ["decide", "decide-execute"];
+const qDecideSales = db.prepare(`
+  SELECT slug, internal, COUNT(*) AS n, SUM(price_usd) AS usd, COUNT(DISTINCT payer) AS payers, MAX(ts) AS last_ts
+  FROM sales WHERE slug IN ('decide', 'decide-execute') AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+  GROUP BY slug, internal`);
+function decideWindow(since) {
+  const out = {};
+  for (const slug of DECIDE_SLUGS) out[slug] = { count: 0, internal: 0, external: 0, externalUsd: 0, externalBuyers: 0, lastExternalAt: null };
+  for (const r of qDecideSales.all(since)) {
+    const e = out[r.slug];
+    if (!e) continue;
+    e.count += r.n;
+    if (r.internal) { e.internal += r.n; continue; }
+    e.external += r.n;
+    e.externalUsd = +(e.externalUsd + Number(r.usd || 0)).toFixed(6);
+    e.externalBuyers += Number(r.payers || 0);
+    // Truncated to the hour, like every other external timestamp we publish.
+    if (r.last_ts) e.lastExternalAt = new Date(Math.floor(r.last_ts / 3_600_000) * 3_600_000).toISOString();
+  }
+  return out;
+}
+/** { days, window: {decide, decide-execute}, allTime: {...} } - see decideWindow. */
+export function decideSales({ days = 30 } = {}) {
+  return { days, window: decideWindow(Date.now() - days * 86_400_000), allTime: decideWindow(0) };
+}
+
 export function cardSales({ days = 30 } = {}) {
   const since = Date.now() - days * 86_400_000;
   const w = qCard.get(since), all = qCard.get(0), subs = qCardSubs.get(0);
@@ -796,7 +886,7 @@ export function salesSummary({ days = 30, detailed = false } = {}) {
   };
 }
 
-// Day-bucketed Tempo settlements (wire = 'mpp-tempo'), UTC, straight from
+// Day-bucketed Tempo settlements (wire 'mpp-tempo', plus tempo/subscription charges), UTC, straight from
 // this table — NOT the on-chain wallet scan /api/revenue/daily reads. Tempo
 // is deliberately excluded from RAILS (not x402-settleable), so no scan
 // ever sees it; this is the ONLY place Tempo revenue is visible day-by-day,
@@ -810,7 +900,7 @@ const qTempoDaily = db.prepare(`
     SUM(CASE WHEN internal = 0 THEN 1 ELSE 0 END) AS extTx,
     SUM(CASE WHEN internal = 1 THEN price_usd ELSE 0 END) AS intUsd,
     SUM(CASE WHEN internal = 1 THEN 1 ELSE 0 END) AS intTx
-  FROM sales WHERE wire = 'mpp-tempo'
+  FROM sales WHERE wire IN ('mpp-tempo', 'mpp-tempo-subscription')
   GROUP BY day ORDER BY day`);
 
 /** [{day, extUsd, extTx, intUsd, intTx}], oldest first. */
@@ -830,13 +920,32 @@ export function tempoDailyRecordingSince() {
   return rows.length ? rows[0].day : null;
 }
 
+// External Tempo payments (per-call tempo/charge and tempo/subscription
+// charges), for the revenue ledger's buyer figures. Tempo is not one of the
+// chains the on-chain transfer scan reads, so without this the buyer counts
+// on /revenue could not see a Tempo buyer at all, and the external payment
+// headline could not see a Tempo payment. `internal` is this table's
+// own classification and is never re-derived by the reader. Uncapped on
+// purpose: these rows feed distinct counts.
+const qTempoExternalPayments = db.prepare(`
+  SELECT ts, payer, tx, price_usd FROM sales
+  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND wire IN ('mpp-tempo', 'mpp-tempo-subscription')
+  ORDER BY ts`);
+
+/** [{ts, payer, tx, usd}] for every external Tempo settlement, oldest first. */
+export function externalTempoPayments() {
+  try {
+    return qTempoExternalPayments.all().map((r) => ({ ts: r.ts, payer: r.payer || null, tx: r.tx || null, usd: Number(r.price_usd) || 0 }));
+  } catch { return []; }
+}
+
 // ---------------------------------------------------------------------------
 // Public receipts for the metered tier (GET /api/proof, /proof).
 //
 // Shape is deliberately NOT a purchase feed (the mppSales lesson: tool + price
 // + timestamp per row is a customer's buying pattern). It is aggregates plus
-// ONE latest external row and ONE latest internal (canary) row, each with the
-// settle tx so the amount is checkable on-chain, and never a payer.
+// ONE latest external row and ONE latest internal (canary) row, never a payer.
+// Only the canary row carries its settle tx (a hash names its payer on chain).
 const qProofAgg = db.prepare(`
   SELECT COUNT(*) AS n, SUM(price_usd) AS settled, SUM(quote_usd) AS quoted,
          SUM(CASE WHEN quote_usd IS NOT NULL THEN 1 ELSE 0 END) AS quoted_n
@@ -871,7 +980,12 @@ export function proofFeed({ slug = "v1-chat-metered" } = {}) {
       settledUsd: +Number(l.price_usd).toFixed(6),
       quoteUsd: l.quote_usd == null ? null : +Number(l.quote_usd).toFixed(6),
       underQuote: l.quote_usd == null ? null : Number(l.price_usd) <= Number(l.quote_usd) + 1e-9,
-      network: l.network, wire: l.wire, rail: l.rail, tx: l.tx,
+      network: l.network, wire: l.wire, rail: l.rail,
+      // An outside buyer's tx hash resolves to that buyer's wallet on chain,
+      // so only our own canary row carries one; the external row is the
+      // amount, the quote and the hour.
+      tx: internal ? l.tx : null,
+      txWithheld: !internal,
     } : null;
     return {
       count: Number(a.n) || 0,
@@ -883,4 +997,91 @@ export function proofFeed({ slug = "v1-chat-metered" } = {}) {
   };
   const week = meteredExternal({ days: 7, slug });
   return { slug, persistent: salesPersistent, external: { ...side(false), buyers7d: week.buyers, settlements7d: week.settlements }, internal: side(true), generatedAt: new Date().toISOString() };
+}
+
+// ---------------------------------------------------------------------------
+// Weekly OUTSIDE MPP agents (operator-only, counts only).
+//
+// Distinct external payers per UTC week (weeks start Monday 00:00 UTC) on the
+// MPP wires, split by method, beside the same series over every paying rail
+// for comparison. `internal` is this table's own classification (canary,
+// Tempo volume runner, burners, heartbeat), never recomputed here. A payer is
+// "new" in the week of its FIRST payment in that scope across ALL history,
+// not the charted window, so nobody is relabelled new when the window moves.
+// Payer strings are already normalized at record time (EVM lowercase), so one
+// wallet paying over Tempo and over the Base evm challenge is one agent.
+// Addresses never leave this function.
+const WEEK_MS = 7 * 86_400_000;
+const WEEK_EPOCH_MS = 4 * 86_400_000; // 1970-01-05, a Monday
+export const MPP_AGENT_METHODS = Object.freeze({
+  "mpp-tempo": "tempoCharge",
+  "mpp-tempo-subscription": "tempoSubscription",
+  "mpp": "evm",
+});
+const MPP_AGENT_WIRES_SQL = `(${Object.keys(MPP_AGENT_METHODS).map((w) => `'${w}'`).join(", ")})`;
+const qAgentRowsAll = db.prepare(`
+  SELECT CAST((ts - ${WEEK_EPOCH_MS}) / ${WEEK_MS} AS INTEGER) AS wk, payer, wire,
+         COUNT(*) AS n, SUM(price_usd) AS usd
+  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+  GROUP BY wk, payer, wire`);
+const qAgentFirstAll = db.prepare(`
+  SELECT payer, MIN(ts) AS first_ts FROM sales
+  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL GROUP BY payer`);
+const qAgentFirstMpp = db.prepare(`
+  SELECT payer, MIN(ts) AS first_ts FROM sales
+  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND wire IN ${MPP_AGENT_WIRES_SQL} GROUP BY payer`);
+
+export function weekStartOf(ts) {
+  return Math.floor((ts - WEEK_EPOCH_MS) / WEEK_MS) * WEEK_MS + WEEK_EPOCH_MS;
+}
+
+export function mppAgentsWeekly({ weeks = 12, now = Date.now() } = {}) {
+  const n = Math.max(1, Math.min(104, Math.floor(Number(weeks)) || 12));
+  const currentWk = Math.floor((now - WEEK_EPOCH_MS) / WEEK_MS);
+  const firstWk = currentWk - n + 1;
+  const since = firstWk * WEEK_MS + WEEK_EPOCH_MS;
+  const firstAll = new Map(qAgentFirstAll.all().map((r) => [r.payer, r.first_ts]));
+  const firstMpp = new Map(qAgentFirstMpp.all().map((r) => [r.payer, r.first_ts]));
+  const blank = () => ({ agents: new Set(), payments: 0, usd: 0, unattributedPayments: 0 });
+  const buckets = new Map();
+  for (let wk = firstWk; wk <= currentWk; wk++) {
+    buckets.set(wk, { all: blank(), mpp: blank(), byMethod: Object.fromEntries(Object.values(MPP_AGENT_METHODS).map((m) => [m, blank()])) });
+  }
+  const add = (b, payer, cnt, usd) => {
+    b.payments += cnt; b.usd += usd;
+    if (payer) b.agents.add(payer); else b.unattributedPayments += cnt;
+  };
+  for (const r of qAgentRowsAll.all(since)) {
+    const b = buckets.get(r.wk);
+    if (!b) continue;
+    const cnt = Number(r.n) || 0, usd = Number(r.usd) || 0;
+    add(b.all, r.payer, cnt, usd);
+    const method = Object.hasOwn(MPP_AGENT_METHODS, r.wire || "") ? MPP_AGENT_METHODS[r.wire] : null;
+    if (method) { add(b.mpp, r.payer, cnt, usd); add(b.byMethod[method], r.payer, cnt, usd); }
+  }
+  const shape = (b, weekStart, firsts) => {
+    let newAgents = 0;
+    if (firsts) for (const p of b.agents) { const f = firsts.get(p); if (f !== undefined && f >= weekStart) newAgents++; }
+    const out = { distinctAgents: b.agents.size, payments: b.payments, usd: +b.usd.toFixed(6), unattributedPayments: b.unattributedPayments };
+    if (firsts) Object.assign(out, { newAgents, returningAgents: b.agents.size - newAgents });
+    return out;
+  };
+  const mpp = [], all = [];
+  for (const [wk, b] of buckets) {
+    const weekStart = wk * WEEK_MS + WEEK_EPOCH_MS;
+    const iso = new Date(weekStart).toISOString().slice(0, 10);
+    const row = { weekStart: iso, ...shape(b.mpp, weekStart, firstMpp), byMethod: {} };
+    for (const [m, mb] of Object.entries(b.byMethod)) row.byMethod[m] = shape(mb, weekStart, null);
+    mpp.push(row);
+    all.push({ weekStart: iso, ...shape(b.all, weekStart, firstAll) });
+  }
+  return {
+    weeks: mpp,
+    allRails: { weeks: all },
+    methods: { ...MPP_AGENT_METHODS },
+    window: { weeks: n, from: new Date(since).toISOString().slice(0, 10), weekStartsOn: "Monday 00:00 UTC", currentWeekPartial: true },
+    scope: "External payers only (the ledger's internal=0 on paying rails). newAgents = first payment in that scope across all history; an agent paying on several MPP methods counts once in the MPP total and once in each method row. unattributedPayments are payments with no recorded payer, counted in payments/usd but never as agents.",
+    persistent: salesPersistent,
+    generatedAt: new Date(now).toISOString(),
+  };
 }

@@ -78,7 +78,7 @@ const snap = {
   const calls = [];
   const LATEST = 200_000;
   const logsAll = [
-    ...Array.from({ length: 30 }, (_, i) => xfer(i % 2 ? P1 : P2, A, 1000)),      // A: 30 transfers, 2 payers, $0.03
+    ...Array.from({ length: 30 }, (_, i) => xfer([P1, P2, P3][i % 3], A, 1000)),  // A: 30 transfers, 3 payers, $0.03
     ...Array.from({ length: 5 }, () => xfer(P3, B, 250_000)),                     // B: 5 transfers, 1 payer, $1.25
     xfer(P1, SELF, 1000),                                                          // self: 1 transfer
     xfer(P1, NOBODY, 999_999_999),                                                 // to an address nobody advertises: ignored
@@ -101,22 +101,40 @@ const snap = {
   ok(getLogs.every((c) => c.params[0].topics[2].length === 4), "every chunk carries EVERY rankable recipient in topics[2]");
   ok(lb.window.fromBlock === LATEST - MPP_LB_WINDOW_BLOCKS + 1 && lb.window.toBlock === LATEST && lb.window.blocks === MPP_LB_WINDOW_BLOCKS, "window = exactly the last 99k blocks (under the rpc cap) ending at latest");
   const byR = Object.fromEntries(lb.rows.map((r) => [r.recipient, r]));
-  ok(byR[A.toLowerCase()].transfers === 30 && byR[A.toLowerCase()].payers === 2 && Math.abs(byR[A.toLowerCase()].volumeUsdc - 0.03) < 1e-9, "A: 30 transfers, 2 distinct payers, $0.03 volume");
+  ok(byR[A.toLowerCase()].transfers === 30 && byR[A.toLowerCase()].payers === 3 && Math.abs(byR[A.toLowerCase()].volumeUsdc - 0.03) < 1e-9, "A: 30 transfers, 3 distinct payers, $0.03 volume");
   ok(byR[B.toLowerCase()].transfers === 5 && byR[B.toLowerCase()].payers === 1 && Math.abs(byR[B.toLowerCase()].volumeUsdc - 1.25) < 1e-9, "B: 5 transfers, 1 payer, $1.25");
   ok(byR[C.toLowerCase()].transfers === 1 && byR[C.toLowerCase()].volumeUsdc === 0, "C: malformed data still counts the transfer, skips the amount");
   ok(byR[SELF.toLowerCase()].transfers === 1 && byR[SELF.toLowerCase()].self === true, "self row counted like everyone else");
   ok(!byR[NOBODY.toLowerCase()], "a transfer to an unadvertised address is ignored");
   ok(lb.rows.map((r) => r.rank).join(",") === "1,2,3,4" && lb.rows[0].recipient === A.toLowerCase() && lb.rows[1].recipient === B.toLowerCase(), "ranked by transfers desc (A, B, then the 1-transfer rows), ranks 1..n");
-  ok(lb.rows[0].proven === true && lb.rows[0].routable === true && lb.rows[1].proven === false && lb.rows[1].routable === false && lb.provenFloor === 20, "proven = transfers >= router floor (default 20): A yes, B no; routable follows when a charge offer exists");
+  ok(lb.rows[0].proven === true && lb.rows[0].routable === true && lb.rows[1].proven === false && lb.rows[1].routable === false && lb.provenFloor === 20, "proven = transfers >= router floor (default 20) and >= 3 distinct payers: A yes, B no; routable follows when a charge offer exists");
   {
     const sessionOnly = { sellers: [seller("S", "https://s.example", [{ method: "tempo", intent: "session", recipient: B, currency: USDC, chainId: 4217 }])] };
-    const rpc2 = async (m, p) => m === "eth_blockNumber" ? "0x" + LATEST.toString(16) : (parseInt(p[0].fromBlock, 16) === LATEST - MPP_LB_WINDOW_BLOCKS + 1 ? Array.from({ length: 25 }, () => xfer(P1, B, 1000)) : []);
+    const rpc2 = async (m, p) => m === "eth_blockNumber" ? "0x" + LATEST.toString(16) : (parseInt(p[0].fromBlock, 16) === LATEST - MPP_LB_WINDOW_BLOCKS + 1 ? Array.from({ length: 25 }, (_, i) => xfer([P1, P2, P3][i % 3], B, 1000)) : []);
     const lb2 = await computeMppLeaderboard({ snapshot: sessionOnly, rpcFn: rpc2, now: 1, self: null });
     ok(lb2.rows[0].proven === true && lb2.rows[0].routable === false, "a session-only recipient over the floor is proven but NOT routable (the router pays tempo/charge only)");
   }
   // Ecosystem totals exclude our own self row (cost audit 2026-08-19: at
   // ~1,000 self-buys/day the self row would be most of "the MPP economy").
   ok(lb.recipients === 4 && lb.activeRecipients === 3 && lb.totals.transfers === 36 && Math.abs(lb.totals.volumeUsdc - 1.28) < 1e-9 && lb.totals.selfTransfers === 1, `totals over active EXTERNAL recipients (30+5+1 transfers, $0.03+$1.25+$0), self row (1 transfer) reported separately (got ${lb.totals.transfers}/${lb.activeRecipients}/self ${lb.totals.selfTransfers})`);
+  // THE PAYER FLOOR (2026-09-28). The same transfer count from two wallets,
+  // or with the recipient paying itself, is not proven: the count alone was
+  // cheap to reach from wallets the seller holds.
+  {
+    const FAKE = [
+      ...Array.from({ length: 30 }, (_, i) => xfer(i % 2 ? P1 : P2, B, 1000)),     // 30 transfers, 2 payers
+      ...Array.from({ length: 30 }, () => xfer(B, B, 1000)),                         // + 30 from itself
+    ];
+    const rpc3 = async (m, p) => m === "eth_blockNumber" ? "0x" + LATEST.toString(16) : (parseInt(p[0].fromBlock, 16) === LATEST - MPP_LB_WINDOW_BLOCKS + 1 ? FAKE : []);
+    const one = { sellers: [seller("F", "https://f.example", [{ method: "tempo", intent: "charge", recipient: B, currency: USDC, chainId: 4217 }])] };
+    const lb3 = await computeMppLeaderboard({ snapshot: one, rpcFn: rpc3, now: 1, self: null });
+    ok(lb3.rows[0].transfers === 60 && lb3.rows[0].evidencePayers === 2 && lb3.rows[0].proven === false && lb3.rows[0].routable === false,
+       "60 transfers from two wallets plus the recipient itself are NOT proven: the payer floor excludes the recipient and needs 3 distinct payers");
+    const HONEST = Array.from({ length: 30 }, (_, i) => xfer([P1, P2, P3][i % 3], B, 1000));
+    const rpc4 = async (m, p) => m === "eth_blockNumber" ? "0x" + LATEST.toString(16) : (parseInt(p[0].fromBlock, 16) === LATEST - MPP_LB_WINDOW_BLOCKS + 1 ? HONEST : []);
+    const lb4 = await computeMppLeaderboard({ snapshot: one, rpcFn: rpc4, now: 1, self: null });
+    ok(lb4.rows[0].proven === true && lb4.rows[0].routable === true, "control: the same count from three outside payers is proven and routable");
+  }
   // priming: the router's gate now answers from cache without an RPC
   const before = calls.length;
   const n = await tempoInboundCount(A, { rpcFn: async () => { throw new Error("must not be called"); }, now: 1_000_000 + 1000 });
@@ -144,6 +162,7 @@ const snap = {
   seen.length = 0; mode = "ok";
   const first = await refreshMppLeaderboard({ snapshot: snap, rpcFn, now: 10, self: null });
   ok(first.rows.length === 3 && first.rows[0].transfers === 2 && mppLeaderboardSnapshot(11).stale === false, "refresh publishes a fresh snapshot");
+  ok(mppLeaderboardSnapshot(11).provenMinPayers === 3 && mppLeaderboardSnapshot(11).provenFloor === 20, "the snapshot carries the payer rule beside the transfer floor");
   mode = "dead";
   const second = await refreshMppLeaderboard({ snapshot: snap, rpcFn, now: 20, self: null });
   ok(second.rows.length === 3 && second.rows[0].transfers === 2 && /rpc down/.test(second.lastError || ""), "an RPC failure keeps the PREVIOUS board up and records the error");
@@ -211,7 +230,16 @@ const snap = {
   const html = mppMarketPage("https://x.test", snap, lb);
   ok(/MPP leaderboard/.test(html) && /id="leaderboard"/.test(html), "page renders the leaderboard section");
   ok(/Alpha<\/a>, <a[^>]*>Alpha Pro<\/a>/.test(html), "a shared recipient row names every seller behind it");
-  ok(/\(this server\)/.test(html), "our own recipient is labelled as this server");
+  // The host card says ranked rows never include the host: our own recipient
+  // is left out of the ranked table and the ranks renumber over what shows.
+  ok(!/\(this server\)/.test(html) && !/explore\.tempo\.xyz\/address\/${SELF.toLowerCase()}/.test(html), "our own recipient is not a ranked row");
+  ok(/<td class="num">2<\/td>\s*<td><a[^>]*>Gw0/.test(html), "ranks renumber over the shown rows, leaving no gap where the host sat");
+  // The router's real rule, not the floor alone.
+  const lbRule = { ...lb, provenMinPayers: 3, rows: [...lb.rows, { rank: 5, recipient: "0x" + "9".repeat(40), sellers: [{ name: "Few", origin: "https://few.example", url: "https://few.example" }], intents: ["charge"], self: false, transfers: 40, payers: 2, evidencePayers: 2, volumeUsdc: 1, proven: false, routable: false }, { rank: 6, recipient: "0x" + "8".repeat(40), sellers: [{ name: "Small", origin: "https://small.example", url: "https://small.example" }], intents: ["charge"], self: false, transfers: 7, payers: 4, evidencePayers: 4, volumeUsdc: 0.1, proven: false, routable: false }] };
+  const ruled = mppMarketPage("https://x.test", snap, lbRule);
+  ok(/at least 20 inbound transfers in the window from at least 3 distinct payers other than the recipient, plus a tempo\/charge offer/.test(ruled) && !/floor 20 in the window =/.test(ruled), "the routable rule names the transfer floor, the payer rule and the charge offer");
+  ok(/too few payers \(2 of 3\)/.test(ruled), "a row over the transfer floor but short on payers says that, not 'below floor'");
+  ok(/below floor \(7 of 20 transfers\)/.test(ruled), "a row under the transfer floor says by how much");
   ok(!/Beta<\/a><div><a class="mlb-addr"/.test(html) && /1 more verified recipient with no inbound transfer/.test(html), "zero-transfer recipients are counted, not ranked");
   ok(/routable &middot; #1/.test(html), "the roster row for a proven seller carries its rank badge");
   ok(/Gw3<\/a> <span[^>]*>\+3 more on this recipient<\/span>/.test(html) && !/>Gw5</.test(html), "a shared recipient shows 4 names + a count, the rest in a title");

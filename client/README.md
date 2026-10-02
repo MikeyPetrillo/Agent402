@@ -5,7 +5,7 @@ instance) - the buy side of [Agentic Finance](https://agent402.tools/agentic-fin
 agents paying per request over x402 or MPP. **Resolve a task to a tool, then call it - with payment handled for
 you.** Free pure-CPU tools settle with a built-in proof-of-work (no wallet, zero
 dependencies); wallet-only tools settle via an x402- or MPP-wrapped fetch you
-provide, or by card through a prepaid credits key. Results are cached, and every
+provide, or through a prepaid credits key already issued. Results are cached, and every
 send carries an `Idempotency-Key` that is stable per client and per operation, so
 a retried lost response replays the paid answer on the credits and proof-of-work
 paths (the wallet path is different: see "Retries and double charges").
@@ -55,7 +55,7 @@ The SDK's spending caps, reservations and caching apply identically on the MPP
 path (pinned by `scripts/test-client-mpp.js` in the parent repo, which buys
 through the SDK with a real mppx client).
 
-**Over x402** with [`@x402/fetch`](https://www.npmjs.com/package/@x402/fetch) - USDC on any of the 12 x402 chains:
+**Over x402** with [`@x402/fetch`](https://www.npmjs.com/package/@x402/fetch) - this snippet registers the EVM scheme, so it pays USDC on the EVM x402 chains; register the matching scheme package as well to pay on Solana, Stellar or Algorand:
 
 ```js
 import { wrapFetchWithPayment } from "@x402/fetch";
@@ -71,15 +71,15 @@ const a = new Agent402({ fetch: payFetch });
 const article = await a.call("extract", { url: "https://example.com/article" });
 ```
 
-## Pay by card instead of a wallet (prepaid credits)
+## Prepaid credits (keys already issued)
 
-Buy a credits pack ($20 / $50 / $100) at https://agent402.tools/credits, claim the
-`a402_...` key once, and pass it as `creditsKey`. The SDK then sends
-`Authorization: Bearer a402_...` on wallet-only calls; the server authorizes
+New credits are not on sale. A key already issued (`a402_...`) still works: pass it
+as `creditsKey` and the SDK sends `Authorization: Bearer a402_...` on wallet-only
+calls (the wallet-scoped routes, memory and usage, refuse it and need a wallet); the server authorizes
 against the key's balance before the handler runs and debits the list price only
 on a successful (200) response (the `X-Credits-Balance` header carries what is
-left; credits never expire). A refused call throws with the balance and a top-up
-link; nothing is debited.
+left; credits never expire). A refused call throws with the balance; nothing is
+debited.
 
 ```js
 const client = new Agent402({ creditsKey: "a402_..." });
@@ -121,8 +121,8 @@ What the server does with it depends on how the call was paid:
 ## Workflows (skill packs)
 
 For jobs that no single tool covers - e.g. "audit a domain", "build a stock
-brief" - Agent402 ships curated multi-tool **skill packs**: 5-7 catalog tools
-composed into a Claude-ready task template. Discover them the same way you'd
+brief" - Agent402 ships curated multi-tool **skill packs**: several catalog
+tools (most packs run three to seven) composed into a Claude-ready task template. Discover them the same way you'd
 discover a tool:
 
 ```js

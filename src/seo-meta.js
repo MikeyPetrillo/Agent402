@@ -31,6 +31,24 @@ export function metaDescription(text, max = META_DESCRIPTION_MAX) {
   return (ws > 0 ? head.slice(0, ws) : head.slice(0, max)).replace(/[\s,;:\-·]+$/g, "").trim();
 }
 
+/** Title for a search result: the first candidate that fits `max`, else the
+ *  last one trimmed at a word boundary (dangling short words dropped). */
+export const SERP_TITLE_MAX = 60;
+export function fitTitle(candidates, max = SERP_TITLE_MAX) {
+  const list = (Array.isArray(candidates) ? candidates : [candidates]).map(clean).filter(Boolean);
+  const hit = list.find((c) => c.length <= max);
+  if (hit) return hit;
+  return trimWords(list[list.length - 1] || "", max);
+}
+export function trimWords(text, max) {
+  const s = clean(text);
+  if (s.length <= max) return s;
+  let out = s.slice(0, max + 1);
+  const ws = out.lastIndexOf(" ");
+  out = ws > 0 ? out.slice(0, ws) : out.slice(0, max);
+  return out.replace(/(\s+(in|the|of|and|to|for|a|an|on|with|or|from|by|at))+$/i, "").replace(/[\s,;:\-·]+$/g, "").trim();
+}
+
 export function metaTitle(text, max = META_TITLE_MAX) {
   const s = clean(text);
   if (s.length <= max) return s;

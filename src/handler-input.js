@@ -1,4 +1,4 @@
-import { applyInputAliases } from "./input-aliases.js";
+import { applyInputAliases, applyShapeAliases, ignoredShapeParams, shapeRefusal } from "./input-aliases.js";
 // The ONE construction of the object a tool handler is served, shared by the
 // dispatcher and by every place that PRICES a request from its body.
 //
@@ -50,10 +50,59 @@ export function handlerInputOf(req, def) {
 // idempotent against an earlier one made without it.
 function aliasInto(req, input, def) {
   if (!def) return;
-  const filled = applyInputAliases(input, def);
+  const filled = [...applyInputAliases(input, def), ...applyShapeAliases(input, def)];
+  // Recognised request-shape fields this tool does not apply, named back to the
+  // caller in the answer's `ignoredParams` (never silently dropped). Recomputed
+  // on every call, so it always describes the object the handler is served.
+  const ignored = ignoredShapeParams(input, def);
+  try {
+    if (ignored.length || req.__ignoredParams) Object.defineProperty(req, "__ignoredParams", { value: ignored, enumerable: false, writable: true, configurable: true });
+  } catch { /* frozen req in a test */ }
   if (!filled.length) return;
   try {
     const prev = req.__aliasedParams || [];
     Object.defineProperty(req, "__aliasedParams", { value: [...new Set([...prev, ...filled])], enumerable: false, writable: true, configurable: true });
   } catch { /* frozen req in a test */ }
+}
+
+/** Cheap input check a paid gate can run BEFORE its payment round trip.
+ *  Returns null when the input may proceed, else `{status: 400, body}` with the
+ *  same self-correcting envelope the dispatcher's 400 carries (error, tool,
+ *  expected, required, example). Two checks only, both of which the handler
+ *  makes anyway:
+ *    - every key the tool's published inputSchema marks `required` is present
+ *      (after the accepted input aliases are filled; null/undefined = absent);
+ *    - the tool's own pure `validateInput(input)`, when it declares one, does
+ *      not throw a 4xx.
+ *  Types, ranges and upstream facts stay the handler's call. A throw that is
+ *  not a 4xx is ignored here and left to the handler. */
+export function preValidateInput(def, req) {
+  if (!def || !req) return null;
+  const input = handlerInputOf(req, def);
+  const schema = def.discovery?.inputSchema || {};
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  const missing = required.filter((k) => input[k] === undefined || input[k] === null);
+  let message = shapeRefusal(input, def)
+    || (missing.length ? `Missing required parameter${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}` : null);
+  if (!message && typeof def.validateInput === "function") {
+    try { def.validateInput(input); }
+    catch (e) { const s = Number(e?.statusCode); if (s >= 400 && s < 500) message = String(e?.message || "Invalid input"); }
+  }
+  if (!message) return null;
+  return {
+    status: 400,
+    body: { error: message, tool: def.slug, expected: schema.properties || {}, required, example: def.discovery?.input || {} },
+  };
+}
+
+/** Merge `ignoredParams` into a JSON object answer when the request carried
+ *  recognised request-shape fields the tool did not apply. Returns a NEW object
+ *  (the handler's result may be cached and served to another caller) or the
+ *  result unchanged. Arrays, binaries, streams and non-objects pass through. */
+export function withIgnoredParams(result, req) {
+  const ignored = req?.__ignoredParams;
+  if (!Array.isArray(ignored) || !ignored.length) return result;
+  if (!result || typeof result !== "object" || Array.isArray(result) || Buffer.isBuffer(result)) return result;
+  if (result.__binary || typeof result.__sse === "function") return result;
+  return { ...result, ignoredParams: ignored };
 }

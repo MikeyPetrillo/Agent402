@@ -818,7 +818,7 @@ export const CHAIN_TOOLS = [
     category: "crypto",
     price: "$0.001",
     description:
-      "The latest block number on Ethereum, Base, Polygon, Arbitrum, or Optimism. The cheapest possible on-chain read - the hello world of paid chain access. Keyless multi-endpoint failover. ?network=base",
+      "The latest block number on Ethereum, Base, Polygon, Arbitrum, or Optimism: returns network, blockNumber (integer) and hex. The cheapest possible on-chain read - the hello world of paid chain access. For block number plus chain id and gas price in one call use chain-info. Keyless multi-endpoint failover. ?network=base",
     tags: ["crypto", "block", "number", "latest", "height", "rpc", "evm", "chain"],
     discovery: {
       input: { network: "base" },

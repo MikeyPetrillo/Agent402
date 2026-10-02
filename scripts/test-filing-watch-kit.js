@@ -12,7 +12,7 @@
 //
 // Covers:
 //   - catalog envelope (route, slug, price $4, schema, example, tags) and the
-//     upstream arithmetic (maxUpstreamUsd <= 1.6 = 40% of $4)
+//     upstream arithmetic (maxUpstreamUsd within the margin rule)
 //   - input validation: every bad input 400s with ZERO egress and ZERO EDGAR reads
 //   - probe: exactly ONE submissions read, fingerprint stability (reordering and
 //     unrelated churn do not move it; a new accession or a changed form does),
@@ -160,19 +160,18 @@ const SCHED = { headers: { authorization: "sub:sub_abc123" } };
   ok(/not investment advice/i.test(def.discovery.output.example.meta.disclaimer) || /not investment advice/i.test(JSON.stringify(def.discovery.output.example)), "example carries the disclaimer");
   ok(def.tags.includes("sec") && def.tags.includes("edgar") && def.tags.includes("8-k"), "tags name the source and the flagship form");
   const t = FILING_TIERS["filing-report"];
-  ok(t.maxUpstreamUsd <= 1.6, `maxUpstreamUsd ${t.maxUpstreamUsd} <= 1.6`);
-  ok(t.maxUpstreamUsd / 4 <= 0.4 + 1e-9, `maxUpstreamUsd is <= 40% of the $4 price (${(t.maxUpstreamUsd / 4 * 100).toFixed(0)}%)`);
-  // Worst case priced with the margin clamp's conservative opus row ($15/$75 per M).
+  ok(t.maxUpstreamUsd <= 1.6, `maxUpstreamUsd within the absolute bound`);
+  ok(t.maxUpstreamUsd / 4 <= 0.4 + 1e-9, `maxUpstreamUsd is within the margin share of the price`);
+  // Worst case priced at the synthesis model's list rates.
   const worstIn = (t.maxDocs * t.docMaxChars + t.indexRows * 200 + 6000) / 3.5;
   // Rates are the LIVE list price for the synthesis model, verified against
-  // OpenRouter's catalog on 2026-08-22 (claude-opus-5: $5/M in, $25/M out).
-  // They are not a guess and they are not a conservative multiple: the point of
+  // OpenRouter's catalog on 2026-08-22. They are not a guess and they are not a conservative multiple: the point of
   // this assertion is that the DECLARED cap is honest, and the separate
   // price-vs-cap assertion below is what keeps the sale profitable. Re-verify
   // when the synthesis model changes - scripts/test-gateway-model-ids.js is the
   // guard that notices a model moving.
   const worst = worstIn * 5e-6 + t.synthMaxTokens * 25e-6;
-  ok(worst <= t.maxUpstreamUsd, `worst-case synthesis $${worst.toFixed(3)} (${Math.round(worstIn)} in / ${t.synthMaxTokens} out at $5/$25 per M) is within the $${t.maxUpstreamUsd} cap`);
+  ok(worst <= t.maxUpstreamUsd, `worst-case synthesis (${Math.round(worstIn)} in / ${t.synthMaxTokens} out at list rates) is within the declared cap`);
   eq(FILING_MODELS.length, 1, "one synthesis model id is exported for the live-catalog guard");
   eq(FILING_MODELS[0], "anthropic/claude-opus-5", "synthesis model is claude-opus-5");
   // The injected seams ARE the shipped functions.

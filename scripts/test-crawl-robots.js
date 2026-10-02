@@ -104,14 +104,14 @@ const fetcher = (body) => async () => { hits++; if (body instanceof Error) throw
     "probePath consults robots.txt, so EVERY per-origin probe is gated by it and not just the ones we remembered");
   ok(/robotsBlocked: true/.test(helper),
     "a robots refusal is marked, so the crawl can report it as an exclusion rather than as a failure");
-  ok(helper.indexOf("robotsForbids") < helper.indexOf("safeFetch"),
+  ok(helper.indexOf("robotsForbids") > -1 && helper.indexOf("crawlFetch") > -1 && helper.indexOf("robotsForbids") < helper.indexOf("crawlFetch"),
     "and it is consulted BEFORE the fetch, which is the only ordering that saves the seller a request");
 }
 
 // ---- the x402 discovery document is robots-EXEMPT --------------------------
 // robots.txt governs content crawling; /.well-known/x402 is a protocol
 // endpoint the seller publishes to be fetched. A blanket Disallow: / (a
-// common API-host default) hid sol.blockrun.ai's manifest while they served
+// common API-host default) hid a seller's manifest while they served
 // it 200 for exactly this discovery (2026-09-01). Everything else stays
 // gated - the second assertion is the one that keeps this narrow.
 {
@@ -127,7 +127,7 @@ const fetcher = (body) => async () => { hits++; if (body instanceof Error) throw
 
 // ---- a manifest-published seller's OpenAPI is read under a BLANKET Disallow --
 // The manifest is the seller's opt-in to machine discovery; the OpenAPI is
-// what NAMES the routes it lists. sol.blockrun.ai: manifest 200, robots
+// what NAMES the routes it lists. a seller: manifest 200, robots
 // "Disallow: /", OpenAPI 200 with "Grok Live Search" for the route our index
 // called "/api/v1/search" - unrankable by any normal task text (2026-09-02).
 // Three edges keep this narrow: only /openapi.json, only with the manifest,

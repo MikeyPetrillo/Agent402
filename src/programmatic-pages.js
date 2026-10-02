@@ -31,13 +31,14 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { REPORTS_CSS } from "./human-reports-page.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
-import { INSIDER_TIERS } from "./tools/insider-flow-kit.js";
+import { INSIDER_TIERS, INSIDER_DEFAULT_DAYS } from "./tools/insider-flow-kit.js";
 import { FUND_TIERS } from "./tools/fund-report-kit.js";
 import { DOSSIER_TIERS } from "./tools/dossier-kit.js";
 import { probeInsiderFilings, parseForm4 } from "./tools/insider-flow-kit.js";
 import { resolveCompany, resolveManager, edgarGetJson, fetchXmlText, findInformationTable, parse13fInformationTable, latest13fFiling } from "./tools/edgar-kit.js";
 import { SEED_TICKERS, SEED_MANAGERS, seededManager, isSeededTicker } from "./programmatic-seeds.js";
 import { alertFormHtml } from "./free-alerts.js";
+import { fitTitle } from "./seo-meta.js";
 
 // --- validation -------------------------------------------------------------
 // Shape first, upstream second. Anything that fails here costs one regex.
@@ -522,7 +523,7 @@ export function insiderPage({ ticker, data, baseUrl, degraded = false }) {
 <section>
   ${table}
   ${rows.length ? `<div class="pg-meta">Transaction codes: P is an open-market purchase, S an open-market sale, A a grant or award, M an option exercise, F shares surrendered for tax. ${buys} open-market buy${buys === 1 ? "" : "s"} and ${sells} open-market sale${sells === 1 ? "" : "s"} in the rows above.</div>` : ""}
-  ${buySection({ family, alertKind: "insider", input: ticker, headline: `Every Form 4 against ${name}, parsed and explained`, blurb: `The free view above is the newest few filings. The paid report reads every Form 4 in your window (up to 365 days), separates open-market buys and sales from awards, exercises and tax withholding, totals the flow per insider, flags 10b5-1 plans where the filing notes them, and hands you a cited write-up plus a downloadable transactions table.` })}
+  ${buySection({ family, alertKind: "insider", input: ticker, headline: `The Form 4 flow against ${name}, parsed and explained`, blurb: `The free view above is the newest few filings. The paid report reads the newest Form 4 filings of the last ${INSIDER_DEFAULT_DAYS} days (up to ${INSIDER_TIERS["insider-report"].maxFilings}), separates open-market buys and sales from awards, exercises and tax withholding, totals the flow per insider, flags 10b5-1 plans where the filing notes them, and hands you a cited write-up plus a downloadable transactions table.` })}
   ${crossLinks([
     { href: `/reports/dossier/${ticker}`, label: `${ticker} company profile` },
     { href: "/reports/insider", label: "All insider pages" },
@@ -548,7 +549,7 @@ export function fundPage({ slug, data, baseUrl, degraded = false }) {
   const seed = seededManager(slug);
   const name = data?.name || seed?.name || slugToName(slug);
   const canonical = `${baseUrl}/reports/fund/${slug}`;
-  const title = `${name} 13F holdings: latest portfolio from SEC filings`;
+  const title = fitTitle([`${name} 13F holdings: latest portfolio from SEC filings`, `${name} 13F holdings: latest SEC portfolio`, `${name} 13F holdings`]);
   const description = data
     ? `What ${name} holds: the latest SEC Form 13F-HR, period ending ${data.reportDate}, filed ${data.filedDate}${data.holdingsAvailable ? `, ${fmtInt(data.totalHoldings)} positions worth ${fmtUsd(data.totalValueUsd)}` : ""}. Top holdings shown free.`
     : `What ${name} holds: the latest SEC Form 13F-HR portfolio, position count and top holdings by reported value, straight from EDGAR.`;
@@ -599,7 +600,7 @@ export function dossierPage({ ticker, data, baseUrl, degraded = false }) {
   const family = FAMILIES.dossier;
   const name = data?.name || ticker;
   const canonical = `${baseUrl}/reports/dossier/${ticker}`;
-  const title = `${ticker} due diligence: SEC filing profile for ${name}`;
+  const title = fitTitle([`${ticker} due diligence: SEC filing profile for ${name}`, `${ticker} due diligence: ${name} SEC profile`, `${ticker} due diligence: SEC filing profile`]);
   const description = data
     ? `Due-diligence starting point for ${name} (${ticker}): CIK ${data.cik}${data.industry ? `, ${data.industry}` : ""}${data.latest10K?.filingDate ? `, latest 10-K filed ${data.latest10K.filingDate}` : ""}. Company identity and filing dates from SEC EDGAR, free.`
     : `Due-diligence starting point for ${ticker}: company identity, industry classification and the latest 10-K and 10-Q dates from SEC EDGAR.`;

@@ -282,14 +282,16 @@ export const MACRO_TOOLS = [
   {
     route: "GET /api/treasury-yield-curve", name: "US Treasury daily yield curve", slug: "treasury-yield-curve", category: "data", price: "$0.005",
     description:
-      "Latest US Treasury daily constant-maturity yields (1mo, 3mo, 6mo, 1y, 2y, 3y, 5y, 7y, 10y, 20y, 30y) as clean JSON. Source: FRED DGS* series (St. Louis Fed), public domain, no key. No params - always returns the most recent published curve.",
+      "Latest US Treasury daily constant-maturity yield curve in one object: recordDate plus mo1, mo3, mo6, yr1, yr2, yr3, yr5, yr7, yr10, yr20 and yr30, each a yield in percent. Source: FRED DGS* series (St. Louis Fed), public domain. No params - always returns the most recent published curve, which trails today by a business day or two; for a date range use treasury-yield-history.",
     tags: ["treasury", "yield-curve", "interest-rates", "rates", "macro", "bonds", "fed", "10-year", "yields"],
     discovery: {
       input: {},
       inputSchema: { properties: {} },
-      output: { example: { recordDate: "2026-06-12", mo1: 5.42, mo3: 5.39, yr1: 4.91, yr2: 4.78, yr5: 4.45, yr10: 4.51, yr30: 4.68 } },
+      output: { example: { recordDate: "2026-09-22", mo1: 3.97, mo3: 4.16, mo6: 4.26, yr1: 4.43, yr2: 4.71, yr3: 4.81, yr5: 4.83, yr7: 4.89, yr10: 4.96, yr20: 5.33, yr30: 5.29, unit: "percent", source: "FRED DGS* constant-maturity series (St. Louis Fed)" } },
     },
-    handler: async () => fetchLatestYieldCurve(),
+    // unit + source were absent: a bare object of numbers did not say what it
+    // measured or where it came from.
+    handler: async () => ({ ...(await fetchLatestYieldCurve()), unit: "percent", source: "FRED DGS* constant-maturity series (St. Louis Fed)" }),
   },
   {
     route: "GET /api/treasury-yield-history", name: "US Treasury yield history", slug: "treasury-yield-history", category: "data", price: "$0.005",
@@ -682,11 +684,16 @@ async function fredGetJsonOnce(url, extraHeaders = {}, timeoutMs = 15_000) {
     // Redact the full body/message before slicing — FRED_API_KEY(_V2) rides the
     // query string (v1) and could be reflected in an upstream diagnostic.
     const msg = redactSecrets(body?.error_message || body?.message || text || `HTTP ${res.status}`).slice(0, 200);
-    // FRED 4xx with a key set almost always means a bad/expired/whitespace key —
-    // attribute as caller-fixable (422) so it shows up in client_errored.
     // "The series does not exist" is FRED refusing the buyer's id, not an
     // outage: a 404 naming it (corpus, 2026-09-06).
     if (res.status === 400 && /does not exist/i.test(msg)) throw bad(`FRED has no such series (${msg.trim()})`, 404);
+    // FRED refusing THIS SERVER'S key (malformed, unregistered, expired, or v2
+    // credentials) is our configuration, and no input the caller sends can fix
+    // it: a 503 that says so, never a 422 with a schema hint pointing the buyer
+    // at their own request. Every refusal is uncharged either way.
+    if (res.status === 401 || res.status === 403 || /api_key|credential/i.test(msg)) {
+      throw Object.assign(bad("FRED rejected this server's API key. This is our configuration, not your input; you were not charged.", 503), { noRetry: true });
+    }
     throw bad(`FRED upstream HTTP ${res.status}: ${msg}`, res.status >= 500 ? 502 : 422);
   }
   if (!body) throw bad("FRED returned non-JSON response", 502);
@@ -716,10 +723,17 @@ async function fredObservations({ seriesId, startDate, endDate, limit, units, fr
   qs.set("sort_order", latest ? "desc" : "asc");
   const j = await fredGetJson(`${FRED_BASE}/series/observations?${qs}`);
   if (j?.error_code) throw bad(`FRED upstream error: ${j.error_message || "unknown"}`, 502);
-  let obs = (j?.observations ?? [])
+  const raw = j?.observations ?? [];
+  let obs = raw
     .filter((o) => o.value !== ".")
     .map((o) => ({ date: o.date, value: Number(o.value) }));
   if (latest) obs = obs.reverse();
+  // FRED marks a period with no published value as "." (e.g. a release
+  // cancelled by a government shutdown). Dropping it silently turned a
+  // 12-month ask into 11 rows with nothing saying why; the dates ride along
+  // (non-enumerable, so every existing caller sees the same array) for the
+  // tools that report them.
+  Object.defineProperty(obs, "missing", { value: raw.filter((o) => o.value === ".").map((o) => o.date).sort(), enumerable: false });
   return obs;
 }
 
@@ -923,7 +937,7 @@ MACRO_TOOLS.push(
   {
     route: "GET /api/unemployment-rate", name: "US unemployment rate (UNRATE)", slug: "unemployment-rate", category: "data", price: "$0.005",
     description:
-      "Latest US unemployment rate plus a trailing N-month series for trend. Source: FRED UNRATE (Bureau of Labor Statistics). ?months=12 (1-120, default 12).",
+      "Latest US unemployment rate (current, as of date) plus a trailing N-month history of {date, value} for trend, seasonally adjusted, in percent. Source: FRED UNRATE (Bureau of Labor Statistics). A month with no published value is listed in missingDates rather than dropped silently. ?months=12 (1-120, default 12). This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["unemployment", "unrate", "labor", "jobs", "bls", "fred", "macro"],
     discovery: {
       input: { months: 12 },
@@ -942,13 +956,14 @@ MACRO_TOOLS.push(
         months: obs.length,
         history: obs,
         source: "FRED UNRATE (Bureau of Labor Statistics)",
+        ...(obs.missing?.length ? { missingDates: obs.missing, note: `No value was published for ${obs.missing.join(", ")}, so the series has ${obs.length} of the ${months} months asked for.` } : {}),
       };
     },
   },
   {
-    route: "GET /api/fed-funds", name: "Effective federal funds rate", slug: "fed-funds", aliases: ["effective-federal-funds-rate", "federal-funds-rate", "fed-funds-rate"], category: "data", price: "$0.010",
+    route: "GET /api/fed-funds", name: "Effective federal funds rate", slug: "fed-funds", aliases: ["effective-federal-funds-rate", "federal-funds-rate", "fed-funds-rate"], category: "data", price: "$0.005",
     description:
-      "Current effective federal funds rate plus a trailing N-day series. Source: FRED DFF (Board of Governors). ?days=30 (1-365, default 30).",
+      "Current effective federal funds rate (current, as of date, in percent) plus a trailing N-day history of {date, value}. Source: FRED DFF (Board of Governors), a daily series that includes weekends. ?days=30 (1-365, default 30). This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fed-funds", "interest-rates", "monetary-policy", "fomc", "fed", "macro", "fred"],
     discovery: {
       input: { days: 30 },

@@ -2,7 +2,7 @@ name: Paid tool smoke test
 
 # Owner-approved, manually-dispatched: buy ONE tool from production with real
 # USDC on Base to confirm it works end-to-end (render, FRED, any live-data tool).
-# Cost is the tool's own price (typically $0.005-0.025). Marked internal traffic
+# Cost is the tool's own price. Marked internal traffic
 # (X-Heartbeat-Token) so it doesn't pollute the sales ledger. Dispatch only.
 on:
   workflow_dispatch:
@@ -51,7 +51,7 @@ jobs:
     env:
       TARGET_URL: https://agent402.tools
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -64,7 +64,7 @@ jobs:
         # match one of [x402V2Pay...]` - our own canary never caught it because
         # it only pays OUR 402s, which the old client still shaped correctly.
         # A buyer workflow that cannot pay a third party is not a buyer test.
-        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.26.0 @x402/core@2.26.0 @x402/evm@2.26.0 viem@2.52.2
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.27.0 @x402/core@2.27.0 @x402/evm@2.27.0 viem@2.52.2
       - name: Buy one tool from production (real USDC)
         env:
           BURNER_KEY: ${{ secrets.BURNER_KEY }}

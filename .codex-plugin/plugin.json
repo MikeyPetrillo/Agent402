@@ -1,0 +1,46 @@
+{
+  "name": "agent402",
+  "version": "2.4.0",
+  "description": "Open-source MCP server: 500+ tools AI agents call and pay for per request over x402 or MPP, or free via proof-of-work for pure-compute tools.",
+  "author": {
+    "name": "Havok Holdings LLC",
+    "url": "https://agent402.tools/company"
+  },
+  "homepage": "https://agent402.tools",
+  "repository": "https://github.com/MikeyPetrillo/Agent402",
+  "license": "AGPL-3.0-or-later",
+  "keywords": [
+    "mcp",
+    "x402",
+    "mpp",
+    "tools",
+    "agents",
+    "payments"
+  ],
+  "interface": {
+    "type": "mcp",
+    "displayName": "Agent402.Tools",
+    "shortDescription": "500+ pay-per-call tools for AI agents over x402 or MPP",
+    "longDescription": "One MCP server with 500+ tools: web search and rendering, PDFs and OCR, SEC filings, market and crypto data, and utilities. The agent finds a tool with catalog.find and pays for that one call in USDC over x402 or MPP, by prepaid card credits, or free via proof-of-work for pure-compute tools. A failed call is never charged. Most tools are deterministic code; model-backed tools are marked as such.",
+    "developerName": "Havok Holdings LLC",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read"
+    ],
+    "websiteURL": "https://agent402.tools",
+    "privacyPolicyURL": "https://agent402.tools/privacy",
+    "termsOfServiceURL": "https://agent402.tools/terms",
+    "defaultPrompt": [
+      "Use Agent402.Tools to find a tool for this task and call it."
+    ],
+    "brandColor": "#0F5E43",
+    "composerIcon": "./docs/logo-current.png",
+    "logo": "./docs/logo-current.png",
+    "screenshots": [
+      "./docs/screenshots/home.jpg",
+      "./docs/screenshots/markets.jpg",
+      "./docs/screenshots/sample-report.jpg"
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

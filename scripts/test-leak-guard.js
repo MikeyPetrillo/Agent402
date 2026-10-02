@@ -47,8 +47,8 @@ process.env.NEYNAR_API_KEY = "neynar-LEAKCANARY0000";
 delete process.env.WARPCAST_API_KEY;
 process.env.FRED_API_KEY = "fred-LEAKCANARY0000";
 process.env.FRED_API_KEY_V2 = "fredv2-LEAKCANARY0000";
-process.env.YAHOO_RELAY_URL = "https://93.184.216.34/relay"; // public-IP literal → no DNS
-process.env.YAHOO_RELAY_TOKEN = "yrelay-LEAKCANARY0000";
+process.env.DATABENTO_API_KEY = "db-LEAKCANARY00000000000000000000"; // public-IP literal → no DNS
+
 process.env.ALCHEMY_API_KEY = "alchemy-LEAKCANARY0000";
 process.env.E2B_API_KEY = "e2b_LEAKCANARY0000"; // code-run-kit (E2B sandbox)
 delete process.env.POSTHOG_API_KEY; // telemetry must stay a no-op
@@ -176,11 +176,12 @@ const okChatFixture = () => ({
     cost: 0.00123, cost_details: { upstream_inference_cost: 0.00123 }, is_byok: false,
   },
 });
+// /v1/images/generations rides OpenRouter's Image API since 2026-09-24.
 const okImagesFixture = () => ({
-  id: "gen-2", model: "google/gemini-2.5-flash-image",
-  choices: [{ message: { role: "assistant", images: [{ image_url: { url: "data:image/png;base64,QUJDRA==" } }] } }],
+  created: 1750000000,
+  data: [{ b64_json: "QUJDRA==", media_type: "image/png" }],
   usage: {
-    prompt_tokens: 14, completion_tokens: 1290, total_tokens: 1304,
+    prompt_tokens: 14, completion_tokens: 4096, total_tokens: 4110,
     cost: 0.041, cost_details: { upstream_inference_cost: 0.041 }, is_byok: true,
   },
 });
@@ -193,7 +194,15 @@ globalThis.fetch = async (url, init) => {
   const u = String(url);
   if (u.startsWith(AUDIO_URL)) return wavRes(); // STT audio download, no credential
   const cred = credentialFrom(url, init);
-  if (cred.includes("LEAKCANARY")) sawCanaryCred = true;
+  // HTTP Basic hides the credential behind base64 ("Basic " + b64(key + ":")),
+  // so a literal scan cannot see the canary and the validity check silently
+  // reports that the mock never received it. Decode before matching, or every
+  // Basic-auth upstream is invisible to this guard - which also means a
+  // handler that echoed such a header would leak a key this test called clean.
+  const decoded = cred.replace(/Basic\s+([A-Za-z0-9+/=]+)/g, (m, b64) => {
+    try { return m + " " + Buffer.from(b64, "base64").toString("utf8"); } catch { return m; }
+  });
+  if (decoded.includes("LEAKCANARY")) sawCanaryCred = true;
   if (mode === "network-error") throw Object.assign(new Error("connect ECONNREFUSED 203.0.113.1:443"), { code: "ECONNREFUSED" });
   if (mode === "ok-chat-cost") return jsonRes(200, okChatFixture());
   if (mode === "ok-images-cost") return jsonRes(200, okImagesFixture());
@@ -268,7 +277,7 @@ for (const { slug, handler, input } of HANDLER_CASES) {
 // ---------------------------------------------------------------------------
 // Non-AI credentialed kits (D5 follow-up). Each carries a secret to its
 // upstream (CoinGecko demo key header / Neynar x-api-key / FRED api_key query
-// param / Yahoo-Nasdaq relay Bearer / Alchemy key in the RPC URL) and has a
+// param / Databento HTTP Basic / Alchemy key in the RPC URL) and has a
 // residual-4xx path that echoes the raw upstream body. Drive each through the
 // credential-echoing 400 upstream and assert the canary never reaches the
 // thrown error. Status shielding differs per kit (crypto/macro/finance map a

@@ -33,6 +33,12 @@ const catalog = { object: "list", data: [
   { id: "deepseek/*", object: "model", x402: { tier: "v1-chat", endpoint: "/v1/chat/completions", priceUsd: 0.02, maxTokens: 2048, maxInputChars: 64_000 } },
   { id: "x/stealth", object: "model", x402: { tier: "v1-chat-ox", endpoint: "/v1/ox/chat/completions", priceUsd: 0.002, maxTokens: 8000, maxInputChars: 32_000, stealth: true } },
 ] };
+// Refusals the way Agent402 answers a refused x402 payment: the refusal's own
+// fields, then the offer mirrored from the PAYMENT-REQUIRED header.
+const OFFER = { x402Version: 2, resource: { url: "https://agent402.tools/v1/metered/chat/completions", mimeType: "application/json" }, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "10000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2", outputSchema: { type: "object", properties: { choices: { type: "array" } } } } }], extensions: { bazaar: { info: { input: { type: "http", method: "POST", body: { messages: [] } } }, schema: { type: "object" } } } };
+const REFUSED_HINT = { hint: "0x0000...00a1 holds too little USDC on Base for this call. Fund the wallet, then sign a NEW authorization.", retry: "fund-wallet", payerUsdcOnBase: 0, ...OFFER };
+const REFUSED_PROBLEM = { type: "https://paymentauth.org/problems/invalid-challenge", title: "Invalid Challenge", status: 402, detail: "Challenge is invalid: not issued by this server or tampered.", hint: "Request a fresh challenge.", ...OFFER };
+const PLAIN_400 = '{"error": "bad input", "expected": {"messages": "array"}}';
 const stub = createServer((req, res) => {
   let raw = "";
   req.on("data", (c) => { raw += c; });
@@ -41,6 +47,9 @@ const stub = createServer((req, res) => {
     const body = raw ? JSON.parse(raw) : {};
     seen.push({ url: req.url, auth: req.headers.authorization || null, idem: req.headers["idempotency-key"] || null, body });
     if (!req.headers.authorization) { res.writeHead(402, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: "Payment required" })); }
+    if (req.headers.authorization === "Bearer refuse-hint") { res.writeHead(402, { "content-type": "application/json; charset=utf-8" }); return res.end(JSON.stringify(REFUSED_HINT)); }
+    if (req.headers.authorization === "Bearer refuse-problem") { res.writeHead(402, { "content-type": "application/problem+json" }); return res.end(JSON.stringify(REFUSED_PROBLEM)); }
+    if (req.headers.authorization === "Bearer plain-400") { res.writeHead(400, { "content-type": "application/json" }); return res.end(PLAIN_400); }
     if (req.headers.authorization === "Bearer a402_deadkey00000000000000") { res.writeHead(402, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: "Insufficient credits", reason: "insufficient", balanceUsd: 0 })); }
     if (body.stream) {
       res.writeHead(200, { "content-type": "text/event-stream", "x-credits-balance": "19.99" });
@@ -174,6 +183,46 @@ await p.close();
   const r = await fetch(`${w.baseUrl}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ messages: [] }) });
   ok(r.status === 200 && paid === 1, "the paying fetch is what reaches upstream");
   await w.close();
+}
+
+// ---- proxy: a refused x402 payment reads as its explanation ------------------
+// OpenClaw's model client is an OpenAI SDK: it builds a failed call's message
+// from `error.message` when the body has an error object, from the error when
+// it is a string, and from the whole body otherwise (client.makeStatusError +
+// APIError.makeMessage). A refusal body that also carries the x402 offer must
+// reach it as the one sentence that says what to fix, never as the offer.
+{
+  const sdkMessage = (status, raw) => {
+    let j; try { j = JSON.parse(raw); } catch { return `${status} ${raw}`; }
+    const n = j && typeof j === "object" && j.error == null ? { error: j } : j;
+    const e = n?.error;
+    return `${status} ${e?.message ? (typeof e.message === "string" ? e.message : JSON.stringify(e.message)) : e ? JSON.stringify(e) : undefined}`;
+  };
+  const via = async (bearer) => {
+    const payFetch = async (url, init) => fetch(url, { ...init, headers: { ...init.headers, authorization: `Bearer ${bearer}` } });
+    const w = await startProxy({ upstream, payFetch, port: 0 });
+    try {
+      const r = await fetch(`${w.baseUrl}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ messages: [] }) });
+      return { status: r.status, ct: r.headers.get("content-type") || "", raw: await r.text() };
+    } finally { await w.close(); }
+  };
+  const offerFree = (j) => ["x402Version", "resource", "accepts", "extensions"].every((k) => !(k in j));
+
+  const h = await via("refuse-hint");
+  const hj = JSON.parse(h.raw);
+  ok(h.status === 402 && /^application\/json/.test(h.ct), `a refused payment stays a 402, as JSON (${h.status} ${h.ct})`);
+  ok(hj.error?.message === REFUSED_HINT.hint && hj.error?.type === "payment_required" && hj.error?.code === "fund-wallet", `the refusal is an OpenAI error whose message is the hint (${String(JSON.stringify(hj.error)).slice(0, 120)})`);
+  ok(offerFree(hj) && hj.retry === "fund-wallet" && hj.payerUsdcOnBase === 0, `the offer is dropped and the refusal's own fields are kept (keys: ${Object.keys(hj).join(",")})`);
+  ok(sdkMessage(h.status, h.raw) === `402 ${REFUSED_HINT.hint}`, `the SDK's message is the hint alone (${sdkMessage(h.status, h.raw).slice(0, 80)})`);
+
+  const p2 = await via("refuse-problem");
+  const pj = JSON.parse(p2.raw);
+  ok(p2.status === 402 && /^application\/json/.test(p2.ct) && pj.error?.message === REFUSED_PROBLEM.detail && pj.error?.code === null && offerFree(pj) && pj.type === REFUSED_PROBLEM.type,
+    `an MPP problem refusal reads as its detail, offer dropped (${pj.error?.message})`);
+  ok(sdkMessage(p2.status, p2.raw) === `402 ${REFUSED_PROBLEM.detail}`, "the SDK's message is the problem detail alone");
+
+  const plain = await via("plain-400");
+  ok(plain.status === 400 && plain.raw === PLAIN_400, `an error body with no x402 offer passes through byte for byte (${plain.raw})`);
 }
 
 // ---- plugin register() with a fake OpenClaw api ----------------------------

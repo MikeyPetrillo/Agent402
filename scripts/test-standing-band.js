@@ -10,7 +10,7 @@
 // non-negotiable: every figure is DERIVED, and a cold cache says NOTHING
 // rather than a wrong number.
 import { strict as assert } from "node:assert";
-import { standingBand } from "../src/standing.js";
+import { standingBand, standingCountsExcludingHost } from "../src/standing.js";
 
 let n = 0;
 const ok = (c, m) => { assert.ok(c, m); n++; };
@@ -64,7 +64,22 @@ ok(standingBand({ sellers: 50 }) !== "", "at the floor it speaks");
   }
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/function standingFigures\(\)/.test(server), "one derivation feeds all three");
-  ok(/getIndexSnapshot\(\)\?\.totals/.test(server), "...read from the index totals, not typed into the copy");
+  ok(/standingCountsExcludingHost\(getIndexSnapshot\(\)\)/.test(server), "...read from the index, host left out, not typed into the copy");
+  ok(!/standing: \{ sellers: idx\.sellers/.test(server), "/revenue's band goes through the same derivation");
+  // The settled figure beside the rail count includes Tempo, so the rail
+  // count must include it too, on every page the band renders.
+  ok(/function settlementRailCount\(\) \{\s*return RAILS\.length \+ \(tempoEnabled\(\) \? 1 : 0\);/.test(server), "the rail count adds Tempo when its relay is on");
+  ok(!/rails: RAILS\.length/.test(server), "no band is fed the x402-only rail count");
+}
+
+// --- the band says the host is in no count, so the counts leave it out -------
+{
+  const snap = { totals: { sellers: 4732, tools: 128772 }, sellers: [{ local: true, toolCount: 584 }, { origin: "https://a.example", toolCount: 3 }] };
+  const c = standingCountsExcludingHost(snap);
+  ok(c.sellers === 4731 && c.listings === 128188, `host row and its tools left out (got ${c.sellers} / ${c.listings})`);
+  const none = standingCountsExcludingHost({ totals: { sellers: 10, tools: 50 }, sellers: [] });
+  ok(none.sellers === 10 && none.listings === 50, "no local row, nothing subtracted");
+  ok(standingCountsExcludingHost(null).sellers === 0, "no snapshot reads zero, which suppresses the band");
 }
 
 console.log(`\ntest-standing-band: ${n} assertions OK`);

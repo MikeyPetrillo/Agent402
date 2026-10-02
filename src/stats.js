@@ -66,6 +66,7 @@ db.exec(`
 
 const RECENT_KEEP = 200; // rows retained
 const RECENT_SHOW = 25;  // rows exposed in /api/stats
+const TOP_TOOLS_SHOW = 10; // rows in the public topTools ranking (allTools' LIMIT)
 
 // The router-execute tiers: the only catalog slugs Agent402 earns a margin
 // on (every other paid call is buyer wallet straight to seller wallet).
@@ -74,7 +75,15 @@ const ROUTER_SLUGS = new Set(["route-execute", "route-execute-plus", "route-exec
 const bumpCounter = db.prepare("INSERT INTO counters (k, n) VALUES (?, 1) ON CONFLICT(k) DO UPDATE SET n = n + 1");
 const bumpTool = db.prepare("INSERT INTO tool_counts (slug, n) VALUES (?, 1) ON CONFLICT(slug) DO UPDATE SET n = n + 1");
 const getCounter = db.prepare("SELECT n FROM counters WHERE k = ?");
-const allTools = db.prepare("SELECT slug, n FROM tool_counts ORDER BY n DESC LIMIT 10");
+const allTools = db.prepare(`SELECT slug, n FROM tool_counts ORDER BY n DESC LIMIT ${TOP_TOOLS_SHOW}`);
+const countToolsWithCalls = db.prepare("SELECT COUNT(*) AS n FROM tool_counts");
+// TRUE counts for the two capped lists above, so neither is ever the only
+// number a reader has. Uncapped by construction: a COUNT(*), never a length.
+const countChargedFailures = db.prepare("SELECT COUNT(*) AS n FROM charged_failures");
+const countChargedFailuresGenuine = db.prepare("SELECT COUNT(*) AS n FROM charged_failures WHERE status <> 402");
+const toolsWithCalls = () => { try { return countToolsWithCalls.get()?.n ?? 0; } catch { return 0; } };
+const chargedFailuresRetained = () => { try { return countChargedFailures.get()?.n ?? 0; } catch { return 0; } };
+const chargedFailuresGenuine = () => { try { return countChargedFailuresGenuine.get()?.n ?? 0; } catch { return 0; } };
 const setMetaIfAbsent = db.prepare("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO NOTHING");
 const getMeta = db.prepare("SELECT v FROM meta WHERE k = ?");
 const insertRecent = db.prepare("INSERT INTO recent_calls (slug, method, ts) VALUES (?, ?, ?)");
@@ -157,6 +166,12 @@ export function recordSellerRegistrationSeen(origin, { settled = false, inheritF
   } catch {
     /* best-effort — never break the crawl/registration path over telemetry */
   }
+}
+
+const deleteSellerRegistrationStmt = db.prepare("DELETE FROM seller_registrations WHERE origin = ?");
+/** Forget one origin's registration row (operator removal only). */
+export function deleteSellerRegistration(origin) {
+  try { return deleteSellerRegistrationStmt.run(String(origin || "")).changes > 0; } catch { return false; }
 }
 
 /** Every self-serve registration with its conversion/churn timestamps, newest first. */
@@ -442,10 +457,27 @@ export function getStats({ wallet, walletName, network, toolCount, baseUrl, pric
     // Genuine charged failures in the retained event log: a 402 there means the
     // buyer was never charged, so it is excluded. THIS is the reliability
     // number; the lifetime counter above is not.
-    chargedButFailedGenuine: (getChargedFailures.all(RECENT_KEEP) || [])
-      .filter((r) => Number(r.status) !== 402).length,
+    //
+    // IT IS A WINDOW, AND IT SAYS SO. `charged_failures` is pruned to
+    // RECENT_KEEP rows and read back under a LIMIT, so this is "genuine
+    // failures among the most recent RECENT_KEEP charged-failure events", it
+    // can never report more than RECENT_KEEP however many there were, and it
+    // is NOT a lifetime figure - which is exactly what a reader takes it for
+    // when it is published as a bare 0 beside a lifetime counter and the note
+    // calls it "current quality". Same shape as the LIMIT-20 query whose
+    // .length was once published as a tool count and drove a retirement: the
+    // number was right and its contract was quiet. The scope now travels with
+    // it, and test-capped-counts.js pins that it does.
+    chargedButFailedGenuine: chargedFailuresGenuine(),
+    chargedButFailedGenuineScope: {
+      of: "the most recent charged-failure events retained on disk, not all time",
+      eventsRetained: chargedFailuresRetained(),
+      eventsRetainedMax: RECENT_KEEP,
+      // The ceiling this figure can never exceed, said outright.
+      maxReportable: RECENT_KEEP,
+    },
     chargedButFailedNote:
-      "chargedButFailed is a LIFETIME counter containing a since-fixed miscount: settlement REJECTIONS (buyer keeps their money) were recorded as charged failures. Use chargedButFailedGenuine, which excludes them, for current quality.",
+      `chargedButFailed is a LIFETIME counter containing a since-fixed miscount: settlement REJECTIONS (buyer keeps their money) were recorded as charged failures. Use chargedButFailedGenuine for current quality - it excludes them, but it is a WINDOW over the most recent ${RECENT_KEEP} retained charged-failure events (see chargedButFailedGenuineScope), never a lifetime count.`,
     // topTools ranks by RAW CALL VOLUME (free + paid combined, from allTools),
     // never by purchases alone - a "topPaidTools" purchase-count ranking used
     // to be published right beside it (found externally 2026-08-14). Stripping
@@ -456,12 +488,25 @@ export function getStats({ wallet, walletName, network, toolCount, baseUrl, pric
     // was reduced to stop giving away. The full per-tool breakdown (paid
     // count, revenue, price) stays operator-only via getOperatorBreakdown.
     topTools: allTools.all(),
+    // A ranking is not a catalog, and the cut has to be readable: `topTools`
+    // is the head of a list this endpoint never returns in full.
+    topToolsScope: { rankedBy: "raw call volume, free and paid combined", limit: TOP_TOOLS_SHOW, toolsWithAnyCalls: toolsWithCalls() },
     estimatedRevenueUsd, // sum of price × USDC-purchase count (counters; chain is source of truth)
+    // Priced at TODAY's catalog price, not at what each call actually sold
+    // for: tools have been repriced repeatedly (78 of them in one pass), a
+    // retired tool's purchases lose their price entirely, and this counts
+    // USDC purchases only - never card, credits or Tempo. The settled figures
+    // on /api/revenue are the ones drawn from what was actually charged.
+    estimatedRevenueNote:
+      "An estimate, not a ledger: lifetime USDC-purchase counts valued at TODAY's catalog price (tools are repriced, and a retired tool's purchases value at zero). Card, prepaid-credits and Tempo sales are not in it. Use /api/revenue for settled amounts.",
     recentCalls: getRecent.all(RECENT_SHOW).map((r) => ({
       slug: r.slug,
       paidWith: r.method === "pow" ? "proof-of-work" : r.method === "heartbeat" ? "heartbeat" : "usdc",
       at: new Date(r.ts).toISOString(),
     })),
+    // The newest RECENT_SHOW of RECENT_KEEP retained rows - a live feed, never
+    // the period's traffic. Stated because the rows carry no total of their own.
+    recentCallsScope: { shown: RECENT_SHOW, retainedMax: RECENT_KEEP, of: "the newest served calls retained on disk, not a period total" },
     servingSince: new Date(firstServed).toISOString(),
     // NOT service-availability uptime - resets to 0 on every deploy. Named
     // processUptimeSeconds (not uptimeSeconds) specifically so it can't be
@@ -510,7 +555,7 @@ export function recordUpstreamCall(upstream, caller = "unknown") {
  * measured cost, an x402 buy's settled quote), day-bucketed in UTC. Integer
  * micro-dollars so sums stay exact. Best-effort - metering must never break
  * serving - and recorded server-side on purpose: PostHog-only cost telemetry
- * is how an $11 OpenRouter day once read as $0.03 (a keyless local boot has
+ * is how a real OpenRouter day once read as near zero (a keyless local boot has
  * no PostHog; this table records whenever the process serves).
  */
 export function recordUpstreamSpend(source, usd) {

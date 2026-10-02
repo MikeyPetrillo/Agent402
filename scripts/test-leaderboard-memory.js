@@ -25,6 +25,8 @@ import {
   initWalletAccumulator,
   foldTransfers,
   finalizeLeaderboard,
+  UNCOUNTED_IN_MAX_PER_WALLET,
+  UNCOUNTED_IN_MAX_TOTAL,
 } from "../src/leaderboard.js";
 
 let pass = 0, fail = 0;
@@ -152,6 +154,28 @@ if (batchedDeltaMB < collectAllDeltaMB) {
   // still retain freed pages) — but make it loud, since this is the exact
   // regression this test exists to catch.
   console.error(`WARN - batched heapUsed delta (${batchedDeltaMB.toFixed(1)} MB) was not below the collect-all delta (${collectAllDeltaMB.toFixed(1)} MB) — informational, investigate if this repeats`);
+}
+
+// --- over-ceiling inbound held for the funding pass is bounded ---
+// A listing can name any busy wallet as its payTo; every over-ceiling inbound
+// payment it receives is held for the funding pass, so the hold is capped per
+// wallet and across every chunk of one scan's fold.
+{
+  const hot = "0x" + "e1".repeat(20);
+  const acc = initWalletAccumulator([{ wallet: hot, origins: ["https://a.example"] }]);
+  const big = (wallet, i) => ({ wallet, payer: "0x" + (i + 1).toString(16).padStart(40, "0"), usd: 5, pos: i + 1 });
+  const per = UNCOUNTED_IN_MAX_PER_WALLET;
+  for (let b = 0; b < 3; b++) foldTransfers(acc, Array.from({ length: per }, (_, i) => big(hot, b * per + i)), MAX_CALL_USD);
+  const hotRow = acc.get(hot);
+  const heldHot = [...hotRow.uncountedIn.values()].reduce((n, u) => n + u.pos.length, 0);
+  ok(heldHot === per && hotRow.uncountedInDropped === 2 * per, `one wallet holds at most ${per} over-ceiling payments across chunks (held ${heldHot}, dropped ${hotRow.uncountedInDropped})`);
+  const many = Array.from({ length: Math.ceil(UNCOUNTED_IN_MAX_TOTAL / per) + 1 }, (_, k) => "0x" + (0xf0 + k).toString(16).padStart(2, "0").repeat(20));
+  const acc2 = initWalletAccumulator(many.map((wallet, k) => ({ wallet, origins: [`https://w${k}.example`] })));
+  many.forEach((w, k) => foldTransfers(acc2, Array.from({ length: per }, (_, i) => big(w, k * per + i)), MAX_CALL_USD));
+  const heldAll = many.reduce((n, w) => n + [...(acc2.get(w).uncountedIn || new Map()).values()].reduce((m, u) => m + u.pos.length, 0), 0);
+  const dropped = many.reduce((n, w) => n + (acc2.get(w).uncountedInDropped || 0), 0);
+  ok(heldAll === UNCOUNTED_IN_MAX_TOTAL && dropped === many.length * per - UNCOUNTED_IN_MAX_TOTAL, `the scan-wide hold stops at ${UNCOUNTED_IN_MAX_TOTAL} across ${many.length} wallets (held ${heldAll}, dropped ${dropped})`);
+  ok(hotRow.overCeilingSkipped === 3 * per, `dropped payments are still counted as over-ceiling (${hotRow.overCeilingSkipped})`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

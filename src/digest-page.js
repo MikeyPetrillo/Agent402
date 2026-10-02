@@ -12,8 +12,8 @@ export function digestPage(baseUrl) {
   <form class="dg-form" data-mode="wallet" style="display:grid;gap:12px;max-width:560px;border:1px solid var(--hairline);background:var(--card);padding:22px;">
     <div style="font-weight:600;">Pay with a wallet</div>
     <p style="margin:0;color:var(--muted);font-size:14px;">Prove the wallet is yours by signing a message with it (no transaction, no gas). EVM wallets on any of the rails.</p>
-    <input class="dg-email" type="email" required placeholder="you@example.com" autocomplete="email" style="padding:11px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-size:15px;">
-    <input class="dg-wallet" type="text" required placeholder="0x… the address you pay from" style="padding:11px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:13.5px;">
+    <input class="dg-email" type="email" required aria-label="Email address for the weekly digest" placeholder="you@example.com" autocomplete="email" style="padding:11px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-size:15px;">
+    <input class="dg-wallet" type="text" required aria-label="Wallet address you pay from" placeholder="0x… the address you pay from" style="padding:11px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:13.5px;">
     <input class="dg-hp" type="text" name="website" tabindex="-1" autocomplete="off" style="position:absolute;left:-9999px;" aria-hidden="true">
     <button class="dg-submit hm-btn hm-btn-dark" type="submit">Sign with wallet and subscribe</button>
     <div class="dg-msg" style="font-size:14px;color:var(--muted);min-height:1.4em;" aria-live="polite"></div>
@@ -22,8 +22,8 @@ export function digestPage(baseUrl) {
   <form class="dg-form" data-mode="credits" style="display:grid;gap:12px;max-width:560px;border:1px solid var(--hairline);background:var(--card);padding:22px;margin-top:18px;">
     <div style="font-weight:600;">Pay with a credits key</div>
     <p style="margin:0;color:var(--muted);font-size:14px;">Presenting the key is the proof. It is sent once over HTTPS and never stored by this form; the digest is keyed to the key's id. The claim email for a new key carries this link already.</p>
-    <input class="dg-email" type="email" required placeholder="you@example.com" autocomplete="email" style="padding:11px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-size:15px;">
-    <input class="dg-key" type="password" required placeholder="a402_…" autocomplete="off" style="padding:11px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:13.5px;">
+    <input class="dg-email" type="email" required aria-label="Email address for the weekly digest" placeholder="you@example.com" autocomplete="email" style="padding:11px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-size:15px;">
+    <input class="dg-key" type="password" required aria-label="Prepaid credits key" placeholder="a402_…" autocomplete="off" style="padding:11px 12px;border:1px solid var(--hairline);background:var(--paper);color:var(--ink);font-family:var(--font-mono);font-size:13.5px;">
     <input class="dg-hp" type="text" name="website" tabindex="-1" autocomplete="off" style="position:absolute;left:-9999px;" aria-hidden="true">
     <button class="dg-submit hm-btn hm-btn-dark" type="submit">Subscribe</button>
     <div class="dg-msg" style="font-size:14px;color:var(--muted);min-height:1.4em;" aria-live="polite"></div>

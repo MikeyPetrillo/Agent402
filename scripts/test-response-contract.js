@@ -238,7 +238,7 @@ for (const kw of ["$ref", "allOf", "anyOf", "oneOf", "not", "if", "patternProper
   const mentions = src.split("\n").filter((l) => /responseContract/.test(l)).map((l) => l.trim());
   const allowed = [
     /^import \{.*\} from ".\/response-contract.js";$/,
-    /^const packed = packResponseContract\(responseContractOf\(op\)\);$/,
+    /^const packed = packResponseContract\(responseContractOf\(resolveLocalRefs\(op, openapi\)\)\);$/,
     /^return packed \? \{ responseContract: packed \} : \{\};$/,
     /^if \(key === "requestContract" \|\| key === "responseContract"\) continue;$/,
     /^const responseContract = ownContractTuple\(o, "responseContract"\);$/,
