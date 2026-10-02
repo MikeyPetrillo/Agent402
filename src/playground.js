@@ -18,7 +18,7 @@ const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
 export function playgroundPage(baseUrl, catalog) {
   const freeCount = fmtNum(toolList(catalog).filter(isComputePayable).length);
   const title = "Playground - try Agent402 tools for free";
-  const description = `Try any of Agent402's ${freeCount} free-tier tools directly in your browser, or the OpenAI-compatible /v1 gateway. No signup, no wallet - proof-of-work pays automatically.`;
+  const description = `Try any of Agent402's ${freeCount} free-tier tools directly in your browser. No signup, no wallet - proof-of-work pays automatically.`;
   const canonical = `${baseUrl}/playground`;
 
   // Embed the catalog the page already has. /api/pricing is the public scrapable
@@ -99,7 +99,7 @@ export function playgroundPage(baseUrl, catalog) {
 <div class="crumb"><a href="/">Agent402</a> / playground</div>
 <div class="pg-title">
   <h1>Playground</h1>
-  <p>Try any of Agent402's ${freeCount} free-tier tools directly in your browser, or the OpenAI-compatible /v1 gateway. No signup, no wallet - proof-of-work pays automatically.</p>
+  <p>Try any of Agent402's ${freeCount} free-tier tools directly in your browser. No signup, no wallet - proof-of-work pays automatically.</p>
 </div>
 </section>
 <section>

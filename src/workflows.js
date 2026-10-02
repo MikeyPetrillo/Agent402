@@ -1,10 +1,27 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { isComputePayable } from "./pow.js";
+
+// Per-run cost is DERIVED from the live catalog at render time: the sum of
+// each step's list price, and "free via proof-of-work" only when every step
+// is compute-payable. A step whose slug is not in the catalog is dropped from
+// the card rather than priced from a stale figure.
+const usd = (p) => Number(String(p ?? "").replace(/[^0-9.]/g, "")) || 0;
+export function workflowCost(steps, catalog) {
+  const bySlug = new Map(Object.values(catalog || {}).filter((d) => d && d.slug).map((d) => [d.slug, d]));
+  const defs = steps.map((st) => bySlug.get(st.slug)).filter(Boolean);
+  const micro = defs.reduce((n, d) => n + Math.round(usd(d.price) * 1e6), 0);
+  const allFree = defs.length > 0 && defs.every((d) => isComputePayable(d));
+  const total = micro / 1e6;
+  const label = allFree
+    ? "free via proof-of-work"
+    : `$${total.toFixed(total < 0.1 ? 3 : 2)} per run at list price`;
+  return { known: new Set(defs.map((d) => d.slug)), total, allFree, label };
+}
 
 const WORKFLOWS = [
   {
     title: "Research a company",
     description: "Search the web for a company, render a key page, extract structured data, pull a company profile, and retrieve SEC filings - all in one chain.",
-    cost: "~$0.03",
     steps: [
       { slug: "search", label: "Search the web for the company" },
       { slug: "render", label: "Render the company homepage" },
@@ -15,7 +32,6 @@ const WORKFLOWS = [
   {
     title: "Audit a domain",
     description: "Run a full security and configuration audit on any domain: DNS records, TLS certificate, WHOIS registration, HTTP headers, SPF policy, and robots.txt.",
-    cost: "~$0.04",
     steps: [
       { slug: "dns", label: "Look up DNS records" },
       { slug: "tls-cert", label: "Inspect the TLS certificate" },
@@ -28,7 +44,6 @@ const WORKFLOWS = [
   {
     title: "Process PDF invoices",
     description: "Convert a PDF invoice to markdown, extract line items and totals into structured JSON, then validate the output as clean CSV.",
-    cost: "~$0.015",
     steps: [
       { slug: "pdf-to-markdown", label: "Convert PDF to markdown text" },
       { slug: "extract", label: "Extract line items and totals" },
@@ -38,7 +53,6 @@ const WORKFLOWS = [
   {
     title: "Monitor a webpage",
     description: "Render a JavaScript-heavy page, extract a target element, write the result to wallet-keyed memory, and read back previous snapshots for change detection.",
-    cost: "~$0.02",
     steps: [
       { slug: "render", label: "Render the target page" },
       { slug: "extract", label: "Extract the monitored element" },
@@ -48,8 +62,7 @@ const WORKFLOWS = [
   },
   {
     title: "Build a macro dashboard",
-    description: "Assemble a US economic snapshot from official government feeds: CPI, unemployment, Fed funds rate, and the Treasury yield curve - all free via proof-of-work.",
-    cost: "free via PoW",
+    description: "Assemble a US economic snapshot from official government feeds: CPI, unemployment, Fed funds rate, and the Treasury yield curve - paid per call from a wallet.",
     steps: [
       { slug: "cpi-yoy", label: "Fetch CPI year-over-year rate" },
       { slug: "unemployment-rate", label: "Get current unemployment rate" },
@@ -59,7 +72,7 @@ const WORKFLOWS = [
   },
 ];
 
-export function workflowsPage(baseUrl) {
+export function workflowsPage(baseUrl, catalog = {}) {
   const canonical = `${baseUrl}/workflows`;
   const pageTitle = "Workflows - tool chaining examples for Agent402";
   const pageDesc = "See how agents chain Agent402 tools into multi-step workflows: company research, domain audits, PDF processing, web monitoring, and macro dashboards.";
@@ -80,7 +93,9 @@ export function workflowsPage(baseUrl) {
   };
 
   const cards = WORKFLOWS.map((wf) => {
+    const cost = workflowCost(wf.steps, catalog);
     const steps = wf.steps
+      .filter((s) => cost.known.has(s.slug))
       .map((s) => `<a href="/tools/${esc(s.slug)}" class="wf-step"><span class="wf-step-name">${esc(s.slug)}</span><span class="wf-step-desc">${esc(s.label)}</span></a>`)
       .join(`<span class="wf-arrow" aria-hidden="true">\u2192</span>`);
     return `
@@ -88,7 +103,7 @@ export function workflowsPage(baseUrl) {
         <h3>${esc(wf.title)}</h3>
         <p class="wf-desc">${esc(wf.description)}</p>
         <div class="wf-flow">${steps}</div>
-        <p class="wf-cost"><span class="wf-label">Estimated cost:</span> <span class="wf-price">${esc(wf.cost)}</span></p>
+        <p class="wf-cost"><span class="wf-label">Cost:</span> <span class="wf-price">${esc(cost.label)}</span></p>
       </div>`;
   }).join("\n");
 
@@ -127,7 +142,7 @@ export function workflowsPage(baseUrl) {
 <section>
 <div class="wf-eyebrow">$ GET /workflows</div>
 <h1 class="wf-h1">Workflows</h1>
-<p class="wf-intro">Agent402 tools are designed to chain together. Each workflow below shows a multi-step pipeline an agent can run end-to-end, with estimated per-run cost at pay-per-call pricing.</p>
+<p class="wf-intro">Agent402 tools are designed to chain together. Each workflow below shows a multi-step pipeline an agent can run end-to-end, with its per-run cost: the sum of each step's list price from the live catalog.</p>
 </section>
 <section>
 <div class="wf-grid">

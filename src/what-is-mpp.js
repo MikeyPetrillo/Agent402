@@ -14,7 +14,7 @@ import { mppFlagshipRows, mppFlagshipSnippet, mppFlagshipOffersPhrase, MPP_FLAGS
 const STEPS = [
   ["01", "The client requests a paid resource", "A plain HTTP request, no credentials attached. The server answers 402 Payment Required with a WWW-Authenticate: Payment challenge naming the price, the asset, the chain, and a one-time challenge id."],
   ["02", "The client signs and retries", "It signs a payment authorization for exactly that amount with its own wallet key and repeats the identical request, carrying the signed credential in an Authorization: Payment header. The key never leaves the client."],
-  ["03", "The server verifies and settles", "The credential is checked against the challenge, the payment settles on chain, and only then does the server run the request."],
+  ["03", "The server verifies, runs, then settles", "The credential is checked against the challenge, the request runs, and the payment settles only when the response succeeds, so a failed call is not charged. The exception is a Tempo credential the client broadcast itself (push mode): that transfer is already on chain before the request runs."],
   ["04", "The response carries a receipt", "A signed Payment-Receipt header returns with the result - a verifiable record that this exact payment bought this exact answer."],
 ];
 
@@ -27,8 +27,8 @@ const COMPARE = [
 ];
 
 const FAQS = [
-  { q: "What is the Machine Payments Protocol (MPP)?", a: "MPP is an open, IETF-track protocol that lets software pay for web services per request using HTTP's standard authentication mechanism. A paid endpoint answers an unpaid request with status 402 and a WWW-Authenticate: Payment challenge naming a price; the client answers with a signed stablecoin payment in an Authorization: Payment header; the server verifies it, settles on-chain, and returns the result with a signed Payment-Receipt header. No account, API key, or subscription is involved." },
-  { q: "How is MPP different from x402?", a: "They are two dialects of the same idea - pay-per-request over HTTP 402, settled in stablecoins. x402 (from Coinbase) carries payment terms in a PAYMENT-REQUIRED header and the payment in an X-PAYMENT header; MPP carries the same handshake through the web's standard auth headers (WWW-Authenticate / Authorization, the mechanism defined in RFC 9110), which makes it a natural fit for the IETF standards track. A server can speak both from the same URL at the same price, and dual-stack servers exist today." },
+  { q: "What is the Machine Payments Protocol (MPP)?", a: "MPP is an open, IETF-track protocol that lets software pay for web services per request using HTTP's standard authentication mechanism. A paid endpoint answers an unpaid request with status 402 and a WWW-Authenticate: Payment challenge naming a price; the client answers with a signed stablecoin payment in an Authorization: Payment header; the server verifies it, runs the request, settles the payment on-chain, and returns the result with a signed Payment-Receipt header. No account, API key, or subscription is involved." },
+  { q: "How is MPP different from x402?", a: "They are two dialects of the same idea - pay-per-request over HTTP 402, settled in stablecoins. x402 (from Coinbase) carries payment terms in a PAYMENT-REQUIRED header and the payment in a PAYMENT-SIGNATURE header; MPP carries the same handshake through the web's standard auth headers (WWW-Authenticate / Authorization, the mechanism defined in RFC 9110), which makes it a natural fit for the IETF standards track. A server can speak both from the same URL at the same price, and dual-stack servers exist today." },
   { q: "Is MPP a finished standard?", a: "It is IETF-track and in active development - the Payment HTTP authentication scheme is documented at paymentauth.org with the reference implementation in the tempoxyz/mpp repository. Live services accept MPP payments on mainnet today, so the wire format is real and settling, but as with any draft-stage protocol, details can still evolve." },
   { q: "Where can I see MPP working right now?", a: "Every paid endpoint on Agent402.Tools is dual-stack: the same 402 response carries both an x402 offer and a WWW-Authenticate: Payment challenge, a stock mppx client works unmodified, and settled responses return a signed Payment-Receipt. A real purchase settles over the native MPP wire daily as part of the service's paid canary, so the claim is continuously re-proven, not a demo that worked once." },
   { q: "How do I accept MPP payments on my own API?", a: "If you already speak x402, a translation layer can add MPP without touching settlement: answer 402s with an additional WWW-Authenticate: Payment challenge derived from your existing offer, and re-encode inbound Authorization: Payment credentials into your existing verification path. Agent402's implementation of exactly that pattern is open source (AGPL) in its server repository, and the mppx tooling in tempoxyz/mpp provides the client and codec primitives." },
@@ -139,23 +139,22 @@ table{border-collapse:collapse;width:100%}
     <div style="background:var(--surface);">
       <div style="display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--dark-border2);font-family:var(--font-mono);font-size:11px;letter-spacing:.06em;color:var(--dk-muted);"><span style="color:var(--accent-lit);">●</span><span>on the wire</span></div>
       <pre style="margin:0;padding:20px 18px;font-family:var(--font-mono);font-size:12px;line-height:1.85;color:var(--on-dark);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--dk-muted3);"># 1. the client asks, without paying
-</span>POST /api/edgar-filing-text
+</span>POST /api/hash
 
-<span style="color:var(--dk-muted3);"># 2. the server quotes a price
-</span><span style="color:var(--accent-lit);">HTTP/1.1 402 PAYMENT REQUIRED</span>
-WWW-Authenticate: Payment
-  realm="agent402", amount="0.004",
-  asset="USDC", network="base"
+<span style="color:var(--dk-muted3);"># 2. the server quotes a price (one challenge per method and chain)
+</span><span style="color:var(--accent-lit);">HTTP/1.1 402 Payment Required</span>
+WWW-Authenticate: Payment id="8w5V62E3&hellip;", realm="agent402.tools",
+  method="evm", intent="charge", request="eyJhbW91bnQiOiIxMDAwIi&hellip;",
+  expires="&hellip;", opaque="eyJ4NDAyIjoi&hellip;"
 
 <span style="color:var(--dk-muted3);"># 3. the client signs and retries
-</span>POST /api/edgar-filing-text
-Authorization: Payment
-  &lt;signed authorization&gt;
+</span>POST /api/hash
+Authorization: Payment eyJjaGFsbGVuZ2UiOn&hellip;
 
-<span style="color:var(--dk-muted3);"># 4. verified, settled, delivered
+<span style="color:var(--dk-muted3);"># 4. verified, the handler runs, then the payment settles
 </span><span style="color:var(--accent-lit);">HTTP/1.1 200 OK</span>
-Payment-Receipt: 0x8f2a&hellip;c41d
-<span style="color:var(--faint);">{ "filing": "10-K", "text": "&hellip;" }</span></pre>
+Payment-Receipt: eyJtZXRob2QiOiJldm0i&hellip;
+<span style="color:var(--faint);">{ "algo": "sha256", "hex": "&hellip;" }</span></pre>
     </div>
   </div>
 </section>

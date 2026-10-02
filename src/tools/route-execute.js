@@ -182,6 +182,8 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
     slug: tier.slug,
     category: "agent",
     price: `$${EXEC_PRICE_USD}`,
+    // Read by /guides/smart-order-router to render the tier table from the catalog.
+    underlyingMaxUsd: UNDERLYING_MAX_USD,
     // Pays an outside seller from one of this server's own wallets inside the
     // handler, i.e. before the buyer's own payment settles. Read by
     // spendsBeforeSettlement (composite-spend-guard.js).
