@@ -304,7 +304,12 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
  * verify it independently. Liveness facts come from the live stats object; the
  * guarantees are operational facts about how the service is built and watched.
  */
-export function reliabilityReport({ baseUrl, network, wallet, stats, observedStatus = null }) {
+export function reliabilityReport({ baseUrl, network, wallet, stats, observedStatus = null, meteredSkip = null }) {
+  // Exact count of priced routes the catalog sweeps skip as metered, derived
+  // from src/metered-slugs.js (the list the sweeps read) over the live catalog.
+  const skipped = meteredSkip && Number.isFinite(meteredSkip.metered) && Number.isFinite(meteredSkip.total)
+    ? `${meteredSkip.metered} of this server's ${meteredSkip.total} priced routes`
+    : null;
   const explorer = network === "base-sepolia" ? "https://sepolia.basescan.org" : "https://basescan.org";
   return {
     service: "Agent402.Tools",
@@ -327,13 +332,12 @@ export function reliabilityReport({ baseUrl, network, wallet, stats, observedSta
     },
     guarantees: [
       {
-        // Was "Every tool". It is not every tool: CI deliberately skips 20 of
-        // 528 endpoints (18 Brave-backed, 2 E2B) because exercising them spends
-        // real money on a metered upstream on every run, and the sweep once
-        // cost ~4,500 billed Brave queries in a month. The skip is the right
-        // call; claiming otherwise was not, and "every" is the kind of word a
-        // reader can check against our own open CI logs.
-        claim: "Every tool CI can run without a third-party key is called with its own documented example, and the release is blocked on any failure. The metered tools (search, the model gateway, the reports and other keyed or upstream-billed tools) are skipped so a CI run never spends upstream; the daily paid canary buys a sample of them and an offline probe checks the report inputs.",
+        // Was "Every tool". It is not every tool: CI deliberately skips the
+        // metered routes because exercising them spends real money upstream on
+        // every run. The count is derived (meteredSkip over the live catalog,
+        // from src/metered-slugs.js, the list both sweeps read), never typed:
+        // a typed "20 of 528" here went stale as the metered set grew.
+        claim: `Every tool CI can run without a third-party key is called with its own documented example, and the release is blocked on any failure. The metered tools (search, the model gateway, the reports and other keyed or upstream-billed tools${skipped ? `: ${skipped}` : ""}) are skipped so a CI run never spends upstream; the daily paid canary buys a sample of them and an offline probe checks the report inputs.`,
         verify: `${baseUrl}/openapi.json`,
         evidence: `${REPO}/actions/workflows/deploy.yml`,
       },
