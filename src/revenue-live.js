@@ -550,7 +550,7 @@ export function publicRevenueSnapshot(snap) {
   };
 }
 
-export function withFreshRecent(snap, ledgerRecentFn) {
+export function withFreshRecent(snap, ledgerRecentFn, ledgerNewestOwnFn = null) {
   if (!snap || !Array.isArray(snap.rails) || typeof ledgerRecentFn !== "function") return snap;
   const byLabel = new Map(Object.entries(EVM).map(([name, c]) => [c.label, [name, c]]));
   let changed = false;
@@ -564,7 +564,17 @@ export function withFreshRecent(snap, ledgerRecentFn) {
     if (!Array.isArray(rows) || !rows.length) return rail;
     changed = true;
     const recent = rows.map((t) => ({ ...t, tx: t.txHash ? c.tx(t.txHash) : null }));
-    return { ...rail, recent, externalUsd: Number(recent.filter((t) => t.external).reduce((sum, t) => sum + t.usd, 0).toFixed(6)) };
+    const out = { ...rail, recent, externalUsd: Number(recent.filter((t) => t.external).reduce((sum, t) => sum + t.usd, 0).toFixed(6)) };
+    // The proof row is our own newest settle. On a busy rail the capped page
+    // above holds only outside buyers, so read our newest settle directly.
+    if (typeof ledgerNewestOwnFn === "function") {
+      const seen = newestOwnSettle(recent);
+      let own = seen ? { when: seen.when, tx: seen.tx || null, usd: Number.isFinite(seen.usd) ? seen.usd : null } : null;
+      if (!own) { try { const r = ledgerNewestOwnFn(c.ledgerChain || name, rail.wallet); if (r && r.when) own = { when: r.when, tx: r.txHash ? c.tx(r.txHash) : null, usd: Number.isFinite(r.usd) ? r.usd : null }; } catch { /* keep the snapshot's row */ } }
+      const prevWhen = rail.lastInbound?.internal === true ? Date.parse(rail.lastInbound.when) : -Infinity;
+      if (own && Date.parse(own.when) >= prevWhen) out.lastInbound = { ...own, internal: true };
+    }
+    return out;
   });
   return changed ? { ...snap, rails } : snap;
 }
@@ -1745,6 +1755,8 @@ export function revenuePage(baseUrl, snap) {
   // external buy is the one proof link a reader actually opens. The twelve
   // cards this replaced each listed four recent transfers, a scan note and a
   // wallet-explorer link. Per-payment rows are not published at all (publicRevenueSnapshot).
+  // Dollar cells: two decimals from $1, three below (sub-cent calls stay legible).
+  const usdCell = (n) => { const v = Number(n || 0); return v === 0 ? "$0" : `$${v.toFixed(v >= 1 ? 2 : 3)}`; };
   const railRow = (r) => {
     const c = perChainOf(r);
     // A balance present (fresh or carried forward from the last good read)
@@ -1763,7 +1775,7 @@ export function revenuePage(baseUrl, snap) {
       <td><strong>${esc(r.rail)}</strong> <span style="color:var(--muted);">${esc(r.asset)}</span></td>
       <td class="num">${c ? Number(c.inboundCount).toLocaleString() : "-"}${c && !c.caughtUp ? `<span style="display:block;font-size:10.5px;font-weight:400;color:var(--muted);">still syncing</span>` : ""}</td>
       <td class="num">${c && c.externalCount ? Number(c.externalCount).toLocaleString() : "0"}</td>
-      <td class="num">$${c ? esc(String(c.externalUsd)) : "0"}</td>
+      <td class="num">${c ? esc(usdCell(c.externalUsd)) : "$0"}</td>
       <td>${proof}</td>
       <td>${status}</td>
       <td>${r.explorer ? `<a href="${esc(r.explorer)}" rel="noopener">explorer</a>` : "-"}</td>

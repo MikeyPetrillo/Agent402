@@ -517,7 +517,7 @@ import { algorandPage, algorandSellers } from "./algorand-page.js";
 import { CHAIN_PAGES, marketSellers, marketOperatorCount, marketPage, marketPanelHtml, catalogPayableOn } from "./market-page.js";
 import { sellPage } from "./sell.js";
 import { recordSellerVerification, sellerVerificationStatus } from "./seller-verification.js";
-import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerSummary, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
+import { setPayerDustFloorUsd, externalPaymentEventsFor, startRevenueLedger, ledgerRecent, ledgerNewestOwn, ledgerSummary, ledgerDaily, ledgerBuyersDaily, ledgerBuyersWeekly, ledgerBuyersMonthly, ledgerBuyerConcentration, ledgerBuyerRetention, ledgerSyncState } from "./revenue-ledger.js";
 import { x402EconomySnapshot, economySnapshotCached, warmEconomySnapshot } from "./x402-economy.js";
 import { provenByChain, unattributedMerchants, advertisedPayToEvidence, payToFromLive402, provenPayToMatches, meetsRouterGate, sharedPayToClaims } from "./settlement-proof.js";
 import { buildEvidenceBinding, baseLiveGate } from "./evidence-binding.js";
@@ -3406,7 +3406,7 @@ app.get("/api/revenue", async (_req, res) => {
   try {
     // Recent rows are re-read from the ledger per request (withFreshRecent);
     // only the balances ride the hourly background snapshot.
-    const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent);
+    const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent, ledgerNewestOwn);
     const ledger = memoSurface("revenue:allTime", 60_000, () => ({ allTime: ledgerSummary(revenueWallets()), sales: salesSummary() }));
     res.set("Cache-Control", "public, max-age=30").json({ ...publicRevenueSnapshot(snap), ...ledger });
   } catch (e) {
@@ -3531,7 +3531,7 @@ app.get("/revenue", async (_req, res) => {
   try {
     // Recent rows are re-read from the ledger per request (withFreshRecent);
     // only the balances ride the hourly background snapshot.
-    const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent);
+    const snap = withFreshRecent(await revenueSnapshot(revenueWallets()), ledgerRecent, ledgerNewestOwn);
     // `standing` is what the page is MEASURING, read from the index totals rather
     // than typed into the copy: a framing paragraph that goes stale is worse
     // than none, because it is the sentence asking to be trusted.
@@ -6419,7 +6419,7 @@ async function buildChainPage(chainKey, sellerQuery, all) {
   const snapshot = getIndexSnapshot();
   const { selectedSeller, scanWallet } = resolveMarketSeller(chainKey, snapshot, sellerQuery);
   const [revSnap, activity] = await Promise.all([
-    revenueSnapshot(revenueWallets()).then((snap) => withFreshRecent(snap, ledgerRecent)),
+    revenueSnapshot(revenueWallets()).then((snap) => withFreshRecent(snap, ledgerRecent, ledgerNewestOwn)),
     scanWallet ? getActivityForChain(chainKey, scanWallet, { maxWaitMs: PAGE_ACTIVITY_WAIT_MS }) : Promise.resolve(null),
   ]);
   const rail = revSnap?.rails?.find((r) => r.rail === SNAPSHOT_RAIL_LABEL[chainKey]) || null;

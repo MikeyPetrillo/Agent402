@@ -655,6 +655,26 @@ export function ledgerRecent(chain, wallets, { limit = 8 } = {}) {
   }
 }
 
+/** The newest settle one of OUR wallets paid into `wallets` on `chain`
+ *  (a canary or volume run): not external, payer known, call-sized. The
+ *  capped `ledgerRecent` page can hold only outside buyers on a busy rail,
+ *  so the rail's proof row reads this instead. Null when none is recorded. */
+export function ledgerNewestOwn(chain, wallets) {
+  const norm = (w) => (/^0x[0-9a-fA-F]{40}$/.test(String(w)) ? String(w).toLowerCase() : String(w));
+  const list = (Array.isArray(wallets) ? wallets : [wallets]).filter(Boolean).map(norm);
+  if (!chain || !list.length) return null;
+  try {
+    const placeholders = list.map(() => "?").join(",");
+    const r = db.prepare(
+      `SELECT tx_hash, block, when_ts, usd FROM transfers
+        WHERE chain = ? AND wallet IN (${placeholders}) AND external = 0 AND payer IS NOT NULL AND usd > 0 AND usd <= ?
+        ORDER BY block DESC, when_ts DESC LIMIT 1`
+    ).get(chain, ...list, MAX_CALL_USD);
+    if (!r) return null;
+    return { usd: Number(r.usd), txHash: r.tx_hash, block: r.block ?? null, when: r.when_ts ? new Date(r.when_ts * 1000).toISOString() : null };
+  } catch { return null; }
+}
+
 // Tx hashes this ledger has actually SEEN ON-CHAIN, for reconciling against the
 // settlement receipts recorded at serve time. `tx_hash` (not `txid`) is the
 // join key: EVM txids carry a `:logIndex` suffix that a settle receipt never
