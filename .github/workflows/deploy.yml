@@ -1920,6 +1920,8 @@ jobs:
           t node scripts/test-tool-page-backlinks.js
           # Tool pages: escaped examples, one h1, title/description bounds, sections
           t node scripts/test-tool-page-content.js
+          # Every tool category is a CATEGORIES key (breadcrumb + category page), decide included (offline + booted)
+          TARGET_URL=http://localhost:3000 t node scripts/test-tool-categories.js
 
       - name: Tool-count sync (static surfaces match the live catalog total — no count drift)
         run: node scripts/sync-count.js --check

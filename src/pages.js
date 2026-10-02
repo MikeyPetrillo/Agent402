@@ -8,7 +8,7 @@ import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbLd } from
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { agentReportPriceRange, cardReportPriceRange } from "./report-tiers.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
-import { RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT } from "./rails.js";
+import { RAILS, RAILS_AMP, RAILS_OR, RAILS_PAREN, RAILS_SHORT } from "./rails.js";
 import { mppOffersFor } from "./mpp-offers.js";
 import { mppFlagshipRows } from "./mpp-flagship.js";
 import { PRICED_BY_MODEL_NOTE } from "./tools/llm-gateway-kit.js";
@@ -323,7 +323,15 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const required = Array.isArray(schema.required) ? schema.required : [];
   const example = tool.discovery?.output?.example;
   const input = tool.discovery?.input ?? {};
-  const evmOnly = !!(tool.identityBound || tool.longRunning);
+  // A tool that names its only networks (`onlyNetworks`, e.g. decide-execute:
+  // Base) is offered on exactly those (payments.js acceptsForItem), so the page
+  // names them rather than "EVM chains".
+  const onlyRails = Array.isArray(tool.onlyNetworks) && tool.onlyNetworks.length
+    ? tool.onlyNetworks.map((c) => RAILS.find((r) => r.caip2 === c)).filter(Boolean)
+    : [];
+  const evmOnly = !!(tool.identityBound || tool.longRunning || onlyRails.length);
+  const evmOne = onlyRails.length ? `${onlyRails.map((r) => `${r.asset} on ${r.name}`).join(" or ")}` : "USDC on an EVM chain";
+  const evmAny = onlyRails.length ? evmOne : "USDC on EVM chains";
   const isPack = tool.category === "skill-pack";
   const packSlug = isPack ? tool.slug.replace(/^skill-/, "") : null;
 
@@ -340,7 +348,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
         "@type": "Offer",
         price: tool.price.replace("$", ""),
         priceCurrency: "USD",
-        description: `${pw.long}, paid over x402${evmOnly ? " (USDC on EVM chains)" : ` in ${RAILS_OR}`} or MPP. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
+        description: `${pw.long}, paid over x402${evmOnly ? ` (${evmAny})` : ` in ${RAILS_OR}`} or MPP. No signup, no API key.${computePayable ? " Or free with proof-of-work (no wallet)." : ""}`,
       },
     },
     {
@@ -359,7 +367,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const payHow = computePayable
     ? `pay ${pw.long} over x402 or MPP, or call it free by solving a proof-of-work challenge`
     : evmOnly
-      ? `pay ${pw.long} over x402 with USDC on an EVM chain${tool.identityBound ? " (the paying wallet is the identity)" : ""}`
+      ? `pay ${pw.long} over x402 with ${evmOne}${tool.identityBound ? " (the paying wallet is the identity)" : ""}`
       : `pay ${pw.long} over x402 or MPP (there is no free tier)`;
   const reqPhrase = required.length
     ? `${required.length === 1 ? "the required field" : "the required fields"} ${codeList(required)}`
