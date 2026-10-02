@@ -2691,6 +2691,8 @@ jobs:
           t node scripts/test-cross-surface.js
           # MPP discovery offers and the live 402 tempo challenge share one predicate (offline)
           t node scripts/test-mpp-discovery-agreement.js
+          # /openapi.json payment prose (MPP rails per route, creditsKey) read from the 402's own config (offline)
+          t node scripts/test-openapi-mpp-clause.js
           # Util-kit tests (jwt-sign, uuid-v5, group-by, json-to-xml, geo-distance, color-contrast)
           t node scripts/test-util-kit.js
           # x-data kit (offline)
