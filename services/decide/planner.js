@@ -117,7 +117,11 @@ export async function buildDecision({ task, constraints, depth }, deps) {
   let steps = [{ purpose: task, query: task, dependsOn: [] }];
   if (depth !== "quick") {
     const p = decomposePrompt(task, cfg.maxSteps);
-    const out = left() > 1500 ? await within(llm.call(p.system, p.user, { maxTokens: 700, timeoutMs: timeoutFor(0.35), meter, stage: "decompose" }), timeoutFor(0.35) + 250) : null;
+    let out = left() > 1500 ? await within(llm.call(p.system, p.user, { maxTokens: 700, timeoutMs: timeoutFor(0.35), meter, stage: "decompose" }), timeoutFor(0.35) + 250) : null;
+    // One retry while there is time: a single slow answer used to fold a
+    // chained task into one step (2026-10-01 prod check, an ENS-then-count
+    // task planned as one ENS lookup).
+    if (!(Array.isArray(out?.steps) && out.steps.length) && left() > 9000) out = await within(llm.call(p.system, p.user, { maxTokens: 700, timeoutMs: timeoutFor(0.3), meter, stage: "decompose_retry" }), timeoutFor(0.3) + 250);
     const raw = Array.isArray(out?.steps) ? out.steps : null;
     if (raw && raw.length) {
       steps = raw.slice(0, cfg.maxSteps).map((s, i) => ({
@@ -156,7 +160,7 @@ export async function buildDecision({ task, constraints, depth }, deps) {
   };
   const judgeSteps = depth === "quick"
     ? [{ purpose: task, candidates: judgedSet(whole, 12) }]
-    : [...steps.map((s) => ({ purpose: s.purpose, candidates: judgedSet(s.candidates, 12) })), { purpose: `the ENTIRE task in one call: ${task}`, candidates: whole.slice(0, 8) }];
+    : [...steps.map((s) => ({ purpose: s.purpose, candidates: judgedSet(s.candidates, 12) })), { purpose: `the ENTIRE task in one call: ${task}`, candidates: judgedSet(whole, 8) }];
   const jp = judgePrompt(task, judgeSteps);
   // The judgment model first (one yes/no per pair); the model judge when it
   // is off, over its ceiling, or fails.

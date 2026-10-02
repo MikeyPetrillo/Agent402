@@ -9250,7 +9250,23 @@ app.post("/api/pdf", async (req, res) => {
   }
 });
 
-// Wallet-keyed memory: the verified payer address is the caller identity.
+// The same work these bespoke routes do, as handlers, so a Decide plan run
+// through execute (and route-execute) can call them like any kit tool: they
+// read as "call directly" before, and a plan whose only payable render was
+// ours had nothing to run (2026-10-01 prod check). The public routes above are
+// unchanged; core catalog entries are not mounted by the kit binder, and all
+// five stay wallet-only.
+{
+  const needUrl = (i) => { const u = String(i?.url || "").trim(); if (!u) throw Object.assign(new Error('"url" is required'), { statusCode: 400 }); return u; };
+  const set = (route, fn) => { if (CATALOG[route] && typeof CATALOG[route].handler !== "function") CATALOG[route].handler = fn; };
+  set("POST /api/extract", async (i) => extractArticle(needUrl(i)));
+  set("GET /api/meta", async (i) => fetchPageMeta(needUrl(i)));
+  set("GET /api/dns", async (i) => { const name = String(i?.name || "").trim(); if (!name) throw Object.assign(new Error('"name" is required'), { statusCode: 400 }); return dnsLookup(name, i?.type); });
+  set("POST /api/render", async (i) => { const url = needUrl(i); return workerEnabled() ? runOnWorker("render", { url }) : renderArticle(url); });
+  set("POST /api/pdf", async (i) => pdfToText(needUrl(i)));
+}
+
+// Wallet-keyed memory: the verified payer address is the caller identity.// Wallet-keyed memory: the verified payer address is the caller identity.
 // `actor` is who is calling; `owner` is the namespace being acted on (defaults
 // to the caller's own namespace; a different owner requires a grant).
 function memoryActor(req, res) {
