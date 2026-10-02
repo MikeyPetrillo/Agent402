@@ -2,7 +2,7 @@
 
 > **Payment wires:** every paid endpoint accepts **x402** and **MPP** (Machine Payments Protocol) on the same 402 - see [[Paying with x402]] and [[Paying with MPP]]. Agent402 is the applied layer of [[Agentic Finance]]: agents that pay and get paid on their own.
 
-All endpoints live at `https://agent402.tools` (hosted instance) or your self-hosted root. Discovery endpoints are free and unpaywalled. Tool endpoints require payment (x402 or proof-of-work) unless `FREE_MODE=true`.
+All endpoints live at `https://agent402.tools` (hosted instance) or your self-hosted root. Discovery endpoints are free and unpaywalled. Tool endpoints require payment (x402, MPP, a prepaid credits key, or proof-of-work on the pure-CPU tools) unless `FREE_MODE=true`.
 
 ## Discovery endpoints
 
@@ -38,7 +38,7 @@ can point at a whole workflow instead of one tool.
 
 ### `POST /api/route`
 
-Cross-seller Smart Order Router. Finds the cheapest healthy tool for a task across Agent402 and every x402 seller crawled from the Coinbase CDP Bazaar. The response returns the top N and carries `matched` for how many scored.
+Cross-seller Smart Order Router. Ranks the tools that match a task across Agent402 and the x402 sellers it has indexed: candidates are shortlisted by how well they match the task, then ordered by crawl health, by distinct payers over the last 30 days and by price; each row's `why.tiebreaks` names the order applied. The response returns the top N and carries `matched` for how many scored.
 
 ```bash
 curl -X POST https://agent402.tools/api/route \
@@ -131,7 +131,7 @@ Outcome-priced reports on the same 402: `POST /v1/research` ($0.60; `/pro` $0.85
 
 ### Card front door and credits
 
-`/reports`, `/monitors` and `/credits` are HTML pages backed by Stripe Checkout (`POST /api/buy`, `POST /api/subscribe`, `POST /api/credits/checkout`; each answers `503` when the instance has no Stripe key). A report bought by card is $2, $3 for the pro tiers, $4 for research max, dossier max and the LinkedIn article, and $5 for the ticker pack: the card price includes payment processing, and an agent paying per call pays the lower tool price for the same report. A monitor is $5 a month. A paid report renders at `/r/<session>`, a monitor report at `/m/<id>`. A prepaid credits key pays any priced catalog route with `Authorization: Bearer a402_…` (the response carries `X-Credits-Balance`; insufficient or unknown keys get `402` with `{ reason, balanceUsd, topup }`; identity-bound routes answer `402` `reason: "identity-bound"`), and `GET /api/credits/balance` with the same header returns the balance.
+`/reports`, `/monitors` and `/credits` are HTML pages backed by Stripe Checkout (`POST /api/buy`, `POST /api/subscribe`, `POST /api/credits/checkout`; each answers `503` when the instance has no Stripe key, and the credits checkout also answers `503` while new credits are not on sale, which is the default unless the operator sets `CREDITS_SALES=on`; keys already issued keep working). Each report's card price is listed on `/reports` and each monitor's monthly price on `/monitors`: the card price includes payment processing, and an agent paying per call pays the lower tool price for the same report. A paid report renders at `/r/<session>`, a monitor report at `/m/<id>`. A prepaid credits key pays any priced catalog route with `Authorization: Bearer a402_…` (the response carries `X-Credits-Balance`; insufficient or unknown keys get `402` with `{ reason, balanceUsd, topup }`; identity-bound routes answer `402` `reason: "identity-bound"`), and `GET /api/credits/balance` with the same header returns the balance.
 
 ### OpenAI wire paths
 
@@ -198,7 +198,7 @@ Challenges are single-use, short-lived, and scoped to exactly one slug. See [[Pa
 
 ## Idempotency
 
-Send an `Idempotency-Key` header to enable idempotent requests. If the same key is seen again for the same method, path, and payment credential, the server replays the cached result without re-charging.
+Send an `Idempotency-Key` header to enable idempotent requests. If the same key is seen again for the same method, path, payment credential and request body, the server replays the cached result without re-charging.
 
 ```bash
 curl -X POST https://agent402.tools/api/hash \
@@ -208,7 +208,7 @@ curl -X POST https://agent402.tools/api/hash \
   -d '{"text":"hello"}'
 ```
 
-Cache key formula: `sha256(METHOD + path + Idempotency-Key + gate-credential)`. Without the header, every request is treated as unique.
+Cache key formula: `sha256(METHOD + path + Idempotency-Key + gate-credential + sha256(body))`. Without the header, every request is treated as unique.
 
 The cache is **settlement-aware**: a response body is captured when the handler produces it but is only committed to the cache once the *final* status is `200`, i.e. after settlement succeeded. A `200` whose settlement then failed (and therefore became a `402`) is never cached and never replayed. Streamed responses are never replayable.
 

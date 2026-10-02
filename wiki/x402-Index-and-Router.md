@@ -12,7 +12,7 @@ shouldn't cost money, by the same logic as `/api/find`):
 |---|---|
 | `GET /marketplace` | HTML dashboard over the indexed sellers: tool count, network, last-fetched time, rolling health, discovery sources. (`GET /index` is the old path and now answers `301 → /marketplace`; follow redirects or just use `/marketplace`.) |
 | `GET /api/index` | The same data as JSON, **one page at a time** (250 max): per-seller `health`, `routable`, totals. `complete: false` and a `Link` header with `rel="next"` while sellers remain, `sellerCount` for the total. `?seller=<host>` returns ONE origin unpaged, with its rolling `history` |
-| `POST /api/route` | Smart Order Router / neutral x402 discovery API: `{ query, top, include }` → top-N matching tools across sellers, ranked by match score, then health, then price; when the judgment model is enabled it reorders the top of that list (at most two rows per seller, plus the best matches from the local catalog) so the listing that actually does the task comes first, the cheapest among equally good ones, and reports it in `judged`. `include` = `all` (default) / `external` (exclude Agent402 itself) / `local` |
+| `POST /api/route` | Smart Order Router / neutral x402 discovery API: `{ query, top, include }` → top-N matching tools across sellers, shortlisted by match score, then ordered by crawl health, by distinct payers over the last 30 days and by price; when the judgment model is enabled it reorders the top of that list (at most two rows per seller, plus the best matches from the local catalog) so the listing that actually does the task comes first, the cheapest among equally good ones, and reports it in `judged`. `include` = `all` (default) / `external` (exclude Agent402 itself) / `local` |
 | `GET /api/leaderboard` | Top N of the on-chain ranking of sellers by **Base USDC settled volume** (25 default, 50 ceiling, `totalSellers` for the full count) - see [[x402-Leaderboard]] |
 
 And one **paid** executing surface built on the same resolver:
@@ -47,7 +47,7 @@ settlement: an under-budget attempt costs nothing.
 
 With `include: "external"`, route-execute goes beyond this host's catalog: it resolves the best **external** seller for the task - an x402 seller from the open index, or an **MPP seller on Tempo** from the live-verified [MPP marketplace](https://agent402.tools/mpp-marketplace) - pays them from Agent402's own spending wallet over the seller's wire (x402 or MPP), and relays the result. One payment from you, one request, cross-vendor and cross-protocol settlement underneath.
 
-The reliability filter is the point. The open ecosystem is full of endpoints that answer a 402 but never deliver a paid result, so route-execute only considers sellers with **proven settled volume** (on Base: on-chain completed deliveries on the [[x402-Leaderboard]]; on Algorand: verification counts witnessed by the GoPlausible facilitator; on Tempo/MPP: recent inbound USDC.e transfers to the seller's own recipient, read on-chain) and then probes the candidate for a live 402 before committing. External settlement is **chain-matched**: pay on Base and the router pays a Base seller from its Base spending wallet; pay on Algorand and it pays an Algorand seller from its AVM wallet; pay over MPP on Tempo and it pays a Tempo/MPP seller from its Tempo wallet - the chain you fund is the chain it spends. (An operator can additionally let Base buyers fall through to Tempo/MPP sellers.) A payment on a chain without a spending wallet gets an honest 409 naming the supported chains, and a 4xx/5xx always cancels your settlement, so you are never charged for a failure. Relayed bodies are marked `untrustedContent` (the seller's output, not ours). Default remains local-only: external routing is an explicit opt-in.
+The reliability filter is the point. An endpoint that answers a 402 is not proof it delivers a paid result, so route-execute ranks sellers with **proven settled volume** first (on Base: on-chain settlement evidence on the [[x402-Leaderboard]]; on Solana: recent inbound USDC to the seller's payTo, read from the chain at pay time; on Algorand: verification counts witnessed by the GoPlausible facilitator; on Tempo/MPP: recent inbound USDC.e transfers to the seller's own recipient, read on-chain) and then probes the candidate for a live 402 before committing. A seller with no settlement history yet is tried only after every proven candidate, under a small per-call cap on Base and Solana (the live cap is stated on [/why](https://agent402.tools/why)), and is flagged unproven on the receipt. External settlement is **chain-matched**: pay on Base and the router pays a Base seller from its Base spending wallet; pay on Solana or Algorand and it pays a seller on that chain from its wallet there; pay over MPP on Tempo and it pays a Tempo/MPP seller from its Tempo wallet - the chain you fund is the chain it spends. (An operator can additionally let Base buyers fall through to Tempo/MPP sellers.) A payment on a chain without a spending wallet gets an honest 409 naming the supported chains, and a 4xx/5xx always cancels your settlement, so you are never charged for a failure. Relayed bodies are marked `untrustedContent` (the seller's output, not ours). Default remains local-only: external routing is an explicit opt-in.
 
 The full walkthrough - tiers, selection mechanics, chain matching, and a real production receipt with both on-chain settlement transactions - is the [Smart Order Router guide](https://agent402.tools/guides/smart-order-router).
 
@@ -55,7 +55,7 @@ The full walkthrough - tiers, selection mechanics, chain matching, and a real pr
 
 1. **Local catalog** - the Agent402 server's own tools are always present (no network).
 2. **Operator seeds** - origins listed in the `X402_INDEX_SEEDS` env (comma-separated) get crawled every 30 minutes.
-3. **Auto-discovery** - every hour, the indexer pulls public x402 registries (currently the [Coinbase CDP Bazaar](https://docs.cdp.coinbase.com/x402/docs/bazaar)) and adds new origins to the crawl set, capped at 50,000 sellers as a sanity guard. Crawls run through a worker pool with a concurrency limit (`CRAWL_CONCURRENCY = 25`) so a large seed list never floods outbound.
+3. **Auto-discovery** - every hour, the indexer pulls public x402 registries (the Coinbase CDP Bazaar and the GoPlausible, PayAI and Solvador facilitator registries) and adds new origins to the crawl set, capped at 50,000 sellers as a sanity guard. Crawls run through a worker pool with a concurrency limit (`CRAWL_CONCURRENCY = 25`) so a large seed list never floods outbound.
 
 Each crawl fetches `<origin>/.well-known/x402` plus the seller's `openapi.json`
 when present, runs every request through the SSRF guard (`safeFetch`), caps
@@ -66,14 +66,13 @@ seller.
 
 A buyer routed to a dead seller wastes money. The router takes that seriously:
 
-- **Excluded:** a seller whose last `HEALTH_WINDOW` (5) crawl outcomes include any errors is **not routable** and is skipped by `/api/route`.
+- **Excluded:** a seller whose most recent crawl failed (or a registry-only record whose origin never answered) is **not routable** and is skipped by `/api/route`. `health` (0..1) is the success share of the last `HEALTH_WINDOW` (5) crawls.
 - **Brand new:** sellers with no history yet *are* routable - benefit of the doubt for newcomers.
-- **Ranked:** at equal match score, healthier sellers rank first. Then cheaper wins.
+- **Ranked:** at equal match score, healthier sellers rank first, then sellers more distinct wallets paid over the last 30 days, then the cheaper one.
 - **Snapshot:** `GET /api/index` exposes each seller's `health` (0..1) and `routable` flag, a page at a time. The rolling `history` those are derived from is on the single-origin view, `GET /api/index?seller=<host>`, so an operator can audit the decisions for any seller they name; the bulk listing withholds it deliberately, and says so rather than returning it empty.
 
 The unit tests for these guarantees live in [`scripts/test-router-health.js`](https://github.com/MikeyPetrillo/Agent402/blob/main/scripts/test-router-health.js)
-(eight scenarios, offline - they seed the in-memory cache directly via a test
-escape hatch).
+(offline - they seed the in-memory cache directly via a test escape hatch).
 
 ### Trust evidence for one seller (`GET /api/x402/seller-trust`, $0.005)
 
@@ -111,7 +110,7 @@ spends USDC from our own wallet, which is why it costs what it does.
 ## Calling the router
 
 ```bash
-# Default - include everything (local + crawled remotes), pick the cheapest healthy match
+# Default - include everything (local + crawled remotes)
 curl -X POST https://agent402.tools/api/route \
   -H 'content-type: application/json' \
   -d '{"query":"ocr image to text","top":5}'
@@ -189,7 +188,9 @@ Returns an **object**, not a bare array. The matches are in `results`:
   tier name never reads as a callable action. `networksInferred: true` marks a
   row whose chains were inherited from its seller rather than read on its own 402.
 - `count` is the number of results returned; `sellers` is how many distinct
-  sellers they came from.
+  sellers they came from. The results are a page: `matched`, `complete` and
+  `truncated` say whether more rows met the query, and `diversityCapped` says
+  a seller's extra rows were cut at `perSellerCap`.
 - The response echoes back the resolved `include` value (invalid values fall
   back to `all`).
 
@@ -203,6 +204,6 @@ Returns an **object**, not a bare array. The matches are in `results`:
 ## Related
 
 - [[Architecture]] - where the indexer sits in the request flow
-- [[Operations]] - 3-rail attribution (USDC / PoW / Heartbeat) on the operator dashboard
+- [[Operations]] - attribution by payment path on the operator dashboard
 - [[x402-Leaderboard]] - on-chain ranking using the same Bazaar walk
 - [`/api/find`](https://agent402.tools/api/find) - local-only resolver (older, simpler)

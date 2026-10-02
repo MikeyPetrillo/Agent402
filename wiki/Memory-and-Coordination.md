@@ -60,7 +60,7 @@ GET /api/memory/log?limit=100
 
 ## Semantic memory
 
-Store prose now, search it by meaning later (deterministic lexical scoring - no embeddings API, no LLM):
+Store prose now, search it later. By default recall scores against a hashed term vector computed in-process (word and word-pair overlap, no embeddings API, no LLM); an operator who sets `EMBEDDINGS_URL` swaps in an OpenAI-compatible embeddings endpoint for true semantic similarity:
 
 ```bash
 POST /api/memory/remember   {"text":"Railway deploy failed: build out of memory","meta":{"sev":"high"}}

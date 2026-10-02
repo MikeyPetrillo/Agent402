@@ -105,7 +105,9 @@ const FORBIDDEN = [
     // comment said "we route ONLY to sellers with proven settled volume". A
     // claim has as many phrasings as people who write it down, so this matches
     // the SHAPE: an exclusivity word near "seller" near "proven".
-    re: /\b(?:only|exclusively)\b[^.]{0,60}sellers?[^.]{0,80}proven|\bproven\b[^.]{0,60}sellers?[^.]{0,40}\bonly\b/i,
+    // Third word order ("Sellers qualify only with proven on-chain settled
+    // volume", the MCP wiki page) slipped past the first two alternatives.
+    re: /\b(?:only|exclusively)\b[^.]{0,60}sellers?[^.]{0,80}proven|\bproven\b[^.]{0,60}sellers?[^.]{0,40}\bonly\b|\bsellers?\b[^.]{0,30}\b(?:only|exclusively) (?:with|on|if|when|after)\b[^.]{0,30}\bproven\b/i,
     why: "the unproven Solana tier makes the exclusive form false; render routingProofSentence() or name the chain it is true of",
     // The claim is always about ROUTING or ELIGIBILITY. Without this the rule
     // also read a payTo-mismatch comment ("we only refuse on a positive
@@ -458,6 +460,7 @@ ok(files.some((f) => /^scripts\/.*card.*\.js$/.test(f)),
 // to pass; otherwise the next author suppresses it and the guard is decoration.
 {
   const MUST_FAIL = [
+    "the Smart Order Router resolves the best-matching external seller. Sellers qualify only with proven on-chain settled volume.",
     // The two sentences a plugin registry displayed in full from SKILL.md.
     "500+ deterministic web tools an agent can call over plain HTTP, paid per call.\nNo LLM sits in the serving path on Agent402's side; every response is a",
     "Pay-per-call access to Agent402.Tools: 500+ deterministic web tools (browser rendering",

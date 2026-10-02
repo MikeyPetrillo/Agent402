@@ -8,9 +8,11 @@ funds - they decode quotes, read public chain state, and build the
 authorization you sign. (Two paths elsewhere on the service are not
 non-custodial and are named as such: a prepaid credits balance is money held
 until it is spent, and a card report purchase is held by the payment processor
-until the report is delivered. See [Security](https://agent402.tools/security).) All tools are keyless (public RPC) and work across
-**Base, Polygon, Arbitrum, Optimism, and Ethereum** (`network` param, default
-`base`).
+until the report is delivered. See [Security](https://agent402.tools/security).) The caller needs no API key: the
+tools read public chain state through the server's own RPC providers. The chain
+tools take a `network` param (default `base`): **Base, Polygon, Arbitrum,
+Optimism, Ethereum, Monad, Celo, Avalanche and Sei**, plus Robinhood Chain for
+the chain-read tools (`tx-status`, `gas-estimate`).
 
 Walkthrough with runnable examples: [the x402 payments guide](https://agent402.tools/guides/x402-payments-toolkit).
 
@@ -36,16 +38,15 @@ Walkthrough with runnable examples: [the x402 payments guide](https://agent402.t
 
 ## Why non-custodial
 
-Custodial "pay for me" services must hold your funds - which means money
-transmission, KYC/AML, and trusting a middleman. These tools never touch your
-money: you keep your key, you sign, you send. That's the correct architecture
-for agent payments, and the reason this surface stays clean.
+These tools never touch your money: you keep your key, you sign, you send.
+Nothing here holds a balance on your behalf.
 
 ## Notes
 
 - Tools are **wallet-only** (paid per call in USDC via x402), so they are *not*
   exposed on the free hosted MCP connector - the payments surface is the paid
   HTTP / `agent402-mcp` path. See [[MCP Connector]].
-- USDC addresses are the native Circle deployments per chain; EIP-712 domain is
-  `USD Coin` / version `2`.
+- USDC addresses are the native deployments per chain. The EIP-712 domain is
+  the token's own: name `USD Coin` on most chains and `USDC` on Celo, Monad and
+  Sei, version `2`; `transfer-authorization` fills it in for the chosen network.
 - Open source: [src/tools/x402-kit.js](https://github.com/MikeyPetrillo/Agent402/blob/main/src/tools/x402-kit.js).
