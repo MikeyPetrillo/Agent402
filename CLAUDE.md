@@ -73,6 +73,15 @@ LLC: credit the entity, never a personal name.
 - Tests use port 0 (or a port below 32768) and read the bound port back
   (`scripts/test-port-hygiene.js`).
 - Public copy: first-party and affirmative, no competitor names, no em dashes.
+- **Truth audit 2026-10-02.** Every existing copy guard passed while seven pages and a share
+  card still sold prepaid credits two weeks after sales stopped, /terms carried a date three
+  edits old, copy said "three wires" after a fourth shipped, pack pages recommended retired
+  packs, and the home page counted skill packs twice. The guards checked prices and counts,
+  never whether the thing offered still exists. Copy that offers something reads the switch
+  that sells it (`creditsSalesEnabled()`), and these are now guarded: test-static-pages (no
+  credits sale while off), test-legal-dates (text hash pins the date), test-wire-count-copy,
+  test-pack-copy-retired, copy-absolutes ("never touches funds"). Lesson: when a product is
+  turned off, grep for every sentence that sells it, not only the route that serves it.
 
 ## Key machine-readable surfaces (free)
 `/health`, `/api/pricing`, `/openapi.json`, `/llms.txt`, `/.well-known/x402`,
