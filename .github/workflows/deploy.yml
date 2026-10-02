@@ -1928,6 +1928,7 @@ jobs:
           t node scripts/test-tool-page-backlinks.js
           # Tool pages: escaped examples, one h1, title/description bounds, sections
           t node scripts/test-tool-page-content.js
+          t node scripts/test-tool-page-mpp.js
           # Every tool category is a CATEGORIES key (breadcrumb + category page), decide included (offline + booted)
           TARGET_URL=http://localhost:3000 t node scripts/test-tool-categories.js
 

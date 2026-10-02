@@ -7676,7 +7676,7 @@ app.get("/tools/:slug", (req, res) => {
   // The method alias (POST on a GET-only path, GET/HEAD on a POST-only path)
   // runs only when the catalog has no route of the other method at this path.
   const otherMethodRouted = !!CATALOG[`${tool.method === "GET" ? "POST" : "GET"} ${tool.path}`];
-  htmlCache(res, 300, 900).send(skillPackCanonical(tool.slug, toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null, otherMethodRouted })));
+  htmlCache(res, 300, 900).send(skillPackCanonical(tool.slug, toolPage(BASE_URL, tool, related, { computePayable: POW_SLUGS.has(tool.slug), powDifficulty: POW_DIFFICULTY, cacheTtl: cachePolicy?.ttl ?? null, otherMethodRouted, mpp: !!(process.env.MPP_SECRET_KEY || "").trim() })));
 });
 // A skill pack's catalog page points its canonical at the pack page (/skills/<pack>).
 const SKILL_PACK_SLUGS = new Set(SKILL_PACKS.map((p) => p.slug));
