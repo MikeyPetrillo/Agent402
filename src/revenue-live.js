@@ -1335,6 +1335,7 @@ function persistLastGood(rails) {
 // snapshot's numbers come from, not a constant. Filed rather than rushed.
 const SNAPSHOT_TTL_MS = parseInt(process.env.REVENUE_SNAPSHOT_TTL_MS, 10) || 60 * 60_000;
 const SCAN_REQUEST_DEADLINE_MS = parseInt(process.env.REVENUE_SCAN_DEADLINE_MS, 10) || 25_000;
+const RAIL_DEADLINE_MS = parseInt(process.env.REVENUE_RAIL_DEADLINE_MS, 10) || 45_000;
 const SCAN_TIMED_OUT = Symbol("revenue-scan-timeout");
 export async function revenueSnapshot(opts) {
   if (cached && Date.now() - cachedAt < SNAPSHOT_TTL_MS) return cached;
@@ -1346,6 +1347,10 @@ export async function revenueSnapshot(opts) {
   // Stale-while-revalidate: never block a visitor on the multi-chain scan if we
   // have anything to serve.
   if (cached) return cached;
+  // Cold after a restart: the last good reading saved on the volume is served,
+  // marked stale, while the scan runs (a cold page used to wait out the
+  // deadline on every visit until the first scan finished).
+  if (diskLastGood?.rails?.length) return lastGoodSnapshot(diskLastGood);
   // Cold cache (first request after a boot, before the background primer warms
   // it): wait for the scan, but NEVER past a hard deadline - a single throttled
   // rail must not hang /revenue past the edge-proxy timeout (the outage this
@@ -1364,22 +1369,42 @@ export async function revenueSnapshot(opts) {
   return result;
 }
 
+/** A snapshot built from the saved last-good rails, every balance marked stale. */
+export function lastGoodSnapshot(lg) {
+  const rails = lg.rails.map((r) => ({ ...r, staleBalance: true, balanceAsOf: r.balanceAsOf || lg.asOf || null, error: null }));
+  const totalUsd = rails.reduce((s, r) => s + (Number.isFinite(r.balance) ? r.balance : 0), 0);
+  return {
+    spec: "agent402-revenue/1",
+    asOf: lg.asOf || null,
+    stale: true,
+    cacheSeconds: 30,
+    totalUsd: Number(totalUsd.toFixed(6)),
+    windowExternalUsd: null,
+    maxCallUsd: MAX_CALL_USD,
+    rails,
+    note: "The last good reading, saved before this server restarted, shown while a fresh read runs. Balances are marked stale with the time they were read; recent-window external totals return with the fresh read.",
+  };
+}
+
 async function refreshSnapshot({ walletAddress, solanaWallet }) {
   const stellarWallet = (process.env.STELLAR_WALLET_ADDRESS || "").trim();
   const algorandWallet = (process.env.ALGORAND_WALLET_ADDRESS || "").trim();
+  // Each rail is bounded as a whole, not only per request: a rail that pages
+  // through many slow reads kept the whole snapshot from finishing, and a cold
+  // /revenue then waited out its deadline on every visit (2026-10-01). A rail
+  // past its bound reads as an error, so the carry-forward below keeps its
+  // last good balance, marked stale.
+  const bounded = (label, p) => Promise.race([
+    p,
+    new Promise((resolve) => setTimeout(() => resolve({ rail: label, balance: null, recent: [], error: `timed out after ${Math.round(RAIL_DEADLINE_MS / 1000)} s` }), RAIL_DEADLINE_MS).unref?.()),
+  ]);
+  const evm = (name) => bounded(EVM[name]?.label || name, evmRail(name, walletAddress));
   const [base, polygon, arbitrum, monad, celo, avalanche, sei, optimism, robinhood, solana, stellar, algorand] = await Promise.all([
-    evmRail("base", walletAddress),
-    evmRail("polygon", walletAddress),
-    evmRail("arbitrum", walletAddress),
-    evmRail("monad", walletAddress),
-    evmRail("celo", walletAddress),
-    evmRail("avalanche", walletAddress),
-    evmRail("sei", walletAddress),
-    evmRail("optimism", walletAddress),
-    evmRail("robinhood", walletAddress),
-    solanaRail(solanaWallet),
-    stellarRail(stellarWallet),
-    algorandRail(algorandWallet),
+    evm("base"), evm("polygon"), evm("arbitrum"), evm("monad"), evm("celo"),
+    evm("avalanche"), evm("sei"), evm("optimism"), evm("robinhood"),
+    bounded("Solana", solanaRail(solanaWallet)),
+    bounded("Stellar", stellarRail(stellarWallet)),
+    bounded("Algorand", algorandRail(algorandWallet)),
   ]);
   const rails = [base, solana, polygon, arbitrum, monad, celo, avalanche, sei, optimism, stellar, algorand, robinhood];
   // Per-rail last-good balance carry-forward. The non-EVM reads (Solana,
